@@ -7,6 +7,7 @@ Each plugin is a normal DSH plugin package. It loads into the running desktop Ho
 | Plugin | What it does |
 | --- | --- |
 | [`dsh-site`](plugins/dsh-site) | Serves the running DSH Desktop GUI to other devices on a private network (for example a Tailscale tailnet). Same sessions, same workspaces, same tools as the machine itself. |
+| [`discord`](plugins/discord) | Connects a Discord bot to DSH sessions. Each Discord thread is one persistent agent session, and the agent answers through Discord tools. Full bot setup steps are in its README. |
 | [`session-bridge`](plugins/session-bridge) | A local JSON API on a Unix socket that drives the Host's own session controller. Scripts and other agents can create, prompt, steer, cancel and read DSH sessions, and you watch them live in the DSH window. |
 
 These plugins are independent work. They are not made or endorsed by DeepSeek.
@@ -59,7 +60,9 @@ Or restore the backups from step 2.
 ## Tests
 
 ```bash
-npm test
+npm test                                  # dsh-site, session-bridge
+npm install --no-save @deepseek-ai/schemastery @deepseek-ai/dsh-llm@next @deepseek-ai/dsh-brand@next @deepseek-ai/dsh-tools@next
+node plugins/discord/test/smoke.mjs       # discord (no token needed)
 ```
 
 ## License
