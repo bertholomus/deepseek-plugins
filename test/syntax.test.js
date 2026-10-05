@@ -1,0 +1,9 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+
+for (const f of ['plugins/dsh-site/lib/index.js', 'plugins/dsh-site/lib/cidr.js', 'plugins/session-bridge/lib/index.js']) {
+    test(`syntax ${f}`, () => {
+        assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', f]));
+    });
+}

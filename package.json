@@ -1,0 +1,11 @@
+{
+  "name": "deepseek-plugins",
+  "private": true,
+  "type": "module",
+  "description": "Community plugins for DeepSeek Harness (DSH) Desktop.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=20" }
+}
