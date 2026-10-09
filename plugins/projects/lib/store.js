@@ -13,13 +13,35 @@
  *
  * @module dsh-plugin-projects/store
  */
-import { readFileSync, renameSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
+import { readFileSync, renameSync, writeFileSync, mkdirSync, chmodSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { homedir } from 'node:os';
 
 /** Resolve a '~'-prefixed path. */
 export function expand(p) {
     return p.startsWith('~/') || p === '~' ? `${homedir()}${p.slice(1)}` : p;
+}
+
+/**
+ * Create a folder (and missing parents) as mode 700. The mode is set
+ * explicitly because the process umask is shared: another plugin that
+ * narrows it while we create folders would otherwise leave them without
+ * the execute bit, and nothing inside could be opened. An existing folder
+ * keeps its mode, unless its owner (us) cannot use it; that one gets the
+ * owner bits back.
+ * @param {string} dir
+ */
+export function ensurePrivateDir(dir) {
+    const first = mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (first === undefined) {
+        const st = statSync(dir);
+        if ((st.mode & 0o700) !== 0o700 && st.uid === process.getuid?.()) chmodSync(dir, (st.mode & 0o777) | 0o700);
+        return;
+    }
+    for (let d = dir; ; d = dirname(d)) {
+        chmodSync(d, 0o700);
+        if (d === first || dirname(d) === d) break;
+    }
 }
 
 export class ProjectStore {
@@ -43,7 +65,7 @@ export class ProjectStore {
     /** Persist atomically; the store must survive crashes mid-write. */
     save() {
         try {
-            mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
+            ensurePrivateDir(dirname(this.file));
             const tmp = `${this.file}.tmp`;
             writeFileSync(tmp, `${JSON.stringify({ version: 1, projects: this.projects }, null, 2)}\n`, { mode: 0o600 });
             chmodSync(tmp, 0o600);

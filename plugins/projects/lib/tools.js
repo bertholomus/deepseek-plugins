@@ -81,7 +81,8 @@ export function projectTools(manager, who) {
             },
             async execute(args) {
                 const r = await manager.startThread(projectId, args);
-                return `Started ${r.threadId} "${r.title}" (${r.route}). It will hand back when done.`;
+                const notes = r.notes?.length ? ` Note: ${r.notes.join('; ')}.` : '';
+                return `Started ${r.threadId} "${r.title}" (${r.route}). It will hand back when done.${notes}`;
             },
         }),
         tool({

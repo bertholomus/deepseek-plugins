@@ -49,8 +49,9 @@ export function parseModelSpec(spec, fallbackProvider) {
 }
 
 /**
- * Rewrite one resolved model request config with a project route.
- * Unset model or effort leaves that part of the request alone.
+ * Rewrite one resolved model request config with a project route. An unset
+ * model leaves the request's model alone. A set model without an effort runs
+ * at that model's own default effort, as a DSH model selection does.
  * @param {object} resolved - config proposed by the `agent/request` waterfall.
  * @param {string|undefined} modelSpec
  * @param {string|undefined} effort
@@ -61,6 +62,7 @@ export function applyRoute(resolved, modelSpec, effort) {
     if (parsed) {
         next.provider = parsed.provider;
         next.model = parsed.model;
+        delete next.reasoningEffort;
     }
     if (set(effort)) next.reasoningEffort = effort.trim();
     return next;
@@ -79,11 +81,13 @@ function catalogModels(catalog) {
 
 /**
  * Check a model spec and effort against the host model catalog, and return
- * the canonical "provider:model". With no catalog, accept as given.
+ * the canonical "provider:model". With no catalog, accept as given. A model
+ * with no effort levels drops the effort and says so in `note`, so a
+ * project-wide effort default does not break threads on such a model.
  * @param {object|undefined} catalog - sessionController.modelCatalog() value.
  * @param {string|undefined} modelSpec - requested model, or undefined to keep the default.
  * @param {string|undefined} effort - requested effort, or undefined.
- * @returns {{ok: true, model?: string, effort?: string} | {ok: false, error: string}}
+ * @returns {{ok: true, model?: string, effort?: string, note?: string} | {ok: false, error: string}}
  */
 export function checkSelection(catalog, modelSpec, effort) {
     const models = catalogModels(catalog);
@@ -112,7 +116,10 @@ export function checkSelection(catalog, modelSpec, effort) {
     }
     if (set(effort)) {
         const e = effort.trim();
-        if (entry && entry.efforts.length > 0 && !entry.efforts.includes(e)) {
+        if (entry && entry.efforts.length === 0) {
+            return { ok: true, ...(model ? { model } : {}), note: `${entry.provider}:${entry.model} has no effort levels, so effort "${e}" is not used` };
+        }
+        if (entry && !entry.efforts.includes(e)) {
             return { ok: false, error: `effort "${e}" is not offered by ${entry.provider}:${entry.model}. Choose one of: ${entry.efforts.join(', ')}` };
         }
         return { ok: true, ...(model ? { model } : {}), effort: e };

@@ -49,19 +49,18 @@ class FakeScope {
             },
         };
     }
-    on(event, fn) {
+    on(event, fn, options) {
         const list = this.listeners.get(event) ?? [];
-        list.push(fn);
+        if (options?.prepend) list.unshift(fn);
+        else list.push(fn);
         this.listeners.set(event, list);
         return () => this.listeners.set(event, (this.listeners.get(event) ?? []).filter((f) => f !== fn));
     }
+    /** Run the `agent/request` waterfall as cordis does: the first listener is outermost. */
     async request(base) {
-        let config = base;
-        for (const fn of this.listeners.get('agent/request') ?? []) {
-            const prev = config;
-            config = await fn({}, async () => prev);
-        }
-        return config;
+        const list = this.listeners.get('agent/request') ?? [];
+        const run = (i) => (i >= list.length ? Promise.resolve(base) : list[i]({}, () => run(i + 1)));
+        return run(0);
     }
     emitStatus(agent, status) {
         agent.status = status;
@@ -78,16 +77,41 @@ class FakeScope {
     }
 }
 
-/** A fake Host with sessionController, agents and workspaceRegistry. */
-function fakeHost() {
+/** The Host's model service: validates a call config and fills in the default effort. */
+const fakeLlm = {
+    calls: 0,
+    async resolveCallConfig(config) {
+        fakeLlm.calls += 1;
+        const model = CATALOG.groups.find((g) => g.id === config.provider)?.models.find((m) => m.id === config.model);
+        if (!model) throw new Error(`unknown model ${config.provider}:${config.model}`);
+        const efforts = model.reasoning?.efforts.map((e) => e.id);
+        const effective = config.reasoningEffort ?? model.reasoning?.defaultEffort;
+        if (effective !== undefined && !efforts?.includes(effective)) throw new Error(`effort ${effective} unsupported`);
+        return { ...config, ...(effective === undefined ? {} : { reasoningEffort: effective }) };
+    },
+};
+
+/**
+ * A fake Host with sessionController, agents and workspaceRegistry.
+ * `selection: true` adds the per-session model selection a real DSH Host has
+ * (its own `agent/request` listener, installed before `agent/created`, plus
+ * `sessionController.agents.selectForNextRequest`).
+ */
+function fakeHost({ selection = false, hostListener = selection } = {}) {
     const listeners = new Map();
     const effects = [];
     const sessions = new Map(); // id → {events, prompts, title, cwd}
     const live = new Map(); // id → agent
     let n = 0;
+    const selections = []; // [{sessionId, selection}] in call order
+    const services = {
+        agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: 'deepseek-v4' }) },
+        llm: fakeLlm,
+    };
     const host = {
-        sessions, live, effects,
+        sessions, live, effects, selections, services,
         logger: { info() {}, warn() {} },
+        get: (name) => services[name],
         on(event, fn) {
             const list = listeners.get(event) ?? [];
             list.push(fn);
@@ -102,6 +126,10 @@ function fakeHost() {
             const ctx = new FakeScope();
             const agent = { id, status: 'idle', ctx };
             ctx.agent = agent;
+            if (hostListener) {
+                // Like DSH's own selection listener: it rewrites the route of every request.
+                ctx.on('agent/request', async (_e, next) => ({ ...await next(), provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'host' }));
+            }
             live.set(id, agent);
             host.emit('agent/created', { agent, source: 'resume' });
             return agent;
@@ -130,11 +158,19 @@ function fakeHost() {
             async modelCatalog() { return CATALOG; },
         },
     };
+    if (selection) {
+        host.sessionController.agents = {
+            selectForNextRequest(agent, sel) {
+                assert.equal(live.get(agent.id), agent, 'selection targets the live agent');
+                selections.push({ sessionId: agent.id, selection: sel, promptsBefore: sessions.get(agent.id).prompts.length });
+            },
+        };
+    }
     return host;
 }
 
-function setup(overrides = {}, dir = mkdtempSync(join(tmpdir(), 'projects-'))) {
-    const host = fakeHost();
+function setup(overrides = {}, dir = mkdtempSync(join(tmpdir(), 'projects-')), hostOptions = {}) {
+    const host = fakeHost(hostOptions);
     const config = plugin.Config({
         threadEffort: 'high',
         storeFile: join(dir, 'projects.json'),
@@ -167,7 +203,9 @@ test('model specs and route rewriting', () => {
     const base = { provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'high', maxTokens: 9 };
     assert.deepEqual(applyRoute(base, undefined, undefined), base);
     assert.deepEqual(applyRoute(base, 'other:big-model', 'max'), { ...base, provider: 'other', model: 'big-model', reasoningEffort: 'max' });
-    assert.deepEqual(applyRoute(base, 'deepseek-v4-flash', undefined), { ...base, model: 'deepseek-v4-flash' });
+    // A new model without an effort runs at that model's own default effort.
+    assert.deepEqual(applyRoute(base, 'deepseek-v4-flash', undefined), { provider: 'deepseek', model: 'deepseek-v4-flash', maxTokens: 9 });
+    assert.deepEqual(applyRoute(base, undefined, 'low'), { ...base, reasoningEffort: 'low' });
 });
 
 test('selection is checked against the host catalog', () => {
@@ -176,7 +214,8 @@ test('selection is checked against the host catalog', () => {
     assert.match(checkSelection(CATALOG, 'nope', undefined).error, /unknown model "nope"/);
     assert.deepEqual(checkSelection(CATALOG, undefined, 'max'), { ok: true, effort: 'max' });
     assert.match(checkSelection(CATALOG, undefined, 'medium').error, /not offered by deepseek:deepseek-v4/);
-    assert.deepEqual(checkSelection(CATALOG, 'other:big-model', 'anything'), { ok: true, model: 'other:big-model', effort: 'anything' });
+    // A model without effort levels drops the effort and says so.
+    assert.deepEqual(checkSelection(CATALOG, 'other:big-model', 'max'), { ok: true, model: 'other:big-model', note: 'other:big-model has no effort levels, so effort "max" is not used' });
     assert.deepEqual(checkSelection(undefined, 'x:y', 'z'), { ok: true, model: 'x:y', effort: 'z' });
     assert.equal(slugify('DSH Plugins!'), 'dsh-plugins');
 });
@@ -298,9 +337,10 @@ test('settings: change, validate, reset to default, per-thread override', async 
     assert.match(await coord.ctx.call('project_settings', { thread_effort: 'max' }), /^Failed: effort "max" is not offered by deepseek:deepseek-v4-flash/);
     assert.match(await coord.ctx.call('project_settings', { coordinator_effort: 'default' }), /Coordinator: DSH default model · effort max \(DSH default \/ project config\)/);
 
-    await coord.ctx.call('project_thread_start', { title: 'Big', brief: 'Think hard.', model: 'other:big-model', effort: 'xhigh' });
+    assert.match(await coord.ctx.call('project_thread_start', { title: 'Big', brief: 'Think hard.', model: 'other:big-model', effort: 'max' }),
+        /^Started t1 "Big" \(other:big-model · effort default\)\. It will hand back when done\. Note: other:big-model has no effort levels/);
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
-    assert.deepEqual(await thread.ctx.request({ provider: 'deepseek', model: 'deepseek-v4' }), { provider: 'other', model: 'big-model', reasoningEffort: 'xhigh' });
+    assert.deepEqual(await thread.ctx.request({ provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'high' }), { provider: 'other', model: 'big-model' });
     assert.match(await coord.ctx.call('project_thread_update', { thread: 't1', model: 'default', effort: 'default' }), /route deepseek:deepseek-v4-flash · effort high/);
     assert.deepEqual(await thread.ctx.request({ provider: 'deepseek', model: 'deepseek-v4' }), { provider: 'deepseek', model: 'deepseek-v4-flash', reasoningEffort: 'high' });
     assert.match(await coord.ctx.call('project_thread_update', { thread: 't1', resolved: true, stop: true }), /resolved; current turn stopped/);
@@ -382,4 +422,98 @@ test('a deleted coordinator is recreated on load', async () => {
     plugin.apply(host, first.config); // no sessions carried over
     await tick();
     assert.ok(coordinatorOf(host));
+});
+
+// ── a Host with per-session model selection (real DSH) ─────────────────────
+
+const SELECTING = { selection: true };
+
+test('override mode stays outermost over the Host selection listener', async () => {
+    const { host } = setup({}, undefined, { hostListener: true });
+    await tick();
+    const coord = coordinatorOf(host);
+    assert.deepEqual(await coord.ctx.request({ provider: 'x', model: 'y' }), { provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'max' });
+});
+
+test('session mode: coordinator and threads get DSH model selections, not request rewrites', async () => {
+    const { host } = setup({}, undefined, SELECTING);
+    await tick();
+    const coord = coordinatorOf(host);
+    assert.deepEqual(host.selections, [{ sessionId: coord.id, selection: { provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'max' }, promptsBefore: 0 }]);
+    // Only the Host's own listener rewrites requests.
+    assert.equal(coord.ctx.listeners.get('agent/request').length, 1);
+
+    // A thread is selected before its brief arrives.
+    assert.match(await coord.ctx.call('project_thread_start', { title: 'Fast', brief: 'Go.', model: 'deepseek-v4-flash' }), /^Started t1 "Fast" \(deepseek:deepseek-v4-flash · effort high\)\. It will hand back when done\.$/);
+    const t1 = [...host.live.values()].find((a) => a.id !== coord.id);
+    assert.deepEqual(host.selections[1], { sessionId: t1.id, selection: { provider: 'deepseek', model: 'deepseek-v4-flash', reasoningEffort: 'high' }, promptsBefore: 0 });
+
+    // A model without effort levels: the default effort is dropped with a note.
+    assert.match(await coord.ctx.call('project_thread_start', { title: 'Big', brief: 'Go.', model: 'big-model' }), /\(other:big-model · effort default\).*Note: other:big-model has no effort levels, so effort "high" is not used\.$/);
+    assert.deepEqual(host.selections[2].selection, { provider: 'other', model: 'big-model' });
+
+    // project_thread_update re-selects the thread.
+    assert.match(await coord.ctx.call('project_thread_update', { thread: 't1', effort: 'off' }), /route deepseek:deepseek-v4-flash · effort off from the next request/);
+    assert.deepEqual(host.selections[3], { sessionId: t1.id, selection: { provider: 'deepseek', model: 'deepseek-v4-flash', reasoningEffort: 'off' }, promptsBefore: 1 });
+    await coord.ctx.call('project_thread_update', { thread: 't1', title: 'Renamed' });
+    assert.equal(host.selections.length, 4, 'a rename selects nothing');
+});
+
+test('session mode: coordinator settings re-select only on change, and "default" restores it', async () => {
+    const { host } = setup({}, undefined, SELECTING);
+    await tick();
+    const coord = coordinatorOf(host);
+    const efforts = () => host.selections.filter((s) => s.sessionId === coord.id).map((s) => s.selection.reasoningEffort);
+    assert.deepEqual(efforts(), ['max']);
+    await coord.ctx.call('project_settings', { coordinator_effort: 'low' });
+    await coord.ctx.call('project_settings', { coordinator_effort: 'low' });
+    await coord.ctx.call('project_settings', { thread_effort: 'max' });
+    assert.deepEqual(efforts(), ['max', 'low'], 'no selection when nothing about the coordinator changed');
+    await coord.ctx.call('project_settings', { coordinator_effort: 'default' });
+    assert.deepEqual(efforts(), ['max', 'low', 'max']);
+});
+
+test('session mode: a project on DSH defaults selects nothing until a setting is made', async () => {
+    const { host } = setup({ threadEffort: '', projects: [{ name: 'DSH Plugins', workspacePath: '/work/dsh' }] }, undefined, SELECTING);
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { title: 'Plain', brief: 'Go.' });
+    assert.deepEqual(host.selections, []);
+    await coord.ctx.call('project_settings', { coordinator_model: 'deepseek-v4-flash' });
+    assert.deepEqual(host.selections.map((s) => s.selection), [{ provider: 'deepseek', model: 'deepseek-v4-flash' }]);
+    // Back to the DSH default selection, with the adapter's default effort filled in.
+    await coord.ctx.call('project_settings', { coordinator_model: 'default' });
+    assert.deepEqual(host.selections.at(-1).selection, { provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'high' });
+});
+
+test('session mode: restart keeps the coordinator selection; a changed profile re-selects it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const first = setup({}, dir, SELECTING);
+    await tick();
+    assert.equal(first.host.selections.length, 1);
+
+    const again = fakeHost(SELECTING);
+    for (const [id, s] of first.host.sessions) again.sessions.set(id, s);
+    plugin.apply(again, first.config);
+    await tick();
+    assert.equal(again.selections.length, 0, 'unchanged settings: the session keeps its selection');
+
+    const changed = fakeHost(SELECTING);
+    for (const [id, s] of first.host.sessions) changed.sessions.set(id, s);
+    plugin.apply(changed, plugin.Config({ ...first.config, projects: [{ ...first.config.projects[0], coordinatorEffort: 'low' }] }));
+    await tick();
+    assert.deepEqual(changed.selections.map((s) => s.selection.reasoningEffort), ['low']);
+});
+
+test('session mode: a failed selection is reported, and the coordinator retries later', async () => {
+    const { host, dir } = setup({}, undefined, SELECTING);
+    await tick();
+    const coord = coordinatorOf(host);
+    host.services.llm = { async resolveCallConfig() { throw new Error('provider offline'); } };
+    assert.match(await coord.ctx.call('project_thread_start', { title: 'T', brief: 'Go.' }), /Note: the model could not be set, so the thread runs on the DSH default/);
+    assert.match(await coord.ctx.call('project_settings', { coordinator_effort: 'low' }), /The coordinator model could not be switched/);
+    host.services.llm = fakeLlm;
+    await coord.ctx.call('project_settings', { thread_effort: 'max' });
+    assert.deepEqual(host.selections.filter((s) => s.sessionId === coord.id).map((s) => s.selection.reasoningEffort), ['max', 'low'], 'the next settings call retries the coordinator');
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /error select dsh-plugins\/t1 provider offline/);
 });

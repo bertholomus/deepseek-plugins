@@ -8,16 +8,24 @@
  * Project behaviour is attached to the live Agent, not to the session file:
  * on every `agent/created` (fresh, resumed, cleared) the manager looks the
  * session up in the store and installs agent-scoped tools, a system prompt
- * section, a model route override and, for threads, the idle watcher. Other
- * sessions never see any of it.
+ * section and, for threads, the idle watcher. Other sessions never see any
+ * of it.
+ *
+ * Models and effort are set the way the DSH model picker sets them: a durable
+ * `model/selection` on the one session, so the DSH window shows the right
+ * model and the user can still change it there. The picker's public path
+ * (`sessionController.selectModel`) also overwrites the global default model,
+ * so the manager calls the controller's per-session step directly. When a
+ * Host does not have that step, it falls back to rewriting every model
+ * request of project sessions.
  *
  * @module dsh-plugin-projects/projects
  */
-import { appendFileSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { ProjectStore, expand } from './store.js';
-import { effectiveSettings, applyRoute, checkSelection, describeRoute } from './settings.js';
+import { ProjectStore, expand, ensurePrivateDir } from './store.js';
+import { effectiveSettings, applyRoute, checkSelection, describeRoute, parseModelSpec } from './settings.js';
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage,
     handbackMessage, idleMessage, HANDBACK_STATUSES,
@@ -64,8 +72,13 @@ export class ProjectManager {
         this.store = new ProjectStore(config.storeFile);
         this.logFile = config.logFile ? expand(config.logFile) : '';
         if (this.logFile) {
-            try { mkdirSync(dirname(this.logFile), { recursive: true, mode: 0o700 }); } catch {}
+            try { ensurePrivateDir(dirname(this.logFile)); } catch {}
         }
+        /**
+         * 'session': set models with the controller's per-session selection.
+         * 'override': this Host lacks it; rewrite each project model request.
+         */
+        this.selectionMode = typeof ctx.sessionController?.agents?.selectForNextRequest === 'function' ? 'session' : 'override';
         /** projectId → normalized project row. */
         this.projects = new Map();
         for (const row of config.projects ?? []) {
@@ -112,8 +125,13 @@ export class ProjectManager {
         return agent ? agent.status : 'idle';
     }
 
+    /** The Host model catalog, cached briefly; undefined when unavailable. */
     async catalog() {
-        try { return await this.sc.modelCatalog(); } catch { return undefined; }
+        if (this.catalogCache && Date.now() - this.catalogCache.at < 30000) return this.catalogCache.value;
+        let value;
+        try { value = await this.sc.modelCatalog(); } catch { value = undefined; }
+        this.catalogCache = value ? { value, at: Date.now() } : null;
+        return value;
     }
 
     // ── lifecycle ──────────────────────────────────────────────────────────
@@ -169,12 +187,16 @@ export class ProjectManager {
         if (await this.exists(stored.coordinatorSessionId)) {
             const live = this.ctx.agents.get(stored.coordinatorSessionId);
             if (live) this.maybeInstall(live);
+            await this.applyCoordinatorRoute(projectId);
             return stored.coordinatorSessionId;
         }
         const sessionId = await this.createSession(project);
-        this.store.putProject(projectId, { coordinatorSessionId: sessionId, coordinatorCreatedAt: new Date().toISOString() });
+        this.store.putProject(projectId, {
+            coordinatorSessionId: sessionId, coordinatorCreatedAt: new Date().toISOString(), coordinatorRoute: undefined,
+        });
         await this.attach(sessionId);
         await this.sc.rename({ sessionId, title: `◆ ${project.name}` }).catch(() => {});
+        await this.applyCoordinatorRoute(projectId);
         this.log(`coordinator ${projectId} ${sessionId}`);
         return sessionId;
     }
@@ -227,11 +249,14 @@ export class ProjectManager {
                 text: () => (role === 'coordinator' ? this.coordinatorText(projectId) : this.threadText(projectId, threadId)),
             }));
             for (const tool of this.buildTools(this, who)) add(scoped.tools.register(tool));
-            add(scoped.on('agent/request', async (_event, next) => {
-                const resolved = await next();
-                const route = this.routeFor(who);
-                return route ? applyRoute(resolved, route.model, route.effort) : resolved;
-            }));
+            if (this.selectionMode === 'override') {
+                // Outermost, so the Host's own selection listener cannot undo it.
+                add(scoped.on('agent/request', async (_event, next) => {
+                    const resolved = await next();
+                    const route = await this.checkedRoute(who);
+                    return route ? applyRoute(resolved, route.model, route.effort) : resolved;
+                }, { prepend: true }));
+            }
             if (role === 'thread') {
                 add(scoped.on('agent/status', ({ status }) => {
                     void this.onThreadStatus(projectId, threadId, agent, status).catch((error) => {
@@ -255,6 +280,86 @@ export class ProjectManager {
         }
         const t = this.store.thread(who.projectId, who.threadId);
         return t ? { model: t.model, effort: t.effort } : null;
+    }
+
+    /** The route checked against the catalog: an effort the model lacks is dropped. */
+    async checkedRoute(who) {
+        const route = this.routeFor(who);
+        if (!route || (!route.model && !route.effort)) return route;
+        const check = checkSelection(await this.catalog(), route.model, route.effort);
+        return check.ok ? { model: check.model ?? route.model, effort: check.effort } : route;
+    }
+
+    /**
+     * The complete selection for a route. An unset model means the DSH
+     * default model; an unset effort means the model's own default, and a
+     * fully unset route means the DSH default selection.
+     */
+    fullSelection(route) {
+        let base = {};
+        try { base = this.ctx.get?.('agentDefaultModel')?.currentSelection?.() ?? {}; } catch {}
+        if (!route?.model && !route?.effort) return base.provider && base.model ? { ...base } : null;
+        const parsed = route.model ? parseModelSpec(route.model, base.provider) : { provider: base.provider, model: base.model };
+        if (!parsed?.provider || !parsed.model) return null;
+        return { provider: parsed.provider, model: parsed.model, ...(route.effort ? { reasoningEffort: route.effort } : {}) };
+    }
+
+    /** Validate a selection and fill in the adapter's default effort, as the DSH picker does. */
+    async resolveSelection(selection) {
+        const llm = this.ctx.get?.('llm');
+        if (typeof llm?.resolveCallConfig !== 'function') return selection;
+        const r = await llm.resolveCallConfig(selection, AbortSignal.timeout(20000));
+        return { provider: r.provider, model: r.model, ...(r.reasoningEffort === undefined ? {} : { reasoningEffort: String(r.reasoningEffort) }) };
+    }
+
+    /**
+     * Put one session on its project route from its next model request, the
+     * way the DSH model picker does, without saving a global default.
+     * @returns whether a selection was recorded.
+     */
+    async selectRoute(agent, who) {
+        if (this.selectionMode !== 'session' || !agent) return false;
+        const label = `${who.projectId}/${who.threadId ?? 'coordinator'}`;
+        try {
+            const wanted = this.fullSelection(await this.checkedRoute(who));
+            if (!wanted) throw new Error('no DSH default model to build on');
+            const selection = await this.resolveSelection(wanted);
+            this.sc.agents.selectForNextRequest(agent, selection);
+            this.log(`select ${label} ${selection.provider}:${selection.model} effort=${selection.reasoningEffort ?? '-'}`);
+            return true;
+        } catch (error) {
+            this.log(`error select ${label} ${String(error?.message ?? error).slice(0, 200)}`);
+            this.ctx.logger?.warn?.('projects: could not set the model for %s: %s', label, error?.message ?? error);
+            return false;
+        }
+    }
+
+    /**
+     * Select the coordinator's route when its settings differ from the ones
+     * it last got. A new coordinator on the DSH default needs no selection.
+     * @returns false only when a needed selection failed.
+     */
+    async applyCoordinatorRoute(projectId) {
+        if (this.selectionMode !== 'session') return true;
+        const stored = this.store.project(projectId);
+        if (!stored.coordinatorSessionId) return true;
+        const s = this.settings(projectId);
+        const key = JSON.stringify([s.coordinatorModel.value ?? null, s.coordinatorEffort.value ?? null]);
+        if (stored.coordinatorRoute === key) return true;
+        if (stored.coordinatorRoute === undefined && key === '[null,null]') {
+            this.store.putProject(projectId, { coordinatorRoute: key });
+            return true;
+        }
+        let agent;
+        try {
+            agent = await this.attach(stored.coordinatorSessionId);
+        } catch (error) {
+            this.log(`error select ${projectId}/coordinator ${String(error?.message ?? error).slice(0, 200)}`);
+            return false;
+        }
+        if (!await this.selectRoute(agent, { projectId, role: 'coordinator' })) return false;
+        this.store.putProject(projectId, { coordinatorRoute: key });
+        return true;
     }
 
     readMemory(projectId) {
@@ -382,11 +487,16 @@ export class ProjectManager {
             sessionId, title: cleanTitle, model: check.model, effort: check.effort,
             resolved: false, createdAt: new Date().toISOString(), handbackTimes: [],
         });
-        await this.attach(sessionId);
+        const agent = await this.attach(sessionId);
+        const notes = check.note ? [check.note] : [];
+        if ((check.model || check.effort) && this.selectionMode === 'session'
+            && !await this.selectRoute(agent, { projectId, role: 'thread', threadId })) {
+            notes.push('the model could not be set, so the thread runs on the DSH default (details in the projects log)');
+        }
         await this.sc.rename({ sessionId, title: `${project.name} › ${cleanTitle}` }).catch(() => {});
         await this.prompt(sessionId, briefMessage(project.name, threadId, cleanTitle, brief.trim()), 'queue');
         this.log(`thread-start ${projectId}/${threadId} ${sessionId} brief-chars=${brief.length}`);
-        return { threadId, sessionId, title: cleanTitle, route: describeRoute(check.model, check.effort) };
+        return { threadId, sessionId, title: cleanTitle, route: describeRoute(check.model, check.effort), notes };
     }
 
     async sendToThread(projectId, threadId, text, steer) {
@@ -436,12 +546,17 @@ export class ProjectManager {
             fields.model = check.model;
             fields.effort = check.effort;
             out.push(`route ${describeRoute(check.model, check.effort)} from the next request`);
+            if (check.note) out.push(check.note);
         }
         if (changes.resolved !== undefined) {
             fields.resolved = changes.resolved === true;
             out.push(fields.resolved ? 'resolved' : 'reopened');
         }
         if (Object.keys(fields).length > 0) this.store.putThread(projectId, threadId, fields);
+        if ('model' in fields && this.selectionMode === 'session'
+            && !await this.selectRoute(await this.attach(t.sessionId), { projectId, role: 'thread', threadId })) {
+            out.push('but the model could not be set, so it keeps its current one (details in the projects log)');
+        }
         if (changes.stop === true) {
             await this.sc.cancel({ sessionId: t.sessionId });
             out.push('current turn stopped (queued messages kept)');
@@ -459,6 +574,7 @@ export class ProjectManager {
         const current = this.settings(projectId);
         const val = (v) => (v === 'default' ? undefined : v);
         const pairs = [['coordinatorModel', 'coordinatorEffort'], ['threadModel', 'threadEffort']];
+        const notes = [];
         let catalog;
         for (const [mKey, eKey] of pairs) {
             if (changes[mKey] === undefined && changes[eKey] === undefined) continue;
@@ -468,11 +584,16 @@ export class ProjectManager {
             const check = checkSelection(catalog, model, effort);
             if (!check.ok) throw new ProjectError(check.error);
             if (changes[mKey] !== undefined) next[mKey] = changes[mKey] === 'default' ? undefined : check.model;
-            if (changes[eKey] !== undefined) next[eKey] = changes[eKey] === 'default' ? undefined : check.effort;
+            if (changes[eKey] !== undefined) next[eKey] = changes[eKey] === 'default' ? undefined : (check.effort ?? effort.trim());
+            if (check.note) notes.push(`${mKey === 'coordinatorModel' ? 'Coordinator' : 'Threads'}: ${check.note}.`);
         }
         const wasPaused = this.paused(projectId);
         if (changes.paused !== undefined) next.paused = changes.paused;
         this.store.putSettings(projectId, next);
+        // Every call also retries a coordinator selection that failed before.
+        if (!await this.applyCoordinatorRoute(projectId)) {
+            notes.push('The coordinator model could not be switched; it keeps its current one (details in the projects log).');
+        }
         let flushed = 0;
         if (wasPaused && !this.paused(projectId)) flushed = await this.flushPending(projectId);
         this.log(`settings ${projectId} ${Object.keys(next).join(',')}`);
@@ -481,6 +602,7 @@ export class ProjectManager {
             `Coordinator: ${describeRoute(s.coordinatorModel.value, s.coordinatorEffort.value)} (${s.coordinatorModel.source} / ${s.coordinatorEffort.source})`,
             `New threads: ${describeRoute(s.threadModel.value, s.threadEffort.value)} (${s.threadModel.source} / ${s.threadEffort.source})`,
             `Paused: ${this.paused(projectId) ? 'yes' : 'no'}${flushed ? ` (delivered ${flushed} held handbacks)` : ''}`,
+            ...notes,
         ].join('\n');
     }
 
@@ -502,7 +624,7 @@ export class ProjectManager {
         if (Buffer.byteLength(body) > this.config.maxMemoryBytes) {
             throw new ProjectError(`memory would exceed ${this.config.maxMemoryBytes} bytes; summarize it with action "replace"`);
         }
-        mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+        ensurePrivateDir(dirname(path));
         writeFileSync(path, body, { mode: 0o600 });
         this.log(`memory ${projectId} ${action} bytes=${statSync(path).size}`);
         return `Project memory ${action === 'append' ? 'appended' : 'replaced'} (${Buffer.byteLength(body)} bytes).`;
