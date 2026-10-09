@@ -569,6 +569,14 @@ export class ProjectManager {
         const s = this.settings(projectId);
         const check = checkSelection(await this.catalog(), model ?? s.threadModel.value, effort ?? s.threadEffort.value);
         if (!check.ok) throw new ProjectError(check.error);
+        // Every attempt counts, so a coordinator caught in a loop stops even when starts fail.
+        const now = Date.now();
+        const starts = (this.store.project(projectId).threadStarts ?? []).filter((ms) => now - ms < HOUR);
+        if (starts.length >= this.config.maxThreadsPerHour) {
+            this.log(`thread-limit ${projectId} ${starts.length}`);
+            throw new ProjectError(`thread limit reached: this project started ${starts.length} threads in the last hour (maxThreadsPerHour). Tell the user, and continue in existing threads with project_thread_send`);
+        }
+        this.store.putProject(projectId, { threadStarts: [...starts, now] });
 
         const threadId = this.store.reserveThreadId(projectId);
         const sessionId = await this.createSession(project);

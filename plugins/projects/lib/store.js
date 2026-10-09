@@ -3,7 +3,7 @@
  *
  * { version: 1, projects: { [projectId]: {
  *     coordinatorSessionId, settings: { coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused? },
- *     nextThread, pendingHandbacks: [text],
+ *     nextThread, pendingHandbacks: [text], threadStarts: [ms],
  *     threads: { [threadId]: { sessionId, title, model?, effort?, state, resolved,
  *       createdAt, lastHandback?: { status, summary, at }, handbackTimes: [ms] } } } } }
  *

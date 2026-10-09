@@ -382,6 +382,19 @@ test('handback rate cap', async () => {
     assert.match(await thread.ctx.call('project_handback', { status: 'done', summary: 'c' }), /^Failed: handback limit reached \(2 per hour\)/);
 });
 
+test('thread start cap stops a coordinator that keeps starting threads', async () => {
+    const { host, dir } = setup({ maxThreadsPerHour: 2 });
+    await tick();
+    const coord = coordinatorOf(host);
+    assert.match(await coord.ctx.call('project_thread_start', { title: 'One', brief: 'x' }), /^Started t1/);
+    assert.match(await coord.ctx.call('project_thread_start', { title: 'Two', brief: 'x' }), /^Started t2/);
+    assert.match(await coord.ctx.call('project_thread_start', { title: 'Three', brief: 'x' }), /^Failed: thread limit reached: this project started 2 threads in the last hour/);
+    assert.equal(host.sessions.size, 3, 'coordinator plus two threads');
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /thread-limit dsh-plugins 2/);
+    // Sending to an existing thread still works.
+    assert.match(await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Carry on.' }), /^Sent to t1/);
+});
+
 test('memory is shared and shown in both policies', async () => {
     const { host, dir } = setup();
     await tick();
