@@ -10,7 +10,9 @@
  *
  * Settings mirror Claude Code's project page: coordinator model and effort,
  * thread model and effort (plugin-wide defaults, per-project config, and
- * runtime changes through the coordinator), plus pause.
+ * runtime changes through the coordinator), plus pause. The plugin-wide
+ * defaults are live config, so the form on the plugin's page in DSH (the
+ * browser half, lib/client.js) changes them without a restart.
  *
  * @module dsh-plugin-projects
  */
@@ -48,19 +50,26 @@ const Project = z.object({
     memoryFile: z.string(),
 });
 
+/**
+ * A setting DSH's settings page may change while the plugin runs. The plugin
+ * reads it through pluginDefaults(); a schemastery without volatile fields
+ * keeps it ordinary config.
+ */
+const live = (schema) => (typeof schema.volatile === 'function' ? schema.volatile() : schema);
+
 export const Config = z.object({
     /** Master switch. */
     enabled: z.boolean().default(true),
     /** Projects, one coordinator each. */
     projects: z.array(Project).default([]),
     /** Plugin-wide default coordinator model; empty uses the DSH default model. */
-    coordinatorModel: z.string(),
+    coordinatorModel: live(z.string()),
     /** Plugin-wide default coordinator effort; empty uses the model's default. */
-    coordinatorEffort: z.string(),
+    coordinatorEffort: live(z.string()),
     /** Plugin-wide default model for new threads. */
-    threadModel: z.string(),
+    threadModel: live(z.string()),
     /** Plugin-wide default effort for new threads. */
-    threadEffort: z.string(),
+    threadEffort: live(z.string()),
     /** "idle": when a thread ends a turn the coordinator started without a handback, tell the coordinator. "off": only explicit handbacks. */
     autoHandback: z.union(['idle', 'off']).default('idle'),
     /** Handbacks (explicit plus automatic) one thread may send per hour; stops runaway loops. */
@@ -92,6 +101,10 @@ export function apply(ctx, config) {
     });
     ctx.on('agent/disposed', ({ agent }) => {
         manager.forget(agent);
+    });
+    // The defaults form saved: only the live fields changed, so the plugin keeps running.
+    ctx.on('loader/volatile-update', () => {
+        void manager.onDefaultsChanged();
     });
     ctx.effect(() => () => manager.dispose(), 'projects.scopes()');
 

@@ -8,7 +8,8 @@
  * socket and checks what reached the model: models and efforts on the wire,
  * tool scoping, handbacks, the automatic notes (idle, failed, stopped,
  * waiting on approval, cut off by a DSH crash), queued turns, direct talk,
- * settings, memory, pause and a restart.
+ * settings, memory, pause, a restart, the browser half DSH serves for the
+ * plugin's page, and a saved default that applies without a restart.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/projects/test/e2e/run.mjs
  *
@@ -22,6 +23,7 @@ import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Script } from 'node:vm';
 import { startFakeModel } from './fake-model.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -101,6 +103,20 @@ function bridge(method, path, body) {
     });
 }
 
+/** GET from the DSH web server. */
+function httpGet(url, headers = {}) {
+    return new Promise((resolvePromise, reject) => {
+        const req = request(url, { headers }, (res) => {
+            let text = '';
+            res.setEncoding('utf8');
+            res.on('data', (c) => { text += c; });
+            res.on('end', () => resolvePromise({ status: res.statusCode, headers: res.headers, text }));
+        });
+        req.on('error', reject);
+        req.end();
+    });
+}
+
 const readText = (file) => { try { return readFileSync(file, 'utf8'); } catch { return ''; } };
 const store = () => { try { return JSON.parse(readFileSync(storeFile, 'utf8')); } catch { return {}; } };
 const project = () => store().projects?.[PROJECT_ID] ?? {};
@@ -111,8 +127,9 @@ const octal = (mode) => mode.toString(8);
 /** The model sees "E2E:call <tool> <json>" and calls that tool. */
 const call = (tool, args) => `E2E:call ${tool} ${JSON.stringify(args)}`;
 
+const profile = join(home, 'profiles', 'web');
+
 function writeProfile(modelPort) {
-    const profile = join(home, 'profiles', 'web');
     mkdirSync(join(profile, 'node_modules'), { recursive: true });
     const plugins = { 'dsh-plugin-projects': join(pluginsDir, 'projects'), 'dsh-plugin-session-bridge': join(pluginsDir, 'session-bridge') };
     writeFileSync(join(profile, 'package.json'), `${JSON.stringify({
@@ -122,6 +139,15 @@ function writeProfile(modelPort) {
         dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', ...Object.keys(plugins)] } },
     }, null, 2)}\n`);
     for (const [name, dir] of Object.entries(plugins)) symlinkSync(dir, join(profile, 'node_modules', name), 'dir');
+    writePatch(modelPort, { coordinatorEffort: 'max', threadEffort: 'high' });
+}
+
+/**
+ * Write the profile's cordis.patch.yml with these plugin-wide defaults. DSH
+ * watches the file, so a rewrite while it runs is a config save, the same
+ * write the defaults form on the plugin's page makes.
+ */
+function writePatch(modelPort, defaults) {
     const q = JSON.stringify;
     // The DSH default effort is "low", so a missed project selection shows on the wire.
     writeFileSync(join(profile, 'cordis.patch.yml'), `- id: agent-default-model
@@ -152,9 +178,7 @@ function writeProfile(modelPort) {
             reasoningEfforts: false
 - id: projects
   config:
-    coordinatorEffort: max
-    threadEffort: high
-    approvalNoticeSeconds: 1
+${Object.entries(defaults).map(([key, value]) => `    ${key}: ${q(value)}\n`).join('')}    approvalNoticeSeconds: 1
     storeFile: ${q(storeFile)}
     memoryDir: ${q(memoryDir)}
     logFile: ${q(logFile)}
@@ -245,6 +269,17 @@ try {
     check('state folder is 700', modeOf(stateDir) === 0o700, octal(modeOf(stateDir)));
     check('store file is 600', modeOf(storeFile) === 0o600, octal(modeOf(storeFile)));
     check('log file is 600', modeOf(logFile) === 0o600, octal(modeOf(logFile)));
+    // The browser half: DSH serves it for the plugin's page, and it parses
+    // (DSH sends browser halves in batches, so one that does not parse breaks others).
+    const signIn = /dsh web: (\S+)/.exec(readText(dshLog))?.[1] ?? '';
+    const cookie = String((await httpGet(signIn)).headers['set-cookie']?.[0] ?? '').split(';')[0];
+    const app = await httpGet(new URL('./', signIn).href, { cookie });
+    const clientUrl = /"id":"dsh-plugin-projects","url":"([^"]+)"/.exec(app.text)?.[1];
+    const client = clientUrl ? await httpGet(new URL(clientUrl, new URL('./', signIn)).href, { cookie }) : { status: 0, text: '' };
+    let parses = false;
+    try { new Script(client.text); parses = true; } catch {}
+    check('DSH serves the browser half and it parses', client.status === 200 && client.text.includes("'plugins.bundle.config'") && parses,
+        `${clientUrl ?? 'not in the boot graph'}: ${client.status}`);
 
     // 2. Thread start and handback.
     let mark = model.requests.length;
@@ -412,6 +447,33 @@ try {
     check('coordinator keeps its effort after restart', since(mark, 'coordinator').every((r) => r.effort === 'low'), describe(since(mark, 'coordinator')));
     const t1After = since(mark, 't1');
     check('thread keeps its effort and tools after restart', t1After.length > 0 && t1After.every((r) => r.effort === 'max' && r.tools.includes('project_handback')), describe(t1After));
+
+    // 17. New defaults saved while DSH runs (the form on the plugin's page
+    // writes the same file) apply without restarting the plugin. They replace
+    // the coordinator's own changes to those settings (effort low, thread
+    // model fake-flash): the newest change wins. A thread that started on
+    // fake-flash keeps it.
+    const starts = () => readText(logFile).split('\n').filter((l) => l.includes(` coordinator ${PROJECT_ID} `)).length;
+    const startsBefore = starts();
+    writePatch(model.port, { coordinatorEffort: 'high', threadModel: 'fake:fake-model', threadEffort: 'max' });
+    await waitFor(() => readText(logFile).includes(`select ${PROJECT_ID}/coordinator fake:fake-model effort=high`), 'the coordinator to switch to the new default');
+    const noted = readText(logFile).split('\n').find((l) => l.includes(`defaults ${PROJECT_ID} `)) ?? '';
+    check('the saved defaults replace the coordinator changes', noted.endsWith(`defaults ${PROJECT_ID} coordinatorEffort,threadModel,threadEffort replaced coordinatorEffort,threadModel`)
+        && project().settings?.coordinatorEffort === undefined && project().settings?.threadModel === undefined, noted);
+    check('the plugin was not restarted', starts() === startsBefore, `${startsBefore} → ${starts()}`);
+    mark = model.requests.length;
+    await say(coord, call('project_thread_start', { title: 'Iota', brief: 'Just answer.' }));
+    await coordinatorSaw(mark, 'SAW-IDLE', 'the Iota idle note');
+    check('the coordinator asks with the new default effort', since(mark, 'coordinator').every((r) => r.effort === 'high'), describe(since(mark, 'coordinator')));
+    check('the coordinator prompt shows the new defaults', since(mark, 'coordinator')[0]?.system.includes('- New threads: fake:fake-model · effort max'),
+        since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => l.startsWith('- Coordinator:') || l.startsWith('- New threads:')).join(' | '));
+    const t9Reqs = since(mark, 't9');
+    check('a new thread asks with the new defaults', t9Reqs.length > 0 && t9Reqs.every((r) => r.model === 'fake-model' && r.effort === 'max'), describe(t9Reqs));
+    mark = model.requests.length;
+    await say(coord, call('project_thread_send', { thread: 't5', text: 'After the new defaults.' }));
+    await coordinatorSaw(mark, 'SAW-IDLE', 'the t5 idle note after the new defaults');
+    const t5After = since(mark, 't5');
+    check('a thread keeps the model it started with', t5After.length > 0 && t5After.every((r) => r.model === 'fake-flash' && r.effort === undefined), describe(t5After));
     check('no errors in the projects log', !/ error /.test(readText(logFile)), readText(logFile).split('\n').filter((l) => / error /.test(l)).join('\n'));
 } catch (error) {
     failed += 1;

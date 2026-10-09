@@ -17,6 +17,18 @@ export const SETTING_KEYS = ['coordinatorModel', 'coordinatorEffort', 'threadMod
 const set = (v) => typeof v === 'string' && v.trim() !== '';
 
 /**
+ * The four plugin-wide defaults as plain values. DSH hands them over as live
+ * references (`{get()}`) because its settings page edits them while the
+ * plugin runs; a test or an older DSH hands over plain strings.
+ * @param {object} config - plugin config.
+ * @returns {Record<string, string|undefined>}
+ */
+export function pluginDefaults(config = {}) {
+    const read = (v) => (v !== null && typeof v === 'object' && typeof v.get === 'function' ? v.get() : v);
+    return Object.fromEntries(SETTING_KEYS.map((key) => [key, read(config[key])]));
+}
+
+/**
  * Resolve the four settings and where each came from.
  * @param {object} plugin - plugin config (top-level defaults).
  * @param {object} project - the project's profile row.

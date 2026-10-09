@@ -3,7 +3,7 @@
  *
  * { version: 1, projects: { [projectId]: {
  *     coordinatorSessionId, settings: { coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused? },
- *     nextThread, pendingHandbacks: [text], threadStarts: [ms],
+ *     nextThread, pendingHandbacks: [text], threadStarts: [ms], defaultsSeen?: { the plugin defaults last applied },
  *     threads: { [threadId]: { sessionId, title, model?, effort?, resolved, createdAt,
  *       lastHandback?: { status, summary, at }, lastDirect?: { at, reply }, handbackTimes: [ms],
  *       busy?: true while a turn runs, seenTurn?: key of the last turn reviewed } } } } }

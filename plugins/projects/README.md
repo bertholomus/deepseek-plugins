@@ -23,14 +23,24 @@ The four settings match Claude Code's project page:
 
 | Claude Code | Here | Where |
 | --- | --- | --- |
-| Coordinator model | `coordinatorModel` | plugin row, project row, or `project_settings` |
+| Coordinator model | `coordinatorModel` | the plugin's page in DSH, plugin row, project row, or `project_settings` |
 | Coordinator effort | `coordinatorEffort` | same |
 | Thread model | `threadModel` | same |
 | Thread effort | `threadEffort` | same |
 | Pause project | `paused` | project row or `project_settings` |
 | Goal | `goal` | project row |
 
-Each setting comes from the first place that sets it: a change made through the coordinator (`project_settings`), then the project row, then the plugin row, then the DSH default model. Saying "default" to the coordinator clears a change, like "Use default".
+### Default models page
+
+In DSH, open **Plugins → dsh-plugin-projects**. Under **Default models**, pick the model and effort for coordinators and for new threads. The model list is DSH's own, grouped by provider, and the effort choices are the ones the chosen model offers. **DSH default** follows your DSH default model.
+
+**Save** applies at once, in every project, without restarting DSH or interrupting a session: each coordinator switches from its next request, and new threads start with the new defaults. A thread that already exists keeps the model and effort it started with. The page writes the plugin row of your profile's `cordis.patch.yml`, so editing that row by hand does the same.
+
+### Which setting wins
+
+Each setting comes from the first place that sets it: a change made through the coordinator (`project_settings`), then the project row, then the plugin row (the page), then the DSH default model. Saying "default" to the coordinator clears a change, like "Use default".
+
+The newest change wins. Asking a coordinator to change a setting changes it for that project. Saving a new value for that setting on the page later replaces the coordinator's change in every project, and the plugin logs it (`defaults <project> … replaced …`). A setting in a project row stays: that project keeps it until you edit the row.
 
 Models are `provider:model` or a bare model id. Effort is whatever the model offers (for DeepSeek: `off`, `low`, `high`, `max`). Both are checked against the Host's model catalog, and a bad value comes back with the valid choices. A model with no effort levels runs without one, and the coordinator is told the effort was not used.
 
@@ -61,11 +71,11 @@ The plugin sets a project session's model and effort the same way the DSH model 
            workspacePath: ~/code/deepseek-plugins
    ```
 
-3. Restart DSH Desktop once so it loads the new bundle. Later config changes apply live when the profile uses `patchReload: live`.
+3. Restart DSH Desktop once so it loads the new bundle. After that, DSH picks up edits to `cordis.patch.yml` while it runs. Running sessions keep running.
 
 The `◆ DSH Plugins` session appears in the sidebar. Open it and ask for work.
 
-An older setup that adds the row with `insert` still works: the configured row is the one that runs.
+An older setup that adds the row with `insert:` still runs (the configured row is the one that runs), but the row is then in the profile twice and DSH can't save the Default models page. The page says so and shows the values read-only. To fix it, change that row to the address row in step 2: `- id: projects` with the same `config:`, without `insert:` and `name:`.
 
 ## Config
 
@@ -150,7 +160,7 @@ node plugins/projects/test/smoke.mjs
 
 The smoke tests run against a fake Host built from the published `@deepseek-ai/*` packages, including a Host with DSH's per-session model selection.
 
-The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin, session-bridge and a scripted model server. It drives the coordinator and threads through the bridge and checks what reaches the model: the model and effort of every request, which tools each session has, handbacks, the automatic notes (idle, failed, stopped, waiting on approval, cut off by a crash), queued turns, direct talk, settings, memory, pause, a stop by the coordinator, and a restart after DSH is killed mid-turn. It takes about two minutes.
+The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin, session-bridge and a scripted model server. It drives the coordinator and threads through the bridge and checks what reaches the model: the model and effort of every request, which tools each session has, handbacks, the automatic notes (idle, failed, stopped, waiting on approval, cut off by a crash), queued turns, direct talk, settings, memory, pause, a stop by the coordinator, a restart after DSH is killed mid-turn, that DSH serves the page's browser code, and new defaults saved while DSH runs. It takes about two minutes.
 
 ```bash
 npm install --prefix /tmp/dsh @deepseek-ai/dsh

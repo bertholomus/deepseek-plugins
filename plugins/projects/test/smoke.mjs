@@ -11,8 +11,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import * as plugin from '../lib/index.js';
-import { effectiveSettings, applyRoute, checkSelection, parseModelSpec } from '../lib/settings.js';
+import { effectiveSettings, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
 import { slugify, timing } from '../lib/projects.js';
 
 const CATALOG = {
@@ -191,16 +192,23 @@ function fakeHost({ selection = false, hostListener = selection } = {}) {
 
 function setup(overrides = {}, dir = mkdtempSync(join(tmpdir(), 'projects-')), hostOptions = {}) {
     const host = fakeHost(hostOptions);
-    const config = plugin.Config({
+    const raw = {
         threadEffort: 'high',
         storeFile: join(dir, 'projects.json'),
         memoryDir: join(dir, 'memory'),
         logFile: join(dir, 'projects.log'),
         projects: [{ name: 'DSH Plugins', goal: 'Ship good DSH plugins', workspacePath: '/work/dsh', coordinatorEffort: 'max' }],
         ...overrides,
-    });
+    };
+    const config = plugin.Config(raw);
     plugin.apply(host, config);
-    return { host, config, dir };
+    return { host, config, raw, dir };
+}
+
+/** Change live config the way DSH does when its settings page saves, then tell the plugin. */
+function saveDefaults(host, config, values) {
+    for (const [key, value] of Object.entries(values)) config[key][Symbol.for('cosmokit.volatile.write')](value);
+    host.emit('loader/volatile-update', Object.keys(values).map((key) => [key]));
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 10));
@@ -214,6 +222,12 @@ test('settings resolve override → project → plugin → DSH default', () => {
     assert.deepEqual(s.threadEffort, { value: 'max', source: 'project setting' });
     assert.deepEqual(s.coordinatorModel, { value: undefined, source: 'DSH default' });
     assert.equal(effectiveSettings({}, { coordinatorEffort: '  ' }).coordinatorEffort.source, 'DSH default');
+    // DSH hands the plugin-wide defaults over as live references; tests and older hosts as plain strings.
+    assert.deepEqual(pluginDefaults({ threadEffort: 'high', coordinatorEffort: { get: () => 'max' }, threadModel: { get: () => undefined } }),
+        { coordinatorModel: undefined, coordinatorEffort: 'max', threadModel: undefined, threadEffort: 'high' });
+    const parsed = plugin.Config({ threadEffort: 'low' });
+    assert.equal(pluginDefaults(parsed).threadEffort, 'low');
+    assert.equal(pluginDefaults(parsed).coordinatorEffort, undefined);
 });
 
 test('model specs and route rewriting', () => {
@@ -545,9 +559,113 @@ test('session mode: restart keeps the coordinator selection; a changed profile r
 
     const changed = fakeHost(SELECTING);
     for (const [id, s] of first.host.sessions) changed.sessions.set(id, s);
-    plugin.apply(changed, plugin.Config({ ...first.config, projects: [{ ...first.config.projects[0], coordinatorEffort: 'low' }] }));
+    plugin.apply(changed, plugin.Config({ ...first.raw, projects: [{ ...first.raw.projects[0], coordinatorEffort: 'low' }] }));
     await tick();
     assert.deepEqual(changed.selections.map((s) => s.selection.reasoningEffort), ['low']);
+});
+
+test('defaults form: a saved default switches the coordinator and new threads, and replaces a coordinator change', async () => {
+    const SELECTING = { selection: true };
+    const { host, config, dir } = setup({ coordinatorEffort: 'high', projects: [{ name: 'DSH Plugins', workspacePath: '/work/dsh' }] }, undefined, SELECTING);
+    await tick();
+    const coord = coordinatorOf(host);
+    const efforts = () => host.selections.filter((s) => s.sessionId === coord.id).map((s) => s.selection.reasoningEffort);
+    assert.deepEqual(efforts(), ['high']);
+    // The user asked the coordinator for max-effort threads in this project.
+    await coord.ctx.call('project_settings', { thread_effort: 'max' });
+    assert.match(await coord.ctx.call('project_settings', {}), /New threads: DSH default model · effort max \(DSH default \/ project setting\)/);
+
+    // Then saved new defaults on the plugin's page.
+    saveDefaults(host, config, { coordinatorEffort: 'max', threadEffort: 'off' });
+    await tick();
+    assert.deepEqual(efforts(), ['high', 'max'], 'the coordinator switches from its next request');
+    assert.match(await coord.ctx.call('project_settings', {}), /New threads: DSH default model · effort off \(DSH default \/ plugin default\)/);
+    assert.match(await coord.ctx.call('project_thread_start', { title: 'After', brief: 'Go.' }), /Started t1/);
+    const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'DSH Plugins › After');
+    assert.equal(host.selections.find((s) => s.sessionId === t1.id).selection.reasoningEffort, 'off');
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /defaults dsh-plugins coordinatorEffort,threadEffort replaced threadEffort/);
+
+    // A save that changes nothing the plugin uses re-selects nothing; an empty default is an unset one.
+    saveDefaults(host, config, { coordinatorEffort: 'max' });
+    saveDefaults(host, config, { coordinatorModel: ' ' });
+    await tick();
+    assert.deepEqual(efforts(), ['high', 'max']);
+    assert.equal(readFileSync(join(dir, 'projects.log'), 'utf8').match(/ defaults /g).length, 1);
+});
+
+test('defaults form: a default changed while DSH was stopped replaces the coordinator change at the next start', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const first = setup({}, dir);
+    await tick();
+    const coordId = coordinatorOf(first.host).id;
+    assert.match(await coordinatorOf(first.host).ctx.call('project_settings', { thread_effort: 'off', coordinator_effort: 'low' }), /New threads: DSH default model · effort off/);
+    const restart = async (raw) => {
+        const host = fakeHost();
+        for (const [id, s] of first.host.sessions) host.sessions.set(id, s);
+        plugin.apply(host, plugin.Config(raw));
+        await tick();
+        return host.wake(coordId);
+    };
+    // Restarted with the same defaults: the coordinator's changes stand.
+    assert.match(await (await restart(first.raw)).ctx.call('project_settings', {}), /effort low \(DSH default \/ project setting\)\nNew threads: DSH default model · effort off \(DSH default \/ project setting\)/);
+    // Restarted after the thread effort default changed: that change is replaced, the coordinator's own stands.
+    assert.match(await (await restart({ ...first.raw, threadEffort: 'max' })).ctx.call('project_settings', {}),
+        /effort low \(DSH default \/ project setting\)\nNew threads: DSH default model · effort max \(DSH default \/ plugin default\)/);
+});
+
+/**
+ * Load the browser half the way DSH does: a classic script that hands its
+ * factory to the module loader, which calls it with DSH's module require.
+ */
+function loadClient() {
+    let loaded;
+    runInNewContext(readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'), { window: { __ModuleLoader__: { load: (m) => { loaded = m; } } } });
+    const ui = {
+        SettingsFormModel: class {
+            constructor(scope) { this.scope = scope; }
+            bind(project) { return { getSnapshot: project, subscribe: () => () => {} }; }
+            shell() { return { available: this.scope.getSnapshot().status === 'ready', writable: true, dirty: false, invalid: false, saving: false, failed: false }; }
+            field(name) { return { text: this.scope.getSnapshot().value?.[name] ?? '', overridden: false, invalid: false }; }
+            actions() { return {}; }
+            dispose() {}
+        },
+        settingsTextField: (field) => ({ field }),
+    };
+    const modules = { react: { createElement: (type, props, ...children) => ({ type, props, children }) }, '@deepseek-ai/dsh-client-ui-primitives': ui };
+    return { id: loaded.id, client: loaded.factory((name) => modules[name]) };
+}
+
+test('browser half: the defaults form registers on the plugin page, read-only when the profile adds the row twice', () => {
+    const { id, client } = loadClient();
+    assert.equal(id, 'dsh-plugin-projects');
+    // Values made inside the script's context: copy them before comparing.
+    assert.deepEqual([...client.inject], ['slots', 'configForms', 'remote', 'remote.session']);
+    let snapshot = { status: 'ready', value: { coordinatorEffort: 'max' }, base: {}, user: { coordinatorEffort: 'max' }, writable: true, revision: 1 };
+    const registered = [];
+    client.apply({
+        effect: (fn) => fn(),
+        configForms: {
+            get: (ns) => (assert.equal(ns, 'projects'), { getSnapshot: () => snapshot, subscribe: () => () => {}, mutate: async () => true }),
+            whileServed: (names, fn) => (assert.deepEqual([...names], ['projects']), fn()),
+        },
+        slots: {
+            inject: (_name, fn) => fn(),
+            register: (slot, component) => { registered.push({ slot, component }); return () => {}; },
+        },
+    });
+    assert.deepEqual(registered.map((r) => ({ ...r.slot })), [{ name: 'plugins.bundle.config', key: 'dsh-plugin-projects' }]);
+    const page = registered[0].component;
+    assert.match(page({ view: 'summary' }), /^Default models/);
+    const form = page({ view: 'page' }).props.form;
+    assert.equal(form.getSnapshot().coordinatorEffort.text, 'max');
+    assert.equal(form.getSnapshot().insertedTwice, false);
+    // The older setup adds the row with insert: the value the plugin runs with comes from neither layer a save edits.
+    snapshot = { ...snapshot, user: {} };
+    assert.equal(form.getSnapshot().insertedTwice, true);
+    snapshot = { ...snapshot, base: { coordinatorEffort: 'max' } };
+    assert.equal(form.getSnapshot().insertedTwice, false);
+    snapshot = { status: 'loading', value: undefined, base: undefined, user: undefined, writable: true, revision: undefined };
+    assert.equal(form.getSnapshot().insertedTwice, false);
 });
 
 test('session mode: a failed selection is reported, and the coordinator retries later', async () => {

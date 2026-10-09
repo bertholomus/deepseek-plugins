@@ -25,7 +25,7 @@ import { appendFileSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ProjectStore, expand, ensurePrivateDir } from './store.js';
-import { effectiveSettings, applyRoute, checkSelection, describeRoute, parseModelSpec } from './settings.js';
+import { SETTING_KEYS, effectiveSettings, applyRoute, checkSelection, describeRoute, parseModelSpec, pluginDefaults } from './settings.js';
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage,
     handbackMessage, idleMessage, approvalMessage, describeEnding, HANDBACK_STATUSES, TAGS,
@@ -189,7 +189,46 @@ export class ProjectManager {
     }
 
     settings(projectId) {
-        return effectiveSettings(this.config, this.project(projectId), this.store.project(projectId).settings);
+        return effectiveSettings(pluginDefaults(this.config), this.project(projectId), this.store.project(projectId).settings);
+    }
+
+    /**
+     * Compare the plugin defaults with the ones this project last saw. A
+     * default that changed since (on the plugin's page in DSH, or in the
+     * profile) replaces the project's own change of that setting made through
+     * the coordinator, so the newest change wins. The first look only records.
+     * @returns {string[]} the settings whose project change was replaced.
+     */
+    noteDefaults(projectId) {
+        // Empty means "use the default", however it is written.
+        const plain = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
+        const now = pluginDefaults(this.config);
+        const p = this.store.project(projectId);
+        const seen = p.defaultsSeen;
+        const changed = SETTING_KEYS.filter((key) => plain(now[key]) !== plain(seen?.[key]));
+        if (seen && changed.length === 0) return [];
+        const replaced = seen ? changed.filter((key) => p.settings[key] !== undefined) : [];
+        if (replaced.length) this.store.putSettings(projectId, Object.fromEntries(replaced.map((key) => [key, undefined])));
+        this.store.putProject(projectId, { defaultsSeen: Object.fromEntries(SETTING_KEYS.map((key) => [key, plain(now[key])])) });
+        if (seen) this.log(`defaults ${projectId} ${changed.join(',')}${replaced.length ? ` replaced ${replaced.join(',')}` : ''}`);
+        return replaced;
+    }
+
+    /**
+     * The plugin defaults changed while the plugin runs (DSH's settings page
+     * saved them). Coordinators switch from their next request; new threads
+     * start with the new defaults, and running threads keep theirs.
+     */
+    async onDefaultsChanged() {
+        for (const projectId of this.projects.keys()) {
+            if (this.disposed) return;
+            try {
+                this.noteDefaults(projectId);
+                await this.applyCoordinatorRoute(projectId);
+            } catch (error) {
+                this.log(`error defaults ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
+            }
+        }
     }
 
     paused(projectId) {
@@ -223,6 +262,7 @@ export class ProjectManager {
         for (const id of this.projects.keys()) {
             if (this.disposed) return;
             try {
+                this.noteDefaults(id);
                 await this.ensureCoordinator(id);
             } catch (error) {
                 this.log(`error coordinator ${id} ${String(error?.message ?? error).slice(0, 300)}`);
