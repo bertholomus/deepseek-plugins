@@ -141,6 +141,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         function ModelField({ id, field, models, catalog, disabled, onEdit }) {
+            // Until the catalog arrives, a stored model is shown as it is, not as missing.
+            const known = models.length > 0;
             const def = catalog && catalog.default;
             const defaultModel = def ? findModel(models, `${def.provider}:${def.model}`) : undefined;
             const chosen = findModel(models, field.text, def && def.provider);
@@ -160,7 +162,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 h('option', { value: '' }, `DSH default${defaultModel ? ` (${defaultModel.name})` : ''}`),
                 ...groups.map((group) => h('optgroup', { key: group.provider, label: group.name },
                     ...group.models.map((model) => h('option', { key: model.key, value: model.key }, model.name)))),
-                value !== '' && !chosen ? h('option', { value }, `${value} (not in this DSH)`) : null));
+                value !== '' && !chosen ? h('option', { value }, known ? `${value} (not in this DSH)` : value) : null));
         }
 
         /**
@@ -168,16 +170,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * no model set, the effort of your DSH default; with a model set, that
          * model's own default.
          */
-        function EffortField({ id, field, model, dshDefault, catalog, disabled, onEdit }) {
+        function EffortField({ id, field, model, known, dshDefault, catalog, disabled, onEdit }) {
             const efforts = model ? model.efforts : [];
             const def = catalog && catalog.default;
             const fallback = (dshDefault && def && def.reasoningEffort) || (model && model.defaultEffort);
             const options = [{ value: 'default', label: fallback ? `Default (${effortName(model, fallback)})` : 'Default' }]
                 .concat(efforts.map((e) => ({ value: e.id, label: e.name })));
-            if (field.text !== '' && !efforts.some((e) => e.id === field.text)) options.push({ value: field.text, label: `${field.text} (not offered)` });
+            // Only a model the catalog lists can say an effort is not offered (or that it has none).
+            const listed = known && model !== undefined;
+            if (field.text !== '' && !efforts.some((e) => e.id === field.text)) options.push({ value: field.text, label: listed ? `${field.text} (not offered)` : field.text });
             return h('div', { className: 'dshp-field' },
                 h('span', { className: 'dshp-label', id: `${id}-label` }, 'Effort'),
-                options.length < 2
+                options.length < 2 && listed
                     ? h('p', { className: 'dshp-hint' }, 'This model has no effort levels.')
                     : h(ui.SegmentedControl, {
                         id, label: 'Effort', disabled, options,
@@ -212,7 +216,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 ? TextFields({ route, state, actions, disabled })
                 : [
                     h(ModelField, { key: 'model', id: `dshp-${route.id}-model`, field, models, catalog: catalog.value, disabled, onEdit: (value) => actions.edit(route.model, value) }),
-                    h(EffortField, { key: 'effort', id: `dshp-${route.id}-effort`, field: state[route.effort], model, dshDefault: field.text === '', catalog: catalog.value, disabled, onEdit: (value) => actions.edit(route.effort, value) }),
+                    h(EffortField, { key: 'effort', id: `dshp-${route.id}-effort`, field: state[route.effort], model, known: models.length > 0, dshDefault: field.text === '', catalog: catalog.value, disabled, onEdit: (value) => actions.edit(route.effort, value) }),
                 ];
             return h('section', { className: 'dshp-section', 'data-projects-route': route.id },
                 h('h4', { className: 'dshp-title' }, route.title),
