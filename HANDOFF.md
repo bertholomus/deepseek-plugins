@@ -1,6 +1,6 @@
 # Handoff
 
-Updated: 2026-10-09 02:35 PT by B (bertholomus)
+Updated: 2026-10-09 02:45 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (draft PR #1)
 
 ## Doing now
@@ -21,12 +21,24 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 - Fixed: session-bridge `GET /sessions/:id` showed no title for renamed sessions (718da57).
 - A stop the coordinator asks for (`project_thread_update stop: true`) no longer comes back to it as a "stopped" note. Stops from anywhere else still do (50a67b7).
 - New `maxThreadsPerHour` (default 20) per project. A scripted model that answered every idle note with a new thread made a real host start 87 threads in 40 s; now the same loop stops at 20 with an error the coordinator reports (0f10d0a).
-- Tests: `npm test` 27/27, `node plugins/projects/test/smoke.mjs` 27/27, e2e 44/44.
+- Checked the DSH web UI with Playwright (scripted model, cloud DSH): the coordinator session shows effort Max, a thread High, and a new plain session still shows the DSH default (Low). Threads are titled `<project> › <title>` in the sidebar.
+- Fixed the 10 findings of a second-opinion review (each has a test that fails on the old code):
+  - DSH runs queued messages as back-to-back turns and goes idle once. The idle review now reads the last turn from the session log (its handback calls, end reason, prompt) instead of a flag kept over the whole busy period. A failed follow-up after a handback now gets its note.
+  - A turn cut off by a DSH crash or quit is reported when DSH starts again (threads are marked `busy` in the store while a turn runs; DSH's cold read closes the open turn as `interrupted`). A config reload no longer loses a running turn or a waiting permission prompt.
+  - A held handback is retried with backoff (1 min doubling to 15 min) and delivered in order. The thread is told it will be retried, not "when the project resumes".
+  - `project_memory replace` with empty text is refused (it erased memory).
+  - Reload safety: one store object per file in the process, a lock so two plugin instances never make two coordinators, and a disposed instance hands late attaches to the new one.
+  - Only "session not found" counts as a deleted coordinator; other read errors no longer create a second one.
+  - Empty optional tool arguments count as not given; `"default"` works in `project_thread_start`; thread ids are trimmed; `stop` on an idle thread says no turn was running.
+  - Project ids keep letters in any script (前端 and 后端 no longer collide).
+  - The memory excerpt in prompts keeps the start and the newest lines.
+- Tests: `npm test` 28/28, `node plugins/projects/test/smoke.mjs` 36/36, e2e 49/49 as root and as a normal user (adds queued turns and a SIGKILL mid-turn).
 
 ## Next steps (in order)
 1. Mac live test after the restart: coordinator appears, thread start, handback, idle note, settings, and the DSH model picker shows the project effort. `~/.dsh/projects/projects.log` should have `select ...` lines.
 2. Fix what it shows, then mark PR #1 ready for review.
 3. Later: a Discord thread as a project thread or coordinator (the user's existing flow), and auto-continue after usage limits.
+4. Idea, not tried: DSH session headers have `parentSession` (forks set it) and the web client nests child sessions under their parent (dsh-api-session-controller `lineage.js`). Threads could nest under their coordinator in the sidebar. Check first: `hasApiSessionSubagentOwner` and the archived-session gate treat `parentSession` specially, so it may change prompt routing or archiving.
 
 ## Open questions / blockers
 - The Mac has no GitHub push credentials for bertholomus. gh auth is broken, HTTPS asks for a username and the SSH key is refused. Fixes made on the Mac go through the cloud session.
@@ -53,3 +65,8 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 - DSH words the approval reason itself: `escalate sandbox to danger-full-access: <justification>`.
 - Session titles: the session header keeps the creation-time title. Renames are `session/title` events.
 - Per-thread caps don't bound a coordinator that starts new threads in a loop; `maxThreadsPerHour` does. Keep a project-level cap on anything a model can repeat.
+- DSH's agent loop runs every queued message as its own turn (`turn/start` … `turn/end`) and only reports `idle` after the last one. Anything per turn must be read from the session log, not from status transitions.
+- `sessionController.inspect` on a cold session uses the cold read, which appends synthetic `interrupted` turn closers for a turn a crash left open. Resuming the agent persists them. A crashed turn never produces a running → idle transition.
+- A config save restarts the plugin (cordis `update` → `restart`): the old scope is disposed first, then `apply` runs again, while the old instance's async work keeps going. Hence the shared store and the coordinator lock.
+- `ApiSessionNotFound` (session-controller) is the only error that means a session is gone; `inspect` can also time out or fail on I/O.
+- Tool calls and results are in the session log: `tool/call {callId, name, arguments}` and `tool/result {message: {toolCallId, content}}`. The idle review finds a handback by its result text, which starts with "Handback ".
