@@ -68,6 +68,7 @@ export function coordinatorPolicy(p) {
         `- Coordinator: ${describeRoute(s.coordinatorModel.value, s.coordinatorEffort.value)}`,
         `- New threads: ${describeRoute(s.threadModel.value, s.threadEffort.value)}`,
         '- Change them with project_settings when the user asks. A thread can also get its own model or effort at start or with project_thread_update.',
+        '- The user can also set the defaults for every project in DSH, under Plugins → dsh-plugin-projects → Default models. Saving there replaces your change of that setting.',
         p.paused ? '- The project is PAUSED: do not start threads. Handbacks are held until it resumes. Tell the user if they ask for new work.' : null,
         '',
         '## Threads',
