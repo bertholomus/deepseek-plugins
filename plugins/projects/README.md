@@ -11,7 +11,7 @@ Every coordinator and thread is an ordinary DSH session in the project's workspa
 3. The thread works. When it finishes, gets blocked, or needs a decision, it calls `project_handback`. The handback lands in the coordinator as its next turn, starting with `[Handback from thread t1 · "title" · status: done]`.
 4. The coordinator tells you the result, answers the thread if it can, or asks you. Follow-ups go to the same thread with `project_thread_send`.
 
-If a thread ends a turn the coordinator started without a handback, the coordinator gets a short automatic note with the thread's last reply (`autoHandback: idle`, the default). So nothing a thread does goes unnoticed. When you talk to a thread directly, the coordinator is not woken for it; its thread list just notes that you did.
+If a thread ends a turn the coordinator started without a handback, the coordinator gets a short automatic note with the thread's last reply (`autoHandback: idle`, the default). The note says so when the turn failed (for example a model error) or was stopped. If such a thread waits on a permission prompt for a minute, the coordinator is told which thread and what it wants to do, so it can tell you. So nothing a thread does goes unnoticed. When you talk to a thread directly, the coordinator is not woken for it; its thread list just notes that you did.
 
 The coordinator's system prompt is rebuilt on every request with the live thread roster, the settings and an excerpt of project memory. A thread's prompt tells it who it is and how to hand back.
 
@@ -78,7 +78,8 @@ Plugin row:
 | `threadModel` | | Default model for new threads. |
 | `threadEffort` | | Default effort for new threads. |
 | `autoHandback` | `idle` | `idle` tells the coordinator when a thread ends a turn the coordinator started without a handback. `off` sends only explicit handbacks. |
-| `maxHandbacksPerHour` | `30` | Handbacks one thread may send per hour. Stops a coordinator and a thread from looping. |
+| `maxHandbacksPerHour` | `30` | Handbacks one thread may send per hour, automatic notes included. Stops a coordinator and a thread from looping. |
+| `approvalNoticeSeconds` | `60` | How long a thread the coordinator started may wait on a permission prompt before the coordinator is told. `0` turns it off. |
 | `storeFile` | `~/.dsh/projects/projects.json` | Project state: sessions, threads, setting changes, held handbacks. Mode 600. |
 | `memoryDir` | `~/.dsh/projects/memory` | Project memory files, one per project. |
 | `maxMemoryBytes` | `65536` | Largest memory file the tools will write. |

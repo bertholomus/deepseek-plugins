@@ -13,6 +13,7 @@ export const TAGS = {
     coordinator: '[From the coordinator',
     handback: '[Handback from thread',
     idle: '[Thread idle without a handback',
+    approval: '[Thread waiting for approval',
 };
 
 export const HANDBACK_STATUSES = ['done', 'blocked', 'needs_decision', 'progress'];
@@ -57,7 +58,8 @@ export function coordinatorPolicy(p) {
         '- Write each brief so the thread can work without this conversation: the user\'s ask in their own words, the facts it needs from project memory, and the default you picked where the ask is ambiguous. Do not add deliverables the user did not ask for.',
         '- Tell the user in one line that the thread started and what it is called.',
         `- Threads report back with handbacks. A handback arrives here as a message starting with "${TAGS.handback}". Tell the user the result in a line or two and name the thread. If the thread asks a question you can answer from what you know, answer it with project_thread_send; otherwise ask the user. When a thread is done and nothing is open, resolve it with project_thread_update.`,
-        `- A message starting with "${TAGS.idle}" is automatic: the thread ended a turn you started without calling project_handback. Read it with project_thread_read only if it matters, and nudge the thread if it stalled.`,
+        `- A message starting with "${TAGS.idle}" is automatic: the thread ended a turn you started without calling project_handback. If it says the turn failed or was stopped, tell the user. Otherwise read the thread with project_thread_read only if it matters, and nudge the thread if it stalled.`,
+        `- A message starting with "${TAGS.approval}" is automatic: a thread you started is stopped on a permission prompt. Tell the user which thread and what it wants to do; they approve or reject it in that thread's session. Do not start another thread for the same work.`,
         '- The user can talk to a thread directly in its own session. Those turns do not come to you; the roster below notes them. Do not answer them here.',
         '- Record durable facts (decisions, conventions, how the user wants to work) with project_memory, so later threads and a restarted coordinator know them.',
         '- Never poll threads in a loop. Handbacks arrive on their own.',
@@ -114,8 +116,29 @@ export function handbackMessage(threadId, title, status, summary) {
     return `${TAGS.handback} ${threadId} · "${title}" · status: ${status}]\n\n${summary}\n\n(Full conversation: project_thread_read thread="${threadId}".)`;
 }
 
-/** The automatic note when a thread goes idle without a handback. */
-export function idleMessage(threadId, title, lastText) {
+/**
+ * The automatic note when a thread goes idle without a handback.
+ * @param {string} ending - how the turn ended when it did not complete, or ''.
+ */
+export function idleMessage(threadId, title, lastText, ending = '') {
     const body = lastText ? `Its last reply:\n\n${clip(lastText, 1500)}` : 'It produced no reply text.';
-    return `${TAGS.idle}: ${threadId} · "${title}"]\n\n${body}`;
+    return `${TAGS.idle}: ${threadId} · "${title}"]\n\n${ending ? `${ending}\n\n` : ''}${body}`;
+}
+
+/** One line for a turn that did not complete normally, or ''. */
+export function describeEnding(reason) {
+    switch (reason?.kind) {
+        case 'error': return `The turn failed: ${clip(reason.error?.message ?? 'unknown error', 300)}`;
+        case 'aborted': return 'The turn was stopped before it finished.';
+        case 'max-tokens': return 'The turn hit the output token limit.';
+        case 'blocked': return 'The turn was blocked.';
+        case 'interrupted': return 'The turn was cut off because DSH stopped while it ran.';
+        default: return '';
+    }
+}
+
+/** The automatic note when a thread waits on a permission prompt. */
+export function approvalMessage(threadId, title, sessionTitle, toolName, reason) {
+    const what = `It asked to use ${toolName}${reason ? `: ${clip(reason, 300)}` : '.'}`;
+    return `${TAGS.approval}: ${threadId} · "${title}"]\n\n${what}\n\nThe user approves or rejects it in the "${sessionTitle}" session.`;
 }

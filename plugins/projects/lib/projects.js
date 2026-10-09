@@ -28,7 +28,7 @@ import { ProjectStore, expand, ensurePrivateDir } from './store.js';
 import { effectiveSettings, applyRoute, checkSelection, describeRoute, parseModelSpec } from './settings.js';
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage,
-    handbackMessage, idleMessage, HANDBACK_STATUSES, TAGS,
+    handbackMessage, idleMessage, approvalMessage, describeEnding, HANDBACK_STATUSES, TAGS,
 } from './prompts.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
@@ -110,6 +110,8 @@ export class ProjectManager {
         this.installed = new Map();
         /** sessionId → {running, handedBack} for thread turn tracking. */
         this.turns = new Map();
+        /** sessionId → (approval id → timer) for permission prompts not yet answered. */
+        this.approvals = new Map();
     }
 
     /** One action line, mode 600. Sizes and ids only, never prompt text. */
@@ -280,6 +282,8 @@ export class ProjectManager {
                         this.log(`error status ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
                     });
                 }));
+                add(scoped.on('session/event', (_session, event) => this.onThreadEvent(projectId, threadId, agent, event)));
+                add(() => this.clearApprovals(agent.id));
             }
         } catch (error) {
             for (const d of disposers.reverse()) { try { d(); } catch {} }
@@ -428,8 +432,50 @@ export class ProjectManager {
             return;
         }
         if (this.config.autoHandback !== 'idle' || !this.allowHandback(projectId, threadId)) return;
-        await this.deliver(projectId, idleMessage(threadId, t.title, turn.reply));
-        this.log(`idle-note ${projectId}/${threadId} chars=${turn.reply.length}`);
+        await this.deliver(projectId, idleMessage(threadId, t.title, turn.reply, turn.ending));
+        this.log(`idle-note ${projectId}/${threadId} chars=${turn.reply.length}${turn.ending ? ' ended-early' : ''}`);
+    }
+
+    /**
+     * Watch a thread's permission prompts. One still unanswered after
+     * approvalNoticeSeconds tells the coordinator, so a thread it started
+     * does not sit on a prompt nobody sees.
+     */
+    onThreadEvent(projectId, threadId, agent, event) {
+        const id = event?.data?.id;
+        if (!id) return;
+        if (event.type === 'approval/decided') {
+            clearTimeout(this.approvals.get(agent.id)?.get(id));
+            this.approvals.get(agent.id)?.delete(id);
+            return;
+        }
+        if (event.type !== 'approval/asked' || !(this.config.approvalNoticeSeconds > 0)) return;
+        const pending = this.approvals.get(agent.id) ?? new Map();
+        this.approvals.set(agent.id, pending);
+        const timer = setTimeout(() => {
+            pending.delete(id);
+            void this.noticeApproval(projectId, threadId, agent, event.data).catch((error) => {
+                this.log(`error approval ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
+            });
+        }, this.config.approvalNoticeSeconds * 1000);
+        timer.unref?.();
+        pending.set(id, timer);
+    }
+
+    clearApprovals(sessionId) {
+        for (const timer of this.approvals.get(sessionId)?.values() ?? []) clearTimeout(timer);
+        this.approvals.delete(sessionId);
+    }
+
+    async noticeApproval(projectId, threadId, agent, data) {
+        const t = this.store.thread(projectId, threadId);
+        if (!t || t.resolved || !this.projects.has(projectId)) return;
+        const turn = await this.lastTurn(agent.id);
+        // The user is talking to the thread directly, so the prompt is in front of them.
+        if (!turn.fromProject || !this.allowHandback(projectId, threadId)) return;
+        const sessionTitle = `${this.project(projectId).name} › ${t.title}`;
+        await this.deliver(projectId, approvalMessage(threadId, t.title, sessionTitle, String(data.toolName ?? 'a tool'), data.reason));
+        this.log(`approval-note ${projectId}/${threadId} tool=${String(data.toolName ?? '').slice(0, 60)}`);
     }
 
     /** Rate cap: at most maxHandbacksPerHour per thread, explicit and automatic together. */
@@ -443,21 +489,24 @@ export class ProjectManager {
     }
 
     /**
-     * The session's last reply, and whether its last prompt came from this
-     * project (the coordinator) rather than from the user directly.
+     * The session's last reply, how its last turn ended when that was not a
+     * normal completion, and whether its last prompt came from this project
+     * (the coordinator) rather than from the user directly.
      */
     async lastTurn(sessionId) {
         let reply = '';
+        let ending;
         try {
             const r = await this.sc.inspect(sessionId, AbortSignal.timeout(20000));
             const events = r.events ?? [];
             for (let i = events.length - 1; i >= 0; i--) {
+                if (ending === undefined && events[i]?.type === 'turn/end') ending = describeEnding(events[i].data?.reason);
                 if (!reply && roleOf(events[i]) === 'assistant') reply = textOf(events[i]);
                 const prompt = promptOf(events[i]);
-                if (prompt) return { reply, fromProject: prompt.fromProject };
+                if (prompt) return { reply, ending: ending ?? '', fromProject: prompt.fromProject };
             }
         } catch {}
-        return { reply, fromProject: true };
+        return { reply, ending: ending ?? '', fromProject: true };
     }
 
     /** Send text to the coordinator, or hold it while the project is paused or unreachable. */

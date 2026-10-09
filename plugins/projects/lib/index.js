@@ -65,6 +65,8 @@ export const Config = z.object({
     autoHandback: z.union(['idle', 'off']).default('idle'),
     /** Handbacks (explicit plus automatic) one thread may send per hour; stops runaway loops. */
     maxHandbacksPerHour: z.number().default(30),
+    /** Seconds a thread started by the coordinator may wait on a permission prompt before the coordinator is told. 0 turns it off. */
+    approvalNoticeSeconds: z.number().default(60),
     /** Durable project state. */
     storeFile: z.string().default('~/.dsh/projects/projects.json'),
     /** Folder for project memory files. */
@@ -80,6 +82,7 @@ export function apply(ctx, config) {
     for (const key of ['maxHandbacksPerHour', 'maxMemoryBytes']) {
         if (!Number.isInteger(config[key]) || config[key] < 1) throw new Error(`projects: ${key} must be a positive integer`);
     }
+    if (!(config.approvalNoticeSeconds >= 0)) throw new Error('projects: approvalNoticeSeconds must be 0 or more');
     const manager = new ProjectManager({ ctx, config, buildTools: projectTools });
 
     ctx.on('agent/created', ({ agent }) => {

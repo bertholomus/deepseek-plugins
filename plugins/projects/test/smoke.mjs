@@ -66,6 +66,10 @@ class FakeScope {
         agent.status = status;
         for (const fn of this.listeners.get('agent/status') ?? []) fn({ agent, status });
     }
+    /** An event appended to this agent's session log. */
+    sessionEvent(event) {
+        for (const fn of this.listeners.get('session/event') ?? []) fn({}, event);
+    }
     section() {
         const sec = [...this.sections.values()][0];
         return typeof sec?.text === 'function' ? sec.text({}) : sec?.text;
@@ -564,4 +568,63 @@ test('a turn the user drives in a thread does not wake the coordinator', async (
     const read = await coord.ctx.call('project_thread_read', { thread: 't1', count: 10 });
     assert.match(read, /## user\nWhat does this function do\?/);
     assert.doesNotMatch(read, /runtime context|model changed/);
+});
+
+// ── failed turns and permission prompts ────────────────────────────────────
+
+test('the idle note says when a thread turn failed', async () => {
+    const { host } = setup();
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { title: 'Flaky', brief: 'Call the lane.' });
+    const thread = [...host.live.values()].find((a) => a.id !== coord.id);
+    const ts = host.sessions.get(thread.id);
+    ts.events.push({ seq: ts.events.length + 1, type: 'turn/end', data: { turn: 1, reason: { kind: 'error', error: { message: 'provider unavailable', code: 'NETWORK' } } } });
+    thread.ctx.emitStatus(thread, 'running');
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    assert.match(host.sessions.get(coord.id).prompts[0].text, /^\[Thread idle without a handback: t1 · "Flaky"\]\n\nThe turn failed: provider unavailable\n\nIt produced no reply text\./);
+});
+
+test('a permission prompt left unanswered tells the coordinator', async () => {
+    const { host } = setup({ approvalNoticeSeconds: 0.02 });
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { title: 'Deploy', brief: 'Deploy the site.' });
+    const thread = [...host.live.values()].find((a) => a.id !== coord.id);
+    const wait = () => new Promise((r) => setTimeout(r, 60));
+
+    // Answered quickly: nothing to report.
+    thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'a1', toolName: 'bash', reason: 'runs rm -rf build' } });
+    thread.ctx.sessionEvent({ type: 'approval/decided', data: { id: 'a1', outcome: 'allowed-once' } });
+    await wait();
+    assert.equal(host.sessions.get(coord.id).prompts.length, 0);
+
+    // Left waiting: the coordinator hears which thread and what it wants.
+    thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'a2', toolName: 'bash', reason: 'runs ./deploy.sh' } });
+    await wait();
+    const cp = host.sessions.get(coord.id).prompts;
+    assert.equal(cp.length, 1);
+    assert.equal(cp[0].text, '[Thread waiting for approval: t1 · "Deploy"]\n\nIt asked to use bash: runs ./deploy.sh\n\nThe user approves or rejects it in the "DSH Plugins › Deploy" session.');
+
+    // The user is in the thread directly: the prompt is in front of them.
+    userSays(host, thread.id, 'Go ahead and deploy.');
+    thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'a3', toolName: 'bash' } });
+    await wait();
+    assert.equal(cp.length, 1);
+});
+
+test('permission prompt notices stop with the plugin and can be turned off', async () => {
+    for (const [seconds, unload] of [[0.02, true], [0, false]]) {
+        const { host } = setup({ approvalNoticeSeconds: seconds });
+        await tick();
+        const coord = coordinatorOf(host);
+        await coord.ctx.call('project_thread_start', { title: 'Quiet', brief: 'Work.' });
+        const thread = [...host.live.values()].find((a) => a.id !== coord.id);
+        thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'b1', toolName: 'bash' } });
+        if (unload) for (const dispose of host.effects) await dispose();
+        await new Promise((r) => setTimeout(r, 60));
+        assert.equal(host.sessions.get(coord.id).prompts.length, 0);
+    }
+    assert.throws(() => setup({ approvalNoticeSeconds: -1 }), /approvalNoticeSeconds/);
 });
