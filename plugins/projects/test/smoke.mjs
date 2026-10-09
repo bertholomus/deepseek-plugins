@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as plugin from '../lib/index.js';
 import { effectiveSettings, applyRoute, checkSelection, parseModelSpec } from '../lib/settings.js';
-import { slugify } from '../lib/projects.js';
+import { slugify, timing } from '../lib/projects.js';
 
 const CATALOG = {
     default: { provider: 'deepseek', model: 'deepseek-v4' },
@@ -74,12 +74,19 @@ class FakeScope {
         const sec = [...this.sections.values()][0];
         return typeof sec?.text === 'function' ? sec.text({}) : sec?.text;
     }
+    /** Call a tool as the model would. Like DSH, the call and its result go into the session log. */
     async call(name, args) {
         const def = this.registered.get(name);
         assert.ok(def, `tool ${name} not registered (have ${[...this.registered.keys()].join(', ')})`);
-        return def.execute(args, { agent: this.agent });
+        const log = this.log?.();
+        const callId = `call-${++toolCalls}`;
+        log?.push({ seq: log.length + 1, type: 'tool/call', data: { callId, name, arguments: args } });
+        const value = await def.execute(args, { agent: this.agent, callId });
+        log?.push({ seq: log.length + 1, type: 'tool/result', data: { message: { role: 'tool', toolCallId: callId, content: [{ type: 'text', text: value }] } } });
+        return value;
     }
 }
+let toolCalls = 0;
 
 /** The Host's model service: validates a call config and fills in the default effort. */
 const fakeLlm = {
@@ -130,6 +137,7 @@ function fakeHost({ selection = false, hostListener = selection } = {}) {
             const ctx = new FakeScope();
             const agent = { id, status: 'idle', ctx };
             ctx.agent = agent;
+            ctx.log = () => sessions.get(id)?.events;
             if (hostListener) {
                 // Like DSH's own selection listener: it rewrites the route of every request.
                 ctx.on('agent/request', async (_e, next) => ({ ...await next(), provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'host' }));
@@ -149,8 +157,13 @@ function fakeHost({ selection = false, hostListener = selection } = {}) {
                 return { agent: host.wake(id) };
             },
             async inspect(id) {
+                if (host.inspectError) throw host.inspectError;
                 if (!sessions.has(id)) throw new Error('session/not-found');
-                return { meta: {}, events: sessions.get(id).events };
+                const events = sessions.get(id).events;
+                if (live.has(id)) return { meta: {}, events };
+                // Like DSH's cold read: a turn left open by a crash reads as ended, "interrupted".
+                const open = events.findLastIndex((e) => e.type === 'turn/start') > events.findLastIndex((e) => e.type === 'turn/end');
+                return { meta: {}, events: open ? [...events, { seq: events.length + 1, type: 'turn/end', data: { reason: { kind: 'interrupted' } } }] : events };
             },
             async prompt(req) {
                 assert.ok(req.requestId && req.content[0].text);
@@ -225,6 +238,11 @@ test('selection is checked against the host catalog', () => {
     assert.deepEqual(checkSelection(CATALOG, 'other:big-model', 'max'), { ok: true, model: 'other:big-model', note: 'other:big-model has no effort levels, so effort "max" is not used' });
     assert.deepEqual(checkSelection(undefined, 'x:y', 'z'), { ok: true, model: 'x:y', effort: 'z' });
     assert.equal(slugify('DSH Plugins!'), 'dsh-plugins');
+    assert.equal(slugify('Café Ops'), 'cafe-ops');
+    // Names in other scripts keep their letters, so two of them do not collide.
+    assert.equal(slugify('前端'), '前端');
+    assert.notEqual(slugify('前端'), slugify('后端'));
+    assert.equal(slugify('!!!'), 'project');
 });
 
 test('config: required fields and defaults', () => {
@@ -350,6 +368,9 @@ test('settings: change, validate, reset to default, per-thread override', async 
     assert.deepEqual(await thread.ctx.request({ provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'high' }), { provider: 'other', model: 'big-model' });
     assert.match(await coord.ctx.call('project_thread_update', { thread: 't1', model: 'default', effort: 'default' }), /route deepseek:deepseek-v4-flash · effort high/);
     assert.deepEqual(await thread.ctx.request({ provider: 'deepseek', model: 'deepseek-v4' }), { provider: 'deepseek', model: 'deepseek-v4-flash', reasoningEffort: 'high' });
+    assert.match(await coord.ctx.call('project_thread_update', { thread: 't1', stop: true }), /t1: no turn was running\./);
+    assert.equal(host.sessions.get(thread.id).cancelled, undefined);
+    thread.ctx.emitStatus(thread, 'running');
     assert.match(await coord.ctx.call('project_thread_update', { thread: 't1', resolved: true, stop: true }), /resolved; current turn stopped/);
     assert.equal(host.sessions.get(thread.id).cancelled, true);
     assert.match(await coord.ctx.call('project_thread_list', {}), /\(no threads yet\)\n\(1 resolved hidden\)/);
@@ -408,6 +429,10 @@ test('memory is shared and shown in both policies', async () => {
     assert.match(coord.ctx.section(), /## Project memory \(excerpt\)\n- Node 22 everywhere\.\n- CI runs npm test\./);
     assert.match(thread.ctx.section(), /- CI runs npm test\./);
     assert.match(await coord.ctx.call('project_memory', { action: 'replace', text: 'x'.repeat(70000) }), /^Failed: memory would exceed/);
+    // An empty replace would erase everything, so it is refused.
+    assert.match(await coord.ctx.call('project_memory', { action: 'replace' }), /^Failed: text is required/);
+    assert.match(await coord.ctx.call('project_memory', { action: 'replace', text: '  ' }), /^Failed: text is required/);
+    assert.equal(readFileSync(join(dir, 'memory', 'dsh-plugins.md'), 'utf8'), '- Node 22 everywhere.\n- CI runs npm test.\n');
 });
 
 test('restart: same coordinator, threads re-attach on resume', async () => {
@@ -668,4 +693,234 @@ test('permission prompt notices stop with the plugin and can be turned off', asy
         assert.equal(host.sessions.get(coord.id).prompts.length, 0);
     }
     assert.throws(() => setup({ approvalNoticeSeconds: -1 }), /approvalNoticeSeconds/);
+});
+
+// ── turns DSH runs back to back, and turns the plugin did not see end ──────
+
+/** Mark turns in a session log the way DSH does. */
+const turnMarks = (host, sessionId) => {
+    const log = host.sessions.get(sessionId).events;
+    const push = (type, data) => log.push({ seq: log.length + 1, type, data });
+    return {
+        start: () => push('turn/start', {}),
+        end: (kind = 'completed', message) => push('turn/end', { reason: { kind, ...(message ? { error: { message } } : {}) } }),
+    };
+};
+const threadOf = (host, coord) => [...host.live.values()].find((a) => a.id !== coord.id);
+/** Dispose the plugin and apply it again, as cordis does when its config is saved. */
+async function reload(host, config) {
+    for (const dispose of host.effects.splice(0)) await dispose();
+    plugin.apply(host, config);
+}
+/** A new host process over the same session logs and store. */
+function restart(sessions, config) {
+    const host = fakeHost();
+    for (const [id, s] of sessions) host.sessions.set(id, { ...s, prompts: [] });
+    plugin.apply(host, config);
+    return host;
+}
+
+test('a queued coordinator message that fails after a handback still gets its note', async () => {
+    const { host } = setup();
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { title: 'Two', brief: 'Do A.' });
+    const thread = threadOf(host, coord);
+    const turn = turnMarks(host, thread.id);
+
+    // Turn A hands back. The coordinator queues B meanwhile; DSH runs B next without going idle.
+    thread.ctx.emitStatus(thread, 'running');
+    turn.start();
+    await thread.ctx.call('project_handback', { status: 'done', summary: 'A is done.' });
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Now do B.' });
+    turn.end();
+    turn.start();
+    turn.end('error', 'provider unavailable');
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    const cp = host.sessions.get(coord.id).prompts;
+    assert.equal(cp.length, 2, 'the handback, then a note for B');
+    assert.match(cp[0].text, /status: done\]\n\nA is done\./);
+    assert.match(cp[1].text, /^\[Thread idle without a handback: t1 · "Two"\]\n\nThe turn failed: provider unavailable/);
+
+    // A last turn that hands back sends no note, even after one that did not.
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'And C.' });
+    thread.ctx.emitStatus(thread, 'running');
+    turn.start();
+    turn.end();
+    turn.start();
+    await thread.ctx.call('project_handback', { status: 'done', summary: 'C is done.' });
+    turn.end();
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    assert.equal(cp.length, 3);
+    assert.match(cp[2].text, /C is done\./);
+});
+
+test('a thread turn cut off by a DSH stop is reported at the next start, once', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const first = setup({}, dir);
+    await tick();
+    const coord = coordinatorOf(first.host);
+    await coord.ctx.call('project_thread_start', { title: 'Long', brief: 'Run the long job.' });
+    const thread = threadOf(first.host, coord);
+    thread.ctx.emitStatus(thread, 'running');
+    turnMarks(first.host, thread.id).start();
+    assistantSays(first.host, thread.id, 'Starting the job.');
+
+    // DSH stops mid-turn; the next process reads the open turn as interrupted.
+    const second = restart(first.host.sessions, first.config);
+    await tick();
+    const cp = second.sessions.get(coord.id).prompts;
+    assert.equal(cp.length, 1);
+    assert.equal(cp[0].text, '[Thread idle without a handback: t1 · "Long"]\n\nThe turn was cut off because DSH stopped while it ran.\n\nIts last reply:\n\nStarting the job.');
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /idle-note dsh-plugins\/t1 chars=17 ended=interrupted/);
+
+    const third = restart(first.host.sessions, first.config);
+    await tick();
+    assert.equal(third.sessions.get(coord.id).prompts.length, 0, 'reported once');
+});
+
+test('a config reload while a thread runs still reports its turn and its permission prompt', async () => {
+    const { host, config } = setup({ approvalNoticeSeconds: 0.02 });
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { title: 'Busy', brief: 'Deploy it.' });
+    const thread = threadOf(host, coord);
+    thread.ctx.emitStatus(thread, 'running');
+    const log = host.sessions.get(thread.id).events;
+    const asked = { seq: log.length + 1, type: 'approval/asked', data: { id: 'a1', toolName: 'bash', reason: 'runs ./deploy.sh' } };
+    log.push(asked);
+    thread.ctx.sessionEvent(asked);
+
+    await reload(host, config);
+    await new Promise((r) => setTimeout(r, 80));
+    const cp = host.sessions.get(coord.id).prompts;
+    assert.equal(cp.length, 1, 'the new plugin instance watches the prompt');
+    assert.match(cp[0].text, /^\[Thread waiting for approval: t1 · "Busy"\]\n\nIt asked to use bash: runs \.\/deploy\.sh/);
+
+    log.push({ seq: log.length + 1, type: 'approval/decided', data: { id: 'a1', outcome: 'rejected' } });
+    assistantSays(host, thread.id, 'The deploy was rejected.');
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    assert.equal(cp.length, 2, 'and reports the turn when it ends');
+    assert.match(cp[1].text, /^\[Thread idle without a handback: t1 · "Busy"\]\n\nIts last reply:\n\nThe deploy was rejected\./);
+});
+
+test('a turn that ends during a reload is reported by the new instance', async () => {
+    const { host, config } = setup();
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { title: 'Gap', brief: 'Work.' });
+    const thread = threadOf(host, coord);
+    thread.ctx.emitStatus(thread, 'running');
+    for (const dispose of host.effects.splice(0)) await dispose();
+    // The turn ends while no plugin instance listens.
+    const turn = turnMarks(host, thread.id);
+    turn.start();
+    assistantSays(host, thread.id, 'Finished in the gap.');
+    turn.end();
+    thread.ctx.emitStatus(thread, 'idle');
+    plugin.apply(host, config);
+    await tick();
+    const cp = host.sessions.get(coord.id).prompts;
+    assert.equal(cp.length, 1);
+    assert.match(cp[0].text, /^\[Thread idle without a handback: t1 · "Gap"\]\n\nIts last reply:\n\nFinished in the gap\./);
+});
+
+test('a handback the coordinator cannot take is retried, in order', async () => {
+    timing.retryMs = 20;
+    try {
+        const { host, dir } = setup();
+        await tick();
+        const coord = coordinatorOf(host);
+        await coord.ctx.call('project_thread_start', { title: 'Retry', brief: 'x' });
+        const thread = threadOf(host, coord);
+        const prompt = host.sessionController.prompt;
+        let refuse = true;
+        host.sessionController.prompt = async (req) => {
+            if (refuse && req.sessionId === coord.id) throw new Error('session/writer-held');
+            return prompt(req);
+        };
+        const retrying = 'Handback saved; the coordinator could not take it just now, and it is sent again automatically.';
+        assert.equal(await thread.ctx.call('project_handback', { status: 'progress', summary: 'First.' }), retrying);
+        assert.equal(await thread.ctx.call('project_handback', { status: 'done', summary: 'Second.' }), retrying);
+        refuse = false;
+        await new Promise((r) => setTimeout(r, 100));
+        const cp = host.sessions.get(coord.id).prompts.map((p) => p.text);
+        assert.equal(cp.length, 2);
+        assert.match(cp[0], /status: progress\]\n\nFirst\./);
+        assert.match(cp[1], /status: done\]\n\nSecond\./);
+        assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /error deliver dsh-plugins session\/writer-held/);
+        // The handback counts, so going idle sends no extra note.
+        thread.ctx.emitStatus(thread, 'running');
+        thread.ctx.emitStatus(thread, 'idle');
+        await tick();
+        assert.equal(host.sessions.get(coord.id).prompts.length, 2);
+    } finally {
+        timing.retryMs = 60000;
+    }
+});
+
+test('a thread started while the plugin reloads stays a project thread', async () => {
+    const { host, config, dir } = setup();
+    await tick();
+    const coord = coordinatorOf(host);
+    // Hold session creation, so the reload lands in the middle of the start.
+    const create = host.sessionController.create;
+    let release;
+    host.sessionController.create = (req) => new Promise((r) => { release = () => r(create(req)); });
+    const started = coord.ctx.call('project_thread_start', { title: 'Mid', brief: 'x' });
+    await tick();
+    host.sessionController.create = create;
+    await reload(host, config);
+    await tick();
+    release();
+    assert.match(await started, /^Started t1 "Mid"/);
+    const thread = threadOf(host, coord);
+    assert.deepEqual([...thread.ctx.registered.keys()].sort(), ['project_handback', 'project_memory']);
+    // A write by the new instance keeps the thread.
+    await coord.ctx.call('project_settings', { thread_effort: 'max' });
+    assert.ok(JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'].threads.t1);
+    assert.match(await coord.ctx.call('project_thread_list', {}), /t1 · "Mid"/);
+});
+
+test('a reload during startup makes one coordinator, not two', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const host = fakeHost();
+    const config = plugin.Config({
+        storeFile: join(dir, 'projects.json'), memoryDir: join(dir, 'memory'), logFile: join(dir, 'projects.log'),
+        projects: [{ name: 'DSH Plugins', workspacePath: '/work/dsh' }],
+    });
+    plugin.apply(host, config);
+    await reload(host, config);
+    await tick();
+    assert.equal([...host.sessions.values()].filter((s) => s.title === '◆ DSH Plugins').length, 1);
+    assert.equal(host.sessions.size, 1);
+});
+
+test('a coordinator that cannot be read right now is not replaced', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const first = setup({}, dir);
+    await tick();
+    const host = fakeHost();
+    for (const [id, s] of first.host.sessions) host.sessions.set(id, s);
+    host.inspectError = new Error('read timed out');
+    plugin.apply(host, first.config);
+    await tick();
+    assert.equal(host.sessions.size, 1, 'no second coordinator');
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /error coordinator dsh-plugins read timed out/);
+});
+
+test('empty optional arguments count as not given; thread ids are trimmed', async () => {
+    const { host, dir } = setup();
+    await tick();
+    const coord = coordinatorOf(host);
+    assert.match(await coord.ctx.call('project_thread_start', { title: 'E', brief: 'x', model: '', effort: '' }), /^Started t1 "E" \(DSH default model · effort high\)/);
+    assert.match(await coord.ctx.call('project_thread_start', { title: 'D', brief: 'x', model: 'default', effort: 'default' }), /^Started t2 "D" \(DSH default model · effort high\)/);
+    await coord.ctx.call('project_settings', { thread_model: 'deepseek-v4-flash' });
+    assert.match(await coord.ctx.call('project_settings', { thread_model: '', coordinator_effort: ' ' }), /New threads: deepseek:deepseek-v4-flash · effort high \(project setting/);
+    assert.match(await coord.ctx.call('project_thread_update', { thread: ' t1 ', model: '', effort: '', title: '' }), /^t1: nothing to change\.$/);
+    assert.match(await coord.ctx.call('project_thread_send', { thread: ' t2 ', text: 'More.' }), /^Sent to t2\.$/);
+    assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'].threads), ['t1', 't2']);
 });

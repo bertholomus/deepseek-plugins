@@ -5,6 +5,7 @@
  *
  *   E2E:call <tool> <json args>   call that tool (the rest of the line is the JSON)
  *   E2E:fail                      answer HTTP 400, so the turn fails
+ *   E2E:slow <ms>                 on a line of its own: answer after that long
  *   [Handback from thread …       reply SAW-HANDBACK
  *   [Thread idle without …        reply SAW-IDLE
  *   [Thread waiting for approval… reply SAW-APPROVAL
@@ -12,7 +13,8 @@
  *
  * After a tool result it replies "TOOL-RESULT: <result>", which ends the turn.
  * Every request is recorded (model, effort, tool names, system text, the user
- * text since the last assistant message, action) for the test to check.
+ * text since the last assistant message, action, arrival time) for the test
+ * to check.
  *
  * @module dsh-plugin-projects/test/e2e/fake-model
  */
@@ -85,7 +87,16 @@ export async function startFakeModel({ port = 0, models = ['fake-model', 'fake-f
             system: messages.filter((m) => m.role === 'system' || m.role === 'developer').map(textOf).join('\n---\n'),
             fresh,
             action,
+            at: Date.now(),
         });
+        const slow = /^E2E:slow (\d+)$/m.exec(fresh);
+        if (slow) {
+            await new Promise((resolve) => {
+                const timer = setTimeout(resolve, Number(slow[1]));
+                res.once('close', () => { clearTimeout(timer); resolve(); });
+            });
+            if (req.socket.destroyed) return;
+        }
         if (action.fail) {
             res.writeHead(400, { 'content-type': 'application/json' });
             res.end(JSON.stringify({ error: { message: 'fake model rejected the request', type: 'invalid_request_error' } }));

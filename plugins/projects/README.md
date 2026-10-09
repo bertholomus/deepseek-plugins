@@ -11,9 +11,11 @@ Every coordinator and thread is an ordinary DSH session in the project's workspa
 3. The thread works. When it finishes, gets blocked, or needs a decision, it calls `project_handback`. The handback lands in the coordinator as its next turn, starting with `[Handback from thread t1 · "title" · status: done]`.
 4. The coordinator tells you the result, answers the thread if it can, or asks you. Follow-ups go to the same thread with `project_thread_send`.
 
-If a thread ends a turn the coordinator started without a handback, the coordinator gets a short automatic note with the thread's last reply (`autoHandback: idle`, the default). The note says so when the turn failed (for example a model error) or was stopped, unless the coordinator stopped it itself. If such a thread waits on a permission prompt for a minute, the coordinator is told which thread and what it wants to do, so it can tell you. So nothing a thread does goes unnoticed. When you talk to a thread directly, the coordinator is not woken for it; its thread list just notes that you did.
+If a thread ends a turn the coordinator started without a handback, the coordinator gets a short automatic note with the thread's last reply (`autoHandback: idle`, the default). The note says so when the turn failed (for example a model error), was stopped (unless the coordinator stopped it itself), or was cut off because DSH quit or crashed; that one arrives when DSH starts again. If such a thread waits on a permission prompt for a minute, the coordinator is told which thread and what it wants to do, so it can tell you. So nothing a thread does goes unnoticed. When you talk to a thread directly, the coordinator is not woken for it; its thread list just notes that you did.
 
-The coordinator's system prompt is rebuilt on every request with the live thread roster, the settings and an excerpt of project memory. A thread's prompt tells it who it is and how to hand back.
+Handbacks and notes reach the coordinator in order. If it cannot take one (for example while it is open in another DSH process), the plugin keeps it and tries again, waiting longer each time, up to 15 minutes.
+
+The coordinator's system prompt is rebuilt on every request with the live thread roster, the settings and project memory (all of it when short, otherwise its start and its newest lines). A thread's prompt tells it who it is and how to hand back.
 
 ## Settings
 
@@ -92,7 +94,7 @@ Project row:
 | --- | --- | --- |
 | `name` | required | Display name and coordinator title. |
 | `workspacePath` | required | Workspace for the coordinator and every thread. |
-| `id` | name, slugified | Stable id. Changing it starts the project over. |
+| `id` | name, slugified | Stable id. Letters in any script are kept. Changing it starts the project over. |
 | `goal` | `''` | The outcome the coordinator works toward. |
 | `agentPreset` | | Agent preset for new project sessions. |
 | `coordinatorModel`, `coordinatorEffort`, `threadModel`, `threadEffort` | | Override the plugin defaults for this project. |
@@ -148,7 +150,7 @@ node plugins/projects/test/smoke.mjs
 
 The smoke tests run against a fake Host built from the published `@deepseek-ai/*` packages, including a Host with DSH's per-session model selection.
 
-The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin, session-bridge and a scripted model server. It drives the coordinator and threads through the bridge and checks what reaches the model: the model and effort of every request, which tools each session has, handbacks, the automatic notes (idle, failed, stopped, waiting on approval), direct talk, settings, memory, pause, a stop by the coordinator and a restart. It takes about a minute.
+The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin, session-bridge and a scripted model server. It drives the coordinator and threads through the bridge and checks what reaches the model: the model and effort of every request, which tools each session has, handbacks, the automatic notes (idle, failed, stopped, waiting on approval, cut off by a crash), queued turns, direct talk, settings, memory, pause, a stop by the coordinator, and a restart after DSH is killed mid-turn. It takes about two minutes.
 
 ```bash
 npm install --prefix /tmp/dsh @deepseek-ai/dsh

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { effectiveSettings, applyRoute, checkSelection } from '../plugins/projects/lib/settings.js';
-import { handbackMessage, idleMessage, rosterLines } from '../plugins/projects/lib/prompts.js';
+import { handbackMessage, idleMessage, rosterLines, memoryExcerpt } from '../plugins/projects/lib/prompts.js';
 import { ensurePrivateDir } from '../plugins/projects/lib/store.js';
 import { mkdtempSync, mkdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -38,6 +38,16 @@ test('projects: message framing', () => {
     assert.match(idleMessage('t2', 'Fix CI', ''), /It produced no reply text\./);
     assert.deepEqual(rosterLines({}, () => 'idle'), ['(no threads yet)']);
     assert.match(rosterLines({ t1: { title: 'A', sessionId: 's', resolved: true } }, () => 'idle')[0], /t1 · "A" · resolved · no handback yet/);
+});
+
+test('projects: a long memory shows its start and its newest lines', () => {
+    const memory = ['# Summary', ...Array.from({ length: 400 }, (_, i) => `- fact ${i}`)].join('\n');
+    const excerpt = memoryExcerpt(memory);
+    assert.ok(excerpt.startsWith('# Summary\n- fact 0\n'));
+    assert.ok(excerpt.endsWith('\n- fact 399'));
+    assert.match(excerpt, /\n\[… \d+ characters left out; project_memory read shows all …\]\n- fact \d+\n/);
+    assert.ok(excerpt.length < 4100, `${excerpt.length}`);
+    assert.equal(memoryExcerpt('short'), 'short');
 });
 
 test('projects: private folders are 700 even under a narrowed umask, and an unusable one is repaired', { skip: process.platform === 'win32' }, () => {

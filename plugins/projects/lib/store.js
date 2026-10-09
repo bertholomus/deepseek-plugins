@@ -4,8 +4,9 @@
  * { version: 1, projects: { [projectId]: {
  *     coordinatorSessionId, settings: { coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused? },
  *     nextThread, pendingHandbacks: [text], threadStarts: [ms],
- *     threads: { [threadId]: { sessionId, title, model?, effort?, state, resolved,
- *       createdAt, lastHandback?: { status, summary, at }, handbackTimes: [ms] } } } } }
+ *     threads: { [threadId]: { sessionId, title, model?, effort?, resolved, createdAt,
+ *       lastHandback?: { status, summary, at }, lastDirect?: { at, reply }, handbackTimes: [ms],
+ *       busy?: true while a turn runs, seenTurn?: key of the last turn reviewed } } } } }
  *
  * Settings here are the runtime overrides the coordinator sets with
  * project_settings. They sit above the profile config; deleting a key means
@@ -51,7 +52,26 @@ export function ensurePrivateDir(dir) {
     }
 }
 
+/** Open stores by file, so every manager in this process shares one copy. */
+const opened = new Map();
+
 export class ProjectStore {
+    /**
+     * The store for a file, shared within the process. A manager left over
+     * from a config reload may still be finishing a tool call; sharing the
+     * copy means its writes and the new manager's never overwrite each other.
+     * @param {string} file - store path.
+     */
+    static open(file) {
+        const path = expand(file);
+        let store = opened.get(path);
+        if (!store) {
+            store = new ProjectStore(path);
+            opened.set(path, store);
+        }
+        return store;
+    }
+
     /** @param {string} file - store path. */
     constructor(file) {
         this.file = expand(file);

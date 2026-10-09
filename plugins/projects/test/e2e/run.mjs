@@ -7,7 +7,8 @@
  * server, then drives the coordinator and its threads through the bridge
  * socket and checks what reached the model: models and efforts on the wire,
  * tool scoping, handbacks, the automatic notes (idle, failed, stopped,
- * waiting on approval), direct talk, settings, memory, pause and a restart.
+ * waiting on approval, cut off by a DSH crash), queued turns, direct talk,
+ * settings, memory, pause and a restart.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/projects/test/e2e/run.mjs
  *
@@ -263,6 +264,8 @@ try {
     const t1 = threadSession('t1');
     check('thread session is titled "E2E Project › Alpha"', (await bridge('GET', `/sessions/${t1}`)).title === `${PROJECT} › Alpha`);
     check('roster shows the handback', saw.system.includes('- t1 · "Alpha" · ') && saw.system.includes('last handback: done'));
+    await sleep(1000);
+    check('a turn that handed back sends no idle note', !readText(logFile).includes(`idle-note ${PROJECT_ID}/t1 `) && since(mark, 'coordinator').every((r) => r.action.text !== 'SAW-IDLE'), describe(since(mark)));
 
     // 3. A thread that stops without a handback: the idle note.
     mark = model.requests.length;
@@ -372,12 +375,37 @@ try {
     await sleep(1500);
     check('its own stop is not echoed back to it', !since(mark, 'coordinator').some((r) => r.fresh.includes('t6 · "Zeta"')), describe(since(mark, 'coordinator')));
 
-    // 15. Restart: same coordinator, routes kept, threads still wired.
-    await stopDsh(child);
+    // 15. Queued turns: the coordinator queues a second message while the first
+    // turn runs; DSH runs both before going idle. The first hands back, the
+    // second fails, and the coordinator hears about both.
+    mark = model.requests.length;
+    await say(coord, call('project_thread_start', {
+        title: 'Eta',
+        brief: `E2E:slow 4000\n${call('project_handback', { status: 'done', summary: 'Eta part one done.' })}`,
+    }));
+    const sent = await say(coord, call('project_thread_send', { thread: 't7', text: 'E2E:fail' }));
+    saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Eta failure note');
+    const t7Reqs = since(mark, 't7');
+    check('the second message was queued while the first turn ran', sent[0].at < (t7Reqs[1]?.at ?? 0), describe(since(mark)));
+    check('the first turn handed back', since(mark, 'coordinator').some((r) => r.fresh.includes('Eta part one done.')));
+    check('the queued turn that failed gets its note', saw.fresh.includes('[Thread idle without a handback: t7 · "Eta"]') && saw.fresh.includes('The turn failed:'), saw.fresh.slice(0, 300));
+
+    // 16. DSH dies mid-turn. At the next start the coordinator hears the thread
+    // was cut off. Then: same coordinator, routes kept, threads still wired.
+    mark = model.requests.length;
+    await say(coord, call('project_thread_start', { title: 'Theta', brief: 'E2E:slow 120000\nWork for a long time.' }));
+    await waitFor(() => since(mark, 't8').length > 0, 'the Theta request');
+    const exited = new Promise((r) => child.once('exit', r));
+    child.kill('SIGKILL');
+    await exited;
+    mark = model.requests.length;
     child = startDsh(dsh);
     await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge after restart', 90000);
     await waitFor(() => readText(logFile).includes(`coordinator ${PROJECT_ID} ${coord} resumed`), 'the plugin to resume the coordinator');
     check('restart keeps the coordinator', project().coordinatorSessionId === coord);
+    saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Theta cut-off note');
+    check('a turn cut off by the crash is reported', saw.fresh.includes('[Thread idle without a handback: t8 · "Theta"]')
+        && saw.fresh.includes('The turn was cut off because DSH stopped while it ran.'), saw.fresh.slice(0, 300));
     mark = model.requests.length;
     await say(coord, call('project_thread_send', { thread: 't1', text: 'After the restart.' }));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the t1 idle note after restart');

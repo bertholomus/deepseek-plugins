@@ -35,9 +35,39 @@ import {
 const SECTION_ORDER = 9500;
 const HOUR = 60 * 60 * 1000;
 
-/** Lower-kebab id from a project name. */
+/** Delivery retry delays for a coordinator that cannot take a message; tests shorten them. */
+export const timing = { retryMs: 60000, maxRetryMs: 15 * 60000 };
+
+/** What project_handback returns. The idle review counts a turn as handed back by these texts. */
+const HANDBACK_SENT = 'Handback delivered to the coordinator.';
+const HANDBACK_HELD = 'Handback saved; the coordinator gets it when the project resumes.';
+const HANDBACK_RETRY = 'Handback saved; the coordinator could not take it just now, and it is sent again automatically.';
+
+/**
+ * Lower-kebab id from a project name. Letters in any script are kept
+ * (前端 and 后端 stay apart); accents are dropped.
+ */
 export function slugify(name) {
-    return String(name ?? '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'project';
+    const slug = String(name ?? '').normalize('NFKD').replace(/\p{M}+/gu, '').toLowerCase()
+        .replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '');
+    return [...slug].slice(0, 48).join('').replace(/-+$/, '') || 'project';
+}
+
+/** The newest manager per store file. One left over from a config reload hands late work to it. */
+const managers = new Map();
+/** Coordinator checks in flight, by store file and project, so two managers never make two coordinators. */
+const ensuring = new Map();
+
+/** Whether a session read failed because the session does not exist, not for another reason. */
+function isNotFound(error) {
+    return error?.constructor?.name === 'ApiSessionNotFound' || error?.code === 'session/not-found'
+        || /not[ -]found/i.test(String(error?.message ?? ''));
+}
+
+/** Arguments of a logged tool call: an object, or JSON text. */
+function argsOf(value) {
+    if (typeof value !== 'string') return value ?? {};
+    try { return JSON.parse(value); } catch { return {}; }
 }
 
 /** Text of one message-like session event, or ''. */
@@ -73,6 +103,27 @@ function promptOf(event) {
     return { text, fromProject };
 }
 
+/**
+ * Where one turn sits in a session log. `current` is the turn running now;
+ * otherwise the last turn that ended. A log without turn markers counts as
+ * one turn. Returns event indexes [start, end), the end reason and whether
+ * the turn has ended.
+ */
+function turnRange(events, current) {
+    const lastIndex = (type, before) => {
+        for (let i = before - 1; i >= 0; i--) if (events[i]?.type === type) return i;
+        return -1;
+    };
+    const lastEnd = lastIndex('turn/end', events.length);
+    if (current) {
+        const lastStart = lastIndex('turn/start', events.length);
+        return { start: lastStart > lastEnd ? lastStart : lastEnd + 1, end: events.length, ended: false };
+    }
+    if (lastEnd < 0) return { start: Math.max(lastIndex('turn/start', events.length), 0), end: events.length, ended: false };
+    const start = Math.max(lastIndex('turn/start', lastEnd), lastIndex('turn/end', lastEnd) + 1);
+    return { start, end: lastEnd + 1, reason: events[lastEnd].data?.reason ?? null, ended: true };
+}
+
 export class ProjectError extends Error {}
 
 export class ProjectManager {
@@ -86,7 +137,9 @@ export class ProjectManager {
         this.ctx = ctx;
         this.config = config;
         this.buildTools = buildTools;
-        this.store = new ProjectStore(config.storeFile);
+        this.store = ProjectStore.open(config.storeFile);
+        managers.set(this.store.file, this);
+        this.disposed = false;
         this.logFile = config.logFile ? expand(config.logFile) : '';
         if (this.logFile) {
             try { ensurePrivateDir(dirname(this.logFile)); } catch {}
@@ -102,16 +155,21 @@ export class ProjectManager {
             const id = slugify(row.id || row.name);
             if (this.projects.has(id)) {
                 this.log(`config duplicate project id ${id}; keeping the first row`);
+                ctx.logger?.warn?.('projects: two projects have the id "%s"; only the first runs. Give the other an id.', id);
                 continue;
             }
             this.projects.set(id, { ...row, id, workspacePath: expand(row.workspacePath) });
         }
         /** Agent → disposer for its installed project scope. */
         this.installed = new Map();
-        /** sessionId → {running, handedBack, stopRequested} for thread turn tracking. */
+        /** sessionId → {running, stopped?: {key}} for thread turn tracking. */
         this.turns = new Map();
         /** sessionId → (approval id → timer) for permission prompts not yet answered. */
         this.approvals = new Map();
+        /** projectId → tail of its delivery chain, so messages reach the coordinator in order. */
+        this.chains = new Map();
+        /** projectId → {timer, attempt} for held messages waiting on a retry. */
+        this.retries = new Map();
     }
 
     /** One action line, mode 600. Sizes and ids only, never prompt text. */
@@ -155,34 +213,50 @@ export class ProjectManager {
 
     // ── lifecycle ──────────────────────────────────────────────────────────
 
-    /** Attach to live agents, then make sure every project has a coordinator. */
+    /**
+     * Attach to live agents, make sure every project has a coordinator,
+     * deliver held messages, and review thread turns that ended while the
+     * plugin was not watching (DSH stopped or the plugin reloaded mid-turn).
+     */
     async start() {
         for (const agent of this.ctx.agents.list?.() ?? []) this.maybeInstall(agent);
         for (const id of this.projects.keys()) {
+            if (this.disposed) return;
             try {
                 await this.ensureCoordinator(id);
-                if (!this.paused(id)) await this.flushPending(id);
             } catch (error) {
                 this.log(`error coordinator ${id} ${String(error?.message ?? error).slice(0, 300)}`);
                 this.ctx.logger?.warn?.('projects: could not start coordinator for %s: %s', id, error?.message ?? error);
+                continue;
             }
+            // Reloaded meanwhile: the new manager delivers and reviews.
+            if (this.disposed) return;
+            await this.flushPending(id);
+            await this.catchUp(id);
         }
     }
 
     async dispose() {
+        this.disposed = true;
+        if (managers.get(this.store.file) === this) managers.delete(this.store.file);
         for (const dispose of this.installed.values()) {
             try { dispose(); } catch {}
         }
         this.installed.clear();
+        for (const sessionId of [...this.approvals.keys()]) this.clearApprovals(sessionId);
+        for (const { timer } of this.retries.values()) clearTimeout(timer);
+        this.retries.clear();
     }
 
+    /** Whether a session exists. Only "not found" means no; any other read error is thrown. */
     async exists(sessionId) {
         if (!sessionId) return false;
         try {
             await this.sc.inspect(sessionId, AbortSignal.timeout(20000));
             return true;
-        } catch {
-            return false;
+        } catch (error) {
+            if (isNotFound(error)) return false;
+            throw error;
         }
     }
 
@@ -200,7 +274,20 @@ export class ProjectManager {
         return r?.agent;
     }
 
+    /** One coordinator check per project at a time, across managers. */
     async ensureCoordinator(projectId) {
+        const key = `${this.store.file}#${projectId}`;
+        while (ensuring.has(key)) await ensuring.get(key).catch(() => {});
+        const run = this.ensureCoordinatorOnce(projectId);
+        ensuring.set(key, run);
+        try {
+            return await run;
+        } finally {
+            if (ensuring.get(key) === run) ensuring.delete(key);
+        }
+    }
+
+    async ensureCoordinatorOnce(projectId) {
         const project = this.project(projectId);
         const stored = this.store.project(projectId);
         if (await this.exists(stored.coordinatorSessionId)) {
@@ -210,6 +297,8 @@ export class ProjectManager {
             this.log(`coordinator ${projectId} ${stored.coordinatorSessionId} resumed`);
             return stored.coordinatorSessionId;
         }
+        // The plugin reloaded meanwhile; the new manager makes the coordinator.
+        if (this.disposed) return null;
         const sessionId = await this.createSession(project);
         this.store.putProject(projectId, {
             coordinatorSessionId: sessionId, coordinatorCreatedAt: new Date().toISOString(), coordinatorRoute: undefined,
@@ -233,6 +322,11 @@ export class ProjectManager {
     // ── agent scope ────────────────────────────────────────────────────────
 
     maybeInstall(agent) {
+        // A tool call that outlived a config reload hands its new session to the new manager.
+        if (this.disposed) {
+            managers.get(this.store.file)?.maybeInstall(agent);
+            return;
+        }
         if (!agent || this.installed.has(agent)) return;
         const who = this.store.lookup(agent.id);
         if (!who || !this.projects.has(who.projectId)) return;
@@ -278,6 +372,16 @@ export class ProjectManager {
                 }, { prepend: true }));
             }
             if (role === 'thread') {
+                if (agent.status === 'running') {
+                    // Attached mid-turn (the plugin reloaded): review the turn when it ends,
+                    // and watch the permission prompts it is already waiting on.
+                    this.turns.set(agent.id, { running: true });
+                    const t = this.store.thread(projectId, threadId);
+                    if (t && !t.busy) this.store.putThread(projectId, threadId, { busy: true });
+                    void this.rearmApprovals(projectId, threadId, agent).catch((error) => {
+                        this.log(`error approval ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
+                    });
+                }
                 add(scoped.on('agent/status', ({ status }) => {
                     void this.onThreadStatus(projectId, threadId, agent, status).catch((error) => {
                         this.log(`error status ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
@@ -409,26 +513,46 @@ export class ProjectManager {
     }
 
     /**
-     * Track thread turns. A turn the coordinator started that ends without a
-     * handback sends the automatic note. A turn the user started by talking
-     * to the thread directly is only recorded for the coordinator's roster:
-     * the user is already there, and a note would make the coordinator take
-     * a turn for nothing.
+     * Track thread turns. DSH runs queued messages as back-to-back turns and
+     * goes idle once at the end, so the review looks at the last turn only.
      */
     async onThreadStatus(projectId, threadId, agent, status) {
-        const state = this.turns.get(agent.id) ?? { running: false, handedBack: false };
+        const state = this.turns.get(agent.id) ?? { running: false };
         if (status === 'running') {
-            if (!state.running) this.turns.set(agent.id, { running: true, handedBack: false });
+            if (state.running) return;
+            this.turns.set(agent.id, { running: true });
+            // Marks a turn in flight, so one cut off by a DSH stop is reviewed at the next start.
+            const t = this.store.thread(projectId, threadId);
+            if (t && !t.busy) this.store.putThread(projectId, threadId, { busy: true });
             return;
         }
         if (status !== 'idle' || !state.running) return;
-        this.turns.set(agent.id, { running: false, handedBack: false });
-        if (state.handedBack) return;
+        this.turns.set(agent.id, { running: false });
+        if (this.store.thread(projectId, threadId)?.busy) this.store.putThread(projectId, threadId, { busy: false });
+        await this.reviewTurn(projectId, threadId, agent.id, { stopped: state.stopped });
+    }
+
+    /**
+     * Review a thread's last ended turn once. A turn the coordinator started
+     * that ended without a handback sends the automatic note. A turn the user
+     * started by talking to the thread directly is only recorded for the
+     * coordinator's roster: the user is already there, and a note would make
+     * the coordinator take a turn for nothing.
+     * @param {object} [options]
+     * @param {{key: unknown}} [options.stopped] - the turn the coordinator stopped.
+     * @param {boolean} [options.catchUp] - reviewing at start: only a turn that really ended.
+     */
+    async reviewTurn(projectId, threadId, sessionId, { stopped, catchUp = false } = {}) {
+        const turn = await this.readTurn(sessionId);
         const t = this.store.thread(projectId, threadId);
-        if (!t || t.resolved) return;
-        const turn = await this.lastTurn(agent.id);
+        if (!t || t.resolved || (catchUp && !turn.ended)) return;
+        if (turn.ended) {
+            if (t.seenTurn === turn.key) return;
+            this.store.putThread(projectId, threadId, { seenTurn: turn.key });
+        }
+        if (turn.handedBack) return;
         // The coordinator stopped this turn itself, so a note would only echo that back.
-        if (state.stopRequested && turn.endKind === 'aborted') return;
+        if (stopped && stopped.key === turn.key && turn.endKind === 'aborted') return;
         if (!turn.fromProject) {
             this.store.putThread(projectId, threadId, { lastDirect: { at: new Date().toISOString(), reply: turn.reply.slice(0, 500) } });
             this.log(`direct-turn ${projectId}/${threadId} chars=${turn.reply.length}`);
@@ -436,7 +560,25 @@ export class ProjectManager {
         }
         if (this.config.autoHandback !== 'idle' || !this.allowHandback(projectId, threadId)) return;
         await this.deliver(projectId, idleMessage(threadId, t.title, turn.reply, turn.ending));
-        this.log(`idle-note ${projectId}/${threadId} chars=${turn.reply.length}${turn.ending ? ' ended-early' : ''}`);
+        this.log(`idle-note ${projectId}/${threadId} chars=${turn.reply.length}${turn.ending ? ` ended=${turn.endKind}` : ''}`);
+    }
+
+    /**
+     * At start: review the turns of threads that were mid-turn when the
+     * plugin last looked, unless they are running now (their end is watched).
+     */
+    async catchUp(projectId) {
+        for (const [threadId, t] of Object.entries(this.store.project(projectId).threads)) {
+            if (this.disposed) return;
+            if (!t.busy || t.resolved) continue;
+            if (this.ctx.agents.get(t.sessionId)?.status === 'running') continue;
+            this.store.putThread(projectId, threadId, { busy: false });
+            try {
+                await this.reviewTurn(projectId, threadId, t.sessionId, { catchUp: true });
+            } catch (error) {
+                this.log(`error catch-up ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
+            }
+        }
     }
 
     /**
@@ -470,10 +612,22 @@ export class ProjectManager {
         this.approvals.delete(sessionId);
     }
 
+    /** Watch the permission prompts a running turn already waits on (after a reload). */
+    async rearmApprovals(projectId, threadId, agent) {
+        const events = (await this.sc.inspect(agent.id, AbortSignal.timeout(20000))).events ?? [];
+        const { start } = turnRange(events, true);
+        const open = new Map();
+        for (const event of events.slice(start)) {
+            if (event?.type === 'approval/asked' && event.data?.id) open.set(event.data.id, event);
+            else if (event?.type === 'approval/decided') open.delete(event.data?.id);
+        }
+        for (const event of open.values()) this.onThreadEvent(projectId, threadId, agent, event);
+    }
+
     async noticeApproval(projectId, threadId, agent, data) {
         const t = this.store.thread(projectId, threadId);
         if (!t || t.resolved || !this.projects.has(projectId)) return;
-        const turn = await this.lastTurn(agent.id);
+        const turn = await this.readTurn(agent.id, { current: true });
         // The user is talking to the thread directly, so the prompt is in front of them.
         if (!turn.fromProject || !this.allowHandback(projectId, threadId)) return;
         const sessionTitle = `${this.project(projectId).name} › ${t.title}`;
@@ -492,72 +646,126 @@ export class ProjectManager {
     }
 
     /**
-     * The session's last reply, how its last turn ended (`endKind`, and
-     * `ending` as a line when that was not a normal completion), and whether
-     * its last prompt came from this project (the coordinator) rather than
-     * from the user directly.
+     * One turn of a session, read from its log: the last one that ended, or
+     * with `current` the one running now. Returns its `key` (the seq of its
+     * first event), whether it `ended`, how (`endKind`, and `ending` as a line
+     * when that was not a normal completion), its last reply, whether it
+     * handed back, and whether its prompt came from this project (the
+     * coordinator) rather than from the user directly.
      */
-    async lastTurn(sessionId) {
+    async readTurn(sessionId, { current = false } = {}) {
+        const events = (await this.sc.inspect(sessionId, AbortSignal.timeout(20000))).events ?? [];
+        const { start, end, reason, ended } = turnRange(events, current);
         let reply = '';
-        let end;
-        try {
-            const r = await this.sc.inspect(sessionId, AbortSignal.timeout(20000));
-            const events = r.events ?? [];
-            for (let i = events.length - 1; i >= 0; i--) {
-                if (end === undefined && events[i]?.type === 'turn/end') end = events[i].data?.reason ?? null;
-                if (!reply && roleOf(events[i]) === 'assistant') reply = textOf(events[i]);
-                const prompt = promptOf(events[i]);
-                if (prompt) return { reply, ending: describeEnding(end), endKind: end?.kind, fromProject: prompt.fromProject };
+        let prompt = null;
+        const handbacks = new Map();
+        let handedBack = false;
+        for (let i = start; i < end; i++) {
+            const event = events[i];
+            if (roleOf(event) === 'assistant') reply = textOf(event) || reply;
+            prompt = promptOf(event) ?? prompt;
+            if (event?.type === 'tool/call' && event.data?.name === 'project_handback') {
+                handbacks.set(event.data.callId, argsOf(event.data.arguments)?.status);
+            } else if (event?.type === 'tool/result') {
+                const callId = event.data?.message?.toolCallId ?? event.data?.message?.source?.callId;
+                const status = handbacks.get(callId);
+                if (status && status !== 'progress' && textOf(event).startsWith('Handback ')) handedBack = true;
             }
-        } catch {}
-        return { reply, ending: describeEnding(end), endKind: end?.kind, fromProject: true };
+        }
+        // A turn with no prompt of its own (woken by the Host) belongs to the last prompt before it.
+        for (let i = start - 1; !prompt && i >= 0; i--) prompt = promptOf(events[i]);
+        return {
+            key: events[start]?.seq ?? start,
+            ended,
+            endKind: reason?.kind,
+            ending: describeEnding(reason),
+            reply,
+            handedBack,
+            fromProject: prompt ? prompt.fromProject : true,
+        };
     }
 
-    /** Send text to the coordinator, or hold it while the project is paused or unreachable. */
-    async deliver(projectId, text) {
-        const stored = this.store.project(projectId);
-        if (this.paused(projectId) || !stored.coordinatorSessionId) {
-            this.store.putProject(projectId, { pendingHandbacks: [...stored.pendingHandbacks, text] });
-            return 'held';
-        }
-        try {
-            await this.prompt(stored.coordinatorSessionId, text, 'queue');
-            return 'delivered';
-        } catch (error) {
-            this.log(`error deliver ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
-            this.store.putProject(projectId, { pendingHandbacks: [...stored.pendingHandbacks, text] });
-            return 'held';
-        }
+    /** Run one delivery step after the ones before it, so the coordinator gets messages in order. */
+    serial(projectId, step) {
+        const run = (this.chains.get(projectId) ?? Promise.resolve()).then(step);
+        this.chains.set(projectId, run.catch(() => {}));
+        return run;
     }
 
-    async flushPending(projectId) {
-        const stored = this.store.project(projectId);
-        const pending = stored.pendingHandbacks;
-        if (pending.length === 0 || !stored.coordinatorSessionId) return 0;
-        this.store.putProject(projectId, { pendingHandbacks: [] });
-        let sent = 0;
-        for (let i = 0; i < pending.length; i++) {
+    /**
+     * Send text to the coordinator after anything held before it. It is
+     * held while the project is paused, and retried when the coordinator
+     * cannot take it.
+     * @returns {Promise<'delivered'|'held'>}
+     */
+    deliver(projectId, text) {
+        return this.serial(projectId, async () => {
+            const pending = this.store.project(projectId).pendingHandbacks;
+            this.store.putProject(projectId, { pendingHandbacks: [...pending, text] });
+            if (this.paused(projectId)) return 'held';
+            return (await this.sendHeld(projectId)) === 0 ? 'delivered' : 'held';
+        });
+    }
+
+    /** Deliver held messages now, unless paused. @returns how many were sent. */
+    flushPending(projectId) {
+        return this.serial(projectId, async () => {
+            const before = this.store.project(projectId).pendingHandbacks.length;
+            if (before === 0 || this.paused(projectId)) return 0;
+            const sent = before - await this.sendHeld(projectId);
+            this.log(`flush ${projectId} sent=${sent}`);
+            return sent;
+        });
+    }
+
+    /** Send held messages in order until one fails; then retry later. Runs inside `serial`. @returns how many are left. */
+    async sendHeld(projectId) {
+        const sessionId = this.store.project(projectId).coordinatorSessionId;
+        // No coordinator yet: the next start makes one and sends them.
+        if (!sessionId) return this.store.project(projectId).pendingHandbacks.length;
+        while (this.store.project(projectId).pendingHandbacks.length > 0 && !this.paused(projectId)) {
             try {
-                await this.prompt(stored.coordinatorSessionId, pending[i], 'queue');
-                sent += 1;
-            } catch {
-                this.store.putProject(projectId, { pendingHandbacks: [...pending.slice(i), ...this.store.project(projectId).pendingHandbacks] });
+                await this.prompt(sessionId, this.store.project(projectId).pendingHandbacks[0], 'queue');
+            } catch (error) {
+                this.log(`error deliver ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
+                this.retryLater(projectId);
                 break;
             }
+            this.store.putProject(projectId, { pendingHandbacks: this.store.project(projectId).pendingHandbacks.slice(1) });
         }
-        this.log(`flush ${projectId} sent=${sent}`);
-        return sent;
+        const left = this.store.project(projectId).pendingHandbacks.length;
+        if (left === 0) {
+            clearTimeout(this.retries.get(projectId)?.timer);
+            this.retries.delete(projectId);
+        }
+        return left;
+    }
+
+    /** Try held messages again later, backing off up to timing.maxRetryMs. */
+    retryLater(projectId) {
+        const retry = this.retries.get(projectId) ?? { attempt: 0 };
+        if (retry.timer || this.disposed) return;
+        const delay = Math.min(timing.retryMs * 2 ** retry.attempt, timing.maxRetryMs);
+        retry.attempt += 1;
+        retry.timer = setTimeout(() => {
+            retry.timer = undefined;
+            void this.flushPending(projectId);
+        }, delay);
+        retry.timer.unref?.();
+        this.retries.set(projectId, retry);
     }
 
     // ── operations behind the tools ────────────────────────────────────────
 
+    /** The thread for an id as the model typed it (" t3 " is t3), or an error that lists the threads. */
     requireThread(projectId, threadId) {
-        const t = this.store.thread(projectId, String(threadId ?? '').trim());
+        const id = String(threadId ?? '').trim();
+        const t = this.store.thread(projectId, id);
         if (!t) {
             const known = Object.keys(this.store.project(projectId).threads).join(', ') || 'none';
-            throw new ProjectError(`no thread "${threadId}" in this project (threads: ${known})`);
+            throw new ProjectError(`no thread "${id}" in this project (threads: ${known})`);
         }
-        return t;
+        return { id, t };
     }
 
     async startThread(projectId, { title, brief, model, effort }) {
@@ -567,7 +775,9 @@ export class ProjectManager {
         if (!cleanTitle) throw new ProjectError('title is required');
         if (!String(brief ?? '').trim()) throw new ProjectError('brief is required');
         const s = this.settings(projectId);
-        const check = checkSelection(await this.catalog(), model ?? s.threadModel.value, effort ?? s.threadEffort.value);
+        // Not given, or "default": the project's thread default.
+        const or = (value, fallback) => (value === undefined || value === 'default' ? fallback : value);
+        const check = checkSelection(await this.catalog(), or(model, s.threadModel.value), or(effort, s.threadEffort.value));
         if (!check.ok) throw new ProjectError(check.error);
         // Every attempt counts, so a coordinator caught in a loop stops even when starts fail.
         const now = Date.now();
@@ -582,7 +792,7 @@ export class ProjectManager {
         const sessionId = await this.createSession(project);
         this.store.putThread(projectId, threadId, {
             sessionId, title: cleanTitle, model: check.model, effort: check.effort,
-            resolved: false, createdAt: new Date().toISOString(), handbackTimes: [],
+            resolved: false, createdAt: new Date().toISOString(), handbackTimes: [], seenTurn: null,
         });
         const agent = await this.attach(sessionId);
         const notes = check.note ? [check.note] : [];
@@ -597,13 +807,13 @@ export class ProjectManager {
     }
 
     async sendToThread(projectId, threadId, text, steer) {
-        const t = this.requireThread(projectId, threadId);
+        const { id, t } = this.requireThread(projectId, threadId);
         if (!String(text ?? '').trim()) throw new ProjectError('text is required');
-        if (t.resolved) this.store.putThread(projectId, threadId, { resolved: false });
+        if (t.resolved) this.store.putThread(projectId, id, { resolved: false });
         await this.attach(t.sessionId);
         await this.prompt(t.sessionId, coordinatorMessage(text.trim()), steer ? 'steer' : 'queue');
-        this.log(`thread-send ${projectId}/${threadId} mode=${steer ? 'steer' : 'queue'} chars=${text.length}`);
-        return `${steer ? 'Steered' : 'Sent to'} ${threadId}${t.resolved ? ' (reopened)' : ''}.`;
+        this.log(`thread-send ${projectId}/${id} mode=${steer ? 'steer' : 'queue'} chars=${text.length}`);
+        return `${steer ? 'Steered' : 'Sent to'} ${id}${t.resolved ? ' (reopened)' : ''}.`;
     }
 
     listThreads(projectId, includeResolved) {
@@ -615,18 +825,18 @@ export class ProjectManager {
     }
 
     async readThread(projectId, threadId, count = 6) {
-        const t = this.requireThread(projectId, threadId);
+        const { id, t } = this.requireThread(projectId, threadId);
         const r = await this.sc.inspect(t.sessionId, AbortSignal.timeout(20000));
         const msgs = (r.events ?? [])
             .map((e) => (roleOf(e) === 'user' ? { role: 'user', text: promptOf(e)?.text } : { role: roleOf(e), text: textOf(e) }))
             .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.text);
         const n = Math.max(1, Math.min(Number(count) || 6, 30));
         const lines = msgs.slice(-n).map((m) => `## ${m.role}\n${m.text.length > 3000 ? `${m.text.slice(0, 3000)}…` : m.text}`);
-        return [`${threadId} · "${t.title}" · ${t.resolved ? 'resolved' : this.liveStatus(t.sessionId)} · ${describeRoute(t.model, t.effort)}`, ...lines].join('\n\n');
+        return [`${id} · "${t.title}" · ${t.resolved ? 'resolved' : this.liveStatus(t.sessionId)} · ${describeRoute(t.model, t.effort)}`, ...lines].join('\n\n');
     }
 
-    async updateThread(projectId, threadId, changes) {
-        const t = this.requireThread(projectId, threadId);
+    async updateThread(projectId, threadKey, changes) {
+        const { id: threadId, t } = this.requireThread(projectId, threadKey);
         const out = [];
         const fields = {};
         if (changes.title !== undefined && String(changes.title).trim()) {
@@ -655,10 +865,19 @@ export class ProjectManager {
             out.push('but the model could not be set, so it keeps its current one (details in the projects log)');
         }
         if (changes.stop === true) {
-            const state = this.turns.get(t.sessionId);
-            if (state?.running) state.stopRequested = true;
-            await this.sc.cancel({ sessionId: t.sessionId });
-            out.push('current turn stopped (queued messages kept)');
+            if (this.ctx.agents.get(t.sessionId)?.status !== 'running') {
+                out.push('no turn was running');
+            } else {
+                const state = this.turns.get(t.sessionId);
+                if (state?.running) state.stopped = { key: (await this.readTurn(t.sessionId, { current: true })).key };
+                try {
+                    await this.sc.cancel({ sessionId: t.sessionId });
+                    out.push('current turn stopped (queued messages kept)');
+                } catch (error) {
+                    if (state) state.stopped = undefined;
+                    out.push(`the turn could not be stopped (${String(error?.message ?? error).slice(0, 200)})`);
+                }
+            }
         }
         this.log(`thread-update ${projectId}/${threadId} ${Object.keys(fields).join(',')}${changes.stop ? ',stop' : ''}`);
         return out.length ? `${threadId}: ${out.join('; ')}.` : `${threadId}: nothing to change.`;
@@ -718,7 +937,8 @@ export class ProjectManager {
         }
         if (action !== 'append' && action !== 'replace') throw new ProjectError('action must be read, append or replace');
         const add = String(text ?? '').trim();
-        if (!add && action === 'append') throw new ProjectError('text is required');
+        // Also for replace: an empty replace would erase the whole memory.
+        if (!add) throw new ProjectError('text is required');
         const body = action === 'append' ? `${this.readMemory(projectId).replace(/\s*$/, '')}\n${add}\n`.replace(/^\n/, '') : `${add}\n`;
         if (Buffer.byteLength(body) > this.config.maxMemoryBytes) {
             throw new ProjectError(`memory would exceed ${this.config.maxMemoryBytes} bytes; summarize it with action "replace"`);
@@ -729,23 +949,22 @@ export class ProjectManager {
         return `Project memory ${action === 'append' ? 'appended' : 'replaced'} (${Buffer.byteLength(body)} bytes).`;
     }
 
-    async handback(projectId, threadId, agentId, status, summary) {
+    /**
+     * A thread's report to the coordinator. The idle review finds it in the
+     * thread's log, by the result text this returns.
+     */
+    async handback(projectId, threadId, status, summary) {
         if (!HANDBACK_STATUSES.includes(status)) throw new ProjectError(`status must be one of ${HANDBACK_STATUSES.join(', ')}`);
         const text = String(summary ?? '').trim();
         if (!text) throw new ProjectError('summary is required');
-        const t = this.requireThread(projectId, threadId);
+        const { t } = this.requireThread(projectId, threadId);
         if (!this.allowHandback(projectId, threadId)) {
             throw new ProjectError(`handback limit reached (${this.config.maxHandbacksPerHour} per hour); finish the work and hand back once`);
         }
         this.store.putThread(projectId, threadId, { lastHandback: { status, summary: text.slice(0, 500), at: new Date().toISOString() } });
-        if (status !== 'progress') {
-            const state = this.turns.get(agentId);
-            if (state) state.handedBack = true;
-        }
         const outcome = await this.deliver(projectId, handbackMessage(threadId, t.title, status, text));
         this.log(`handback ${projectId}/${threadId} status=${status} chars=${text.length} ${outcome}`);
-        return outcome === 'delivered'
-            ? 'Handback delivered to the coordinator.'
-            : 'Handback saved; the coordinator gets it when the project resumes.';
+        if (outcome === 'delivered') return HANDBACK_SENT;
+        return this.paused(projectId) ? HANDBACK_HELD : HANDBACK_RETRY;
     }
 }

@@ -58,7 +58,7 @@ export function coordinatorPolicy(p) {
         '- Write each brief so the thread can work without this conversation: the user\'s ask in their own words, the facts it needs from project memory, and the default you picked where the ask is ambiguous. Do not add deliverables the user did not ask for.',
         '- Tell the user in one line that the thread started and what it is called.',
         `- Threads report back with handbacks. A handback arrives here as a message starting with "${TAGS.handback}". Tell the user the result in a line or two and name the thread. If the thread asks a question you can answer from what you know, answer it with project_thread_send; otherwise ask the user. When a thread is done and nothing is open, resolve it with project_thread_update.`,
-        `- A message starting with "${TAGS.idle}" is automatic: the thread ended a turn you started without calling project_handback. If it says the turn failed or was stopped, tell the user, and do not start another thread to retry it unless the user asks. Otherwise read the thread with project_thread_read only if it matters, and nudge the thread if it stalled.`,
+        `- A message starting with "${TAGS.idle}" is automatic: the thread ended a turn you started without calling project_handback. If it says the turn failed, was stopped or was cut off, tell the user, and retry only if they ask, in the same thread with project_thread_send rather than a new thread. Otherwise read the thread with project_thread_read only if it matters, and nudge the thread if it stalled.`,
         `- A message starting with "${TAGS.approval}" is automatic: a thread you started is stopped on a permission prompt. Tell the user which thread and what it wants to do; they approve or reject it in that thread's session. Do not start another thread for the same work.`,
         '- The user can talk to a thread directly in its own session. Those turns do not come to you; the roster below notes them. Do not answer them here.',
         '- Record durable facts (decisions, conventions, how the user wants to work) with project_memory, so later threads and a restarted coordinator know them.',
@@ -98,7 +98,21 @@ export function threadPolicy(p) {
 
 function memorySection(memory) {
     if (!memory || memory.trim() === '') return [];
-    return ['', '## Project memory (excerpt)', clip(memory.trim(), 4000)];
+    return ['', '## Project memory (excerpt)', memoryExcerpt(memory)];
+}
+
+/**
+ * Memory for a system prompt: all of it when short, else its start (often a
+ * summary) and its end (the newest appended facts), cut at line breaks.
+ */
+export function memoryExcerpt(memory, max = 4000) {
+    const text = String(memory ?? '').trim();
+    if (text.length <= max) return text;
+    const headEnd = text.lastIndexOf('\n', 1000);
+    const head = text.slice(0, headEnd > 0 ? headEnd : 1000);
+    const tailStart = text.indexOf('\n', text.length - (max - head.length));
+    const tail = text.slice(tailStart > 0 ? tailStart + 1 : text.length - (max - head.length));
+    return `${head}\n[… ${text.length - head.length - tail.length} characters left out; project_memory read shows all …]\n${tail}`;
 }
 
 /** The first message a new thread receives. */

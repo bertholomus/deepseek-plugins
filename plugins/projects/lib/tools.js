@@ -27,6 +27,9 @@ function tool(spec) {
     return defineTool({ output: TEXT_OUTPUT, timeoutMs: 90000, ...spec, execute: (args, exec) => guarded(() => spec.execute(args, exec)) });
 }
 
+/** An optional text argument; an empty string counts as not given, as some models send one for every field. */
+const given = (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value);
+
 const MODEL_HELP = 'Model as "provider:model" or a bare model id; "default" clears it.';
 const EFFORT_HELP = 'Reasoning effort the model offers (for DeepSeek: off, low, high, max); "default" clears it.';
 
@@ -61,8 +64,8 @@ export function projectTools(manager, who) {
                     status: { type: 'string', required: true, enum: HANDBACK_STATUSES, description: 'done, blocked, needs_decision, or progress (a milestone before you finish)' },
                     summary: { type: 'string', required: true, description: 'Short report, result first' },
                 },
-                async execute(args, exec) {
-                    return manager.handback(projectId, threadId, exec?.agent?.id, args.status, args.summary);
+                async execute(args) {
+                    return manager.handback(projectId, threadId, args.status, args.summary);
                 },
             }),
         ];
@@ -76,11 +79,11 @@ export function projectTools(manager, who) {
             parameters: {
                 title: { type: 'string', required: true, description: 'A few plain words naming the work, in the user\'s vocabulary' },
                 brief: { type: 'string', required: true, description: 'Self-contained instructions: the user\'s ask in their words, needed facts from memory, and any default you picked' },
-                model: { type: 'string', description: `Optional model for this thread only. ${MODEL_HELP}` },
-                effort: { type: 'string', description: `Optional effort for this thread only. ${EFFORT_HELP}` },
+                model: { type: 'string', description: 'Optional model for this thread only, as "provider:model" or a bare model id. Leave it out for the project\'s thread default.' },
+                effort: { type: 'string', description: 'Optional effort for this thread only (for DeepSeek: off, low, high, max). Leave it out for the project\'s thread default.' },
             },
             async execute(args) {
-                const r = await manager.startThread(projectId, args);
+                const r = await manager.startThread(projectId, { ...args, model: given(args.model), effort: given(args.effort) });
                 const notes = r.notes?.length ? ` Note: ${r.notes.join('; ')}.` : '';
                 return `Started ${r.threadId} "${r.title}" (${r.route}). It will hand back when done.${notes}`;
             },
@@ -130,7 +133,7 @@ export function projectTools(manager, who) {
                 stop: { type: 'boolean', description: 'Stop the running turn; queued messages are kept' },
             },
             async execute(args) {
-                return manager.updateThread(projectId, args.thread, args);
+                return manager.updateThread(projectId, args.thread, { ...args, title: given(args.title), model: given(args.model), effort: given(args.effort) });
             },
         }),
         tool({
@@ -145,10 +148,10 @@ export function projectTools(manager, who) {
             },
             async execute(args) {
                 return manager.updateSettings(projectId, {
-                    coordinatorModel: args.coordinator_model,
-                    coordinatorEffort: args.coordinator_effort,
-                    threadModel: args.thread_model,
-                    threadEffort: args.thread_effort,
+                    coordinatorModel: given(args.coordinator_model),
+                    coordinatorEffort: given(args.coordinator_effort),
+                    threadModel: given(args.thread_model),
+                    threadEffort: given(args.thread_effort),
                     paused: args.paused,
                 });
             },
