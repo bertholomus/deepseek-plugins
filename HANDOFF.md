@@ -1,6 +1,6 @@
 # Handoff
 
-Updated: 2026-10-09 02:12 PT by B (bertholomus)
+Updated: 2026-10-09 02:35 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (draft PR #1)
 
 ## Doing now
@@ -20,7 +20,8 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 - Fixed: `project_settings` accepted an effort no model offers (e.g. "ultra") when the thread model has no efforts (e48952b).
 - Fixed: session-bridge `GET /sessions/:id` showed no title for renamed sessions (718da57).
 - A stop the coordinator asks for (`project_thread_update stop: true`) no longer comes back to it as a "stopped" note. Stops from anywhere else still do (50a67b7).
-- Tests: `npm test` 27/27, `node plugins/projects/test/smoke.mjs` 26/26, e2e 44/44.
+- New `maxThreadsPerHour` (default 20) per project. A scripted model that answered every idle note with a new thread made a real host start 87 threads in 40 s; now the same loop stops at 20 with an error the coordinator reports (0f10d0a).
+- Tests: `npm test` 27/27, `node plugins/projects/test/smoke.mjs` 27/27, e2e 44/44.
 
 ## Next steps (in order)
 1. Mac live test after the restart: coordinator appears, thread start, handback, idle note, settings, and the DSH model picker shows the project effort. `~/.dsh/projects/projects.log` should have `select ...` lines.
@@ -51,3 +52,4 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 - After a DSH restart, an existing coordinator session stays cold until someone prompts it. The log says `coordinator <project> <session> resumed` when the plugin has checked it.
 - DSH words the approval reason itself: `escalate sandbox to danger-full-access: <justification>`.
 - Session titles: the session header keeps the creation-time title. Renames are `session/title` events.
+- Per-thread caps don't bound a coordinator that starts new threads in a loop; `maxThreadsPerHour` does. Keep a project-level cap on anything a model can repeat.
