@@ -1,13 +1,18 @@
 # Handoff
 
-Updated: 2026-10-09 04:47 PT by B (bertholomus)
+Updated: 2026-10-09 16:30 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (draft PR #1)
 
 ## Doing now
-- The Mac live test has not run. DSH Desktop there was busy with TP6 sessions, and the user asked us not to interrupt them. The Remote Control session on the Mac was told to wait for 2+ minutes with zero running sessions, then pull this branch, change the profile's `insert:` projects row to an address row (see Next steps), run the Fleet ff-only merge, restart DSH Desktop and run the live test. It parked at 11:33 UTC after sitting idle, so nothing happens until the user writes in the thread (that resumes it with its transcript) or restarts DSH Desktop themselves.
+- The user typed "go: convert the projects row in my DSH profile, then restart DSH once idle" (23:07 UTC). The Mac session converted the row and found the plugin already live: DSH Desktop restarted at 4:06 PM PT (not by us) and loaded it.
+- Since that 4:06 PM restart, three other plugins never came back: the MiniMe bridge (`~/.dsh/minime-bridge/bridge.sock` gone, so `dshb` fails), the Discord bot and dsh-site. Cause unknown (see blockers). Told the user.
+- With the bridge down there is no session count, so the Mac session now waits for idle with a log-based check (`dsh-idle.mjs`, see Gotchas): 2 minutes with no running turn and no session log written. Then it runs the Fleet ff-only merge, pulls, quits and reopens DSH Desktop, checks the three plugins came back, and runs the live test (Next steps 1-2).
 - The cloud thread pushes fixes. The Mac can't push to GitHub (see blockers), so it sends fixes back to the cloud thread instead.
 
 ## Done since last handoff
+- Mac (2026-10-09, after the user's go): the projects row in `~/.dsh/profiles/desktop/cordis.patch.yml` is an address row now (backup `cordis.patch.yml.bak-before-projects-address-row-20261009T231101Z`); the profile composes with one projects row. The checkout `~/.dsh-plugins/deepseek-plugins` is at 163b558; `npm test` 28/28 and smoke 39/39 pass on macOS. projects.log: the plugin first came up at 1:09 AM PT through live reload, then on the 4:06 PM restart `select dsh-plugins/coordinator owner-ascents:GLM-5.3-Flash-EXL3 effort=max` and the coordinator "◆ DSH Plugins" resumed. The running host code predates 163b558 (no Default models page yet) until the next restart.
+- Checked on a real DSH 0.2.0-rc.2: a profile with session-bridge and dsh-site address rows plus the old `insert:` projects row at the end starts all three with their configs. So the old row is unlikely to be why the Mac's three plugins didn't come back.
+- Idle check without the bridge: `dsh-idle.mjs` (project files `projects-plugin/dsh-idle.mjs`; the Mac session got it inline). It decodes `~/.dsh/sessions/*/*/session.v4.jsonl.zstd` and counts a session as running when its last `turn/start` has no `turn/end` and started after `--since` (the app's start time). `--wait 120` exits once 2 minutes pass with no running turn and no log written. Tested on real DSH 0.2.0-rc.2 and 0.2.1-alpha.2: a turn stuck on a model counts, a turn cut off by a kill or restart doesn't.
 - New: a **Default models** page on the plugin's page in DSH (Plugins → dsh-plugin-projects), like Claude Code's project settings. Model dropdown from DSH's catalog (grouped by provider, "DSH default" first) and the effort tabs that model offers, for the coordinator and for new threads. Save applies live: no DSH or plugin restart, each coordinator switches from its next request, new threads use the new defaults, existing threads keep theirs. The newest change wins: a saved default replaces a `project_settings` change of the same setting in every project (logged as `defaults <project> <keys> replaced <keys>`); project rows still override. Also applies when the default changed while DSH was stopped, or when the patch file is edited by hand. Code: `lib/client.js` (browser half, no build step), `noteDefaults`/`onDefaultsChanged` in `lib/projects.js`, `pluginDefaults` in `lib/settings.js`, live fields in `lib/index.js`.
 - The page detects the older `insert:` profile row (the Mac has one), where DSH refuses every save, and shows the values read-only with the one-line fix instead of a failed save.
 - Also passes on DSH 0.2.1-alpha.2 (published 2026-10-09): e2e 56/56 as root and as a normal user, and the page renders and saves in Chromium. The Mac's DSH Desktop version is not known yet; the Mac session should report it.
@@ -19,7 +24,7 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 - session-bridge: the umask is restored right after `listen()` (d60452d).
 - A turn the user drives in a thread no longer wakes the coordinator. It shows in the roster instead (523a3a4).
 - Docs: install through `dsh.profile.bundles` (`dsh plugin --profile desktop add`), with an address row for config (2a377af).
-- Mac: `dsh-plugin-projects` is in `~/.dsh/profiles/desktop` bundles, plus an insert row with config (done by the RC session after the user typed OK). It is not loaded yet; that needs the DSH restart.
+- Mac: `dsh-plugin-projects` is in `~/.dsh/profiles/desktop` bundles, plus an insert row with config (done by the RC session after the user typed OK). Live reload loaded it at 1:09 AM PT without a restart.
 - The coordinator now hears when a thread it started fails, is stopped, or waits on a permission prompt for `approvalNoticeSeconds` (default 60) (3a0cc97).
 - Real-host end-to-end test in the repo: `plugins/projects/test/e2e/run.mjs` (`npm run test:e2e`, needs `DSH_BIN` or `dsh` on PATH). It boots DSH with projects + session-bridge + a scripted model and checks 42 things (44 now). 42/42 on DSH 0.2.0-rc.2, as root and as a normal user, without the repo-root `node_modules` link (5fdf31d).
 - Fixed: `project_settings` accepted an effort no model offers (e.g. "ultra") when the thread model has no efforts (e48952b).
@@ -40,7 +45,7 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 - Tests: `npm test` 28/28, `node plugins/projects/test/smoke.mjs` 36/36, e2e 49/49 as root and as a normal user (adds queued turns and a SIGKILL mid-turn).
 
 ## Next steps (in order)
-1. Mac, before the restart: in `~/.dsh/profiles/desktop/cordis.patch.yml`, change the `- insert:` row holding `id: projects` into an address row: `- id: projects` with the same `config:` block (dedented), no `insert:` and no `name:`. Without this the Default models page is read-only. It's a profile change, so Remote Control may need the user's typed OK in the thread.
+1. Mac: once `dsh-idle.mjs --wait 120` says idle, Fleet ff-only merge (skip if refused), `git pull --ff-only`, quit and reopen DSH Desktop. Check the MiniMe bridge socket and `dshb`, the Discord bot and dsh-site come back. If not, find out why (Settings → Plugins, app logs).
 2. Mac live test after the restart: coordinator appears, thread start, handback, idle note, settings, the DSH model picker shows the project effort, and Plugins → dsh-plugin-projects → Default models saves. `~/.dsh/projects/projects.log` should have `select ...` lines, and after a save a `defaults …` line followed by a new `select <project>/coordinator …` line.
 3. Fix what it shows, then mark PR #1 ready for review.
 4. Later: a Discord thread as a project thread or coordinator (the user's existing flow), and auto-continue after usage limits.
@@ -48,7 +53,8 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 
 ## Open questions / blockers
 - The Mac has no GitHub push credentials for bertholomus. gh auth is broken, HTTPS asks for a username and the SSH key is refused. Fixes made on the Mac go through the cloud session.
-- The Mac DSH restart waits for its running sessions to finish, and the Remote Control session that would do it is parked until the user's next message in the thread.
+- The Mac's MiniMe bridge, Discord bot and dsh-site have been down since DSH Desktop restarted at 4:06 PM PT on 2026-10-09 (their logs end with "stopped" or "gateway closed" at 4:06:30-31). projects and Fleet Shell started. The files don't show why; the Mac session will check that their bundles still resolve and, if the restart doesn't bring them back, read Settings → Plugins or the app's logs. Who restarted DSH at 4:06 PM is not known.
+- The Mac Remote Control session parks after sitting idle; only the user's next message in the thread wakes it.
 - Found, not fixed (ask the user first, it changes the live Discord bot): the discord plugin's `/model` and `/effort` set the route with a plain `agent/request` override (plugins/discord/lib/router.js `installRouteOverride`). On DSH 0.2 the Host's installModelSelection rewrites every request to the session's selection (its `selection.current` always has a value), so those commands likely do nothing. Same cause as the projects fix; the fix is `selectForNextRequest` the same way.
 - session-bridge `POST /sessions/:id/model` still saves the global DSH default (it calls `selectModel`). Offered to fix; no answer yet.
 
@@ -81,4 +87,5 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 - DSH's config editor refuses to save a row whose id is in the profile twice (bundle insert + profile `insert:`): it appends an address row, then its check reads the first (bundle) row and fails. The runtime still uses the later row, so only saves break.
 - DSH reloads the profile patch on change for every profile (dsh-base's `hmr` row, on whenever there is a profile). There is no `patchReload` option in 0.2.0-rc.2.
 - Playwright: `page.goto(..., { waitUntil: 'networkidle' })` hangs on a second load of the DSH web app (it keeps a live connection). Use `domcontentloaded` plus a short wait.
+- Session logs are `~/.dsh/sessions/<workspace>/<session>/session.v4.jsonl.zstd`: zstd frames appended one after another, each holding JSONL events (`{type, seq, time, data}`). Node's `zlib.zstdDecompressSync` (and its stream) decode only the first frame, so split frames first (`dsh-idle.mjs` walks the frame headers). DSH writes the log only at checkpoints (before each model request and tool dispatch, and at turn end), so a log's mtime says nothing about a long model call or tool still running; read the turn events instead.
 - Tool calls and results are in the session log: `tool/call {callId, name, arguments}` and `tool/result {message: {toolCallId, content}}`. The idle review finds a handback by its result text, which starts with "Handback ".
