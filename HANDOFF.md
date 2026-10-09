@@ -1,13 +1,17 @@
 # Handoff
 
-Updated: 2026-10-09 02:45 PT by B (bertholomus)
+Updated: 2026-10-09 03:30 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (draft PR #1)
 
 ## Doing now
-- Waiting for the user's Mac to be idle. DSH Desktop there is busy with TP6 sessions, and the user asked us not to interrupt them. When it has had zero running sessions for 2+ minutes, the Remote Control session on the Mac pulls this branch, runs the Fleet ff-only merge, restarts DSH Desktop and runs the live test.
+- Waiting for the user's Mac to be idle. DSH Desktop there is busy with TP6 sessions, and the user asked us not to interrupt them. When it has had zero running sessions for 2+ minutes, the Remote Control session on the Mac pulls this branch, changes the profile's `insert:` projects row to an address row (see Next steps), runs the Fleet ff-only merge, restarts DSH Desktop and runs the live test.
 - The cloud thread pushes fixes. The Mac can't push to GitHub (see blockers), so it sends fixes back to the cloud thread instead.
 
 ## Done since last handoff
+- New: a **Default models** page on the plugin's page in DSH (Plugins → dsh-plugin-projects), like Claude Code's project settings. Model dropdown from DSH's catalog (grouped by provider, "DSH default" first) and the effort tabs that model offers, for the coordinator and for new threads. Save applies live: no DSH or plugin restart, each coordinator switches from its next request, new threads use the new defaults, existing threads keep theirs. The newest change wins: a saved default replaces a `project_settings` change of the same setting in every project (logged as `defaults <project> <keys> replaced <keys>`); project rows still override. Also applies when the default changed while DSH was stopped, or when the patch file is edited by hand. Code: `lib/client.js` (browser half, no build step), `noteDefaults`/`onDefaultsChanged` in `lib/projects.js`, `pluginDefaults` in `lib/settings.js`, live fields in `lib/index.js`.
+- The page detects the older `insert:` profile row (the Mac has one), where DSH refuses every save, and shows the values read-only with the one-line fix instead of a failed save.
+- Checked in a real DSH 0.2.0-rc.2 with Chromium: page renders, save writes the patch and switches the coordinator, reload shows saved values, a hand edit of the patch also applies live, the insert-row case shows the note, and after converting the row the save works.
+- Tests: `npm test` 28/28, smoke 39/39 (adds the browser half and two live-defaults tests), e2e 56/56 as root and as a normal user (adds: DSH serves the browser half and it parses; defaults saved while DSH runs switch the coordinator and new threads without a plugin restart, replace coordinator changes, and leave existing threads alone).
 - Real-host test in the cloud: DSH 0.2.0-rc.2 web profile, a scripted OpenAI-compatible model server and session-bridge. Coordinator → thread → handback → coordinator works. The idle note, settings, bad effort, memory, list/read and thread update all work, and so does a host restart (same coordinator, tools reattach, routes kept). Tools are scoped: coordinator 33, thread 28.
 - Fixed: effort never reached the model on a real host (see Gotchas). Project sessions now get a per-session DSH model selection. On the wire: coordinator `reasoning_effort: max`, threads `high`, a model without efforts gets none, and settings changes apply from the next request.
 - Fixed: folder modes. The state, memory and log folders are created 700 one level at a time and repaired if unusable. The Mac found the macOS EACCES case (e0cab5d).
@@ -35,10 +39,11 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 - Tests: `npm test` 28/28, `node plugins/projects/test/smoke.mjs` 36/36, e2e 49/49 as root and as a normal user (adds queued turns and a SIGKILL mid-turn).
 
 ## Next steps (in order)
-1. Mac live test after the restart: coordinator appears, thread start, handback, idle note, settings, and the DSH model picker shows the project effort. `~/.dsh/projects/projects.log` should have `select ...` lines.
-2. Fix what it shows, then mark PR #1 ready for review.
-3. Later: a Discord thread as a project thread or coordinator (the user's existing flow), and auto-continue after usage limits.
-4. Idea, not tried: DSH session headers have `parentSession` (forks set it) and the web client nests child sessions under their parent (dsh-api-session-controller `lineage.js`). Threads could nest under their coordinator in the sidebar. Check first: `hasApiSessionSubagentOwner` and the archived-session gate treat `parentSession` specially, so it may change prompt routing or archiving.
+1. Mac, before the restart: in `~/.dsh/profiles/desktop/cordis.patch.yml`, change the `- insert:` row holding `id: projects` into an address row: `- id: projects` with the same `config:` block (dedented), no `insert:` and no `name:`. Without this the Default models page is read-only. It's a profile change, so Remote Control may need the user's typed OK in the thread.
+2. Mac live test after the restart: coordinator appears, thread start, handback, idle note, settings, the DSH model picker shows the project effort, and Plugins → dsh-plugin-projects → Default models saves. `~/.dsh/projects/projects.log` should have `select ...` lines, and after a save a `defaults …` line followed by a new `select <project>/coordinator …` line.
+3. Fix what it shows, then mark PR #1 ready for review.
+4. Later: a Discord thread as a project thread or coordinator (the user's existing flow), and auto-continue after usage limits.
+5. Idea, not tried: DSH session headers have `parentSession` (forks set it) and the web client nests child sessions under their parent (dsh-api-session-controller `lineage.js`). Threads could nest under their coordinator in the sidebar. Check first: `hasApiSessionSubagentOwner` and the archived-session gate treat `parentSession` specially, so it may change prompt routing or archiving.
 
 ## Open questions / blockers
 - The Mac has no GitHub push credentials for bertholomus. gh auth is broken, HTTPS asks for a username and the SSH key is refused. Fixes made on the Mac go through the cloud session.
@@ -69,4 +74,10 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 - `sessionController.inspect` on a cold session uses the cold read, which appends synthetic `interrupted` turn closers for a turn a crash left open. Resuming the agent persists them. A crashed turn never produces a running → idle transition.
 - A config save restarts the plugin (cordis `update` → `restart`): the old scope is disposed first, then `apply` runs again, while the old instance's async work keeps going. Hence the shared store and the coordinator lock.
 - `ApiSessionNotFound` (session-controller) is the only error that means a session is gone; `inspect` can also time out or fail on I/O.
+- Live config: a schemastery field marked `.volatile()` reaches the plugin as a reference with `get()`. When a save changes only volatile fields, the loader updates those references in place (no restart) and emits `loader/volatile-update` to the plugin. DSH's settings page (`@deepseek-ai/dsh-settings`) only offers forms for plugins with volatile fields. `index.js` guards with `live()` for a schemastery without `.volatile()`.
+- Browser halves: `package.json` `dsh.client: { platform: 'web', inject: [...] }` plus `exports["./client"]`. The file is a classic script calling `window.__ModuleLoader__.load({ id, factory: (require) => ({ inject, apply }) })`; `require` gives `react` and `@deepseek-ai/dsh-client-ui-primitives` (SettingsFormModel, SettingsForm, SegmentedControl, ...). DSH concatenates browser halves into one script, so a syntax error breaks other plugins too: always `node --check lib/client.js` (the e2e also parses what DSH serves).
+- The plugin's page slot is `plugins.bundle.config`, keyed by package name; it gets no form prop, so the client builds one from `ctx.configForms.get('projects')`. Register inside `ctx.configForms.whileServed(['projects'], ...)`.
+- DSH's config editor refuses to save a row whose id is in the profile twice (bundle insert + profile `insert:`): it appends an address row, then its check reads the first (bundle) row and fails. The runtime still uses the later row, so only saves break.
+- DSH reloads the profile patch on change for every profile (dsh-base's `hmr` row, on whenever there is a profile). There is no `patchReload` option in 0.2.0-rc.2.
+- Playwright: `page.goto(..., { waitUntil: 'networkidle' })` hangs on a second load of the DSH web app (it keeps a live connection). Use `domcontentloaded` plus a short wait.
 - Tool calls and results are in the session log: `tool/call {callId, name, arguments}` and `tool/result {message: {toolCallId, content}}`. The idle review finds a handback by its result text, which starts with "Handback ".
