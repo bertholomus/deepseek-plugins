@@ -1,0 +1,5 @@
+# The plugin's own bundle row. Your profile's cordis.patch.yml addresses the
+# same id ("projects") to declare projects and their default models.
+- insert:
+    - id: projects
+      name: dsh-plugin-projects

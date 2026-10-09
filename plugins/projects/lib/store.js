@@ -1,0 +1,112 @@
+/**
+ * Durable project state. One JSON file, atomic writes, mode 600. Shape:
+ *
+ * { version: 1, projects: { [projectId]: {
+ *     coordinatorSessionId, settings: { coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused? },
+ *     nextThread, pendingHandbacks: [text],
+ *     threads: { [threadId]: { sessionId, title, model?, effort?, state, resolved,
+ *       createdAt, lastHandback?: { status, summary, at }, handbackTimes: [ms] } } } } }
+ *
+ * Settings here are the runtime overrides the coordinator sets with
+ * project_settings. They sit above the profile config; deleting a key means
+ * "use default".
+ *
+ * @module dsh-plugin-projects/store
+ */
+import { readFileSync, renameSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { homedir } from 'node:os';
+
+/** Resolve a '~'-prefixed path. */
+export function expand(p) {
+    return p.startsWith('~/') || p === '~' ? `${homedir()}${p.slice(1)}` : p;
+}
+
+export class ProjectStore {
+    /** @param {string} file - store path. */
+    constructor(file) {
+        this.file = expand(file);
+        /** @type {Record<string, object>} */
+        this.projects = {};
+        this.load();
+    }
+
+    load() {
+        try {
+            const parsed = JSON.parse(readFileSync(this.file, 'utf8'));
+            if (parsed?.version === 1 && parsed.projects && typeof parsed.projects === 'object') this.projects = parsed.projects;
+        } catch {
+            this.projects = {}; // missing or corrupt store: start clean, never crash
+        }
+    }
+
+    /** Persist atomically; the store must survive crashes mid-write. */
+    save() {
+        try {
+            mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
+            const tmp = `${this.file}.tmp`;
+            writeFileSync(tmp, `${JSON.stringify({ version: 1, projects: this.projects }, null, 2)}\n`, { mode: 0o600 });
+            chmodSync(tmp, 0o600);
+            renameSync(tmp, this.file);
+        } catch {
+            // Best-effort for availability; the next mutation retries.
+        }
+    }
+
+    /** The project entry, created empty on first use. */
+    project(projectId) {
+        const p = this.projects[projectId] ??= {};
+        p.settings ??= {};
+        p.threads ??= {};
+        p.pendingHandbacks ??= [];
+        p.nextThread ??= 1;
+        return p;
+    }
+
+    /** Merge fields into a project entry and persist. */
+    putProject(projectId, fields) {
+        Object.assign(this.project(projectId), fields);
+        this.save();
+    }
+
+    /** Set or clear (value undefined) runtime setting overrides. */
+    putSettings(projectId, changes) {
+        const settings = this.project(projectId).settings;
+        for (const [key, value] of Object.entries(changes)) {
+            if (value === undefined) delete settings[key];
+            else settings[key] = value;
+        }
+        this.save();
+    }
+
+    /** Reserve the next short thread id ("t1", "t2", ...). Never reused. */
+    reserveThreadId(projectId) {
+        const p = this.project(projectId);
+        const id = `t${p.nextThread}`;
+        p.nextThread += 1;
+        this.save();
+        return id;
+    }
+
+    thread(projectId, threadId) {
+        return this.projects[projectId]?.threads?.[threadId] ?? null;
+    }
+
+    putThread(projectId, threadId, fields) {
+        const threads = this.project(projectId).threads;
+        threads[threadId] = { ...threads[threadId], ...fields };
+        this.save();
+        return threads[threadId];
+    }
+
+    /** Find which project and role a session belongs to. */
+    lookup(sessionId) {
+        for (const [projectId, p] of Object.entries(this.projects)) {
+            if (p.coordinatorSessionId === sessionId) return { projectId, role: 'coordinator' };
+            for (const [threadId, t] of Object.entries(p.threads ?? {})) {
+                if (t.sessionId === sessionId) return { projectId, role: 'thread', threadId };
+            }
+        }
+        return null;
+    }
+}
