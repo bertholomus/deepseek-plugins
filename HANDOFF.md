@@ -30,6 +30,8 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 ## Open questions / blockers
 - The Mac has no GitHub push credentials for bertholomus. gh auth is broken, HTTPS asks for a username and the SSH key is refused. Fixes made on the Mac go through the cloud session.
 - The Mac DSH restart waits for its running sessions to finish.
+- Found, not fixed (ask the user first, it changes the live Discord bot): the discord plugin's `/model` and `/effort` set the route with a plain `agent/request` override (plugins/discord/lib/router.js `installRouteOverride`). On DSH 0.2 the Host's installModelSelection rewrites every request to the session's selection (its `selection.current` always has a value), so those commands likely do nothing. Same cause as the projects fix; the fix is `selectForNextRequest` the same way.
+- session-bridge `POST /sessions/:id/model` still saves the global DSH default (it calls `selectModel`). Offered to fix; no answer yet.
 
 ## Gotchas (things that broke, decisions made and why)
 - DSH loads a plugin package only if the profile lists it in `dsh.profile.bundles`. A patch row alone does nothing. `dsh plugin --profile desktop add <path>` adds the link dependency, the `node_modules` symlink and the bundles entry. Use the `dsh` that DSH Desktop installs, because the npm `dsh` refuses the desktop profile. A running DSH doesn't load new bundles, so restart it.
