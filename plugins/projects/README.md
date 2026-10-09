@@ -167,4 +167,4 @@ npm install --prefix /tmp/dsh @deepseek-ai/dsh
 DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/projects/test/e2e/run.mjs
 ```
 
-It passes on DSH 0.2.0-rc.2, as root and as a normal user.
+It passes on DSH 0.2.0-rc.2 and 0.2.1-alpha.2, as root and as a normal user.

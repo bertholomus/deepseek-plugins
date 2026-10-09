@@ -1,6 +1,6 @@
 # Handoff
 
-Updated: 2026-10-09 03:30 PT by B (bertholomus)
+Updated: 2026-10-09 03:50 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (draft PR #1)
 
 ## Doing now
@@ -10,6 +10,7 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 ## Done since last handoff
 - New: a **Default models** page on the plugin's page in DSH (Plugins → dsh-plugin-projects), like Claude Code's project settings. Model dropdown from DSH's catalog (grouped by provider, "DSH default" first) and the effort tabs that model offers, for the coordinator and for new threads. Save applies live: no DSH or plugin restart, each coordinator switches from its next request, new threads use the new defaults, existing threads keep theirs. The newest change wins: a saved default replaces a `project_settings` change of the same setting in every project (logged as `defaults <project> <keys> replaced <keys>`); project rows still override. Also applies when the default changed while DSH was stopped, or when the patch file is edited by hand. Code: `lib/client.js` (browser half, no build step), `noteDefaults`/`onDefaultsChanged` in `lib/projects.js`, `pluginDefaults` in `lib/settings.js`, live fields in `lib/index.js`.
 - The page detects the older `insert:` profile row (the Mac has one), where DSH refuses every save, and shows the values read-only with the one-line fix instead of a failed save.
+- Also passes on DSH 0.2.1-alpha.2 (published 2026-10-09): e2e 56/56 as root and as a normal user, and the page renders and saves in Chromium. The Mac's DSH Desktop version is not known yet; the Mac session should report it.
 - Checked in a real DSH 0.2.0-rc.2 with Chromium: page renders, save writes the patch and switches the coordinator, reload shows saved values, a hand edit of the patch also applies live, the insert-row case shows the note, and after converting the row the save works.
 - Tests: `npm test` 28/28, smoke 39/39 (adds the browser half and two live-defaults tests), e2e 56/56 as root and as a normal user (adds: DSH serves the browser half and it parses; defaults saved while DSH runs switch the coordinator and new threads without a plugin restart, replace coordinator changes, and leave existing threads alone).
 - Real-host test in the cloud: DSH 0.2.0-rc.2 web profile, a scripted OpenAI-compatible model server and session-bridge. Coordinator → thread → handback → coordinator works. The idle note, settings, bad effort, memory, list/read and thread update all work, and so does a host restart (same coordinator, tools reattach, routes kept). Tools are scoped: coordinator 33, thread 28.
