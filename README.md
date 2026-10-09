@@ -2,7 +2,7 @@
 
 Community plugins for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Desktop.
 
-Each plugin is a normal DSH plugin package. It loads into the running desktop Host through the profile's `cordis.patch.yml`. With `patchReload: live`, DSH loads and unloads it without a restart.
+Each plugin is a normal DSH plugin package. You add it to a DSH profile's bundles and set it up in the profile's `cordis.patch.yml`. Setup changes apply without a restart when the profile uses `patchReload: live`.
 
 | Plugin | What it does |
 | --- | --- |
@@ -15,7 +15,14 @@ These plugins are independent work. They are not made or endorsed by DeepSeek.
 
 ## Install a plugin
 
-The examples use the default desktop profile at `~/.dsh/profiles/desktop`.
+DSH loads a plugin only when the profile lists its package in `dsh.profile.bundles`. The plugin's bundle then adds the plugin's row, and you configure that row in the profile's `cordis.patch.yml`. The examples use the default desktop profile at `~/.dsh/profiles/desktop` and the `projects` plugin.
+
+| Plugin | Package | Row id |
+| --- | --- | --- |
+| dsh-site | `dsh-plugin-dsh-site` | `dsh-site` |
+| discord | `dsh-plugin-discord` | `discord` |
+| projects | `dsh-plugin-projects` | `projects` |
+| session-bridge | `dsh-plugin-session-bridge` | `session-bridge` |
 
 1. Clone this repository:
 
@@ -32,31 +39,40 @@ The examples use the default desktop profile at `~/.dsh/profiles/desktop`.
    cp package.json package.json.bak-$ts
    ```
 
-3. Add the plugin as a linked dependency in `package.json`:
-
-   ```json
-   "dsh-plugin-dsh-site": "link:/Users/<you>/.dsh-plugins/deepseek-plugins/plugins/dsh-site"
-   ```
-
-4. Link it into the profile's `node_modules`:
+3. Add the plugin to the profile with the `dsh` command that DSH Desktop installs. The `dsh` from npm refuses to change the desktop profile.
 
    ```bash
-   ln -s ~/.dsh-plugins/deepseek-plugins/plugins/dsh-site node_modules/dsh-plugin-dsh-site
+   dsh plugin --profile desktop add ~/.dsh-plugins/deepseek-plugins/plugins/projects
    ```
+
+   This links the package into the profile and adds it to `dsh.profile.bundles`. To do the same by hand, in `~/.dsh/profiles/desktop`:
+
+   - In `package.json`, add `"dsh-plugin-projects": "link:/Users/<you>/.dsh-plugins/deepseek-plugins/plugins/projects"` to `dependencies`.
+   - In the same file, add `"dsh-plugin-projects"` to the end of `dsh.profile.bundles`.
+   - Link it into `node_modules`: `ln -s ~/.dsh-plugins/deepseek-plugins/plugins/projects node_modules/dsh-plugin-projects`
 
    The plugins need `@deepseek-ai/schemastery`, which the desktop profile already has.
 
-5. Add an `insert` row to `cordis.patch.yml`. Each plugin README gives its row.
+4. Configure the plugin in `cordis.patch.yml`. Its bundle already adds the row, so address the row by its id and give it a `config`. Each plugin README gives its config.
 
-If the profile uses `patchReload: live`, the plugin starts in a few seconds. Otherwise restart DSH Desktop.
+   ```yaml
+   - id: projects
+     config:
+       # the plugin's settings
+   ```
+
+5. Restart DSH Desktop. A running DSH does not load new bundles. After that, changes to the row apply live when the profile uses `patchReload: live`.
+
+A row added with `insert` while the bundle is also listed still works, because the configured row is the one that runs. The address form above avoids the duplicate row.
 
 ## Remove a plugin
 
 1. Delete its row from `cordis.patch.yml`.
-2. Delete its dependency from `package.json`.
+2. In `package.json`, delete the package from `dsh.profile.bundles` and its dependency.
 3. Remove the `node_modules/dsh-plugin-*` symlink.
+4. Restart DSH Desktop.
 
-Or restore the backups from step 2.
+Or restore the backups from step 2 of the install.
 
 ## Tests
 

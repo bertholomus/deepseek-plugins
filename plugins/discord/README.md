@@ -57,36 +57,34 @@ You can also give the token as an environment variable with the same name. Do no
 
 ### 5. Install the plugin
 
-Use the steps in the [top-level README](../../README.md#install-a-plugin) with the name `dsh-plugin-discord`. Or use the DSH CLI:
+Use the steps in the [top-level README](../../README.md#install-a-plugin) with the name `dsh-plugin-discord`, or the `dsh` command that DSH Desktop installs:
 
 ```bash
-dsh plugin --profile desktop add ./plugins/discord
+dsh plugin --profile desktop add ~/.dsh-plugins/deepseek-plugins/plugins/discord
 ```
 
 ### 6. Configure the row
 
-Add this to `~/.dsh/profiles/desktop/cordis.patch.yml`:
+The bundle adds the `discord` row. Address it in `~/.dsh/profiles/desktop/cordis.patch.yml`:
 
 ```yaml
-- insert:
-    - id: discord
-      name: dsh-plugin-discord
-      config:
-        workspacePath: /path/where/discord/agents/work
-        tokenRef: DISCORD_BOT_TOKEN
-        allowedChannelIds: ["<channel id>"]
-        allowedUserIds: ["<your user id>"]
-        permissionPreset: workspace-write
-        requireMention: false
-        autoThread: true
-        threadArchiveMinutes: 1440
-        # models: ["provider:model", "other:model"]   # menu for /model
-        # titleModel: "provider:model"                # model for thread titles
+- id: discord
+  config:
+    workspacePath: /path/where/discord/agents/work
+    tokenRef: DISCORD_BOT_TOKEN
+    allowedChannelIds: ["<channel id>"]
+    allowedUserIds: ["<your user id>"]
+    permissionPreset: workspace-write
+    requireMention: false
+    autoThread: true
+    threadArchiveMinutes: 1440
+    # models: ["provider:model", "other:model"]   # menu for /model
+    # titleModel: "provider:model"                # model for thread titles
 ```
 
 ### 7. Check that it runs
 
-If the profile uses `patchReload: live`, the plugin starts in a few seconds. Otherwise restart DSH Desktop. Then:
+Restart DSH Desktop once so it loads the new bundle. Later changes to the row apply live when the profile uses `patchReload: live`. Then:
 
 1. Look in the DSH log for `discord: gateway connected; listening for messages`.
 2. Post a message in the allowed channel. The bot opens a thread and answers there.

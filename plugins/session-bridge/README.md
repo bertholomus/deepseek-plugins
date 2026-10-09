@@ -13,14 +13,14 @@ It drives the Host's own `sessionController`, the same code path the GUI uses. A
 
 ## Config
 
+Install the plugin as in the [root README](../../README.md#install-a-plugin), then address its row in `cordis.patch.yml`:
+
 ```yaml
-- insert:
-    - id: session-bridge
-      name: dsh-plugin-session-bridge
-      config:
-        socketPath: "~/.dsh/session-bridge/bridge.sock"
-        logFile: "~/.dsh/session-bridge/bridge.log"
-        maxBodyBytes: 1048576
+- id: session-bridge
+  config:
+    socketPath: "~/.dsh/session-bridge/bridge.sock"
+    logFile: "~/.dsh/session-bridge/bridge.log"
+    maxBodyBytes: 1048576
 ```
 
 | Key | Default | Meaning |

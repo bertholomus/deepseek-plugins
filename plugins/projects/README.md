@@ -30,33 +30,40 @@ The four settings match Claude Code's project page:
 
 Each setting comes from the first place that sets it: a change made through the coordinator (`project_settings`), then the project row, then the plugin row, then the DSH default model. Saying "default" to the coordinator clears a change, like "Use default".
 
-Models are `provider:model` or a bare model id. Effort is whatever the model offers (for DeepSeek: `off`, `low`, `high`, `max`). Both are checked against the Host's model catalog, and a bad value comes back with the valid choices.
+Models are `provider:model` or a bare model id. Effort is whatever the model offers (for DeepSeek: `off`, `low`, `high`, `max`). Both are checked against the Host's model catalog, and a bad value comes back with the valid choices. A model with no effort levels runs without one, and the coordinator is told the effort was not used.
 
 A thread keeps the model and effort it started with. The coordinator can give one thread its own model or effort at start, or change it later with `project_thread_update`.
 
 Pausing blocks new threads and holds handbacks. Resuming delivers the held handbacks in order.
 
-Project sessions always run on the project's model and effort: the plugin sets them on every model request. A choice made in the DSH model picker for a project session is overridden. Change it through the coordinator instead.
+The plugin sets a project session's model and effort the same way the DSH model picker does, but only on that one session. It never changes your DSH default model. The DSH window shows each session's model and effort. You can still pick another model for one session in the DSH picker, and your pick holds until the coordinator changes that session's settings. A pick in the picker also becomes your DSH default model, as it does for any session.
 
 ## Setup
 
-1. Install the plugin as in the [root README](../../README.md#install-a-plugin) (package name `dsh-plugin-projects`).
-2. Add the row to your profile's `cordis.patch.yml`:
+1. Install the plugin as in the [root README](../../README.md#install-a-plugin):
 
-```yaml
-- insert:
-    - id: projects
-      name: dsh-plugin-projects
-      config:
-        coordinatorEffort: max
-        threadEffort: high
-        projects:
-          - name: DSH Plugins
-            goal: Designing, maintaining and improving DSH plugins
-            workspacePath: ~/code/deepseek-plugins
-```
+   ```bash
+   dsh plugin --profile desktop add ~/.dsh-plugins/deepseek-plugins/plugins/projects
+   ```
 
-With `patchReload: live`, the `◆ DSH Plugins` session appears in a few seconds. Open it and ask for work.
+2. Configure it in your profile's `cordis.patch.yml`. The plugin's bundle already adds its row (`id: projects`), so address that row by id:
+
+   ```yaml
+   - id: projects
+     config:
+       coordinatorEffort: max
+       threadEffort: high
+       projects:
+         - name: DSH Plugins
+           goal: Designing, maintaining and improving DSH plugins
+           workspacePath: ~/code/deepseek-plugins
+   ```
+
+3. Restart DSH Desktop once so it loads the new bundle. Later config changes apply live when the profile uses `patchReload: live`.
+
+The `◆ DSH Plugins` session appears in the sidebar. Open it and ask for work.
+
+An older setup that adds the row with `insert` still works: the configured row is the one that runs.
 
 ## Config
 
@@ -127,7 +134,6 @@ Thread:
 
 ## Not yet
 
-- Not yet run against a live DSH Desktop. The tests use a fake Host built from the published `@deepseek-ai/*` type definitions.
 - No "auto-continue when usage limits reset".
 - Discord threads cannot be project threads yet. The discord plugin keeps its own sessions.
 
@@ -137,3 +143,5 @@ Thread:
 npm install --no-save @deepseek-ai/schemastery @deepseek-ai/dsh-tools@next
 node plugins/projects/test/smoke.mjs
 ```
+
+The smoke tests run against a fake Host built from the published `@deepseek-ai/*` packages, including a Host with DSH's per-session model selection. The plugin has also run on a real DSH host (0.2.0-rc.2, web profile) with a scripted model server. That run covered the coordinator, threads, handbacks, the idle note, settings and memory. It also checked the effort on each model request and a host restart.

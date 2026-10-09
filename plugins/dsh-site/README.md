@@ -38,17 +38,17 @@ With `true`, **network membership is the only gate**. Any device that can reach 
 
 ## Config
 
+Install the plugin as in the [root README](../../README.md#install-a-plugin), then address its row in `cordis.patch.yml`:
+
 ```yaml
-- insert:
-    - id: dsh-site
-      name: dsh-plugin-dsh-site
-      config:
-        listenHost: 0.0.0.0
-        listenPort: 8443
-        targetOrigin: "http://127.0.0.1:19387"
-        allowCIDRs: "100.64.0.0/10,127.0.0.0/8,::1/128"
-        injectAuthCookie: false
-        logFile: "~/.dsh/dsh-site/site.log"
+- id: dsh-site
+  config:
+    listenHost: 0.0.0.0
+    listenPort: 8443
+    targetOrigin: "http://127.0.0.1:19387"
+    allowCIDRs: "100.64.0.0/10,127.0.0.0/8,::1/128"
+    injectAuthCookie: false
+    logFile: "~/.dsh/dsh-site/site.log"
 ```
 
 | Key | Default | Meaning |
