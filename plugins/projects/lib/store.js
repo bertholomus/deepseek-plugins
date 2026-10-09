@@ -13,7 +13,7 @@
  *
  * @module dsh-plugin-projects/store
  */
-import { readFileSync, renameSync, writeFileSync, mkdirSync, chmodSync, statSync } from 'node:fs';
+import { readFileSync, renameSync, writeFileSync, mkdirSync, chmodSync, statSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -32,15 +32,22 @@ export function expand(p) {
  * @param {string} dir
  */
 export function ensurePrivateDir(dir) {
-    const first = mkdirSync(dir, { recursive: true, mode: 0o700 });
-    if (first === undefined) {
+    // One level at a time, chmod before descending: a recursive mkdir under a
+    // narrowed umask (e.g. 0177) makes the parent 600 and then cannot enter it
+    // to create the child (EACCES on macOS; root skips the check, so CI as root passes).
+    const missing = [];
+    for (let d = dir; !existsSync(d); d = dirname(d)) {
+        missing.unshift(d);
+        if (dirname(d) === d) break;
+    }
+    if (missing.length === 0) {
         const st = statSync(dir);
         if ((st.mode & 0o700) !== 0o700 && st.uid === process.getuid?.()) chmodSync(dir, (st.mode & 0o777) | 0o700);
         return;
     }
-    for (let d = dir; ; d = dirname(d)) {
+    for (const d of missing) {
+        try { mkdirSync(d, { mode: 0o700 }); } catch (error) { if (error?.code !== 'EEXIST') throw error; }
         chmodSync(d, 0o700);
-        if (d === first || dirname(d) === d) break;
     }
 }
 
