@@ -1,10 +1,10 @@
 # Handoff
 
-Updated: 2026-10-09 03:50 PT by B (bertholomus)
+Updated: 2026-10-09 04:47 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (draft PR #1)
 
 ## Doing now
-- Waiting for the user's Mac to be idle. DSH Desktop there is busy with TP6 sessions, and the user asked us not to interrupt them. When it has had zero running sessions for 2+ minutes, the Remote Control session on the Mac pulls this branch, changes the profile's `insert:` projects row to an address row (see Next steps), runs the Fleet ff-only merge, restarts DSH Desktop and runs the live test.
+- The Mac live test has not run. DSH Desktop there was busy with TP6 sessions, and the user asked us not to interrupt them. The Remote Control session on the Mac was told to wait for 2+ minutes with zero running sessions, then pull this branch, change the profile's `insert:` projects row to an address row (see Next steps), run the Fleet ff-only merge, restart DSH Desktop and run the live test. It parked at 11:33 UTC after sitting idle, so nothing happens until the user writes in the thread (that resumes it with its transcript) or restarts DSH Desktop themselves.
 - The cloud thread pushes fixes. The Mac can't push to GitHub (see blockers), so it sends fixes back to the cloud thread instead.
 
 ## Done since last handoff
@@ -48,7 +48,7 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 
 ## Open questions / blockers
 - The Mac has no GitHub push credentials for bertholomus. gh auth is broken, HTTPS asks for a username and the SSH key is refused. Fixes made on the Mac go through the cloud session.
-- The Mac DSH restart waits for its running sessions to finish.
+- The Mac DSH restart waits for its running sessions to finish, and the Remote Control session that would do it is parked until the user's next message in the thread.
 - Found, not fixed (ask the user first, it changes the live Discord bot): the discord plugin's `/model` and `/effort` set the route with a plain `agent/request` override (plugins/discord/lib/router.js `installRouteOverride`). On DSH 0.2 the Host's installModelSelection rewrites every request to the session's selection (its `selection.current` always has a value), so those commands likely do nothing. Same cause as the projects fix; the fix is `selectForNextRequest` the same way.
 - session-bridge `POST /sessions/:id/model` still saves the global DSH default (it calls `selectModel`). Offered to fix; no answer yet.
 
