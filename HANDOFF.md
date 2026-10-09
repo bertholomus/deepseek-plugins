@@ -1,6 +1,6 @@
 # Handoff
 
-Updated: 2026-10-09 01:45 PT by B (bertholomus)
+Updated: 2026-10-09 01:58 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (draft PR #1)
 
 ## Doing now
@@ -15,7 +15,11 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 - A turn the user drives in a thread no longer wakes the coordinator. It shows in the roster instead (523a3a4).
 - Docs: install through `dsh.profile.bundles` (`dsh plugin --profile desktop add`), with an address row for config (2a377af).
 - Mac: `dsh-plugin-projects` is in `~/.dsh/profiles/desktop` bundles, plus an insert row with config (done by the RC session after the user typed OK). It is not loaded yet; that needs the DSH restart.
-- Tests: `npm test` 27/27, `node plugins/projects/test/smoke.mjs` 22/22, also as a non-root user.
+- The coordinator now hears when a thread it started fails, is stopped, or waits on a permission prompt for `approvalNoticeSeconds` (default 60) (3a0cc97).
+- Real-host end-to-end test in the repo: `plugins/projects/test/e2e/run.mjs` (`npm run test:e2e`, needs `DSH_BIN` or `dsh` on PATH). It boots DSH with projects + session-bridge + a scripted model and checks 42 things. 42/42 on DSH 0.2.0-rc.2, as root and as a normal user, without the repo-root `node_modules` link (5fdf31d).
+- Fixed: `project_settings` accepted an effort no model offers (e.g. "ultra") when the thread model has no efforts (e48952b).
+- Fixed: session-bridge `GET /sessions/:id` showed no title for renamed sessions (718da57).
+- Tests: `npm test` 27/27, `node plugins/projects/test/smoke.mjs` 25/25, e2e 42/42.
 
 ## Next steps (in order)
 1. Mac live test after the restart: coordinator appears, thread start, handback, idle note, settings, and the DSH model picker shows the project effort. `~/.dsh/projects/projects.log` should have `select ...` lines.
@@ -40,3 +44,7 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 - Repo-local `node_modules` may be a symlink in cloud sessions. .gitignore's `node_modules/` does not match a symlink, so never `git add -A`.
 - In the cloud Bash tool, `pkill -f <pattern>` also kills the tool's own shell when the pattern appears in the command. Find the PID with `ps -eo pid,args | awk ...`.
 - Remote Control on the Mac refuses profile changes unless the user typed the approval in the thread. A relayed card tap does not count.
+- DSH routes a linked plugin's `peerDependencies` (`@deepseek-ai/schemastery`, `@deepseek-ai/dsh-tools`) to its own install, so a plugin folder needs no `node_modules`. The e2e test proves it. The smoke tests still need the peers installed.
+- After a DSH restart, an existing coordinator session stays cold until someone prompts it. The log says `coordinator <project> <session> resumed` when the plugin has checked it.
+- DSH words the approval reason itself: `escalate sandbox to danger-full-access: <justification>`.
+- Session titles: the session header keeps the creation-time title. Renames are `session/title` events.
