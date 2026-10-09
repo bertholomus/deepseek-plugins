@@ -78,6 +78,8 @@ export const Config = z.object({
     maxThreadsPerHour: z.number().default(20),
     /** Seconds a thread started by the coordinator may wait on a permission prompt before the coordinator is told. 0 turns it off. */
     approvalNoticeSeconds: z.number().default(60),
+    /** A new coordinator introduces itself in a first turn. DSH lists a session only after its first turn, so without it the coordinator stays out of the sidebar until someone messages it. */
+    welcome: z.boolean().default(true),
     /** Durable project state. */
     storeFile: z.string().default('~/.dsh/projects/projects.json'),
     /** Folder for project memory files. */

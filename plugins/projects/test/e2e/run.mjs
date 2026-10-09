@@ -266,6 +266,15 @@ try {
     await waitFor(() => readText(logFile).includes(`select ${PROJECT_ID}/coordinator`), 'the coordinator selection');
     check('coordinator session is titled "◆ E2E Project"', (await bridge('GET', `/sessions/${coord}`)).title === `◆ ${PROJECT}`);
     check('coordinator selection is logged', readText(logFile).includes(`select ${PROJECT_ID}/coordinator fake:fake-model effort=max`), readText(logFile));
+    // DSH lists a session only after its first turn, so a new coordinator introduces itself.
+    const welcome = await coordinatorSaw(0, 'SAW-WELCOME', 'the coordinator welcome');
+    check('a new coordinator introduces itself', welcome.fresh.includes(`[Project created: "${PROJECT}"]`) && welcome.effort === 'max', welcome.fresh.slice(0, 200));
+    mkdirSync(join(root, 'plain'));
+    const blankSession = (await bridge('POST', '/sessions', { workspacePath: join(root, 'plain') })).sessionId;
+    const listed = await bridge('GET', '/sessions');
+    check('DSH lists the coordinator; a session without a turn stays hidden',
+        listed.find((s) => s.sessionId === coord)?.blank === false && listed.find((s) => s.sessionId === blankSession)?.blank === true,
+        JSON.stringify(listed.map((s) => [s.sessionId === coord ? 'coordinator' : s.sessionId === blankSession ? 'blank' : 'other', s.blank])));
     check('state folder is 700', modeOf(stateDir) === 0o700, octal(modeOf(stateDir)));
     check('store file is 600', modeOf(storeFile) === 0o600, octal(modeOf(storeFile)));
     check('log file is 600', modeOf(logFile) === 0o600, octal(modeOf(logFile)));
@@ -438,6 +447,7 @@ try {
     await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge after restart', 90000);
     await waitFor(() => readText(logFile).includes(`coordinator ${PROJECT_ID} ${coord} resumed`), 'the plugin to resume the coordinator');
     check('restart keeps the coordinator', project().coordinatorSessionId === coord);
+    check('a restart does not welcome the coordinator again', model.requests.filter((r) => r.fresh.includes('[Project created')).length === 1);
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Theta cut-off note');
     check('a turn cut off by the crash is reported', saw.fresh.includes('[Thread idle without a handback: t8 · "Theta"]')
         && saw.fresh.includes('The turn was cut off because DSH stopped while it ran.'), saw.fresh.slice(0, 300));

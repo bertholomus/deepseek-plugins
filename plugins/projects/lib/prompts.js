@@ -14,6 +14,7 @@ export const TAGS = {
     handback: '[Handback from thread',
     idle: '[Thread idle without a handback',
     approval: '[Thread waiting for approval',
+    welcome: '[Project created',
 };
 
 export const HANDBACK_STATUSES = ['done', 'blocked', 'needs_decision', 'progress'];
@@ -60,6 +61,7 @@ export function coordinatorPolicy(p) {
         `- Threads report back with handbacks. A handback arrives here as a message starting with "${TAGS.handback}". Tell the user the result in a line or two and name the thread. If the thread asks a question you can answer from what you know, answer it with project_thread_send; otherwise ask the user. When a thread is done and nothing is open, resolve it with project_thread_update.`,
         `- A message starting with "${TAGS.idle}" is automatic: the thread ended a turn you started without calling project_handback. If it says the turn failed, was stopped or was cut off, tell the user, and retry only if they ask, in the same thread with project_thread_send rather than a new thread. Otherwise read the thread with project_thread_read only if it matters, and nudge the thread if it stalled.`,
         `- A message starting with "${TAGS.approval}" is automatic: a thread you started is stopped on a permission prompt. Tell the user which thread and what it wants to do; they approve or reject it in that thread's session. Do not start another thread for the same work.`,
+        `- A message starting with "${TAGS.welcome}" is automatic: the project was just set up. Introduce yourself to the user in two or three short sentences: what the project is for, and that they can hand you work here, which you run in threads. Do not start a thread for it.`,
         '- The user can talk to a thread directly in its own session. Those turns do not come to you; the roster below notes them. Do not answer them here.',
         '- Record durable facts (decisions, conventions, how the user wants to work) with project_memory, so later threads and a restarted coordinator know them.',
         '- Never poll threads in a loop. Handbacks arrive on their own.',
@@ -150,6 +152,14 @@ export function describeEnding(reason) {
         case 'interrupted': return 'The turn was cut off because DSH stopped while it ran.';
         default: return '';
     }
+}
+
+/**
+ * The first message a new coordinator gets. Its turn is what makes DSH list
+ * the session: the sidebar hides sessions that never had a turn.
+ */
+export function welcomeMessage(projectName) {
+    return `${TAGS.welcome}: "${projectName}"]\n\nThis is the first message in this coordinator session.`;
 }
 
 /** The automatic note when a thread waits on a permission prompt. */

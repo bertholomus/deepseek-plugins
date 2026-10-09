@@ -9,6 +9,7 @@
  *   [Handback from thread …       reply SAW-HANDBACK
  *   [Thread idle without …        reply SAW-IDLE
  *   [Thread waiting for approval… reply SAW-APPROVAL
+ *   [Project created …            reply SAW-WELCOME
  *   anything else                 reply "Plain reply."
  *
  * After a tool result it replies "TOOL-RESULT: <result>", which ends the turn.
@@ -47,6 +48,7 @@ function decide(body, text) {
     if (text.includes('[Handback from thread')) return { text: 'SAW-HANDBACK' };
     if (text.includes('[Thread idle without a handback')) return { text: 'SAW-IDLE' };
     if (text.includes('[Thread waiting for approval')) return { text: 'SAW-APPROVAL' };
+    if (text.includes('[Project created')) return { text: 'SAW-WELCOME' };
     return { text: 'Plain reply.' };
 }
 

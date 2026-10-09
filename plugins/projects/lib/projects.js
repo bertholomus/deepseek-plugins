@@ -28,7 +28,7 @@ import { ProjectStore, expand, ensurePrivateDir } from './store.js';
 import { SETTING_KEYS, effectiveSettings, applyRoute, checkSelection, describeRoute, parseModelSpec, pluginDefaults } from './settings.js';
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage,
-    handbackMessage, idleMessage, approvalMessage, describeEnding, HANDBACK_STATUSES, TAGS,
+    handbackMessage, idleMessage, approvalMessage, welcomeMessage, describeEnding, HANDBACK_STATUSES, TAGS,
 } from './prompts.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
@@ -335,6 +335,7 @@ export class ProjectManager {
             if (live) this.maybeInstall(live);
             await this.applyCoordinatorRoute(projectId);
             this.log(`coordinator ${projectId} ${stored.coordinatorSessionId} resumed`);
+            await this.welcome(projectId, stored.coordinatorSessionId, false);
             return stored.coordinatorSessionId;
         }
         // The plugin reloaded meanwhile; the new manager makes the coordinator.
@@ -347,7 +348,39 @@ export class ProjectManager {
         await this.sc.rename({ sessionId, title: `◆ ${project.name}` }).catch(() => {});
         await this.applyCoordinatorRoute(projectId);
         this.log(`coordinator ${projectId} ${sessionId}`);
+        await this.welcome(projectId, sessionId, true);
         return sessionId;
+    }
+
+    /**
+     * Give a coordinator its first turn: it introduces itself. DSH lists a
+     * session only once it has had a turn, so until then the user can't find
+     * the coordinator in the sidebar to talk to it. Once per coordinator
+     * session; held like any message while the project is paused.
+     * @param {boolean} fresh - the session was just created, so it has had no turn.
+     */
+    async welcome(projectId, sessionId, fresh) {
+        if (!this.config.welcome) return;
+        const stored = this.store.project(projectId);
+        if (stored.welcomedSession === sessionId) return;
+        if (!fresh) {
+            // A coordinator from before this check: welcome it only if it never had a turn.
+            let used;
+            try {
+                const events = (await this.sc.inspect(sessionId, AbortSignal.timeout(20000))).events ?? [];
+                used = events.some((e) => e?.type === 'turn/start') || stored.pendingHandbacks.length > 0;
+            } catch (error) {
+                this.log(`error welcome ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
+                return;
+            }
+            if (used) {
+                this.store.putProject(projectId, { welcomedSession: sessionId });
+                return;
+            }
+        }
+        this.store.putProject(projectId, { welcomedSession: sessionId });
+        const outcome = await this.deliver(projectId, welcomeMessage(this.project(projectId).name));
+        this.log(`welcome ${projectId} ${sessionId} ${outcome}`);
     }
 
     async prompt(sessionId, text, mode = 'queue') {

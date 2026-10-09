@@ -193,6 +193,8 @@ function fakeHost({ selection = false, hostListener = selection } = {}) {
 function setup(overrides = {}, dir = mkdtempSync(join(tmpdir(), 'projects-')), hostOptions = {}) {
     const host = fakeHost(hostOptions);
     const raw = {
+        // Most tests count coordinator messages from zero; the welcome has its own tests.
+        welcome: false,
         threadEffort: 'high',
         storeFile: join(dir, 'projects.json'),
         memoryDir: join(dir, 'memory'),
@@ -263,6 +265,7 @@ test('config: required fields and defaults', () => {
     const c = plugin.Config({});
     assert.equal(c.enabled, true);
     assert.equal(c.autoHandback, 'idle');
+    assert.equal(c.welcome, true);
     assert.deepEqual(c.projects, []);
     assert.throws(() => plugin.Config({ projects: [{ name: 'x' }] }), /workspacePath/);
     assert.throws(() => plugin.Config({ autoHandback: 'always' }));
@@ -873,6 +876,63 @@ test('a queued coordinator message that fails after a handback still gets its no
     await tick();
     assert.equal(cp.length, 3);
     assert.match(cp[2].text, /C is done\./);
+});
+
+test('a new coordinator introduces itself once, so DSH lists it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const first = setup({ welcome: true }, dir);
+    await tick();
+    const coord = coordinatorOf(first.host);
+    assert.deepEqual(first.host.sessions.get(coord.id).prompts, [
+        { mode: 'queue', text: '[Project created: "DSH Plugins"]\n\nThis is the first message in this coordinator session.' },
+    ]);
+    assert.match(coord.ctx.section(), /A message starting with "\[Project created" is automatic/);
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), new RegExp(`welcome dsh-plugins ${coord.id} delivered`));
+    const second = restart(first.host.sessions, first.config);
+    await tick();
+    assert.equal(second.sessions.get(coord.id).prompts.length, 0, 'welcomed once');
+});
+
+test('a coordinator from before the welcome gets it only if it never had a turn', async () => {
+    // Never used: DSH still hides it, so the next start welcomes it.
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const first = setup({}, dir);
+    await tick();
+    const coord = coordinatorOf(first.host);
+    const second = restart(first.host.sessions, plugin.Config({ ...first.raw, welcome: true }));
+    await tick();
+    assert.match(second.sessions.get(coord.id).prompts[0]?.text ?? '', /^\[Project created: "DSH Plugins"\]/);
+
+    // Used already: DSH lists it, so it gets nothing, and later starts don't read its log again.
+    const usedDir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const used = setup({}, usedDir);
+    await tick();
+    const usedCoord = coordinatorOf(used.host);
+    turnMarks(used.host, usedCoord.id).start();
+    turnMarks(used.host, usedCoord.id).end();
+    const again = restart(used.host.sessions, plugin.Config({ ...used.raw, welcome: true }));
+    await tick();
+    assert.equal(again.sessions.get(usedCoord.id).prompts.length, 0);
+    assert.equal(JSON.parse(readFileSync(join(usedDir, 'projects.json'), 'utf8')).projects['dsh-plugins'].welcomedSession, usedCoord.id);
+
+    // A failed log read skips the welcome for now and doesn't stop the start.
+    const flakyDir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const flaky = setup({}, flakyDir);
+    await tick();
+    const flakyCoord = coordinatorOf(flaky.host);
+    const host = fakeHost();
+    for (const [id, s] of flaky.host.sessions) host.sessions.set(id, { ...s, prompts: [] });
+    const inspect = host.sessionController.inspect;
+    let reads = 0;
+    host.sessionController.inspect = async (id, signal) => {
+        if (id === flakyCoord.id && reads++ === 1) throw new Error('read timed out');
+        return inspect(id, signal);
+    };
+    plugin.apply(host, plugin.Config({ ...flaky.raw, welcome: true }));
+    await tick();
+    assert.equal(host.sessions.get(flakyCoord.id).prompts.length, 0);
+    assert.match(readFileSync(join(flakyDir, 'projects.log'), 'utf8'), /error welcome dsh-plugins read timed out/);
+    assert.equal(JSON.parse(readFileSync(join(flakyDir, 'projects.json'), 'utf8')).projects['dsh-plugins'].welcomedSession, undefined);
 });
 
 test('a thread turn cut off by a DSH stop is reported at the next start, once', async () => {
