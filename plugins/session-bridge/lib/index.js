@@ -225,15 +225,21 @@ export function apply(ctx, config) {
     mkdirSync(dirname(socketPath), { recursive: true, mode: 0o700 });
     chmodSync(dirname(socketPath), 0o700);
     if (existsSync(socketPath)) rmSync(socketPath, { force: true });
+    // The umask is process-wide, so narrow it only around listen(): Node binds
+    // the socket inside that call. Restoring it later, in the callback, would
+    // leave folders other plugins create in the meantime without the execute
+    // bit, and nothing inside them could be opened.
     const oldUmask = process.umask(0o177);
-    server.listen(socketPath, () => {
+    try {
+        server.listen(socketPath, () => {
+            try { chmodSync(socketPath, 0o600); } catch {}
+            log(`listening ${socketPath} pid=${process.pid}`);
+            ctx.logger.info('session-bridge: listening on %s', socketPath);
+        });
+    } finally {
         process.umask(oldUmask);
-        try { chmodSync(socketPath, 0o600); } catch {}
-        log(`listening ${socketPath} pid=${process.pid}`);
-        ctx.logger.info('session-bridge: listening on %s', socketPath);
-    });
+    }
     server.on('error', (error) => {
-        process.umask(oldUmask);
         log(`server error ${String(error?.message ?? error)}`);
         ctx.logger.warn('session-bridge: server error %s', error?.message ?? error);
     });
