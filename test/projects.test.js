@@ -25,6 +25,8 @@ test('projects: a model without effort levels drops the effort with a note', () 
     const catalog = { default: { provider: 'p', model: 'a' }, groups: [{ id: 'p', models: [{ id: 'a', reasoning: { efforts: [{ id: 'max' }] } }, { id: 'b' }] }] };
     assert.deepEqual(checkSelection(catalog, 'b', 'max'), { ok: true, model: 'p:b', note: 'p:b has no effort levels, so effort "max" is not used' });
     assert.deepEqual(checkSelection(catalog, undefined, 'max'), { ok: true, effort: 'max' });
+    // An effort no model offers is still refused, even where it would not be used.
+    assert.deepEqual(checkSelection(catalog, 'b', 'ultra'), { ok: false, error: 'effort "ultra" is not offered by any model. Efforts in this DSH: max' });
 });
 
 test('projects: no catalog accepts the selection as given', () => {

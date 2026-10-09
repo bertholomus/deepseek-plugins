@@ -117,6 +117,11 @@ export function checkSelection(catalog, modelSpec, effort) {
     if (set(effort)) {
         const e = effort.trim();
         if (entry && entry.efforts.length === 0) {
+            // The effort is kept for a later model switch, so refuse one no model offers.
+            const known = [...new Set(models.flatMap((m) => m.efforts))];
+            if (known.length > 0 && !known.includes(e)) {
+                return { ok: false, error: `effort "${e}" is not offered by any model. Efforts in this DSH: ${known.join(', ')}` };
+            }
             return { ok: true, ...(model ? { model } : {}), note: `${entry.provider}:${entry.model} has no effort levels, so effort "${e}" is not used` };
         }
         if (entry && !entry.efforts.includes(e)) {
