@@ -28,7 +28,7 @@ import { ProjectStore, expand, ensurePrivateDir } from './store.js';
 import { effectiveSettings, applyRoute, checkSelection, describeRoute, parseModelSpec } from './settings.js';
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage,
-    handbackMessage, idleMessage, HANDBACK_STATUSES,
+    handbackMessage, idleMessage, HANDBACK_STATUSES, TAGS,
 } from './prompts.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
@@ -54,6 +54,23 @@ function roleOf(event) {
     if (event?.type === 'assistant/message') return 'assistant';
     if (event?.type === 'user/message') return 'user';
     return null;
+}
+
+/** Request ids of the prompts this plugin sends; they mark coordinator-driven turns. */
+const RPC_PREFIX = 'projects-';
+
+/**
+ * A prompt someone sent to the session, or null. User-role messages the Host
+ * injects (runtime context, model-change notices) have another source kind.
+ */
+function promptOf(event) {
+    if (roleOf(event) !== 'user') return null;
+    const source = (event?.data?.message ?? event?.data)?.source;
+    if (source?.kind !== undefined && source.kind !== 'user') return null;
+    const text = textOf(event);
+    if (!text) return null;
+    const fromProject = String(source?.rpcId ?? '').startsWith(RPC_PREFIX) || text.startsWith(TAGS.brief) || text.startsWith(TAGS.coordinator);
+    return { text, fromProject };
 }
 
 export class ProjectError extends Error {}
@@ -204,7 +221,7 @@ export class ProjectManager {
     async prompt(sessionId, text, mode = 'queue') {
         await this.sc.prompt({
             sessionId,
-            requestId: `projects-${randomUUID()}`,
+            requestId: `${RPC_PREFIX}${randomUUID()}`,
             mode,
             content: [{ type: 'text', text }],
         }, AbortSignal.timeout(60000));
@@ -386,7 +403,13 @@ export class ProjectManager {
         return threadPolicy({ name: project.name, goal: project.goal, threadId, title: t?.title ?? threadId, memory: this.readMemory(projectId) });
     }
 
-    /** Track thread turns; an idle edge without a handback sends the automatic note. */
+    /**
+     * Track thread turns. A turn the coordinator started that ends without a
+     * handback sends the automatic note. A turn the user started by talking
+     * to the thread directly is only recorded for the coordinator's roster:
+     * the user is already there, and a note would make the coordinator take
+     * a turn for nothing.
+     */
     async onThreadStatus(projectId, threadId, agent, status) {
         const state = this.turns.get(agent.id) ?? { running: false, handedBack: false };
         if (status === 'running') {
@@ -395,12 +418,18 @@ export class ProjectManager {
         }
         if (status !== 'idle' || !state.running) return;
         this.turns.set(agent.id, { running: false, handedBack: false });
-        if (state.handedBack || this.config.autoHandback !== 'idle') return;
+        if (state.handedBack) return;
         const t = this.store.thread(projectId, threadId);
-        if (!t || t.resolved || !this.allowHandback(projectId, threadId)) return;
-        const last = await this.lastAssistantText(agent.id);
-        await this.deliver(projectId, idleMessage(threadId, t.title, last));
-        this.log(`idle-note ${projectId}/${threadId} chars=${last.length}`);
+        if (!t || t.resolved) return;
+        const turn = await this.lastTurn(agent.id);
+        if (!turn.fromProject) {
+            this.store.putThread(projectId, threadId, { lastDirect: { at: new Date().toISOString(), reply: turn.reply.slice(0, 500) } });
+            this.log(`direct-turn ${projectId}/${threadId} chars=${turn.reply.length}`);
+            return;
+        }
+        if (this.config.autoHandback !== 'idle' || !this.allowHandback(projectId, threadId)) return;
+        await this.deliver(projectId, idleMessage(threadId, t.title, turn.reply));
+        this.log(`idle-note ${projectId}/${threadId} chars=${turn.reply.length}`);
     }
 
     /** Rate cap: at most maxHandbacksPerHour per thread, explicit and automatic together. */
@@ -413,15 +442,22 @@ export class ProjectManager {
         return true;
     }
 
-    async lastAssistantText(sessionId) {
+    /**
+     * The session's last reply, and whether its last prompt came from this
+     * project (the coordinator) rather than from the user directly.
+     */
+    async lastTurn(sessionId) {
+        let reply = '';
         try {
             const r = await this.sc.inspect(sessionId, AbortSignal.timeout(20000));
             const events = r.events ?? [];
             for (let i = events.length - 1; i >= 0; i--) {
-                if (roleOf(events[i]) === 'assistant' && textOf(events[i])) return textOf(events[i]);
+                if (!reply && roleOf(events[i]) === 'assistant') reply = textOf(events[i]);
+                const prompt = promptOf(events[i]);
+                if (prompt) return { reply, fromProject: prompt.fromProject };
             }
         } catch {}
-        return '';
+        return { reply, fromProject: true };
     }
 
     /** Send text to the coordinator, or hold it while the project is paused or unreachable. */
@@ -521,7 +557,7 @@ export class ProjectManager {
         const t = this.requireThread(projectId, threadId);
         const r = await this.sc.inspect(t.sessionId, AbortSignal.timeout(20000));
         const msgs = (r.events ?? [])
-            .map((e) => ({ role: roleOf(e), text: textOf(e) }))
+            .map((e) => (roleOf(e) === 'user' ? { role: 'user', text: promptOf(e)?.text } : { role: roleOf(e), text: textOf(e) }))
             .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.text);
         const n = Math.max(1, Math.min(Number(count) || 6, 30));
         const lines = msgs.slice(-n).map((m) => `## ${m.role}\n${m.text.length > 3000 ? `${m.text.slice(0, 3000)}…` : m.text}`);

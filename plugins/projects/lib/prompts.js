@@ -30,7 +30,10 @@ export function rosterLines(threads, liveStatus) {
     return rows.map(([id, t]) => {
         const status = t.resolved ? 'resolved' : liveStatus(t.sessionId);
         const last = t.lastHandback ? ` · last handback: ${t.lastHandback.status}, "${clip(t.lastHandback.summary, 120)}"` : ' · no handback yet';
-        return `- ${id} · "${t.title}" · ${status}${last}`;
+        const direct = t.lastDirect && !(t.lastHandback && t.lastHandback.at > t.lastDirect.at)
+            ? ` · the user talked to it directly; its reply: "${clip(t.lastDirect.reply, 120)}"`
+            : '';
+        return `- ${id} · "${t.title}" · ${status}${last}${direct}`;
     });
 }
 
@@ -54,7 +57,8 @@ export function coordinatorPolicy(p) {
         '- Write each brief so the thread can work without this conversation: the user\'s ask in their own words, the facts it needs from project memory, and the default you picked where the ask is ambiguous. Do not add deliverables the user did not ask for.',
         '- Tell the user in one line that the thread started and what it is called.',
         `- Threads report back with handbacks. A handback arrives here as a message starting with "${TAGS.handback}". Tell the user the result in a line or two and name the thread. If the thread asks a question you can answer from what you know, answer it with project_thread_send; otherwise ask the user. When a thread is done and nothing is open, resolve it with project_thread_update.`,
-        `- A message starting with "${TAGS.idle}" is automatic: the thread ended a turn without calling project_handback. Read it with project_thread_read only if it matters, and nudge the thread if it stalled.`,
+        `- A message starting with "${TAGS.idle}" is automatic: the thread ended a turn you started without calling project_handback. Read it with project_thread_read only if it matters, and nudge the thread if it stalled.`,
+        '- The user can talk to a thread directly in its own session. Those turns do not come to you; the roster below notes them. Do not answer them here.',
         '- Record durable facts (decisions, conventions, how the user wants to work) with project_memory, so later threads and a restarted coordinator know them.',
         '- Never poll threads in a loop. Handbacks arrive on their own.',
         '',
@@ -62,12 +66,12 @@ export function coordinatorPolicy(p) {
         `- Coordinator: ${describeRoute(s.coordinatorModel.value, s.coordinatorEffort.value)}`,
         `- New threads: ${describeRoute(s.threadModel.value, s.threadEffort.value)}`,
         '- Change them with project_settings when the user asks. A thread can also get its own model or effort at start or with project_thread_update.',
-        p.paused ? '- The project is PAUSED: do not start threads. Handbacks are held until it resumes. Tell the user if they ask for new work.' : '',
+        p.paused ? '- The project is PAUSED: do not start threads. Handbacks are held until it resumes. Tell the user if they ask for new work.' : null,
         '',
         '## Threads',
         ...rosterLines(p.threads, p.liveStatus),
         ...memorySection(p.memory),
-    ].filter((line) => line !== '').join('\n');
+    ].filter((line) => line !== null).join('\n');
 }
 
 /**
@@ -79,7 +83,7 @@ export function threadPolicy(p) {
         '# Project thread',
         '',
         `You are thread ${p.threadId}, "${p.title}", in the DSH project "${p.name}".`,
-        p.goal ? `Project goal: ${p.goal}` : '',
+        p.goal ? `Project goal: ${p.goal}` : null,
         `A coordinator session started you. Its brief and later messages start with "${TAGS.brief}" or "${TAGS.coordinator}". The user may also talk to you directly in this session; their messages are the main ask when they do.`,
         '',
         '- Do the work in your brief end to end. Where the ask forks on a detail nobody specified, pick a reasonable default, say which, and keep going. Stop to ask only when the choice changes the outcome or cannot be undone.',
@@ -87,7 +91,7 @@ export function threadPolicy(p) {
         '- Use status "progress" only for a milestone the coordinator must know before you finish.',
         '- Check project_memory before relying on assumptions about the project, and add durable facts you learn.',
         ...memorySection(p.memory),
-    ].filter((line) => line !== '').join('\n');
+    ].filter((line) => line !== null).join('\n');
 }
 
 function memorySection(memory) {

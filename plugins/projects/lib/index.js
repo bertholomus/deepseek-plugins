@@ -61,7 +61,7 @@ export const Config = z.object({
     threadModel: z.string(),
     /** Plugin-wide default effort for new threads. */
     threadEffort: z.string(),
-    /** "idle": when a thread ends a turn without a handback, tell the coordinator. "off": only explicit handbacks. */
+    /** "idle": when a thread ends a turn the coordinator started without a handback, tell the coordinator. "off": only explicit handbacks. */
     autoHandback: z.union(['idle', 'off']).default('idle'),
     /** Handbacks (explicit plus automatic) one thread may send per hour; stops runaway loops. */
     maxHandbacksPerHour: z.number().default(30),

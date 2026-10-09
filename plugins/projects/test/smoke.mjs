@@ -150,7 +150,10 @@ function fakeHost({ selection = false, hostListener = selection } = {}) {
             },
             async prompt(req) {
                 assert.ok(req.requestId && req.content[0].text);
-                sessions.get(req.sessionId).prompts.push({ mode: req.mode, text: req.content[0].text });
+                const s = sessions.get(req.sessionId);
+                s.prompts.push({ mode: req.mode, text: req.content[0].text });
+                // Like DSH: the prompt is logged as a user message with its request id.
+                s.events.push({ seq: s.events.length + 1, type: 'user/message', data: { content: req.content, source: { kind: 'user', rpcId: req.requestId } } });
                 return { accepted: true };
             },
             async rename(req) { sessions.get(req.sessionId).title = req.title; return { title: req.title, seq: 1 }; },
@@ -516,4 +519,49 @@ test('session mode: a failed selection is reported, and the coordinator retries 
     await coord.ctx.call('project_settings', { thread_effort: 'max' });
     assert.deepEqual(host.selections.filter((s) => s.sessionId === coord.id).map((s) => s.selection.reasoningEffort), ['max', 'low'], 'the next settings call retries the coordinator');
     assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /error select dsh-plugins\/t1 provider offline/);
+});
+
+// ── turns the user drives in a thread ──────────────────────────────────────
+
+const userSays = (host, sessionId, text, kind = 'user') => {
+    const s = host.sessions.get(sessionId);
+    s.events.push({ seq: s.events.length + 1, type: 'user/message', data: { content: [{ type: 'text', text }], source: { kind, rpcId: kind === 'user' ? 'gui-1' : undefined } } });
+};
+const assistantSays = (host, sessionId, text) => {
+    const s = host.sessions.get(sessionId);
+    s.events.push({ seq: s.events.length + 1, type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text }] } } });
+};
+
+test('a turn the user drives in a thread does not wake the coordinator', async () => {
+    const { host } = setup();
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { title: 'Chat', brief: 'Help the user.' });
+    const thread = [...host.live.values()].find((a) => a.id !== coord.id);
+
+    // The user talks to the thread in its own session; the Host adds its runtime context.
+    userSays(host, thread.id, 'What does this function do?');
+    userSays(host, thread.id, 'Current runtime context. ...', 'runtime-context');
+    assistantSays(host, thread.id, 'It parses the config.');
+    thread.ctx.emitStatus(thread, 'running');
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    assert.equal(host.sessions.get(coord.id).prompts.length, 0, 'no idle note for a direct turn');
+    assert.match(coord.ctx.section(), /t1 · "Chat" · idle · no handback yet · the user talked to it directly; its reply: "It parses the config\."/);
+
+    // A turn the coordinator starts still gets the note when it ends without a handback.
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Also check the tests.' });
+    userSays(host, thread.id, '[model changed: ...]', 'model-selection');
+    assistantSays(host, thread.id, 'Tests pass.');
+    thread.ctx.emitStatus(thread, 'running');
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    const cp = host.sessions.get(coord.id).prompts;
+    assert.equal(cp.length, 1);
+    assert.match(cp[0].text, /^\[Thread idle without a handback: t1 · "Chat"\]\n\nIts last reply:\n\nTests pass\./);
+
+    // project_thread_read shows prompts and replies, not injected context.
+    const read = await coord.ctx.call('project_thread_read', { thread: 't1', count: 10 });
+    assert.match(read, /## user\nWhat does this function do\?/);
+    assert.doesNotMatch(read, /runtime context|model changed/);
 });
