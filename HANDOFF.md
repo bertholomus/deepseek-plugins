@@ -1,6 +1,6 @@
 # Handoff
 
-Updated: 2026-10-09 01:58 PT by B (bertholomus)
+Updated: 2026-10-09 02:12 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (draft PR #1)
 
 ## Doing now
@@ -16,10 +16,11 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 - Docs: install through `dsh.profile.bundles` (`dsh plugin --profile desktop add`), with an address row for config (2a377af).
 - Mac: `dsh-plugin-projects` is in `~/.dsh/profiles/desktop` bundles, plus an insert row with config (done by the RC session after the user typed OK). It is not loaded yet; that needs the DSH restart.
 - The coordinator now hears when a thread it started fails, is stopped, or waits on a permission prompt for `approvalNoticeSeconds` (default 60) (3a0cc97).
-- Real-host end-to-end test in the repo: `plugins/projects/test/e2e/run.mjs` (`npm run test:e2e`, needs `DSH_BIN` or `dsh` on PATH). It boots DSH with projects + session-bridge + a scripted model and checks 42 things. 42/42 on DSH 0.2.0-rc.2, as root and as a normal user, without the repo-root `node_modules` link (5fdf31d).
+- Real-host end-to-end test in the repo: `plugins/projects/test/e2e/run.mjs` (`npm run test:e2e`, needs `DSH_BIN` or `dsh` on PATH). It boots DSH with projects + session-bridge + a scripted model and checks 42 things (44 now). 42/42 on DSH 0.2.0-rc.2, as root and as a normal user, without the repo-root `node_modules` link (5fdf31d).
 - Fixed: `project_settings` accepted an effort no model offers (e.g. "ultra") when the thread model has no efforts (e48952b).
 - Fixed: session-bridge `GET /sessions/:id` showed no title for renamed sessions (718da57).
-- Tests: `npm test` 27/27, `node plugins/projects/test/smoke.mjs` 25/25, e2e 42/42.
+- A stop the coordinator asks for (`project_thread_update stop: true`) no longer comes back to it as a "stopped" note. Stops from anywhere else still do (50a67b7).
+- Tests: `npm test` 27/27, `node plugins/projects/test/smoke.mjs` 26/26, e2e 44/44.
 
 ## Next steps (in order)
 1. Mac live test after the restart: coordinator appears, thread start, handback, idle note, settings, and the DSH model picker shows the project effort. `~/.dsh/projects/projects.log` should have `select ...` lines.
