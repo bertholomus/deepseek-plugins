@@ -81,6 +81,10 @@ npm test                                  # dsh-site, session-bridge, projects (
 npm install --no-save @deepseek-ai/schemastery @deepseek-ai/dsh-llm@next @deepseek-ai/dsh-brand@next @deepseek-ai/dsh-tools@next
 node plugins/discord/test/smoke.mjs       # discord (no token needed)
 node plugins/projects/test/smoke.mjs      # projects (fake DSH host)
+
+# projects + session-bridge on a real DSH, with a scripted model server
+npm install --prefix /tmp/dsh @deepseek-ai/dsh
+DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js npm run test:e2e
 ```
 
 ## License

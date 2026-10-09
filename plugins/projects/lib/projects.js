@@ -207,6 +207,7 @@ export class ProjectManager {
             const live = this.ctx.agents.get(stored.coordinatorSessionId);
             if (live) this.maybeInstall(live);
             await this.applyCoordinatorRoute(projectId);
+            this.log(`coordinator ${projectId} ${stored.coordinatorSessionId} resumed`);
             return stored.coordinatorSessionId;
         }
         const sessionId = await this.createSession(project);

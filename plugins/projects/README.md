@@ -145,4 +145,13 @@ npm install --no-save @deepseek-ai/schemastery @deepseek-ai/dsh-tools@next
 node plugins/projects/test/smoke.mjs
 ```
 
-The smoke tests run against a fake Host built from the published `@deepseek-ai/*` packages, including a Host with DSH's per-session model selection. The plugin has also run on a real DSH host (0.2.0-rc.2, web profile) with a scripted model server. That run covered the coordinator, threads, handbacks, the idle note, settings and memory. It also checked the effort on each model request and a host restart.
+The smoke tests run against a fake Host built from the published `@deepseek-ai/*` packages, including a Host with DSH's per-session model selection.
+
+The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin, session-bridge and a scripted model server. It drives the coordinator and threads through the bridge and checks what reaches the model: the model and effort of every request, which tools each session has, handbacks, the automatic notes (idle, failed, stopped, waiting on approval), direct talk, settings, memory, pause and a restart. It takes about a minute.
+
+```bash
+npm install --prefix /tmp/dsh @deepseek-ai/dsh
+DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/projects/test/e2e/run.mjs
+```
+
+It passes on DSH 0.2.0-rc.2, as root and as a normal user.

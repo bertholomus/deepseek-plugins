@@ -5,7 +5,8 @@
   "description": "Community plugins for DeepSeek Harness (DSH) Desktop.",
   "license": "MIT",
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "test:e2e": "node plugins/projects/test/e2e/run.mjs"
   },
   "engines": { "node": ">=20" }
 }
