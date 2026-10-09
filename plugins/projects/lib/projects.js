@@ -108,7 +108,7 @@ export class ProjectManager {
         }
         /** Agent → disposer for its installed project scope. */
         this.installed = new Map();
-        /** sessionId → {running, handedBack} for thread turn tracking. */
+        /** sessionId → {running, handedBack, stopRequested} for thread turn tracking. */
         this.turns = new Map();
         /** sessionId → (approval id → timer) for permission prompts not yet answered. */
         this.approvals = new Map();
@@ -427,6 +427,8 @@ export class ProjectManager {
         const t = this.store.thread(projectId, threadId);
         if (!t || t.resolved) return;
         const turn = await this.lastTurn(agent.id);
+        // The coordinator stopped this turn itself, so a note would only echo that back.
+        if (state.stopRequested && turn.endKind === 'aborted') return;
         if (!turn.fromProject) {
             this.store.putThread(projectId, threadId, { lastDirect: { at: new Date().toISOString(), reply: turn.reply.slice(0, 500) } });
             this.log(`direct-turn ${projectId}/${threadId} chars=${turn.reply.length}`);
@@ -490,24 +492,25 @@ export class ProjectManager {
     }
 
     /**
-     * The session's last reply, how its last turn ended when that was not a
-     * normal completion, and whether its last prompt came from this project
-     * (the coordinator) rather than from the user directly.
+     * The session's last reply, how its last turn ended (`endKind`, and
+     * `ending` as a line when that was not a normal completion), and whether
+     * its last prompt came from this project (the coordinator) rather than
+     * from the user directly.
      */
     async lastTurn(sessionId) {
         let reply = '';
-        let ending;
+        let end;
         try {
             const r = await this.sc.inspect(sessionId, AbortSignal.timeout(20000));
             const events = r.events ?? [];
             for (let i = events.length - 1; i >= 0; i--) {
-                if (ending === undefined && events[i]?.type === 'turn/end') ending = describeEnding(events[i].data?.reason);
+                if (end === undefined && events[i]?.type === 'turn/end') end = events[i].data?.reason ?? null;
                 if (!reply && roleOf(events[i]) === 'assistant') reply = textOf(events[i]);
                 const prompt = promptOf(events[i]);
-                if (prompt) return { reply, ending: ending ?? '', fromProject: prompt.fromProject };
+                if (prompt) return { reply, ending: describeEnding(end), endKind: end?.kind, fromProject: prompt.fromProject };
             }
         } catch {}
-        return { reply, ending: ending ?? '', fromProject: true };
+        return { reply, ending: describeEnding(end), endKind: end?.kind, fromProject: true };
     }
 
     /** Send text to the coordinator, or hold it while the project is paused or unreachable. */
@@ -644,6 +647,8 @@ export class ProjectManager {
             out.push('but the model could not be set, so it keeps its current one (details in the projects log)');
         }
         if (changes.stop === true) {
+            const state = this.turns.get(t.sessionId);
+            if (state?.running) state.stopRequested = true;
             await this.sc.cancel({ sessionId: t.sessionId });
             out.push('current turn stopped (queued messages kept)');
         }

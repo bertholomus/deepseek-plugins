@@ -586,6 +586,34 @@ test('the idle note says when a thread turn failed', async () => {
     assert.match(host.sessions.get(coord.id).prompts[0].text, /^\[Thread idle without a handback: t1 · "Flaky"\]\n\nThe turn failed: provider unavailable\n\nIt produced no reply text\./);
 });
 
+test('a stop the coordinator asks for does not come back as a note', async () => {
+    const { host } = setup();
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { title: 'Long', brief: 'Run the long job.' });
+    const thread = [...host.live.values()].find((a) => a.id !== coord.id);
+    const ts = host.sessions.get(thread.id);
+    const endTurn = (kind) => ts.events.push({ seq: ts.events.length + 1, type: 'turn/end', data: { turn: 1, reason: { kind } } });
+
+    thread.ctx.emitStatus(thread, 'running');
+    assert.match(await coord.ctx.call('project_thread_update', { thread: 't1', stop: true }), /current turn stopped/);
+    assert.equal(ts.cancelled, true);
+    endTurn('aborted');
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    assert.equal(host.sessions.get(coord.id).prompts.length, 0, 'no note for its own stop');
+
+    // A stop from anywhere else (the user, in the thread's session) is still reported.
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Try again.' });
+    thread.ctx.emitStatus(thread, 'running');
+    endTurn('aborted');
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    const cp = host.sessions.get(coord.id).prompts;
+    assert.equal(cp.length, 1);
+    assert.match(cp[0].text, /^\[Thread idle without a handback: t1 · "Long"\]\n\nThe turn was stopped before it finished\./);
+});
+
 test('a permission prompt left unanswered tells the coordinator', async () => {
     const { host } = setup({ approvalNoticeSeconds: 0.02 });
     await tick();

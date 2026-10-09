@@ -358,7 +358,21 @@ try {
     saw = await coordinatorSaw(mark, 'SAW-HANDBACK', 'the held handback');
     check('held handback arrives', saw.fresh.includes('Held while paused.'));
 
-    // 14. Restart: same coordinator, routes kept, threads still wired.
+    // 14. A stop the coordinator asks for is not echoed back to it.
+    mark = model.requests.length;
+    await say(coord, call('project_thread_start', {
+        title: 'Zeta',
+        brief: call('write', { file_path: probe, content: 'x', sandbox_permissions: 'danger-full-access', justification: 'E2E stop check.' }),
+    }));
+    await coordinatorSaw(mark, 'SAW-APPROVAL', 'the Zeta approval note');
+    mark = model.requests.length;
+    reqs = await say(coord, call('project_thread_update', { thread: 't6', stop: true }));
+    check('coordinator can stop a thread', resultOf(reqs).includes('current turn stopped'), resultOf(reqs));
+    await waitIdle(threadSession('t6'));
+    await sleep(1500);
+    check('its own stop is not echoed back to it', !since(mark, 'coordinator').some((r) => r.fresh.includes('t6 · "Zeta"')), describe(since(mark, 'coordinator')));
+
+    // 15. Restart: same coordinator, routes kept, threads still wired.
     await stopDsh(child);
     child = startDsh(dsh);
     await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge after restart', 90000);
