@@ -175,8 +175,10 @@ export function apply(ctx, config) {
             const agent = ctx.agents.get(sessionId);
             const starts = ev.filter((e) => e.type === 'turn/start').length;
             const ends = ev.filter((e) => e.type === 'turn/end');
+            // The header keeps the creation-time title; renames are session/title events.
+            const renamed = ev.findLast((e) => e.type === 'session/title')?.data?.title;
             return {
-                sessionId, cwd: header?.cwd, title: header?.title,
+                sessionId, cwd: header?.cwd, title: renamed ?? header?.title,
                 attached: agent !== undefined, status: agent?.status ?? 'cold',
                 turns: { started: starts, ended: ends.length, lastEnd: ends.at(-1)?.data?.reason ?? null },
                 lastSeq: ev.at(-1)?.seq ?? -1,
