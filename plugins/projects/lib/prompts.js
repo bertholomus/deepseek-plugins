@@ -99,7 +99,7 @@ export function rosterLines(threads, liveStatus) {
  * models too. Each automatic message carries its own instruction, so the
  * rules don't have to explain them. It names no model or effort: those are
  * settings, and project_settings shows them when the user asks.
- * @param {object} p - {name, goal, workspacePath, home?: the workspace is the user's home folder, guarded?: config.guardedTools names, yourTools?: 'asked'|'always', folders?: the project's other workspaces, paused, threads, memory, liveStatus}
+ * @param {object} p - {name, goal, workspacePath, home?: the workspace is the user's home folder, guarded?: config.guardedTools names, yourTools?: 'asked'|'always', paused, threads, memory, liveStatus}
  */
 export function coordinatorPolicy(p) {
     return [
@@ -108,7 +108,6 @@ export function coordinatorPolicy(p) {
         `You are the coordinator of the DSH project "${p.name}". The user talks to you here. You run their work in threads and tell them what each thread found.`,
         p.goal ? `Goal: ${p.goal}` : 'Goal: none set yet. Until the user gives one, the project is only what they ask for in this chat.',
         `Workspace: ${p.workspacePath}${p.home ? HOME_NOTE : ''}`,
-        p.folders?.length ? `The project's other folders: ${p.folders.join(', ')}. A thread works in the workspace above unless project_thread_start names one of these as its folder.` : null,
         '',
         '## Rules',
         '1. Do only what the user asks. When they leave the choice of work to you, pick work that only reads and writes files in the workspace, and say what you picked.',

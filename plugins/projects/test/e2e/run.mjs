@@ -12,9 +12,11 @@
  * plugin's page, a saved default that applies without a restart, the Project
  * settings endpoints the window calls, a pick in DSH's own model picker,
  * a thread's code changes as DSH records them, failed and stopped threads
- * as the window shows them, with Retry and Resume, projects as groups
- * of workspaces: the one-time import of the old sidebar's projects and the
- * Projects page's endpoints, and the user's tools and permissions: an MCP
+ * as the window shows them, with Retry and Resume, categories of
+ * workspaces: the one-time import of the old sidebar's projects as
+ * categories, the Projects page's endpoints and DSH's own workspace order
+ * kept in step, a thread in its project's workspace, and the user's tools
+ * and permissions: an MCP
  * server named as one of the user's tools that no coordinator is offered
  * and a thread gets only from the user's words, threads on Workspace Write.
  *
@@ -812,48 +814,62 @@ try {
         && (await viewOf(threadSession('t4')))?.ending === undefined, `${refusedWhy(answer2)} ${since(mark, 't4')[0]?.fresh.slice(0, 300)}`);
     check('the plugin logs each retry', readText(logFile).includes(`thread-continue ${PROJECT_ID}/t3 after=error`) && readText(logFile).includes(`thread-continue ${PROJECT_ID}/t4 after=aborted`));
 
-    // 24. Projects as groups of workspaces. The old sidebar's projects were
-    // read once at the restart above: each name becomes a project without a
-    // coordinator (one joins the profile project of the same name), each
-    // workspace goes where it was unless it is already in a project, and the
-    // old file is only read. Then the Projects page's endpoints.
-    check('the old sidebar\'s projects are imported once', readText(logFile).includes('import fleet-shell projects=1 joined=1 workspaces=2 skipped=1')
+    // 24. Categories and projects. The old sidebar's projects were read once
+    // at the restart above: each name becomes a category holding the
+    // workspaces it held (only names and workspaces), and the old file is
+    // only read. Then the Projects page's endpoints: a project is a ◆
+    // coordinator in a workspace, started at once; categories hold
+    // workspaces, and DSH's own workspace order follows them.
+    check('the old sidebar\'s projects are imported once, as categories', readText(logFile).includes('import fleet-shell categories=2 joined=0 workspaces=3 skipped=1')
         && readText(logFile).split('\n').filter((l) => l.includes(' import fleet-shell ')).length === 1, readText(logFile).split('\n').filter((l) => l.includes('import')).join('\n'));
     check('the old file is only read', readText(oldFile) === oldText);
-    let groups = await webApi(webAgain, 'dsh-plugin-projects/list', {});
-    const named = (name) => groups.value?.projects?.find((p) => p.name === name);
-    const idsIn = (name) => named(name)?.workspaces?.map((w) => w.id) ?? [];
-    check('an old project becomes one without a coordinator, holding its workspace', groups.ok && named('Old Alpha')?.source === 'import' && named('Old Alpha').coordinator === null
-        && idsIn('Old Alpha').join() === wsA, JSON.stringify(named('Old Alpha')));
-    check('one with a profile project\'s name joins it, and the coordinator\'s workspace stays put', idsIn(PROJECT).includes(wsB) && idsIn(PROJECT).includes(homeWs) && named(PROJECT).home === homeWs,
-        JSON.stringify(named(PROJECT)?.workspaces));
-    groups = await webApi(webAgain, 'dsh-plugin-projects/create', { name: 'Made Here', workspace: wsA });
-    const madeId = groups.value?.project;
-    check('create makes a project with the workspace moved into it', groups.ok && idsIn('Made Here').join() === wsA && idsIn('Old Alpha').length === 0, JSON.stringify(groups).slice(0, 400));
-    let refused = await webApi(webAgain, 'dsh-plugin-projects/move', { workspace: homeWs, project: madeId });
-    check('the workspace a coordinator works in stays in its project', !refused.ok && refused.error?.code === 'projects/refused' && /coordinator works/.test(refused.error.message), JSON.stringify(refused));
-    refused = await webApi(webAgain, 'dsh-plugin-projects/rename', { project: PROJECT_ID, name: 'Nope' });
-    check('a profile project is renamed in the profile, not here', !refused.ok && /set in your profile/.test(refused.error?.message ?? ''), JSON.stringify(refused));
-    groups = await webApi(webAgain, 'dsh-plugin-projects/rename', { project: madeId, name: 'Made Here, Renamed' });
-    check('rename', groups.ok && named('Made Here, Renamed')?.id === madeId, JSON.stringify(groups).slice(0, 300));
-    groups = await webApi(webAgain, 'dsh-plugin-projects/remove', { project: madeId });
-    check('delete leaves its workspaces in no project', groups.ok && !named('Made Here, Renamed') && !groups.value.projects.some((p) => p.workspaces.some((w) => w.id === wsA)), JSON.stringify(groups).slice(0, 300));
-    groups = await webApi(webAgain, 'dsh-plugin-projects/move', { workspace: wsA, project: named('Old Alpha')?.id });
-    check('move', groups.ok && idsIn('Old Alpha').join() === wsA, JSON.stringify(groups).slice(0, 300));
+    const api = (method, args) => webApi(webAgain, `dsh-plugin-projects/${method}`, args);
+    let lists = await api('list', {});
+    const category = (name) => lists.value?.categories?.find((c) => c.name === name);
+    const holds = (name) => category(name)?.workspaces?.map((w) => w.id) ?? [];
+    const dshOrder = async () => (await bridge('GET', '/workspaces')).map((w) => w.id);
+    const together = (order, ids) => ids.length === 0 || order.slice(order.indexOf(ids[0]), order.indexOf(ids[0]) + ids.length).join() === ids.join();
+    check('an old project becomes a category holding its workspaces, and no project', lists.ok && category('Old Alpha')?.source === 'import'
+        && holds('Old Alpha').length === 2 && holds('Old Alpha').includes(wsA) && holds('Old Alpha').includes(homeWs) && holds('e2e project').join() === wsB
+        && lists.value.projects.map((p) => p.id).join() === PROJECT_ID, JSON.stringify(lists.value?.categories));
+    let order = await dshOrder();
+    check('DSH\'s own workspace order holds each category together, in their order', together(order, holds('Old Alpha')) && together(order, holds('e2e project'))
+        && order.indexOf(holds('Old Alpha')[0]) < order.indexOf(wsB), JSON.stringify(order));
     mark = model.requests.length;
-    const added = await webApi(webAgain, 'dsh-plugin-projects/addCoordinator', { project: named('Old Alpha')?.id, workspace: wsA });
-    const oldCoord = added.value?.coordinator;
-    await waitFor(() => since(mark).some((r) => r.system.includes('You are the coordinator of the DSH project "Old Alpha"') && r.fresh.includes('[Project created')), 'the new coordinator\'s welcome');
-    const oldCoordView = oldCoord ? await bridge('GET', `/sessions/${oldCoord}`) : null;
-    check('Add coordinator starts a welcomed ◆ coordinator in the chosen workspace', added.ok && oldCoordView?.cwd === realpathSync(dirA) && oldCoordView?.title === '◆ Old Alpha'
-        && added.value.projects.find((p) => p.coordinator === oldCoord)?.home === wsA, JSON.stringify(oldCoordView).slice(0, 300));
+    lists = await api('create', { name: 'Made Here', workspace: wsA });
+    const madeId = lists.value?.project;
+    const madeCoord = lists.value?.coordinator;
+    await waitFor(() => since(mark).some((r) => r.system.includes('You are the coordinator of the DSH project "Made Here"') && r.fresh.includes('[Project created')), 'the new coordinator\'s welcome');
+    const madeView = madeCoord ? await bridge('GET', `/sessions/${madeCoord}`) : null;
+    check('New project starts a welcomed ◆ coordinator in its workspace', lists.ok && madeView?.cwd === realpathSync(dirA) && madeView?.title === '◆ Made Here'
+        && lists.value.projects.find((p) => p.id === madeId)?.home === wsA && lists.value.projects.find((p) => p.id === madeId)?.category === category('Old Alpha')?.id,
+    JSON.stringify(madeView).slice(0, 300));
+    lists = await api('createCategory', { name: 'Later', workspace: wsB });
+    const laterId = lists.value?.category;
+    check('a new category takes the workspace it was made with', lists.ok && holds('Later').join() === wsB && holds('e2e project').length === 0, JSON.stringify(lists.value?.categories));
+    lists = await api('fileWorkspace', { workspace: wsA, category: laterId, before: wsB });
+    order = await dshOrder();
+    check('a workspace filed before another lands there, in DSH\'s order too', lists.ok && holds('Later').join() === `${wsA},${wsB}` && together(order, [wsA, wsB]), `${JSON.stringify(lists.value?.categories)} ${JSON.stringify(order)}`);
+    lists = await api('moveCategory', { category: laterId, before: category('Old Alpha')?.id });
+    order = await dshOrder();
+    check('a category moves, and DSH\'s order with it', lists.ok && lists.value.categories[0]?.id === laterId && order.indexOf(wsB) < order.indexOf(homeWs), `${JSON.stringify(lists.value?.categories?.map((c) => c.id))} ${JSON.stringify(order)}`);
+    lists = await api('renameCategory', { category: laterId, name: 'Later On' });
+    check('rename a category', lists.ok && category('Later On')?.id === laterId);
+    let refused = await api('fileWorkspace', { workspace: wsA, category: 'nope' });
+    check('a category that doesn\'t exist is refused', !refused.ok && refused.error?.code === 'projects/refused' && /not a category here/.test(refused.error.message), JSON.stringify(refused));
+    refused = await api('rename', { project: PROJECT_ID, name: 'Nope' });
+    check('a profile project is renamed in the profile, not here', !refused.ok && /set in your profile/.test(refused.error?.message ?? ''), JSON.stringify(refused));
+    refused = await api('remove', { project: madeId });
+    check('a project with a coordinator isn\'t deleted', !refused.ok && /has a coordinator/.test(refused.error?.message ?? ''), JSON.stringify(refused));
+    lists = await api('removeCategory', { category: laterId });
+    check('deleting a category leaves its workspaces and projects, in none', lists.ok && !category('Later On') && lists.value.projects.some((p) => p.id === madeId && p.category === null), JSON.stringify(lists.value).slice(0, 300));
     mark = model.requests.length;
     await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Mu', brief: 'Just answer.', folder: 'old-b' }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Mu idle note');
     const muId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Mu')?.[0];
     const muView = muId ? await bridge('GET', `/sessions/${threadSession(muId)}`) : null;
-    check('the coordinator is told its project\'s other folders', since(mark, 'coordinator')[0]?.system.includes(`The project's other folders: ${realpathSync(dirB)}.`), since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => /folder/i.test(l)).join(' | '));
-    check('a thread can work in another of its project\'s folders', muView?.cwd === realpathSync(dirB), JSON.stringify(muView).slice(0, 300));
+    check('a thread works in its project\'s workspace, whatever folder is named', muView?.cwd === realpathSync(ws), JSON.stringify(muView).slice(0, 300));
+    check('the coordinator isn\'t offered other folders', !since(mark, 'coordinator')[0]?.system.includes('other folders'), since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => /folder/i.test(l)).join(' | '));
 
     // 25. The user's tools and permissions. lane-catalog, one of the user's own tools in this profile
     // (guardedTools), runs as an MCP server for every session. Under "Your tools: Only when asked", the
@@ -870,24 +886,23 @@ try {
         && model.requests.filter((r) => whoOf(r) === 'coordinator').every((r) => !r.tools.includes(LANES)), reqs[0]?.tools.join(','));
     check('its call to it anyway is refused before it reaches the server, with what to do instead', resultOf(reqs).includes('which this project keeps out of the coordinator. When the user asks for work that needs it, start a thread')
         && readText(mcpCalls) === '', resultOf(reqs));
-    // Old Alpha's coordinator is new: the user has written nothing to it yet. The start's arguments go as JSON with every "l"
+    // Made Here's coordinator is new: the user has written nothing to it yet. The start's arguments go as JSON with every "l"
     // escaped, so the message that carries them (the user's words, here) names no tool, nor "lanes", while the ask does.
-    const oldId = named('Old Alpha')?.id;
-    const oldThreads = () => Object.values(store().projects?.[oldId]?.threads ?? {});
+    const madeThreads = () => Object.values(store().projects?.[madeId]?.threads ?? {});
     const s4 = 'Use lane-catalog to check which of my model lanes are up right now.';
     const lanesStart = `E2E:call project_thread_start ${JSON.stringify({ ask: s4, title: 'Lanes up', brief: `Report which are up. E2E:force ${LANES} {}` }).replace(/l/g, '\\u006c').replace(/L/g, '\\u004c')}`;
-    reqs = await say(oldCoord, lanesStart);
+    reqs = await say(madeCoord, lanesStart);
     check('an ask that names the user\'s tool when the user never did is refused', resultOf(reqs).startsWith('TOOL-RESULT: Failed: ask names lane-catalog, but the user\'s messages don\'t.')
-        && readText(logFile).includes(` guard ${oldId} ask-unsaid lane-catalog`) && !oldThreads().some((t) => t.title === 'Lanes up'), resultOf(reqs));
-    await say(oldCoord, s4);
+        && readText(logFile).includes(` guard ${madeId} ask-unsaid lane-catalog`) && !madeThreads().some((t) => t.title === 'Lanes up'), resultOf(reqs));
+    await say(madeCoord, s4);
     mark = model.requests.length;
-    reqs = await say(oldCoord, lanesStart);
+    reqs = await say(madeCoord, lanesStart);
     check('once the user asks for it by name, the thread starts with it', /^TOOL-RESULT: Started t\d+ "Lanes up"\. It reports back when done\. The user's words give it lane-catalog\./.test(resultOf(reqs)), resultOf(reqs));
-    await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Old Alpha"') && whoOf(r) === 'coordinator' && r.action.text === 'SAW-IDLE'), 'the Lanes up idle note');
-    await waitIdle(oldCoord);
-    const lanesReqs = since(mark).filter((r) => /You are thread t\d+, "Lanes up", in the DSH project "Old Alpha"/.test(r.system));
+    await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Made Here"') && whoOf(r) === 'coordinator' && r.action.text === 'SAW-IDLE'), 'the Lanes up idle note');
+    await waitIdle(madeCoord);
+    const lanesReqs = since(mark).filter((r) => /You are thread t\d+, "Lanes up", in the DSH project "Made Here"/.test(r.system));
     check('the thread is offered the tool the user\'s words name, and its call reaches the server', lanesReqs[0]?.tools.includes(LANES) && resultOf(lanesReqs).includes('alpha up, beta up')
-        && readText(mcpCalls).trim().split('\n').length === 1 && readText(logFile).includes(` wall ${oldId}/coordinator `), `${lanesReqs[0]?.tools.filter((t) => t.startsWith('mcp__')).join(',')} | ${resultOf(lanesReqs)}`);
+        && readText(mcpCalls).trim().split('\n').length === 1 && readText(logFile).includes(` wall ${madeId}/coordinator `), `${lanesReqs[0]?.tools.filter((t) => t.startsWith('mcp__')).join(',')} | ${resultOf(lanesReqs)}`);
     // The user writes to a thread directly: the tools their words there name are its own from that turn on.
     mark = model.requests.length;
     await say(t2, `Please ask lane-catalog which are up. E2E:force ${LANES} {}`);
@@ -895,12 +910,12 @@ try {
     check('the user\'s own words in a thread give it that tool for the same turn', direct[0]?.tools.includes(LANES) && resultOf(direct).includes('alpha up, beta up')
         && readText(logFile).includes(`tools ${PROJECT_ID}/t2 +lane-catalog from the user in the thread`), `${direct[0]?.tools.filter((t) => t.startsWith('mcp__')).join(',')} | ${resultOf(direct)}`);
     // Permissions, as DSH itself holds them.
-    let described = await webApi(webAgain, 'dsh-plugin-projects/describe', { target: oldCoord });
+    let described = await webApi(webAgain, 'dsh-plugin-projects/describe', { target: madeCoord });
     const lanesRow = described.value?.threads?.find((t) => t.title === 'Lanes up');
     check('a thread runs on Workspace Write, its coordinator on DSH\'s default (Full access here), and the window shows both', described.ok && lanesRow?.permission === 'workspace-write'
         && described.value.project.permission === 'danger-full-access' && lanesRow.tools?.join() === 'lane-catalog' && described.value.project.tools?.length === 0
         && described.value.permissions?.options?.map((o) => o.value).join() === 'read-only,workspace-write,danger-full-access', JSON.stringify(described.value ?? described).slice(0, 600));
-    const lanesThread = oldThreads().find((t) => t.title === 'Lanes up');
+    const lanesThread = madeThreads().find((t) => t.title === 'Lanes up');
     const lanesEvents = (await bridge('GET', `/sessions/${lanesThread?.sessionId}/events?types=permission/preset,user/message&limit=50`)).events;
     const presetAt = lanesEvents.findLastIndex((e) => e.type === 'permission/preset');
     check('it is on Workspace Write before it reads its brief', presetAt > 0 && lanesEvents.findIndex((e) => e.type === 'user/message') > presetAt, JSON.stringify(lanesEvents.map((e) => e.type)));
@@ -908,17 +923,17 @@ try {
     check('every thread the plugin started ran on Workspace Write', described.ok && described.value.threads.length > 3 && described.value.threads.every((t) => t.permission === 'workspace-write'),
         JSON.stringify(described.value?.threads?.map((t) => [t.id, t.permission])));
     // Project settings moves the coordinator at once, and new threads start on what it says.
-    let changed = await webApi(webAgain, 'dsh-plugin-projects/update', { target: oldCoord, changes: { coordinatorPermission: 'workspace-write' } });
+    let changed = await webApi(webAgain, 'dsh-plugin-projects/update', { target: madeCoord, changes: { coordinatorPermission: 'workspace-write' } });
     check('Project settings moves a coordinator to another permission', changed.ok && changed.value.project.permission === 'workspace-write'
         && changed.value.access.coordinatorPermission.source === 'project setting', JSON.stringify(changed).slice(0, 400));
-    changed = await webApi(webAgain, 'dsh-plugin-projects/update', { target: oldCoord, changes: { coordinatorPermission: null, threadPermission: 'read-only' } });
+    changed = await webApi(webAgain, 'dsh-plugin-projects/update', { target: madeCoord, changes: { coordinatorPermission: null, threadPermission: 'read-only' } });
     check('and back to DSH\'s default', changed.ok && changed.value.project.permission === 'danger-full-access' && changed.value.access.threadPermission.value === 'read-only', JSON.stringify(changed).slice(0, 400));
     const readOnlyFile = join(dirA, 'read-only-probe.txt');
     mark = model.requests.length;
-    await say(oldCoord, call('project_thread_start', { ask: 'Please do this.', title: 'Read only', brief: call('write', { file_path: readOnlyFile, content: 'x' }) }));
+    await say(madeCoord, call('project_thread_start', { ask: 'Please do this.', title: 'Read only', brief: call('write', { file_path: readOnlyFile, content: 'x' }) }));
     // DSH's sandbox refuses the write, or asks the user; either way nothing is written.
-    await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Old Alpha"') && whoOf(r) === 'coordinator' && /^SAW-(IDLE|APPROVAL)$/.test(r.action.text ?? '')), 'the Read only note');
-    described = await webApi(webAgain, 'dsh-plugin-projects/describe', { target: oldCoord });
+    await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Made Here"') && whoOf(r) === 'coordinator' && /^SAW-(IDLE|APPROVAL)$/.test(r.action.text ?? '')), 'the Read only note');
+    described = await webApi(webAgain, 'dsh-plugin-projects/describe', { target: madeCoord });
     check('a thread on Read Only can\'t write even in its own folder', described.value?.threads?.find((t) => t.title === 'Read only')?.permission === 'read-only' && !existsSync(readOnlyFile),
         resultOf(since(mark).filter((r) => /You are thread t\d+, "Read only", in the DSH project/.test(r.system))));
     check('no errors in the projects log', !/ error /.test(readText(logFile)), readText(logFile).split('\n').filter((l) => / error /.test(l)).join('\n'));

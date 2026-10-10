@@ -55,6 +55,7 @@ import {
 import { META_MARK, MAX_THREADS } from './projection.js';
 import { changeRecord, changeTotals, withChange } from './changes.js';
 import { planFleetShellImport } from './fleet-shell.js';
+import { planCategories } from './categories.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
 const SECTION_ORDER = 9500;
@@ -286,6 +287,29 @@ function selectionKey(selection) {
 
 export class ProjectError extends Error {}
 
+/**
+ * The indexes of a longest increasing run (not necessarily adjacent) in a
+ * list of numbers: the items that can stay where they are while the others
+ * move.
+ */
+export function longestRun(values) {
+    const len = values.map(() => 1);
+    const prev = values.map(() => -1);
+    let best = -1;
+    for (let i = 0; i < values.length; i += 1) {
+        for (let j = 0; j < i; j += 1) {
+            if (values[j] < values[i] && len[j] + 1 > len[i]) {
+                len[i] = len[j] + 1;
+                prev[i] = j;
+            }
+        }
+        if (best < 0 || len[i] > len[best]) best = i;
+    }
+    const out = [];
+    for (let i = best; i >= 0; i = prev[i]) out.unshift(i);
+    return out;
+}
+
 export class ProjectManager {
     /**
      * @param {object} options
@@ -325,6 +349,7 @@ export class ProjectManager {
             this.projects.set(id, { ...row, id, source: 'profile', workspacePath: expand(row.workspacePath) });
         }
         for (const id of Object.keys(this.store.projects)) this.addStored(id);
+        this.migrateCategories();
         /** Agent → disposer for its installed project scope. */
         this.installed = new Map();
         /** sessionId → {running, stopped?: {key}} for thread turn tracking. */
@@ -364,13 +389,15 @@ export class ProjectManager {
     }
 
     /**
-     * Add a project the store defines (made on the Projects page or
-     * imported) to the running set. A profile row with the same id wins.
-     * Its folder is its coordinator's workspace, else its first one.
+     * Add a project the store defines (made on the Projects page) to the
+     * running set. A profile row with the same id wins. Its folder is its
+     * coordinator's workspace. A group from before categories that never
+     * got a coordinator is a category now, not a project.
      */
     addStored(projectId) {
         const stored = this.store.projects[projectId];
         if (typeof stored?.name !== 'string' || stored.name.trim() === '' || this.projects.has(projectId)) return;
+        if (typeof stored.home !== 'string' && typeof stored.coordinatorSessionId !== 'string') return;
         const manager = this;
         this.projects.set(projectId, {
             id: projectId,
@@ -405,29 +432,12 @@ export class ProjectManager {
         }
     }
 
-    /**
-     * The workspaces in a project, in DSH's order: the ones it holds, with a
-     * profile project's own folder among them once DSH has it.
-     */
-    workspacesIn(projectId) {
-        const ids = new Set(this.store.workspacesOf(projectId));
-        const home = this.store.projects[projectId]?.home;
-        if (this.fromProfile(projectId) && typeof home === 'string') ids.add(home);
-        return this.workspaceList().filter((ws) => ids.has(ws.id));
-    }
-
-    /** The workspace a project's coordinator works in: its home, else its first workspace. */
+    /** The DSH workspace a project's coordinator and threads work in, once DSH has it. */
     homeOf(projectId) {
-        const home = this.workspace(this.store.projects[projectId]?.home);
-        if (home && (this.fromProfile(projectId) || this.store.workspaceOf[home.id] === projectId)) return home;
-        return this.workspacesIn(projectId)[0];
+        return this.workspace(this.store.projects[projectId]?.home);
     }
 
-    /**
-     * Note which DSH workspace a profile project's folder is, once DSH has
-     * one there: it counts among the project's workspaces, and no other
-     * project can hold it.
-     */
+    /** Note which DSH workspace a profile project's folder is, once DSH has one there. */
     async noteHome(projectId) {
         if (!this.fromProfile(projectId)) return;
         let ws;
@@ -435,7 +445,193 @@ export class ProjectManager {
         if (!ws?.id) return;
         const stored = this.store.project(projectId);
         if (stored.home !== ws.id) this.store.putProject(projectId, { home: ws.id });
-        if (this.store.workspaceOf[ws.id] !== projectId) this.store.placeWorkspace(ws.id, projectId);
+    }
+
+    // ── categories ─────────────────────────────────────────────────────────
+
+    /**
+     * Once, when the store has no categories yet: the groups of workspaces
+     * from before become categories. Each group that holds a workspace, and
+     * each one made on the Projects page or imported (an empty one too),
+     * becomes a category with the same id, name and place in the list,
+     * holding the same workspaces. A group with a coordinator stays a
+     * project too, in its coordinator's workspace. The file from before is
+     * copied first (projects.v1.json), and the groups' records stay as they
+     * were, so an older version of the plugin still finds them.
+     */
+    migrateCategories() {
+        const store = this.store;
+        if (store.hasCategories) return;
+        const profile = [...this.projects.values()].filter((p) => p.source === 'profile').map((p) => ({ id: p.id, name: p.name }));
+        const now = new Date().toISOString();
+        const plan = planCategories(store, profile, now);
+        const made = plan.order.length;
+        const filed = Object.keys(plan.categoryOf).length;
+        const copy = made > 0 ? store.backup() : '';
+        store.categories = plan.categories;
+        store.categoryOf = plan.categoryOf;
+        store.hasCategories = true;
+        if (made === 0) {
+            store.save();
+            return;
+        }
+        store.putImport('categories', { at: now, categories: made, workspaces: filed, ...(copy ? { backup: copy } : {}) });
+        this.log(`categories from groups categories=${made} workspaces=${filed}${copy ? ` backup=${copy}` : ''}`);
+    }
+
+    /** The categories in their order, as [id, definition]. */
+    categoryEntries() {
+        const at = (c) => (Number.isFinite(c?.order) ? c.order : Infinity);
+        return Object.entries(this.store.categories).map(([id, c], i) => ({ id, c, i }))
+            .sort((a, b) => at(a.c) - at(b.c) || a.i - b.i)
+            .map(({ id, c }) => [id, c]);
+    }
+
+    /** A category the window names, or a refusal. */
+    requireCategory(categoryId) {
+        const category = typeof categoryId === 'string' ? this.store.categories[categoryId] : undefined;
+        if (!category) throw new ProjectError(`"${String(categoryId ?? '').slice(0, 80)}" is not a category here`);
+        return category;
+    }
+
+    /**
+     * Every category in its order, with the workspaces it holds in DSH's
+     * order (only ones DSH has), for the session list and the Projects page.
+     */
+    listCategories() {
+        const order = this.workspaceList();
+        return this.categoryEntries().map(([id, c]) => ({
+            id,
+            name: c.name,
+            source: typeof c.source === 'string' ? c.source : 'page',
+            ...(typeof c.importedFrom === 'string' ? { importedFrom: c.importedFrom } : {}),
+            workspaces: order.filter((ws) => this.store.categoryOf[ws.id] === id).map((ws) => ({ id: ws.id, path: ws.path, title: ws.title })),
+        }));
+    }
+
+    /** A new category, last in the list. @returns its id. */
+    makeCategory(name, source, extra = {}) {
+        const base = slugify(name);
+        let id = base;
+        for (let n = 2; this.store.categories[id] !== undefined; n += 1) id = `${base}-${n}`;
+        const orders = Object.values(this.store.categories).map((c) => (Number.isFinite(c?.order) ? c.order : -1));
+        this.store.putCategory(id, { name, order: Math.max(-1, ...orders) + 1, createdAt: new Date().toISOString(), source, ...extra });
+        this.log(`category-new ${id} ${source}`);
+        return id;
+    }
+
+    /** A category name as the user typed it: one line, at most 80 bytes. */
+    categoryName(value) {
+        const name = clipTitle(typeof value === 'string' ? value : '');
+        if (name === '') throw new ProjectError('a category needs a name');
+        return name;
+    }
+
+    /**
+     * A new category, last in the list, optionally holding a workspace from
+     * the start. @returns its id.
+     */
+    async createCategory(name, workspaceId) {
+        const clean = this.categoryName(name);
+        if (workspaceId !== undefined && !this.workspace(workspaceId)) throw new ProjectError('DSH has no such workspace');
+        const id = this.makeCategory(clean, 'page');
+        if (workspaceId !== undefined) await this.fileWorkspace(workspaceId, id);
+        return id;
+    }
+
+    renameCategory(categoryId, name) {
+        const category = this.requireCategory(categoryId);
+        const clean = this.categoryName(name);
+        if (clean === category.name) return;
+        this.store.putCategory(categoryId, { name: clean });
+        this.log(`category-rename ${categoryId}`);
+    }
+
+    /** Delete a category: its workspaces, their chats and projects stay in DSH, in Other workspaces. */
+    async removeCategory(categoryId) {
+        this.requireCategory(categoryId);
+        this.store.removeCategory(categoryId);
+        this.log(`category-delete ${categoryId}`);
+        await this.syncWorkspaceOrder();
+    }
+
+    /** Move a category before another one, or (before null) to the end. */
+    async moveCategory(categoryId, beforeId) {
+        this.requireCategory(categoryId);
+        const before = typeof beforeId === 'string' && beforeId !== '' ? beforeId : null;
+        if (before !== null) this.requireCategory(before);
+        if (before === categoryId) return;
+        const ids = this.categoryEntries().map(([id]) => id).filter((id) => id !== categoryId);
+        ids.splice(before === null ? ids.length : ids.indexOf(before), 0, categoryId);
+        ids.forEach((id, i) => { this.store.categories[id].order = i; });
+        this.store.save();
+        this.log(`category-move ${categoryId} before=${before ?? 'end'}`);
+        await this.syncWorkspaceOrder();
+    }
+
+    /**
+     * Put a DSH workspace in a category, or (categoryId null) in none,
+     * before another workspace there or (beforeId null) after the last. A
+     * workspace is in one category at most. DSH's own workspace order is
+     * kept in step, so its list holds each category's workspaces together.
+     */
+    async fileWorkspace(workspaceId, categoryId, beforeId = null) {
+        if (!this.workspace(workspaceId)) throw new ProjectError('DSH has no such workspace');
+        if (categoryId !== null) this.requireCategory(categoryId);
+        const before = typeof beforeId === 'string' && beforeId !== '' && beforeId !== workspaceId ? beforeId : null;
+        if (before !== null) {
+            if (!this.workspace(before)) throw new ProjectError('DSH has no such workspace');
+            if ((this.store.categoryOf[before] ?? null) !== categoryId) throw new ProjectError('that workspace is in another category');
+        }
+        if ((this.store.categoryOf[workspaceId] ?? null) !== categoryId) {
+            this.store.fileWorkspace(workspaceId, categoryId);
+            this.log(`workspace ${workspaceId} category=${categoryId ?? 'none'}`);
+        }
+        await this.syncWorkspaceOrder({ move: workspaceId, before: before ?? undefined });
+    }
+
+    /**
+     * Keep DSH's workspace order (one list for every window, which DSH's
+     * session list draws) in category order: each category's workspaces
+     * together, the categories in their order, then the workspaces in none.
+     * Within each, DSH's order holds, except for `move`, which lands before
+     * `before` or last. So DSH's list reads in the order the session list
+     * shows it, with the categories' headers among it, and a screen reader
+     * hears each workspace after its category. Moves as few workspaces as it
+     * can, through the call DSH's own workspace drag makes.
+     */
+    async syncWorkspaceOrder({ move, before } = {}) {
+        const registry = this.ctx.workspaceRegistry;
+        if (typeof registry?.insertBefore !== 'function') return;
+        const run = async () => {
+            const current = this.workspaceList().map((ws) => ws.id);
+            const bucket = (id) => (this.store.categories[this.store.categoryOf[id]] ? this.store.categoryOf[id] : null);
+            const groups = new Map(this.categoryEntries().map(([id]) => [id, []]));
+            const loose = [];
+            const listOf = (id) => (bucket(id) === null ? loose : groups.get(bucket(id)));
+            for (const id of current) if (id !== move) listOf(id).push(id);
+            if (move !== undefined && current.includes(move)) {
+                const list = listOf(move);
+                const at = before === undefined ? -1 : list.indexOf(before);
+                list.splice(at < 0 ? list.length : at, 0, move);
+            }
+            const wanted = [...[...groups.values()].flat(), ...loose];
+            const keep = new Set(longestRun(wanted.map((id) => current.indexOf(id))).map((k) => wanted[k]));
+            let moves = 0;
+            // From the end, each moved workspace lands before the one that follows it.
+            for (let k = wanted.length - 1; k >= 0; k -= 1) {
+                if (keep.has(wanted[k])) continue;
+                await registry.insertBefore(wanted[k], wanted[k + 1]);
+                moves += 1;
+            }
+            if (moves > 0) this.log(`workspace-order moves=${moves}`);
+        };
+        // One pass at a time; a call during one runs once it ends.
+        const next = (this.ordering ?? Promise.resolve()).then(run).catch((error) => {
+            this.log(`error workspace-order ${String(error?.message ?? error).slice(0, 200)}`);
+        });
+        this.ordering = next;
+        return next;
     }
 
     settings(projectId) {
@@ -851,13 +1047,14 @@ export class ProjectManager {
      */
     async start() {
         for (const agent of this.ctx.agents.list?.() ?? []) this.maybeInstall(agent);
-        // Profile projects claim their folders before an import places any workspace.
         for (const id of this.projects.keys()) await this.noteHome(id);
         if (this.disposed) return;
         await this.importFleetShell();
+        if (this.disposed) return;
+        await this.syncWorkspaceOrder();
         for (const id of [...this.projects.keys()]) {
             if (this.disposed) return;
-            // A project made on the Projects page or imported runs a coordinator only once the user adds one.
+            // A project made on the Projects page whose coordinator never started gets one when the user asks.
             if (!this.fromProfile(id) && !this.store.projects[id]?.coordinatorSessionId) continue;
             try {
                 if (this.fromProfile(id)) this.noteProjectRow(id);
@@ -955,10 +1152,12 @@ export class ProjectManager {
     /**
      * Once, bring in the projects of the all-in-one mod's old sidebar
      * (`<DSH home>/fleet-shell/state.json`): each old project becomes a
-     * project here, in the same order, without a coordinator, holding the
-     * same DSH workspaces. A name that is already a project here joins it.
-     * A workspace DSH no longer has, or one already in a project here, stays
-     * where it is. The old file is only read.
+     * category here, in the same order, holding the same DSH workspaces.
+     * Only names and which workspaces each held come over: the old file's
+     * instructions, files and defaults are not read. A name that is already
+     * a category here joins it. A workspace DSH no longer has, or one
+     * already in a category here, stays where it is. The old file is only
+     * read.
      */
     async importFleetShell() {
         if (this.store.imports.fleetShell) return;
@@ -971,27 +1170,27 @@ export class ProjectManager {
             return;
         }
         const plan = planFleetShellImport(state, {
-            names: new Map([...this.projects.values()].map((p) => [String(p.name).trim().toLowerCase(), p.id])),
+            names: new Map(this.categoryEntries().map(([id, c]) => [String(c.name).trim().toLowerCase(), id])),
             known: (workspaceId) => Boolean(this.workspace(workspaceId)),
-            placed: (workspaceId) => Boolean(this.store.workspaceOf[workspaceId]),
+            placed: (workspaceId) => Boolean(this.store.categories[this.store.categoryOf[workspaceId]]),
         });
         let made = 0;
         let placed = 0;
         for (const group of plan.groups) {
             let id = group.join;
             if (!id) {
-                id = this.makeProject(group.name, 'import', { importedFrom: group.from });
+                id = this.makeCategory(group.name, 'import', { importedFrom: group.from });
                 made += 1;
             }
             for (const workspaceId of group.workspaces) {
-                this.store.workspaceOf[workspaceId] = id;
+                this.store.categoryOf[workspaceId] = id;
                 placed += 1;
             }
         }
         const joined = plan.groups.length - made;
         const skipped = plan.skipped.length;
-        this.store.putImport('fleetShell', { at: new Date().toISOString(), file, projects: made, joined, workspaces: placed, skipped });
-        this.log(`import fleet-shell projects=${made} joined=${joined} workspaces=${placed} skipped=${skipped}`);
+        this.store.putImport('fleetShell', { at: new Date().toISOString(), file, categories: made, joined, workspaces: placed, skipped });
+        this.log(`import fleet-shell categories=${made} joined=${joined} workspaces=${placed} skipped=${skipped}`);
     }
 
     /** Whether a session exists. Only "not found" means no; any other read error is thrown. */
@@ -1365,7 +1564,6 @@ export class ProjectManager {
             home: isHome(project.workspacePath),
             guarded: this.guards().map(([name]) => name),
             yourTools: this.access(projectId).yourTools.value,
-            folders: this.workspacesIn(projectId).map((ws) => ws.path).filter((path) => path !== project.workspacePath),
             paused: this.paused(projectId),
             threads: this.store.project(projectId).threads,
             memory: this.readMemory(projectId),
@@ -1793,25 +1991,6 @@ export class ProjectManager {
     }
 
     /**
-     * One of the project's folders, named by its path, its workspace's title
-     * or its folder name; undefined (the project workspace) when none is named.
-     */
-    folderOf(projectId, folder) {
-        const wanted = typeof folder === 'string' ? folder.trim().replace(/[\\/]+$/, '') : '';
-        if (wanted === '') return undefined;
-        const spaces = this.workspacesIn(projectId);
-        const lower = wanted.toLowerCase();
-        const base = (path) => String(path).split(/[\\/]+/).filter(Boolean).pop() ?? '';
-        const ws = spaces.find((w) => w.path === wanted || w.path === expand(wanted))
-            ?? spaces.find((w) => String(w.title).toLowerCase() === lower || base(w.path).toLowerCase() === lower);
-        if (!ws) {
-            const names = spaces.map((w) => w.path).join(', ');
-            throw new ProjectError(`"${wanted.slice(0, 80)}" is not one of this project's folders${names ? ` (${names})` : ''}`);
-        }
-        return ws.path;
-    }
-
-    /**
      * Refuse a thread start or message that would use a guarded tool
      * (config.guardedTools) the user's words don't call for: `allowed` (the
      * user's tools their checked words give the thread) or the project's
@@ -1831,7 +2010,7 @@ export class ProjectManager {
         throw new ProjectError(`this would use ${blocked.join(', ')}, and the user's words do not ask for ${them}. Keep the work inside the workspace, or ask the user first. If the user did ask, ${how}. If the text only says not to use ${them}, leave that out: threads already have that rule`);
     }
 
-    async startThread(projectId, { title, ask, brief, model, effort, folder }) {
+    async startThread(projectId, { title, ask, brief, model, effort }) {
         const project = this.project(projectId);
         if (this.paused(projectId)) throw new ProjectError('the project is paused; new threads are blocked until it resumes');
         const cleanTitle = clipTitle(title);
@@ -1839,7 +2018,9 @@ export class ProjectManager {
         if (!String(brief ?? '').trim()) throw new ProjectError('brief is required');
         const userWords = typeof ask === 'string' ? ask.trim().slice(0, 4000) : '';
         if (!userWords) throw new ProjectError('ask is required: copy the user\'s words from their message');
-        const where = this.folderOf(projectId, folder);
+        // A thread works where its project does, so it shows under its project in DSH's list.
+        const where = project.workspacePath;
+        if (!where) throw new ProjectError('DSH has no workspace for this project\'s folder right now');
         // The user's tools the thread gets: the ones the ask names that the user really wrote.
         const tools = await this.askedTools(projectId, userWords);
         this.guard(projectId, 'start', `${cleanTitle}\n${userWords}\n${brief}`, tools);
@@ -1874,7 +2055,6 @@ export class ProjectManager {
             sessionId, title: cleanTitle, model: check.model, effort: check.effort,
             resolved: false, createdAt: new Date().toISOString(), handbackTimes: [], seenTurn: null,
             ...(userWords ? { ask: userWords } : {}),
-            ...(where !== project.workspacePath ? { folder: where } : {}),
             tools,
         });
         const agent = await this.attach(sessionId);
@@ -2173,40 +2353,18 @@ export class ProjectManager {
     }
 
     /**
-     * A new project from the Projects page, optionally holding a workspace.
-     * @returns its id.
+     * A new project from the Projects page: a ◆ coordinator in a DSH
+     * workspace, started at once, whose threads work there too.
+     * @returns {id, coordinator}.
      */
-    createProject(name, workspaceId) {
+    async createProject(name, workspaceId) {
         const clean = this.projectName(name);
-        if (workspaceId !== undefined && workspaceId !== null) this.checkMovable(workspaceId);
-        const id = this.makeProject(clean, 'page');
-        if (workspaceId !== undefined && workspaceId !== null) this.moveWorkspace(workspaceId, id);
-        return id;
-    }
-
-    /** Refuse to move a workspace DSH doesn't have, or one a coordinator works in. */
-    checkMovable(workspaceId) {
         const ws = this.workspace(workspaceId);
-        if (!ws) throw new ProjectError('DSH has no such workspace');
-        for (const id of this.projects.keys()) {
-            const coordinated = this.fromProfile(id) || Boolean(this.store.projects[id]?.coordinatorSessionId);
-            if (coordinated && this.homeOf(id)?.id === workspaceId) {
-                throw new ProjectError(`${ws.title || 'this workspace'} is where ◆ ${this.project(id).name}'s coordinator works, so it stays in that project`);
-            }
-        }
-        return ws;
-    }
-
-    /**
-     * Put a DSH workspace in a project, or (projectId null) in none. A
-     * workspace is in one project at most, so it leaves any other.
-     */
-    moveWorkspace(workspaceId, projectId) {
-        this.checkMovable(workspaceId);
-        if (projectId !== null) this.project(projectId);
-        if ((this.store.workspaceOf[workspaceId] ?? null) === projectId) return;
-        this.store.placeWorkspace(workspaceId, projectId);
-        this.log(`workspace ${workspaceId} ${projectId ?? 'none'}`);
+        if (!ws) throw new ProjectError(typeof workspaceId === 'string' && workspaceId !== '' ? 'DSH has no such workspace' : 'a project needs a workspace to work in');
+        const id = this.makeProject(clean, 'page', { home: ws.id });
+        const coordinator = await this.ensureCoordinator(id, { create: true });
+        if (!coordinator) throw new ProjectError(`◆ ${clean} was made, but its coordinator could not start; open the Projects page to try again`);
+        return { id, coordinator };
     }
 
     /** Rename a project made on the Projects page or imported; its coordinator, if any, follows. */
@@ -2226,8 +2384,8 @@ export class ProjectManager {
     }
 
     /**
-     * Delete a project made on the Projects page or imported. Its workspaces
-     * and their sessions stay in DSH, in no project. One with a coordinator
+     * Delete a project made on the Projects page whose coordinator never
+     * started. Its workspace and chats stay in DSH. One with a coordinator
      * keeps it: its threads would lose their project.
      */
     deleteProject(projectId) {
@@ -2240,19 +2398,13 @@ export class ProjectManager {
     }
 
     /**
-     * Add a coordinator to a project made on the Projects page or imported.
-     * It works in the given workspace of the project, else its first.
+     * Start the coordinator of a project made on the Projects page that has
+     * none (it never started, or the user deleted it in DSH).
      * @returns the coordinator's session id.
      */
-    async startCoordinator(projectId, workspaceId) {
+    async startCoordinator(projectId) {
         const project = this.project(projectId);
-        const stored = this.store.project(projectId);
-        if (!this.fromProfile(projectId) && !(await this.exists(stored.coordinatorSessionId))) {
-            const home = workspaceId === undefined || workspaceId === null ? this.workspacesIn(projectId)[0] : this.workspace(workspaceId);
-            if (!home) throw new ProjectError(`${project.name} holds no workspace yet; move one into it first`);
-            if (this.store.workspaceOf[home.id] !== projectId) throw new ProjectError(`${home.title || 'that workspace'} is not in ${project.name}`);
-            this.store.putProject(projectId, { home: home.id });
-        }
+        if (!this.fromProfile(projectId) && !this.homeOf(projectId)) throw new ProjectError(`DSH has no workspace for ${project.name}'s folder right now`);
         const sessionId = await this.ensureCoordinator(projectId, { create: true });
         if (!sessionId) throw new ProjectError('the coordinator could not start');
         return sessionId;
@@ -2347,6 +2499,9 @@ export class ProjectManager {
      * now (model and permission), pause, and how many threads are open.
      */
     listProjects() {
+        // The order of the tree: by category, then by DSH's workspace order, then the profile's and the page's order.
+        const categoryAt = new Map(this.categoryEntries().map(([id], i) => [id, i]));
+        const workspaceAt = new Map(this.workspaceList().map((ws, i) => [ws.id, i]));
         const listed = [...this.projects.keys()].map((projectId, index) => {
             const project = this.project(projectId);
             const stored = this.store.project(projectId);
@@ -2361,7 +2516,8 @@ export class ProjectManager {
                 source: project.source,
                 workspace: project.workspacePath ?? null,
                 home: home?.id ?? null,
-                workspaces: this.workspacesIn(projectId).map((ws) => ({ id: ws.id, path: ws.path, title: ws.title })),
+                category: home && this.store.categories[this.store.categoryOf[home.id]] ? this.store.categoryOf[home.id] : null,
+                workspaces: home ? [{ id: home.id, path: home.path, title: home.title }] : [],
                 coordinator: stored.coordinatorSessionId ?? null,
                 live: this.liveSelection(stored.coordinatorSessionId) ?? null,
                 permission: this.permissionOf(stored.coordinatorSessionId) ?? null,
@@ -2369,11 +2525,15 @@ export class ProjectManager {
                 settings: Object.fromEntries(SETTING_KEYS.map((key) => [key, { value: settings[key].value ?? null, source: settings[key].source }])),
                 access: Object.fromEntries(ACCESS_KEYS.map((key) => [key, { value: access[key].value, source: access[key].source }])),
                 threads: { open, resolved: ids.length - open },
-                order: this.fromProfile(projectId) ? index : 10000 + (Number.isFinite(stored.order) ? stored.order : index),
+                order: [
+                    categoryAt.get(home ? this.store.categoryOf[home.id] : undefined) ?? categoryAt.size,
+                    home && workspaceAt.has(home.id) ? workspaceAt.get(home.id) : workspaceAt.size,
+                    this.fromProfile(projectId) ? index : 10000 + (Number.isFinite(stored.order) ? stored.order : index),
+                ],
             };
         });
-        // The profile's projects in its order, then the others in the order they were made or imported.
-        return listed.sort((a, b) => a.order - b.order).map(({ order, ...project }) => project);
+        const by = (a, b) => a.order[0] - b.order[0] || a.order[1] - b.order[1] || a.order[2] - b.order[2];
+        return listed.sort(by).map(({ order, ...project }) => project);
     }
 
     /**

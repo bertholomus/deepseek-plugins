@@ -165,13 +165,24 @@ function fakeWorkspaces(initial = []) {
     };
     // Listed in the order given.
     for (const path of [...initial].reverse()) add(path);
+    /** Every insertBefore call, as [id, beforeId]. */
+    const moves = [];
     return {
         add,
+        moves,
         async create(path) { return add(path); },
         async resolveByPath(path) { return spaces.get(`ws:${path}`); },
         get: (id) => spaces.get(id),
         list: () => order.map((id) => spaces.get(id)),
         delete(id) { spaces.delete(id); order.splice(order.indexOf(id), 1); },
+        /** DSH's: move a workspace before another, or (no anchor) to the end. */
+        async insertBefore(id, beforeId) {
+            if (!order.includes(id) || (beforeId !== undefined && !order.includes(beforeId))) throw new Error('workspace order: unknown workspace');
+            moves.push([id, beforeId]);
+            order.splice(order.indexOf(id), 1);
+            order.splice(beforeId === undefined ? order.length : order.indexOf(beforeId), 0, id);
+            return [...order];
+        },
     };
 }
 
@@ -924,7 +935,10 @@ test('window: the Project settings endpoints read and change a project the way i
     // DSH's gateway finds the service by its binding and method markers.
     assert.equal(remote.typertRemote.namespace, 'dsh-plugin-projects');
     assert.equal(remote.typertRemote.serviceKey, 'dshPluginProjectsRemote');
-    assert.deepEqual(remoteMethods(remote).map((m) => m.method), ['describe', 'list', 'update', 'continueThread', 'create', 'move', 'rename', 'remove', 'addCoordinator']);
+    assert.deepEqual(remoteMethods(remote).map((m) => m.method), [
+        'describe', 'list', 'update', 'continueThread', 'create', 'rename', 'remove', 'addCoordinator',
+        'createCategory', 'renameCategory', 'removeCategory', 'moveCategory', 'fileWorkspace',
+    ]);
     const refused = async (promise, pattern) => {
         await assert.rejects(promise, (error) => error.code === 'projects/refused' && pattern.test(error.message));
     };
@@ -3116,7 +3130,7 @@ test('data paths under ~/.dsh follow DSH_HOME, as DSH\'s own data does', async (
     await withDshHome('', () => assert.equal(dataPath('~/.dsh/projects/projects.json'), join(homedir(), '.dsh/projects/projects.json')));
 });
 
-test('projects page: a project holds workspaces, and gets a coordinator only when one is added', async () => {
+test('projects page: a new project is a coordinator in a workspace, started at once, whose threads work there too', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'projects-'));
     const options = { gateway: true, workspaces: ['/work/a', '/work/b', '/work/c'] };
     const { host, raw } = setup({}, dir, options);
@@ -3129,22 +3143,23 @@ test('projects page: a project holds workspaces, and gets a coordinator only whe
         const found = list.projects.find((p) => p.id === id);
         return found === undefined ? undefined : plain(found);
     };
-    const spaces = (list, id) => project(list, id)?.workspaces.map((w) => w.id);
-    const sessionsBefore = host.sessions.size;
 
-    // The profile project holds its own folder once DSH has it.
+    // The profile project works in its own folder once DSH has it; a fresh store has no categories.
     let list = await remote.list();
-    assert.deepEqual(spaces(list, 'dsh-plugins'), ['ws:/work/dsh']);
-    assert.equal(project(list, 'dsh-plugins').source, 'profile');
+    assert.deepEqual(project(list, 'dsh-plugins').workspaces.map((w) => w.id), ['ws:/work/dsh']);
+    assert.deepEqual(plain(list.categories), []);
 
-    // A new project, holding one workspace: no coordinator, no session.
-    let made = await remote.create('  Recipes  ', 'ws:/work/a');
+    // A new project: its coordinator starts in the workspace straight away.
+    const made = await remote.create('  Recipes  ', 'ws:/work/b');
     assert.equal(made.project, 'recipes');
+    const coord = host.live.get(made.coordinator);
+    assert.equal(host.sessions.get(made.coordinator).title, '◆ Recipes');
+    assert.equal(host.sessions.get(made.coordinator).cwd, 'ws:/work/b');
     const { settings, access, ...recipes } = project(made, 'recipes');
     assert.deepEqual(recipes, {
-        id: 'recipes', name: 'Recipes', source: 'page', workspace: '/work/a', home: 'ws:/work/a',
-        workspaces: [{ id: 'ws:/work/a', path: '/work/a', title: 'a' }],
-        coordinator: null, live: null, permission: null, paused: false, threads: { open: 0, resolved: 0 },
+        id: 'recipes', name: 'Recipes', source: 'page', workspace: '/work/b', home: 'ws:/work/b', category: null,
+        workspaces: [{ id: 'ws:/work/b', path: '/work/b', title: 'b' }],
+        coordinator: made.coordinator, live: null, permission: null, paused: false, threads: { open: 0, resolved: 0 },
     });
     // Without a profile row, its models and access are the plugin's defaults.
     assert.deepEqual([settings.coordinatorEffort, settings.threadEffort], [{ value: null, source: 'DSH default' }, { value: 'high', source: 'plugin default' }]);
@@ -3153,59 +3168,29 @@ test('projects page: a project holds workspaces, and gets a coordinator only whe
         coordinatorPermission: { value: 'default', source: 'plugin default' },
         threadPermission: { value: 'workspace-write', source: 'plugin default' },
     });
-    assert.equal(host.sessions.size, sessionsBefore);
-    // Names are unique ids; an empty one is refused.
-    assert.equal((await remote.create('Recipes')).project, 'recipes-2');
-    await refused(remote.create('   '), /a project needs a name/);
-
-    // Workspaces move between projects, in DSH's order, and back to none.
-    list = await remote.move('ws:/work/c', 'recipes');
-    list = await remote.move('ws:/work/b', 'recipes');
-    assert.deepEqual(spaces(list, 'recipes'), ['ws:/work/a', 'ws:/work/b', 'ws:/work/c']);
-    list = await remote.move('ws:/work/c', 'recipes-2');
-    assert.deepEqual([spaces(list, 'recipes'), spaces(list, 'recipes-2')], [['ws:/work/a', 'ws:/work/b'], ['ws:/work/c']]);
-    list = await remote.move('ws:/work/c', null);
-    assert.deepEqual(spaces(list, 'recipes-2'), []);
-    await refused(remote.move('ws:/nope', 'recipes'), /DSH has no such workspace/);
-    await refused(remote.move('ws:/work/a', 'nope'), /"nope" is not a project here/);
-    // The folder a coordinator works in stays in its project.
-    await refused(remote.move('ws:/work/dsh', 'recipes'), /dsh is where ◆ DSH Plugins's coordinator works/);
-
-    // A coordinator, added in a chosen workspace of the project.
-    await refused(remote.addCoordinator('recipes', 'ws:/work/c'), /c is not in Recipes/);
-    await refused(remote.addCoordinator('recipes-2'), /Recipes holds no workspace yet/);
-    const added = await remote.addCoordinator('recipes', 'ws:/work/b');
-    const coord = host.live.get(added.coordinator);
-    assert.equal(host.sessions.get(added.coordinator).title, '◆ Recipes');
-    assert.equal(host.sessions.get(added.coordinator).cwd, 'ws:/work/b');
-    assert.deepEqual([project(added, 'recipes').coordinator, project(added, 'recipes').home, project(added, 'recipes').workspace], [added.coordinator, 'ws:/work/b', '/work/b']);
     assert.ok(coord.ctx.registered.has('project_thread_start'), 'the coordinator gets the project tools');
-    assert.match(coord.ctx.section(), /You are the coordinator of the DSH project "Recipes"\. The user talks to you here\. You run their work in threads and tell them what each thread found\.\nGoal: none set yet\. Until the user gives one, the project is only what they ask for in this chat\.\nWorkspace: \/work\/b\nThe project's other folders: \/work\/a\. A thread works in the workspace above unless project_thread_start names one of these as its folder\./);
-    assert.equal((await remote.addCoordinator('recipes')).coordinator, added.coordinator, 'adding again keeps the one it has');
-    await refused(remote.move('ws:/work/b', null), /b is where ◆ Recipes's coordinator works/);
-    list = await remote.move('ws:/work/a', 'recipes-2');
-    assert.deepEqual(spaces(list, 'recipes'), ['ws:/work/b']);
-    list = await remote.move('ws:/work/a', 'recipes');
+    assert.match(coord.ctx.section(), /You are the coordinator of the DSH project "Recipes"\. The user talks to you here\. You run their work in threads and tell them what each thread found\.\nGoal: none set yet\. Until the user gives one, the project is only what they ask for in this chat\.\nWorkspace: \/work\/b\n\n## Rules/);
+    // A workspace can hold more than one project; names are unique ids.
+    assert.equal((await remote.create('Recipes', 'ws:/work/b')).project, 'recipes-2');
+    await refused(remote.create('   ', 'ws:/work/a'), /a project needs a name/);
+    await refused(remote.create('Nowhere'), /a project needs a workspace to work in/);
+    await refused(remote.create('Nowhere', 'ws:/nope'), /DSH has no such workspace/);
 
-    // A thread can work in another of the project's folders, named by its folder name.
+    // A thread works in its project's workspace, whatever folder a model names, so it shows under its project.
     await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'In a', brief: 'Go.', folder: 'a' });
     const t1 = [...host.sessions].find(([, v]) => v.title === 'In a');
-    assert.equal(t1[1].cwd, 'ws:/work/a');
-    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Nowhere', brief: 'Go.', folder: '/work/c' }), /^Failed: "\/work\/c" is not one of this project's folders \(\/work\/a, \/work\/b\)/);
+    assert.equal(t1[1].cwd, 'ws:/work/b');
+    assert.equal(ProjectStore.open(raw.storeFile).projects.recipes.threads.t1.folder, undefined);
 
     // Renaming follows into the coordinator's title; a profile project is renamed in the profile.
     await remote.rename('recipes', 'Recipe Lab');
-    assert.equal(host.sessions.get(added.coordinator).title, '◆ Recipe Lab');
+    assert.equal(host.sessions.get(made.coordinator).title, '◆ Recipe Lab');
     await refused(remote.rename('dsh-plugins', 'X'), /name is set in your profile/);
-    // Deleting: only a project without a coordinator; its workspaces go back to none.
+    // Deleting: only a project whose coordinator never started.
     await refused(remote.remove('recipes'), /has a coordinator/);
     await refused(remote.remove('dsh-plugins'), /set in your profile/);
-    list = await remote.move('ws:/work/c', 'recipes-2');
-    list = await remote.remove('recipes-2');
-    assert.equal(project(list, 'recipes-2'), undefined);
-    assert.equal(plain(ProjectStore.open(raw.storeFile).workspaceOf)['ws:/work/c'], undefined);
 
-    // After a restart: the same projects and workspaces, the coordinator resumed, nothing new made.
+    // After a restart: the same projects, the coordinator resumed, nothing new made.
     const sessions = host.sessions.size;
     const again = fakeHost(options);
     for (const [id, session] of host.sessions) again.sessions.set(id, session);
@@ -3213,22 +3198,23 @@ test('projects page: a project holds workspaces, and gets a coordinator only whe
     plugin.apply(again, plugin.Config(raw));
     await tick();
     const after = await again.provided.get('dshPluginProjectsRemote').list();
+    // In the tree's order: DSH lists its own folder first.
     assert.deepEqual(after.projects.map((p) => [p.id, p.name, p.coordinator !== null, p.workspaces.map((w) => w.id)]), [
         ['dsh-plugins', 'DSH Plugins', true, ['ws:/work/dsh']],
-        ['recipes', 'Recipe Lab', true, ['ws:/work/a', 'ws:/work/b']],
+        ['recipes', 'Recipe Lab', true, ['ws:/work/b']],
+        ['recipes-2', 'Recipes', true, ['ws:/work/b']],
     ]);
     assert.equal(again.sessions.size, sessions);
-    assert.match(readFileSync(raw.logFile, 'utf8'), new RegExp(`coordinator recipes ${added.coordinator} resumed`));
+    assert.match(readFileSync(raw.logFile, 'utf8'), new RegExp(`coordinator recipes ${made.coordinator} resumed`));
 });
 
-test('projects page: a project whose coordinator was deleted in DSH goes back to none, and gets a new one when added', async () => {
+test('projects page: a project whose coordinator was deleted in DSH gets no new one unasked, and a new one when the user asks', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'projects-'));
     const options = { gateway: true, workspaces: ['/work/a'] };
     const { host, raw } = setup({}, dir, options);
     await tick();
     const remote = host.provided.get('dshPluginProjectsRemote');
-    await remote.create('Lab', 'ws:/work/a');
-    const first = (await remote.addCoordinator('lab')).coordinator;
+    const first = (await remote.create('Lab', 'ws:/work/a')).coordinator;
     // The user deletes the coordinator session in DSH; the next start finds it gone.
     host.sessions.delete(first);
     host.live.delete(first);
@@ -3244,9 +3230,153 @@ test('projects page: a project whose coordinator was deleted in DSH goes back to
     const second = (await remote2.addCoordinator('lab')).coordinator;
     assert.notEqual(second, first);
     assert.equal(again.sessions.get(second).title, '◆ Lab');
+    assert.equal(again.sessions.get(second).cwd, 'ws:/work/a');
 });
 
-test('import: the old sidebar\'s projects come in once, in their order, without coordinators; the old file is only read', async () => {
+test('categories: named sets of workspaces in their order, kept in step with DSH\'s own workspace order', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const options = { gateway: true, workspaces: ['/work/a', '/work/b', '/work/c', '/work/d'] };
+    const { host, raw } = setup({}, dir, options);
+    await tick();
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    const registry = host.workspaceRegistry;
+    const refused = async (promise, pattern) => {
+        await assert.rejects(promise, (error) => error.code === 'projects/refused' && pattern.test(error.message));
+    };
+    const tree = (list) => plain(list.categories).map((c) => [c.id, c.name, c.workspaces.map((w) => w.id.slice(9))]);
+    const dshOrder = () => registry.list().map((ws) => ws.id.slice(9));
+    // DSH lists a new workspace first: its own folder came in at the start.
+    assert.deepEqual(dshOrder(), ['dsh', 'a', 'b', 'c', 'd']);
+
+    let list = await remote.createCategory('  Fleet Services ', 'ws:/work/c');
+    assert.equal(list.category, 'fleet-services');
+    assert.deepEqual(tree(list), [['fleet-services', 'Fleet Services', ['c']]]);
+    // DSH's order follows: each category's workspaces together, in the categories' order, then the rest.
+    assert.deepEqual(dshOrder(), ['c', 'dsh', 'a', 'b', 'd']);
+    list = await remote.createCategory('Lab');
+    assert.deepEqual(tree(list), [['fleet-services', 'Fleet Services', ['c']], ['lab', 'Lab', []]]);
+    await remote.fileWorkspace('ws:/work/a', 'lab');
+    list = await remote.fileWorkspace('ws:/work/b', 'lab', 'ws:/work/a');
+    assert.deepEqual(tree(list), [['fleet-services', 'Fleet Services', ['c']], ['lab', 'Lab', ['b', 'a']]]);
+    assert.deepEqual(dshOrder(), ['c', 'b', 'a', 'dsh', 'd']);
+    // Filed with no anchor, a workspace goes last in its category; moving to another one takes it out of the first.
+    list = await remote.fileWorkspace('ws:/work/b', 'lab', '');
+    assert.deepEqual(tree(list)[1][2], ['a', 'b']);
+    list = await remote.fileWorkspace('ws:/work/b', 'fleet-services', 'ws:/work/c');
+    assert.deepEqual(tree(list), [['fleet-services', 'Fleet Services', ['b', 'c']], ['lab', 'Lab', ['a']]]);
+    assert.deepEqual(dshOrder(), ['b', 'c', 'a', 'dsh', 'd']);
+
+    // Categories move; DSH's order moves with them, as few workspaces as it takes.
+    const before = registry.moves.length;
+    list = await remote.moveCategory('lab', 'fleet-services');
+    assert.deepEqual(tree(list).map(([id]) => id), ['lab', 'fleet-services']);
+    assert.deepEqual(dshOrder(), ['a', 'b', 'c', 'dsh', 'd']);
+    assert.equal(registry.moves.length - before, 1);
+    list = await remote.moveCategory('lab', '');
+    assert.deepEqual(tree(list).map(([id]) => id), ['fleet-services', 'lab']);
+
+    // Rename; refusals.
+    list = await remote.renameCategory('lab', 'Labs');
+    assert.equal(tree(list)[1][1], 'Labs');
+    await refused(remote.renameCategory('nope', 'X'), /"nope" is not a category here/);
+    await refused(remote.createCategory('   '), /a category needs a name/);
+    await refused(remote.createCategory('Other', 'ws:/nope'), /DSH has no such workspace/);
+    await refused(remote.fileWorkspace('ws:/nope', 'lab'), /DSH has no such workspace/);
+    await refused(remote.fileWorkspace('ws:/work/a', 'nope'), /"nope" is not a category here/);
+    await refused(remote.fileWorkspace('ws:/work/d', 'lab', 'ws:/work/b'), /that workspace is in another category/);
+    await refused(remote.moveCategory('lab', 'nope'), /"nope" is not a category here/);
+    // Ids stay as made, and are unique.
+    assert.equal((await remote.createCategory('Lab')).category, 'lab-2');
+    await remote.removeCategory('lab-2');
+
+    // Out of a category: last among the workspaces in none.
+    list = await remote.fileWorkspace('ws:/work/b', '');
+    assert.deepEqual(tree(list), [['fleet-services', 'Fleet Services', ['c']], ['lab', 'Labs', ['a']]]);
+    assert.deepEqual(dshOrder(), ['c', 'a', 'dsh', 'd', 'b']);
+
+    // A project's place in the list follows its workspace's.
+    await remote.create('Ops', 'ws:/work/a');
+    list = await remote.list();
+    assert.deepEqual(list.projects.map((p) => [p.id, p.category]), [['ops', 'lab'], ['dsh-plugins', null]]);
+
+    // Deleting a category leaves its workspaces, chats and projects where they are, in none.
+    list = await remote.removeCategory('lab');
+    assert.deepEqual(tree(list), [['fleet-services', 'Fleet Services', ['c']]]);
+    assert.equal(list.projects.find((p) => p.id === 'ops').coordinator !== null, true);
+    assert.deepEqual(dshOrder(), ['c', 'a', 'dsh', 'd', 'b']);
+
+    // A workspace DSH adds later (DSH lists it first) goes after the categories when the window lists, among the others in none.
+    registry.add('/work/new');
+    assert.equal(dshOrder()[0], 'new');
+    await remote.list();
+    await tick();
+    assert.deepEqual(dshOrder(), ['c', 'new', 'a', 'dsh', 'd', 'b']);
+
+    // After a restart: the same categories; DSH's order needs no moves.
+    const moves = registry.moves.length;
+    const again = fakeHost(options);
+    for (const [id, session] of host.sessions) again.sessions.set(id, session);
+    again.workspaceRegistry = registry;
+    plugin.apply(again, plugin.Config(raw));
+    await tick();
+    assert.deepEqual(tree(await again.provided.get('dshPluginProjectsRemote').list()), [['fleet-services', 'Fleet Services', ['c']]]);
+    assert.equal(registry.moves.length, moves);
+    const saved = JSON.parse(readFileSync(raw.storeFile, 'utf8'));
+    assert.deepEqual([saved.version, Object.keys(saved.categories), saved.categoryOf], [1, ['fleet-services'], { 'ws:/work/c': 'fleet-services' }]);
+});
+
+test('categories: once, the groups from before become categories with their names, order and workspaces; the old records stay', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const storeFile = join(dir, 'projects.json');
+    const old = {
+        version: 1,
+        projects: {
+            'dsh-plugins': { settings: {}, threads: {}, pendingHandbacks: [], nextThread: 1, home: 'ws:/work/dsh' },
+            'local-model-recipe': { name: 'Local Model Recipe', source: 'import', createdAt: '2026-10-10T08:13:00.000Z', order: 0, importedFrom: 'p4' },
+            empty: { name: 'Empty', source: 'page', createdAt: '2026-10-10T09:00:00.000Z', order: 2 },
+            lab: { name: 'Lab', source: 'page', createdAt: '2026-10-10T08:30:00.000Z', order: 1, home: 'ws:/work/b', coordinatorSessionId: 'gone' },
+        },
+        workspaceOf: { 'ws:/work/dsh': 'dsh-plugins', 'ws:/work/a': 'local-model-recipe', 'ws:/work/c': 'lab', 'ws:/work/b': 'lab', 'ws:/work/d': 'dsh-plugins' },
+        imports: { fleetShell: { at: '2026-10-10T08:13:00.000Z', projects: 1, joined: 0, workspaces: 1, skipped: 0 } },
+    };
+    const text = `${JSON.stringify(old, null, 2)}\n`;
+    writeFileSync(storeFile, text);
+    const options = { gateway: true, workspaces: ['/work/dsh', '/work/a', '/work/b', '/work/c', '/work/d', '/work/e'] };
+    const { host, raw } = setup({ storeFile }, dir, options);
+    await tick();
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    const list = await remote.list();
+    // The profile's project first, then the others in their order; an empty group too.
+    assert.deepEqual(plain(list.categories).map((c) => [c.id, c.name, c.source, c.workspaces.map((w) => w.id.slice(9))]), [
+        ['dsh-plugins', 'DSH Plugins', 'group', ['dsh', 'd']],
+        ['local-model-recipe', 'Local Model Recipe', 'import', ['a']],
+        ['lab', 'Lab', 'group', ['b', 'c']],
+        ['empty', 'Empty', 'group', []],
+    ]);
+    // Only the ones with a coordinator are projects.
+    assert.deepEqual(list.projects.map((p) => [p.id, p.home]), [['dsh-plugins', 'ws:/work/dsh'], ['lab', 'ws:/work/b']]);
+    // DSH's order now reads like the list.
+    assert.deepEqual(host.workspaceRegistry.list().map((ws) => ws.id.slice(9)), ['dsh', 'd', 'a', 'b', 'c', 'e']);
+    const saved = JSON.parse(readFileSync(storeFile, 'utf8'));
+    assert.equal(saved.version, 1);
+    assert.deepEqual(saved.workspaceOf, old.workspaceOf, 'an older version still finds its groups');
+    assert.deepEqual(saved.projects.empty, old.projects.empty);
+    assert.deepEqual({ ...saved.imports.categories, at: 'x' }, { at: 'x', categories: 4, workspaces: 5, backup: join(dir, 'projects.v1.json') });
+    assert.equal(readFileSync(join(dir, 'projects.v1.json'), 'utf8'), text, 'the store from before is kept');
+    assert.match(readFileSync(raw.logFile, 'utf8'), /categories from groups categories=4 workspaces=5/);
+
+    // Once: a restart moves nothing again, and a category made since stays.
+    await remote.createCategory('Later');
+    const again = fakeHost(options);
+    for (const [id, session] of host.sessions) again.sessions.set(id, session);
+    again.workspaceRegistry = host.workspaceRegistry;
+    plugin.apply(again, plugin.Config(raw));
+    await tick();
+    assert.deepEqual(plain((await again.provided.get('dshPluginProjectsRemote').list()).categories).map((c) => c.id), ['dsh-plugins', 'local-model-recipe', 'lab', 'empty', 'later']);
+    assert.equal(readFileSync(raw.logFile, 'utf8').match(/categories from groups/g).length, 1);
+});
+
+test('import: the old sidebar\'s projects come in once, as categories in their order; only names and workspaces, and the old file is only read', async () => {
     const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
     const file = join(home, 'fleet-shell', 'state.json');
     mkdirSync(join(home, 'fleet-shell'));
@@ -3273,31 +3403,31 @@ test('import: the old sidebar\'s projects come in once, in their order, without 
         await tick();
         const remote = host.provided.get('dshPluginProjectsRemote');
         const list = await remote.list();
-        assert.deepEqual(list.projects.map((p) => [p.id, p.name, p.source, p.coordinator !== null, p.workspaces.map((w) => w.id)]), [
-            // The profile project keeps its folder and takes in the old project of the same name.
-            ['dsh-plugins', 'DSH Plugins', 'profile', true, ['ws:/work/dsh', 'ws:/work/d']],
-            ['local-model-recipe', 'Local Model Recipe', 'import', false, ['ws:/work/a']],
-            ['fleet-services', 'Fleet Services', 'import', false, ['ws:/work/b']],
-            ['security', 'Security', 'import', false, []],
+        assert.deepEqual(plain(list.categories).map((c) => [c.id, c.name, c.source, c.importedFrom, c.workspaces.map((w) => w.id.slice(9))]), [
+            ['local-model-recipe', 'Local Model Recipe', 'import', 'p4', ['dsh', 'a']],
+            ['fleet-services', 'Fleet Services', 'import', 'p3', ['b']],
+            ['dsh-plugins', 'dsh plugins', 'import', 'p1', ['d']],
+            ['security', 'Security', 'import', 'p9', []],
         ]);
-        assert.equal([...host.sessions.values()].filter((v) => v.title?.startsWith('◆')).length, 1, 'only the profile project has a coordinator');
+        // No projects come in: only the profile's has a coordinator.
+        assert.deepEqual(list.projects.map((p) => p.id), ['dsh-plugins']);
+        assert.equal([...host.sessions.values()].filter((v) => v.title?.startsWith('◆')).length, 1);
         const store = plain(ProjectStore.open(raw.storeFile));
-        assert.deepEqual({ ...store.imports.fleetShell, at: 'x' }, { at: 'x', file, projects: 3, joined: 1, workspaces: 3, skipped: 1 });
-        assert.equal(store.projects['local-model-recipe'].importedFrom, 'p4');
-        assert.match(readFileSync(raw.logFile, 'utf8'), /import fleet-shell projects=3 joined=1 workspaces=3 skipped=1/);
+        assert.deepEqual({ ...store.imports.fleetShell, at: 'x' }, { at: 'x', file, categories: 4, joined: 0, workspaces: 4, skipped: 1 });
+        assert.match(readFileSync(raw.logFile, 'utf8'), /import fleet-shell categories=4 joined=0 workspaces=4 skipped=1/);
         assert.equal(readFileSync(file, 'utf8'), text, 'the old file is unchanged');
 
         // Once only: a later start with a changed old file imports nothing.
         writeFileSync(file, JSON.stringify({ ...old, projects: [...old.projects, { id: 'p7', name: 'Later' }], projectOf: { 'ws:/work/c': 'p7' } }));
-        await remote.move('ws:/work/b', null);
+        await remote.fileWorkspace('ws:/work/b', '');
         const again = fakeHost(options);
         for (const [id, session] of host.sessions) again.sessions.set(id, session);
         again.workspaceRegistry = host.workspaceRegistry;
         plugin.apply(again, plugin.Config(raw));
         await tick();
         const after = await again.provided.get('dshPluginProjectsRemote').list();
-        assert.deepEqual(after.projects.map((p) => [p.id, p.workspaces.map((w) => w.id)]), [
-            ['dsh-plugins', ['ws:/work/dsh', 'ws:/work/d']], ['local-model-recipe', ['ws:/work/a']], ['fleet-services', []], ['security', []],
+        assert.deepEqual(plain(after.categories).map((c) => [c.id, c.workspaces.map((w) => w.id.slice(9))]), [
+            ['local-model-recipe', ['dsh', 'a']], ['fleet-services', []], ['dsh-plugins', ['d']], ['security', []],
         ]);
     });
 });
@@ -3338,7 +3468,7 @@ test('import plan: one group per name in the old order, a name already here join
     assert.deepEqual(planFleetShellImport({ projects: 'p1', projectOf: null }, here), none);
 });
 
-test('import preview: says what the import will do, reading only, and that it ran once it has', () => {
+test('import preview: says what the move to categories and the import will do, reading only, and that they ran once they have', () => {
     const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
     for (const dir of ['fleet-shell', 'storages', 'projects']) mkdirSync(join(home, dir));
     const state = { projects: [{ id: 'p1', name: 'Fleet Services' }, { id: 'p2', name: 'Security' }], projectOf: { w1: 'p1', w2: 'p1', w3: 'p2', w4: '_none', w9: 'p2' } };
@@ -3348,26 +3478,41 @@ test('import preview: says what the import will do, reading only, and that it ra
         w3: { path: '/work/lab', title: 'Vulnerability Lab', sessionIds: [] },
         w4: { path: '/work/discord', title: 'DSH Discord', sessionIds: [] },
     };
+    const projectsFile = join(home, 'projects', 'projects.json');
     const files = {
         [join(home, 'fleet-shell', 'state.json')]: JSON.stringify(state),
         [join(home, 'storages', 'workspace.json')]: JSON.stringify({ unit: { name: 'workspace', version: 2 }, global: {}, tables: { workspaces } }),
-        [join(home, 'projects', 'projects.json')]: JSON.stringify({ version: 1, projects: { 'dsh-plugins': { coordinatorSessionId: 's-coordinator' }, elsewhere: { coordinatorSessionId: 's-other-dsh' } } }),
+        [projectsFile]: JSON.stringify({
+            version: 1,
+            projects: { 'dsh-plugins': { coordinatorSessionId: 's-coordinator', home: 'w2' }, lab: { name: 'Lab', source: 'page', order: 0 }, elsewhere: { coordinatorSessionId: 's-other-dsh' } },
+            workspaceOf: { w2: 'dsh-plugins', w3: 'lab' },
+        }),
     };
     for (const [file, text] of Object.entries(files)) writeFileSync(file, text);
     const script = fileURLToPath(new URL('../scripts/import-preview.mjs', import.meta.url));
     const run = () => spawnSync(process.execPath, [script], { env: { ...process.env, DSH_HOME: home }, encoding: 'utf8' });
     const first = run();
     assert.equal(first.status, 0, first.stderr);
-    assert.match(first.stdout, /1\. Fleet Services, a new project without a coordinator\n {5}fleet-ops \(\/work\/fleet-ops\)\n2\. Security, a new project without a coordinator\n {5}Vulnerability Lab \(\/work\/lab\)\n/);
-    assert.match(first.stdout, /Already in a project here, stays there: deepseek-plugins \(\/work\/plugins\) in "dsh-plugins"/);
+    assert.match(first.stdout, /Groups become categories, once, at the first start with this version \(the store is copied to .*projects\.v1\.json first\):\n\n1\. The project "dsh-plugins" from your profile, under the same name\n {5}deepseek-plugins \(\/work\/plugins\)\n2\. Lab\n {5}Vulnerability Lab \(\/work\/lab\)\n/);
+    assert.match(first.stdout, /Projects with a coordinator stay projects, in their coordinator's workspace: dsh-plugins in deepseek-plugins \(\/work\/plugins\)/);
+    assert.match(first.stdout, /Groups without a coordinator are only categories now: lab/);
+    assert.match(first.stdout, /1\. Fleet Services, a new category\n {5}fleet-ops \(\/work\/fleet-ops\)\n2\. Security, a new category\n {5}\(no workspaces\)\n/);
+    assert.match(first.stdout, /names and workspaces only; its instructions, files and defaults stay behind/);
+    assert.match(first.stdout, /Already in a category here, stays there: deepseek-plugins \(\/work\/plugins\) in "dsh-plugins", Vulnerability Lab \(\/work\/lab\) in "lab"/);
     assert.match(first.stdout, /Ungrouped in the old sidebar, goes to Other workspaces: DSH Discord \(\/work\/discord\)/);
     assert.match(first.stdout, /Gone from DSH, skipped: w9/);
-    assert.match(first.stdout, /Result: 2 new projects, 0 joined, 2 workspaces placed, 1 skipped\./);
+    assert.match(first.stdout, /Result: 2 new categories, 0 joined, 1 workspaces placed, 1 skipped\./);
     assert.match(first.stdout, /it names coordinators this DSH doesn't list in any workspace: elsewhere \(s-other-dsh\)\./);
     assert.doesNotMatch(first.stdout, /dsh-plugins \(s-coordinator\)/);
     for (const [file, text] of Object.entries(files)) assert.equal(readFileSync(file, 'utf8'), text, `${file} is unchanged`);
-    writeFileSync(join(home, 'projects', 'projects.json'), JSON.stringify({ version: 1, projects: {}, imports: { fleetShell: { at: '2026-10-10T15:00:00.000Z', projects: 2, workspaces: 2, skipped: 1 } } }));
-    assert.match(run().stdout, /Already imported \(2026-10-10T15:00:00\.000Z\): 2 projects, 2 workspaces, 1 skipped\. It won't run again\./);
+    // Once both have run, it says so.
+    writeFileSync(projectsFile, JSON.stringify({
+        version: 1, projects: {}, categories: {}, categoryOf: {},
+        imports: { categories: { at: '2026-10-10T22:00:00.000Z' }, fleetShell: { at: '2026-10-10T15:00:00.000Z', projects: 2, workspaces: 2, skipped: 1 } },
+    }));
+    const done = run().stdout;
+    assert.match(done, /Groups already became categories \(2026-10-10T22:00:00\.000Z\)\./);
+    assert.match(done, /The old sidebar was already imported \(2026-10-10T15:00:00\.000Z\): 2 groups, 2 workspaces, 1 skipped\. It won't run again\./);
 });
 
 // ── code changes (changes.js) ──────────────────────────────────────────────

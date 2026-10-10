@@ -13,11 +13,22 @@
  *       busy?: true while a turn runs, seenTurn?: key of the last turn reviewed,
  *       lastEnding?: { text, kind, at }: that turn, when it failed or stopped without a handback (prompts.js describeEnding),
  *       changes?: [{ turn, seq, added, deleted, total, files: [{ path, added, deleted, binary?, oversized? }], turns? }] (changes.js) } },
- *     home?: id of the DSH workspace its coordinator works in,
- *     A project made on the Projects page or imported also keeps its definition here (a profile row has its own):
+ *     home?: id of the DSH workspace its coordinator and threads work in,
+ *     A project made on the Projects page also keeps its definition here (a profile row has its own):
  *     name, source: 'page' | 'import', createdAt, order: its place among them, importedFrom?: the old project's id } },
- *   workspaceOf: { [DSH workspace id]: projectId }: the project each workspace is in, one at most,
- *   imports: { fleetShell?: { at, file, projects, workspaces, skipped } }: one-time imports already made }
+ *   categories: { [categoryId]: { name, order: its place in the list, createdAt, source: 'group' | 'page' | 'import',
+ *     importedFrom?: the old sidebar project's id } }: named sets of DSH workspaces, above them in the session list,
+ *   categoryOf: { [DSH workspace id]: categoryId }: the category each workspace is in, one at most,
+ *   workspaceOf: { [DSH workspace id]: projectId }: before categories, the group each workspace was in. Kept as it
+ *     was when categories replaced groups, so an older version of the plugin still finds its groups; never written now,
+ *   imports: { fleetShell?: { at, file, projects, workspaces, skipped }, categories?: { at, categories, workspaces } }:
+ *     one-time imports and moves already made }
+ *
+ * Until categories, a project made on the Projects page or imported was a
+ * group of workspaces (◇) that got a coordinator only when the user added
+ * one. Those groups became categories (`migrateCategories` in projects.js);
+ * their entries stay under `projects`, and only the ones with a coordinator
+ * are projects now.
  *
  * Settings here are the project's own: set in its Project settings dialog,
  * by picking a model in its coordinator's DSH model picker, or by the
@@ -26,8 +37,8 @@
  *
  * @module dsh-plugin-projects/store
  */
-import { readFileSync, renameSync, writeFileSync, mkdirSync, chmodSync, statSync, existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { readFileSync, renameSync, writeFileSync, mkdirSync, chmodSync, statSync, existsSync, copyFileSync, constants } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
 /** Resolve a '~'-prefixed path. */
@@ -105,8 +116,14 @@ export class ProjectStore {
         this.file = dataPath(file);
         /** @type {Record<string, object>} */
         this.projects = {};
-        /** @type {Record<string, string>} workspace id → project id */
+        /** @type {Record<string, string>} workspace id → project id (groups, before categories) */
         this.workspaceOf = {};
+        /** @type {Record<string, object>} category id → its definition */
+        this.categories = {};
+        /** @type {Record<string, string>} workspace id → category id */
+        this.categoryOf = {};
+        /** Whether the file has categories: false until groups became categories, once. */
+        this.hasCategories = false;
         /** @type {Record<string, object>} */
         this.imports = {};
         this.load();
@@ -119,12 +136,19 @@ export class ProjectStore {
             if (parsed?.version === 1 && parsed.projects && typeof parsed.projects === 'object') {
                 this.projects = parsed.projects;
                 this.workspaceOf = Object.fromEntries(Object.entries(plain(parsed.workspaceOf)).filter(([, id]) => typeof id === 'string'));
+                this.hasCategories = plain(parsed.categories) === parsed.categories;
+                this.categories = Object.fromEntries(Object.entries(plain(parsed.categories))
+                    .filter(([, c]) => plain(c) === c && typeof c.name === 'string' && c.name.trim() !== ''));
+                this.categoryOf = Object.fromEntries(Object.entries(plain(parsed.categoryOf)).filter(([, id]) => typeof id === 'string'));
                 this.imports = plain(parsed.imports);
             }
         } catch {
             // Missing or corrupt store: start clean, never crash.
             this.projects = {};
             this.workspaceOf = {};
+            this.categories = {};
+            this.categoryOf = {};
+            this.hasCategories = false;
             this.imports = {};
         }
     }
@@ -134,7 +158,12 @@ export class ProjectStore {
         try {
             ensurePrivateDir(dirname(this.file));
             const tmp = `${this.file}.tmp`;
-            const state = { version: 1, projects: this.projects, workspaceOf: this.workspaceOf, imports: this.imports };
+            // Still version 1: an older version of the plugin reads the file as it did and keeps its groups.
+            const state = {
+                version: 1, projects: this.projects, workspaceOf: this.workspaceOf,
+                ...(this.hasCategories ? { categories: this.categories, categoryOf: this.categoryOf } : {}),
+                imports: this.imports,
+            };
             writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
             chmodSync(tmp, 0o600);
             renameSync(tmp, this.file);
@@ -212,6 +241,49 @@ export class ProjectStore {
     removeProject(projectId) {
         delete this.projects[projectId];
         for (const id of this.workspacesOf(projectId)) delete this.workspaceOf[id];
+        this.save();
+    }
+
+    /**
+     * Copy the file as it is now to `<name>.v1.json` beside it, once: the
+     * store from before categories, kept in case the user wants it back.
+     * @returns the copy's path, or '' when there was nothing to copy or a copy exists.
+     */
+    backup() {
+        const copy = join(dirname(this.file), `${basename(this.file, '.json')}.v1.json`);
+        try {
+            if (!existsSync(this.file)) return '';
+            copyFileSync(this.file, copy, constants.COPYFILE_EXCL);
+            chmodSync(copy, 0o600);
+            return copy;
+        } catch {
+            return '';
+        }
+    }
+
+    /** The workspaces in a category, in the order they were filed. */
+    workspacesInCategory(categoryId) {
+        return Object.keys(this.categoryOf).filter((id) => this.categoryOf[id] === categoryId);
+    }
+
+    /** Merge fields into a category, made on first use, and persist. */
+    putCategory(categoryId, fields) {
+        this.categories[categoryId] = { ...this.categories[categoryId], ...fields };
+        this.save();
+        return this.categories[categoryId];
+    }
+
+    /** Forget a category; its workspaces go back to none. */
+    removeCategory(categoryId) {
+        delete this.categories[categoryId];
+        for (const id of this.workspacesInCategory(categoryId)) delete this.categoryOf[id];
+        this.save();
+    }
+
+    /** Put a workspace in a category, or (categoryId null) in none. A workspace is in one category at most. */
+    fileWorkspace(workspaceId, categoryId) {
+        if (categoryId === null) delete this.categoryOf[workspaceId];
+        else this.categoryOf[workspaceId] = categoryId;
         this.save();
     }
 

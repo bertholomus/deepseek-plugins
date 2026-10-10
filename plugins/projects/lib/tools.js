@@ -103,10 +103,9 @@ export function projectTools(manager, who) {
                 brief: { type: 'string', required: true, description: 'What the thread needs beyond the ask: facts from project memory, and the default you picked where the ask is unclear. No deliverables the user did not ask for.' },
                 model: { type: 'string', description: `A model for this thread only, as "provider:model" or a bare model id. ${ONLY_ASKED} Leave it out otherwise.` },
                 effort: { type: 'string', description: `An effort for this thread only, one the model offers. ${ONLY_ASKED} Leave it out otherwise.` },
-                folder: { type: 'string', description: 'Optional: another of the project\'s folders (listed in your instructions) for this thread to work in. Leave it out for the project workspace.' },
             },
             async execute(args) {
-                const r = await manager.startThread(projectId, { ...args, ask: given(args.ask), model: given(args.model), effort: given(args.effort), folder: given(args.folder) });
+                const r = await manager.startThread(projectId, { ...args, ask: given(args.ask), model: given(args.model), effort: given(args.effort) });
                 // It names what the thread runs on only when the coordinator chose that (r.route).
                 const runs = r.route ? ` It runs on ${r.route}.` : '';
                 const notes = r.notes?.length ? ` Note: ${r.notes.join('; ')}.` : '';
