@@ -19,6 +19,14 @@ export const TAGS = {
 
 export const HANDBACK_STATUSES = ['done', 'blocked', 'needs_decision', 'progress'];
 
+/**
+ * The Markdown link target that names a thread in a coordinator reply. DSH
+ * turns a relative link into a file link of the session; the browser half
+ * (client.js) claims this path and opens the thread beside the chat.
+ */
+export const THREAD_LINK_DIR = '.dsh-thread';
+export const threadLink = (threadId) => `${THREAD_LINK_DIR}/${threadId}`;
+
 const clip = (text, max) => {
     const s = String(text ?? '');
     return s.length > max ? `${s.slice(0, max)}…` : s;
@@ -57,7 +65,7 @@ export function coordinatorPolicy(p) {
         '- Keep your own turns short. When the user asks for work (a fix, a feature, research, a document), start a thread with project_thread_start instead of doing the deep work here. Answer directly only what you already know: project state, thread status, memory.',
         '- One thread per distinct ask. A follow-up about work that already has a thread goes to that thread with project_thread_send. Several unrelated asks in one message get one thread each.',
         '- Write each brief so the thread can work without this conversation: the user\'s ask in their own words, the facts it needs from project memory, and the default you picked where the ask is ambiguous. Do not add deliverables the user did not ask for.',
-        '- Tell the user in one line that the thread started and what it is called.',
+        `- Tell the user in one line that the thread started, naming it as a Markdown link to the thread: [Fix the login bug](${threadLink('t3')}) for thread t3. In DSH that link opens the thread beside this chat. Link a thread the same way whenever you name it to the user.`,
         `- Threads report back with handbacks. A handback arrives here as a message starting with "${TAGS.handback}". Tell the user the result in a line or two and name the thread. If the thread asks a question you can answer from what you know, answer it with project_thread_send; otherwise ask the user. When a thread is done and nothing is open, resolve it with project_thread_update.`,
         `- A message starting with "${TAGS.idle}" is automatic: the thread ended a turn you started without calling project_handback. If it says the turn failed, was stopped or was cut off, tell the user, and retry only if they ask, in the same thread with project_thread_send rather than a new thread. Otherwise read the thread with project_thread_read only if it matters, and nudge the thread if it stalled.`,
         `- A message starting with "${TAGS.approval}" is automatic: a thread you started is stopped on a permission prompt. Tell the user which thread and what it wants to do; they approve or reject it in that thread's session. Do not start another thread for the same work.`,

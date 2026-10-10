@@ -12,6 +12,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
+import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
 import * as plugin from '../lib/index.js';
 import { effectiveSettings, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
 import { slugify, timing } from '../lib/projects.js';
@@ -33,6 +34,8 @@ const CATALOG = {
 class FakeScope {
     constructor() {
         this.registered = new Map();
+        /** Presentation meta of each tool result, in call order. */
+        this.metas = [];
         this.sections = new Map();
         this.listeners = new Map();
         const self = this;
@@ -83,8 +86,13 @@ class FakeScope {
         const callId = `call-${++toolCalls}`;
         log?.push({ seq: log.length + 1, type: 'tool/call', data: { callId, name, arguments: args } });
         const value = await def.execute(args, { agent: this.agent, callId });
-        log?.push({ seq: log.length + 1, type: 'tool/result', data: { message: { role: 'tool', toolCallId: callId, content: [{ type: 'text', text: value }] } } });
-        return value;
+        // As DSH does: check the value against the output schema, render it for the model, and record the meta.
+        assert.deepEqual(validateJsonSchemaValue(def.output.schema, value, 'value'), [], `${name} returned a value its schema refuses`);
+        const text = def.output.render(args, value).map((block) => block.text).join('');
+        const meta = def.output.presentationMeta?.(args, value);
+        this.metas.push({ name, meta });
+        log?.push({ seq: log.length + 1, type: 'tool/result', time: Date.now(), data: { message: { role: 'tool', toolCallId: callId, content: [{ type: 'text', text }] }, ...(meta === undefined ? {} : { meta }) } });
+        return text;
     }
 }
 let toolCalls = 0;
@@ -116,14 +124,21 @@ function fakeHost({ selection = false, hostListener = selection } = {}) {
     const live = new Map(); // id → agent
     let n = 0;
     const selections = []; // [{sessionId, selection}] in call order
+    const projections = []; // definitions registered on ctx.sessionProjections
     const services = {
         agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: 'deepseek-v4' }) },
         llm: fakeLlm,
+        sessionProjections: { register(def) { projections.push(def); return () => projections.splice(projections.indexOf(def), 1); } },
     };
     const host = {
-        sessions, live, effects, selections, services,
+        sessions, live, effects, selections, services, projections,
         logger: { info() {}, warn() {} },
         get: (name) => services[name],
+        /** Like cordis: run the callback only when every named service is present. */
+        inject(names, fn) {
+            if (!names.every((name) => services[name])) return;
+            fn(Object.assign(Object.create(host), Object.fromEntries(names.map((name) => [name, services[name]]))));
+        },
         on(event, fn) {
             const list = listeners.get(event) ?? [];
             list.push(fn);
@@ -171,7 +186,7 @@ function fakeHost({ selection = false, hostListener = selection } = {}) {
                 const s = sessions.get(req.sessionId);
                 s.prompts.push({ mode: req.mode, text: req.content[0].text });
                 // Like DSH: the prompt is logged as a user message with its request id.
-                s.events.push({ seq: s.events.length + 1, type: 'user/message', data: { content: req.content, source: { kind: 'user', rpcId: req.requestId } } });
+                s.events.push({ seq: s.events.length + 1, type: 'user/message', time: Date.now(), data: { content: req.content, source: { kind: 'user', rpcId: req.requestId } } });
                 return { accepted: true };
             },
             async rename(req) { sessions.get(req.sessionId).title = req.title; return { title: req.title, seq: 1 }; },
@@ -506,12 +521,12 @@ test('session mode: coordinator and threads get DSH model selections, not reques
     assert.equal(coord.ctx.listeners.get('agent/request').length, 1);
 
     // A thread is selected before its brief arrives.
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'Fast', brief: 'Go.', model: 'deepseek-v4-flash' }), /^Started t1 "Fast" \(deepseek:deepseek-v4-flash · effort high\)\. It will hand back when done\.$/);
+    assert.match(await coord.ctx.call('project_thread_start', { title: 'Fast', brief: 'Go.', model: 'deepseek-v4-flash' }), /^Started t1 "Fast" \(deepseek:deepseek-v4-flash · effort high\)\. It will hand back when done\. Link it in replies as \[Fast\]\(\.dsh-thread\/t1\)\.$/);
     const t1 = [...host.live.values()].find((a) => a.id !== coord.id);
     assert.deepEqual(host.selections[1], { sessionId: t1.id, selection: { provider: 'deepseek', model: 'deepseek-v4-flash', reasoningEffort: 'high' }, promptsBefore: 0 });
 
     // A model without effort levels: the default effort is dropped with a note.
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'Big', brief: 'Go.', model: 'big-model' }), /\(other:big-model · effort default\).*Note: other:big-model has no effort levels, so effort "high" is not used\.$/);
+    assert.match(await coord.ctx.call('project_thread_start', { title: 'Big', brief: 'Go.', model: 'big-model' }), /\(other:big-model · effort default\).*Note: other:big-model has no effort levels, so effort "high" is not used\. Link it in replies as \[Big\]\(\.dsh-thread\/t2\)\.$/);
     assert.deepEqual(host.selections[2].selection, { provider: 'other', model: 'big-model' });
 
     // project_thread_update re-selects the thread.
@@ -619,11 +634,12 @@ test('defaults form: a default changed while DSH was stopped replaces the coordi
 /**
  * Load the browser half the way DSH does: a classic script that hands its
  * factory to the module loader, which calls it with DSH's module require.
+ * The primitives are stand-ins; an icon is its own name.
  */
 function loadClient() {
     let loaded;
-    runInNewContext(readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'), { window: { __ModuleLoader__: { load: (m) => { loaded = m; } } } });
-    const ui = {
+    runInNewContext(readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'), { window: { __ModuleLoader__: { load: (m) => { loaded = m; } } }, URL, console });
+    const base = {
         SettingsFormModel: class {
             constructor(scope) { this.scope = scope; }
             bind(project) { return { getSnapshot: project, subscribe: () => () => {} }; }
@@ -634,19 +650,26 @@ function loadClient() {
         },
         settingsTextField: (field) => ({ field }),
     };
-    const modules = { react: { createElement: (type, props, ...children) => ({ type, props, children }) }, '@deepseek-ai/dsh-client-ui-primitives': ui };
+    const ui = new Proxy(base, { get: (target, name) => (name in target ? target[name] : typeof name === 'string' && name.startsWith('Icon') ? name : undefined) });
+    const modules = { react: { createElement: (type, props, ...children) => ({ type, props, children }) }, 'react-dom': {}, '@deepseek-ai/dsh-client-ui-primitives': ui };
     return { id: loaded.id, client: loaded.factory((name) => modules[name]) };
 }
+
+/** Values made inside the script's context, copied so they compare as plain data. */
+const plain = (value) => JSON.parse(JSON.stringify(value));
 
 test('browser half: the defaults form registers on the plugin page, read-only when the profile adds the row twice', () => {
     const { id, client } = loadClient();
     assert.equal(id, 'dsh-plugin-projects');
-    // Values made inside the script's context: copy them before comparing.
-    assert.deepEqual([...client.inject], ['slots', 'configForms', 'remote', 'remote.session']);
+    // Each part waits for its own DSH services, so only the slots are required.
+    assert.deepEqual([...client.inject], ['slots']);
     let snapshot = { status: 'ready', value: { coordinatorEffort: 'max' }, base: {}, user: { coordinatorEffort: 'max' }, writable: true, revision: 1 };
     const registered = [];
-    client.apply({
+    const groups = [];
+    const ctx = {
         effect: (fn) => fn(),
+        // This DSH serves the settings services only; the threads part keeps waiting.
+        inject: (names, fn) => { groups.push([...names]); if (names.includes('configForms')) fn(ctx); },
         configForms: {
             get: (ns) => (assert.equal(ns, 'projects'), { getSnapshot: () => snapshot, subscribe: () => () => {}, mutate: async () => true }),
             whileServed: (names, fn) => (assert.deepEqual([...names], ['projects']), fn()),
@@ -655,7 +678,9 @@ test('browser half: the defaults form registers on the plugin page, read-only wh
             inject: (_name, fn) => fn(),
             register: (slot, component) => { registered.push({ slot, component }); return () => {}; },
         },
-    });
+    };
+    client.apply(ctx);
+    assert.deepEqual(groups, [['configForms', 'remote', 'remote.session'], ['sessions', 'uiWorkspace', 'sidebarRight']]);
     assert.deepEqual(registered.map((r) => ({ ...r.slot })), [{ name: 'plugins.bundle.config', key: 'dsh-plugin-projects' }]);
     const page = registered[0].component;
     assert.match(page({ view: 'summary' }), /^Default models/);
@@ -669,6 +694,133 @@ test('browser half: the defaults form registers on the plugin page, read-only wh
     assert.equal(form.getSnapshot().insertedTwice, false);
     snapshot = { status: 'loading', value: undefined, base: undefined, user: undefined, writable: true, revision: undefined };
     assert.equal(form.getSnapshot().insertedTwice, false);
+});
+
+test('browser half: threads add a header menu, turn cards, sidebar marks and right-sidebar tabs', () => {
+    const { client } = loadClient();
+    const registered = [];
+    const types = [];
+    const protocols = [];
+    const ctx = {
+        effect: (fn) => fn(),
+        inject: (names, fn) => { if (!names.includes('configForms')) fn(ctx); },
+        slots: { inject: (_name, fn) => fn(), register: (slot) => { registered.push({ ...slot }); return () => {}; } },
+        resources: { register: (provider) => { protocols.push(provider.protocol); return () => {}; } },
+        sidebarRightTabs: { register: (type) => { types.push(type); return () => {}; } },
+        sessions: { list: { getSnapshot: () => ({ ids: [], byId: {}, phase: 'ready', projectionsBySession: {} }), subscribe: () => () => {} } },
+        uiWorkspace: {},
+        sidebarRight: {},
+    };
+    client.apply(ctx);
+    assert.deepEqual(registered.map((r) => [r.name, r.id ?? r.key ?? null, r.order ?? null]), [
+        ['conversation.session.header.actions', 'dsh-plugin-projects/threads-menu', -25],
+        ['conversation.chat.turnTail', 'dsh-plugin-projects/thread-cards', 30],
+        ['sidebar.session.row.leading', 'dsh-plugin-projects/thread-mark', 20],
+        ['sidebar.session.row.hover', 'dsh-plugin-projects/thread-hover', 20],
+        ['sidebar.right.pane.tab', 'dsh-plugin-projects/thread-chat', null],
+        ['sidebar.right.pane.tab.title', 'dsh-plugin-projects/thread-chat', null],
+        ['projects.thread.conversation', null, null],
+        ['sidebar.right.pane.tab', 'dsh-plugin-projects/threads-pane', null],
+        ['sidebar.right.pane.tab.title', 'dsh-plugin-projects/threads-pane', null],
+        ['sidebar.right.pane.tab', 'dsh-plugin-projects/thread-link', null],
+    ]);
+    // The thread chat tab hosts the conversation slot it renders.
+    assert.deepEqual(plain(registered[4].children), { 'projects.thread.conversation': { kind: 'single', scope: 'session' } });
+    assert.deepEqual(protocols, ['projectthread']);
+    assert.deepEqual(types.map((t) => [t.id, t.kind, t.patterns ? [...t.patterns] : null]), [
+        ['dsh-plugin-projects/thread-chat', 'projectthread', ['dsh-resource://projectthread/session/**']],
+        ['dsh-plugin-projects/threads-pane', 'projectthreads', null],
+        ['dsh-plugin-projects/thread-link', 'projectthreadlink', ['dsh-resource://file/session/**/.dsh-thread/*']],
+    ]);
+    const [chat, pane, link] = types;
+    assert.equal(chat.canOpen('dsh-resource://projectthread/session/s%2F1'), true);
+    assert.equal(chat.canOpen('dsh-resource://projectthread/other/s1'), false);
+    assert.equal(chat.title('dsh-resource://projectthread/session/s1'), 'Thread');
+    assert.equal(pane.title(), 'Threads');
+    // `[title](.dsh-thread/t3)` in a reply opens the thread, not DSH's file viewer.
+    assert.equal(link.canOpen('dsh-resource://file/session/s%2F1/.dsh-thread/t3'), true);
+    assert.equal(link.canOpen('dsh-resource://file/session/s1/.dsh-thread/notes.md'), false);
+    assert.equal(link.title('dsh-resource://file/session/s1/.dsh-thread/T12'), 'Thread t12');
+    assert.equal(link.priority, undefined, 'the extension band ranks above the builtin file viewer');
+});
+
+test('browser half: thread rows, cards and links read the projection as DSH sends it', () => {
+    const { client } = loadClient();
+    const { projectContext, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow } = client.internals;
+    const coordValue = { role: 'coordinator', project: { id: 'p', name: 'DSH Plugins' }, threads: [
+        { id: 't1', session: 's-t1', title: 'Add CI', resolved: false, created: '2026-10-09T10:00:00.000Z', handback: { status: 'done', summary: 'CI added.', at: '2026-10-09T11:00:00.000Z' } },
+        { id: 't2', session: 's-t2', title: 'Fix login', resolved: false, created: '2026-10-09T12:00:00.000Z', handback: { status: 'needs_decision', summary: 'Pick A or B.', at: '2026-10-09T13:00:00.000Z' } },
+        { id: 't3', session: 's-t3', title: 'Write docs', resolved: false, created: '2026-10-09T14:00:00.000Z' },
+        { id: 't4', session: 's-t4', title: 'Old spike', resolved: true, created: '2026-10-08T14:00:00.000Z' },
+    ], cards: [
+        { turn: 2, seq: 10, kind: 'start', thread: 't3' },
+        { turn: 2, seq: 11, kind: 'send', thread: 't3', status: 'steer' },
+        { turn: 2, seq: 12, kind: 'start', thread: 't4' },
+        { turn: 3, seq: 20, kind: 'handback', thread: 't2', status: 'needs_decision' },
+    ] };
+    const threadValue = { role: 'thread', project: { name: 'DSH Plugins' }, coordinator: 's-c', thread: { id: 't3', title: 'Write docs' },
+        cards: [{ turn: 1, seq: 5, kind: 'handback', thread: 't3', status: 'progress' }] };
+    // The session list as DSH's store holds it: values on rows (cached) or loaded per session.
+    const state = {
+        ids: ['s-c', 's-t1', 's-t3', 's-plain'],
+        phase: 'ready',
+        byId: {
+            's-c': { id: 's-c', title: '◆ DSH Plugins', projectionValues: { projectSession: coordValue } },
+            's-t1': { id: 's-t1', title: 'DSH Plugins › Add CI' },
+            's-t3': { id: 's-t3', title: 'DSH Plugins › Write docs', running: true, updatedAt: Date.parse('2026-10-09T15:00:00.000Z') },
+            's-plain': { id: 's-plain', title: 'Something else' },
+        },
+        projectionsBySession: { 's-t3': { state: 'ready', values: { projectSession: threadValue } } },
+    };
+    const statuses = new Map([['s-t3', { running: true }]]);
+
+    // The coordinator's roster, newest activity first, each with what it needs.
+    const coord = projectContext(state, 's-c');
+    const rows = rowsOf(coord.roster, statuses, state.byId);
+    assert.deepEqual(plain(rows.map((r) => [r.id, r.group, r.dot, r.line])), [
+        ['t3', 'running', 'ongoing', 'Working…'],
+        ['t2', 'waiting', 'warning', 'Needs your decision · Pick A or B.'],
+        ['t1', 'idle', 'done', 'Done · CI added.'],
+        ['t4', 'resolved', 'done', 'Resolved'],
+    ]);
+    assert.deepEqual(plain(countsOf(rows)), { open: 3, running: 1, waiting: 1, resolved: 1 });
+    assert.equal(summaryText(countsOf(rows)), '3 open · 1 waiting on you · 1 running · 1 resolved');
+    // A thread reads the roster from its coordinator, and knows it is still loading before then.
+    const thread = projectContext(state, 's-t3');
+    assert.equal(thread.coordinator, 's-c');
+    assert.equal(thread.roster, coord.roster);
+    const early = projectContext({ ...state, byId: { ...state.byId, 's-c': { id: 's-c' } }, projectionsBySession: { ...state.projectionsBySession, 's-c': { state: 'loading', values: {} } } }, 's-t3');
+    assert.deepEqual([early.roster, early.load], [null, 'loading']);
+    assert.equal(projectContext(state, 's-plain'), undefined);
+
+    // Cards: one per thread in a turn, the first action wins.
+    assert.deepEqual(plain(cardsOf(coordValue, 2).map((c) => [c.kind, c.thread])), [['start', 't3'], ['start', 't4']]);
+    assert.equal(cardsOf(coordValue, 9).length, 0);
+    const [handback] = cardsOf(coordValue, 3).map((card) => cardView(card, coord, statuses, state.byId, 's-c'));
+    assert.deepEqual(plain([handback.verb, handback.title, handback.session, handback.state.label, handback.icon]), ['Handback · Needs your decision', 'Fix login', 's-t2', 'Needs a decision', 'IconTreeCornerRegular']);
+    const steer = cardView({ turn: 2, seq: 11, kind: 'send', thread: 't3', status: 'steer' }, coord, statuses, state.byId, 's-c');
+    assert.deepEqual(plain([steer.verb, steer.state.label]), ['Steered a running thread', 'Running']);
+    assert.equal(cardView({ turn: 2, seq: 1, kind: 'update', thread: 't4', status: 'resolved' }, coord, statuses, state.byId, 's-c').verb, 'Resolved a thread');
+    // In a thread, its own handback card points back at the coordinator.
+    const own = cardView(threadValue.cards[0], thread, statuses, state.byId, 's-t3');
+    assert.deepEqual(plain([own.verb, own.title, own.session]), ['Handed back to the coordinator · Progress update', '◆ DSH Plugins', 's-c']);
+
+    // A thread link as DSH resolves `.dsh-thread/t3` against the coordinator's session.
+    const target = linkTarget(`dsh-resource://file/session/${encodeURIComponent('s-c')}/.dsh-thread/T3`);
+    assert.deepEqual(plain(target), { sessionId: 's-c', threadId: 't3' });
+    assert.deepEqual(plain(resolveLink(state, target)), { state: 'found', session: 's-t3', coordinator: 's-c' });
+    assert.equal(resolveLink(state, { sessionId: 's-c', threadId: 't9' }).state, 'missing');
+    assert.equal(resolveLink(state, { sessionId: 's-t3', threadId: 't3' }).state, 'found');
+    assert.equal(resolveLink(state, { sessionId: 'not-loaded', threadId: 't1' }).state, 'loading');
+    assert.equal(resolveLink(state, undefined).state, 'invalid');
+    assert.equal(linkTarget('dsh-resource://file/session/s-c/.dsh-thread/notes.md'), undefined);
+
+    // A sidebar chat address keeps any session id intact.
+    assert.equal(chatSessionOf(chatAddress('sess/with ?#%')), 'sess/with ?#%');
+    assert.equal(chatSessionOf('dsh-resource://subagentchat/session/x'), undefined);
+
+    // Sidebar marks: from the projection, or from the "<project> › " title before DSH has folded the row.
+    assert.deepEqual(['s-t3', 's-t1', 's-c', 's-plain'].map((id) => isThreadRow(state, id)), [true, true, false, false]);
 });
 
 test('session mode: a failed selection is reported, and the coordinator retries later', async () => {
@@ -1103,4 +1255,105 @@ test('empty optional arguments count as not given; thread ids are trimmed', asyn
     assert.match(await coord.ctx.call('project_thread_update', { thread: ' t1 ', model: '', effort: '', title: '' }), /^t1: nothing to change\.$/);
     assert.match(await coord.ctx.call('project_thread_send', { thread: ' t2 ', text: 'More.' }), /^Sent to t2\.$/);
     assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'].threads), ['t1', 't2']);
+});
+
+// ── the DSH window's view (projection.js) ───────────────────────────────────
+
+/** Fold a session log through the registered projection, as DSH's drive does. */
+function fold(host, sessionId, events = host.sessions.get(sessionId).events) {
+    const def = host.projections[0];
+    let state = def.init({ id: sessionId });
+    for (const event of events) state = def.apply(state, event);
+    return def.wire.viewSchema.parse(def.wire.view(state));
+}
+
+test('projection: coordinator roster and cards, thread role and coordinator link', async () => {
+    const { host } = setup();
+    await tick();
+    assert.equal(host.projections.length, 1);
+    assert.equal(host.projections[0].key, 'projectSession');
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { title: 'Add CI', brief: 'Add a workflow.' });
+    const thread = [...host.live.values()].find((a) => a.id !== coord.id);
+    // The tool result records the view; the model sees only text.
+    const started = coord.ctx.metas.at(-1);
+    assert.equal(started.name, 'project_thread_start');
+    assert.deepEqual(started.meta.action, { kind: 'start', thread: 't1' });
+    assert.equal(started.meta.threads[0].session, thread.id);
+
+    // A session the store does not know yet (DSH folds new sessions from their first event) reads only events.
+    const coordEvents = host.sessions.get(coord.id).events;
+    const fresh = fold(host, 'not-in-store', coordEvents);
+    assert.equal(fresh.role, 'coordinator');
+    assert.deepEqual(fresh.project, { id: 'dsh-plugins', name: 'DSH Plugins' });
+    assert.deepEqual(fresh.threads.map((t) => [t.id, t.session, t.title, t.resolved]), [['t1', thread.id, 'Add CI', false]]);
+    assert.deepEqual(fresh.cards.map((c) => [c.kind, c.thread]), [['start', 't1']]);
+
+    // The brief names the thread and, through its request id, the coordinator.
+    const tv = fold(host, 'not-in-store', host.sessions.get(thread.id).events);
+    assert.equal(tv.role, 'thread');
+    assert.deepEqual(tv.thread, { id: 't1', title: 'Add CI' });
+    assert.equal(tv.project.name, 'DSH Plugins');
+    assert.equal(tv.coordinator, coord.id);
+
+    // A handback: the coordinator's roster and a card; the thread's own card.
+    thread.ctx.emitStatus(thread, 'running');
+    await thread.ctx.call('project_handback', { status: 'done', summary: 'CI added in .github/workflows/test.yml' });
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    const after = fold(host, 'not-in-store', coordEvents);
+    assert.deepEqual(after.cards.map((c) => [c.kind, c.thread, c.status ?? null]), [['start', 't1', null], ['handback', 't1', 'done']]);
+    assert.equal(after.threads[0].handback.status, 'done');
+    assert.equal(after.threads[0].handback.summary, 'CI added in .github/workflows/test.yml');
+    const own = fold(host, 'not-in-store', host.sessions.get(thread.id).events);
+    assert.deepEqual(own.cards.map((c) => [c.kind, c.status]), [['handback', 'done']]);
+
+    // Resolve: a card, and the roster says so.
+    await coord.ctx.call('project_thread_update', { thread: 't1', resolved: true });
+    const resolved = fold(host, 'not-in-store', coordEvents);
+    assert.deepEqual(resolved.cards.at(-1), { turn: 0, seq: resolved.cards.at(-1).seq, kind: 'update', thread: 't1', status: 'resolved' });
+    assert.equal(resolved.threads[0].resolved, true);
+});
+
+test('projection: sessions the store knows are seeded; older events add cards but never roll the roster back', async () => {
+    const { host } = setup();
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { title: 'Old name', brief: 'x' });
+    const thread = [...host.live.values()].find((a) => a.id !== coord.id);
+    await coord.ctx.call('project_thread_update', { thread: 't1', title: 'New name' });
+    const events = host.sessions.get(coord.id).events.map((e) => ({ ...e, time: 1 })); // written long before the fold
+    const seeded = fold(host, coord.id, events);
+    assert.equal(seeded.threads[0].title, 'New name', 'the seed is newer than the replayed start');
+    assert.deepEqual(seeded.cards.map((c) => [c.kind, c.status ?? null]), [['start', null], ['update', 'renamed']]);
+    const tv = fold(host, thread.id, []);
+    assert.deepEqual([tv.role, tv.thread.title, tv.coordinator], ['thread', 'New name', coord.id]);
+    assert.equal(fold(host, 'plain-session', []), null);
+});
+
+test('projection: unrelated and malformed events keep the same state; parsing never throws', () => {
+    const { host } = setup();
+    const def = host.projections[0];
+    const state = def.init({ id: 'plain' });
+    for (const event of [null, {}, { type: 'assistant/message' }, { type: 'tool/result', data: { meta: { other: 1 } } }, { type: 'user/message', data: null },
+        // A user typing a tag is not the plugin speaking.
+        { type: 'user/message', data: { content: [{ type: 'text', text: '[Handback from thread t1 · "x" · status: done]' }], source: { kind: 'user', rpcId: 'browser-1' } } },
+        { type: 'user/message', data: { content: [{ type: 'text', text: '[Handback from thread t1 · "x" · status: done]' }], source: { kind: 'runtime-context' } } }]) {
+        assert.equal(def.apply(state, event), state);
+    }
+    // A turn moves the internal turn counter but not the value DSH sends.
+    const next = def.apply(state, { type: 'turn/start', data: { turn: 3 } });
+    assert.equal(next.turn, 3);
+    assert.equal(def.wire.view(next), def.wire.view(state));
+    for (const bad of [undefined, null, 'x', 5, [], { turn: -1, v: 'no' }, { v: { role: 'boss', project: {} } }]) {
+        const parsed = def.stateSchema.parse(bad);
+        assert.equal(parsed.v, null);
+        assert.equal(parsed.turn, 0);
+    }
+    assert.equal(def.wire.viewSchema.parse('nope'), null);
+    // A handback card lands on the turn the message arrived in.
+    let s = def.apply(state, { type: 'turn/start', data: { turn: 7 } });
+    s = def.apply(s, { type: 'user/message', seq: 40, time: 5, data: { content: [{ type: 'text', text: '[Handback from thread t2 · "Say "hi"" · status: needs_decision]\n\nPick A or B.\n\n(Full conversation: project_thread_read thread="t2".)' }], source: { kind: 'user', rpcId: 'projects-abc' } } });
+    assert.deepEqual(s.v.cards, [{ turn: 7, seq: 40, kind: 'handback', thread: 't2', status: 'needs_decision' }]);
+    assert.deepEqual(s.v.threads, [{ id: 't2', session: null, title: 'Say "hi"', resolved: false, handback: { status: 'needs_decision', summary: 'Pick A or B.', at: new Date(5).toISOString() } }]);
 });

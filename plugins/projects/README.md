@@ -17,6 +17,18 @@ Handbacks and notes reach the coordinator in order. If it cannot take one (for e
 
 The coordinator's system prompt is rebuilt on every request with the live thread roster, the settings and project memory (all of it when short, otherwise its start and its newest lines). A thread's prompt tells it who it is and how to hand back.
 
+## In the DSH window
+
+Threads show up the way Claude Code shows sub-sessions:
+
+- **Thread cards.** Under each coordinator reply, a card for every thread that turn started, messaged, steered, stopped, resolved or heard back from, with the thread's live state (running, waiting on you, done, resolved). Click the thread's name or **Open** to make it the main chat, or the split icon to open it beside the coordinator in the right sidebar, where you can read and talk to it.
+- **Threads menu.** At the top of every project session, **N threads** (with an orange dot when a thread waits on you, or a spinner while one runs) opens the project's threads grouped as *Waiting on you*, *Running*, *Idle* and *Resolved*, each with its last handback. Hover or click it; the arrow keys move through it. **Open the Threads panel** keeps the list in the right sidebar, where a click opens a thread's chat as a tab.
+- **Thread names are links.** The coordinator writes thread names as `[title](.dsh-thread/t3)`, so a name in its reply opens that thread beside the chat. DSH draws them with a branch icon.
+- **Back to the coordinator.** In a thread, **◆ Coordinator** at the top goes back to its coordinator, and the thread's own handback shows as a card that opens the coordinator.
+- **Session list.** Thread rows get a small branch mark, and hovering one shows its project and last handback.
+
+All of it reads the `projectSession` view the plugin adds to each session (`lib/projection.js`); DSH builds it on the Host from the session's own events and sends it to the window, so nothing extra is stored. It needs DSH's own window (DSH Desktop or `dsh --profile web`). Sessions from before this version show their project and threads too.
+
 ## Settings
 
 The four settings match Claude Code's project page:
@@ -152,6 +164,8 @@ Thread:
 ## Not yet
 
 - No "auto-continue when usage limits reset".
+- Only the coordinator starts threads; a thread cannot start threads of its own.
+- **Waiting on you** knows about a pending permission prompt only for threads open in the window. The coordinator still gets told about the others after `approvalNoticeSeconds`.
 - Discord threads cannot be project threads yet. The discord plugin keeps its own sessions.
 
 ## Tests
@@ -163,7 +177,7 @@ node plugins/projects/test/smoke.mjs
 
 The smoke tests run against a fake Host built from the published `@deepseek-ai/*` packages, including a Host with DSH's per-session model selection.
 
-The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin, session-bridge and a scripted model server. It drives the coordinator and threads through the bridge and checks what reaches the model: the model and effort of every request, which tools each session has, handbacks, the automatic notes (idle, failed, stopped, waiting on approval, cut off by a crash), queued turns, direct talk, settings, memory, pause, a stop by the coordinator, a restart after DSH is killed mid-turn, that DSH serves the page's browser code, new defaults saved while DSH runs, and that a new coordinator introduces itself so DSH lists it. It takes about two minutes.
+The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin, session-bridge and a scripted model server. It drives the coordinator and threads through the bridge and checks what reaches the model: the model and effort of every request, which tools each session has, handbacks, the automatic notes (idle, failed, stopped, waiting on approval, cut off by a crash), queued turns, direct talk, settings, memory, pause, a stop by the coordinator, a restart after DSH is killed mid-turn, that DSH serves the page's browser code, the view the window draws (each thread with its handback and cards, and each thread's coordinator, as DSH folds and saves it), new defaults saved while DSH runs, and that a new coordinator introduces itself so DSH lists it. It takes about two minutes.
 
 ```bash
 npm install --prefix /tmp/dsh @deepseek-ai/dsh

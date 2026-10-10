@@ -19,6 +19,7 @@
 import z from '@deepseek-ai/schemastery';
 import { ProjectManager } from './projects.js';
 import { projectTools } from './tools.js';
+import { projectSessionProjection } from './projection.js';
 
 export const name = 'projects';
 
@@ -109,6 +110,11 @@ export function apply(ctx, config) {
         void manager.onDefaultsChanged();
     });
     ctx.effect(() => () => manager.dispose(), 'projects.scopes()');
+    // What the DSH window draws for project sessions: roles, rosters and thread
+    // cards (lib/projection.js). Optional, so a Host without projections still runs projects.
+    ctx.inject(['sessionProjections'], (scope) => {
+        scope.sessionProjections.register(projectSessionProjection((sessionId) => manager.seedView(sessionId)));
+    });
 
     // Coordinators are created after composition settles; failures are logged, never thrown.
     manager.start().then(() => {

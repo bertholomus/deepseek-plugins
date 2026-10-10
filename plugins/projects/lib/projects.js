@@ -30,6 +30,7 @@ import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage,
     handbackMessage, idleMessage, approvalMessage, welcomeMessage, describeEnding, HANDBACK_STATUSES, TAGS,
 } from './prompts.js';
+import { META_MARK, MAX_THREADS } from './projection.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
 const SECTION_ORDER = 9500;
@@ -62,6 +63,23 @@ const ensuring = new Map();
 function isNotFound(error) {
     return error?.constructor?.name === 'ApiSessionNotFound' || error?.code === 'session/not-found'
         || /not[ -]found/i.test(String(error?.message ?? ''));
+}
+
+/** One thread as the DSH window shows it in a roster (see projection.js). */
+function rosterEntry(id, t) {
+    const entry = { id, session: t.sessionId, title: t.title, resolved: t.resolved === true };
+    if (t.createdAt) entry.created = t.createdAt;
+    if (t.lastHandback) entry.handback = { status: t.lastHandback.status, summary: String(t.lastHandback.summary ?? '').slice(0, 300), at: t.lastHandback.at ?? null };
+    return entry;
+}
+
+/** Thread ids for a full roster: every open thread, then the newest resolved ones. */
+function rosterIds(threads) {
+    const ids = Object.keys(threads ?? {}).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+    const open = ids.filter((id) => !threads[id].resolved);
+    const resolved = ids.filter((id) => threads[id].resolved).slice(-Math.max(MAX_THREADS - open.length, 0));
+    const keep = new Set([...open, ...resolved]);
+    return ids.filter((id) => keep.has(id));
 }
 
 /** Arguments of a logged tool call: an object, or JSON text. */
@@ -383,10 +401,15 @@ export class ProjectManager {
         this.log(`welcome ${projectId} ${sessionId} ${outcome}`);
     }
 
-    async prompt(sessionId, text, mode = 'queue') {
+    /**
+     * @param {string} [from] - the coordinator session sending to a thread. It
+     *   rides in the request id, which the session log keeps with the message,
+     *   so the thread's projection can link back to its coordinator.
+     */
+    async prompt(sessionId, text, mode = 'queue', from = undefined) {
         await this.sc.prompt({
             sessionId,
-            requestId: `${RPC_PREFIX}${randomUUID()}`,
+            requestId: `${RPC_PREFIX}${randomUUID()}${from ? `@${from}` : ''}`,
             mode,
             content: [{ type: 'text', text }],
         }, AbortSignal.timeout(60000));
@@ -828,6 +851,54 @@ export class ProjectManager {
         this.retries.set(projectId, retry);
     }
 
+    // ── what the DSH window draws ──────────────────────────────────────────
+
+    /**
+     * What a project tool result records for the DSH window: its presentation
+     * meta, which the `projectSession` projection folds (projection.js). It
+     * names the project and the session's role; for a coordinator it carries
+     * the roster entries the call touched (all of them with `full`), and
+     * `action` is the card the call's turn shows. Never throws: a tool's
+     * result must not fail over its picture.
+     * @param {string} projectId
+     * @param {{role: 'coordinator'|'thread', threadId?: string}} who
+     * @param {{action?: object, threads?: string[], full?: boolean}} [details]
+     * @returns {object|null}
+     */
+    view(projectId, who, details = {}) {
+        try {
+            const project = this.projects.get(projectId);
+            if (!project) return null;
+            const stored = this.store.project(projectId);
+            const out = { [META_MARK]: 1, role: who.role, project: { id: projectId, name: project.name } };
+            if (stored.coordinatorSessionId) out.coordinator = stored.coordinatorSessionId;
+            if (who.role === 'thread') {
+                out.thread = { id: who.threadId, title: stored.threads[who.threadId]?.title ?? who.threadId };
+            } else {
+                const ids = details.full ? rosterIds(stored.threads) : (details.threads ?? []).filter((id) => stored.threads[id]);
+                out.threads = ids.map((id) => rosterEntry(id, stored.threads[id]));
+                if (details.full) out.full = true;
+            }
+            if (details.action) out.action = details.action;
+            return out;
+        } catch (error) {
+            this.log(`error view ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
+            return null;
+        }
+    }
+
+    /**
+     * The projection's starting value for a session this store knows, so a
+     * coordinator or thread from before the projection existed shows its
+     * project and threads the first time DSH folds it.
+     * @param {string} sessionId
+     */
+    seedView(sessionId) {
+        const who = this.store.lookup(sessionId);
+        if (!who || !this.projects.has(who.projectId)) return null;
+        return this.view(who.projectId, who, who.role === 'coordinator' ? { full: true } : {});
+    }
+
     // ── operations behind the tools ────────────────────────────────────────
 
     /** The thread for an id as the model typed it (" t3 " is t3), or an error that lists the threads. */
@@ -874,7 +945,7 @@ export class ProjectManager {
             notes.push('the model could not be set, so the thread runs on the DSH default (details in the projects log)');
         }
         await this.sc.rename({ sessionId, title: `${project.name} › ${cleanTitle}` }).catch(() => {});
-        await this.prompt(sessionId, briefMessage(project.name, threadId, cleanTitle, brief.trim()), 'queue');
+        await this.prompt(sessionId, briefMessage(project.name, threadId, cleanTitle, brief.trim()), 'queue', this.store.project(projectId).coordinatorSessionId);
         this.log(`thread-start ${projectId}/${threadId} ${sessionId} brief-chars=${brief.length}`);
         return { threadId, sessionId, title: cleanTitle, route: describeRoute(check.model, check.effort), notes };
     }
@@ -884,7 +955,7 @@ export class ProjectManager {
         if (!String(text ?? '').trim()) throw new ProjectError('text is required');
         if (t.resolved) this.store.putThread(projectId, id, { resolved: false });
         await this.attach(t.sessionId);
-        await this.prompt(t.sessionId, coordinatorMessage(text.trim()), steer ? 'steer' : 'queue');
+        await this.prompt(t.sessionId, coordinatorMessage(text.trim()), steer ? 'steer' : 'queue', this.store.project(projectId).coordinatorSessionId);
         this.log(`thread-send ${projectId}/${id} mode=${steer ? 'steer' : 'queue'} chars=${text.length}`);
         return `${steer ? 'Steered' : 'Sent to'} ${id}${t.resolved ? ' (reopened)' : ''}.`;
     }

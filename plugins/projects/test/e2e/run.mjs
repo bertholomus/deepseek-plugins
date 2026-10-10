@@ -249,6 +249,19 @@ async function say(sessionId, text) {
     return since(mark);
 }
 
+/**
+ * A session's `projectSession` value (what the DSH window draws, projection.js)
+ * as DSH last saved it in its projection cache, which it writes at every turn end.
+ */
+function windowView(sessionId) {
+    try {
+        const doc = JSON.parse(readFileSync(join(home, 'storages', 'session_projcache', 'sessions', `${sessionId}.json`), 'utf8'));
+        return doc?.record?.rows?.projectSession?.val?.v ?? null;
+    } catch {
+        return null;
+    }
+}
+
 /** Wait for the coordinator to answer an automatic message, then for it to be idle. */
 async function coordinatorSaw(mark, reply, what) {
     const req = await waitFor(() => since(mark, 'coordinator').find((r) => r.action.text === reply), what);
@@ -287,7 +300,8 @@ try {
     const client = clientUrl ? await httpGet(new URL(clientUrl, new URL('./', signIn)).href, { cookie }) : { status: 0, text: '' };
     let parses = false;
     try { new Script(client.text); parses = true; } catch {}
-    check('DSH serves the browser half and it parses', client.status === 200 && client.text.includes("'plugins.bundle.config'") && parses,
+    check('DSH serves the browser half and it parses', client.status === 200 && client.text.includes("'plugins.bundle.config'")
+        && client.text.includes("'conversation.chat.turnTail'") && parses,
         `${clientUrl ?? 'not in the boot graph'}: ${client.status}`);
 
     // 2. Thread start and handback.
@@ -308,6 +322,16 @@ try {
     const t1 = threadSession('t1');
     check('thread session is titled "E2E Project › Alpha"', (await bridge('GET', `/sessions/${t1}`)).title === `${PROJECT} › Alpha`);
     check('roster shows the handback', saw.system.includes('- t1 · "Alpha" · ') && saw.system.includes('last handback: done'));
+    // The window's view, folded by DSH from the real session events.
+    const view = await waitFor(() => (windowView(coord)?.threads?.some((t) => t.id === 't1' && t.handback?.status === 'done') ? windowView(coord) : null),
+        'the coordinator view with the Alpha handback', 15000).catch(() => windowView(coord));
+    check('the window view lists the thread, its handback and its cards', view?.role === 'coordinator' && view.project?.name === PROJECT
+        && view.threads?.[0]?.session === t1 && view.threads[0].title === 'Alpha'
+        && ['start', 'handback'].every((kind) => view.cards?.some((c) => c.kind === kind && c.thread === 't1' && Number.isSafeInteger(c.turn))),
+        JSON.stringify(view)?.slice(0, 400));
+    const threadView = windowView(t1);
+    check('the window view of a thread names its coordinator', threadView?.role === 'thread' && threadView.coordinator === coord
+        && threadView.thread?.id === 't1' && threadView.cards?.some((c) => c.kind === 'handback'), JSON.stringify(threadView)?.slice(0, 300));
     await sleep(1000);
     check('a turn that handed back sends no idle note', !readText(logFile).includes(`idle-note ${PROJECT_ID}/t1 `) && since(mark, 'coordinator').every((r) => r.action.text !== 'SAW-IDLE'), describe(since(mark)));
 
