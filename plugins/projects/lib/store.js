@@ -7,7 +7,8 @@
  *     welcomedSession?: the coordinator session that got (or never needed) its first-turn welcome,
  *     threads: { [threadId]: { sessionId, title, model?, effort?, resolved, createdAt,
  *       lastHandback?: { status, summary, at }, lastDirect?: { at, reply }, handbackTimes: [ms],
- *       busy?: true while a turn runs, seenTurn?: key of the last turn reviewed } } } } }
+ *       busy?: true while a turn runs, seenTurn?: key of the last turn reviewed,
+ *       changes?: [{ turn, seq, added, deleted, total, files: [{ path, added, deleted, binary?, oversized? }], turns? }] (changes.js) } } } } }
  *
  * Settings here are the project's own: set in its Project settings dialog,
  * by picking a model in its coordinator's DSH model picker, or by the

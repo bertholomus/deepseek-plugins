@@ -228,6 +228,22 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-card-actions{flex:none;display:inline-flex;align-items:center;gap:4px}',
             '.dshp-t-card-actions .dshp-t-icon{width:28px;height:28px;margin:0}',
             '@container (width<=460px){.dshp-t-card-state-label{display:none}}',
+            // Threads: a thread's code changes, in DSH's colors for added and deleted lines
+            '.dshp-t-changes{flex:none;display:inline-flex;align-items:center;gap:6px;box-sizing:border-box;height:26px;padding:0 7px;border:0;border-radius:var(--dsw-radius-md);background:none;font:inherit;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);white-space:nowrap}',
+            'button.dshp-t-changes{cursor:pointer}',
+            'button.dshp-t-changes:hover,button.dshp-t-changes:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}',
+            'button.dshp-t-changes:focus-visible{box-shadow:inset 0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}',
+            '.dshp-t-changes-icon{flex:none;display:inline-flex}',
+            '.dshp-t-counts{display:inline-flex;gap:5px;font-family:var(--ds-font-family-code);font-variant-numeric:tabular-nums}',
+            // DSH's green is too light to read on white at this size; deepened toward the text color.
+            '.dshp-t-added{color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 60%,var(--dsw-alias-label-primary))}',
+            '.dshp-t-deleted{color:var(--dsw-alias-state-error-primary)}',
+            // DSH's hover card is dark in both themes.
+            '.dshp-t-hover-line .dshp-t-added{color:var(--dsw-alias-state-success-primary)}',
+            '.dshp-t-hover-line .dshp-t-deleted{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 60%,white)}',
+            '@container (width<=400px){.dshp-t-card .dshp-t-files{display:none}}',
+            '.dshp-t-row[data-changes] .dshp-t-name{grid-column:2}',
+            '.dshp-t-row-changes{grid-column:3;grid-row:1;justify-self:end;display:inline-flex;align-items:center;gap:5px;min-width:0;font-size:11px;line-height:17px;color:var(--dsw-alias-label-tertiary);white-space:nowrap}',
             // Threads: a new project's suggested first asks, under the coordinator's greeting
             '.dshp-t-suggest{display:flex;flex-direction:column;gap:8px}',
             '.dshp-t-suggest-label{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
@@ -975,6 +991,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const CHAT_PROTOCOL = 'projectthread';
         const CHAT_PREFIX = `dsh-resource://${CHAT_PROTOCOL}/session/`;
         const KINDS = { chat: 'projectthread', pane: 'projectthreads', link: 'projectthreadlink' };
+        /** DSH's Review tab for one turn's changes (dsh-client-ui-deliverables): `<session>/<seq>/<turn>`. */
+        const REVIEW_PREFIX = 'dsh-resource://changes-review/session/';
         const IDS = {
             menu: `${BUNDLE}/threads-menu`,
             cards: `${BUNDLE}/thread-cards`,
@@ -1026,6 +1044,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             resumeFailed: 'Couldn\'t resume the project.',
             tryAsking: 'Try asking',
             suggestCopied: 'Copied. Paste it in the message box below.',
+            reviewChanges: 'Review changes',
+            reviewLatest: 'Review the latest changes',
+            diffGone: 'DSH no longer has this diff. It keeps diffs until it restarts.',
         };
         /** A new project's first asks, shown under the coordinator's greeting until the user writes. */
         const SUGGESTIONS = [
@@ -1388,6 +1409,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return rows.sort((a, b) => (b.at ?? 0) - (a.at ?? 0) || threadNumber(b.id) - threadNumber(a.id));
         }
 
+        /** The sessions of some rows (threads without a session yet are left out). */
+        const rowSessions = (rows) => rows.map((row) => row.session).filter((id) => id !== undefined);
+
         function countsOf(rows) {
             const count = (group) => rows.filter((row) => row.group === group).length;
             return { open: rows.length - count('resolved'), running: count('running'), waiting: count('waiting'), resolved: count('resolved') };
@@ -1428,15 +1452,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             else if (event.key === 'End') at(items.length - 1);
         }
 
-        function ThreadRow({ row, current, now, model, onOpen, action }) {
+        function ThreadRow({ row, current, now, model, changes, onOpen, action }) {
             const enabled = !current && row.session !== undefined;
             const open = () => { if (enabled) onOpen(row); };
             return h('div', {
                 className: 'dshp-t-row', role: 'button', tabIndex: enabled ? 0 : -1,
-                'data-dshp-item': '', 'data-thread': row.id,
+                'data-dshp-item': '', 'data-thread': row.id, 'data-changes': changes ? '' : undefined,
                 'aria-current': current ? 'true' : undefined,
                 'aria-disabled': enabled ? undefined : 'true',
-                'aria-label': `${row.title}. ${current ? `${TEXT.current}. ` : ''}${row.line}${model ? `. Runs on ${model}` : ''}`,
+                'aria-label': `${row.title}. ${current ? `${TEXT.current}. ` : ''}${row.line}${changes ? `. ${changesText(changes)}` : ''}${model ? `. Runs on ${model}` : ''}`,
                 onClick: open,
                 onKeyDown: (event) => {
                     if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
@@ -1447,6 +1471,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             h('span', { className: 'dshp-t-dot' }, h(ui.StateDot, { state: row.dot })),
             h('span', { className: 'dshp-t-text' },
                 h('span', { className: 'dshp-t-name' }, row.title),
+                changes ? h('span', { className: 'dshp-t-row-changes', 'data-projects-changes': '' }, ...changeCounts(changes)) : null,
                 h('span', { className: 'dshp-t-line' }, current ? `${TEXT.current} · ${row.line}` : row.line)),
             h('span', { className: 'dshp-t-meta' },
                 model ? h('span', { className: 'dshp-t-model', title: model, 'data-projects-thread-model': '' }, model) : null,
@@ -1460,7 +1485,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /** Rows grouped as Waiting on you, Running, Idle and Resolved (folded). */
-        function ThreadList({ rows, current, now, models, onOpen, action }) {
+        function ThreadList({ rows, current, now, models, changes, onOpen, action }) {
             const [showResolved, setShowResolved] = React.useState(() => rows.some((row) => row.group === 'resolved' && row.session === current));
             return GROUPS.map((group) => {
                 const members = rows.filter((row) => row.group === group.id);
@@ -1468,6 +1493,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const list = members.map((row) => h(ThreadRow, {
                     key: row.id, row, current: row.session !== undefined && row.session === current, now, onOpen, action,
                     model: row.session !== undefined ? models?.[row.session] : undefined,
+                    changes: changes?.[row.id],
                 }));
                 if (group.id !== 'resolved') {
                     return h('div', { key: group.id, role: 'group', 'aria-label': group.label, 'data-thread-group': group.id },
@@ -1556,6 +1582,99 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return { cv, models };
         }
 
+        const GROUPED = new Intl.NumberFormat('en-US');
+        const ALWAYS = Object.freeze({ getSnapshot: () => true, subscribe: () => () => {} });
+
+        /** A thread's changes as the plugin describes them (lines added and deleted, files, the newest turn to review), or undefined. */
+        function changesOf(value) {
+            return isObject(value) && Number.isSafeInteger(value.added) && Number.isSafeInteger(value.deleted)
+                && Number.isSafeInteger(value.files) && value.files > 0 ? value : undefined;
+        }
+
+        /** "2 files changed: 18 lines added, 3 deleted", for screen readers. */
+        const changesText = (changes) => `${plural(changes.files, 'file')} changed: ${plural(changes.added, 'line')} added, ${changes.deleted} deleted`;
+
+        /** "+18 -3 · 2 files", in DSH's colors for added and deleted lines. */
+        function changeCounts(changes) {
+            return [
+                h('span', { key: 'c', className: 'dshp-t-counts' },
+                    h('span', { className: 'dshp-t-added' }, `+${GROUPED.format(changes.added)}`),
+                    h('span', { className: 'dshp-t-deleted' }, `-${GROUPED.format(changes.deleted)}`)),
+                h('span', { key: 'f', className: 'dshp-t-files' }, `· ${plural(changes.files, 'file')}`),
+            ];
+        }
+
+        /** Whether DSH shows code changes in chats (its developer tools setting, as its own "Edited N files" card does); on where DSH doesn't say. */
+        function useCodeChanges(projects) {
+            const store = projects.codeChanges?.() ?? ALWAYS;
+            const subscribe = React.useCallback((listener) => store.subscribe(listener), [store]);
+            const get = React.useCallback(() => store.getSnapshot(), [store]);
+            return React.useSyncExternalStore(subscribe, get) !== false;
+        }
+
+        /** The newest turn in which a thread changed files, from its own projection ('' when none). */
+        function lastChange(value) {
+            const list = Array.isArray(value?.changes) ? value.changes : EMPTY;
+            return list.length > 0 && Number.isSafeInteger(list[list.length - 1]?.seq) ? String(list[list.length - 1].seq) : '';
+        }
+
+        /**
+         * Each thread's code changes, by thread id, as the plugin keeps them
+         * from DSH's per-turn summaries (describe's `threads[].changes`). A
+         * thread's own projection marks each turn that changes files, and the
+         * project is read again then, so a card updates as the turn ends.
+         * @param {string[]} sessions - the shown threads' sessions.
+         */
+        function useThreadChanges(projects, useSessions, coordinator, sessions, active) {
+            const key = sessions.join('\n');
+            // The ids are read through `key`, so a new array of the same ids keeps the selector.
+            const select = React.useCallback((state) => sessions.map((id) => lastChange(valueIn(state, id))).join(','), [key]);
+            const marks = useSessions(select);
+            const shown = useCodeChanges(projects);
+            const facts = projects.facts;
+            const on = active && shown && typeof coordinator === 'string' && coordinator !== '' && sessions.length > 0;
+            const seen = React.useRef(marks);
+            React.useEffect(() => {
+                if (!on) return undefined;
+                const fresh = seen.current !== marks;
+                seen.current = marks;
+                void facts.describe(coordinator, fresh ? 0 : 5000);
+                if (!fresh) return undefined;
+                // The plugin keeps a summary a moment after DSH announces it; read once more to be sure.
+                const timer = setTimeout(() => { void facts.describe(coordinator, 0); }, 1500);
+                return () => clearTimeout(timer);
+            }, [on, coordinator, marks, facts]);
+            const threads = React.useSyncExternalStore(facts.subscribe, () => (on ? facts.info(coordinator)?.threads : undefined));
+            return React.useMemo(() => {
+                const out = {};
+                for (const t of Array.isArray(threads) ? threads : EMPTY) {
+                    const changes = isObject(t) && typeof t.id === 'string' ? changesOf(t.changes) : undefined;
+                    if (changes) out[t.id] = changes;
+                }
+                return out;
+            }, [threads]);
+        }
+
+        /**
+         * A thread's changes on its card: "+18 -3 · 2 files", opening DSH's
+         * Review tab on the newest turn that changed files while DSH still
+         * has its diff.
+         */
+        function CardChanges({ changes, onReview }) {
+            const counts = changeCounts(changes);
+            if (!changes.reviewable || !onReview) {
+                return h('span', { className: 'dshp-t-changes', title: `${changesText(changes)}. ${TEXT.diffGone}`, 'data-projects-changes': 'gone' }, ...counts);
+            }
+            const label = changes.turns > 1 ? TEXT.reviewLatest : TEXT.reviewChanges;
+            // DSH's own code-file tile, the mark on its "Edited N files" card.
+            const icon = ui.FileTypeIcon ? h('span', { className: 'dshp-t-changes-icon', 'aria-hidden': true }, h(ui.FileTypeIcon, { kind: 'code', size: 16 })) : null;
+            return h(ui.Tooltip, { label, side: 'top', align: 'end' },
+                h('button', {
+                    type: 'button', className: 'dshp-t-changes', 'aria-label': `${label}. ${changesText(changes)}`,
+                    'data-projects-changes': '', onClick: onReview,
+                }, icon, ...counts));
+        }
+
         /** The project name, as a link to the coordinator unless that is where the user is. */
         function ProjectName({ info, here, onOpen }) {
             const name = info.project.name || TEXT.coordinator;
@@ -1627,6 +1746,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const handbacks = useHeldHandbacks(projects.facts, coordinator);
             const rows = React.useMemo(() => withHeld(rowsOf(info?.roster, statuses, byId), paused ? handbacks : EMPTY), [info?.roster, statuses, byId, paused, handbacks]);
             const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, open);
+            const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), open);
             const described = useProjectInfo(projects.facts, sessionId, info !== undefined, open);
             if (info === undefined) return null;
 
@@ -1693,7 +1813,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             paused ? h(PausedNotice, { coordinator, role: info.me.role, projects }) : null,
             h('div', { className: 'dshp-t-menu-body' },
                 notice ?? h(ThreadList, {
-                    rows, current: sessionId, now, models,
+                    rows, current: sessionId, now, models, changes,
                     onOpen: (row) => openSession(row.session),
                     action: { label: TEXT.openBeside, icon: ui.IconCompareSplitOutlineRegular, run: (row) => { change(false); projects.openBeside(row.session); } },
                 })),
@@ -1730,6 +1850,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const handbacks = useHeldHandbacks(projects.facts, coordinator);
             const rows = React.useMemo(() => withHeld(rowsOf(info?.roster, statuses, byId), paused ? handbacks : EMPTY), [info?.roster, statuses, byId, paused, handbacks]);
             const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, info !== undefined && visible);
+            const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), info !== undefined && visible);
             const described = useProjectInfo(projects.facts, sessionId, info !== undefined, visible);
             if (info === undefined) {
                 return h('div', { className: 'dshp-t-pane', 'data-projects-threads-pane': '' }, h('div', { className: 'dshp-t-empty' }, TEXT.notProject));
@@ -1750,7 +1871,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             h(ModelsSummary, { ...summaryModels(cv, models, coordinator, described), onPick: settingsOn ? (pick) => projects.settings.open(sessionId, { pick }) : undefined }),
             paused ? h(PausedNotice, { coordinator, role: info.me.role, projects }) : null,
             notice ?? h(ThreadList, {
-                rows, current: sessionId, now, models,
+                rows, current: sessionId, now, models, changes,
                 onOpen: (row) => {
                     try { tab.actions.openResource(chatAddress(row.session)); } catch { projects.openBeside(row.session); }
                 },
@@ -1986,6 +2107,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         title: enabled ? `${TEXT.open}: ${view.title}` : undefined,
                         onClick: () => projects.openSession(view.session),
                     }, view.title)),
+                view.changes ? h(CardChanges, {
+                    changes: view.changes,
+                    onReview: enabled && view.changes.last ? () => projects.openReview(view.session, view.changes.last) : undefined,
+                }) : null,
                 view.state ? h('span', { className: 'dshp-t-card-state' },
                     h(ui.StateDot, { state: view.state.dot }),
                     h('span', { className: 'dshp-t-card-state-label' }, view.state.label)) : null,
@@ -2011,6 +2136,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             React.useEffect(() => {
                 for (const id of threadSessions) projects.refresh(id);
             }, [key, projects]);
+            // And what each changed in the workspace.
+            const changes = useThreadChanges(projects, useSessions, info?.me.role === 'coordinator' ? sessionId : undefined, threadSessions, true);
             // A new project suggests first asks under its greeting until the user writes or a thread starts.
             const suggest = info !== undefined && info.me.role === 'coordinator' && info.me.asked !== true
                 && Array.isArray(info.roster) && info.roster.length === 0 && cards.some((card) => card.kind === 'welcome');
@@ -2018,7 +2145,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return h('div', { className: 'dshp-t-cards', 'data-projects-thread-cards': '' },
                 ...views.map((view) => h(ThreadCard, {
                     key: view.key, projects,
-                    view: view.threadId !== undefined && view.session !== undefined ? { ...view, model: selectionText(cv, selections[view.session]) } : view,
+                    view: view.threadId !== undefined && view.session !== undefined
+                        ? { ...view, model: selectionText(cv, selections[view.session]), changes: changes[view.threadId] }
+                        : view,
                 })));
         }
 
@@ -2309,6 +2438,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const cv = useCatalogView(projects.catalog, info !== undefined);
             const paused = usePaused(projects.facts, info?.coordinator, info?.coordinator ? 'list' : null) === true;
             const handbacks = useHeldHandbacks(projects.facts, info?.coordinator);
+            const thread = info?.me.role === 'thread';
+            const changed = useThreadChanges(projects, useSessions, thread ? info.coordinator : undefined, thread ? [sessionId] : EMPTY, true)[info?.me.thread?.id];
             // Which handbacks a pause holds is in the project's description; read it once for this card.
             React.useEffect(() => { if (paused && info?.coordinator) void projects.facts.describe(info.coordinator, 15000); }, [paused, info?.coordinator, projects]);
             if (info === undefined) return null;
@@ -2321,6 +2452,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 return h('div', { className: 'dshp-t-hover', 'data-projects-thread-hover': '' },
                     h('div', { className: 'dshp-t-hover-head' }, h(ui.IconTreeCornerRegular, { size: 12 }), `Thread ${info.me.thread?.id ?? ''} of ◆ ${project}`),
                     row && row.line ? h('div', { className: 'dshp-t-hover-line' }, row.line) : null,
+                    changed ? h('div', { className: 'dshp-t-hover-line', 'data-projects-changes': '' }, ...changeCounts(changed)) : null,
                     runs, pause);
             }
             const counts = countsOf(rowsOf(info.roster, statuses, byId));
@@ -2384,6 +2516,44 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 },
                 openPane() {
                     try { ctx.sidebarRight.openTab(KINDS.pane); } catch (error) { warn('could not open the Threads panel', error); }
+                },
+                /**
+                 * DSH's Review tab on one turn's changes (`last`: {seq, turn}).
+                 * The tab reviews the session whose sidebar holds it, so the
+                 * thread opens and the tab opens in its sidebar once DSH has
+                 * set that sidebar up (a moment later). Where DSH can't open a
+                 * tab in another session, the thread opens, with DSH's own
+                 * card for its changes.
+                 */
+                openReview(sessionId, last) {
+                    if (typeof sessionId !== 'string' || sessionId === '' || !isObject(last)) return;
+                    const address = `${REVIEW_PREFIX}${encodeURIComponent(sessionId)}/${last.seq}/${last.turn}`;
+                    const sidebar = ctx.sidebarRight;
+                    openSession(sessionId);
+                    if (typeof sidebar?.openResourceIn !== 'function' || typeof sidebar.actionsFor !== 'function') return;
+                    let tries = 0;
+                    const place = () => {
+                        try {
+                            if (sidebar.actionsFor(sessionId) !== undefined) {
+                                sidebar.openResourceIn(sessionId, address, { params: { index: 0 } });
+                                return;
+                            }
+                        } catch (error) {
+                            warn('could not open the changes', error);
+                            return;
+                        }
+                        if (++tries < 50) setTimeout(place, 100);
+                    };
+                    place();
+                },
+                /** DSH's developer tools setting, which shows or hides code changes in chats; undefined where DSH has none. */
+                codeChanges() {
+                    try {
+                        const store = ctx.get('configForms')?.developerTools?.enabled;
+                        return store && typeof store.subscribe === 'function' && typeof store.getSnapshot === 'function' ? store : undefined;
+                    } catch {
+                        return undefined;
+                    }
                 },
                 hasPane() {
                     try { return ctx.get('sidebarRightTabs')?.get?.(KINDS.pane) !== undefined; } catch { return false; }
@@ -2827,6 +2997,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             valueIn, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, nestingPlan,
             catalogView, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS,
+            changesOf, changesText, lastChange, REVIEW_PREFIX,
         };
         return module.exports;
     },

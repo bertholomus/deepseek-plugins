@@ -11,8 +11,10 @@
  * presentation meta of project tool results (tools.js), the tagged
  * messages the plugin sends (prompts.js), which DSH logs as an agent's or a
  * plugin's message (earlier versions sent them as the user's, with a
- * request id that marks them), and whether the user has written in a
- * coordinator yet (a new project suggests first asks until then). A
+ * request id that marks them), whether the user has written in a
+ * coordinator yet (a new project suggests first asks until then), and the
+ * turns in which a thread changed files (DSH's `workspace/changes` events;
+ * the window then reads the numbers from the plugin). A
  * session the store already knows
  * is seeded from the store the first time DSH folds it, so sessions from
  * before this version show their project and threads at once; replayed
@@ -25,11 +27,12 @@
  *
  * { role: 'coordinator'|'thread', project: { id?, name }, coordinator?: sessionId,
  *   thread?: { id, title }, threads?: [{ id, session, title, resolved, created?, handback? }],
- *   cards?: [{ turn, seq, kind, thread?, status? }], asked?: true }
+ *   cards?: [{ turn, seq, kind, thread?, status? }], asked?: true, changes?: [{ turn, seq }] }
  *
  * Card kinds: start, send, update (tool results), handback, idle, approval
  * (the plugin's messages), and welcome: the turn a new coordinator
  * introduced itself in. `asked` is set once the user writes in a coordinator.
+ * `changes` lists a thread's turns that changed files, oldest first.
  *
  * @module dsh-plugin-projects/projection
  */
@@ -38,11 +41,13 @@ import { TAGS } from './prompts.js';
 /** The projection key; the browser half reads the same name. */
 export const PROJECTION_KEY = 'projectSession';
 /** Bump when the state shape or fold changes; DSH then refolds from the log. */
-export const STATE_VERSION = 2;
+export const STATE_VERSION = 3;
 /** Most recent cards kept per session; older turns rarely scroll into view. */
 export const MAX_CARDS = 60;
 /** Threads kept in a roster: every open one, then the newest resolved ones. */
 export const MAX_THREADS = 60;
+/** A thread's turns with file changes kept in its value (the newest). */
+export const MAX_CHANGES = 40;
 /** Marks the presentation meta of project tool results. */
 export const META_MARK = 'dshProjects';
 
@@ -217,6 +222,19 @@ function applyToolMeta(state, event) {
     return { ...state, v };
 }
 
+/**
+ * A thread's turn changed files (DSH announces each turn's changes, and a
+ * turn again when they change): note the event, so the window knows to
+ * read the thread's changes again.
+ */
+function applyChanges(state, event) {
+    if (state.v?.role !== 'thread' || !Number.isSafeInteger(event?.seq)) return state;
+    const turn = Number.isSafeInteger(event.data?.turn) ? event.data.turn : state.turn;
+    const list = (Array.isArray(state.v.changes) ? state.v.changes : []).filter((c) => c?.turn !== turn);
+    list.push({ turn, seq: event.seq });
+    return { ...state, v: { ...state.v, changes: list.slice(-MAX_CHANGES) } };
+}
+
 /** One event folded into the state; the same reference when the event says nothing about projects. */
 export function applyEvent(state, event) {
     try {
@@ -227,6 +245,7 @@ export function applyEvent(state, event) {
             }
             case 'user/message': return applyMessage(state, event);
             case 'tool/result': return applyToolMeta(state, event);
+            case 'workspace/changes': return applyChanges(state, event);
             default: return state;
         }
     } catch {

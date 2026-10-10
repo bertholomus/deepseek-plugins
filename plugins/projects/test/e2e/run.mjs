@@ -10,7 +10,8 @@
  * waiting on approval, cut off by a DSH crash), queued turns, direct talk,
  * settings, memory, pause, a restart, the browser half DSH serves for the
  * plugin's page, a saved default that applies without a restart, the Project
- * settings endpoints the window calls, and a pick in DSH's own model picker.
+ * settings endpoints the window calls, a pick in DSH's own model picker, and
+ * a thread's code changes as DSH records them.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/projects/test/e2e/run.mjs
  *
@@ -611,6 +612,75 @@ try {
         && row.settings.coordinatorModel.value === 'fake:fake-model' && row.settings.coordinatorModel.source === 'project setting'
         && row.settings.threadModel.value === 'fake:fake-mini' && row.settings.threadEffort.source === 'plugin default'
         && row.live?.model === 'fake-model' && row.live?.reasoningEffort === 'max' && row.threads.open > 0, JSON.stringify(answer).slice(0, 600));
+
+    // 22. Code changes: a thread's edits show as +a -d · N files, as DSH's own
+    // "Edited N files" card counts them, with the turn DSH's Review tab opens.
+    // The totals outlive a DSH restart; DSH's diff of them does not.
+    const git = (...args) => execFileSync('git', ['-c', 'user.name=E2E', '-c', 'user.email=e2e@example.com', ...args], { cwd: ws, stdio: 'ignore' });
+    let gitReady = true;
+    try {
+        writeFileSync(join(ws, 'README.md'), '# E2E\n');
+        git('init', '-q');
+        git('add', 'README.md');
+        git('commit', '-q', '-m', 'Start');
+    } catch {
+        gitReady = false;
+    }
+    check('git makes the workspace a repository, so DSH records each turn\'s changes', gitReady);
+    mark = model.requests.length;
+    await say(coord, call('project_thread_start', { title: 'Lambda', brief: call('write', { file_path: join(ws, 'notes.md'), content: 'one\ntwo\nthree\n' }) }));
+    await coordinatorSaw(mark, 'SAW-IDLE', 'the Lambda idle note');
+    const lambdaId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Lambda')?.[0];
+    const lambda = threadSession(lambdaId);
+    const turnsKept = (n) => waitFor(() => (project().threads?.[lambdaId]?.changes?.length === n ? true : null), `${n} Lambda turn(s) with changes in the store`, 15000).catch(() => false);
+    await turnsKept(1);
+    const changesOf = async (web) => {
+        const read = await webApi(web, 'dsh-plugin-projects/describe', { target: coord });
+        return read.ok ? read.value.threads.find((t) => t.id === lambdaId)?.changes : undefined;
+    };
+    const dshCard = async (web, seq) => {
+        const res = await httpGet(new URL(`api/changes.summary?${new URLSearchParams({ sessionId: lambda, seq: String(seq) })}`, web.base).href, { cookie: web.cookie });
+        let value = null;
+        try { value = JSON.parse(res.text); } catch {}
+        return { status: res.status, value };
+    };
+    let lc = await changesOf(web);
+    const firstSeq = lc?.last.seq;
+    let card = lc ? await dshCard(web, lc.last.seq) : { status: 0, value: null };
+    check('a thread\'s edit shows as +a -d · N files, as DSH\'s own card counts it', lc?.added === 3 && lc.deleted === 0 && lc.files === 1 && lc.turns === 1 && lc.reviewable === true
+        && card.status === 200 && card.value?.added === 3 && card.value.deleted === 0 && card.value.total === 1 && card.value.turn === lc.last.turn,
+        `${JSON.stringify(lc)} ${card.status} ${JSON.stringify(card.value)?.slice(0, 200)}`);
+    // The window's live copy: DSH writes its projection cache at the turn's
+    // end, before it announces the turn's changes, so ask the running Host.
+    const projected = await webApi(web, 'session/projections', { request: { sessionId: lambda } });
+    const pv = projected.ok ? projected.value?.values?.projectSession : undefined;
+    const lambdaView = pv?.role ? pv : pv?.v;
+    check('the thread\'s own view marks the turn, so the window reads its changes again', lambdaView?.role === 'thread'
+        && lambdaView.changes?.some((c) => c.seq === lc?.last.seq && c.turn === lc?.last.turn), projected.ok ? JSON.stringify(lambdaView) : JSON.stringify(projected).slice(0, 400));
+    // A second turn (the user talking to the thread) edits the file it wrote: lines add up, the file counts once.
+    await say(lambda, call('edit', { file_path: join(ws, 'notes.md'), old_string: 'two', new_string: 'TWO' }));
+    await turnsKept(2);
+    lc = await changesOf(web);
+    check('changes add up over the thread\'s turns, and Review opens the newest', lc?.added === 4 && lc.deleted === 1 && lc.files === 1 && lc.turns === 2
+        && lc.reviewable === true && lc.last.seq > firstSeq && lc.last.seq === project().threads[lambdaId].changes[1].seq, JSON.stringify(lc));
+    // DSH restarts: the totals stay with the plugin, and Review is no longer offered.
+    const lastSeq = lc?.last.seq;
+    const signIns = () => [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].length;
+    const signInsBefore = signIns();
+    await stopDsh(child);
+    child = startDsh(dsh);
+    await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge after the second restart', 90000);
+    await waitFor(() => signIns() > signInsBefore, 'the new web sign-in link', 30000);
+    const webAgain = await signInWeb();
+    lc = await waitFor(() => changesOf(webAgain), 'the project after the second restart', 30000).catch(() => undefined);
+    card = lastSeq !== undefined ? await dshCard(webAgain, lastSeq) : { status: 0, value: null };
+    check('after a restart the thread\'s changes stay, without a diff to review', lc?.added === 4 && lc.deleted === 1 && lc.files === 1 && lc.reviewable === false && card.status === 404,
+        `${JSON.stringify(lc)} ${card.status}`);
+    mark = model.requests.length;
+    await say(coord, 'Which threads changed files?');
+    const lambdaLine = since(mark, 'coordinator')[0]?.system.split('\n').find((l) => l.startsWith(`- ${lambdaId} · "Lambda" · `)) ?? '';
+    check('the coordinator\'s roster says what the thread changed', lambdaLine.startsWith(`- ${lambdaId} · "Lambda" · idle · no handback yet · the user talked to it directly`)
+        && lambdaLine.endsWith(' · changed 1 file (+4 -1)'), lambdaLine);
     check('no errors in the projects log', !/ error /.test(readText(logFile)), readText(logFile).split('\n').filter((l) => / error /.test(l)).join('\n'));
 } catch (error) {
     failed += 1;

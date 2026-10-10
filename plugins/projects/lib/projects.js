@@ -42,6 +42,7 @@ import {
     handbackMessage, idleMessage, approvalMessage, welcomeMessage, describeEnding, HANDBACK_STATUSES, TAGS,
 } from './prompts.js';
 import { META_MARK, MAX_THREADS } from './projection.js';
+import { changeRecord, changeTotals, withChange } from './changes.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
 const SECTION_ORDER = 9500;
@@ -794,6 +795,10 @@ export class ProjectManager {
             this.onSelection({ projectId, role: 'thread', threadId }, agent, event.data);
             return;
         }
+        if (event?.type === 'workspace/changes') {
+            this.noteChanges(projectId, threadId, agent.id, event.seq);
+            return;
+        }
         const id = event?.data?.id;
         if (!id) return;
         if (event.type === 'approval/decided') {
@@ -812,6 +817,41 @@ export class ProjectManager {
         }, this.config.approvalNoticeSeconds * 1000);
         timer.unref?.();
         pending.set(id, timer);
+    }
+
+    /**
+     * A thread turn changed files, as DSH announced it: keep its summary
+     * with the thread, so the window can show the thread's changes after DSH
+     * restarts too (DSH keeps its own copy only while the session lives).
+     * DSH stores the summary right after the event, so read it a moment later.
+     */
+    noteChanges(projectId, threadId, sessionId, seq, attempt = 0) {
+        const timer = setTimeout(() => {
+            let summary;
+            try { summary = this.ctx.get?.('workspaceChanges')?.summary?.(sessionId, seq); } catch {}
+            if (summary === undefined) {
+                if (attempt < 3) this.noteChanges(projectId, threadId, sessionId, seq, attempt + 1);
+                return;
+            }
+            const record = changeRecord(seq, summary);
+            const t = this.store.thread(projectId, threadId);
+            if (!record || !t) return;
+            this.store.putThread(projectId, threadId, { changes: withChange(t.changes, record) });
+            this.log(`changes ${projectId}/${threadId} turn=${record.turn} files=${record.total} +${record.added} -${record.deleted}`);
+        }, attempt === 0 ? 0 : 200 * 2 ** attempt);
+        timer.unref?.();
+    }
+
+    /**
+     * A thread's changes as the window shows them: totals over its turns,
+     * and whether DSH can still show the newest turn's diff.
+     */
+    threadChanges(t) {
+        const totals = changeTotals(t.changes);
+        if (!totals) return null;
+        let reviewable = false;
+        try { reviewable = typeof t.sessionId === 'string' && this.ctx.get?.('workspaceChanges')?.summary?.(t.sessionId, totals.last.seq) !== undefined; } catch {}
+        return { ...totals, reviewable };
     }
 
     clearApprovals(sessionId) {
@@ -1274,6 +1314,7 @@ export class ProjectManager {
                     id, title: t.title, session: t.sessionId ?? null, resolved: t.resolved === true,
                     model: t.model ?? null, effort: t.effort ?? null, live: this.liveSelection(t.sessionId) ?? null,
                     handback: t.lastHandback?.status ?? null,
+                    changes: this.threadChanges(t),
                 };
             }),
         };

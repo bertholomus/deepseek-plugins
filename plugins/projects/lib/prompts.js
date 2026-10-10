@@ -6,6 +6,7 @@
  * @module dsh-plugin-projects/prompts
  */
 import { describeRoute } from './settings.js';
+import { changeTotals, changesLine } from './changes.js';
 
 /** Messages that cross sessions start with one of these tags. */
 export const TAGS = {
@@ -44,7 +45,8 @@ export function rosterLines(threads, liveStatus) {
         const direct = t.lastDirect && !(t.lastHandback && t.lastHandback.at > t.lastDirect.at)
             ? ` · the user talked to it directly; its reply: "${clip(t.lastDirect.reply, 120)}"`
             : '';
-        return `- ${id} · "${t.title}" · ${status}${last}${direct}`;
+        const changed = changesLine(changeTotals(t.changes));
+        return `- ${id} · "${t.title}" · ${status}${last}${direct}${changed ? ` · ${changed}` : ''}`;
     });
 }
 

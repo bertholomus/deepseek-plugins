@@ -17,6 +17,7 @@ import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol';
 import * as plugin from '../lib/index.js';
 import { effectiveSettings, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
 import { slugify, timing } from '../lib/projects.js';
+import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS } from '../lib/changes.js';
 
 const CATALOG = {
     default: { provider: 'deepseek', model: 'deepseek-v4' },
@@ -1697,6 +1698,102 @@ test('browser half: one store of what the plugin says about projects, shared by 
         ['Done · held until you resume', 'Working…', 'No handback yet']);
 });
 
+// ── code changes (changes.js) ──────────────────────────────────────────────
+
+test('changes: each turn\'s newest summary is kept, and the totals count a file once', () => {
+    const summary = (turn, files) => ({
+        turn, cwd: '/w', files, total: files.length,
+        added: files.reduce((n, f) => n + f.added, 0), deleted: files.reduce((n, f) => n + f.deleted, 0),
+    });
+    const r1 = changeRecord(7, summary(1, [{ path: '/w/a.md', display: 'a.md', added: 3, deleted: 0 }, { path: '/w/img.png', display: 'img.png', added: 0, deleted: 0, binary: true }]));
+    assert.deepEqual(r1, { turn: 1, seq: 7, added: 3, deleted: 0, total: 2, files: [{ path: 'a.md', added: 3, deleted: 0 }, { path: 'img.png', added: 0, deleted: 0, binary: true }] });
+    assert.equal(changeRecord(7, null), null);
+    assert.equal(changeRecord(undefined, summary(1, [])), null);
+    let list = withChange(undefined, r1);
+    const r2 = changeRecord(12, summary(2, [{ path: '/w/a.md', display: 'a.md', added: 1, deleted: 1 }]));
+    list = withChange(list, r2);
+    assert.deepEqual(changeTotals(list), { added: 4, deleted: 1, files: 2, turns: 2, last: { seq: 12, turn: 2 } });
+    assert.equal(changesLine(changeTotals(list)), 'changed 2 files (+4 -1)');
+    // DSH announces a turn again when its changes change: the newer one replaces it; one without files drops it.
+    list = withChange(list, changeRecord(15, summary(2, [{ path: '/w/a.md', display: 'a.md', added: 2, deleted: 1 }])));
+    assert.deepEqual(list.map((r) => [r.turn, r.seq, r.added]), [[1, 7, 3], [2, 15, 2]]);
+    list = withChange(list, changeRecord(16, summary(2, [])));
+    assert.deepEqual(changeTotals(list), { added: 3, deleted: 0, files: 2, turns: 1, last: { seq: 7, turn: 1 } });
+    // Files DSH counted but did not list (over its cap) still count.
+    const capped = changeRecord(20, { turn: 3, files: [{ display: 'x.js', added: 1, deleted: 0 }], total: 5, added: 9, deleted: 4 });
+    assert.deepEqual(changeTotals([capped]), { added: 9, deleted: 4, files: 5, turns: 1, last: { seq: 20, turn: 3 } });
+    assert.equal(changesLine(changeTotals([changeRecord(1, summary(1, [{ display: 'one.md', added: 1, deleted: 0 }]))])), 'changed 1 file (+1 -0)');
+    assert.equal(changeTotals([]), null);
+    assert.equal(changeTotals(undefined), null);
+    assert.equal(changesLine(null), '');
+    // Past MAX_TURNS the oldest turns fold together: fewer records, every turn still counted.
+    let many = [];
+    for (let turn = 1; turn <= MAX_TURNS + 5; turn++) {
+        many = withChange(many, changeRecord(turn * 10, summary(turn, [{ display: 'f.md', added: 1, deleted: 0 }, { display: `only-${turn}.md`, added: 2, deleted: 1 }])));
+    }
+    assert.equal(many.length, MAX_TURNS);
+    assert.deepEqual(changeTotals(many), { added: 3 * (MAX_TURNS + 5), deleted: MAX_TURNS + 5, files: MAX_TURNS + 6, turns: MAX_TURNS + 5, last: { seq: (MAX_TURNS + 5) * 10, turn: MAX_TURNS + 5 } });
+    assert.deepEqual(many[0].files.find((f) => f.path === 'f.md'), { path: 'f.md', added: 6, deleted: 0 });
+});
+
+test('changes: a thread\'s file changes reach the window and its coordinator, and outlive DSH\'s own copy', async () => {
+    const { host, dir } = setup({}, undefined, { ...SELECTING, gateway: true });
+    // DSH's workspace-changes service: it serves a summary while it holds the session.
+    const summaries = new Map();
+    host.services.workspaceChanges = { summary: (sessionId, seq) => summaries.get(`${sessionId}/${seq}`) };
+    await tick();
+    const coord = coordinatorOf(host);
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    await coord.ctx.call('project_thread_start', { title: 'Edit', brief: 'Go.' });
+    const t1 = threadOf(host, coord);
+    const announce = (seq, turn, files) => {
+        // Like DSH: the event first, its summary right after.
+        t1.ctx.sessionEvent({ type: 'workspace/changes', seq, data: { turn } });
+        summaries.set(`${t1.id}/${seq}`, {
+            turn, cwd: '/work/dsh', files, total: files.length,
+            added: files.reduce((n, f) => n + f.added, 0), deleted: files.reduce((n, f) => n + f.deleted, 0),
+        });
+    };
+    assert.equal((await remote.describe(coord.id)).threads[0].changes, null, 'nothing changed yet');
+    announce(7, 1, [{ path: '/work/dsh/a.md', display: 'a.md', added: 3, deleted: 0 }, { path: '/work/dsh/b.js', display: 'b.js', added: 10, deleted: 2 }]);
+    await tick();
+    let read = await remote.describe(coord.id);
+    assert.deepEqual(plain(read.threads[0].changes), { added: 13, deleted: 2, files: 2, turns: 1, last: { seq: 7, turn: 1 }, reviewable: true });
+    // Another turn edits one of the same files: lines add up, the file counts once, and Review opens the newest turn.
+    announce(12, 2, [{ path: '/work/dsh/a.md', display: 'a.md', added: 1, deleted: 1 }]);
+    await tick();
+    read = await remote.describe(t1.id);
+    assert.deepEqual(plain(read.threads[0].changes), { added: 14, deleted: 3, files: 2, turns: 2, last: { seq: 12, turn: 2 }, reviewable: true });
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /changes dsh-plugins\/t1 turn=2 files=1 \+1 -1/);
+    // The coordinator hears it in its roster and in project_thread_list.
+    assert.match(coord.ctx.section(), /- t1 · "Edit" · idle · no handback yet · changed 2 files \(\+14 -3\)/);
+    assert.match(await coord.ctx.call('project_thread_list', {}), /changed 2 files \(\+14 -3\)/);
+    // DSH drops its copy when it restarts: the totals stay, and Review is no longer offered.
+    summaries.clear();
+    read = await remote.describe(coord.id);
+    assert.deepEqual(plain(read.threads[0].changes), { added: 14, deleted: 3, files: 2, turns: 2, last: { seq: 12, turn: 2 }, reviewable: false });
+    // A DSH without the service: an announcement it never serves changes nothing and throws nothing.
+    delete host.services.workspaceChanges;
+    t1.ctx.sessionEvent({ type: 'workspace/changes', seq: 20, data: { turn: 3 } });
+    await tick();
+    assert.equal((await remote.describe(coord.id)).threads[0].changes.turns, 2);
+});
+
+test('browser half: a thread\'s changes read as DSH\'s card counts them, and its projection says when to read them again', () => {
+    const { client } = loadClient();
+    const { changesOf, changesText, lastChange, REVIEW_PREFIX } = client.internals;
+    const changes = { added: 18, deleted: 3, files: 2, turns: 1, last: { seq: 12, turn: 2 }, reviewable: true };
+    assert.equal(changesOf(changes), changes);
+    for (const bad of [null, undefined, 'x', { added: 1, deleted: 0, files: 0 }, { added: '1', deleted: 0, files: 1 }]) assert.equal(changesOf(bad), undefined);
+    assert.equal(changesText(changes), '2 files changed: 18 lines added, 3 deleted');
+    assert.equal(changesText({ ...changes, files: 1, added: 1 }), '1 file changed: 1 line added, 3 deleted');
+    assert.equal(lastChange({ role: 'thread', changes: [{ turn: 1, seq: 9 }, { turn: 2, seq: 15 }] }), '15');
+    assert.equal(lastChange({ role: 'thread' }), '');
+    assert.equal(lastChange(undefined), '');
+    // DSH's own Review tab, as its "Edited N files" card opens it.
+    assert.equal(REVIEW_PREFIX, 'dsh-resource://changes-review/session/');
+});
+
 // ── the DSH window's view (projection.js) ───────────────────────────────────
 
 /** Fold a session log through the registered projection, as DSH's drive does. */
@@ -1774,7 +1871,7 @@ test('projection: sessions the store knows are seeded; older events add cards bu
 test('projection: a new coordinator\'s welcome turn, and whether the user has asked anything since', () => {
     const { host } = setup();
     const def = host.projections[0];
-    assert.equal(def.stateVersion, 2, 'the fold changed, so DSH folds every session again');
+    assert.equal(def.stateVersion, 3, 'the fold changed, so DSH folds every session again');
     const msg = (seq, text, source) => ({ type: 'user/message', seq, time: seq, data: { content: [{ type: 'text', text }], ...(source ? { source } : {}) } });
     let s = def.apply(def.init({ id: 'new' }), { type: 'turn/start', data: { turn: 0 } });
     s = def.apply(s, msg(1, '[Project created: "DSH Plugins"]\n\nThis is the first message in this coordinator session.', { kind: 'cordis-host-runner' }));
@@ -1792,6 +1889,23 @@ test('projection: a new coordinator\'s welcome turn, and whether the user has as
     const brief = def.apply(def.init({ id: 't' }), msg(1, '[Brief from the coordinator of "DSH Plugins" · you are thread t1, "Go"]\n\nGo.', { kind: 'agent-message', form: 'relay', senderSessionId: 'c' }));
     assert.equal(def.apply(brief, msg(2, 'Hello.', { kind: 'user', rpcId: 'browser-3' })), brief);
     assert.equal(def.apply(brief, msg(3, '[Project created: "DSH Plugins"]\n\nx', { kind: 'cordis-host-runner' })), brief, 'a thread never takes a welcome');
+});
+
+test('projection: a thread notes each turn that changed files, a newer announcement replacing its turn', () => {
+    const { host } = setup();
+    const def = host.projections[0];
+    const brief = { type: 'user/message', seq: 1, time: 1, data: { content: [{ type: 'text', text: '[Brief from the coordinator of "DSH Plugins" · you are thread t1, "Go"]\n\nGo.' }], source: { kind: 'agent-message', form: 'relay', senderSessionId: 'c' } } };
+    let s = def.apply(def.apply(def.init({ id: 't' }), { type: 'turn/start', data: { turn: 1 } }), brief);
+    s = def.apply(s, { type: 'workspace/changes', seq: 9, data: { turn: 1 } });
+    s = def.apply(def.apply(s, { type: 'turn/start', data: { turn: 2 } }), { type: 'workspace/changes', seq: 15, data: { turn: 2 } });
+    assert.deepEqual(s.v.changes, [{ turn: 1, seq: 9 }, { turn: 2, seq: 15 }]);
+    s = def.apply(s, { type: 'workspace/changes', seq: 18, data: { turn: 2 } });
+    assert.deepEqual(s.v.changes, [{ turn: 1, seq: 9 }, { turn: 2, seq: 18 }]);
+    // A coordinator's or an unknown session's changes are not a thread's.
+    const plainState = def.init({ id: 'plain' });
+    assert.equal(def.apply(plainState, { type: 'workspace/changes', seq: 3, data: { turn: 1 } }), plainState);
+    const welcome = def.apply(def.init({ id: 'c' }), { type: 'user/message', seq: 1, time: 1, data: { content: [{ type: 'text', text: '[Project created: "DSH Plugins"]\n\nHi.' }], source: { kind: 'cordis-host-runner' } } });
+    assert.equal(def.apply(welcome, { type: 'workspace/changes', seq: 4, data: { turn: 0 } }), welcome);
 });
 
 test('projection: unrelated and malformed events keep the same state; parsing never throws', () => {
