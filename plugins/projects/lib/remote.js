@@ -5,7 +5,8 @@
  * app and in a browser). This module adds one more, `dsh-plugin-projects`,
  * so the Project settings dialog in lib/client.js reads and changes a
  * project's models, effort and pause the way the coordinator's
- * project_settings tool does, through the same manager methods, the
+ * project_settings tool does, through the same manager methods, and its
+ * access settings (the user's tools, permissions), which only it does, the
  * plugin's page lists every project with its models, a failed or stopped
  * thread runs again from its card (Retry, Resume), and the Projects page
  * makes projects, moves workspaces between them and adds coordinators.
@@ -56,10 +57,14 @@ export class ProjectsRemote {
         }
     }
 
-    /** Every project with its models and their sources, for the plugin's page. */
+    /**
+     * Every project with its models and access settings and their sources,
+     * for the plugin's page, with the user's tools (guardedTools) and the
+     * permissions DSH offers.
+     */
     async list() {
         try {
-            return { projects: this.manager.listProjects() };
+            return { projects: this.manager.listProjects(), guarded: this.manager.guards().map(([name]) => name), permissions: this.manager.permissionCatalog() };
         } catch (error) {
             throw failure(error);
         }
@@ -144,11 +149,14 @@ export class ProjectsRemote {
     }
 
     /**
-     * Change a project's settings, or one thread's model and effort. Values
-     * are strings; null goes back to the default. `paused` is a boolean.
+     * Change a project's settings, or one thread's model, effort or
+     * permission. Values are strings; null goes back to the default.
+     * `paused` is a boolean. Access settings change only here (and in the
+     * profile): yourTools "asked" or "always", a permission DSH offers or
+     * "default".
      * @param target - as for describe.
-     * @param changes - {coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?}
-     *   or {thread, model?, effort?}.
+     * @param changes - {coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?,
+     *   yourTools?, coordinatorPermission?, threadPermission?} or {thread, model?, effort?, permission?}.
      * @returns the project as describe returns it, with `notes` from the change.
      */
     async update(target, changes) {

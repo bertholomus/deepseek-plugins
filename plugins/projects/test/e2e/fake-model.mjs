@@ -4,6 +4,7 @@
  * test drives every session by what it sends:
  *
  *   E2E:call <tool> <json args>   call that tool (the rest of the line is the JSON)
+ *   E2E:force <tool> <json args>  call it even if the session is not offered it
  *   E2E:fail                      answer HTTP 400, so the turn fails
  *   …asked you to try again/continue  (Retry or Resume from the window) reply RESUMED
  *   E2E:slow <ms>                 on a line of its own: answer after that long
@@ -47,6 +48,8 @@ function decide(body, text) {
         if (!tools.has(call[1])) return { text: `MISSING TOOL ${call[1]}` };
         return { tool: call[1], args: JSON.parse(call[2]) };
     }
+    const force = /E2E:force (\S+) (.*)$/m.exec(text);
+    if (force) return { tool: force[1], args: JSON.parse(force[2]) };
     if (text.includes('E2E:fail')) return { fail: true };
     if (text.includes('[Handback from thread')) return { text: 'SAW-HANDBACK' };
     if (text.includes('[Thread idle without a handback')) return { text: 'SAW-IDLE' };

@@ -1,7 +1,7 @@
 /**
- * Model and effort settings. Four settings per project:
- * coordinator model, coordinator effort, thread model, thread effort. Each
- * resolves from the first layer that sets it:
+ * Model and effort settings, and access settings. Four model settings per
+ * project: coordinator model, coordinator effort, thread model, thread
+ * effort. Each resolves from the first layer that sets it:
  *
  *   the project's own setting (its Project settings dialog, its coordinator's
  *   DSH model picker, or the project_settings tool) → project row in the
@@ -17,18 +17,66 @@
 
 export const SETTING_KEYS = ['coordinatorModel', 'coordinatorEffort', 'threadModel', 'threadEffort'];
 
+/**
+ * Access settings, layered the same way: who may use the user's own tools
+ * (config.guardedTools), and the DSH permission preset the coordinator and
+ * new threads run with.
+ *
+ *   yourTools: "asked" keeps the user's tools from every coordinator, and
+ *     from a thread unless the user's own words for it name one; "always"
+ *     lets every project session use them.
+ *   coordinatorPermission, threadPermission: one of DSH's permission
+ *     presets (read-only, workspace-write, danger-full-access), or "default"
+ *     for DSH's default for new sessions.
+ *
+ * Without any setting they are the plugin's own defaults below, not DSH's:
+ * threads start on Workspace Write. Only the user changes them (Project
+ * settings, the plugin's page, the profile); no project tool does.
+ */
+export const ACCESS_KEYS = ['yourTools', 'coordinatorPermission', 'threadPermission'];
+export const TOOL_MODES = ['asked', 'always'];
+export const ACCESS_DEFAULTS = Object.freeze({ yourTools: 'asked', coordinatorPermission: 'default', threadPermission: 'workspace-write' });
+
 const set = (v) => typeof v === 'string' && v.trim() !== '';
 
+/** A config value DSH hands over as a live reference (`{get()}`), read now; a plain value as it is. */
+export const liveValue = (v) => (v !== null && typeof v === 'object' && typeof v.get === 'function' ? v.get() : v);
+
 /**
- * The four plugin-wide defaults as plain values. DSH hands them over as live
- * references (`{get()}`) because its settings page edits them while the
- * plugin runs; a test or an older DSH hands over plain strings.
+ * The plugin-wide defaults as plain values. DSH hands them over as live
+ * references because its settings page edits them while the plugin runs; a
+ * test or an older DSH hands over plain strings.
  * @param {object} config - plugin config.
  * @returns {Record<string, string|undefined>}
  */
 export function pluginDefaults(config = {}) {
-    const read = (v) => (v !== null && typeof v === 'object' && typeof v.get === 'function' ? v.get() : v);
-    return Object.fromEntries(SETTING_KEYS.map((key) => [key, read(config[key])]));
+    return Object.fromEntries([...SETTING_KEYS, ...ACCESS_KEYS].map((key) => [key, liveValue(config[key])]));
+}
+
+/** An access value a layer sets, or undefined: yourTools takes "asked" or "always", a permission any preset name. */
+function accessValue(key, v) {
+    if (!set(v)) return undefined;
+    const value = v.trim();
+    if (key === 'yourTools') return TOOL_MODES.includes(value.toLowerCase()) ? value.toLowerCase() : undefined;
+    return value;
+}
+
+/**
+ * Resolve the three access settings and where each came from: the
+ * project's own setting, its profile row, the plugin's defaults (set on its
+ * page, or the built-in ACCESS_DEFAULTS).
+ * @returns {Record<string, {value: string, source: string}>}
+ */
+export function effectiveAccess(plugin = {}, project = {}, overrides = {}) {
+    const out = {};
+    for (const key of ACCESS_KEYS) {
+        const own = accessValue(key, overrides[key]);
+        const row = accessValue(key, project[key]);
+        if (own !== undefined) out[key] = { value: own, source: 'project setting' };
+        else if (row !== undefined) out[key] = { value: row, source: 'project config' };
+        else out[key] = { value: accessValue(key, plugin[key]) ?? ACCESS_DEFAULTS[key], source: 'plugin default' };
+    }
+    return out;
 }
 
 /**

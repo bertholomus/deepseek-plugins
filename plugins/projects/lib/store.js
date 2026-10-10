@@ -2,10 +2,13 @@
  * Durable project state. One JSON file, atomic writes, mode 600. Shape:
  *
  * { version: 1, projects: { [projectId]: {
- *     coordinatorSessionId, settings: { coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused? },
- *     nextThread, pendingHandbacks: [text | {text, from: thread session}], threadStarts: [ms], rowSeen?: { the project row's models and efforts last seen },
+ *     coordinatorSessionId, settings: { coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?, yourTools?, coordinatorPermission?, threadPermission? },
+ *     nextThread, pendingHandbacks: [text | {text, from: thread session}], threadStarts: [ms], rowSeen?: { the project row's models, efforts and access last seen },
  *     welcomedSession?: the coordinator session that got (or never needed) its first-turn welcome,
+ *     coordinatorRoute?, coordinatorAccess?: the model route and permission setting the coordinator last got,
  *     threads: { [threadId]: { sessionId, title, model?, effort?, resolved, createdAt,
+ *       ask?: the user's words it started with, tools?: the user's tools (guardedTools names) the user's words gave it,
+ *       permission?: the DSH permission preset it started on or was moved to,
  *       lastHandback?: { status, summary, at }, lastDirect?: { at, reply }, handbackTimes: [ms],
  *       busy?: true while a turn runs, seenTurn?: key of the last turn reviewed,
  *       lastEnding?: { text, kind, at }: that turn, when it failed or stopped without a handback (prompts.js describeEnding),

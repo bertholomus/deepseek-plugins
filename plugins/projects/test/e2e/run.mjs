@@ -12,9 +12,11 @@
  * plugin's page, a saved default that applies without a restart, the Project
  * settings endpoints the window calls, a pick in DSH's own model picker,
  * a thread's code changes as DSH records them, failed and stopped threads
- * as the window shows them, with Retry and Resume, and projects as groups
+ * as the window shows them, with Retry and Resume, projects as groups
  * of workspaces: the one-time import of the old sidebar's projects and the
- * Projects page's endpoints.
+ * Projects page's endpoints, and the user's tools and permissions: an MCP
+ * server named as one of the user's tools that no coordinator is offered
+ * and a thread gets only from the user's words, threads on Workspace Write.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/projects/test/e2e/run.mjs
  *
@@ -87,6 +89,8 @@ const logFile = join(stateDir, 'projects.log');
 const memoryDir = join(stateDir, 'memory');
 const sock = join(root, 'bridge.sock');
 const dshLog = join(root, 'dsh.log');
+/** Every call that reaches the stand-in for the user's lane-catalog MCP server (fake-mcp.mjs). */
+const mcpCalls = join(root, 'mcp-calls.log');
 
 function bridge(method, path, body) {
     return new Promise((resolvePromise, reject) => {
@@ -184,8 +188,31 @@ function writeProfile(modelPort) {
  */
 function writePatch(modelPort, defaults) {
     const q = JSON.stringify;
-    // The DSH default effort is "low", so a missed project selection shows on the wire.
-    writeFileSync(join(profile, 'cordis.patch.yml'), `- id: agent-default-model
+    // The DSH default effort is "low", so a missed project selection shows on the wire. lane-catalog
+    // stands in for one of the user's MCP servers; new sessions get Full access, as in the user's DSH.
+    writeFileSync(join(profile, 'cordis.patch.yml'), `- insert:
+    - id: mcp-lane-catalog
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        transport: stdio
+        serverName: lane-catalog
+        command: ${q(process.execPath)}
+        args: [${q(join(here, 'fake-mcp.mjs'))}, ${q(mcpCalls)}]
+        failOnStartupError: true
+- id: permission
+  config:
+    defaultPreset: danger-full-access
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+- id: agent-default-model
   config:
     provider: fake
     model: fake-model
@@ -612,7 +639,8 @@ try {
     reqs = await say(coord, call('project_thread_start', { ask: 'Write a haiku about rain.', title: 'Lanes', brief: 'Use mcp__lane-catalog__lanes_status to list the lanes.' }));
     check('a start that would use a guarded tool the user did not ask for is refused', resultOf(reqs).startsWith('TOOL-RESULT: Failed: this would use lane-catalog, and the user\'s words do not ask for it.')
         && readText(logFile).includes(`guard ${PROJECT_ID} start lane-catalog`), resultOf(reqs));
-    check('the coordinator\'s rules name the guarded tools', reqs.some((r) => r.system.includes('\n   Here those include: lane-catalog.\n')), reqs.at(-1)?.system.split('\n').filter((l) => /include/.test(l)).join(' | '));
+    check('the coordinator\'s rules name the user\'s tools it doesn\'t have', reqs.some((r) => r.system.includes('\n   You don\'t have these here: lane-catalog. When the user\'s words ask for work that needs one, start a thread with their words in `ask`; the thread gets the ones their words name.\n')),
+        reqs.at(-1)?.system.split('\n').filter((l) => /these here|include/.test(l)).join(' | '));
     reqs = await say(coord, call('project_thread_start', { title: 'No ask', brief: 'Just answer.' }));
     check('a start without the user\'s words is rejected before it runs', resultOf(reqs) !== '' && /\bask\b/.test(resultOf(reqs))
         && !Object.values(project().threads ?? {}).some((t) => t.title === 'No ask' || t.title === 'Lanes'), resultOf(reqs).slice(0, 300));
@@ -826,6 +854,73 @@ try {
     const muView = muId ? await bridge('GET', `/sessions/${threadSession(muId)}`) : null;
     check('the coordinator is told its project\'s other folders', since(mark, 'coordinator')[0]?.system.includes(`The project's other folders: ${realpathSync(dirB)}.`), since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => /folder/i.test(l)).join(' | '));
     check('a thread can work in another of its project\'s folders', muView?.cwd === realpathSync(dirB), JSON.stringify(muView).slice(0, 300));
+
+    // 25. The user's tools and permissions. lane-catalog, one of the user's own tools in this profile
+    // (guardedTools), runs as an MCP server for every session. Under "Your tools: Only when asked", the
+    // default, no coordinator is offered it or can call it, and a thread has it only when the user's own
+    // words for it name it. Threads run on Workspace Write; DSH's default here is Full access, as in the
+    // user's own DSH, and coordinators keep it.
+    const LANES = 'mcp__lane-catalog__lanes_status';
+    const plainId = (await bridge('POST', '/sessions', { workspacePath: join(root, 'plain'), text: 'Hello plain session.' })).sessionId;
+    await waitIdle(plainId);
+    const plainReq = model.requests.find((r) => r.fresh.includes('Hello plain session.'));
+    check('the user\'s MCP server reaches an ordinary session', plainReq?.tools.includes(LANES) === true, plainReq?.tools.join(','));
+    reqs = await say(coord, `E2E:force ${LANES} {}`);
+    check('a coordinator is never offered the user\'s tool', reqs[0]?.tools.includes('bash') && !reqs[0].tools.includes(LANES)
+        && model.requests.filter((r) => whoOf(r) === 'coordinator').every((r) => !r.tools.includes(LANES)), reqs[0]?.tools.join(','));
+    check('its call to it anyway is refused before it reaches the server, with what to do instead', resultOf(reqs).includes('which this project keeps out of the coordinator. When the user asks for work that needs it, start a thread')
+        && readText(mcpCalls) === '', resultOf(reqs));
+    // Old Alpha's coordinator is new: the user has written nothing to it yet. The start's arguments go as JSON with every "l"
+    // escaped, so the message that carries them (the user's words, here) names no tool, nor "lanes", while the ask does.
+    const oldId = named('Old Alpha')?.id;
+    const oldThreads = () => Object.values(store().projects?.[oldId]?.threads ?? {});
+    const s4 = 'Use lane-catalog to check which of my model lanes are up right now.';
+    const lanesStart = `E2E:call project_thread_start ${JSON.stringify({ ask: s4, title: 'Lanes up', brief: `Report which are up. E2E:force ${LANES} {}` }).replace(/l/g, '\\u006c').replace(/L/g, '\\u004c')}`;
+    reqs = await say(oldCoord, lanesStart);
+    check('an ask that names the user\'s tool when the user never did is refused', resultOf(reqs).startsWith('TOOL-RESULT: Failed: ask names lane-catalog, but the user\'s messages don\'t.')
+        && readText(logFile).includes(` guard ${oldId} ask-unsaid lane-catalog`) && !oldThreads().some((t) => t.title === 'Lanes up'), resultOf(reqs));
+    await say(oldCoord, s4);
+    mark = model.requests.length;
+    reqs = await say(oldCoord, lanesStart);
+    check('once the user asks for it by name, the thread starts with it', /^TOOL-RESULT: Started t\d+ "Lanes up"\. It reports back when done\. The user's words give it lane-catalog\./.test(resultOf(reqs)), resultOf(reqs));
+    await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Old Alpha"') && whoOf(r) === 'coordinator' && r.action.text === 'SAW-IDLE'), 'the Lanes up idle note');
+    await waitIdle(oldCoord);
+    const lanesReqs = since(mark).filter((r) => /You are thread t\d+, "Lanes up", in the DSH project "Old Alpha"/.test(r.system));
+    check('the thread is offered the tool the user\'s words name, and its call reaches the server', lanesReqs[0]?.tools.includes(LANES) && resultOf(lanesReqs).includes('alpha up, beta up')
+        && readText(mcpCalls).trim().split('\n').length === 1 && readText(logFile).includes(` wall ${oldId}/coordinator `), `${lanesReqs[0]?.tools.filter((t) => t.startsWith('mcp__')).join(',')} | ${resultOf(lanesReqs)}`);
+    // The user writes to a thread directly: the tools their words there name are its own from that turn on.
+    mark = model.requests.length;
+    await say(t2, `Please ask lane-catalog which are up. E2E:force ${LANES} {}`);
+    const direct = since(mark, 't2').filter((r) => r.system.includes(`in the DSH project "${PROJECT}"`));
+    check('the user\'s own words in a thread give it that tool for the same turn', direct[0]?.tools.includes(LANES) && resultOf(direct).includes('alpha up, beta up')
+        && readText(logFile).includes(`tools ${PROJECT_ID}/t2 +lane-catalog from the user in the thread`), `${direct[0]?.tools.filter((t) => t.startsWith('mcp__')).join(',')} | ${resultOf(direct)}`);
+    // Permissions, as DSH itself holds them.
+    let described = await webApi(webAgain, 'dsh-plugin-projects/describe', { target: oldCoord });
+    const lanesRow = described.value?.threads?.find((t) => t.title === 'Lanes up');
+    check('a thread runs on Workspace Write, its coordinator on DSH\'s default (Full access here), and the window shows both', described.ok && lanesRow?.permission === 'workspace-write'
+        && described.value.project.permission === 'danger-full-access' && lanesRow.tools?.join() === 'lane-catalog' && described.value.project.tools?.length === 0
+        && described.value.permissions?.options?.map((o) => o.value).join() === 'read-only,workspace-write,danger-full-access', JSON.stringify(described.value ?? described).slice(0, 600));
+    const lanesThread = oldThreads().find((t) => t.title === 'Lanes up');
+    const lanesEvents = (await bridge('GET', `/sessions/${lanesThread?.sessionId}/events?types=permission/preset,user/message&limit=50`)).events;
+    const presetAt = lanesEvents.findLastIndex((e) => e.type === 'permission/preset');
+    check('it is on Workspace Write before it reads its brief', presetAt > 0 && lanesEvents.findIndex((e) => e.type === 'user/message') > presetAt, JSON.stringify(lanesEvents.map((e) => e.type)));
+    described = await webApi(webAgain, 'dsh-plugin-projects/describe', { target: coord });
+    check('every thread the plugin started ran on Workspace Write', described.ok && described.value.threads.length > 3 && described.value.threads.every((t) => t.permission === 'workspace-write'),
+        JSON.stringify(described.value?.threads?.map((t) => [t.id, t.permission])));
+    // Project settings moves the coordinator at once, and new threads start on what it says.
+    let changed = await webApi(webAgain, 'dsh-plugin-projects/update', { target: oldCoord, changes: { coordinatorPermission: 'workspace-write' } });
+    check('Project settings moves a coordinator to another permission', changed.ok && changed.value.project.permission === 'workspace-write'
+        && changed.value.access.coordinatorPermission.source === 'project setting', JSON.stringify(changed).slice(0, 400));
+    changed = await webApi(webAgain, 'dsh-plugin-projects/update', { target: oldCoord, changes: { coordinatorPermission: null, threadPermission: 'read-only' } });
+    check('and back to DSH\'s default', changed.ok && changed.value.project.permission === 'danger-full-access' && changed.value.access.threadPermission.value === 'read-only', JSON.stringify(changed).slice(0, 400));
+    const readOnlyFile = join(dirA, 'read-only-probe.txt');
+    mark = model.requests.length;
+    await say(oldCoord, call('project_thread_start', { ask: 'Please do this.', title: 'Read only', brief: call('write', { file_path: readOnlyFile, content: 'x' }) }));
+    // DSH's sandbox refuses the write, or asks the user; either way nothing is written.
+    await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Old Alpha"') && whoOf(r) === 'coordinator' && /^SAW-(IDLE|APPROVAL)$/.test(r.action.text ?? '')), 'the Read only note');
+    described = await webApi(webAgain, 'dsh-plugin-projects/describe', { target: oldCoord });
+    check('a thread on Read Only can\'t write even in its own folder', described.value?.threads?.find((t) => t.title === 'Read only')?.permission === 'read-only' && !existsSync(readOnlyFile),
+        resultOf(since(mark).filter((r) => /You are thread t\d+, "Read only", in the DSH project/.test(r.system))));
     check('no errors in the projects log', !/ error /.test(readText(logFile)), readText(logFile).split('\n').filter((l) => / error /.test(l)).join('\n'));
 } catch (error) {
     failed += 1;

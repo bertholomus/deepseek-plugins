@@ -14,6 +14,9 @@
  * a model in its coordinator's DSH model picker, or through the coordinator;
  * projects that set none use the plugin-wide defaults. Those are live config,
  * so the form on the plugin's page in DSH changes them without a restart.
+ * Access settings work the same way, except that only the user changes
+ * them: whether project sessions have the user's own tools, and the DSH
+ * permission preset of the coordinator and of new threads.
  *
  * @module dsh-plugin-projects
  */
@@ -47,6 +50,12 @@ const Project = z.object({
     threadModel: z.string(),
     /** Default effort for new threads; empty uses the plugin default. */
     threadEffort: z.string(),
+    /** "asked" or "always": who in this project may use the user's own tools (guardedTools); empty uses the plugin default. */
+    yourTools: z.string(),
+    /** The coordinator's DSH permission preset, or "default" for DSH's default; empty uses the plugin default. */
+    coordinatorPermission: z.string(),
+    /** The DSH permission preset new threads start on, or "default"; empty uses the plugin default. */
+    threadPermission: z.string(),
     /** Block new threads and hold handbacks. The coordinator's project_settings can override it. */
     paused: z.boolean().default(false),
     /** Project memory file; defaults to <memoryDir>/<id>.md. */
@@ -73,6 +82,18 @@ export const Config = z.object({
     threadModel: live(z.string()),
     /** Plugin-wide default effort for new threads. */
     threadEffort: live(z.string()),
+    /**
+     * Who may use the user's own tools (guardedTools) in projects. "asked"
+     * (the default): no coordinator has them, and a thread has only the
+     * ones the user's own words for it name. "always": every project
+     * session has them, and only the prompts' rule and the thread checks
+     * stand between them and the model.
+     */
+    yourTools: live(z.string()),
+    /** Plugin-wide coordinator permission: a DSH permission preset (read-only, workspace-write, danger-full-access), or empty or "default" for DSH's default for new sessions. */
+    coordinatorPermission: live(z.string()),
+    /** Plugin-wide permission new threads start on: a DSH permission preset, or "default" for DSH's default. Empty means workspace-write. */
+    threadPermission: live(z.string()),
     /** "idle": when a thread ends a turn the coordinator started without a handback, tell the coordinator. "off": only explicit handbacks. */
     autoHandback: z.union(['idle', 'off']).default('idle'),
     /** Handbacks (explicit plus automatic) one thread may send per hour; stops runaway loops. */
@@ -94,10 +115,12 @@ export const Config = z.object({
      * names) that project sessions use only when the user's own words ask
      * for them: a list, or a map from each name to the words the user may
      * call it by, e.g. { "lane-catalog": ["lanes", "model lanes"] }. The
-     * prompts name them, and a thread start or message that names one is
-     * refused unless the user's words or the project's goal name it.
+     * prompts name them, a thread start or message that names one is
+     * refused unless the user's words or the project's goal name it, and
+     * under yourTools "asked" sessions don't have them at all. Live, so an
+     * edit doesn't restart the plugin.
      */
-    guardedTools: z.union([z.array(z.string()), z.dict(z.array(z.string()))]).default([]),
+    guardedTools: live(z.union([z.array(z.string()), z.dict(z.array(z.string()))]).default([])),
     /** Action log, mode 600, never prompt text. Empty turns it off. */
     logFile: z.string().default('~/.dsh/projects/projects.log'),
 });
@@ -119,6 +142,10 @@ export function apply(ctx, config) {
     // The defaults form saved: only the live fields changed, so the plugin keeps running.
     ctx.on('loader/volatile-update', () => {
         void manager.onDefaultsChanged();
+    });
+    // An MCP server connected, reconnected or changed its tools: the user's tools stay out of the sessions that may not use them.
+    ctx.on('tools/change', () => {
+        manager.onToolsChanged();
     });
     ctx.effect(() => () => manager.dispose(), 'projects.scopes()');
     // What the DSH window draws for project sessions: roles, rosters and thread

@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
 import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol';
 import * as plugin from '../lib/index.js';
-import { effectiveSettings, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
+import { effectiveSettings, effectiveAccess, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
 import { slugify, timing, clipTitle, guardList, guardedIn } from '../lib/projects.js';
 import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS } from '../lib/changes.js';
 import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, cardSummary, threadMarkdown } from '../lib/prompts.js';
@@ -39,18 +39,35 @@ const CATALOG = {
 
 /** Agent-scoped context: records registrations and dispatches scoped events. */
 class FakeScope {
-    constructor() {
+    /** @param {object} [host] - the fake Host, whose tool names (host.toolNames) tools.restrict() knows. */
+    constructor(host) {
+        this.host = host;
         this.registered = new Map();
         /** Presentation meta of each tool result, in call order. */
         this.metas = [];
         this.sections = new Map();
         this.listeners = new Map();
+        /** The deny lists of tools.restrict() in force, and the tools.guard() checks, as DSH keeps them for one agent. */
+        this.restrictions = [];
+        this.guards = [];
         const self = this;
         this.tools = {
             register(def) {
                 assert.ok(!self.registered.has(def.name), `duplicate tool ${def.name}`);
                 self.registered.set(def.name, def);
                 return () => self.registered.delete(def.name);
+            },
+            /** Like DSH: a name it doesn't offer throws, and the disposer lifts this restriction alone. */
+            restrict({ deny }) {
+                const unknown = deny.filter((name) => !(host?.toolNames ?? []).includes(name));
+                if (unknown.length > 0) throw new Error(`tools.restrict() names unknown global tools ${unknown.join(', ')}`);
+                const entry = [...deny];
+                self.restrictions.push(entry);
+                return () => self.restrictions.splice(self.restrictions.indexOf(entry) >>> 0, 1);
+            },
+            guard(check) {
+                self.guards.push(check);
+                return () => self.guards.splice(self.guards.indexOf(check) >>> 0, 1);
             },
         };
         this.systemPrompt = {
@@ -84,6 +101,19 @@ class FakeScope {
     section() {
         const sec = [...this.sections.values()][0];
         return typeof sec?.text === 'function' ? sec.text({}) : sec?.text;
+    }
+    /** The Host's tools this agent's model is offered now: every one no restriction denies. */
+    offered() {
+        const denied = new Set(this.restrictions.flat());
+        return (this.host?.toolNames ?? []).filter((name) => !denied.has(name));
+    }
+    /** What DSH's guards say before this agent calls a tool: the first refusal, or undefined. */
+    refusal(name) {
+        for (const check of this.guards) {
+            const reason = check({ name, agent: this.agent });
+            if (reason !== undefined) return reason;
+        }
+        return undefined;
     }
     /** Call a tool as the model would. Like DSH, the call and its result go into the session log. */
     async call(name, args) {
@@ -146,12 +176,49 @@ function fakeWorkspaces(initial = []) {
 }
 
 /**
+ * DSH's permission presets: every session is on one, a new one on the
+ * user's default. set() logs `permission/preset` on the session when it
+ * changes, as DSH's own permission menu does; pick() is the user doing that.
+ */
+function fakePresets(sessions, live) {
+    const options = [
+        { value: 'read-only', name: 'Read Only', description: 'Read files; ask before edits and commands' },
+        { value: 'workspace-write', name: 'Workspace Write', description: 'Edit files in the workspace; ask before going outside it' },
+        { value: 'danger-full-access', name: 'Full access', description: 'No sandbox and no approvals' },
+        { value: 'auto', name: 'Auto review' },
+    ];
+    const on = new Map();
+    const pp = {
+        names: ['read-only', 'workspace-write', 'danger-full-access'],
+        defaultPreset: 'danger-full-access',
+        /** Every set() call, with how many messages the session had then. */
+        sets: [],
+        /** Tests set it to make set() fail. */
+        fail: false,
+        catalog: () => ({ options: [...options, { value: 'custom', name: 'Custom' }], defaultOptions: options, defaultPreset: pp.defaultPreset }),
+        current: (session) => on.get(session.id) ?? pp.defaultPreset,
+        set(session, name) {
+            if (!pp.names.includes(name)) throw new Error(`permission: unknown preset "${name}"`);
+            if (pp.fail) throw new Error('permission: the session refused it');
+            pp.sets.push({ sessionId: session.id, preset: name, promptsBefore: sessions.get(session.id)?.prompts.length });
+            if (pp.current(session) === name) return;
+            on.set(session.id, name);
+            live.get(session.id)?.ctx.sessionEvent({ type: 'permission/preset', data: { preset: name } });
+        },
+        pick: (sessionId, name) => pp.set({ id: sessionId }, name),
+    };
+    return pp;
+}
+
+/**
  * A fake Host with sessionController, agents and workspaceRegistry.
  * `selection: true` adds the per-session model selection a real DSH Host has
  * (its own `agent/request` listener, installed before `agent/created`, plus
- * `sessionController.agents.selectForNextRequest`).
+ * `sessionController.agents.selectForNextRequest`). `tools` names the
+ * Host's tools (DSH's own and the MCP servers'), which a project may keep
+ * from a session; `presets: true` adds DSH's permission presets.
  */
-function fakeHost({ selection = false, hostListener = selection, gateway = false, workspaces = [] } = {}) {
+function fakeHost({ selection = false, hostListener = selection, gateway = false, workspaces = [], tools = [], presets = false } = {}) {
     const listeners = new Map();
     const effects = [];
     const sessions = new Map(); // id → {events, prompts, title, cwd}
@@ -164,11 +231,19 @@ function fakeHost({ selection = false, hostListener = selection, gateway = false
         llm: fakeLlm,
         sessionProjections: { register(def) { projections.push(def); return () => projections.splice(projections.indexOf(def), 1); } },
         ...(gateway ? { typertGateway: {} } : {}),
+        ...(presets ? { permissionPresets: fakePresets(sessions, live) } : {}),
     };
     /** Services the plugin provides (cordis `ctx.provide`), such as its window endpoints. */
     const provided = new Map();
     const host = {
         sessions, live, effects, selections, services, projections, provided,
+        /** The Host's tool names; a test adds one and emits `tools/change`, as an MCP server connecting does. */
+        toolNames: [...tools],
+        /** DSH's tool registry as the plugin's context reads it: every tool a session could be offered. */
+        tools: {
+            view: () => ({ restrictableNames: new Set(host.toolNames) }),
+            schemas: () => host.toolNames.map((name) => ({ name })),
+        },
         logger: { info() {}, warn() {} },
         provide(name, value) { provided.set(name, value); },
         get: (name) => services[name],
@@ -198,7 +273,7 @@ function fakeHost({ selection = false, hostListener = selection, gateway = false
         },
         wake(id) {
             if (live.has(id)) return live.get(id);
-            const ctx = new FakeScope();
+            const ctx = new FakeScope(host);
             const agent = {
                 id, status: 'idle', ctx, session: { id },
                 followup(message) { host.accept(id, 'queue', message); },
@@ -289,6 +364,11 @@ const tick = () => new Promise((r) => setTimeout(r, 10));
 /** The source of the nth message a session was sent. */
 const sourceOf = (session, n) => session.events.filter((e) => e.type === 'user/message')[n]?.data.source;
 const coordinatorOf = (host) => [...host.live.values()].find((a) => host.sessions.get(a.id).title === '◆ DSH Plugins');
+/** The user typing in a session's chat in the DSH window: logged as the user's own message. */
+function userTyping(host) {
+    let typed = 0;
+    return (session, text) => host.sessionController.prompt({ sessionId: session.id, requestId: `typed-${++typed}`, content: [{ type: 'text', text }], mode: 'queue' });
+}
 
 // ── pure settings ───────────────────────────────────────────────────────────
 
@@ -299,11 +379,25 @@ test('settings resolve override → project → plugin → DSH default', () => {
     assert.deepEqual(s.coordinatorModel, { value: undefined, source: 'DSH default' });
     assert.equal(effectiveSettings({}, { coordinatorEffort: '  ' }).coordinatorEffort.source, 'DSH default');
     // DSH hands the plugin-wide defaults over as live references; tests and older hosts as plain strings.
-    assert.deepEqual(pluginDefaults({ threadEffort: 'high', coordinatorEffort: { get: () => 'max' }, threadModel: { get: () => undefined } }),
-        { coordinatorModel: undefined, coordinatorEffort: 'max', threadModel: undefined, threadEffort: 'high' });
+    assert.deepEqual(pluginDefaults({ threadEffort: 'high', coordinatorEffort: { get: () => 'max' }, threadModel: { get: () => undefined }, yourTools: { get: () => 'always' } }), {
+        coordinatorModel: undefined, coordinatorEffort: 'max', threadModel: undefined, threadEffort: 'high',
+        yourTools: 'always', coordinatorPermission: undefined, threadPermission: undefined,
+    });
     const parsed = plugin.Config({ threadEffort: 'low' });
     assert.equal(pluginDefaults(parsed).threadEffort, 'low');
     assert.equal(pluginDefaults(parsed).coordinatorEffort, undefined);
+    // Access settings layer the same way, but their last layer is the plugin's own: your tools only when asked, the
+    // coordinator on DSH's default permission and threads on Workspace Write.
+    assert.deepEqual(effectiveAccess({}, {}, {}), {
+        yourTools: { value: 'asked', source: 'plugin default' },
+        coordinatorPermission: { value: 'default', source: 'plugin default' },
+        threadPermission: { value: 'workspace-write', source: 'plugin default' },
+    });
+    // A word that is no mode is not a setting; a permission is checked against DSH's presets where it is used.
+    const access = effectiveAccess({ yourTools: ' Always ', threadPermission: 'read-only' }, { yourTools: 'sometimes', coordinatorPermission: 'workspace-write' }, { threadPermission: 'danger-full-access' });
+    assert.deepEqual(access.yourTools, { value: 'always', source: 'plugin default' });
+    assert.deepEqual(access.coordinatorPermission, { value: 'workspace-write', source: 'project config' });
+    assert.deepEqual(access.threadPermission, { value: 'danger-full-access', source: 'project setting' });
 });
 
 test('model specs and route rewriting', () => {
@@ -836,7 +930,10 @@ test('window: the Project settings endpoints read and change a project the way i
     };
 
     const read = await remote.describe(coord.id);
-    assert.deepEqual(plain(read.project), { id: 'dsh-plugins', name: 'DSH Plugins', source: 'profile', workspace: '/work/dsh', homeFolder: false, coordinator: coord.id, live: null });
+    assert.deepEqual(plain(read.project), { id: 'dsh-plugins', name: 'DSH Plugins', source: 'profile', workspace: '/work/dsh', homeFolder: false, coordinator: coord.id, live: null, permission: null, tools: [] });
+    // Access settings come with their sources too. This DSH has no permission presets, and none of the user's tools are named.
+    assert.deepEqual(plain(read.access.yourTools), { value: 'asked', source: 'plugin default', inherited: { value: 'asked', source: 'plugin default' } });
+    assert.deepEqual([read.guarded, read.permissions], [[], null]);
     assert.deepEqual(plain(read.settings.coordinatorEffort), { value: 'max', source: 'project config', inherited: { value: 'max', source: 'project config' } });
     assert.deepEqual(plain(read.settings.threadEffort), { value: 'high', source: 'plugin default', inherited: { value: 'high', source: 'plugin default' } });
     assert.deepEqual(plain(read.paused), { value: false, source: 'project config', inherited: false, held: 0, handbacks: [] });
@@ -2236,7 +2333,8 @@ test('scope: a thread start or message that would use a guarded tool needs the u
     const { host, dir } = setup({ guardedTools: ['lane-catalog', 'family_1password', 'cua'] });
     await tick();
     const coord = coordinatorOf(host);
-    assert.match(coord.ctx.section(), /\n2\. Never use the user's personal or infrastructure tools, [^\n]*\n   Here those include: lane-catalog, family_1password, cua\.\n3\. /);
+    const say = userTyping(host);
+    assert.match(coord.ctx.section(), /\n2\. Never use the user's personal or infrastructure tools, [^\n]*\n   You don't have these here: lane-catalog, family_1password, cua\. When the user's words ask for work that needs one, start a thread with their words in `ask`; the thread gets the ones their words name\.\n3\. /);
     // The first real run's t2: a test task the coordinator picked itself, sent to the user's model lanes.
     const drift = await coord.ctx.call('project_thread_start', {
         ask: 'I\'m simply testing out the effectiveness of the coordinator - can we find a small test-task or a couple test-tasks to roll on for this test?',
@@ -2248,21 +2346,36 @@ test('scope: a thread start or message that would use a guarded tool needs the u
     // A tool id names its server too, and a refused start makes no thread.
     assert.match(await coord.ctx.call('project_thread_start', { ask: 'Check things.', title: 'Probe', brief: 'Call mcp__lane-catalog__lanes_status.' }), /^Failed: this would use lane-catalog,/);
     assert.match(await coord.ctx.call('project_thread_start', { ask: 'Check things.', title: 'Token', brief: 'Get the token from family_1password, then use cua to log in.' }), /^Failed: this would use family_1password, cua, and the user's words do not ask for them\./);
-    assert.equal(host.live.size, 1, 'no thread session was made');
-    // Scenario S4: the user asks for it by name, so the thread starts, with their words.
+    // Scenario S4. An ask is the user's words only if the user wrote them: one naming their tool that they never did is refused.
     const s4 = 'Use lane-catalog to check which of my model lanes are up right now.';
-    assert.match(await coord.ctx.call('project_thread_start', { ask: s4, title: 'Lanes up', brief: 'Call lanes_status on lane-catalog and report each lane\'s state.' }), /^Started t1 "Lanes up"/);
+    const lanes = { ask: s4, title: 'Lanes up', brief: 'Call lanes_status on lane-catalog and report each lane\'s state.' };
+    assert.equal(await coord.ctx.call('project_thread_start', lanes),
+        'Failed: ask names lane-catalog, but the user\'s messages don\'t. Put only the user\'s own words in ask, copied from their message, or ask the user first');
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /guard dsh-plugins ask-unsaid lane-catalog\n/);
+    assert.equal(host.live.size, 1, 'no thread session was made');
+    // Once the user asks for it by name, the thread starts with their words and that tool.
+    await say(coord, s4);
+    assert.equal(await coord.ctx.call('project_thread_start', lanes),
+        'Started t1 "Lanes up". It reports back when done. The user\'s words give it lane-catalog. Link it as [Lanes up](.dsh-thread/t1).');
     const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Lanes up');
     assert.match(host.sessions.get(t1.id).prompts[0].text, new RegExp(`\n\nThe user asked: "${s4.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"\n\nCall lanes_status`));
-    assert.equal(JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'].threads.t1.ask, s4);
-    assert.match(t1.ctx.section(), /\n   Here those include: lane-catalog, family_1password, cua\.\n3\. Editing files/);
+    const stored = () => JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'].threads;
+    assert.deepEqual([stored().t1.ask, stored().t1.tools], [s4, ['lane-catalog']]);
+    assert.match(t1.ctx.section(), /\n   Here those include: lane-catalog, family_1password, cua\. You have only the ones the user's words name: lane-catalog\.\n3\. Editing files/);
     // A name inside another word is not that tool.
-    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Tidy up.', title: 'Vacuum', brief: 'Vacuum the cuatro folder; cuda stays.' }), /^Started t2/);
-    // A message to a thread: the thread's ask, or the user's words given with the message, must name the tool.
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Tidy up.', title: 'Vacuum', brief: 'Vacuum the cuatro folder; cuda stays.' }), /^Started t2 "Vacuum"\. It reports back when done\. Link/);
+    const t2 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Vacuum');
+    assert.match(t2.ctx.section(), /\n   Here those include: lane-catalog, family_1password, cua\. You have none of them\.\n3\. /);
+    // A message to a thread: the thread's tools, or the user's words given with the message, must name the tool.
     assert.equal(await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Also run pick_lane on lane-catalog.' }), 'Sent to t1.');
     assert.match(await coord.ctx.call('project_thread_send', { thread: 't2', text: 'Then check lane-catalog.' }), /^Failed: this would use lane-catalog, and the user's words do not ask for it\. .*If the user did ask, put their words in ask, or start a thread for it with their words in ask\./);
     assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /guard dsh-plugins send lane-catalog\n/);
-    assert.equal(await coord.ctx.call('project_thread_send', { thread: 't2', text: 'Then read the token from family_1password.', ask: 'grab the token from my family 1password' }), 'Sent to t2.');
+    const token = { thread: 't2', text: 'Then read the token from family_1password.', ask: 'grab the token from my family 1password' };
+    assert.match(await coord.ctx.call('project_thread_send', token), /^Failed: ask names family_1password, but the user's messages don't\./);
+    await say(coord, 'For the vacuum thread: grab the token from my family 1password');
+    assert.equal(await coord.ctx.call('project_thread_send', token), 'Sent to t2.');
+    assert.deepEqual(stored().t2.tools, ['family_1password']);
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /tools dsh-plugins\/t2 \+family_1password from the user's words in a message\n/);
 });
 
 test('scope: the user\'s word for a guarded tool, or the goal, asks for it; a home-folder workspace gets a note', async () => {
@@ -2273,9 +2386,13 @@ test('scope: the user\'s word for a guarded tool, or the goal, asks for it; a ho
     await tick();
     const coord = coordinatorOf(host);
     assert.match(coord.ctx.section(), /\nWorkspace: [^\n]+ \(the user's home folder: put new files in a new subfolder, and never move or delete anything you did not create\)\n/);
-    assert.match(coord.ctx.section(), /Here those include: lane-catalog, obsidian\./);
-    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Which of my lanes are up?', title: 'Lanes', brief: 'Ask lane-catalog.' }), /^Started t1/);
+    assert.match(coord.ctx.section(), /You don't have these here: lane-catalog, obsidian\./);
+    await userTyping(host)(coord, 'Which of my lanes are up?');
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Which of my lanes are up?', title: 'Lanes', brief: 'Ask lane-catalog.' }), /^Started t1 "Lanes"\. It reports back when done\. The user's words give it lane-catalog\./);
+    // The goal names obsidian, so every thread has it.
     assert.match(await coord.ctx.call('project_thread_start', { ask: 'Sort the inbox.', title: 'Inbox', brief: 'Use obsidian to file the inbox notes.' }), /^Started t2/);
+    const inbox = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Inbox');
+    assert.match(inbox.ctx.section(), /Here those include: lane-catalog, obsidian\. You have only the ones the user's words name: obsidian\./);
     // An alias asks for its tool only from the user's words: a brief that says "lanes" uses no tool by that.
     assert.match(await coord.ctx.call('project_thread_start', { ask: 'Write a poem.', title: 'Poem', brief: 'A poem about swimming lanes.' }), /^Started t3/);
     const thread = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Lanes');
@@ -2286,6 +2403,204 @@ test('scope: the user\'s word for a guarded tool, or the goal, asks for it; a ho
     assert.equal(guardedIn('mcp__lane-catalog__lanes_status', guardList(['lane-catalog'])).join(), 'lane-catalog');
     assert.deepEqual(guardList({ a: ['x', ' ', 'y'], ' ': ['z'] }), [['a', ['x', 'y']]]);
     assert.deepEqual(guardedIn('My Lanes and the Notes App', guardList({ 'lane-catalog': ['lane'], obsidian: ['notes app'] }), { aliases: true }), ['lane-catalog', 'obsidian']);
+});
+
+/** DSH's own tools and the user's MCP servers, as a session is offered them before any restriction. */
+const HOST_TOOLS = ['shell', 'read_file', 'mcp__lane-catalog__lanes_status', 'mcp__lane-catalog__pick_lane', 'mcp__family_1password__get_item', 'mcp__cua__click', 'mcp__tavily__search'];
+
+test('your tools: a coordinator never has the user\'s tools, and a thread has only the ones the user\'s own words name', async () => {
+    const { host, dir, config } = setup({ guardedTools: { 'lane-catalog': ['lanes'], family_1password: ['1password'], cua: [] } }, undefined, { gateway: true, tools: HOST_TOOLS });
+    await tick();
+    const coord = coordinatorOf(host);
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    const say = userTyping(host);
+    const log = () => readFileSync(join(dir, 'projects.log'), 'utf8');
+    const stored = () => JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'].threads;
+    const threadNamed = (title) => [...host.live.values()].find((a) => host.sessions.get(a.id).title === title);
+    const OTHERS = ['shell', 'read_file', 'mcp__tavily__search'];
+
+    // Scenario S4's coordinator answered from lane-catalog itself. Under "asked", the default, its model is never offered one of the user's tools.
+    assert.deepEqual(coord.ctx.offered(), OTHERS);
+    assert.match(log(), new RegExp(` wall dsh-plugins/coordinator ${coord.id} hid=4 allowed=-\n`));
+    // A call to one anyway is refused before it reaches the tool, with what to do instead.
+    assert.equal(coord.ctx.refusal('mcp__lane-catalog__lanes_status'), 'This is one of the user\'s own tools, which this project keeps out of the coordinator. When the user asks for work that needs it, start a thread with their words in ask: the thread gets the tools their words name.');
+    assert.match(log(), / wall-refused dsh-plugins\/coordinator mcp__lane-catalog__lanes_status\n/);
+    assert.equal(coord.ctx.refusal('shell'), undefined);
+    assert.equal(coord.ctx.refusal('project_thread_start'), undefined);
+
+    // So it starts a thread with the user's words, and the thread has the tools they name, by name or by the user's word for one.
+    const ask = 'Which of my lanes are up right now?';
+    await say(coord, ask);
+    assert.match(await coord.ctx.call('project_thread_start', { ask, title: 'Lanes', brief: 'Report each lane.' }), /^Started t1 "Lanes"\. It reports back when done\. The user's words give it lane-catalog\. /);
+    const t1 = threadNamed('Lanes');
+    assert.deepEqual(t1.ctx.offered(), ['shell', 'read_file', 'mcp__lane-catalog__lanes_status', 'mcp__lane-catalog__pick_lane', 'mcp__tavily__search']);
+    assert.equal(t1.ctx.refusal('mcp__cua__click'), 'This is one of the user\'s own tools, and the user\'s words for this thread don\'t name it. If the task needs it, hand back with status blocked and say so.');
+    assert.equal(t1.ctx.refusal('mcp__lane-catalog__pick_lane'), undefined);
+    // A thread whose words name none of them has none.
+    await coord.ctx.call('project_thread_start', { ask: 'Tidy the notes folder.', title: 'Tidy', brief: 'Tidy it.' });
+    const t2 = threadNamed('Tidy');
+    assert.deepEqual(t2.ctx.offered(), OTHERS);
+
+    // The user writes to a thread directly: the tools their words there name are its too, from
+    // the turn that answers them. Like DSH, the message is queued before that turn gathers its
+    // tools and logged after; the queued copy already gives them.
+    await say(t2, 'use cua to click through the setup dialog');
+    const typed = host.sessions.get(t2.id).events.at(-1);
+    t2.ctx.sessionEvent({ type: 'agent/inbox/spliced', data: { target: 'next-turn', start: 0, inserted: [typed.data] } });
+    assert.deepEqual(t2.ctx.offered(), ['shell', 'read_file', 'mcp__cua__click', 'mcp__tavily__search']);
+    t2.ctx.sessionEvent(typed);
+    assert.equal(log().match(/ tools dsh-plugins\/t2 \+cua from the user in the thread\n/g)?.length, 1);
+    // A queued message from the coordinator gives it nothing either.
+    t2.ctx.sessionEvent({ type: 'agent/inbox/spliced', data: { target: 'next-turn', start: 0, inserted: [{ id: 'm-relay', role: 'user', content: [{ type: 'text', text: 'Use family_1password too.' }], source: { kind: 'agent-message', form: 'relay', senderSessionId: coord.id } }] } });
+    assert.deepEqual(stored().t2.tools, ['cua']);
+    // A message from the coordinator gives it nothing.
+    t2.ctx.sessionEvent({ type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: 'Use family_1password too.' }], source: { kind: 'agent-message', form: 'relay', senderSessionId: coord.id } } });
+    assert.deepEqual(stored().t2.tools, ['cua']);
+    // The coordinator passes on the user's words with a message: the tools they name join the thread's.
+    const more = 'Also have the lanes thread get my 1password token for the gateway.';
+    await say(coord, more);
+    assert.equal(await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Get the gateway token from family_1password.', ask: more }), 'Sent to t1.');
+    assert.deepEqual([stored().t1.tools, t1.ctx.offered().includes('mcp__family_1password__get_item')], [['lane-catalog', 'family_1password'], true]);
+
+    // An MCP server connects or changes its tools: the walls follow, one restriction per session.
+    host.toolNames.push('mcp__cua__type');
+    host.emit('tools/change');
+    await new Promise((r) => setTimeout(r, 80));
+    assert.deepEqual([coord.ctx.offered().includes('mcp__cua__type'), t1.ctx.offered().includes('mcp__cua__type'), t2.ctx.offered().includes('mcp__cua__type')], [false, false, true]);
+    assert.deepEqual([coord.ctx.restrictions.length, t1.ctx.restrictions.length, t2.ctx.restrictions.length], [1, 1, 1]);
+
+    // Project settings shows who has which, and the plugin page's list names the user's tools.
+    let read = await remote.describe(coord.id);
+    assert.deepEqual(plain([read.project.tools, read.threads.map((t) => [t.id, t.tools]), read.guarded]),
+        [[], [['t1', ['lane-catalog', 'family_1password']], ['t2', ['cua']]], ['lane-catalog', 'family_1password', 'cua']]);
+    assert.deepEqual(plain((await remote.list()).guarded), ['lane-catalog', 'family_1password', 'cua']);
+
+    // "Always", set in Project settings: every session has them, and the coordinator's prompt keeps only the rule.
+    read = await remote.update(coord.id, { yourTools: 'always' });
+    assert.deepEqual(plain(read.access.yourTools), { value: 'always', source: 'project setting', inherited: { value: 'asked', source: 'plugin default' } });
+    assert.deepEqual([coord.ctx.offered(), t2.ctx.offered()], [host.toolNames, host.toolNames]);
+    assert.deepEqual([read.project.tools, read.threads[1].tools], ['all', 'all']);
+    assert.match(coord.ctx.section(), /\n   Here those include: lane-catalog, family_1password, cua\.\n3\. /);
+    assert.equal(coord.ctx.refusal('mcp__lane-catalog__lanes_status'), undefined);
+    // The coordinator can see the setting, and can't change it.
+    const shown = await coord.ctx.call('project_settings', {});
+    assert.match(shown, /\nThe user's tools \(lane-catalog, family_1password, cua\): every session has them\nThe user changes these in Project settings; project_settings can't\.$/);
+    assert.equal(coord.ctx.registered.get('project_settings').parameters.your_tools, undefined);
+    // Back to the default, and only the two words are settings.
+    read = await remote.update(coord.id, { yourTools: null });
+    assert.deepEqual([read.access.yourTools.source, coord.ctx.offered()], ['plugin default', OTHERS]);
+    await assert.rejects(remote.update(coord.id, { yourTools: 'sometimes' }), (error) => error.code === 'projects/refused' && /your tools must be "asked" or "always"/.test(error.message));
+    assert.match(await coord.ctx.call('project_settings', {}), /\nThe user's tools \(lane-catalog, family_1password, cua\): you don't have them; a thread has the ones the user's words for it name\n/);
+
+    // The list of the user's tools is live: the plugin page saves it, and every wall and prompt follows without a reload.
+    saveDefaults(host, config, { guardedTools: ['lane-catalog'] });
+    await tick();
+    assert.deepEqual(coord.ctx.offered(), host.toolNames.filter((name) => !name.startsWith('mcp__lane-catalog__')));
+    assert.match(coord.ctx.section(), /\n   You don't have these here: lane-catalog\. When/);
+    saveDefaults(host, config, { guardedTools: [] });
+    await tick();
+    assert.deepEqual([coord.ctx.offered(), coord.ctx.restrictions.length], [host.toolNames, 0]);
+});
+
+test('your tools: a reload attaches to loaded coordinators without reading their logs, and puts every wall back', async () => {
+    const { host, config } = setup({ guardedTools: ['lane-catalog'] }, undefined, { tools: HOST_TOOLS });
+    await tick();
+    const coord = coordinatorOf(host);
+    await userTyping(host)(coord, 'Ask lane-catalog which lanes are up.');
+    await coord.ctx.call('project_thread_start', { ask: 'Ask lane-catalog which lanes are up.', title: 'Lanes', brief: 'Go.' });
+    const t1 = threadOf(host, coord);
+    const inspect = host.sessionController.inspect;
+    const reads = [];
+    host.sessionController.inspect = (id, ...rest) => { reads.push(id); return inspect(id, ...rest); };
+    await reload(host, config);
+    await tick();
+    assert.deepEqual(reads.filter((id) => id === coord.id), [], 'a coordinator DSH has loaded needs no read of its log');
+    assert.equal(coord.ctx.offered().some((name) => name.startsWith('mcp__lane-catalog__')), false);
+    assert.equal(t1.ctx.offered().some((name) => name.startsWith('mcp__lane-catalog__')), true);
+    assert.deepEqual([coord.ctx.restrictions.length, coord.ctx.guards.length, t1.ctx.guards.length], [1, 1, 1]);
+});
+
+test('permissions: threads start on Workspace Write, the coordinator stays on DSH\'s default, and the user\'s picks become the settings', async () => {
+    const { host, dir } = setup({}, undefined, { gateway: true, presets: true });
+    await tick();
+    const pp = host.services.permissionPresets;
+    const coord = coordinatorOf(host);
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    const log = () => readFileSync(join(dir, 'projects.log'), 'utf8');
+    const stored = () => JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'];
+    const threadNamed = (title) => [...host.live.values()].find((a) => host.sessions.get(a.id).title === title);
+    const refused = async (promise, pattern) => {
+        await assert.rejects(promise, (error) => error.code === 'projects/refused' && pattern.test(error.message));
+    };
+    // The coordinator keeps the permission DSH gave it, the user's default: the plugin changes nothing.
+    assert.deepEqual([pp.current(coord.session), pp.sets, stored().coordinatorAccess], ['danger-full-access', [], 'default']);
+
+    // A thread is on Workspace Write before it reads its brief.
+    await coord.ctx.call('project_thread_start', { ask: 'Add CI.', title: 'CI', brief: 'Add CI.' });
+    const t1 = threadNamed('CI');
+    assert.equal(pp.current(t1.session), 'workspace-write');
+    assert.deepEqual(pp.sets, [{ sessionId: t1.id, preset: 'workspace-write', promptsBefore: 0 }]);
+    assert.equal(stored().threads.t1.permission, 'workspace-write');
+    assert.match(log(), / permission dsh-plugins\/t1 workspace-write\n/);
+    // That change was the plugin's own, not a pick of the user's.
+    assert.doesNotMatch(log(), /picked-permission/);
+
+    // The window: each setting with its source, every thread's permission, and the presets DSH offers (not Auto).
+    let read = await remote.describe(coord.id);
+    assert.equal(read.project.permission, 'danger-full-access');
+    assert.deepEqual(plain(read.access.coordinatorPermission), { value: 'default', source: 'plugin default', inherited: { value: 'default', source: 'plugin default' } });
+    assert.deepEqual(plain(read.access.threadPermission), { value: 'workspace-write', source: 'plugin default', inherited: { value: 'workspace-write', source: 'plugin default' } });
+    assert.deepEqual(plain(read.permissions.options.map((o) => [o.value, o.name])), [['read-only', 'Read Only'], ['workspace-write', 'Workspace Write'], ['danger-full-access', 'Full access']]);
+    assert.equal(read.permissions.defaultPreset, 'danger-full-access');
+    assert.deepEqual(read.threads.map((t) => t.permission), ['workspace-write']);
+    assert.equal(plain(await remote.list()).projects[0].permission, 'danger-full-access');
+
+    // The user picks Full access for the thread in DSH's own permission menu: its setting follows.
+    pp.pick(t1.id, 'danger-full-access');
+    assert.equal(stored().threads.t1.permission, 'danger-full-access');
+    assert.match(log(), / picked-permission dsh-plugins\/t1 danger-full-access\n/);
+    // And Read Only for the coordinator: that becomes the project's coordinator setting.
+    pp.pick(coord.id, 'read-only');
+    read = await remote.describe(coord.id);
+    assert.deepEqual(plain(read.access.coordinatorPermission), { value: 'read-only', source: 'project setting', inherited: { value: 'default', source: 'plugin default' } });
+    assert.equal(read.project.permission, 'read-only');
+
+    // Project settings moves the coordinator at once; null goes back to DSH's default.
+    read = await remote.update(coord.id, { coordinatorPermission: 'workspace-write' });
+    assert.deepEqual([pp.current(coord.session), read.notes], ['workspace-write', []]);
+    read = await remote.update(coord.id, { coordinatorPermission: null });
+    assert.deepEqual([pp.current(coord.session), read.access.coordinatorPermission.source], ['danger-full-access', 'plugin default']);
+    assert.equal(log().match(/picked-permission dsh-plugins\/coordinator/g).length, 1, 'only the user\'s own pick');
+    // New threads start on what Project settings says; running threads keep theirs.
+    await remote.update(coord.id, { threadPermission: 'read-only' });
+    await coord.ctx.call('project_thread_start', { ask: 'Read the docs.', title: 'Docs', brief: 'Read them.' });
+    assert.deepEqual([pp.current(threadNamed('Docs').session), pp.current(t1.session)], ['read-only', 'danger-full-access']);
+    // One thread, from its row in Project settings.
+    read = await remote.update(coord.id, { thread: 't1', permission: 'workspace-write' });
+    assert.deepEqual([pp.current(t1.session), read.notes, read.threads.find((t) => t.id === 't1').permission], ['workspace-write', ['t1: permission workspace-write.'], 'workspace-write']);
+    // Only DSH's presets, or "default".
+    await refused(remote.update(coord.id, { threadPermission: 'yolo' }), /^"yolo" is not one of DSH's permissions \(default, read-only, workspace-write, danger-full-access\)$/);
+    await refused(remote.update(coord.id, { thread: 't1', permission: 'auto' }), /^"auto" is not one of DSH's permissions$/);
+    // The coordinator sees them, and has no way to change them.
+    assert.match(await coord.ctx.call('project_settings', {}), /\nPermissions: coordinator DSH's default \(danger-full-access\), new threads read-only\nThe user changes these in Project settings; project_settings can't\.$/);
+    // A thread DSH won't put on its permission doesn't start: its session never gets the brief.
+    pp.fail = true;
+    assert.equal(await coord.ctx.call('project_thread_start', { ask: 'More.', title: 'Stuck', brief: 'Go.' }),
+        'Failed: t3 could not be put on the permission "read-only", so it did not start. Tell the user (details in the projects log)');
+    assert.deepEqual([host.sessions.get(stored().threads.t3.sessionId).prompts.length, stored().threads.t3.resolved], [0, true]);
+    assert.match(log(), / error permission dsh-plugins\/t3 permission: the session refused it\n/);
+});
+
+test('permissions: a project row sets them, and a permission DSH doesn\'t offer stops thread starts with a reason', async () => {
+    const { host } = setup({ projects: [{ name: 'DSH Plugins', workspacePath: '/work/dsh', coordinatorPermission: 'read-only', threadPermission: 'yolo' }] }, undefined, { presets: true });
+    await tick();
+    const pp = host.services.permissionPresets;
+    const coord = coordinatorOf(host);
+    // A new coordinator goes on its setting when it is made.
+    assert.equal(pp.current(coord.session), 'read-only');
+    assert.equal(await coord.ctx.call('project_thread_start', { ask: 'Go.', title: 'X', brief: 'Go.' }),
+        'Failed: threads in this project start on the permission "yolo", which DSH doesn\'t offer. Tell the user to choose another in Project settings');
+    assert.equal(host.live.size, 1, 'no thread session was made');
 });
 
 test('browser half: the plugin\'s messages get a notice that names them, without the note to the coordinator', () => {
@@ -2722,14 +3037,19 @@ test('projects page: a project holds workspaces, and gets a coordinator only whe
     // A new project, holding one workspace: no coordinator, no session.
     let made = await remote.create('  Recipes  ', 'ws:/work/a');
     assert.equal(made.project, 'recipes');
-    const { settings, ...recipes } = project(made, 'recipes');
+    const { settings, access, ...recipes } = project(made, 'recipes');
     assert.deepEqual(recipes, {
         id: 'recipes', name: 'Recipes', source: 'page', workspace: '/work/a', home: 'ws:/work/a',
         workspaces: [{ id: 'ws:/work/a', path: '/work/a', title: 'a' }],
-        coordinator: null, live: null, paused: false, threads: { open: 0, resolved: 0 },
+        coordinator: null, live: null, permission: null, paused: false, threads: { open: 0, resolved: 0 },
     });
-    // Without a profile row, its models are the plugin's defaults.
+    // Without a profile row, its models and access are the plugin's defaults.
     assert.deepEqual([settings.coordinatorEffort, settings.threadEffort], [{ value: null, source: 'DSH default' }, { value: 'high', source: 'plugin default' }]);
+    assert.deepEqual(access, {
+        yourTools: { value: 'asked', source: 'plugin default' },
+        coordinatorPermission: { value: 'default', source: 'plugin default' },
+        threadPermission: { value: 'workspace-write', source: 'plugin default' },
+    });
     assert.equal(host.sessions.size, sessionsBefore);
     // Names are unique ids; an empty one is refused.
     assert.equal((await remote.create('Recipes')).project, 'recipes-2');

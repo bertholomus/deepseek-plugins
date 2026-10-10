@@ -21,7 +21,15 @@
  * The binding runs both ways: a model the user picks in DSH's own picker for
  * a coordinator becomes the project's coordinator setting, and one picked
  * for a thread becomes that thread's, so the project's settings always say
- * what its sessions run on.
+ * what its sessions run on. Permission presets are set and followed the
+ * same way, through DSH's own permission presets.
+ *
+ * The user's own tools (config.guardedTools: their MCP servers for
+ * passwords, notes, lanes and the like) stay out of project sessions under
+ * yourTools "asked": the manager leaves them out of what each session's
+ * model is offered (DSH's per-agent tools.restrict) and refuses a call to
+ * one anyway (tools.guard). A thread gets the ones the user's own words for
+ * it name, checked against what the user wrote to the coordinator.
  *
  * The plugin's messages go into a session the way DSH's own agents and
  * plugins send theirs, not as the user's: a brief or a coordinator's message
@@ -37,7 +45,9 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { ProjectStore, expand, dataPath, dshHome, ensurePrivateDir } from './store.js';
-import { SETTING_KEYS, effectiveSettings, applyRoute, checkSelection, describeRoute, parseModelSpec, pluginDefaults } from './settings.js';
+import {
+    SETTING_KEYS, ACCESS_KEYS, TOOL_MODES, effectiveSettings, effectiveAccess, applyRoute, checkSelection, describeRoute, parseModelSpec, pluginDefaults, liveValue,
+} from './settings.js';
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage, cardSummary,
     handbackMessage, idleMessage, approvalMessage, welcomeMessage, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS, STOPPED_BY_USER,
@@ -152,6 +162,18 @@ export function guardedIn(text, guard, { aliases = false } = {}) {
 
 /** Whether a folder is the user's home folder, where a project must not scatter files. */
 const isHome = (folder) => typeof folder === 'string' && expand(folder).replace(/\/+$/, '') === homedir().replace(/\/+$/, '');
+
+/** The plugin's own tools, never taken for one of the user's even when a guarded name is a word in them. */
+const OWN_TOOLS = new Set(['project_memory', 'project_handback', 'project_thread_start', 'project_thread_send', 'project_thread_list', 'project_thread_read', 'project_thread_update', 'project_settings']);
+
+/** The guarded names (guardList) a tool's name holds: mcp__lane-catalog__lanes_status holds lane-catalog. */
+const guardsOfTool = (name, guard) => (typeof name === 'string' && !OWN_TOOLS.has(name) ? guardedIn(name, guard) : []);
+
+/** What a session's call to one of the user's tools it may not use returns, before the call reaches the tool. */
+const WALL_REASONS = {
+    coordinator: 'This is one of the user\'s own tools, which this project keeps out of the coordinator. When the user asks for work that needs it, start a thread with their words in ask: the thread gets the tools their words name.',
+    thread: 'This is one of the user\'s own tools, and the user\'s words for this thread don\'t name it. If the task needs it, hand back with status blocked and say so.',
+};
 
 /** One thread as the DSH window shows it in a roster (see projection.js). */
 function rosterEntry(id, t) {
@@ -315,6 +337,14 @@ export class ProjectManager {
         this.retries = new Map();
         /** sessionId → the selection the manager just made there, so its own `model/selection` is not taken for the user's pick. */
         this.ownSelections = new Map();
+        /** Agent → who it is ({projectId, role, threadId?}), for every agent the manager installed on. */
+        this.roles = new Map();
+        /** Agent → {key, dispose}: the user's tools it doesn't see (tools.restrict), as a sorted key. */
+        this.walls = new Map();
+        /** sessionId → the permission preset the manager just put it on, so its own `permission/preset` is not taken for the user's pick. */
+        this.ownPermissions = new Map();
+        /** The pending pass over every wall after DSH's tool list changed. */
+        this.wallTimer = undefined;
     }
 
     /** One action line, mode 600. Sizes and ids only, never prompt text. */
@@ -412,13 +442,337 @@ export class ProjectManager {
         return effectiveSettings(pluginDefaults(this.config), this.project(projectId), this.store.project(projectId).settings);
     }
 
+    /** The project's access settings: the user's tools, coordinator and thread permissions, each with its source. */
+    access(projectId) {
+        return effectiveAccess(pluginDefaults(this.config), this.project(projectId), this.store.project(projectId).settings);
+    }
+
+    /** config.guardedTools as [name, aliases] pairs, read now: it is live config. */
+    guards() {
+        return guardList(liveValue(this.config.guardedTools));
+    }
+
+    // ── the user's own tools ──────────────────────────────────────────────
+
+    /**
+     * The user's tools (guarded names) one project session may use. Under
+     * "always" every one. Under "asked" none for the coordinator; a thread
+     * has the ones the user's own words for it named (its `tools`: checked
+     * against what the user wrote when it started or got a message, or
+     * typed in the thread itself) and the ones the project's goal names.
+     * @param {{projectId: string, role: string, threadId?: string}} who
+     * @returns {Set<string>|'all'}
+     */
+    toolsFor(who) {
+        if (!this.projects.has(who.projectId)) return new Set();
+        if (this.access(who.projectId).yourTools.value === 'always') return 'all';
+        if (who.role !== 'thread') return new Set();
+        const guard = this.guards();
+        const known = new Set(guard.map(([name]) => name));
+        const names = new Set(guardedIn(this.project(who.projectId).goal ?? '', guard, { aliases: true }));
+        const t = this.store.thread(who.projectId, who.threadId);
+        for (const name of Array.isArray(t?.tools) ? t.tools : []) if (known.has(name)) names.add(name);
+        return names;
+    }
+
+    /**
+     * Every tool name DSH offers a session before any restriction (its own
+     * tools and the user's MCP servers), as tools.restrict() knows them.
+     */
+    toolNames(agent) {
+        const tools = this.ctx.tools;
+        try {
+            const known = tools?.view?.(agent)?.restrictableNames;
+            if (known instanceof Set) return [...known];
+        } catch {}
+        try {
+            return (tools?.schemas?.() ?? []).map((s) => s?.name).filter((name) => typeof name === 'string');
+        } catch {
+            return [];
+        }
+    }
+
+    /** The tools of the user's that a session may not use, by tool name. */
+    walledTools(agent, who) {
+        const guard = this.guards();
+        if (guard.length === 0) return [];
+        const allowed = this.toolsFor(who);
+        if (allowed === 'all') return [];
+        return this.toolNames(agent).filter((name) => {
+            const hits = guardsOfTool(name, guard);
+            return hits.length > 0 && !hits.some((g) => allowed.has(g));
+        });
+    }
+
+    /**
+     * Keep the user's tools a session may not use out of what its model is
+     * offered (DSH's per-agent tools.restrict). Done again whenever the
+     * answer can change: settings, the thread's tools, DSH's tool list.
+     */
+    applyWall(agent, who) {
+        if (this.disposed || typeof agent?.ctx?.tools?.restrict !== 'function') return;
+        const label = `${who.projectId}/${who.threadId ?? 'coordinator'}`;
+        let deny;
+        try {
+            deny = this.walledTools(agent, who).sort();
+        } catch (error) {
+            this.log(`error wall ${label} ${String(error?.message ?? error).slice(0, 200)}`);
+            return;
+        }
+        const key = deny.join('\n');
+        const was = this.walls.get(agent);
+        // Nothing to hide and nothing hidden: no wall, and no log line.
+        if ((was?.key ?? '') === key) return;
+        let dispose;
+        if (deny.length > 0) {
+            try {
+                dispose = agent.ctx.tools.restrict({ deny });
+            } catch (error) {
+                // The old wall stays; the guard refuses these tools' calls meanwhile.
+                this.log(`error wall ${label} ${String(error?.message ?? error).slice(0, 200)}`);
+                return;
+            }
+        }
+        // The new wall is up before the old one comes down.
+        this.walls.set(agent, { key, dispose });
+        try { was?.dispose?.(); } catch {}
+        const allowed = this.toolsFor(who);
+        const kept = allowed === 'all' ? 'all' : [...allowed].join(',') || '-';
+        this.log(`wall ${label} ${agent.id} hid=${deny.length} allowed=${kept}`);
+    }
+
+    dropWall(agent) {
+        const wall = this.walls.get(agent);
+        this.walls.delete(agent);
+        try { wall?.dispose?.(); } catch {}
+    }
+
+    /**
+     * Why a call to one of the user's tools is refused, or undefined. DSH
+     * asks before every call of the session, so this holds even in the
+     * moment before a wall is updated.
+     */
+    wallReason(who, name) {
+        try {
+            const guard = this.guards();
+            if (guard.length === 0) return undefined;
+            const hits = guardsOfTool(name, guard);
+            if (hits.length === 0) return undefined;
+            const allowed = this.toolsFor(who);
+            if (allowed === 'all' || hits.some((g) => allowed.has(g))) return undefined;
+            this.log(`wall-refused ${who.projectId}/${who.threadId ?? 'coordinator'} ${String(name).slice(0, 80)}`);
+            return who.role === 'thread' ? WALL_REASONS.thread : WALL_REASONS.coordinator;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /** Every installed session's wall again (of one project, or all). */
+    rewall(projectId) {
+        for (const [agent, who] of this.roles) {
+            if (projectId === undefined || who.projectId === projectId) this.applyWall(agent, who);
+        }
+    }
+
+    /** DSH's tool list changed (an MCP server came or went): walls again, once the changes settle. */
+    onToolsChanged() {
+        if (this.disposed || this.wallTimer !== undefined) return;
+        this.wallTimer = setTimeout(() => {
+            this.wallTimer = undefined;
+            // A throw in a timer would end DSH's Host.
+            try { this.rewall(); } catch (error) { this.log(`error wall ${String(error?.message ?? error).slice(0, 200)}`); }
+        }, 50);
+        this.wallTimer.unref?.();
+    }
+
+    /**
+     * What the user wrote to the coordinator: their own messages in its
+     * chat, not the plugin's or the threads'. '' when there is no
+     * coordinator or its log can't be read.
+     */
+    async userText(projectId) {
+        const sessionId = this.store.project(projectId).coordinatorSessionId;
+        if (!sessionId) return '';
+        try {
+            const events = (await this.sc.inspect(sessionId, AbortSignal.timeout(20000))).events ?? [];
+            return events.map(promptOf).filter((p) => p && !p.fromProject).map((p) => p.text).join('\n');
+        } catch (error) {
+            this.log(`error user-words ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
+            return '';
+        }
+    }
+
+    /**
+     * The user's tools an `ask` names, checked against what the user wrote:
+     * each must also be named in the user's own messages to the coordinator
+     * or in the project's goal. An ask that names one the user never wrote
+     * is not the user's words, so it is refused.
+     * @returns {Promise<string[]>} the guarded names the ask gives its thread.
+     */
+    async askedTools(projectId, ask) {
+        const guard = this.guards();
+        if (guard.length === 0 || !ask) return [];
+        const named = guardedIn(ask, guard, { aliases: true });
+        if (named.length === 0) return [];
+        const said = new Set(guardedIn(`${this.project(projectId).goal ?? ''}\n${await this.userText(projectId)}`, guard, { aliases: true }));
+        const unsaid = named.filter((name) => !said.has(name));
+        if (unsaid.length > 0) {
+            this.log(`guard ${projectId} ask-unsaid ${unsaid.join(',')}`);
+            throw new ProjectError(`ask names ${unsaid.join(', ')}, but the user's messages don't. Put only the user's own words in ask, copied from their message, or ask the user first`);
+        }
+        return named;
+    }
+
+    /** Give a thread more of the user's tools, named by the user's words; its wall follows at once. */
+    addThreadTools(projectId, threadId, names, why) {
+        const t = this.store.thread(projectId, threadId);
+        if (!t || names.length === 0) return;
+        const have = Array.isArray(t.tools) ? t.tools : [];
+        const added = names.filter((name) => !have.includes(name));
+        if (added.length === 0) return;
+        this.store.putThread(projectId, threadId, { tools: [...have, ...added] });
+        this.log(`tools ${projectId}/${threadId} +${added.join(',')} ${why}`);
+        const agent = this.ctx.agents.get(t.sessionId);
+        if (agent && this.roles.has(agent)) this.applyWall(agent, this.roles.get(agent));
+    }
+
+    // ── permissions ───────────────────────────────────────────────────────
+
+    /** DSH's permission presets service, or undefined on a DSH without it. */
+    presets() {
+        try {
+            const pp = this.ctx.get?.('permissionPresets');
+            return pp && typeof pp.set === 'function' && typeof pp.current === 'function' ? pp : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * The presets DSH offers for new sessions, in its order ({value, name,
+     * description?}, as its permission menu lists them, without the
+     * experimental Auto), and the one new sessions get. null without them.
+     */
+    permissionCatalog() {
+        const pp = this.presets();
+        if (!pp) return null;
+        try {
+            const c = pp.catalog();
+            const options = (Array.isArray(c?.defaultOptions) ? c.defaultOptions : [])
+                .filter((o) => typeof o?.value === 'string' && o.value !== 'custom' && o.value !== 'auto')
+                .map((o) => ({ value: o.value, name: typeof o.name === 'string' ? o.name : o.value, ...(typeof o.description === 'string' ? { description: o.description } : {}) }));
+            return { options, defaultPreset: typeof c?.defaultPreset === 'string' ? c.defaultPreset : null };
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * The preset a permission setting puts a session on: DSH's default for
+     * new sessions for "default", undefined for a name DSH doesn't offer.
+     */
+    presetOf(value) {
+        const catalog = this.permissionCatalog();
+        if (!catalog) return undefined;
+        if (value === 'default') return catalog.defaultPreset ?? undefined;
+        return catalog.options.some((o) => o.value === value) ? value : undefined;
+    }
+
+    /** A loaded session's permission preset now (DSH's name, or "custom"), or undefined. */
+    permissionOf(sessionId) {
+        try {
+            const session = typeof sessionId === 'string' ? this.ctx.agents.get(sessionId)?.session : undefined;
+            const preset = session ? this.presets()?.current(session) : undefined;
+            return typeof preset === 'string' ? preset : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * Put one session on a permission preset, the way DSH's permission menu
+     * does, marked as the manager's own change.
+     * @returns whether the session is on it now.
+     */
+    setPermission(agent, preset, label) {
+        const pp = this.presets();
+        if (!pp || !agent?.session || typeof preset !== 'string') return false;
+        try {
+            if (pp.current(agent.session) === preset) return true;
+            this.ownPermissions.set(agent.id, preset);
+            pp.set(agent.session, preset);
+            this.log(`permission ${label} ${preset}`);
+            return pp.current(agent.session) === preset;
+        } catch (error) {
+            this.ownPermissions.delete(agent.id);
+            this.log(`error permission ${label} ${String(error?.message ?? error).slice(0, 200)}`);
+            return false;
+        }
+    }
+
+    /**
+     * Put the coordinator on its permission setting when the setting
+     * differs from the one it last got. A coordinator on DSH's default needs
+     * nothing (DSH gave it that one); an unloaded coordinator gets it when
+     * it loads.
+     * @returns false only when a needed change failed.
+     */
+    applyCoordinatorPermission(projectId, agent = undefined) {
+        const stored = this.store.project(projectId);
+        if (!stored.coordinatorSessionId || !this.presets()) return true;
+        const want = this.access(projectId).coordinatorPermission.value;
+        if (stored.coordinatorAccess === want) return true;
+        if (stored.coordinatorAccess === undefined && want === 'default') {
+            this.store.putProject(projectId, { coordinatorAccess: want });
+            return true;
+        }
+        const live = agent ?? this.ctx.agents.get(stored.coordinatorSessionId);
+        if (!live) return true;
+        const preset = this.presetOf(want);
+        if (!preset) {
+            this.log(`permission ${projectId}/coordinator unknown preset ${want}`);
+            return false;
+        }
+        if (!this.setPermission(live, preset, `${projectId}/coordinator`)) return false;
+        this.store.putProject(projectId, { coordinatorAccess: want });
+        return true;
+    }
+
+    /**
+     * A `permission/preset` on a project session that the manager didn't
+     * make: the user's pick in DSH's own permission menu. On a coordinator
+     * it becomes the project's coordinator setting, on a thread that
+     * thread's, so the settings say what the sessions run with.
+     */
+    onPermission(who, agent, data) {
+        try {
+            const preset = data?.preset;
+            if (typeof preset !== 'string' || preset === 'custom' || !this.projects.has(who.projectId)) return;
+            if (this.ownPermissions.get(agent.id) === preset) {
+                this.ownPermissions.delete(agent.id);
+                return;
+            }
+            if (who.role === 'coordinator') {
+                this.store.putSettings(who.projectId, { coordinatorPermission: preset });
+                this.store.putProject(who.projectId, { coordinatorAccess: preset });
+            } else {
+                if (!this.store.thread(who.projectId, who.threadId)) return;
+                this.store.putThread(who.projectId, who.threadId, { permission: preset });
+            }
+            this.log(`picked-permission ${who.projectId}/${who.threadId ?? 'coordinator'} ${preset}`);
+        } catch (error) {
+            this.log(`error picked-permission ${who.projectId} ${String(error?.message ?? error).slice(0, 200)}`);
+        }
+    }
+
     /**
      * Compare the project's row in the profile with the one this project
-     * last saw. A model or effort the row changed since (an edit by hand)
-     * replaces the project's own setting of it, made in its Project settings,
-     * in its coordinator's model picker or through the coordinator: all of
-     * them are this project's, so the newest wins. The plugin defaults never
-     * replace a project's own setting. The first look only records.
+     * last saw. A model, effort or access setting the row changed since (an
+     * edit by hand) replaces the project's own setting of it, made in its
+     * Project settings, in its coordinator's model or permission menu or
+     * through the coordinator: all of them are this project's, so the newest
+     * wins. The plugin defaults never replace a project's own setting. The
+     * first look only records.
      * @returns {string[]} the settings whose project setting was replaced.
      */
     noteProjectRow(projectId) {
@@ -427,26 +781,32 @@ export class ProjectManager {
         const row = this.project(projectId);
         const p = this.store.project(projectId);
         const seen = p.rowSeen;
-        const changed = SETTING_KEYS.filter((key) => plain(row[key]) !== plain(seen?.[key]));
+        const keys = [...SETTING_KEYS, ...ACCESS_KEYS];
+        const changed = keys.filter((key) => plain(row[key]) !== plain(seen?.[key]));
         if (seen && changed.length === 0) return [];
         const replaced = seen ? changed.filter((key) => p.settings[key] !== undefined) : [];
         if (replaced.length) this.store.putSettings(projectId, Object.fromEntries(replaced.map((key) => [key, undefined])));
-        this.store.putProject(projectId, { rowSeen: Object.fromEntries(SETTING_KEYS.map((key) => [key, plain(row[key])])), defaultsSeen: undefined });
+        this.store.putProject(projectId, { rowSeen: Object.fromEntries(keys.map((key) => [key, plain(row[key])])), defaultsSeen: undefined });
         if (seen) this.log(`row ${projectId} ${changed.join(',')}${replaced.length ? ` replaced ${replaced.join(',')}` : ''}`);
         return replaced;
     }
 
     /**
      * The plugin defaults changed while the plugin runs (DSH's settings page
-     * saved them). A coordinator that runs on a default switches from its
-     * next request; new threads start with the new defaults, and running
-     * threads keep theirs. A project's own settings stay.
+     * saved them, or the profile's live fields were edited). A coordinator
+     * that runs on a default switches from its next request, and to its
+     * permission now; new threads start with the new defaults, and running
+     * threads keep theirs. A project's own settings stay. Every session's
+     * wall follows the user's tools as they are now.
      */
     async onDefaultsChanged() {
         this.log('defaults saved');
+        // Your tools, or the list of them, may have changed.
+        try { this.rewall(); } catch (error) { this.log(`error wall ${String(error?.message ?? error).slice(0, 200)}`); }
         for (const projectId of this.projects.keys()) {
             if (this.disposed) return;
             try {
+                this.applyCoordinatorPermission(projectId);
                 await this.applyCoordinatorRoute(projectId);
             } catch (error) {
                 this.log(`error defaults ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
@@ -524,6 +884,9 @@ export class ProjectManager {
             try { dispose(); } catch {}
         }
         this.installed.clear();
+        this.roles.clear();
+        clearTimeout(this.wallTimer);
+        this.wallTimer = undefined;
         for (const sessionId of [...this.approvals.keys()]) this.clearApprovals(sessionId);
         for (const { timer } of this.retries.values()) clearTimeout(timer);
         this.retries.clear();
@@ -679,10 +1042,12 @@ export class ProjectManager {
     async ensureCoordinatorOnce(projectId, create) {
         const project = this.project(projectId);
         const stored = this.store.project(projectId);
-        if (await this.exists(stored.coordinatorSessionId)) {
-            const live = this.ctx.agents.get(stored.coordinatorSessionId);
+        // A coordinator DSH has loaded exists; only one it hasn't needs its log read to know.
+        const live = stored.coordinatorSessionId ? this.ctx.agents.get(stored.coordinatorSessionId) : undefined;
+        if (live || await this.exists(stored.coordinatorSessionId)) {
             if (live) this.maybeInstall(live);
             await this.applyCoordinatorRoute(projectId);
+            this.applyCoordinatorPermission(projectId);
             this.log(`coordinator ${projectId} ${stored.coordinatorSessionId} resumed`);
             await this.welcome(projectId, stored.coordinatorSessionId, false);
             return stored.coordinatorSessionId;
@@ -701,8 +1066,9 @@ export class ProjectManager {
         if (this.disposed) return null;
         const sessionId = await this.createSession(project);
         this.store.putProject(projectId, {
-            coordinatorSessionId: sessionId, coordinatorCreatedAt: new Date().toISOString(), coordinatorRoute: undefined,
+            coordinatorSessionId: sessionId, coordinatorCreatedAt: new Date().toISOString(), coordinatorRoute: undefined, coordinatorAccess: undefined,
         });
+        // Attaching puts it on its permission setting (install).
         await this.attach(sessionId);
         await this.sc.rename({ sessionId, title: `◆ ${project.name}` }).catch(() => {});
         await this.applyCoordinatorRoute(projectId);
@@ -784,6 +1150,7 @@ export class ProjectManager {
             this.ctx.logger?.warn?.('projects: could not attach to session %s: %s', agent.id, error?.message ?? error);
             return;
         }
+        this.roles.set(agent, who);
         this.log(`attach ${who.role} ${who.projectId}${who.threadId ? `/${who.threadId}` : ''} ${agent.id}`);
     }
 
@@ -791,6 +1158,7 @@ export class ProjectManager {
         const dispose = this.installed.get(agent);
         if (!dispose) return;
         this.installed.delete(agent);
+        this.roles.delete(agent);
         try { dispose(); } catch {}
     }
 
@@ -837,9 +1205,17 @@ export class ProjectManager {
             } else {
                 add(scoped.on('session/event', (_session, event) => {
                     if (event?.type === 'model/selection') this.onSelection(who, agent, event.data);
+                    else if (event?.type === 'permission/preset') this.onPermission(who, agent, event.data);
                 }));
+                // A setting changed while it was not loaded.
+                this.applyCoordinatorPermission(projectId, agent);
             }
             add(() => this.ownSelections.delete(agent.id));
+            add(() => this.ownPermissions.delete(agent.id));
+            // The user's tools it may not use: left out of what its model is offered, and refused if called anyway.
+            if (typeof scoped.tools?.guard === 'function') add(scoped.tools.guard((exec) => this.wallReason(who, exec?.name)));
+            add(() => this.dropWall(agent));
+            this.applyWall(agent, who);
         } catch (error) {
             for (const d of disposers.reverse()) { try { d(); } catch {} }
             throw error;
@@ -987,7 +1363,8 @@ export class ProjectManager {
             goal: project.goal,
             workspacePath: project.workspacePath,
             home: isHome(project.workspacePath),
-            guarded: guardList(this.config.guardedTools).map(([name]) => name),
+            guarded: this.guards().map(([name]) => name),
+            yourTools: this.access(projectId).yourTools.value,
             folders: this.workspacesIn(projectId).map((ws) => ws.path).filter((path) => path !== project.workspacePath),
             paused: this.paused(projectId),
             threads: this.store.project(projectId).threads,
@@ -999,13 +1376,17 @@ export class ProjectManager {
     threadText(projectId, threadId) {
         const project = this.project(projectId);
         const t = this.store.thread(projectId, threadId);
+        const tools = this.toolsFor({ projectId, role: 'thread', threadId });
         return threadPolicy({
             name: project.name,
             goal: project.goal,
             threadId,
             title: t?.title ?? threadId,
             home: isHome(t?.folder ?? project.workspacePath),
-            guarded: guardList(this.config.guardedTools).map(([name]) => name),
+            guarded: this.guards().map(([name]) => name),
+            yourTools: tools === 'all' ? 'always' : 'asked',
+            // Under "asked", the user's tools this thread has.
+            tools: tools === 'all' ? undefined : [...tools],
             memory: this.readMemory(projectId),
         });
     }
@@ -1102,8 +1483,24 @@ export class ProjectManager {
             this.onSelection({ projectId, role: 'thread', threadId }, agent, event.data);
             return;
         }
+        if (event?.type === 'permission/preset') {
+            this.onPermission({ projectId, role: 'thread', threadId }, agent, event.data);
+            return;
+        }
         if (event?.type === 'workspace/changes') {
             this.noteChanges(projectId, threadId, agent.id, event.seq);
+            return;
+        }
+        // DSH queues a message (agent/inbox/spliced) before the turn that reads it gathers its
+        // tools, and logs it (user/message) once that turn already has them: the queued copy
+        // is what lets the user's words give a tool to the very turn that answers them.
+        if (event?.type === 'agent/inbox/spliced') {
+            for (const message of Array.isArray(event.data?.inserted) ? event.data.inserted : []) this.onThreadPrompt(projectId, threadId, promptOf({ type: 'user/message', data: message }));
+            return;
+        }
+        const prompt = promptOf(event);
+        if (prompt) {
+            this.onThreadPrompt(projectId, threadId, prompt);
             return;
         }
         const id = event?.data?.id;
@@ -1124,6 +1521,17 @@ export class ProjectManager {
         }, this.config.approvalNoticeSeconds * 1000);
         timer.unref?.();
         pending.set(id, timer);
+    }
+
+    /** The user writing to a thread directly: the tools their words name are theirs to give it. */
+    onThreadPrompt(projectId, threadId, prompt) {
+        if (!prompt || prompt.fromProject) return;
+        try {
+            const guard = this.guards();
+            if (guard.length > 0) this.addThreadTools(projectId, threadId, guardedIn(prompt.text, guard, { aliases: true }), 'from the user in the thread');
+        } catch (error) {
+            this.log(`error tools ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
+        }
     }
 
     /**
@@ -1405,17 +1813,17 @@ export class ProjectManager {
 
     /**
      * Refuse a thread start or message that would use a guarded tool
-     * (config.guardedTools) the user's words don't call for: `userWords`
-     * and the project's goal must name it or one of its aliases. The first
-     * real run drifted from a test task the coordinator picked itself into
-     * the user's model lanes; this holds whatever the model makes of its
-     * prompt.
+     * (config.guardedTools) the user's words don't call for: `allowed` (the
+     * user's tools their checked words give the thread) or the project's
+     * goal must name it. The first real run drifted from a test task the
+     * coordinator picked itself into the user's model lanes; this holds
+     * whatever the model makes of its prompt, under either yourTools.
      */
-    guard(projectId, what, text, userWords) {
-        const guard = guardList(this.config.guardedTools);
+    guard(projectId, what, text, allowed) {
+        const guard = this.guards();
         if (guard.length === 0) return;
-        const allowed = new Set(guardedIn(`${userWords ?? ''}\n${this.project(projectId).goal ?? ''}`, guard, { aliases: true }));
-        const blocked = guardedIn(text, guard).filter((name) => !allowed.has(name));
+        const ok = new Set([...allowed, ...guardedIn(this.project(projectId).goal ?? '', guard, { aliases: true })]);
+        const blocked = guardedIn(text, guard).filter((name) => !ok.has(name));
         if (blocked.length === 0) return;
         this.log(`guard ${projectId} ${what} ${blocked.join(',')}`);
         const them = blocked.length > 1 ? 'them' : 'it';
@@ -1431,8 +1839,17 @@ export class ProjectManager {
         if (!String(brief ?? '').trim()) throw new ProjectError('brief is required');
         const userWords = typeof ask === 'string' ? ask.trim().slice(0, 4000) : '';
         if (!userWords) throw new ProjectError('ask is required: copy the user\'s words from their message');
-        this.guard(projectId, 'start', `${cleanTitle}\n${userWords}\n${brief}`, userWords);
         const where = this.folderOf(projectId, folder);
+        // The user's tools the thread gets: the ones the ask names that the user really wrote.
+        const tools = await this.askedTools(projectId, userWords);
+        this.guard(projectId, 'start', `${cleanTitle}\n${userWords}\n${brief}`, tools);
+        const access = this.access(projectId);
+        // Its permission preset; one DSH doesn't offer (any more) is not one to start a thread on.
+        const preset = this.presets() ? this.presetOf(access.threadPermission.value) : undefined;
+        if (this.presets() && !preset) {
+            this.log(`permission ${projectId} unknown preset ${access.threadPermission.value}`);
+            throw new ProjectError(`threads in this project start on the permission "${access.threadPermission.value}", which DSH doesn't offer. Tell the user to choose another in Project settings`);
+        }
         const s = this.settings(projectId);
         // Not given, or "default": the project's thread default.
         const given = (value) => value !== undefined && value !== 'default';
@@ -1458,8 +1875,18 @@ export class ProjectManager {
             resolved: false, createdAt: new Date().toISOString(), handbackTimes: [], seenTurn: null,
             ...(userWords ? { ask: userWords } : {}),
             ...(where !== project.workspacePath ? { folder: where } : {}),
+            tools,
         });
         const agent = await this.attach(sessionId);
+        // On the project's thread permission before it reads its brief; a thread that can't be put there doesn't start.
+        if (preset) {
+            if (!agent || !this.setPermission(agent, preset, `${projectId}/${threadId}`)) {
+                this.store.putThread(projectId, threadId, { resolved: true });
+                this.log(`thread-start ${projectId}/${threadId} ${sessionId} not started: permission`);
+                throw new ProjectError(`${threadId} could not be put on the permission "${preset}", so it did not start. Tell the user (details in the projects log)`);
+            }
+            this.store.putThread(projectId, threadId, { permission: this.permissionOf(sessionId) ?? preset });
+        }
         const notes = check.note ? [check.note] : [];
         if (this.selectionMode === 'session') {
             const applied = await this.selectRoute(agent, { projectId, role: 'thread', threadId });
@@ -1478,21 +1905,33 @@ export class ProjectManager {
         this.log(`thread-start ${projectId}/${threadId} ${sessionId} brief-chars=${brief.length} ask-chars=${userWords.length}`);
         // What it runs on is named only when the coordinator asked for a model or effort: otherwise it is a setting the coordinator needs no word of.
         const asked = given(model) || given(effort);
-        return { threadId, sessionId, title: cleanTitle, route: asked ? describeRoute(check.model, check.effort) : undefined, notes: asked ? notes : [] };
+        return {
+            threadId, sessionId, title: cleanTitle, route: asked ? describeRoute(check.model, check.effort) : undefined, notes: asked ? notes : [],
+            // The user's tools it has because the user's words name them, which the coordinator may tell the user.
+            tools: access.yourTools.value === 'asked' ? tools : [],
+        };
     }
 
     /**
      * Send a thread a message. `ask` is the user's words when the message
      * passes on their request; the coordinator's own messages (`ask`
      * undefined) and the plugin's (`guard` false) say only what they say.
+     * The user's tools the checked ask names join the thread's before it
+     * reads the message.
      */
     async sendToThread(projectId, threadId, text, steer, { ask, guard = false } = {}) {
         const { id, t } = this.requireThread(projectId, threadId);
         if (!String(text ?? '').trim()) throw new ProjectError('text is required');
         const userWords = typeof ask === 'string' ? ask.trim().slice(0, 4000) : '';
-        if (guard) this.guard(projectId, 'send', `${userWords}\n${text}`, `${t.ask ?? ''}\n${userWords}`);
+        let tools = [];
+        if (guard) {
+            // More of the user's tools only when the user's checked words for this message name them.
+            tools = await this.askedTools(projectId, userWords);
+            this.guard(projectId, 'send', `${userWords}\n${text}`, [...(Array.isArray(t.tools) ? t.tools : []), ...tools]);
+        }
         if (t.resolved) this.store.putThread(projectId, id, { resolved: false });
         await this.attach(t.sessionId);
+        this.addThreadTools(projectId, id, tools, 'from the user\'s words in a message');
         await this.prompt(t.sessionId, coordinatorMessage(text.trim(), userWords), steer ? 'steer' : 'queue', this.store.project(projectId).coordinatorSessionId);
         this.log(`thread-send ${projectId}/${id} mode=${steer ? 'steer' : 'queue'} chars=${text.length}`);
         return `${steer ? 'Steered' : 'Sent to'} ${id}${t.resolved ? ' (reopened)' : ''}.`;
@@ -1645,13 +2084,69 @@ export class ProjectManager {
             `Coordinator: ${describeRoute(s.coordinatorModel.value, s.coordinatorEffort.value)} (${s.coordinatorModel.source} / ${s.coordinatorEffort.source})`,
             `New threads: ${describeRoute(s.threadModel.value, s.threadEffort.value)} (${s.threadModel.source} / ${s.threadEffort.source})`,
             `Paused: ${this.paused(projectId) ? 'yes' : 'no'}${flushed ? ` (delivered ${flushed} held handbacks)` : ''}`,
+            ...this.accessLines(projectId),
             ...notes,
         ].join('\n');
     }
 
-    // ── the Project settings dialog (remote.js) ────────────────────────────
+    /** The access settings as project_settings shows them; only the user changes them, in Project settings. */
+    accessLines(projectId) {
+        const a = this.access(projectId);
+        const guarded = this.guards().map(([name]) => name);
+        const permission = (value) => (value === 'default' ? `DSH's default (${this.presets()?.defaultPreset ?? 'unknown'})` : value);
+        return [
+            guarded.length === 0 ? null
+                : `The user's tools (${guarded.join(', ')}): ${a.yourTools.value === 'always' ? 'every session has them' : 'you don\'t have them; a thread has the ones the user\'s words for it name'}`,
+            this.presets() ? `Permissions: coordinator ${permission(a.coordinatorPermission.value)}, new threads ${permission(a.threadPermission.value)}` : null,
+            'The user changes these in Project settings; project_settings can\'t.',
+        ].filter((line) => line !== null);
+    }
 
-    /** The project a window call names: a project id, or the id of one of its sessions. */
+    /**
+     * Change the project's access settings, from the window only: the
+     * user's tools ("asked" or "always") and the coordinator's and new
+     * threads' permission (a preset DSH offers, or "default"). null clears
+     * the project's own, so its profile row or the plugin default applies.
+     * Walls follow at once, and the coordinator moves to its new
+     * permission; running threads keep theirs.
+     * @returns {string[]} notes.
+     */
+    changeAccess(projectId, changes) {
+        const next = {};
+        if (changes.yourTools !== undefined) {
+            if (changes.yourTools !== null && !TOOL_MODES.includes(changes.yourTools)) throw new ProjectError('your tools must be "asked" or "always"');
+            next.yourTools = changes.yourTools ?? undefined;
+        }
+        for (const key of ['coordinatorPermission', 'threadPermission']) {
+            const value = changes[key];
+            if (value === undefined) continue;
+            if (value !== null && (typeof value !== 'string' || !this.presetOf(value))) {
+                const offered = this.permissionCatalog()?.options.map((o) => o.value) ?? [];
+                throw new ProjectError(offered.length ? `"${String(value).slice(0, 40)}" is not one of DSH's permissions (${['default', ...offered].join(', ')})` : 'this DSH has no permission presets');
+            }
+            next[key] = value ?? undefined;
+        }
+        if (Object.keys(next).length === 0) return [];
+        this.store.putSettings(projectId, next);
+        this.log(`access ${projectId} ${Object.keys(next).join(',')}`);
+        if ('yourTools' in next) this.rewall(projectId);
+        if ('coordinatorPermission' in next && !this.applyCoordinatorPermission(projectId)) {
+            return ['The coordinator\'s permission could not be changed (details in the projects log).'];
+        }
+        return [];
+    }
+
+    /** Put one thread on another permission preset ("default": DSH's default for new sessions), from the window. */
+    async changeThreadPermission(projectId, threadKey, value) {
+        const { id, t } = this.requireThread(projectId, threadKey);
+        const preset = typeof value === 'string' ? this.presetOf(value) : undefined;
+        if (!preset) throw new ProjectError(`"${String(value).slice(0, 40)}" is not one of DSH's permissions`);
+        const agent = await this.attach(t.sessionId);
+        if (!agent || !this.setPermission(agent, preset, `${projectId}/${id}`)) throw new ProjectError(`${id}'s permission could not be changed (details in the projects log)`);
+        this.store.putThread(projectId, id, { permission: preset });
+        return `${id}: permission ${preset}.`;
+    }
+
     // ── projects as groups of workspaces (the Projects page) ─────────────────
 
     /**
@@ -1763,6 +2258,9 @@ export class ProjectManager {
         return sessionId;
     }
 
+    // ── the Project settings dialog (remote.js) ────────────────────────────
+
+    /** The project a window call names: a project id, or the id of one of its sessions. */
     projectFor(target) {
         const value = typeof target === 'string' ? target.trim() : '';
         if (this.projects.has(value)) return value;
@@ -1789,16 +2287,23 @@ export class ProjectManager {
 
     /**
      * A project as its Project settings dialog shows it: each of the four
-     * settings with its source and what it falls back to without the
-     * project's own, pause (with how many messages it holds and whose
-     * handbacks), and every thread with its model.
+     * settings and the three access settings with its source and what it
+     * falls back to without the project's own, pause (with how many messages
+     * it holds and whose handbacks), and every thread with its model, its
+     * permission and the user's tools it has.
      */
     describeProject(projectId) {
         const project = this.project(projectId);
         const stored = this.store.project(projectId);
         const settings = this.settings(projectId);
         const inherited = effectiveSettings(pluginDefaults(this.config), project, {});
+        const access = this.access(projectId);
+        const inheritedAccess = effectiveAccess(pluginDefaults(this.config), project, {});
         const own = typeof stored.settings.paused === 'boolean';
+        const toolsOf = (who) => {
+            const tools = this.toolsFor(who);
+            return tools === 'all' ? 'all' : [...tools];
+        };
         return {
             project: {
                 id: projectId,
@@ -1809,8 +2314,15 @@ export class ProjectManager {
                 homeFolder: isHome(project.workspacePath),
                 coordinator: stored.coordinatorSessionId ?? null,
                 live: this.liveSelection(stored.coordinatorSessionId) ?? null,
+                // Its permission preset now, while DSH has it loaded; and the user's tools it has.
+                permission: this.permissionOf(stored.coordinatorSessionId) ?? null,
+                tools: toolsOf({ projectId, role: 'coordinator' }),
             },
             settings: Object.fromEntries(SETTING_KEYS.map((key) => [key, { ...settings[key], inherited: inherited[key] }])),
+            access: Object.fromEntries(ACCESS_KEYS.map((key) => [key, { ...access[key], inherited: inheritedAccess[key] }])),
+            // The user's tools (guardedTools), and the permissions DSH offers, for the dialog's menus.
+            guarded: this.guards().map(([name]) => name),
+            permissions: this.permissionCatalog(),
             paused: {
                 value: this.paused(projectId), source: own ? 'project setting' : 'project config', inherited: project.paused === true,
                 held: stored.pendingHandbacks.length, handbacks: heldHandbacks(stored.pendingHandbacks),
@@ -1822,15 +2334,17 @@ export class ProjectManager {
                     model: t.model ?? null, effort: t.effort ?? null, live: this.liveSelection(t.sessionId) ?? null,
                     handback: t.lastHandback?.status ?? null,
                     changes: this.threadChanges(t),
+                    permission: this.permissionOf(t.sessionId) ?? t.permission ?? null,
+                    tools: toolsOf({ projectId, role: 'thread', threadId: id }),
                 };
             }),
         };
     }
 
     /**
-     * Every project as the plugin's page lists it: the four settings with
-     * their sources, what the coordinator runs on right now, pause, and how
-     * many threads are open.
+     * Every project as the plugin's page lists it: the four settings and the
+     * access settings with their sources, what the coordinator runs on right
+     * now (model and permission), pause, and how many threads are open.
      */
     listProjects() {
         const listed = [...this.projects.keys()].map((projectId, index) => {
@@ -1840,6 +2354,7 @@ export class ProjectManager {
             const ids = rosterIds(stored.threads);
             const open = ids.filter((id) => stored.threads[id].resolved !== true).length;
             const home = this.homeOf(projectId);
+            const access = this.access(projectId);
             return {
                 id: projectId,
                 name: project.name,
@@ -1849,8 +2364,10 @@ export class ProjectManager {
                 workspaces: this.workspacesIn(projectId).map((ws) => ({ id: ws.id, path: ws.path, title: ws.title })),
                 coordinator: stored.coordinatorSessionId ?? null,
                 live: this.liveSelection(stored.coordinatorSessionId) ?? null,
+                permission: this.permissionOf(stored.coordinatorSessionId) ?? null,
                 paused: this.paused(projectId),
                 settings: Object.fromEntries(SETTING_KEYS.map((key) => [key, { value: settings[key].value ?? null, source: settings[key].source }])),
+                access: Object.fromEntries(ACCESS_KEYS.map((key) => [key, { value: access[key].value, source: access[key].source }])),
                 threads: { open, resolved: ids.length - open },
                 order: this.fromProfile(projectId) ? index : 10000 + (Number.isFinite(stored.order) ? stored.order : index),
             };
@@ -1861,17 +2378,29 @@ export class ProjectManager {
 
     /**
      * A change from the Project settings dialog: the project's settings, or
-     * one thread's model and effort. null puts a value back to its default.
-     * @param {object} changes - {coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?} or {thread, model?, effort?}.
+     * one thread's model, effort and permission. null puts a value back to
+     * its default.
+     * @param {object} changes - {coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?, yourTools?,
+     *   coordinatorPermission?, threadPermission?} or {thread, model?, effort?, permission?}.
      * @returns the project as describeProject shows it, with `notes` from the change.
      */
     async changeFromWindow(projectId, changes) {
         const text = (value) => (value === null ? 'default' : typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined);
-        let notes;
+        // An access value: a word, or null to clear the project's own.
+        const word = (value) => (value === null ? null : typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined);
+        let notes = [];
         if (changes.thread !== undefined) {
             const { id } = this.requireThread(projectId, changes.thread);
-            notes = [await this.updateThread(projectId, id, { model: text(changes.model), effort: text(changes.effort) })];
+            if (changes.model !== undefined || changes.effort !== undefined || changes.permission === undefined) {
+                notes.push(await this.updateThread(projectId, id, { model: text(changes.model), effort: text(changes.effort) }));
+            }
+            if (changes.permission !== undefined) notes.push(await this.changeThreadPermission(projectId, id, word(changes.permission)));
         } else {
+            const access = this.changeAccess(projectId, {
+                yourTools: word(changes.yourTools),
+                coordinatorPermission: word(changes.coordinatorPermission),
+                threadPermission: word(changes.threadPermission),
+            });
             ({ notes } = await this.changeSettings(projectId, {
                 coordinatorModel: text(changes.coordinatorModel),
                 coordinatorEffort: text(changes.coordinatorEffort),
@@ -1879,6 +2408,7 @@ export class ProjectManager {
                 threadEffort: text(changes.threadEffort),
                 paused: changes.paused === null || typeof changes.paused === 'boolean' ? changes.paused : undefined,
             }));
+            notes = [...access, ...notes];
         }
         return { ...this.describeProject(projectId), notes };
     }

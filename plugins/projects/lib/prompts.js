@@ -99,7 +99,7 @@ export function rosterLines(threads, liveStatus) {
  * models too. Each automatic message carries its own instruction, so the
  * rules don't have to explain them. It names no model or effort: those are
  * settings, and project_settings shows them when the user asks.
- * @param {object} p - {name, goal, workspacePath, home?: the workspace is the user's home folder, guarded?: config.guardedTools names, folders?: the project's other workspaces, paused, threads, memory, liveStatus}
+ * @param {object} p - {name, goal, workspacePath, home?: the workspace is the user's home folder, guarded?: config.guardedTools names, yourTools?: 'asked'|'always', folders?: the project's other workspaces, paused, threads, memory, liveStatus}
  */
 export function coordinatorPolicy(p) {
     return [
@@ -113,7 +113,10 @@ export function coordinatorPolicy(p) {
         '## Rules',
         '1. Do only what the user asks. When they leave the choice of work to you, pick work that only reads and writes files in the workspace, and say what you picked.',
         `2. Never use the user's personal or infrastructure tools, yourself or in a thread: ${OFF_LIMITS}. Only the user's own words (a message, or the goal) can call for one.`,
-        p.guarded?.length ? `   Here those include: ${p.guarded.join(', ')}.` : null,
+        // Under "asked" the coordinator doesn't have them, so the rule says where such work goes.
+        p.guarded?.length && p.yourTools !== 'always'
+            ? `   You don't have these here: ${p.guarded.join(', ')}. When the user's words ask for work that needs one, start a thread with their words in \`ask\`; the thread gets the ones their words name.`
+            : p.guarded?.length ? `   Here those include: ${p.guarded.join(', ')}.` : null,
         '3. For work, start a thread with project_thread_start, not with DSH\'s subagent or workflow tools. One thread per distinct ask; put the user\'s words in `ask`, word for word. A follow-up on a thread\'s work goes to that thread with project_thread_send.',
         `4. Name a thread to the user only as a link: [Fix the login bug](${threadLink('t3')}) for thread t3.`,
         '5. Answer yourself only what you already know: thread status, project memory, this conversation. Keep your turns short.',
@@ -130,9 +133,12 @@ export function coordinatorPolicy(p) {
     ].filter((line) => line !== null).join('\n');
 }
 
+/** Under yourTools "asked": which of the user's tools a thread has, the ones the user's words for it name. */
+const toolsNote = (tools) => (tools?.length ? ` You have only the ones the user's words name: ${tools.join(', ')}.` : ' You have none of them.');
+
 /**
  * Thread policy section: the task and only the task, then one handback.
- * @param {object} p - {name, goal, threadId, title, home?: it works in the user's home folder, guarded?, memory}
+ * @param {object} p - {name, goal, threadId, title, home?: it works in the user's home folder, guarded?, yourTools?: 'asked'|'always', tools?: the guarded ones it has, memory}
  */
 export function threadPolicy(p) {
     return [
@@ -145,7 +151,7 @@ export function threadPolicy(p) {
         '',
         '1. Do the task end to end, and only the task. Where a detail is unspecified, pick a sensible default, say which, and keep going.',
         `2. Do not use the user's personal or infrastructure tools (${OFF_LIMITS}) unless the user's own words ask for it. If the task needs one anyway, hand back with status blocked and say why.`,
-        p.guarded?.length ? `   Here those include: ${p.guarded.join(', ')}.` : null,
+        p.guarded?.length ? `   Here those include: ${p.guarded.join(', ')}.${p.yourTools === 'always' ? '' : toolsNote(p.tools)}` : null,
         '3. Editing files for your task is fine. Before you delete files, push, publish, send or post anything, spend money, or do anything that cannot be undone, hand back with status needs_decision, unless the user\'s words asked for exactly that.',
         '4. When you are done or stuck, call project_handback once, as your last step. Its summary is what the user reads on your card, which shows 300 characters: the result first, then where (paths, links). Only what your tools showed; mark a guess "(guess)".',
         '5. After project_handback, end your turn with one short line. Do not repeat the summary.',

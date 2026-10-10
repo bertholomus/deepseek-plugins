@@ -110,8 +110,9 @@ export function projectTools(manager, who) {
                 // It names what the thread runs on only when the coordinator chose that (r.route).
                 const runs = r.route ? ` It runs on ${r.route}.` : '';
                 const notes = r.notes?.length ? ` Note: ${r.notes.join('; ')}.` : '';
+                const has = r.tools?.length ? ` The user's words give it ${r.tools.join(', ')}.` : '';
                 return result(
-                    `Started ${r.threadId} "${r.title}". It reports back when done.${runs}${notes} Link it as ${threadMarkdown(r.threadId, r.title)}.`,
+                    `Started ${r.threadId} "${r.title}". It reports back when done.${runs}${has}${notes} Link it as ${threadMarkdown(r.threadId, r.title)}.`,
                     { action: { kind: 'start', thread: r.threadId }, threads: [r.threadId] },
                 );
             },
@@ -173,7 +174,7 @@ export function projectTools(manager, who) {
         }),
         tool({
             name: 'project_settings',
-            description: 'Show or change which model and effort the coordinator and new threads use, or pause the project. With no arguments it shows them. Only when the user asks.',
+            description: 'Show or change which model and effort the coordinator and new threads use, or pause the project. With no arguments it shows them, and the user\'s tools and permission settings, which only the user changes. Only when the user asks.',
             parameters: {
                 coordinator_model: { type: 'string', description: `Coordinator model. ${MODEL_HELP}` },
                 coordinator_effort: { type: 'string', description: `Coordinator effort. ${EFFORT_HELP}` },
