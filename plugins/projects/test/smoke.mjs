@@ -1689,7 +1689,7 @@ test('browser half: a failed or stopped thread reads Failed or Stopped everywher
     assert.equal(continueError({ code: 'projects/unreachable', message: 'socket' }), 'Couldn\'t reach the thread.');
 });
 
-test('browser half: each session list row says its place in a project, and the CSS nests by it', () => {
+test('browser half: each session list row says its place in a project, and the CSS nests each project by it', () => {
     const { client } = loadClient();
     const { rowPlace, nestingRules } = client.internals;
     const coord = (name) => ({ role: 'coordinator', project: { name }, threads: [] });
@@ -1720,20 +1720,31 @@ test('browser half: each session list row says its place in a project, and the C
     assert.equal(rowPlace(state, 'missing'), '');
     assert.equal(rowPlace(undefined, 'c'), '');
 
-    // Each coordinator's threads in the list, by its id: the same places, gathered once per list state.
-    const { threadRows } = client.internals;
-    const rows = threadRows(state);
-    assert.deepEqual([...rows.keys()].sort(), ['c', 'o']);
-    assert.deepEqual([...rows.get('c')].sort(), ['t1', 't2', 't3']);
-    assert.deepEqual([...rows.get('o')], ['ot']);
-    assert.equal(threadRows(state), rows);
-    assert.equal(threadRows(undefined).size, 0);
+    // The projects drawn in a section, read from the marks in its rows: each coordinator there with its threads
+    // there, at its wrapper's place (from 1), its threads in DSH's order; a coordinator without threads here, or a
+    // thread whose coordinator is elsewhere, nests nothing.
+    const { sectionGroups } = client.internals;
+    const markOf = (mark) => (mark ? { getAttribute: (name) => ({ 'data-projects-row': mark[0], 'data-projects-of': mark[1] })[name] ?? null } : null);
+    const rowEl = (key, mark) => ({ getAttribute: (name) => (name === 'data-row-key' ? key : null), querySelector: (sel) => (sel === '[data-projects-row]' ? markOf(mark) : null) });
+    const wrap = (key, mark) => ({ children: [rowEl(key, mark)] });
+    const section = {
+        children: [
+            wrap('workspace:w'), wrap('session:x'), wrap('session:t2', ['thread', 'c']), wrap('session:c', ['coordinator', 'c']),
+            wrap('session:d', ['coordinator', 'd']), wrap('session:e', ['coordinator', 'e']), wrap('session:t1', ['thread', 'c']),
+            wrap('session:et', ['thread', 'e']), wrap('session:far', ['thread', 'elsewhere']), { children: [] }, wrap('overflow:w'),
+        ],
+    };
+    assert.deepEqual(plain(sectionGroups(section)), [
+        { coordinator: 'c', at: 4, threads: ['t2', 't1'] },
+        { coordinator: 'e', at: 6, threads: ['et'] },
+    ]);
+    assert.deepEqual(plain(sectionGroups(null)), []);
 
-    // The rules name the coordinator's and its threads' rows by DSH's row keys, lay out and move only the
-    // wrappers of the coordinator's own section (coordinator, then its threads, then the rest from where the
-    // first of them was), and look no deeper than a wrapper's child or a section's grandchildren, with no
-    // sibling selector: one row's change restyles one section, cheaply (1.8 s to 0.1 s at 300 chats).
-    const css = nestingRules('ses_01.ab-c:9', ['ses_t1', 'ses_t2'], 4);
+    // The rules name the coordinators' and threads' rows by DSH's row keys, lay out and move only the wrappers of
+    // their own section (each coordinator, then its threads, then what DSH lists after the coordinator), and look
+    // no deeper than a wrapper's child or a section's grandchildren, with no sibling selector: one row's change
+    // restyles one section, cheaply (1.8 s to 0.1 s at 300 chats).
+    const css = nestingRules([{ coordinator: 'ses_01.ab-c:9', at: 4, threads: ['ses_t1', 'ses_t2'] }]);
     const rules = css.split('\n');
     const list = '[role="tree"] div:has(>*>[data-row-key="session:ses_01.ab-c:9"])';
     const C = ':has(>[data-row-key="session:ses_01.ab-c:9"])';
@@ -1746,32 +1757,37 @@ test('browser half: each session list row says its place in a project, and the C
     assert.ok(rules.indexOf(`${list}>${C}{order:1}`) > rules.indexOf(`${list}>:nth-child(n+5){order:3}`));
     assert.ok(rules.indexOf(`${list}>${T}{order:2}`) > rules.indexOf(`${list}>:nth-child(n+5){order:3}`));
     assert.ok(rules.includes(`${list}>${T}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,30px) + var(--dsh-workspace-indent,0px))}`));
-    for (const rule of rules) {
+    // The corner is drawn in the indent, not in the row's leading seat; the branch mark leaves the seat but is still read aloud.
+    assert.ok(rules.some((rule) => rule.startsWith(`${list}>${T}::before{content:"";position:absolute;`)));
+    assert.ok(rules.includes(`${list}>${T} .dshp-t-mark[data-projects-thread-mark=""]{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}`));
+    const has = (ids) => `:has(${ids.map((id) => `>[data-row-key="session:${id}"]`).join(',')})`;
+    // Two projects in one workspace stay apart: each is drawn where its coordinator is, and what DSH lists after a
+    // coordinator follows that project's threads.
+    const two = nestingRules([{ coordinator: 'b', at: 6, threads: ['bt'] }, { coordinator: 'a', at: 2, threads: ['at1', 'at2'] }]).split('\n');
+    const L2 = '[role="tree"] div:has(>*>[data-row-key="session:a"])';
+    assert.deepEqual(two.slice(2, 8), [
+        `${L2}>:nth-child(n+3){order:3}`, `${L2}>:nth-child(n+7){order:6}`,
+        `${L2}>${has(['a'])}{order:1}`, `${L2}>${has(['at1', 'at2'])}{order:2}`,
+        `${L2}>${has(['b'])}{order:4}`, `${L2}>${has(['bt'])}{order:5}`,
+    ]);
+    assert.ok(two.includes(`${L2}>${has(['at1', 'at2', 'bt'])}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,30px) + var(--dsh-workspace-indent,0px))}`));
+    for (const rule of [...rules, ...two]) {
         // A :has() inside another makes a browser drop the whole rule; a descendant step inside one, or a
         // sibling selector after one, is what made the old rules slow.
         assert.doesNotMatch(rule, /:has\([^)]*:has\(/, rule);
         for (const inside of rule.match(/:has\([^)]*\)/g) ?? []) assert.doesNotMatch(inside, /\]\s+\[|\*\s+\[/, rule);
         assert.doesNotMatch(rule, /~/, rule);
     }
-    // No threads, or no place yet, nothing to move; an id that could break out of the selector gets no rules, a thread's is left out.
-    assert.equal(nestingRules('c', [], 2), '');
-    assert.equal(nestingRules('c', ['t1'], 0), '');
-    assert.equal(nestingRules('c', ['t1']), '');
-    assert.equal(nestingRules('a"] *{display:none} [x="', ['t1'], 2), '');
-    assert.equal(nestingRules('', ['t1'], 2), '');
-    assert.equal(nestingRules(undefined, ['t1'], 2), '');
-    const kept = nestingRules('c', ['t1', 'x"] *{display:none} [y="'], 2);
+    // Nothing to nest, or no place yet: no rules; an id that could break out of the selector gets none, a thread's is left out.
+    assert.equal(nestingRules([]), '');
+    assert.equal(nestingRules(undefined), '');
+    assert.equal(nestingRules([{ coordinator: 'c', at: 2, threads: [] }]), '');
+    assert.equal(nestingRules([{ coordinator: 'c', at: 0, threads: ['t1'] }]), '');
+    assert.equal(nestingRules([{ coordinator: 'a"] *{display:none} [x="', at: 2, threads: ['t1'] }]), '');
+    assert.equal(nestingRules([{ coordinator: '', at: 2, threads: ['t1'] }]), '');
+    const kept = nestingRules([{ coordinator: 'c', at: 2, threads: ['t1', 'x"] *{display:none} [y="'] }]);
     assert.match(kept, /:has\(>\[data-row-key="session:t1"\]\)/);
     assert.doesNotMatch(kept, /x"\]/);
-
-    // Where the group starts: the first wrapper (from 1) holding the coordinator or one of its threads.
-    const { firstPlace } = client.internals;
-    const wrapper = (key) => ({ children: [{ getAttribute: (name) => (name === 'data-row-key' ? key : null) }] });
-    const section = { children: [wrapper('workspace:w'), wrapper('session:x'), wrapper('session:t2'), wrapper('session:c'), { children: [] }, wrapper('overflow:w')] };
-    assert.equal(firstPlace(section, new Set(['session:c', 'session:t2'])), 3);
-    assert.equal(firstPlace(section, new Set(['session:c'])), 4);
-    assert.equal(firstPlace(section, new Set(['session:gone'])), 0);
-    assert.equal(firstPlace(null, new Set(['session:c'])), 0);
 });
 
 test('browser half: a thread opens beside its coordinator, and in full view where the window is too narrow or when asked', async () => {
@@ -2014,41 +2030,89 @@ test('browser half: a thread\'s newest card says when its last turn ended, and h
     assert.deepEqual([byClass(card, 'dshp-t-card-why').length, textIn(byClass(card, 'dshp-t-card-state-text'))], [0, 'Failed']);
 });
 
-test('browser half: DSH\'s session list is grouped by project, collapsible, with Other workspaces last', () => {
+test('browser half: DSH\'s session list is grouped by category, collapsible, with Other workspaces last', () => {
     const { client } = loadClient();
     const { sidebarGroups, sidebarRules, OTHERS } = client.internals;
-    const items = ['w1', 'w2', 'w3', 'w4', 'w5'].map((workspaceId) => ({ workspaceId, sessionIds: [] }));
-    const listed = [
-        { id: 'a', name: 'Alpha', coordinator: 's-a', workspaces: [{ id: 'w2' }, { id: 'gone' }] },
-        { id: 'b', name: 'Beta', workspaces: [{ id: 'w1' }, { id: 'w2' }, { id: 'w4' }] },
-        { id: 'c', name: 'Empty', workspaces: [{ id: 'gone' }] },
+    const items = ['w2', 'w1', 'w4', 'w3', 'w5'].map((workspaceId) => ({ workspaceId, sessionIds: [] }));
+    const categories = [
+        { id: 'a', name: 'Alpha', workspaces: [{ id: 'w2' }, { id: 'gone' }] },
+        { id: 'b', name: 'Beta', workspaces: [{ id: 'w4' }, { id: 'w1' }, { id: 'w2' }] },
+        { id: 'c', name: 'Empty', workspaces: [] },
     ];
-    // In the plugin's order; a workspace counts once, in its first project; DSH's deleted ones and empty projects drop out.
-    assert.deepEqual(plain(sidebarGroups(listed, items)), [
-        { id: 'a', name: 'Alpha', glyph: '◆', workspaces: ['w2'] },
-        { id: 'b', name: 'Beta', glyph: '◇', workspaces: ['w1', 'w4'] },
-        { id: OTHERS, name: 'Other workspaces', glyph: '', workspaces: ['w3', 'w5'] },
+    // In the plugin's order, empty ones too; each holds its workspaces in DSH's order, a workspace once; DSH's
+    // deleted ones drop out; Other workspaces holds the rest.
+    assert.deepEqual(plain(sidebarGroups(categories, items)), [
+        { id: 'a', name: 'Alpha', category: true, workspaces: ['w2'] },
+        { id: 'b', name: 'Beta', category: true, workspaces: ['w1', 'w4'] },
+        { id: 'c', name: 'Empty', category: true, workspaces: [] },
+        { id: OTHERS, name: 'Other workspaces', category: false, workspaces: ['w3', 'w5'] },
     ]);
-    // No project holding a listed workspace, or not known yet: DSH's list as it is.
-    assert.equal(sidebarGroups([listed[2]], items), null);
+    // Other workspaces shows while it holds one, or while a workspace is dragged (somewhere to drop it).
+    const filed = [{ id: 'a', name: 'All', workspaces: items.map((ws) => ({ id: ws.workspaceId })) }];
+    assert.deepEqual(plain(sidebarGroups(filed, items)).map((g) => g.id), ['a']);
+    assert.deepEqual(plain(sidebarGroups(filed, items, true)).map((g) => [g.id, g.workspaces.length]), [['a', 5], [OTHERS, 0]]);
+    // No categories, or not known yet: DSH's list as it is.
+    assert.equal(sidebarGroups([], items), null);
     assert.equal(sidebarGroups(null, items), null);
-    assert.equal(sidebarGroups(listed, undefined), null);
+    assert.equal(sidebarGroups(categories, undefined), null);
 
-    const groups = sidebarGroups(listed, items);
+    const groups = sidebarGroups(categories, items);
     const rules = sidebarRules(groups, new Set(['b'])).split('\n');
     const on = '[data-slot="sidebar.workspaces"] [role="tree"]:has(>[data-projects-sb]):has(>div>*>[data-row-key^="workspace:"])';
     const section = (id) => `div:has(>*>[data-row-key="workspace:${id}"])`;
     for (const rule of rules) assert.doesNotMatch(rule, /:has\([^)]*:has\(/, rule);
     assert.ok(rules.includes(`${on}{display:flex;flex-direction:column}`));
-    // Each workspace's section right after its project's header (headers take the even places), a collapsed project's hidden.
+    // Each workspace's section right after its category's header (headers take the even places), a collapsed category's hidden.
     assert.ok(rules.includes(`${on}>${section('w2')}{order:1}`));
     assert.ok(rules.includes(`${on}>${section('w1')}{order:3;display:none!important}`));
-    assert.ok(rules.includes(`${on}>${section('w3')}{order:5}`));
+    assert.ok(rules.includes(`${on}>${section('w3')}{order:7}`));
     // Headers hide where DSH shows no workspaces (In one list, search).
     assert.ok(rules.includes('[data-slot="sidebar.workspaces"] [role="tree"]:not(:has(>div>*>[data-row-key^="workspace:"]))>[data-projects-sb]{display:none}'));
     // An id that could break out of a selector gets no rule.
-    const odd = sidebarRules([{ id: 'x', name: 'X', glyph: '◇', workspaces: ['a"] *{display:none} [x="'] }], new Set()).split('\n');
+    const odd = sidebarRules([{ id: 'x', name: 'X', category: true, workspaces: ['a"] *{display:none} [x="'] }], new Set()).split('\n');
     for (const rule of odd) assert.doesNotMatch(rule, /display:none\} \[x=/);
+
+    // The headers sit in DSH's list just before their category's first section, an empty category's before the
+    // next header, DSH's Ungrouped bucket last: the list reads in the order it is drawn. A second pass moves nothing.
+    const { placeHeaders, describeWorkspaces } = client.internals;
+    let moves = 0;
+    const fakeTree = (kids) => {
+        const tree = {
+            children: kids,
+            insertBefore(node, ref) {
+                moves += 1;
+                this.children.splice(this.children.indexOf(node), 1);
+                this.children.splice(ref === null ? this.children.length : this.children.indexOf(ref), 0, node);
+            },
+        };
+        for (const kid of kids) Object.defineProperty(kid, 'nextElementSibling', { get: () => tree.children[tree.children.indexOf(kid) + 1] ?? null });
+        return tree;
+    };
+    const head = (id) => ({ id: `H:${id}`, getAttribute: (name) => (name === 'data-projects-sb' ? id : null), contains: () => false });
+    const sec = (ws) => ({ id: ws === '' ? 'strays' : ws, getAttribute: () => null, querySelector: () => ({ getAttribute: () => `workspace:${ws}` }) });
+    const tree = fakeTree([sec('w2'), sec('w1'), sec('w4'), sec('w3'), sec('w5'), sec(''), head('a'), head('b'), head('c'), head(OTHERS)]);
+    placeHeaders(tree, groups);
+    assert.deepEqual(tree.children.map((e) => e.id), ['H:a', 'w2', 'H:b', 'w1', 'w4', 'H:c', `H:${OTHERS}`, 'w3', 'w5', 'strays']);
+    const before = moves;
+    placeHeaders(tree, groups);
+    assert.equal(moves, before);
+
+    // Each workspace row names its category to a screen reader; the plugin's words go when the categories do.
+    const attrs = new Map();
+    const wsRow = (id, own = {}) => {
+        const a = new Map(Object.entries({ 'data-row-key': `workspace:${id}`, ...own }));
+        attrs.set(id, a);
+        return { getAttribute: (n) => a.get(n) ?? null, setAttribute: (n, v) => a.set(n, String(v)), hasAttribute: (n) => a.has(n), removeAttribute: (n) => a.delete(n) };
+    };
+    const rows = [wsRow('w2'), wsRow('w1'), wsRow('w3'), wsRow('new')];
+    const list = { querySelectorAll: () => rows };
+    describeWorkspaces(list, groups);
+    assert.equal(attrs.get('w2').get('aria-description'), 'in Alpha');
+    assert.equal(attrs.get('w1').get('aria-description'), 'in Beta');
+    assert.equal(attrs.get('w3').get('aria-description'), 'in Other workspaces');
+    assert.equal(attrs.get('new').has('aria-description'), false);
+    describeWorkspaces(list, null);
+    assert.deepEqual(['w2', 'w1', 'w3'].map((id) => attrs.get(id).has('aria-description')), [false, false, false]);
 });
 
 test('browser half: the Projects page puts a project on one row: its workspaces, what waits on you, what runs, when it moved', () => {

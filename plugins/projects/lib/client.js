@@ -63,6 +63,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /** DSH's branch glyph, as a mask for links drawn by DSH's markdown. */
         const BRANCH_MASK = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.3"><path d="M1.015 8h4.681c.723 0 1.085 0 1.425-.08.302-.072.591-.19.857-.35.3-.18.558-.433 1.075-.939l2.275-2.225"/><path d="M1.012 8h4.684c.723 0 1.085 0 1.425.08.302.072.591.19.857.35.3.18.558.433 1.075.939l2.275 2.225"/><circle cx="12.45" cy="3.308" r="1.57"/><circle cx="12.45" cy="12.692" r="1.57"/></svg>')}")`;
+        /** The corner that hangs a nested thread under its coordinator, as DSH's own tree corner (IconTreeCornerRegular). */
+        const CORNER_MASK = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 9 11" fill="none" stroke="#000"><path d="M0.5 0V7C0.5 7.79565 0.81607 8.55871 1.37868 9.12132C1.94129 9.68393 2.70435 10 3.5 10H8.5"/></svg>')}")`;
+        /** Drawn in a nested thread's indent, under its coordinator's leading seat, its foot level with the row's middle. */
+        const NEST_CORNER = `content:"";position:absolute;z-index:1;pointer-events:none;top:calc(50% - 11px);left:calc(var(--dsh-workspace-indent,0px) + 15px);width:10px;height:12px;background:var(--dsw-alias-label-tertiary);-webkit-mask:${CORNER_MASK} center/contain no-repeat;mask:${CORNER_MASK} center/contain no-repeat`;
+        /** DSH's drop line (its own style), drawn over the session list for the plugin's drags: they never touch DSH's rows. */
+        const DROP_LINE = ['55deg', '125deg'].map((deg, i) => `linear-gradient(${deg},transparent calc(50% - 1px),var(--dsw-alias-state-business-primary) calc(50% - 1px) calc(50% + 1px),transparent calc(50% + 1px)) 0 ${i * 5}px/5px 7px no-repeat`)
+            .concat('linear-gradient(var(--dsw-alias-state-business-primary) 0 0) 4px 5px/calc(100% - 4px) 2px no-repeat').join(',');
+        /** Out of sight, still read by screen readers. */
+        const HIDDEN = 'position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0';
         /** DSH's focus ring color, as its own controls draw it. */
         const RING = 'var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))';
         // DSH's error red and link blue reach only 4.5 and 4.2:1 as small text on white: a touch of the
@@ -378,12 +387,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // DSH draws the link as an inline block, which sits on its last line: in a list, a link that wraps would
             // pull the bullet down to its second line, so it hangs from the top of the line instead.
             'li button[title*=".dsh-thread/"]{vertical-align:top}',
-            // Threads: session list rows. A thread row right under its coordinator is indented so its corner sits
-            // under the coordinator's ◆ (the rules come with the coordinator's row, see RowPlace); a thread row
-            // anywhere else keeps a branch mark.
+            // Threads: session list rows. A thread row under its coordinator is indented, with a corner in the
+            // indent (nestingRules); a thread row anywhere else keeps a branch mark in the leading seat.
             '.dshp-t-mark{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:20px;color:var(--dsw-alias-label-tertiary)}',
-            '.dshp-t-branch{display:inline-flex}',
-            '.dshp-t-corner{display:none}',
+            // The seat is 16 px: when the plugin's mark shares it with DSH's or another plugin's, it widens
+            // instead of letting the marks run over the title.
+            `[data-row-key^="session:"]>:has(${['', '>[data-slot]'].flatMap((at) => [`${at}>.dshp-t-mark+*`, `${at}>*+.dshp-t-mark`]).join(',')}){width:auto;min-width:16px;gap:2px}`,
             '.dshp-t-hover{display:flex;flex-direction:column;gap:2px;font-size:12px;line-height:16px;color:#cfd3d6}',
             '.dshp-t-hover-head{display:flex;align-items:center;gap:6px;color:#fff}',
             '.dshp-t-hover-line{color:#adb2b8;overflow-wrap:anywhere}',
@@ -560,21 +569,30 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             `.dshp-pg-danger:not(:disabled){color:${ERROR_TEXT}}`,
             // A narrow page keeps each row's dots and time, not their words.
             '@container (width<=560px){.dshp-pg-pulse-text{display:none}.dshp-pg-body{padding-left:14px}}',
-            // Project headers in DSH's session list (sidebarRules places DSH's rows under them)
+            // Category headers in DSH's session list (sidebarRules places DSH's rows under them)
             '.dshp-sb-head{display:flex;align-items:center;gap:6px;box-sizing:border-box;height:30px;margin-top:10px;padding:0 8px;border-radius:var(--dsw-radius-md);font-size:13px;font-weight:500;line-height:18px;color:var(--dsw-alias-label-primary);cursor:pointer;user-select:none;outline:none}',
-            '.dshp-sb-head:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+            '.dshp-sb-head:is(:hover,[data-projects-menu-open]){background:var(--dsw-alias-interactive-bg-hover)}',
             `.dshp-sb-head:focus-visible{box-shadow:inset 0 0 0 2px ${RING}}`,
-            // The glyph at rest, as DSH's rows show their folder; the chevron on hover, and while the group is collapsed.
             '.dshp-sb-lead{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px}',
-            '.dshp-sb-glyph{font-size:11px;line-height:1}',
-            '.dshp-sb-chev{display:none;color:var(--dsw-alias-label-secondary);transition:transform .15s var(--ds-ease-in-out,ease)}',
+            '.dshp-sb-chev{display:inline-flex;color:var(--dsw-alias-label-secondary);transition:transform .15s var(--ds-ease-in-out,ease)}',
             '.dshp-sb-head[aria-expanded=true] .dshp-sb-chev{transform:rotate(90deg)}',
-            '.dshp-sb-head:is(:hover,:focus-visible,[aria-expanded=false],.dshp-sb-plain) .dshp-sb-chev{display:inline-flex}',
-            '.dshp-sb-head:is(:hover,:focus-visible,[aria-expanded=false]) .dshp-sb-glyph{display:none}',
             '.dshp-sb-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshp-sb-dot{flex:none;display:inline-flex;align-items:center}',
             '.dshp-sb-count{flex:none;min-width:16px;font-size:12px;font-weight:400;text-align:right;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
+            // A category's ⋯ takes the count's place while the header is pointed at, focused or its menu is open, as DSH's rows show theirs.
+            '.dshp-sb-more{flex:none;display:none;align-items:center;justify-content:center;width:20px;height:20px;margin-right:-2px;padding:0;border:0;border-radius:var(--dsw-radius-sm,4px);background:none;color:var(--dsw-alias-label-secondary);cursor:pointer}',
+            '.dshp-sb-more:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
+            '.dshp-sb-head:not(.dshp-sb-plain):is(:hover,:focus-visible,[data-projects-menu-open]) .dshp-sb-more{display:inline-flex}',
+            '.dshp-sb-head:not(.dshp-sb-plain):is(:hover,:focus-visible,[data-projects-menu-open]) .dshp-sb-count{display:none}',
             '@media (prefers-reduced-motion:reduce){.dshp-sb-chev{transition:none}}',
+            // Dragging a category or a workspace: what moves is dimmed, the category it goes into is lit, and DSH's line shows where.
+            '[data-projects-dragging]{opacity:.5}',
+            '.dshp-sb-head[data-projects-drop]{background:var(--dsw-alias-interactive-bg-hover);box-shadow:inset 0 0 0 1px var(--dsw-alias-state-business-primary)}',
+            `.dshp-sb-drop-line{position:fixed;z-index:2147483000;height:12px;pointer-events:none;background:${DROP_LINE}}`,
+            '.dshp-sb-drop-line[hidden]{display:none}',
+            // A place DSH's own drag may not drop a session (useSessionDragGuard): no line there.
+            '[data-projects-refused] [data-row-key^="session:"]::before,[data-projects-refused] [data-row-key^="session:"]::after{display:none!important}',
+            `.dshp-sr{${HIDDEN}}`,
         ].join('');
         const CSS_ID = `${BUNDLE}/client.css`;
         if (typeof document !== 'undefined' && document.querySelector(`style[data-plugin-css=${JSON.stringify(CSS_ID)}]`) === null) {
@@ -1874,6 +1892,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             let listFailed = false;
             /** What list says besides the projects: the user's tools (guardedTools) and the permissions DSH offers. */
             let listedAccess = { guarded: EMPTY, permissions: null };
+            /** The categories as list (or a change) last answered, in their order; null until one did. */
+            let listedCategories = null;
             const emit = () => {
                 version += 1;
                 for (const listener of [...listeners]) listener();
@@ -1909,10 +1929,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     if (result.ok) put(target, result.value);
                 });
             };
-            /** Take every project as the plugin listed them (list, or a change on the Projects page). */
-            const take = (projects) => {
+            /** Take every project and category as the plugin listed them (list, or a change from the sidebar or the Projects page). */
+            const take = (value) => {
+                const projects = Array.isArray(value?.projects) ? value.projects : EMPTY;
                 listFailed = false;
                 listed = projects.filter((p) => isObject(p) && typeof p.id === 'string');
+                if (Array.isArray(value?.categories)) listedCategories = value.categories.filter((c) => isObject(c) && typeof c.id === 'string');
                 for (const p of projects) {
                     if (!isObject(p) || typeof p.coordinator !== 'string') continue;
                     pausedAt.set(p.coordinator, p.paused === true);
@@ -1932,7 +1954,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const guarded = Array.isArray(result.value.guarded) ? result.value.guarded.filter((name) => typeof name === 'string') : EMPTY;
                 const permissions = isObject(result.value.permissions) ? result.value.permissions : null;
                 if (guarded.join('\n') !== listedAccess.guarded.join('\n') || JSON.stringify(permissions) !== JSON.stringify(listedAccess.permissions)) listedAccess = { guarded, permissions };
-                take(result.value.projects);
+                take(result.value);
             });
             const read = (key, maxAge) => (key === 'list' ? list(maxAge) : describe(key.slice(2), maxAge));
             const tick = () => {
@@ -1952,6 +1974,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 },
                 /** Every project as `list` last answered (null until it has), and whether the last read failed. */
                 projects: () => listed,
+                /** Every category in its order, with the workspaces it holds in DSH's order (null until `list` answered). */
+                categories: () => listedCategories,
                 listFailed: () => listFailed,
                 /** The user's tools and DSH's permissions as `list` last answered: {guarded, permissions}; the same object until they change. */
                 listedAccess: () => listedAccess,
@@ -1995,13 +2019,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     return result;
                 },
                 /**
-                 * A change from the Projects page (remote.js `create`, `move`,
-                 * `rename`, `remove`, `addCoordinator`); the projects it answers
-                 * with update every view.
+                 * A change from the sidebar or the Projects page (remote.js
+                 * `create`, `rename`, `remove`, `addCoordinator`, and the
+                 * category calls); the projects and categories it answers with
+                 * update every view.
                  */
                 async act(method, args) {
                     const result = await link.call(method, args);
-                    if (result.ok && Array.isArray(result.value?.projects)) take(result.value.projects);
+                    if (result.ok && Array.isArray(result.value?.projects)) take(result.value);
                     return result;
                 },
             };
@@ -3466,10 +3491,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * A row's mark: a corner while it nests under its coordinator, a
-         * branch anywhere else (nestingRules picks), or the thread's state dot when it
-         * failed or waits on the user; a pause sign on a paused project's
-         * coordinator.
+         * A row's mark in its leading seat: a branch on a thread (while it
+         * nests under its coordinator, nestingRules draws a corner in its
+         * indent instead), or the thread's state dot when it failed or waits
+         * on the user; a pause sign on a paused project's coordinator.
          */
         function ThreadMark({ sessionId, useSessions, projects }) {
             const thread = useSessions((state) => isThreadRow(state, sessionId));
@@ -3491,8 +3516,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h(ui.StateDot, { state: dot }));
             }
             return h('span', { className: 'dshp-t-mark', role: 'img', 'aria-label': 'Project thread', 'data-projects-thread-mark': '' },
-                h('span', { className: 'dshp-t-corner' }, h(ui.IconTreeCornerRegular, { size: 12 })),
-                h('span', { className: 'dshp-t-branch' }, h(ui.IconBranchOutlineRegular, { size: 12 })));
+                h(ui.IconBranchOutlineRegular, { size: 12 }));
         }
 
         /** The project name a coordinator session stands for, or undefined. */
@@ -3535,115 +3559,114 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return of === undefined ? '' : `thread:${of}`;
         }
 
-        /** Each coordinator's thread sessions in the list, by its session id, once per session list state. */
-        const threadRowsCache = new WeakMap();
-        function threadRows(state) {
-            if (!isObject(state)) return new Map();
-            let rows = threadRowsCache.get(state);
-            if (rows === undefined) {
-                rows = new Map();
-                for (const id of Object.keys(state.byId ?? {})) {
-                    const place = rowPlace(state, id);
-                    if (!place.startsWith('thread:')) continue;
-                    const of = place.slice('thread:'.length);
-                    if (rows.has(of)) rows.get(of).push(id);
-                    else rows.set(of, [id]);
+        /**
+         * The projects drawn in one of DSH's workspace sections, read from the
+         * marks RowPlace puts in each row: every coordinator there with at
+         * least one of its threads there too, with its wrapper's position in
+         * the section (from 1) and its threads in DSH's order. A section's
+         * children are its rows' wrappers; a thread in another workspace
+         * belongs to no group here.
+         * @returns {{coordinator: string, at: number, threads: string[]}[]} in DSH's order of their coordinators.
+         */
+        function sectionGroups(section) {
+            const coordinators = [];
+            const threads = new Map();
+            const wrappers = section?.children ?? EMPTY;
+            for (let i = 0; i < wrappers.length; i += 1) {
+                let row = null;
+                for (const child of wrappers[i].children ?? EMPTY) {
+                    if (String(child.getAttribute?.('data-row-key') ?? '').startsWith('session:')) { row = child; break; }
                 }
-                threadRowsCache.set(state, rows);
+                const mark = row?.querySelector?.('[data-projects-row]');
+                if (!mark) continue;
+                const id = row.getAttribute('data-row-key').slice('session:'.length);
+                const role = mark.getAttribute('data-projects-row');
+                const of = mark.getAttribute('data-projects-of') ?? '';
+                if (role === 'coordinator' && of === id) coordinators.push({ coordinator: id, at: i + 1 });
+                else if (role === 'thread' && of !== '') {
+                    if (threads.has(of)) threads.get(of).push(id);
+                    else threads.set(of, [id]);
+                }
             }
-            return rows;
+            return coordinators.filter((g) => threads.has(g.coordinator)).map((g) => ({ ...g, threads: threads.get(g.coordinator) }));
         }
 
         /**
-         * The CSS that nests a coordinator's threads under it in DSH's session
-         * list, whatever order DSH lists them in. Each row of the list sits in
-         * a wrapper of its own, and the wrappers of one workspace are siblings
-         * in its section. The coordinator's section lays its wrappers out as a
-         * column and moves them there: the coordinator, then its threads in
-         * DSH's order, together where the first of them was; the rows DSH
-         * listed after that one follow. DSH's order, data and wrappers stay as
-         * they are. A thread in another workspace keeps its branch mark.
+         * The CSS that nests each project's threads under its coordinator in
+         * one of DSH's workspace sections, whatever order DSH lists them in.
+         * The section lays its rows' wrappers out as a column, and each
+         * project is drawn where its coordinator's row is: the coordinator,
+         * then its threads in DSH's order. So dragging the ◆ row moves the
+         * project, a thread is never drawn apart from it, and two projects in
+         * one workspace stay apart. The rows DSH lists after a coordinator
+         * follow its threads. DSH's order, data and wrappers stay as they
+         * are. A nested thread is indented, with its corner drawn in the
+         * indent: the row's leading seat stays free for DSH's marks and other
+         * plugins' (a thread in another workspace keeps its branch mark there).
          *
          * Every selector names rows by DSH's own row keys and looks only at a
-         * wrapper's child or a section's grandchildren, and where the group
-         * starts is a position (RowPlace counts it), not a sibling selector:
-         * a change to one row restyles its own section, and cheaply.
-         * @param of - the coordinator's session id.
-         * @param threads - its threads' session ids.
-         * @param first - the position (from 1) of the first of them among the section's wrappers.
+         * wrapper's child or a section's grandchildren, and where a project
+         * starts is a position (sectionGroups counts it), not a sibling
+         * selector: a change to one row restyles its own section, and cheaply.
+         * @param groups - sectionGroups' answer for one section.
          */
-        function nestingRules(of, threads, first) {
+        function nestingRules(groups) {
             const safe = (id) => typeof id === 'string' && /^[\w.:-]+$/.test(id);
-            const ids = Array.isArray(threads) ? threads.filter(safe) : EMPTY;
-            if (!safe(of) || ids.length === 0 || !Number.isInteger(first) || first < 1) return '';
+            const list = (Array.isArray(groups) ? groups : EMPTY)
+                .filter((g) => safe(g?.coordinator) && Number.isInteger(g.at) && g.at >= 1 && Array.isArray(g.threads))
+                .map((g) => ({ ...g, threads: g.threads.filter(safe) }))
+                .filter((g) => g.threads.length > 0)
+                .sort((a, b) => a.at - b.at);
+            if (list.length === 0) return '';
             const row = (id) => `[data-row-key="session:${id}"]`;
-            // The coordinator's section (its workspace), its wrapper, and its threads' wrappers.
-            const list = `[role="tree"] div:has(>*>${row(of)})`;
-            const C = `:has(>${row(of)})`;
-            const T = `:has(${ids.map((id) => `>${row(id)}`).join(',')})`;
-            return [
-                `${list}{display:flex;flex-direction:column}`,
+            const holding = (ids) => `:has(${ids.map((id) => `>${row(id)}`).join(',')})`;
+            // The section, named by its first coordinator's row.
+            const S = `[role="tree"] div:has(>*>${row(list[0].coordinator)})`;
+            const rules = [
+                `${S}{display:flex;flex-direction:column}`,
                 // DSH's "Show more" button is a row of its own, as wide as its text.
-                `${list}>[data-row-key]{align-self:flex-start}`,
-                // After the first of them, the rest of the section; then the coordinator and its threads (later rules win).
-                `${list}>:nth-child(n+${first + 1}){order:3}`,
-                `${list}>${C}{order:1}`,
-                `${list}>${T}{order:2}`,
-                `${list}>${T}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,30px) + var(--dsh-workspace-indent,0px))}`,
-                `${list}>${T} .dshp-t-corner{display:inline-flex}`,
-                `${list}>${T} .dshp-t-branch{display:none}`,
-            ].join('\n');
+                `${S}>[data-row-key]{align-self:flex-start}`,
+            ];
+            // What follows each coordinator; then each project itself (later rules win).
+            list.forEach((g, k) => rules.push(`${S}>:nth-child(n+${g.at + 1}){order:${3 * k + 3}}`));
+            list.forEach((g, k) => rules.push(`${S}>${holding([g.coordinator])}{order:${3 * k + 1}}`, `${S}>${holding(g.threads)}{order:${3 * k + 2}}`));
+            const T = `${S}>${holding(list.flatMap((g) => g.threads))}`;
+            rules.push(
+                `${T}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,30px) + var(--dsh-workspace-indent,0px))}`,
+                `${T}::before{${NEST_CORNER}}`,
+                // The branch mark gives way to the corner; screen readers still hear "Project thread".
+                `${T} .dshp-t-mark[data-projects-thread-mark=""]{${HIDDEN}}`,
+            );
+            return rules.join('\n');
         }
 
-        /** The position (from 1) of the first wrapper in a section that holds one of these rows, 0 for none. */
-        function firstPlace(section, keys) {
-            const wrappers = section?.children ?? EMPTY;
-            for (let i = 0; i < wrappers.length; i += 1) {
-                for (const child of wrappers[i].children ?? EMPTY) {
-                    if (keys.has(child.getAttribute?.('data-row-key'))) return i + 1;
-                }
+        /** The nesting CSS for every section of DSH's list that holds a project with threads. */
+        function nestingCss(tree) {
+            const sections = new Set();
+            for (const mark of tree?.querySelectorAll?.('[data-projects-row="coordinator"]') ?? EMPTY) {
+                const section = mark.closest('[data-row-key^="session:"]')?.parentElement?.parentElement;
+                if (section) sections.add(section);
             }
-            return 0;
+            return [...sections].map((section) => nestingRules(sectionGroups(section))).filter(Boolean).join('\n');
         }
 
         /**
          * A row's place in its project, from inside the row: a hidden mark in
          * the row's actions seat, which DSH mounts on every row whether it is
-         * idle or busy (for checks; no CSS reads it); and on a coordinator's
-         * row with threads, nestingRules, which come and go with the row. The
-         * rules follow where the group starts as DSH moves rows (a watch on the
-         * coordinator's section), written into the style before the next
-         * frame. Nothing of DSH's own is changed.
+         * idle or busy. The sidebar reads the marks to nest each project's
+         * threads under its coordinator (nestingCss) and to keep DSH's own
+         * drags from taking a thread out of its project or a chat into one
+         * (useSessionDragGuard). Nothing of DSH's own is changed.
          */
         function RowPlace({ sessionId, useSessions }) {
             const place = useSessions((state) => rowPlace(state, sessionId));
-            const coordinator = place === `coordinator:${sessionId}`;
-            const threads = useSessions((state) => (coordinator ? (threadRows(state).get(sessionId) ?? EMPTY).slice().sort().join(' ') : ''));
-            const style = React.useRef(null);
-            React.useLayoutEffect(() => {
-                const sheet = style.current;
-                if (!sheet || threads === '') return undefined;
-                const ids = threads.split(' ');
-                const keys = new Set([sessionId, ...ids].map((id) => `session:${id}`));
-                // The row's wrapper, and the section that holds its workspace's wrappers.
-                const section = sheet.closest('[data-row-key]')?.parentElement?.parentElement ?? null;
-                let shown = -1;
-                const write = () => {
-                    const first = firstPlace(section, keys);
-                    if (first === shown) return;
-                    shown = first;
-                    sheet.textContent = nestingRules(sessionId, ids, first);
-                };
-                write();
-                if (section === null || typeof MutationObserver === 'undefined') return undefined;
-                const observer = new MutationObserver(write);
-                observer.observe(section, { childList: true });
-                return () => observer.disconnect();
-            }, [sessionId, threads]);
             if (place === '') return null;
             const at = place.indexOf(':');
-            return h('span', { hidden: true, 'data-projects-row': place.slice(0, at), 'data-projects-of': place.slice(at + 1) },
-                coordinator && threads !== '' ? h('style', { ref: style, 'data-projects-nest': '' }) : null);
+            const role = place.slice(0, at);
+            return h('span', {
+                hidden: true, 'data-projects-row': role, 'data-projects-of': place.slice(at + 1),
+                'data-projects-node': role === 'coordinator' ? 'project' : 'thread', 'data-projects-id': sessionId,
+            });
         }
 
         /**
@@ -3694,7 +3717,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const row = entry ? withHeld([threadRow(entry, statuses, byId, endings)], paused ? handbacks : EMPTY)[0] : undefined;
                 const line = row ? hoverLine(row) : undefined;
                 return h('div', { className: 'dshp-t-hover', 'data-projects-thread-hover': '' },
-                    h('div', { className: 'dshp-t-hover-head' }, h(ui.IconTreeCornerRegular, { size: 12 }), `Thread ${info.me.thread?.id ?? ''} of ◆ ${project}`),
+                    h('div', { className: 'dshp-t-hover-head' }, h(ui.IconTreeCornerRegular, { size: 12 }), `Thread of ◆ ${project}`),
                     line ? h('div', { className: 'dshp-t-hover-line', 'data-projects-state': row.dot }, line) : null,
                     changed ? h('div', { className: 'dshp-t-hover-line', 'data-projects-changes': '' }, ...changeCounts(changed)) : null,
                     runs, access, pause);
@@ -4044,7 +4067,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // DSH's session list by project: a header over each project's workspaces.
             ctx.slots.inject('shell.overlay', () => ctx.slots.register({
                 name: 'shell.overlay', id: IDS.sidebar, inject: withApi,
-            }, SidebarGroups));
+            }, SidebarTree));
             // The Projects entry in DSH's sidebar, after Plugins, and the page it opens.
             ctx.slots.inject('main', () => ctx.slots.register({
                 name: 'main', key: IDS.page, inject: withApi,
@@ -4725,7 +4748,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /** The name dialog for New project and Rename: DSH's own rename dialog, with the plugin's refusal under the field. */
-        function NameDialog({ title, description, initial = '', action, busyLabel, onSubmit, onClose }) {
+        function NameDialog({ title, description, label = PAGE.nameLabel, initial = '', action, busyLabel, onSubmit, onClose }) {
             const [draft, setDraft] = React.useState(initial);
             const [busy, setBusy] = React.useState(false);
             const [error, setError] = React.useState('');
@@ -4755,7 +4778,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h(ui.Button, { variant: 'primary', disabled: busy || clean === '', onClick: () => void submit(), 'data-projects-dialog-submit': '' }, busy ? busyLabel : action)),
             },
             h('input', {
-                className: 'dshp-pg-input', value: draft, 'aria-label': PAGE.nameLabel, placeholder: PAGE.nameLabel, maxLength: 120,
+                className: 'dshp-pg-input', value: draft, 'aria-label': label, placeholder: label, maxLength: 120,
                 'data-modal-autofocus': true, 'data-projects-name-input': '', disabled: busy,
                 onFocus: (event) => event.target.select(),
                 onChange: (event) => {
@@ -4771,6 +4794,31 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 },
             }),
             error ? h('div', { className: 'dshp-pg-dialog-error', role: 'alert' }, error) : null);
+        }
+
+        /** A question before something is deleted, as DSH asks before it deletes a workspace. */
+        function ConfirmDialog({ title, text, action, busyLabel, onSubmit, onClose }) {
+            const [busy, setBusy] = React.useState(false);
+            const [error, setError] = React.useState('');
+            const alive = React.useRef(true);
+            React.useEffect(() => () => { alive.current = false; }, []);
+            const submit = async () => {
+                if (busy) return;
+                setBusy(true);
+                setError('');
+                const problem = await onSubmit();
+                if (alive.current && problem) {
+                    setBusy(false);
+                    setError(problem);
+                }
+            };
+            return h(ui.Modal, {
+                open: true, title, description: text, closeLabel: PAGE.close, className: 'dshp-pg-dialog',
+                onClose: () => { if (!busy) onClose(); },
+                footer: h(React.Fragment, null,
+                    h(ui.Button, { variant: 'outline', disabled: busy, onClick: onClose, 'data-modal-autofocus': true }, PAGE.cancel),
+                    h(ui.Button, { variant: 'outline', className: 'dshp-pg-danger', disabled: busy, onClick: () => void submit(), 'data-projects-dialog-submit': '' }, busy ? busyLabel : action)),
+            }, error ? h('div', { className: 'dshp-pg-dialog-error', role: 'alert' }, error) : undefined);
         }
 
         /** Delete a project, as DSH asks before it deletes a workspace. */
@@ -4967,9 +5015,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 overlay);
         }
 
-        // ── Projects in DSH's session list ─────────────────────────────────
+        // ── Categories in DSH's session list ───────────────────────────────
 
-        /** Where the collapsed groups are kept between restarts (the window's own storage). */
+        /** Where the collapsed categories are kept between restarts (the window's own storage). */
         const FOLDED_KEY = `${BUNDLE}/sidebar-folded`;
         /** DSH's workspace list in its sidebar, the plugin's headers in it, and a workspace's section there (one workspace, or any). */
         const SB_TREE = '[data-slot="sidebar.workspaces"] [role="tree"]';
@@ -4978,43 +5026,82 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** DSH's Ungrouped bucket: chats no workspace holds, under a row of its own at the end of DSH's list. */
         const SB_STRAYS = 'div:has(>[data-row-key="workspace:"],>*>[data-row-key="workspace:"])';
 
+        const SIDEBAR = {
+            others: 'Other workspaces',
+            actions: (name) => `Category actions: ${name}`,
+            addWorkspace: 'Add a workspace',
+            addNone: 'Every workspace is already here',
+            inNone: 'In no category',
+            inOther: 'In other categories',
+            moveUp: 'Move up',
+            moveDown: 'Move down',
+            rename: 'Rename…',
+            newCategory: 'New category…',
+            remove: 'Delete…',
+            nameLabel: 'Category name',
+            newTitle: 'New category',
+            newText: 'It starts empty and goes last. Drag workspaces onto it, or add them from its ⋯ menu.',
+            newWith: (title) => `${title} moves into it.`,
+            create: 'Create',
+            creating: 'Creating…',
+            renameTitle: 'Rename category',
+            renameAction: 'Rename',
+            renaming: 'Renaming…',
+            deleteTitle: 'Delete category',
+            deleteText: (name, n) => `This deletes “${name}”. ${n === 0 ? 'It holds no workspaces.' : n === 1 ? 'Its workspace moves to Other workspaces.' : `Its ${n} workspaces move to Other workspaces.`} No chats, projects or folders are deleted.`,
+            deleting: 'Deleting…',
+            in: (name) => `in ${name}`,
+            filed: (ws, category) => `${ws} moved to ${category}.`,
+            moved: (name) => `${name} moved.`,
+            created: (name) => `${name} created.`,
+            renamed: (name) => `Renamed to ${name}.`,
+            deleted: (name) => `${name} deleted.`,
+            // DSH's own session drags, refused with the reason.
+            threadStays: 'A thread stays with the project it started in.',
+            chatOut: 'A chat can\'t become a project\'s thread. The project\'s coordinator can message it instead.',
+            projectIn: 'A project can\'t go inside another project.',
+            chatStays: 'A chat stays in the folder it started in.',
+            projectStays: 'A project stays in its workspace. To give it another category, drag the workspace.',
+        };
+
+        /** A DSH workspace's name as its row shows it. */
+        const workspaceTitle = (ws) => (typeof ws?.title === 'string' && ws.title !== '' ? ws.title : folderName(ws?.path ?? ws?.workspaceId ?? ''));
+
         /**
-         * The groups DSH's session list shows: each project holding a
-         * workspace DSH lists, in the plugin's order (the profile's projects,
-         * then the others as they were made or imported), then Other
-         * workspaces. null until the projects are known, or while no project
-         * holds a listed workspace: the list then stays as DSH draws it.
+         * The groups DSH's session list shows: every category in the plugin's
+         * order, empty ones too, each with the workspaces it holds in DSH's
+         * order, then Other workspaces (the rest) while it holds any, or while
+         * a workspace is dragged (somewhere to drop it). null while the
+         * categories aren't known, or there are none: the list then stays as
+         * DSH draws it.
          */
-        function sidebarGroups(listed, items) {
-            if (!Array.isArray(listed) || !Array.isArray(items)) return null;
-            const live = new Set(items.map((ws) => ws?.workspaceId).filter((id) => typeof id === 'string'));
+        function sidebarGroups(categories, items, othersShown = false) {
+            if (!Array.isArray(categories) || categories.length === 0 || !Array.isArray(items)) return null;
+            const order = items.map((ws) => ws?.workspaceId).filter((id) => typeof id === 'string');
             const placed = new Set();
             const groups = [];
-            for (const project of listed) {
-                if (!isObject(project) || typeof project.id !== 'string') continue;
-                const ids = [];
-                for (const known of Array.isArray(project.workspaces) ? project.workspaces : EMPTY) {
-                    const id = known?.id;
-                    if (typeof id !== 'string' || placed.has(id) || !live.has(id)) continue;
-                    placed.add(id);
-                    ids.push(id);
-                }
-                if (ids.length > 0) groups.push({ id: project.id, name: project.name || project.id, glyph: coordinated(project) ? '◆' : '◇', workspaces: ids });
+            for (const category of categories) {
+                if (!isObject(category) || typeof category.id !== 'string') continue;
+                const held = new Set((Array.isArray(category.workspaces) ? category.workspaces : EMPTY).map((ws) => ws?.id));
+                const ids = order.filter((id) => held.has(id) && !placed.has(id));
+                for (const id of ids) placed.add(id);
+                groups.push({ id: category.id, name: typeof category.name === 'string' && category.name !== '' ? category.name : category.id, category: true, workspaces: ids });
             }
-            if (groups.length === 0) return null;
-            const others = [...live].filter((id) => !placed.has(id));
-            if (others.length > 0) groups.push({ id: OTHERS, name: PAGE.others, glyph: '', workspaces: others });
-            return groups;
+            const others = order.filter((id) => !placed.has(id));
+            if (others.length > 0 || othersShown) groups.push({ id: OTHERS, name: SIDEBAR.others, category: false, workspaces: others });
+            return groups.length > 0 ? groups : null;
         }
 
         /**
-         * The CSS that groups DSH's list by project. It holds while the list
-         * has the plugin's headers and shows workspaces (not In one list, not
-         * search results): DSH's list becomes a column whose workspace
-         * sections each follow their project's header one step in, and a
-         * collapsed project's sections are hidden. DSH's own order stays
-         * inside each project; a workspace the plugin hasn't placed yet goes
-         * last, with Other workspaces.
+         * The CSS that sets DSH's list under the categories. It holds while the
+         * list has the plugin's headers and shows workspaces (not In one list,
+         * not search results): the list becomes a column whose workspace
+         * sections each follow their category's header one step in, and a
+         * collapsed category's sections are hidden. DSH's own order stays
+         * inside each category (the plugin keeps DSH's order in category
+         * order, so the headers also sit before their sections in the DOM); a
+         * workspace the plugin hasn't placed yet goes last, with Other
+         * workspaces.
          */
         function sidebarRules(groups, folded) {
             // (:has can't hold another :has, so the list's own test names the row inside a section.)
@@ -5043,7 +5130,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return rules.join('\n');
         }
 
-        /** A collapsed group's dot: waiting on you if one of its chats is, else running if one runs. */
+        /** A collapsed category's dot: waiting on you if one of its chats is, else running if one runs. */
         function groupDot(group, byId, statuses) {
             let dot = null;
             for (const id of group.workspaces) {
@@ -5056,7 +5143,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return dot;
         }
 
-        /** The collapsed groups, kept in the window's storage so they stay collapsed after a restart. */
+        /** The collapsed categories, kept in the window's storage so they stay collapsed after a restart. */
         const useFolded = () => useStoredSet(FOLDED_KEY);
 
         /**
@@ -5092,9 +5179,479 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return tree;
         }
 
-        /** A project's header: its name and how many workspaces it holds; a click, Enter or Space collapses or opens it. */
-        function GroupHeader({ group, order, first, folded, dot, onToggle }) {
-            const count = group.workspaces.length;
+        /** The workspace a section of DSH's list is for: its own row's id ('' for DSH's Ungrouped bucket), or null for anything else. */
+        function sectionWorkspace(section) {
+            const row = section?.querySelector?.(':scope>[data-row-key^="workspace:"],:scope>*>[data-row-key^="workspace:"]');
+            return row ? row.getAttribute('data-row-key').slice('workspace:'.length) : null;
+        }
+
+        /**
+         * The section of DSH's list an element is in: a child of the list, or
+         * of a folder's group in Workspace Tree. null for the plugin's headers
+         * and anything outside the list.
+         */
+        function sectionAt(tree, el) {
+            for (let e = el instanceof Element ? el : null; e && e !== tree; e = e.parentElement) {
+                const parent = e.parentElement;
+                if (parent === tree) return e.matches(SB_HEAD) ? null : e;
+                if (parent?.getAttribute('role') === 'group') return e;
+            }
+            return null;
+        }
+
+        /**
+         * Each header in DSH's list just before its category's first section,
+         * and an empty category's before the next header, so the list reads
+         * in the order it is drawn (DSH's Ungrouped bucket stays last). A
+         * header that had the focus keeps it.
+         */
+        function placeHeaders(tree, groups) {
+            const heads = new Map();
+            const sections = new Map();
+            const index = new Map();
+            let strays = null;
+            [...tree.children].forEach((child, i) => {
+                index.set(child, i);
+                const id = child.getAttribute('data-projects-sb');
+                if (id !== null) { heads.set(id, child); return; }
+                const ws = sectionWorkspace(child);
+                if (ws === '') strays = child;
+                else if (ws !== null) sections.set(ws, child);
+            });
+            let next = strays;
+            for (let i = groups.length - 1; i >= 0; i -= 1) {
+                const head = heads.get(groups[i].id);
+                if (!head) continue;
+                let first = null;
+                for (const ws of groups[i].workspaces) {
+                    const section = sections.get(ws);
+                    if (section && (first === null || index.get(section) < index.get(first))) first = section;
+                }
+                const ref = first ?? next;
+                if (head.nextElementSibling !== ref) {
+                    const focused = typeof document !== 'undefined' && head.contains(document.activeElement) ? document.activeElement : null;
+                    tree.insertBefore(head, ref);
+                    if (focused && document.activeElement !== focused) focused.focus({ preventScroll: true });
+                }
+                next = head;
+            }
+        }
+
+        /** Each workspace row names its category to a screen reader ("in Fleet Services"); the plugin's word goes when its category does. */
+        function describeWorkspaces(tree, groups) {
+            const where = new Map();
+            for (const group of groups ?? EMPTY) for (const ws of group.workspaces) where.set(ws, SIDEBAR.in(group.name));
+            for (const row of tree.querySelectorAll('[data-row-key^="workspace:"]')) {
+                const text = where.get(row.getAttribute('data-row-key').slice('workspace:'.length));
+                if (text !== undefined) {
+                    if (row.getAttribute('aria-description') !== text) row.setAttribute('aria-description', text);
+                    if (!row.hasAttribute('data-projects-in')) row.setAttribute('data-projects-in', '');
+                } else if (row.hasAttribute('data-projects-in')) {
+                    row.removeAttribute('aria-description');
+                    row.removeAttribute('data-projects-in');
+                }
+            }
+        }
+
+        /**
+         * Keep the plugin's parts of DSH's list in step with it: the nesting
+         * CSS, the headers' places and the workspaces' categories. DSH redraws
+         * rows on its own (a fold, Show more, a session moving up), so this
+         * runs again on every change to the list, before it is painted, and
+         * after every render here. Each pass changes only what differs.
+         * @param read - a ref to {groups}: the latest categories to draw.
+         */
+        function useTreeSync(tree, read) {
+            const sheet = React.useRef(null);
+            const pass = React.useRef(() => {});
+            pass.current = () => {
+                if (!tree?.isConnected) return;
+                const css = nestingCss(tree);
+                if (sheet.current && sheet.current.textContent !== css) sheet.current.textContent = css;
+                const groups = read.current.groups;
+                if (groups) placeHeaders(tree, groups);
+                describeWorkspaces(tree, groups);
+            };
+            React.useLayoutEffect(() => {
+                if (!tree || typeof document === 'undefined') return undefined;
+                const style = document.createElement('style');
+                style.setAttribute('data-projects-nest', '');
+                document.head.append(style);
+                sheet.current = style;
+                let busy = false;
+                const run = () => {
+                    if (busy) return;
+                    busy = true;
+                    try { pass.current(); } finally { busy = false; }
+                };
+                run();
+                const observer = typeof MutationObserver === 'undefined' ? null : new MutationObserver(run);
+                observer?.observe(tree, { childList: true, subtree: true });
+                return () => {
+                    observer?.disconnect();
+                    style.remove();
+                    sheet.current = null;
+                    describeWorkspaces(tree, null);
+                };
+            }, [tree]);
+            React.useLayoutEffect(() => { pass.current(); });
+        }
+
+        /**
+         * The plugin's own drags in DSH's list: a category's header (reorder
+         * the categories) and a workspace's row (into a category, or among
+         * its workspaces). The plugin claims these drags as they start,
+         * before DSH sees them, so DSH draws no line and saves no order of
+         * its own; the plugin draws DSH's line itself and makes the move
+         * through its endpoints, which keep DSH's workspace order in step.
+         * A folder's nested workspaces in Workspace Tree keep DSH's own drag.
+         * @param read - a ref to {groups, folded, titleOf, dragging(on), file(ws, group, before), moveCategory(id, before)}.
+         */
+        function useCategoryDrags(tree, read) {
+            React.useEffect(() => {
+                if (!tree || typeof document === 'undefined') return undefined;
+                let drag = null;
+                let lit = null;
+                const line = document.createElement('div');
+                line.className = 'dshp-sb-drop-line';
+                line.hidden = true;
+                line.setAttribute('aria-hidden', 'true');
+                document.body.append(line);
+                const show = (target) => {
+                    if (lit && lit !== target?.head) {
+                        lit.removeAttribute('data-projects-drop');
+                        lit = null;
+                    }
+                    if (target?.head && lit !== target.head) {
+                        target.head.setAttribute('data-projects-drop', 'into');
+                        lit = target.head;
+                    }
+                    line.hidden = !target?.line;
+                    if (target?.line) Object.assign(line.style, { top: `${target.line.top}px`, left: `${target.line.left}px`, width: `${target.line.width}px` });
+                };
+                const stop = () => {
+                    show(null);
+                    if (!drag) return;
+                    drag.source.removeAttribute('data-projects-dragging');
+                    drag = null;
+                    read.current.dragging(false);
+                };
+                const groups = () => read.current.groups ?? EMPTY;
+                const groupOf = (ws) => groups().find((g) => g.workspaces.includes(ws)) ?? null;
+                const sectionOf = (ws) => [...tree.children].find((el) => sectionWorkspace(el) === ws) ?? null;
+                const under = (event) => (event.target instanceof Element && tree.contains(event.target) ? event.target : null);
+                // The lower half of a row.
+                const lower = (event, box) => event.clientY >= box.top + box.height / 2;
+                /*
+                 * A workspace goes onto a category's header (first in it) or a
+                 * workspace's own row (above it, or below its open chats). A
+                 * chat's row, or anything else, is no place for it: no line,
+                 * and the "no" pointer.
+                 */
+                const workspaceTarget = (event) => {
+                    const el = under(event);
+                    if (!el) return null;
+                    const from = groupOf(drag.id);
+                    const head = el.closest(SB_HEAD);
+                    if (head) {
+                        const into = groups().find((g) => g.id === head.getAttribute('data-projects-sb'));
+                        if (!into) return null;
+                        if (from === into && into.workspaces[0] === drag.id) return { none: true };
+                        return { head, into, before: into.workspaces.find((id) => id !== drag.id) ?? null };
+                    }
+                    const row = el.closest('[data-row-key^="workspace:"]');
+                    const section = row ? sectionAt(tree, row) : null;
+                    const ws = section?.parentElement === tree ? sectionWorkspace(section) : null;
+                    const into = ws ? groupOf(ws) : null;
+                    if (!into) return null;
+                    if (ws === drag.id) return { none: true };
+                    const box = section.getBoundingClientRect();
+                    const after = lower(event, row.getBoundingClientRect());
+                    const list = into.workspaces.filter((id) => id !== drag.id);
+                    const before = list[list.indexOf(ws) + (after ? 1 : 0)] ?? null;
+                    if (from === into && (from.workspaces[from.workspaces.indexOf(drag.id) + 1] ?? null) === before) return { none: true };
+                    return { into, before, line: { top: after ? box.bottom - 4 : box.top - 8, left: box.left, width: box.width } };
+                };
+                /*
+                 * A category goes onto another category's header: above it, or
+                 * below its open workspaces; onto Other workspaces, last of the
+                 * categories. Only headers take it.
+                 */
+                const categoryTarget = (event) => {
+                    const head = under(event)?.closest(SB_HEAD);
+                    const over = head ? groups().find((g) => g.id === head.getAttribute('data-projects-sb')) : null;
+                    if (!over) return null;
+                    if (over.id === drag.id) return { none: true };
+                    const box = head.getBoundingClientRect();
+                    let bottom = box.bottom;
+                    if (!read.current.folded.has(over.id)) {
+                        for (const ws of over.workspaces) bottom = Math.max(bottom, sectionOf(ws)?.getBoundingClientRect().bottom ?? bottom);
+                    }
+                    const ids = groups().filter((g) => g.category).map((g) => g.id);
+                    const after = over.category && lower(event, box);
+                    const before = !over.category ? null : after ? ids[ids.indexOf(over.id) + 1] ?? null : over.id;
+                    if (before === drag.id || (ids[ids.indexOf(drag.id) + 1] ?? null) === before) return { none: true };
+                    return { before, line: { top: after ? bottom - 4 : box.top - 8, left: box.left, width: box.width } };
+                };
+                const targetOf = (event) => (drag.kind === 'workspace' ? workspaceTarget(event) : categoryTarget(event));
+                const begin = (event, next) => {
+                    event.stopPropagation();
+                    drag = next;
+                    try {
+                        event.dataTransfer.effectAllowed = 'move';
+                        event.dataTransfer.setData('text/plain', next.name);
+                    } catch { /* a synthetic event */ }
+                    // After the browser has taken its picture of the row.
+                    requestAnimationFrame(() => { if (drag === next) next.source.setAttribute('data-projects-dragging', ''); });
+                    read.current.dragging(next.kind === 'workspace');
+                };
+                const onStart = (event) => {
+                    const el = under(event);
+                    if (!el || drag || !read.current.groups) return;
+                    const head = el.closest(SB_HEAD);
+                    if (head) {
+                        const group = groups().find((g) => g.id === head.getAttribute('data-projects-sb'));
+                        if (group?.category) begin(event, { kind: 'category', id: group.id, name: group.name, source: head });
+                        return;
+                    }
+                    const row = el.closest('[data-row-key^="workspace:"]');
+                    const section = row ? sectionAt(tree, row) : null;
+                    if (!section || section.parentElement !== tree) return;
+                    const id = row.getAttribute('data-row-key').slice('workspace:'.length);
+                    if (id === '' || !groupOf(id)) return;
+                    begin(event, { kind: 'workspace', id, name: read.current.titleOf(id), source: section });
+                };
+                const onOver = (event) => {
+                    if (!drag) return;
+                    event.stopPropagation();
+                    const target = targetOf(event);
+                    if (target) {
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = 'move';
+                    }
+                    show(target?.none ? null : target);
+                };
+                const onDrop = (event) => {
+                    if (!drag) return;
+                    event.stopPropagation();
+                    event.preventDefault();
+                    const target = targetOf(event);
+                    const done = drag;
+                    stop();
+                    if (!target || target.none) return;
+                    if (done.kind === 'workspace') read.current.file(done.id, target.into, target.before);
+                    else read.current.moveCategory(done.id, target.before);
+                };
+                const onEnd = (event) => {
+                    if (!drag) return;
+                    event.stopPropagation();
+                    stop();
+                };
+                document.addEventListener('dragstart', onStart, true);
+                document.addEventListener('dragover', onOver, true);
+                document.addEventListener('drop', onDrop, true);
+                document.addEventListener('dragend', onEnd, true);
+                return () => {
+                    document.removeEventListener('dragstart', onStart, true);
+                    document.removeEventListener('dragover', onOver, true);
+                    document.removeEventListener('drop', onDrop, true);
+                    document.removeEventListener('dragend', onEnd, true);
+                    stop();
+                    line.remove();
+                };
+            }, [tree, read]);
+        }
+
+        /**
+         * DSH's own drags of session rows, kept to what a project allows. DSH
+         * moves a row among the rows of its workspace; the plugin only
+         * watches, and refuses, with the reason, a drop that would take a
+         * thread out of its project, put a chat or another project inside a
+         * project, or move a session to another workspace (its folder is
+         * fixed). A refused place shows no drop line and the "no" pointer,
+         * and DSH saves nothing: DSH saves the last place it marked when the
+         * drag ends, wherever it ends, so the plugin first drops the row on
+         * itself, which DSH takes as a drop where it already is.
+         * @param read - a ref to {pinned: Set of DSH's pinned session ids, refuse(text)}.
+         */
+        function useSessionDragGuard(tree, read) {
+            React.useEffect(() => {
+                if (!tree || typeof document === 'undefined') return undefined;
+                let drag = null;
+                let replaying = false;
+                const rowAt = (el) => (el instanceof Element ? el.closest('[data-row-key^="session:"]') : null);
+                const idOf = (row) => row.getAttribute('data-row-key').slice('session:'.length);
+                // A row's own section: its wrapper's parent.
+                const sectionOfRow = (row) => row?.parentElement?.parentElement ?? null;
+                const placeOf = (row) => {
+                    const mark = row.querySelector('[data-projects-row]');
+                    return { role: mark?.getAttribute('data-projects-row') ?? '', of: mark?.getAttribute('data-projects-of') ?? '' };
+                };
+                const pinned = (id) => read.current.pinned.has(id);
+                const verdict = (el) => {
+                    const role = drag.place.role;
+                    if (el instanceof Element && tree.contains(el)) {
+                        const head = el.closest(SB_HEAD);
+                        const section = head ? null : sectionAt(tree, el);
+                        if (head || (section && section !== drag.section)) return role === 'thread' ? SIDEBAR.threadStays : role === 'coordinator' ? SIDEBAR.projectStays : SIDEBAR.chatStays;
+                        // A thread onto its own workspace: out of its project.
+                        if (role === 'thread' && el.closest('[data-row-key^="workspace:"]')) return SIDEBAR.threadStays;
+                    }
+                    const marker = drag.marker;
+                    if (!marker) return null;
+                    const groups = sectionGroups(drag.section);
+                    if (role === 'thread') {
+                        // Below its coordinator, or among its project's threads.
+                        const own = groups.find((g) => g.coordinator === drag.place.of);
+                        return !own || (marker.id === own.coordinator && marker.half === 'after') || own.threads.includes(marker.id) ? null : SIDEBAR.threadStays;
+                    }
+                    // Onto a project's row, or in among its threads.
+                    if (marker.project && marker.id !== drag.id && marker.into) return role === 'coordinator' ? SIDEBAR.projectIn : SIDEBAR.chatOut;
+                    for (const g of groups) {
+                        if (g.coordinator === drag.id) continue;
+                        const last = g.threads[g.threads.length - 1];
+                        const inside = marker.id === g.coordinator ? marker.half === 'after' : g.threads.includes(marker.id) && !(marker.id === last && marker.half === 'after');
+                        if (inside) return role === 'coordinator' ? SIDEBAR.projectIn : SIDEBAR.chatOut;
+                    }
+                    return null;
+                };
+                const mark = (refused) => {
+                    if (refused) tree.setAttribute('data-projects-refused', '');
+                    else tree.removeAttribute('data-projects-refused');
+                };
+                // A drop on the dragged row itself: DSH then saves nothing, and its drag ends as a drop in place.
+                const keep = () => {
+                    if (drag.kept || !drag.row.isConnected) return;
+                    drag.kept = true;
+                    const box = drag.row.getBoundingClientRect();
+                    replaying = true;
+                    try {
+                        drag.row.dispatchEvent(new DragEvent('drop', {
+                            bubbles: true, cancelable: true, clientX: box.left + box.width / 2, clientY: box.top + box.height / 2, dataTransfer: new DataTransfer(),
+                        }));
+                    } catch { /* no DragEvent: DSH saves its line */ } finally {
+                        replaying = false;
+                    }
+                };
+                const onStart = (event) => {
+                    if (replaying) return;
+                    drag = null;
+                    const row = rowAt(event.target);
+                    if (!row || !tree.contains(row)) return;
+                    const section = sectionOfRow(row);
+                    // In one list and search results have no sections: DSH's own.
+                    if (sectionWorkspace(section) === null) return;
+                    const id = idOf(row);
+                    drag = { id, row, section, place: placeOf(row), pinned: pinned(id), marker: null, refusal: null, kept: false };
+                };
+                const onOver = (event) => {
+                    if (!drag || replaying) return;
+                    const row = rowAt(event.target);
+                    // The rows DSH marks a place on: the same workspace, pinned or not as the dragged one is.
+                    if (row && sectionOfRow(row) === drag.section && pinned(idOf(row)) === drag.pinned) {
+                        const box = row.getBoundingClientRect();
+                        const at = (event.clientY - box.top) / Math.max(1, box.height);
+                        const place = placeOf(row);
+                        // DSH marks above or below by the row's halves; its middle half is "onto" it.
+                        drag.marker = { id: idOf(row), half: at < 0.5 ? 'before' : 'after', into: at >= 0.25 && at < 0.75, project: place.role === 'coordinator' && place.of === idOf(row) };
+                    }
+                    drag.refusal = verdict(event.target);
+                    mark(drag.refusal !== null);
+                };
+                // After DSH's own handlers, which call every place "move".
+                const onOverLate = (event) => {
+                    if (drag?.refusal && event.dataTransfer) event.dataTransfer.dropEffect = 'none';
+                };
+                const onDrop = (event) => {
+                    if (!drag || replaying) return;
+                    drag.refusal = verdict(event.target);
+                    if (drag.refusal === null) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    keep();
+                };
+                const onEnd = () => {
+                    if (!drag || replaying) return;
+                    const refusal = drag.refusal;
+                    if (refusal) keep();
+                    mark(false);
+                    drag = null;
+                    if (refusal) read.current.refuse(refusal);
+                };
+                document.addEventListener('dragstart', onStart, true);
+                document.addEventListener('dragover', onOver, true);
+                window.addEventListener('dragover', onOverLate);
+                document.addEventListener('drop', onDrop, true);
+                document.addEventListener('dragend', onEnd, true);
+                return () => {
+                    document.removeEventListener('dragstart', onStart, true);
+                    document.removeEventListener('dragover', onOver, true);
+                    window.removeEventListener('dragover', onOverLate);
+                    document.removeEventListener('drop', onDrop, true);
+                    document.removeEventListener('dragend', onEnd, true);
+                    mark(false);
+                };
+            }, [tree, read]);
+        }
+
+        /**
+         * ⋯ on a category's header: Add a workspace (those in no category
+         * first), Move up and down, Rename, New category and Delete. Shift+F10
+         * or the context-menu key opens it from the header too.
+         */
+        function CategoryMenu({ group, first, last, open, setOpen, workspaces, actions }) {
+            const folder = h(ui.IconFolderCloseRegular, {});
+            const free = workspaces.filter((ws) => ws.group === null);
+            const taken = workspaces.filter((ws) => ws.group !== null && ws.group.id !== group.id);
+            const add = free.length + taken.length === 0 ? [{ id: 'none', label: SIDEBAR.addNone, disabled: true }] : [
+                ...(free.length > 0 ? [{ type: 'label', id: 'free', text: SIDEBAR.inNone }] : []),
+                ...free.map((ws) => ({ id: `w:${ws.id}`, label: ws.title, icon: folder })),
+                ...(taken.length > 0 ? [{ type: 'label', id: 'taken', text: SIDEBAR.inOther }] : []),
+                ...taken.map((ws) => ({ id: `w:${ws.id}`, icon: folder, label: h('span', null, ws.title, h('span', { className: 'dshp-pg-menu-from' }, ` · ${ws.group.name}`)) })),
+            ];
+            const items = [
+                { id: 'add', label: SIDEBAR.addWorkspace, icon: h(ui.IconPlusOutlineRegular, {}), submenu: add },
+                { type: 'separator', id: 's1' },
+                { id: 'up', label: SIDEBAR.moveUp, icon: h(ui.IconChevronUpOutlineRegular, {}), disabled: first },
+                { id: 'down', label: SIDEBAR.moveDown, icon: h(ui.IconChevronDownOutlineRegular, {}), disabled: last },
+                { type: 'separator', id: 's2' },
+                { id: 'rename', label: SIDEBAR.rename, icon: h(ui.IconEditOutlineRegular, {}) },
+                { id: 'new', label: SIDEBAR.newCategory, icon: h(ui.IconProjectAddOutlineRegular, {}) },
+                { id: 'delete', label: SIDEBAR.remove, icon: h(ui.IconTrashOutlineRegular, {}), danger: true },
+            ];
+            return h(ui.Menu, {
+                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end',
+                onSelect: (id) => {
+                    setOpen(false);
+                    if (id === 'up') actions.move(group, -1);
+                    else if (id === 'down') actions.move(group, 1);
+                    else if (id === 'rename') actions.rename(group);
+                    else if (id === 'new') actions.create(null);
+                    else if (id === 'delete') actions.remove(group);
+                    else if (id.startsWith('w:')) void actions.file(id.slice(2), group, null);
+                },
+                anchor: h('button', {
+                    type: 'button', className: 'dshp-sb-more', tabIndex: -1, 'aria-label': SIDEBAR.actions(group.name), 'aria-haspopup': 'menu', 'aria-expanded': open,
+                    'data-projects-category-menu': group.id,
+                    onClick: (event) => {
+                        event.stopPropagation();
+                        setOpen(!open);
+                    },
+                }, h(ui.IconEllipsisOutlineRegular, { size: 14 })),
+            });
+        }
+
+        /**
+         * A category's header in DSH's list: its name and how many workspaces
+         * it holds; a click, Enter or Space collapses or opens it, the arrow
+         * keys walk the headers, Alt+↑ and Alt+↓ move a category, and a
+         * category's header drags (Other workspaces stays last).
+         */
+        function CategoryHeader({ group, index, count, folded, dot, onToggle, onMove, menu }) {
+            // Clicks and keys from the menu (drawn elsewhere in the page) reach here through React, not the page.
+            const own = (event) => event.currentTarget.contains(event.target);
+            const [open, setOpen] = React.useState(false);
+            const n = group.workspaces.length;
             const status = dot === 'warning' ? ', a chat is waiting on you' : dot === 'ongoing' ? ', running' : '';
             const step = (event, by) => {
                 const heads = [...(event.currentTarget.parentElement?.querySelectorAll(`:scope>${SB_HEAD}`) ?? EMPTY)];
@@ -5102,13 +5659,26 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
             return h('div', {
                 role: 'treeitem', tabIndex: 0, 'aria-level': 1, 'aria-expanded': !folded,
-                'aria-label': `${group.name}, ${plural(count, 'workspace')}${status}`,
-                className: group.glyph ? 'dshp-sb-head' : 'dshp-sb-head dshp-sb-plain', 'data-projects-sb': group.id,
-                style: first ? { order, marginTop: 0 } : { order },
-                onClick: () => onToggle(),
+                'aria-label': `${group.name}, ${plural(n, 'workspace')}${status}`,
+                'aria-keyshortcuts': group.category ? 'Alt+ArrowUp Alt+ArrowDown Shift+F10' : undefined,
+                className: group.category ? 'dshp-sb-head' : 'dshp-sb-head dshp-sb-plain', 'data-projects-sb': group.id,
+                'data-projects-menu-open': open ? '' : undefined,
+                draggable: group.category,
+                style: index === 0 ? { order: 0, marginTop: 0 } : { order: 2 * index },
+                onClick: (event) => {
+                    if (own(event) && !event.target.closest?.('.dshp-sb-more')) onToggle();
+                },
+                onContextMenu: group.category ? (event) => {
+                    if (!own(event)) return;
+                    event.preventDefault();
+                    setOpen(true);
+                } : undefined,
                 onKeyDown: (event) => {
                     if (event.target !== event.currentTarget) return;
-                    if (event.key === 'Enter' || event.key === ' ') onToggle();
+                    if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+                        if (group.category) onMove(event.key === 'ArrowUp' ? -1 : 1);
+                    } else if (group.category && ((event.key === 'F10' && event.shiftKey) || event.key === 'ContextMenu')) setOpen(true);
+                    else if (event.key === 'Enter' || event.key === ' ') onToggle();
                     else if (event.key === 'ArrowRight') onToggle(true);
                     else if (event.key === 'ArrowLeft') onToggle(false);
                     else if (event.key === 'ArrowDown') step(event, 1);
@@ -5118,45 +5688,139 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     event.stopPropagation();
                 },
             },
+            h('span', { hidden: true, 'data-projects-node': 'category', 'data-projects-id': group.id }),
             h('span', { className: 'dshp-sb-lead', 'aria-hidden': true },
-                group.glyph ? h('span', { className: 'dshp-sb-glyph' }, group.glyph) : null,
                 h('span', { className: 'dshp-sb-chev' }, h(ui.IconChevronRightOutlineRegular, { size: 12 }))),
-            h('span', { className: 'dshp-sb-name' }, group.name),
+            h('span', { className: 'dshp-sb-name', 'data-projects-title': '' }, group.name),
             dot ? h('span', { className: 'dshp-sb-dot', 'aria-hidden': true }, h(ui.StateDot, { state: dot })) : null,
-            h('span', { className: 'dshp-sb-count', 'aria-hidden': true }, count));
+            h('span', { className: 'dshp-sb-count', 'aria-hidden': true }, count),
+            group.category ? h(CategoryMenu, { ...menu, group, open, setOpen }) : null);
         }
 
         const noStatuses = (select) => select(new Map());
 
         /**
-         * DSH's session list by project, as the old sidebar tree showed it:
-         * a header over each project's workspaces with its count, collapsible
-         * (remembered across restarts), and the workspaces in no project
-         * last. DSH has no seat for a header in its list, so the headers are
-         * the plugin's own elements added to the list, and CSS sets DSH's
-         * rows under them (sidebarRules). DSH's rows, its order inside each
-         * project, its view options and search are its own as before; In one
+         * DSH's session list, as the plugin arranges it. Each project's
+         * threads nest under its coordinator, and DSH's own drags of session
+         * rows keep threads in their project and chats out of projects
+         * (useSessionDragGuard). With categories, a header goes over each
+         * category's workspaces, with its count, collapsible (remembered
+         * across restarts), with Other workspaces last, and headers and
+         * workspaces drag (useCategoryDrags). DSH has no seat for a header in
+         * its list, so the headers are the plugin's own elements added to
+         * the list, placed before their sections, and CSS sets DSH's rows
+         * under them (sidebarRules). DSH's rows, its order inside each
+         * category, its view options and search are its own as before; In one
          * list and search show no headers.
          */
-        function SidebarGroups({ useWorkspaces = noWorkspaces, useSessionStatus = noStatuses, projects }) {
+        function SidebarTree({ useWorkspaces = noWorkspaces, useSessionStatus = noStatuses, projects }) {
             useFacts(projects.facts);
             useWatch(projects.facts, 'list');
             const items = useWorkspaces((state) => state.items);
+            const pinnedIds = useWorkspaces((state) => state.pinnedSessionIds);
             const statuses = useSessionStatus((value) => value);
             const tree = useSidebarTree();
             const [folded, toggle] = useFolded();
-            const listed = projects.facts.projects();
-            const groups = React.useMemo(() => sidebarGroups(listed, items), [listed, items]);
+            const [dragging, setDragging] = React.useState(false);
+            const [dialog, setDialog] = React.useState(null);
+            const [toast, setToast] = React.useState(null);
+            const [said, setSaid] = React.useState('');
+            const categories = projects.facts.categories();
+            const groups = React.useMemo(() => sidebarGroups(categories, items, dragging), [categories, items, dragging]);
             const css = React.useMemo(() => (groups === null ? '' : sidebarRules(groups, folded)), [groups, folded]);
-            if (groups === null || tree === null || typeof document === 'undefined') return null;
-            const byId = new Map((Array.isArray(items) ? items : EMPTY).map((ws) => [ws?.workspaceId, ws]));
+            const byId = React.useMemo(() => new Map((Array.isArray(items) ? items : EMPTY).map((ws) => [ws?.workspaceId, ws])), [items]);
+            const pinned = React.useMemo(() => new Set(Array.isArray(pinnedIds) ? pinnedIds : EMPTY), [pinnedIds]);
+            const titleOf = (id) => workspaceTitle(byId.get(id) ?? { workspaceId: id });
+            const refuse = React.useCallback((text) => setToast((prev) => ({ text, seq: (prev?.seq ?? 0) + 1 })), []);
+            const announce = (text) => setSaid((prev) => (prev === text ? `${text} ` : text));
+            const act = async (method, args, success, then) => {
+                const result = await projects.facts.act(method, args);
+                if (!result.ok) refuse(errorText(result.error));
+                else {
+                    if (success) announce(success);
+                    then?.(result);
+                }
+                return result;
+            };
+            const ids = (groups ?? EMPTY).filter((g) => g.category).map((g) => g.id);
+            const actions = {
+                file: (workspace, group, before) => act('fileWorkspace', { workspace, category: group.category ? group.id : '', before: before ?? '' },
+                    group.workspaces.includes(workspace) ? SIDEBAR.moved(titleOf(workspace)) : SIDEBAR.filed(titleOf(workspace), group.name), () => toggle(group.id, false)),
+                moveCategory: (id, before) => act('moveCategory', { category: id, before: before ?? '' }, SIDEBAR.moved(groups?.find((g) => g.id === id)?.name ?? id)),
+                move: (group, by) => {
+                    const at = ids.indexOf(group.id);
+                    if (at < 0 || at + by < 0 || at + by >= ids.length) return;
+                    void actions.moveCategory(group.id, by < 0 ? ids[at - 1] : ids[at + 2] ?? null);
+                },
+                create: (ws) => setDialog({ kind: 'new', ws }),
+                rename: (group) => setDialog({ kind: 'rename', group }),
+                remove: (group) => setDialog({ kind: 'delete', group }),
+            };
+            const read = React.useRef(null);
+            read.current = {
+                groups, folded, pinned, titleOf, refuse, dragging: setDragging,
+                file: (ws, group, before) => { void actions.file(ws, group, before); },
+                moveCategory: (id, before) => { void actions.moveCategory(id, before); },
+            };
+            useTreeSync(tree, read);
+            useCategoryDrags(groups === null ? null : tree, read);
+            useSessionDragGuard(tree, read);
+            if (tree === null || typeof document === 'undefined') return null;
+            // Every workspace DSH lists, with the category it is in, for Add a workspace.
+            const where = new Map();
+            for (const group of groups ?? EMPTY) if (group.category) for (const ws of group.workspaces) where.set(ws, group);
+            const workspaces = (Array.isArray(items) ? items : EMPTY).filter((ws) => typeof ws?.workspaceId === 'string')
+                .map((ws) => ({ id: ws.workspaceId, title: workspaceTitle(ws), group: where.get(ws.workspaceId) ?? null }));
+            let overlay = null;
+            if (dialog?.kind === 'delete') {
+                overlay = h(ConfirmDialog, {
+                    title: SIDEBAR.deleteTitle, text: SIDEBAR.deleteText(dialog.group.name, dialog.group.workspaces.length), action: SIDEBAR.deleteTitle, busyLabel: SIDEBAR.deleting,
+                    onClose: () => setDialog(null),
+                    onSubmit: async () => {
+                        const result = await projects.facts.act('removeCategory', { category: dialog.group.id });
+                        if (!result.ok) return errorText(result.error);
+                        announce(SIDEBAR.deleted(dialog.group.name));
+                        setDialog(null);
+                        return null;
+                    },
+                });
+            } else if (dialog) {
+                const naming = dialog.kind === 'new';
+                overlay = h(NameDialog, {
+                    title: naming ? SIDEBAR.newTitle : SIDEBAR.renameTitle,
+                    description: naming ? (dialog.ws ? SIDEBAR.newWith(titleOf(dialog.ws)) : SIDEBAR.newText) : undefined,
+                    label: SIDEBAR.nameLabel,
+                    initial: naming ? '' : dialog.group.name,
+                    action: naming ? SIDEBAR.create : SIDEBAR.renameAction,
+                    busyLabel: naming ? SIDEBAR.creating : SIDEBAR.renaming,
+                    onClose: () => setDialog(null),
+                    onSubmit: async (name) => {
+                        const result = naming
+                            ? await projects.facts.act('createCategory', { name, workspace: dialog.ws ?? '' })
+                            : await projects.facts.act('renameCategory', { category: dialog.group.id, name });
+                        if (!result.ok) return errorText(result.error);
+                        announce(naming ? SIDEBAR.created(name) : SIDEBAR.renamed(name));
+                        setDialog(null);
+                        return null;
+                    },
+                });
+            }
             return h(React.Fragment, null,
-                ReactDOM.createPortal(h('style', { 'data-projects-sidebar': '' }, css), document.head),
-                ReactDOM.createPortal(groups.map((group, i) => h(GroupHeader, {
-                    key: group.id, group, order: 2 * i, first: i === 0, folded: folded.has(group.id),
+                css ? ReactDOM.createPortal(h('style', { 'data-projects-sidebar': '' }, css), document.head) : null,
+                groups ? ReactDOM.createPortal(groups.map((group, i) => h(CategoryHeader, {
+                    key: group.id, group, index: i, count: group.workspaces.length, folded: folded.has(group.id),
                     dot: folded.has(group.id) ? groupDot(group, byId, statuses) : null,
                     onToggle: (open) => toggle(group.id, open === undefined ? undefined : !open),
-                })), tree));
+                    onMove: (by) => actions.move(group, by),
+                    menu: { workspaces, actions, first: ids.indexOf(group.id) === 0, last: ids.indexOf(group.id) === ids.length - 1 },
+                })), tree) : null,
+                // Moves made here, said to screen readers.
+                h('div', { className: 'dshp-sr', role: 'status', 'aria-live': 'polite', 'data-projects-sidebar-said': '' }, said),
+                toast ? h(ui.Toast, {
+                    key: toast.seq, text: toast.text, icon: h(ui.IconInfoOutlineRegular, { size: 16 }), anchor: tree, holdMs: 4000,
+                    onDone: () => setToast((prev) => (prev?.seq === toast.seq ? null : prev)),
+                }) : null,
+                overlay);
         }
 
         // ── Project settings ───────────────────────────────────────────────
@@ -5777,12 +6441,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the views are built on.
         module.exports.internals = {
-            valueIn, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, nestingRules, threadRows, firstPlace,
+            valueIn, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, nestingRules, sectionGroups, nestingCss,
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
             rowState, endingOf, endingIn, endingReason, endingLine, openSessions, markState, hoverLine, continueError, GROUPS,
-            roomFor, besidePref, sidebarGroups, sidebarRules, placeWorkspaces, chatsIn, pulseOf, pulseText, listText, OTHERS, clockOf, againText, ThreadCard, EndingBar,
+            roomFor, besidePref, sidebarGroups, sidebarRules, placeHeaders, describeWorkspaces, sectionWorkspace, sectionAt, placeWorkspaces, chatsIn, pulseOf, pulseText, listText, OTHERS, clockOf, againText, ThreadCard, EndingBar,
             noticeOf, noticeView, TriggerNotice, ProjectNotice,
             permissionName, permissionShown, permissionIn, toolsText, accessOf, accessSummary, PermissionPicker, ToolsControl, ModelsSummary,
         };
