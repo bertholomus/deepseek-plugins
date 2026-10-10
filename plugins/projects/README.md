@@ -1,13 +1,13 @@
 # dsh-plugin-projects
 
-Claude-Code-style projects for DSH Desktop. Each project has one **coordinator** session. You talk to the coordinator; it starts **threads** (separate sessions) for focused work, and threads **hand back** their results to it. Each project has default models and effort levels for the coordinator and for threads.
+Claude-Code-style projects for DSH Desktop. A project gathers the DSH workspaces that belong together. Give it a **coordinator** session and you talk to the coordinator; it starts **threads** (separate sessions) for focused work, and threads **hand back** their results to it. Each project has default models and effort levels for the coordinator and for threads.
 
-Every coordinator and thread is an ordinary DSH session in the project's workspace, made through the Host's own `sessionController`. They show live in the DSH sidebar, and you can open any thread and talk to it directly.
+Every coordinator and thread is an ordinary DSH session in one of the project's workspaces, made through the Host's own `sessionController`. They show live in the DSH sidebar, and you can open any thread and talk to it directly.
 
 ## How it flows
 
 1. You ask the coordinator for work in the `◆ <project>` session.
-2. The coordinator calls `project_thread_start` with a title and a self-contained brief. A new session titled with the thread's title starts with that brief as its first message. A title longer than DSH's 80-byte limit for session titles is cut once, after its last whole word, with "…", and that one title is used everywhere. DSH's session list shows the thread under the `◆ <project>` coordinator while the two are next to each other.
+2. The coordinator calls `project_thread_start` with a title and a self-contained brief. A new session titled with the thread's title starts with that brief as its first message. A title longer than DSH's 80-byte limit for session titles is cut once, after its last whole word, with "…", and that one title is used everywhere. DSH's session list shows the thread under the `◆ <project>` coordinator. The thread works in the coordinator's workspace, or in another of the project's workspaces when the coordinator names it (`folder`).
 3. The thread works. When it finishes, gets blocked, or needs a decision, it calls `project_handback`. The handback lands in the coordinator as its next turn, starting with `[Handback from thread t1 · "title" · status: done]`.
 4. The coordinator tells you the result, answers the thread if it can, or asks you. Follow-ups go to the same thread with `project_thread_send`.
 
@@ -29,13 +29,38 @@ Threads show up the way Claude Code shows sub-sessions:
 - **Code changes.** A thread that edited files shows **+18 -3 · 2 files** on its cards, on its rows in the Threads menu and panel, and in its hover card in the session list: lines added and deleted and how many files, as DSH's own **Edited 2 files** card in the thread counts them, added up over the thread's turns. Click it on a card to open the thread with DSH's **Review** tab on its newest turn that changed files. The coordinator's thread list says the same ("changed 2 files (+18 -3)"). The counts outlive a DSH restart; DSH keeps the diffs only while it runs, so after a restart they no longer open Review. Like DSH's card, they show only while **Show coding view** is on in DSH's settings.
 - **Back to the coordinator.** In a thread, **◆ Coordinator** at the top goes back to its coordinator, and the thread's own handback shows as a card that opens the coordinator.
 - **A thread that failed or stopped.** When a thread's turn fails (the provider refused the request, DSH couldn't reach it, a plugin blocked it), its newest card reads **Turn failed** with the provider's reason and a **Retry** button; its row in the Threads menu and panel reads *Failed* with the reason, in red under *Waiting on you*, with a Retry icon. A turn that stopped before it finished (stopped, cut off when DSH closed, out of output tokens) reads **Stopped** with **Resume** instead. Retry and Resume send the thread "The user asked you to try again" (or "to continue") from its coordinator, so its handback goes there as usual. The coordinator's thread list says the same, so it can tell you which threads need you. A turn that finishes or hands back clears it.
-- **Projects page.** **Projects** in DSH's sidebar, next to Plugins and Automation tasks, opens a page with a card for every project, the most recently active first: its name (click it to open the coordinator), **Paused** when it is, its folder, how many threads are running, waiting on you or done, and what the coordinator and new threads run on (click either to change it in Project settings). Under that are its threads, as in the Threads panel; done, idle and resolved threads fold under their headings. The gear opens Project settings and **Open** opens the coordinator.
-- **Session list.** Thread rows get a small branch mark, a red dot when the thread's last turn failed, or an orange one when it waits on your decision or is blocked. Threads right under their coordinator are indented under its ◆ with a corner mark instead; a thread anywhere else (say a plain session sits between them) keeps the branch mark. Hovering one shows its project, what it last did (its handback, or how its last turn ended) and what it runs on. The plugin doesn't change DSH's list: each row carries a hidden mark through DSH's row slot, and the coordinator's row brings the CSS that indents its threads.
+- **Projects page.** **Projects** in DSH's sidebar, next to Plugins and Automation tasks, opens a page with a card for every project, the most recently active first (see [Projects as groups of workspaces](#projects-as-groups-of-workspaces)). A project with a coordinator shows its name (click it to open the coordinator), **Paused** when it is, its folder, how many threads are running, waiting on you or done, and what the coordinator and new threads run on (click either to change it in Project settings). Under that are its threads, as in the Threads panel; done, idle and resolved threads fold under their headings, and its workspaces fold under **Workspaces**. The gear opens Project settings and **Open** opens the coordinator.
+- **Session list.** Thread rows get a small branch mark, a red dot when the thread's last turn failed, or an orange one when it waits on your decision or is blocked. In the coordinator's workspace, its threads are drawn right under its ◆, indented with a corner mark, whatever order DSH lists them in: the coordinator and its threads sit together where the most recent of them is, and the rest of the workspace's sessions follow in DSH's order. A thread in another of the project's workspaces keeps the branch mark. Hovering a thread shows its project, what it last did (its handback, or how its last turn ended) and what it runs on. The plugin doesn't change DSH's list or its order: each row carries a hidden mark through DSH's row slot, and the coordinator's row brings the CSS that lays out its workspace's rows (`nestingRules` in `lib/client.js`).
 - **A new project.** The coordinator introduces itself, and under its greeting three first asks wait (**Try asking**) until you write or a thread starts. Click one to put it in the message box, ready to send or change.
 - **A paused project.** Above the message box of the coordinator and of each thread, a bar like DSH's goal bar says the project is paused, how many handbacks it holds, and has **Resume**. The Threads menu and panel say the same with **Resume**, **N threads** reads **Paused · N threads**, the coordinator's row in the session list gets a pause mark, and a thread whose handback is held reads "Done · held until you resume" instead of "No handback yet", while its own card in the thread says **Handback held**. Resume anywhere delivers what was held.
 - **Keyboard.** Every control the plugin draws shows DSH's focus ring when you reach it with the keyboard (Tab, or the arrow keys in the Threads menu and panel), and its text reads at 4.5:1 or better against its background, in light and dark.
 
 All of it reads the `projectSession` view the plugin adds to each session (`lib/projection.js`); DSH builds it on the Host from the session's own events and sends it to the window, so nothing extra is stored. It needs DSH's own window (DSH Desktop or `dsh --profile web`). Sessions from before this version show their project and threads too.
+
+## Projects as groups of workspaces
+
+A project is a named set of DSH workspaces, one project per workspace. A coordinator is optional: a project from your profile always has one, and any other project gets one when you add it.
+
+- **New project** at the top of the Projects page (or **New project…** in a workspace's ⋯ menu, which moves that workspace in) asks for a name and makes an empty ◇ project.
+- **Add a workspace** under a project lists the workspaces that aren't in a project and those in other projects. A workspace's **⋯** menu moves it to another project (**Move to project**) or takes it out (**Remove from project**). A coordinator's own workspace stays in its project.
+- **Other workspaces**, at the bottom of the page, holds every workspace that isn't in a project, with its ⋯ menu to move it into one.
+- Each workspace row shows its title, its folder, how many chats it holds, whether one is running and when it last changed. Click it to see its chats, newest first, and click a chat to open it. The **+** next to it starts a new chat there.
+- **⋯** on a project renames it, or deletes a project without a coordinator (its workspaces go back to Other workspaces; no chats or folders are deleted). A project from your profile is renamed in its row.
+- **Add coordinator** gives a ◇ project a `◆ <name>` coordinator in its workspace (it asks which one when there are several). The coordinator opens with its introduction, and it can start threads in any of the project's workspaces.
+
+The page and the coordinator use the same endpoints (`lib/remote.js`: `create`, `move`, `rename`, `remove`, `addCoordinator`), and the store keeps which project each workspace is in (`workspaceOf`).
+
+### Your old sidebar projects
+
+The first time this version starts, it brings in the projects of the all-in-one mod's old sidebar (`<DSH home>/fleet-shell/state.json`), once: each becomes a ◇ project in the same order, holding the same workspaces, marked **Imported from your old sidebar**. A project here with the same name takes in the old one's workspaces instead. A workspace already in a project here (a profile project's own workspace) stays there, Ungrouped ones go to Other workspaces, and ones DSH no longer has are skipped. The old file is only read. The store records the import (`imports.fleetShell`) and the log says what it did (`import fleet-shell projects=5 joined=0 workspaces=13 skipped=0`), so it never runs again. To run it once more, remove `imports` from the store while DSH is stopped.
+
+To see what it will do before it runs, without changing anything:
+
+```bash
+node ~/.dsh-plugins/deepseek-plugins/plugins/projects/scripts/import-preview.mjs
+```
+
+It reads the old file, DSH's workspaces and the plugin's store, and lists each project with the workspaces it will get.
 
 ## Settings
 
@@ -144,12 +169,14 @@ Plugin row:
 | `maxMemoryBytes` | `65536` | Largest memory file the tools will write. |
 | `logFile` | `~/.dsh/projects/projects.log` | Action log, mode 600. Empty string turns it off. |
 
+A path under `~/.dsh` follows DSH's own data folder: with `DSH_HOME` set (a second DSH for testing, say), the store, memory and log live under it instead, so that DSH keeps projects of its own.
+
 Project row:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `name` | required | Display name and coordinator title. |
-| `workspacePath` | required | Workspace for the coordinator and every thread. |
+| `workspacePath` | required | Workspace for the coordinator, and for every thread that doesn't name another of the project's workspaces. |
 | `id` | name, slugified | Stable id. Letters in any script are kept. Changing it starts the project over. |
 | `goal` | `''` | The outcome the coordinator works toward. |
 | `agentPreset` | | Agent preset for new project sessions. |
@@ -165,7 +192,7 @@ Coordinator:
 
 | Tool | What it does |
 | --- | --- |
-| `project_thread_start` | Start a thread with a title and brief, optionally with its own model or effort. |
+| `project_thread_start` | Start a thread with a title and brief, optionally with its own model or effort, or in another of the project's workspaces (`folder`). |
 | `project_thread_send` | Message a thread. Queued by default; `steer` delivers into the running turn. Reopens a resolved thread. |
 | `project_thread_list` | Threads with live status and last handback. |
 | `project_thread_read` | The latest messages of a thread. |
@@ -188,7 +215,7 @@ Thread:
 
 ## Security
 
-- Threads run with the same tools and permissions as any DSH session in that workspace. A project adds no new access. It only lets one session start and message others in the same workspace.
+- Threads run with the same tools and permissions as any DSH session in that workspace. A project adds no new access. It only lets one session start and message others in the project's workspaces.
 - Project tools are registered per session, so a session outside a project cannot start threads or send handbacks.
 - The store, memory files and log are mode 600 in a mode 700 folder. The log records actions, ids and sizes, never prompt or memory text.
 
@@ -209,7 +236,7 @@ node plugins/projects/test/smoke.mjs
 
 The smoke tests run against a fake Host built from the published `@deepseek-ai/*` packages, including a Host with DSH's per-session model selection.
 
-The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin, session-bridge and a scripted model server. It drives the coordinator and threads through the bridge and checks what reaches the model: the model and effort of every request, which tools each session has, handbacks, the automatic notes (idle, failed, stopped, waiting on approval, cut off by a crash), queued turns, direct talk, settings, memory, pause, a stop by the coordinator, a restart after DSH is killed mid-turn, that DSH serves the page's browser code, the view the window draws (each thread with its handback and cards, and each thread's coordinator, as DSH folds and saves it), new defaults saved while DSH runs (a project's own choices stay), the Project settings endpoints as the window calls them (a read through a thread, **Use default**, a refusal, a new thread on the project's own thread model), a pick in DSH's own model picker becoming the coordinator setting, a thread model that lacks the project's effort running at its nearest level, the plugin page's list of projects (each setting with where it comes from, and what the coordinator runs right now), that a new coordinator introduces itself so DSH lists it (the window view marks that turn and the user's first ask), who DSH shows as the sender of each message (a brief or a coordinator's message from the coordinator, a handback from its thread, held or not, the notes and the welcome from the plugin, and the user's own words as the user's), and a thread's code changes in a git folder (the counts DSH's own card shows, added up over two turns, the turn Review opens, the thread's view marking each turn, the coordinator's thread list, and the counts kept after another restart while the diff is gone). It takes about three minutes.
+The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin, session-bridge and a scripted model server. It drives the coordinator and threads through the bridge and checks what reaches the model: the model and effort of every request, which tools each session has, handbacks, the automatic notes (idle, failed, stopped, waiting on approval, cut off by a crash), queued turns, direct talk, settings, memory, pause, a stop by the coordinator, a restart after DSH is killed mid-turn, that DSH serves the page's browser code, the view the window draws (each thread with its handback and cards, and each thread's coordinator, as DSH folds and saves it), new defaults saved while DSH runs (a project's own choices stay), the Project settings endpoints as the window calls them (a read through a thread, **Use default**, a refusal, a new thread on the project's own thread model), a pick in DSH's own model picker becoming the coordinator setting, a thread model that lacks the project's effort running at its nearest level, the plugin page's list of projects (each setting with where it comes from, and what the coordinator runs right now), that a new coordinator introduces itself so DSH lists it (the window view marks that turn and the user's first ask), who DSH shows as the sender of each message (a brief or a coordinator's message from the coordinator, a handback from its thread, held or not, the notes and the welcome from the plugin, and the user's own words as the user's), and a thread's code changes in a git folder (the counts DSH's own card shows, added up over two turns, the turn Review opens, the thread's view marking each turn, the coordinator's thread list, the counts kept after another restart while the diff is gone), and projects as groups (the one-time import from an old sidebar file, joins by name, workspaces DSH no longer has, the old file untouched, New project, Move, Rename, Delete, the refusals, Add coordinator in an imported project, and a thread in another of its workspaces). It takes about four minutes.
 
 ```bash
 npm install --prefix /tmp/dsh @deepseek-ai/dsh

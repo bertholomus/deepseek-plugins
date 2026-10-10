@@ -2,7 +2,7 @@
  * dsh-plugin-projects, browser half. Three parts:
  *
  * - The "Default models" form on the plugin's page in DSH (Plugins →
- *   dsh-plugin-projects). It edits the four plugin-wide defaults through
+ *   Projects). It edits the four plugin-wide defaults through
  *   DSH's own settings forms, so a save lands in the profile's
  *   cordis.patch.yml and the running plugin switches without a restart.
  * - Project settings: a dialog per project, opened from a project
@@ -67,7 +67,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const CSS = [
             // Keyboard focus: DSH's ring on every plugin control. DSH's own buttons (Open, Retry, Save…) get its outline;
             // the plugin's own controls draw it inset below, so a scrolling list can't clip it.
-            `:where(.dshp-t-card-actions,.dshp-t-paused,.dshp-dock,.dshp-ps,.dshp-page,.dshp-pg-actions,.dshp-pg-empty,.dshp-t-chat-bar,.dshp-t-pane-gear) button:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid ${RING};outline-offset:2px}`,
+            `:where(.dshp-t-card-actions,.dshp-t-paused,.dshp-dock,.dshp-ps,.dshp-page,.dshp-pg,.dshp-pg-dialog,.dshp-t-chat-bar,.dshp-t-pane-gear) button:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid ${RING};outline-offset:2px}`,
             // Default models form
             '.dshp-heading{margin:0 0 4px;font-size:14px;font-weight:600;line-height:1.5;color:var(--dsw-alias-label-primary)}',
             '.dshp-section{display:flex;flex-direction:column;gap:2px;padding:12px 0}',
@@ -362,7 +362,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // The Projects page (the Projects entry in the sidebar): DSH's page layout, as on Automation tasks,
             // with a card per project and its threads by state.
             '.dshp-pg{display:flex;width:100%;min-width:0;height:100%;min-height:0;overflow:hidden;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);font-size:14px;line-height:1.6}',
-            '.dshp-pg-scroll{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;--dsh-scrollbar-width:9px;--dsh-scrollbar-thumb-border:2px}',
+            '.dshp-pg-scroll{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;container-type:inline-size;--dsh-scrollbar-width:9px;--dsh-scrollbar-thumb-border:2px}',
             '.dshp-pg-content{max-width:960px;margin:0 auto;padding:0 clamp(24px,4vw,48px) 48px}',
             '.dshp-pg-heading{display:flex;align-items:baseline;gap:12px;margin-bottom:20px;padding-top:28px}',
             '[data-platform=darwin] .dshp-pg-heading{padding-top:calc(28px + var(--dsh-frame-top-clearance,0px))}',
@@ -404,6 +404,67 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-pg-empty h2{margin:0;font-size:15px;font-weight:500;line-height:22px;color:var(--dsw-alias-label-primary)}',
             '.dshp-pg-empty p{max-width:440px;margin:0;font-size:13px;line-height:21px}',
             '.dshp-pg-empty .dshp-pg-cta{margin-top:12px}',
+            // Projects page: groups of workspaces
+            '.dshp-pg-heading .dshp-pg-new{margin-left:auto;align-self:center}',
+            `.dshp-pg-alert{display:flex;align-items:center;gap:10px;margin:-4px 0 16px;padding:6px 6px 6px 14px;border-radius:12px;background:var(--dsw-alias-interactive-bg-hover-danger,var(--dsw-alias-interactive-bg-hover));font-size:13px;line-height:20px;color:${ERROR_TEXT}}`,
+            '.dshp-pg-alert>span{flex:1;min-width:0}',
+            '.dshp-pg-alert .dshp-t-icon{margin:0;color:inherit}',
+            '.dshp-pg-group-name{display:inline-flex;align-items:center;gap:8px;min-width:0;max-width:100%}',
+            '.dshp-pg-hollow{color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-others-icon{display:inline-flex;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-others{margin-top:16px}',
+            '.dshp-pg-others .dshp-pg-head{padding-right:18px}',
+            '.dshp-pg-head .dshp-pg-count{flex:none}',
+            '.dshp-pg-btn-glyph{font-size:10px;line-height:1}',
+            '.dshp-pg-card[data-fresh]{animation:dshp-pg-fresh 2.4s ease-out}',
+            `@keyframes dshp-pg-fresh{0%,45%{box-shadow:0 0 0 2px ${RING}}100%{box-shadow:0 0 0 2px transparent}}`,
+            `@media (prefers-reduced-motion:reduce){.dshp-pg-card[data-fresh]{animation:none;box-shadow:0 0 0 2px ${RING}}}`,
+            '.dshp-pg-fold{display:flex;flex-direction:column;gap:2px;padding:2px 0 2px}',
+            '.dshp-pg-ws-list{display:flex;flex-direction:column;gap:2px}',
+            '.dshp-pg-ws{display:flex;align-items:center;gap:2px;border-radius:12px}',
+            '.dshp-pg-ws:hover,.dshp-pg-ws:focus-within{background:var(--dsw-alias-interactive-bg-hover)}',
+            '.dshp-pg-ws-item[aria-busy=true]{opacity:.55;pointer-events:none;transition:opacity .12s}',
+            '.dshp-pg-ws-toggle{display:grid;grid-template-columns:10px 16px minmax(0,1fr) auto;align-items:center;column-gap:8px;flex:1;min-width:0;box-sizing:border-box;min-height:48px;padding:6px 8px 6px 10px;border:0;border-radius:12px;background:none;font:inherit;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer}',
+            `.dshp-pg-ws-toggle:focus-visible{outline:none;box-shadow:inset 0 0 0 2px ${RING}}`,
+            '.dshp-pg-ws-arrow{display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-pg-ws-arrow svg{transition:transform .12s}',
+            '.dshp-pg-ws-toggle[aria-expanded=true] .dshp-pg-ws-arrow svg{transform:rotate(90deg)}',
+            '.dshp-pg-ws-folder{display:inline-flex;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-ws-text{display:flex;flex-direction:column;min-width:0}',
+            '.dshp-pg-ws-title{display:flex;align-items:center;gap:8px;min-width:0;font-size:14px;font-weight:500;line-height:20px}',
+            '.dshp-pg-ws-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshp-pg-ws-tag{flex:none;padding:0 7px;border-radius:9px;background:var(--dsw-alias-interactive-bg-hover);font-size:11px;font-weight:400;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-ws:hover .dshp-pg-ws-tag,.dshp-pg-ws:focus-within .dshp-pg-ws-tag{background:var(--dsw-alias-bg-base)}',
+            '.dshp-pg-ws-path{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-ws-meta{display:inline-flex;align-items:center;gap:8px;padding-left:8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap;font-variant-numeric:tabular-nums}',
+            '.dshp-pg-ws-meta>span+span::before{content:"·";padding-right:8px}',
+            '.dshp-pg-ws-meta>.dshp-pg-ws-dot+span::before{content:none}',
+            '.dshp-pg-ws-dot{display:inline-flex;align-items:center}',
+            '.dshp-pg-ws-acts{flex:none;display:inline-flex;align-items:center;gap:2px;padding-right:8px}',
+            '.dshp-pg-ws-acts .dshp-t-icon{width:28px;height:28px;margin:0}',
+            '.dshp-pg-chats{display:flex;flex-direction:column;gap:1px;margin:2px 0 6px 23px;padding-left:10px;border-left:.5px solid var(--dsw-alias-border-l3)}',
+            '.dshp-pg-chat{display:grid;grid-template-columns:14px minmax(0,1fr) auto;align-items:center;column-gap:8px;box-sizing:border-box;width:100%;min-height:34px;padding:5px 10px 5px 8px;border:0;border-radius:10px;background:none;font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer}',
+            '.dshp-pg-chat:hover,.dshp-pg-chat:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}',
+            `.dshp-pg-chat:focus-visible{outline:none;box-shadow:inset 0 0 0 2px ${RING}}`,
+            '.dshp-pg-chat-dot{display:inline-flex;align-items:center;justify-content:center;width:14px}',
+            '.dshp-pg-chat-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshp-pg-chat-ago{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
+            '.dshp-pg-chat-none{padding:6px 8px;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-more,.dshp-pg-add{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;box-sizing:border-box;height:32px;padding:0 10px;border:0;border-radius:10px;background:none;font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary);cursor:pointer}',
+            '.dshp-pg-more:hover,.dshp-pg-more:focus-visible,.dshp-pg-add:hover,.dshp-pg-add:focus-visible,.dshp-pg-add[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
+            `.dshp-pg-more:focus-visible,.dshp-pg-add:focus-visible{outline:none;box-shadow:inset 0 0 0 2px ${RING}}`,
+            '.dshp-pg-add{margin-top:2px}',
+            '.dshp-pg-menu-glyph{display:inline-flex;align-items:center;justify-content:center;width:16px;font-size:11px;line-height:1}',
+            '.dshp-pg-menu-from{color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-dialog.dshp-pg-dialog{width:min(440px,100%)}',
+            '.dshp-pg-input{box-sizing:border-box;width:100%;height:44px;padding:7px 14px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-lg);background:none;font:inherit;font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary);outline:none}',
+            // Drawn over the edge, not inside the border, so the 2 px reach the field's own edge on every side.
+            `.dshp-pg-input:focus{outline:2px solid ${RING};outline-offset:-2px}`,
+            '.dshp-pg-input::placeholder{color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-input:disabled{color:var(--dsw-alias-label-dimmed)}',
+            `.dshp-pg-dialog-error{margin-top:8px;font-size:12px;line-height:18px;color:${ERROR_TEXT}}`,
+            `.dshp-pg-danger:not(:disabled){color:${ERROR_TEXT}}`,
+            '@container (width<=560px){.dshp-pg-ws-path{display:none}.dshp-pg-ws-toggle{min-height:44px}}',
         ].join('');
         const CSS_ID = `${BUNDLE}/client.css`;
         if (typeof document !== 'undefined' && document.querySelector(`style[data-plugin-css=${JSON.stringify(CSS_ID)}]`) === null) {
@@ -1392,15 +1453,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     if (result.ok) put(target, result.value);
                 });
             };
-            const list = (maxAge = 0) => once('list', maxAge, async () => {
-                const result = await link.call('list', {});
-                if (!result.ok || !Array.isArray(result.value?.projects)) {
-                    if (!listFailed) { listFailed = true; emit(); }
-                    return;
-                }
+            /** Take every project as the plugin listed them (list, or a change on the Projects page). */
+            const take = (projects) => {
                 listFailed = false;
-                listed = result.value.projects.filter((p) => isObject(p) && typeof p.id === 'string');
-                for (const p of result.value.projects) {
+                listed = projects.filter((p) => isObject(p) && typeof p.id === 'string');
+                for (const p of projects) {
                     if (!isObject(p) || typeof p.coordinator !== 'string') continue;
                     pausedAt.set(p.coordinator, p.paused === true);
                     if (typeof p.id !== 'string') continue;
@@ -1409,6 +1466,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     if (d && (d.paused?.value === true) !== (p.paused === true)) described.set(p.id, { ...d, paused: { ...d.paused, value: p.paused === true } });
                 }
                 emit();
+            };
+            const list = (maxAge = 0) => once('list', maxAge, async () => {
+                const result = await link.call('list', {});
+                if (!result.ok || !Array.isArray(result.value?.projects)) {
+                    if (!listFailed) { listFailed = true; emit(); }
+                    return;
+                }
+                take(result.value.projects);
             });
             const read = (key, maxAge) => (key === 'list' ? list(maxAge) : describe(key.slice(2), maxAge));
             const tick = () => {
@@ -1466,6 +1531,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 async continueThread(target, thread) {
                     const result = await link.call('continueThread', { target, thread });
                     if (result.ok) put(target, result.value);
+                    return result;
+                },
+                /**
+                 * A change from the Projects page (remote.js `create`, `move`,
+                 * `rename`, `remove`, `addCoordinator`); the projects it answers
+                 * with update every view.
+                 */
+                async act(method, args) {
+                    const result = await link.call(method, args);
+                    if (result.ok && Array.isArray(result.value?.projects)) take(result.value.projects);
                     return result;
                 },
             };
@@ -2750,25 +2825,33 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * The CSS that nests a coordinator's threads under it in DSH's session
-         * list. Each row of the list sits in a wrapper of its own and the
-         * wrappers are siblings; RowPlace marks each row from inside it. A
-         * thread's wrapper nests when every wrapper between it and the
-         * coordinator's holds a thread of that coordinator. DSH lists every
-         * session as a top-level row, in recency or manual order, so any other
-         * row in between ends the run, and a thread above its coordinator
-         * stays where DSH put it, with its branch mark.
+         * list, whatever order DSH lists them in. Each row of the list sits in
+         * a wrapper of its own, the wrappers of one workspace are siblings,
+         * and RowPlace marks each row from inside it. The coordinator's
+         * workspace lays its wrappers out as a column and moves them there:
+         * the coordinator, then its threads in DSH's order, together where the
+         * first of them was; the rows DSH listed after that one follow. DSH's
+         * order, data and wrappers stay as they are. A thread in another
+         * workspace keeps its branch mark.
          * @param of - the coordinator's session id.
          */
         function nestingRules(of) {
             if (typeof of !== 'string' || !/^[\w.:-]+$/.test(of)) return '';
-            const holds = (role) => `:has(>[data-row-key] [data-projects-row="${role}"][data-projects-of="${of}"])`;
-            const C = holds('coordinator');
-            const T = holds('thread');
-            const nested = `[role="tree"] ${C}~${T}:not(${C}~:not(${T})~*)`;
+            const mark = (role) => `[data-projects-row="${role}"][data-projects-of="${of}"]`;
+            const C = `:has(>[data-row-key] ${mark('coordinator')})`;
+            const T = `:has(>[data-row-key] ${mark('thread')})`;
+            // The workspace's list: the wrappers' parent.
+            const list = `[role="tree"] :has(>*>[data-row-key] ${mark('coordinator')})`;
             return [
-                `${nested}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,30px) + var(--dsh-workspace-indent,0px))}`,
-                `${nested} .dshp-t-corner{display:inline-flex}`,
-                `${nested} .dshp-t-branch{display:none}`,
+                `${list}{display:flex;flex-direction:column}`,
+                `${list}>${C}{order:1}`,
+                `${list}>${T}{order:2}`,
+                `${list}>:is(${C},${T})~:not(${C},${T}){order:3}`,
+                // DSH's "Show more" button is a row of its own, as wide as its text.
+                `${list}>[data-row-key]{align-self:flex-start}`,
+                `${list}>${T}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,30px) + var(--dsh-workspace-indent,0px))}`,
+                `${list}>${T} .dshp-t-corner{display:inline-flex}`,
+                `${list}>${T} .dshp-t-branch{display:none}`,
             ].join('\n');
         }
 
@@ -2937,6 +3020,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 hasPane() {
                     try { return ctx.get('sidebarRightTabs')?.get?.(KINDS.pane) !== undefined; } catch { return false; }
                 },
+                /** A new chat in a workspace, as DSH's session list starts one; undefined where DSH can't. */
+                get newChat() {
+                    let start;
+                    try { start = ctx.uiWorkspace?.startSession; } catch { start = undefined; }
+                    if (typeof start !== 'function') return undefined;
+                    return (workspaceId) => {
+                        try { ctx.uiWorkspace.startSession(workspaceId); } catch (error) { warn('could not start a chat', error); }
+                    };
+                },
                 /** DSH's Plugins page at this plugin (its Default models and projects); undefined where DSH can't open it. */
                 get openDefaults() {
                     let nav;
@@ -3039,11 +3131,50 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             title: 'Projects',
             loading: 'Loading projects…',
             emptyTitle: 'No projects yet',
-            emptyText: 'A project is a ◆ coordinator you talk to and the threads it starts, working in one of your folders. Add one in the plugin\'s settings and it shows up here.',
-            emptyAction: 'Open the plugin\'s settings',
+            emptyText: 'A project gathers the workspaces that belong together. Give it a ◆ coordinator and it plans the work and starts threads for you.',
             notStarted: 'The coordinator starts the next time DSH loads the plugin.',
             open: 'Open',
+            newProject: 'New project',
+            newProjectItem: 'New project…',
+            nameLabel: 'Project name',
+            newText: 'It starts empty. Put workspaces in it, then add a ◆ coordinator when you want one.',
+            newWith: (title) => `${title} moves into it.`,
+            create: 'Create',
+            creating: 'Creating…',
+            rename: 'Rename',
+            renameItem: 'Rename…',
+            renameTitle: 'Rename project',
+            renaming: 'Renaming…',
+            deleteItem: 'Delete…',
+            deleteTitle: 'Delete project',
+            deleting: 'Deleting…',
+            deleteText: (name, n) => `This deletes “${name}”. ${n === 0 ? 'It holds no workspaces.' : n === 1 ? 'Its workspace goes back to Other workspaces.' : `Its ${n} workspaces go back to Other workspaces.`} No chats or folders are deleted.`,
+            cancel: 'Cancel',
+            close: 'Close',
+            addCoordinator: 'Add coordinator',
+            adding: 'Adding…',
+            coordinatorWhere: 'Where should it work?',
+            addWorkspace: 'Add a workspace',
+            addNone: 'Every workspace is already here',
+            notInProject: 'Not in a project',
+            inOtherProjects: 'In other projects',
+            moveTo: 'Move to project',
+            removeFromProject: 'Remove from project',
+            workspaces: 'Workspaces',
+            others: 'Other workspaces',
+            othersText: 'Not in a project yet. Use ⋯ on one to move it into a project.',
+            coordinatorHere: 'Coordinator works here',
+            noWorkspaces: 'No workspaces yet. Add one and its chats show up here.',
+            noChats: 'No chats yet',
+            newChat: 'New chat',
+            showAll: (n) => `Show all ${n}`,
+            showFewer: 'Show fewer',
+            imported: 'Imported from your old sidebar',
+            dismiss: 'Dismiss',
         };
+        /** Chats a workspace shows before "Show all"; workspaces the Other workspaces card shows before it. */
+        const CHATS_SHOWN = 5;
+        const OTHERS_SHOWN = 6;
 
         /**
          * The Projects entry's icon, drawn like DSH's own (a 16 px grid and a
@@ -3060,15 +3191,275 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             h('circle', { cx: 12.45, cy: 12.69, r: 1.57 }));
         }
 
-        /** When a project last moved: its coordinator's or any thread's newest update. */
-        function lastActive(project, byId) {
-            let at = 0;
-            const consider = (id) => {
-                const t = typeof id === 'string' ? byId?.[id]?.updatedAt : undefined;
-                if (Number.isFinite(t) && t > at) at = t;
+        /** For a DSH without workspaces on its page props: none. */
+        const NO_WORKSPACES = Object.freeze({ items: EMPTY, archivedSessionIds: EMPTY, phase: 'none' });
+        const noWorkspaces = (select) => select(NO_WORKSPACES);
+
+        /** Whether a project has a ◆ coordinator (or gets one from the profile); the others are groups of workspaces (◇). */
+        const coordinated = (project) => (typeof project.coordinator === 'string' && project.coordinator !== '') || project.source === 'profile';
+
+        /** A path with the home folder as ~, as DSH's session list shows paths. */
+        const shortPath = (path) => String(path ?? '').replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~');
+
+        /**
+         * Every project's workspaces with DSH's own title, path and chats for
+         * each, and the workspaces in no project. The plugin says what
+         * belongs where; DSH's list says what exists and what it's called.
+         */
+        function placeWorkspaces(listed, items, ready) {
+            const live = new Map(items.map((ws) => [ws.workspaceId, ws]));
+            const view = (id, ws, known) => ({
+                id,
+                title: ws?.title || known?.title || folderName(ws?.path ?? known?.path ?? id),
+                path: ws?.path ?? known?.path ?? '',
+                sessionIds: Array.isArray(ws?.sessionIds) ? ws.sessionIds : EMPTY,
+            });
+            const placed = new Set();
+            const of = new Map();
+            for (const project of listed) {
+                const list = [];
+                for (const known of Array.isArray(project.workspaces) ? project.workspaces : EMPTY) {
+                    if (!isObject(known) || typeof known.id !== 'string' || placed.has(known.id)) continue;
+                    // One DSH has deleted: gone once DSH's list has loaded.
+                    if (ready && !live.has(known.id)) continue;
+                    placed.add(known.id);
+                    list.push(view(known.id, live.get(known.id), known));
+                }
+                of.set(project.id, list);
+            }
+            const others = items.filter((ws) => typeof ws?.workspaceId === 'string' && !placed.has(ws.workspaceId)).map((ws) => view(ws.workspaceId, ws));
+            return { of, others };
+        }
+
+        /** Whether a session is a project's coordinator or thread, which its project's card shows instead. */
+        const projectSession = (sessions, id) => valueIn(sessions, id) !== undefined || coordinatorName(sessions, id) !== undefined || isThreadRow(sessions, id);
+
+        /** A workspace's chats, the newest first: none archived or blank, and no coordinator or thread. */
+        function chatsIn(ws, sessions, archived, skip) {
+            const out = [];
+            for (const id of ws.sessionIds) {
+                const row = sessions.byId?.[id];
+                if (!row || row.blank === true || archived.has(id) || skip?.has(id) || projectSession(sessions, id)) continue;
+                out.push(row);
+            }
+            return out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+        }
+
+        /** A chat's dot as DSH's session list draws it: waiting on the user, running, or none. */
+        function chatDot(row, statuses) {
+            const status = statuses?.get?.(row.id);
+            if (status?.pendingInteraction) return 'warning';
+            return (status?.running ?? row.running) === true ? 'ongoing' : null;
+        }
+
+        /** The ⋯ button that opens a row's or a card's menu. */
+        function MenuButton({ label, open, onClick, ...rest }) {
+            return h('button', {
+                type: 'button', className: 'dshp-t-icon', 'aria-label': label, 'aria-haspopup': 'menu', 'aria-expanded': open, onClick, ...rest,
+            }, h(ui.IconEllipsisOutlineRegular, { size: 15 }));
+        }
+
+        /** A project in a menu, with its glyph. */
+        const projectItem = (project, id = `p:${project.id}`) => ({
+            id, label: project.name || project.id,
+            icon: h('span', { className: 'dshp-pg-menu-glyph', 'aria-hidden': true }, coordinated(project) ? '◆' : '◇'),
+        });
+
+        /** ⋯ on a workspace: move it to another project, into a new one, or out of its project. */
+        function WorkspaceMenu({ ws, inProject, targets, actions }) {
+            const [open, setOpen] = React.useState(false);
+            const items = [
+                { type: 'label', id: 'to', text: PAGE.moveTo },
+                ...targets.map((project) => projectItem(project)),
+                { id: 'new', label: PAGE.newProjectItem, icon: h(ui.IconProjectAddOutlineRegular, {}) },
+                ...(inProject ? [{ type: 'separator', id: 'sep' }, { id: 'out', label: PAGE.removeFromProject, icon: h(ui.IconCloseOutlineRegular, {}) }] : []),
+            ];
+            return h(ui.Menu, {
+                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end',
+                onSelect: (id) => {
+                    setOpen(false);
+                    if (id === 'new') actions.create(ws);
+                    else if (id === 'out') void actions.move(ws.id, null);
+                    else if (id.startsWith('p:')) void actions.move(ws.id, id.slice(2));
+                },
+                anchor: h(MenuButton, { label: `${PAGE.moveTo}: ${ws.title}`, open, 'data-projects-workspace-menu': ws.id, onClick: () => setOpen((v) => !v) }),
+            });
+        }
+
+        /** ⋯ on a project made on this page or imported: rename it, or delete it while it has no coordinator. */
+        function ProjectMenu({ project, actions }) {
+            const [open, setOpen] = React.useState(false);
+            const name = project.name || project.id;
+            const items = [
+                { id: 'rename', label: PAGE.renameItem, icon: h(ui.IconEditOutlineRegular, {}) },
+                ...(coordinated(project) ? [] : [{ id: 'delete', label: PAGE.deleteItem, icon: h(ui.IconTrashOutlineRegular, {}), danger: true }]),
+            ];
+            return h(ui.Menu, {
+                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end',
+                onSelect: (id) => {
+                    setOpen(false);
+                    if (id === 'rename') actions.rename(project);
+                    else if (id === 'delete') actions.remove(project);
+                },
+                anchor: h(MenuButton, { label: `Project actions: ${name}`, open, 'data-projects-project-menu': project.id, onClick: () => setOpen((v) => !v) }),
+            });
+        }
+
+        /**
+         * "Add a workspace" under a project's workspaces: any workspace not in
+         * it, those in no project first. One a coordinator works in stays put,
+         * so it isn't offered.
+         */
+        function AddWorkspace({ project, others, elsewhere, actions }) {
+            const [open, setOpen] = React.useState(false);
+            const folder = h(ui.IconFolderCloseRegular, {});
+            const items = others.length + elsewhere.length === 0 ? [{ id: 'none', label: PAGE.addNone, disabled: true }] : [
+                ...(others.length > 0 ? [{ type: 'label', id: 'free', text: PAGE.notInProject }] : []),
+                ...others.map((ws) => ({ id: `w:${ws.id}`, label: ws.title, icon: folder })),
+                ...(elsewhere.length > 0 ? [{ type: 'label', id: 'taken', text: PAGE.inOtherProjects }] : []),
+                ...elsewhere.map(({ ws, from }) => ({
+                    id: `w:${ws.id}`, icon: folder,
+                    label: h('span', null, ws.title, h('span', { className: 'dshp-pg-menu-from' }, ` · ${from.name || from.id}`)),
+                })),
+            ];
+            return h(ui.Menu, {
+                open, onClose: () => setOpen(false), items, portal: true, align: 'start',
+                onSelect: (id) => {
+                    setOpen(false);
+                    if (id.startsWith('w:')) void actions.move(id.slice(2), project.id);
+                },
+                anchor: h('button', {
+                    type: 'button', className: 'dshp-pg-add', 'data-dshp-item': '', 'aria-haspopup': 'menu', 'aria-expanded': open,
+                    'data-projects-add-workspace': project.id, onClick: () => setOpen((v) => !v),
+                }, h(ui.IconPlusOutlineRegular, { size: 14 }), PAGE.addWorkspace),
+            });
+        }
+
+        /**
+         * Add coordinator on a project without one: it works in the project's
+         * workspace, or in the one picked when the project holds several.
+         */
+        function AddCoordinator({ project, workspaces, busy, actions }) {
+            const [open, setOpen] = React.useState(false);
+            const props = {
+                variant: 'outline', size: 'sm', disabled: busy || workspaces.length === 0, 'aria-busy': busy || undefined,
+                'data-projects-add-coordinator': project.id,
+                icon: h('span', { className: 'dshp-pg-btn-glyph', 'aria-hidden': true }, '◆'),
             };
-            consider(project.coordinator);
-            return at;
+            const label = busy ? PAGE.adding : PAGE.addCoordinator;
+            if (workspaces.length < 2) return h(ui.Button, { ...props, onClick: () => void actions.addCoordinator(project, workspaces[0]?.id) }, label);
+            return h(ui.Menu, {
+                open, onClose: () => setOpen(false), portal: true, align: 'end',
+                items: [{ type: 'label', id: 'where', text: PAGE.coordinatorWhere }, ...workspaces.map((ws) => ({ id: ws.id, label: ws.title, icon: h(ui.IconFolderCloseRegular, {}) }))],
+                onSelect: (id) => {
+                    setOpen(false);
+                    void actions.addCoordinator(project, id);
+                },
+                anchor: h(ui.Button, { ...props, 'aria-haspopup': 'menu', 'aria-expanded': open, onClick: () => setOpen((v) => !v) }, label),
+            });
+        }
+
+        /**
+         * One workspace on the page: its folder, name and path, how many chats
+         * it holds and when one last moved, and a dot while one runs or waits
+         * on you. A click shows its chats, the newest first; New chat starts
+         * one there, as DSH's session list does; ⋯ moves it.
+         */
+        function WorkspaceRow({ ws, chats, open, onToggle, now, statuses, tag, menu, busy, projects }) {
+            const [all, setAll] = React.useState(false);
+            const dots = chats.map((row) => chatDot(row, statuses));
+            const dot = dots.includes('warning') ? 'warning' : dots.includes('ongoing') ? 'ongoing' : null;
+            const latest = chats[0]?.updatedAt;
+            const shown = all ? chats : chats.slice(0, CHATS_SHOWN);
+            const newChat = projects.newChat ? h(ui.Tooltip, { label: PAGE.newChat, side: 'bottom', portal: true },
+                h('button', {
+                    type: 'button', className: 'dshp-t-icon', 'aria-label': `${PAGE.newChat} in ${ws.title}`, 'data-projects-new-chat': ws.id,
+                    onClick: () => projects.newChat(ws.id),
+                }, h(ui.IconNewChatOutlineRegular, { size: 15 }))) : null;
+            return h('div', { className: 'dshp-pg-ws-item', 'data-projects-workspace': ws.id, 'aria-busy': busy || undefined },
+                h('div', { className: 'dshp-pg-ws' },
+                    h('button', {
+                        type: 'button', className: 'dshp-pg-ws-toggle', 'data-dshp-item': '', 'aria-expanded': open, title: ws.path || undefined, onClick: onToggle,
+                        'aria-label': `${ws.title}${tag ? `, ${tag}` : ''}. ${chats.length === 0 ? PAGE.noChats : plural(chats.length, 'chat')}`,
+                    },
+                    h('span', { className: 'dshp-pg-ws-arrow', 'aria-hidden': true }, h(ui.IconTriangleRightFillRegular, { size: 10 })),
+                    h('span', { className: 'dshp-pg-ws-folder', 'aria-hidden': true }, h(open ? ui.IconFolderOpenRegular : ui.IconFolderCloseRegular, { size: 16 })),
+                    h('span', { className: 'dshp-pg-ws-text' },
+                        h('span', { className: 'dshp-pg-ws-title' },
+                            h('span', { className: 'dshp-pg-ws-name' }, ws.title),
+                            tag ? h('span', { className: 'dshp-pg-ws-tag' }, tag) : null),
+                        // Cut at the start when it doesn't fit, so the folder's own name stays in view.
+                        ws.path ? h('span', { className: 'dshp-pg-ws-path' }, h('span', { dir: 'ltr' }, shortPath(ws.path))) : null),
+                    h('span', { className: 'dshp-pg-ws-meta' },
+                        dot ? h('span', { className: 'dshp-pg-ws-dot', 'data-state': dot }, h(ui.StateDot, { state: dot })) : null,
+                        h('span', null, chats.length === 0 ? PAGE.noChats : plural(chats.length, 'chat')),
+                        latest !== undefined ? h('span', null, ago(latest, now)) : null)),
+                    h('span', { className: 'dshp-pg-ws-acts' }, newChat, menu)),
+                open ? h('div', { className: 'dshp-pg-chats', role: 'group', 'aria-label': `Chats in ${ws.title}` },
+                    chats.length === 0 ? h('div', { className: 'dshp-pg-chat-none' }, PAGE.noChats) : null,
+                    // `shown` starts where `chats` does, so a row's dot is at its own index.
+                    ...shown.map((row, i) => h('button', {
+                        key: row.id, type: 'button', className: 'dshp-pg-chat', 'data-dshp-item': '', 'data-projects-chat': row.id,
+                        onClick: () => projects.openSession(row.id),
+                    },
+                    h('span', { className: 'dshp-pg-chat-dot' }, dots[i] ? h(ui.StateDot, { state: dots[i] }) : null),
+                    h('span', { className: 'dshp-pg-chat-title' }, row.displayTitle || row.title || PAGE.newChat),
+                    h('span', { className: 'dshp-pg-chat-ago' }, ago(row.updatedAt, now)))),
+                    chats.length > CHATS_SHOWN ? h('button', {
+                        type: 'button', className: 'dshp-pg-more', 'data-dshp-item': '', onClick: () => setAll((v) => !v),
+                    }, all ? PAGE.showFewer : PAGE.showAll(chats.length)) : null) : null);
+        }
+
+        /** Workspaces, each opening to its chats; `limit` folds a long list behind "Show all". */
+        function WorkspaceList({ list, chatsOf, now, statuses, projects, busy, menuFor, tagFor, limit }) {
+            const [open, setOpen] = React.useState(() => new Set());
+            const [all, setAll] = React.useState(false);
+            const toggle = (id) => setOpen((prev) => {
+                const next = new Set(prev);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+            });
+            const shown = limit && !all ? list.slice(0, limit) : list;
+            return h('div', { className: 'dshp-pg-ws-list' },
+                ...shown.map((ws) => h(WorkspaceRow, {
+                    key: ws.id, ws, chats: chatsOf(ws), open: open.has(ws.id), onToggle: () => toggle(ws.id), now, statuses, projects,
+                    busy: busy.has(ws.id), menu: menuFor(ws), tag: tagFor?.(ws),
+                })),
+                limit && list.length > limit ? h('button', {
+                    type: 'button', className: 'dshp-pg-more', 'data-dshp-item': '', onClick: () => setAll((v) => !v),
+                }, all ? PAGE.showFewer : PAGE.showAll(list.length)) : null);
+        }
+
+        /** Scroll a card into view and ring it for a moment, after it was made. */
+        function useFresh(fresh) {
+            const ref = React.useRef(null);
+            React.useEffect(() => {
+                if (fresh) ref.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+            }, [fresh]);
+            return ref;
+        }
+
+        /**
+         * What a project's workspace rows need from the page: each one's
+         * chats, its ⋯ menu (none for the one a coordinator works in, which
+         * stays put), the projects it can move to, and what "Add a workspace"
+         * offers.
+         */
+        function workspaceParts(project, page, skip) {
+            const { placed, listed, sessions, archived, actions } = page;
+            const targets = listed.filter((p) => p.id !== project.id);
+            const home = coordinated(project) ? project.home : undefined;
+            const holders = new Map();
+            for (const p of targets) for (const ws of placed.of.get(p.id) ?? EMPTY) holders.set(ws.id, p);
+            const stays = new Set(listed.filter((p) => coordinated(p) && typeof p.home === 'string').map((p) => p.home));
+            return {
+                chatsOf: (ws) => chatsIn(ws, sessions, archived, skip),
+                menuFor: (ws) => (ws.id === home ? null : h(WorkspaceMenu, { ws, inProject: true, targets, actions })),
+                tagFor: (ws) => (ws.id === home ? PAGE.coordinatorHere : null),
+                others: placed.others,
+                elsewhere: [...holders.entries()].filter(([id]) => !stays.has(id)).map(([id, from]) => ({ ws: (placed.of.get(from.id) ?? EMPTY).find((w) => w.id === id), from })).filter((x) => x.ws),
+            };
         }
 
         /**
@@ -3076,13 +3467,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * coordinator), its folder and what its threads are doing, what it
          * runs on (each opens Project settings with that menu open), the
          * pause with Resume, and its threads by state, as in the Threads
-         * menu; Done, Idle and Resolved fold behind their counts.
+         * menu; Done, Idle and Resolved fold behind their counts, and so do
+         * its workspaces with their own chats.
          */
-        function ProjectCard({ project, useSessions, useSessionStatus, projects, now, settingsOn }) {
+        function ProjectCard({ project, workspaces, page, useSessions, projects, now, settingsOn, fresh }) {
             const coordinator = typeof project.coordinator === 'string' && project.coordinator !== '' ? project.coordinator : undefined;
             const info = useSessions((state) => (coordinator ? projectContext(state, coordinator) : undefined), sameContext);
-            const statuses = useSessionStatus((value) => value);
-            const byId = useSessions((state) => state.byId);
+            const { statuses, sessions } = page;
+            const byId = sessions.byId;
             React.useEffect(() => { if (coordinator) projects.refresh(coordinator); }, [coordinator, projects]);
             const paused = project.paused === true || usePaused(projects.facts, coordinator, null) === true;
             const handbacks = useHeldHandbacks(projects.facts, coordinator);
@@ -3090,6 +3482,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const rows = useRows(projects, useSessions, info?.roster, statuses, byId, paused ? handbacks : EMPTY);
             const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, true);
             const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), true);
+            const [showWorkspaces, setShowWorkspaces] = React.useState(false);
+            const ref = useFresh(fresh);
             const summary = summaryModels(cv, models, coordinator, { settings: project.settings });
             const name = project.name || project.id;
             const headingId = `dshp-pg-${project.id}`;
@@ -3099,6 +3493,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const counts = info?.roster ? countsOf(rows)
                 : { open: Number(project.threads?.open) || 0, waiting: 0, running: 0, resolved: Number(project.threads?.resolved) || 0 };
             const threadsText = counts.open + counts.resolved > 0 ? summaryText(counts) : null;
+            const skip = React.useMemo(() => new Set([coordinator, ...rowSessions(rows)].filter(Boolean)), [coordinator, rows]);
+            const parts = workspaceParts(project, page, skip);
             const model = (id, label, text) => {
                 const content = [h('span', { key: 'l' }, label), h('span', { key: 'v' }, text ?? '…')];
                 if (!settingsOn) return h('span', { key: id, className: 'dshp-pg-model', 'data-projects-models': id }, ...content);
@@ -3118,49 +3514,249 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     onOpen: (row) => projects.openSession(row.session),
                 });
             }
-            return h('section', { className: 'dshp-pg-card', 'aria-labelledby': headingId, 'data-projects-project': project.id, onKeyDown: (event) => arrowKeys(event, event.currentTarget) },
+            return h('section', {
+                ref, className: 'dshp-pg-card', 'aria-labelledby': headingId, 'data-projects-project': project.id, 'data-fresh': fresh ? '' : undefined,
+                onKeyDown: (event) => arrowKeys(event, event.currentTarget),
+            },
+            h('div', { className: 'dshp-pg-head' },
+                h('h2', { className: 'dshp-pg-title', id: headingId },
+                    h('button', { type: 'button', className: 'dshp-pg-name', disabled: !coordinator, onClick: open, 'aria-label': `Open ◆ ${name}` },
+                        h('span', { className: 'dshp-pg-diamond', 'aria-hidden': true }, '◆'),
+                        h('span', { className: 'dshp-pg-name-text' }, name)),
+                    paused ? h('span', { className: 'dshp-pg-badge', 'data-projects-paused': '' }, h(ui.IconPauseOutlineRegular, { size: 12 }), TEXT.paused) : null),
+                h('span', { className: 'dshp-pg-actions' },
+                    settingsOn ? h(ui.Tooltip, { label: SETTINGS.title, side: 'bottom' },
+                        h('button', {
+                            type: 'button', className: 'dshp-t-icon', 'aria-label': `${SETTINGS.title}: ${name}`, 'data-projects-settings-trigger': '',
+                            onClick: () => projects.settings.open(target),
+                        }, h(ui.IconSlidersTwoOutlineRegular, { size: 14 }))) : null,
+                    coordinator ? h(ui.Button, { variant: 'outline', size: 'sm', onClick: open, 'aria-label': `${PAGE.open} ◆ ${name}` }, PAGE.open) : null,
+                    project.source === 'profile' ? null : h(ProjectMenu, { project, actions: page.actions }))),
+            h('div', { className: 'dshp-pg-meta' },
+                project.workspace ? h('span', { className: 'dshp-pg-folder', title: project.workspace },
+                    h(ui.IconFolderCloseRegular, { size: 13, 'aria-hidden': true }),
+                    h('span', null, workspaces.find((ws) => ws.id === project.home)?.title || folderName(project.workspace))) : null,
+                workspaces.length > 1 ? h('span', null, plural(workspaces.length, 'workspace')) : null,
+                threadsText ? h('span', { 'data-projects-summary': '' }, threadsText) : null),
+            h('div', { className: 'dshp-pg-models', role: 'group', 'aria-label': 'Models' },
+                model('coordinator', TEXT.coordinator, summary.coordinator),
+                model('thread', 'New threads', summary.thread)),
+            h('div', { className: 'dshp-pg-body' },
+                paused && coordinator ? h(PausedNotice, { coordinator, role: 'coordinator', projects }) : null,
+                body,
+                h('div', { role: 'group', 'aria-label': PAGE.workspaces, 'data-projects-workspaces': project.id },
+                    h('button', {
+                        type: 'button', className: 'dshp-t-group', 'data-dshp-item': '', 'aria-expanded': showWorkspaces,
+                        onClick: () => setShowWorkspaces((v) => !v),
+                    }, h(ui.IconChevronRightOutlineRegular, { size: 12 }), `${PAGE.workspaces} · ${workspaces.length}`),
+                    showWorkspaces ? h('div', { className: 'dshp-pg-fold' },
+                        h(WorkspaceList, { list: workspaces, now, statuses, projects, busy: page.busy, chatsOf: parts.chatsOf, menuFor: parts.menuFor, tagFor: parts.tagFor }),
+                        h(AddWorkspace, { project, others: parts.others, elsewhere: parts.elsewhere, actions: page.actions })) : null)));
+        }
+
+        /**
+         * A project without a coordinator: a named set of workspaces, each
+         * opening to its chats, with Add coordinator to give it one.
+         */
+        function GroupCard({ project, workspaces, page, now, fresh }) {
+            const name = project.name || project.id;
+            const headingId = `dshp-pg-${project.id}`;
+            const ref = useFresh(fresh);
+            const parts = workspaceParts(project, page);
+            const chats = workspaces.reduce((n, ws) => n + parts.chatsOf(ws).length, 0);
+            return h('section', {
+                ref, className: 'dshp-pg-card', 'aria-labelledby': headingId, 'data-projects-project': project.id, 'data-projects-group': '',
+                'data-fresh': fresh ? '' : undefined, onKeyDown: (event) => arrowKeys(event, event.currentTarget),
+            },
+            h('div', { className: 'dshp-pg-head' },
+                h('h2', { className: 'dshp-pg-title', id: headingId },
+                    h('span', { className: 'dshp-pg-group-name' },
+                        h('span', { className: 'dshp-pg-diamond dshp-pg-hollow', 'aria-hidden': true }, '◇'),
+                        h('span', { className: 'dshp-pg-name-text' }, name))),
+                h('span', { className: 'dshp-pg-actions' },
+                    h(AddCoordinator, { project, workspaces, busy: page.busy.has(project.id), actions: page.actions }),
+                    h(ProjectMenu, { project, actions: page.actions }))),
+            h('div', { className: 'dshp-pg-meta' },
+                h('span', null, plural(workspaces.length, 'workspace')),
+                chats > 0 ? h('span', null, plural(chats, 'chat')) : null,
+                project.source === 'import' ? h('span', { 'data-projects-imported': '' }, PAGE.imported) : null),
+            h('div', { className: 'dshp-pg-body' },
+                workspaces.length === 0 ? h('div', { className: 'dshp-t-notice' }, PAGE.noWorkspaces)
+                    : h(WorkspaceList, { list: workspaces, now, statuses: page.statuses, projects: page.projects, busy: page.busy, chatsOf: parts.chatsOf, menuFor: parts.menuFor }),
+                h(AddWorkspace, { project, others: parts.others, elsewhere: parts.elsewhere, actions: page.actions })));
+        }
+
+        /** Workspaces in no project, last on the page, each with ⋯ to move it into one. */
+        function OthersCard({ page, now }) {
+            const { placed, listed, sessions, archived, actions } = page;
+            const list = placed.others;
+            return h('section', { className: 'dshp-pg-card dshp-pg-others', 'aria-labelledby': 'dshp-pg-others', 'data-projects-others': '', onKeyDown: (event) => arrowKeys(event, event.currentTarget) },
                 h('div', { className: 'dshp-pg-head' },
-                    h('h2', { className: 'dshp-pg-title', id: headingId },
-                        h('button', { type: 'button', className: 'dshp-pg-name', disabled: !coordinator, onClick: open, 'aria-label': `Open ◆ ${name}` },
-                            h('span', { className: 'dshp-pg-diamond', 'aria-hidden': true }, '◆'),
-                            h('span', { className: 'dshp-pg-name-text' }, name)),
-                        paused ? h('span', { className: 'dshp-pg-badge', 'data-projects-paused': '' }, h(ui.IconPauseOutlineRegular, { size: 12 }), TEXT.paused) : null),
-                    h('span', { className: 'dshp-pg-actions' },
-                        settingsOn ? h(ui.Tooltip, { label: SETTINGS.title, side: 'bottom' },
-                            h('button', {
-                                type: 'button', className: 'dshp-t-icon', 'aria-label': `${SETTINGS.title}: ${name}`, 'data-projects-settings-trigger': '',
-                                onClick: () => projects.settings.open(target),
-                            }, h(ui.IconSlidersTwoOutlineRegular, { size: 14 }))) : null,
-                        coordinator ? h(ui.Button, { variant: 'outline', size: 'sm', onClick: open, 'aria-label': `${PAGE.open} ◆ ${name}` }, PAGE.open) : null)),
-                h('div', { className: 'dshp-pg-meta' },
-                    project.workspace ? h('span', { className: 'dshp-pg-folder', title: project.workspace },
-                        h(ui.IconFolderCloseRegular, { size: 13, 'aria-hidden': true }), h('span', null, folderName(project.workspace))) : null,
-                    threadsText ? h('span', { 'data-projects-summary': '' }, threadsText) : null),
-                h('div', { className: 'dshp-pg-models', role: 'group', 'aria-label': 'Models' },
-                    model('coordinator', TEXT.coordinator, summary.coordinator),
-                    model('thread', 'New threads', summary.thread)),
+                    h('h2', { className: 'dshp-pg-title', id: 'dshp-pg-others' },
+                        h('span', { className: 'dshp-pg-group-name' },
+                            h('span', { className: 'dshp-pg-others-icon', 'aria-hidden': true }, h(ui.IconFolderCloseRegular, { size: 16 })),
+                            h('span', { className: 'dshp-pg-name-text' }, PAGE.others))),
+                    h('span', { className: 'dshp-pg-count' }, plural(list.length, 'workspace'))),
+                h('div', { className: 'dshp-pg-meta' }, h('span', null, PAGE.othersText)),
                 h('div', { className: 'dshp-pg-body' },
-                    paused && coordinator ? h(PausedNotice, { coordinator, role: 'coordinator', projects }) : null,
-                    body));
+                    h(WorkspaceList, {
+                        list, now, statuses: page.statuses, projects: page.projects, busy: page.busy, limit: OTHERS_SHOWN,
+                        chatsOf: (ws) => chatsIn(ws, sessions, archived),
+                        menuFor: (ws) => h(WorkspaceMenu, { ws, inProject: false, targets: listed, actions }),
+                    })));
+        }
+
+        /** The name dialog for New project and Rename: DSH's own rename dialog, with the plugin's refusal under the field. */
+        function NameDialog({ title, description, initial = '', action, busyLabel, onSubmit, onClose }) {
+            const [draft, setDraft] = React.useState(initial);
+            const [busy, setBusy] = React.useState(false);
+            const [error, setError] = React.useState('');
+            const composing = React.useRef(false);
+            const alive = React.useRef(true);
+            React.useEffect(() => () => { alive.current = false; }, []);
+            const clean = draft.replace(/\s+/g, ' ').trim();
+            const submit = async () => {
+                if (busy || clean === '') return;
+                if (initial !== '' && clean === initial) {
+                    onClose();
+                    return;
+                }
+                setBusy(true);
+                setError('');
+                const problem = await onSubmit(clean);
+                if (alive.current && problem) {
+                    setBusy(false);
+                    setError(problem);
+                }
+            };
+            return h(ui.Modal, {
+                open: true, title, description, closeLabel: PAGE.close, className: 'dshp-pg-dialog',
+                onClose: () => { if (!busy) onClose(); },
+                footer: h(React.Fragment, null,
+                    h(ui.Button, { variant: 'outline', disabled: busy, onClick: onClose }, PAGE.cancel),
+                    h(ui.Button, { variant: 'primary', disabled: busy || clean === '', onClick: () => void submit(), 'data-projects-dialog-submit': '' }, busy ? busyLabel : action)),
+            },
+            h('input', {
+                className: 'dshp-pg-input', value: draft, 'aria-label': PAGE.nameLabel, placeholder: PAGE.nameLabel, maxLength: 120,
+                'data-modal-autofocus': true, 'data-projects-name-input': '', disabled: busy,
+                onFocus: (event) => event.target.select(),
+                onChange: (event) => {
+                    setDraft(event.target.value);
+                    setError('');
+                },
+                onCompositionStart: () => { composing.current = true; },
+                onCompositionEnd: () => { composing.current = false; },
+                onKeyDown: (event) => {
+                    if (event.key !== 'Enter' || composing.current) return;
+                    event.preventDefault();
+                    void submit();
+                },
+            }),
+            error ? h('div', { className: 'dshp-pg-dialog-error', role: 'alert' }, error) : null);
+        }
+
+        /** Delete a project, as DSH asks before it deletes a workspace. */
+        function DeleteDialog({ project, count, onSubmit, onClose }) {
+            const [busy, setBusy] = React.useState(false);
+            const [error, setError] = React.useState('');
+            const alive = React.useRef(true);
+            React.useEffect(() => () => { alive.current = false; }, []);
+            const submit = async () => {
+                if (busy) return;
+                setBusy(true);
+                setError('');
+                const problem = await onSubmit();
+                if (alive.current && problem) {
+                    setBusy(false);
+                    setError(problem);
+                }
+            };
+            return h(ui.Modal, {
+                open: true, title: PAGE.deleteTitle, description: PAGE.deleteText(project.name || project.id, count), closeLabel: PAGE.close, className: 'dshp-pg-dialog',
+                onClose: () => { if (!busy) onClose(); },
+                footer: h(React.Fragment, null,
+                    h(ui.Button, { variant: 'outline', disabled: busy, onClick: onClose, 'data-modal-autofocus': true }, PAGE.cancel),
+                    h(ui.Button, { variant: 'outline', className: 'dshp-pg-danger', disabled: busy, onClick: () => void submit(), 'data-projects-dialog-submit': '' }, busy ? PAGE.deleting : PAGE.deleteTitle)),
+            }, error ? h('div', { className: 'dshp-pg-dialog-error', role: 'alert' }, error) : undefined);
         }
 
         /**
          * The Projects page, opened from the Projects entry in DSH's sidebar:
-         * every project as a card, the most recently active first.
+         * every project as a card, the most recently active first (in the
+         * order they had when the page opened, so cards don't jump while you
+         * read), then the workspaces in no project.
          */
-        function ProjectsPage({ useSessions, useSessionStatus, projects }) {
+        function ProjectsPage({ useSessions, useSessionStatus, useWorkspaces = noWorkspaces, projects }) {
             useFacts(projects.facts);
             useWatch(projects.facts, 'list');
             const settingsOn = useSettingsAvailable(projects.settings);
             const listed = projects.facts.projects();
             const failed = projects.facts.listFailed();
-            const byId = useSessions((state) => state.byId);
+            const sessions = useSessions((state) => state);
+            const statuses = useSessionStatus((value) => value);
+            const items = useWorkspaces((state) => state.items);
+            const archivedIds = useWorkspaces((state) => state.archivedSessionIds);
+            const ready = useWorkspaces((state) => state.phase) === 'ready';
             const now = useNow(true);
-            const order = React.useMemo(() => {
-                if (!Array.isArray(listed)) return EMPTY;
-                // Most recent activity first; the profile's order among projects that never ran.
-                return listed.map((p, i) => ({ p, i, at: lastActive(p, byId) })).sort((a, b) => b.at - a.at || a.i - b.i).map((x) => x.p);
-            }, [listed, byId]);
+            const [dialog, setDialog] = React.useState(null);
+            const [notice, setNotice] = React.useState('');
+            const [busy, setBusy] = React.useState(() => new Set());
+            const [fresh, setFresh] = React.useState(null);
+            React.useEffect(() => {
+                if (fresh === null) return undefined;
+                const timer = setTimeout(() => setFresh(null), 2400);
+                return () => clearTimeout(timer);
+            }, [fresh]);
+            const all = Array.isArray(listed) ? listed : EMPTY;
+            const archived = React.useMemo(() => new Set(Array.isArray(archivedIds) ? archivedIds : EMPTY), [archivedIds]);
+            const placed = React.useMemo(() => placeWorkspaces(all, Array.isArray(items) ? items : EMPTY, ready), [all, items, ready]);
+            // The order cards had when the page opened (or a project came or went): the most recent activity first.
+            const latest = React.useRef(null);
+            latest.current = { sessions, placed };
+            const key = all.map((p) => p.id).join('\n');
+            const settled = sessions?.phase === 'ready';
+            const rank = React.useMemo(() => {
+                const { sessions: state, placed: where } = latest.current;
+                const activity = (project) => {
+                    let at = 0;
+                    const consider = (id) => {
+                        const t = typeof id === 'string' ? state?.byId?.[id]?.updatedAt : undefined;
+                        if (Number.isFinite(t) && t > at) at = t;
+                    };
+                    consider(project.coordinator);
+                    for (const ws of where.of.get(project.id) ?? EMPTY) for (const id of ws.sessionIds) consider(id);
+                    return at;
+                };
+                // The profile's and the plugin's order among projects that never ran.
+                return all.map((p, i) => ({ id: p.id, i, at: activity(p) })).sort((a, b) => b.at - a.at || a.i - b.i).map((x) => x.id);
+            }, [key, settled, ready]);
+            const mark = (id, on) => setBusy((prev) => {
+                const next = new Set(prev);
+                if (on) next.add(id);
+                else next.delete(id);
+                return next;
+            });
+            const act = async (id, method, args) => {
+                mark(id, true);
+                setNotice('');
+                const result = await projects.facts.act(method, args);
+                mark(id, false);
+                if (!result.ok) setNotice(errorText(result.error));
+                return result;
+            };
+            const actions = {
+                move: (workspace, project) => act(workspace, 'move', { workspace, project: project ?? '' }),
+                async addCoordinator(project, workspace) {
+                    const result = await act(project.id, 'addCoordinator', { project: project.id, workspace: workspace ?? '' });
+                    if (result.ok && typeof result.value?.coordinator === 'string') projects.openSession(result.value.coordinator);
+                },
+                create: (ws) => setDialog({ kind: 'new', ws: ws ?? null }),
+                rename: (project) => setDialog({ kind: 'rename', project }),
+                remove: (project) => setDialog({ kind: 'delete', project }),
+            };
+            const page = { placed, listed: all, sessions, statuses, archived, busy, actions, projects };
+            const byProject = new Map(all.map((p) => [p.id, p]));
+            const ordered = rank.map((id) => byProject.get(id)).filter(Boolean);
             let content;
             if (listed === null) {
                 content = failed
@@ -3168,24 +3764,69 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         h('button', { type: 'button', className: 'dshp-t-retry', onClick: () => { void projects.facts.list(0); } },
                             h(ui.IconRefreshOutlineRegular, { size: 12 }), TEXT.retry))
                     : h('div', { className: 'dshp-pg-state', role: 'status' }, PAGE.loading);
-            } else if (order.length === 0) {
-                content = h('div', { className: 'dshp-pg-empty', 'data-projects-empty': '' },
-                    h('span', { className: 'dshp-pg-empty-glyph' }, h(ProjectsIcon, { size: 28 })),
-                    h('h2', null, PAGE.emptyTitle),
-                    h('p', null, PAGE.emptyText),
-                    projects.openDefaults ? h(ui.Button, { variant: 'outline', size: 'sm', className: 'dshp-pg-cta', onClick: () => projects.openDefaults() }, PAGE.emptyAction) : null);
             } else {
-                content = h('ul', { className: 'dshp-pg-list' },
-                    ...order.map((project) => h('li', { key: project.id },
-                        h(ProjectCard, { project, useSessions, useSessionStatus, projects, now, settingsOn }))));
+                content = h(React.Fragment, null,
+                    ordered.length === 0 ? h('div', { className: 'dshp-pg-empty', 'data-projects-empty': '' },
+                        h('span', { className: 'dshp-pg-empty-glyph' }, h(ProjectsIcon, { size: 28 })),
+                        h('h2', null, PAGE.emptyTitle),
+                        h('p', null, PAGE.emptyText),
+                        h(ui.Button, { variant: 'primary', size: 'sm', className: 'dshp-pg-cta', onClick: () => actions.create(null), 'data-projects-new': '' }, PAGE.newProject))
+                        : h('ul', { className: 'dshp-pg-list' },
+                            ...ordered.map((project) => {
+                                const workspaces = placed.of.get(project.id) ?? EMPTY;
+                                const shared = { project, workspaces, page, now, fresh: fresh === project.id };
+                                return h('li', { key: project.id }, coordinated(project)
+                                    ? h(ProjectCard, { ...shared, useSessions, projects, settingsOn })
+                                    : h(GroupCard, shared));
+                            })),
+                    placed.others.length > 0 ? h(OthersCard, { page, now }) : null);
+            }
+            let overlay = null;
+            if (dialog?.kind === 'delete') {
+                overlay = h(DeleteDialog, {
+                    project: dialog.project, count: (placed.of.get(dialog.project.id) ?? EMPTY).length, onClose: () => setDialog(null),
+                    onSubmit: async () => {
+                        const result = await projects.facts.act('remove', { project: dialog.project.id });
+                        if (!result.ok) return errorText(result.error);
+                        setDialog(null);
+                        return null;
+                    },
+                });
+            } else if (dialog) {
+                const naming = dialog.kind === 'new';
+                overlay = h(NameDialog, {
+                    title: naming ? PAGE.newProject : PAGE.renameTitle,
+                    description: naming ? (dialog.ws ? PAGE.newWith(dialog.ws.title) : PAGE.newText) : undefined,
+                    initial: naming ? '' : dialog.project.name || '',
+                    action: naming ? PAGE.create : PAGE.rename,
+                    busyLabel: naming ? PAGE.creating : PAGE.renaming,
+                    onClose: () => setDialog(null),
+                    onSubmit: async (name) => {
+                        const result = naming
+                            ? await projects.facts.act('create', { name, workspace: dialog.ws?.id ?? '' })
+                            : await projects.facts.act('rename', { project: dialog.project.id, name });
+                        if (!result.ok) return errorText(result.error);
+                        if (naming && typeof result.value?.project === 'string') setFresh(result.value.project);
+                        setDialog(null);
+                        return null;
+                    },
+                });
             }
             return h('div', { className: 'dshp-pg', 'data-projects-page': '' },
                 h('div', { className: 'dshp-pg-scroll' },
                     h('div', { className: 'dshp-pg-content' },
                         h('div', { className: 'dshp-pg-heading' },
                             h('h1', null, PAGE.title),
-                            Array.isArray(listed) && listed.length > 0 ? h('span', { className: 'dshp-pg-count' }, plural(listed.length, 'project')) : null),
-                        content)));
+                            all.length > 0 ? h('span', { className: 'dshp-pg-count' }, plural(all.length, 'project')) : null,
+                            all.length > 0 ? h(ui.Button, {
+                                variant: 'outline', size: 'sm', className: 'dshp-pg-new', icon: h(ui.IconPlusOutlineRegular, { size: 14 }),
+                                onClick: () => actions.create(null), 'data-projects-new': '',
+                            }, PAGE.newProject) : null),
+                        notice ? h('div', { className: 'dshp-pg-alert', role: 'alert', 'data-projects-page-error': '' },
+                            h('span', null, notice),
+                            h('button', { type: 'button', className: 'dshp-t-icon', 'aria-label': PAGE.dismiss, onClick: () => setNotice('') }, h(ui.IconCloseOutlineRegular, { size: 14 }))) : null,
+                        content)),
+                overlay);
         }
 
         // ── Project settings ───────────────────────────────────────────────

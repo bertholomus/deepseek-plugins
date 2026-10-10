@@ -33,9 +33,9 @@
  * @module dsh-plugin-projects/projects
  */
 import { appendFileSync, readFileSync, writeFileSync, statSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
-import { ProjectStore, expand, ensurePrivateDir } from './store.js';
+import { ProjectStore, expand, dataPath, dshHome, ensurePrivateDir } from './store.js';
 import { SETTING_KEYS, effectiveSettings, applyRoute, checkSelection, describeRoute, parseModelSpec, pluginDefaults } from './settings.js';
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage,
@@ -43,6 +43,7 @@ import {
 } from './prompts.js';
 import { META_MARK, MAX_THREADS } from './projection.js';
 import { changeRecord, changeTotals, withChange } from './changes.js';
+import { planFleetShellImport } from './fleet-shell.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
 const SECTION_ORDER = 9500;
@@ -241,7 +242,7 @@ export class ProjectManager {
         this.store = ProjectStore.open(config.storeFile);
         managers.set(this.store.file, this);
         this.disposed = false;
-        this.logFile = config.logFile ? expand(config.logFile) : '';
+        this.logFile = config.logFile ? dataPath(config.logFile) : '';
         if (this.logFile) {
             try { ensurePrivateDir(dirname(this.logFile)); } catch {}
         }
@@ -250,7 +251,11 @@ export class ProjectManager {
          * 'override': this Host lacks it; rewrite each project model request.
          */
         this.selectionMode = typeof ctx.sessionController?.agents?.selectForNextRequest === 'function' ? 'session' : 'override';
-        /** projectId → normalized project row. */
+        /**
+         * projectId → the project: a row in the profile, which always has a
+         * coordinator, or one made on the Projects page or imported, which
+         * gets one when the user adds it.
+         */
         this.projects = new Map();
         for (const row of config.projects ?? []) {
             const id = slugify(row.id || row.name);
@@ -259,8 +264,9 @@ export class ProjectManager {
                 ctx.logger?.warn?.('projects: two projects have the id "%s"; only the first runs. Give the other an id.', id);
                 continue;
             }
-            this.projects.set(id, { ...row, id, workspacePath: expand(row.workspacePath) });
+            this.projects.set(id, { ...row, id, source: 'profile', workspacePath: expand(row.workspacePath) });
         }
+        for (const id of Object.keys(this.store.projects)) this.addStored(id);
         /** Agent → disposer for its installed project scope. */
         this.installed = new Map();
         /** sessionId → {running, stopped?: {key}} for thread turn tracking. */
@@ -289,6 +295,81 @@ export class ProjectManager {
         const p = this.projects.get(projectId);
         if (!p) throw new ProjectError(`project "${projectId}" is not configured`);
         return p;
+    }
+
+    /**
+     * Add a project the store defines (made on the Projects page or
+     * imported) to the running set. A profile row with the same id wins.
+     * Its folder is its coordinator's workspace, else its first one.
+     */
+    addStored(projectId) {
+        const stored = this.store.projects[projectId];
+        if (typeof stored?.name !== 'string' || stored.name.trim() === '' || this.projects.has(projectId)) return;
+        const manager = this;
+        this.projects.set(projectId, {
+            id: projectId,
+            goal: '',
+            source: stored.source === 'import' ? 'import' : 'page',
+            get name() { return manager.store.projects[projectId]?.name ?? projectId; },
+            get workspacePath() { return manager.homeOf(projectId)?.path; },
+        });
+    }
+
+    /** Whether the project is a row in the profile (its name, folder and coordinator are set there). */
+    fromProfile(projectId) {
+        return this.projects.get(projectId)?.source === 'profile';
+    }
+
+    /** DSH's workspace with this id, or undefined. */
+    workspace(workspaceId) {
+        try {
+            return typeof workspaceId === 'string' && workspaceId !== '' ? this.ctx.workspaceRegistry?.get?.(workspaceId) : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /** DSH's workspaces in its own (sidebar) order. */
+    workspaceList() {
+        try {
+            const list = this.ctx.workspaceRegistry?.list?.();
+            return Array.isArray(list) ? list : [];
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * The workspaces in a project, in DSH's order: the ones it holds, with a
+     * profile project's own folder among them once DSH has it.
+     */
+    workspacesIn(projectId) {
+        const ids = new Set(this.store.workspacesOf(projectId));
+        const home = this.store.projects[projectId]?.home;
+        if (this.fromProfile(projectId) && typeof home === 'string') ids.add(home);
+        return this.workspaceList().filter((ws) => ids.has(ws.id));
+    }
+
+    /** The workspace a project's coordinator works in: its home, else its first workspace. */
+    homeOf(projectId) {
+        const home = this.workspace(this.store.projects[projectId]?.home);
+        if (home && (this.fromProfile(projectId) || this.store.workspaceOf[home.id] === projectId)) return home;
+        return this.workspacesIn(projectId)[0];
+    }
+
+    /**
+     * Note which DSH workspace a profile project's folder is, once DSH has
+     * one there: it counts among the project's workspaces, and no other
+     * project can hold it.
+     */
+    async noteHome(projectId) {
+        if (!this.fromProfile(projectId)) return;
+        let ws;
+        try { ws = await this.ctx.workspaceRegistry.resolveByPath(this.project(projectId).workspacePath); } catch { ws = undefined; }
+        if (!ws?.id) return;
+        const stored = this.store.project(projectId);
+        if (stored.home !== ws.id) this.store.putProject(projectId, { home: ws.id });
+        if (this.store.workspaceOf[ws.id] !== projectId) this.store.placeWorkspace(ws.id, projectId);
     }
 
     settings(projectId) {
@@ -374,11 +455,19 @@ export class ProjectManager {
      */
     async start() {
         for (const agent of this.ctx.agents.list?.() ?? []) this.maybeInstall(agent);
-        for (const id of this.projects.keys()) {
+        // Profile projects claim their folders before an import places any workspace.
+        for (const id of this.projects.keys()) await this.noteHome(id);
+        if (this.disposed) return;
+        await this.importFleetShell();
+        for (const id of [...this.projects.keys()]) {
             if (this.disposed) return;
+            // A project made on the Projects page or imported runs a coordinator only once the user adds one.
+            if (!this.fromProfile(id) && !this.store.projects[id]?.coordinatorSessionId) continue;
             try {
-                this.noteProjectRow(id);
-                await this.ensureCoordinator(id);
+                if (this.fromProfile(id)) this.noteProjectRow(id);
+                const sessionId = await this.ensureCoordinator(id);
+                if (!sessionId) continue;
+                await this.noteHome(id);
             } catch (error) {
                 this.log(`error coordinator ${id} ${String(error?.message ?? error).slice(0, 300)}`);
                 this.ctx.logger?.warn?.('projects: could not start coordinator for %s: %s', id, error?.message ?? error);
@@ -445,6 +534,16 @@ export class ProjectManager {
         }
     }
 
+    /** A session's title as DSH lists it, else as its log has it; undefined when neither says. */
+    async currentTitle(sessionId) {
+        try {
+            const { items } = await this.sc.list({}, AbortSignal.timeout(20000));
+            const title = (Array.isArray(items) ? items : []).find((item) => item?.sessionId === sessionId)?.projections?.values?.title;
+            if (typeof title === 'string') return title;
+        } catch {}
+        return this.sessionTitle(sessionId).catch(() => undefined);
+    }
+
     /** A session's title as its log has it (its newest title event), or undefined. */
     async sessionTitle(sessionId) {
         const { events } = await this.sc.inspect(sessionId, AbortSignal.timeout(20000));
@@ -452,6 +551,48 @@ export class ProjectManager {
             if (events[i]?.type === 'session/title' && typeof events[i].data?.title === 'string') return events[i].data.title;
         }
         return undefined;
+    }
+
+    /**
+     * Once, bring in the projects of the all-in-one mod's old sidebar
+     * (`<DSH home>/fleet-shell/state.json`): each old project becomes a
+     * project here, in the same order, without a coordinator, holding the
+     * same DSH workspaces. A name that is already a project here joins it.
+     * A workspace DSH no longer has, or one already in a project here, stays
+     * where it is. The old file is only read.
+     */
+    async importFleetShell() {
+        if (this.store.imports.fleetShell) return;
+        const file = join(dshHome(), 'fleet-shell', 'state.json');
+        let state;
+        try {
+            state = JSON.parse(readFileSync(file, 'utf8'));
+        } catch (error) {
+            if (error?.code !== 'ENOENT') this.log(`error import fleet-shell ${String(error?.message ?? error).slice(0, 200)}`);
+            return;
+        }
+        const plan = planFleetShellImport(state, {
+            names: new Map([...this.projects.values()].map((p) => [String(p.name).trim().toLowerCase(), p.id])),
+            known: (workspaceId) => Boolean(this.workspace(workspaceId)),
+            placed: (workspaceId) => Boolean(this.store.workspaceOf[workspaceId]),
+        });
+        let made = 0;
+        let placed = 0;
+        for (const group of plan.groups) {
+            let id = group.join;
+            if (!id) {
+                id = this.makeProject(group.name, 'import', { importedFrom: group.from });
+                made += 1;
+            }
+            for (const workspaceId of group.workspaces) {
+                this.store.workspaceOf[workspaceId] = id;
+                placed += 1;
+            }
+        }
+        const joined = plan.groups.length - made;
+        const skipped = plan.skipped.length;
+        this.store.putImport('fleetShell', { at: new Date().toISOString(), file, projects: made, joined, workspaces: placed, skipped });
+        this.log(`import fleet-shell projects=${made} joined=${joined} workspaces=${placed} skipped=${skipped}`);
     }
 
     /** Whether a session exists. Only "not found" means no; any other read error is thrown. */
@@ -466,9 +607,9 @@ export class ProjectManager {
         }
     }
 
-    /** Create one ordinary session in the project's workspace. */
-    async createSession(project) {
-        const ws = await this.ctx.workspaceRegistry.create(project.workspacePath);
+    /** Create one ordinary session in the project's workspace, or another folder of it. */
+    async createSession(project, folder = project.workspacePath) {
+        const ws = await this.ctx.workspaceRegistry.create(folder);
         const created = await this.sc.create({ workspaceId: ws.id, ...(project.agentPreset ? { agentPreset: project.agentPreset } : {}) });
         return created.sessionId;
     }
@@ -481,10 +622,10 @@ export class ProjectManager {
     }
 
     /** One coordinator check per project at a time, across managers. */
-    async ensureCoordinator(projectId) {
+    async ensureCoordinator(projectId, { create = this.fromProfile(projectId) } = {}) {
         const key = `${this.store.file}#${projectId}`;
         while (ensuring.has(key)) await ensuring.get(key).catch(() => {});
-        const run = this.ensureCoordinatorOnce(projectId);
+        const run = this.ensureCoordinatorOnce(projectId, create);
         ensuring.set(key, run);
         try {
             return await run;
@@ -493,7 +634,13 @@ export class ProjectManager {
         }
     }
 
-    async ensureCoordinatorOnce(projectId) {
+    /**
+     * @param {boolean} create - make a coordinator when there is none: always
+     *   for a profile project; for one made on the Projects page, only when the
+     *   user adds it. Without, a coordinator session that is gone (deleted in
+     *   DSH) leaves the project without one.
+     */
+    async ensureCoordinatorOnce(projectId, create) {
         const project = this.project(projectId);
         const stored = this.store.project(projectId);
         if (await this.exists(stored.coordinatorSessionId)) {
@@ -503,6 +650,16 @@ export class ProjectManager {
             this.log(`coordinator ${projectId} ${stored.coordinatorSessionId} resumed`);
             await this.welcome(projectId, stored.coordinatorSessionId, false);
             return stored.coordinatorSessionId;
+        }
+        if (!create) {
+            if (stored.coordinatorSessionId) {
+                this.store.putProject(projectId, { coordinatorSessionId: undefined, welcomedSession: undefined });
+                this.log(`coordinator ${projectId} gone`);
+            }
+            return null;
+        }
+        if (typeof project.workspacePath !== 'string' || project.workspacePath === '') {
+            throw new ProjectError(`"${project.name}" has no workspace for its coordinator to work in; move one into it first`);
         }
         // The plugin reloaded meanwhile; the new manager makes the coordinator.
         if (this.disposed) return null;
@@ -792,6 +949,7 @@ export class ProjectManager {
             name: project.name,
             goal: project.goal,
             workspacePath: project.workspacePath,
+            folders: this.workspacesIn(projectId).map((ws) => ws.path).filter((path) => path !== project.workspacePath),
             paused: this.paused(projectId),
             threads: this.store.project(projectId).threads,
             settings: this.settings(projectId),
@@ -1161,12 +1319,32 @@ export class ProjectManager {
         return { id, t };
     }
 
-    async startThread(projectId, { title, brief, model, effort }) {
+    /**
+     * One of the project's folders, named by its path, its workspace's title
+     * or its folder name; undefined (the project workspace) when none is named.
+     */
+    folderOf(projectId, folder) {
+        const wanted = typeof folder === 'string' ? folder.trim().replace(/[\\/]+$/, '') : '';
+        if (wanted === '') return undefined;
+        const spaces = this.workspacesIn(projectId);
+        const lower = wanted.toLowerCase();
+        const base = (path) => String(path).split(/[\\/]+/).filter(Boolean).pop() ?? '';
+        const ws = spaces.find((w) => w.path === wanted || w.path === expand(wanted))
+            ?? spaces.find((w) => String(w.title).toLowerCase() === lower || base(w.path).toLowerCase() === lower);
+        if (!ws) {
+            const names = spaces.map((w) => w.path).join(', ');
+            throw new ProjectError(`"${wanted.slice(0, 80)}" is not one of this project's folders${names ? ` (${names})` : ''}`);
+        }
+        return ws.path;
+    }
+
+    async startThread(projectId, { title, brief, model, effort, folder }) {
         const project = this.project(projectId);
         if (this.paused(projectId)) throw new ProjectError('the project is paused; new threads are blocked until it resumes');
         const cleanTitle = clipTitle(title);
         if (!cleanTitle) throw new ProjectError('title is required');
         if (!String(brief ?? '').trim()) throw new ProjectError('brief is required');
+        const where = this.folderOf(projectId, folder);
         const s = this.settings(projectId);
         // Not given, or "default": the project's thread default.
         const given = (value) => value !== undefined && value !== 'default';
@@ -1186,7 +1364,7 @@ export class ProjectManager {
         this.store.putProject(projectId, { threadStarts: [...starts, now] });
 
         const threadId = this.store.reserveThreadId(projectId);
-        const sessionId = await this.createSession(project);
+        const sessionId = await this.createSession(project, where);
         this.store.putThread(projectId, threadId, {
             sessionId, title: cleanTitle, model: check.model, effort: check.effort,
             resolved: false, createdAt: new Date().toISOString(), handbackTimes: [], seenTurn: null,
@@ -1373,6 +1551,117 @@ export class ProjectManager {
     // ── the Project settings dialog (remote.js) ────────────────────────────
 
     /** The project a window call names: a project id, or the id of one of its sessions. */
+    // ── projects as groups of workspaces (the Projects page) ─────────────────
+
+    /**
+     * Make a project in the store, without a coordinator, and add it to the
+     * running set.
+     * @returns its id: the name as a slug, made unique.
+     */
+    makeProject(name, source, extra = {}) {
+        const base = slugify(name);
+        let id = base;
+        for (let n = 2; this.projects.has(id) || this.store.projects[id] !== undefined; n += 1) id = `${base}-${n}`;
+        const orders = Object.values(this.store.projects).map((p) => (Number.isFinite(p?.order) ? p.order : -1));
+        this.store.putProject(id, { name, source, createdAt: new Date().toISOString(), order: Math.max(-1, ...orders) + 1, ...extra });
+        this.addStored(id);
+        this.log(`project-new ${id} ${source}`);
+        return id;
+    }
+
+    /** A project name as the user typed it: one line, at most 80 bytes like a DSH title. */
+    projectName(value) {
+        const name = clipTitle(typeof value === 'string' ? value : '');
+        if (name === '') throw new ProjectError('a project needs a name');
+        return name;
+    }
+
+    /**
+     * A new project from the Projects page, optionally holding a workspace.
+     * @returns its id.
+     */
+    createProject(name, workspaceId) {
+        const clean = this.projectName(name);
+        if (workspaceId !== undefined && workspaceId !== null) this.checkMovable(workspaceId);
+        const id = this.makeProject(clean, 'page');
+        if (workspaceId !== undefined && workspaceId !== null) this.moveWorkspace(workspaceId, id);
+        return id;
+    }
+
+    /** Refuse to move a workspace DSH doesn't have, or one a coordinator works in. */
+    checkMovable(workspaceId) {
+        const ws = this.workspace(workspaceId);
+        if (!ws) throw new ProjectError('DSH has no such workspace');
+        for (const id of this.projects.keys()) {
+            const coordinated = this.fromProfile(id) || Boolean(this.store.projects[id]?.coordinatorSessionId);
+            if (coordinated && this.homeOf(id)?.id === workspaceId) {
+                throw new ProjectError(`${ws.title || 'this workspace'} is where ◆ ${this.project(id).name}'s coordinator works, so it stays in that project`);
+            }
+        }
+        return ws;
+    }
+
+    /**
+     * Put a DSH workspace in a project, or (projectId null) in none. A
+     * workspace is in one project at most, so it leaves any other.
+     */
+    moveWorkspace(workspaceId, projectId) {
+        this.checkMovable(workspaceId);
+        if (projectId !== null) this.project(projectId);
+        if ((this.store.workspaceOf[workspaceId] ?? null) === projectId) return;
+        this.store.placeWorkspace(workspaceId, projectId);
+        this.log(`workspace ${workspaceId} ${projectId ?? 'none'}`);
+    }
+
+    /** Rename a project made on the Projects page or imported; its coordinator, if any, follows. */
+    async renameProject(projectId, name) {
+        this.project(projectId);
+        if (this.fromProfile(projectId)) throw new ProjectError('this project\'s name is set in your profile, so rename it there');
+        const clean = this.projectName(name);
+        const stored = this.store.project(projectId);
+        const was = stored.name;
+        if (clean === was) return;
+        this.store.putProject(projectId, { name: clean });
+        this.log(`project-rename ${projectId}`);
+        const sessionId = stored.coordinatorSessionId;
+        if (!sessionId) return;
+        // The coordinator's title is "◆ <name>"; one the user renamed stays theirs.
+        if (await this.currentTitle(sessionId) === dshTitle(`◆ ${was}`)) await this.sc.rename({ sessionId, title: `◆ ${clean}` }).catch(() => {});
+    }
+
+    /**
+     * Delete a project made on the Projects page or imported. Its workspaces
+     * and their sessions stay in DSH, in no project. One with a coordinator
+     * keeps it: its threads would lose their project.
+     */
+    deleteProject(projectId) {
+        const project = this.project(projectId);
+        if (this.fromProfile(projectId)) throw new ProjectError('this project is set in your profile, so remove it there');
+        if (this.store.projects[projectId]?.coordinatorSessionId) throw new ProjectError(`◆ ${project.name} has a coordinator, so it can't be deleted here`);
+        this.store.removeProject(projectId);
+        this.projects.delete(projectId);
+        this.log(`project-delete ${projectId}`);
+    }
+
+    /**
+     * Add a coordinator to a project made on the Projects page or imported.
+     * It works in the given workspace of the project, else its first.
+     * @returns the coordinator's session id.
+     */
+    async startCoordinator(projectId, workspaceId) {
+        const project = this.project(projectId);
+        const stored = this.store.project(projectId);
+        if (!this.fromProfile(projectId) && !(await this.exists(stored.coordinatorSessionId))) {
+            const home = workspaceId === undefined || workspaceId === null ? this.workspacesIn(projectId)[0] : this.workspace(workspaceId);
+            if (!home) throw new ProjectError(`${project.name} holds no workspace yet; move one into it first`);
+            if (this.store.workspaceOf[home.id] !== projectId) throw new ProjectError(`${home.title || 'that workspace'} is not in ${project.name}`);
+            this.store.putProject(projectId, { home: home.id });
+        }
+        const sessionId = await this.ensureCoordinator(projectId, { create: true });
+        if (!sessionId) throw new ProjectError('the coordinator could not start');
+        return sessionId;
+    }
+
     projectFor(target) {
         const value = typeof target === 'string' ? target.trim() : '';
         if (this.projects.has(value)) return value;
@@ -1413,7 +1702,8 @@ export class ProjectManager {
             project: {
                 id: projectId,
                 name: project.name,
-                workspace: project.workspacePath,
+                source: project.source,
+                workspace: project.workspacePath ?? null,
                 coordinator: stored.coordinatorSessionId ?? null,
                 live: this.liveSelection(stored.coordinatorSessionId) ?? null,
             },
@@ -1440,23 +1730,30 @@ export class ProjectManager {
      * many threads are open.
      */
     listProjects() {
-        return [...this.projects.keys()].map((projectId) => {
+        const listed = [...this.projects.keys()].map((projectId, index) => {
             const project = this.project(projectId);
             const stored = this.store.project(projectId);
             const settings = this.settings(projectId);
             const ids = rosterIds(stored.threads);
             const open = ids.filter((id) => stored.threads[id].resolved !== true).length;
+            const home = this.homeOf(projectId);
             return {
                 id: projectId,
                 name: project.name,
-                workspace: project.workspacePath,
+                source: project.source,
+                workspace: project.workspacePath ?? null,
+                home: home?.id ?? null,
+                workspaces: this.workspacesIn(projectId).map((ws) => ({ id: ws.id, path: ws.path, title: ws.title })),
                 coordinator: stored.coordinatorSessionId ?? null,
                 live: this.liveSelection(stored.coordinatorSessionId) ?? null,
                 paused: this.paused(projectId),
                 settings: Object.fromEntries(SETTING_KEYS.map((key) => [key, { value: settings[key].value ?? null, source: settings[key].source }])),
                 threads: { open, resolved: ids.length - open },
+                order: this.fromProfile(projectId) ? index : 10000 + (Number.isFinite(stored.order) ? stored.order : index),
             };
         });
+        // The profile's projects in its order, then the others in the order they were made or imported.
+        return listed.sort((a, b) => a.order - b.order).map(({ order, ...project }) => project);
     }
 
     /**
@@ -1485,7 +1782,7 @@ export class ProjectManager {
 
     memoryPath(projectId) {
         const project = this.project(projectId);
-        return project.memoryFile ? expand(project.memoryFile) : `${expand(this.config.memoryDir)}/${projectId}.md`;
+        return project.memoryFile ? dataPath(project.memoryFile) : `${dataPath(this.config.memoryDir)}/${projectId}.md`;
     }
 
     memory(projectId, action, text) {

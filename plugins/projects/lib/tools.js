@@ -100,9 +100,10 @@ export function projectTools(manager, who) {
                 brief: { type: 'string', required: true, description: 'Self-contained instructions: the user\'s ask in their words, needed facts from memory, and any default you picked' },
                 model: { type: 'string', description: 'Optional model for this thread only, as "provider:model" or a bare model id. Leave it out for the project\'s thread default.' },
                 effort: { type: 'string', description: 'Optional effort for this thread only (for DeepSeek: off, low, high, max). Leave it out for the project\'s thread default.' },
+                folder: { type: 'string', description: 'Optional: another of the project\'s folders (listed in your instructions) for this thread to work in. Leave it out for the project workspace.' },
             },
             async execute(args) {
-                const r = await manager.startThread(projectId, { ...args, model: given(args.model), effort: given(args.effort) });
+                const r = await manager.startThread(projectId, { ...args, model: given(args.model), effort: given(args.effort), folder: given(args.folder) });
                 const notes = r.notes?.length ? ` Note: ${r.notes.join('; ')}.` : '';
                 return result(
                     `Started ${r.threadId} "${r.title}" (${r.route}). It will hand back when done.${notes} Link it in replies as [${r.title}](${threadLink(r.threadId)}).`,

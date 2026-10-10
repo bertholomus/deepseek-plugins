@@ -6,8 +6,9 @@
  * so the Project settings dialog in lib/client.js reads and changes a
  * project's models, effort and pause the way the coordinator's
  * project_settings tool does, through the same manager methods, the
- * plugin's page lists every project with its models, and a failed or
- * stopped thread runs again from its card (Retry, Resume).
+ * plugin's page lists every project with its models, a failed or stopped
+ * thread runs again from its card (Retry, Resume), and the Projects page
+ * makes projects, moves workspaces between them and adds coordinators.
  *
  * The gateway finds a Remote service by its `typertRemote` binding and the
  * method markers on its prototype; DSH's own services get both from
@@ -65,6 +66,69 @@ export class ProjectsRemote {
     }
 
     /**
+     * A new project from the Projects page, without a coordinator.
+     * @param name - its name.
+     * @param workspace - optional: a DSH workspace id it holds from the start.
+     * @returns {project: the new id, projects: every project as list returns them}.
+     */
+    async create(name, workspace) {
+        try {
+            const id = this.manager.createProject(name, typeof workspace === 'string' && workspace !== '' ? workspace : undefined);
+            return { project: id, projects: this.manager.listProjects() };
+        } catch (error) {
+            throw failure(error);
+        }
+    }
+
+    /**
+     * Put a DSH workspace in a project, or (project null) in none.
+     * @returns every project as list returns them.
+     */
+    async move(workspace, project) {
+        try {
+            if (typeof workspace !== 'string' || workspace === '') throw new ProjectError('workspace is required');
+            this.manager.moveWorkspace(workspace, typeof project === 'string' && project !== '' ? this.manager.projectFor(project) : null);
+            return { projects: this.manager.listProjects() };
+        } catch (error) {
+            throw failure(error);
+        }
+    }
+
+    /** Rename a project made on the Projects page or imported. @returns every project. */
+    async rename(project, name) {
+        try {
+            await this.manager.renameProject(this.manager.projectFor(project), name);
+            return { projects: this.manager.listProjects() };
+        } catch (error) {
+            throw failure(error);
+        }
+    }
+
+    /** Delete a project made on the Projects page or imported, without a coordinator. @returns every project. */
+    async remove(project) {
+        try {
+            this.manager.deleteProject(this.manager.projectFor(project));
+            return { projects: this.manager.listProjects() };
+        } catch (error) {
+            throw failure(error);
+        }
+    }
+
+    /**
+     * Add a coordinator to a project made on the Projects page or imported.
+     * @param workspace - optional: which of its workspaces it works in.
+     * @returns {coordinator: its session id, projects: every project}.
+     */
+    async addCoordinator(project, workspace) {
+        try {
+            const sessionId = await this.manager.startCoordinator(this.manager.projectFor(project), typeof workspace === 'string' && workspace !== '' ? workspace : undefined);
+            return { coordinator: sessionId, projects: this.manager.listProjects() };
+        } catch (error) {
+            throw failure(error);
+        }
+    }
+
+    /**
      * Run a thread again after its last turn failed (Retry) or stopped (Resume).
      * @param target - as for describe.
      * @param thread - the thread's id (t3).
@@ -106,4 +170,4 @@ function markRemote(Class, names) {
         });
     }
 }
-markRemote(ProjectsRemote, ['describe', 'list', 'update', 'continueThread']);
+markRemote(ProjectsRemote, ['describe', 'list', 'update', 'continueThread', 'create', 'move', 'rename', 'remove', 'addCoordinator']);

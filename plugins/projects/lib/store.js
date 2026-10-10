@@ -9,7 +9,12 @@
  *       lastHandback?: { status, summary, at }, lastDirect?: { at, reply }, handbackTimes: [ms],
  *       busy?: true while a turn runs, seenTurn?: key of the last turn reviewed,
  *       lastEnding?: { text, kind, at }: that turn, when it failed or stopped without a handback (prompts.js describeEnding),
- *       changes?: [{ turn, seq, added, deleted, total, files: [{ path, added, deleted, binary?, oversized? }], turns? }] (changes.js) } } } } }
+ *       changes?: [{ turn, seq, added, deleted, total, files: [{ path, added, deleted, binary?, oversized? }], turns? }] (changes.js) } },
+ *     home?: id of the DSH workspace its coordinator works in,
+ *     A project made on the Projects page or imported also keeps its definition here (a profile row has its own):
+ *     name, source: 'page' | 'import', createdAt, order: its place among them, importedFrom?: the old project's id } },
+ *   workspaceOf: { [DSH workspace id]: projectId }: the project each workspace is in, one at most,
+ *   imports: { fleetShell?: { at, file, projects, workspaces, skipped } }: one-time imports already made }
  *
  * Settings here are the project's own: set in its Project settings dialog,
  * by picking a model in its coordinator's DSH model picker, or by the
@@ -19,12 +24,28 @@
  * @module dsh-plugin-projects/store
  */
 import { readFileSync, renameSync, writeFileSync, mkdirSync, chmodSync, statSync, existsSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
 /** Resolve a '~'-prefixed path. */
 export function expand(p) {
     return p.startsWith('~/') || p === '~' ? `${homedir()}${p.slice(1)}` : p;
+}
+
+/** DSH's own data folder: `$DSH_HOME`, else ~/.dsh, as DSH resolves it. */
+export function dshHome() {
+    const env = typeof process.env.DSH_HOME === 'string' ? process.env.DSH_HOME.trim() : '';
+    return env === '' ? join(homedir(), '.dsh') : resolve(expand(env));
+}
+
+/**
+ * Resolve one of the plugin's data paths. One under ~/.dsh lives in DSH's
+ * data folder, so a DSH run with its own DSH_HOME (a test copy) keeps its
+ * own projects instead of sharing the main one's.
+ */
+export function dataPath(p) {
+    if (p === '~/.dsh' || p.startsWith('~/.dsh/')) return `${dshHome()}${p.slice('~/.dsh'.length)}`;
+    return expand(p);
 }
 
 /**
@@ -67,7 +88,7 @@ export class ProjectStore {
      * @param {string} file - store path.
      */
     static open(file) {
-        const path = expand(file);
+        const path = dataPath(file);
         let store = opened.get(path);
         if (!store) {
             store = new ProjectStore(path);
@@ -78,18 +99,30 @@ export class ProjectStore {
 
     /** @param {string} file - store path. */
     constructor(file) {
-        this.file = expand(file);
+        this.file = dataPath(file);
         /** @type {Record<string, object>} */
         this.projects = {};
+        /** @type {Record<string, string>} workspace id → project id */
+        this.workspaceOf = {};
+        /** @type {Record<string, object>} */
+        this.imports = {};
         this.load();
     }
 
     load() {
+        const plain = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
         try {
             const parsed = JSON.parse(readFileSync(this.file, 'utf8'));
-            if (parsed?.version === 1 && parsed.projects && typeof parsed.projects === 'object') this.projects = parsed.projects;
+            if (parsed?.version === 1 && parsed.projects && typeof parsed.projects === 'object') {
+                this.projects = parsed.projects;
+                this.workspaceOf = Object.fromEntries(Object.entries(plain(parsed.workspaceOf)).filter(([, id]) => typeof id === 'string'));
+                this.imports = plain(parsed.imports);
+            }
         } catch {
-            this.projects = {}; // missing or corrupt store: start clean, never crash
+            // Missing or corrupt store: start clean, never crash.
+            this.projects = {};
+            this.workspaceOf = {};
+            this.imports = {};
         }
     }
 
@@ -98,7 +131,8 @@ export class ProjectStore {
         try {
             ensurePrivateDir(dirname(this.file));
             const tmp = `${this.file}.tmp`;
-            writeFileSync(tmp, `${JSON.stringify({ version: 1, projects: this.projects }, null, 2)}\n`, { mode: 0o600 });
+            const state = { version: 1, projects: this.projects, workspaceOf: this.workspaceOf, imports: this.imports };
+            writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
             chmodSync(tmp, 0o600);
             renameSync(tmp, this.file);
         } catch {
@@ -150,6 +184,38 @@ export class ProjectStore {
         threads[threadId] = { ...threads[threadId], ...fields };
         this.save();
         return threads[threadId];
+    }
+
+    /** The workspaces in a project, in the order they joined it. */
+    workspacesOf(projectId) {
+        return Object.keys(this.workspaceOf).filter((id) => this.workspaceOf[id] === projectId);
+    }
+
+    /**
+     * Put a workspace in a project, or (projectId null) in none. A workspace
+     * is in one project at most, so this takes it out of any other.
+     */
+    placeWorkspace(workspaceId, projectId) {
+        if (projectId === null) delete this.workspaceOf[workspaceId];
+        else {
+            // Re-adding moves it to the end, the order it joined in.
+            delete this.workspaceOf[workspaceId];
+            this.workspaceOf[workspaceId] = projectId;
+        }
+        this.save();
+    }
+
+    /** Forget a project: its state, and its workspaces go back to none. */
+    removeProject(projectId) {
+        delete this.projects[projectId];
+        for (const id of this.workspacesOf(projectId)) delete this.workspaceOf[id];
+        this.save();
+    }
+
+    /** Record a one-time import as made. */
+    putImport(key, record) {
+        this.imports[key] = record;
+        this.save();
     }
 
     /** Find which project and role a session belongs to. */

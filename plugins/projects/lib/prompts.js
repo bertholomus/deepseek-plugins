@@ -56,7 +56,7 @@ export function rosterLines(threads, liveStatus) {
 
 /**
  * Coordinator policy section.
- * @param {object} p - {name, goal, workspacePath, paused, threads, settings, memory, liveStatus}
+ * @param {object} p - {name, goal, workspacePath, folders?: the project's other workspaces, paused, threads, settings, memory, liveStatus}
  */
 export function coordinatorPolicy(p) {
     const s = p.settings;
@@ -66,6 +66,7 @@ export function coordinatorPolicy(p) {
         `You are the coordinator of the DSH project "${p.name}".`,
         p.goal ? `Goal: ${p.goal}` : 'Goal: (none set)',
         `Workspace: ${p.workspacePath}`,
+        p.folders?.length ? `The project's other folders: ${p.folders.join(', ')}. A thread works in the workspace above unless project_thread_start names one of these as its folder.` : null,
         '',
         '## How this project works',
         '- You talk with the user in this session. Threads are separate DSH sessions that you start for focused work. They show in the sidebar, and the user can open any thread and talk to it directly.',
@@ -85,7 +86,7 @@ export function coordinatorPolicy(p) {
         `- Coordinator: ${describeRoute(s.coordinatorModel.value, s.coordinatorEffort.value)}`,
         `- New threads: ${describeRoute(s.threadModel.value, s.threadEffort.value)}`,
         '- Change them with project_settings when the user asks. A thread can also get its own model or effort at start or with project_thread_update.',
-        '- The user can also set the defaults for every project in DSH, under Plugins → dsh-plugin-projects → Default models. Saving there replaces your change of that setting.',
+        '- The user can also set the defaults for every project in DSH, under Plugins → Projects → Default models. Saving there replaces your change of that setting.',
         p.paused ? '- The project is PAUSED: do not start threads. Handbacks are held until it resumes. Tell the user if they ask for new work.' : null,
         '',
         '## Threads',

@@ -11,8 +11,10 @@
  * settings, memory, pause, a restart, the browser half DSH serves for the
  * plugin's page, a saved default that applies without a restart, the Project
  * settings endpoints the window calls, a pick in DSH's own model picker,
- * a thread's code changes as DSH records them, and failed and stopped
- * threads as the window shows them, with Retry and Resume.
+ * a thread's code changes as DSH records them, failed and stopped threads
+ * as the window shows them, with Retry and Resume, and projects as groups
+ * of workspaces: the one-time import of the old sidebar's projects and the
+ * Projects page's endpoints.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/projects/test/e2e/run.mjs
  *
@@ -21,7 +23,7 @@
  * (then DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js).
  */
 import { spawn, execFileSync } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -673,6 +675,26 @@ try {
     const lastSeq = lc?.last.seq;
     const signIns = () => [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].length;
     const signInsBefore = signIns();
+    // (24, checked below) The all-in-one mod's old sidebar projects, which the plugin reads once at the next start.
+    const dirA = join(root, 'old-a');
+    const dirB = join(root, 'old-b');
+    mkdirSync(dirA);
+    mkdirSync(dirB);
+    const wsA = (await bridge('POST', '/sessions', { workspacePath: dirA })).workspace.id;
+    const wsB = (await bridge('POST', '/sessions', { workspacePath: dirB })).workspace.id;
+    const homeWs = (await bridge('GET', '/workspaces')).find((w) => w.path === realpathSync(ws))?.id;
+    const oldFile = join(home, 'fleet-shell', 'state.json');
+    mkdirSync(dirname(oldFile), { recursive: true });
+    writeFileSync(oldFile, `${JSON.stringify({
+        prefs: { projectsSidebar: true },
+        projects: [
+            { id: 'p1', name: ' Old  Alpha ', instructions: '', files: [], defaults: {} },
+            { id: 'p2', name: 'e2e project', instructions: '', files: [], defaults: {} },
+            { id: 'p3', name: '   ' },
+        ],
+        projectOf: { [wsA]: 'p1', [wsB]: 'p2', [homeWs]: 'p1', 'gone-workspace': 'p1', 'loose-workspace': '_none' },
+    }, null, 2)}\n`);
+    const oldText = readText(oldFile);
     await stopDsh(child);
     child = startDsh(dsh);
     await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge after the second restart', 90000);
@@ -732,6 +754,49 @@ try {
     check('Resume continues a stopped thread', answer2.ok && since(mark, 't4')[0]?.fresh.includes('The user asked you to continue. Your last turn was stopped before it finished.')
         && (await viewOf(threadSession('t4')))?.ending === undefined, `${refusedWhy(answer2)} ${since(mark, 't4')[0]?.fresh.slice(0, 300)}`);
     check('the plugin logs each retry', readText(logFile).includes(`thread-continue ${PROJECT_ID}/t3 after=error`) && readText(logFile).includes(`thread-continue ${PROJECT_ID}/t4 after=aborted`));
+
+    // 24. Projects as groups of workspaces. The old sidebar's projects were
+    // read once at the restart above: each name becomes a project without a
+    // coordinator (one joins the profile project of the same name), each
+    // workspace goes where it was unless it is already in a project, and the
+    // old file is only read. Then the Projects page's endpoints.
+    check('the old sidebar\'s projects are imported once', readText(logFile).includes('import fleet-shell projects=1 joined=1 workspaces=2 skipped=1')
+        && readText(logFile).split('\n').filter((l) => l.includes(' import fleet-shell ')).length === 1, readText(logFile).split('\n').filter((l) => l.includes('import')).join('\n'));
+    check('the old file is only read', readText(oldFile) === oldText);
+    let groups = await webApi(webAgain, 'dsh-plugin-projects/list', {});
+    const named = (name) => groups.value?.projects?.find((p) => p.name === name);
+    const idsIn = (name) => named(name)?.workspaces?.map((w) => w.id) ?? [];
+    check('an old project becomes one without a coordinator, holding its workspace', groups.ok && named('Old Alpha')?.source === 'import' && named('Old Alpha').coordinator === null
+        && idsIn('Old Alpha').join() === wsA, JSON.stringify(named('Old Alpha')));
+    check('one with a profile project\'s name joins it, and the coordinator\'s workspace stays put', idsIn(PROJECT).includes(wsB) && idsIn(PROJECT).includes(homeWs) && named(PROJECT).home === homeWs,
+        JSON.stringify(named(PROJECT)?.workspaces));
+    groups = await webApi(webAgain, 'dsh-plugin-projects/create', { name: 'Made Here', workspace: wsA });
+    const madeId = groups.value?.project;
+    check('create makes a project with the workspace moved into it', groups.ok && idsIn('Made Here').join() === wsA && idsIn('Old Alpha').length === 0, JSON.stringify(groups).slice(0, 400));
+    let refused = await webApi(webAgain, 'dsh-plugin-projects/move', { workspace: homeWs, project: madeId });
+    check('the workspace a coordinator works in stays in its project', !refused.ok && refused.error?.code === 'projects/refused' && /coordinator works/.test(refused.error.message), JSON.stringify(refused));
+    refused = await webApi(webAgain, 'dsh-plugin-projects/rename', { project: PROJECT_ID, name: 'Nope' });
+    check('a profile project is renamed in the profile, not here', !refused.ok && /set in your profile/.test(refused.error?.message ?? ''), JSON.stringify(refused));
+    groups = await webApi(webAgain, 'dsh-plugin-projects/rename', { project: madeId, name: 'Made Here, Renamed' });
+    check('rename', groups.ok && named('Made Here, Renamed')?.id === madeId, JSON.stringify(groups).slice(0, 300));
+    groups = await webApi(webAgain, 'dsh-plugin-projects/remove', { project: madeId });
+    check('delete leaves its workspaces in no project', groups.ok && !named('Made Here, Renamed') && !groups.value.projects.some((p) => p.workspaces.some((w) => w.id === wsA)), JSON.stringify(groups).slice(0, 300));
+    groups = await webApi(webAgain, 'dsh-plugin-projects/move', { workspace: wsA, project: named('Old Alpha')?.id });
+    check('move', groups.ok && idsIn('Old Alpha').join() === wsA, JSON.stringify(groups).slice(0, 300));
+    mark = model.requests.length;
+    const added = await webApi(webAgain, 'dsh-plugin-projects/addCoordinator', { project: named('Old Alpha')?.id, workspace: wsA });
+    const oldCoord = added.value?.coordinator;
+    await waitFor(() => since(mark).some((r) => r.system.includes('You are the coordinator of the DSH project "Old Alpha"') && r.fresh.includes('[Project created')), 'the new coordinator\'s welcome');
+    const oldCoordView = oldCoord ? await bridge('GET', `/sessions/${oldCoord}`) : null;
+    check('Add coordinator starts a welcomed ◆ coordinator in the chosen workspace', added.ok && oldCoordView?.cwd === realpathSync(dirA) && oldCoordView?.title === '◆ Old Alpha'
+        && added.value.projects.find((p) => p.coordinator === oldCoord)?.home === wsA, JSON.stringify(oldCoordView).slice(0, 300));
+    mark = model.requests.length;
+    await say(coord, call('project_thread_start', { title: 'Mu', brief: 'Just answer.', folder: 'old-b' }));
+    await coordinatorSaw(mark, 'SAW-IDLE', 'the Mu idle note');
+    const muId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Mu')?.[0];
+    const muView = muId ? await bridge('GET', `/sessions/${threadSession(muId)}`) : null;
+    check('the coordinator is told its project\'s other folders', since(mark, 'coordinator')[0]?.system.includes(`The project's other folders: ${realpathSync(dirB)}.`), since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => /folder/i.test(l)).join(' | '));
+    check('a thread can work in another of its project\'s folders', muView?.cwd === realpathSync(dirB), JSON.stringify(muView).slice(0, 300));
     check('no errors in the projects log', !/ error /.test(readText(logFile)), readText(logFile).split('\n').filter((l) => / error /.test(l)).join('\n'));
 } catch (error) {
     failed += 1;
