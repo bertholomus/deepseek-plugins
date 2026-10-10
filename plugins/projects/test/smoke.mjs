@@ -1976,8 +1976,8 @@ test('browser half: one store of what the plugin says about projects, shared by 
     assert.equal(typeof fresh.watch(''), 'function');
     // What a pause means where it shows.
     assert.equal(pausedText('coordinator', 0), 'New threads and handbacks wait until you resume.');
-    assert.equal(pausedText('coordinator', 1), 'New threads and handbacks wait until you resume. 1 message held.');
-    assert.equal(pausedText('coordinator', 2, 2), 'New threads and handbacks wait until you resume. 2 handbacks held.');
+    assert.equal(pausedText('coordinator', 1), '1 message held until you resume. New threads wait too.');
+    assert.equal(pausedText('coordinator', 2, 2), '2 handbacks held until you resume. New threads wait too.');
     assert.equal(pausedText('thread', 3), 'This thread\'s handbacks wait until the project resumes.');
     assert.equal(SUGGESTIONS.length, 3);
     // A thread whose handback the pause holds says so, instead of "No handback yet"; running and resolved rows keep theirs.
