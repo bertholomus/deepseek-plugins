@@ -23,7 +23,7 @@ Threads show up the way Claude Code shows sub-sessions:
 
 - **Thread cards.** Under each coordinator reply, a card for every thread that turn started, messaged, steered, stopped, resolved or heard back from, with the thread's live state (running, waiting on you, done, resolved). Click the thread's name or **Open** to make it the main chat, or the split icon to open it beside the coordinator in the right sidebar, where you can read and talk to it.
 - **Threads menu.** At the top of every project session, **N threads** (with an orange dot when a thread waits on you, or a spinner while one runs) opens the project's threads grouped as *Waiting on you*, *Running*, *Idle* and *Resolved*, each with its last handback. Hover or click it; the arrow keys move through it. **Open the Threads panel** keeps the list in the right sidebar, where a click opens a thread's chat as a tab.
-- **Thread names are links.** The coordinator writes thread names as `[title](.dsh-thread/t3)`, so a name in its reply opens that thread beside the chat. DSH draws them with a branch icon.
+- **Thread names are links.** The coordinator writes thread names as `[title](.dsh-thread/t3)`, so a name in its reply opens that thread: DSH opens it beside the chat, or in the main view on DSH Desktop. A card's Open beside always opens it beside. DSH draws them with a branch icon.
 - **Back to the coordinator.** In a thread, **◆ Coordinator** at the top goes back to its coordinator, and the thread's own handback shows as a card that opens the coordinator.
 - **Session list.** Thread rows get a small branch mark, and hovering one shows its project and last handback.
 
