@@ -1,13 +1,18 @@
 # Handoff
 
-Updated: 2026-10-09 17:31 PT by B (bertholomus)
-Branch: claude/projects-plugin-boaurl (draft PR #1)
+Updated: 2026-10-09 17:42 PT by B (bertholomus)
+Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 
 ## Doing now
-- Mac session running the thread → handback test through `dshb` (Next steps 2).
+- Nested threads (Next steps 1), which the user asked for at 17:34 PT with a screenshot of Claude Code's thread cards: a project session starts a thread *under* itself, the thread shows nested under its parent, and the parent's chat has a polished, clickable thread card (title, live status, "View thread"), like Claude Code. Pointers the Mac session found in DSH 0.2.0-rc.2's code, not yet verified here: tool-call cards through the `tool.call.toolview` slot keyed by tool name (DSH's Cordis plugin draws `cordis_run` this way); `ctx.uiWorkspace.openSession(id)` and `ctx.sidebarRight.openResource(…, preferNewPane)` to open a session or open it beside (DSH's subagent plugin uses both for child sessions); a `conversation.session.header.lineage` slot for a "Parent > Child" breadcrumb; sidebar row slots `sidebar.session.row.leading` and `row.hover`.
 - The cloud thread pushes fixes. The Mac can't push to GitHub (see blockers), so it sends fixes back to the cloud thread instead.
 
 ## Done since last handoff
+- PR #1 marked ready for review (17:32 PT). Its body has the live results.
+- Mac live test passed (17:31 PT, DSH Desktop 0.2.0-rc.2): asked through `dshb`, the coordinator started a "Smoke test" thread (t1), which replied "ok" and handed back 26 s after the start. The coordinator reported the handback and resolved the thread. "◆ DSH Plugins" and the thread both show in the sidebar.
+- Found in that test, fixed (27d3669): in its welcome turn the coordinator ran `git pull` in its workspace. On the Mac the project's `workspacePath` is the folder DSH loads the plugin from (`~/.dsh-plugins/deepseek-plugins`), so the pull moved the code the next restart loads (2a114b8 → fe19700). The welcome message and the coordinator's policy line now say to introduce itself from what it already knows and run no tools. Loads on the Mac at the next restart. README (e0ad538): keep `workspacePath` apart from the plugin's install folder.
+- Seen in that test: the Default models page was saved at 5:28 PM PT, probably by the user in the DSH window: coordinatorModel and threadModel GLM-5.3-Flash, threadEffort max. So t1 ran at Max, not the default High. Left as is.
+- After 27d3669: e2e 59/59 on DSH 0.2.0-rc.2 and 0.2.1-alpha.2 (as root), smoke 41/41.
 - Mac, after the user's "fix all of it" (17:23 PT): the MiniMe bridge, Discord bot and dsh-site run again (17:27 PT). Changes, all backed up:
   - `~/.dsh-plugins/{discord,minime-bridge,dsh-site}/package.json` (backups `package.json.bak-20261010T002358Z`): `@deepseek-ai/schemastery ^3.18.1` moved to `peerDependencies`; discord also got `"*"` peers for dsh-brand, dsh-llm and dsh-tools, which it imported without listing.
   - Removed two links into the profile's tree that the Oct 8 prune broke: minime-bridge's whole `node_modules` (a symlink to `~/.dsh/profiles/desktop/node_modules`) and dsh-site's `node_modules/@deepseek-ai/schemastery`.
@@ -57,17 +62,17 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 - Tests: `npm test` 28/28, `node plugins/projects/test/smoke.mjs` 36/36, e2e 49/49 as root and as a normal user (adds queued turns and a SIGKILL mid-turn).
 
 ## Next steps (in order)
-1. Done (see Done). Avoid `dsh --dump-config` on the live profile: `loadProfile` removes link projections and rewrites `cordis.yml`; the doctor doesn't.
-2. Mac live test, rest of it, through `dshb`: tell the coordinator to start a "Smoke test" thread that replies ok and hands back; check `select dsh-plugins/coordinator` and `select dsh-plugins/t1` lines, the handback and the coordinator's reply, and that the coordinator now shows in the sidebar. Later, load d8236c7 with a DSH restart (idle check first). Original list for reference: coordinator appears, thread start, handback, idle note, settings, the DSH model picker shows the project effort, and Plugins → dsh-plugin-projects → Default models saves. `~/.dsh/projects/projects.log` should have `select ...` lines, and after a save a `defaults …` line followed by a new `select <project>/coordinator …` line.
-3. Fix what it shows, then mark PR #1 ready for review.
+1. Nested threads with clickable cards (the user's 17:34 PT ask, see Doing now): design, build, test on a real DSH, push. Then the Mac loads it with an idle-checked restart and runs a live test. Known from 0.2.0-rc.2: DSH session headers have `parentSession` (forks set it); `sessionController.create` has no parent option, the fork path uses the internal `agents.create({ meta: { parentSession } })`; `hasApiSessionSubagentOwner` only claims a child whose agent the parent owns, and the archived gate only applies to `origin: 'subagent'`.
+2. Ask the user: load the plugin on the Mac from its own clone, so the project's work in `~/.dsh-plugins/deepseek-plugins` doesn't change what DSH loads. Changing `workspacePath` instead wouldn't move the existing coordinator (see Gotchas). Needs their typed OK and an idle-checked restart.
+3. Load 27d3669 or later on the Mac at the next restart (together with 1 or 2).
 4. Later: a Discord thread as a project thread or coordinator (the user's existing flow), and auto-continue after usage limits.
-5. Idea, not built: DSH session headers have `parentSession` (forks set it) and the web client nests child sessions under their parent. Threads could nest under their coordinator in the sidebar. Checked on 0.2.0-rc.2: `sessionController.create` has no parent option, so it would need the internal `agents.create({ meta: { parentSession } })` the fork path uses. `hasApiSessionSubagentOwner` only claims a child whose agent the parent owns, and the archived gate only applies to `origin: 'subagent'`, so routing would likely be unaffected. Not worth the internal API risk without the user asking.
 
 ## Open questions / blockers
 - The Mac has no GitHub push credentials for bertholomus. gh auth is broken, HTTPS asks for a username and the SSH key is refused. Fixes made on the Mac go through the cloud session.
 - The Mac Remote Control session parks after sitting idle; only the user's next message in the thread wakes it.
 - Probably not a bug after all (corrected 2026-10-09 17:33 PT): the discord plugin's `/model` and `/effort` use a plain `agent/request` override (plugins/discord/lib/router.js `installRouteOverride`). The session controller installs its overriding selection listener only on sessions it creates or resumes itself (`composeAgent` → `installSelection`), or when its `selectionFor` runs (DSH's model picker via `selectForNextRequest`, or an image prompt). The discord plugin creates and resumes its sessions with `ctx.agents` directly, so its override normally stands; after someone uses DSH's model picker on a Discord session, the picker's choice wins. Not tested on a real host. Projects needed the fix because it creates sessions through the session controller.
 - session-bridge `POST /sessions/:id/model` still saves the global DSH default (it calls `selectModel`). Offered to fix; no answer yet.
+- Not confirmed: that the user made the 5:28 PM Default models save (threads at Max).
 
 ## Gotchas (things that broke, decisions made and why)
 - DSH loads a plugin package only if the profile lists it in `dsh.profile.bundles`. A patch row alone does nothing. `dsh plugin --profile desktop add <path>` adds the link dependency, the `node_modules` symlink and the bundles entry. Use the `dsh` that DSH Desktop installs, because the npm `dsh` refuses the desktop profile. A running DSH doesn't load new bundles, so restart it.
@@ -103,3 +108,5 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 - An import failure shows only on the host's stderr: `dsh: warning: 1 entry did not activate` / `<id> (<package>): failed to import`. DSH Desktop's host stderr isn't in a file the Mac session found. `dsh-plugin-doctor.mjs` reproduces the import read-only with the exact error.
 - Session logs are `~/.dsh/sessions/<workspace>/<session>/session.v4.jsonl.zstd`: zstd frames appended one after another, each holding JSONL events (`{type, seq, time, data}`). Node's `zlib.zstdDecompressSync` (and its stream) decode only the first frame, so split frames first (`dsh-idle.mjs` walks the frame headers). DSH writes the log only at checkpoints (before each model request and tool dispatch, and at turn end), so a log's mtime says nothing about a long model call or tool still running; read the turn events instead.
 - Tool calls and results are in the session log: `tool/call {callId, name, arguments}` and `tool/result {message: {toolCallId, content}}`. The idle review finds a handback by its result text, which starts with "Handback ".
+- A project's coordinator and threads run tools in `workspacePath`. If that is the folder DSH loads a plugin from, their pulls and edits change what DSH loads at the next restart. Changing `workspacePath` later doesn't move an existing coordinator: DSH resumes a session in the cwd from its header, so only new threads would move.
+- Avoid `dsh --dump-config` on a live profile: `loadProfile` removes link projections and rewrites `cordis.yml`. The doctor doesn't.
