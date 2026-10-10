@@ -1706,26 +1706,58 @@ test('browser half: each session list row says its place in a project, and the C
     assert.equal(rowPlace(state, 'missing'), '');
     assert.equal(rowPlace(undefined, 'c'), '');
 
-    // The rules name the coordinator in every selector, lay out and move only the wrappers of its own
-    // workspace's list (coordinator, then its threads, then the rest), and change rows only through the plugin's own marks.
-    const css = nestingRules('ses_01.ab-c:9');
+    // Each coordinator's threads in the list, by its id: the same places, gathered once per list state.
+    const { threadRows } = client.internals;
+    const rows = threadRows(state);
+    assert.deepEqual([...rows.keys()].sort(), ['c', 'o']);
+    assert.deepEqual([...rows.get('c')].sort(), ['t1', 't2', 't3']);
+    assert.deepEqual([...rows.get('o')], ['ot']);
+    assert.equal(threadRows(state), rows);
+    assert.equal(threadRows(undefined).size, 0);
+
+    // The rules name the coordinator's and its threads' rows by DSH's row keys, lay out and move only the
+    // wrappers of the coordinator's own section (coordinator, then its threads, then the rest from where the
+    // first of them was), and look no deeper than a wrapper's child or a section's grandchildren, with no
+    // sibling selector: one row's change restyles one section, cheaply (1.8 s to 0.1 s at 300 chats).
+    const css = nestingRules('ses_01.ab-c:9', ['ses_t1', 'ses_t2'], 4);
     const rules = css.split('\n');
-    const list = '[role="tree"] :has(>*>[data-row-key] [data-projects-row="coordinator"][data-projects-of="ses_01.ab-c:9"])';
-    const C = ':has(>[data-row-key] [data-projects-row="coordinator"][data-projects-of="ses_01.ab-c:9"])';
-    const T = ':has(>[data-row-key] [data-projects-row="thread"][data-projects-of="ses_01.ab-c:9"])';
+    const list = '[role="tree"] div:has(>*>[data-row-key="session:ses_01.ab-c:9"])';
+    const C = ':has(>[data-row-key="session:ses_01.ab-c:9"])';
+    const T = ':has(>[data-row-key="session:ses_t1"],>[data-row-key="session:ses_t2"])';
     assert.equal(rules.length, 8);
     for (const rule of rules) assert.ok(rule.startsWith(list), rule);
     assert.ok(rules.includes(`${list}{display:flex;flex-direction:column}`));
-    assert.ok(rules.includes(`${list}>${C}{order:1}`));
-    assert.ok(rules.includes(`${list}>${T}{order:2}`));
-    assert.ok(rules.includes(`${list}>:is(${C},${T})~:not(${C},${T}){order:3}`));
+    assert.ok(rules.includes(`${list}>:nth-child(n+5){order:3}`));
+    // The coordinator's and threads' own orders come after the rule for what follows them, so they win.
+    assert.ok(rules.indexOf(`${list}>${C}{order:1}`) > rules.indexOf(`${list}>:nth-child(n+5){order:3}`));
+    assert.ok(rules.indexOf(`${list}>${T}{order:2}`) > rules.indexOf(`${list}>:nth-child(n+5){order:3}`));
     assert.ok(rules.includes(`${list}>${T}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,30px) + var(--dsh-workspace-indent,0px))}`));
-    // A :has() inside another makes a browser drop the whole rule.
-    for (const rule of rules) assert.doesNotMatch(rule, /:has\([^)]*:has\(/, rule);
-    // An id that could break out of the selector gets no rules.
-    assert.equal(nestingRules('a"] *{display:none} [x="'), '');
-    assert.equal(nestingRules(''), '');
-    assert.equal(nestingRules(undefined), '');
+    for (const rule of rules) {
+        // A :has() inside another makes a browser drop the whole rule; a descendant step inside one, or a
+        // sibling selector after one, is what made the old rules slow.
+        assert.doesNotMatch(rule, /:has\([^)]*:has\(/, rule);
+        for (const inside of rule.match(/:has\([^)]*\)/g) ?? []) assert.doesNotMatch(inside, /\]\s+\[|\*\s+\[/, rule);
+        assert.doesNotMatch(rule, /~/, rule);
+    }
+    // No threads, or no place yet, nothing to move; an id that could break out of the selector gets no rules, a thread's is left out.
+    assert.equal(nestingRules('c', [], 2), '');
+    assert.equal(nestingRules('c', ['t1'], 0), '');
+    assert.equal(nestingRules('c', ['t1']), '');
+    assert.equal(nestingRules('a"] *{display:none} [x="', ['t1'], 2), '');
+    assert.equal(nestingRules('', ['t1'], 2), '');
+    assert.equal(nestingRules(undefined, ['t1'], 2), '');
+    const kept = nestingRules('c', ['t1', 'x"] *{display:none} [y="'], 2);
+    assert.match(kept, /:has\(>\[data-row-key="session:t1"\]\)/);
+    assert.doesNotMatch(kept, /x"\]/);
+
+    // Where the group starts: the first wrapper (from 1) holding the coordinator or one of its threads.
+    const { firstPlace } = client.internals;
+    const wrapper = (key) => ({ children: [{ getAttribute: (name) => (name === 'data-row-key' ? key : null) }] });
+    const section = { children: [wrapper('workspace:w'), wrapper('session:x'), wrapper('session:t2'), wrapper('session:c'), { children: [] }, wrapper('overflow:w')] };
+    assert.equal(firstPlace(section, new Set(['session:c', 'session:t2'])), 3);
+    assert.equal(firstPlace(section, new Set(['session:c'])), 4);
+    assert.equal(firstPlace(section, new Set(['session:gone'])), 0);
+    assert.equal(firstPlace(null, new Set(['session:c'])), 0);
 });
 
 test('browser half: a thread opens beside its coordinator, and in full view where the window is too narrow or when asked', async () => {

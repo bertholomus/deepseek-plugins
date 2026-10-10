@@ -3514,53 +3514,115 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return of === undefined ? '' : `thread:${of}`;
         }
 
+        /** Each coordinator's thread sessions in the list, by its session id, once per session list state. */
+        const threadRowsCache = new WeakMap();
+        function threadRows(state) {
+            if (!isObject(state)) return new Map();
+            let rows = threadRowsCache.get(state);
+            if (rows === undefined) {
+                rows = new Map();
+                for (const id of Object.keys(state.byId ?? {})) {
+                    const place = rowPlace(state, id);
+                    if (!place.startsWith('thread:')) continue;
+                    const of = place.slice('thread:'.length);
+                    if (rows.has(of)) rows.get(of).push(id);
+                    else rows.set(of, [id]);
+                }
+                threadRowsCache.set(state, rows);
+            }
+            return rows;
+        }
+
         /**
          * The CSS that nests a coordinator's threads under it in DSH's session
          * list, whatever order DSH lists them in. Each row of the list sits in
-         * a wrapper of its own, the wrappers of one workspace are siblings,
-         * and RowPlace marks each row from inside it. The coordinator's
-         * workspace lays its wrappers out as a column and moves them there:
-         * the coordinator, then its threads in DSH's order, together where the
-         * first of them was; the rows DSH listed after that one follow. DSH's
-         * order, data and wrappers stay as they are. A thread in another
-         * workspace keeps its branch mark.
+         * a wrapper of its own, and the wrappers of one workspace are siblings
+         * in its section. The coordinator's section lays its wrappers out as a
+         * column and moves them there: the coordinator, then its threads in
+         * DSH's order, together where the first of them was; the rows DSH
+         * listed after that one follow. DSH's order, data and wrappers stay as
+         * they are. A thread in another workspace keeps its branch mark.
+         *
+         * Every selector names rows by DSH's own row keys and looks only at a
+         * wrapper's child or a section's grandchildren, and where the group
+         * starts is a position (RowPlace counts it), not a sibling selector:
+         * a change to one row restyles its own section, and cheaply.
          * @param of - the coordinator's session id.
+         * @param threads - its threads' session ids.
+         * @param first - the position (from 1) of the first of them among the section's wrappers.
          */
-        function nestingRules(of) {
-            if (typeof of !== 'string' || !/^[\w.:-]+$/.test(of)) return '';
-            const mark = (role) => `[data-projects-row="${role}"][data-projects-of="${of}"]`;
-            const C = `:has(>[data-row-key] ${mark('coordinator')})`;
-            const T = `:has(>[data-row-key] ${mark('thread')})`;
-            // The workspace's list: the wrappers' parent.
-            const list = `[role="tree"] :has(>*>[data-row-key] ${mark('coordinator')})`;
+        function nestingRules(of, threads, first) {
+            const safe = (id) => typeof id === 'string' && /^[\w.:-]+$/.test(id);
+            const ids = Array.isArray(threads) ? threads.filter(safe) : EMPTY;
+            if (!safe(of) || ids.length === 0 || !Number.isInteger(first) || first < 1) return '';
+            const row = (id) => `[data-row-key="session:${id}"]`;
+            // The coordinator's section (its workspace), its wrapper, and its threads' wrappers.
+            const list = `[role="tree"] div:has(>*>${row(of)})`;
+            const C = `:has(>${row(of)})`;
+            const T = `:has(${ids.map((id) => `>${row(id)}`).join(',')})`;
             return [
                 `${list}{display:flex;flex-direction:column}`,
-                `${list}>${C}{order:1}`,
-                `${list}>${T}{order:2}`,
-                `${list}>:is(${C},${T})~:not(${C},${T}){order:3}`,
                 // DSH's "Show more" button is a row of its own, as wide as its text.
                 `${list}>[data-row-key]{align-self:flex-start}`,
+                // After the first of them, the rest of the section; then the coordinator and its threads (later rules win).
+                `${list}>:nth-child(n+${first + 1}){order:3}`,
+                `${list}>${C}{order:1}`,
+                `${list}>${T}{order:2}`,
                 `${list}>${T}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,30px) + var(--dsh-workspace-indent,0px))}`,
                 `${list}>${T} .dshp-t-corner{display:inline-flex}`,
                 `${list}>${T} .dshp-t-branch{display:none}`,
             ].join('\n');
         }
 
+        /** The position (from 1) of the first wrapper in a section that holds one of these rows, 0 for none. */
+        function firstPlace(section, keys) {
+            const wrappers = section?.children ?? EMPTY;
+            for (let i = 0; i < wrappers.length; i += 1) {
+                for (const child of wrappers[i].children ?? EMPTY) {
+                    if (keys.has(child.getAttribute?.('data-row-key'))) return i + 1;
+                }
+            }
+            return 0;
+        }
+
         /**
          * A row's place in its project, from inside the row: a hidden mark in
          * the row's actions seat, which DSH mounts on every row whether it is
-         * idle or busy, for nestingRules to read; and on a coordinator's row,
-         * those rules, which come and go with the row. Nothing of DSH's own
-         * is changed.
+         * idle or busy (for checks; no CSS reads it); and on a coordinator's
+         * row with threads, nestingRules, which come and go with the row. The
+         * rules follow where the group starts as DSH moves rows (a watch on the
+         * coordinator's section), written into the style before the next
+         * frame. Nothing of DSH's own is changed.
          */
         function RowPlace({ sessionId, useSessions }) {
             const place = useSessions((state) => rowPlace(state, sessionId));
+            const coordinator = place === `coordinator:${sessionId}`;
+            const threads = useSessions((state) => (coordinator ? (threadRows(state).get(sessionId) ?? EMPTY).slice().sort().join(' ') : ''));
+            const style = React.useRef(null);
+            React.useLayoutEffect(() => {
+                const sheet = style.current;
+                if (!sheet || threads === '') return undefined;
+                const ids = threads.split(' ');
+                const keys = new Set([sessionId, ...ids].map((id) => `session:${id}`));
+                // The row's wrapper, and the section that holds its workspace's wrappers.
+                const section = sheet.closest('[data-row-key]')?.parentElement?.parentElement ?? null;
+                let shown = -1;
+                const write = () => {
+                    const first = firstPlace(section, keys);
+                    if (first === shown) return;
+                    shown = first;
+                    sheet.textContent = nestingRules(sessionId, ids, first);
+                };
+                write();
+                if (section === null || typeof MutationObserver === 'undefined') return undefined;
+                const observer = new MutationObserver(write);
+                observer.observe(section, { childList: true });
+                return () => observer.disconnect();
+            }, [sessionId, threads]);
             if (place === '') return null;
             const at = place.indexOf(':');
-            const role = place.slice(0, at);
-            const of = place.slice(at + 1);
-            return h('span', { hidden: true, 'data-projects-row': role, 'data-projects-of': of },
-                role === 'coordinator' ? h('style', null, nestingRules(of)) : null);
+            return h('span', { hidden: true, 'data-projects-row': place.slice(0, at), 'data-projects-of': place.slice(at + 1) },
+                coordinator && threads !== '' ? h('style', { ref: style, 'data-projects-nest': '' }) : null);
         }
 
         /**
@@ -5694,7 +5756,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the views are built on.
         module.exports.internals = {
-            valueIn, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, nestingRules,
+            valueIn, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, nestingRules, threadRows, firstPlace,
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
