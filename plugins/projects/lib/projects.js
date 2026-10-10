@@ -1805,6 +1805,8 @@ export class ProjectManager {
                 name: project.name,
                 source: project.source,
                 workspace: project.workspacePath ?? null,
+                // The window's first asks stay out of the rest of the user's home folder.
+                homeFolder: isHome(project.workspacePath),
                 coordinator: stored.coordinatorSessionId ?? null,
                 live: this.liveSelection(stored.coordinatorSessionId) ?? null,
             },

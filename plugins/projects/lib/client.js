@@ -1406,6 +1406,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             'Plan the work and start a thread for each part',
             'Start a thread that reviews the code for bugs',
         ];
+        /** The same for a project in the user's home folder, where "this folder" and "the code" would be all of it. */
+        const HOME_SUGGESTIONS = [
+            'Plan the work and start a thread for each part',
+            'Start a thread that writes a small test script in a new folder',
+        ];
+        /** The first asks for a project as `describe` answered; none until it has. */
+        const suggestionsFor = (described) => (isObject(described) ? (described.project?.homeFolder === true ? HOME_SUGGESTIONS : SUGGESTIONS) : null);
         const GROUPS = [
             { id: 'waiting', label: 'Waiting on you' },
             { id: 'running', label: 'Running' },
@@ -3032,6 +3039,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          */
         function Suggestions({ sessionId, projects }) {
             const [copied, setCopied] = React.useState(false);
+            const asks = suggestionsFor(useProjectInfo(projects.facts, sessionId, true, false));
+            if (asks === null) return null;
             const use = (text) => {
                 if (projects.draft(sessionId, text)) return;
                 // No message box to fill (DSH changed it): copy the ask instead.
@@ -3040,7 +3049,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return h('div', { className: 'dshp-t-suggest', 'data-projects-suggestions': '' },
                 h('div', { className: 'dshp-t-suggest-label', id: `dshp-suggest-${sessionId}` }, TEXT.tryAsking),
                 h('div', { className: 'dshp-t-suggest-list', role: 'group', 'aria-labelledby': `dshp-suggest-${sessionId}` },
-                    ...SUGGESTIONS.map((text) => h('button', {
+                    ...asks.map((text) => h('button', {
                         key: text, type: 'button', className: 'dshp-t-suggest-item', 'data-projects-suggestion': '', onClick: () => use(text),
                     }, h(ui.IconSparkleRegular, { size: 14 }), h('span', null, text)))),
                 copied ? h('div', { className: 'dshp-t-suggest-note', role: 'status' }, TEXT.suggestCopied) : null);
@@ -5191,7 +5200,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.internals = {
             valueIn, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, nestingRules,
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
-            selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS,
+            selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
             rowState, endingOf, endingIn, endingReason, endingLine, openSessions, markState, hoverLine, continueError, GROUPS,
             roomFor, besidePref, sidebarGroups, sidebarRules, placeWorkspaces, chatsIn, pulseOf, pulseText, listText, OTHERS, clockOf, againText, ThreadCard, EndingBar,

@@ -836,7 +836,7 @@ test('window: the Project settings endpoints read and change a project the way i
     };
 
     const read = await remote.describe(coord.id);
-    assert.deepEqual(plain(read.project), { id: 'dsh-plugins', name: 'DSH Plugins', source: 'profile', workspace: '/work/dsh', coordinator: coord.id, live: null });
+    assert.deepEqual(plain(read.project), { id: 'dsh-plugins', name: 'DSH Plugins', source: 'profile', workspace: '/work/dsh', homeFolder: false, coordinator: coord.id, live: null });
     assert.deepEqual(plain(read.settings.coordinatorEffort), { value: 'max', source: 'project config', inherited: { value: 'max', source: 'project config' } });
     assert.deepEqual(plain(read.settings.threadEffort), { value: 'high', source: 'plugin default', inherited: { value: 'high', source: 'plugin default' } });
     assert.deepEqual(plain(read.paused), { value: false, source: 'project config', inherited: false, held: 0, handbacks: [] });
@@ -2269,7 +2269,7 @@ test('scope: the user\'s word for a guarded tool, or the goal, asks for it; a ho
     const { host } = setup({
         guardedTools: { 'lane-catalog': ['lanes', 'model lanes'], obsidian: ['notes app'] },
         projects: [{ name: 'DSH Plugins', goal: 'Keep the obsidian inbox tidy', workspacePath: homedir() }],
-    });
+    }, undefined, { gateway: true });
     await tick();
     const coord = coordinatorOf(host);
     assert.match(coord.ctx.section(), /\nWorkspace: [^\n]+ \(the user's home folder: put new files in a new subfolder, and never move or delete anything you did not create\)\n/);
@@ -2280,6 +2280,9 @@ test('scope: the user\'s word for a guarded tool, or the goal, asks for it; a ho
     assert.match(await coord.ctx.call('project_thread_start', { ask: 'Write a poem.', title: 'Poem', brief: 'A poem about swimming lanes.' }), /^Started t3/);
     const thread = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Lanes');
     assert.match(thread.ctx.section(), /\nYou work in the user's home folder: put new files in a new subfolder, and never move or delete anything you did not create\.\n/);
+    // The window hears it too, for its first asks.
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    assert.equal((await remote.describe(coord.id)).project.homeFolder, true);
     assert.equal(guardedIn('mcp__lane-catalog__lanes_status', guardList(['lane-catalog'])).join(), 'lane-catalog');
     assert.deepEqual(guardList({ a: ['x', ' ', 'y'], ' ': ['z'] }), [['a', ['x', 'y']]]);
     assert.deepEqual(guardedIn('My Lanes and the Notes App', guardList({ 'lane-catalog': ['lane'], obsidian: ['notes app'] }), { aliases: true }), ['lane-catalog', 'obsidian']);
@@ -2601,7 +2604,7 @@ test('empty optional arguments count as not given; thread ids are trimmed', asyn
 
 test('browser half: one store of what the plugin says about projects, shared by the views and read while they watch', async () => {
     const { client } = loadClient();
-    const { projectFacts, pausedText, withHeld, SUGGESTIONS } = client.internals;
+    const { projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor } = client.internals;
     const calls = [];
     let paused = true;
     const project = () => ({
@@ -2654,6 +2657,11 @@ test('browser half: one store of what the plugin says about projects, shared by 
     assert.equal(pausedText('coordinator', 2, 2), '2 handbacks held until you resume. New threads wait too.');
     assert.equal(pausedText('thread', 3), 'This thread\'s handbacks wait until the project resumes.');
     assert.equal(SUGGESTIONS.length, 3);
+    // A project in the user's home folder gets first asks that don't send anyone through all of it; none until describe answers.
+    assert.equal(suggestionsFor(null), null);
+    assert.equal(suggestionsFor(project()), SUGGESTIONS);
+    const home = suggestionsFor({ project: { id: 'p1', homeFolder: true } });
+    assert.ok(home.length >= 2 && home.every((text) => !/look around|this folder|the code/i.test(text)), home.join(' | '));
     // A thread whose handback the pause holds says so, instead of "No handback yet"; running and resolved rows keep theirs.
     const rows = [{ id: 't1', group: 'idle', line: 'No handback yet' }, { id: 't2', group: 'running', line: 'Working…' }, { id: 't3', group: 'idle', line: 'No handback yet' }];
     assert.equal(withHeld(rows, []), rows);
