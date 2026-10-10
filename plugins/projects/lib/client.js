@@ -84,6 +84,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // The plugin's page: every project and what it runs
             '.dshp-page{display:flex;flex-direction:column}',
             '.dshp-projects{display:flex;flex-direction:column;gap:2px;margin-top:12px;padding:16px 0 4px;border-top:.5px solid var(--dsw-alias-border-l2)}',
+            '.dshp-options{display:flex;flex-direction:column;margin-top:12px;padding:16px 0 4px;border-top:.5px solid var(--dsw-alias-border-l2)}',
+            '.dshp-option{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:8px 0}',
+            '.dshp-option-text{min-width:0}',
+            '.dshp-option-title{font-size:14px;line-height:20px;color:var(--dsw-alias-label-primary)}',
+            '.dshp-option-hint{margin-top:4px;max-width:560px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-option>span{flex:none;display:flex}',
             '.dshp-projects .dshp-hint{color:var(--dsw-alias-label-secondary)}',
             '.dshp-pt{display:flex;flex-direction:column;margin-top:10px;border:.5px solid var(--dsw-alias-settings-card-stroke,var(--dsw-alias-border-l4));border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill,var(--dsw-alias-bg-layer-2));container-type:inline-size}',
             '.dshp-pt-row{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) minmax(0,1fr) 84px;align-items:center;gap:6px 16px;box-sizing:border-box;min-height:60px;padding:10px 14px}',
@@ -252,13 +258,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // Threads: a thread whose last turn failed or stopped, on its newest card
             '.dshp-t-card[data-card-tone=error] .dshp-t-card-icon{color:var(--dsw-alias-state-error-primary)}',
             '.dshp-t-card-why{grid-column:2;grid-row:3;margin-left:10px;display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}',
-            '.dshp-t-row-acts{display:inline-flex;align-items:center;gap:2px}',
+            '.dshp-t-row-acts{display:inline-flex;align-items:center;justify-content:flex-end;gap:2px}',
             '.dshp-t-icon:disabled{cursor:default}',
             // A narrow chat gives the name the counts' room: they join the verb line, and drop their file count first.
             '@container (width<=560px){.dshp-t-card>.dshp-t-changes{grid-row:1;height:16px;margin-left:6px;padding:0 3px}.dshp-t-card>.dshp-t-changes .dshp-t-changes-icon{display:none}.dshp-t-card-title,.dshp-t-card-why{grid-column:2/4}}',
             // Narrower still, the state and buttons move to a row of their own under the name, which keeps the card's width.
             '@container (width<=460px){.dshp-t-card .dshp-t-files{display:none}.dshp-t-card-icon{align-self:start}.dshp-t-card-side{grid-column:2/4;grid-row:4;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0 0 10px}.dshp-t-card-side>.dshp-t-card-state,.dshp-t-card-side>.dshp-t-card-actions{margin-left:0}.dshp-t-card-side>.dshp-t-card-actions:only-child{margin-left:auto}}',
-            '@container (width<=300px){.dshp-t-go-label{display:none}}',
+            '@container (460px<width<=560px){.dshp-t-full-label{display:none}}',
+            '@container (width<=300px){.dshp-t-go-label,.dshp-t-full-label{display:none}}',
             // Threads: a thread's code changes, in DSH's colors for added and deleted lines
             '.dshp-t-changes{flex:none;display:inline-flex;align-items:center;gap:6px;box-sizing:border-box;height:26px;padding:0 7px;border:0;border-radius:var(--dsw-radius-md);background:none;font:inherit;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);white-space:nowrap}',
             'button.dshp-t-changes{cursor:pointer}',
@@ -296,6 +303,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-dock-glyph{flex:none;display:inline-flex;color:var(--dsw-alias-label-tertiary)}',
             '.dshp-dock-label{flex:none;font-size:13px;font-weight:500;line-height:24px;color:var(--dsw-alias-label-primary)}',
             '.dshp-dock-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary-dimmed,var(--dsw-alias-label-secondary))}',
+            // A failed thread's reason may run long: two lines, then the bar's tooltip.
+            '.dshp-dock-wrap .dshp-dock-text{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal}',
+            '.dshp-dock-glyph[data-state=stopped]{color:var(--dsw-alias-label-secondary)}',
+            '.dshp-dock-time{flex:none;font-size:12px;line-height:20px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
             // In a narrow chat the text takes its own line under the label, so the held count and what it means stay whole.
             '@container dshp-dock (max-width:600px){.dshp-dock-bar{flex-wrap:wrap;row-gap:0;padding-bottom:7px}.dshp-dock-label{flex:1 1 auto}.dshp-dock-text{order:1;box-sizing:border-box;flex:1 1 100%;padding-inline:24px 7px;white-space:normal}}',
             // Threads: `[title](.dsh-thread/t3)` in a reply (DSH draws it as a file link)
@@ -360,43 +371,71 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-ps-state{display:flex;flex-direction:column;align-items:center;gap:10px;padding:36px 12px;text-align:center;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
             `.dshp-ps-state.dshp-ps-error{color:${ERROR_TEXT}}`,
             // The Projects page (the Projects entry in the sidebar): DSH's page layout, as on Automation tasks,
-            // with a card per project and its threads by state.
+            // with one row per project in a list; a row opens to its threads, workspaces and chats.
             '.dshp-pg{display:flex;width:100%;min-width:0;height:100%;min-height:0;overflow:hidden;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);font-size:14px;line-height:1.6}',
             '.dshp-pg-scroll{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;container-type:inline-size;--dsh-scrollbar-width:9px;--dsh-scrollbar-thumb-border:2px}',
             '.dshp-pg-content{max-width:960px;margin:0 auto;padding:0 clamp(24px,4vw,48px) 48px}',
-            '.dshp-pg-heading{display:flex;align-items:baseline;gap:12px;margin-bottom:20px;padding-top:28px}',
+            '.dshp-pg-heading{display:flex;align-items:baseline;gap:12px;margin-bottom:16px;padding-top:28px}',
             '[data-platform=darwin] .dshp-pg-heading{padding-top:calc(28px + var(--dsh-frame-top-clearance,0px))}',
             '.dshp-pg-heading h1{margin:0;font-size:20px;font-weight:500;line-height:28px}',
             '.dshp-pg-count{font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pg-list{display:flex;flex-direction:column;gap:16px;margin:0;padding:0;list-style:none}',
-            '.dshp-pg-card{border:.5px solid var(--dsw-alias-border-l3);border-radius:16px;background:var(--dsw-alias-bg-base)}',
-            '.dshp-pg-head{display:flex;align-items:center;gap:12px;min-height:32px;padding:14px 14px 0 18px}',
-            '.dshp-pg-title{display:flex;align-items:center;gap:10px;flex:1;min-width:0;margin:0;font-size:16px;font-weight:500;line-height:24px}',
-            '.dshp-pg-name{display:inline-flex;align-items:center;gap:8px;min-width:0;max-width:100%;padding:0;border:0;border-radius:4px;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer}',
+            '.dshp-pg-heading .dshp-pg-new{margin-left:auto;align-self:center}',
+            `.dshp-pg-alert{display:flex;align-items:center;gap:10px;margin:-4px 0 12px;padding:6px 6px 6px 14px;border-radius:12px;background:var(--dsw-alias-interactive-bg-hover-danger,var(--dsw-alias-interactive-bg-hover));font-size:13px;line-height:20px;color:${ERROR_TEXT}}`,
+            '.dshp-pg-alert>span{flex:1;min-width:0}',
+            '.dshp-pg-alert .dshp-t-icon{margin:0;color:inherit}',
+            '.dshp-pg-note{display:flex;align-items:center;gap:8px;margin:-4px 0 12px;padding:5px 5px 5px 12px;border-radius:12px;background:var(--dsw-alias-interactive-bg-hover);font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-note>svg{flex:none}',
+            '.dshp-pg-note>span{flex:1;min-width:0}',
+            '.dshp-pg-note .dshp-t-icon{margin:0}',
+            // The list: a row per project, a hairline between them, Other workspaces last.
+            '.dshp-pg-list{display:flex;flex-direction:column;margin:0;padding:6px;list-style:none;border:.5px solid var(--dsw-alias-border-l3);border-radius:16px;background:var(--dsw-alias-bg-base)}',
+            '.dshp-pg-item+.dshp-pg-item::before{content:"";display:block;margin:2px 10px;border-top:.5px solid var(--dsw-alias-border-l3)}',
+            '.dshp-pg-row{display:grid;grid-template-columns:24px 16px minmax(0,1fr) auto auto;align-items:center;column-gap:8px;box-sizing:border-box;min-height:56px;padding:7px 8px 7px 6px;border-radius:12px;cursor:pointer}',
+            '.dshp-pg-row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+            '.dshp-pg-chev{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:var(--dsw-radius-sm);background:none;color:var(--dsw-alias-label-secondary);cursor:pointer}',
+            '.dshp-pg-chev:hover{color:var(--dsw-alias-label-primary)}',
+            `.dshp-pg-chev:focus-visible{outline:none;box-shadow:0 0 0 2px ${RING}}`,
+            '.dshp-pg-chev svg{transition:transform .15s var(--ds-ease-in-out,ease)}',
+            '.dshp-pg-chev[aria-expanded=true] svg{transform:rotate(90deg)}',
+            '.dshp-pg-glyph{display:inline-flex;align-items:center;justify-content:center;width:16px;font-size:13px;line-height:1}',
+            '.dshp-pg-hollow{color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-row-text{display:flex;flex-direction:column;min-width:0}',
+            '.dshp-pg-title{display:flex;align-items:center;gap:8px;min-width:0;margin:0;font-size:15px;font-weight:500;line-height:22px}',
+            '.dshp-pg-name{display:inline-flex;align-items:center;min-width:0;max-width:100%;padding:0;border:0;border-radius:4px;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer}',
             '.dshp-pg-name:disabled{cursor:default}',
             '.dshp-pg-name:not(:disabled):hover .dshp-pg-name-text{text-decoration:underline;text-underline-offset:3px}',
             `.dshp-pg-name:focus-visible{outline:none;box-shadow:0 0 0 2px ${RING}}`,
-            '.dshp-pg-diamond{flex:none;font-size:13px}',
             '.dshp-pg-name-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshp-pg-badge{flex:none;display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px;border-radius:11px;background:var(--dsw-alias-interactive-bg-hover);font-size:12px;font-weight:400;line-height:18px;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pg-actions{flex:none;display:flex;align-items:center;gap:6px}',
-            '.dshp-pg-meta{display:flex;flex-wrap:wrap;align-items:center;min-width:0;padding:2px 18px 0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pg-meta>*+*::before{content:"·";padding:0 6px}',
-            '.dshp-pg-folder{display:inline-flex;align-items:center;gap:4px;min-width:0}',
-            '.dshp-pg-folder>svg{flex:none}',
-            '.dshp-pg-models{display:flex;flex-wrap:wrap;gap:2px 16px;padding:2px 18px 0;font-size:13px;line-height:20px}',
-            '.dshp-pg-model{display:inline-flex;align-items:baseline;gap:6px;min-width:0;padding:0;border:0;border-radius:4px;background:none;font:inherit;color:var(--dsw-alias-label-primary);text-align:left}',
-            '.dshp-pg-model>span:first-child{color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-row:hover .dshp-pg-badge{background:var(--dsw-alias-bg-base)}',
+            '.dshp-pg-line{display:flex;align-items:center;gap:6px;min-width:0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-line>svg{flex:none}',
+            '.dshp-pg-line-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshp-pg-pulses{display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap;font-variant-numeric:tabular-nums}',
+            '.dshp-pg-pulses>*+*::before{content:"·";margin-right:6px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-pulse{display:inline-flex;align-items:center;gap:6px}',
+            '.dshp-pg-pulse[data-state=warning]{color:var(--dsw-alias-label-primary)}',
+            // As wide as a coordinated project's two buttons, so the times line up down the list.
+            '.dshp-pg-actions{display:inline-flex;align-items:center;justify-content:flex-end;gap:2px;min-width:54px}',
+            '.dshp-pg-proj[data-fresh]>.dshp-pg-row{animation:dshp-pg-fresh 2.4s ease-out}',
+            `@keyframes dshp-pg-fresh{0%,45%{box-shadow:0 0 0 2px ${RING}}100%{box-shadow:0 0 0 2px transparent}}`,
+            `@media (prefers-reduced-motion:reduce){.dshp-pg-proj[data-fresh]>.dshp-pg-row{animation:none;box-shadow:0 0 0 2px ${RING}}.dshp-pg-chev svg{transition:none}}`,
+            // An open row: under the name, what it runs on, its threads, its workspaces.
+            '.dshp-pg-body{padding:0 6px 8px 34px}',
+            '.dshp-pg-models{display:flex;flex-wrap:wrap;gap:2px 6px;padding:0 0 4px}',
+            '.dshp-pg-model{display:inline-flex;align-items:center;gap:6px;min-width:0;height:28px;padding:0 8px;border:0;border-radius:var(--dsw-radius-md);background:none;font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary);text-align:left}',
+            '.dshp-pg-model-value{color:var(--dsw-alias-label-primary)}',
+            '.dshp-pg-model>svg{flex:none;color:var(--dsw-alias-label-tertiary)}',
             'button.dshp-pg-model{cursor:pointer}',
-            'button.dshp-pg-model:hover>span:last-child{text-decoration:underline;text-underline-offset:3px}',
-            `button.dshp-pg-model:focus-visible{outline:none;box-shadow:0 0 0 2px ${RING}}`,
-            '.dshp-pg-body{padding:10px 8px 8px}',
-            '.dshp-pg-body .dshp-t-paused{margin:0 4px 6px}',
+            'button.dshp-pg-model:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+            `button.dshp-pg-model:focus-visible{outline:none;box-shadow:inset 0 0 0 2px ${RING}}`,
+            '.dshp-pg-body .dshp-t-paused{margin:0 0 6px}',
             '.dshp-pg-body .dshp-t-row{grid-template-columns:16px minmax(0,1fr) auto;column-gap:10px;min-height:52px;padding:8px 10px;border-radius:12px;font-size:14px;line-height:21px}',
             '.dshp-pg-body .dshp-t-dot{width:16px;height:21px}',
             '.dshp-pg-body .dshp-t-line,.dshp-pg-body .dshp-t-meta{height:auto;font-size:13px;line-height:20px}',
             '.dshp-pg-body .dshp-t-group{padding:8px 10px 4px;font-size:12px;line-height:18px}',
             '.dshp-pg-body .dshp-t-notice{padding:6px 10px 8px;font-size:13px;line-height:20px}',
+            '.dshp-pg-adds{display:flex;flex-wrap:wrap;gap:2px 4px;margin-top:2px}',
             '.dshp-pg-state{padding:48px 0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
             `.dshp-pg-state.dshp-t-error{color:${ERROR_TEXT}}`,
             '.dshp-pg-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:72px 20px;text-align:center;color:var(--dsw-alias-label-secondary)}',
@@ -404,46 +443,29 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-pg-empty h2{margin:0;font-size:15px;font-weight:500;line-height:22px;color:var(--dsw-alias-label-primary)}',
             '.dshp-pg-empty p{max-width:440px;margin:0;font-size:13px;line-height:21px}',
             '.dshp-pg-empty .dshp-pg-cta{margin-top:12px}',
-            // Projects page: groups of workspaces
-            '.dshp-pg-heading .dshp-pg-new{margin-left:auto;align-self:center}',
-            `.dshp-pg-alert{display:flex;align-items:center;gap:10px;margin:-4px 0 16px;padding:6px 6px 6px 14px;border-radius:12px;background:var(--dsw-alias-interactive-bg-hover-danger,var(--dsw-alias-interactive-bg-hover));font-size:13px;line-height:20px;color:${ERROR_TEXT}}`,
-            '.dshp-pg-alert>span{flex:1;min-width:0}',
-            '.dshp-pg-alert .dshp-t-icon{margin:0;color:inherit}',
-            '.dshp-pg-group-name{display:inline-flex;align-items:center;gap:8px;min-width:0;max-width:100%}',
-            '.dshp-pg-hollow{color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pg-others-icon{display:inline-flex;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pg-others{margin-top:16px}',
-            '.dshp-pg-others .dshp-pg-head{padding-right:18px}',
-            '.dshp-pg-head .dshp-pg-count{flex:none}',
-            '.dshp-pg-btn-glyph{font-size:10px;line-height:1}',
-            '.dshp-pg-card[data-fresh]{animation:dshp-pg-fresh 2.4s ease-out}',
-            `@keyframes dshp-pg-fresh{0%,45%{box-shadow:0 0 0 2px ${RING}}100%{box-shadow:0 0 0 2px transparent}}`,
-            `@media (prefers-reduced-motion:reduce){.dshp-pg-card[data-fresh]{animation:none;box-shadow:0 0 0 2px ${RING}}}`,
-            '.dshp-pg-fold{display:flex;flex-direction:column;gap:2px;padding:2px 0 2px}',
-            '.dshp-pg-ws-list{display:flex;flex-direction:column;gap:2px}',
-            '.dshp-pg-ws{display:flex;align-items:center;gap:2px;border-radius:12px}',
+            // A workspace: one line, its path on a hover; a click shows its chats.
+            '.dshp-pg-ws-list{display:flex;flex-direction:column;gap:1px}',
+            '.dshp-pg-ws{display:flex;align-items:center;gap:2px;border-radius:10px}',
             '.dshp-pg-ws:hover,.dshp-pg-ws:focus-within{background:var(--dsw-alias-interactive-bg-hover)}',
             '.dshp-pg-ws-item[aria-busy=true]{opacity:.55;pointer-events:none;transition:opacity .12s}',
-            '.dshp-pg-ws-toggle{display:grid;grid-template-columns:10px 16px minmax(0,1fr) auto;align-items:center;column-gap:8px;flex:1;min-width:0;box-sizing:border-box;min-height:48px;padding:6px 8px 6px 10px;border:0;border-radius:12px;background:none;font:inherit;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer}',
+            '.dshp-pg-ws-toggle{display:grid;grid-template-columns:10px 16px minmax(0,1fr) auto;align-items:center;column-gap:8px;flex:1;min-width:0;box-sizing:border-box;min-height:36px;padding:4px 8px 4px 10px;border:0;border-radius:10px;background:none;font:inherit;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer}',
             `.dshp-pg-ws-toggle:focus-visible{outline:none;box-shadow:inset 0 0 0 2px ${RING}}`,
             '.dshp-pg-ws-arrow{display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary)}',
             '.dshp-pg-ws-arrow svg{transition:transform .12s}',
             '.dshp-pg-ws-toggle[aria-expanded=true] .dshp-pg-ws-arrow svg{transform:rotate(90deg)}',
             '.dshp-pg-ws-folder{display:inline-flex;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pg-ws-text{display:flex;flex-direction:column;min-width:0}',
-            '.dshp-pg-ws-title{display:flex;align-items:center;gap:8px;min-width:0;font-size:14px;font-weight:500;line-height:20px}',
+            '.dshp-pg-ws-title{display:flex;align-items:center;gap:8px;min-width:0;font-size:14px;line-height:20px}',
             '.dshp-pg-ws-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshp-pg-ws-tag{flex:none;padding:0 7px;border-radius:9px;background:var(--dsw-alias-interactive-bg-hover);font-size:11px;font-weight:400;line-height:18px;color:var(--dsw-alias-label-secondary)}',
             '.dshp-pg-ws:hover .dshp-pg-ws-tag,.dshp-pg-ws:focus-within .dshp-pg-ws-tag{background:var(--dsw-alias-bg-base)}',
-            '.dshp-pg-ws-path{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
             '.dshp-pg-ws-meta{display:inline-flex;align-items:center;gap:8px;padding-left:8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap;font-variant-numeric:tabular-nums}',
             '.dshp-pg-ws-meta>span+span::before{content:"·";padding-right:8px}',
             '.dshp-pg-ws-meta>.dshp-pg-ws-dot+span::before{content:none}',
             '.dshp-pg-ws-dot{display:inline-flex;align-items:center}',
-            '.dshp-pg-ws-acts{flex:none;display:inline-flex;align-items:center;gap:2px;padding-right:8px}',
+            '.dshp-pg-ws-acts{flex:none;display:inline-flex;align-items:center;gap:2px;padding-right:6px}',
             '.dshp-pg-ws-acts .dshp-t-icon{width:28px;height:28px;margin:0}',
-            '.dshp-pg-chats{display:flex;flex-direction:column;gap:1px;margin:2px 0 6px 23px;padding-left:10px;border-left:.5px solid var(--dsw-alias-border-l3)}',
-            '.dshp-pg-chat{display:grid;grid-template-columns:14px minmax(0,1fr) auto;align-items:center;column-gap:8px;box-sizing:border-box;width:100%;min-height:34px;padding:5px 10px 5px 8px;border:0;border-radius:10px;background:none;font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer}',
+            '.dshp-pg-chats{display:flex;flex-direction:column;gap:1px;margin:2px 0 4px 23px;padding-left:10px;border-left:.5px solid var(--dsw-alias-border-l3)}',
+            '.dshp-pg-chat{display:grid;grid-template-columns:14px minmax(0,1fr) auto;align-items:center;column-gap:8px;box-sizing:border-box;width:100%;min-height:32px;padding:5px 10px 5px 8px;border:0;border-radius:10px;background:none;font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer}',
             '.dshp-pg-chat:hover,.dshp-pg-chat:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}',
             `.dshp-pg-chat:focus-visible{outline:none;box-shadow:inset 0 0 0 2px ${RING}}`,
             '.dshp-pg-chat-dot{display:inline-flex;align-items:center;justify-content:center;width:14px}',
@@ -453,7 +475,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-pg-more,.dshp-pg-add{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;box-sizing:border-box;height:32px;padding:0 10px;border:0;border-radius:10px;background:none;font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary);cursor:pointer}',
             '.dshp-pg-more:hover,.dshp-pg-more:focus-visible,.dshp-pg-add:hover,.dshp-pg-add:focus-visible,.dshp-pg-add[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
             `.dshp-pg-more:focus-visible,.dshp-pg-add:focus-visible{outline:none;box-shadow:inset 0 0 0 2px ${RING}}`,
-            '.dshp-pg-add{margin-top:2px}',
+            '.dshp-pg-add:disabled{cursor:default}',
             '.dshp-pg-menu-glyph{display:inline-flex;align-items:center;justify-content:center;width:16px;font-size:11px;line-height:1}',
             '.dshp-pg-menu-from{color:var(--dsw-alias-label-secondary)}',
             '.dshp-pg-dialog.dshp-pg-dialog{width:min(440px,100%)}',
@@ -464,7 +486,23 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-pg-input:disabled{color:var(--dsw-alias-label-dimmed)}',
             `.dshp-pg-dialog-error{margin-top:8px;font-size:12px;line-height:18px;color:${ERROR_TEXT}}`,
             `.dshp-pg-danger:not(:disabled){color:${ERROR_TEXT}}`,
-            '@container (width<=560px){.dshp-pg-ws-path{display:none}.dshp-pg-ws-toggle{min-height:44px}}',
+            // A narrow page keeps each row's dots and time, not their words.
+            '@container (width<=560px){.dshp-pg-pulse-text{display:none}.dshp-pg-body{padding-left:14px}}',
+            // Project headers in DSH's session list (sidebarRules places DSH's rows under them)
+            '.dshp-sb-head{display:flex;align-items:center;gap:6px;box-sizing:border-box;height:30px;margin-top:10px;padding:0 8px;border-radius:var(--dsw-radius-md);font-size:13px;font-weight:500;line-height:18px;color:var(--dsw-alias-label-primary);cursor:pointer;user-select:none;outline:none}',
+            '.dshp-sb-head:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+            `.dshp-sb-head:focus-visible{box-shadow:inset 0 0 0 2px ${RING}}`,
+            // The glyph at rest, as DSH's rows show their folder; the chevron on hover, and while the group is collapsed.
+            '.dshp-sb-lead{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px}',
+            '.dshp-sb-glyph{font-size:11px;line-height:1}',
+            '.dshp-sb-chev{display:none;color:var(--dsw-alias-label-secondary);transition:transform .15s var(--ds-ease-in-out,ease)}',
+            '.dshp-sb-head[aria-expanded=true] .dshp-sb-chev{transform:rotate(90deg)}',
+            '.dshp-sb-head:is(:hover,:focus-visible,[aria-expanded=false],.dshp-sb-plain) .dshp-sb-chev{display:inline-flex}',
+            '.dshp-sb-head:is(:hover,:focus-visible,[aria-expanded=false]) .dshp-sb-glyph{display:none}',
+            '.dshp-sb-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshp-sb-dot{flex:none;display:inline-flex;align-items:center}',
+            '.dshp-sb-count{flex:none;min-width:16px;font-size:12px;font-weight:400;text-align:right;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
+            '@media (prefers-reduced-motion:reduce){.dshp-sb-chev{transition:none}}',
         ].join('');
         const CSS_ID = `${BUNDLE}/client.css`;
         if (typeof document !== 'undefined' && document.querySelector(`style[data-plugin-css=${JSON.stringify(CSS_ID)}]`) === null) {
@@ -1180,6 +1218,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return h('section', { className: 'dshp-projects', 'data-projects-table': '' }, ...head, body);
         }
 
+        const OPTIONS = {
+            heading: 'Threads',
+            beside: 'Open threads beside their coordinator',
+            besideHint: 'A thread you open from the sidebar, a card or the Projects page shows in the right panel, beside its coordinator\'s chat, when the window has room for both. Off, a thread opens on its own, and "Open beside its coordinator" in its menus still pairs them.',
+        };
+
+        /** The plugin page's switches, which this window keeps (no Save). */
+        function ThreadOptions() {
+            const beside = useBesidePref();
+            return h('section', { className: 'dshp-options', 'data-projects-options': '' },
+                h('h3', { className: 'dshp-heading' }, OPTIONS.heading),
+                h('div', { className: 'dshp-option' },
+                    h('div', { className: 'dshp-option-text' },
+                        h('div', { className: 'dshp-option-title', id: 'dshp-option-beside' }, OPTIONS.beside),
+                        h('div', { className: 'dshp-option-hint' }, OPTIONS.besideHint)),
+                    h('span', { 'data-projects-beside-setting': beside ? 'on' : 'off' },
+                        h(ui.Switch, { checked: beside, label: OPTIONS.beside, onChange: (on) => besidePref.set(on) }))));
+        }
+
         function applyDefaultsForm(ctx, { catalog, link, dialog, sessionsOf }) {
             const scope = ctx.configForms.get(ENTRY);
             const model = new ui.SettingsFormModel(scope, FIELDS.map((name) => ui.settingsTextField(name)));
@@ -1198,6 +1255,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 ? 'Default models and effort for coordinators and threads.'
                 : h('div', { className: 'dshp-page' },
                     h(DefaultsForm, { form, catalog }),
+                    h(ThreadOptions),
                     h(ProjectsTable, { link, dialog, catalog, sessionsOf })));
             ctx.effect(() => ctx.configForms.whileServed([ENTRY], () => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
                 name: 'plugins.bundle.config',
@@ -1225,9 +1283,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             link: `${BUNDLE}/thread-link`,
             settings: `${BUNDLE}/project-settings`,
             settingsItem: `${BUNDLE}/project-settings-item`,
+            fullItem: `${BUNDLE}/full-view-item`,
             paused: `${BUNDLE}/paused-bar`,
+            ending: `${BUNDLE}/ending-bar`,
             place: `${BUNDLE}/row-place`,
             page: `${BUNDLE}/projects`,
+            sidebar: `${BUNDLE}/sidebar-groups`,
         };
         /** The conversation inside a thread's sidebar chat; its tab body declares it. */
         const CONVERSATION_SLOT = 'projects.thread.conversation';
@@ -1245,8 +1306,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             coordinator: 'Coordinator',
             openCoordinator: 'Open the coordinator',
             open: 'Open',
-            openBeside: 'Open beside',
-            openMain: 'Open as the main chat',
+            openTip: 'Open it beside this chat',
+            fullView: 'Full view',
+            openFull: 'Open in full view',
+            openBeside: 'Open beside its coordinator',
             openPane: 'Open the Threads panel',
             current: 'This chat',
             loading: 'Loading threads…',
@@ -1279,6 +1342,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             retrying: 'Retrying…',
             resumingThread: 'Resuming…',
             continueFailed: 'Couldn\'t reach the thread.',
+            endedFailed: 'Failed',
+            endedStopped: 'Stopped',
+            stoppedEarly: 'It stopped before it finished.',
         };
         /** A new project's first asks, shown under the coordinator's greeting until the user writes. */
         const SUGGESTIONS = [
@@ -1307,6 +1373,79 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         const chatAddress = (sessionId) => `${CHAT_PREFIX}${encodeURIComponent(sessionId)}`;
+
+        /** The sessions DSH's main view holds (its "mainView" references): the main chat, or two for a moment while DSH switches. */
+        function mainViews(state) {
+            const ids = [];
+            if (!isObject(state?.byId)) return ids;
+            for (const [id, row] of Object.entries(state.byId)) if ((row?.retainedBy?.mainView ?? 0) > 0) ids.push(id);
+            return ids;
+        }
+
+        /**
+         * DSH's own layout limits: its smallest main chat beside a right
+         * sidebar and its smallest right sidebar; below the narrowest window
+         * the right sidebar covers the whole window instead.
+         */
+        const MAIN_MIN = 400;
+        const PANE_MIN = 300;
+        const COVER_BELOW = 768;
+        /**
+         * Whether the window has room for a chat beside the main one: DSH's
+         * smallest main chat and right sidebar next to the left sidebar as it
+         * is now, the same rule DSH uses to show its right sidebar at all.
+         * That is 980 px wide with the left sidebar at its 280 px default,
+         * 1118 px at 418 px, and 768 px once DSH folds the sidebar away.
+         */
+        function roomBeside() {
+            if (typeof window === 'undefined' || typeof document === 'undefined') return true;
+            let left = 0;
+            try { left = document.querySelector('[data-slot="sidebar"]')?.parentElement?.getBoundingClientRect().width ?? 0; } catch { left = 0; }
+            return roomFor(window.innerWidth, left);
+        }
+        /** The same for a window `width` px wide whose left sidebar takes `left` px. */
+        const roomFor = (width, left) => width >= COVER_BELOW && width - left - MAIN_MIN >= PANE_MIN;
+
+        /**
+         * Whether a thread opened anywhere lands beside its coordinator (on
+         * unless turned off on the plugin's page), kept in the window's
+         * storage. Off, a thread opens on its own unless asked to open
+         * beside.
+         */
+        const BESIDE_KEY = `${BUNDLE}/open-beside`;
+        const besidePref = (() => {
+            const listeners = new Set();
+            let value;
+            const notify = () => { for (const listener of [...listeners]) listener(); };
+            // Another DSH window changed it.
+            const onStorage = (event) => {
+                if (event.key !== BESIDE_KEY && event.key !== null) return;
+                value = undefined;
+                notify();
+            };
+            return {
+                get() {
+                    if (value === undefined) {
+                        try { value = window.localStorage.getItem(BESIDE_KEY) !== 'off'; } catch { value = true; }
+                    }
+                    return value;
+                },
+                set(on) {
+                    value = on === true;
+                    try { window.localStorage.setItem(BESIDE_KEY, value ? 'on' : 'off'); } catch { /* no storage: until the window closes */ }
+                    notify();
+                },
+                subscribe(listener) {
+                    if (listeners.size === 0) try { window.addEventListener('storage', onStorage); } catch { /* no window */ }
+                    listeners.add(listener);
+                    return () => {
+                        listeners.delete(listener);
+                        if (listeners.size === 0) try { window.removeEventListener('storage', onStorage); } catch { /* no window */ }
+                    };
+                },
+            };
+        })();
+        const useBesidePref = () => React.useSyncExternalStore(besidePref.subscribe, besidePref.get);
 
         /** The session a thread chat address names, or undefined. */
         function chatSessionOf(address) {
@@ -1854,7 +1993,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * names once at its top) is left off the line and named in a tooltip
          * when the row is hovered or focused, so the summary keeps its room.
          */
-        function ThreadRow({ row, current, now, model, quietModel, changes, onOpen, action, projects }) {
+        function ThreadRow({ row, current, now, model, quietModel, changes, onOpen, action, projects, slots = 0 }) {
             const enabled = !current && row.session !== undefined;
             const quiet = model !== undefined && model === quietModel;
             const open = () => { if (enabled) onOpen(row); };
@@ -1890,7 +2029,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         changes ? h('span', { className: 'dshp-t-row-changes', 'data-projects-changes': '' }, ...changeCounts(changes)) : null,
                         model && !quiet ? h('span', { className: 'dshp-t-model', title: model, 'data-projects-thread-model': '' }, model) : null,
                         row.at !== undefined ? h('span', { className: 'dshp-t-ago' }, ago(row.at, now)) : null))),
-            acts.length > 0 ? h('span', { className: 'dshp-t-row-acts' }, ...acts) : null);
+            // As wide as the list's busiest row, so every row's time sits in one column.
+            acts.length > 0 || slots > 0 ? h('span', { className: 'dshp-t-row-acts', style: slots > 0 ? { minWidth: slots * 28 } : undefined }, ...acts) : null);
             return quiet ? h(ui.Tooltip, { label: `Runs on ${model}`, side: 'right', delayMs: 500, focusDelayMs: 300, portal: true }, body) : body;
         }
 
@@ -1904,6 +2044,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          */
         function ThreadList({ rows, current, now, models, quietModel, changes, onOpen, action, projects, fold = FOLDED }) {
             const [shown, setShown] = React.useState(() => new Set(rows.filter((row) => row.session !== undefined && row.session === current).map((row) => row.group)));
+            // The most buttons a row has (Retry or Resume, and the list's own action).
+            const slots = rows.reduce((most, row) => {
+                const enabled = row.session !== undefined && row.session !== current;
+                return Math.max(most, (row.ending && row.session !== undefined && projects ? 1 : 0) + (action && enabled ? 1 : 0));
+            }, 0);
             const toggle = (id) => setShown((prev) => {
                 const next = new Set(prev);
                 if (next.has(id)) next.delete(id);
@@ -1914,7 +2059,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const members = rows.filter((row) => row.group === group.id);
                 if (members.length === 0) return null;
                 const list = members.map((row) => h(ThreadRow, {
-                    key: row.id, row, current: row.session !== undefined && row.session === current, now, onOpen, action, projects, quietModel,
+                    key: row.id, row, current: row.session !== undefined && row.session === current, now, onOpen, action, projects, quietModel, slots,
                     model: row.session !== undefined ? models?.[row.session] : undefined,
                     changes: changes?.[row.id],
                 }));
@@ -2131,6 +2276,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function ThreadsMenu({ sessionId, useSessions, useSessionStatus, projects }) {
             const info = useSessions((state) => projectContext(state, sessionId), sameContext);
             const settingsOn = useSettingsAvailable(projects.settings);
+            const beside = useBesidePref();
             const statuses = useSessionStatus((value) => value);
             const byId = useSessions((state) => state.byId);
             const [open, setOpen] = React.useState(false);
@@ -2257,8 +2403,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     rows, current: sessionId, now, models, changes, projects,
                     // The menu names what new threads start on at its top; a row names its model only when it differs.
                     quietModel: summary.thread,
-                    onOpen: (row) => openSession(row.session),
-                    action: { label: TEXT.openBeside, icon: ui.IconCompareSplitOutlineRegular, run: (row) => { change(false); projects.openBeside(row.session); } },
+                    onOpen: (row) => { change(false); projects.openThread(row.session); },
+                    // A row opens the thread as the setting says; its button does the other.
+                    action: beside
+                        ? { label: TEXT.openFull, icon: ui.IconRightUpOutlineRegular, run: (row) => { change(false); projects.openFull(row.session); } }
+                        : { label: TEXT.openBeside, icon: ui.IconCompareSplitOutlineRegular, run: (row) => { change(false); projects.openPaired(row.session); } },
                 })),
             foot.length > 0 ? h('div', { className: 'dshp-t-menu-foot' }, ...foot) : null), document.body) : null;
             const gear = settingsOn ? h(ui.Tooltip, { label: SETTINGS.title, side: 'bottom' },
@@ -2318,7 +2467,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 onOpen: (row) => {
                     try { tab.actions.openResource(chatAddress(row.session)); } catch { projects.openBeside(row.session); }
                 },
-                action: { label: TEXT.openMain, icon: ui.IconRightUpOutlineRegular, run: (row) => projects.openSession(row.session) },
+                action: { label: TEXT.openFull, icon: ui.IconRightUpOutlineRegular, run: (row) => projects.openFull(row.session) },
             }));
         }
 
@@ -2422,11 +2571,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h('div', { className: 'dshp-t-chat-title' },
                         h('span', { className: 'dshp-t-chat-name' }, facts.title),
                         sub ? h('span', { className: 'dshp-t-chat-sub' }, sub) : null),
-                    threadSession ? h(ui.Tooltip, { label: TEXT.openMain, side: 'bottom', align: 'end' },
+                    threadSession ? h(ui.Tooltip, { label: TEXT.openFull, side: 'bottom', align: 'end' },
                         h(ui.Button, {
-                            variant: 'ghost', size: 'sm', icon: h(ui.IconRightUpOutlineRegular, { size: 16 }),
-                            onClick: () => projects.openSession(threadSession),
-                        }, TEXT.open)) : null),
+                            variant: 'ghost', size: 'sm', icon: h(ui.IconRightUpOutlineRegular, { size: 16 }), 'data-projects-full': '',
+                            onClick: () => projects.openFull(threadSession),
+                        }, TEXT.fullView)) : null),
                 h('div', { className: 'dshp-t-chat-body' },
                     resource.status === 'failed' && resource.value === undefined
                         ? h('div', { className: 'dshp-t-empty' }, TEXT.chatGone)
@@ -2556,6 +2705,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         function ThreadCard({ view, projects }) {
             const enabled = view.session !== undefined;
+            const beside = useBesidePref();
+            // A thread's own handback card points at its coordinator, which opens as the main chat.
+            const thread = view.threadId !== undefined;
             // The thread's newest card says why its last turn failed or stopped, and offers to run it again.
             const ending = enabled && view.newest ? view.row?.ending : undefined;
             const go = useContinue(projects, ending ? view.row : undefined);
@@ -2568,8 +2720,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         view.verb, view.model ? h('span', { className: 'dshp-t-card-model', 'data-projects-thread-model': '' }, ` · ${view.model}`) : null),
                     h('button', {
                         type: 'button', className: 'dshp-t-card-title', disabled: !enabled,
-                        title: enabled ? `${TEXT.open}: ${view.title}` : undefined,
-                        onClick: () => projects.openSession(view.session),
+                        title: !enabled ? undefined : thread ? `${beside ? TEXT.openTip : TEXT.openFull}: ${view.title}` : TEXT.openCoordinator,
+                        onClick: () => projects.openThread(view.session),
                     }, view.title),
                     why ? h('span', {
                         className: go.error ? 'dshp-t-card-why dshp-t-error' : 'dshp-t-card-why', title: why,
@@ -2590,12 +2742,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         icon: h(go.retry ? ui.IconRefreshOutlineRegular : ui.IconPlayOutlineRegular, { size: 14 }),
                         onClick: () => { void go.run(); },
                     }, h('span', { className: 'dshp-t-go-label' }, go.busy ? (go.retry ? TEXT.retrying : TEXT.resumingThread) : goLabel)) : null,
-                    h(ui.Tooltip, { label: TEXT.openBeside, side: 'top', align: 'end' },
-                        h('button', {
-                            type: 'button', className: 'dshp-t-icon', 'aria-label': `${TEXT.openBeside}: ${view.title}`,
-                            onClick: () => projects.openBeside(view.session),
-                        }, h(ui.IconCompareSplitOutlineRegular, { size: 16 }))),
-                    h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => projects.openSession(view.session) }, TEXT.open)) : null) : null);
+                    thread ? h(ui.Tooltip, { label: TEXT.openFull, side: 'top', align: 'end' },
+                        h(ui.Button, {
+                            variant: 'outline', size: 'sm', 'aria-label': `${TEXT.openFull}: ${view.title}`, 'data-projects-full': '',
+                            icon: h(ui.IconRightUpOutlineRegular, { size: 14 }),
+                            onClick: () => projects.openFull(view.session),
+                        }, h('span', { className: 'dshp-t-full-label' }, TEXT.fullView))) : null,
+                    h(ui.Tooltip, { label: thread ? TEXT.openTip : TEXT.openCoordinator, side: 'top', align: 'end' },
+                        h(ui.Button, {
+                            variant: 'outline', size: 'sm', 'aria-label': `${TEXT.open}: ${view.title}`, 'data-projects-open': '',
+                            icon: thread ? h(ui.IconCompareSplitOutlineRegular, { size: 14 }) : undefined,
+                            onClick: () => projects.openPaired(view.session),
+                        }, TEXT.open))) : null) : null);
         }
 
         function ThreadCardList({ sessionId, cards, useSessions, useSessionStatus, projects }) {
@@ -2706,6 +2864,42 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         variant: 'outline', size: 'sm', disabled: busy, 'data-projects-resume': '',
                         icon: h(ui.IconPlayOutlineRegular, { size: 14 }), onClick: () => { void resume(); },
                     }, busy ? TEXT.resuming : TEXT.resume)));
+        }
+
+        /**
+         * Above the message box of a thread whose last turn failed or
+         * stopped (where DSH's own note can be raw JSON): why, in a sentence,
+         * when, and Retry or Resume, which send the thread on with a message
+         * from its coordinator. Gone once the thread runs or hands back.
+         */
+        function EndingBar({ sessionId, useSessions, useSessionStatus = noStatuses, projects }) {
+            const me = useSessions((state) => valueIn(state, sessionId));
+            const busyNow = useSessionStatus((map) => {
+                const status = map?.get?.(sessionId);
+                return status?.running === true || status?.pendingInteraction !== undefined && status?.pendingInteraction !== null;
+            });
+            const ending = me?.role === 'thread' && typeof me.thread?.id === 'string' ? endingOf(me) : undefined;
+            const row = React.useMemo(() => (ending ? { session: sessionId, id: me.thread.id, title: me.thread.title || me.thread.id, ending } : undefined),
+                [sessionId, me?.thread?.id, me?.thread?.title, ending]);
+            const { busy, error, run, retry } = useContinue(projects, row);
+            const now = useNow(row !== undefined);
+            if (!row || busyNow) return null;
+            const why = endingReason(ending) || (retry ? '' : TEXT.stoppedEarly);
+            const at = Date.parse(ending.at ?? '');
+            const text = error || why;
+            const action = retry ? TEXT.retryThread : TEXT.resumeThread;
+            return h('div', { className: 'dshp-dock dshp-dock-wrap', 'data-projects-ending-bar': ending.state },
+                h('div', { className: 'dshp-dock-bar', role: 'status', title: text },
+                    h('span', { className: 'dshp-dock-glyph', 'data-state': ending.state, 'aria-hidden': true },
+                        retry ? h(ui.StateDot, { state: 'error' }) : h(ui.IconStopFillRegular, { size: 12 })),
+                    h('span', { className: 'dshp-dock-label' }, retry ? TEXT.endedFailed : TEXT.endedStopped),
+                    text ? h('span', { className: error ? 'dshp-dock-text dshp-t-error' : 'dshp-dock-text' }, text) : h('span', { className: 'dshp-dock-text' }),
+                    Number.isFinite(at) ? h('span', { className: 'dshp-dock-time' }, ago(at, now)) : null,
+                    h(ui.Button, {
+                        variant: 'outline', size: 'sm', disabled: busy, 'aria-busy': busy || undefined, 'data-projects-continue': retry ? 'retry' : 'resume',
+                        'aria-label': `${action}: ${row.title}`,
+                        icon: h(retry ? ui.IconRefreshOutlineRegular : ui.IconPlayOutlineRegular, { size: 14 }), onClick: () => { void run(); },
+                    }, busy ? (retry ? TEXT.retrying : TEXT.resumingThread) : action)));
         }
 
         /** Coordinator project names in a session list ("◆ name" titles), once per list. */
@@ -2931,6 +3125,49 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (typeof sessionId !== 'string' || sessionId === '') return;
                 try { ctx.uiWorkspace.openSession(sessionId); } catch (error) { warn('could not open the session', error); }
             };
+            const list = () => {
+                try { return ctx.sessions.list.getSnapshot(); } catch { return undefined; }
+            };
+            /** The main chat: the session DSH's main view holds; undefined while it holds none, or two in the middle of a switch. */
+            const mainChat = () => {
+                const ids = mainViews(list());
+                return ids.length === 1 ? ids[0] : undefined;
+            };
+            /** The coordinator a thread opens beside: undefined for any other session, or a thread whose coordinator is gone. */
+            const coordinatorOf = (sessionId) => {
+                let state;
+                try { state = ctx.sessions.list.getSnapshot(); } catch { return undefined; }
+                const place = rowPlace(state, sessionId);
+                const coordinator = place.startsWith('thread:') ? place.slice('thread:'.length) : undefined;
+                return coordinator !== undefined && coordinator !== sessionId && state.byId?.[coordinator] !== undefined ? coordinator : undefined;
+            };
+            /** The thread the user chose to see as the main chat; it stays there until another chat is opened. */
+            let full;
+            /**
+             * Show a thread's chat in its coordinator's right sidebar, once that
+             * sidebar is the one on screen (DSH keeps one per chat). A thread
+             * already open there comes to the front.
+             */
+            const besideIn = (coordinator, sessionId) => {
+                const sidebar = ctx.sidebarRight;
+                let tries = 0;
+                const place = () => {
+                    let onScreen;
+                    try { onScreen = sidebar.mounted?.getSnapshot?.(); } catch { onScreen = undefined; }
+                    if (onScreen === coordinator || (onScreen === undefined && tries >= 2)) {
+                        try {
+                            sidebar.openResource(chatAddress(sessionId), { kind: KINDS.chat });
+                            return;
+                        } catch (error) {
+                            if (tries >= 40) { warn('could not open the thread beside its coordinator', error); return; }
+                        }
+                    }
+                    // The user went on to another chat meanwhile.
+                    if (tries > 0 && mainChat() !== undefined && mainChat() !== coordinator) return;
+                    if (++tries <= 40) setTimeout(place, 50);
+                };
+                place();
+            };
             const failed = new Set();
             const catalog = shared.catalog ?? catalogSource(() => undefined);
             const link = shared.link ?? hostLink(() => undefined, catalog);
@@ -2940,8 +3177,105 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const shell = scope?.get?.('conversation')?.input?.for?.(scope);
                 return shell && (typeof shell.actions?.setDraft === 'function' || typeof shell.setDraft === 'function') ? shell : undefined;
             };
+            /** Open a thread as the main chat, where it stays until another chat is opened. */
+            const openFull = (sessionId) => {
+                if (typeof sessionId !== 'string' || sessionId === '') return;
+                full = sessionId;
+                openSession(sessionId);
+            };
+            /**
+             * Open a thread side by side: its coordinator as the main chat
+             * and the thread in the coordinator's right sidebar. Where the
+             * window has no room for both, or for any other session, it
+             * opens as the main chat.
+             */
+            const openPaired = (sessionId) => {
+                if (typeof sessionId !== 'string' || sessionId === '') return;
+                const coordinator = coordinatorOf(sessionId);
+                if (coordinator === undefined || !roomBeside()) {
+                    if (coordinator !== undefined) full = sessionId;
+                    openSession(sessionId);
+                    return;
+                }
+                // Also when the coordinator is the main chat already: that closes a page (Projects, say) shown over it.
+                openSession(coordinator);
+                besideIn(coordinator, sessionId);
+            };
             return {
                 openSession,
+                openPaired,
+                /** Open a chat: a thread beside its coordinator unless that's turned off, any other chat as the main chat. */
+                openThread(sessionId) {
+                    if (besidePref.get()) openPaired(sessionId);
+                    else openFull(sessionId);
+                },
+                openFull,
+                /**
+                 * Threads open side by side wherever DSH opens them: its session
+                 * list, its search, the plugin's pages. DSH's main view shows the
+                 * session it holds as the main chat. When DSH starts moving that
+                 * hold from one chat to a thread, the plugin holds the thread's
+                 * coordinator there too, and once DSH has let go of the old chat
+                 * the coordinator takes the thread's place, all before anything
+                 * is drawn; the thread opens in the coordinator's right sidebar.
+                 * A thread opened in full view, or one DSH shows at start or with
+                 * nothing open before it, stays the main chat.
+                 * @returns the unsubscribe.
+                 */
+                followOpens() {
+                    const store = ctx.sessions?.list;
+                    if (typeof store?.subscribe !== 'function') return () => {};
+                    let last = mainChat();
+                    let busy = false;
+                    // While DSH switches to a thread: the thread, its coordinator and the plugin's hold on it.
+                    let held;
+                    const letGo = () => { const hold = held; held = undefined; try { hold?.reference.release(); } catch { /* already released */ } };
+                    const holds = (state, id) => state?.byId?.[id]?.retainedBy?.mainView ?? 0;
+                    const check = () => {
+                        const state = store.getSnapshot();
+                        const now = mainViews(state);
+                        if (held !== undefined && !now.includes(held.thread)) letGo();
+                        if (held === undefined) {
+                            const opening = now.find((id) => id !== last);
+                            if (opening === undefined) {
+                                if (now.length === 0) last = undefined;
+                                return;
+                            }
+                            if (full !== undefined && full !== opening) full = undefined;
+                            const coordinator = last === undefined || opening === full || !besidePref.get() ? undefined : coordinatorOf(opening);
+                            if (coordinator === undefined || !roomBeside()) {
+                                if (now.length === 1) last = opening;
+                                return;
+                            }
+                            busy = true;
+                            try {
+                                held = { thread: opening, coordinator, reference: ctx.sessions.retain(coordinator, { source: 'mainView' }) };
+                            } catch (error) {
+                                warn('could not open the thread beside its coordinator', error);
+                                return;
+                            } finally {
+                                busy = false;
+                            }
+                        }
+                        // DSH still holds the chat it showed (the coordinator's own hold counts beside the plugin's).
+                        const state2 = store.getSnapshot();
+                        const waiting = mainViews(state2).some((id) => id !== held.thread && (id !== held.coordinator || holds(state2, id) > 1));
+                        if (waiting) return;
+                        const { thread, coordinator } = held;
+                        busy = true;
+                        try {
+                            ctx.uiWorkspace.openSession(coordinator);
+                        } catch (error) {
+                            warn('could not open the coordinator', error);
+                        } finally {
+                            letGo();
+                            busy = false;
+                        }
+                        last = mainChat() ?? coordinator;
+                        queueMicrotask(() => besideIn(coordinator, thread));
+                    };
+                    return store.subscribe(() => { if (!busy) check(); });
+                },
                 /** The Project settings dialog, for the entry points. */
                 settings: dialog,
                 /** DSH's model catalog, to name the models sessions run on. */
@@ -2982,15 +3316,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 /**
                  * DSH's Review tab on one turn's changes (`last`: {seq, turn}).
                  * The tab reviews the session whose sidebar holds it, so the
-                 * thread opens and the tab opens in its sidebar once DSH has
-                 * set that sidebar up (a moment later). Where DSH can't open a
-                 * tab in another session, the thread opens, with DSH's own
-                 * card for its changes.
+                 * thread opens in full view and the tab opens in its sidebar
+                 * once DSH has set that sidebar up (a moment later). Where DSH
+                 * can't open a tab in another session, the thread opens, with
+                 * DSH's own card for its changes.
                  */
                 openReview(sessionId, last) {
                     if (typeof sessionId !== 'string' || sessionId === '' || !isObject(last)) return;
                     const address = `${REVIEW_PREFIX}${encodeURIComponent(sessionId)}/${last.seq}/${last.turn}`;
                     const sidebar = ctx.sidebarRight;
+                    full = sessionId;
                     openSession(sessionId);
                     if (typeof sidebar?.openResourceIn !== 'function' || typeof sidebar.actionsFor !== 'function') return;
                     let tries = 0;
@@ -3071,9 +3406,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
                 name: 'conversation.input.dock', id: IDS.paused, order: 15, inject: withApi,
             }, PausedBar));
+            ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+                name: 'conversation.input.dock', id: IDS.ending, order: 16, inject: withApi,
+            }, EndingBar));
             ctx.slots.inject('sidebar.session.row.hover', () => ctx.slots.register({
                 name: 'sidebar.session.row.hover', id: IDS.hover, order: 20, inject: withApi,
             }, ThreadHover));
+            ctx.slots.inject('sidebar.workspaces.session.menu.item', () => ctx.slots.register({
+                name: 'sidebar.workspaces.session.menu.item', id: IDS.fullItem, order: 50, inject: withApi,
+            }, FullViewMenuItem));
+            // A thread opened anywhere lands beside its coordinator.
+            ctx.effect(() => projects.followOpens(), 'projects: threads beside their coordinator');
+            // DSH's session list by project: a header over each project's workspaces.
+            ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+                name: 'shell.overlay', id: IDS.sidebar, inject: withApi,
+            }, SidebarGroups));
             // The Projects entry in DSH's sidebar, after Plugins, and the page it opens.
             ctx.slots.inject('main', () => ctx.slots.register({
                 name: 'main', key: IDS.page, inject: withApi,
@@ -3152,7 +3499,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             cancel: 'Cancel',
             close: 'Close',
             addCoordinator: 'Add coordinator',
-            adding: 'Adding…',
+            adding: 'Adding a coordinator…',
             coordinatorWhere: 'Where should it work?',
             addWorkspace: 'Add a workspace',
             addNone: 'Every workspace is already here',
@@ -3165,12 +3512,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             othersText: 'Not in a project yet. Use ⋯ on one to move it into a project.',
             coordinatorHere: 'Coordinator works here',
             noWorkspaces: 'No workspaces yet. Add one and its chats show up here.',
+            noWorkspacesYet: 'No workspaces yet',
             noChats: 'No chats yet',
+            noThreads: 'No threads yet',
             newChat: 'New chat',
             showAll: (n) => `Show all ${n}`,
             showFewer: 'Show fewer',
-            imported: 'Imported from your old sidebar',
+            imported: (names) => `Imported from your old sidebar: ${listText(names)}.`,
             dismiss: 'Dismiss',
+            waiting: (n) => `${n} waiting`,
+            running: (n) => `${n} running`,
+            waitingLabel: (n) => (n === 1 ? 'one chat waiting on you' : `${n} chats waiting on you`),
         };
         /** Chats a workspace shows before "Show all"; workspaces the Other workspaces card shows before it. */
         const CHATS_SHOWN = 5;
@@ -3200,6 +3552,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /** A path with the home folder as ~, as DSH's session list shows paths. */
         const shortPath = (path) => String(path ?? '').replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~');
+
+        /** Names as a sentence lists them: "A", "A and B", "A, B and C". */
+        const listText = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
 
         /**
          * Every project's workspaces with DSH's own title, path and chats for
@@ -3286,13 +3641,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             });
         }
 
-        /** ⋯ on a project made on this page or imported: rename it, or delete it while it has no coordinator. */
-        function ProjectMenu({ project, actions }) {
+        /**
+         * ⋯ on a project made on this page or imported: Add coordinator while
+         * it has none (asking where it should work when the project holds
+         * several workspaces), Rename, and Delete while it has no coordinator.
+         */
+        function ProjectMenu({ project, workspaces = EMPTY, busy = false, actions }) {
             const [open, setOpen] = React.useState(false);
             const name = project.name || project.id;
+            const group = !coordinated(project);
+            const where = workspaces.map((ws) => ({ id: `c:${ws.id}`, label: ws.title, icon: h(ui.IconFolderCloseRegular, {}) }));
             const items = [
+                // With several workspaces, a submenu of them says where it works.
+                ...(group ? [{
+                    id: 'coordinator', label: busy ? PAGE.adding : PAGE.addCoordinator, disabled: busy || workspaces.length === 0,
+                    icon: h('span', { className: 'dshp-pg-menu-glyph', 'aria-hidden': true }, '◆'),
+                    submenu: workspaces.length > 1 ? where : undefined,
+                }, { type: 'separator', id: 'sep' }] : []),
                 { id: 'rename', label: PAGE.renameItem, icon: h(ui.IconEditOutlineRegular, {}) },
-                ...(coordinated(project) ? [] : [{ id: 'delete', label: PAGE.deleteItem, icon: h(ui.IconTrashOutlineRegular, {}), danger: true }]),
+                ...(group ? [{ id: 'delete', label: PAGE.deleteItem, icon: h(ui.IconTrashOutlineRegular, {}), danger: true }] : []),
             ];
             return h(ui.Menu, {
                 open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end',
@@ -3300,6 +3667,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     setOpen(false);
                     if (id === 'rename') actions.rename(project);
                     else if (id === 'delete') actions.remove(project);
+                    else if (id === 'coordinator') void actions.addCoordinator(project, workspaces[0]?.id);
+                    else if (id.startsWith('c:')) void actions.addCoordinator(project, id.slice(2));
                 },
                 anchor: h(MenuButton, { label: `Project actions: ${name}`, open, 'data-projects-project-menu': project.id, onClick: () => setOpen((v) => !v) }),
             });
@@ -3336,34 +3705,35 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * Add coordinator on a project without one: it works in the project's
-         * workspace, or in the one picked when the project holds several.
+         * Add coordinator, quiet beside "Add a workspace" in an open project
+         * without one (⋯ offers it too): it works in the project's workspace,
+         * or in the one picked when the project holds several.
          */
         function AddCoordinator({ project, workspaces, busy, actions }) {
             const [open, setOpen] = React.useState(false);
             const props = {
-                variant: 'outline', size: 'sm', disabled: busy || workspaces.length === 0, 'aria-busy': busy || undefined,
+                type: 'button', className: 'dshp-pg-add', 'data-dshp-item': '', disabled: busy, 'aria-busy': busy || undefined,
                 'data-projects-add-coordinator': project.id,
-                icon: h('span', { className: 'dshp-pg-btn-glyph', 'aria-hidden': true }, '◆'),
             };
-            const label = busy ? PAGE.adding : PAGE.addCoordinator;
-            if (workspaces.length < 2) return h(ui.Button, { ...props, onClick: () => void actions.addCoordinator(project, workspaces[0]?.id) }, label);
+            const content = [h('span', { key: 'g', className: 'dshp-pg-menu-glyph', 'aria-hidden': true }, '◆'), busy ? PAGE.adding : PAGE.addCoordinator];
+            if (workspaces.length < 2) return h('button', { ...props, onClick: () => void actions.addCoordinator(project, workspaces[0]?.id) }, ...content);
             return h(ui.Menu, {
-                open, onClose: () => setOpen(false), portal: true, align: 'end',
+                open, onClose: () => setOpen(false), portal: true, align: 'start',
                 items: [{ type: 'label', id: 'where', text: PAGE.coordinatorWhere }, ...workspaces.map((ws) => ({ id: ws.id, label: ws.title, icon: h(ui.IconFolderCloseRegular, {}) }))],
                 onSelect: (id) => {
                     setOpen(false);
                     void actions.addCoordinator(project, id);
                 },
-                anchor: h(ui.Button, { ...props, 'aria-haspopup': 'menu', 'aria-expanded': open, onClick: () => setOpen((v) => !v) }, label),
+                anchor: h('button', { ...props, 'aria-haspopup': 'menu', 'aria-expanded': open, onClick: () => setOpen((v) => !v) }, ...content),
             });
         }
 
         /**
-         * One workspace on the page: its folder, name and path, how many chats
-         * it holds and when one last moved, and a dot while one runs or waits
-         * on you. A click shows its chats, the newest first; New chat starts
-         * one there, as DSH's session list does; ⋯ moves it.
+         * One workspace on the page, on one line: its folder and name (its
+         * path in a tooltip), how many chats it holds and when one last
+         * moved, and a dot while one runs or waits on you. A click shows its
+         * chats, the newest first; New chat starts one there, as DSH's
+         * session list does; ⋯ moves it.
          */
         function WorkspaceRow({ ws, chats, open, onToggle, now, statuses, tag, menu, busy, projects }) {
             const [all, setAll] = React.useState(false);
@@ -3371,25 +3741,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const dot = dots.includes('warning') ? 'warning' : dots.includes('ongoing') ? 'ongoing' : null;
             const latest = chats[0]?.updatedAt;
             const shown = all ? chats : chats.slice(0, CHATS_SHOWN);
+            const path = shortPath(ws.path);
             const newChat = projects.newChat ? h(ui.Tooltip, { label: PAGE.newChat, side: 'bottom', portal: true },
                 h('button', {
                     type: 'button', className: 'dshp-t-icon', 'aria-label': `${PAGE.newChat} in ${ws.title}`, 'data-projects-new-chat': ws.id,
                     onClick: () => projects.newChat(ws.id),
                 }, h(ui.IconNewChatOutlineRegular, { size: 15 }))) : null;
+            const name = h('span', { className: 'dshp-pg-ws-name', 'data-projects-path': path || undefined }, ws.title);
             return h('div', { className: 'dshp-pg-ws-item', 'data-projects-workspace': ws.id, 'aria-busy': busy || undefined },
                 h('div', { className: 'dshp-pg-ws' },
                     h('button', {
-                        type: 'button', className: 'dshp-pg-ws-toggle', 'data-dshp-item': '', 'aria-expanded': open, title: ws.path || undefined, onClick: onToggle,
-                        'aria-label': `${ws.title}${tag ? `, ${tag}` : ''}. ${chats.length === 0 ? PAGE.noChats : plural(chats.length, 'chat')}`,
+                        type: 'button', className: 'dshp-pg-ws-toggle', 'data-dshp-item': '', 'aria-expanded': open, onClick: onToggle,
+                        'aria-label': `${ws.title}${tag ? `, ${tag}` : ''}. ${chats.length === 0 ? PAGE.noChats : plural(chats.length, 'chat')}${path ? `. ${path}` : ''}`,
                     },
                     h('span', { className: 'dshp-pg-ws-arrow', 'aria-hidden': true }, h(ui.IconTriangleRightFillRegular, { size: 10 })),
                     h('span', { className: 'dshp-pg-ws-folder', 'aria-hidden': true }, h(open ? ui.IconFolderOpenRegular : ui.IconFolderCloseRegular, { size: 16 })),
-                    h('span', { className: 'dshp-pg-ws-text' },
-                        h('span', { className: 'dshp-pg-ws-title' },
-                            h('span', { className: 'dshp-pg-ws-name' }, ws.title),
-                            tag ? h('span', { className: 'dshp-pg-ws-tag' }, tag) : null),
-                        // Cut at the start when it doesn't fit, so the folder's own name stays in view.
-                        ws.path ? h('span', { className: 'dshp-pg-ws-path' }, h('span', { dir: 'ltr' }, shortPath(ws.path))) : null),
+                    h('span', { className: 'dshp-pg-ws-title' },
+                        // The path on demand: a hover on the name.
+                        path ? h(ui.Tooltip, { label: path, side: 'right', delayMs: 400, maxWidth: 520, portal: true }, name) : name,
+                        tag ? h('span', { className: 'dshp-pg-ws-tag' }, tag) : null),
                     h('span', { className: 'dshp-pg-ws-meta' },
                         dot ? h('span', { className: 'dshp-pg-ws-dot', 'data-state': dot }, h(ui.StateDot, { state: dot })) : null,
                         h('span', null, chats.length === 0 ? PAGE.noChats : plural(chats.length, 'chat')),
@@ -3400,7 +3770,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     // `shown` starts where `chats` does, so a row's dot is at its own index.
                     ...shown.map((row, i) => h('button', {
                         key: row.id, type: 'button', className: 'dshp-pg-chat', 'data-dshp-item': '', 'data-projects-chat': row.id,
-                        onClick: () => projects.openSession(row.id),
+                        onClick: () => projects.openThread(row.id),
                     },
                     h('span', { className: 'dshp-pg-chat-dot' }, dots[i] ? h(ui.StateDot, { state: dots[i] }) : null),
                     h('span', { className: 'dshp-pg-chat-title' }, row.displayTitle || row.title || PAGE.newChat),
@@ -3431,15 +3801,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }, all ? PAGE.showFewer : PAGE.showAll(list.length)) : null);
         }
 
-        /** Scroll a card into view and ring it for a moment, after it was made. */
-        function useFresh(fresh) {
-            const ref = React.useRef(null);
-            React.useEffect(() => {
-                if (fresh) ref.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
-            }, [fresh]);
-            return ref;
-        }
-
         /**
          * What a project's workspace rows need from the page: each one's
          * chats, its ⋯ menu (none for the one a coordinator works in, which
@@ -3462,15 +3823,142 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
         }
 
+        /** Scroll a project's row into view and ring it for a moment, after it was made. */
+        function useFresh(fresh) {
+            const ref = React.useRef(null);
+            React.useEffect(() => {
+                if (fresh) ref.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+            }, [fresh]);
+            return ref;
+        }
+
         /**
-         * One project on the Projects page: its name (which opens the
-         * coordinator), its folder and what its threads are doing, what it
-         * runs on (each opens Project settings with that menu open), the
-         * pause with Resume, and its threads by state, as in the Threads
-         * menu; Done, Idle and Resolved fold behind their counts, and so do
-         * its workspaces with their own chats.
+         * A set of ids kept in the window's storage, so it holds across
+         * restarts (the projects open on the page, the sidebar's collapsed
+         * groups, a note dismissed). Without storage it lasts until the window
+         * closes.
          */
-        function ProjectCard({ project, workspaces, page, useSessions, projects, now, settingsOn, fresh }) {
+        function useStoredSet(key) {
+            const [set, setSet] = React.useState(() => {
+                try {
+                    const saved = JSON.parse(window.localStorage.getItem(key) ?? '[]');
+                    return new Set(Array.isArray(saved) ? saved.filter((id) => typeof id === 'string') : EMPTY);
+                } catch {
+                    return new Set();
+                }
+            });
+            const first = React.useRef(true);
+            React.useEffect(() => {
+                if (first.current) { first.current = false; return; }
+                try { window.localStorage.setItem(key, JSON.stringify([...set])); } catch { /* no storage */ }
+            }, [set]);
+            /** Add or remove an id; `on` undefined flips it. */
+            const toggle = React.useCallback((id, on) => setSet((prev) => {
+                const next = on === undefined ? !prev.has(id) : on;
+                if (next === prev.has(id)) return prev;
+                const copy = new Set(prev);
+                if (next) copy.add(id);
+                else copy.delete(id);
+                return copy;
+            }), []);
+            return [set, toggle];
+        }
+
+        /** The projects open on the page, and the import note once dismissed. */
+        const OPEN_KEY = `${BUNDLE}/page-open`;
+        const NOTE_KEY = `${BUNDLE}/page-notes`;
+        /** Other workspaces' id on the page and in the sidebar: the workspaces in no project. */
+        const OTHERS = '@others';
+
+        /**
+         * What a row says about some sessions: how many wait on you, how many
+         * run, and when the newest last moved (0 for never).
+         */
+        function pulseOf(ids, sessions, statuses) {
+            const pulse = { waiting: 0, running: 0, at: 0 };
+            for (const id of ids) {
+                const row = typeof id === 'string' ? sessions?.byId?.[id] : undefined;
+                if (!row) continue;
+                if (Number.isFinite(row.updatedAt) && row.updatedAt > pulse.at) pulse.at = row.updatedAt;
+                const dot = chatDot(row, statuses);
+                if (dot === 'warning') pulse.waiting += 1;
+                else if (dot === 'ongoing') pulse.running += 1;
+            }
+            return pulse;
+        }
+
+        /** What waits, what runs and when it moved, for a row's label. */
+        function pulseText(pulse) {
+            const parts = [];
+            if (pulse.waiting > 0) parts.push(`${pulse.waiting} waiting on you`);
+            if (pulse.running > 0) parts.push(`${pulse.running} running`);
+            return parts.length > 0 ? `, ${parts.join(', ')}` : '';
+        }
+
+        /**
+         * A row on the Projects page, for a project or for Other workspaces:
+         * its name with what waits on you, what runs and when it last moved,
+         * and under the name its workspaces, or once open what it holds. A
+         * click on the row opens or closes it; its chevron is the row's tab
+         * stop, where Enter, Space and the arrow keys do the same.
+         */
+        function PageRow({ id, label, open, onToggle, glyph, hollow, title, badge, line, pulse, now, actions }) {
+            const pulses = [];
+            if (pulse.waiting > 0) {
+                pulses.push(h('span', { key: 'w', className: 'dshp-pg-pulse', 'data-state': 'warning' },
+                    h(ui.StateDot, { state: 'warning' }), h('span', { className: 'dshp-pg-pulse-text' }, PAGE.waiting(pulse.waiting))));
+            }
+            if (pulse.running > 0) {
+                pulses.push(h('span', { key: 'r', className: 'dshp-pg-pulse', 'data-state': 'ongoing' },
+                    h(ui.StateDot, { state: 'ongoing' }), h('span', { className: 'dshp-pg-pulse-text' }, PAGE.running(pulse.running))));
+            }
+            if (pulse.at > 0) pulses.push(h('span', { key: 'a', className: 'dshp-pg-ago' }, ago(pulse.at, now)));
+            return h('div', {
+                className: 'dshp-pg-row',
+                onClick: (event) => {
+                    // Not on one of the row's buttons, in a menu it opened (drawn elsewhere), or while selecting its text.
+                    if (!event.currentTarget.contains(event.target) || event.target.closest('button,a,input')) return;
+                    if (String(window.getSelection?.() ?? '') !== '') return;
+                    onToggle();
+                },
+            },
+            h('button', {
+                type: 'button', className: 'dshp-pg-chev', 'data-dshp-item': '', 'data-projects-toggle': id,
+                'aria-expanded': open, 'aria-controls': open ? `dshp-pg-body-${id}` : undefined, 'aria-label': label,
+                onClick: () => onToggle(),
+                onKeyDown: (event) => {
+                    if (event.key === 'ArrowRight' && !open) onToggle(true);
+                    else if (event.key === 'ArrowLeft' && open) onToggle(false);
+                    else return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                },
+            }, h(ui.IconChevronRightOutlineRegular, { size: 12 })),
+            h('span', { className: hollow ? 'dshp-pg-glyph dshp-pg-hollow' : 'dshp-pg-glyph', 'aria-hidden': true }, glyph),
+            h('div', { className: 'dshp-pg-row-text' },
+                h('h2', { className: 'dshp-pg-title', id: `dshp-pg-${id}` }, title, badge),
+                h('div', { className: 'dshp-pg-line' }, line)),
+            h('span', { className: 'dshp-pg-pulses' }, ...pulses),
+            h('span', { className: 'dshp-pg-actions' }, actions));
+        }
+
+        /** A closed row's second line: the names of its workspaces. */
+        function workspaceNames(workspaces) {
+            if (workspaces.length === 0) return h('span', { className: 'dshp-pg-line-text' }, PAGE.noWorkspacesYet);
+            const names = workspaces.map((ws) => ws.title).join(', ');
+            return h(React.Fragment, null,
+                h(ui.IconFolderCloseRegular, { size: 13, 'aria-hidden': true }),
+                h('span', { className: 'dshp-pg-line-text', 'data-projects-workspace-names': '', title: names }, names));
+        }
+
+        /**
+         * A project with a ◆ coordinator: its name opens the coordinator.
+         * Open, it shows what it runs on (each opens Project settings with
+         * that menu open), the pause with Resume, its threads by state as in
+         * the Threads menu (Done, Idle and Resolved fold behind their counts),
+         * then its workspaces with their own chats.
+         */
+        function CoordinatedProject({ project, workspaces, page, useSessions, projects, now, settingsOn, open, onToggle, fresh }) {
             const coordinator = typeof project.coordinator === 'string' && project.coordinator !== '' ? project.coordinator : undefined;
             const info = useSessions((state) => (coordinator ? projectContext(state, coordinator) : undefined), sameContext);
             const { statuses, sessions } = page;
@@ -3480,130 +3968,125 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const handbacks = useHeldHandbacks(projects.facts, coordinator);
             useWatch(projects.facts, coordinator && paused ? `d:${coordinator}` : null, paused);
             const rows = useRows(projects, useSessions, info?.roster, statuses, byId, paused ? handbacks : EMPTY);
-            const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, true);
-            const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), true);
-            const [showWorkspaces, setShowWorkspaces] = React.useState(false);
+            const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, open);
+            const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), open);
             const ref = useFresh(fresh);
             const summary = summaryModels(cv, models, coordinator, { settings: project.settings });
             const name = project.name || project.id;
-            const headingId = `dshp-pg-${project.id}`;
-            const open = () => { if (coordinator) projects.openSession(coordinator); };
             const target = coordinator ?? project.id;
-            // What its threads are doing; nothing for a project without threads, whose list says so.
             const counts = info?.roster ? countsOf(rows)
                 : { open: Number(project.threads?.open) || 0, waiting: 0, running: 0, resolved: Number(project.threads?.resolved) || 0 };
-            const threadsText = counts.open + counts.resolved > 0 ? summaryText(counts) : null;
             const skip = React.useMemo(() => new Set([coordinator, ...rowSessions(rows)].filter(Boolean)), [coordinator, rows]);
             const parts = workspaceParts(project, page, skip);
+            // Its threads by their own state; its coordinator and plain chats by DSH's.
+            const chats = workspaces.flatMap((ws) => parts.chatsOf(ws).map((row) => row.id));
+            const others = pulseOf([coordinator, ...chats], sessions, statuses);
+            const moved = pulseOf(rowSessions(rows), sessions, statuses).at;
+            const pulse = { waiting: counts.waiting + others.waiting, running: counts.running + others.running, at: Math.max(others.at, moved) };
             const model = (id, label, text) => {
-                const content = [h('span', { key: 'l' }, label), h('span', { key: 'v' }, text ?? '…')];
+                const content = [h('span', { key: 'l' }, label), h('span', { key: 'v', className: 'dshp-pg-model-value' }, text ?? '…')];
                 if (!settingsOn) return h('span', { key: id, className: 'dshp-pg-model', 'data-projects-models': id }, ...content);
                 return h('button', {
-                    key: id, type: 'button', className: 'dshp-pg-model', 'data-projects-models': id,
+                    key: id, type: 'button', className: 'dshp-pg-model', 'data-dshp-item': '', 'data-projects-models': id,
                     'aria-label': `${label}: ${text ?? 'loading'}. Change it in ${SETTINGS.title}`,
                     onClick: () => projects.settings.open(target, { pick: id }),
-                }, ...content);
+                }, ...content, h(ui.IconChevronDownOutlineRegular, { key: 'c', size: 12 }));
             };
-            let body;
-            if (!coordinator) body = h('div', { className: 'dshp-t-notice' }, PAGE.notStarted);
-            else if (info === undefined) body = h('div', { className: 'dshp-t-notice', role: 'status' }, TEXT.loading);
+            let threads;
+            if (!coordinator) threads = h('div', { className: 'dshp-t-notice' }, PAGE.notStarted);
+            else if (info === undefined) threads = h('div', { className: 'dshp-t-notice', role: 'status' }, TEXT.loading);
             else {
-                body = rosterNotice(info, rows, projects) ?? h(ThreadList, {
+                threads = rosterNotice(info, rows, projects) ?? h(ThreadList, {
                     rows, now, models, changes, projects, quietModel: summary.thread,
                     fold: ['done', 'idle', 'resolved'],
-                    onOpen: (row) => projects.openSession(row.session),
+                    onOpen: (row) => projects.openThread(row.session),
                 });
             }
-            return h('section', {
-                ref, className: 'dshp-pg-card', 'aria-labelledby': headingId, 'data-projects-project': project.id, 'data-fresh': fresh ? '' : undefined,
-                onKeyDown: (event) => arrowKeys(event, event.currentTarget),
-            },
-            h('div', { className: 'dshp-pg-head' },
-                h('h2', { className: 'dshp-pg-title', id: headingId },
-                    h('button', { type: 'button', className: 'dshp-pg-name', disabled: !coordinator, onClick: open, 'aria-label': `Open ◆ ${name}` },
-                        h('span', { className: 'dshp-pg-diamond', 'aria-hidden': true }, '◆'),
-                        h('span', { className: 'dshp-pg-name-text' }, name)),
-                    paused ? h('span', { className: 'dshp-pg-badge', 'data-projects-paused': '' }, h(ui.IconPauseOutlineRegular, { size: 12 }), TEXT.paused) : null),
-                h('span', { className: 'dshp-pg-actions' },
-                    settingsOn ? h(ui.Tooltip, { label: SETTINGS.title, side: 'bottom' },
-                        h('button', {
-                            type: 'button', className: 'dshp-t-icon', 'aria-label': `${SETTINGS.title}: ${name}`, 'data-projects-settings-trigger': '',
-                            onClick: () => projects.settings.open(target),
-                        }, h(ui.IconSlidersTwoOutlineRegular, { size: 14 }))) : null,
-                    coordinator ? h(ui.Button, { variant: 'outline', size: 'sm', onClick: open, 'aria-label': `${PAGE.open} ◆ ${name}` }, PAGE.open) : null,
-                    project.source === 'profile' ? null : h(ProjectMenu, { project, actions: page.actions }))),
-            h('div', { className: 'dshp-pg-meta' },
-                project.workspace ? h('span', { className: 'dshp-pg-folder', title: project.workspace },
-                    h(ui.IconFolderCloseRegular, { size: 13, 'aria-hidden': true }),
-                    h('span', null, workspaces.find((ws) => ws.id === project.home)?.title || folderName(project.workspace))) : null,
-                workspaces.length > 1 ? h('span', null, plural(workspaces.length, 'workspace')) : null,
-                threadsText ? h('span', { 'data-projects-summary': '' }, threadsText) : null),
-            h('div', { className: 'dshp-pg-models', role: 'group', 'aria-label': 'Models' },
-                model('coordinator', TEXT.coordinator, summary.coordinator),
-                model('thread', 'New threads', summary.thread)),
-            h('div', { className: 'dshp-pg-body' },
-                paused && coordinator ? h(PausedNotice, { coordinator, role: 'coordinator', projects }) : null,
-                body,
-                h('div', { role: 'group', 'aria-label': PAGE.workspaces, 'data-projects-workspaces': project.id },
-                    h('button', {
-                        type: 'button', className: 'dshp-t-group', 'data-dshp-item': '', 'aria-expanded': showWorkspaces,
-                        onClick: () => setShowWorkspaces((v) => !v),
-                    }, h(ui.IconChevronRightOutlineRegular, { size: 12 }), `${PAGE.workspaces} · ${workspaces.length}`),
-                    showWorkspaces ? h('div', { className: 'dshp-pg-fold' },
+            const title = h('button', {
+                type: 'button', className: 'dshp-pg-name', disabled: !coordinator, 'aria-label': `Open ◆ ${name}`,
+                onClick: () => { if (coordinator) projects.openSession(coordinator); },
+            }, h('span', { className: 'dshp-pg-name-text' }, name));
+            return h('section', { ref, className: 'dshp-pg-proj', 'aria-labelledby': `dshp-pg-${project.id}`, 'data-projects-project': project.id, 'data-fresh': fresh ? '' : undefined },
+                h(PageRow, {
+                    id: project.id, open, onToggle, now, pulse, glyph: '◆', title,
+                    label: `${name}, ${plural(workspaces.length, 'workspace')}${pulseText(pulse)}${paused ? `, ${TEXT.paused}` : ''}`,
+                    badge: paused ? h('span', { className: 'dshp-pg-badge', 'data-projects-paused': '' }, h(ui.IconPauseOutlineRegular, { size: 12 }), TEXT.paused) : null,
+                    line: open ? h('span', { className: 'dshp-pg-line-text', 'data-projects-summary': '' }, counts.open + counts.resolved > 0 ? summaryText(counts) : PAGE.noThreads)
+                        : workspaceNames(workspaces),
+                    actions: [
+                        settingsOn ? h(ui.Tooltip, { key: 's', label: SETTINGS.title, side: 'bottom', portal: true },
+                            h('button', {
+                                type: 'button', className: 'dshp-t-icon', 'aria-label': `${SETTINGS.title}: ${name}`, 'data-projects-settings-trigger': '',
+                                onClick: () => projects.settings.open(target),
+                            }, h(ui.IconSlidersTwoOutlineRegular, { size: 14 }))) : null,
+                        project.source === 'profile' ? null : h(ProjectMenu, { key: 'm', project, actions: page.actions }),
+                    ],
+                }),
+                open ? h('div', { className: 'dshp-pg-body', id: `dshp-pg-body-${project.id}` },
+                    paused && coordinator ? h(PausedNotice, { coordinator, role: 'coordinator', projects }) : null,
+                    h('div', { className: 'dshp-pg-models', role: 'group', 'aria-label': 'Models' },
+                        model('coordinator', TEXT.coordinator, summary.coordinator),
+                        model('thread', 'New threads', summary.thread)),
+                    threads,
+                    h('div', { role: 'group', 'aria-label': PAGE.workspaces, 'data-projects-workspaces': project.id },
+                        h('div', { className: 'dshp-t-group' }, PAGE.workspaces),
                         h(WorkspaceList, { list: workspaces, now, statuses, projects, busy: page.busy, chatsOf: parts.chatsOf, menuFor: parts.menuFor, tagFor: parts.tagFor }),
-                        h(AddWorkspace, { project, others: parts.others, elsewhere: parts.elsewhere, actions: page.actions })) : null)));
+                        h('div', { className: 'dshp-pg-adds' },
+                            h(AddWorkspace, { project, others: parts.others, elsewhere: parts.elsewhere, actions: page.actions })))) : null);
         }
 
         /**
-         * A project without a coordinator: a named set of workspaces, each
-         * opening to its chats, with Add coordinator to give it one.
+         * A project without a coordinator (◇): a named set of workspaces.
+         * Open, each workspace opens to its chats, and Add coordinator gives
+         * it one.
          */
-        function GroupCard({ project, workspaces, page, now, fresh }) {
+        function GroupProject({ project, workspaces, page, now, open, onToggle, fresh }) {
             const name = project.name || project.id;
-            const headingId = `dshp-pg-${project.id}`;
             const ref = useFresh(fresh);
             const parts = workspaceParts(project, page);
-            const chats = workspaces.reduce((n, ws) => n + parts.chatsOf(ws).length, 0);
+            const lists = workspaces.map((ws) => parts.chatsOf(ws));
+            const chats = lists.reduce((n, list) => n + list.length, 0);
+            const pulse = pulseOf(lists.flat().map((row) => row.id), page.sessions, page.statuses);
+            const busy = page.busy.has(project.id);
             return h('section', {
-                ref, className: 'dshp-pg-card', 'aria-labelledby': headingId, 'data-projects-project': project.id, 'data-projects-group': '',
-                'data-fresh': fresh ? '' : undefined, onKeyDown: (event) => arrowKeys(event, event.currentTarget),
+                ref, className: 'dshp-pg-proj', 'aria-labelledby': `dshp-pg-${project.id}`, 'data-projects-project': project.id, 'data-projects-group': '',
+                'data-fresh': fresh ? '' : undefined,
             },
-            h('div', { className: 'dshp-pg-head' },
-                h('h2', { className: 'dshp-pg-title', id: headingId },
-                    h('span', { className: 'dshp-pg-group-name' },
-                        h('span', { className: 'dshp-pg-diamond dshp-pg-hollow', 'aria-hidden': true }, '◇'),
-                        h('span', { className: 'dshp-pg-name-text' }, name))),
-                h('span', { className: 'dshp-pg-actions' },
-                    h(AddCoordinator, { project, workspaces, busy: page.busy.has(project.id), actions: page.actions }),
-                    h(ProjectMenu, { project, actions: page.actions }))),
-            h('div', { className: 'dshp-pg-meta' },
-                h('span', null, plural(workspaces.length, 'workspace')),
-                chats > 0 ? h('span', null, plural(chats, 'chat')) : null,
-                project.source === 'import' ? h('span', { 'data-projects-imported': '' }, PAGE.imported) : null),
-            h('div', { className: 'dshp-pg-body' },
+            h(PageRow, {
+                id: project.id, open, onToggle, now, pulse, glyph: '◇', hollow: true,
+                label: `${name}, ${plural(workspaces.length, 'workspace')}${pulseText(pulse)}`,
+                title: h('span', { className: 'dshp-pg-name-text' }, name),
+                line: open ? h('span', { className: 'dshp-pg-line-text' }, `${plural(workspaces.length, 'workspace')}${chats > 0 ? ` · ${plural(chats, 'chat')}` : ''}`)
+                    : workspaceNames(workspaces),
+                actions: h(ProjectMenu, { project, workspaces, busy, actions: page.actions }),
+            }),
+            open ? h('div', { className: 'dshp-pg-body', id: `dshp-pg-body-${project.id}` },
                 workspaces.length === 0 ? h('div', { className: 'dshp-t-notice' }, PAGE.noWorkspaces)
                     : h(WorkspaceList, { list: workspaces, now, statuses: page.statuses, projects: page.projects, busy: page.busy, chatsOf: parts.chatsOf, menuFor: parts.menuFor }),
-                h(AddWorkspace, { project, others: parts.others, elsewhere: parts.elsewhere, actions: page.actions })));
+                h('div', { className: 'dshp-pg-adds' },
+                    h(AddWorkspace, { project, others: parts.others, elsewhere: parts.elsewhere, actions: page.actions }),
+                    workspaces.length > 0 ? h(AddCoordinator, { project, workspaces, busy, actions: page.actions }) : null)) : null);
         }
 
-        /** Workspaces in no project, last on the page, each with ⋯ to move it into one. */
-        function OthersCard({ page, now }) {
+        /** The workspaces in no project, last on the page; open, each has ⋯ to move it into one. */
+        function OtherWorkspaces({ page, now, open, onToggle }) {
             const { placed, listed, sessions, archived, actions } = page;
             const list = placed.others;
-            return h('section', { className: 'dshp-pg-card dshp-pg-others', 'aria-labelledby': 'dshp-pg-others', 'data-projects-others': '', onKeyDown: (event) => arrowKeys(event, event.currentTarget) },
-                h('div', { className: 'dshp-pg-head' },
-                    h('h2', { className: 'dshp-pg-title', id: 'dshp-pg-others' },
-                        h('span', { className: 'dshp-pg-group-name' },
-                            h('span', { className: 'dshp-pg-others-icon', 'aria-hidden': true }, h(ui.IconFolderCloseRegular, { size: 16 })),
-                            h('span', { className: 'dshp-pg-name-text' }, PAGE.others))),
-                    h('span', { className: 'dshp-pg-count' }, plural(list.length, 'workspace'))),
-                h('div', { className: 'dshp-pg-meta' }, h('span', null, PAGE.othersText)),
-                h('div', { className: 'dshp-pg-body' },
+            const chatsOf = (ws) => chatsIn(ws, sessions, archived);
+            const pulse = pulseOf(list.flatMap((ws) => chatsOf(ws).map((row) => row.id)), sessions, page.statuses);
+            return h('section', { className: 'dshp-pg-proj dshp-pg-others', 'aria-labelledby': `dshp-pg-${OTHERS}`, 'data-projects-others': '' },
+                h(PageRow, {
+                    id: OTHERS, open, onToggle, now, pulse,
+                    glyph: h(ui.IconFolderCloseRegular, { size: 15 }), hollow: true,
+                    label: `${PAGE.others}, ${plural(list.length, 'workspace')}${pulseText(pulse)}`,
+                    title: h('span', { className: 'dshp-pg-name-text' }, PAGE.others),
+                    line: open ? h('span', { className: 'dshp-pg-line-text' }, PAGE.othersText) : workspaceNames(list),
+                }),
+                open ? h('div', { className: 'dshp-pg-body', id: `dshp-pg-body-${OTHERS}` },
                     h(WorkspaceList, {
-                        list, now, statuses: page.statuses, projects: page.projects, busy: page.busy, limit: OTHERS_SHOWN,
-                        chatsOf: (ws) => chatsIn(ws, sessions, archived),
+                        list, now, statuses: page.statuses, projects: page.projects, busy: page.busy, limit: OTHERS_SHOWN, chatsOf,
                         menuFor: (ws) => h(WorkspaceMenu, { ws, inProject: false, targets: listed, actions }),
-                    })));
+                    })) : null);
         }
 
         /** The name dialog for New project and Rename: DSH's own rename dialog, with the plugin's refusal under the field. */
@@ -3682,9 +4165,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * The Projects page, opened from the Projects entry in DSH's sidebar:
-         * every project as a card, the most recently active first (in the
-         * order they had when the page opened, so cards don't jump while you
-         * read), then the workspaces in no project.
+         * every project as one row in a list, the most recently active first
+         * (in the order they had when the page opened, so rows don't jump
+         * while you read), then the workspaces in no project. A row opens to
+         * its threads, workspaces and chats, and stays open across restarts.
          */
         function ProjectsPage({ useSessions, useSessionStatus, useWorkspaces = noWorkspaces, projects }) {
             useFacts(projects.facts);
@@ -3702,11 +4186,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [notice, setNotice] = React.useState('');
             const [busy, setBusy] = React.useState(() => new Set());
             const [fresh, setFresh] = React.useState(null);
+            const [opened, toggleOpen] = useStoredSet(OPEN_KEY);
+            const [notes, dismissNote] = useStoredSet(NOTE_KEY);
             React.useEffect(() => {
                 if (fresh === null) return undefined;
+                // A project just made opens, so "Add a workspace" is right there.
+                toggleOpen(fresh, true);
                 const timer = setTimeout(() => setFresh(null), 2400);
                 return () => clearTimeout(timer);
-            }, [fresh]);
+            }, [fresh, toggleOpen]);
             const all = Array.isArray(listed) ? listed : EMPTY;
             const archived = React.useMemo(() => new Set(Array.isArray(archivedIds) ? archivedIds : EMPTY), [archivedIds]);
             const placed = React.useMemo(() => placeWorkspaces(all, Array.isArray(items) ? items : EMPTY, ready), [all, items, ready]);
@@ -3755,6 +4243,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 remove: (project) => setDialog({ kind: 'delete', project }),
             };
             const page = { placed, listed: all, sessions, statuses, archived, busy, actions, projects };
+            const imported = all.filter((p) => p.source === 'import').map((p) => p.name || p.id);
             const byProject = new Map(all.map((p) => [p.id, p]));
             const ordered = rank.map((id) => byProject.get(id)).filter(Boolean);
             let content;
@@ -3771,15 +4260,23 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         h('h2', null, PAGE.emptyTitle),
                         h('p', null, PAGE.emptyText),
                         h(ui.Button, { variant: 'primary', size: 'sm', className: 'dshp-pg-cta', onClick: () => actions.create(null), 'data-projects-new': '' }, PAGE.newProject))
-                        : h('ul', { className: 'dshp-pg-list' },
-                            ...ordered.map((project) => {
-                                const workspaces = placed.of.get(project.id) ?? EMPTY;
-                                const shared = { project, workspaces, page, now, fresh: fresh === project.id };
-                                return h('li', { key: project.id }, coordinated(project)
-                                    ? h(ProjectCard, { ...shared, useSessions, projects, settingsOn })
-                                    : h(GroupCard, shared));
-                            })),
-                    placed.others.length > 0 ? h(OthersCard, { page, now }) : null);
+                        : h('ul', {
+                            className: 'dshp-pg-list', 'aria-label': PAGE.title,
+                            // Up and down walk the rows and what open rows show (not a menu one of them opened).
+                            onKeyDown: (event) => { if (event.currentTarget.contains(event.target)) arrowKeys(event, event.currentTarget); },
+                        },
+                        ...ordered.map((project) => {
+                            const workspaces = placed.of.get(project.id) ?? EMPTY;
+                            const shared = {
+                                project, workspaces, page, now, fresh: fresh === project.id,
+                                open: opened.has(project.id), onToggle: (on) => toggleOpen(project.id, on),
+                            };
+                            return h('li', { key: project.id, className: 'dshp-pg-item' }, coordinated(project)
+                                ? h(CoordinatedProject, { ...shared, useSessions, projects, settingsOn })
+                                : h(GroupProject, shared));
+                        }),
+                        placed.others.length > 0 ? h('li', { key: OTHERS, className: 'dshp-pg-item dshp-pg-item-others' },
+                            h(OtherWorkspaces, { page, now, open: opened.has(OTHERS), onToggle: (on) => toggleOpen(OTHERS, on) })) : null));
             }
             let overlay = null;
             if (dialog?.kind === 'delete') {
@@ -3825,8 +4322,206 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         notice ? h('div', { className: 'dshp-pg-alert', role: 'alert', 'data-projects-page-error': '' },
                             h('span', null, notice),
                             h('button', { type: 'button', className: 'dshp-t-icon', 'aria-label': PAGE.dismiss, onClick: () => setNotice('') }, h(ui.IconCloseOutlineRegular, { size: 14 }))) : null,
+                        // Where the old sidebar's projects went, said once, until dismissed.
+                        imported.length > 0 && !notes.has('imported') ? h('div', { className: 'dshp-pg-note', 'data-projects-imported': '' },
+                            h(ui.IconInfoOutlineRegular, { size: 14, 'aria-hidden': true }),
+                            h('span', null, PAGE.imported(imported)),
+                            h('button', { type: 'button', className: 'dshp-t-icon', 'aria-label': `${PAGE.dismiss}: ${PAGE.imported(imported)}`, onClick: () => dismissNote('imported', true) },
+                                h(ui.IconCloseOutlineRegular, { size: 14 }))) : null,
                         content)),
                 overlay);
+        }
+
+        // ── Projects in DSH's session list ─────────────────────────────────
+
+        /** Where the collapsed groups are kept between restarts (the window's own storage). */
+        const FOLDED_KEY = `${BUNDLE}/sidebar-folded`;
+        /** DSH's workspace list in its sidebar, the plugin's headers in it, and a workspace's section there (one workspace, or any). */
+        const SB_TREE = '[data-slot="sidebar.workspaces"] [role="tree"]';
+        const SB_HEAD = '[data-projects-sb]';
+        const sbSection = (id) => `div:has(>*>[data-row-key${id === undefined ? '^="workspace:"' : `="workspace:${id}"`}])`;
+        /** DSH's Ungrouped bucket: chats no workspace holds, under a row of its own at the end of DSH's list. */
+        const SB_STRAYS = 'div:has(>[data-row-key="workspace:"],>*>[data-row-key="workspace:"])';
+
+        /**
+         * The groups DSH's session list shows: each project holding a
+         * workspace DSH lists, in the plugin's order (the profile's projects,
+         * then the others as they were made or imported), then Other
+         * workspaces. null until the projects are known, or while no project
+         * holds a listed workspace: the list then stays as DSH draws it.
+         */
+        function sidebarGroups(listed, items) {
+            if (!Array.isArray(listed) || !Array.isArray(items)) return null;
+            const live = new Set(items.map((ws) => ws?.workspaceId).filter((id) => typeof id === 'string'));
+            const placed = new Set();
+            const groups = [];
+            for (const project of listed) {
+                if (!isObject(project) || typeof project.id !== 'string') continue;
+                const ids = [];
+                for (const known of Array.isArray(project.workspaces) ? project.workspaces : EMPTY) {
+                    const id = known?.id;
+                    if (typeof id !== 'string' || placed.has(id) || !live.has(id)) continue;
+                    placed.add(id);
+                    ids.push(id);
+                }
+                if (ids.length > 0) groups.push({ id: project.id, name: project.name || project.id, glyph: coordinated(project) ? '◆' : '◇', workspaces: ids });
+            }
+            if (groups.length === 0) return null;
+            const others = [...live].filter((id) => !placed.has(id));
+            if (others.length > 0) groups.push({ id: OTHERS, name: PAGE.others, glyph: '', workspaces: others });
+            return groups;
+        }
+
+        /**
+         * The CSS that groups DSH's list by project. It holds while the list
+         * has the plugin's headers and shows workspaces (not In one list, not
+         * search results): DSH's list becomes a column whose workspace
+         * sections each follow their project's header one step in, and a
+         * collapsed project's sections are hidden. DSH's own order stays
+         * inside each project; a workspace the plugin hasn't placed yet goes
+         * last, with Other workspaces.
+         */
+        function sidebarRules(groups, folded) {
+            // (:has can't hold another :has, so the list's own test names the row inside a section.)
+            const sections = '>div>*>[data-row-key^="workspace:"]';
+            const on = `${SB_TREE}:has(>${SB_HEAD}):has(${sections})`;
+            const last = 2 * groups.length - 1;
+            const rules = [
+                `${on}{display:flex;flex-direction:column}`,
+                `${on}>*{flex-shrink:0}`,
+                `${SB_TREE}:not(:has(${sections}))>${SB_HEAD}{display:none}`,
+                `${on}>:not(${SB_HEAD}){order:${last}}`,
+                `${on}>${sbSection()}{order:${last};margin-top:4px!important;--dsh-workspace-indent:12px!important}`,
+                // DSH's Ungrouped bucket stays last, level with the headers.
+                `${on}>${SB_STRAYS}{order:${last + 1};margin-top:10px!important;--dsh-workspace-indent:0px!important}`,
+            ];
+            // Workspace Tree nests a folder's workspaces in its section: each level a step further in.
+            for (let depth = 1; depth <= 4; depth += 1) {
+                rules.push(`${on}>${sbSection()}${` ${sbSection()}`.repeat(depth)}{--dsh-workspace-indent:${12 * (depth + 1)}px!important}`);
+            }
+            groups.forEach((group, i) => {
+                const shut = folded.has(group.id) ? ';display:none!important' : '';
+                for (const id of group.workspaces) {
+                    if (/^[\w.:-]+$/.test(id)) rules.push(`${on}>${sbSection(id)}{order:${2 * i + 1}${shut}}`);
+                }
+            });
+            return rules.join('\n');
+        }
+
+        /** A collapsed group's dot: waiting on you if one of its chats is, else running if one runs. */
+        function groupDot(group, byId, statuses) {
+            let dot = null;
+            for (const id of group.workspaces) {
+                for (const sessionId of byId.get(id)?.sessionIds ?? EMPTY) {
+                    const status = statuses?.get?.(sessionId);
+                    if (status?.pendingInteraction) return 'warning';
+                    if (status?.running === true) dot = 'ongoing';
+                }
+            }
+            return dot;
+        }
+
+        /** The collapsed groups, kept in the window's storage so they stay collapsed after a restart. */
+        const useFolded = () => useStoredSet(FOLDED_KEY);
+
+        /**
+         * DSH's workspace list while its sidebar shows one, found again when
+         * DSH draws a new one (search, view options, folding the sidebar).
+         */
+        function useSidebarTree() {
+            const find = () => (typeof document === 'undefined' ? null : document.querySelector(SB_TREE));
+            const [tree, setTree] = React.useState(find);
+            React.useEffect(() => {
+                if (typeof MutationObserver === 'undefined') return undefined;
+                let current = find();
+                setTree(current);
+                let frame = 0;
+                const look = () => {
+                    frame = 0;
+                    const next = find();
+                    if (next !== current) {
+                        current = next;
+                        setTree(next);
+                    }
+                };
+                const observer = new MutationObserver(() => {
+                    if (current?.isConnected || frame !== 0) return;
+                    frame = requestAnimationFrame(look);
+                });
+                observer.observe(document.body, { childList: true, subtree: true });
+                return () => {
+                    observer.disconnect();
+                    if (frame !== 0) cancelAnimationFrame(frame);
+                };
+            }, []);
+            return tree;
+        }
+
+        /** A project's header: its name and how many workspaces it holds; a click, Enter or Space collapses or opens it. */
+        function GroupHeader({ group, order, first, folded, dot, onToggle }) {
+            const count = group.workspaces.length;
+            const status = dot === 'warning' ? ', a chat is waiting on you' : dot === 'ongoing' ? ', running' : '';
+            const step = (event, by) => {
+                const heads = [...(event.currentTarget.parentElement?.querySelectorAll(`:scope>${SB_HEAD}`) ?? EMPTY)];
+                heads[heads.indexOf(event.currentTarget) + by]?.focus();
+            };
+            return h('div', {
+                role: 'treeitem', tabIndex: 0, 'aria-level': 1, 'aria-expanded': !folded,
+                'aria-label': `${group.name}, ${plural(count, 'workspace')}${status}`,
+                className: group.glyph ? 'dshp-sb-head' : 'dshp-sb-head dshp-sb-plain', 'data-projects-sb': group.id,
+                style: first ? { order, marginTop: 0 } : { order },
+                onClick: () => onToggle(),
+                onKeyDown: (event) => {
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key === 'Enter' || event.key === ' ') onToggle();
+                    else if (event.key === 'ArrowRight') onToggle(true);
+                    else if (event.key === 'ArrowLeft') onToggle(false);
+                    else if (event.key === 'ArrowDown') step(event, 1);
+                    else if (event.key === 'ArrowUp') step(event, -1);
+                    else return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                },
+            },
+            h('span', { className: 'dshp-sb-lead', 'aria-hidden': true },
+                group.glyph ? h('span', { className: 'dshp-sb-glyph' }, group.glyph) : null,
+                h('span', { className: 'dshp-sb-chev' }, h(ui.IconChevronRightOutlineRegular, { size: 12 }))),
+            h('span', { className: 'dshp-sb-name' }, group.name),
+            dot ? h('span', { className: 'dshp-sb-dot', 'aria-hidden': true }, h(ui.StateDot, { state: dot })) : null,
+            h('span', { className: 'dshp-sb-count', 'aria-hidden': true }, count));
+        }
+
+        const noStatuses = (select) => select(new Map());
+
+        /**
+         * DSH's session list by project, as the old sidebar tree showed it:
+         * a header over each project's workspaces with its count, collapsible
+         * (remembered across restarts), and the workspaces in no project
+         * last. DSH has no seat for a header in its list, so the headers are
+         * the plugin's own elements added to the list, and CSS sets DSH's
+         * rows under them (sidebarRules). DSH's rows, its order inside each
+         * project, its view options and search are its own as before; In one
+         * list and search show no headers.
+         */
+        function SidebarGroups({ useWorkspaces = noWorkspaces, useSessionStatus = noStatuses, projects }) {
+            useFacts(projects.facts);
+            useWatch(projects.facts, 'list');
+            const items = useWorkspaces((state) => state.items);
+            const statuses = useSessionStatus((value) => value);
+            const tree = useSidebarTree();
+            const [folded, toggle] = useFolded();
+            const listed = projects.facts.projects();
+            const groups = React.useMemo(() => sidebarGroups(listed, items), [listed, items]);
+            const css = React.useMemo(() => (groups === null ? '' : sidebarRules(groups, folded)), [groups, folded]);
+            if (groups === null || tree === null || typeof document === 'undefined') return null;
+            const byId = new Map((Array.isArray(items) ? items : EMPTY).map((ws) => [ws?.workspaceId, ws]));
+            return h(React.Fragment, null,
+                ReactDOM.createPortal(h('style', { 'data-projects-sidebar': '' }, css), document.head),
+                ReactDOM.createPortal(groups.map((group, i) => h(GroupHeader, {
+                    key: group.id, group, order: 2 * i, first: i === 0, folded: folded.has(group.id),
+                    dot: folded.has(group.id) ? groupDot(group, byId, statuses) : null,
+                    onToggle: (open) => toggle(group.id, open === undefined ? undefined : !open),
+                })), tree));
         }
 
         // ── Project settings ───────────────────────────────────────────────
@@ -4143,6 +4838,36 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             });
         }
 
+        /**
+         * The other way to open a thread, in its menu in the session list:
+         * "Open in full view" (the thread as the main chat) where a click on
+         * its row opens it beside its coordinator, not while it is the main
+         * chat; "Open beside its coordinator" where that's turned off.
+         */
+        function FullViewMenuItem({ sessionId, useMenuOpenState, useSessions, projects }) {
+            const [, setMenuOpen] = useMenuOpenState();
+            const thread = useSessions((state) => rowPlace(state, sessionId).startsWith('thread:'));
+            const beside = useBesidePref();
+            if (!thread || (beside && openRow(sessionId))) return null;
+            return h(ui.MenuItemButton, {
+                icon: h(beside ? ui.IconRightUpOutlineRegular : ui.IconCompareSplitOutlineRegular, {}),
+                onSelect: () => {
+                    setMenuOpen(false);
+                    if (beside) projects.openFull(sessionId);
+                    else projects.openPaired(sessionId);
+                },
+            }, beside ? TEXT.openFull : TEXT.openBeside);
+        }
+
+        /** Whether DSH's session list shows this session as the open one. */
+        function openRow(sessionId) {
+            try {
+                return [...document.querySelectorAll('[data-row-key^="session:"][aria-selected="true"]')].some((row) => row.getAttribute('data-row-key') === `session:${sessionId}`);
+            } catch {
+                return false;
+            }
+        }
+
         /** "Project settings" in a project session's menu in the session list. */
         function SettingsMenuItem({ sessionId, useMenuOpenState, useSessions, dialog }) {
             const [, setMenuOpen] = useMenuOpenState();
@@ -4213,6 +4938,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
             rowState, endingOf, endingIn, endingReason, endingLine, openSessions, markState, hoverLine, continueError, GROUPS,
+            roomFor, besidePref, sidebarGroups, sidebarRules, placeWorkspaces, chatsIn, pulseOf, pulseText, listText, OTHERS,
         };
         return module.exports;
     },
