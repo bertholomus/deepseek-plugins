@@ -1412,6 +1412,77 @@ test('browser half: New threads follows DSH\'s default after a pick in any chat;
     assert.equal(focused, 'main');
 });
 
+test('browser half: access reads as DSH names it, and each thread row says what it can reach', () => {
+    const { client } = loadClient();
+    const { permissionName, permissionShown, permissionIn, toolsText, accessOf, accessSummary, ThreadRow, ModelsSummary } = client.internals;
+    const catalog = {
+        defaultPreset: 'danger-full-access',
+        options: [
+            { value: 'read-only', name: 'read-only' }, { value: 'workspace-write', name: 'Workspace Write' }, { value: 'danger-full-access', name: 'danger-full-access' },
+            { value: 'team-review', name: 'team-review' }, { value: 'night', name: 'Night shift' },
+        ],
+    };
+    // DSH's own labels for its presets; another kebab-case name title-cased, any other as given.
+    assert.deepEqual(['read-only', 'workspace-write', 'danger-full-access', 'team-review', 'night', 'custom', 'not-offered'].map((v) => permissionName(v, catalog)),
+        ['Read Only', 'Workspace Write', 'Full access', 'Team Review', 'Night shift', 'Custom', 'Not Offered']);
+    assert.equal(permissionName('', catalog), undefined);
+    assert.equal(permissionName('read-only', { options: [{ value: 'read-only', name: 'Look only' }] }), 'Look only', 'a preset the profile renamed keeps its name');
+    // "default" is DSH's default for new sessions.
+    assert.deepEqual(plain(permissionShown('default', catalog)), { preset: 'danger-full-access', name: 'Full access' });
+    assert.deepEqual(plain(permissionShown('default', null)), { name: 'DSH default' });
+    assert.deepEqual(plain(permissionShown('workspace-write', null)), { preset: 'workspace-write', name: 'Workspace Write' });
+    assert.deepEqual([toolsText('all'), toolsText(['cua', 'lane-catalog']), toolsText([]), toolsText(undefined)], ['all of them', 'cua, lane-catalog', 'none', 'none']);
+    // DSH's permissions projection, from either place the window's store keeps it.
+    assert.equal(permissionIn({ projectionsBySession: { s1: { values: { permissions: { currentValue: 'read-only' } } } } }, 's1'), 'read-only');
+    assert.equal(permissionIn({ byId: { s1: { projectionValues: { permissions: { currentValue: 'workspace-write' } } } } }, 's1'), 'workspace-write');
+    assert.equal(permissionIn({ byId: { s1: {} } }, 's1'), undefined);
+    assert.equal(permissionIn(undefined, 's1'), undefined);
+
+    // What each thread can reach: the preset DSH shows now wins over the one the plugin last saw.
+    const info = {
+        access: { yourTools: { value: 'asked' }, threadPermission: { value: 'workspace-write' } }, guarded: ['lane-catalog', 'cua'], permissions: catalog,
+        threads: [{ id: 't1', session: 's1', permission: 'workspace-write', tools: ['lane-catalog'] }, { id: 't2', session: 's2', permission: 'workspace-write', tools: [] }, { id: 't3', tools: [] }],
+    };
+    assert.deepEqual(plain(accessOf(info, { s2: 'read-only' })), { s1: { permission: 'workspace-write', tools: ['lane-catalog'] }, s2: { permission: 'read-only', tools: [] } });
+    assert.deepEqual(plain(accessOf(null, {})), {});
+    // The menu's access rows: what new threads start on, and the user's tools once any are listed.
+    assert.deepEqual(plain(accessSummary(info)), { permission: { preset: 'workspace-write', name: 'Workspace Write' }, tools: 'Only when asked' });
+    assert.equal(accessSummary({ ...info, access: { ...info.access, yourTools: { value: 'always' } } }).tools, 'Always');
+    assert.deepEqual(plain(accessSummary({ ...info, guarded: [] })), { permission: { preset: 'workspace-write', name: 'Workspace Write' } });
+    assert.deepEqual(plain(accessSummary({ ...info, permissions: null })), { tools: 'Only when asked' });
+    assert.deepEqual(plain(accessSummary({ ...info, guarded: [], permissions: null })), {});
+    assert.deepEqual(plain(accessSummary(null)), {});
+
+    // A row names the user's tools it has, and a permission other than new threads' default.
+    const row = { id: 't1', title: 'Check lanes', line: 'Running', dot: 'ongoing', session: 's1' };
+    const bodyOf = (el) => (el.props.className === 'dshp-t-row' ? el : el.children[0]);
+    const mainOf = (el) => bodyOf(el).children.find((c) => c?.props?.className === 'dshp-t-main');
+    const chips = (access) => {
+        const main = mainOf(ThreadRow({ row, now: 0, onOpen() {}, access, quietPermission: 'workspace-write', permissions: catalog }));
+        return { label: main.props['aria-label'], tools: textIn(byClass(main, 'dshp-t-tools')), permission: byClass(main, 'dshp-t-perm').map((e) => [e.props['data-projects-thread-permission'], textIn(e)]) };
+    };
+    assert.deepEqual(plain(chips({ permission: 'workspace-write', tools: ['lane-catalog'] })),
+        { label: 'Check lanes. Running. Your tools: lane-catalog', tools: 'lane-catalog', permission: [] });
+    assert.deepEqual(plain(chips({ permission: 'read-only', tools: [] })),
+        { label: 'Check lanes. Running. Read Only', tools: '', permission: [['read-only', 'Read Only']] });
+    assert.deepEqual(plain(chips({ permission: 'danger-full-access', tools: 'all' })),
+        { label: 'Check lanes. Running. Full access. Your tools: all of them', tools: 'all of them', permission: [['danger-full-access', 'Full access']] });
+    assert.deepEqual(plain(chips(undefined)), { label: 'Check lanes. Running', tools: '', permission: [] });
+
+    // The menu's top: rows for new threads' permission and the user's tools, each opening Project settings at Access.
+    const picked = [];
+    const summary = ModelsSummary({ coordinator: 'V4 · Max', thread: 'V4 · High', access: accessSummary(info), onPick: (id) => picked.push(id) });
+    const rows = summary.children.filter(Boolean);
+    assert.deepEqual(rows.map((r) => r.props['data-projects-models']), ['coordinator', 'thread', 'access', 'tools']);
+    assert.deepEqual(rows.slice(2).map((r) => r.props['aria-label']),
+        ['Thread access: Workspace Write. Change it in Project settings', 'Your tools: Only when asked. Change it in Project settings']);
+    rows[2].props.onClick();
+    rows[3].props.onClick();
+    assert.deepEqual(picked, ['access', 'access']);
+    assert.equal(ModelsSummary({ coordinator: 'V4 · Max', thread: 'V4 · High' }).children.filter(Boolean).length, 2);
+    assert.equal(ModelsSummary({ coordinator: 'V4 · Max', thread: 'V4 · High', access: {} }).children.filter(Boolean).length, 2);
+});
+
 test('browser half: thread rows, cards and links read the projection as DSH sends it', () => {
     const { client } = loadClient();
     const { projectContext, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow } = client.internals;

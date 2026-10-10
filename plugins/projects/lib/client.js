@@ -46,6 +46,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             { id: 'thread', title: 'New threads', hint: 'A running thread keeps the model it started with.', model: 'threadModel', effort: 'threadEffort' },
         ];
         const FIELDS = ROUTES.flatMap((route) => [route.model, route.effort]);
+        /** The plugin-wide access defaults, in the same form; empty is the plugin's own default. */
+        const ACCESS_FIELDS = ['yourTools', 'coordinatorPermission', 'threadPermission'];
+        const FORM_FIELDS = [...FIELDS, ...ACCESS_FIELDS];
+        /** What an empty access field means. */
+        const ACCESS_BUILTIN = { yourTools: 'asked', coordinatorPermission: 'default', threadPermission: 'workspace-write' };
         const LABELS = {
             unavailable: 'The projects plugin is not running, so its defaults cannot be changed right now.',
             readOnly: 'This DSH stores settings read-only.',
@@ -104,6 +109,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-pt-value{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary)}',
             '.dshp-pt-source{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
             '.dshp-pt-action{align-items:flex-end}',
+            '.dshp-pt-perm{display:inline-flex;align-items:center;gap:5px;min-width:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pt-perm>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshp-pt-state{padding:14px 0 6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
             '@container (width<=560px){.dshp-pt-head{display:none}.dshp-pt-row{grid-template-columns:minmax(0,1fr) auto}.dshp-pt-row>.dshp-pt-cell:nth-child(2),.dshp-pt-row>.dshp-pt-cell:nth-child(3){grid-column:1/-1}.dshp-pt-action{grid-row:1;grid-column:2}.dshp-pt-label{display:block;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}}',
             // Model picker: DSH's composer model menu, as a settings control
@@ -145,6 +152,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-mp-search-clear:hover,.dshp-mp-search-clear:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover)}',
             `.dshp-mp-search-clear:focus-visible{box-shadow:inset 0 0 0 2px ${RING}}`,
             '.dshp-mp-empty{padding:8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+            // Access: DSH's permission icons, the permission picker (DSH's access chip, in the model picker's shape), Your tools.
+            '.dshp-perm-glyph{flex:none;display:inline-flex;align-items:center}',
+            '.dshp-nowrap{white-space:nowrap}',
+            '.dshp-perm-glyph>svg{display:block}',
+            '.dshp-pp{display:inline-flex;min-width:0;max-width:100%}',
+            '.dshp-pp-trigger .dshp-perm-glyph{color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pp-compact{gap:4px;padding:0 8px 0 10px}',
+            '.dshp-pp-opt{display:inline-flex;flex-direction:column;min-width:0;max-width:100%}',
+            '.dshp-pp-opt-name,.dshp-pp-opt-detail{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshp-pp-opt-detail{font-size:12px;line-height:16px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-tools-control{flex:none;display:inline-flex}',
+            '.dshp-tools-pair{display:inline-flex;gap:4px}',
+            '.dshp-tool-names{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}',
+            '.dshp-tool-name{padding:0 6px;border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-interactive-bg-hover);font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-heading-next{margin-top:20px}',
             // Threads: header menu
             '.dshp-t-hdr{position:relative;display:inline-flex;align-items:center;gap:2px;min-width:0}',
             // A project session's title is its own name (no project prefix), so its header crumb may use more of the
@@ -183,6 +205,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-models-label{flex:none;width:84px;color:var(--dsw-alias-label-secondary)}',
             '.dshp-t-models-value{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshp-t-models-row>svg{flex:none;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-t-models-glyph{flex:none;display:inline-flex;margin-right:-3px;color:var(--dsw-alias-label-secondary)}',
             '.dshp-t-pane .dshp-t-models{margin:0 0 6px;padding:0 0 8px}',
             '.dshp-t-pane .dshp-t-models-row{min-height:32px;padding:6px 10px;font-size:13px;line-height:20px}',
             '.dshp-t-pane .dshp-t-models-label{width:96px}',
@@ -211,6 +234,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-line{flex:1 1 150px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}',
             '.dshp-t-meta{flex:none;margin-left:auto;display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%;height:16px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;white-space:nowrap}',
             '.dshp-t-model{min-width:0;overflow:hidden;text-overflow:ellipsis}',
+            '.dshp-t-tools,.dshp-t-perm{flex:0 1 auto;display:inline-flex;align-items:center;gap:3px;min-width:0;max-width:140px}',
+            '.dshp-t-tools>span,.dshp-t-perm>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis}',
+            '.dshp-t-tools>svg{flex:none}',
             '.dshp-t-ago{flex:none}',
             '.dshp-t-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;margin:-4px -2px -4px 0;padding:0;border:0;border-radius:var(--dsw-radius-sm);background:none;color:var(--dsw-alias-label-tertiary);cursor:pointer}',
             '.dshp-t-icon:hover,.dshp-t-icon:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
@@ -363,6 +389,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-hover-line{color:#adb2b8;overflow-wrap:anywhere}',
             // The same 6px between the counts and "· N files" as on cards and rows.
             '.dshp-t-hover-line[data-projects-changes]{display:flex;align-items:center;gap:6px}',
+            '.dshp-t-hover-line[data-projects-access]{display:flex;align-items:flex-start;gap:6px}',
+            '.dshp-t-hover-line[data-projects-access]>.dshp-perm-glyph{margin-top:2px}',
             // Project settings dialog
             '.dshp-t-gear{padding:3px 5px}',
             '.dshp-t-pane-head{position:relative;padding-right:40px}',
@@ -406,6 +434,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-ps-note{margin:18px 2px 0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
             '.dshp-ps-state{display:flex;flex-direction:column;align-items:center;gap:10px;padding:36px 12px;text-align:center;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
             `.dshp-ps-state.dshp-ps-error{color:${ERROR_TEXT}}`,
+            '.dshp-ps-controls{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;min-width:0;max-width:100%}',
+            '.dshp-ps-reach{display:inline-flex;align-items:flex-start;gap:5px;min-width:0}',
+            '.dshp-ps-reach>.dshp-perm-glyph{margin-top:3px}',
+            '.dshp-ps-reach>span:last-child{min-width:0}',
             // The Projects page (the Projects entry in the sidebar): DSH's page layout, as on Automation tasks,
             // with one row per project in a list; a row opens to its threads, workspaces and chats.
             '.dshp-pg{display:flex;width:100%;min-width:0;height:100%;min-height:0;overflow:hidden;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);font-size:14px;line-height:1.6}',
@@ -462,6 +494,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-pg-model{display:inline-flex;align-items:center;gap:6px;min-width:0;height:28px;padding:0 8px;border:0;border-radius:var(--dsw-radius-md);background:none;font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary);text-align:left}',
             '.dshp-pg-model-value{color:var(--dsw-alias-label-primary)}',
             '.dshp-pg-model>svg{flex:none;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-pg-model-glyph{flex:none;display:inline-flex;margin-right:-2px;color:var(--dsw-alias-label-secondary)}',
             'button.dshp-pg-model{cursor:pointer}',
             'button.dshp-pg-model:hover{background:var(--dsw-alias-interactive-bg-hover)}',
             `button.dshp-pg-model:focus-visible{outline:none;box-shadow:inset 0 0 0 2px ${RING}}`,
@@ -718,7 +751,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function insertedTwice(snapshot) {
             if (!snapshot || snapshot.status !== 'ready') return false;
             const has = (layer, key) => layer !== null && typeof layer === 'object' && layer[key] !== undefined && layer[key] !== '';
-            return FIELDS.some((key) => has(snapshot.value, key) && !has(snapshot.user, key) && !has(snapshot.base, key));
+            return FORM_FIELDS.some((key) => has(snapshot.value, key) && !has(snapshot.user, key) && !has(snapshot.base, key));
         }
 
         /** Provider groups of a model list in catalog order, DSH's own account first as its picker does. */
@@ -1109,9 +1142,67 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     })));
         }
 
-        function DefaultsForm({ form, catalog }) {
+        /** The user's tools and DSH's permissions, as the plugin lists them: read when shown, then every 15 s. null until read. */
+        function useListedAccess(link) {
+            const [value, setValue] = React.useState(null);
+            React.useEffect(() => {
+                let alive = true;
+                const read = async () => {
+                    const result = await link.call('list', {});
+                    if (!alive || !result.ok || !isObject(result.value)) return;
+                    const guarded = Array.isArray(result.value.guarded) ? result.value.guarded.filter((name) => typeof name === 'string' && name !== '') : [];
+                    const permissions = isObject(result.value.permissions) ? result.value.permissions : null;
+                    setValue((was) => (was && was.guarded.join('\n') === guarded.join('\n') && JSON.stringify(was.permissions) === JSON.stringify(permissions) ? was : { guarded, permissions }));
+                };
+                void read();
+                const timer = setInterval(() => {
+                    if (typeof document === 'undefined' || document.visibilityState !== 'hidden') void read();
+                }, 15000);
+                return () => { alive = false; clearInterval(timer); };
+            }, [link]);
+            return value;
+        }
+
+        const ACCESS_NOTE = 'These apply to every project that doesn\'t set its own in its Project settings or its row in your profile. Your tools are the ones listed under guardedTools in this plugin\'s config.';
+
+        /**
+         * The plugin-wide access defaults, in the same form as the default
+         * models (one Save): Your tools, and the permission coordinators and
+         * new threads start on. An empty field is the plugin's own default;
+         * picking that value stages a clear.
+         * @param props.listed - useListedAccess' answer.
+         */
+        function accessDefaults({ state, actions, disabled, listed }) {
+            const text = (name) => String(state[name]?.text ?? '').trim();
+            const guarded = listed?.guarded ?? EMPTY;
+            const perms = isObject(listed?.permissions) && Array.isArray(listed.permissions.options) && listed.permissions.options.length > 0 ? listed.permissions : null;
+            const pick = (name, next) => actions.edit(name, next === ACCESS_BUILTIN[name] ? '' : next);
+            const tools = text('yourTools').toLowerCase() === 'always' ? 'always' : 'asked';
+            const row = (id, title, hint, control, extra) => h('section', { key: id, className: 'dshp-section', 'data-projects-access-default': id },
+                h('h4', { className: 'dshp-title' }, title),
+                h('div', { className: 'dshp-route' },
+                    h('div', { className: 'dshp-route-text' }, h('p', { className: 'dshp-hint' }, hint), extra ?? null),
+                    control));
+            const permission = (name, title, hint, risk) => row(name, title, hint, h(PermissionPicker, {
+                id: `dshp-${name}`, label: title, catalog: perms, value: text(name) || ACCESS_BUILTIN[name], dshDefault: true, risk, disabled,
+                onPick: (next) => pick(name, next),
+            }));
+            return [
+                h('h3', { key: 'h', className: 'dshp-heading dshp-heading-next', 'data-projects-access-defaults': '' }, 'Default access'),
+                row('yourTools', SETTINGS.yourTools,
+                    guarded.length === 0 ? SETTINGS.noTools : tools === 'always' ? SETTINGS.toolsAlwaysAll : SETTINGS.toolsAsked,
+                    h(ToolsControl, { id: 'dshp-your-tools', value: tools, names: guarded, risk: RISK.allTools, disabled, onPick: (next) => pick('yourTools', next) }),
+                    guarded.length > 0 ? h(ToolNames, { names: guarded }) : null),
+                perms ? permission('coordinatorPermission', SETTINGS.coordinatorPermission, 'Where each ◆ session can write, and what it asks you first. DSH default is the permission DSH gives new chats.', RISK.allCoordinators) : null,
+                perms ? permission('threadPermission', SETTINGS.threadPermission, 'What each new thread starts on. A running thread keeps its own.', RISK.allThreads) : null,
+                h('p', { key: 'n', className: 'dshp-note' }, ACCESS_NOTE),
+            ];
+        }
+
+        function DefaultsForm({ form, catalog, link }) {
             const snapshot = React.useSyncExternalStore(form.subscribe, form.getSnapshot);
             const cat = React.useSyncExternalStore(catalog.subscribe, catalog.getSnapshot);
+            const listed = useListedAccess(link);
             React.useEffect(() => { catalog.load(); }, [catalog]);
             const models = modelsOf(cat.value);
             // A save would be refused, so the form shows the values read-only with the fix.
@@ -1122,12 +1213,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 h('h3', { className: 'dshp-heading' }, 'Default models'),
                 h(ui.SettingsForm, { labels, state, onSave: form.actions.save, onDiscard: form.actions.discard },
                     ...ROUTES.map((route) => h(RouteSection, { key: route.id, route, state, actions: form.actions, catalog: cat, models, disabled })),
-                    h('p', { className: 'dshp-note' }, NOTE)));
+                    h('p', { key: 'note', className: 'dshp-note' }, NOTE),
+                    ...accessDefaults({ state, actions: form.actions, disabled, listed })));
         }
 
         const TABLE = {
             heading: 'Projects',
-            hint: 'What each project runs. A project\'s own choice comes first, then its row in your profile, then the Default models above.',
+            hint: 'What each project runs on and can reach. A project\'s own choice comes first, then its row in your profile, then the defaults above.',
             loading: 'Loading projects…',
             failed: 'The projects plugin didn\'t answer, so its projects can\'t be listed right now.',
             none: 'No projects yet. Add one under "projects" in this plugin\'s config.',
@@ -1170,6 +1262,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const cv = React.useMemo(() => catalogView(cat.value), [cat.value]);
             const settingsOn = useSettingsAvailable(dialog);
             const [list, setList] = React.useState(null);
+            const [listed, setListed] = React.useState(null);
             const [failed, setFailed] = React.useState(false);
             const alive = React.useRef(true);
             const read = React.useCallback(async () => {
@@ -1177,6 +1270,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (!alive.current) return;
                 if (result.ok && Array.isArray(result.value?.projects)) {
                     setList(result.value.projects.filter((p) => isObject(p) && typeof p.id === 'string'));
+                    const guarded = Array.isArray(result.value.guarded) ? result.value.guarded.filter((name) => typeof name === 'string' && name !== '') : [];
+                    const permissions = isObject(result.value.permissions) && Array.isArray(result.value.permissions.options) && result.value.permissions.options.length > 0 ? result.value.permissions : null;
+                    setListed((was) => (was && was.guarded.join('\n') === guarded.join('\n') && JSON.stringify(was.permissions) === JSON.stringify(permissions) ? was : { guarded, permissions }));
                     setFailed(false);
                 } else {
                     setFailed(true);
@@ -1220,15 +1316,27 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             } else if (list.length === 0) {
                 body = h('div', { className: 'dshp-pt-state' }, TABLE.none);
             } else {
-                const cell = (key, label, value, caption) => h('div', { key, className: 'dshp-pt-cell', role: 'cell' },
+                const perms = listed?.permissions ?? null;
+                const guarded = listed?.guarded ?? EMPTY;
+                const cell = (key, label, value, caption, extra) => h('div', { key, className: 'dshp-pt-cell', role: 'cell' },
                     h('span', { className: 'dshp-pt-label' }, label),
                     h('span', { className: 'dshp-pt-value', title: value }, value),
-                    caption ? h('span', { className: 'dshp-pt-source' }, caption) : null);
-                const routeCell = (p, key, label, mKey, eKey, live) => {
+                    caption ? h('span', { className: 'dshp-pt-source' }, caption) : null,
+                    extra ?? null);
+                // Where the coordinator (now, when DSH has it loaded) or new threads can write, with where that comes from.
+                const permissionLine = (p, key, live) => {
+                    const a = p.access?.[key];
+                    if (!perms || !isObject(a)) return null;
+                    const shown = live ? { preset: live, name: permissionName(live, perms) } : permissionShown(a.value, perms);
+                    if (!shown.name) return null;
+                    return h('span', { className: 'dshp-pt-perm', 'data-projects-table-permission': shown.preset ?? '', title: ACCESS_SOURCE[a.source] ?? undefined },
+                        permissionGlyph(shown.preset, 12), h('span', null, shown.name));
+                };
+                const routeCell = (p, key, label, mKey, eKey, live, permission) => {
                     const m = p.settings?.[mKey];
                     const e = p.settings?.[eKey];
                     const route = resolveRoute(cv, m?.value ?? undefined, e?.value ?? undefined);
-                    return cell(key, label, routeLabel(route), (live ? liveNote(cv, route, live) : undefined) ?? sourceLine(m, levelsOf(route) ? e : undefined));
+                    return cell(key, label, routeLabel(route), (live ? liveNote(cv, route, live) : undefined) ?? sourceLine(m, levelsOf(route) ? e : undefined), permission);
                 };
                 const threadsLine = (t) => {
                     const open = Number(t?.open) || 0;
@@ -1236,6 +1344,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     if (open + resolved === 0) return 'No threads yet';
                     return resolved > 0 ? `${plural(open, 'open thread')} · ${resolved} resolved` : plural(open, 'open thread');
                 };
+                const toolsLine = (p) => (guarded.length === 0 || !isObject(p.access?.yourTools) ? null
+                    : h('span', { className: 'dshp-pt-source', 'data-projects-table-tools': p.access.yourTools.value }, p.access.yourTools.value === 'always' ? 'Your tools: always' : 'Your tools: only when asked'));
                 body = h('div', { className: 'dshp-pt', role: 'table', 'aria-label': TABLE.heading },
                     h('div', { className: 'dshp-pt-row dshp-pt-head', role: 'row' },
                         ...[TABLE.project, TEXT.coordinator, 'New threads', ''].map((text, i) => h('span', { key: i, role: 'columnheader' }, text))),
@@ -1245,9 +1355,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                 h('span', { className: 'dshp-pt-diamond', 'aria-hidden': true }, '◆'),
                                 h('span', { className: 'dshp-pt-name-text', title: p.workspace || undefined }, p.name || p.id),
                                 p.paused ? h('span', { className: 'dshp-pt-badge' }, TABLE.paused) : null),
-                            h('span', { className: 'dshp-pt-source' }, threadsLine(p.threads))),
-                        routeCell(p, 'c', TEXT.coordinator, 'coordinatorModel', 'coordinatorEffort', p.live),
-                        routeCell(p, 't', 'New threads', 'threadModel', 'threadEffort'),
+                            h('span', { className: 'dshp-pt-source' }, threadsLine(p.threads)),
+                            toolsLine(p)),
+                        routeCell(p, 'c', TEXT.coordinator, 'coordinatorModel', 'coordinatorEffort', p.live, permissionLine(p, 'coordinatorPermission', typeof p.permission === 'string' ? p.permission : undefined)),
+                        routeCell(p, 't', 'New threads', 'threadModel', 'threadEffort', undefined, permissionLine(p, 'threadPermission')),
                         h('div', { className: 'dshp-pt-cell dshp-pt-action', role: 'cell' },
                             settingsOn ? h(ui.Button, {
                                 variant: 'outline', size: 'sm', 'aria-label': `${SETTINGS.title}: ${p.name || p.id}`,
@@ -1278,11 +1389,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         function applyDefaultsForm(ctx, { catalog, link, dialog, sessionsOf }) {
             const scope = ctx.configForms.get(ENTRY);
-            const model = new ui.SettingsFormModel(scope, FIELDS.map((name) => ui.settingsTextField(name)));
+            const model = new ui.SettingsFormModel(scope, FORM_FIELDS.map((name) => ui.settingsTextField(name)));
             const store = model.bind(() => ({
                 ...model.shell(),
                 insertedTwice: insertedTwice(scope.getSnapshot()),
-                ...Object.fromEntries(FIELDS.map((name) => [name, model.field(name)])),
+                ...Object.fromEntries(FORM_FIELDS.map((name) => [name, model.field(name)])),
             }));
             const form = {
                 subscribe: (listener) => store.subscribe(listener),
@@ -1291,9 +1402,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
             ctx.effect(() => () => model.dispose(), 'projects: defaults form');
             const Page = (props) => (props.view === 'summary'
-                ? 'Default models and effort for coordinators and threads.'
+                ? 'Default models, effort and access for coordinators and threads.'
                 : h('div', { className: 'dshp-page' },
-                    h(DefaultsForm, { form, catalog }),
+                    h(DefaultsForm, { form, catalog, link }),
                     h(ThreadOptions),
                     h(ProjectsTable, { link, dialog, catalog, sessionsOf })));
             ctx.effect(() => ctx.configForms.whileServed([ENTRY], () => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
@@ -1603,6 +1714,131 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** A resolved setting (resolveRoute) as one label. */
         const routeLabel = (route) => (route.effortName ? `${route.name} · ${route.effortName}` : route.name);
 
+        // ── Access: the user's tools, and the permission each session runs on ──
+
+        /** DSH's own labels for its built-in permission presets, as its access menu shows them. */
+        const PRESET_LABELS = Object.freeze({ 'read-only': 'Read Only', 'workspace-write': 'Workspace Write', 'danger-full-access': 'Full access' });
+        const FULL_ACCESS = 'danger-full-access';
+
+        /**
+         * A permission preset under the name DSH's menus give it: the built-in
+         * label, else the name DSH sends, title-cased when it is a kebab-case
+         * key ("team-review" is "Team Review"), as DSH does.
+         * @param catalog - the permissions DSH offers ({options: [{value, name}]}), or undefined.
+         */
+        function permissionName(value, catalog) {
+            if (typeof value !== 'string' || value === '') return undefined;
+            if (value === 'custom') return 'Custom';
+            const option = Array.isArray(catalog?.options) ? catalog.options.find((o) => isObject(o) && o.value === value) : undefined;
+            const name = typeof option?.name === 'string' && option.name !== '' ? option.name : value;
+            if (Object.hasOwn(PRESET_LABELS, value) && (name === value || name === PRESET_LABELS[value])) return PRESET_LABELS[value];
+            return /^[a-z0-9]+(-[a-z0-9]+)*$/.test(name) ? name.split('-').map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ') : name;
+        }
+
+        /** DSH's icon for one of its built-in presets (a shield for any other), at `size`. */
+        function permissionGlyph(value, size = 14) {
+            if (typeof value !== 'string' || value === '') return null;
+            const Icon = value === 'read-only' ? ui.PermissionIconReadOnlyRegular : value === 'workspace-write' ? ui.PermissionIconWorkspaceWriteRegular
+                : value === FULL_ACCESS ? ui.PermissionIconFullAccessRegular : ui.IconShieldOutlineRegular;
+            return Icon ? h('span', { className: 'dshp-perm-glyph', 'aria-hidden': true }, h(Icon, { size })) : null;
+        }
+
+        /** The shield that marks the user's tools. */
+        function toolsGlyph(size = 12) {
+            return ui.IconShieldOutlineRegular ? h('span', { className: 'dshp-perm-glyph', 'aria-hidden': true }, h(ui.IconShieldOutlineRegular, { size })) : null;
+        }
+
+        /**
+         * The preset a permission setting puts a session on ("default" is
+         * DSH's default for new sessions), and its name.
+         * @returns {{preset?: string, name?: string}}
+         */
+        function permissionShown(value, catalog) {
+            const preset = value === 'default' ? (typeof catalog?.defaultPreset === 'string' ? catalog.defaultPreset : undefined) : value;
+            return { preset, name: permissionName(preset, catalog) ?? (value === 'default' ? 'DSH default' : undefined) };
+        }
+
+        /** The user's tools a session has, as a phrase: "none", "all of them", or their names. */
+        function toolsText(tools) {
+            if (tools === 'all') return 'all of them';
+            return Array.isArray(tools) && tools.length > 0 ? tools.join(', ') : 'none';
+        }
+
+        /** "Your tools: …" as an element, each name kept whole on a line ("lane-catalog" doesn't break at its hyphen). */
+        function toolsWords(tools) {
+            const names = tools !== 'all' && Array.isArray(tools) ? tools : EMPTY;
+            if (names.length === 0) return h('span', null, `Your tools: ${toolsText(tools)}`);
+            return h('span', null, 'Your tools: ', ...names.flatMap((name, i) => [i > 0 ? ', ' : null, h('span', { key: name, className: 'dshp-nowrap' }, name)]).filter((part) => part !== null));
+        }
+
+        /** The parts of a line, with " · " between them. */
+        const joined = (parts) => parts.filter(Boolean).flatMap((part, i) => (i > 0 ? [' · ', part] : [part]));
+
+        /**
+         * A session's permission preset now, from DSH's own `permissions`
+         * projection (the one its access chip shows), or undefined before DSH
+         * has sent it.
+         */
+        function permissionIn(state, sessionId) {
+            if (typeof sessionId !== 'string' || sessionId === '' || !state) return undefined;
+            const value = state.projectionsBySession?.[sessionId]?.values?.permissions ?? state.byId?.[sessionId]?.projectionValues?.permissions;
+            return isObject(value) && typeof value.currentValue === 'string' && value.currentValue !== '' ? value.currentValue : undefined;
+        }
+        const sameRecord = (a, b) => {
+            const keys = Object.keys(a);
+            return keys.length === Object.keys(b).length && keys.every((key) => a[key] === b[key]);
+        };
+
+        /** The permission presets of some sessions, by session id; the same object until one of them changes. */
+        function usePermissions(useSessions, sessionIds) {
+            const key = sessionIds.join('\n');
+            const select = React.useCallback((state) => {
+                const out = {};
+                for (const id of sessionIds) {
+                    const preset = permissionIn(state, id);
+                    if (preset) out[id] = preset;
+                }
+                return out;
+            }, [key]);
+            return useSessions(select, sameRecord);
+        }
+
+        /**
+         * What each thread of a described project can reach, by session id:
+         * {permission, tools}. The preset DSH shows now wins over the one the
+         * plugin last saw; which of the user's tools it has only the plugin
+         * knows. Empty until the project is described.
+         * @param info - describe's answer, or null.
+         * @param live - usePermissions' answer.
+         */
+        function accessOf(info, live) {
+            const out = {};
+            for (const t of Array.isArray(info?.threads) ? info.threads : []) {
+                if (!isObject(t) || typeof t.session !== 'string') continue;
+                const permission = live?.[t.session] ?? (typeof t.permission === 'string' ? t.permission : undefined);
+                out[t.session] = { permission, tools: t.tools === 'all' ? 'all' : Array.isArray(t.tools) ? t.tools : EMPTY };
+            }
+            return out;
+        }
+
+        /**
+         * The access rows at the top of the Threads menu and pane and on the
+         * Projects page: the permission new threads start on (when DSH offers
+         * permissions), and whether sessions get the user's tools (when any
+         * are listed). Each is undefined until the project is described.
+         * @returns {{permission?: {preset?: string, name: string}, tools?: string}}
+         */
+        function accessSummary(info) {
+            const a = info?.access;
+            if (!isObject(a)) return {};
+            const thread = permissionShown(a.threadPermission?.value, info.permissions);
+            const guarded = Array.isArray(info.guarded) ? info.guarded : EMPTY;
+            return {
+                permission: isObject(info.permissions) && thread.name ? thread : undefined,
+                tools: guarded.length === 0 ? undefined : a.yourTools?.value === 'always' ? 'Always' : 'Only when asked',
+            };
+        }
+
         /** DSH's model catalog for naming models; loads it once while `active`. */
         function useCatalogView(catalog, active = true) {
             const snapshot = React.useSyncExternalStore(catalog.subscribe, catalog.getSnapshot);
@@ -1632,6 +1868,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             /** The last list answer (null until one came), and whether the last read failed. */
             let listed = null;
             let listFailed = false;
+            /** What list says besides the projects: the user's tools (guardedTools) and the permissions DSH offers. */
+            let listedAccess = { guarded: EMPTY, permissions: null };
             const emit = () => {
                 version += 1;
                 for (const listener of [...listeners]) listener();
@@ -1687,6 +1925,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     if (!listFailed) { listFailed = true; emit(); }
                     return;
                 }
+                const guarded = Array.isArray(result.value.guarded) ? result.value.guarded.filter((name) => typeof name === 'string') : EMPTY;
+                const permissions = isObject(result.value.permissions) ? result.value.permissions : null;
+                if (guarded.join('\n') !== listedAccess.guarded.join('\n') || JSON.stringify(permissions) !== JSON.stringify(listedAccess.permissions)) listedAccess = { guarded, permissions };
                 take(result.value.projects);
             });
             const read = (key, maxAge) => (key === 'list' ? list(maxAge) : describe(key.slice(2), maxAge));
@@ -1708,6 +1949,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 /** Every project as `list` last answered (null until it has), and whether the last read failed. */
                 projects: () => listed,
                 listFailed: () => listFailed,
+                /** The user's tools and DSH's permissions as `list` last answered: {guarded, permissions}; the same object until they change. */
+                listedAccess: () => listedAccess,
                 /** Whether a coordinator's project is paused, as last read; undefined until read. */
                 paused(coordinator) {
                     const d = this.info(coordinator);
@@ -2067,10 +2310,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * equal to `quietModel` (what new threads start on, which the menu
          * names once at its top) is left off the line and named in a tooltip
          * when the row is hovered or focused, so the summary keeps its room.
+         * The same goes for its permission against `quietPermission`; the
+         * user's tools it has are always named.
+         * @param props.access - {permission?, tools}: what it can reach (accessOf), or undefined.
+         * @param props.permissions - the permissions DSH offers, for their names.
          */
-        function ThreadRow({ row, current, now, model, quietModel, changes, onOpen, action, projects, slots = 0 }) {
+        function ThreadRow({ row, current, now, model, quietModel, access, quietPermission, permissions, changes, onOpen, action, projects, slots = 0 }) {
             const enabled = !current && row.session !== undefined;
             const quiet = model !== undefined && model === quietModel;
+            const permission = access?.permission !== undefined && access.permission !== quietPermission ? access.permission : undefined;
+            const permissionText = permission !== undefined ? permissionName(permission, permissions) : undefined;
+            const tools = access?.tools === 'all' || (Array.isArray(access?.tools) && access.tools.length > 0) ? toolsText(access.tools) : undefined;
             const acts = [
                 row.ending && row.session !== undefined && projects ? h(RowContinue, { key: 'continue', row, projects }) : null,
                 action && enabled ? h(ui.Tooltip, { key: 'action', label: action.label, side: 'bottom', align: 'end', portal: true },
@@ -2095,7 +2345,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 type: 'button', className: 'dshp-t-main', tabIndex: enabled ? 0 : -1, 'data-dshp-item': '',
                 'aria-current': current ? 'true' : undefined,
                 'aria-disabled': enabled ? undefined : 'true',
-                'aria-label': `${row.title}. ${current ? `${TEXT.current}. ` : ''}${row.line}${changes ? `. ${changesText(changes)}` : ''}${model ? `. Runs on ${model}` : ''}`,
+                'aria-label': `${row.title}. ${current ? `${TEXT.current}. ` : ''}${row.line}${changes ? `. ${changesText(changes)}` : ''}${model ? `. Runs on ${model}` : ''}`
+                    + `${permissionText ? `. ${permissionText}` : ''}${tools ? `. Your tools: ${tools}` : ''}`,
                 onClick: () => { if (enabled) onOpen(row); },
             },
             h('span', { className: 'dshp-t-dot', 'data-state': row.dot }, h(ui.StateDot, { state: row.dot })),
@@ -2105,6 +2356,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h('span', { className: 'dshp-t-line' }, current ? `${TEXT.current} · ${row.line}` : row.line),
                     h('span', { className: 'dshp-t-meta' },
                         changes ? h('span', { className: 'dshp-t-row-changes', 'data-projects-changes': '' }, ...changeCounts(changes)) : null,
+                        tools ? h('span', { className: 'dshp-t-tools', title: `Your tools: ${tools}`, 'data-projects-thread-tools': '' },
+                            ui.IconShieldOutlineRegular ? h(ui.IconShieldOutlineRegular, { size: 12, 'aria-hidden': true }) : null, h('span', null, tools)) : null,
+                        permissionText ? h('span', { className: 'dshp-t-perm', title: `Permission: ${permissionText}`, 'data-projects-thread-permission': permission },
+                            permissionGlyph(permission, 12), h('span', null, permissionText)) : null,
                         model && !quiet ? h('span', { className: 'dshp-t-model', title: model, 'data-projects-thread-model': '' }, model) : null,
                         row.at !== undefined ? h('span', { className: 'dshp-t-ago' }, ago(row.at, now)) : null)))),
             acts.length > 0 || slots > 0 ? h('span', { className: 'dshp-t-row-acts', style: slots > 0 ? { minWidth: slots * 28 } : undefined }, ...acts) : null);
@@ -2119,7 +2374,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * A group in `fold` shows as "Resolved · 3" and opens on a click; it
          * starts open when it holds the current chat's row.
          */
-        function ThreadList({ rows, current, now, models, quietModel, changes, onOpen, action, projects, fold = FOLDED }) {
+        function ThreadList({ rows, current, now, models, quietModel, access, quietPermission, permissions, changes, onOpen, action, projects, fold = FOLDED }) {
             const [shown, setShown] = React.useState(() => new Set(rows.filter((row) => row.session !== undefined && row.session === current).map((row) => row.group)));
             // The most buttons a row has (Retry or Resume, and the list's own action).
             const slots = rows.reduce((most, row) => {
@@ -2138,6 +2393,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const list = members.map((row) => h(ThreadRow, {
                     key: row.id, row, current: row.session !== undefined && row.session === current, now, onOpen, action, projects, quietModel, slots,
                     model: row.session !== undefined ? models?.[row.session] : undefined,
+                    access: row.session !== undefined ? access?.[row.session] : undefined, quietPermission, permissions,
                     changes: changes?.[row.id],
                 }));
                 if (!fold.includes(group.id)) {
@@ -2170,26 +2426,32 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * What the project runs on, at the top of the Threads menu and pane:
-         * the coordinator's model and effort and what new threads start on.
-         * Each opens Project settings with that model menu open.
+         * the coordinator's model and effort, what new threads start on, and
+         * (once the project is described) the permission new threads start
+         * on and whether they get the user's tools. Each opens Project
+         * settings with that model menu open, or at Access.
+         * @param props.access - accessSummary's answer, or undefined.
          */
-        function ModelsSummary({ coordinator, thread, onPick }) {
-            const item = (id, label, text) => {
+        function ModelsSummary({ coordinator, thread, access, onPick }) {
+            const item = (id, label, text, glyph, pick = id) => {
                 const shown = text ?? '…';
                 const content = [
                     h('span', { key: 'l', className: 'dshp-t-models-label' }, label),
+                    glyph ? h('span', { key: 'g', className: 'dshp-t-models-glyph' }, glyph) : null,
                     h('span', { key: 'v', className: 'dshp-t-models-value', title: text }, shown),
                 ];
                 if (!onPick) return h('div', { key: id, className: 'dshp-t-models-row', 'data-projects-models': id }, ...content);
                 return h('button', {
                     key: id, type: 'button', className: 'dshp-t-models-row', 'data-dshp-item': '', 'data-projects-models': id,
                     'aria-label': `${label}: ${text ?? 'loading'}. Change it in ${SETTINGS.title}`,
-                    onClick: () => onPick(id),
+                    onClick: () => onPick(pick),
                 }, ...content, h(ui.IconChevronRightOutlineRegular, { key: 'c', size: 12 }));
             };
-            return h('div', { className: 'dshp-t-models', role: 'group', 'aria-label': 'Models' },
+            return h('div', { className: 'dshp-t-models', role: 'group', 'aria-label': 'Models and access' },
                 item('coordinator', TEXT.coordinator, coordinator),
-                item('thread', 'New threads', thread));
+                item('thread', 'New threads', thread),
+                access?.permission ? item('access', SETTINGS.threadAccess, access.permission.name, permissionGlyph(access.permission.preset, 12)) : null,
+                access?.tools ? item('tools', SETTINGS.yourTools, access.tools, toolsGlyph(), 'access') : null);
         }
 
         /**
@@ -2411,6 +2673,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, open);
             const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), open);
             const described = useProjectInfo(projects.facts, sessionId, info !== undefined, open);
+            const permissions = usePermissions(useSessions, rowSessions(rows));
             if (info === undefined) return null;
 
             const counts = countsOf(rows);
@@ -2455,6 +2718,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const notice = rosterNotice(info, rows, projects);
             const summary = summaryModels(cv, models, coordinator, described);
             const openSettings = (pick) => { change(false); projects.settings.open(sessionId, typeof pick === 'string' ? { pick } : undefined); };
+            const quietPermission = permissionShown(described?.access?.threadPermission?.value, described?.permissions).preset;
             const foot = [
                 projects.hasPane() ? h('button', { key: 'pane', type: 'button', className: 'dshp-t-foot-btn', 'data-dshp-item': '', onClick: () => { change(false); projects.openPane(); } },
                     h(ui.IconFlatListOutlineRegular, { size: 14 }), TEXT.openPane) : null,
@@ -2473,13 +2737,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             h('div', { className: 'dshp-t-menu-head' },
                 h(ProjectName, { info, here: sessionId, onOpen: () => openSession(coordinator) }),
                 info.roster !== null ? h('span', { className: 'dshp-t-count' }, summaryText(counts)) : null),
-            h(ModelsSummary, { ...summary, onPick: settingsOn ? openSettings : undefined }),
+            h(ModelsSummary, { ...summary, access: accessSummary(described), onPick: settingsOn ? openSettings : undefined }),
             paused ? h(PausedNotice, { coordinator, role: info.me.role, projects }) : null,
             h('div', { className: 'dshp-t-menu-body' },
                 notice ?? h(ThreadList, {
                     rows, current: sessionId, now, models, changes, projects,
-                    // The menu names what new threads start on at its top; a row names its model only when it differs.
+                    // The menu names what new threads start on at its top; a row names its model and permission only when they differ.
                     quietModel: summary.thread,
+                    access: accessOf(described, permissions), quietPermission, permissions: described?.permissions,
                     onOpen: (row) => { change(false); projects.openThread(row.session); },
                     // A row opens the thread as the setting says; its button does the other.
                     action: beside
@@ -2521,6 +2786,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, info !== undefined && visible);
             const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), info !== undefined && visible);
             const described = useProjectInfo(projects.facts, sessionId, info !== undefined, visible);
+            const permissions = usePermissions(useSessions, rowSessions(rows));
             if (info === undefined) {
                 return h('div', { className: 'dshp-t-pane', 'data-projects-threads-pane': '' }, h('div', { className: 'dshp-t-empty' }, TEXT.notProject));
             }
@@ -2537,10 +2803,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         type: 'button', className: 'dshp-t-icon', 'aria-label': SETTINGS.title, 'data-projects-settings-trigger': '',
                         onClick: () => projects.settings.open(sessionId),
                     }, h(ui.IconSlidersTwoOutlineRegular, { size: 14 })))) : null),
-            h(ModelsSummary, { ...summaryModels(cv, models, coordinator, described), onPick: settingsOn ? (pick) => projects.settings.open(sessionId, { pick }) : undefined }),
+            h(ModelsSummary, { ...summaryModels(cv, models, coordinator, described), access: accessSummary(described), onPick: settingsOn ? (pick) => projects.settings.open(sessionId, { pick }) : undefined }),
             paused ? h(PausedNotice, { coordinator, role: info.me.role, projects }) : null,
             notice ?? h(ThreadList, {
                 rows, current: sessionId, now, models, changes, projects,
+                access: accessOf(described, permissions), permissions: described?.permissions,
+                quietPermission: permissionShown(described?.access?.threadPermission?.value, described?.permissions).preset,
                 onOpen: (row) => {
                     try { tab.actions.openResource(chatAddress(row.session)); } catch { projects.openBeside(row.session); }
                 },
@@ -3324,11 +3592,19 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const handbacks = useHeldHandbacks(projects.facts, info?.coordinator);
             const thread = info?.me.role === 'thread';
             const changed = useThreadChanges(projects, useSessions, thread ? info.coordinator : undefined, thread ? [sessionId] : EMPTY, true)[info?.me.thread?.id];
-            // Which handbacks a pause holds is in the project's description; read it once for this card.
-            React.useEffect(() => { if (paused && info?.coordinator) void projects.facts.describe(info.coordinator, 15000); }, [paused, info?.coordinator, projects]);
+            const live = useSessions((state) => permissionIn(state, sessionId));
+            // Which handbacks a pause holds, and which of the user's tools a session has, are in the project's description; read it for this card.
+            React.useEffect(() => { if (info?.coordinator) void projects.facts.describe(info.coordinator, 15000); }, [info?.coordinator, projects]);
+            const described = React.useSyncExternalStore(projects.facts.subscribe, () => (info?.coordinator ? projects.facts.info(info.coordinator) : null));
             if (info === undefined) return null;
             const project = info.project.name ?? '';
             const runs = picked ? h('div', { className: 'dshp-t-hover-line', 'data-projects-thread-model': '' }, `Runs on ${selectionText(cv, picked)}`) : null;
+            // Where it can write, and which of the user's tools it has (named only when some are listed).
+            const mine = thread ? described?.threads?.find?.((t) => isObject(t) && t.session === sessionId) : described?.project;
+            const preset = live ?? (typeof mine?.permission === 'string' ? mine.permission : undefined);
+            const listed = Array.isArray(described?.guarded) && described.guarded.length > 0 && mine;
+            const reach = joined([preset ? permissionName(preset, described?.permissions) : null, listed ? toolsWords(mine.tools) : null]);
+            const access = reach.length > 0 ? h('div', { className: 'dshp-t-hover-line', 'data-projects-access': preset ?? '' }, permissionGlyph(preset, 12), h('span', null, ...reach)) : null;
             const pause = paused ? h('div', { className: 'dshp-t-hover-line', 'data-projects-paused': '' }, `${TEXT.projectPaused}. ${pausedText(info.me.role, 0)}`) : null;
             if (info.me.role === 'thread') {
                 const entry = (info.roster ?? EMPTY).find((t) => isObject(t) && t.session === sessionId);
@@ -3338,13 +3614,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h('div', { className: 'dshp-t-hover-head' }, h(ui.IconTreeCornerRegular, { size: 12 }), `Thread ${info.me.thread?.id ?? ''} of ◆ ${project}`),
                     line ? h('div', { className: 'dshp-t-hover-line', 'data-projects-state': row.dot }, line) : null,
                     changed ? h('div', { className: 'dshp-t-hover-line', 'data-projects-changes': '' }, ...changeCounts(changed)) : null,
-                    runs, pause);
+                    runs, access, pause);
             }
             const counts = countsOf(rowsOf(info.roster, statuses, byId, endings));
             return h('div', { className: 'dshp-t-hover', 'data-projects-thread-hover': '' },
                 h('div', { className: 'dshp-t-hover-head' }, h('span', { 'aria-hidden': true }, '◆'), `Coordinator of ${project}`),
                 h('div', { className: 'dshp-t-hover-line' }, counts.open + counts.resolved > 0 ? summaryText(counts).replace(/^(\d+) open/, (m, n) => plural(Number(n), 'open thread')) : 'No threads yet'),
-                runs, pause);
+                runs, access, pause);
         }
 
         /** Navigation the thread views share, with the model catalog and the plugin's endpoints; nothing here throws into React. */
@@ -4235,8 +4511,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const rows = useRows(projects, useSessions, info?.roster, statuses, byId, paused ? handbacks : EMPTY);
             const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, open);
             const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), open);
+            // Which of the user's tools each thread has only describe says; read while the row is open.
+            const described = useProjectInfo(projects.facts, coordinator, Boolean(coordinator) && open, open);
+            const permissions = usePermissions(useSessions, rowSessions(rows));
+            const listedAccess = React.useSyncExternalStore(projects.facts.subscribe, projects.facts.listedAccess);
             const ref = useFresh(fresh);
             const summary = summaryModels(cv, models, coordinator, { settings: project.settings });
+            const accessInfo = described ?? { access: project.access, ...listedAccess };
+            const access = accessSummary(accessInfo);
             const name = project.name || project.id;
             const target = coordinator ?? project.id;
             const counts = info?.roster ? countsOf(rows)
@@ -4248,13 +4530,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const others = pulseOf([coordinator, ...chats], sessions, statuses);
             const moved = pulseOf(rowSessions(rows), sessions, statuses).at;
             const pulse = { waiting: counts.waiting + others.waiting, running: counts.running + others.running, at: Math.max(others.at, moved) };
-            const model = (id, label, text) => {
-                const content = [h('span', { key: 'l' }, label), h('span', { key: 'v', className: 'dshp-pg-model-value' }, text ?? '…')];
+            const model = (id, label, text, glyph, pick = id) => {
+                const content = [h('span', { key: 'l' }, label), glyph ? h('span', { key: 'g', className: 'dshp-pg-model-glyph' }, glyph) : null,
+                    h('span', { key: 'v', className: 'dshp-pg-model-value' }, text ?? '…')];
                 if (!settingsOn) return h('span', { key: id, className: 'dshp-pg-model', 'data-projects-models': id }, ...content);
                 return h('button', {
                     key: id, type: 'button', className: 'dshp-pg-model', 'data-dshp-item': '', 'data-projects-models': id,
                     'aria-label': `${label}: ${text ?? 'loading'}. Change it in ${SETTINGS.title}`,
-                    onClick: () => projects.settings.open(target, { pick: id }),
+                    onClick: () => projects.settings.open(target, { pick }),
                 }, ...content, h(ui.IconChevronDownOutlineRegular, { key: 'c', size: 12 }));
             };
             let threads;
@@ -4263,6 +4546,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             else {
                 threads = rosterNotice(info, rows, projects) ?? h(ThreadList, {
                     rows, now, models, changes, projects, quietModel: summary.thread,
+                    access: accessOf(described, permissions), permissions: accessInfo.permissions,
+                    quietPermission: permissionShown(accessInfo.access?.threadPermission?.value, accessInfo.permissions).preset,
                     fold: ['done', 'idle', 'resolved'],
                     onOpen: (row) => projects.openThread(row.session),
                 });
@@ -4289,9 +4574,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }),
                 open ? h('div', { className: 'dshp-pg-body', id: `dshp-pg-body-${project.id}` },
                     paused && coordinator ? h(PausedNotice, { coordinator, role: 'coordinator', projects }) : null,
-                    h('div', { className: 'dshp-pg-models', role: 'group', 'aria-label': 'Models' },
+                    h('div', { className: 'dshp-pg-models', role: 'group', 'aria-label': 'Models and access' },
                         model('coordinator', TEXT.coordinator, summary.coordinator),
-                        model('thread', 'New threads', summary.thread)),
+                        model('thread', 'New threads', summary.thread),
+                        access.permission ? model('access', SETTINGS.threadAccess, access.permission.name, permissionGlyph(access.permission.preset, 12)) : null,
+                        access.tools ? model('tools', SETTINGS.yourTools, access.tools, toolsGlyph(), 'access') : null),
                     threads,
                     h('div', { role: 'group', 'aria-label': PAGE.workspaces, 'data-projects-workspaces': project.id },
                         h('div', { className: 'dshp-t-group' }, PAGE.workspaces),
@@ -4809,8 +5096,42 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             useDefault: 'Use default',
             running: 'Running. A change applies from its next request.',
             resolved: 'Resolved.',
-            note: 'Projects that don\'t choose their own models use the plugin\'s Default models.',
-            openDefaults: 'Default models for all projects',
+            note: 'Projects that don\'t choose their own models or access use the plugin\'s defaults.',
+            openDefaults: 'Defaults for all projects',
+            access: 'Access',
+            threadAccess: 'Thread access',
+            yourTools: 'Your tools',
+            toolsAsked: 'The coordinator never has them. A thread has only the ones your words for it name.',
+            toolsAlways: 'Every coordinator and thread in this project has them.',
+            toolsAlwaysAll: 'Every coordinator and thread has them, in every project that doesn\'t choose its own.',
+            noTools: 'None are listed yet, so no session is kept from any. List your personal and infrastructure tools under guardedTools in this plugin\'s config.',
+            coordinatorPermission: 'Coordinator permission',
+            coordinatorPermissionHint: 'Where the ◆ session can write, and what it asks you first. A permission you pick in its chat lands here too.',
+            threadPermission: 'New threads\' permission',
+            threadPermissionHint: 'What each new thread starts on. Running threads keep theirs; change one under Threads.',
+            permission: 'Permission',
+            notKnown: 'Not known until it runs',
+        };
+        /** The two values of Your tools, as the controls name them. */
+        const TOOL_MODES = [{ value: 'asked', label: 'Only when asked' }, { value: 'always', label: 'Always' }];
+        /** Where an inherited access setting comes from, in the pickers' Default rows. */
+        const ACCESS_LABELS = { 'project config': 'Your profile', 'plugin default': 'Default access' };
+        const ACCESS_SOURCE = { 'project setting': 'Set for this project', 'project config': 'From your profile', 'plugin default': 'From Default access' };
+        /** DSH's own confirmation copy for Full access, and ours for Always. */
+        const RISK = {
+            acknowledge: 'I understand the risks and want to continue',
+            cancel: 'Cancel',
+            fullTitle: 'Enable Full access?',
+            fullConfirm: 'Enable Full access',
+            coordinator: 'Full access lets the coordinator reduce confirmation steps and perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust what it does.',
+            threads: 'Full access lets this project\'s new threads reduce confirmation steps and perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust the tasks they get.',
+            thread: 'Full access reduces confirmation steps and lets the agent perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust the current task.',
+            allCoordinators: 'Full access lets the coordinator of every project that doesn\'t choose its own reduce confirmation steps and perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust what they do.',
+            allThreads: 'Full access lets new threads in every project that doesn\'t choose its own reduce confirmation steps and perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust the tasks they get.',
+            toolsTitle: 'Give every session your tools?',
+            tools: (names) => `Every coordinator and thread in this project can then use ${listText(names)} on its own, even when your words don't ask for them. Only use it when you trust what runs here.`,
+            allTools: (names) => `Every coordinator and thread in projects that don't choose their own can then use ${listText(names)} on its own, even when your words don't ask for them. Only use it when you trust what runs there.`,
+            toolsConfirm: 'Use always',
         };
         const SETTING_ROUTES = [
             { id: 'coordinator', title: 'Coordinator', hint: 'The ◆ session you talk to. A model you pick in its chat lands here too.', model: 'coordinatorModel', effort: 'coordinatorEffort' },
@@ -4837,9 +5158,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     listeners.add(listener);
                     return () => listeners.delete(listener);
                 },
-                /** @param options - {pick?: 'coordinator'|'thread'}: open with that model menu open. */
+                /** @param options - {pick?: 'coordinator'|'thread'|'access'}: open with that model menu open, or at Access. */
                 open(target, options) {
-                    const pick = options?.pick === 'coordinator' || options?.pick === 'thread' ? options.pick : null;
+                    const pick = options?.pick === 'coordinator' || options?.pick === 'thread' || options?.pick === 'access' ? options.pick : null;
                     if (typeof target === 'string' && target !== '' && snapshot.available) set({ target, seq: snapshot.seq + 1, pick });
                 },
                 close() {
@@ -4901,6 +5222,128 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }
             }
             return parts.join(' ');
+        }
+
+        /**
+         * DSH's own confirmation before a riskier setting takes effect.
+         * `ask(copy, then)` shows it (copy: {title, description, confirm}) and
+         * runs `then` once confirmed; `element` goes in the tree. Without
+         * DSH's RiskConfirmation, `then` runs at once. Once it closes, focus
+         * goes back to `restore()` (the control it came from) if nothing has it.
+         */
+        function useRiskGate(restore) {
+            const [pending, setPending] = React.useState(null);
+            const [acknowledged, setAcknowledged] = React.useState(false);
+            const refocus = () => {
+                if (typeof restore !== 'function' || typeof document === 'undefined') return;
+                // DSH's dialog hands focus back to what had it when it opened: a menu item that is gone by
+                // then, so the page would have it. The control can be busy for a moment after a change.
+                const again = () => {
+                    const active = document.activeElement;
+                    if (!active || active === document.body) restore()?.focus?.();
+                };
+                for (const ms of [0, 120, 400, 1000]) setTimeout(again, ms);
+            };
+            const close = () => { setPending(null); setAcknowledged(false); refocus(); };
+            const ask = (copy, then) => {
+                if (!ui.RiskConfirmation) { then(); return; }
+                setAcknowledged(false);
+                setPending({ ...copy, then });
+            };
+            const element = pending ? h(ui.RiskConfirmation, {
+                open: true, title: pending.title, description: pending.description, confirmLabel: pending.confirm,
+                acknowledgeLabel: RISK.acknowledge, cancelLabel: RISK.cancel, closeLabel: SETTINGS.close,
+                acknowledged, onAcknowledgedChange: setAcknowledged, onCancel: close,
+                onConfirm: () => { const { then } = pending; close(); then(); },
+            }) : null;
+            return { ask, element };
+        }
+
+        /**
+         * A permission control in the shape of DSH's own access chip: the
+         * preset's icon and name, opening a menu of the presets DSH offers.
+         * With `fallback` the menu starts with Default, which hands the choice
+         * back to what the setting inherits; with `dshDefault` it offers DSH's
+         * default for new sessions as a value of its own. A pick that ends in
+         * Full access asks first, as DSH does.
+         * @param props.value - the value in force: a preset name, or "default" for DSH's default.
+         * @param props.own - whether it is set at this level, so Default is not checked.
+         * @param props.fallback - {value, label}: what Default means, or undefined.
+         * @param props.catalog - the permissions DSH offers ({options, defaultPreset}).
+         * @param props.risk - what the Full access confirmation says.
+         * @param props.compact - only the icon; the name is in its label and tooltip.
+         * @param props.onPick - called with a preset name, "default", or null for Default.
+         */
+        function PermissionPicker({ id, label, catalog, value, own = true, fallback, dshDefault = false, risk, compact = false, busy = false, disabled = false, onPick }) {
+            const [open, setOpen] = React.useState(false);
+            const triggerRef = React.useRef(null);
+            const gate = useRiskGate(() => triggerRef.current);
+            React.useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
+            const options = Array.isArray(catalog?.options) ? catalog.options.filter((o) => isObject(o) && typeof o.value === 'string') : EMPTY;
+            const shown = permissionShown(value, catalog);
+            const base = fallback ? permissionShown(fallback.value, catalog) : undefined;
+            const dsh = permissionShown('default', catalog);
+            const optionLabel = (name, detail) => (detail ? h('span', { className: 'dshp-pp-opt' }, h('span', { className: 'dshp-pp-opt-name' }, name), h('span', { className: 'dshp-pp-opt-detail' }, detail)) : name);
+            const items = [
+                ...(base ? [{ id: '@default', label: optionLabel('Default', [fallback.label, base.name].filter(Boolean).join(' · ')), icon: permissionGlyph(base.preset) }, { type: 'separator', id: '@sep' }] : []),
+                ...(dshDefault || (own && value === 'default') ? [{ id: 'default', label: optionLabel('DSH default', dsh.preset ? dsh.name : undefined), icon: permissionGlyph(dsh.preset) }] : []),
+                ...options.map((o) => ({ id: o.value, label: permissionName(o.value, catalog), icon: permissionGlyph(o.value) })),
+            ];
+            const selected = fallback && !own ? '@default' : value;
+            const choose = (next) => {
+                setOpen(false);
+                if (next === selected) return;
+                const pick = next === '@default' ? null : next;
+                const ends = pick === null ? base?.preset : permissionShown(pick, catalog).preset;
+                const run = () => onPick(pick);
+                if (ends === FULL_ACCESS && shown.preset !== FULL_ACCESS && risk) gate.ask({ title: RISK.fullTitle, description: risk, confirm: RISK.fullConfirm }, run);
+                else run();
+            };
+            const name = shown.name ?? SETTINGS.notKnown;
+            const description = options.find((o) => o.value === shown.preset)?.description;
+            const trigger = h('button', {
+                ref: triggerRef, type: 'button', id, className: compact ? 'dshp-mp-trigger dshp-pp-trigger dshp-pp-compact' : 'dshp-mp-trigger dshp-pp-trigger',
+                disabled: disabled || options.length === 0, 'aria-haspopup': 'menu', 'aria-expanded': open, 'aria-busy': busy || undefined,
+                'aria-label': `${label}: ${name}`, title: compact ? `${SETTINGS.permission}: ${name}` : description ?? name,
+                'data-projects-permission-picker': id, 'data-projects-permission': shown.preset ?? '',
+                onClick: () => setOpen((was) => !was),
+            },
+            permissionGlyph(shown.preset ?? 'unknown'),
+            compact ? null : h('span', { className: 'dshp-mp-name' }, name),
+            busy ? h(ui.StateDot, { state: 'ongoing' }) : h(ui.IconChevronDownOutlineRegular, { size: 12, className: open ? 'dshp-mp-chev dshp-mp-chev-open' : 'dshp-mp-chev' }));
+            return h('span', { className: 'dshp-pp' },
+                h(ui.Menu, {
+                    open, items, selectedId: selected, onSelect: choose, onClose: () => setOpen(false),
+                    align: 'end', portal: true, anchor: trigger, listClassName: 'dshp-pp-menu',
+                }),
+                gate.element);
+        }
+
+        /**
+         * Your tools: Only when asked or Always, as DSH's segmented control.
+         * Always asks first, naming the tools it hands over.
+         * @param props.names - the user's tools (guardedTools names).
+         * @param props.risk - (names) => what the confirmation says.
+         */
+        function ToolsControl({ id, value, names, risk, disabled = false, onPick }) {
+            const box = React.useRef(null);
+            const gate = useRiskGate(() => box.current?.querySelector('[aria-selected="true"],[aria-pressed="true"]') ?? box.current?.querySelector('button'));
+            const choose = (next) => {
+                if (next === value) return;
+                if (next === 'always' && names.length > 0) gate.ask({ title: RISK.toolsTitle, description: risk(names), confirm: RISK.toolsConfirm }, () => onPick(next));
+                else onPick(next);
+            };
+            const control = ui.SegmentedControl
+                ? h(ui.SegmentedControl, { id, label: SETTINGS.yourTools, value, options: TOOL_MODES, disabled, onChange: choose })
+                : h('span', { className: 'dshp-tools-pair', role: 'group', 'aria-label': SETTINGS.yourTools },
+                    ...TOOL_MODES.map((mode) => h('button', { key: mode.value, type: 'button', 'aria-pressed': value === mode.value, disabled, onClick: () => choose(mode.value) }, mode.label)));
+            return h('span', { ref: box, className: 'dshp-tools-control', 'data-projects-your-tools': value }, control, gate.element);
+        }
+
+        /** The user's tools by name, as DSH's quiet tags. */
+        function ToolNames({ names }) {
+            return h('span', { className: 'dshp-tool-names', 'data-projects-guarded': '' },
+                ...names.map((name) => (ui.Tag ? h(ui.Tag, { key: name, tone: 'neutral' }, name) : h('span', { key: name, className: 'dshp-tool-name' }, name))));
         }
 
         function SettingRow({ id, lead, title, description, source, note, control, message }) {
@@ -4994,6 +5437,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (note) setMessage({ key, kind: 'info', text: note });
             };
             const messageFor = (key) => (message?.key === key ? message : null);
+            // Opened at Access (the Access row of the Threads menu or the Projects page): that section, its first control focused.
+            const shownAccess = React.useRef(false);
+            React.useEffect(() => {
+                if (pick !== 'access' || data === null || shownAccess.current || typeof document === 'undefined') return;
+                shownAccess.current = true;
+                const section = document.querySelector('[data-projects-settings-section="access"]');
+                section?.scrollIntoView?.({ block: 'start' });
+                section?.querySelector?.('[role=tab][aria-selected=true],button:not(:disabled)')?.focus?.();
+            }, [pick, data]);
 
             let body;
             if (data === null) {
@@ -5032,6 +5484,36 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         }),
                     });
                 };
+                // Access: the user's tools, and where the coordinator and threads can write.
+                const perms = isObject(data.permissions) && Array.isArray(data.permissions.options) && data.permissions.options.length > 0 ? data.permissions : null;
+                const guarded = Array.isArray(data.guarded) ? data.guarded.filter((name) => typeof name === 'string' && name !== '') : [];
+                const access = isObject(data.access) ? data.access : {};
+                const accessSource = (key) => (access[key]?.source === 'project setting'
+                    ? [h('span', { key: 'own', className: 'dshp-ps-own' }, SETTINGS.own),
+                        h('button', { key: 'reset', type: 'button', className: 'dshp-ps-link', disabled, onClick: () => change(key, { [key]: null }) }, SETTINGS.useDefault)]
+                    : [h('span', { key: 'from' }, ACCESS_SOURCE[access[key]?.source] ?? '')]);
+                const tools = access.yourTools?.value === 'always' ? 'always' : 'asked';
+                const toolsRow = h(SettingRow, {
+                    key: 'yourTools', id: 'yourTools', title: SETTINGS.yourTools, message: messageFor('yourTools'),
+                    description: guarded.length === 0 ? SETTINGS.noTools : tools === 'always' ? SETTINGS.toolsAlways : SETTINGS.toolsAsked,
+                    source: accessSource('yourTools'),
+                    note: guarded.length > 0 ? h(ToolNames, { names: guarded }) : undefined,
+                    control: h(ToolsControl, { id: 'dshp-ps-your-tools', value: tools, names: guarded, risk: RISK.tools, disabled, onPick: (next) => change('yourTools', { yourTools: next }) }),
+                });
+                const permissionRow = (key, title, hint, risk, live) => {
+                    const a = access[key] ?? {};
+                    const shown = permissionShown(a.value, perms);
+                    return h(SettingRow, {
+                        key, id: key, title, description: hint, source: accessSource(key), message: messageFor(key),
+                        // The coordinator can be on another preset for a moment, or one this setting can't name.
+                        note: live && shown.preset && live !== shown.preset ? `Now on ${permissionName(live, perms)}.` : undefined,
+                        control: h(PermissionPicker, {
+                            id: `dshp-ps-${key}`, label: title, catalog: perms, value: a.value, own: a.source === 'project setting', risk, busy: busy === key, disabled,
+                            fallback: { value: a.inherited?.value, label: ACCESS_LABELS[a.inherited?.source] },
+                            onPick: (next) => change(key, { [key]: next }),
+                        }),
+                    });
+                };
                 const threads = Array.isArray(data.threads) ? data.threads.filter((t) => isObject(t) && typeof t.id === 'string') : [];
                 const open = threads.filter((t) => !t.resolved);
                 const resolved = threads.filter((t) => t.resolved);
@@ -5045,16 +5527,26 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         hb: typeof t.handback === 'string' ? { status: t.handback } : undefined,
                         ending: typeof t.session === 'string' ? endings[t.session] : undefined,
                     });
+                    // Where it can write and which of the user's tools it has, in words; the picker beside the model changes the first.
+                    const permission = typeof t.permission === 'string' ? t.permission : undefined;
+                    const reach = joined([perms && permission ? permissionName(permission, perms) : null, guarded.length > 0 ? toolsWords(t.tools) : null]);
                     return h(SettingRow, {
                         key, id: key, title: t.title || t.id, message: messageFor(key),
                         note: notesFor(resolveRoute(cv, t.model ?? undefined, t.effort ?? undefined), t.live),
                         lead: h('span', { className: 'dshp-ps-dot' }, h(ui.StateDot, { state: dot })),
                         description: t.resolved ? SETTINGS.resolved : running ? SETTINGS.running : undefined,
-                        control: h(ModelPicker, {
-                            id: `dshp-ps-${t.id}`, label: `${t.title || t.id} (${t.id})`, catalog: catalog.value, busy: busy === key, disabled,
-                            value: { model: t.model ?? undefined, effort: t.effort ?? undefined }, own: { model: true, effort: true },
-                            onPick: (pick) => change(key, { thread: t.id, ...pick }),
-                        }),
+                        source: reach.length > 0 ? [h('span', { key: 'reach', className: 'dshp-ps-reach', 'data-projects-thread-access': permission ?? '' },
+                            perms && permission ? permissionGlyph(permission, 12) : null, h('span', null, ...reach))] : undefined,
+                        control: h('div', { className: 'dshp-ps-controls' },
+                            h(ModelPicker, {
+                                id: `dshp-ps-${t.id}`, label: `${t.title || t.id} (${t.id})`, catalog: catalog.value, busy: busy === key, disabled,
+                                value: { model: t.model ?? undefined, effort: t.effort ?? undefined }, own: { model: true, effort: true },
+                                onPick: (pick) => change(key, { thread: t.id, ...pick }),
+                            }),
+                            perms && !t.resolved && typeof t.session === 'string' ? h(PermissionPicker, {
+                                id: `dshp-ps-${t.id}-permission`, label: `${t.title || t.id}: ${SETTINGS.permission}`, catalog: perms, value: permission, compact: true,
+                                risk: RISK.thread, disabled, onPick: (next) => change(key, { thread: t.id, permission: next }),
+                            }) : null),
                     });
                 };
                 const shown = showResolved ? [...open, ...resolved] : open;
@@ -5062,6 +5554,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     catalog.status === 'failed' && !catalog.value ? h('p', { key: 'catalog', className: 'dshp-ps-alert dshp-ps-info', role: 'status' }, SETTINGS.catalogFailed, ' ',
                         h('button', { type: 'button', className: 'dshp-ps-link', onClick: () => link.catalog.load() }, SETTINGS.retry)) : null,
                     h(Section, { key: 'models', id: 'models', heading: SETTINGS.models }, ...SETTING_ROUTES.map(routeRow)),
+                    h(Section, { key: 'access', id: 'access', heading: SETTINGS.access },
+                        toolsRow,
+                        perms ? permissionRow('coordinatorPermission', SETTINGS.coordinatorPermission, SETTINGS.coordinatorPermissionHint, RISK.coordinator, data.project?.permission) : null,
+                        perms ? permissionRow('threadPermission', SETTINGS.threadPermission, SETTINGS.threadPermissionHint, RISK.threads) : null),
                     h(Section, { key: 'threads', id: 'threads', heading: SETTINGS.threads, meta: threads.length > 0 ? `${open.length} open` : undefined },
                         shown.length === 0 ? h('div', { key: 'empty', className: 'dshp-ps-empty' }, threads.length === 0 ? SETTINGS.noThreads : SETTINGS.allResolved) : null,
                         ...shown.map(threadRowFor),
@@ -5205,6 +5701,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             rowState, endingOf, endingIn, endingReason, endingLine, openSessions, markState, hoverLine, continueError, GROUPS,
             roomFor, besidePref, sidebarGroups, sidebarRules, placeWorkspaces, chatsIn, pulseOf, pulseText, listText, OTHERS, clockOf, againText, ThreadCard, EndingBar,
             noticeOf, noticeView, TriggerNotice, ProjectNotice,
+            permissionName, permissionShown, permissionIn, toolsText, accessOf, accessSummary, PermissionPicker, ToolsControl, ModelsSummary,
         };
         return module.exports;
     },
