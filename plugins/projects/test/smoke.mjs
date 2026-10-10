@@ -822,6 +822,40 @@ test('browser half: thread rows, cards and links read the projection as DSH send
     assert.deepEqual(['s-t3', 's-t1', 's-c', 's-plain'].map((id) => isThreadRow(state, id)), [true, true, false, false]);
 });
 
+test('browser half: a thread row nests only right under its coordinator or a nested sibling', () => {
+    const { client } = loadClient();
+    const { nestingPlan } = client.internals;
+    const coord = (name) => ({ role: 'coordinator', project: { name }, threads: [] });
+    const state = {
+        byId: {
+            c: { title: '◆ DSH Plugins', projectionValues: { projectSession: coord('DSH Plugins') } },
+            t1: { title: 'DSH Plugins › Add CI' },
+            t2: { title: 'DSH Plugins › Fix login', projectionValues: { projectSession: { role: 'thread', coordinator: 'c', thread: { id: 't2' } } } },
+            t3: { title: 'Renamed by hand', projectionValues: { projectSession: { role: 'thread', coordinator: 'c', thread: { id: 't3' } } } },
+            t4: { title: 'DSH Plugins › Spike' },
+            o: { title: '◆ Other' },
+            ot: { title: 'Other › Its thread' },
+            plain: { title: 'Release notes' },
+        },
+    };
+    const plan = (keys) => Object.fromEntries([...nestingPlan(state, keys.map((k) => (k.startsWith('workspace:') ? k : `session:${k}`)))]
+        .map(([key, e]) => [key.replace('session:', ''), e.nested ? e.short ?? `(full) ${e.full}` : 'flat']));
+    // Under the coordinator, a run of its threads nests; the prefix goes, a title without it stays whole.
+    assert.deepEqual(plan(['workspace:w', 'c', 't1', 't2', 't3', 'plain', 't4']),
+        { t1: 'Add CI', t2: 'Fix login', t3: '(full) Renamed by hand', t4: 'flat' });
+    // Recency put a thread above its coordinator, another session between them, or another project's coordinator above.
+    assert.deepEqual(plan(['t1', 'c', 't2']), { t1: 'flat', t2: 'Fix login' });
+    assert.deepEqual(plan(['c', 'plain', 't1', 't2']), { t1: 'flat', t2: 'flat' });
+    assert.deepEqual(plan(['o', 't1', 'ot']), { t1: 'flat', ot: 'flat' });
+    assert.deepEqual(plan(['o', 'ot', 'c', 't4']), { ot: 'Its thread', t4: 'Spike' });
+    // A workspace header ends the run; a thread never nests under a nested thread of another project.
+    assert.deepEqual(plan(['c', 'workspace:w2', 't1']), { t1: 'flat' });
+    assert.deepEqual(plan(['c', 't1', 'ot']), { t1: 'Add CI', ot: 'flat' });
+    // Nothing to nest without a coordinator in the list; plain rows never appear in the plan.
+    assert.deepEqual(plan(['plain', 't1']), { t1: 'flat' });
+    assert.equal(nestingPlan({ byId: {} }, ['session:x', 'workspace:y', null]).size, 0);
+});
+
 test('session mode: a failed selection is reported, and the coordinator retries later', async () => {
     const { host, dir } = setup({}, undefined, SELECTING);
     await tick();

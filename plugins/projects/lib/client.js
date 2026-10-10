@@ -155,8 +155,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // Threads: `[title](.dsh-thread/t3)` in a reply (DSH draws it as a file link)
             'button[title*=".dsh-thread/"]>svg:first-child{display:none}',
             `button[title*=".dsh-thread/"]::before{content:"";display:inline-block;flex:none;width:1.1em;height:1.1em;margin-right:5px;vertical-align:-.25em;background-color:currentColor;-webkit-mask:${BRANCH_MASK} center/contain no-repeat;mask:${BRANCH_MASK} center/contain no-repeat}`,
-            // Threads: session list rows
+            // Threads: session list rows. A thread row right under its coordinator (rowNesting) is indented so
+            // its corner sits under the coordinator's ◆; a thread row anywhere else keeps a branch mark.
             '.dshp-t-mark{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:20px;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-t-branch,[data-projects-nest] .dshp-t-corner{display:inline-flex}',
+            '.dshp-t-corner,[data-projects-nest] .dshp-t-branch{display:none}',
+            '[data-row-key][data-projects-nest]{padding-inline-start:calc(var(--dshp-nest,30px) + var(--dsh-workspace-indent,0px))}',
             '.dshp-t-hover{display:flex;flex-direction:column;gap:2px;font-size:12px;line-height:16px;color:#cfd3d6}',
             '.dshp-t-hover-head{display:flex;align-items:center;gap:6px;color:#fff}',
             '.dshp-t-hover-line{color:#adb2b8;overflow-wrap:anywhere}',
@@ -1084,11 +1088,176 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return at > 0 && namesOf(state.byId).has(title.slice(0, at));
         }
 
-        function ThreadMark({ sessionId, useSessions }) {
+        /** A row's mark: a corner while it nests under its coordinator, a branch anywhere else (CSS picks). */
+        function ThreadMark({ sessionId, useSessions, nesting }) {
             const thread = useSessions((state) => isThreadRow(state, sessionId));
+            // Every idle row mounts this seat, so a list that comes back (the sidebar reopened) gets nested again.
+            React.useLayoutEffect(() => { nesting?.soon(); }, [nesting, thread]);
             if (!thread) return null;
             return h('span', { className: 'dshp-t-mark', role: 'img', 'aria-label': 'Project thread', 'data-projects-thread-mark': '' },
-                h(ui.IconTreeCornerRegular, { size: 12 }));
+                h('span', { className: 'dshp-t-corner' }, h(ui.IconTreeCornerRegular, { size: 12 })),
+                h('span', { className: 'dshp-t-branch' }, h(ui.IconBranchOutlineRegular, { size: 12 })));
+        }
+
+        /** The project name a coordinator session stands for, or undefined. */
+        function coordinatorName(state, sessionId) {
+            const value = valueIn(state, sessionId);
+            if (value?.role === 'coordinator' && typeof value.project?.name === 'string' && value.project.name !== '') return value.project.name;
+            const title = state?.byId?.[sessionId]?.title;
+            return typeof title === 'string' && title.startsWith('◆ ') && title.length > 2 ? title.slice(2) : undefined;
+        }
+
+        /**
+         * Which rows of DSH's session list sit under their coordinator. DSH
+         * draws every session as a top-level row, in recency or manual order,
+         * so a thread is under its coordinator only while the two are
+         * neighbours: a thread row nests when the row right above it is its
+         * coordinator, or a thread of the same coordinator that nests. Any
+         * other row above (a workspace header, another session) ends the run.
+         * @param state - DSH's session list state.
+         * @param keys - the list's `data-row-key`s, top to bottom.
+         * @returns for each thread row's key: whether it nests, its full title, and its title without "<project> › ".
+         */
+        function nestingPlan(state, keys) {
+            const names = new Map();
+            for (const id of Object.keys(state?.byId ?? {})) {
+                const name = coordinatorName(state, id);
+                if (name !== undefined && !names.has(name)) names.set(name, id);
+            }
+            const plan = new Map();
+            let above;
+            for (const key of keys) {
+                const id = typeof key === 'string' && key.startsWith('session:') ? key.slice(8) : undefined;
+                const value = valueIn(state, id);
+                const title = typeof state?.byId?.[id]?.title === 'string' ? state.byId[id].title : '';
+                const at = title.indexOf(' › ');
+                let row;
+                if (id !== undefined && (value?.role === 'coordinator' || (!value && coordinatorName(state, id) !== undefined))) {
+                    row = { role: 'coordinator', of: id };
+                } else if (id !== undefined && (value?.role === 'thread' || (!value && at > 0 && names.has(title.slice(0, at))))) {
+                    const of = value && typeof value.coordinator === 'string' && value.coordinator !== '' ? value.coordinator : names.get(title.slice(0, at));
+                    if (of !== undefined) {
+                        const nested = above !== undefined && above.of === of && (above.role === 'coordinator' || above.nested);
+                        const name = coordinatorName(state, of);
+                        const prefix = name === undefined ? undefined : `${name} › `;
+                        const short = prefix !== undefined && title.startsWith(prefix) && title.length > prefix.length ? title.slice(prefix.length) : undefined;
+                        row = { role: 'thread', of, nested };
+                        plan.set(key, { nested, full: title, short });
+                    }
+                }
+                above = row;
+            }
+            return plan;
+        }
+
+        /**
+         * Keeps DSH's session list showing threads under their coordinator.
+         * After each change to the list's rows (a mutation observer on the
+         * list) or to the session store, one pass over the rendered rows
+         * applies nestingPlan: a nesting row gets `data-projects-nest`, which
+         * the CSS indents, and its title loses the "<project> › " that the
+         * coordinator above already says. It only sets that attribute and the
+         * title's text, which React leaves alone until the title itself
+         * changes, and it puts both back when the plugin stops.
+         */
+        function rowNesting(sessions) {
+            const ATTR = 'data-projects-nest';
+            /** Rows whose title shows our short text, with that text. */
+            const shown = new WeakMap();
+            let tree = null;
+            let observer = null;
+            let frame = 0;
+            let queued = false;
+            let running = false;
+            let warned = false;
+
+            const titleOf = (row) => {
+                for (const el of row.children) {
+                    if (typeof el.className === 'string' && /(?:^|\s)[\w-]*_title(?:\s|$)/.test(el.className)) return el;
+                }
+                return undefined;
+            };
+            /** The title's single text node, the only thing React renders there. */
+            const textOf = (row) => {
+                const span = titleOf(row);
+                const node = span?.firstChild;
+                return node && node === span.lastChild && node.nodeType === 3 ? node : undefined;
+            };
+            function show(row, entry) {
+                const node = textOf(row);
+                if (node === undefined) return;
+                const mine = shown.get(row);
+                const want = entry?.nested && entry.short !== undefined ? entry.short : undefined;
+                if (want !== undefined) {
+                    // Swap only what React wrote (the full title) or what we wrote before; anything else is DSH's own label.
+                    if (node.nodeValue !== entry.full && node.nodeValue !== mine) return;
+                    if (node.nodeValue !== want) node.nodeValue = want;
+                    shown.set(row, want);
+                } else if (mine !== undefined) {
+                    if (node.nodeValue === mine && entry?.full) node.nodeValue = entry.full;
+                    shown.delete(row);
+                }
+            }
+            function watch() {
+                const found = document.querySelector('[role="tree"] [data-row-key^="session:"]')?.closest('[role="tree"]') ?? null;
+                if (found === tree) return;
+                observer?.disconnect();
+                tree = found;
+                if (tree === null) return;
+                observer ??= new MutationObserver(run);
+                observer.observe(tree, { childList: true, subtree: true, characterData: true });
+            }
+            function pass(off) {
+                const rows = tree === null ? [] : [...tree.querySelectorAll('[data-row-key]')];
+                const state = sessions.list.getSnapshot();
+                const plan = off ? new Map() : nestingPlan(state, rows.map((row) => row.getAttribute('data-row-key')));
+                for (const row of rows) {
+                    const key = row.getAttribute('data-row-key');
+                    let entry = plan.get(key);
+                    if (entry === undefined && shown.has(row)) {
+                        const id = key?.startsWith('session:') ? key.slice(8) : undefined;
+                        entry = { nested: false, full: state?.byId?.[id]?.title };
+                    }
+                    const nested = entry?.nested === true;
+                    if (row.hasAttribute(ATTR) !== nested) row.toggleAttribute(ATTR, nested);
+                    show(row, entry);
+                }
+            }
+            function run() {
+                if (!running) return;
+                try {
+                    watch();
+                    pass(false);
+                } catch (error) {
+                    if (!warned) console.warn(`[projects] could not nest thread rows: ${error?.message ?? error}`);
+                    warned = true;
+                }
+            }
+            return {
+                /** Nest before the next paint (rows just mounted). */
+                soon() {
+                    if (queued || !running) return;
+                    queued = true;
+                    queueMicrotask(() => { queued = false; run(); });
+                },
+                start() {
+                    running = true;
+                    const unsubscribe = sessions.list.subscribe(() => {
+                        if (frame !== 0 || !running) return;
+                        frame = requestAnimationFrame(() => { frame = 0; run(); });
+                    });
+                    run();
+                    return () => {
+                        running = false;
+                        unsubscribe();
+                        if (frame !== 0) cancelAnimationFrame(frame);
+                        frame = 0;
+                        observer?.disconnect();
+                        try { pass(true); } catch {}
+                        tree = null;
+                    };
+                },
+            };
         }
 
         function ThreadHover({ sessionId, useSessions, useSessionStatus }) {
@@ -1158,8 +1327,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
                 name: 'conversation.chat.turnTail', id: IDS.cards, order: 30, inject: withApi,
             }, ThreadCards));
+            const nesting = rowNesting(ctx.sessions);
+            ctx.effect(() => nesting.start(), 'projects: threads under their coordinator in the session list');
             ctx.slots.inject('sidebar.session.row.leading', () => ctx.slots.register({
-                name: 'sidebar.session.row.leading', id: IDS.mark, order: 20,
+                name: 'sidebar.session.row.leading', id: IDS.mark, order: 20, inject: () => ({ nesting }),
             }, ThreadMark));
             ctx.slots.inject('sidebar.session.row.hover', () => ctx.slots.register({
                 name: 'sidebar.session.row.hover', id: IDS.hover, order: 20,
@@ -1219,7 +1390,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.inject = inject;
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the views are built on.
-        module.exports.internals = { valueIn, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago };
+        module.exports.internals = { valueIn, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, nestingPlan };
         return module.exports;
     },
 });
