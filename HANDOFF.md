@@ -1,10 +1,10 @@
 # Handoff
 
-Updated: 2026-10-09 17:27 PT by B (bertholomus)
+Updated: 2026-10-09 17:33 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (draft PR #1)
 
 ## Doing now
-- Waiting for the user to type "fix the discord, minime-bridge and dsh-site plugins and restart DSH once idle" (asked 17:25 PT). The Mac session has the steps (Next steps 1): make `@deepseek-ai/*` peers in the three plugins' package.json, single rows, doctor re-run, pull the checkout, restart once idle, then the thread → handback test.
+- The user said "fix all of it" (17:23 PT). The Mac session is doing Next steps 1-2: make `@deepseek-ai/*` peers in the three plugins' package.json (backups), single rows, doctor re-run (must show 0 import errors), pull the checkout, restart once idle, check the three are back and the coordinator shows in the sidebar, then the thread → handback test through `dshb`.
 - Cause found (doctor on the Mac, 17:20 PT): the three plugin copies at `~/.dsh-plugins/{discord,minime-bridge,dsh-site}` list `@deepseek-ai/schemastery` under `dependencies`, and their folders have no `node_modules`, so DSH can't import them ("Cannot find package '@deepseek-ai/schemastery'"). An Oct 8 04:11Z plugin uninstall through DSH (backup `~/.dsh/backups/plugin-uninstall-20261008T041107Z`) pruned schemastery from the profile; the Oct 7 DSH process had them loaded already, so they broke at the 4:06 PM restart. How they resolved it before is not proven: on 0.2.0-rc.2 the profile's copy doesn't help a linked plugin (below).
 - The cloud thread pushes fixes. The Mac can't push to GitHub (see blockers), so it sends fixes back to the cloud thread instead.
 
@@ -62,7 +62,7 @@ Branch: claude/projects-plugin-boaurl (draft PR #1)
 - The Mac has no GitHub push credentials for bertholomus. gh auth is broken, HTTPS asks for a username and the SSH key is refused. Fixes made on the Mac go through the cloud session.
 - The Mac's MiniMe bridge, Discord bot and dsh-site have been down since DSH Desktop restarted at 4:06 PM PT on 2026-10-09 (their logs end with "stopped" or "gateway closed" at 4:06:30-31), and the 4:32 PM restart didn't bring them back. projects and Fleet Shell run. In Settings → Plugins each bundle is on, but its one row shows "Not running" with a locked switch. The lock comes from the duplicated ids; "Not running" is the import failure (cause and fix in Doing now). Changes need the user's typed OK. Who restarted DSH at 4:06 PM is not known.
 - The Mac Remote Control session parks after sitting idle; only the user's next message in the thread wakes it.
-- Found, not fixed (ask the user first, it changes the live Discord bot): the discord plugin's `/model` and `/effort` set the route with a plain `agent/request` override (plugins/discord/lib/router.js `installRouteOverride`). On DSH 0.2 the Host's installModelSelection rewrites every request to the session's selection (its `selection.current` always has a value), so those commands likely do nothing. Same cause as the projects fix; the fix is `selectForNextRequest` the same way.
+- Probably not a bug after all (corrected 2026-10-09 17:33 PT): the discord plugin's `/model` and `/effort` use a plain `agent/request` override (plugins/discord/lib/router.js `installRouteOverride`). The session controller installs its overriding selection listener only on sessions it creates or resumes itself (`composeAgent` → `installSelection`), or when its `selectionFor` runs (DSH's model picker via `selectForNextRequest`, or an image prompt). The discord plugin creates and resumes its sessions with `ctx.agents` directly, so its override normally stands; after someone uses DSH's model picker on a Discord session, the picker's choice wins. Not tested on a real host. Projects needed the fix because it creates sessions through the session controller.
 - session-bridge `POST /sessions/:id/model` still saves the global DSH default (it calls `selectModel`). Offered to fix; no answer yet.
 
 ## Gotchas (things that broke, decisions made and why)
