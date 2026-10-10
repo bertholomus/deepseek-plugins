@@ -34,11 +34,12 @@
  */
 import { appendFileSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { ProjectStore, expand, dataPath, dshHome, ensurePrivateDir } from './store.js';
 import { SETTING_KEYS, effectiveSettings, applyRoute, checkSelection, describeRoute, parseModelSpec, pluginDefaults } from './settings.js';
 import {
-    coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage,
+    coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage, cardSummary,
     handbackMessage, idleMessage, approvalMessage, welcomeMessage, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS, STOPPED_BY_USER,
 } from './prompts.js';
 import { META_MARK, MAX_THREADS } from './projection.js';
@@ -117,11 +118,46 @@ function isNotFound(error) {
         || /not[ -]found/i.test(String(error?.message ?? ''));
 }
 
+/**
+ * config.guardedTools as [name, aliases] pairs. It is a list of MCP server
+ * (or tool) names, or a map from each name to the words the user may call
+ * it by, such as "lane-catalog": ["lanes", "model lanes"].
+ */
+export function guardList(guardedTools) {
+    const entries = Array.isArray(guardedTools) ? guardedTools.map((name) => [name, []]) : Object.entries(guardedTools ?? {});
+    return entries
+        .map(([name, aliases]) => [String(name ?? '').trim(), (Array.isArray(aliases) ? aliases : []).map((a) => String(a ?? '').trim()).filter(Boolean)])
+        .filter(([name]) => name);
+}
+
+/** Text as lower-case words between spaces: "-", "_" and other marks all separate words. */
+const wordsOf = (text) => ` ${String(text ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()} `;
+
+/** Whether words (from wordsOf) hold a name as whole words, also in the plural. */
+function holds(words, name) {
+    const w = wordsOf(name).trim();
+    return w !== '' && [` ${w} `, ` ${w}s `, ` ${w}es `].some((form) => words.includes(form));
+}
+
+/**
+ * The guarded tools a text names: by name, also inside a tool id such as
+ * mcp__lane-catalog__lanes_status, and with `aliases`, by the words the
+ * user may call one by. A brief uses a tool when it names it; the user's
+ * words ask for one when they name it or an alias.
+ */
+export function guardedIn(text, guard, { aliases = false } = {}) {
+    const words = wordsOf(text);
+    return guard.filter(([name, alias]) => holds(words, name) || (aliases && alias.some((a) => holds(words, a)))).map(([name]) => name);
+}
+
+/** Whether a folder is the user's home folder, where a project must not scatter files. */
+const isHome = (folder) => typeof folder === 'string' && expand(folder).replace(/\/+$/, '') === homedir().replace(/\/+$/, '');
+
 /** One thread as the DSH window shows it in a roster (see projection.js). */
 function rosterEntry(id, t) {
     const entry = { id, session: t.sessionId, title: t.title, resolved: t.resolved === true };
     if (t.createdAt) entry.created = t.createdAt;
-    if (t.lastHandback) entry.handback = { status: t.lastHandback.status, summary: String(t.lastHandback.summary ?? '').slice(0, 300), at: t.lastHandback.at ?? null };
+    if (t.lastHandback) entry.handback = { status: t.lastHandback.status, summary: cardSummary(t.lastHandback.summary, 300), at: t.lastHandback.at ?? null };
     return entry;
 }
 
@@ -702,7 +738,8 @@ export class ProjectManager {
             }
         }
         this.store.putProject(projectId, { welcomedSession: sessionId });
-        const outcome = await this.deliver(projectId, welcomeMessage(this.project(projectId).name));
+        const project = this.project(projectId);
+        const outcome = await this.deliver(projectId, welcomeMessage(project.name, project.goal?.trim()));
         this.log(`welcome ${projectId} ${sessionId} ${outcome}`);
     }
 
@@ -949,10 +986,11 @@ export class ProjectManager {
             name: project.name,
             goal: project.goal,
             workspacePath: project.workspacePath,
+            home: isHome(project.workspacePath),
+            guarded: guardList(this.config.guardedTools).map(([name]) => name),
             folders: this.workspacesIn(projectId).map((ws) => ws.path).filter((path) => path !== project.workspacePath),
             paused: this.paused(projectId),
             threads: this.store.project(projectId).threads,
-            settings: this.settings(projectId),
             memory: this.readMemory(projectId),
             liveStatus: (sid) => this.liveStatus(sid),
         });
@@ -961,7 +999,15 @@ export class ProjectManager {
     threadText(projectId, threadId) {
         const project = this.project(projectId);
         const t = this.store.thread(projectId, threadId);
-        return threadPolicy({ name: project.name, goal: project.goal, threadId, title: t?.title ?? threadId, memory: this.readMemory(projectId) });
+        return threadPolicy({
+            name: project.name,
+            goal: project.goal,
+            threadId,
+            title: t?.title ?? threadId,
+            home: isHome(t?.folder ?? project.workspacePath),
+            guarded: guardList(this.config.guardedTools).map(([name]) => name),
+            memory: this.readMemory(projectId),
+        });
     }
 
     /**
@@ -1357,12 +1403,35 @@ export class ProjectManager {
         return ws.path;
     }
 
-    async startThread(projectId, { title, brief, model, effort, folder }) {
+    /**
+     * Refuse a thread start or message that would use a guarded tool
+     * (config.guardedTools) the user's words don't call for: `userWords`
+     * and the project's goal must name it or one of its aliases. The first
+     * real run drifted from a test task the coordinator picked itself into
+     * the user's model lanes; this holds whatever the model makes of its
+     * prompt.
+     */
+    guard(projectId, what, text, userWords) {
+        const guard = guardList(this.config.guardedTools);
+        if (guard.length === 0) return;
+        const allowed = new Set(guardedIn(`${userWords ?? ''}\n${this.project(projectId).goal ?? ''}`, guard, { aliases: true }));
+        const blocked = guardedIn(text, guard).filter((name) => !allowed.has(name));
+        if (blocked.length === 0) return;
+        this.log(`guard ${projectId} ${what} ${blocked.join(',')}`);
+        const them = blocked.length > 1 ? 'them' : 'it';
+        const how = what === 'start' ? 'put their words in ask' : 'put their words in ask, or start a thread for it with their words in ask';
+        throw new ProjectError(`this would use ${blocked.join(', ')}, and the user's words do not ask for ${them}. Keep the work inside the workspace, or ask the user first. If the user did ask, ${how}. If the text only says not to use ${them}, leave that out: threads already have that rule`);
+    }
+
+    async startThread(projectId, { title, ask, brief, model, effort, folder }) {
         const project = this.project(projectId);
         if (this.paused(projectId)) throw new ProjectError('the project is paused; new threads are blocked until it resumes');
         const cleanTitle = clipTitle(title);
         if (!cleanTitle) throw new ProjectError('title is required');
         if (!String(brief ?? '').trim()) throw new ProjectError('brief is required');
+        const userWords = typeof ask === 'string' ? ask.trim().slice(0, 4000) : '';
+        if (!userWords) throw new ProjectError('ask is required: copy the user\'s words from their message');
+        this.guard(projectId, 'start', `${cleanTitle}\n${userWords}\n${brief}`, userWords);
         const where = this.folderOf(projectId, folder);
         const s = this.settings(projectId);
         // Not given, or "default": the project's thread default.
@@ -1387,6 +1456,8 @@ export class ProjectManager {
         this.store.putThread(projectId, threadId, {
             sessionId, title: cleanTitle, model: check.model, effort: check.effort,
             resolved: false, createdAt: new Date().toISOString(), handbackTimes: [], seenTurn: null,
+            ...(userWords ? { ask: userWords } : {}),
+            ...(where !== project.workspacePath ? { folder: where } : {}),
         });
         const agent = await this.attach(sessionId);
         const notes = check.note ? [check.note] : [];
@@ -1403,17 +1474,26 @@ export class ProjectManager {
             }
         }
         await this.sc.rename({ sessionId, title: cleanTitle }).catch(() => {});
-        await this.prompt(sessionId, briefMessage(project.name, threadId, cleanTitle, brief.trim()), 'queue', this.store.project(projectId).coordinatorSessionId);
-        this.log(`thread-start ${projectId}/${threadId} ${sessionId} brief-chars=${brief.length}`);
-        return { threadId, sessionId, title: cleanTitle, route: describeRoute(check.model, check.effort), notes };
+        await this.prompt(sessionId, briefMessage(project.name, threadId, cleanTitle, brief.trim(), userWords), 'queue', this.store.project(projectId).coordinatorSessionId);
+        this.log(`thread-start ${projectId}/${threadId} ${sessionId} brief-chars=${brief.length} ask-chars=${userWords.length}`);
+        // What it runs on is named only when the coordinator asked for a model or effort: otherwise it is a setting the coordinator needs no word of.
+        const asked = given(model) || given(effort);
+        return { threadId, sessionId, title: cleanTitle, route: asked ? describeRoute(check.model, check.effort) : undefined, notes: asked ? notes : [] };
     }
 
-    async sendToThread(projectId, threadId, text, steer) {
+    /**
+     * Send a thread a message. `ask` is the user's words when the message
+     * passes on their request; the coordinator's own messages (`ask`
+     * undefined) and the plugin's (`guard` false) say only what they say.
+     */
+    async sendToThread(projectId, threadId, text, steer, { ask, guard = false } = {}) {
         const { id, t } = this.requireThread(projectId, threadId);
         if (!String(text ?? '').trim()) throw new ProjectError('text is required');
+        const userWords = typeof ask === 'string' ? ask.trim().slice(0, 4000) : '';
+        if (guard) this.guard(projectId, 'send', `${userWords}\n${text}`, `${t.ask ?? ''}\n${userWords}`);
         if (t.resolved) this.store.putThread(projectId, id, { resolved: false });
         await this.attach(t.sessionId);
-        await this.prompt(t.sessionId, coordinatorMessage(text.trim()), steer ? 'steer' : 'queue', this.store.project(projectId).coordinatorSessionId);
+        await this.prompt(t.sessionId, coordinatorMessage(text.trim(), userWords), steer ? 'steer' : 'queue', this.store.project(projectId).coordinatorSessionId);
         this.log(`thread-send ${projectId}/${id} mode=${steer ? 'steer' : 'queue'} chars=${text.length}`);
         return `${steer ? 'Steered' : 'Sent to'} ${id}${t.resolved ? ' (reopened)' : ''}.`;
     }
@@ -1456,7 +1536,7 @@ export class ProjectManager {
             .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.text);
         const n = Math.max(1, Math.min(Number(count) || 6, 30));
         const lines = msgs.slice(-n).map((m) => `## ${m.role}\n${m.text.length > 3000 ? `${m.text.slice(0, 3000)}…` : m.text}`);
-        return [`${id} · "${t.title}" · ${t.resolved ? 'resolved' : this.liveStatus(t.sessionId)} · ${describeRoute(t.model, t.effort)}`, ...lines].join('\n\n');
+        return [`${id} · "${t.title}" · ${t.resolved ? 'resolved' : this.liveStatus(t.sessionId)}`, ...lines].join('\n\n');
     }
 
     async updateThread(projectId, threadKey, changes) {
@@ -1838,8 +1918,11 @@ export class ProjectManager {
         if (!this.allowHandback(projectId, threadId)) {
             throw new ProjectError(`handback limit reached (${this.config.maxHandbacksPerHour} per hour); finish the work and hand back once`);
         }
-        this.store.putThread(projectId, threadId, { lastHandback: { status, summary: text.slice(0, 500), at: new Date().toISOString() } });
-        const outcome = await this.deliver(projectId, handbackMessage(threadId, t.title, status, text), t.sessionId);
+        this.store.putThread(projectId, threadId, { lastHandback: { status, summary: cardSummary(text, 500), at: new Date().toISOString() } });
+        // With no other thread at work, the reply to this one also closes what the user asked for.
+        const others = Object.entries(this.store.project(projectId).threads).filter(([id, o]) => id !== threadId && !o.resolved);
+        const last = status !== 'progress' && !others.some(([, o]) => this.liveStatus(o.sessionId) !== 'idle');
+        const outcome = await this.deliver(projectId, handbackMessage(threadId, t.title, status, text, { last }), t.sessionId);
         this.log(`handback ${projectId}/${threadId} status=${status} chars=${text.length} ${outcome}`);
         if (outcome === 'delivered') return HANDBACK_SENT;
         return this.paused(projectId) ? HANDBACK_HELD : HANDBACK_RETRY;

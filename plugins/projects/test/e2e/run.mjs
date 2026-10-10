@@ -223,6 +223,9 @@ ${Object.entries(defaults).map(([key, value]) => `    ${key}: ${q(value)}\n`).jo
     storeFile: ${q(storeFile)}
     memoryDir: ${q(memoryDir)}
     logFile: ${q(logFile)}
+    guardedTools:
+      lane-catalog:
+        - lanes
     projects:
       - name: ${q(PROJECT)}
         goal: Prove the plugin on a real host
@@ -358,6 +361,7 @@ try {
     // 2. Thread start and handback.
     let mark = model.requests.length;
     await say(coord, call('project_thread_start', {
+        ask: 'Check the Alpha work and report.',
         title: 'Alpha',
         brief: `Do the work, then report. ${call('project_handback', { status: 'done', summary: 'Alpha finished: nothing to change.' })}`,
     }));
@@ -368,8 +372,9 @@ try {
     const t1Reqs = since(mark, 't1');
     check('thread asks with effort high', t1Reqs.length > 0 && t1Reqs.every((r) => r.model === 'fake-model' && r.effort === 'high'), describe(t1Reqs));
     check('thread has thread tools only', t1Reqs[0]?.tools.includes('project_handback') && !t1Reqs[0]?.tools.includes('project_thread_start'));
-    check('thread gets the brief', t1Reqs[0]?.fresh.includes(`[Brief from the coordinator of "${PROJECT}" · you are thread t1, "Alpha"]`));
+    check('thread gets the brief, the user\'s words first', t1Reqs[0]?.fresh.includes(`[Brief from the coordinator of "${PROJECT}" · you are thread t1, "Alpha"]\n\nThe user asked: "Check the Alpha work and report."\n\nDo the work`), t1Reqs[0]?.fresh.slice(0, 300));
     check('handback reaches the coordinator', saw.fresh.includes('[Handback from thread t1 · "Alpha" · status: done]') && saw.fresh.includes('Alpha finished'), saw.fresh.slice(0, 300));
+    check('the handback says how to answer it: now, the thread\'s link first, then the result', saw.fresh.includes('(The user has not seen this. Reply now. First line: the link [Alpha](.dsh-thread/t1), a colon, and the result in one sentence.'), saw.fresh.slice(-400));
     const t1 = threadSession('t1');
     check('thread session is titled "Alpha"', (await bridge('GET', `/sessions/${t1}`)).title === 'Alpha');
     check('roster shows the handback', saw.system.includes('- t1 · "Alpha" · ') && saw.system.includes('last handback: done'));
@@ -382,7 +387,9 @@ try {
         JSON.stringify(view)?.slice(0, 400));
     check('the window view marks the welcome turn and that the user has asked something since', view?.cards?.some((c) => c.kind === 'welcome' && Number.isSafeInteger(c.turn))
         && view.asked === true, JSON.stringify(view?.cards)?.slice(0, 300));
-    const threadView = windowView(t1);
+    // DSH folds the thread's own view from its events; it can trail the coordinator's by a moment.
+    const threadView = await waitFor(() => (windowView(t1)?.cards?.some((c) => c.kind === 'handback') ? windowView(t1) : null),
+        'the thread view with its handback card', 15000).catch(() => windowView(t1));
     check('the window view of a thread names its coordinator', threadView?.role === 'thread' && threadView.coordinator === coord
         && threadView.thread?.id === 't1' && threadView.cards?.some((c) => c.kind === 'handback'), JSON.stringify(threadView)?.slice(0, 300));
     await sleep(1000);
@@ -390,7 +397,7 @@ try {
 
     // 3. A thread that stops without a handback: the idle note.
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', { title: 'Beta', brief: 'Just answer.' }));
+    await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Beta', brief: 'Just answer.' }));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Beta idle note');
     check('idle note reaches the coordinator', saw.fresh.includes('[Thread idle without a handback: t2 · "Beta"]') && saw.fresh.includes('Plain reply.'), saw.fresh.slice(0, 300));
     const t2 = threadSession('t2');
@@ -415,7 +422,7 @@ try {
 
     // 5. A failed turn: the note says so. The roster now notes the direct talk.
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', { title: 'Gamma', brief: 'E2E:fail' }));
+    await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Gamma', brief: 'E2E:fail' }));
     check('roster notes the direct talk', since(mark, 'coordinator')[0]?.system.includes('- t2 · "Beta" · idle · no handback yet · the user talked to it directly; its reply: "Plain reply."'),
         since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => l.startsWith('- t')).join(' | '));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Gamma failure note');
@@ -425,6 +432,7 @@ try {
     mark = model.requests.length;
     const probe = join(root, 'outside', 'approval-probe.txt');
     await say(coord, call('project_thread_start', {
+        ask: 'Please do this.',
         title: 'Delta',
         brief: call('write', { file_path: probe, content: 'x', sandbox_permissions: 'danger-full-access', justification: 'E2E approval check.' }),
     }));
@@ -451,7 +459,7 @@ try {
     reqs = await say(coord, call('project_settings', { thread_model: 'fake-flash' }));
     check('settings note the dropped effort', resultOf(reqs).includes('has no effort levels'), resultOf(reqs));
     mark = model.requests.length;
-    reqs = await say(coord, call('project_thread_start', { title: 'Epsilon', brief: 'Just answer.' }));
+    reqs = await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Epsilon', brief: 'Just answer.' }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Epsilon idle note');
     const t5Reqs = since(mark, 't5');
     check('flash thread asks without effort', t5Reqs.length > 0 && t5Reqs.every((r) => r.model === 'fake-flash' && r.effort === undefined), describe(t5Reqs));
@@ -509,6 +517,7 @@ try {
     // 14. A stop the coordinator asks for is not echoed back to it.
     mark = model.requests.length;
     await say(coord, call('project_thread_start', {
+        ask: 'Please do this.',
         title: 'Zeta',
         brief: call('write', { file_path: probe, content: 'x', sandbox_permissions: 'danger-full-access', justification: 'E2E stop check.' }),
     }));
@@ -525,6 +534,7 @@ try {
     // second fails, and the coordinator hears about both.
     mark = model.requests.length;
     await say(coord, call('project_thread_start', {
+        ask: 'Please do this.',
         title: 'Eta',
         brief: `E2E:slow 4000\n${call('project_handback', { status: 'done', summary: 'Eta part one done.' })}`,
     }));
@@ -538,7 +548,7 @@ try {
     // 16. DSH dies mid-turn. At the next start the coordinator hears the thread
     // was cut off. Then: same coordinator, routes kept, threads still wired.
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', { title: 'Theta', brief: 'E2E:slow 120000\nWork for a long time.' }));
+    await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Theta', brief: 'E2E:slow 120000\nWork for a long time.' }));
     await waitFor(() => since(mark, 't8').length > 0, 'the Theta request');
     const exited = new Promise((r) => child.once('exit', r));
     child.kill('SIGKILL');
@@ -586,13 +596,26 @@ try {
     answer = await webApi(web, 'dsh-plugin-projects/update', { target: coord, changes: { threadEffort: 'ultra' } });
     check('the window gets the plugin\'s refusal', answer.ok === false && answer.error?.code === 'projects/refused' && /ultra/.test(answer.error.message), JSON.stringify(answer));
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', { title: 'Iota', brief: 'Just answer.' }));
+    await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Iota', brief: 'Just answer.' }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Iota idle note');
     check('the coordinator asks with the default effort again', since(mark, 'coordinator').every((r) => r.effort === 'high'), describe(since(mark, 'coordinator')));
-    check('the coordinator prompt shows the project\'s thread model', since(mark, 'coordinator')[0]?.system.includes('- New threads: fake:fake-flash · effort max'),
-        since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => l.startsWith('- Coordinator:') || l.startsWith('- New threads:')).join(' | '));
+    // Models and efforts are settings: neither the coordinator's own prompt section nor its start result names them unless it chose one.
+    const iota = since(mark, 'coordinator');
+    const policyOf = (r) => { const at = r.system.indexOf('# Project coordinator'); return at < 0 ? '' : r.system.slice(at, r.system.indexOf('\n## Threads', at)); };
+    check('the coordinator\'s prompt and start result name no model', iota.length > 0 && iota.every((r) => policyOf(r) !== '' && !/fake-|effort (max|high)|## Settings/.test(policyOf(r)))
+        && resultOf(iota) === 'TOOL-RESULT: Started t9 "Iota". It reports back when done. Link it as [Iota](.dsh-thread/t9).',
+        `${resultOf(iota)} || ${iota.map((r) => policyOf(r).split('\n').filter((l) => /fake-|effort|Settings/.test(l)).join(' | ')).join(' ;; ')}`);
     const t9Reqs = since(mark, 't9');
     check('a new thread starts on the project\'s own thread model', t9Reqs.length > 0 && t9Reqs.every((r) => r.model === 'fake-flash' && r.effort === undefined), describe(t9Reqs));
+
+    // Scope: a start that would use a guarded tool the user's words don't name is refused, and one without their words never runs.
+    reqs = await say(coord, call('project_thread_start', { ask: 'Write a haiku about rain.', title: 'Lanes', brief: 'Use mcp__lane-catalog__lanes_status to list the lanes.' }));
+    check('a start that would use a guarded tool the user did not ask for is refused', resultOf(reqs).startsWith('TOOL-RESULT: Failed: this would use lane-catalog, and the user\'s words do not ask for it.')
+        && readText(logFile).includes(`guard ${PROJECT_ID} start lane-catalog`), resultOf(reqs));
+    check('the coordinator\'s rules name the guarded tools', reqs.some((r) => r.system.includes('\n   Here those include: lane-catalog.\n')), reqs.at(-1)?.system.split('\n').filter((l) => /include/.test(l)).join(' | '));
+    reqs = await say(coord, call('project_thread_start', { title: 'No ask', brief: 'Just answer.' }));
+    check('a start without the user\'s words is rejected before it runs', resultOf(reqs) !== '' && /\bask\b/.test(resultOf(reqs))
+        && !Object.values(project().threads ?? {}).some((t) => t.title === 'No ask' || t.title === 'Lanes'), resultOf(reqs).slice(0, 300));
 
     // 19. A model picked in DSH's own picker (the composer's model menu) becomes the project's coordinator setting.
     answer = await webApi(web, 'session/selectModel', { request: { sessionId: coord, provider: 'fake', model: 'fake-model', reasoningEffort: 'max' } });
@@ -613,7 +636,7 @@ try {
     check('the window says the inherited effort is fitted', answer.ok && (answer.value?.notes ?? []).some((n) => /fake:fake-mini doesn't offer effort "max", so it runs at "high"/.test(n)),
         JSON.stringify(answer).slice(0, 400));
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', { title: 'Kappa', brief: 'Just answer.' }));
+    await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Kappa', brief: 'Just answer.' }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Kappa idle note');
     const kappa = since(mark, 't10');
     check('a thread whose model lacks the default effort starts at the nearest one', kappa.length > 0 && kappa.every((r) => r.model === 'fake-mini' && r.effort === 'high'), describe(kappa));
@@ -641,7 +664,7 @@ try {
     }
     check('git makes the workspace a repository, so DSH records each turn\'s changes', gitReady);
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', { title: 'Lambda', brief: call('write', { file_path: join(ws, 'notes.md'), content: 'one\ntwo\nthree\n' }) }));
+    await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Lambda', brief: call('write', { file_path: join(ws, 'notes.md'), content: 'one\ntwo\nthree\n' }) }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Lambda idle note');
     const lambdaId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Lambda')?.[0];
     const lambda = threadSession(lambdaId);
@@ -737,7 +760,7 @@ try {
     check('the roster tells the coordinator which threads failed or stopped', lineOf('t3').includes('· its last turn failed (HTTP 400): fake model rejected the request')
         && lineOf('t4').includes('· its last turn was stopped by the user before it finished.') && lineOf('t8').includes('· its last turn was cut off because DSH stopped while it ran.')
         && lineOf('t7').includes('last handback: done') && lineOf('t7').includes('its last turn failed') && !lineOf('t1').includes('its last turn'), roster.join('\n'));
-    check('the coordinator is told to leave a thread the user stopped stopped', since(mark, 'coordinator')[0]?.system.includes('- A thread the user stopped stays stopped'));
+    check('the coordinator is told to leave a thread the user stopped stopped', since(mark, 'coordinator')[0]?.system.includes('A thread the user stopped stays stopped.'));
     // Retry: the thread hears it from its coordinator, runs, and its failure clears.
     const refusedWhy = (answer) => (answer.ok ? 'ok' : `${answer.error?.code}: ${answer.error?.message}`);
     let answer2 = await webApi(webAgain, 'dsh-plugin-projects/continueThread', { target: coord, thread: 't1' });
@@ -797,7 +820,7 @@ try {
     check('Add coordinator starts a welcomed ◆ coordinator in the chosen workspace', added.ok && oldCoordView?.cwd === realpathSync(dirA) && oldCoordView?.title === '◆ Old Alpha'
         && added.value.projects.find((p) => p.coordinator === oldCoord)?.home === wsA, JSON.stringify(oldCoordView).slice(0, 300));
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', { title: 'Mu', brief: 'Just answer.', folder: 'old-b' }));
+    await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Mu', brief: 'Just answer.', folder: 'old-b' }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Mu idle note');
     const muId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Mu')?.[0];
     const muView = muId ? await bridge('GET', `/sessions/${threadSession(muId)}`) : null;

@@ -18,9 +18,9 @@ import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
 import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol';
 import * as plugin from '../lib/index.js';
 import { effectiveSettings, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
-import { slugify, timing, clipTitle } from '../lib/projects.js';
+import { slugify, timing, clipTitle, guardList, guardedIn } from '../lib/projects.js';
 import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS } from '../lib/changes.js';
-import { describeEnding, endingStateOf, continueMessage, readableError } from '../lib/prompts.js';
+import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, cardSummary, threadMarkdown } from '../lib/prompts.js';
 import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
 import { planFleetShellImport } from '../lib/fleet-shell.js';
 
@@ -371,8 +371,22 @@ test('coordinator is created, titled and gets coordinator tools', async () => {
     const text = coord.ctx.section();
     assert.match(text, /coordinator of the DSH project "DSH Plugins"/);
     assert.match(text, /Goal: Ship good DSH plugins/);
-    assert.match(text, /Coordinator: DSH default model · effort max/);
-    assert.match(text, /New threads: DSH default model · effort high/);
+    // Models and efforts are settings: the coordinator's prompt names none of them (project_settings shows them).
+    assert.doesNotMatch(text, /## Settings|DSH default model|effort (max|high)/);
+    assert.match(text, /\n9\. Only when the user asks: resolve a thread \(project_thread_update\) or change models, effort or pause \(project_settings; with no arguments it shows them\)\./);
+    // Ten short numbered rules a weaker model can follow: the user's ask and nothing else, work it picks itself only in the
+    // workspace, off the user's personal and infrastructure tools, one way to start a thread, and every thread named as a link.
+    assert.deepEqual(text.match(/^\d+\. /gm), ['1. ', '2. ', '3. ', '4. ', '5. ', '6. ', '7. ', '8. ', '9. ', '10. ']);
+    assert.match(text, /\n1\. Do only what the user asks\. When they leave the choice of work to you, pick work that only reads and writes files in the workspace, and say what you picked\./);
+    assert.match(text, /\n2\. Never use the user's personal or infrastructure tools, yourself or in a thread: password managers and vaults, note apps, email and messaging, home or household services, control of the user's screen, model lanes and gateways\. Only the user's own words \(a message, or the goal\) can call for one\./);
+    assert.match(text, /\n3\. For work, start a thread with project_thread_start, not with DSH's subagent or workflow tools\. One thread per distinct ask; put the user's words in `ask`, word for word\./);
+    assert.match(text, /\n4\. Name a thread to the user only as a link: \[Fix the login bug\]\(\.dsh-thread\/t3\) for thread t3\./);
+    assert.match(text, /\n6\. Before you or a thread delete files, push, publish, send or post anything, spend money, or change settings outside the workspace, ask the user/);
+    assert.match(text, /\n10\. Write to project_memory only decisions and preferences the user stated\./);
+    assert.doesNotMatch(text, /home folder|Here those include|PAUSED/);
+    assert.ok(text.length < 2400, `short enough for a weaker model: ${text.length} characters`);
+    // Nor do the tools' descriptions name a provider's efforts.
+    for (const [name, def] of coord.ctx.registered) assert.doesNotMatch(JSON.stringify([def.description, def.parameters]), /deepseek|off, low, high, max/i, name);
     // Coordinator requests run at effort max, model untouched.
     assert.deepEqual(await coord.ctx.request({ provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'high' }),
         { provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'max' });
@@ -391,8 +405,8 @@ test('thread start → brief → handback → coordinator turn', async () => {
     const { host } = setup();
     await tick();
     const coord = coordinatorOf(host);
-    const out = await coord.ctx.call('project_thread_start', { title: 'Add CI', brief: 'Add a GitHub Actions workflow running npm test.' });
-    assert.match(out, /^Started t1 "Add CI" \(DSH default model · effort high\)/);
+    const out = await coord.ctx.call('project_thread_start', { ask: 'Add CI that runs our tests.', title: 'Add CI', brief: 'Add a GitHub Actions workflow running npm test.' });
+    assert.equal(out, 'Started t1 "Add CI". It reports back when done. Link it as [Add CI](.dsh-thread/t1).');
 
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
     const ts = host.sessions.get(thread.id);
@@ -400,11 +414,19 @@ test('thread start → brief → handback → coordinator turn', async () => {
     assert.equal(ts.title, 'Add CI');
     assert.equal(ts.prompts.length, 1);
     assert.equal(ts.prompts[0].mode, 'queue');
-    assert.match(ts.prompts[0].text, /^\[Brief from the coordinator of "DSH Plugins" · you are thread t1, "Add CI"\]\n\nAdd a GitHub Actions/);
+    // The user's own words come first, then the coordinator's brief.
+    assert.match(ts.prompts[0].text, /^\[Brief from the coordinator of "DSH Plugins" · you are thread t1, "Add CI"\]\n\nThe user asked: "Add CI that runs our tests\."\n\nAdd a GitHub Actions/);
     // As DSH sends its own agents' messages, so DSH draws a notice, not a user bubble.
     assert.deepEqual(sourceOf(ts, 0), { kind: 'agent-message', form: 'relay', senderSessionId: coord.id });
     assert.deepEqual([...thread.ctx.registered.keys()].sort(), ['project_handback', 'project_memory']);
     assert.match(thread.ctx.section(), /You are thread t1, "Add CI"/);
+    // A thread does the task and only the task, off the user's own tools, and hands back once, result first.
+    assert.match(thread.ctx.section(), /\n1\. Do the task end to end, and only the task\./);
+    assert.match(thread.ctx.section(), /\n2\. Do not use the user's personal or infrastructure tools \(password managers and vaults, note apps, .*\) unless the user's own words ask for it\./);
+    assert.match(thread.ctx.section(), /\n3\. Editing files for your task is fine\. Before you delete files, push, publish/);
+    assert.match(thread.ctx.section(), /\n4\. When you are done or stuck, call project_handback once, as your last step\..*shows 300 characters: the result first/);
+    assert.match(thread.ctx.section(), /\n5\. After project_handback, end your turn with one short line\./);
+    assert.doesNotMatch(thread.ctx.section(), /Here those include/, 'no guarded tools are configured');
     assert.equal((await thread.ctx.request({ provider: 'deepseek', model: 'deepseek-v4' })).reasoningEffort, 'high');
 
     // The thread works, hands back, goes idle: one handback, no idle note.
@@ -415,16 +437,25 @@ test('thread start → brief → handback → coordinator turn', async () => {
     const cp = host.sessions.get(coord.id).prompts;
     assert.equal(cp.length, 1);
     assert.match(cp[0].text, /^\[Handback from thread t1 · "Add CI" · status: done\]\n\nCI added/);
+    // Its last paragraph says how to answer, when the coordinator answers: now, the link first, then the result; and with no
+    // other thread at work, a line that closes the user's ask.
+    assert.match(cp[0].text, /\n\n\(The user has not seen this\. Reply now\. First line: the link \[Add CI\]\(\.dsh-thread\/t1\), a colon, and the result in one sentence\. Then at most two short lines\. No other thread is running: end with one line that answers what the user asked for\. Write "the thread reports" for anything you did not check yourself\. Full conversation: project_thread_read thread="t1"\.\)$/);
     assert.deepEqual(sourceOf(host.sessions.get(coord.id), 0), { kind: 'agent-message', form: 'relay', senderSessionId: thread.id }, 'a handback comes from its thread');
     assert.match(coord.ctx.section(), /t1 · "Add CI" · idle · last handback: done, "CI added/);
     // A coordinator's message to a thread comes from the coordinator too.
     assert.equal(await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Also cache npm.', steer: true }), 'Steered t1.');
     assert.deepEqual([ts.prompts[1].mode, sourceOf(ts, 1)], ['steer', { kind: 'agent-message', form: 'relay', senderSessionId: coord.id }]);
 
+    // A follow-up that passes on the user's request carries their words too.
+    assert.equal(await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Cache the npm folder.', ask: 'can it cache npm?' }), 'Sent to t1.');
+    assert.equal(ts.prompts[2].text, '[From the coordinator]\n\nThe user asked: "can it cache npm?"\n\nCache the npm folder.');
+
     // Schema-invalid input is rejected by dsh-tools before execute; ordinary failures come back as text.
     await assert.rejects(thread.ctx.call('project_handback', { status: 'finished', summary: 'x' }), { code: 'INVALID_ARGS' });
+    await assert.rejects(coord.ctx.call('project_thread_start', { title: 'X', brief: 'y' }), { code: 'INVALID_ARGS' }, 'a thread start needs the user\'s words');
+    assert.match(await coord.ctx.call('project_thread_start', { ask: '  ', title: 'X', brief: 'y' }), /^Failed: ask is required: copy the user's words from their message/);
     assert.match(await thread.ctx.call('project_handback', { status: 'done', summary: '  ' }), /^Failed: summary is required/);
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'X', brief: 'y', effort: 'medium' }), /^Failed: effort "medium" is not offered/);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'X', brief: 'y', effort: 'medium' }), /^Failed: effort "medium" is not offered/);
     assert.match(await coord.ctx.call('project_thread_send', { thread: 't9', text: 'hi' }), /^Failed: no thread "t9".*threads: t1/);
 });
 
@@ -432,7 +463,7 @@ test('idle without a handback sends the automatic note with the last reply', asy
     const { host } = setup();
     await tick();
     const coord = coordinatorOf(host);
-    await coord.ctx.call('project_thread_start', { title: 'Docs', brief: 'Write docs.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Docs', brief: 'Write docs.' });
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
     host.sessions.get(thread.id).events.push({ seq: 1, type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text: 'I wrote half the docs.' }] } } });
     thread.ctx.emitStatus(thread, 'running');
@@ -451,7 +482,7 @@ test('autoHandback off sends only explicit handbacks', async () => {
     const { host } = setup({ autoHandback: 'off' });
     await tick();
     const coord = coordinatorOf(host);
-    await coord.ctx.call('project_thread_start', { title: 'Quiet', brief: 'Work.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Quiet', brief: 'Work.' });
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
     thread.ctx.emitStatus(thread, 'running');
     thread.ctx.emitStatus(thread, 'idle');
@@ -471,8 +502,8 @@ test('settings: change, validate, reset to default, per-thread override', async 
     assert.match(await coord.ctx.call('project_settings', { thread_effort: 'max' }), /^Failed: effort "max" is not offered by deepseek:deepseek-v4-flash/);
     assert.match(await coord.ctx.call('project_settings', { coordinator_effort: 'default' }), /Coordinator: DSH default model · effort max \(DSH default \/ project config\)/);
 
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'Big', brief: 'Think hard.', model: 'other:big-model', effort: 'max' }),
-        /^Started t1 "Big" \(other:big-model · effort default\)\. It will hand back when done\. Note: other:big-model has no effort levels/);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Big', brief: 'Think hard.', model: 'other:big-model', effort: 'max' }),
+        /^Started t1 "Big"\. It reports back when done\. It runs on other:big-model · effort default\. Note: other:big-model has no effort levels/);
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
     assert.deepEqual(await thread.ctx.request({ provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'high' }), { provider: 'other', model: 'big-model' });
     assert.match(await coord.ctx.call('project_thread_update', { thread: 't1', model: 'default', effort: 'default' }), /route deepseek:deepseek-v4-flash · effort high/);
@@ -490,11 +521,11 @@ test('pause blocks threads and holds handbacks until resume', async () => {
     const { host } = setup();
     await tick();
     const coord = coordinatorOf(host);
-    await coord.ctx.call('project_thread_start', { title: 'Work', brief: 'Do it.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Work', brief: 'Do it.' });
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
     assert.match(await coord.ctx.call('project_settings', { paused: true }), /Paused: yes/);
     assert.match(coord.ctx.section(), /PAUSED/);
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'No', brief: 'x' }), /^Failed: the project is paused/);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'No', brief: 'x' }), /^Failed: the project is paused/);
     assert.match(await thread.ctx.call('project_handback', { status: 'done', summary: 'Finished.' }), /saved; the coordinator gets it when the project resumes/);
     assert.equal(host.sessions.get(coord.id).prompts.length, 0);
     assert.match(await coord.ctx.call('project_settings', { paused: false }), /Paused: no \(delivered 1 held handbacks\)/);
@@ -505,7 +536,7 @@ test('handback rate cap', async () => {
     const { host } = setup({ maxHandbacksPerHour: 2 });
     await tick();
     const coord = coordinatorOf(host);
-    await coord.ctx.call('project_thread_start', { title: 'Loop', brief: 'x' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Loop', brief: 'x' });
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
     await thread.ctx.call('project_handback', { status: 'progress', summary: 'a' });
     await thread.ctx.call('project_handback', { status: 'progress', summary: 'b' });
@@ -516,9 +547,9 @@ test('thread start cap stops a coordinator that keeps starting threads', async (
     const { host, dir } = setup({ maxThreadsPerHour: 2 });
     await tick();
     const coord = coordinatorOf(host);
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'One', brief: 'x' }), /^Started t1/);
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'Two', brief: 'x' }), /^Started t2/);
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'Three', brief: 'x' }), /^Failed: thread limit reached: this project started 2 threads in the last hour/);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'One', brief: 'x' }), /^Started t1/);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Two', brief: 'x' }), /^Started t2/);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Three', brief: 'x' }), /^Failed: thread limit reached: this project started 2 threads in the last hour/);
     assert.equal(host.sessions.size, 3, 'coordinator plus two threads');
     assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /thread-limit dsh-plugins 2/);
     // Sending to an existing thread still works.
@@ -531,7 +562,7 @@ test('memory is shared and shown in both policies', async () => {
     const coord = coordinatorOf(host);
     assert.equal(await coord.ctx.call('project_memory', { action: 'read' }), '(project memory is empty)');
     await coord.ctx.call('project_memory', { action: 'append', text: '- Node 22 everywhere.' });
-    await coord.ctx.call('project_thread_start', { title: 'T', brief: 'x' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'T', brief: 'x' });
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
     await thread.ctx.call('project_memory', { action: 'append', text: '- CI runs npm test.' });
     assert.equal(readFileSync(join(dir, 'memory', 'dsh-plugins.md'), 'utf8'), '- Node 22 everywhere.\n- CI runs npm test.\n');
@@ -549,7 +580,7 @@ test('restart: same coordinator, threads re-attach on resume', async () => {
     const first = setup({}, dir);
     await tick();
     const coord = coordinatorOf(first.host);
-    await coord.ctx.call('project_thread_start', { title: 'Survivor', brief: 'x' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Survivor', brief: 'x' });
     const threadId = [...first.host.live.keys()].find((id) => id !== coord.id);
 
     // A new host process over the same sessions and store.
@@ -598,12 +629,12 @@ test('session mode: coordinator and threads get DSH model selections, not reques
     assert.equal(coord.ctx.listeners.get('agent/request').length, 1);
 
     // A thread is selected before its brief arrives.
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'Fast', brief: 'Go.', model: 'deepseek-v4-flash' }), /^Started t1 "Fast" \(deepseek:deepseek-v4-flash · effort high\)\. It will hand back when done\. Link it in replies as \[Fast\]\(\.dsh-thread\/t1\)\.$/);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Fast', brief: 'Go.', model: 'deepseek-v4-flash' }), /^Started t1 "Fast"\. It reports back when done\. It runs on deepseek:deepseek-v4-flash · effort high\. Link it as \[Fast\]\(\.dsh-thread\/t1\)\.$/);
     const t1 = [...host.live.values()].find((a) => a.id !== coord.id);
     assert.deepEqual(host.selections[1], { sessionId: t1.id, selection: { provider: 'deepseek', model: 'deepseek-v4-flash', reasoningEffort: 'high' }, promptsBefore: 0 });
 
     // A model without effort levels: the default effort is dropped with a note.
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'Big', brief: 'Go.', model: 'big-model' }), /\(other:big-model · effort default\).*Note: other:big-model has no effort levels, so effort "high" is not used\. Link it in replies as \[Big\]\(\.dsh-thread\/t2\)\.$/);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Big', brief: 'Go.', model: 'big-model' }), /It runs on other:big-model · effort default\. Note: other:big-model has no effort levels, so effort "high" is not used\. Link it as \[Big\]\(\.dsh-thread\/t2\)\.$/);
     assert.deepEqual(host.selections[2].selection, { provider: 'other', model: 'big-model' });
 
     // project_thread_update re-selects the thread.
@@ -620,13 +651,14 @@ test('an effort the DSH default model lacks never stops a thread: it runs at the
     // The user picks V4 Flash somewhere in DSH, which makes it the DSH default model (the judge's B1).
     const flash = { provider: 'deepseek', model: 'deepseek-v4-flash' };
     host.services.agentDefaultModel.currentSelection = () => ({ ...flash });
-    const started = await coord.ctx.call('project_thread_start', { title: 'Fast', brief: 'Go.' });
-    assert.match(started, /^Started t1 "Fast" \(DSH default model · effort high\)\. It will hand back when done\. Note: deepseek:deepseek-v4-flash doesn't offer effort "max", so it runs at "high"\./);
+    const started = await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Fast', brief: 'Go.' });
+    // A fitted default is a setting the coordinator didn't choose: the start says nothing of it.
+    assert.equal(started, 'Started t1 "Fast". It reports back when done. Link it as [Fast](.dsh-thread/t1).');
     const t1 = [...host.live.values()].find((a) => a.id !== coord.id);
     assert.deepEqual(host.selections.at(-1), { sessionId: t1.id, selection: { ...flash, reasoningEffort: 'high' }, promptsBefore: 0 });
     // An effort named in the start is fitted too; only one no model offers is refused.
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'Two', brief: 'Go.', model: 'deepseek-v4-flash', effort: 'max' }), /\(deepseek:deepseek-v4-flash · effort high\).*runs at "high"/);
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'Three', brief: 'Go.', effort: 'ultra' }), /^Failed: effort "ultra" is not offered by any model/);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Two', brief: 'Go.', model: 'deepseek-v4-flash', effort: 'max' }), /It runs on deepseek:deepseek-v4-flash · effort high\. Note: .*runs at "high"/);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Three', brief: 'Go.', effort: 'ultra' }), /^Failed: effort "ultra" is not offered by any model/);
     // "Use default" goes through when the inherited effort doesn't fit the default model, and the coordinator runs fitted.
     await coord.ctx.call('project_settings', { coordinator_effort: 'off' });
     const reset = await coord.ctx.call('project_settings', { coordinator_effort: 'default' });
@@ -662,12 +694,14 @@ test('session mode: on DSH defaults the coordinator gets no selection until a se
     await tick();
     const coord = coordinatorOf(host);
     assert.deepEqual(host.selections, []);
-    await coord.ctx.call('project_thread_start', { title: 'Plain', brief: 'Go.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Plain', brief: 'Go.' });
     const t1 = [...host.live.values()].find((a) => a.id !== coord.id);
     // The thread is put on the DSH default of the moment and records it, so a pick
     // elsewhere in DSH (which changes the DSH default) doesn't move it.
     assert.deepEqual(host.selections.map((s) => [s.sessionId, s.selection]), [[t1.id, { provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'high' }]]);
-    assert.match(await coord.ctx.call('project_thread_read', { thread: 't1' }), /^t1 · "Plain" · .* · deepseek:deepseek-v4 · effort high/);
+    const read = await coord.ctx.call('project_thread_read', { thread: 't1' });
+    assert.match(read, /^t1 · "Plain" · \w+\n/);
+    assert.doesNotMatch(read.split('\n')[0], /deepseek|effort/, 'reading a thread names no model');
     host.selections.length = 0;
     await coord.ctx.call('project_settings', { coordinator_model: 'deepseek-v4-flash' });
     assert.deepEqual(host.selections.map((s) => s.selection), [{ provider: 'deepseek', model: 'deepseek-v4-flash' }]);
@@ -709,7 +743,7 @@ test('defaults form: a saved default switches what follows the defaults, and a p
     await tick();
     assert.deepEqual(efforts(), ['high', 'max'], 'a coordinator on the default switches from its next request');
     assert.match(await coord.ctx.call('project_settings', {}), /New threads: DSH default model · effort max \(DSH default \/ project setting\)/, 'the project\'s own choice stays');
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'After', brief: 'Go.' }), /Started t1/);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'After', brief: 'Go.' }), /Started t1/);
     const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'After');
     assert.equal(host.selections.find((s) => s.sessionId === t1.id).selection.reasoningEffort, 'max');
 
@@ -771,7 +805,7 @@ test('picker: a model the user picks in DSH\'s own picker becomes the project\'s
     assert.match(await coord.ctx.call('project_settings', {}), /^Coordinator: deepseek:deepseek-v4-flash · effort off \(project setting \/ project setting\)/);
     assert.equal(host.selections.length, selectionsBefore, 'the coordinator already runs on the pick, so nothing selects it again');
     // In a thread, the pick becomes that thread's model.
-    await coord.ctx.call('project_thread_start', { title: 'Picked', brief: 'Go.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Picked', brief: 'Go.' });
     const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Picked');
     t1.ctx.sessionEvent({ type: 'model/selection', data: { provider: 'other', model: 'big-model' } });
     assert.deepEqual(await threadRoute(), ['t1 other:big-model null']);
@@ -826,7 +860,7 @@ test('window: the Project settings endpoints read and change a project the way i
     await refused(remote.update(coord.id, 'max'), /changes must be an object/);
 
     // A thread, named by its own session: its model changes from its next request.
-    await coord.ctx.call('project_thread_start', { title: 'Window', brief: 'Go.', model: 'deepseek-v4' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Window', brief: 'Go.', model: 'deepseek-v4' });
     const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Window');
     after = await remote.update(t1.id, { thread: 't1', model: 'deepseek:deepseek-v4-flash', effort: 'off' });
     assert.deepEqual(plain(after.threads.map(({ id, title, session, resolved, model, effort }) => ({ id, title, session, resolved, model, effort }))),
@@ -837,7 +871,7 @@ test('window: the Project settings endpoints read and change a project the way i
     // Pause, and back to what the profile says.
     after = await remote.update(coord.id, { paused: true });
     assert.deepEqual(plain(after.paused), { value: true, source: 'project setting', inherited: false, held: 0, handbacks: [] });
-    await refused(coord.ctx.call('project_thread_start', { title: 'Blocked', brief: 'Go.' }).then((text) => {
+    await refused(coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Blocked', brief: 'Go.' }).then((text) => {
         throw Object.assign(new Error(text), { code: /paused/.test(text) ? 'projects/refused' : 'unexpected' });
     }), /paused/);
     // What a pause holds for the coordinator is counted, for the window's pause bar.
@@ -977,6 +1011,7 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
         ['sidebar.workspaces.session.menu.item', 'dsh-plugin-projects/project-settings-item', 250],
         ['conversation.session.header.actions', 'dsh-plugin-projects/threads-menu', -25],
         ['conversation.chat.turnTail', 'dsh-plugin-projects/thread-cards', 30],
+        ['conversation.chat.node', 'turn-trigger', null],
         ['sidebar.session.row.leading', 'dsh-plugin-projects/thread-mark', 20],
         ['sidebar.workspaces.session.row.action', 'dsh-plugin-projects/row-place', 900],
         ['conversation.input.dock', 'dsh-plugin-projects/paused-bar', 15],
@@ -1842,7 +1877,8 @@ test('session mode: a failed selection is reported, and the coordinator retries 
     await tick();
     const coord = coordinatorOf(host);
     host.services.llm = { async resolveCallConfig() { throw new Error('provider offline'); } };
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'T', brief: 'Go.' }), /Note: the model could not be set, so the thread runs on the DSH default/);
+    assert.doesNotMatch(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'T', brief: 'Go.' }), /Note/, 'a setting the coordinator didn\'t choose gets no note');
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'U', brief: 'Go.', effort: 'high' }), /Note: the model could not be set, so the thread runs on the DSH default/);
     assert.match(await coord.ctx.call('project_settings', { coordinator_effort: 'low' }), /The coordinator model could not be switched/);
     host.services.llm = fakeLlm;
     await coord.ctx.call('project_settings', { thread_effort: 'max' });
@@ -1865,7 +1901,7 @@ test('a turn the user drives in a thread does not wake the coordinator', async (
     const { host } = setup();
     await tick();
     const coord = coordinatorOf(host);
-    await coord.ctx.call('project_thread_start', { title: 'Chat', brief: 'Help the user.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Chat', brief: 'Help the user.' });
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
 
     // The user talks to the thread in its own session; the Host adds its runtime context.
@@ -1901,7 +1937,7 @@ test('the idle note says when a thread turn failed', async () => {
     const { host } = setup();
     await tick();
     const coord = coordinatorOf(host);
-    await coord.ctx.call('project_thread_start', { title: 'Flaky', brief: 'Call the lane.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Flaky', brief: 'Call the lane.' });
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
     const ts = host.sessions.get(thread.id);
     ts.events.push({ seq: ts.events.length + 1, type: 'turn/end', data: { turn: 1, reason: { kind: 'error', error: { message: 'provider unavailable', code: 'NETWORK' } } } });
@@ -1916,7 +1952,7 @@ test('a failed or stopped thread shows in the roster until a turn finishes; Retr
     await tick();
     const coord = coordinatorOf(host);
     const remote = host.provided.get('dshPluginProjectsRemote');
-    await coord.ctx.call('project_thread_start', { title: 'Flaky', brief: 'Call the lane.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Flaky', brief: 'Call the lane.' });
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
     const ts = host.sessions.get(thread.id);
     const turn = (reason) => {
@@ -2006,7 +2042,7 @@ test('a stop the coordinator asks for, or a person makes, does not come back as 
     const { host, dir } = setup();
     await tick();
     const coord = coordinatorOf(host);
-    await coord.ctx.call('project_thread_start', { title: 'Long', brief: 'Run the long job.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Long', brief: 'Run the long job.' });
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
     const ts = host.sessions.get(thread.id);
     const endTurn = (kind) => ts.events.push({ seq: ts.events.length + 1, type: 'turn/end', data: { turn: 1, reason: { kind } } });
@@ -2048,7 +2084,7 @@ test('a permission prompt left unanswered tells the coordinator', async () => {
     const { host } = setup({ approvalNoticeSeconds: 0.02 });
     await tick();
     const coord = coordinatorOf(host);
-    await coord.ctx.call('project_thread_start', { title: 'Deploy', brief: 'Deploy the site.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Deploy', brief: 'Deploy the site.' });
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
     const wait = () => new Promise((r) => setTimeout(r, 60));
 
@@ -2063,7 +2099,7 @@ test('a permission prompt left unanswered tells the coordinator', async () => {
     await wait();
     const cp = host.sessions.get(coord.id).prompts;
     assert.equal(cp.length, 1);
-    assert.equal(cp[0].text, '[Thread waiting for approval: t1 · "Deploy"]\n\nIt asked to use bash: runs ./deploy.sh\n\nThe user approves or rejects it in the "Deploy" session.');
+    assert.equal(cp[0].text, '[Thread waiting for approval: t1 · "Deploy"]\n\nIt asked to use bash: runs ./deploy.sh\n\nThe user approves or rejects it in the "Deploy" session.\n\n(Tell the user in one line, starting with [Deploy](.dsh-thread/t1), what it wants to do. Do not start another thread for the same work.)');
 
     // The user is in the thread directly: the prompt is in front of them.
     userSays(host, thread.id, 'Go ahead and deploy.');
@@ -2077,7 +2113,7 @@ test('permission prompt notices stop with the plugin and can be turned off', asy
         const { host } = setup({ approvalNoticeSeconds: seconds });
         await tick();
         const coord = coordinatorOf(host);
-        await coord.ctx.call('project_thread_start', { title: 'Quiet', brief: 'Work.' });
+        await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Quiet', brief: 'Work.' });
         const thread = [...host.live.values()].find((a) => a.id !== coord.id);
         thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'b1', toolName: 'bash' } });
         if (unload) for (const dispose of host.effects) await dispose();
@@ -2116,7 +2152,7 @@ test('a queued coordinator message that fails after a handback still gets its no
     const { host } = setup();
     await tick();
     const coord = coordinatorOf(host);
-    await coord.ctx.call('project_thread_start', { title: 'Two', brief: 'Do A.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Two', brief: 'Do A.' });
     const thread = threadOf(host, coord);
     const turn = turnMarks(host, thread.id);
 
@@ -2155,16 +2191,138 @@ test('a new coordinator introduces itself once, so DSH lists it', async () => {
     await tick();
     const coord = coordinatorOf(first.host);
     assert.deepEqual(first.host.sessions.get(coord.id).prompts, [
-        { mode: 'queue', text: '[Project created: "DSH Plugins"]\n\nThis is the first message in this coordinator session. Introduce yourself from what you already know, without running any tools.' },
+        { mode: 'queue', text: '[Project created: "DSH Plugins"]\n\nThis is the first message in this coordinator session. Without running any tools or starting a thread, introduce yourself in two or three short sentences: say that you run the user\'s work in threads and report back here, and say what the project is for.' },
     ]);
     assert.deepEqual(sourceOf(first.host.sessions.get(coord.id), 0), { kind: 'cordis-host-runner' }, 'the welcome is the plugin\'s, not the user\'s');
-    assert.match(coord.ctx.section(), /A message starting with "\[Project created" is automatic/);
     // On the Mac a coordinator ran `git pull` in its workspace during its welcome.
-    assert.match(coord.ctx.section(), /run no tools and start no thread for it/);
+    assert.match(coord.ctx.section(), /\n7\. Messages that start with "\[" come from threads or the plugin, not the user: do what the note in them says\. For "\[Project created", run no tools and start no thread for it\./);
     assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), new RegExp(`welcome dsh-plugins ${coord.id} delivered`));
     const second = restart(first.host.sessions, first.config);
     await tick();
     assert.equal(second.sessions.get(coord.id).prompts.length, 0, 'welcomed once');
+});
+
+test('model-facing text: a project without a goal asks for one; a handback\'s note and a thread link', () => {
+    assert.match(welcomeMessage('Recipes', ''), /^\[Project created: "Recipes"\]\n\n.*Without running any tools or starting a thread, .* and ask what the project is for, since no goal is set\.$/);
+    assert.match(welcomeMessage('Recipes', 'Cook'), /and say what the project is for\.$/);
+    // The card's summary leaves out the note to the coordinator: today's and the older ones.
+    const blocked = handbackMessage('t2', 'x', 'blocked', 'Needs a token (CI).');
+    assert.match(blocked, /\n\n\(The user has not seen this\. Reply now\. First line: the link \[x\]\(\.dsh-thread\/t2\), a colon, and what it needs from the user in one sentence\. Then at most two short lines\. Write "the thread reports"/);
+    assert.doesNotMatch(blocked, /No other thread is running/);
+    assert.match(handbackMessage('t2', 'x', 'needs_decision', 'A or B?'), /the decision the user must make in one sentence\. Then the options, one short line each\./);
+    assert.equal(handbackSummary(blocked), 'Needs a token (CI).');
+    assert.equal(handbackSummary(handbackMessage('t2', 'x', 'done', 'Done.', { last: true })), 'Done.');
+    assert.equal(handbackSummary('[Handback from thread t2 · "x" · status: blocked]\n\nNeeds a token (CI).\n\n(For the user: lead with what blocks it in a line or two, as t2\'s report, and link the thread: [x](.dsh-thread/t2). Full conversation: project_thread_read thread="t2".)'), 'Needs a token (CI).');
+    assert.equal(handbackSummary('[Handback from thread t2 · "x" · status: done]\n\nDone.\n\n(Full conversation: project_thread_read thread="t2".)'), 'Done.');
+    // The idle and approval notes carry their own instruction, with the thread's link.
+    assert.match(idleMessage('t3', 'Flaky', '', 'The turn failed (HTTP 500): boom'), /\n\n\(Tell the user in one line, starting with \[Flaky\]\(\.dsh-thread\/t3\), that its turn failed; its card has Retry\. Do not retry it or start a new thread unless the user asks\.\)$/);
+    assert.match(idleMessage('t3', 'Long', '', 'The turn was stopped before it finished.'), /that its turn stopped; its card has Resume\./);
+    assert.match(idleMessage('t3', 'Chat', 'Which file?'), /\n\n\(If its last reply is a result or a question, pass it on to the user as you would a handback, starting with \[Chat\]\(\.dsh-thread\/t3\)\. If it stopped partway, send it "Finish the task and call project_handback\." with project_thread_send\.\)$/);
+    assert.match(approvalMessage('t4', 'Deploy', 'Deploy', 'shell', 'rm -rf build'), /\n\n\(Tell the user in one line, starting with \[Deploy\]\(\.dsh-thread\/t4\), what it wants to do\. Do not start another thread for the same work\.\)$/);
+    // A card or roster line is cut at a sentence end, or a word end, never inside a name (the first real run's card ended
+    // "…deepseek-v41-a7 (DeepSeek-V4.1-Flash-T").
+    const t2 = 'Lane probe (2026-10-10 10:48 AM PDT, read-only, no files touched): 3 lanes in ~/.dsh/lanes.json — 1 up, 2 down, 0 busy, 0 auth_failed. Up: glm53-a5 (GLM-5.3-Flash-EXL3, 850k ctx, traits long/reasoning/vision/primary). Down: glm53-full-a1a4 (the 1M-ctx lane) and deepseek-v41-a7 (DeepSeek-V4.1-Flash-TF), both with the same detail.';
+    assert.equal(cardSummary(t2, 300), 'Lane probe (2026-10-10 10:48 AM PDT, read-only, no files touched): 3 lanes in ~/.dsh/lanes.json — 1 up, 2 down, 0 busy, 0 auth_failed. Up: glm53-a5 (GLM-5.3-Flash-EXL3, 850k ctx, traits long/reasoning/vision/primary). …');
+    assert.equal(cardSummary(t2, 120), 'Lane probe (2026-10-10 10:48 AM PDT, read-only, no files touched): 3 lanes in ~/.dsh/lanes.json — 1 up, 2 down, 0…');
+    assert.equal(cardSummary(`${'One sentence. '.repeat(3)}${'word '.repeat(80)}`, 100), `${'One sentence. '.repeat(3)}${'word '.repeat(10)}word…`);
+    assert.equal(cardSummary('## Result\n\n- Wrote **notes/venv.md** with three bullets\n- Checked it with `cat`'), 'Result: Wrote notes/venv.md with three bullets. Checked it with cat.');
+    assert.equal(cardSummary('Done'), 'Done');
+    assert.equal(cardSummary(`${'a'.repeat(40)} ${'b'.repeat(400)}`, 100), `${'a'.repeat(40)}…`);
+    // A bracket in a title can't break the link.
+    assert.equal(threadMarkdown('t4', 'Fix [the] login'), '[Fix \\[the\\] login](.dsh-thread/t4)');
+});
+
+test('scope: a thread start or message that would use a guarded tool needs the user\'s words, and the prompts name those tools', async () => {
+    const { host, dir } = setup({ guardedTools: ['lane-catalog', 'family_1password', 'cua'] });
+    await tick();
+    const coord = coordinatorOf(host);
+    assert.match(coord.ctx.section(), /\n2\. Never use the user's personal or infrastructure tools, [^\n]*\n   Here those include: lane-catalog, family_1password, cua\.\n3\. /);
+    // The first real run's t2: a test task the coordinator picked itself, sent to the user's model lanes.
+    const drift = await coord.ctx.call('project_thread_start', {
+        ask: 'I\'m simply testing out the effectiveness of the coordinator - can we find a small test-task or a couple test-tasks to roll on for this test?',
+        title: 'Test task: lane probe report',
+        brief: 'Use the lane-catalog MCP tools (lanes_status, pick_lane) to report which lanes are up.',
+    });
+    assert.equal(drift, 'Failed: this would use lane-catalog, and the user\'s words do not ask for it. Keep the work inside the workspace, or ask the user first. If the user did ask, put their words in ask. If the text only says not to use it, leave that out: threads already have that rule');
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /guard dsh-plugins start lane-catalog\n/);
+    // A tool id names its server too, and a refused start makes no thread.
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Check things.', title: 'Probe', brief: 'Call mcp__lane-catalog__lanes_status.' }), /^Failed: this would use lane-catalog,/);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Check things.', title: 'Token', brief: 'Get the token from family_1password, then use cua to log in.' }), /^Failed: this would use family_1password, cua, and the user's words do not ask for them\./);
+    assert.equal(host.live.size, 1, 'no thread session was made');
+    // Scenario S4: the user asks for it by name, so the thread starts, with their words.
+    const s4 = 'Use lane-catalog to check which of my model lanes are up right now.';
+    assert.match(await coord.ctx.call('project_thread_start', { ask: s4, title: 'Lanes up', brief: 'Call lanes_status on lane-catalog and report each lane\'s state.' }), /^Started t1 "Lanes up"/);
+    const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Lanes up');
+    assert.match(host.sessions.get(t1.id).prompts[0].text, new RegExp(`\n\nThe user asked: "${s4.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"\n\nCall lanes_status`));
+    assert.equal(JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'].threads.t1.ask, s4);
+    assert.match(t1.ctx.section(), /\n   Here those include: lane-catalog, family_1password, cua\.\n3\. Editing files/);
+    // A name inside another word is not that tool.
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Tidy up.', title: 'Vacuum', brief: 'Vacuum the cuatro folder; cuda stays.' }), /^Started t2/);
+    // A message to a thread: the thread's ask, or the user's words given with the message, must name the tool.
+    assert.equal(await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Also run pick_lane on lane-catalog.' }), 'Sent to t1.');
+    assert.match(await coord.ctx.call('project_thread_send', { thread: 't2', text: 'Then check lane-catalog.' }), /^Failed: this would use lane-catalog, and the user's words do not ask for it\. .*If the user did ask, put their words in ask, or start a thread for it with their words in ask\./);
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /guard dsh-plugins send lane-catalog\n/);
+    assert.equal(await coord.ctx.call('project_thread_send', { thread: 't2', text: 'Then read the token from family_1password.', ask: 'grab the token from my family 1password' }), 'Sent to t2.');
+});
+
+test('scope: the user\'s word for a guarded tool, or the goal, asks for it; a home-folder workspace gets a note', async () => {
+    const { host } = setup({
+        guardedTools: { 'lane-catalog': ['lanes', 'model lanes'], obsidian: ['notes app'] },
+        projects: [{ name: 'DSH Plugins', goal: 'Keep the obsidian inbox tidy', workspacePath: homedir() }],
+    });
+    await tick();
+    const coord = coordinatorOf(host);
+    assert.match(coord.ctx.section(), /\nWorkspace: [^\n]+ \(the user's home folder: put new files in a new subfolder, and never move or delete anything you did not create\)\n/);
+    assert.match(coord.ctx.section(), /Here those include: lane-catalog, obsidian\./);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Which of my lanes are up?', title: 'Lanes', brief: 'Ask lane-catalog.' }), /^Started t1/);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Sort the inbox.', title: 'Inbox', brief: 'Use obsidian to file the inbox notes.' }), /^Started t2/);
+    // An alias asks for its tool only from the user's words: a brief that says "lanes" uses no tool by that.
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Write a poem.', title: 'Poem', brief: 'A poem about swimming lanes.' }), /^Started t3/);
+    const thread = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Lanes');
+    assert.match(thread.ctx.section(), /\nYou work in the user's home folder: put new files in a new subfolder, and never move or delete anything you did not create\.\n/);
+    assert.equal(guardedIn('mcp__lane-catalog__lanes_status', guardList(['lane-catalog'])).join(), 'lane-catalog');
+    assert.deepEqual(guardList({ a: ['x', ' ', 'y'], ' ': ['z'] }), [['a', ['x', 'y']]]);
+    assert.deepEqual(guardedIn('My Lanes and the Notes App', guardList({ 'lane-catalog': ['lane'], obsidian: ['notes app'] }), { aliases: true }), ['lane-catalog', 'obsidian']);
+});
+
+test('browser half: the plugin\'s messages get a notice that names them, without the note to the coordinator', () => {
+    const { client } = loadClient();
+    const { noticeOf } = client.internals;
+    const data = (text, kind = 'agent-message') => ({ content: [{ type: 'text', text }], source: { kind }, time: 1 });
+    const handback = handbackMessage('t1', 'Add CI', 'done', 'CI added.', { last: true });
+    assert.deepEqual(plain(noticeOf(data(handback))), { kind: 'handback', thread: 't1', name: 'Add CI', status: 'done', body: 'CI added.' });
+    assert.deepEqual(plain(noticeOf(data(idleMessage('t3', 'Flaky', '', 'The turn failed (HTTP 500): boom'), 'cordis-host-runner'))),
+        { kind: 'idle', thread: 't3', name: 'Flaky', status: 'failed', body: 'The turn failed (HTTP 500): boom\n\nIt produced no reply text.' });
+    assert.equal(noticeOf(data(approvalMessage('t4', 'Deploy', 'Deploy', 'shell', 'rm -rf build'), 'cordis-host-runner')).body,
+        'It asked to use shell: rm -rf build\n\nThe user approves or rejects it in the "Deploy" session.');
+    assert.equal(noticeOf(data(welcomeMessage('Recipes', ''), 'cordis-host-runner')).kind, 'welcome');
+    // The user's own words, and other agents' messages, keep DSH's own notice.
+    assert.equal(noticeOf(data(handback, 'user')), undefined);
+    assert.equal(noticeOf(data('A message from another agent.')), undefined);
+});
+
+test('a handback\'s note asks for a closing line only when no other thread is at work', async () => {
+    const { host, dir } = setup();
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { ask: 'Do A and B.', title: 'A', brief: 'Do A.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Do A and B.', title: 'B', brief: 'Do B.' });
+    const [a, b] = ['A', 'B'].map((title) => [...host.live.values()].find((x) => host.sessions.get(x.id).title === title));
+    b.ctx.emitStatus(b, 'running');
+    a.ctx.emitStatus(a, 'running');
+    await a.ctx.call('project_handback', { status: 'done', summary: 'A is done.' });
+    a.ctx.emitStatus(a, 'idle');
+    await tick();
+    await b.ctx.call('project_handback', { status: 'done', summary: 'B is done.' });
+    b.ctx.emitStatus(b, 'idle');
+    await tick();
+    const cp = host.sessions.get(coord.id).prompts;
+    assert.doesNotMatch(cp[0].text, /No other thread is running/, 'B was still at work');
+    assert.match(cp[1].text, /No other thread is running: end with one line that answers what the user asked for\./);
+    // A long handback is kept for the cards cut at a sentence end, never inside a word.
+    await a.ctx.call('project_handback', { status: 'done', summary: `Fixed it. ${'Checked every file again carefully. '.repeat(20)}` });
+    const kept = JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'].threads.t1.lastHandback.summary;
+    assert.ok(kept.length <= 500 && kept.endsWith('carefully. …'), kept);
 });
 
 test('a coordinator from before the welcome gets it only if it never had a turn', async () => {
@@ -2214,7 +2372,7 @@ test('a thread turn cut off by a DSH stop is reported at the next start, once', 
     const first = setup({}, dir);
     await tick();
     const coord = coordinatorOf(first.host);
-    await coord.ctx.call('project_thread_start', { title: 'Long', brief: 'Run the long job.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Long', brief: 'Run the long job.' });
     const thread = threadOf(first.host, coord);
     thread.ctx.emitStatus(thread, 'running');
     turnMarks(first.host, thread.id).start();
@@ -2225,7 +2383,7 @@ test('a thread turn cut off by a DSH stop is reported at the next start, once', 
     await tick();
     const cp = second.sessions.get(coord.id).prompts;
     assert.equal(cp.length, 1);
-    assert.equal(cp[0].text, '[Thread idle without a handback: t1 · "Long"]\n\nThe turn was cut off because DSH stopped while it ran.\n\nIts last reply:\n\nStarting the job.');
+    assert.equal(cp[0].text, '[Thread idle without a handback: t1 · "Long"]\n\nThe turn was cut off because DSH stopped while it ran.\n\nIts last reply:\n\nStarting the job.\n\n(Tell the user in one line, starting with [Long](.dsh-thread/t1), that its turn stopped; its card has Resume. Do not retry it or start a new thread unless the user asks.)');
     assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /idle-note dsh-plugins\/t1 chars=17 ended=interrupted/);
 
     const third = restart(first.host.sessions, first.config);
@@ -2250,7 +2408,7 @@ test('thread sessions an older version titled "<project> › <title>" are rename
     const first = setup({}, dir);
     await tick();
     const coord = coordinatorOf(first.host);
-    for (const title of ['Old', 'Mine', 'Cold', 'Long']) await coord.ctx.call('project_thread_start', { title, brief: `Do ${title}.` });
+    for (const title of ['Old', 'Mine', 'Cold', 'Long']) await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title, brief: `Do ${title}.` });
     const idOf = (title) => [...first.host.sessions].find(([, s]) => s.title === title)[0];
     const [old, mine, cold, long] = ['Old', 'Mine', 'Cold', 'Long'].map(idOf);
     // As an older version titled them, one renamed by the user, one whose title only its log has.
@@ -2301,7 +2459,7 @@ test('a config reload while a thread runs still reports its turn and its permiss
     const { host, config } = setup({ approvalNoticeSeconds: 0.02 });
     await tick();
     const coord = coordinatorOf(host);
-    await coord.ctx.call('project_thread_start', { title: 'Busy', brief: 'Deploy it.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Busy', brief: 'Deploy it.' });
     const thread = threadOf(host, coord);
     thread.ctx.emitStatus(thread, 'running');
     const log = host.sessions.get(thread.id).events;
@@ -2327,7 +2485,7 @@ test('a turn that ends during a reload is reported by the new instance', async (
     const { host, config } = setup();
     await tick();
     const coord = coordinatorOf(host);
-    await coord.ctx.call('project_thread_start', { title: 'Gap', brief: 'Work.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Gap', brief: 'Work.' });
     const thread = threadOf(host, coord);
     thread.ctx.emitStatus(thread, 'running');
     for (const dispose of host.effects.splice(0)) await dispose();
@@ -2350,7 +2508,7 @@ test('a handback the coordinator cannot take is retried, in order', async () => 
         const { host, dir } = setup();
         await tick();
         const coord = coordinatorOf(host);
-        await coord.ctx.call('project_thread_start', { title: 'Retry', brief: 'x' });
+        await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Retry', brief: 'x' });
         const thread = threadOf(host, coord);
         const accept = host.accept;
         let refuse = true;
@@ -2386,7 +2544,7 @@ test('a thread started while the plugin reloads stays a project thread', async (
     const create = host.sessionController.create;
     let release;
     host.sessionController.create = (req) => new Promise((r) => { release = () => r(create(req)); });
-    const started = coord.ctx.call('project_thread_start', { title: 'Mid', brief: 'x' });
+    const started = coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Mid', brief: 'x' });
     await tick();
     host.sessionController.create = create;
     await reload(host, config);
@@ -2432,8 +2590,8 @@ test('empty optional arguments count as not given; thread ids are trimmed', asyn
     const { host, dir } = setup();
     await tick();
     const coord = coordinatorOf(host);
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'E', brief: 'x', model: '', effort: '' }), /^Started t1 "E" \(DSH default model · effort high\)/);
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'D', brief: 'x', model: 'default', effort: 'default' }), /^Started t2 "D" \(DSH default model · effort high\)/);
+    assert.equal(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'E', brief: 'x', model: '', effort: '' }), 'Started t1 "E". It reports back when done. Link it as [E](.dsh-thread/t1).');
+    assert.equal(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'D', brief: 'x', model: 'default', effort: 'default' }), 'Started t2 "D". It reports back when done. Link it as [D](.dsh-thread/t2).');
     await coord.ctx.call('project_settings', { thread_model: 'deepseek-v4-flash' });
     assert.match(await coord.ctx.call('project_settings', { thread_model: '', coordinator_effort: ' ' }), /New threads: deepseek:deepseek-v4-flash · effort high \(project setting/);
     assert.match(await coord.ctx.call('project_thread_update', { thread: ' t1 ', model: '', effort: '', title: '' }), /^t1: nothing to change\.$/);
@@ -2591,7 +2749,7 @@ test('projects page: a project holds workspaces, and gets a coordinator only whe
     assert.equal(host.sessions.get(added.coordinator).cwd, 'ws:/work/b');
     assert.deepEqual([project(added, 'recipes').coordinator, project(added, 'recipes').home, project(added, 'recipes').workspace], [added.coordinator, 'ws:/work/b', '/work/b']);
     assert.ok(coord.ctx.registered.has('project_thread_start'), 'the coordinator gets the project tools');
-    assert.match(coord.ctx.section(), /You are the coordinator of the DSH project "Recipes"\.\nGoal: \(none set\)\nWorkspace: \/work\/b\nThe project's other folders: \/work\/a\. A thread works in the workspace above unless project_thread_start names one of these as its folder\./);
+    assert.match(coord.ctx.section(), /You are the coordinator of the DSH project "Recipes"\. The user talks to you here\. You run their work in threads and tell them what each thread found\.\nGoal: none set yet\. Until the user gives one, the project is only what they ask for in this chat\.\nWorkspace: \/work\/b\nThe project's other folders: \/work\/a\. A thread works in the workspace above unless project_thread_start names one of these as its folder\./);
     assert.equal((await remote.addCoordinator('recipes')).coordinator, added.coordinator, 'adding again keeps the one it has');
     await refused(remote.move('ws:/work/b', null), /b is where ◆ Recipes's coordinator works/);
     list = await remote.move('ws:/work/a', 'recipes-2');
@@ -2599,10 +2757,10 @@ test('projects page: a project holds workspaces, and gets a coordinator only whe
     list = await remote.move('ws:/work/a', 'recipes');
 
     // A thread can work in another of the project's folders, named by its folder name.
-    await coord.ctx.call('project_thread_start', { title: 'In a', brief: 'Go.', folder: 'a' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'In a', brief: 'Go.', folder: 'a' });
     const t1 = [...host.sessions].find(([, v]) => v.title === 'In a');
     assert.equal(t1[1].cwd, 'ws:/work/a');
-    assert.match(await coord.ctx.call('project_thread_start', { title: 'Nowhere', brief: 'Go.', folder: '/work/c' }), /^Failed: "\/work\/c" is not one of this project's folders \(\/work\/a, \/work\/b\)/);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Nowhere', brief: 'Go.', folder: '/work/c' }), /^Failed: "\/work\/c" is not one of this project's folders \(\/work\/a, \/work\/b\)/);
 
     // Renaming follows into the coordinator's title; a profile project is renamed in the profile.
     await remote.rename('recipes', 'Recipe Lab');
@@ -2827,7 +2985,7 @@ test('changes: a thread\'s file changes reach the window and its coordinator, an
     await tick();
     const coord = coordinatorOf(host);
     const remote = host.provided.get('dshPluginProjectsRemote');
-    await coord.ctx.call('project_thread_start', { title: 'Edit', brief: 'Go.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Edit', brief: 'Go.' });
     const t1 = threadOf(host, coord);
     const announce = (seq, turn, files) => {
         // Like DSH: the event first, its summary right after.
@@ -2893,7 +3051,7 @@ test('projection: coordinator roster and cards, thread role and coordinator link
     assert.equal(host.projections.length, 1);
     assert.equal(host.projections[0].key, 'projectSession');
     const coord = coordinatorOf(host);
-    await coord.ctx.call('project_thread_start', { title: 'Add CI', brief: 'Add a workflow.' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Add CI', brief: 'Add a workflow.' });
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
     // The tool result records the view; the model sees only text.
     const started = coord.ctx.metas.at(-1);
@@ -2939,7 +3097,7 @@ test('projection: sessions the store knows are seeded; older events add cards bu
     const { host } = setup();
     await tick();
     const coord = coordinatorOf(host);
-    await coord.ctx.call('project_thread_start', { title: 'Old name', brief: 'x' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Old name', brief: 'x' });
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
     await coord.ctx.call('project_thread_update', { thread: 't1', title: 'New name' });
     const events = host.sessions.get(coord.id).events.map((e) => ({ ...e, time: 1 })); // written long before the fold
@@ -2954,7 +3112,7 @@ test('projection: sessions the store knows are seeded; older events add cards bu
 test('projection: a new coordinator\'s welcome turn, and whether the user has asked anything since', () => {
     const { host } = setup();
     const def = host.projections[0];
-    assert.equal(def.stateVersion, 5, 'the fold changed, so DSH folds every session again');
+    assert.equal(def.stateVersion, 6, 'the fold changed, so DSH folds every session again');
     const msg = (seq, text, source) => ({ type: 'user/message', seq, time: seq, data: { content: [{ type: 'text', text }], ...(source ? { source } : {}) } });
     let s = def.apply(def.init({ id: 'new' }), { type: 'turn/start', data: { turn: 0 } });
     s = def.apply(s, msg(1, '[Project created: "DSH Plugins"]\n\nThis is the first message in this coordinator session.', { kind: 'cordis-host-runner' }));

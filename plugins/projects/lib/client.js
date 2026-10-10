@@ -246,6 +246,27 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-chat-body{display:flex;flex:1 1 auto;min-width:0;min-height:0}',
             '.dshp-t-tab-title{display:inline-flex;align-items:center;gap:6px;min-width:0}',
             '.dshp-t-tab-title>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            // The plugin's messages between sessions: DSH's notice box, saying what came in (TriggerNotice).
+            '.dshp-nt{min-width:0;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-turn-trigger-bg,var(--dsw-alias-markdown-code-block));container-type:inline-size;transition:background-color .1s}',
+            '.dshp-nt:hover{background:var(--dsw-alias-turn-trigger-bg-hover,var(--dsw-alias-interactive-bg-hover))}',
+            '.dshp-nt-head{display:flex;align-items:center;gap:10px;box-sizing:border-box;width:100%;padding:12px 16px;border:0;border-radius:inherit;background:none;font:inherit;text-align:left;color:var(--dsw-alias-label-secondary);cursor:pointer;outline:none}',
+            `.dshp-nt-head:focus-visible{box-shadow:inset 0 0 0 2px ${RING}}`,
+            '.dshp-nt-icon{flex:none;display:inline-flex}',
+            '.dshp-nt-line{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--dsh-content-font-size,14px)}',
+            '.dshp-nt-name{font-weight:500;color:var(--dsw-alias-label-primary)}',
+            // A handback is the turn's news: its whole line reads in the label colour.
+            '.dshp-nt[data-projects-notice=handback] .dshp-nt-head{color:var(--dsw-alias-label-primary)}',
+            '.dshp-nt-state{flex:none;display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap}',
+            '.dshp-nt-time{flex:none;margin-left:auto;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary)}',
+            '.dshp-nt-chev{flex:none}',
+            '.dshp-nt-state+.dshp-nt-chev,.dshp-nt-line+.dshp-nt-chev{margin-left:auto}',
+            '.dshp-nt-chev-open{transform:rotate(180deg)}',
+            '.dshp-nt-body{padding:0 16px 12px 40px}',
+            '.dshp-nt-why{margin:8px 0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary)}',
+            '.dshp-nt-text{margin:0;max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary)}',
+            // In a chat beside a thread, the time gives way first; the name gives way before the state.
+            '@container (width<=380px){.dshp-nt-time{display:none}.dshp-nt-state+.dshp-nt-chev{margin-left:0}.dshp-nt-state{margin-left:auto}.dshp-nt-head{gap:8px;padding:12px 12px}.dshp-nt-body{padding:0 12px 12px 34px}}',
+            '@media (prefers-reduced-motion:reduce){.dshp-nt{transition:none}}',
             // Threads: cards under a turn
             '.dshp-t-cards{display:flex;flex-direction:column;overflow:hidden;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1);container-type:inline-size}',
             // A card is a grid: icon, then verb, name and reason stacked, then counts, state and actions.
@@ -276,8 +297,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // Narrower still, the state and buttons move to a row of their own under the name, which keeps the card's width.
             '@container (width<=460px){.dshp-t-card .dshp-t-files{display:none}.dshp-t-card-icon{align-self:start}.dshp-t-card-side{grid-column:2/4;grid-row:4;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0 0 10px}.dshp-t-card-side>.dshp-t-card-state,.dshp-t-card-side>.dshp-t-card-actions{margin-left:0}.dshp-t-card-side>.dshp-t-card-actions:only-child{margin-left:auto}}',
             '@container (460px<width<=560px){.dshp-t-full-label{display:none}}',
-            // A coordinator beside its thread is about 400 px wide: Full view keeps its icon and tooltip, and a long state gives way before a button wraps.
-            '@container (width<=400px){.dshp-t-full-label{display:none}.dshp-t-card-side>.dshp-t-card-state{min-width:0;overflow:hidden}.dshp-t-card-state-text{min-width:0;overflow:hidden;text-overflow:ellipsis}}',
+            // A coordinator beside its thread is about 400 px wide: Full view keeps its icon and tooltip, and the buttons move under
+            // the state rather than cut it ("Sto…"); only a state wider than the card itself is cut.
+            '@container (width<=400px){.dshp-t-full-label{display:none}.dshp-t-card-side{flex-wrap:wrap;row-gap:6px}.dshp-t-card-side>.dshp-t-card-actions{margin-left:auto}.dshp-t-card-side>.dshp-t-card-state{min-width:0;max-width:100%;overflow:hidden}.dshp-t-card-state-text{min-width:0;overflow:hidden;text-overflow:ellipsis}}',
             '@container (width<=300px){.dshp-t-go-label,.dshp-t-full-label{display:none}}',
             '.dshp-t-go-label,.dshp-t-full-label{white-space:nowrap}',
             // Threads: a thread's code changes, in DSH's colors for added and deleted lines
@@ -1318,6 +1340,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const EMPTY = Object.freeze([]);
         const NO_PROJECT = Object.freeze({});
         const TEXT = {
+            // The plugin's messages between sessions, as their notices name them.
+            noticeHandback: 'Handback from',
+            noticeHandbackWhy: 'What the thread reported. The coordinator answers it below.',
+            noticeIdle: 'ended without a handback',
+            noticeIdleWhy: 'The thread ended a turn without reporting back, so the plugin told the coordinator.',
+            noticeApproval: 'is waiting for approval',
+            noticeApprovalWhy: 'The thread waits on a permission prompt in its own chat, so the plugin told the coordinator.',
+            noticeWelcome: 'Project created',
+            noticeWelcomeWhy: 'The plugin started this coordinator, which introduces itself.',
+            noticeBrief: 'Brief from',
+            noticeBriefWhy: 'The coordinator started this thread with this brief.',
+            noticeCoordinator: 'Message from the coordinator',
+            noticeCoordinatorWhy: 'The coordinator sent this thread a message.',
+            noticeOther: 'Message received',
+            needsYou: 'Needs you',
             threads: 'Threads',
             thread: 'Thread',
             coordinator: 'Coordinator',
@@ -2755,6 +2792,128 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }
         }
 
+        /**
+         * The plugin's own messages between sessions. DSH draws a message from
+         * another session or from a plugin as a collapsed notice that says
+         * only "Task message received" or "Plugin status updated"; these say
+         * what came in. The first line of each is its tag (prompts.js TAGS).
+         */
+        const NOTICE_PATTERNS = [
+            ['handback', /^\[Handback from thread (t\d+) · "(.*)" · status: ([a-z_]+)\]$/],
+            ['idle', /^\[Thread idle without a handback: (t\d+) · "(.*)"\]$/],
+            ['approval', /^\[Thread waiting for approval: (t\d+) · "(.*)"\]$/],
+            ['welcome', /^\[Project created: "(.*)"\]$/],
+            ['brief', /^\[Brief from the coordinator of "(.*)" · you are thread (t\d+), "(.*)"\]$/],
+            ['coordinator', /^\[From the coordinator\]$/],
+        ];
+        /** The sources DSH draws those messages with: another session's (a handback, a brief) and a plugin's (the notes). */
+        const NOTICE_SOURCES = new Set(['agent-message', 'cordis-host-runner']);
+        /** The closing note in which the plugin tells the coordinator how to answer (prompts.js NOTE_START); the user's notice leaves it out. */
+        const CLOSING_NOTE = /(?:^|\n\n)\((?:The user has not seen this|For the user|Full conversation|Tell the user|If its last reply)\b[^\n]*\)\s*$/;
+        /** A handback's state as its notice says it: the state the thread reported, not its state now. */
+        const NOTICE_STATES = {
+            done: { dot: 'done', label: 'Done' },
+            blocked: { dot: 'warning', label: 'Blocked' },
+            needs_decision: { dot: 'warning', label: 'Needs a decision' },
+            progress: { dot: 'idle', label: 'Progress' },
+        };
+
+        /**
+         * What one of the plugin's messages says, for its notice: its kind,
+         * the thread or project it names, and its text without the tag (a
+         * handback's without its closing note to the coordinator). undefined
+         * for any other message, which keeps DSH's own notice.
+         */
+        function noticeOf(data) {
+            if (!isObject(data) || !isObject(data.source) || !NOTICE_SOURCES.has(data.source.kind)) return undefined;
+            const text = (Array.isArray(data.content) ? data.content : [])
+                .map((part) => (isObject(part) && part.type === 'text' && typeof part.text === 'string' ? part.text : '')).join('');
+            const newline = text.indexOf('\n');
+            const head = newline < 0 ? text : text.slice(0, newline);
+            const body = newline < 0 ? '' : text.slice(newline).trim().replace(CLOSING_NOTE, '').trim();
+            for (const [kind, pattern] of NOTICE_PATTERNS) {
+                const m = pattern.exec(head);
+                if (!m) continue;
+                switch (kind) {
+                    case 'handback': return { kind, thread: m[1], name: m[2], status: m[3], body };
+                    case 'idle': {
+                        // The note's first line says when the turn failed or stopped (prompts.js describeEnding).
+                        const ended = /^The turn (failed|was blocked)\b/.test(body) ? 'failed' : /^The turn (was stopped|hit the output token limit|was cut off)\b/.test(body) ? 'stopped' : '';
+                        return { kind, thread: m[1], name: m[2], status: ended, body };
+                    }
+                    case 'approval': return { kind, thread: m[1], name: m[2], body };
+                    case 'welcome': return { kind, project: m[1], body };
+                    case 'brief': return { kind, project: m[1], thread: m[2], name: m[3], body };
+                    default: return { kind, body };
+                }
+            }
+            return undefined;
+        }
+
+        /** How a notice reads: its icon, its line (lead, name, tail), its state, and why it came. */
+        function noticeView(notice) {
+            switch (notice.kind) {
+                case 'handback':
+                    return { icon: ui.IconTreeCornerRegular, lead: TEXT.noticeHandback, name: notice.name, state: NOTICE_STATES[notice.status] ?? { dot: 'idle', label: notice.status }, why: TEXT.noticeHandbackWhy };
+                case 'idle': {
+                    const failed = notice.status === 'failed';
+                    const stopped = notice.status === 'stopped';
+                    return {
+                        icon: failed ? ui.IconWarningTriangleOutlineRegular : stopped ? ui.IconStopFillRegular : ui.IconPauseOutlineRegular,
+                        name: notice.name, tail: TEXT.noticeIdle,
+                        state: { dot: failed ? 'error' : 'idle', label: OUTCOMES.idle[notice.status] ?? OUTCOMES.idle[''] }, why: TEXT.noticeIdleWhy,
+                    };
+                }
+                case 'approval':
+                    return { icon: ui.IconWarningOutlineRegular, name: notice.name, tail: TEXT.noticeApproval, state: { dot: 'warning', label: TEXT.needsYou }, why: TEXT.noticeApprovalWhy };
+                case 'welcome':
+                    return { icon: ui.IconCordisPluginOutlineRegular, lead: TEXT.noticeWelcome, why: TEXT.noticeWelcomeWhy };
+                case 'brief':
+                    return { icon: ui.IconPaperPlaneOutlineRegular, lead: TEXT.noticeBrief, name: `◆ ${notice.project}`, why: TEXT.noticeBriefWhy };
+                default:
+                    return { icon: ui.IconPaperPlaneOutlineRegular, lead: TEXT.noticeCoordinator, why: TEXT.noticeCoordinatorWhy };
+            }
+        }
+
+        /**
+         * DSH's keyed node for a turn's trigger, shadowed: the plugin's own
+         * messages get a notice that names them; every other trigger renders
+         * through DSH's own view, found among the slot's entries.
+         */
+        function TriggerNotice(props) {
+            const notice = noticeOf(props.node?.data);
+            if (notice !== undefined) return h(ProjectNotice, { node: props.node, notice });
+            const Dsh = props.dshTrigger?.();
+            return Dsh ? h(Dsh, props) : h(ProjectNotice, { node: props.node, notice: { kind: 'other', body: noticeText(props.node?.data) } });
+        }
+
+        /** A notice's text as DSH shows it when expanded. */
+        function noticeText(data) {
+            return (Array.isArray(data?.content) ? data.content : []).map((part) => (isObject(part) && typeof part.text === 'string' ? part.text : '')).join('').trim();
+        }
+
+        /** DSH's notice, saying what came in. The same box and toggle, the name and state in words. */
+        function ProjectNotice({ node, notice }) {
+            const [open, setOpen] = React.useState(false);
+            const bodyId = React.useId();
+            const view = notice.kind === 'other' ? { icon: ui.IconPaperPlaneOutlineRegular, lead: TEXT.noticeOther } : noticeView(notice);
+            const at = Number(node?.data?.time);
+            const time = clockOf(at);
+            return h('section', { className: 'dshp-nt', 'data-turn-trigger': '', 'data-projects-notice': notice.kind, 'data-thread': notice.thread },
+                h('button', { type: 'button', className: 'dshp-nt-head', 'aria-expanded': open, 'aria-controls': bodyId, onClick: () => setOpen(!open) },
+                    h('span', { className: 'dshp-nt-icon', 'aria-hidden': true }, h(view.icon ?? ui.IconPaperPlaneOutlineRegular, { size: 14 })),
+                    h('span', { className: 'dshp-nt-line' },
+                        view.lead ? `${view.lead}${view.name ? ' ' : ''}` : null,
+                        view.name ? h('span', { className: 'dshp-nt-name' }, view.name) : null,
+                        view.tail ? ` ${view.tail}` : null),
+                    view.state ? h('span', { className: 'dshp-nt-state' }, h(ui.StateDot, { state: view.state.dot }), view.state.label) : null,
+                    time ? h('time', { className: 'dshp-nt-time', dateTime: new Date(at).toISOString() }, time) : null,
+                    h(ui.IconChevronDownOutlineRegular, { size: 12, className: open ? 'dshp-nt-chev dshp-nt-chev-open' : 'dshp-nt-chev' })),
+                open ? h('div', { id: bodyId, className: 'dshp-nt-body' },
+                    view.why ? h('p', { className: 'dshp-nt-why' }, view.why) : null,
+                    notice.body ? h('pre', { className: 'dshp-nt-text' }, notice.body) : null) : null);
+        }
+
         function ThreadCard({ view, projects }) {
             const enabled = view.session !== undefined;
             const beside = useBesidePref();
@@ -3485,6 +3644,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
                 name: 'conversation.chat.turnTail', id: IDS.cards, order: 30, inject: withApi,
             }, ThreadCards));
+            // A turn's trigger: DSH's keyed node, shadowed one priority ahead (the lowest renders). The plugin's
+            // own messages get a notice that names them; every other trigger renders through DSH's own view.
+            const dshTrigger = () => ctx.slots.entries('conversation.chat.node')
+                .find((entry) => entry.options?.key === 'turn-trigger' && entry.component !== TriggerNotice)?.component;
+            ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+                name: 'conversation.chat.node', key: 'turn-trigger', priority: -1, locale: 'chat', inject: () => ({ dshTrigger }),
+            }, TriggerNotice));
             ctx.slots.inject('sidebar.session.row.leading', () => ctx.slots.register({
                 name: 'sidebar.session.row.leading', id: IDS.mark, order: 20, inject: withApi,
             }, ThreadMark));
@@ -5029,6 +5195,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             changesOf, changesText, lastChange, REVIEW_PREFIX,
             rowState, endingOf, endingIn, endingReason, endingLine, openSessions, markState, hoverLine, continueError, GROUPS,
             roomFor, besidePref, sidebarGroups, sidebarRules, placeWorkspaces, chatsIn, pulseOf, pulseText, listText, OTHERS, clockOf, againText, ThreadCard, EndingBar,
+            noticeOf, noticeView, TriggerNotice, ProjectNotice,
         };
         return module.exports;
     },

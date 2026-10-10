@@ -45,12 +45,12 @@
  *
  * @module dsh-plugin-projects/projection
  */
-import { TAGS, endingStateOf, readableError } from './prompts.js';
+import { TAGS, endingStateOf, readableError, handbackSummary, cardSummary } from './prompts.js';
 
 /** The projection key; the browser half reads the same name. */
 export const PROJECTION_KEY = 'projectSession';
 /** Bump when the state shape or fold changes; DSH then refolds from the log. */
-export const STATE_VERSION = 5;
+export const STATE_VERSION = 6;
 /** Most recent cards kept per session; older turns rarely scroll into view. */
 export const MAX_CARDS = 60;
 /** Threads kept in a roster: every open one, then the newest resolved ones. */
@@ -187,9 +187,9 @@ function applyMessage(state, event) {
         if (state.v?.role === 'thread') return state;
         let v = identify(state.v, 'coordinator', {});
         if (fresh) {
-            const body = text.slice(newline < 0 ? text.length : newline).replace(/\n\n\(Full conversation:[^)]*\)\s*$/, '').trim();
+            const body = handbackSummary(text);
             const known = (v.threads ?? []).find((t) => t.id === m[1]);
-            const handback = { status: m[3], summary: clip(body.replace(/\s+/g, ' '), 300), at: Number.isFinite(event.time) ? new Date(event.time).toISOString() : null };
+            const handback = { status: m[3], summary: cardSummary(body, 300), at: Number.isFinite(event.time) ? new Date(event.time).toISOString() : null };
             v = { ...v, threads: mergeRoster(v.threads, [{ ...(known ?? { id: m[1], session: null, title: clip(m[2], 120), resolved: false }), handback }], false) };
         }
         return { ...state, v: withCard(v, { turn: state.turn, seq: event.seq, kind: 'handback', thread: m[1], status: m[3] }) };

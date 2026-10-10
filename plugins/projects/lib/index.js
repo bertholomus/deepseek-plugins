@@ -89,6 +89,15 @@ export const Config = z.object({
     memoryDir: z.string().default('~/.dsh/projects/memory'),
     /** Largest memory file the tools will write. */
     maxMemoryBytes: z.number().default(65536),
+    /**
+     * The user's personal and infrastructure tools (MCP server or tool
+     * names) that project sessions use only when the user's own words ask
+     * for them: a list, or a map from each name to the words the user may
+     * call it by, e.g. { "lane-catalog": ["lanes", "model lanes"] }. The
+     * prompts name them, and a thread start or message that names one is
+     * refused unless the user's words or the project's goal name it.
+     */
+    guardedTools: z.union([z.array(z.string()), z.dict(z.array(z.string()))]).default([]),
     /** Action log, mode 600, never prompt text. Empty turns it off. */
     logFile: z.string().default('~/.dsh/projects/projects.log'),
 });
