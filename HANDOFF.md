@@ -1,6 +1,6 @@
 # Handoff
 
-Updated: 2026-10-09 23:25 PT by B (bertholomus)
+Updated: 2026-10-09 23:45 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 
 ## Doing now
@@ -10,6 +10,8 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 - The cloud thread pushes fixes; the Mac checkout can now pull and push too (only one side pushes the branch at a time).
 
 ## Done since last handoff
+- **Threads UI passed in DSH Test** (23:22 PT, commit 01357a3, the Mac session): smoke 46/46, npm 28/28, `dsh-test doctor` 0 import errors. The coordinator welcomed, then started a "UI check" thread (t1) that replied "ok" and handed back after 11 s; the coordinator resolved it. The window showed the Started and Handback cards (Resolved dot, Open beside, Open), the thread name as a link, the Threads menu (0 open · 1 resolved, Open the Threads panel), Open beside with the "t1 · ◆ DSH Plugins" breadcrumb, the thread's "◆ Coordinator" and "Threads" header buttons, and the thread nested under the coordinator in the session list with its hover card. Screenshots on the Mac: `~/claude2/dsh-test-0{1..4}-*.png`. The live DSH was not touched (running since 17:26 PT).
+- Found there, fixed in wording (aba8bc8): DSH Desktop opens a reply's thread link in the main view, while DSH's web profile (our e2e and demo) opens it beside the chat, even with the right sidebar closed (checked). The coordinator's prompt and the README no longer promise "beside"; a card's Open beside always opens beside. e2e 61/61 on rc.2 after the change; PR body updated.
 - 79c21e6: the Threads panel tab keeps DSH's plain "Threads" title (a custom title with an icon clipped it in the 80-170px tab chip). PR #1 body now covers the threads UI and the new tests. The browser check on DSH 0.2.1-alpha.2, light and dark, matched rc.2.
 - **Threads in the DSH window, Claude Code style** (cfe8791):
   - Host: a `projectSession` session projection (`lib/projection.js`, registered in `index.js` through optional `ctx.inject(['sessionProjections'])`). DSH folds it on the Host from each session's events and sends it to the window: role (coordinator or thread), project, a coordinator's thread roster (session, title, resolved, last handback), a thread's coordinator, and per-turn cards. It reads only what sessions already record: tool results' presentation meta (`meta.dshProjects: 1`, set in `tools.js`) and the plugin's tagged messages; plugin prompt request ids are now `projects-<uuid>@<coordinator session>` so a thread's brief names its coordinator. A session the store knows is seeded from the store (`seedView`), so older sessions show at once. `apply` and both parsers never throw (DSH runs them unguarded).
@@ -70,7 +72,7 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 - Tests: `npm test` 28/28, `node plugins/projects/test/smoke.mjs` 36/36, e2e 49/49 as root and as a normal user (adds queued turns and a SIGKILL mid-turn).
 
 ## Next steps (in order)
-1. DSH Test (the Mac session drives it, once the user's next message in the Mac thread wakes it): bring `~/.dsh-test-plugins/deepseek-plugins` to 01357a3 or later by fetching from `~/.dsh-plugins/deepseek-plugins` (no network), smoke 46, `dsh-test load` + `restart` + `doctor`, then through the DSH Test bridge a coordinator → thread ("UI check") → handback, and check in its window (port 19487): the thread card with Open / Open beside, the "N threads" menu, a thread link opening beside the chat, the thread's ◆ Coordinator button. Screenshots in the report. Then ask Albert before loading it into the live DSH (an idle-checked restart; the live checkout already holds 01357a3).
+1. Live load, only after the user types "load live" in the Mac thread (the Mac session has the steps): fast-forward `~/.dsh-plugins/deepseek-plugins` to aba8bc8 or later, smoke + npm, `dsh-idle.mjs --wait 120`, restart the live DSH, check projects.log and the coordinator's Threads menu. No test thread in the live DSH unless the user asks.
 2. Ask the user: load the plugin on the Mac from its own clone, so the project's work in `~/.dsh-plugins/deepseek-plugins` doesn't change what DSH loads. Changing `workspacePath` instead wouldn't move the existing coordinator (see Gotchas). Needs their typed OK and an idle-checked restart.
 3. Only if the user asks: threads that start threads of their own (nested threads), a "New thread" button in the Threads menu, and tool-call views for the project tools (`tool.call.toolview`).
 4. Later: a Discord thread as a project thread or coordinator (the user's existing flow), and auto-continue after usage limits.
