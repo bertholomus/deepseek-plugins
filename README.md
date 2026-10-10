@@ -51,7 +51,7 @@ DSH loads a plugin only when the profile lists its package in `dsh.profile.bundl
    - In the same file, add `"dsh-plugin-projects"` to the end of `dsh.profile.bundles`.
    - Link it into `node_modules`: `ln -s ~/.dsh-plugins/deepseek-plugins/plugins/projects node_modules/dsh-plugin-projects`
 
-   The plugins need `@deepseek-ai/schemastery`, which the desktop profile already has.
+   Nothing else needs installing. The plugins list `@deepseek-ai/schemastery` and the DSH packages they use as `peerDependencies`, and DSH gives them its own copies. Keep them as peers in your own copy of a plugin. DSH doesn't look in the profile's `node_modules` for a linked plugin's `dependencies`, so a plugin that lists them there fails to import unless its own folder has them installed.
 
 4. Configure the plugin in `cordis.patch.yml`. Its bundle already adds the row, so address the row by its id and give it a `config`. Each plugin README gives its config.
 
