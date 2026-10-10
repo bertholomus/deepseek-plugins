@@ -13,11 +13,15 @@
  *
  * Models and effort are set the way the DSH model picker sets them: a durable
  * `model/selection` on the one session, so the DSH window shows the right
- * model and the user can still change it there. The picker's public path
- * (`sessionController.selectModel`) also overwrites the global default model,
- * so the manager calls the controller's per-session step directly. When a
- * Host does not have that step, it falls back to rewriting every model
- * request of project sessions.
+ * model. The picker's public path (`sessionController.selectModel`) also
+ * overwrites the global default model, so the manager calls the controller's
+ * per-session step directly. When a Host does not have that step, it falls
+ * back to rewriting every model request of project sessions.
+ *
+ * The binding runs both ways: a model the user picks in DSH's own picker for
+ * a coordinator becomes the project's coordinator setting, and one picked
+ * for a thread becomes that thread's, so the project's settings always say
+ * what its sessions run on.
  *
  * @module dsh-plugin-projects/projects
  */
@@ -142,6 +146,16 @@ function turnRange(events, current) {
     return { start, end: lastEnd + 1, reason: events[lastEnd].data?.reason ?? null, ended: true };
 }
 
+/** What the manager stored as a coordinator's applied route, to tell when its settings changed. */
+function routeKey(model, effort) {
+    return JSON.stringify([model ?? null, effort ?? null]);
+}
+
+/** A model selection as one comparable string. */
+function selectionKey(selection) {
+    return `${selection?.provider}\u0000${selection?.model}\u0000${selection?.reasoningEffort ?? ''}`;
+}
+
 export class ProjectError extends Error {}
 
 export class ProjectManager {
@@ -188,6 +202,8 @@ export class ProjectManager {
         this.chains = new Map();
         /** projectId → {timer, attempt} for held messages waiting on a retry. */
         this.retries = new Map();
+        /** sessionId → the selection the manager just made there, so its own `model/selection` is not taken for the user's pick. */
+        this.ownSelections = new Map();
     }
 
     /** One action line, mode 600. Sizes and ids only, never prompt text. */
@@ -211,37 +227,40 @@ export class ProjectManager {
     }
 
     /**
-     * Compare the plugin defaults with the ones this project last saw. A
-     * default that changed since (on the plugin's page in DSH, or in the
-     * profile) replaces the project's own change of that setting made through
-     * the coordinator, so the newest change wins. The first look only records.
-     * @returns {string[]} the settings whose project change was replaced.
+     * Compare the project's row in the profile with the one this project
+     * last saw. A model or effort the row changed since (an edit by hand)
+     * replaces the project's own setting of it, made in its Project settings,
+     * in its coordinator's model picker or through the coordinator: all of
+     * them are this project's, so the newest wins. The plugin defaults never
+     * replace a project's own setting. The first look only records.
+     * @returns {string[]} the settings whose project setting was replaced.
      */
-    noteDefaults(projectId) {
+    noteProjectRow(projectId) {
         // Empty means "use the default", however it is written.
         const plain = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
-        const now = pluginDefaults(this.config);
+        const row = this.project(projectId);
         const p = this.store.project(projectId);
-        const seen = p.defaultsSeen;
-        const changed = SETTING_KEYS.filter((key) => plain(now[key]) !== plain(seen?.[key]));
+        const seen = p.rowSeen;
+        const changed = SETTING_KEYS.filter((key) => plain(row[key]) !== plain(seen?.[key]));
         if (seen && changed.length === 0) return [];
         const replaced = seen ? changed.filter((key) => p.settings[key] !== undefined) : [];
         if (replaced.length) this.store.putSettings(projectId, Object.fromEntries(replaced.map((key) => [key, undefined])));
-        this.store.putProject(projectId, { defaultsSeen: Object.fromEntries(SETTING_KEYS.map((key) => [key, plain(now[key])])) });
-        if (seen) this.log(`defaults ${projectId} ${changed.join(',')}${replaced.length ? ` replaced ${replaced.join(',')}` : ''}`);
+        this.store.putProject(projectId, { rowSeen: Object.fromEntries(SETTING_KEYS.map((key) => [key, plain(row[key])])), defaultsSeen: undefined });
+        if (seen) this.log(`row ${projectId} ${changed.join(',')}${replaced.length ? ` replaced ${replaced.join(',')}` : ''}`);
         return replaced;
     }
 
     /**
      * The plugin defaults changed while the plugin runs (DSH's settings page
-     * saved them). Coordinators switch from their next request; new threads
-     * start with the new defaults, and running threads keep theirs.
+     * saved them). A coordinator that runs on a default switches from its
+     * next request; new threads start with the new defaults, and running
+     * threads keep theirs. A project's own settings stay.
      */
     async onDefaultsChanged() {
+        this.log('defaults saved');
         for (const projectId of this.projects.keys()) {
             if (this.disposed) return;
             try {
-                this.noteDefaults(projectId);
                 await this.applyCoordinatorRoute(projectId);
             } catch (error) {
                 this.log(`error defaults ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
@@ -261,11 +280,20 @@ export class ProjectManager {
 
     /** The Host model catalog, cached briefly; undefined when unavailable. */
     async catalog() {
-        if (this.catalogCache && Date.now() - this.catalogCache.at < 30000) return this.catalogCache.value;
         let value;
-        try { value = await this.sc.modelCatalog(); } catch { value = undefined; }
-        this.catalogCache = value ? { value, at: Date.now() } : null;
-        return value;
+        if (this.catalogCache && Date.now() - this.catalogCache.at < 30000) {
+            value = this.catalogCache.value;
+        } else {
+            try { value = await this.sc.modelCatalog(); } catch { value = undefined; }
+            this.catalogCache = value ? { value, at: Date.now() } : null;
+        }
+        // The DSH default changes with every pick in DSH's model picker, so
+        // checks use the current one, the same one fullSelection builds on.
+        let current;
+        try { current = this.ctx.get?.('agentDefaultModel')?.currentSelection?.(); } catch {}
+        if (!value || !current?.provider || !current?.model) return value;
+        if (value.default?.provider === current.provider && value.default?.model === current.model) return value;
+        return { ...value, default: { provider: current.provider, model: current.model } };
     }
 
     // ── lifecycle ──────────────────────────────────────────────────────────
@@ -280,7 +308,7 @@ export class ProjectManager {
         for (const id of this.projects.keys()) {
             if (this.disposed) return;
             try {
-                this.noteDefaults(id);
+                this.noteProjectRow(id);
                 await this.ensureCoordinator(id);
             } catch (error) {
                 this.log(`error coordinator ${id} ${String(error?.message ?? error).slice(0, 300)}`);
@@ -485,7 +513,12 @@ export class ProjectManager {
                 }));
                 add(scoped.on('session/event', (_session, event) => this.onThreadEvent(projectId, threadId, agent, event)));
                 add(() => this.clearApprovals(agent.id));
+            } else {
+                add(scoped.on('session/event', (_session, event) => {
+                    if (event?.type === 'model/selection') this.onSelection(who, agent, event.data);
+                }));
             }
+            add(() => this.ownSelections.delete(agent.id));
         } catch (error) {
             for (const d of disposers.reverse()) { try { d(); } catch {} }
             throw error;
@@ -504,11 +537,16 @@ export class ProjectManager {
         return t ? { model: t.model, effort: t.effort } : null;
     }
 
-    /** The route checked against the catalog: an effort the model lacks is dropped. */
+    /**
+     * The route checked against the catalog. An effort the model lacks is
+     * dropped or fitted to the nearest level it offers, so a default model
+     * that changed under an inherited effort still runs.
+     */
     async checkedRoute(who) {
         const route = this.routeFor(who);
         if (!route || (!route.model && !route.effort)) return route;
-        const check = checkSelection(await this.catalog(), route.model, route.effort);
+        const check = checkSelection(await this.catalog(), route.model, route.effort, { fit: true });
+        if (check.ok && check.fitted) this.log(`fit ${who.projectId}/${who.threadId ?? 'coordinator'} ${check.note}`);
         return check.ok ? { model: check.model ?? route.model, effort: check.effort } : route;
     }
 
@@ -537,7 +575,7 @@ export class ProjectManager {
     /**
      * Put one session on its project route from its next model request, the
      * way the DSH model picker does, without saving a global default.
-     * @returns whether a selection was recorded.
+     * @returns the selection recorded, or false.
      */
     async selectRoute(agent, who) {
         if (this.selectionMode !== 'session' || !agent) return false;
@@ -546,10 +584,12 @@ export class ProjectManager {
             const wanted = this.fullSelection(await this.checkedRoute(who));
             if (!wanted) throw new Error('no DSH default model to build on');
             const selection = await this.resolveSelection(wanted);
+            this.ownSelections.set(agent.id, selectionKey(selection));
             this.sc.agents.selectForNextRequest(agent, selection);
             this.log(`select ${label} ${selection.provider}:${selection.model} effort=${selection.reasoningEffort ?? '-'}`);
-            return true;
+            return selection;
         } catch (error) {
+            this.ownSelections.delete(agent.id);
             this.log(`error select ${label} ${String(error?.message ?? error).slice(0, 200)}`);
             this.ctx.logger?.warn?.('projects: could not set the model for %s: %s', label, error?.message ?? error);
             return false;
@@ -566,7 +606,7 @@ export class ProjectManager {
         const stored = this.store.project(projectId);
         if (!stored.coordinatorSessionId) return true;
         const s = this.settings(projectId);
-        const key = JSON.stringify([s.coordinatorModel.value ?? null, s.coordinatorEffort.value ?? null]);
+        const key = routeKey(s.coordinatorModel.value, s.coordinatorEffort.value);
         if (stored.coordinatorRoute === key) return true;
         if (stored.coordinatorRoute === undefined && key === '[null,null]') {
             this.store.putProject(projectId, { coordinatorRoute: key });
@@ -582,6 +622,37 @@ export class ProjectManager {
         if (!await this.selectRoute(agent, { projectId, role: 'coordinator' })) return false;
         this.store.putProject(projectId, { coordinatorRoute: key });
         return true;
+    }
+
+    /**
+     * A `model/selection` on a project session. One the manager made itself
+     * is skipped. Any other is the user's pick in DSH's own model picker
+     * (the composer's model menu or /model): on a coordinator it becomes the
+     * project's coordinator model and effort, on a thread that thread's, so
+     * the project's settings say what its sessions run on.
+     */
+    onSelection(who, agent, data) {
+        try {
+            if (typeof data?.provider !== 'string' || typeof data?.model !== 'string' || !this.projects.has(who.projectId)) return;
+            if (this.ownSelections.get(agent.id) === selectionKey(data)) {
+                this.ownSelections.delete(agent.id);
+                return;
+            }
+            const model = `${data.provider}:${data.model}`;
+            const effort = typeof data.reasoningEffort === 'string' && data.reasoningEffort !== '' ? data.reasoningEffort : undefined;
+            if (who.role === 'coordinator') {
+                this.store.putSettings(who.projectId, { coordinatorModel: model, coordinatorEffort: effort });
+                // It already runs on the pick, so nothing selects it again.
+                const s = this.settings(who.projectId);
+                this.store.putProject(who.projectId, { coordinatorRoute: routeKey(s.coordinatorModel.value, s.coordinatorEffort.value) });
+            } else {
+                if (!this.store.thread(who.projectId, who.threadId)) return;
+                this.store.putThread(who.projectId, who.threadId, { model, effort });
+            }
+            this.log(`picked ${who.projectId}/${who.threadId ?? 'coordinator'} ${model} effort=${effort ?? '-'}`);
+        } catch (error) {
+            this.log(`error picked ${who.projectId} ${String(error?.message ?? error).slice(0, 200)}`);
+        }
     }
 
     readMemory(projectId) {
@@ -683,6 +754,10 @@ export class ProjectManager {
      * does not sit on a prompt nobody sees.
      */
     onThreadEvent(projectId, threadId, agent, event) {
+        if (event?.type === 'model/selection') {
+            this.onSelection({ projectId, role: 'thread', threadId }, agent, event.data);
+            return;
+        }
         const id = event?.data?.id;
         if (!id) return;
         if (event.type === 'approval/decided') {
@@ -920,8 +995,12 @@ export class ProjectManager {
         if (!String(brief ?? '').trim()) throw new ProjectError('brief is required');
         const s = this.settings(projectId);
         // Not given, or "default": the project's thread default.
-        const or = (value, fallback) => (value === undefined || value === 'default' ? fallback : value);
-        const check = checkSelection(await this.catalog(), or(model, s.threadModel.value), or(effort, s.threadEffort.value));
+        const given = (value) => value !== undefined && value !== 'default';
+        const or = (value, fallback) => (given(value) ? value : fallback);
+        // An effort the model lacks never stops a start: it runs at the nearest
+        // level and the result says so. Only an effort no model offers is refused.
+        const check = checkSelection(await this.catalog(), or(model, s.threadModel.value), or(effort, s.threadEffort.value),
+            { fit: given(effort) ? 'known' : true });
         if (!check.ok) throw new ProjectError(check.error);
         // Every attempt counts, so a coordinator caught in a loop stops even when starts fail.
         const now = Date.now();
@@ -940,9 +1019,17 @@ export class ProjectManager {
         });
         const agent = await this.attach(sessionId);
         const notes = check.note ? [check.note] : [];
-        if ((check.model || check.effort) && this.selectionMode === 'session'
-            && !await this.selectRoute(agent, { projectId, role: 'thread', threadId })) {
-            notes.push('the model could not be set, so the thread runs on the DSH default (details in the projects log)');
+        if (this.selectionMode === 'session') {
+            const applied = await this.selectRoute(agent, { projectId, role: 'thread', threadId });
+            if (!applied) {
+                if (check.model || check.effort) notes.push('the model could not be set, so the thread runs on the DSH default (details in the projects log)');
+            } else if (!check.model || (!check.effort && applied.reasoningEffort)) {
+                // The thread keeps what it started on, even when the DSH default changes later, so record it.
+                this.store.putThread(projectId, threadId, {
+                    model: check.model ?? `${applied.provider}:${applied.model}`,
+                    effort: check.effort ?? applied.reasoningEffort,
+                });
+            }
         }
         await this.sc.rename({ sessionId, title: `${project.name} › ${cleanTitle}` }).catch(() => {});
         await this.prompt(sessionId, briefMessage(project.name, threadId, cleanTitle, brief.trim()), 'queue', this.store.project(projectId).coordinatorSessionId);
@@ -992,7 +1079,9 @@ export class ProjectManager {
             const s = this.settings(projectId);
             const wantModel = changes.model === undefined ? t.model : changes.model === 'default' ? s.threadModel.value : changes.model;
             const wantEffort = changes.effort === undefined ? t.effort : changes.effort === 'default' ? s.threadEffort.value : changes.effort;
-            const check = checkSelection(await this.catalog(), wantModel, wantEffort);
+            // A new model fits the effort the thread already had; an effort given now must be offered.
+            const check = checkSelection(await this.catalog(), wantModel, wantEffort,
+                { fit: changes.effort === undefined || changes.effort === 'default' });
             if (!check.ok) throw new ProjectError(check.error);
             fields.model = check.model;
             fields.effort = check.effort;
@@ -1028,10 +1117,13 @@ export class ProjectManager {
     }
 
     /**
-     * Change runtime settings. A value of "default" clears the override.
+     * Change the project's own settings. A model or effort of "default"
+     * clears it, so the project row or the plugin default applies again;
+     * `paused: null` does the same for pause.
      * @param {object} changes - coordinatorModel, coordinatorEffort, threadModel, threadEffort, paused.
+     * @returns {Promise<{notes: string[], flushed: number}>}
      */
-    async updateSettings(projectId, changes) {
+    async changeSettings(projectId, changes) {
         const next = {};
         const current = this.settings(projectId);
         const val = (v) => (v === 'default' ? undefined : v);
@@ -1041,16 +1133,23 @@ export class ProjectManager {
         for (const [mKey, eKey] of pairs) {
             if (changes[mKey] === undefined && changes[eKey] === undefined) continue;
             catalog ??= await this.catalog();
-            const model = changes[mKey] === undefined ? current[mKey].value : val(changes[mKey]);
-            const effort = changes[eKey] === undefined ? current[eKey].value : val(changes[eKey]);
-            const check = checkSelection(catalog, model, effort);
+            // A cleared setting is checked as what it falls back to.
+            const inherited = effectiveSettings(pluginDefaults(this.config), this.project(projectId), {});
+            const model = changes[mKey] === undefined ? current[mKey].value : changes[mKey] === 'default' ? inherited[mKey].value : changes[mKey];
+            const effort = changes[eKey] === undefined ? current[eKey].value : changes[eKey] === 'default' ? inherited[eKey].value : changes[eKey];
+            // An effort set now must be offered; one kept from before or inherited is fitted.
+            const effortGiven = changes[eKey] !== undefined && changes[eKey] !== 'default';
+            const check = checkSelection(catalog, model, effort, { fit: !effortGiven });
             if (!check.ok) throw new ProjectError(check.error);
             if (changes[mKey] !== undefined) next[mKey] = changes[mKey] === 'default' ? undefined : check.model;
-            if (changes[eKey] !== undefined) next[eKey] = changes[eKey] === 'default' ? undefined : (check.effort ?? effort.trim());
+            if (changes[eKey] !== undefined) next[eKey] = changes[eKey] === 'default' ? undefined : (check.effort ?? val(effort)?.trim());
+            // The project's own effort follows a new model: fitted, or cleared when the model has no levels.
+            else if (changes[mKey] !== undefined && current[eKey].source === 'project setting' && (check.fitted || check.effort === undefined)) next[eKey] = check.effort;
             if (check.note) notes.push(`${mKey === 'coordinatorModel' ? 'Coordinator' : 'Threads'}: ${check.note}.`);
         }
         const wasPaused = this.paused(projectId);
-        if (changes.paused !== undefined) next.paused = changes.paused;
+        if (changes.paused === null) next.paused = undefined;
+        else if (typeof changes.paused === 'boolean') next.paused = changes.paused;
         this.store.putSettings(projectId, next);
         // Every call also retries a coordinator selection that failed before.
         if (!await this.applyCoordinatorRoute(projectId)) {
@@ -1059,6 +1158,15 @@ export class ProjectManager {
         let flushed = 0;
         if (wasPaused && !this.paused(projectId)) flushed = await this.flushPending(projectId);
         this.log(`settings ${projectId} ${Object.keys(next).join(',')}`);
+        return { notes, flushed };
+    }
+
+    /**
+     * Change settings through the coordinator's project_settings tool.
+     * @returns {Promise<string>} the settings after the change, as the tool reports them.
+     */
+    async updateSettings(projectId, changes) {
+        const { notes, flushed } = await this.changeSettings(projectId, changes);
         const s = this.settings(projectId);
         return [
             `Coordinator: ${describeRoute(s.coordinatorModel.value, s.coordinatorEffort.value)} (${s.coordinatorModel.source} / ${s.coordinatorEffort.source})`,
@@ -1066,6 +1174,89 @@ export class ProjectManager {
             `Paused: ${this.paused(projectId) ? 'yes' : 'no'}${flushed ? ` (delivered ${flushed} held handbacks)` : ''}`,
             ...notes,
         ].join('\n');
+    }
+
+    // ── the Project settings dialog (remote.js) ────────────────────────────
+
+    /** The project a window call names: a project id, or the id of one of its sessions. */
+    projectFor(target) {
+        const value = typeof target === 'string' ? target.trim() : '';
+        if (this.projects.has(value)) return value;
+        const who = value ? this.store.lookup(value) : null;
+        if (who && this.projects.has(who.projectId)) return who.projectId;
+        throw new ProjectError(value ? `"${value.slice(0, 80)}" is not a project here, nor one of its sessions` : 'no project given');
+    }
+
+    /**
+     * The model a loaded session runs its next request on, from DSH's own
+     * model selection record; undefined when the session is not loaded.
+     */
+    liveSelection(sessionId) {
+        try {
+            const session = this.ctx.agents.get(sessionId)?.session;
+            const state = session ? this.ctx.get?.('sessionProjections')?.stateOf?.(session, 'modelSelection') : undefined;
+            const picked = state?.pending ?? state?.lastUsed;
+            if (!picked?.provider || !picked?.model) return undefined;
+            return { provider: picked.provider, model: picked.model, ...(picked.reasoningEffort ? { reasoningEffort: String(picked.reasoningEffort) } : {}) };
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * A project as its Project settings dialog shows it: each of the four
+     * settings with its source and what it falls back to without the
+     * project's own, pause, and every thread with its model.
+     */
+    describeProject(projectId) {
+        const project = this.project(projectId);
+        const stored = this.store.project(projectId);
+        const settings = this.settings(projectId);
+        const inherited = effectiveSettings(pluginDefaults(this.config), project, {});
+        const own = typeof stored.settings.paused === 'boolean';
+        return {
+            project: {
+                id: projectId,
+                name: project.name,
+                workspace: project.workspacePath,
+                coordinator: stored.coordinatorSessionId ?? null,
+                live: this.liveSelection(stored.coordinatorSessionId) ?? null,
+            },
+            settings: Object.fromEntries(SETTING_KEYS.map((key) => [key, { ...settings[key], inherited: inherited[key] }])),
+            paused: { value: this.paused(projectId), source: own ? 'project setting' : 'project config', inherited: project.paused === true },
+            threads: rosterIds(stored.threads).map((id) => {
+                const t = stored.threads[id];
+                return {
+                    id, title: t.title, session: t.sessionId ?? null, resolved: t.resolved === true,
+                    model: t.model ?? null, effort: t.effort ?? null, live: this.liveSelection(t.sessionId) ?? null,
+                    handback: t.lastHandback?.status ?? null,
+                };
+            }),
+        };
+    }
+
+    /**
+     * A change from the Project settings dialog: the project's settings, or
+     * one thread's model and effort. null puts a value back to its default.
+     * @param {object} changes - {coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?} or {thread, model?, effort?}.
+     * @returns the project as describeProject shows it, with `notes` from the change.
+     */
+    async changeFromWindow(projectId, changes) {
+        const text = (value) => (value === null ? 'default' : typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined);
+        let notes;
+        if (changes.thread !== undefined) {
+            const { id } = this.requireThread(projectId, changes.thread);
+            notes = [await this.updateThread(projectId, id, { model: text(changes.model), effort: text(changes.effort) })];
+        } else {
+            ({ notes } = await this.changeSettings(projectId, {
+                coordinatorModel: text(changes.coordinatorModel),
+                coordinatorEffort: text(changes.coordinatorEffort),
+                threadModel: text(changes.threadModel),
+                threadEffort: text(changes.threadEffort),
+                paused: changes.paused === null || typeof changes.paused === 'boolean' ? changes.paused : undefined,
+            }));
+        }
+        return { ...this.describeProject(projectId), notes };
     }
 
     memoryPath(projectId) {

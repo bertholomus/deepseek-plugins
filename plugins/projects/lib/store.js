@@ -3,15 +3,16 @@
  *
  * { version: 1, projects: { [projectId]: {
  *     coordinatorSessionId, settings: { coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused? },
- *     nextThread, pendingHandbacks: [text], threadStarts: [ms], defaultsSeen?: { the plugin defaults last applied },
+ *     nextThread, pendingHandbacks: [text], threadStarts: [ms], rowSeen?: { the project row's models and efforts last seen },
  *     welcomedSession?: the coordinator session that got (or never needed) its first-turn welcome,
  *     threads: { [threadId]: { sessionId, title, model?, effort?, resolved, createdAt,
  *       lastHandback?: { status, summary, at }, lastDirect?: { at, reply }, handbackTimes: [ms],
  *       busy?: true while a turn runs, seenTurn?: key of the last turn reviewed } } } } }
  *
- * Settings here are the runtime overrides the coordinator sets with
- * project_settings. They sit above the profile config; deleting a key means
- * "use default".
+ * Settings here are the project's own: set in its Project settings dialog,
+ * by picking a model in its coordinator's DSH model picker, or by the
+ * coordinator with project_settings. They sit above the profile config;
+ * deleting a key means "use default".
  *
  * @module dsh-plugin-projects/store
  */

@@ -8,11 +8,12 @@
  * DSH session made through the Host's sessionController, so the user watches
  * and talks to the coordinator and every thread in the DSH window.
  *
- * Settings mirror Claude Code's project page: coordinator model and effort,
- * thread model and effort (plugin-wide defaults, per-project config, and
- * runtime changes through the coordinator), plus pause. The plugin-wide
- * defaults are live config, so the form on the plugin's page in DSH (the
- * browser half, lib/client.js) changes them without a restart.
+ * Settings mirror Claude Code's project settings: coordinator model and
+ * effort, thread model and effort, plus pause. Each project sets its own in
+ * its Project settings dialog (lib/client.js, through remote.js), by picking
+ * a model in its coordinator's DSH model picker, or through the coordinator;
+ * projects that set none use the plugin-wide defaults. Those are live config,
+ * so the form on the plugin's page in DSH changes them without a restart.
  *
  * @module dsh-plugin-projects
  */
@@ -20,6 +21,7 @@ import z from '@deepseek-ai/schemastery';
 import { ProjectManager } from './projects.js';
 import { projectTools } from './tools.js';
 import { projectSessionProjection } from './projection.js';
+import { ProjectsRemote, SERVICE } from './remote.js';
 
 export const name = 'projects';
 
@@ -114,6 +116,12 @@ export function apply(ctx, config) {
     // cards (lib/projection.js). Optional, so a Host without projections still runs projects.
     ctx.inject(['sessionProjections'], (scope) => {
         scope.sessionProjections.register(projectSessionProjection((sessionId) => manager.seedView(sessionId)));
+    });
+
+    // The Project settings dialog's endpoints (remote.js), served by DSH's own
+    // gateway. Optional too: without them the dialog says it can't reach the plugin.
+    ctx.inject(['typertGateway'], (scope) => {
+        scope.provide(SERVICE, new ProjectsRemote(scope, manager));
     });
 
     // Coordinators are created after composition settles; failures are logged, never thrown.

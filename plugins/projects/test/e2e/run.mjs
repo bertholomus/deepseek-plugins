@@ -9,7 +9,8 @@
  * tool scoping, handbacks, the automatic notes (idle, failed, stopped,
  * waiting on approval, cut off by a DSH crash), queued turns, direct talk,
  * settings, memory, pause, a restart, the browser half DSH serves for the
- * plugin's page, and a saved default that applies without a restart.
+ * plugin's page, a saved default that applies without a restart, the Project
+ * settings endpoints the window calls, and a pick in DSH's own model picker.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/projects/test/e2e/run.mjs
  *
@@ -19,6 +20,7 @@
  */
 import { spawn, execFileSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -117,6 +119,35 @@ function httpGet(url, headers = {}) {
     });
 }
 
+/** Sign in to DSH's web server as a browser does, from the newest sign-in link in its log. */
+async function signInWeb() {
+    const signIn = [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].at(-1)?.[1] ?? '';
+    const cookie = String((await httpGet(signIn)).headers['set-cookie']?.[0] ?? '').split(';')[0];
+    return { base: new URL('./', signIn), cookie };
+}
+
+/** Call a Remote endpoint the way the window does: POST /api/<endpoint> with a client-request envelope. */
+function webApi(web, endpoint, args) {
+    return new Promise((resolvePromise, reject) => {
+        const body = JSON.stringify({ type: 'client-request', rpcId: randomUUID(), method: endpoint, payload: { args } });
+        const req = request(new URL(`api/${endpoint}`, web.base), {
+            method: 'POST',
+            headers: { cookie: web.cookie, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+        }, (res) => {
+            let text = '';
+            res.setEncoding('utf8');
+            res.on('data', (c) => { text += c; });
+            res.on('end', () => {
+                let result;
+                try { result = JSON.parse(text).result; } catch {}
+                resolvePromise(result ?? { ok: false, error: { code: `http/${res.statusCode}`, message: text.slice(0, 300) } });
+            });
+        });
+        req.on('error', reject);
+        req.end(body);
+    });
+}
+
 const readText = (file) => { try { return readFileSync(file, 'utf8'); } catch { return ''; } };
 const store = () => { try { return JSON.parse(readFileSync(storeFile, 'utf8')); } catch { return {}; } };
 const project = () => store().projects?.[PROJECT_ID] ?? {};
@@ -176,6 +207,12 @@ function writePatch(modelPort, defaults) {
             name: Fake Flash
             contextWindow: 131072
             reasoningEfforts: false
+          - id: fake-mini
+            name: Fake Mini
+            contextWindow: 131072
+            reasoningEfforts:
+              off:
+              high: high
 - id: projects
   config:
 ${Object.entries(defaults).map(([key, value]) => `    ${key}: ${q(value)}\n`).join('')}    approvalNoticeSeconds: 1
@@ -483,31 +520,63 @@ try {
     check('thread keeps its effort and tools after restart', t1After.length > 0 && t1After.every((r) => r.effort === 'max' && r.tools.includes('project_handback')), describe(t1After));
 
     // 17. New defaults saved while DSH runs (the form on the plugin's page
-    // writes the same file) apply without restarting the plugin. They replace
-    // the coordinator's own changes to those settings (effort low, thread
-    // model fake-flash): the newest change wins. A thread that started on
-    // fake-flash keeps it.
+    // writes the same file) apply without restarting the plugin, to whatever
+    // follows the defaults. The project's own choices (coordinator effort
+    // low, thread model fake-flash) stay: a project's choice comes first.
     const starts = () => readText(logFile).split('\n').filter((l) => l.includes(` coordinator ${PROJECT_ID} `)).length;
+    const saves = () => readText(logFile).split('\n').filter((l) => l.endsWith(' defaults saved')).length;
     const startsBefore = starts();
+    const savesBefore = saves();
     writePatch(model.port, { coordinatorEffort: 'high', threadModel: 'fake:fake-model', threadEffort: 'max' });
-    await waitFor(() => readText(logFile).includes(`select ${PROJECT_ID}/coordinator fake:fake-model effort=high`), 'the coordinator to switch to the new default');
-    const noted = readText(logFile).split('\n').find((l) => l.includes(`defaults ${PROJECT_ID} `)) ?? '';
-    check('the saved defaults replace the coordinator changes', noted.endsWith(`defaults ${PROJECT_ID} coordinatorEffort,threadModel,threadEffort replaced coordinatorEffort,threadModel`)
-        && project().settings?.coordinatorEffort === undefined && project().settings?.threadModel === undefined, noted);
+    await waitFor(() => saves() > savesBefore, 'the plugin to see the saved defaults');
+    check('saved defaults leave the project\'s own choices', project().settings?.coordinatorEffort === 'low' && project().settings?.threadModel === 'fake:fake-flash'
+        && !readText(logFile).includes(' replaced '), JSON.stringify(project().settings));
     check('the plugin was not restarted', starts() === startsBefore, `${startsBefore} → ${starts()}`);
+
+    // 18. The Project settings dialog's endpoints, called as the window calls them.
+    const web = await signInWeb();
+    let answer = await webApi(web, 'dsh-plugin-projects/describe', { target: threadSession('t1') });
+    check('the window reads a project through one of its threads', answer.ok && answer.value.project.id === PROJECT_ID && answer.value.project.coordinator === coord
+        && answer.value.settings.coordinatorEffort.value === 'low' && answer.value.settings.coordinatorEffort.inherited.value === 'high'
+        && answer.value.threads.some((t) => t.id === 't5' && t.model === 'fake:fake-flash'), JSON.stringify(answer).slice(0, 500));
+    answer = await webApi(web, 'dsh-plugin-projects/update', { target: coord, changes: { coordinatorEffort: null } });
+    await waitFor(() => readText(logFile).includes(`select ${PROJECT_ID}/coordinator fake:fake-model effort=high`), 'the coordinator to follow the default again');
+    check('"Use default" in the window hands the coordinator back to the saved default', answer.ok && answer.value.settings.coordinatorEffort.source === 'plugin default'
+        && answer.value.settings.coordinatorEffort.value === 'high', JSON.stringify(answer).slice(0, 300));
+    answer = await webApi(web, 'dsh-plugin-projects/update', { target: coord, changes: { threadEffort: 'ultra' } });
+    check('the window gets the plugin\'s refusal', answer.ok === false && answer.error?.code === 'projects/refused' && /ultra/.test(answer.error.message), JSON.stringify(answer));
     mark = model.requests.length;
     await say(coord, call('project_thread_start', { title: 'Iota', brief: 'Just answer.' }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Iota idle note');
-    check('the coordinator asks with the new default effort', since(mark, 'coordinator').every((r) => r.effort === 'high'), describe(since(mark, 'coordinator')));
-    check('the coordinator prompt shows the new defaults', since(mark, 'coordinator')[0]?.system.includes('- New threads: fake:fake-model · effort max'),
+    check('the coordinator asks with the default effort again', since(mark, 'coordinator').every((r) => r.effort === 'high'), describe(since(mark, 'coordinator')));
+    check('the coordinator prompt shows the project\'s thread model', since(mark, 'coordinator')[0]?.system.includes('- New threads: fake:fake-flash · effort max'),
         since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => l.startsWith('- Coordinator:') || l.startsWith('- New threads:')).join(' | '));
     const t9Reqs = since(mark, 't9');
-    check('a new thread asks with the new defaults', t9Reqs.length > 0 && t9Reqs.every((r) => r.model === 'fake-model' && r.effort === 'max'), describe(t9Reqs));
+    check('a new thread starts on the project\'s own thread model', t9Reqs.length > 0 && t9Reqs.every((r) => r.model === 'fake-flash' && r.effort === undefined), describe(t9Reqs));
+
+    // 19. A model picked in DSH's own picker (the composer's model menu) becomes the project's coordinator setting.
+    answer = await webApi(web, 'session/selectModel', { request: { sessionId: coord, provider: 'fake', model: 'fake-model', reasoningEffort: 'max' } });
+    await waitFor(() => readText(logFile).includes(`picked ${PROJECT_ID}/coordinator fake:fake-model effort=max`), 'the pick to reach the project', 10000).catch(() => {});
+    check('a pick in DSH\'s model picker becomes the coordinator setting', answer.ok && project().settings?.coordinatorModel === 'fake:fake-model' && project().settings?.coordinatorEffort === 'max',
+        `${JSON.stringify(answer).slice(0, 200)} ${JSON.stringify(project().settings)}`);
+    check('selections the plugin makes itself are not taken for picks', readText(logFile).split('\n').filter((l) => / picked /.test(l)).length === 1,
+        readText(logFile).split('\n').filter((l) => / picked | select /.test(l)).join('\n'));
     mark = model.requests.length;
     await say(coord, call('project_thread_send', { thread: 't5', text: 'After the new defaults.' }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the t5 idle note after the new defaults');
+    check('the coordinator runs on the pick', since(mark, 'coordinator').every((r) => r.model === 'fake-model' && r.effort === 'max'), describe(since(mark, 'coordinator')));
     const t5After = since(mark, 't5');
     check('a thread keeps the model it started with', t5After.length > 0 && t5After.every((r) => r.model === 'fake-flash' && r.effort === undefined), describe(t5After));
+
+    // 20. An effort the thread model lacks never stops a start: the thread runs at the nearest level it offers.
+    answer = await webApi(web, 'dsh-plugin-projects/update', { target: coord, changes: { threadModel: 'fake:fake-mini' } });
+    check('the window says the inherited effort is fitted', answer.ok && (answer.value?.notes ?? []).some((n) => /fake:fake-mini doesn't offer effort "max", so it runs at "high"/.test(n)),
+        JSON.stringify(answer).slice(0, 400));
+    mark = model.requests.length;
+    await say(coord, call('project_thread_start', { title: 'Kappa', brief: 'Just answer.' }));
+    await coordinatorSaw(mark, 'SAW-IDLE', 'the Kappa idle note');
+    const kappa = since(mark, 't10');
+    check('a thread whose model lacks the default effort starts at the nearest one', kappa.length > 0 && kappa.every((r) => r.model === 'fake-mini' && r.effort === 'high'), describe(kappa));
     check('no errors in the projects log', !/ error /.test(readText(logFile)), readText(logFile).split('\n').filter((l) => / error /.test(l)).join('\n'));
 } catch (error) {
     failed += 1;

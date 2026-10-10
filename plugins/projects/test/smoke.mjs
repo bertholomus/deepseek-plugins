@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
+import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol';
 import * as plugin from '../lib/index.js';
 import { effectiveSettings, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
 import { slugify, timing } from '../lib/projects.js';
@@ -117,7 +118,7 @@ const fakeLlm = {
  * (its own `agent/request` listener, installed before `agent/created`, plus
  * `sessionController.agents.selectForNextRequest`).
  */
-function fakeHost({ selection = false, hostListener = selection } = {}) {
+function fakeHost({ selection = false, hostListener = selection, gateway = false } = {}) {
     const listeners = new Map();
     const effects = [];
     const sessions = new Map(); // id → {events, prompts, title, cwd}
@@ -129,10 +130,14 @@ function fakeHost({ selection = false, hostListener = selection } = {}) {
         agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: 'deepseek-v4' }) },
         llm: fakeLlm,
         sessionProjections: { register(def) { projections.push(def); return () => projections.splice(projections.indexOf(def), 1); } },
+        ...(gateway ? { typertGateway: {} } : {}),
     };
+    /** Services the plugin provides (cordis `ctx.provide`), such as its window endpoints. */
+    const provided = new Map();
     const host = {
-        sessions, live, effects, selections, services, projections,
+        sessions, live, effects, selections, services, projections, provided,
         logger: { info() {}, warn() {} },
+        provide(name, value) { provided.set(name, value); },
         get: (name) => services[name],
         /** Like cordis: run the callback only when every named service is present. */
         inject(names, fn) {
@@ -199,6 +204,8 @@ function fakeHost({ selection = false, hostListener = selection } = {}) {
             selectForNextRequest(agent, sel) {
                 assert.equal(live.get(agent.id), agent, 'selection targets the live agent');
                 selections.push({ sessionId: agent.id, selection: sel, promptsBefore: sessions.get(agent.id).prompts.length });
+                // Like DSH: the selection is a session event, the same one a pick in DSH's own model picker appends.
+                agent.ctx.sessionEvent({ type: 'model/selection', data: { ...sel } });
             },
         };
     }
@@ -264,7 +271,16 @@ test('selection is checked against the host catalog', () => {
     assert.match(checkSelection(CATALOG, 'deepseek-v4-flash', 'max').error, /not offered.*off, high/);
     assert.match(checkSelection(CATALOG, 'nope', undefined).error, /unknown model "nope"/);
     assert.deepEqual(checkSelection(CATALOG, undefined, 'max'), { ok: true, effort: 'max' });
-    assert.match(checkSelection(CATALOG, undefined, 'medium').error, /not offered by deepseek:deepseek-v4/);
+    assert.match(checkSelection(CATALOG, 'deepseek-v4-flash', 'low').error, /^effort "low" is not offered by deepseek:deepseek-v4-flash\. Choose one of: off, high$/);
+    assert.match(checkSelection(CATALOG, undefined, 'medium').error, /^effort "medium" is not offered by any model\. Efforts in this DSH: off, low, high, max$/);
+    // Fitting: the nearest level the model offers at or below the wanted one, with a note.
+    assert.deepEqual(checkSelection(CATALOG, 'deepseek-v4-flash', 'max', { fit: 'known' }),
+        { ok: true, model: 'deepseek:deepseek-v4-flash', effort: 'high', fitted: true, note: 'deepseek:deepseek-v4-flash doesn\'t offer effort "max", so it runs at "high"' });
+    assert.equal(checkSelection(CATALOG, 'deepseek-v4-flash', 'low', { fit: true }).effort, 'off');
+    assert.match(checkSelection(CATALOG, 'deepseek-v4-flash', 'ultra', { fit: 'known' }).error, /not offered by any model/);
+    assert.deepEqual(checkSelection(CATALOG, 'deepseek-v4-flash', 'ultra', { fit: true }),
+        { ok: true, model: 'deepseek:deepseek-v4-flash', fitted: true, note: 'effort "ultra" is not offered by any model, so deepseek:deepseek-v4-flash runs at its default effort' });
+    assert.deepEqual(checkSelection(CATALOG, 'deepseek-v4-flash', 'high', { fit: true }), { ok: true, model: 'deepseek:deepseek-v4-flash', effort: 'high' });
     // A model without effort levels drops the effort and says so.
     assert.deepEqual(checkSelection(CATALOG, 'other:big-model', 'max'), { ok: true, model: 'other:big-model', note: 'other:big-model has no effort levels, so effort "max" is not used' });
     assert.deepEqual(checkSelection(undefined, 'x:y', 'z'), { ok: true, model: 'x:y', effort: 'z' });
@@ -536,6 +552,36 @@ test('session mode: coordinator and threads get DSH model selections, not reques
     assert.equal(host.selections.length, 4, 'a rename selects nothing');
 });
 
+test('an effort the DSH default model lacks never stops a thread: it runs at the nearest level, and own efforts follow a new model', async () => {
+    const { host } = setup({ threadEffort: 'max' }, undefined, SELECTING);
+    await tick();
+    const coord = coordinatorOf(host);
+    // The user picks V4 Flash somewhere in DSH, which makes it the DSH default model (the judge's B1).
+    const flash = { provider: 'deepseek', model: 'deepseek-v4-flash' };
+    host.services.agentDefaultModel.currentSelection = () => ({ ...flash });
+    const started = await coord.ctx.call('project_thread_start', { title: 'Fast', brief: 'Go.' });
+    assert.match(started, /^Started t1 "Fast" \(DSH default model · effort high\)\. It will hand back when done\. Note: deepseek:deepseek-v4-flash doesn't offer effort "max", so it runs at "high"\./);
+    const t1 = [...host.live.values()].find((a) => a.id !== coord.id);
+    assert.deepEqual(host.selections.at(-1), { sessionId: t1.id, selection: { ...flash, reasoningEffort: 'high' }, promptsBefore: 0 });
+    // An effort named in the start is fitted too; only one no model offers is refused.
+    assert.match(await coord.ctx.call('project_thread_start', { title: 'Two', brief: 'Go.', model: 'deepseek-v4-flash', effort: 'max' }), /\(deepseek:deepseek-v4-flash · effort high\).*runs at "high"/);
+    assert.match(await coord.ctx.call('project_thread_start', { title: 'Three', brief: 'Go.', effort: 'ultra' }), /^Failed: effort "ultra" is not offered by any model/);
+    // "Use default" goes through when the inherited effort doesn't fit the default model, and the coordinator runs fitted.
+    await coord.ctx.call('project_settings', { coordinator_effort: 'off' });
+    const reset = await coord.ctx.call('project_settings', { coordinator_effort: 'default' });
+    assert.match(reset, /Coordinator: deepseek:deepseek-v4-flash doesn't offer effort "max", so it runs at "high"\./);
+    assert.deepEqual(host.selections.filter((x) => x.sessionId === coord.id).at(-1).selection, { ...flash, reasoningEffort: 'high' });
+    // A setting made now must still be offered.
+    assert.match(await coord.ctx.call('project_settings', { thread_model: 'deepseek-v4-flash', thread_effort: 'max' }), /^Failed: effort "max" is not offered by deepseek:deepseek-v4-flash/);
+    // The project's own effort follows a new model: fitted to what it offers, cleared when it has none.
+    await coord.ctx.call('project_settings', { thread_model: 'deepseek-v4', thread_effort: 'max' });
+    assert.match(await coord.ctx.call('project_settings', { thread_model: 'deepseek-v4-flash' }), /New threads: deepseek:deepseek-v4-flash · effort high \(project setting \/ project setting\)/);
+    assert.match(await coord.ctx.call('project_settings', { thread_model: 'big-model' }), /New threads: other:big-model · effort max \(project setting \/ plugin default\)/);
+    // A thread moved to a model without its effort keeps the nearest one.
+    assert.match(await coord.ctx.call('project_thread_update', { thread: 't2', model: 'deepseek-v4' }), /route deepseek:deepseek-v4 · effort high/);
+    assert.match(await coord.ctx.call('project_thread_update', { thread: 't2', model: 'deepseek-v4-flash', effort: 'low' }), /^Failed: effort "low" is not offered by deepseek:deepseek-v4-flash/);
+});
+
 test('session mode: coordinator settings re-select only on change, and "default" restores it', async () => {
     const { host } = setup({}, undefined, SELECTING);
     await tick();
@@ -550,12 +596,18 @@ test('session mode: coordinator settings re-select only on change, and "default"
     assert.deepEqual(efforts(), ['max', 'low', 'max']);
 });
 
-test('session mode: a project on DSH defaults selects nothing until a setting is made', async () => {
+test('session mode: on DSH defaults the coordinator gets no selection until a setting is made, and a thread keeps the default it started on', async () => {
     const { host } = setup({ threadEffort: '', projects: [{ name: 'DSH Plugins', workspacePath: '/work/dsh' }] }, undefined, SELECTING);
     await tick();
     const coord = coordinatorOf(host);
-    await coord.ctx.call('project_thread_start', { title: 'Plain', brief: 'Go.' });
     assert.deepEqual(host.selections, []);
+    await coord.ctx.call('project_thread_start', { title: 'Plain', brief: 'Go.' });
+    const t1 = [...host.live.values()].find((a) => a.id !== coord.id);
+    // The thread is put on the DSH default of the moment and records it, so a pick
+    // elsewhere in DSH (which changes the DSH default) doesn't move it.
+    assert.deepEqual(host.selections.map((s) => [s.sessionId, s.selection]), [[t1.id, { provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'high' }]]);
+    assert.match(await coord.ctx.call('project_thread_read', { thread: 't1' }), /^t1 · "Plain" · .* · deepseek:deepseek-v4 · effort high/);
+    host.selections.length = 0;
     await coord.ctx.call('project_settings', { coordinator_model: 'deepseek-v4-flash' });
     assert.deepEqual(host.selections.map((s) => s.selection), [{ provider: 'deepseek', model: 'deepseek-v4-flash' }]);
     // Back to the DSH default selection, with the adapter's default effort filled in.
@@ -582,8 +634,7 @@ test('session mode: restart keeps the coordinator selection; a changed profile r
     assert.deepEqual(changed.selections.map((s) => s.selection.reasoningEffort), ['low']);
 });
 
-test('defaults form: a saved default switches the coordinator and new threads, and replaces a coordinator change', async () => {
-    const SELECTING = { selection: true };
+test('defaults form: a saved default switches what follows the defaults, and a project\'s own settings stay', async () => {
     const { host, config, dir } = setup({ coordinatorEffort: 'high', projects: [{ name: 'DSH Plugins', workspacePath: '/work/dsh' }] }, undefined, SELECTING);
     await tick();
     const coord = coordinatorOf(host);
@@ -591,27 +642,32 @@ test('defaults form: a saved default switches the coordinator and new threads, a
     assert.deepEqual(efforts(), ['high']);
     // The user asked the coordinator for max-effort threads in this project.
     await coord.ctx.call('project_settings', { thread_effort: 'max' });
-    assert.match(await coord.ctx.call('project_settings', {}), /New threads: DSH default model · effort max \(DSH default \/ project setting\)/);
 
     // Then saved new defaults on the plugin's page.
     saveDefaults(host, config, { coordinatorEffort: 'max', threadEffort: 'off' });
     await tick();
-    assert.deepEqual(efforts(), ['high', 'max'], 'the coordinator switches from its next request');
-    assert.match(await coord.ctx.call('project_settings', {}), /New threads: DSH default model · effort off \(DSH default \/ plugin default\)/);
+    assert.deepEqual(efforts(), ['high', 'max'], 'a coordinator on the default switches from its next request');
+    assert.match(await coord.ctx.call('project_settings', {}), /New threads: DSH default model · effort max \(DSH default \/ project setting\)/, 'the project\'s own choice stays');
     assert.match(await coord.ctx.call('project_thread_start', { title: 'After', brief: 'Go.' }), /Started t1/);
     const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'DSH Plugins › After');
-    assert.equal(host.selections.find((s) => s.sessionId === t1.id).selection.reasoningEffort, 'off');
-    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /defaults dsh-plugins coordinatorEffort,threadEffort replaced threadEffort/);
+    assert.equal(host.selections.find((s) => s.sessionId === t1.id).selection.reasoningEffort, 'max');
 
+    // A coordinator with its own effort keeps it through later saves.
+    await coord.ctx.call('project_settings', { coordinator_effort: 'low' });
+    saveDefaults(host, config, { coordinatorEffort: 'off' });
+    await tick();
+    assert.deepEqual(efforts(), ['high', 'max', 'low']);
     // A save that changes nothing the plugin uses re-selects nothing; an empty default is an unset one.
-    saveDefaults(host, config, { coordinatorEffort: 'max' });
+    saveDefaults(host, config, { coordinatorEffort: 'off' });
     saveDefaults(host, config, { coordinatorModel: ' ' });
     await tick();
-    assert.deepEqual(efforts(), ['high', 'max']);
-    assert.equal(readFileSync(join(dir, 'projects.log'), 'utf8').match(/ defaults /g).length, 1);
+    assert.deepEqual(efforts(), ['high', 'max', 'low']);
+    const log = readFileSync(join(dir, 'projects.log'), 'utf8');
+    assert.equal(log.match(/ defaults saved/g).length, 4);
+    assert.doesNotMatch(log, / replaced /);
 });
 
-test('defaults form: a default changed while DSH was stopped replaces the coordinator change at the next start', async () => {
+test('profile: a model or effort edited in the project\'s row replaces the project\'s own choice of it at the next start', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'projects-'));
     const first = setup({}, dir);
     await tick();
@@ -624,11 +680,107 @@ test('defaults form: a default changed while DSH was stopped replaces the coordi
         await tick();
         return host.wake(coordId);
     };
-    // Restarted with the same defaults: the coordinator's changes stand.
+    // Restarted with the same profile, or with other plugin defaults: the project's choices stand.
     assert.match(await (await restart(first.raw)).ctx.call('project_settings', {}), /effort low \(DSH default \/ project setting\)\nNew threads: DSH default model · effort off \(DSH default \/ project setting\)/);
-    // Restarted after the thread effort default changed: that change is replaced, the coordinator's own stands.
-    assert.match(await (await restart({ ...first.raw, threadEffort: 'max' })).ctx.call('project_settings', {}),
-        /effort low \(DSH default \/ project setting\)\nNew threads: DSH default model · effort max \(DSH default \/ plugin default\)/);
+    assert.match(await (await restart({ ...first.raw, threadEffort: 'max', coordinatorEffort: 'high' })).ctx.call('project_settings', {}),
+        /effort low \(DSH default \/ project setting\)\nNew threads: DSH default model · effort off \(DSH default \/ project setting\)/);
+    // Restarted after the row's coordinator effort was edited by hand: that edit wins over the earlier choice; the other stays.
+    const edited = { ...first.raw, projects: [{ ...first.raw.projects[0], coordinatorEffort: 'high' }] };
+    assert.match(await (await restart(edited)).ctx.call('project_settings', {}),
+        /effort high \(DSH default \/ project config\)\nNew threads: DSH default model · effort off \(DSH default \/ project setting\)/);
+    // Seen once, the row no longer replaces anything.
+    await coordinatorOf(first.host).ctx.call('project_settings', {});
+    assert.match(await (await restart(edited)).ctx.call('project_settings', {}), /effort high \(DSH default \/ project config\)/);
+    const log = readFileSync(join(dir, 'projects.log'), 'utf8');
+    assert.equal(log.match(/ row dsh-plugins /g).length, 1);
+    assert.match(log, / row dsh-plugins coordinatorEffort replaced coordinatorEffort/);
+});
+
+test('picker: a model the user picks in DSH\'s own picker becomes the project\'s setting; the plugin\'s own selections do not', async () => {
+    const { host, dir } = setup({}, undefined, { ...SELECTING, gateway: true });
+    await tick();
+    const coord = coordinatorOf(host);
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    const threadRoute = async () => (await remote.describe(coord.id)).threads.map((t) => `${t.id} ${t.model} ${t.effort}`);
+    const selectionsBefore = host.selections.length;
+    // A pick without an effort: the model is the project's now, the effort falls back.
+    coord.ctx.sessionEvent({ type: 'model/selection', data: { provider: 'other', model: 'big-model' } });
+    assert.match(await coord.ctx.call('project_settings', {}), /^Coordinator: other:big-model · effort max \(project setting \/ project config\)/);
+    coord.ctx.sessionEvent({ type: 'model/selection', data: { provider: 'deepseek', model: 'deepseek-v4-flash', reasoningEffort: 'off' } });
+    assert.match(await coord.ctx.call('project_settings', {}), /^Coordinator: deepseek:deepseek-v4-flash · effort off \(project setting \/ project setting\)/);
+    assert.equal(host.selections.length, selectionsBefore, 'the coordinator already runs on the pick, so nothing selects it again');
+    // In a thread, the pick becomes that thread's model.
+    await coord.ctx.call('project_thread_start', { title: 'Picked', brief: 'Go.' });
+    const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'DSH Plugins › Picked');
+    t1.ctx.sessionEvent({ type: 'model/selection', data: { provider: 'other', model: 'big-model' } });
+    assert.deepEqual(await threadRoute(), ['t1 other:big-model null']);
+    // Selections the plugin makes itself, and malformed events, change no setting.
+    await coord.ctx.call('project_thread_update', { thread: 't1', model: 'deepseek-v4', effort: 'low' });
+    coord.ctx.sessionEvent({ type: 'model/selection', data: {} });
+    coord.ctx.sessionEvent({ type: 'model/selection' });
+    const log = readFileSync(join(dir, 'projects.log'), 'utf8');
+    assert.deepEqual(log.split('\n').filter((l) => / picked /.test(l)).map((l) => l.replace(/^\S+ /, '')), [
+        'picked dsh-plugins/coordinator other:big-model effort=-',
+        'picked dsh-plugins/coordinator deepseek:deepseek-v4-flash effort=off',
+        'picked dsh-plugins/t1 other:big-model effort=-',
+    ]);
+    assert.deepEqual(await threadRoute(), ['t1 deepseek:deepseek-v4 low']);
+});
+
+test('window: the Project settings endpoints read and change a project the way its coordinator does', async () => {
+    const { host } = setup({}, undefined, { ...SELECTING, gateway: true });
+    await tick();
+    const coord = coordinatorOf(host);
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    // DSH's gateway finds the service by its binding and method markers.
+    assert.equal(remote.typertRemote.namespace, 'dsh-plugin-projects');
+    assert.equal(remote.typertRemote.serviceKey, 'dshPluginProjectsRemote');
+    assert.deepEqual(remoteMethods(remote).map((m) => m.method), ['describe', 'update']);
+    const refused = async (promise, pattern) => {
+        await assert.rejects(promise, (error) => error.code === 'projects/refused' && pattern.test(error.message));
+    };
+
+    const read = await remote.describe(coord.id);
+    assert.deepEqual(plain(read.project), { id: 'dsh-plugins', name: 'DSH Plugins', workspace: '/work/dsh', coordinator: coord.id, live: null });
+    assert.deepEqual(plain(read.settings.coordinatorEffort), { value: 'max', source: 'project config', inherited: { value: 'max', source: 'project config' } });
+    assert.deepEqual(plain(read.settings.threadEffort), { value: 'high', source: 'plugin default', inherited: { value: 'high', source: 'plugin default' } });
+    assert.deepEqual(plain(read.paused), { value: false, source: 'project config', inherited: false });
+    assert.deepEqual(read.threads, []);
+    assert.deepEqual(plain(await remote.describe('dsh-plugins')), plain(read));
+    await refused(remote.describe('nope'), /"nope" is not a project here/);
+    await refused(remote.describe(''), /no project given/);
+
+    // Coordinator effort, set and given back to the default: the coordinator follows both.
+    const efforts = () => host.selections.filter((s) => s.sessionId === coord.id).map((s) => s.selection.reasoningEffort);
+    let after = await remote.update(coord.id, { coordinatorEffort: 'low' });
+    assert.deepEqual(plain(after.settings.coordinatorEffort), { value: 'low', source: 'project setting', inherited: { value: 'max', source: 'project config' } });
+    assert.deepEqual(after.notes, []);
+    after = await remote.update(coord.id, { coordinatorEffort: null });
+    assert.equal(after.settings.coordinatorEffort.source, 'project config');
+    assert.deepEqual(efforts(), ['max', 'low', 'max']);
+    // Values are checked against DSH's models; a model without efforts says so.
+    await refused(remote.update(coord.id, { threadEffort: 'ultra' }), /effort "ultra" is not offered/);
+    after = await remote.update(coord.id, { threadModel: 'big-model' });
+    assert.deepEqual([after.settings.threadModel.value, after.notes], ['other:big-model', ['Threads: other:big-model has no effort levels, so effort "high" is not used.']]);
+    await refused(remote.update(coord.id, 'max'), /changes must be an object/);
+
+    // A thread, named by its own session: its model changes from its next request.
+    await coord.ctx.call('project_thread_start', { title: 'Window', brief: 'Go.', model: 'deepseek-v4' });
+    const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'DSH Plugins › Window');
+    after = await remote.update(t1.id, { thread: 't1', model: 'deepseek:deepseek-v4-flash', effort: 'off' });
+    assert.deepEqual(plain(after.threads.map(({ id, title, session, resolved, model, effort }) => ({ id, title, session, resolved, model, effort }))),
+        [{ id: 't1', title: 'Window', session: t1.id, resolved: false, model: 'deepseek:deepseek-v4-flash', effort: 'off' }]);
+    assert.deepEqual(host.selections.at(-1), { sessionId: t1.id, selection: { provider: 'deepseek', model: 'deepseek-v4-flash', reasoningEffort: 'off' }, promptsBefore: 1 });
+    await refused(remote.update(coord.id, { thread: 't9', model: 'deepseek-v4' }), /no thread "t9"/);
+
+    // Pause, and back to what the profile says.
+    after = await remote.update(coord.id, { paused: true });
+    assert.deepEqual(plain(after.paused), { value: true, source: 'project setting', inherited: false });
+    await refused(coord.ctx.call('project_thread_start', { title: 'Blocked', brief: 'Go.' }).then((text) => {
+        throw Object.assign(new Error(text), { code: /paused/.test(text) ? 'projects/refused' : 'unexpected' });
+    }), /paused/);
+    after = await remote.update(coord.id, { paused: null });
+    assert.deepEqual(plain(after.paused), { value: false, source: 'project config', inherited: false });
 });
 
 /**
@@ -680,7 +832,7 @@ test('browser half: the defaults form registers on the plugin page, read-only wh
         },
     };
     client.apply(ctx);
-    assert.deepEqual(groups, [['configForms', 'remote', 'remote.session'], ['sessions', 'uiWorkspace', 'sidebarRight']]);
+    assert.deepEqual(groups, [['configForms', 'remote', 'remote.session'], ['connection', 'remote', 'remote.session'], ['sessions', 'uiWorkspace', 'sidebarRight']]);
     assert.deepEqual(registered.map((r) => ({ ...r.slot })), [{ name: 'plugins.bundle.config', key: 'dsh-plugin-projects' }]);
     const page = registered[0].component;
     assert.match(page({ view: 'summary' }), /^Default models/);
@@ -713,6 +865,8 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
     };
     client.apply(ctx);
     assert.deepEqual(registered.map((r) => [r.name, r.id ?? r.key ?? null, r.order ?? null]), [
+        ['shell.overlay', 'dsh-plugin-projects/project-settings', null],
+        ['sidebar.workspaces.session.menu.item', 'dsh-plugin-projects/project-settings-item', 250],
         ['conversation.session.header.actions', 'dsh-plugin-projects/threads-menu', -25],
         ['conversation.chat.turnTail', 'dsh-plugin-projects/thread-cards', 30],
         ['sidebar.session.row.leading', 'dsh-plugin-projects/thread-mark', 20],
@@ -724,7 +878,7 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
         ['sidebar.right.pane.tab', 'dsh-plugin-projects/thread-link', null],
     ]);
     // The thread chat tab hosts the conversation slot it renders.
-    assert.deepEqual(plain(registered[4].children), { 'projects.thread.conversation': { kind: 'single', scope: 'session' } });
+    assert.deepEqual(plain(registered[6].children), { 'projects.thread.conversation': { kind: 'single', scope: 'session' } });
     assert.deepEqual(protocols, ['projectthread']);
     assert.deepEqual(types.map((t) => [t.id, t.kind, t.patterns ? [...t.patterns] : null]), [
         ['dsh-plugin-projects/thread-chat', 'projectthread', ['dsh-resource://projectthread/session/**']],
@@ -741,6 +895,89 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
     assert.equal(link.canOpen('dsh-resource://file/session/s1/.dsh-thread/notes.md'), false);
     assert.equal(link.title('dsh-resource://file/session/s1/.dsh-thread/T12'), 'Thread t12');
     assert.equal(link.priority, undefined, 'the extension band ranks above the builtin file viewer');
+});
+
+test('browser half: Project settings opens per session, calls the plugin\'s endpoints and reads models as DSH does', async () => {
+    const { client } = loadClient();
+    const { settingsDialog, hostLink, errorText, noteText, catalogView, resolveRoute, effortNote, liveNote } = client.internals;
+    // The dialog opens only once its part is running, and closes when that part stops.
+    const dialog = settingsDialog();
+    let changes = 0;
+    dialog.subscribe(() => { changes += 1; });
+    dialog.open('s1');
+    assert.equal(dialog.getSnapshot().target, null);
+    const disconnect = dialog.connect();
+    dialog.open('s1');
+    assert.deepEqual(plain(dialog.getSnapshot()), { target: 's1', seq: 1, available: true });
+    dialog.open('s1');
+    assert.equal(dialog.getSnapshot().seq, 2, 'opening again starts fresh');
+    dialog.close();
+    dialog.open('');
+    assert.equal(dialog.getSnapshot().target, null);
+    disconnect();
+    assert.deepEqual(plain(dialog.getSnapshot()), { target: null, seq: 2, available: false });
+    assert.equal(changes, 5);
+
+    // Calls go over the window's connection to /api/dsh-plugin-projects/<method>.
+    const sent = [];
+    let reply = { ok: true, value: { project: { id: 'p' } } };
+    const link = hostLink({ connection: { rpc: { call: async (channel, endpoint, payload) => { sent.push([channel, endpoint, payload]); if (reply instanceof Error) throw reply; return reply; } } } });
+    assert.deepEqual(plain(await link.call('describe', { target: 's1' })), { ok: true, value: { project: { id: 'p' } } });
+    assert.deepEqual(plain(sent), [['/api', 'dsh-plugin-projects/describe', { args: { target: 's1' } }]]);
+    reply = { ok: false, error: { code: 'projects/refused', message: 'effort "ultra" is not offered by a:b. Choose one of: off, high' } };
+    const refused = await link.call('update', { target: 's1', changes: {} });
+    assert.equal(errorText(refused.error), 'Effort "ultra" is not offered by a:b. Choose one of: off, high.');
+    reply = new Error('transport failure for /api/dsh-plugin-projects/update: HTTP 404');
+    assert.match(errorText((await link.call('update', {})).error), /didn't answer\. If it was just updated, restart DSH/);
+    reply = 'garbage';
+    assert.equal((await link.call('describe', {})).error.code, 'projects/unreadable');
+
+    // Only the notes that change what the user sees are shown.
+    // Efforts a model can't use show on the row, so the notes about them are not repeated.
+    assert.equal(noteText(['Threads: other:big has no effort levels, so effort "high" is not used.']), '');
+    assert.equal(noteText(['t1: route a:b · effort high from the next request.']), '');
+    assert.equal(noteText(['t1: route a:b · effort default from the next request; but the model could not be set, so it keeps its current one (details in the projects log).']),
+        'The model could not be set, so it keeps its current one (details in the projects log).');
+
+    // What a setting runs on, named as DSH's picker names it.
+    const catalog = {
+        default: { provider: 'deepseek-account', model: 'deepseek-v4', reasoningEffort: 'low' },
+        groups: [
+            { id: 'other', name: 'Other', models: [{ id: 'big-model', name: 'Big' }] },
+            { id: 'deepseek-account', name: 'DeepSeek', models: [
+                { id: 'deepseek-v4', name: 'V4', reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'max', name: 'Max' }], defaultEffort: 'max' } },
+                { id: 'deepseek-v4-flash', name: 'V4 Flash', reasoning: { efforts: [{ id: 'off', name: 'Off' }] } },
+            ] },
+        ],
+    };
+    const cv = catalogView(catalog);
+    assert.deepEqual(plain(cv.groups.map((g) => g.provider)), ['deepseek-account', 'other'], 'DSH\'s own account comes first');
+    const shown = (model, effort, view = cv) => { const r = resolveRoute(view, model, effort); return [r.name, r.effortName ?? null]; };
+    assert.deepEqual(shown(undefined, undefined), ['V4', 'Low'], 'nothing set: the DSH default selection');
+    assert.deepEqual(shown('deepseek-account:deepseek-v4', undefined), ['V4', 'Max'], 'a model set: its own default effort');
+    assert.deepEqual(shown('deepseek-v4', 'low'), ['V4', 'Low']);
+    assert.deepEqual(shown('other:big-model', 'max'), ['Big', null], 'a model without efforts shows none');
+    assert.deepEqual(shown('deepseek-account:deepseek-v4-flash', undefined), ['V4 Flash', 'Default'], 'a model without a default effort: the provider\'s');
+    assert.deepEqual(shown('deepseek:deepseek-v4-pro', 'max', catalogView(undefined)), ['deepseek-v4-pro', 'max'], 'before the catalog arrives, the stored values');
+    assert.equal(noteText(['Threads: deepseek:deepseek-v4-flash doesn\'t offer effort "max", so it runs at "high".']), '');
+
+    // An effort the model lacks shows what runs, as the plugin fits it, and says why.
+    const note = (model, effort) => effortNote(cv, resolveRoute(cv, model, effort)) ?? null;
+    assert.deepEqual(shown('deepseek-account:deepseek-v4-flash', 'max'), ['V4 Flash', 'Off'], 'max on a model with only off runs at off');
+    assert.equal(note('deepseek-account:deepseek-v4-flash', 'max'), 'V4 Flash doesn\'t offer Max, so it runs at Off.');
+    assert.equal(note('other:big-model', 'low'), 'Big has no effort levels, so Low isn\'t used.');
+    assert.equal(effortNote(cv, resolveRoute(cv, 'other:big-model', 'low'), false) ?? null, null, 'an inherited effort on a model without levels goes unsaid');
+    assert.match(effortNote(cv, resolveRoute(cv, 'deepseek-account:deepseek-v4-flash', 'max'), false), /runs at Off/, 'a fitted one is said even when inherited');
+    assert.equal(note('deepseek-account:deepseek-v4', 'low'), null);
+    assert.equal(note('other:big-model', undefined), null);
+    assert.deepEqual(shown('deepseek-account:deepseek-v4', 'medium'), ['V4', 'Max'], 'an effort no model offers runs at the model\'s default');
+    // What a loaded session really runs, when it differs from its setting.
+    const live = (model, effort, running) => liveNote(cv, resolveRoute(cv, model, effort), running) ?? null;
+    assert.equal(live(undefined, undefined, { provider: 'deepseek-account', model: 'deepseek-v4', reasoningEffort: 'low' }), null);
+    assert.equal(live(undefined, undefined, { provider: 'deepseek-account', model: 'deepseek-v4-flash', reasoningEffort: 'off' }), 'It runs on V4 Flash · Off right now.');
+    assert.equal(live('deepseek-account:deepseek-v4', 'max', { provider: 'deepseek-account', model: 'deepseek-v4', reasoningEffort: 'low' }), 'It runs on V4 · Low right now.');
+    assert.equal(live('deepseek-account:deepseek-v4', 'max', null), null);
+    assert.equal(live('other:big-model', undefined, { provider: 'other', model: 'big-model' }), null);
 });
 
 test('browser half: thread rows, cards and links read the projection as DSH sends it', () => {

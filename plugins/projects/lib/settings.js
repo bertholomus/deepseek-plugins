@@ -3,11 +3,14 @@
  * coordinator model, coordinator effort, thread model, thread effort. Each
  * resolves from the first layer that sets it:
  *
- *   runtime override (project_settings tool) → project row in the profile → plugin row → DSH default
+ *   the project's own setting (its Project settings dialog, its coordinator's
+ *   DSH model picker, or the project_settings tool) → project row in the
+ *   profile → plugin row → DSH default
  *
  * A thread fixes its model and effort when it starts (start arguments win
  * over the thread defaults), and keeps them until changed with
- * project_thread_update. Pure functions, no host imports.
+ * project_thread_update, the dialog or its own model picker. Pure
+ * functions, no host imports.
  *
  * @module dsh-plugin-projects/settings
  */
@@ -91,17 +94,43 @@ function catalogModels(catalog) {
     return out;
 }
 
+/** Effort names from least to most reasoning; others rank by where models list them. */
+const EFFORT_ORDER = ['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+/**
+ * The level a model offers that comes closest to an effort it doesn't: the
+ * highest one at or below it (max → high), else its lowest one.
+ * @param {string[]} offered - the model's efforts.
+ * @param {string} effort - the wanted effort, offered by some other model.
+ * @param {string[]} known - every effort in the catalog, in listing order.
+ */
+function nearestEffort(offered, effort, known) {
+    const rank = (e) => {
+        const i = EFFORT_ORDER.indexOf(e);
+        return i >= 0 ? i : EFFORT_ORDER.length + known.indexOf(e);
+    };
+    const below = offered.filter((e) => rank(e) <= rank(effort)).sort((a, b) => rank(b) - rank(a));
+    return below[0] ?? [...offered].sort((a, b) => rank(a) - rank(b))[0];
+}
+
 /**
  * Check a model spec and effort against the host model catalog, and return
  * the canonical "provider:model". With no catalog, accept as given. A model
  * with no effort levels drops the effort and says so in `note`, so a
  * project-wide effort default does not break threads on such a model.
+ *
+ * `fit` says what to do with an effort the model doesn't offer. Strict
+ * (false) refuses it, for a value someone is setting now. 'known' runs the
+ * nearest level the model offers and says so, but still refuses an effort no
+ * model offers. true never refuses over effort: an inherited default must
+ * not stop a thread from starting because the DSH default model changed.
  * @param {object|undefined} catalog - sessionController.modelCatalog() value.
  * @param {string|undefined} modelSpec - requested model, or undefined to keep the default.
  * @param {string|undefined} effort - requested effort, or undefined.
- * @returns {{ok: true, model?: string, effort?: string, note?: string} | {ok: false, error: string}}
+ * @param {{fit?: boolean|'known'}} [options]
+ * @returns {{ok: true, model?: string, effort?: string, note?: string, fitted?: boolean} | {ok: false, error: string}}
  */
-export function checkSelection(catalog, modelSpec, effort) {
+export function checkSelection(catalog, modelSpec, effort, { fit = false } = {}) {
     const models = catalogModels(catalog);
     const fallbackProvider = catalog?.default?.provider ?? '';
     let entry = null;
@@ -128,16 +157,20 @@ export function checkSelection(catalog, modelSpec, effort) {
     }
     if (set(effort)) {
         const e = effort.trim();
+        const known = [...new Set(models.flatMap((m) => m.efforts))];
+        const unknown = known.length > 0 && !known.includes(e);
+        const name = entry ? `${entry.provider}:${entry.model}` : '';
+        if (unknown && fit !== true) {
+            return { ok: false, error: `effort "${e}" is not offered by any model. Efforts in this DSH: ${known.join(', ')}` };
+        }
         if (entry && entry.efforts.length === 0) {
-            // The effort is kept for a later model switch, so refuse one no model offers.
-            const known = [...new Set(models.flatMap((m) => m.efforts))];
-            if (known.length > 0 && !known.includes(e)) {
-                return { ok: false, error: `effort "${e}" is not offered by any model. Efforts in this DSH: ${known.join(', ')}` };
-            }
-            return { ok: true, ...(model ? { model } : {}), note: `${entry.provider}:${entry.model} has no effort levels, so effort "${e}" is not used` };
+            return { ok: true, ...(model ? { model } : {}), note: `${name} has no effort levels, so effort "${e}" is not used` };
         }
         if (entry && !entry.efforts.includes(e)) {
-            return { ok: false, error: `effort "${e}" is not offered by ${entry.provider}:${entry.model}. Choose one of: ${entry.efforts.join(', ')}` };
+            if (!fit) return { ok: false, error: `effort "${e}" is not offered by ${name}. Choose one of: ${entry.efforts.join(', ')}` };
+            if (unknown) return { ok: true, ...(model ? { model } : {}), fitted: true, note: `effort "${e}" is not offered by any model, so ${name} runs at its default effort` };
+            const near = nearestEffort(entry.efforts, e, known);
+            return { ok: true, ...(model ? { model } : {}), effort: near, fitted: true, note: `${name} doesn't offer effort "${e}", so it runs at "${near}"` };
         }
         return { ok: true, ...(model ? { model } : {}), effort: e };
     }

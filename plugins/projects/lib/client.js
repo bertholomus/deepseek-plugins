@@ -1,12 +1,15 @@
 /**
- * dsh-plugin-projects, browser half. Two parts:
+ * dsh-plugin-projects, browser half. Three parts:
  *
  * - The "Default models" form on the plugin's page in DSH (Plugins →
  *   dsh-plugin-projects). It edits the four plugin-wide defaults through
  *   DSH's own settings forms, so a save lands in the profile's
- *   cordis.patch.yml and the running plugin switches without a restart
- *   (projects.js noteDefaults() says how a save meets a change made through a
- *   coordinator).
+ *   cordis.patch.yml and the running plugin switches without a restart.
+ * - Project settings: a dialog per project, opened from a project
+ *   session's header, its Threads menu and pane, or its row's menu in the
+ *   session list. It sets the coordinator's and new threads' model and
+ *   effort, each open thread's, and pause, through the plugin's endpoints
+ *   (remote.js), with a model picker shaped like DSH's own.
  * - Threads in the chat window, as in Claude Code: a Threads menu in the
  *   header of every project session (a thread also gets a link back to its
  *   coordinator), a Threads pane in the right sidebar, thread cards under the
@@ -51,7 +54,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             saving: 'Saving…',
         };
         const INSERTED_TWICE = 'DSH can\'t save here because your profile adds this plugin with "insert:" (the older setup). In cordis.patch.yml, change that row to "- id: projects" with its "config:", as in the plugin README. Below is what the plugin runs with now.';
-        const NOTE = 'These apply to every project that doesn\'t set its own in the profile. Asking a coordinator to change one changes it for that project until you change it here again.';
+        const NOTE = 'These apply to every project that doesn\'t set its own. A project\'s own choice, made in its Project settings, in its coordinator\'s model menu or by asking the coordinator, comes first. Default follows DSH\'s default model, which is the one last picked in any DSH chat.';
 
         /** DSH's branch glyph, as a mask for links drawn by DSH's markdown. */
         const BRANCH_MASK = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.3"><path d="M1.015 8h4.681c.723 0 1.085 0 1.425-.08.302-.072.591-.19.857-.35.3-.18.558-.433 1.075-.939l2.275-2.225"/><path d="M1.012 8h4.684c.723 0 1.085 0 1.425.08.302.072.591.19.857.35.3.18.558.433 1.075.939l2.275 2.225"/><circle cx="12.45" cy="3.308" r="1.57"/><circle cx="12.45" cy="12.692" r="1.57"/></svg>')}")`;
@@ -64,12 +67,49 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-hint,.dshp-note{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}',
             '.dshp-note{padding-top:4px}',
             '.dshp-row{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px 16px;margin-top:8px}',
-            '.dshp-field{display:flex;flex-direction:column;gap:6px;min-width:0}',
-            '.dshp-field.dshp-model{flex:1 1 240px}',
-            '.dshp-label{font-size:12px;font-weight:500;line-height:1.5;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-select{height:34px;min-width:0;padding:0 10px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-3);font:inherit;font-size:13px;line-height:1.5;color:var(--dsw-alias-label-primary)}',
-            '.dshp-select:focus-visible{outline:none;border-color:var(--dsw-alias-state-business-primary)}',
-            '.dshp-select:disabled{color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-route{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 16px}',
+            '.dshp-route-text{display:flex;flex-direction:column;gap:2px;flex:1 1 220px;min-width:0}',
+            '.dshp-route-text .dshp-hint{margin:0}',
+            '.dshp-route-note{color:var(--dsw-alias-label-secondary)}',
+            '.dshp-route>.dshp-hint{flex:1 1 220px}',
+            // Model picker: DSH's composer model menu, as a settings control
+            '.dshp-mp{position:relative;display:inline-flex;flex:none;min-width:0;max-width:100%}',
+            '.dshp-mp-trigger{display:inline-flex;align-items:center;gap:8px;box-sizing:border-box;min-width:0;max-width:min(300px,100%);height:32px;padding:0 10px 0 12px;border:0;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-module-platform);font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);white-space:nowrap;cursor:pointer}',
+            '.dshp-mp-trigger:hover:not(:disabled),.dshp-mp-trigger[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover)}',
+            '.dshp-mp-trigger:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}',
+            '.dshp-mp-trigger:disabled{cursor:default;opacity:.6}',
+            '.dshp-mp-name{min-width:0;overflow:hidden;text-overflow:ellipsis}',
+            '.dshp-mp-effort{flex-shrink:1000;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--dsw-alias-label-caption)}',
+            '.dshp-mp-trigger>svg,.dshp-mp-trigger>span:last-child:not(.dshp-mp-name):not(.dshp-mp-effort){flex:none;color:var(--dsw-alias-label-caption)}',
+            '.dshp-mp-chev{transition:transform .12s}',
+            '.dshp-mp-chev-open{transform:rotate(180deg)}',
+            '.dshp-mp-menu{position:fixed;z-index:1100;box-sizing:border-box;display:flex;flex-direction:column;width:max-content;min-width:min(264px,calc(100vw - 32px));max-width:min(420px,calc(100vw - 32px));max-height:min(380px,calc(100vh - 96px));padding:4px;overflow:hidden;box-shadow:var(--dsw-elevation-prominent);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);color:var(--dsw-alias-label-primary);outline:none}',
+            '.dshp-mp-cell,.dshp-mp-opt,.dshp-mp-back{display:flex;align-items:center;gap:6px;box-sizing:border-box;width:100%;border:0;border-radius:var(--dsw-radius-md);background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;outline:none}',
+            '.dshp-mp-cell{height:34px;padding:0 8px;font-size:13px;line-height:20px}',
+            '.dshp-mp-cell:hover,.dshp-mp-cell:focus-visible,.dshp-mp-opt:hover:not(:disabled),.dshp-mp-opt:focus-visible,.dshp-mp-back:hover,.dshp-mp-back:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}',
+            '.dshp-mp-cell-label{flex:none;white-space:nowrap}',
+            '.dshp-mp-cell-value{flex:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-mp-cell>svg{flex:none;color:var(--dsw-alias-menu-icon,var(--dsw-alias-label-tertiary))}',
+            '.dshp-mp-back{height:28px;margin-bottom:2px;padding:0 7px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-mp-back:hover,.dshp-mp-back:focus-visible{color:var(--dsw-alias-label-primary)}',
+            '.dshp-mp-opt{min-height:34px;padding:5px 7px;font-size:13px;line-height:18px}',
+            '.dshp-mp-opt:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}',
+            '.dshp-mp-opt-copy{display:flex;flex-direction:column;flex:1;min-width:0}',
+            '.dshp-mp-opt-name,.dshp-mp-opt-detail{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshp-mp-opt-detail{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-mp-check{flex:0 0 14px;display:grid;place-items:center;color:var(--dsw-alias-label-primary)}',
+            '.dshp-mp-check svg{width:14px;height:14px}',
+            '.dshp-mp-sep{flex:none;height:.5px;margin:3px 7px;background:var(--dsw-alias-border-l2)}',
+            '.dshp-mp-list{min-height:0;overflow-y:auto}',
+            '.dshp-mp-search{position:relative;flex:none;margin:2px 0 3px}',
+            '.dshp-mp-search .dshp-mp-search-box{display:flex;height:auto;padding:5px 7px;border:0 solid transparent;border-radius:var(--dsw-radius-md);background:none}',
+            '.dshp-mp-search .dshp-mp-search-box:focus-within{border-color:transparent}',
+            '.dshp-mp-search .dshp-mp-search-box input{padding:0;font-size:12px;line-height:normal}',
+            '.dshp-mp-search .dshp-mp-search-box input::placeholder{color:var(--dsw-alias-label-caption)}',
+            '.dshp-mp-search .dshp-mp-search-query{padding-right:34px}',
+            '.dshp-mp-search-clear{position:absolute;top:50%;right:4px;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:none;color:var(--dsw-alias-label-secondary);cursor:pointer;transform:translateY(-50%)}',
+            '.dshp-mp-search-clear:hover,.dshp-mp-search-clear:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover)}',
+            '.dshp-mp-empty{padding:8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
             // Threads: header menu
             '.dshp-t-hdr{position:relative;display:inline-flex;align-items:center;gap:2px;min-width:0}',
             '.dshp-t-trigger{display:inline-flex;align-items:center;gap:5px;min-width:0;min-height:28px;padding:3px 6px;border:0;border-radius:var(--dsw-radius-sm);background:none;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);white-space:nowrap;cursor:pointer}',
@@ -164,6 +204,46 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-hover{display:flex;flex-direction:column;gap:2px;font-size:12px;line-height:16px;color:#cfd3d6}',
             '.dshp-t-hover-head{display:flex;align-items:center;gap:6px;color:#fff}',
             '.dshp-t-hover-line{color:#adb2b8;overflow-wrap:anywhere}',
+            // Project settings dialog
+            '.dshp-t-gear{padding:3px 5px}',
+            '.dshp-t-pane-head{position:relative;padding-right:40px}',
+            '.dshp-t-pane-gear{position:absolute;top:2px;right:6px}',
+            '.dshp-ps.dshp-ps{width:min(560px,100%);max-height:100%}',
+            '.dshp-ps-content{min-height:0;overflow-y:auto;--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)}',
+            '.dshp-ps-sub{display:flex;flex-wrap:wrap;align-items:center;gap:2px 8px;min-width:0;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px}',
+            '.dshp-ps-sub b{font-weight:500;color:var(--dsw-alias-label-primary)}',
+            '.dshp-ps-path{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--ds-font-family-code,ui-monospace,monospace);font-size:11px;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-ps-section+.dshp-ps-section{margin-top:22px}',
+            '.dshp-ps-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:0 2px 8px}',
+            '.dshp-ps-heading{margin:0;font-size:13px;font-weight:600;line-height:20px;color:var(--dsw-alias-label-primary)}',
+            '.dshp-ps-count{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}',
+            '.dshp-ps-card{display:flex;flex-direction:column;border:.5px solid var(--dsw-alias-settings-card-stroke,var(--dsw-alias-border-l4));border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill,var(--dsw-alias-bg-layer-2))}',
+            '.dshp-ps-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;box-sizing:border-box;min-height:60px;padding:12px 14px}',
+            '.dshp-ps-row+.dshp-ps-row{border-top:.5px solid var(--dsw-alias-border-l2)}',
+            '.dshp-ps-text{display:flex;flex-direction:column;flex:1 1 220px;gap:2px;min-width:0}',
+            '.dshp-ps-title{display:flex;align-items:center;gap:8px;min-width:0;font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary)}',
+            '.dshp-ps-title>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshp-ps-title>.dshp-ps-dot{flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px}',
+            '.dshp-ps-title>.dshp-ps-id{flex:none;font-family:var(--ds-font-family-code,ui-monospace,monospace);font-size:11px;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-ps-desc{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-ps-source{display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-ps-fit{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-ps-own{display:inline-flex;align-items:center;gap:6px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-ps-own::before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-business-primary)}',
+            '.dshp-ps-link{padding:0;border:0;background:none;font:inherit;color:var(--dsw-alias-label-secondary);text-decoration:underline;text-decoration-color:var(--dsw-alias-border-l4);text-underline-offset:2px;cursor:pointer}',
+            '.dshp-ps-link:hover,.dshp-ps-link:focus-visible{outline:none;color:var(--dsw-alias-label-primary);text-decoration-color:currentColor}',
+            '.dshp-ps-link:disabled{cursor:default;opacity:.6}',
+            '.dshp-ps-alert{flex:1 0 100%;margin:0;padding:6px 8px;border-radius:var(--dsw-radius-sm);font-size:12px;line-height:18px}',
+            '.dshp-ps-alert.dshp-ps-error{background:var(--dsw-alias-interactive-bg-hover-danger,var(--dsw-alias-interactive-bg-hover));color:var(--dsw-alias-state-error-primary)}',
+            '.dshp-ps-alert.dshp-ps-info{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}',
+            '.dshp-ps-empty{padding:16px 14px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-ps-more{display:flex;align-items:center;gap:6px;box-sizing:border-box;width:100%;min-height:40px;padding:8px 14px;border:0;border-top:.5px solid var(--dsw-alias-border-l2);background:none;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);text-align:left;cursor:pointer;border-radius:0 0 var(--dsw-radius-xl) var(--dsw-radius-xl)}',
+            '.dshp-ps-more:hover,.dshp-ps-more:focus-visible{outline:none;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
+            '.dshp-ps-more svg{transition:transform .12s}',
+            '.dshp-ps-more[aria-expanded=true] svg{transform:rotate(90deg)}',
+            '.dshp-ps-note{margin:18px 2px 0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-ps-state{display:flex;flex-direction:column;align-items:center;gap:10px;padding:36px 12px;text-align:center;font-size:13px;line-height:20px;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-ps-state.dshp-ps-error{color:var(--dsw-alias-state-error-primary)}',
         ].join('');
         const CSS_ID = `${BUNDLE}/client.css`;
         if (typeof document !== 'undefined' && document.querySelector(`style[data-plugin-css=${JSON.stringify(CSS_ID)}]`) === null) {
@@ -251,54 +331,341 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return FIELDS.some((key) => has(snapshot.value, key) && !has(snapshot.user, key) && !has(snapshot.base, key));
         }
 
-        function ModelField({ id, field, models, catalog, disabled, onEdit }) {
-            // Until the catalog arrives, a stored model is shown as it is, not as missing.
-            const known = models.length > 0;
-            const def = catalog && catalog.default;
-            const defaultModel = def ? findModel(models, `${def.provider}:${def.model}`) : undefined;
-            const chosen = findModel(models, field.text, def && def.provider);
-            const value = field.text === '' ? '' : chosen ? chosen.key : field.text;
+        /** Provider groups of a model list in catalog order, DSH's own account first as its picker does. */
+        function groupsOf(models) {
             const groups = [];
             for (const model of models) {
                 let group = groups.find((g) => g.provider === model.provider);
                 if (!group) groups.push(group = { provider: model.provider, name: model.providerName, models: [] });
                 group.models.push(model);
             }
-            return h('div', { className: 'dshp-field dshp-model' },
-                h('label', { className: 'dshp-label', htmlFor: id }, 'Model'),
-                h('select', {
-                    id, className: 'dshp-select', value, disabled,
-                    onChange: (event) => onEdit(event.target.value),
-                },
-                h('option', { value: '' }, `DSH default${defaultModel ? ` (${defaultModel.name})` : ''}`),
-                ...groups.map((group) => h('optgroup', { key: group.provider, label: group.name },
-                    ...group.models.map((model) => h('option', { key: model.key, value: model.key }, model.name)))),
-                value !== '' && !chosen ? h('option', { value }, known ? `${value} (not in this DSH)` : value) : null));
+            const rank = (group) => (group.provider === 'deepseek-account' ? 0 : group.provider === 'deepseek-official' ? 1 : 2);
+            return groups.sort((a, b) => rank(a) - rank(b));
+        }
+
+        /** A catalog read once for the pickers: its models, provider groups, every effort they list, and the DSH default. */
+        function catalogView(catalog) {
+            const models = modelsOf(catalog);
+            const def = catalog && catalog.default;
+            const known = [...new Set(models.flatMap((model) => model.efforts.map((e) => e.id)))];
+            return { models, groups: groupsOf(models), known, def, defaultModel: def ? findModel(models, `${def.provider}:${def.model}`) : undefined };
+        }
+
+        /** Effort names from least to most reasoning, ranked as the plugin ranks them (lib/settings.js). */
+        const EFFORT_ORDER = ['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+        /** The level a model runs for an effort it lacks, as the plugin picks it: the highest at or below it, else its lowest. */
+        function nearestEffort(offered, effort, known) {
+            const rank = (e) => {
+                const i = EFFORT_ORDER.indexOf(e);
+                return i >= 0 ? i : EFFORT_ORDER.length + known.indexOf(e);
+            };
+            const below = offered.filter((e) => rank(e) <= rank(effort)).sort((a, b) => rank(b) - rank(a));
+            return below[0] ?? [...offered].sort((a, b) => rank(a) - rank(b))[0];
         }
 
         /**
-         * The effort segments. "Default" is what the plugin then sends: with
-         * no model set, the effort of your DSH default; with a model set, that
-         * model's own default.
+         * What a model and effort setting runs on: the catalog model (DSH's
+         * default model when none is set) and the effort DSH fills in for it.
+         * @param {object} cv - catalogView().
+         * @param {string|undefined} modelText - "provider:model", or unset.
+         * @param {string|undefined} effortText - an effort id, or unset.
          */
-        function EffortField({ id, field, model, known, dshDefault, catalog, disabled, onEdit }) {
+        function resolveRoute(cv, modelText, effortText) {
+            const set = typeof modelText === 'string' && modelText.trim() !== '';
+            const model = set ? findModel(cv.models, modelText, cv.def && cv.def.provider) : cv.defaultModel;
             const efforts = model ? model.efforts : [];
-            const def = catalog && catalog.default;
-            const fallback = (dshDefault && def && def.reasoningEffort) || (model && model.defaultEffort);
-            const options = [{ value: 'default', label: fallback ? `Default (${effortName(model, fallback)})` : 'Default' }]
-                .concat(efforts.map((e) => ({ value: e.id, label: e.name })));
-            // Only a model the catalog lists can say an effort is not offered (or that it has none).
-            const listed = known && model !== undefined;
-            if (field.text !== '' && !efforts.some((e) => e.id === field.text)) options.push({ value: field.text, label: listed ? `${field.text} (not offered)` : field.text });
-            return h('div', { className: 'dshp-field' },
-                h('span', { className: 'dshp-label', id: `${id}-label` }, 'Effort'),
-                options.length < 2 && listed
-                    ? h('p', { className: 'dshp-hint' }, 'This model has no effort levels.')
-                    : h(ui.SegmentedControl, {
-                        id, label: 'Effort', disabled, options,
-                        value: field.text === '' ? 'default' : field.text,
-                        onChange: (next) => onEdit(next === 'default' ? '' : next),
-                    }));
+            const wanted = typeof effortText === 'string' && effortText.trim() !== '' ? effortText.trim() : undefined;
+            const asked = wanted ?? (!set && cv.def && cv.def.reasoningEffort ? cv.def.reasoningEffort : model && model.defaultEffort);
+            // An effort the model lacks runs at the nearest level it offers (the
+            // plugin fits it the same way), or at its default when no model has it.
+            const lacks = model && efforts.length > 0 && asked !== undefined && !efforts.some((e) => e.id === asked);
+            const effort = lacks ? (cv.known.includes(asked) ? nearestEffort(efforts.map((e) => e.id), asked, cv.known) : model.defaultEffort) : asked;
+            // A model the catalog lists says whether it has efforts; until then a stored effort shows as it is.
+            const shown = model ? (efforts.length > 0 ? effort : undefined) : wanted;
+            return {
+                model,
+                name: model ? model.name : set ? modelText.trim().replace(/^[a-zA-Z0-9_-]+[:/]/, '') : 'DSH default',
+                efforts,
+                effort: shown,
+                // Like DSH's picker: a model whose provider picks the effort shows "Default".
+                effortName: shown !== undefined ? effortName(model, shown) : efforts.length > 0 ? 'Default' : undefined,
+                // A set effort the model can't use: fitted, or ignored by a model with no levels.
+                unused: lacks || (model && efforts.length === 0 && wanted !== undefined) ? wanted ?? asked : undefined,
+            };
+        }
+
+        /** An effort's name as any catalog model lists it. */
+        function anyEffortName(cv, id) {
+            for (const model of cv.models) {
+                const found = model.efforts.find((e) => e.id === id);
+                if (found) return found.name;
+            }
+            return String(id).charAt(0).toUpperCase() + String(id).slice(1);
+        }
+
+        /**
+         * Why a set effort is not what runs (resolveRoute's `unused`), or
+         * undefined. An inherited effort on a model without levels is left
+         * unsaid, as DSH's picker hides effort for such a model.
+         */
+        function effortNote(cv, route, own = true) {
+            if (route.unused === undefined || !route.model || (!own && route.efforts.length === 0)) return undefined;
+            const asked = anyEffortName(cv, route.unused);
+            return route.efforts.length === 0
+                ? `${route.name} has no effort levels, so ${asked} isn't used.`
+                : `${route.name} doesn't offer ${asked}, so it runs at ${route.effortName}.`;
+        }
+
+        /**
+         * What a loaded session's next request really uses, when it differs
+         * from what its setting shows: a coordinator set up on an earlier DSH
+         * default keeps that model, and a change can fail.
+         */
+        function liveNote(cv, route, live) {
+            if (!isObject(live) || typeof live.provider !== 'string' || typeof live.model !== 'string' || !route.model) return undefined;
+            const model = findModel(cv.models, `${live.provider}:${live.model}`);
+            const effort = typeof live.reasoningEffort === 'string' ? live.reasoningEffort : undefined;
+            if (model && model.key === route.model.key && (effort === undefined || route.effort === undefined || effort === route.effort)) return undefined;
+            return `It runs on ${model ? model.name : live.model}${effort ? ` · ${model ? effortName(model, effort) : effort}` : ''} right now.`;
+        }
+
+        const MEASURE = Object.freeze({ visibility: 'hidden', left: 0, top: 0 });
+
+        /**
+         * A model and effort control in the shape of DSH's own composer
+         * picker: a "Model · Effort" trigger opening a menu with a Model row
+         * and an Effort row, each leading to its list (models by provider, with
+         * search past four). With `fallback`, both lists start with Default,
+         * which hands the choice back to what the setting inherits; without it
+         * they hold explicit choices only.
+         * @param props.value - {model?, effort?}: the values in force.
+         * @param props.own - {model, effort}: whether each is set at this level, so Default is not checked.
+         * @param props.fallback - {model?, effort?, modelLabel?, effortLabel?}: what Default means, or undefined.
+         * @param props.onPick - called with {model?, effort?}: a value, or null for Default.
+         */
+        function ModelPicker({ id, label, catalog, value, own, fallback, busy = false, disabled = false, onPick }) {
+            const cv = React.useMemo(() => catalogView(catalog), [catalog]);
+            const route = resolveRoute(cv, value.model, value.effort);
+            const base = fallback ? resolveRoute(cv, fallback.model, fallback.effort) : undefined;
+            const effortBase = fallback ? resolveRoute(cv, value.model, fallback.effort) : undefined;
+            const [open, setOpen] = React.useState(false);
+            const [pane, setPane] = React.useState('root');
+            const [query, setQuery] = React.useState('');
+            const [side, setSide] = React.useState('bottom');
+            const rootRef = React.useRef(null);
+            const triggerRef = React.useRef(null);
+            const menuRef = React.useRef(null);
+            const listRef = React.useRef(null);
+            const searchRef = React.useRef(null);
+            const intent = React.useRef(null);
+            const position = ui.useAnchoredPosition({ open, anchorRef: triggerRef, panelRef: menuRef, side, align: 'end', gap: 6, margin: 12 });
+            const close = React.useCallback((refocus) => {
+                setOpen(false);
+                setPane('root');
+                setQuery('');
+                if (refocus) queueMicrotask(() => triggerRef.current?.focus());
+            }, []);
+            const dismiss = React.useCallback((next) => { if (!next) close(false); }, [close]);
+            ui.useDismissOnOutsidePointer(rootRef, open, dismiss, menuRef);
+            React.useEffect(() => { if (disabled) close(false); }, [disabled, close]);
+            const showSearch = cv.models.length > 4;
+            const typed = showSearch ? query.trim() : '';
+            const groups = React.useMemo(() => cv.groups.map((group) => ({ ...group, models: ui.rankByName(group.models, typed) }))
+                .filter((group) => group.models.length > 0), [cv.groups, typed]);
+            // Once a pane is placed: the search field, the row that opened it, or its checked row.
+            React.useLayoutEffect(() => {
+                const want = intent.current;
+                const menu = menuRef.current;
+                if (!open || position === null || want === null || !menu) return;
+                intent.current = null;
+                const first = menu.querySelector('[data-dshp-pick]:not(:disabled):not([data-dshp-pick=back])');
+                const target = want === 'search' ? searchRef.current
+                    : want === 'model' || want === 'effort' ? menu.querySelector(`[data-dshp-pick=${want}]`)
+                        : want === 'checked' ? menu.querySelector('[data-dshp-pick][aria-checked=true]') ?? first : first;
+                target?.focus();
+            }, [open, position, pane]);
+            React.useEffect(() => {
+                const viewport = listRef.current;
+                if (!open || pane !== 'model' || viewport === null) return undefined;
+                return ui.observeStickyMenuGroups(viewport);
+            }, [open, pane, groups]);
+
+            const show = () => {
+                if (disabled) return;
+                const rect = triggerRef.current?.getBoundingClientRect();
+                const below = rect ? window.innerHeight - rect.bottom : Infinity;
+                setSide(rect && below < 320 && rect.top > below ? 'top' : 'bottom');
+                setPane('root');
+                setQuery('');
+                intent.current = 'first';
+                setOpen(true);
+            };
+            const drill = (next) => {
+                setQuery('');
+                intent.current = next === 'model' && showSearch ? 'search' : 'checked';
+                setPane(next);
+            };
+            const back = () => {
+                intent.current = pane;
+                setQuery('');
+                setPane('root');
+            };
+            const pick = (change) => {
+                close(true);
+                onPick(change);
+            };
+            /** A model change also sets an effort the new model offers, when the effort that would apply is not one. */
+            // A new model keeps no effort it can't use: an own effort it lacks is
+            // cleared (no levels) or moved to its default; an inherited one is
+            // fitted by the plugin when it runs.
+            const withEffort = (model, change) => {
+                const applies = own.effort ? value.effort : fallback?.effort;
+                if (!model || !applies || model.efforts.some((e) => e.id === applies)) return change;
+                if (model.efforts.length === 0) return own.effort ? { ...change, effort: null } : change;
+                return { ...change, effort: model.defaultEffort ?? model.efforts[0].id };
+            };
+            const chooseModel = (model) => {
+                if (model === null) return own.model ? pick(withEffort(base?.model, { model: null })) : close(true);
+                if (own.model && route.model?.key === model.key) return close(true);
+                return pick(withEffort(model, { model: model.key }));
+            };
+            const chooseEffort = (effort) => {
+                if (effort === null) return own.effort ? pick({ effort: null }) : close(true);
+                if (own.effort && route.effort === effort) return close(true);
+                return pick({ effort });
+            };
+
+            const onMenuKey = (event) => {
+                if (event.nativeEvent?.isComposing) return;
+                const menu = menuRef.current;
+                if (!menu) return;
+                const items = [...menu.querySelectorAll('[data-dshp-pick]:not(:disabled)')];
+                const at = items.indexOf(document.activeElement);
+                const inSearch = searchRef.current !== null && event.target === searchRef.current;
+                const stop = () => { event.preventDefault(); event.stopPropagation(); };
+                if (event.key === 'Escape') {
+                    stop();
+                    if (pane === 'root') close(true);
+                    else back();
+                } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                    stop();
+                    if (items.length === 0) return;
+                    const step = event.key === 'ArrowDown' ? 1 : -1;
+                    if (inSearch) (step > 0 ? items[0] : items[items.length - 1]).focus();
+                    else if (at === 0 && step < 0 && searchRef.current) searchRef.current.focus();
+                    else items[at < 0 ? 0 : (at + step + items.length) % items.length].focus();
+                } else if ((event.key === 'Home' || event.key === 'End') && !inSearch) {
+                    stop();
+                    items[event.key === 'Home' ? 0 : items.length - 1]?.focus();
+                } else if (event.key === 'ArrowLeft' && !inSearch && pane !== 'root') {
+                    stop();
+                    back();
+                } else if (event.key === 'ArrowRight' && pane === 'root' && at >= 0) {
+                    stop();
+                    items[at].click();
+                } else if (event.key === 'Enter' && inSearch) {
+                    stop();
+                    menu.querySelector('[data-dshp-model]:not(:disabled)')?.click();
+                } else if (event.key === 'Tab') {
+                    stop();
+                    if (event.shiftKey) {
+                        if (pane === 'root') close(true);
+                        else back();
+                    } else if (at >= 0) items[at].click();
+                    else close(true);
+                }
+            };
+
+            const check = (on) => h('span', { className: 'dshp-mp-check', 'aria-hidden': true }, on ? h(ui.IconCheckOutlineRegular, { size: 14 }) : null);
+            const option = ({ key, name, detail, checked, onClick, model = false }) => h('button', {
+                key, type: 'button', role: 'menuitemradio', 'aria-checked': checked, className: 'dshp-mp-opt',
+                'data-dshp-pick': 'opt', 'data-dshp-model': model ? '' : undefined, title: detail ? `${name} · ${detail}` : name, onClick,
+            },
+            h('span', { className: 'dshp-mp-opt-copy' },
+                h('span', { className: 'dshp-mp-opt-name' }, name),
+                detail ? h('span', { className: 'dshp-mp-opt-detail' }, detail) : null),
+            check(checked));
+            const cell = (which, text, shown) => h('button', {
+                key: which, type: 'button', role: 'menuitem', className: 'dshp-mp-cell', 'data-dshp-pick': which, onClick: () => drill(which),
+            },
+            h('span', { className: 'dshp-mp-cell-label' }, text),
+            h('span', { className: 'dshp-mp-cell-value' }, shown),
+            h(ui.IconChevronRightOutlineRegular, { size: 12 }));
+            const backRow = (text) => h('button', { key: 'back', type: 'button', className: 'dshp-mp-back', 'data-dshp-pick': 'back', onClick: back },
+                h(ui.IconChevronLeftOutlineRegular, { size: 12 }), h('span', null, text));
+            const sep = (key) => h('div', { key, className: 'dshp-mp-sep', role: 'separator' });
+
+            let content;
+            if (pane === 'root') {
+                content = [
+                    cell('model', 'Model', route.name),
+                    route.efforts.length > 0 ? cell('effort', 'Effort', route.effortName ?? 'Default') : null,
+                ];
+            } else if (pane === 'model') {
+                content = [
+                    backRow('Model'),
+                    showSearch ? h('div', { key: 'search', className: 'dshp-mp-search' }, h(ui.Input, {
+                        ref: searchRef, className: query !== '' ? 'dshp-mp-search-box dshp-mp-search-query' : 'dshp-mp-search-box', type: 'text', role: 'searchbox',
+                        placeholder: 'Search models…', 'aria-label': 'Search models', value: query,
+                        onChange: (event) => setQuery(event.target.value),
+                    }), query !== '' ? h('button', {
+                        type: 'button', className: 'dshp-mp-search-clear', 'aria-label': 'Clear search',
+                        onClick: () => { setQuery(''); searchRef.current?.focus(); },
+                    }, h(ui.IconCloseFillRegular, null)) : null) : null,
+                    base && typed === '' ? option({
+                        key: 'default', name: 'Default', checked: !own.model, onClick: () => chooseModel(null),
+                        detail: `${fallback.model ? fallback.modelLabel ?? 'Default' : 'DSH default'} · ${base.name}`,
+                    }) : null,
+                    base && typed === '' ? sep('sep') : null,
+                    h('div', { key: 'list', ref: listRef, className: 'dshp-mp-list scrollable', role: 'menu', 'aria-label': 'Models', hidden: groups.length === 0 },
+                        ...groups.map((group) => h(ui.MenuGroup, { key: group.provider, label: group.name },
+                            ...group.models.map((model) => option({
+                                key: model.key, name: model.name, model: true, onClick: () => chooseModel(model),
+                                checked: own.model && route.model !== undefined && route.model.key === model.key,
+                            }))))),
+                    groups.length === 0 ? h('div', { key: 'empty', className: 'dshp-mp-empty', role: 'status' },
+                        cv.models.length === 0 ? 'No models to choose from yet.' : 'No matching models.') : null,
+                ];
+            } else {
+                const effortSource = fallback?.effort ? fallback.effortLabel ?? 'Default' : value.model ? 'Model default' : 'DSH default';
+                content = [
+                    backRow('Effort'),
+                    effortBase ? option({
+                        key: 'default', name: 'Default', checked: !own.effort, onClick: () => chooseEffort(null),
+                        detail: `${effortSource} · ${effortBase.effortName ?? 'none'}`,
+                    }) : null,
+                    effortBase ? sep('sep') : null,
+                    ...route.efforts.map((effort) => option({
+                        key: effort.id, name: effort.name, onClick: () => chooseEffort(effort.id),
+                        checked: own.effort && route.effort === effort.id,
+                    })),
+                ];
+            }
+            const caption = route.effortName ? `${route.name} · ${route.effortName}` : route.name;
+            const menu = open ? ReactDOM.createPortal(h(ui.MenuSurface, {
+                ref: menuRef, id: `${id}-menu`, className: 'dshp-mp-menu', role: pane === 'model' ? 'group' : 'menu',
+                'aria-label': `${label}: model and effort`, 'data-projects-model-menu': id,
+                style: position ?? MEASURE,
+                onKeyDown: onMenuKey,
+            }, ...content), document.body) : null;
+            return h('div', { ref: rootRef, className: 'dshp-mp', 'data-projects-model-picker': id },
+                h('button', {
+                    ref: triggerRef, type: 'button', id, className: 'dshp-mp-trigger', disabled,
+                    'aria-haspopup': 'menu', 'aria-expanded': open, 'aria-controls': open ? `${id}-menu` : undefined,
+                    'aria-label': `${label}: ${caption}`, 'aria-busy': busy || undefined, title: caption,
+                    onClick: () => (open ? close(true) : show()),
+                    onKeyDown: (event) => {
+                        if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && !open) {
+                            event.preventDefault();
+                            show();
+                        }
+                    },
+                },
+                h('span', { className: 'dshp-mp-name' }, route.name),
+                route.effortName ? h('span', { className: 'dshp-mp-effort' }, route.effortName) : null,
+                busy ? h(ui.StateDot, { state: 'ongoing' }) : h(ui.IconChevronDownOutlineRegular, { size: 12, className: open ? 'dshp-mp-chev dshp-mp-chev-open' : 'dshp-mp-chev' })),
+                menu);
         }
 
         /** Plain text controls, for a DSH whose model catalog cannot be read. */
@@ -318,21 +685,35 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         function RouteSection({ route, state, actions, catalog, models, disabled }) {
-            const field = state[route.model];
-            const def = catalog.value && catalog.value.default;
-            const model = field.text === ''
-                ? def && findModel(models, `${def.provider}:${def.model}`)
-                : findModel(models, field.text, def && def.provider);
-            const pickers = catalog.status === 'failed' && models.length === 0
-                ? TextFields({ route, state, actions, disabled })
-                : [
-                    h(ModelField, { key: 'model', id: `dshp-${route.id}-model`, field, models, catalog: catalog.value, disabled, onEdit: (value) => actions.edit(route.model, value) }),
-                    h(EffortField, { key: 'effort', id: `dshp-${route.id}-effort`, field: state[route.effort], model, known: models.length > 0, dshDefault: field.text === '', catalog: catalog.value, disabled, onEdit: (value) => actions.edit(route.effort, value) }),
-                ];
+            const head = h('h4', { className: 'dshp-title' }, route.title);
+            if (catalog.status === 'failed' && models.length === 0) {
+                return h('section', { className: 'dshp-section', 'data-projects-route': route.id },
+                    head, h('p', { className: 'dshp-hint' }, route.hint),
+                    h('div', { className: 'dshp-row' }, ...TextFields({ route, state, actions, disabled })));
+            }
+            const text = (name) => state[name].text.trim();
+            const cv = catalogView(catalog.value);
+            const shown = resolveRoute(cv, text(route.model) || undefined, text(route.effort) || undefined);
+            const note = text(route.effort) !== '' ? effortNote(cv, shown) : undefined;
+            const fix = shown.efforts.length === 0 ? { label: 'Clear it', value: '' } : { label: `Use ${shown.effortName}`, value: shown.effort ?? '' };
             return h('section', { className: 'dshp-section', 'data-projects-route': route.id },
-                h('h4', { className: 'dshp-title' }, route.title),
-                h('p', { className: 'dshp-hint' }, route.hint),
-                h('div', { className: 'dshp-row' }, ...pickers));
+                head,
+                h('div', { className: 'dshp-route' },
+                    h('div', { className: 'dshp-route-text' },
+                        h('p', { className: 'dshp-hint' }, route.hint),
+                        note ? h('p', { className: 'dshp-hint dshp-route-note', 'data-projects-route-note': '' }, note, ' ',
+                            h('button', { type: 'button', className: 'dshp-ps-link', disabled, onClick: () => actions.edit(route.effort, fix.value) }, fix.label)) : null),
+                    h(ModelPicker, {
+                        id: `dshp-${route.id}`, label: route.title, catalog: catalog.value, disabled,
+                        value: { model: text(route.model) || undefined, effort: text(route.effort) || undefined },
+                        own: { model: text(route.model) !== '', effort: text(route.effort) !== '' },
+                        // Unset plugin defaults leave the choice to DSH's own default model.
+                        fallback: {},
+                        onPick: (pick) => {
+                            if (pick.model !== undefined) actions.edit(route.model, pick.model ?? '');
+                            if (pick.effort !== undefined) actions.edit(route.effort, pick.effort ?? '');
+                        },
+                    })));
         }
 
         function DefaultsForm({ form, catalog }) {
@@ -391,6 +772,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             chat: `${BUNDLE}/thread-chat`,
             pane: `${BUNDLE}/threads-pane`,
             link: `${BUNDLE}/thread-link`,
+            settings: `${BUNDLE}/project-settings`,
+            settingsItem: `${BUNDLE}/project-settings-item`,
         };
         /** The conversation inside a thread's sidebar chat; its tab body declares it. */
         const CONVERSATION_SLOT = 'projects.thread.conversation';
@@ -647,6 +1030,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          */
         function ThreadsMenu({ sessionId, useSessions, useSessionStatus, projects }) {
             const info = useSessions((state) => projectContext(state, sessionId), sameContext);
+            const settingsOn = useSettingsAvailable(projects.settings);
             const statuses = useSessionStatus((value) => value);
             const byId = useSessions((state) => state.byId);
             const [open, setOpen] = React.useState(false);
@@ -739,6 +1123,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             h(ui.IconChevronDownOutlineRegular, { size: 12, className: open ? 'dshp-t-chev dshp-t-chev-open' : 'dshp-t-chev' }));
 
             const notice = rosterNotice(info, rows, projects);
+            const openSettings = () => { change(false); projects.settings.open(sessionId); };
+            const foot = [
+                projects.hasPane() ? h('button', { key: 'pane', type: 'button', className: 'dshp-t-foot-btn', 'data-dshp-item': '', onClick: () => { change(false); projects.openPane(); } },
+                    h(ui.IconFlatListOutlineRegular, { size: 14 }), TEXT.openPane) : null,
+                settingsOn ? h('button', { key: 'settings', type: 'button', className: 'dshp-t-foot-btn', 'data-dshp-item': '', onClick: openSettings },
+                    h(ui.IconSlidersTwoOutlineRegular, { size: 14 }), SETTINGS.title) : null,
+            ].filter(Boolean);
             const menu = open ? ReactDOM.createPortal(h(ui.MenuSurface, {
                 ref: panelRef, className: 'dshp-t-menu', role: 'dialog', tabIndex: -1,
                 'aria-label': `${TEXT.threads} · ${info.project.name ?? ''}`,
@@ -757,12 +1148,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     onOpen: (row) => openSession(row.session),
                     action: { label: TEXT.openBeside, icon: ui.IconCompareSplitOutlineRegular, run: (row) => { change(false); projects.openBeside(row.session); } },
                 })),
-            projects.hasPane() ? h('div', { className: 'dshp-t-menu-foot' },
-                h('button', { type: 'button', className: 'dshp-t-foot-btn', 'data-dshp-item': '', onClick: () => { change(false); projects.openPane(); } },
-                    h(ui.IconFlatListOutlineRegular, { size: 14 }), TEXT.openPane)) : null), document.body) : null;
+            foot.length > 0 ? h('div', { className: 'dshp-t-menu-foot' }, ...foot) : null), document.body) : null;
+            const gear = settingsOn ? h(ui.Tooltip, { label: SETTINGS.title, side: 'bottom' },
+                h('button', {
+                    type: 'button', className: 'dshp-t-trigger dshp-t-gear', 'aria-label': SETTINGS.title, 'data-projects-settings-trigger': '',
+                    onClick: openSettings,
+                }, h(ui.IconSlidersTwoOutlineRegular, { size: 14 }))) : null;
 
             return h('div', { ref: rootRef, className: 'dshp-t-hdr', 'data-projects-threads': info.me.role, onMouseLeave: scheduleClose },
-                parent, trigger, menu);
+                parent, trigger, gear, menu);
         }
 
         /**
@@ -773,6 +1167,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function ThreadsPane({ sessionId, useSessions, useSessionStatus, useTabInfo, projects }) {
             const { tab } = useTabInfo();
             const info = useSessions((state) => projectContext(state, sessionId), sameContext);
+            const settingsOn = useSettingsAvailable(projects.settings);
             const statuses = useSessionStatus((value) => value);
             const byId = useSessions((state) => state.byId);
             const now = useNow(tab.visible !== false);
@@ -792,7 +1187,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             },
             h('div', { className: 'dshp-t-pane-head' },
                 h(ProjectName, { info, here: sessionId, onOpen: () => projects.openSession(coordinator) }),
-                info.roster !== null ? h('span', { className: 'dshp-t-count' }, summaryText(countsOf(rows))) : null),
+                info.roster !== null ? h('span', { className: 'dshp-t-count' }, summaryText(countsOf(rows))) : null,
+                settingsOn ? h('span', { className: 'dshp-t-pane-gear' }, h(ui.Tooltip, { label: SETTINGS.title, side: 'bottom', align: 'end', portal: true },
+                    h('button', {
+                        type: 'button', className: 'dshp-t-icon', 'aria-label': SETTINGS.title, 'data-projects-settings-trigger': '',
+                        onClick: () => projects.settings.open(sessionId),
+                    }, h(ui.IconSlidersTwoOutlineRegular, { size: 14 })))) : null),
             notice ?? h(ThreadList, {
                 rows, current: sessionId, now,
                 onOpen: (row) => {
@@ -1280,7 +1680,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /** Navigation the thread views share; nothing here throws into React. */
-        function threadsApi(ctx) {
+        function threadsApi(ctx, dialog = settingsDialog()) {
             const warn = (what, error) => { console.warn(`[projects] ${what}: ${error?.message ?? error}`); };
             const openSession = (sessionId) => {
                 if (typeof sessionId !== 'string' || sessionId === '') return;
@@ -1289,6 +1689,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const failed = new Set();
             return {
                 openSession,
+                /** The Project settings dialog, for the entry points. */
+                settings: dialog,
                 openBeside(sessionId) {
                     if (typeof sessionId !== 'string' || sessionId === '') return;
                     try {
@@ -1318,8 +1720,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
         }
 
-        function applyThreads(ctx) {
-            const projects = threadsApi(ctx);
+        function applyThreads(ctx, dialog) {
+            const projects = threadsApi(ctx, dialog);
             const withApi = () => ({ projects });
             ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
                 name: 'conversation.session.header.actions', id: IDS.menu, order: -25, inject: withApi,
@@ -1379,18 +1781,325 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             });
         }
 
+        // ── Project settings ───────────────────────────────────────────────
+
+        const SETTINGS = {
+            title: 'Project settings',
+            close: 'Close',
+            loading: 'Loading this project\'s settings…',
+            unreachable: 'The projects plugin didn\'t answer. If it was just updated, restart DSH so the new version loads.',
+            retry: 'Try again',
+            catalogFailed: 'DSH\'s model list didn\'t load, so the pickers can\'t list models.',
+            models: 'Models',
+            threads: 'Threads',
+            project: 'Project',
+            noThreads: 'No threads yet. Each thread the coordinator starts shows up here with its model.',
+            allResolved: 'Every thread is resolved.',
+            pause: 'Pause this project',
+            pauseHint: 'New threads wait and handbacks are held until you resume.',
+            own: 'Set for this project',
+            useDefault: 'Use default',
+            running: 'Running. A change applies from its next request.',
+            resolved: 'Resolved.',
+            note: 'Projects that don\'t choose their own models use the plugin\'s Default models, in Settings → Plugins → dsh-plugin-projects.',
+        };
+        const SETTING_ROUTES = [
+            { id: 'coordinator', title: 'Coordinator', hint: 'The ◆ session you talk to. A model you pick in its chat lands here too.', model: 'coordinatorModel', effort: 'coordinatorEffort' },
+            { id: 'thread', title: 'New threads', hint: 'What each new thread starts on. Running threads keep theirs.', model: 'threadModel', effort: 'threadEffort' },
+        ];
+        /** Where an inherited value comes from, in the pickers' Default rows and under a row. */
+        const SOURCE_LABELS = { 'project setting': 'This project', 'project config': 'Your profile', 'plugin default': 'Plugin default', 'DSH default': 'DSH default' };
+        const SOURCE_CAPTIONS = { 'project config': 'From this project\'s row in your profile', 'plugin default': 'Plugin default', 'DSH default': 'DSH default: the model last picked in any DSH chat' };
+
+        /**
+         * Which project the dialog shows, if any. Any part of the window opens
+         * it with a session (or project) id; the dialog part, once its DSH
+         * services are there, marks it available so the entry points show.
+         */
+        function settingsDialog() {
+            let snapshot = { target: null, seq: 0, available: false };
+            const listeners = new Set();
+            const set = (next) => {
+                snapshot = { ...snapshot, ...next };
+                for (const listener of [...listeners]) listener();
+            };
+            return {
+                getSnapshot: () => snapshot,
+                subscribe: (listener) => {
+                    listeners.add(listener);
+                    return () => listeners.delete(listener);
+                },
+                open(target) {
+                    if (typeof target === 'string' && target !== '' && snapshot.available) set({ target, seq: snapshot.seq + 1 });
+                },
+                close() {
+                    if (snapshot.target !== null) set({ target: null });
+                },
+                connect() {
+                    set({ available: true });
+                    return () => set({ available: false, target: null });
+                },
+            };
+        }
+        const useSettingsAvailable = (dialog) => React.useSyncExternalStore(dialog.subscribe, () => dialog.getSnapshot().available);
+
+        /** The plugin's endpoints (remote.js) and DSH's model catalog, over the window's own connection. */
+        function hostLink(ctx) {
+            return {
+                catalog: catalogSource(ctx),
+                async call(method, args) {
+                    try {
+                        const result = await ctx.connection.rpc.call('/api', `${BUNDLE}/${method}`, { args });
+                        if (isObject(result) && (result.ok === true || (result.ok === false && isObject(result.error)))) return result;
+                        return { ok: false, error: { code: 'projects/unreadable', message: 'The plugin sent an answer this window can\'t read.' } };
+                    } catch (error) {
+                        return { ok: false, error: { code: 'projects/unreachable', message: String(error?.message ?? error) } };
+                    }
+                },
+            };
+        }
+
+        /** A failed call as one sentence: the plugin's own refusal, or that it can't be reached. */
+        function errorText(error) {
+            const code = String(error?.code ?? '');
+            const message = String(error?.message ?? '').trim();
+            if (code === 'projects/refused' && message) return `${message.replace(/^./, (c) => c.toUpperCase())}${/[.!?]$/.test(message) ? '' : '.'}`;
+            if (code === 'projects/unreachable' || code.startsWith('gateway/not') || code.startsWith('rpc/')) return SETTINGS.unreachable;
+            return message ? `The change didn't go through: ${message}` : SETTINGS.unreachable;
+        }
+
+        /** The parts of a change's notes worth showing: a dropped effort, or a model that could not be set. */
+        function noteText(notes) {
+            const parts = [];
+            for (const note of Array.isArray(notes) ? notes : []) {
+                if (typeof note !== 'string') continue;
+                for (const part of note.replace(/^t\d+: /, '').split(/; |(?<=\.) /)) {
+                    // Efforts a model can't use show on the row itself (effortNote), so only failures are told here.
+                    if (/could not/.test(part)) parts.push(part.replace(/^but the /, 'The ').replace(/\.?$/, '.'));
+                }
+            }
+            return parts.join(' ');
+        }
+
+        function SettingRow({ id, lead, title, tag, description, source, note, control, message }) {
+            return h('div', { className: 'dshp-ps-row', 'data-projects-setting': id },
+                h('div', { className: 'dshp-ps-text' },
+                    h('div', { className: 'dshp-ps-title' },
+                        lead ?? null,
+                        h('span', null, title),
+                        tag ? h('span', { className: 'dshp-ps-id' }, tag) : null),
+                    description ? h('div', { className: 'dshp-ps-desc' }, description) : null,
+                    source ? h('div', { className: 'dshp-ps-source' }, ...source) : null,
+                    note ? h('div', { className: 'dshp-ps-fit', 'data-projects-setting-note': '' }, note) : null),
+                control,
+                message ? h('p', {
+                    className: `dshp-ps-alert ${message.kind === 'error' ? 'dshp-ps-error' : 'dshp-ps-info'}`,
+                    role: message.kind === 'error' ? 'alert' : 'status',
+                }, message.text) : null);
+        }
+
+        function Section({ id, heading, meta, children }) {
+            return h('section', { className: 'dshp-ps-section', 'data-projects-settings-section': id },
+                h('div', { className: 'dshp-ps-head' },
+                    h('h3', { className: 'dshp-ps-heading' }, heading),
+                    meta ? h('span', { className: 'dshp-ps-count' }, meta) : null),
+                h('div', { className: 'dshp-ps-card' }, children));
+        }
+
+        /**
+         * One project's settings: the coordinator's and new threads' model and
+         * effort, each thread's, and pause. Every change goes to the plugin at
+         * once, like DSH's own settings, and the dialog shows what the plugin
+         * then holds; it reads again every few seconds, so a change made in a
+         * chat or by the coordinator shows up too.
+         */
+        function ProjectSettings({ target, link, dialog, useSessionStatus }) {
+            const catalog = React.useSyncExternalStore(link.catalog.subscribe, link.catalog.getSnapshot);
+            const statuses = useSessionStatus((value) => value);
+            const [data, setData] = React.useState(null);
+            const [failure, setFailure] = React.useState(null);
+            const [busy, setBusy] = React.useState(null);
+            const [message, setMessage] = React.useState(null);
+            const [showResolved, setShowResolved] = React.useState(false);
+            const reads = React.useRef(0);
+            const alive = React.useRef(true);
+            React.useEffect(() => () => { alive.current = false; }, []);
+            const read = React.useCallback(async () => {
+                const seq = ++reads.current;
+                const result = await link.call('describe', { target });
+                if (!alive.current || seq !== reads.current) return;
+                if (result.ok && isObject(result.value) && isObject(result.value.settings)) {
+                    setData(result.value);
+                    setFailure(null);
+                } else {
+                    setFailure(errorText(result.ok ? undefined : result.error));
+                }
+            }, [link, target]);
+            React.useEffect(() => {
+                link.catalog.load();
+                void read();
+                const timer = setInterval(() => {
+                    if (typeof document === 'undefined' || document.visibilityState !== 'hidden') void read();
+                }, 8000);
+                return () => clearInterval(timer);
+            }, [link, read]);
+
+            const change = async (key, changes) => {
+                setBusy(key);
+                setMessage(null);
+                // A read already on its way would show the values from before the change.
+                reads.current += 1;
+                const result = await link.call('update', { target, changes });
+                if (!alive.current) return;
+                setBusy(null);
+                if (!result.ok) {
+                    setMessage({ key, kind: 'error', text: errorText(result.error) });
+                    return;
+                }
+                if (isObject(result.value) && isObject(result.value.settings)) setData(result.value);
+                const note = noteText(result.value?.notes);
+                if (note) setMessage({ key, kind: 'info', text: note });
+            };
+            const messageFor = (key) => (message?.key === key ? message : null);
+
+            let body;
+            if (data === null) {
+                body = failure
+                    ? h('div', { className: 'dshp-ps-state dshp-ps-error', role: 'alert' }, failure,
+                        h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => { setFailure(null); void read(); } }, SETTINGS.retry))
+                    : h('div', { className: 'dshp-ps-state', role: 'status' }, SETTINGS.loading);
+            } else {
+                const disabled = busy !== null;
+                const cv = catalogView(catalog.value);
+                const notesFor = (shown, live, ownEffort = true) => [effortNote(cv, shown, ownEffort), liveNote(cv, shown, live)].filter(Boolean).join(' ') || undefined;
+                const routeRow = (route) => {
+                    const m = data.settings[route.model] ?? {};
+                    const e = data.settings[route.effort] ?? {};
+                    const shown = resolveRoute(cv, m.value ?? undefined, e.value ?? undefined);
+                    const own = { model: m.source === 'project setting', effort: e.source === 'project setting' };
+                    const reset = { ...(own.model ? { [route.model]: null } : {}), ...(own.effort ? { [route.effort]: null } : {}) };
+                    const source = own.model || own.effort
+                        ? [h('span', { key: 'own', className: 'dshp-ps-own' }, SETTINGS.own),
+                            h('button', { key: 'reset', type: 'button', className: 'dshp-ps-link', disabled, onClick: () => change(route.id, reset) }, SETTINGS.useDefault)]
+                        : [h('span', { key: 'from' }, SOURCE_CAPTIONS[m.source === 'DSH default' ? e.source : m.source] ?? '')];
+                    return h(SettingRow, {
+                        key: route.id, id: route.id, title: route.title, description: route.hint, source, message: messageFor(route.id),
+                        note: notesFor(shown, route.id === 'coordinator' ? data.project?.live : undefined, own.effort),
+                        control: h(ModelPicker, {
+                            id: `dshp-ps-${route.id}`, label: route.title, catalog: catalog.value, busy: busy === route.id, disabled,
+                            value: { model: m.value, effort: e.value }, own,
+                            fallback: {
+                                model: m.inherited?.value, effort: e.inherited?.value,
+                                modelLabel: SOURCE_LABELS[m.inherited?.source], effortLabel: SOURCE_LABELS[e.inherited?.source],
+                            },
+                            onPick: (pick) => change(route.id, {
+                                ...(pick.model !== undefined ? { [route.model]: pick.model } : {}),
+                                ...(pick.effort !== undefined ? { [route.effort]: pick.effort } : {}),
+                            }),
+                        }),
+                    });
+                };
+                const threads = Array.isArray(data.threads) ? data.threads.filter((t) => isObject(t) && typeof t.id === 'string') : [];
+                const open = threads.filter((t) => !t.resolved);
+                const resolved = threads.filter((t) => t.resolved);
+                const threadRowFor = (t) => {
+                    const key = `thread:${t.id}`;
+                    const status = typeof t.session === 'string' ? statuses?.get?.(t.session) : undefined;
+                    const running = status?.running === true;
+                    // The same states as the Threads menu: a thread that asked for a decision waits on you.
+                    const asks = t.handback === 'needs_decision' || t.handback === 'blocked';
+                    const dot = t.resolved ? 'done' : status?.pendingInteraction || (!running && asks) ? 'warning'
+                        : running ? 'ongoing' : t.handback === 'done' ? 'done' : 'idle';
+                    return h(SettingRow, {
+                        key, id: key, title: t.title || t.id, tag: t.id, message: messageFor(key),
+                        note: notesFor(resolveRoute(cv, t.model ?? undefined, t.effort ?? undefined), t.live),
+                        lead: h('span', { className: 'dshp-ps-dot' }, h(ui.StateDot, { state: dot })),
+                        description: t.resolved ? SETTINGS.resolved : running ? SETTINGS.running : undefined,
+                        control: h(ModelPicker, {
+                            id: `dshp-ps-${t.id}`, label: `${t.title || t.id} (${t.id})`, catalog: catalog.value, busy: busy === key, disabled,
+                            value: { model: t.model ?? undefined, effort: t.effort ?? undefined }, own: { model: true, effort: true },
+                            onPick: (pick) => change(key, { thread: t.id, ...pick }),
+                        }),
+                    });
+                };
+                const shown = showResolved ? [...open, ...resolved] : open;
+                body = [
+                    catalog.status === 'failed' && !catalog.value ? h('p', { key: 'catalog', className: 'dshp-ps-alert dshp-ps-info', role: 'status' }, SETTINGS.catalogFailed, ' ',
+                        h('button', { type: 'button', className: 'dshp-ps-link', onClick: () => link.catalog.load() }, SETTINGS.retry)) : null,
+                    h(Section, { key: 'models', id: 'models', heading: SETTINGS.models }, ...SETTING_ROUTES.map(routeRow)),
+                    h(Section, { key: 'threads', id: 'threads', heading: SETTINGS.threads, meta: threads.length > 0 ? `${open.length} open` : undefined },
+                        shown.length === 0 ? h('div', { key: 'empty', className: 'dshp-ps-empty' }, threads.length === 0 ? SETTINGS.noThreads : SETTINGS.allResolved) : null,
+                        ...shown.map(threadRowFor),
+                        resolved.length > 0 ? h('button', {
+                            key: 'more', type: 'button', className: 'dshp-ps-more', 'aria-expanded': showResolved, onClick: () => setShowResolved((value) => !value),
+                        }, h(ui.IconChevronRightOutlineRegular, { size: 12 }), `${showResolved ? 'Hide' : 'Show'} ${plural(resolved.length, 'resolved thread')}`) : null),
+                    h(Section, { key: 'project', id: 'project', heading: SETTINGS.project },
+                        h(SettingRow, {
+                            id: 'paused', title: SETTINGS.pause, description: SETTINGS.pauseHint, message: messageFor('paused'),
+                            control: h(ui.Switch, { checked: data.paused?.value === true, label: SETTINGS.pause, disabled, onChange: (next) => change('paused', { paused: next }) }),
+                        })),
+                    h('p', { key: 'note', className: 'dshp-ps-note' }, SETTINGS.note),
+                ];
+            }
+            const project = data?.project;
+            return h(ui.Modal, {
+                open: true, title: SETTINGS.title, closeLabel: SETTINGS.close, className: 'dshp-ps', contentClassName: 'dshp-ps-content',
+                onClose: () => dialog.close(),
+                description: project ? h('span', { className: 'dshp-ps-sub', 'data-projects-settings': project.id },
+                    h('span', null, '◆ ', h('b', null, project.name)),
+                    project.workspace ? h('span', { className: 'dshp-ps-path', title: project.workspace }, project.workspace) : null) : undefined,
+            }, body);
+        }
+
+        /** The dialog in DSH's overlay layer, mounted while a project's settings are open. */
+        function ProjectSettingsOverlay({ dialog, link, useSessionStatus }) {
+            const state = React.useSyncExternalStore(dialog.subscribe, dialog.getSnapshot);
+            if (state.target === null) return null;
+            return h(ProjectSettings, { key: `${state.target}\u0000${state.seq}`, target: state.target, link, dialog, useSessionStatus });
+        }
+
+        /** "Project settings" in a project session's menu in the session list. */
+        function SettingsMenuItem({ sessionId, useMenuOpenState, useSessions, dialog }) {
+            const [, setMenuOpen] = useMenuOpenState();
+            const project = useSessions((state) => valueIn(state, sessionId) !== undefined || isThreadRow(state, sessionId) || coordinatorName(state, sessionId) !== undefined);
+            if (!project) return null;
+            return h(ui.MenuItemButton, {
+                icon: h(ui.IconSlidersTwoOutlineRegular, {}),
+                onSelect: () => {
+                    setMenuOpen(false);
+                    dialog.open(sessionId);
+                },
+            }, SETTINGS.title);
+        }
+
+        function applySettings(ctx, dialog) {
+            const link = hostLink(ctx);
+            ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+                name: 'shell.overlay', id: IDS.settings, inject: () => ({ dialog, link }),
+            }, ProjectSettingsOverlay));
+            ctx.slots.inject('sidebar.workspaces.session.menu.item', () => ctx.slots.register({
+                name: 'sidebar.workspaces.session.menu.item', id: IDS.settingsItem, order: 250, inject: () => ({ dialog }),
+            }, SettingsMenuItem));
+            ctx.effect(() => dialog.connect(), 'projects: project settings');
+        }
+
         /** Required services (cordis inject); each part below waits for its own. */
         const inject = ['slots'];
 
         function apply(ctx) {
+            const dialog = settingsDialog();
             ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => applyDefaultsForm(scope));
-            ctx.inject(['sessions', 'uiWorkspace', 'sidebarRight'], (scope) => applyThreads(scope));
+            ctx.inject(['connection', 'remote', 'remote.session'], (scope) => applySettings(scope, dialog));
+            ctx.inject(['sessions', 'uiWorkspace', 'sidebarRight'], (scope) => applyThreads(scope, dialog));
         }
 
         module.exports.inject = inject;
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the views are built on.
-        module.exports.internals = { valueIn, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, nestingPlan };
+        module.exports.internals = {
+            valueIn, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, nestingPlan,
+            catalogView, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
+        };
         return module.exports;
     },
 });

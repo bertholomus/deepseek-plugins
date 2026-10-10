@@ -35,32 +35,53 @@ The four settings match Claude Code's project page:
 
 | Claude Code | Here | Where |
 | --- | --- | --- |
-| Coordinator model | `coordinatorModel` | the plugin's page in DSH, plugin row, project row, or `project_settings` |
+| Coordinator model | `coordinatorModel` | Project settings, the coordinator's model picker, `project_settings`, project row, or the plugin's page for every project |
 | Coordinator effort | `coordinatorEffort` | same |
-| Thread model | `threadModel` | same |
+| Thread model | `threadModel` | same, except the picker (a pick in a thread's picker changes only that thread) |
 | Thread effort | `threadEffort` | same |
-| Pause project | `paused` | project row or `project_settings` |
+| Pause project | `paused` | Project settings, `project_settings`, or project row |
 | Goal | `goal` | project row |
+
+### Project settings
+
+Each project has its own **Project settings**, like a Claude Code project's settings page. Open it from any of the project's sessions: the sliders icon next to **N threads** at the top, **Project settings** at the bottom of the Threads menu, the same icon in the Threads panel, or **Project settings** in the session's **⋯** menu in the session list.
+
+- **Models.** The coordinator's model and effort, and what new threads start on. Each picker works like DSH's own model menu: **Model** lists DSH's models grouped by provider, with search when there are many, and **Effort** lists what the chosen model offers. **Default** follows the plugin's Default models, and the row says where the current value comes from. A value set for this project shows **● Set for this project** with **Use default** next to it.
+- **Threads.** Every thread with its state (the same dots as the Threads menu) and the model and effort it runs on. Change one to switch that thread from its next request; a running thread finishes its current request first. Resolved threads are behind **Show resolved threads**.
+- **Project.** Pause the project.
+
+A change applies at once, without restarting DSH or interrupting a session: the coordinator switches from its next request, and new threads start on the new choice. The dialog reads the project again every few seconds, so a change made in a chat or by the coordinator shows up there too. It talks to the plugin over DSH's own window connection (`lib/remote.js`), so it works in DSH Desktop and in `dsh --profile web`.
 
 ### Default models page
 
-In DSH, open **Plugins → dsh-plugin-projects**. Under **Default models**, pick the model and effort for coordinators and for new threads. The model list is DSH's own, grouped by provider, and the effort choices are the ones the chosen model offers. **DSH default** follows your DSH default model.
+In DSH, open **Plugins → dsh-plugin-projects**. Under **Default models**, pick the model and effort for coordinators and for new threads in every project that doesn't set its own. The pickers are the same as in Project settings. **Default** follows your DSH default model, which is the model last picked in any DSH chat.
 
-**Save** applies at once, in every project, without restarting DSH or interrupting a session: each coordinator switches from its next request, and new threads start with the new defaults. A thread that already exists keeps the model and effort it started with. The page writes the plugin row of your profile's `cordis.patch.yml`, so editing that row by hand does the same.
+**Save** applies at once, in every project that uses the defaults, without restarting DSH or interrupting a session: each coordinator switches from its next request, and new threads start with the new defaults. A thread that already exists keeps the model and effort it started with. The page writes the plugin row of your profile's `cordis.patch.yml`, so editing that row by hand does the same.
+
+### The model picker in a chat
+
+Picking a model or effort in a coordinator's own DSH model picker (the composer's model menu, or `/model`) makes it that project's coordinator setting, as in Claude Code, so Project settings shows it as **Set for this project**. In a thread, a pick changes that thread's model and effort. DSH also makes a pick your DSH default model, as it does for any session. The plugin's own model changes never count as picks, and it never changes your DSH default model itself.
 
 ### Which setting wins
 
-Each setting comes from the first place that sets it: a change made through the coordinator (`project_settings`), then the project row, then the plugin row (the page), then the DSH default model. Saying "default" to the coordinator clears a change, like "Use default".
+The most specific setting wins:
 
-The newest change wins. Asking a coordinator to change a setting changes it for that project. Saving a new value for that setting on the page later replaces the coordinator's change in every project, and the plugin logs it (`defaults <project> … replaced …`). A setting in a project row stays: that project keeps it until you edit the row.
+1. The project's own setting: set in Project settings, picked in the coordinator's model picker, or asked of the coordinator (`project_settings`).
+2. The project's row in your profile.
+3. The plugin's Default models (the page, or the plugin row).
+4. DSH's default model.
 
-Models are `provider:model` or a bare model id. Effort is whatever the model offers (for DeepSeek: `off`, `low`, `high`, `max`). Both are checked against the Host's model catalog, and a bad value comes back with the valid choices. A model with no effort levels runs without one, and the coordinator is told the effort was not used.
+**Use default** in Project settings, or saying "default" to the coordinator, clears the project's own setting. Saving new Default models never replaces a project's own setting; it changes only the projects that use the defaults. Editing a model or effort in a project's row by hand is the exception: at the next DSH start that value replaces the project's own setting for it, and the plugin logs it (`row <project> … replaced …`).
 
-A thread keeps the model and effort it started with. The coordinator can give one thread its own model or effort at start, or change it later with `project_thread_update`.
+Models are `provider:model` or a bare model id. Effort is whatever the model offers (for DeepSeek: `off`, `low`, `high`, `max`). Both are checked against the Host's model catalog, and a bad value comes back with the valid choices.
+
+An effort the model doesn't offer never stops a session. It runs at the model's nearest level at or below it (Max on a model whose top level is High runs at High), and Project settings, the Default models page and the coordinator say so. A model with no effort levels runs without one. A thread start is refused only for an effort no model in DSH offers. Setting an effort outright with `project_settings` or `project_thread_update` for a model that lacks it is refused with that model's choices, so the coordinator hears them instead of a silent change.
+
+A thread keeps the model and effort it started with, even one that started on the defaults: changing the Default models or your DSH default model later doesn't move it. The coordinator can give one thread its own model or effort at start, or change it later with `project_thread_update`; you can change it in Project settings or in the thread's own model picker.
 
 Pausing blocks new threads and holds handbacks. Resuming delivers the held handbacks in order.
 
-The plugin sets a project session's model and effort the same way the DSH model picker does, but only on that one session. It never changes your DSH default model. The DSH window shows each session's model and effort. You can still pick another model for one session in the DSH picker, and your pick holds until the coordinator changes that session's settings. A pick in the picker also becomes your DSH default model, as it does for any session.
+The plugin sets a project session's model and effort the same way the DSH model picker does, but only on that one session. The DSH window shows each session's model and effort.
 
 ## Setup
 
@@ -177,7 +198,7 @@ node plugins/projects/test/smoke.mjs
 
 The smoke tests run against a fake Host built from the published `@deepseek-ai/*` packages, including a Host with DSH's per-session model selection.
 
-The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin, session-bridge and a scripted model server. It drives the coordinator and threads through the bridge and checks what reaches the model: the model and effort of every request, which tools each session has, handbacks, the automatic notes (idle, failed, stopped, waiting on approval, cut off by a crash), queued turns, direct talk, settings, memory, pause, a stop by the coordinator, a restart after DSH is killed mid-turn, that DSH serves the page's browser code, the view the window draws (each thread with its handback and cards, and each thread's coordinator, as DSH folds and saves it), new defaults saved while DSH runs, and that a new coordinator introduces itself so DSH lists it. It takes about two minutes.
+The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin, session-bridge and a scripted model server. It drives the coordinator and threads through the bridge and checks what reaches the model: the model and effort of every request, which tools each session has, handbacks, the automatic notes (idle, failed, stopped, waiting on approval, cut off by a crash), queued turns, direct talk, settings, memory, pause, a stop by the coordinator, a restart after DSH is killed mid-turn, that DSH serves the page's browser code, the view the window draws (each thread with its handback and cards, and each thread's coordinator, as DSH folds and saves it), new defaults saved while DSH runs (a project's own choices stay), the Project settings endpoints as the window calls them (a read through a thread, **Use default**, a refusal, a new thread on the project's own thread model), a pick in DSH's own model picker becoming the coordinator setting, a thread model that lacks the project's effort running at its nearest level, and that a new coordinator introduces itself so DSH lists it. It takes about two minutes.
 
 ```bash
 npm install --prefix /tmp/dsh @deepseek-ai/dsh
