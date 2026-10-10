@@ -884,9 +884,11 @@ test('a new coordinator introduces itself once, so DSH lists it', async () => {
     await tick();
     const coord = coordinatorOf(first.host);
     assert.deepEqual(first.host.sessions.get(coord.id).prompts, [
-        { mode: 'queue', text: '[Project created: "DSH Plugins"]\n\nThis is the first message in this coordinator session.' },
+        { mode: 'queue', text: '[Project created: "DSH Plugins"]\n\nThis is the first message in this coordinator session. Introduce yourself from what you already know, without running any tools.' },
     ]);
     assert.match(coord.ctx.section(), /A message starting with "\[Project created" is automatic/);
+    // On the Mac a coordinator ran `git pull` in its workspace during its welcome.
+    assert.match(coord.ctx.section(), /run no tools and start no thread for it/);
     assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), new RegExp(`welcome dsh-plugins ${coord.id} delivered`));
     const second = restart(first.host.sessions, first.config);
     await tick();
