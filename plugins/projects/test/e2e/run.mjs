@@ -577,6 +577,14 @@ try {
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Kappa idle note');
     const kappa = since(mark, 't10');
     check('a thread whose model lacks the default effort starts at the nearest one', kappa.length > 0 && kappa.every((r) => r.model === 'fake-mini' && r.effort === 'high'), describe(kappa));
+
+    // 21. The plugin's page lists every project with what it runs and where each setting comes from.
+    answer = await webApi(web, 'dsh-plugin-projects/list', {});
+    const row = answer.ok ? answer.value.projects.find((p) => p.id === PROJECT_ID) : undefined;
+    check('the plugin page lists the project, its settings and where each comes from', row?.coordinator === coord && row.paused === false
+        && row.settings.coordinatorModel.value === 'fake:fake-model' && row.settings.coordinatorModel.source === 'project setting'
+        && row.settings.threadModel.value === 'fake:fake-mini' && row.settings.threadEffort.source === 'plugin default'
+        && row.live?.model === 'fake-model' && row.live?.reasoningEffort === 'max' && row.threads.open > 0, JSON.stringify(answer).slice(0, 600));
     check('no errors in the projects log', !/ error /.test(readText(logFile)), readText(logFile).split('\n').filter((l) => / error /.test(l)).join('\n'));
 } catch (error) {
     failed += 1;

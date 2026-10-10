@@ -5,7 +5,8 @@
  * app and in a browser). This module adds one more, `dsh-plugin-projects`,
  * so the Project settings dialog in lib/client.js reads and changes a
  * project's models, effort and pause the way the coordinator's
- * project_settings tool does, through the same manager methods.
+ * project_settings tool does, through the same manager methods, and the
+ * plugin's page lists every project with its models.
  *
  * The gateway finds a Remote service by its `typertRemote` binding and the
  * method markers on its prototype; DSH's own services get both from
@@ -53,6 +54,15 @@ export class ProjectsRemote {
         }
     }
 
+    /** Every project with its models and their sources, for the plugin's page. */
+    async list() {
+        try {
+            return { projects: this.manager.listProjects() };
+        } catch (error) {
+            throw failure(error);
+        }
+    }
+
     /**
      * Change a project's settings, or one thread's model and effort. Values
      * are strings; null goes back to the default. `paused` is a boolean.
@@ -80,4 +90,4 @@ function markRemote(Class, names) {
         });
     }
 }
-markRemote(ProjectsRemote, ['describe', 'update']);
+markRemote(ProjectsRemote, ['describe', 'list', 'update']);

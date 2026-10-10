@@ -1236,6 +1236,31 @@ export class ProjectManager {
     }
 
     /**
+     * Every project as the plugin's page lists it: the four settings with
+     * their sources, what the coordinator runs on right now, pause, and how
+     * many threads are open.
+     */
+    listProjects() {
+        return [...this.projects.keys()].map((projectId) => {
+            const project = this.project(projectId);
+            const stored = this.store.project(projectId);
+            const settings = this.settings(projectId);
+            const ids = rosterIds(stored.threads);
+            const open = ids.filter((id) => stored.threads[id].resolved !== true).length;
+            return {
+                id: projectId,
+                name: project.name,
+                workspace: project.workspacePath,
+                coordinator: stored.coordinatorSessionId ?? null,
+                live: this.liveSelection(stored.coordinatorSessionId) ?? null,
+                paused: this.paused(projectId),
+                settings: Object.fromEntries(SETTING_KEYS.map((key) => [key, { value: settings[key].value ?? null, source: settings[key].source }])),
+                threads: { open, resolved: ids.length - open },
+            };
+        });
+    }
+
+    /**
      * A change from the Project settings dialog: the project's settings, or
      * one thread's model and effort. null puts a value back to its default.
      * @param {object} changes - {coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?} or {thread, model?, effort?}.

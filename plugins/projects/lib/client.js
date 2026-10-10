@@ -72,6 +72,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-route-text .dshp-hint{margin:0}',
             '.dshp-route-note{color:var(--dsw-alias-label-secondary)}',
             '.dshp-route>.dshp-hint{flex:1 1 220px}',
+            // The plugin's page: every project and what it runs
+            '.dshp-page{display:flex;flex-direction:column}',
+            '.dshp-projects{display:flex;flex-direction:column;gap:2px;margin-top:12px;padding:16px 0 4px;border-top:.5px solid var(--dsw-alias-border-l2)}',
+            '.dshp-projects .dshp-hint{color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pt{display:flex;flex-direction:column;margin-top:10px;border:.5px solid var(--dsw-alias-settings-card-stroke,var(--dsw-alias-border-l4));border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill,var(--dsw-alias-bg-layer-2));container-type:inline-size}',
+            '.dshp-pt-row{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) minmax(0,1fr) 84px;align-items:center;gap:6px 16px;box-sizing:border-box;min-height:60px;padding:10px 14px}',
+            '.dshp-pt-row+.dshp-pt-row{border-top:.5px solid var(--dsw-alias-border-l2)}',
+            '.dshp-pt-head{min-height:0;padding-top:9px;padding-bottom:7px;font-size:12px;font-weight:500;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pt-cell{display:flex;flex-direction:column;min-width:0}',
+            '.dshp-pt-label{display:none}',
+            '.dshp-pt-name{display:flex;align-items:center;gap:6px;min-width:0;font-size:13px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary)}',
+            '.dshp-pt-name-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshp-pt-diamond{flex:none;font-size:10px;line-height:1}',
+            '.dshp-pt-badge{flex:none;padding:0 6px;border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-interactive-bg-hover);font-size:11px;font-weight:500;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pt-value{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary)}',
+            '.dshp-pt-source{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pt-action{align-items:flex-end}',
+            '.dshp-pt-state{padding:14px 0 6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+            '@container (width<=560px){.dshp-pt-head{display:none}.dshp-pt-row{grid-template-columns:minmax(0,1fr) auto}.dshp-pt-row>.dshp-pt-cell:nth-child(2),.dshp-pt-row>.dshp-pt-cell:nth-child(3){grid-column:1/-1}.dshp-pt-action{grid-row:1;grid-column:2}.dshp-pt-label{display:block;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}}',
             // Model picker: DSH's composer model menu, as a settings control
             '.dshp-mp{position:relative;display:inline-flex;flex:none;min-width:0;max-width:100%}',
             '.dshp-mp-trigger{display:inline-flex;align-items:center;gap:8px;box-sizing:border-box;min-width:0;max-width:min(300px,100%);height:32px;padding:0 10px 0 12px;border:0;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-module-platform);font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);white-space:nowrap;cursor:pointer}',
@@ -134,23 +153,37 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-count{flex:none;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;white-space:nowrap}',
             '.dshp-t-menu-body{flex:1 1 auto;min-height:0;overflow:auto}',
             '.dshp-t-menu-foot{margin-top:3px;padding-top:3px;border-top:.5px solid var(--dsw-alias-border-l2)}',
+            // Threads: what the coordinator and new threads run on, under the project name
+            '.dshp-t-models{display:flex;flex-direction:column;margin:0 0 3px;padding:0 0 3px;border-bottom:.5px solid var(--dsw-alias-border-l2)}',
+            '.dshp-t-models-row{display:flex;align-items:center;gap:8px;box-sizing:border-box;width:100%;min-height:28px;padding:4px 9px;border:0;border-radius:var(--dsw-radius-md);background:none;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);text-align:left}',
+            'button.dshp-t-models-row{cursor:pointer}',
+            'button.dshp-t-models-row:hover,button.dshp-t-models-row:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}',
+            'button.dshp-t-models-row:focus-visible{outline:none;box-shadow:inset 0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}',
+            '.dshp-t-models-label{flex:none;width:84px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-t-models-value{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshp-t-models-row>svg{flex:none;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-t-pane .dshp-t-models{margin:0 0 6px;padding:0 0 8px}',
+            '.dshp-t-pane .dshp-t-models-row{min-height:32px;padding:6px 10px;font-size:13px;line-height:20px}',
+            '.dshp-t-pane .dshp-t-models-label{width:96px}',
             '.dshp-t-group{display:flex;align-items:center;gap:4px;box-sizing:border-box;width:100%;padding:8px 9px 3px;border:0;background:none;font:inherit;font-size:11px;font-weight:500;line-height:16px;color:var(--dsw-alias-label-tertiary);text-align:left}',
             'button.dshp-t-group{cursor:pointer;border-radius:var(--dsw-radius-sm)}',
             'button.dshp-t-group:hover,button.dshp-t-group:focus-visible{outline:none;color:var(--dsw-alias-label-primary)}',
             'button.dshp-t-group svg{flex:none;transition:transform .12s}',
             'button.dshp-t-group[aria-expanded=true] svg{transform:rotate(90deg)}',
             // Threads: rows (menu and pane)
-            '.dshp-t-row{position:relative;display:flex;align-items:flex-start;gap:8px;box-sizing:border-box;width:100%;min-height:44px;padding:6px 6px 6px 9px;border-radius:var(--dsw-radius-lg);font-size:12px;line-height:17px;color:var(--dsw-alias-label-primary);cursor:pointer;outline:none}',
+            '.dshp-t-row{position:relative;display:grid;grid-template-columns:14px minmax(0,1fr) auto auto;column-gap:8px;align-items:start;box-sizing:border-box;width:100%;min-height:44px;padding:6px 6px 6px 9px;border-radius:var(--dsw-radius-lg);font-size:12px;line-height:17px;color:var(--dsw-alias-label-primary);cursor:pointer;outline:none}',
             '.dshp-t-row:hover,.dshp-t-row:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}',
             '.dshp-t-row[aria-disabled=true]{cursor:default}',
             '.dshp-t-row[aria-disabled=true]:hover{background:none}',
-            '.dshp-t-dot{flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px;height:17px}',
-            '.dshp-t-text{display:flex;flex-direction:column;flex:1;min-width:0}',
-            '.dshp-t-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshp-t-dot{grid-column:1;grid-row:1;display:inline-flex;align-items:center;justify-content:center;width:14px;height:17px}',
+            '.dshp-t-text{display:contents}',
+            '.dshp-t-name{grid-column:2/4;grid-row:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshp-t-row[aria-current=true] .dshp-t-name{font-weight:600}',
-            '.dshp-t-line{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}',
-            '.dshp-t-meta{flex:none;display:inline-flex;align-items:center;gap:6px;height:17px;font-size:11px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;white-space:nowrap}',
-            '.dshp-t-id{font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:10px}',
+            '.dshp-t-line{grid-column:2;grid-row:2;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-t-meta{grid-column:3;grid-row:2;justify-self:end;display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:190px;height:16px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;white-space:nowrap}',
+            '.dshp-t-model{min-width:0;overflow:hidden;text-overflow:ellipsis}',
+            '.dshp-t-ago{flex:none}',
+            '.dshp-t-row>:not(.dshp-t-dot):not(.dshp-t-text):not(.dshp-t-meta){grid-column:4;grid-row:1/3;align-self:center}',
             '.dshp-t-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;margin:-4px -2px -4px 0;padding:0;border:0;border-radius:var(--dsw-radius-sm);background:none;color:var(--dsw-alias-label-tertiary);cursor:pointer}',
             '.dshp-t-icon:hover,.dshp-t-icon:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
             '.dshp-t-notice{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 9px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
@@ -160,13 +193,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-foot-btn{display:flex;align-items:center;gap:8px;box-sizing:border-box;width:100%;min-height:32px;padding:6px 9px;border:0;border-radius:var(--dsw-radius-lg);background:none;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);text-align:left;cursor:pointer}',
             '.dshp-t-foot-btn:hover,.dshp-t-foot-btn:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
             // Threads: right-sidebar pane
-            '.dshp-t-pane{box-sizing:border-box;height:100%;overflow:auto;padding:14px 10px 24px;color:var(--dsw-alias-label-primary)}',
+            '.dshp-t-pane{box-sizing:border-box;height:100%;overflow:auto;padding:14px 10px 24px;color:var(--dsw-alias-label-primary);container:dshp-pane/inline-size}',
             '.dshp-t-pane-head{display:flex;flex-direction:column;gap:2px;padding:0 10px 8px}',
             '.dshp-t-pane-head .dshp-t-project{font-size:14px;line-height:20px}',
             '.dshp-t-pane-head .dshp-t-count{font-size:12px;line-height:18px}',
             '.dshp-t-pane .dshp-t-row{min-height:54px;padding:8px 8px 8px 10px;font-size:13px;line-height:18px}',
-            '.dshp-t-pane .dshp-t-dot,.dshp-t-pane .dshp-t-meta{height:18px}',
+            '.dshp-t-pane .dshp-t-dot{height:18px}',
+            '.dshp-t-pane .dshp-t-meta{height:17px;line-height:17px}',
             '.dshp-t-pane .dshp-t-line{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;font-size:12px;line-height:17px}',
+            // A narrow pane gives the line the row's width and puts model and time under it.
+            '@container dshp-pane (width<=440px){.dshp-t-pane .dshp-t-line{grid-column:2/4}.dshp-t-pane .dshp-t-meta{grid-column:2/4;grid-row:3;justify-self:start;margin-top:2px}.dshp-t-pane .dshp-t-row>:not(.dshp-t-dot):not(.dshp-t-text):not(.dshp-t-meta){grid-row:1/4}}',
             '.dshp-t-pane .dshp-t-group{padding:12px 10px 4px}',
             '.dshp-t-empty{padding:28px 16px;text-align:center;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
             // Threads: a thread's chat in the right sidebar
@@ -256,15 +292,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         // ── Default models form ────────────────────────────────────────────
 
-        /** The Host model catalog, read again each time the form opens. */
-        function catalogSource(ctx) {
+        /**
+         * The Host model catalog, shared by every part of the window: the
+         * forms read it again each time they open, and the thread views load
+         * it once to name models.
+         * @param remoteOf - DSH's `remote` service, or undefined until DSH provides it.
+         */
+        function catalogSource(remoteOf) {
             let snapshot = { status: 'idle', value: undefined };
+            let tried = 0;
             const listeners = new Set();
             const set = (next) => {
                 snapshot = next;
                 for (const listener of [...listeners]) listener();
             };
-            return {
+            const source = {
                 getSnapshot: () => snapshot,
                 subscribe: (listener) => {
                     listeners.add(listener);
@@ -272,11 +314,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 },
                 load() {
                     if (snapshot.status === 'loading') return;
+                    tried = Date.now();
                     set({ status: 'loading', value: snapshot.value });
                     let session;
-                    try { session = ctx.remote.session; } catch { session = undefined; }
+                    try { session = remoteOf()?.session; } catch { session = undefined; }
                     if (!session || typeof session.modelCatalog !== 'function') {
-                        set({ status: 'failed', value: undefined });
+                        set({ status: 'failed', value: snapshot.value });
                         return;
                     }
                     Promise.resolve().then(() => session.modelCatalog()).then((result) => {
@@ -284,7 +327,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         set(value ? { status: 'ready', value } : { status: 'failed', value: snapshot.value });
                     }, () => set({ status: 'failed', value: snapshot.value }));
                 },
+                /** Load once, for views that only name models; a failed read is tried again after a while. */
+                ensure() {
+                    if (snapshot.status === 'idle' || (snapshot.status === 'failed' && Date.now() - tried > 15000)) source.load();
+                },
+                /** DSH's remote arrived or changed: the next ensure reads again. */
+                reset() {
+                    if (snapshot.status !== 'loading') set({ status: 'idle', value: snapshot.value });
+                },
             };
+            return source;
         }
 
         /** Every model in a catalog, keyed "provider:model" as the plugin stores it. */
@@ -443,8 +495,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * @param props.own - {model, effort}: whether each is set at this level, so Default is not checked.
          * @param props.fallback - {model?, effort?, modelLabel?, effortLabel?}: what Default means, or undefined.
          * @param props.onPick - called with {model?, effort?}: a value, or null for Default.
+         * @param props.autoOpen - open the menu once, when the picker first shows.
          */
-        function ModelPicker({ id, label, catalog, value, own, fallback, busy = false, disabled = false, onPick }) {
+        function ModelPicker({ id, label, catalog, value, own, fallback, busy = false, disabled = false, autoOpen = false, onPick }) {
             const cv = React.useMemo(() => catalogView(catalog), [catalog]);
             const route = resolveRoute(cv, value.model, value.effort);
             const base = fallback ? resolveRoute(cv, fallback.model, fallback.effort) : undefined;
@@ -501,6 +554,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 intent.current = 'first';
                 setOpen(true);
             };
+            // Opened from a project's models summary: this menu is what the user asked for.
+            React.useEffect(() => { if (autoOpen) show(); }, []);
             const drill = (next) => {
                 setQuery('');
                 intent.current = next === 'model' && showSearch ? 'search' : 'checked';
@@ -732,7 +787,139 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h('p', { className: 'dshp-note' }, NOTE)));
         }
 
-        function applyDefaultsForm(ctx) {
+        const TABLE = {
+            heading: 'Projects',
+            hint: 'What each project runs. A project\'s own choice comes first, then its row in your profile, then the Default models above.',
+            loading: 'Loading projects…',
+            failed: 'The projects plugin didn\'t answer, so its projects can\'t be listed right now.',
+            none: 'No projects yet. Add one under "projects" in this plugin\'s config.',
+            project: 'Project',
+            settings: 'Settings',
+            paused: 'Paused',
+        };
+        /** Where a project's model and effort come from: a line for one source, a phrase each for two. */
+        const SOURCE_LINE = { 'project setting': 'Set for this project', 'project config': 'From your profile', 'plugin default': 'From Default models', 'DSH default': 'Follows DSH\'s default model' };
+        const SOURCE_PHRASE = { 'project setting': 'set for this project', 'project config': 'from your profile', 'plugin default': 'from Default models', 'DSH default': 'follows DSH' };
+
+        /**
+         * The source of a model and effort pair, naming the effort's own
+         * source when it differs. `long` adds what DSH's default model is.
+         */
+        function sourceLine(m, e, { long = false } = {}) {
+            if (!isObject(e) || e.value == null || e.source === m?.source) {
+                const line = SOURCE_LINE[m?.source] ?? '';
+                return long && m?.source === 'DSH default' ? `${line}, the one last picked in any DSH chat` : line;
+            }
+            return `Model ${SOURCE_PHRASE[m?.source] ?? ''} · effort ${SOURCE_PHRASE[e.source] ?? ''}`;
+        }
+
+        /** A coordinator selection signature, to read the table again when a pick changes one. */
+        function selectionsKey(state, sessionIds) {
+            return sessionIds.map((id) => {
+                const picked = selectionIn(state, id);
+                return picked ? `${picked.provider}:${picked.model}:${picked.reasoningEffort ?? ''}` : '';
+            }).join('|');
+        }
+
+        /**
+         * Every project with what its coordinator and new threads run on and
+         * where each setting comes from, as the plugin resolves them. It reads
+         * again every few seconds while shown, and soon after a pick in a
+         * coordinator's model menu.
+         */
+        function ProjectsTable({ link, dialog, catalog, sessionsOf }) {
+            const cat = React.useSyncExternalStore(catalog.subscribe, catalog.getSnapshot);
+            const cv = React.useMemo(() => catalogView(cat.value), [cat.value]);
+            const settingsOn = useSettingsAvailable(dialog);
+            const [list, setList] = React.useState(null);
+            const [failed, setFailed] = React.useState(false);
+            const alive = React.useRef(true);
+            const read = React.useCallback(async () => {
+                const result = await link.call('list', {});
+                if (!alive.current) return;
+                if (result.ok && Array.isArray(result.value?.projects)) {
+                    setList(result.value.projects.filter((p) => isObject(p) && typeof p.id === 'string'));
+                    setFailed(false);
+                } else {
+                    setFailed(true);
+                }
+            }, [link]);
+            React.useEffect(() => {
+                alive.current = true;
+                catalog.ensure();
+                void read();
+                const timer = setInterval(() => {
+                    if (typeof document === 'undefined' || document.visibilityState !== 'hidden') void read();
+                }, 3000);
+                return () => { alive.current = false; clearInterval(timer); };
+            }, [read, catalog]);
+            const coordinators = (list ?? EMPTY).map((p) => p.coordinator).filter((id) => typeof id === 'string' && id !== '');
+            const key = coordinators.join('\n');
+            React.useEffect(() => {
+                const sessions = sessionsOf();
+                if (!sessions?.list || coordinators.length === 0) return undefined;
+                let last = selectionsKey(sessions.list.getSnapshot(), coordinators);
+                const timers = new Set();
+                const later = (ms) => { const t = setTimeout(() => { timers.delete(t); void read(); }, ms); timers.add(t); };
+                const unsubscribe = sessions.list.subscribe(() => {
+                    const next = selectionsKey(sessions.list.getSnapshot(), coordinators);
+                    if (next === last) return;
+                    last = next;
+                    // The plugin records a pick as it happens; read once soon and once more to be sure.
+                    later(300);
+                    later(1500);
+                });
+                return () => { unsubscribe(); for (const t of timers) clearTimeout(t); };
+            }, [key, read, sessionsOf]);
+
+            const head = [
+                h('h3', { key: 'h', className: 'dshp-heading' }, TABLE.heading),
+                h('p', { key: 'p', className: 'dshp-hint' }, TABLE.hint),
+            ];
+            let body;
+            if (list === null) {
+                body = h('div', { className: 'dshp-pt-state', role: failed ? 'alert' : 'status' }, failed ? TABLE.failed : TABLE.loading);
+            } else if (list.length === 0) {
+                body = h('div', { className: 'dshp-pt-state' }, TABLE.none);
+            } else {
+                const cell = (key, label, value, caption) => h('div', { key, className: 'dshp-pt-cell', role: 'cell' },
+                    h('span', { className: 'dshp-pt-label' }, label),
+                    h('span', { className: 'dshp-pt-value', title: value }, value),
+                    caption ? h('span', { className: 'dshp-pt-source' }, caption) : null);
+                const routeCell = (p, key, label, mKey, eKey, live) => {
+                    const m = p.settings?.[mKey];
+                    const e = p.settings?.[eKey];
+                    const route = resolveRoute(cv, m?.value ?? undefined, e?.value ?? undefined);
+                    return cell(key, label, routeLabel(route), (live ? liveNote(cv, route, live) : undefined) ?? sourceLine(m, levelsOf(route) ? e : undefined));
+                };
+                const threadsLine = (t) => {
+                    const open = Number(t?.open) || 0;
+                    const resolved = Number(t?.resolved) || 0;
+                    if (open + resolved === 0) return 'No threads yet';
+                    return resolved > 0 ? `${plural(open, 'open thread')} · ${resolved} resolved` : plural(open, 'open thread');
+                };
+                body = h('div', { className: 'dshp-pt', role: 'table', 'aria-label': TABLE.heading },
+                    h('div', { className: 'dshp-pt-row dshp-pt-head', role: 'row' },
+                        ...[TABLE.project, TEXT.coordinator, 'New threads', ''].map((text, i) => h('span', { key: i, role: 'columnheader' }, text))),
+                    ...list.map((p) => h('div', { key: p.id, className: 'dshp-pt-row', role: 'row', 'data-projects-table-row': p.id },
+                        h('div', { className: 'dshp-pt-cell', role: 'cell' },
+                            h('span', { className: 'dshp-pt-name' },
+                                h('span', { className: 'dshp-pt-diamond', 'aria-hidden': true }, '◆'),
+                                h('span', { className: 'dshp-pt-name-text', title: p.workspace || undefined }, p.name || p.id),
+                                p.paused ? h('span', { className: 'dshp-pt-badge' }, TABLE.paused) : null),
+                            h('span', { className: 'dshp-pt-source' }, threadsLine(p.threads))),
+                        routeCell(p, 'c', TEXT.coordinator, 'coordinatorModel', 'coordinatorEffort', p.live),
+                        routeCell(p, 't', 'New threads', 'threadModel', 'threadEffort'),
+                        h('div', { className: 'dshp-pt-cell dshp-pt-action', role: 'cell' },
+                            settingsOn ? h(ui.Button, {
+                                variant: 'outline', size: 'sm', 'aria-label': `${SETTINGS.title}: ${p.name || p.id}`,
+                                onClick: () => dialog.open(p.id),
+                            }, TABLE.settings) : null))));
+            }
+            return h('section', { className: 'dshp-projects', 'data-projects-table': '' }, ...head, body);
+        }
+
+        function applyDefaultsForm(ctx, { catalog, link, dialog, sessionsOf }) {
             const scope = ctx.configForms.get(ENTRY);
             const model = new ui.SettingsFormModel(scope, FIELDS.map((name) => ui.settingsTextField(name)));
             const store = model.bind(() => ({
@@ -746,10 +933,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 actions: model.actions(),
             };
             ctx.effect(() => () => model.dispose(), 'projects: defaults form');
-            const catalog = catalogSource(ctx);
             const Page = (props) => (props.view === 'summary'
                 ? 'Default models and effort for coordinators and threads.'
-                : h(DefaultsForm, { form, catalog }));
+                : h('div', { className: 'dshp-page' },
+                    h(DefaultsForm, { form, catalog }),
+                    h(ProjectsTable, { link, dialog, catalog, sessionsOf })));
             ctx.effect(() => ctx.configForms.whileServed([ENTRY], () => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
                 name: 'plugins.bundle.config',
                 key: BUNDLE,
@@ -858,6 +1046,88 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
+         * What a session's next request runs on, from DSH's own
+         * `modelSelection` projection (the one its composer picker shows), or
+         * undefined before DSH has sent it.
+         */
+        function selectionIn(state, sessionId) {
+            if (typeof sessionId !== 'string' || sessionId === '' || !state) return undefined;
+            const value = state.projectionsBySession?.[sessionId]?.values?.modelSelection ?? state.byId?.[sessionId]?.projectionValues?.modelSelection;
+            const picked = isObject(value) ? value.next ?? value.lastUsed : undefined;
+            return isObject(picked) && typeof picked.provider === 'string' && typeof picked.model === 'string' ? picked : undefined;
+        }
+        const sameSelection = (a, b) => a === b || (a != null && b != null
+            && a.provider === b.provider && a.model === b.model && a.reasoningEffort === b.reasoningEffort);
+        const sameSelections = (a, b) => {
+            const keys = Object.keys(a);
+            return keys.length === Object.keys(b).length && keys.every((key) => sameSelection(a[key], b[key]));
+        };
+
+        /** The selections of some sessions, by session id; the same object until one of them changes. */
+        function useSelections(useSessions, sessionIds) {
+            const key = sessionIds.join('\n');
+            // The ids are read through `key`, so a new array of the same ids keeps the selector.
+            const select = React.useCallback((state) => {
+                const out = {};
+                for (const id of sessionIds) {
+                    const picked = selectionIn(state, id);
+                    if (picked) out[id] = picked;
+                }
+                return out;
+            }, [key]);
+            return useSessions(select, sameSelections);
+        }
+
+        /** A selection named as DSH's model menu names it: "DeepSeek V4 · High", or just the model when it has no effort levels. */
+        function selectionText(cv, picked) {
+            if (!isObject(picked)) return undefined;
+            const model = findModel(cv.models, `${picked.provider}:${picked.model}`);
+            const name = model ? model.name : picked.model;
+            if (model && model.efforts.length === 0) return name;
+            const effort = typeof picked.reasoningEffort === 'string' ? picked.reasoningEffort : model?.defaultEffort;
+            if (effort === undefined) return model ? `${name} · Default` : name;
+            return `${name} · ${model ? effortName(model, effort) : anyEffortName(cv, effort)}`;
+        }
+
+        /** Whether a resolved setting's model takes an effort (an unknown model might). */
+        const levelsOf = (route) => !route.model || route.efforts.length > 0;
+
+        /** A resolved setting (resolveRoute) as one label. */
+        const routeLabel = (route) => (route.effortName ? `${route.name} · ${route.effortName}` : route.name);
+
+        /** DSH's model catalog for naming models; loads it once while `active`. */
+        function useCatalogView(catalog, active = true) {
+            const snapshot = React.useSyncExternalStore(catalog.subscribe, catalog.getSnapshot);
+            React.useEffect(() => { if (active) catalog.ensure(); }, [catalog, active, snapshot.status]);
+            return React.useMemo(() => catalogView(snapshot.value), [snapshot.value]);
+        }
+
+        /**
+         * A project as the plugin describes it (remote.js `describe`): read
+         * when `enabled` turns on, and again every 15 s while `active`.
+         */
+        function useProjectInfo(link, target, enabled, active) {
+            const [info, setInfo] = React.useState(null);
+            const alive = React.useRef(true);
+            React.useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+            const read = React.useCallback(async () => {
+                if (typeof target !== 'string' || target === '') return;
+                const result = await link.call('describe', { target });
+                if (alive.current && result.ok && isObject(result.value) && isObject(result.value.settings)) setInfo(result.value);
+            }, [link, target]);
+            React.useEffect(() => { if (enabled) void read(); }, [enabled, read]);
+            React.useEffect(() => {
+                if (!enabled || !active) return undefined;
+                void read();
+                const timer = setInterval(() => {
+                    if (typeof document === 'undefined' || document.visibilityState !== 'hidden') void read();
+                }, 15000);
+                return () => clearInterval(timer);
+            }, [enabled, active, read]);
+            return info;
+        }
+
+        /**
          * Where a session sits in its project: its own value, its coordinator,
          * the project, and the coordinator's roster (null while unknown).
          */
@@ -882,6 +1152,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return /question|review/i.test(kind) ? 'Has a question for you' : 'Waiting for your approval';
         }
 
+        /** A handback's state and summary, without saying the state twice ("Blocked · Blocked: …"). */
+        function toldText(hb) {
+            const label = HANDBACK_LABELS[hb.status] ?? String(hb.status ?? '');
+            const summary = typeof hb.summary === 'string' ? hb.summary.trim() : '';
+            if (summary === '') return label;
+            const rest = summary.slice(label.length);
+            if (label !== '' && summary.slice(0, label.length).toLowerCase() === label.toLowerCase() && (rest === '' || /^[\s:.,;—–-]/.test(rest))) return summary;
+            return `${label} · ${summary}`;
+        }
+
         /** One roster entry with its live state, as the menu, the pane and the cards show it. */
         function threadRow(entry, statuses, byId) {
             const session = typeof entry.session === 'string' && entry.session !== '' ? entry.session : undefined;
@@ -893,7 +1173,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const asks = hb?.status === 'needs_decision' || hb?.status === 'blocked';
             const group = entry.resolved ? 'resolved' : pending || (!running && asks) ? 'waiting' : running ? 'running' : 'idle';
             const dot = group === 'waiting' ? 'warning' : group === 'running' ? 'ongoing' : group === 'resolved' || hb?.status === 'done' ? 'done' : 'idle';
-            const told = hb ? `${HANDBACK_LABELS[hb.status] ?? hb.status}${hb.summary ? ` · ${hb.summary}` : ''}` : undefined;
+            const told = hb ? toldText(hb) : undefined;
             const line = pending ? pendingLine(pending)
                 : running ? (hb?.status === 'progress' && hb.summary ? `Working… · ${hb.summary}` : 'Working…')
                     : told ?? (entry.resolved ? 'Resolved' : 'No handback yet');
@@ -950,7 +1230,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             else if (event.key === 'End') at(items.length - 1);
         }
 
-        function ThreadRow({ row, current, now, onOpen, action }) {
+        function ThreadRow({ row, current, now, model, onOpen, action }) {
             const enabled = !current && row.session !== undefined;
             const open = () => { if (enabled) onOpen(row); };
             return h('div', {
@@ -958,7 +1238,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 'data-dshp-item': '', 'data-thread': row.id,
                 'aria-current': current ? 'true' : undefined,
                 'aria-disabled': enabled ? undefined : 'true',
-                'aria-label': `${row.title}. ${current ? `${TEXT.current}. ` : ''}${row.line}`,
+                'aria-label': `${row.title}. ${current ? `${TEXT.current}. ` : ''}${row.line}${model ? `. Runs on ${model}` : ''}`,
                 onClick: open,
                 onKeyDown: (event) => {
                     if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
@@ -971,8 +1251,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 h('span', { className: 'dshp-t-name' }, row.title),
                 h('span', { className: 'dshp-t-line' }, current ? `${TEXT.current} · ${row.line}` : row.line)),
             h('span', { className: 'dshp-t-meta' },
-                h('span', { className: 'dshp-t-id' }, row.id),
-                row.at !== undefined ? h('span', null, ago(row.at, now)) : null),
+                model ? h('span', { className: 'dshp-t-model', title: model, 'data-projects-thread-model': '' }, model) : null,
+                row.at !== undefined ? h('span', { className: 'dshp-t-ago' }, ago(row.at, now)) : null),
             action && enabled ? h(ui.Tooltip, { label: action.label, side: 'bottom', align: 'end', portal: true },
                 h('button', {
                     type: 'button', className: 'dshp-t-icon', 'aria-label': `${action.label}: ${row.title}`,
@@ -982,12 +1262,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /** Rows grouped as Waiting on you, Running, Idle and Resolved (folded). */
-        function ThreadList({ rows, current, now, onOpen, action }) {
+        function ThreadList({ rows, current, now, models, onOpen, action }) {
             const [showResolved, setShowResolved] = React.useState(() => rows.some((row) => row.group === 'resolved' && row.session === current));
             return GROUPS.map((group) => {
                 const members = rows.filter((row) => row.group === group.id);
                 if (members.length === 0) return null;
-                const list = members.map((row) => h(ThreadRow, { key: row.id, row, current: row.session !== undefined && row.session === current, now, onOpen, action }));
+                const list = members.map((row) => h(ThreadRow, {
+                    key: row.id, row, current: row.session !== undefined && row.session === current, now, onOpen, action,
+                    model: row.session !== undefined ? models?.[row.session] : undefined,
+                }));
                 if (group.id !== 'resolved') {
                     return h('div', { key: group.id, role: 'group', 'aria-label': group.label, 'data-thread-group': group.id },
                         h('div', { className: 'dshp-t-group' }, group.label), ...list);
@@ -1013,6 +1296,66 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 return h('div', { className: 'dshp-t-notice', role: 'status' }, TEXT.loading);
             }
             return rows.length === 0 ? h('div', { className: 'dshp-t-notice' }, TEXT.empty) : null;
+        }
+
+        /**
+         * What the project runs on, at the top of the Threads menu and pane:
+         * the coordinator's model and effort and what new threads start on.
+         * Each opens Project settings with that model menu open.
+         */
+        function ModelsSummary({ coordinator, thread, onPick }) {
+            const item = (id, label, text) => {
+                const shown = text ?? '…';
+                const content = [
+                    h('span', { key: 'l', className: 'dshp-t-models-label' }, label),
+                    h('span', { key: 'v', className: 'dshp-t-models-value', title: text }, shown),
+                ];
+                if (!onPick) return h('div', { key: id, className: 'dshp-t-models-row', 'data-projects-models': id }, ...content);
+                return h('button', {
+                    key: id, type: 'button', className: 'dshp-t-models-row', 'data-dshp-item': '', 'data-projects-models': id,
+                    'aria-label': `${label}: ${text ?? 'loading'}. Change it in ${SETTINGS.title}`,
+                    onClick: () => onPick(id),
+                }, ...content, h(ui.IconChevronRightOutlineRegular, { key: 'c', size: 12 }));
+            };
+            return h('div', { className: 'dshp-t-models', role: 'group', 'aria-label': 'Models' },
+                item('coordinator', TEXT.coordinator, coordinator),
+                item('thread', 'New threads', thread));
+        }
+
+        /**
+         * The labels ModelsSummary shows: what the coordinator runs on now
+         * (its own model selection), else its setting, and the setting new
+         * threads start on.
+         */
+        function summaryModels(cv, models, coordinator, info) {
+            const s = info?.settings;
+            const route = (model, effort) => (s ? routeLabel(resolveRoute(cv, s[model]?.value ?? undefined, s[effort]?.value ?? undefined)) : undefined);
+            return {
+                coordinator: (coordinator ? models[coordinator] : undefined) ?? route('coordinatorModel', 'coordinatorEffort'),
+                thread: route('threadModel', 'threadEffort'),
+            };
+        }
+
+        /** The model labels of a roster's sessions and its coordinator, read live from DSH. */
+        function useRosterModels(projects, useSessions, rows, coordinator, active) {
+            const ids = React.useMemo(() => {
+                const out = rows.map((row) => row.session).filter((id) => id !== undefined);
+                if (coordinator) out.push(coordinator);
+                return out;
+            }, [rows, coordinator]);
+            const selections = useSelections(useSessions, ids);
+            const cv = useCatalogView(projects.catalog, active);
+            const key = ids.join('\n');
+            // Sessions DSH hasn't loaded in this window send their selection once their projections are read.
+            React.useEffect(() => {
+                if (active) for (const id of ids) projects.refresh(id);
+            }, [active, key, projects]);
+            const models = React.useMemo(() => {
+                const out = {};
+                for (const [id, picked] of Object.entries(selections)) out[id] = selectionText(cv, picked);
+                return out;
+            }, [selections, cv]);
+            return { cv, models };
         }
 
         /** The project name, as a link to the coordinator unless that is where the user is. */
@@ -1083,6 +1426,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (away && (unknown || open)) projects.refresh(coordinator);
             }, [away, unknown, open, coordinator, projects]);
             const rows = React.useMemo(() => rowsOf(info?.roster, statuses, byId), [info?.roster, statuses, byId]);
+            const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, open);
+            const described = useProjectInfo(projects.link, sessionId, info !== undefined, open);
             if (info === undefined) return null;
 
             const counts = countsOf(rows);
@@ -1123,7 +1468,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             h(ui.IconChevronDownOutlineRegular, { size: 12, className: open ? 'dshp-t-chev dshp-t-chev-open' : 'dshp-t-chev' }));
 
             const notice = rosterNotice(info, rows, projects);
-            const openSettings = () => { change(false); projects.settings.open(sessionId); };
+            const openSettings = (pick) => { change(false); projects.settings.open(sessionId, typeof pick === 'string' ? { pick } : undefined); };
             const foot = [
                 projects.hasPane() ? h('button', { key: 'pane', type: 'button', className: 'dshp-t-foot-btn', 'data-dshp-item': '', onClick: () => { change(false); projects.openPane(); } },
                     h(ui.IconFlatListOutlineRegular, { size: 14 }), TEXT.openPane) : null,
@@ -1142,9 +1487,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             h('div', { className: 'dshp-t-menu-head' },
                 h(ProjectName, { info, here: sessionId, onOpen: () => openSession(coordinator) }),
                 info.roster !== null ? h('span', { className: 'dshp-t-count' }, summaryText(counts)) : null),
+            h(ModelsSummary, { ...summaryModels(cv, models, coordinator, described), onPick: settingsOn ? openSettings : undefined }),
             h('div', { className: 'dshp-t-menu-body' },
                 notice ?? h(ThreadList, {
-                    rows, current: sessionId, now,
+                    rows, current: sessionId, now, models,
                     onOpen: (row) => openSession(row.session),
                     action: { label: TEXT.openBeside, icon: ui.IconCompareSplitOutlineRegular, run: (row) => { change(false); projects.openBeside(row.session); } },
                 })),
@@ -1177,6 +1523,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (coordinator !== undefined && coordinator !== sessionId) projects.refresh(coordinator);
             }, [coordinator, sessionId, projects]);
             const rows = React.useMemo(() => rowsOf(info?.roster, statuses, byId), [info?.roster, statuses, byId]);
+            const visible = tab.visible !== false;
+            const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, info !== undefined && visible);
+            const described = useProjectInfo(projects.link, sessionId, info !== undefined, visible);
             if (info === undefined) {
                 return h('div', { className: 'dshp-t-pane', 'data-projects-threads-pane': '' }, h('div', { className: 'dshp-t-empty' }, TEXT.notProject));
             }
@@ -1193,8 +1542,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         type: 'button', className: 'dshp-t-icon', 'aria-label': SETTINGS.title, 'data-projects-settings-trigger': '',
                         onClick: () => projects.settings.open(sessionId),
                     }, h(ui.IconSlidersTwoOutlineRegular, { size: 14 })))) : null),
+            h(ModelsSummary, { ...summaryModels(cv, models, coordinator, described), onPick: settingsOn ? (pick) => projects.settings.open(sessionId, { pick }) : undefined }),
             notice ?? h(ThreadList, {
-                rows, current: sessionId, now,
+                rows, current: sessionId, now, models,
                 onOpen: (row) => {
                     try { tab.actions.openResource(chatAddress(row.session)); } catch { projects.openBeside(row.session); }
                 },
@@ -1423,7 +1773,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return h('div', { className: 'dshp-t-card', 'data-thread': view.threadId, 'data-card-kind': view.kind },
                 h('span', { className: 'dshp-t-card-icon', 'aria-hidden': true }, h(view.icon, { size: 16 })),
                 h('div', { className: 'dshp-t-card-text' },
-                    h('span', { className: 'dshp-t-card-verb' }, view.verb),
+                    h('span', { className: 'dshp-t-card-verb', title: view.model ? `${view.verb} · ${view.model}` : undefined },
+                        view.verb, view.model ? h('span', { className: 'dshp-t-card-model', 'data-projects-thread-model': '' }, ` · ${view.model}`) : null),
                     h('button', {
                         type: 'button', className: 'dshp-t-card-title', disabled: !enabled,
                         title: enabled ? `${TEXT.open}: ${view.title}` : undefined,
@@ -1445,11 +1796,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const info = useSessions((state) => projectContext(state, sessionId), sameContext);
             const statuses = useSessionStatus((value) => value);
             const byId = useSessions((state) => state.byId);
-            if (info === undefined) return null;
-            const views = cards.map((card) => cardView(card, info, statuses, byId, sessionId)).filter(Boolean);
+            const views = info === undefined ? EMPTY : cards.map((card) => cardView(card, info, statuses, byId, sessionId)).filter(Boolean);
+            // A coordinator's cards say what each thread runs on.
+            const threadSessions = views.filter((view) => view.threadId !== undefined && view.session !== undefined).map((view) => view.session);
+            const selections = useSelections(useSessions, threadSessions);
+            const cv = useCatalogView(projects.catalog, threadSessions.length > 0);
+            const key = threadSessions.join('\n');
+            React.useEffect(() => {
+                for (const id of threadSessions) projects.refresh(id);
+            }, [key, projects]);
             if (views.length === 0) return null;
             return h('div', { className: 'dshp-t-cards', 'data-projects-thread-cards': '' },
-                ...views.map((view) => h(ThreadCard, { key: view.key, view, projects })));
+                ...views.map((view) => h(ThreadCard, {
+                    key: view.key, projects,
+                    view: view.threadId !== undefined && view.session !== undefined ? { ...view, model: selectionText(cv, selections[view.session]) } : view,
+                })));
         }
 
         /** Under a finished turn: a card for each thread the turn started, steered, resolved or heard from. */
@@ -1660,37 +2021,47 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
         }
 
-        function ThreadHover({ sessionId, useSessions, useSessionStatus }) {
+        function ThreadHover({ sessionId, useSessions, useSessionStatus, projects }) {
             const info = useSessions((state) => projectContext(state, sessionId), sameContext);
             const statuses = useSessionStatus((value) => value);
             const byId = useSessions((state) => state.byId);
+            const picked = useSessions((state) => selectionIn(state, sessionId), sameSelection);
+            const cv = useCatalogView(projects.catalog, info !== undefined);
             if (info === undefined) return null;
             const project = info.project.name ?? '';
+            const runs = picked ? h('div', { className: 'dshp-t-hover-line', 'data-projects-thread-model': '' }, `Runs on ${selectionText(cv, picked)}`) : null;
             if (info.me.role === 'thread') {
                 const entry = (info.roster ?? EMPTY).find((t) => isObject(t) && t.session === sessionId);
                 const row = entry ? threadRow(entry, statuses, byId) : undefined;
                 return h('div', { className: 'dshp-t-hover', 'data-projects-thread-hover': '' },
                     h('div', { className: 'dshp-t-hover-head' }, h(ui.IconTreeCornerRegular, { size: 12 }), `Thread ${info.me.thread?.id ?? ''} of ◆ ${project}`),
-                    row && row.line ? h('div', { className: 'dshp-t-hover-line' }, row.line) : null);
+                    row && row.line ? h('div', { className: 'dshp-t-hover-line' }, row.line) : null,
+                    runs);
             }
             const counts = countsOf(rowsOf(info.roster, statuses, byId));
             return h('div', { className: 'dshp-t-hover', 'data-projects-thread-hover': '' },
                 h('div', { className: 'dshp-t-hover-head' }, h('span', { 'aria-hidden': true }, '◆'), `Coordinator of ${project}`),
-                h('div', { className: 'dshp-t-hover-line' }, counts.open + counts.resolved > 0 ? summaryText(counts).replace(/^(\d+) open/, (m, n) => plural(Number(n), 'open thread')) : 'No threads yet'));
+                h('div', { className: 'dshp-t-hover-line' }, counts.open + counts.resolved > 0 ? summaryText(counts).replace(/^(\d+) open/, (m, n) => plural(Number(n), 'open thread')) : 'No threads yet'),
+                runs);
         }
 
-        /** Navigation the thread views share; nothing here throws into React. */
-        function threadsApi(ctx, dialog = settingsDialog()) {
+        /** Navigation the thread views share, with the model catalog and the plugin's endpoints; nothing here throws into React. */
+        function threadsApi(ctx, dialog = settingsDialog(), shared = {}) {
             const warn = (what, error) => { console.warn(`[projects] ${what}: ${error?.message ?? error}`); };
             const openSession = (sessionId) => {
                 if (typeof sessionId !== 'string' || sessionId === '') return;
                 try { ctx.uiWorkspace.openSession(sessionId); } catch (error) { warn('could not open the session', error); }
             };
             const failed = new Set();
+            const catalog = shared.catalog ?? catalogSource(() => undefined);
             return {
                 openSession,
                 /** The Project settings dialog, for the entry points. */
                 settings: dialog,
+                /** DSH's model catalog, to name the models sessions run on. */
+                catalog,
+                /** The plugin's endpoints (remote.js). */
+                link: shared.link ?? hostLink(() => undefined, catalog),
                 openBeside(sessionId) {
                     if (typeof sessionId !== 'string' || sessionId === '') return;
                     try {
@@ -1720,8 +2091,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
         }
 
-        function applyThreads(ctx, dialog) {
-            const projects = threadsApi(ctx, dialog);
+        function applyThreads(ctx, dialog, shared) {
+            const projects = threadsApi(ctx, dialog, shared);
             const withApi = () => ({ projects });
             ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
                 name: 'conversation.session.header.actions', id: IDS.menu, order: -25, inject: withApi,
@@ -1735,7 +2106,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 name: 'sidebar.session.row.leading', id: IDS.mark, order: 20, inject: () => ({ nesting }),
             }, ThreadMark));
             ctx.slots.inject('sidebar.session.row.hover', () => ctx.slots.register({
-                name: 'sidebar.session.row.hover', id: IDS.hover, order: 20,
+                name: 'sidebar.session.row.hover', id: IDS.hover, order: 20, inject: withApi,
             }, ThreadHover));
             // The right-sidebar parts: a thread's chat, the Threads pane, and thread links from replies.
             ctx.inject(['resources', 'sidebarRightTabs'], (scope) => {
@@ -1801,15 +2172,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             useDefault: 'Use default',
             running: 'Running. A change applies from its next request.',
             resolved: 'Resolved.',
-            note: 'Projects that don\'t choose their own models use the plugin\'s Default models, in Settings → Plugins → dsh-plugin-projects.',
+            note: 'Projects that don\'t choose their own models use the plugin\'s Default models.',
+            openDefaults: 'Default models for all projects',
         };
         const SETTING_ROUTES = [
             { id: 'coordinator', title: 'Coordinator', hint: 'The ◆ session you talk to. A model you pick in its chat lands here too.', model: 'coordinatorModel', effort: 'coordinatorEffort' },
             { id: 'thread', title: 'New threads', hint: 'What each new thread starts on. Running threads keep theirs.', model: 'threadModel', effort: 'threadEffort' },
         ];
         /** Where an inherited value comes from, in the pickers' Default rows and under a row. */
-        const SOURCE_LABELS = { 'project setting': 'This project', 'project config': 'Your profile', 'plugin default': 'Plugin default', 'DSH default': 'DSH default' };
-        const SOURCE_CAPTIONS = { 'project config': 'From this project\'s row in your profile', 'plugin default': 'Plugin default', 'DSH default': 'DSH default: the model last picked in any DSH chat' };
+        const SOURCE_LABELS = { 'project setting': 'This project', 'project config': 'Your profile', 'plugin default': 'Default models', 'DSH default': 'DSH default' };
 
         /**
          * Which project the dialog shows, if any. Any part of the window opens
@@ -1817,7 +2188,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * services are there, marks it available so the entry points show.
          */
         function settingsDialog() {
-            let snapshot = { target: null, seq: 0, available: false };
+            let snapshot = { target: null, seq: 0, available: false, pick: null };
             const listeners = new Set();
             const set = (next) => {
                 snapshot = { ...snapshot, ...next };
@@ -1829,27 +2200,35 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     listeners.add(listener);
                     return () => listeners.delete(listener);
                 },
-                open(target) {
-                    if (typeof target === 'string' && target !== '' && snapshot.available) set({ target, seq: snapshot.seq + 1 });
+                /** @param options - {pick?: 'coordinator'|'thread'}: open with that model menu open. */
+                open(target, options) {
+                    const pick = options?.pick === 'coordinator' || options?.pick === 'thread' ? options.pick : null;
+                    if (typeof target === 'string' && target !== '' && snapshot.available) set({ target, seq: snapshot.seq + 1, pick });
                 },
                 close() {
                     if (snapshot.target !== null) set({ target: null });
                 },
                 connect() {
                     set({ available: true });
-                    return () => set({ available: false, target: null });
+                    return () => set({ available: false, target: null, pick: null });
                 },
             };
         }
         const useSettingsAvailable = (dialog) => React.useSyncExternalStore(dialog.subscribe, () => dialog.getSnapshot().available);
 
-        /** The plugin's endpoints (remote.js) and DSH's model catalog, over the window's own connection. */
-        function hostLink(ctx) {
+        /**
+         * The plugin's endpoints (remote.js) over the window's own connection,
+         * with DSH's model catalog.
+         * @param connectionOf - DSH's `connection` service, or undefined until DSH provides it.
+         */
+        function hostLink(connectionOf, catalog) {
             return {
-                catalog: catalogSource(ctx),
+                catalog,
                 async call(method, args) {
                     try {
-                        const result = await ctx.connection.rpc.call('/api', `${BUNDLE}/${method}`, { args });
+                        const connection = connectionOf();
+                        if (!connection) throw new Error('the window is not connected to DSH yet');
+                        const result = await connection.rpc.call('/api', `${BUNDLE}/${method}`, { args });
                         if (isObject(result) && (result.ok === true || (result.ok === false && isObject(result.error)))) return result;
                         return { ok: false, error: { code: 'projects/unreadable', message: 'The plugin sent an answer this window can\'t read.' } };
                     } catch (error) {
@@ -1913,7 +2292,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * then holds; it reads again every few seconds, so a change made in a
          * chat or by the coordinator shows up too.
          */
-        function ProjectSettings({ target, link, dialog, useSessionStatus }) {
+        function ProjectSettings({ target, pick, link, dialog, openDefaults, useSessionStatus }) {
             const catalog = React.useSyncExternalStore(link.catalog.subscribe, link.catalog.getSnapshot);
             const statuses = useSessionStatus((value) => value);
             const [data, setData] = React.useState(null);
@@ -1981,13 +2360,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     const source = own.model || own.effort
                         ? [h('span', { key: 'own', className: 'dshp-ps-own' }, SETTINGS.own),
                             h('button', { key: 'reset', type: 'button', className: 'dshp-ps-link', disabled, onClick: () => change(route.id, reset) }, SETTINGS.useDefault)]
-                        : [h('span', { key: 'from' }, SOURCE_CAPTIONS[m.source === 'DSH default' ? e.source : m.source] ?? '')];
+                        : [h('span', { key: 'from' }, sourceLine(m, levelsOf(shown) ? e : undefined, { long: true }))];
                     return h(SettingRow, {
                         key: route.id, id: route.id, title: route.title, description: route.hint, source, message: messageFor(route.id),
                         note: notesFor(shown, route.id === 'coordinator' ? data.project?.live : undefined, own.effort),
                         control: h(ModelPicker, {
                             id: `dshp-ps-${route.id}`, label: route.title, catalog: catalog.value, busy: busy === route.id, disabled,
-                            value: { model: m.value, effort: e.value }, own,
+                            value: { model: m.value, effort: e.value }, own, autoOpen: pick === route.id,
                             fallback: {
                                 model: m.inherited?.value, effort: e.inherited?.value,
                                 modelLabel: SOURCE_LABELS[m.inherited?.source], effortLabel: SOURCE_LABELS[e.inherited?.source],
@@ -2038,7 +2417,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             id: 'paused', title: SETTINGS.pause, description: SETTINGS.pauseHint, message: messageFor('paused'),
                             control: h(ui.Switch, { checked: data.paused?.value === true, label: SETTINGS.pause, disabled, onChange: (next) => change('paused', { paused: next }) }),
                         })),
-                    h('p', { key: 'note', className: 'dshp-ps-note' }, SETTINGS.note),
+                    h('p', { key: 'note', className: 'dshp-ps-note' }, SETTINGS.note,
+                        openDefaults ? [' ', h('button', {
+                            key: 'defaults', type: 'button', className: 'dshp-ps-link', 'data-projects-open-defaults': '',
+                            onClick: () => { if (openDefaults()) dialog.close(); },
+                        }, SETTINGS.openDefaults)] : null),
                 ];
             }
             const project = data?.project;
@@ -2052,10 +2435,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /** The dialog in DSH's overlay layer, mounted while a project's settings are open. */
-        function ProjectSettingsOverlay({ dialog, link, useSessionStatus }) {
+        function ProjectSettingsOverlay({ dialog, link, openDefaults, useSessionStatus }) {
             const state = React.useSyncExternalStore(dialog.subscribe, dialog.getSnapshot);
             if (state.target === null) return null;
-            return h(ProjectSettings, { key: `${state.target}\u0000${state.seq}`, target: state.target, link, dialog, useSessionStatus });
+            return h(ProjectSettings, {
+                key: `${state.target}\u0000${state.seq}`, target: state.target, pick: state.pick, link, dialog, useSessionStatus,
+                openDefaults: openDefaults(false) ? openDefaults : undefined,
+            });
         }
 
         /** "Project settings" in a project session's menu in the session list. */
@@ -2072,10 +2458,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, SETTINGS.title);
         }
 
-        function applySettings(ctx, dialog) {
-            const link = hostLink(ctx);
+        function applySettings(ctx, dialog, link) {
+            /** DSH's Plugins page, at this plugin; false when this DSH can't open it. Called without `go`, it only asks. */
+            const openDefaults = (go = true) => {
+                let nav;
+                try { nav = ctx.get?.('pluginNavigation'); } catch { nav = undefined; }
+                if (!nav || typeof nav.openBundle !== 'function') return false;
+                if (!go) return true;
+                try { nav.openBundle(BUNDLE); return true; } catch { return false; }
+            };
             ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-                name: 'shell.overlay', id: IDS.settings, inject: () => ({ dialog, link }),
+                name: 'shell.overlay', id: IDS.settings, inject: () => ({ dialog, link, openDefaults }),
             }, ProjectSettingsOverlay));
             ctx.slots.inject('sidebar.workspaces.session.menu.item', () => ctx.slots.register({
                 name: 'sidebar.workspaces.session.menu.item', id: IDS.settingsItem, order: 250, inject: () => ({ dialog }),
@@ -2088,9 +2481,23 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         function apply(ctx) {
             const dialog = settingsDialog();
-            ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => applyDefaultsForm(scope));
-            ctx.inject(['connection', 'remote', 'remote.session'], (scope) => applySettings(scope, dialog));
-            ctx.inject(['sessions', 'uiWorkspace', 'sidebarRight'], (scope) => applyThreads(scope, dialog));
+            // DSH's services the parts share, once DSH provides them: one model catalog and one link to the plugin.
+            const bound = {};
+            const bind = (name, then) => (scope) => scope.effect(() => {
+                const service = scope[name];
+                bound[name] = service;
+                then?.();
+                return () => { if (bound[name] === service) bound[name] = undefined; };
+            }, `projects: ${name}`);
+            const catalog = catalogSource(() => bound.remote);
+            const link = hostLink(() => bound.connection, catalog);
+            const sessionsOf = () => bound.sessions;
+            ctx.inject(['remote', 'remote.session'], bind('remote', () => catalog.reset()));
+            ctx.inject(['connection'], bind('connection'));
+            ctx.inject(['sessions'], bind('sessions'));
+            ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => applyDefaultsForm(scope, { catalog, link, dialog, sessionsOf }));
+            ctx.inject(['connection', 'remote', 'remote.session'], (scope) => applySettings(scope, dialog, link));
+            ctx.inject(['sessions', 'uiWorkspace', 'sidebarRight'], (scope) => applyThreads(scope, dialog, { catalog, link }));
         }
 
         module.exports.inject = inject;
@@ -2099,6 +2506,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.internals = {
             valueIn, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, nestingPlan,
             catalogView, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
+            selectionIn, selectionText, summaryModels, sourceLine, toldText,
         };
         return module.exports;
     },

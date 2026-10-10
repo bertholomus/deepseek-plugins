@@ -735,7 +735,7 @@ test('window: the Project settings endpoints read and change a project the way i
     // DSH's gateway finds the service by its binding and method markers.
     assert.equal(remote.typertRemote.namespace, 'dsh-plugin-projects');
     assert.equal(remote.typertRemote.serviceKey, 'dshPluginProjectsRemote');
-    assert.deepEqual(remoteMethods(remote).map((m) => m.method), ['describe', 'update']);
+    assert.deepEqual(remoteMethods(remote).map((m) => m.method), ['describe', 'list', 'update']);
     const refused = async (promise, pattern) => {
         await assert.rejects(promise, (error) => error.code === 'projects/refused' && pattern.test(error.message));
     };
@@ -781,6 +781,17 @@ test('window: the Project settings endpoints read and change a project the way i
     }), /paused/);
     after = await remote.update(coord.id, { paused: null });
     assert.deepEqual(plain(after.paused), { value: false, source: 'project config', inherited: false });
+
+    // The plugin's page lists every project with its settings and where each comes from.
+    const listed = plain(await remote.list());
+    assert.deepEqual(listed.projects.map(({ id, name, workspace, coordinator, paused, threads }) => ({ id, name, workspace, coordinator, paused, threads })),
+        [{ id: 'dsh-plugins', name: 'DSH Plugins', workspace: '/work/dsh', coordinator: coord.id, paused: false, threads: { open: 1, resolved: 0 } }]);
+    assert.deepEqual(listed.projects[0].settings, {
+        coordinatorModel: { value: null, source: 'DSH default' },
+        coordinatorEffort: { value: 'max', source: 'project config' },
+        threadModel: { value: 'other:big-model', source: 'project setting' },
+        threadEffort: { value: 'high', source: 'plugin default' },
+    });
 });
 
 /**
@@ -832,11 +843,17 @@ test('browser half: the defaults form registers on the plugin page, read-only wh
         },
     };
     client.apply(ctx);
-    assert.deepEqual(groups, [['configForms', 'remote', 'remote.session'], ['connection', 'remote', 'remote.session'], ['sessions', 'uiWorkspace', 'sidebarRight']]);
+    // The shared services first (model catalog, connection, sessions), then the three parts.
+    assert.deepEqual(groups, [['remote', 'remote.session'], ['connection'], ['sessions'],
+        ['configForms', 'remote', 'remote.session'], ['connection', 'remote', 'remote.session'], ['sessions', 'uiWorkspace', 'sidebarRight']]);
     assert.deepEqual(registered.map((r) => ({ ...r.slot })), [{ name: 'plugins.bundle.config', key: 'dsh-plugin-projects' }]);
     const page = registered[0].component;
     assert.match(page({ view: 'summary' }), /^Default models/);
-    const form = page({ view: 'page' }).props.form;
+    // The page: the Default models form, then every project with what it runs.
+    const [formPart, tablePart] = page({ view: 'page' }).children;
+    assert.equal(tablePart.type.name, 'ProjectsTable');
+    assert.deepEqual(Object.keys(tablePart.props).sort(), ['catalog', 'dialog', 'link', 'sessionsOf']);
+    const form = formPart.props.form;
     assert.equal(form.getSnapshot().coordinatorEffort.text, 'max');
     assert.equal(form.getSnapshot().insertedTwice, false);
     // The older setup adds the row with insert: the value the plugin runs with comes from neither layer a save edits.
@@ -908,20 +925,22 @@ test('browser half: Project settings opens per session, calls the plugin\'s endp
     assert.equal(dialog.getSnapshot().target, null);
     const disconnect = dialog.connect();
     dialog.open('s1');
-    assert.deepEqual(plain(dialog.getSnapshot()), { target: 's1', seq: 1, available: true });
-    dialog.open('s1');
-    assert.equal(dialog.getSnapshot().seq, 2, 'opening again starts fresh');
+    assert.deepEqual(plain(dialog.getSnapshot()), { target: 's1', seq: 1, available: true, pick: null });
+    dialog.open('s1', { pick: 'thread' });
+    assert.deepEqual(plain(dialog.getSnapshot()), { target: 's1', seq: 2, available: true, pick: 'thread' }, 'opening again starts fresh, here with the New threads menu open');
+    dialog.open('s1', { pick: 'nope' });
+    assert.equal(dialog.getSnapshot().pick, null);
     dialog.close();
     dialog.open('');
     assert.equal(dialog.getSnapshot().target, null);
     disconnect();
-    assert.deepEqual(plain(dialog.getSnapshot()), { target: null, seq: 2, available: false });
-    assert.equal(changes, 5);
+    assert.deepEqual(plain(dialog.getSnapshot()), { target: null, seq: 3, available: false, pick: null });
+    assert.equal(changes, 6);
 
     // Calls go over the window's connection to /api/dsh-plugin-projects/<method>.
     const sent = [];
     let reply = { ok: true, value: { project: { id: 'p' } } };
-    const link = hostLink({ connection: { rpc: { call: async (channel, endpoint, payload) => { sent.push([channel, endpoint, payload]); if (reply instanceof Error) throw reply; return reply; } } } });
+    const link = hostLink(() => ({ rpc: { call: async (channel, endpoint, payload) => { sent.push([channel, endpoint, payload]); if (reply instanceof Error) throw reply; return reply; } } }));
     assert.deepEqual(plain(await link.call('describe', { target: 's1' })), { ok: true, value: { project: { id: 'p' } } });
     assert.deepEqual(plain(sent), [['/api', 'dsh-plugin-projects/describe', { args: { target: 's1' } }]]);
     reply = { ok: false, error: { code: 'projects/refused', message: 'effort "ultra" is not offered by a:b. Choose one of: off, high' } };
@@ -931,6 +950,10 @@ test('browser half: Project settings opens per session, calls the plugin\'s endp
     assert.match(errorText((await link.call('update', {})).error), /didn't answer\. If it was just updated, restart DSH/);
     reply = 'garbage';
     assert.equal((await link.call('describe', {})).error.code, 'projects/unreadable');
+    // Before DSH has given the window its connection, a call says the plugin can't be reached.
+    const early = await hostLink(() => undefined).call('list', {});
+    assert.equal(early.error.code, 'projects/unreachable');
+    assert.match(errorText(early.error), /didn't answer/);
 
     // Only the notes that change what the user sees are shown.
     // Efforts a model can't use show on the row, so the notes about them are not repeated.
@@ -978,6 +1001,62 @@ test('browser half: Project settings opens per session, calls the plugin\'s endp
     assert.equal(live('deepseek-account:deepseek-v4', 'max', { provider: 'deepseek-account', model: 'deepseek-v4', reasoningEffort: 'low' }), 'It runs on V4 · Low right now.');
     assert.equal(live('deepseek-account:deepseek-v4', 'max', null), null);
     assert.equal(live('other:big-model', undefined, { provider: 'other', model: 'big-model' }), null);
+});
+
+test('browser half: rows, cards and the plugin page name what each session runs on, as DSH\'s model menu does', () => {
+    const { client } = loadClient();
+    const { selectionIn, selectionText, summaryModels, sourceLine, toldText, catalogView } = client.internals;
+    const cv = catalogView({
+        default: { provider: 'deepseek-account', model: 'deepseek-v4', reasoningEffort: 'low' },
+        groups: [
+            { id: 'other', name: 'Other', models: [{ id: 'big-model', name: 'Big' }] },
+            { id: 'deepseek-account', name: 'DeepSeek', models: [
+                { id: 'deepseek-v4', name: 'V4', reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'max', name: 'Max' }], defaultEffort: 'max' } },
+                { id: 'deepseek-v4-flash', name: 'V4 Flash', reasoning: { efforts: [{ id: 'off', name: 'Off' }] } },
+            ] },
+        ],
+    });
+    // DSH's own modelSelection projection: the next request's selection, else the last one used.
+    const picked = { provider: 'deepseek-account', model: 'deepseek-v4', reasoningEffort: 'low' };
+    const state = {
+        byId: { a: { projectionValues: { modelSelection: { lastUsed: { provider: 'other', model: 'big-model' }, next: picked } } } },
+        projectionsBySession: {
+            b: { values: { modelSelection: { lastUsed: { provider: 'other', model: 'big-model' }, next: null } } },
+            c: { values: { modelSelection: { lastUsed: null, next: null } } },
+        },
+    };
+    assert.deepEqual(plain(selectionIn(state, 'a')), picked);
+    assert.deepEqual(plain(selectionIn(state, 'b')), { provider: 'other', model: 'big-model' });
+    assert.equal(selectionIn(state, 'c'), undefined);
+    assert.equal(selectionIn(state, 'nope'), undefined);
+    // Named as DSH's composer names them.
+    assert.equal(selectionText(cv, picked), 'V4 · Low');
+    assert.equal(selectionText(cv, { provider: 'deepseek-account', model: 'deepseek-v4' }), 'V4 · Max', 'no effort: the model\'s default');
+    assert.equal(selectionText(cv, { provider: 'deepseek-account', model: 'deepseek-v4-flash' }), 'V4 Flash · Default', 'no default either: the provider\'s');
+    assert.equal(selectionText(cv, { provider: 'other', model: 'big-model', reasoningEffort: 'high' }), 'Big', 'a model without levels shows none');
+    assert.equal(selectionText(catalogView(undefined), { provider: 'x', model: 'm1', reasoningEffort: 'high' }), 'm1 · High', 'before the catalog arrives');
+    assert.equal(selectionText(cv, undefined), undefined);
+    // The menu's summary: what the coordinator runs on now, else its setting; what new threads start on.
+    const info = { settings: {
+        coordinatorModel: { value: null, source: 'DSH default' }, coordinatorEffort: { value: 'max', source: 'project config' },
+        threadModel: { value: 'other:big-model', source: 'project setting' }, threadEffort: { value: 'high', source: 'plugin default' },
+    } };
+    assert.deepEqual(plain(summaryModels(cv, {}, 'c1', info)), { coordinator: 'V4 · Max', thread: 'Big' });
+    assert.deepEqual(plain(summaryModels(cv, { c1: 'V4 Flash · Off' }, 'c1', info)), { coordinator: 'V4 Flash · Off', thread: 'Big' });
+    assert.deepEqual(plain(summaryModels(cv, {}, 'c1', null)), {});
+    // Where a project's setting comes from, on the plugin page.
+    assert.equal(sourceLine({ value: 'a:b', source: 'project setting' }, { value: 'max', source: 'project setting' }), 'Set for this project');
+    assert.equal(sourceLine({ value: 'a:b', source: 'plugin default' }, { value: 'max', source: 'project config' }), 'Model from Default models · effort from your profile');
+    assert.equal(sourceLine({ value: null, source: 'DSH default' }, { value: 'max', source: 'plugin default' }), 'Model follows DSH · effort from Default models');
+    assert.equal(sourceLine({ value: null, source: 'DSH default' }, { value: null, source: 'DSH default' }), 'Follows DSH\'s default model');
+    assert.equal(sourceLine({ value: null, source: 'DSH default' }, { value: null, source: 'DSH default' }, { long: true }), 'Follows DSH\'s default model, the one last picked in any DSH chat');
+    assert.equal(sourceLine({ value: 'a:b', source: 'project setting' }, { value: null, source: 'DSH default' }), 'Set for this project', 'an effort set nowhere is the model\'s own');
+    // A handback that starts with its own state doesn't say it twice.
+    assert.equal(toldText({ status: 'blocked', summary: 'Blocked: the token expired.' }), 'Blocked: the token expired.');
+    assert.equal(toldText({ status: 'done', summary: 'done.' }), 'done.');
+    assert.equal(toldText({ status: 'done', summary: 'Doneness checks pass.' }), 'Done · Doneness checks pass.');
+    assert.equal(toldText({ status: 'needs_decision', summary: 'Pick A or B.' }), 'Needs your decision · Pick A or B.');
+    assert.equal(toldText({ status: 'progress' }), 'Progress update');
 });
 
 test('browser half: thread rows, cards and links read the projection as DSH sends it', () => {
