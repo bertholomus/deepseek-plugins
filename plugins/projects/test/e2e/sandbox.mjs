@@ -8,9 +8,11 @@
  * scripted model, with DSH's default set to Full access (approvals
  * "never"), as in the user's DSH. A thread then writes one file inside its
  * folder and one just outside it, first plainly and then with DSH's wider
- * access retry; a plain session on DSH's default writes outside as a
- * control. It prints which approval policy the thread runs on and what DSH
- * did with each write.
+ * access retry, with DSH's write tool and then in its shell (which DSH runs
+ * under the system's sandbox: sandbox-exec on macOS, bubblewrap or Landlock
+ * on Linux, and refuses to run without one); a plain session on DSH's
+ * default writes outside as a control. It prints which approval policy the
+ * thread runs on and what DSH did with each write.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/projects/test/e2e/sandbox.mjs
  *
@@ -216,6 +218,9 @@ async function stopDsh(child) {
 const model = await startFakeModel({ models: ['fake-model'] });
 writeProfile(model.port);
 const resultsSince = (mark, needle) => model.requests.slice(mark).map((r) => r.action.text ?? '').filter((t) => t.startsWith('TOOL-RESULT:') && (!needle || t.includes(needle)));
+/** Tool results the thread (not its coordinator) saw since `mark`. */
+const threadResultsSince = (mark) => model.requests.slice(mark).filter((r) => !r.system.includes('You are the coordinator'))
+    .map((r) => r.action.text ?? '').filter((t) => t.startsWith('TOOL-RESULT:'));
 const coordinatorSaw = (mark, reply) => model.requests.slice(mark).some((r) => r.action.text === reply && r.system.includes('You are the coordinator'));
 
 async function waitIdle(sessionId, timeout = 30000) {
@@ -287,13 +292,57 @@ try {
     await sleep(500);
     check('stopped without an answer, nothing is written outside', !existsSync(beside));
 
-    // 5. Control: a session on DSH's default (Full access, approvals "never") writes outside its folder without asking.
+    // 5. The same in the thread's shell, which DSH confines with a sandbox backend (sandbox-exec on macOS,
+    //    bubblewrap or Landlock on Linux); without one it refuses to run the command at all.
+    const shell = (command, extra = {}) => call('bash', { command, description: 'Write a note', ...extra });
+    const insideShell = join(ws, 'inside-shell.txt');
+    const besideShell = join(root, 'beside-shell.txt');
+    await waitIdle(coord);
+    mark = model.requests.length;
+    await send(shell(`printf 'inside\\n' > ${JSON.stringify(insideShell)}`));
+    const ran = await waitFor(() => threadResultsSince(mark)[0], 'the shell write inside', 60000);
+    await waitIdle(thread);
+    const unavailable = /no sandbox backend is usable/.test(ran);
+    summary.shellInside = unavailable ? ran.replace('TOOL-RESULT: ', '').slice(0, 400) : (readText(insideShell) === 'inside\n' ? 'written' : ran.slice(0, 300));
+    check('the thread\'s shell runs on Workspace Write (DSH has a sandbox backend here) and writes inside its folder', !unavailable && readText(insideShell) === 'inside\n', ran.slice(0, 500));
+    if (!unavailable) {
+        await waitIdle(coord);
+        mark = model.requests.length;
+        await send(shell(`printf 'outside\\n' > ${JSON.stringify(besideShell)}`));
+        const denied = await waitFor(() => threadResultsSince(mark)[0], 'the shell write outside', 60000);
+        await waitIdle(thread);
+        summary.shellOutside = denied.replace('TOOL-RESULT: ', '').slice(0, 400);
+        check('the thread\'s shell can\'t write just outside its folder, and DSH says a retry asks the user', !existsSync(besideShell)
+            && denied.includes('the approval prompt asks the user'), denied.slice(0, 500));
+        const before = (await events(thread, 'approval/asked')).length;
+        await waitIdle(coord);
+        mark = model.requests.length;
+        await send(shell(`printf 'outside\\n' > ${JSON.stringify(besideShell)}`, { sandbox_permissions: 'danger-full-access', justification: 'The user asked for a note next to the project folder.' }));
+        await waitFor(async () => (await events(thread, 'approval/asked')).length > before, 'DSH\'s approval request for the shell', 60000).catch(() => null);
+        const asked = (await events(thread, 'approval/asked')).length > before;
+        const held = await bridge('GET', `/sessions/${thread}`);
+        check('the shell\'s retry with wider access raises DSH\'s approval request, and nothing is written', asked && held.turns.started > held.turns.ended && !existsSync(besideShell),
+            JSON.stringify({ asked, turns: held.turns, results: threadResultsSince(mark) }).slice(0, 500));
+        await bridge('POST', `/sessions/${thread}/cancel`, {});
+        await waitIdle(thread);
+        await sleep(500);
+        check('stopped without an answer, the shell wrote nothing outside', !existsSync(besideShell));
+    }
+
+    // 6. Control: a session on DSH's default (Full access, approvals "never") writes outside its folder without asking,
+    //    with the write tool and with its shell.
     mark = model.requests.length;
     const own = await bridge('POST', '/sessions', { workspacePath: plain, text: call('write', { file_path: control, content: 'control\n' }) });
     await waitFor(() => resultsSince(mark)[0], 'the control write', 60000);
     await waitIdle(own.sessionId);
     check('a session on DSH\'s default writes outside its folder without asking', readText(control) === 'control\n'
         && (await events(own.sessionId, 'approval/asked')).length === 0, JSON.stringify(resultsSince(mark)).slice(0, 300));
+    const controlShell = join(root, 'control-shell.txt');
+    mark = model.requests.length;
+    await bridge('POST', `/sessions/${own.sessionId}/prompt`, { text: shell(`printf 'control\\n' > ${JSON.stringify(controlShell)}`) });
+    await waitFor(() => resultsSince(mark)[0], 'the control shell write', 60000);
+    await waitIdle(own.sessionId);
+    check('its shell does too', readText(controlShell) === 'control\n' && (await events(own.sessionId, 'approval/asked')).length === 0, JSON.stringify(resultsSince(mark)).slice(0, 300));
 } catch (error) {
     failed += 1;
     console.log(`not ok - scenario aborted: ${error.message}`);
