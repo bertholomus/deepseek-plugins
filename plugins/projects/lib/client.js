@@ -67,7 +67,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const CSS = [
             // Keyboard focus: DSH's ring on every plugin control. DSH's own buttons (Open, Retry, Save…) get its outline;
             // the plugin's own controls draw it inset below, so a scrolling list can't clip it.
-            `:where(.dshp-t-card-actions,.dshp-t-paused,.dshp-dock,.dshp-ps,.dshp-page,.dshp-t-chat-bar,.dshp-t-pane-gear) button:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid ${RING};outline-offset:2px}`,
+            `:where(.dshp-t-card-actions,.dshp-t-paused,.dshp-dock,.dshp-ps,.dshp-page,.dshp-pg-actions,.dshp-pg-empty,.dshp-t-chat-bar,.dshp-t-pane-gear) button:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid ${RING};outline-offset:2px}`,
             // Default models form
             '.dshp-heading{margin:0 0 4px;font-size:14px;font-weight:600;line-height:1.5;color:var(--dsw-alias-label-primary)}',
             '.dshp-section{display:flex;flex-direction:column;gap:2px;padding:12px 0}',
@@ -141,6 +141,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-mp-empty{padding:8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
             // Threads: header menu
             '.dshp-t-hdr{position:relative;display:inline-flex;align-items:center;gap:2px;min-width:0}',
+            // A project session's title is its own name (no project prefix), so its header crumb may use more of the
+            // header than DSH's 220 px; it still gives way first when the header is narrow.
+            'header:has([data-projects-threads]) nav [class*="crumbCurrent"]{max-width:min(560px,40vw)}',
             '.dshp-t-trigger{display:inline-flex;align-items:center;gap:5px;min-width:0;min-height:28px;padding:3px 6px;border:0;border-radius:var(--dsw-radius-sm);background:none;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap;cursor:pointer}',
             '.dshp-t-trigger:hover,.dshp-t-trigger:focus-visible,.dshp-t-trigger[aria-expanded=true]{color:var(--dsw-alias-label-primary)}',
             `.dshp-t-trigger:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover);box-shadow:inset 0 0 0 2px ${RING}}`,
@@ -299,12 +302,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             'button[title*=".dsh-thread/"]>svg:first-child{display:none}',
             `button[title*=".dsh-thread/"][title]{color:${LINK_TEXT}}`,
             `button[title*=".dsh-thread/"]::before{content:"";display:inline-block;flex:none;width:1.1em;height:1.1em;margin-right:5px;vertical-align:-.25em;background-color:currentColor;-webkit-mask:${BRANCH_MASK} center/contain no-repeat;mask:${BRANCH_MASK} center/contain no-repeat}`,
-            // Threads: session list rows. A thread row right under its coordinator (rowNesting) is indented so
-            // its corner sits under the coordinator's ◆; a thread row anywhere else keeps a branch mark.
+            // DSH draws the link as an inline block, which sits on its last line: in a list, a link that wraps would
+            // pull the bullet down to its second line, so it hangs from the top of the line instead.
+            'li button[title*=".dsh-thread/"]{vertical-align:top}',
+            // Threads: session list rows. A thread row right under its coordinator is indented so its corner sits
+            // under the coordinator's ◆ (the rules come with the coordinator's row, see RowPlace); a thread row
+            // anywhere else keeps a branch mark.
             '.dshp-t-mark{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:20px;color:var(--dsw-alias-label-tertiary)}',
-            '.dshp-t-branch,[data-projects-nest] .dshp-t-corner{display:inline-flex}',
-            '.dshp-t-corner,[data-projects-nest] .dshp-t-branch{display:none}',
-            '[data-row-key][data-projects-nest]{padding-inline-start:calc(var(--dshp-nest,30px) + var(--dsh-workspace-indent,0px))}',
+            '.dshp-t-branch{display:inline-flex}',
+            '.dshp-t-corner{display:none}',
             '.dshp-t-hover{display:flex;flex-direction:column;gap:2px;font-size:12px;line-height:16px;color:#cfd3d6}',
             '.dshp-t-hover-head{display:flex;align-items:center;gap:6px;color:#fff}',
             '.dshp-t-hover-line{color:#adb2b8;overflow-wrap:anywhere}',
@@ -353,6 +359,51 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-ps-note{margin:18px 2px 0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
             '.dshp-ps-state{display:flex;flex-direction:column;align-items:center;gap:10px;padding:36px 12px;text-align:center;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
             `.dshp-ps-state.dshp-ps-error{color:${ERROR_TEXT}}`,
+            // The Projects page (the Projects entry in the sidebar): DSH's page layout, as on Automation tasks,
+            // with a card per project and its threads by state.
+            '.dshp-pg{display:flex;width:100%;min-width:0;height:100%;min-height:0;overflow:hidden;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);font-size:14px;line-height:1.6}',
+            '.dshp-pg-scroll{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;--dsh-scrollbar-width:9px;--dsh-scrollbar-thumb-border:2px}',
+            '.dshp-pg-content{max-width:960px;margin:0 auto;padding:0 clamp(24px,4vw,48px) 48px}',
+            '.dshp-pg-heading{display:flex;align-items:baseline;gap:12px;margin-bottom:20px;padding-top:28px}',
+            '[data-platform=darwin] .dshp-pg-heading{padding-top:calc(28px + var(--dsh-frame-top-clearance,0px))}',
+            '.dshp-pg-heading h1{margin:0;font-size:20px;font-weight:500;line-height:28px}',
+            '.dshp-pg-count{font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-list{display:flex;flex-direction:column;gap:16px;margin:0;padding:0;list-style:none}',
+            '.dshp-pg-card{border:.5px solid var(--dsw-alias-border-l3);border-radius:16px;background:var(--dsw-alias-bg-base)}',
+            '.dshp-pg-head{display:flex;align-items:center;gap:12px;min-height:32px;padding:14px 14px 0 18px}',
+            '.dshp-pg-title{display:flex;align-items:center;gap:10px;flex:1;min-width:0;margin:0;font-size:16px;font-weight:500;line-height:24px}',
+            '.dshp-pg-name{display:inline-flex;align-items:center;gap:8px;min-width:0;max-width:100%;padding:0;border:0;border-radius:4px;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer}',
+            '.dshp-pg-name:disabled{cursor:default}',
+            '.dshp-pg-name:not(:disabled):hover .dshp-pg-name-text{text-decoration:underline;text-underline-offset:3px}',
+            `.dshp-pg-name:focus-visible{outline:none;box-shadow:0 0 0 2px ${RING}}`,
+            '.dshp-pg-diamond{flex:none;font-size:13px}',
+            '.dshp-pg-name-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshp-pg-badge{flex:none;display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px;border-radius:11px;background:var(--dsw-alias-interactive-bg-hover);font-size:12px;font-weight:400;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-actions{flex:none;display:flex;align-items:center;gap:6px}',
+            '.dshp-pg-meta{display:flex;flex-wrap:wrap;align-items:center;min-width:0;padding:2px 18px 0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-meta>*+*::before{content:"·";padding:0 6px}',
+            '.dshp-pg-folder{display:inline-flex;align-items:center;gap:4px;min-width:0}',
+            '.dshp-pg-folder>svg{flex:none}',
+            '.dshp-pg-models{display:flex;flex-wrap:wrap;gap:2px 16px;padding:2px 18px 0;font-size:13px;line-height:20px}',
+            '.dshp-pg-model{display:inline-flex;align-items:baseline;gap:6px;min-width:0;padding:0;border:0;border-radius:4px;background:none;font:inherit;color:var(--dsw-alias-label-primary);text-align:left}',
+            '.dshp-pg-model>span:first-child{color:var(--dsw-alias-label-secondary)}',
+            'button.dshp-pg-model{cursor:pointer}',
+            'button.dshp-pg-model:hover>span:last-child{text-decoration:underline;text-underline-offset:3px}',
+            `button.dshp-pg-model:focus-visible{outline:none;box-shadow:0 0 0 2px ${RING}}`,
+            '.dshp-pg-body{padding:10px 8px 8px}',
+            '.dshp-pg-body .dshp-t-paused{margin:0 4px 6px}',
+            '.dshp-pg-body .dshp-t-row{grid-template-columns:16px minmax(0,1fr) auto;column-gap:10px;min-height:52px;padding:8px 10px;border-radius:12px;font-size:14px;line-height:21px}',
+            '.dshp-pg-body .dshp-t-dot{width:16px;height:21px}',
+            '.dshp-pg-body .dshp-t-line,.dshp-pg-body .dshp-t-meta{height:auto;font-size:13px;line-height:20px}',
+            '.dshp-pg-body .dshp-t-group{padding:8px 10px 4px;font-size:12px;line-height:18px}',
+            '.dshp-pg-body .dshp-t-notice{padding:6px 10px 8px;font-size:13px;line-height:20px}',
+            '.dshp-pg-state{padding:48px 0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
+            `.dshp-pg-state.dshp-t-error{color:${ERROR_TEXT}}`,
+            '.dshp-pg-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:72px 20px;text-align:center;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-pg-empty-glyph{display:inline-flex;margin-bottom:4px;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-pg-empty h2{margin:0;font-size:15px;font-weight:500;line-height:22px;color:var(--dsw-alias-label-primary)}',
+            '.dshp-pg-empty p{max-width:440px;margin:0;font-size:13px;line-height:21px}',
+            '.dshp-pg-empty .dshp-pg-cta{margin-top:12px}',
         ].join('');
         const CSS_ID = `${BUNDLE}/client.css`;
         if (typeof document !== 'undefined' && document.querySelector(`style[data-plugin-css=${JSON.stringify(CSS_ID)}]`) === null) {
@@ -1114,6 +1165,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             settings: `${BUNDLE}/project-settings`,
             settingsItem: `${BUNDLE}/project-settings-item`,
             paused: `${BUNDLE}/paused-bar`,
+            place: `${BUNDLE}/row-place`,
+            page: `${BUNDLE}/projects`,
         };
         /** The conversation inside a thread's sidebar chat; its tab body declares it. */
         const CONVERSATION_SLOT = 'projects.thread.conversation';
@@ -1301,6 +1354,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const listeners = new Set();
             let version = 0;
             let timer;
+            /** The last list answer (null until one came), and whether the last read failed. */
+            let listed = null;
+            let listFailed = false;
             const emit = () => {
                 version += 1;
                 for (const listener of [...listeners]) listener();
@@ -1338,7 +1394,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
             const list = (maxAge = 0) => once('list', maxAge, async () => {
                 const result = await link.call('list', {});
-                if (!result.ok || !Array.isArray(result.value?.projects)) return;
+                if (!result.ok || !Array.isArray(result.value?.projects)) {
+                    if (!listFailed) { listFailed = true; emit(); }
+                    return;
+                }
+                listFailed = false;
+                listed = result.value.projects.filter((p) => isObject(p) && typeof p.id === 'string');
                 for (const p of result.value.projects) {
                     if (!isObject(p) || typeof p.coordinator !== 'string') continue;
                     pausedAt.set(p.coordinator, p.paused === true);
@@ -1365,6 +1426,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     const id = projectOf.get(target) ?? (described.has(target) ? target : undefined);
                     return id === undefined ? null : described.get(id) ?? null;
                 },
+                /** Every project as `list` last answered (null until it has), and whether the last read failed. */
+                projects: () => listed,
+                listFailed: () => listFailed,
                 /** Whether a coordinator's project is paused, as last read; undefined until read. */
                 paused(coordinator) {
                     const d = this.info(coordinator);
@@ -1755,9 +1819,22 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return quiet ? h(ui.Tooltip, { label: `Runs on ${model}`, side: 'right', delayMs: 500, focusDelayMs: 300, portal: true }, body) : body;
         }
 
-        /** Rows grouped as Waiting on you, Running, Done, Idle and Resolved (folded). */
-        function ThreadList({ rows, current, now, models, quietModel, changes, onOpen, action, projects }) {
-            const [showResolved, setShowResolved] = React.useState(() => rows.some((row) => row.group === 'resolved' && row.session === current));
+        /** The groups a thread list folds behind a count until clicked. */
+        const FOLDED = Object.freeze(['resolved']);
+
+        /**
+         * Rows grouped as Waiting on you, Running, Done, Idle and Resolved.
+         * A group in `fold` shows as "Resolved · 3" and opens on a click; it
+         * starts open when it holds the current chat's row.
+         */
+        function ThreadList({ rows, current, now, models, quietModel, changes, onOpen, action, projects, fold = FOLDED }) {
+            const [shown, setShown] = React.useState(() => new Set(rows.filter((row) => row.session !== undefined && row.session === current).map((row) => row.group)));
+            const toggle = (id) => setShown((prev) => {
+                const next = new Set(prev);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+            });
             return GROUPS.map((group) => {
                 const members = rows.filter((row) => row.group === group.id);
                 if (members.length === 0) return null;
@@ -1766,16 +1843,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     model: row.session !== undefined ? models?.[row.session] : undefined,
                     changes: changes?.[row.id],
                 }));
-                if (group.id !== 'resolved') {
+                if (!fold.includes(group.id)) {
                     return h('div', { key: group.id, role: 'group', 'aria-label': group.label, 'data-thread-group': group.id },
                         h('div', { className: 'dshp-t-group' }, group.label), ...list);
                 }
+                const open = shown.has(group.id);
                 return h('div', { key: group.id, role: 'group', 'aria-label': group.label, 'data-thread-group': group.id },
                     h('button', {
-                        type: 'button', className: 'dshp-t-group', 'data-dshp-item': '', 'aria-expanded': showResolved,
-                        onClick: () => setShowResolved((value) => !value),
+                        type: 'button', className: 'dshp-t-group', 'data-dshp-item': '', 'aria-expanded': open,
+                        onClick: () => toggle(group.id),
                     }, h(ui.IconChevronRightOutlineRegular, { size: 12 }), `${group.label} · ${members.length}`),
-                    ...(showResolved ? list : []));
+                    ...(open ? list : []));
             });
         }
 
@@ -2602,18 +2680,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * A row's mark: a corner while it nests under its coordinator, a
-         * branch anywhere else (CSS picks), or the thread's state dot when it
+         * branch anywhere else (nestingRules picks), or the thread's state dot when it
          * failed or waits on the user; a pause sign on a paused project's
          * coordinator.
          */
-        function ThreadMark({ sessionId, useSessions, nesting, projects }) {
+        function ThreadMark({ sessionId, useSessions, projects }) {
             const thread = useSessions((state) => isThreadRow(state, sessionId));
             const coordinator = useSessions((state) => !isThreadRow(state, sessionId) && coordinatorName(state, sessionId) !== undefined);
             const paused = usePaused(projects.facts, coordinator ? sessionId : undefined, coordinator ? 'list' : null) === true;
             const mark = useSessions((state) => (thread ? markState(state, sessionId) : ''));
             const parent = useSessions((state) => (thread ? valueIn(state, sessionId)?.coordinator : undefined));
-            // Every idle row mounts this seat, so a list that comes back (the sidebar reopened) gets nested again.
-            React.useLayoutEffect(() => { nesting?.soon(); }, [nesting, thread]);
             // A thread row's state comes from its own session and its coordinator's roster; read both once if DSH hasn't.
             React.useEffect(() => { if (thread) projects.refresh(sessionId); }, [thread, sessionId, projects]);
             React.useEffect(() => { if (typeof parent === 'string' && parent !== '') projects.refresh(parent); }, [parent, projects]);
@@ -2640,157 +2716,77 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return typeof title === 'string' && title.startsWith('◆ ') && title.length > 2 ? title.slice(2) : undefined;
         }
 
-        /**
-         * Which rows of DSH's session list sit under their coordinator. DSH
-         * draws every session as a top-level row, in recency or manual order,
-         * so a thread is under its coordinator only while the two are
-         * neighbours: a thread row nests when the row right above it is its
-         * coordinator, or a thread of the same coordinator that nests. Any
-         * other row above (a workspace header, another session) ends the run.
-         * @param state - DSH's session list state.
-         * @param keys - the list's `data-row-key`s, top to bottom.
-         * @returns for each thread row's key: whether it nests, its full title, and its title without "<project> › ".
-         */
-        function nestingPlan(state, keys) {
-            const names = new Map();
-            for (const id of Object.keys(state?.byId ?? {})) {
-                const name = coordinatorName(state, id);
-                if (name !== undefined && !names.has(name)) names.set(name, id);
-            }
-            const plan = new Map();
-            let above;
-            for (const key of keys) {
-                const id = typeof key === 'string' && key.startsWith('session:') ? key.slice(8) : undefined;
-                const value = valueIn(state, id);
-                const title = typeof state?.byId?.[id]?.title === 'string' ? state.byId[id].title : '';
-                const at = title.indexOf(' › ');
-                let row;
-                if (id !== undefined && (value?.role === 'coordinator' || (!value && coordinatorName(state, id) !== undefined))) {
-                    row = { role: 'coordinator', of: id };
-                } else if (id !== undefined && (value?.role === 'thread' || (!value && at > 0 && names.has(title.slice(0, at))))) {
-                    const of = value && typeof value.coordinator === 'string' && value.coordinator !== '' ? value.coordinator : names.get(title.slice(0, at));
-                    if (of !== undefined) {
-                        const nested = above !== undefined && above.of === of && (above.role === 'coordinator' || above.nested);
-                        const name = coordinatorName(state, of);
-                        const prefix = name === undefined ? undefined : `${name} › `;
-                        const short = prefix !== undefined && title.startsWith(prefix) && title.length > prefix.length ? title.slice(prefix.length) : undefined;
-                        row = { role: 'thread', of, nested };
-                        plan.set(key, { nested, full: title, short });
-                    }
+        /** Coordinator session ids by project name, once per session list state. */
+        const coordinatorIdsCache = new WeakMap();
+        function coordinatorIds(state) {
+            if (!isObject(state)) return new Map();
+            let ids = coordinatorIdsCache.get(state);
+            if (ids === undefined) {
+                ids = new Map();
+                for (const id of Object.keys(state.byId ?? {})) {
+                    const name = coordinatorName(state, id);
+                    if (name !== undefined && !ids.has(name)) ids.set(name, id);
                 }
-                above = row;
+                coordinatorIdsCache.set(state, ids);
             }
-            return plan;
+            return ids;
         }
 
         /**
-         * Keeps DSH's session list showing threads under their coordinator.
-         * After each change to the list's rows (a mutation observer on the
-         * list) or to the session store, one pass over the rendered rows
-         * applies nestingPlan: a nesting row gets `data-projects-nest`, which
-         * the CSS indents, and its title loses the "<project> › " that the
-         * coordinator above already says. It only sets that attribute and the
-         * title's text, which React leaves alone until the title itself
-         * changes, and it puts both back when the plugin stops.
+         * A session list row's place in a project: `coordinator:<its id>`,
+         * `thread:<its coordinator's id>`, or '' for any other session.
          */
-        function rowNesting(sessions) {
-            const ATTR = 'data-projects-nest';
-            /** Rows whose title shows our short text, with that text. */
-            const shown = new WeakMap();
-            let tree = null;
-            let observer = null;
-            let frame = 0;
-            let queued = false;
-            let running = false;
-            let warned = false;
+        function rowPlace(state, sessionId) {
+            if (!isObject(state)) return '';
+            const value = valueIn(state, sessionId);
+            if (value?.role === 'coordinator' || (!value && coordinatorName(state, sessionId) !== undefined)) return `coordinator:${sessionId}`;
+            if (value?.role === 'thread') return typeof value.coordinator === 'string' && value.coordinator !== '' ? `thread:${value.coordinator}` : '';
+            if (value || !isThreadRow(state, sessionId)) return '';
+            // A thread from before titles lost "<project> › ", whose projection hasn't reached the list yet.
+            const title = state.byId[sessionId].title;
+            const of = coordinatorIds(state).get(title.slice(0, title.indexOf(' › ')));
+            return of === undefined ? '' : `thread:${of}`;
+        }
 
-            const titleOf = (row) => {
-                for (const el of row.children) {
-                    if (typeof el.className === 'string' && /(?:^|\s)[\w-]*_title(?:\s|$)/.test(el.className)) return el;
-                }
-                return undefined;
-            };
-            /** The title's single text node, the only thing React renders there. */
-            const textOf = (row) => {
-                const span = titleOf(row);
-                const node = span?.firstChild;
-                return node && node === span.lastChild && node.nodeType === 3 ? node : undefined;
-            };
-            function show(row, entry) {
-                const node = textOf(row);
-                if (node === undefined) return;
-                const mine = shown.get(row);
-                const want = entry?.nested && entry.short !== undefined ? entry.short : undefined;
-                if (want !== undefined) {
-                    // Swap only what React wrote (the full title) or what we wrote before; anything else is DSH's own label.
-                    if (node.nodeValue !== entry.full && node.nodeValue !== mine) return;
-                    if (node.nodeValue !== want) node.nodeValue = want;
-                    shown.set(row, want);
-                } else if (mine !== undefined) {
-                    if (node.nodeValue === mine && entry?.full) node.nodeValue = entry.full;
-                    shown.delete(row);
-                }
-            }
-            function watch() {
-                const found = document.querySelector('[role="tree"] [data-row-key^="session:"]')?.closest('[role="tree"]') ?? null;
-                if (found === tree) return;
-                observer?.disconnect();
-                tree = found;
-                if (tree === null) return;
-                observer ??= new MutationObserver(run);
-                observer.observe(tree, { childList: true, subtree: true, characterData: true });
-            }
-            function pass(off) {
-                const rows = tree === null ? [] : [...tree.querySelectorAll('[data-row-key]')];
-                const state = sessions.list.getSnapshot();
-                const plan = off ? new Map() : nestingPlan(state, rows.map((row) => row.getAttribute('data-row-key')));
-                for (const row of rows) {
-                    const key = row.getAttribute('data-row-key');
-                    let entry = plan.get(key);
-                    if (entry === undefined && shown.has(row)) {
-                        const id = key?.startsWith('session:') ? key.slice(8) : undefined;
-                        entry = { nested: false, full: state?.byId?.[id]?.title };
-                    }
-                    const nested = entry?.nested === true;
-                    if (row.hasAttribute(ATTR) !== nested) row.toggleAttribute(ATTR, nested);
-                    show(row, entry);
-                }
-            }
-            function run() {
-                if (!running) return;
-                try {
-                    watch();
-                    pass(false);
-                } catch (error) {
-                    if (!warned) console.warn(`[projects] could not nest thread rows: ${error?.message ?? error}`);
-                    warned = true;
-                }
-            }
-            return {
-                /** Nest before the next paint (rows just mounted). */
-                soon() {
-                    if (queued || !running) return;
-                    queued = true;
-                    queueMicrotask(() => { queued = false; run(); });
-                },
-                start() {
-                    running = true;
-                    const unsubscribe = sessions.list.subscribe(() => {
-                        if (frame !== 0 || !running) return;
-                        frame = requestAnimationFrame(() => { frame = 0; run(); });
-                    });
-                    run();
-                    return () => {
-                        running = false;
-                        unsubscribe();
-                        if (frame !== 0) cancelAnimationFrame(frame);
-                        frame = 0;
-                        observer?.disconnect();
-                        try { pass(true); } catch {}
-                        tree = null;
-                    };
-                },
-            };
+        /**
+         * The CSS that nests a coordinator's threads under it in DSH's session
+         * list. Each row of the list sits in a wrapper of its own and the
+         * wrappers are siblings; RowPlace marks each row from inside it. A
+         * thread's wrapper nests when every wrapper between it and the
+         * coordinator's holds a thread of that coordinator. DSH lists every
+         * session as a top-level row, in recency or manual order, so any other
+         * row in between ends the run, and a thread above its coordinator
+         * stays where DSH put it, with its branch mark.
+         * @param of - the coordinator's session id.
+         */
+        function nestingRules(of) {
+            if (typeof of !== 'string' || !/^[\w.:-]+$/.test(of)) return '';
+            const holds = (role) => `:has(>[data-row-key] [data-projects-row="${role}"][data-projects-of="${of}"])`;
+            const C = holds('coordinator');
+            const T = holds('thread');
+            const nested = `[role="tree"] ${C}~${T}:not(${C}~:not(${T})~*)`;
+            return [
+                `${nested}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,30px) + var(--dsh-workspace-indent,0px))}`,
+                `${nested} .dshp-t-corner{display:inline-flex}`,
+                `${nested} .dshp-t-branch{display:none}`,
+            ].join('\n');
+        }
+
+        /**
+         * A row's place in its project, from inside the row: a hidden mark in
+         * the row's actions seat, which DSH mounts on every row whether it is
+         * idle or busy, for nestingRules to read; and on a coordinator's row,
+         * those rules, which come and go with the row. Nothing of DSH's own
+         * is changed.
+         */
+        function RowPlace({ sessionId, useSessions }) {
+            const place = useSessions((state) => rowPlace(state, sessionId));
+            if (place === '') return null;
+            const at = place.indexOf(':');
+            const role = place.slice(0, at);
+            const of = place.slice(at + 1);
+            return h('span', { hidden: true, 'data-projects-row': role, 'data-projects-of': of },
+                role === 'coordinator' ? h('style', null, nestingRules(of)) : null);
         }
 
         /**
@@ -2941,6 +2937,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 hasPane() {
                     try { return ctx.get('sidebarRightTabs')?.get?.(KINDS.pane) !== undefined; } catch { return false; }
                 },
+                /** DSH's Plugins page at this plugin (its Default models and projects); undefined where DSH can't open it. */
+                get openDefaults() {
+                    let nav;
+                    try { nav = ctx.get?.('pluginNavigation'); } catch { nav = undefined; }
+                    if (!nav || typeof nav.openBundle !== 'function') return undefined;
+                    return () => {
+                        try { nav.openBundle(BUNDLE); } catch (error) { warn('could not open the plugin\'s page', error); }
+                    };
+                },
                 /** Read a session's projections once per connection; `again` retries a failed read. */
                 refresh(sessionId, again = false) {
                     if (typeof sessionId !== 'string' || sessionId === '') return;
@@ -2964,17 +2969,26 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
                 name: 'conversation.chat.turnTail', id: IDS.cards, order: 30, inject: withApi,
             }, ThreadCards));
-            const nesting = rowNesting(ctx.sessions);
-            ctx.effect(() => nesting.start(), 'projects: threads under their coordinator in the session list');
             ctx.slots.inject('sidebar.session.row.leading', () => ctx.slots.register({
-                name: 'sidebar.session.row.leading', id: IDS.mark, order: 20, inject: () => ({ nesting, projects }),
+                name: 'sidebar.session.row.leading', id: IDS.mark, order: 20, inject: withApi,
             }, ThreadMark));
+            // Threads under their coordinator in the session list: a mark inside each row, read by CSS.
+            ctx.slots.inject('sidebar.workspaces.session.row.action', () => ctx.slots.register({
+                name: 'sidebar.workspaces.session.row.action', id: IDS.place, order: 900,
+            }, RowPlace));
             ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
                 name: 'conversation.input.dock', id: IDS.paused, order: 15, inject: withApi,
             }, PausedBar));
             ctx.slots.inject('sidebar.session.row.hover', () => ctx.slots.register({
                 name: 'sidebar.session.row.hover', id: IDS.hover, order: 20, inject: withApi,
             }, ThreadHover));
+            // The Projects entry in DSH's sidebar, after Plugins, and the page it opens.
+            ctx.slots.inject('main', () => ctx.slots.register({
+                name: 'main', key: IDS.page, inject: withApi,
+            }, ProjectsPage));
+            ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+                name: 'sidebar.panellist', id: IDS.page, order: 5, label: PAGE.title,
+            }, ProjectsIcon));
             // The right-sidebar parts: a thread's chat, the Threads pane, and thread links from replies.
             ctx.inject(['resources', 'sidebarRightTabs'], (scope) => {
                 scope.effect(() => scope.resources.register(threadChatResources(scope.sessions)), 'projects: thread chat resources');
@@ -3017,6 +3031,161 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     name: 'sidebar.right.pane.tab', key: IDS.link, inject: withApi,
                 }, ThreadLinkTab));
             });
+        }
+
+        // ── Projects page ──────────────────────────────────────────────────
+
+        const PAGE = {
+            title: 'Projects',
+            loading: 'Loading projects…',
+            emptyTitle: 'No projects yet',
+            emptyText: 'A project is a ◆ coordinator you talk to and the threads it starts, working in one of your folders. Add one in the plugin\'s settings and it shows up here.',
+            emptyAction: 'Open the plugin\'s settings',
+            notStarted: 'The coordinator starts the next time DSH loads the plugin.',
+            open: 'Open',
+        };
+
+        /**
+         * The Projects entry's icon, drawn like DSH's own (a 16 px grid and a
+         * 1 px stroke): a project's ◆ coordinator branching into its threads.
+         */
+        function ProjectsIcon({ size = 16 }) {
+            return h('svg', {
+                width: size, height: size, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor',
+                strokeWidth: 1, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
+            },
+            h('path', { d: 'M4.6 5 7.6 8l-3 3-3-3Z' }),
+            h('path', { d: 'M7.6 8 11.32 4.4M7.6 8l3.72 3.6' }),
+            h('circle', { cx: 12.45, cy: 3.31, r: 1.57 }),
+            h('circle', { cx: 12.45, cy: 12.69, r: 1.57 }));
+        }
+
+        /** When a project last moved: its coordinator's or any thread's newest update. */
+        function lastActive(project, byId) {
+            let at = 0;
+            const consider = (id) => {
+                const t = typeof id === 'string' ? byId?.[id]?.updatedAt : undefined;
+                if (Number.isFinite(t) && t > at) at = t;
+            };
+            consider(project.coordinator);
+            return at;
+        }
+
+        /**
+         * One project on the Projects page: its name (which opens the
+         * coordinator), its folder and what its threads are doing, what it
+         * runs on (each opens Project settings with that menu open), the
+         * pause with Resume, and its threads by state, as in the Threads
+         * menu; Done, Idle and Resolved fold behind their counts.
+         */
+        function ProjectCard({ project, useSessions, useSessionStatus, projects, now, settingsOn }) {
+            const coordinator = typeof project.coordinator === 'string' && project.coordinator !== '' ? project.coordinator : undefined;
+            const info = useSessions((state) => (coordinator ? projectContext(state, coordinator) : undefined), sameContext);
+            const statuses = useSessionStatus((value) => value);
+            const byId = useSessions((state) => state.byId);
+            React.useEffect(() => { if (coordinator) projects.refresh(coordinator); }, [coordinator, projects]);
+            const paused = project.paused === true || usePaused(projects.facts, coordinator, null) === true;
+            const handbacks = useHeldHandbacks(projects.facts, coordinator);
+            useWatch(projects.facts, coordinator && paused ? `d:${coordinator}` : null, paused);
+            const rows = useRows(projects, useSessions, info?.roster, statuses, byId, paused ? handbacks : EMPTY);
+            const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, true);
+            const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), true);
+            const summary = summaryModels(cv, models, coordinator, { settings: project.settings });
+            const name = project.name || project.id;
+            const headingId = `dshp-pg-${project.id}`;
+            const open = () => { if (coordinator) projects.openSession(coordinator); };
+            const target = coordinator ?? project.id;
+            // What its threads are doing; nothing for a project without threads, whose list says so.
+            const counts = info?.roster ? countsOf(rows)
+                : { open: Number(project.threads?.open) || 0, waiting: 0, running: 0, resolved: Number(project.threads?.resolved) || 0 };
+            const threadsText = counts.open + counts.resolved > 0 ? summaryText(counts) : null;
+            const model = (id, label, text) => {
+                const content = [h('span', { key: 'l' }, label), h('span', { key: 'v' }, text ?? '…')];
+                if (!settingsOn) return h('span', { key: id, className: 'dshp-pg-model', 'data-projects-models': id }, ...content);
+                return h('button', {
+                    key: id, type: 'button', className: 'dshp-pg-model', 'data-projects-models': id,
+                    'aria-label': `${label}: ${text ?? 'loading'}. Change it in ${SETTINGS.title}`,
+                    onClick: () => projects.settings.open(target, { pick: id }),
+                }, ...content);
+            };
+            let body;
+            if (!coordinator) body = h('div', { className: 'dshp-t-notice' }, PAGE.notStarted);
+            else if (info === undefined) body = h('div', { className: 'dshp-t-notice', role: 'status' }, TEXT.loading);
+            else {
+                body = rosterNotice(info, rows, projects) ?? h(ThreadList, {
+                    rows, now, models, changes, projects, quietModel: summary.thread,
+                    fold: ['done', 'idle', 'resolved'],
+                    onOpen: (row) => projects.openSession(row.session),
+                });
+            }
+            return h('section', { className: 'dshp-pg-card', 'aria-labelledby': headingId, 'data-projects-project': project.id, onKeyDown: (event) => arrowKeys(event, event.currentTarget) },
+                h('div', { className: 'dshp-pg-head' },
+                    h('h2', { className: 'dshp-pg-title', id: headingId },
+                        h('button', { type: 'button', className: 'dshp-pg-name', disabled: !coordinator, onClick: open, 'aria-label': `Open ◆ ${name}` },
+                            h('span', { className: 'dshp-pg-diamond', 'aria-hidden': true }, '◆'),
+                            h('span', { className: 'dshp-pg-name-text' }, name)),
+                        paused ? h('span', { className: 'dshp-pg-badge', 'data-projects-paused': '' }, h(ui.IconPauseOutlineRegular, { size: 12 }), TEXT.paused) : null),
+                    h('span', { className: 'dshp-pg-actions' },
+                        settingsOn ? h(ui.Tooltip, { label: SETTINGS.title, side: 'bottom' },
+                            h('button', {
+                                type: 'button', className: 'dshp-t-icon', 'aria-label': `${SETTINGS.title}: ${name}`, 'data-projects-settings-trigger': '',
+                                onClick: () => projects.settings.open(target),
+                            }, h(ui.IconSlidersTwoOutlineRegular, { size: 14 }))) : null,
+                        coordinator ? h(ui.Button, { variant: 'outline', size: 'sm', onClick: open, 'aria-label': `${PAGE.open} ◆ ${name}` }, PAGE.open) : null)),
+                h('div', { className: 'dshp-pg-meta' },
+                    project.workspace ? h('span', { className: 'dshp-pg-folder', title: project.workspace },
+                        h(ui.IconFolderCloseRegular, { size: 13, 'aria-hidden': true }), h('span', null, folderName(project.workspace))) : null,
+                    threadsText ? h('span', { 'data-projects-summary': '' }, threadsText) : null),
+                h('div', { className: 'dshp-pg-models', role: 'group', 'aria-label': 'Models' },
+                    model('coordinator', TEXT.coordinator, summary.coordinator),
+                    model('thread', 'New threads', summary.thread)),
+                h('div', { className: 'dshp-pg-body' },
+                    paused && coordinator ? h(PausedNotice, { coordinator, role: 'coordinator', projects }) : null,
+                    body));
+        }
+
+        /**
+         * The Projects page, opened from the Projects entry in DSH's sidebar:
+         * every project as a card, the most recently active first.
+         */
+        function ProjectsPage({ useSessions, useSessionStatus, projects }) {
+            useFacts(projects.facts);
+            useWatch(projects.facts, 'list');
+            const settingsOn = useSettingsAvailable(projects.settings);
+            const listed = projects.facts.projects();
+            const failed = projects.facts.listFailed();
+            const byId = useSessions((state) => state.byId);
+            const now = useNow(true);
+            const order = React.useMemo(() => {
+                if (!Array.isArray(listed)) return EMPTY;
+                // Most recent activity first; the profile's order among projects that never ran.
+                return listed.map((p, i) => ({ p, i, at: lastActive(p, byId) })).sort((a, b) => b.at - a.at || a.i - b.i).map((x) => x.p);
+            }, [listed, byId]);
+            let content;
+            if (listed === null) {
+                content = failed
+                    ? h('div', { className: 'dshp-pg-state dshp-t-error', role: 'alert' }, SETTINGS.unreachable, ' ',
+                        h('button', { type: 'button', className: 'dshp-t-retry', onClick: () => { void projects.facts.list(0); } },
+                            h(ui.IconRefreshOutlineRegular, { size: 12 }), TEXT.retry))
+                    : h('div', { className: 'dshp-pg-state', role: 'status' }, PAGE.loading);
+            } else if (order.length === 0) {
+                content = h('div', { className: 'dshp-pg-empty', 'data-projects-empty': '' },
+                    h('span', { className: 'dshp-pg-empty-glyph' }, h(ProjectsIcon, { size: 28 })),
+                    h('h2', null, PAGE.emptyTitle),
+                    h('p', null, PAGE.emptyText),
+                    projects.openDefaults ? h(ui.Button, { variant: 'outline', size: 'sm', className: 'dshp-pg-cta', onClick: () => projects.openDefaults() }, PAGE.emptyAction) : null);
+            } else {
+                content = h('ul', { className: 'dshp-pg-list' },
+                    ...order.map((project) => h('li', { key: project.id },
+                        h(ProjectCard, { project, useSessions, useSessionStatus, projects, now, settingsOn }))));
+            }
+            return h('div', { className: 'dshp-pg', 'data-projects-page': '' },
+                h('div', { className: 'dshp-pg-scroll' },
+                    h('div', { className: 'dshp-pg-content' },
+                        h('div', { className: 'dshp-pg-heading' },
+                            h('h1', null, PAGE.title),
+                            Array.isArray(listed) && listed.length > 0 ? h('span', { className: 'dshp-pg-count' }, plural(listed.length, 'project')) : null),
+                        content)));
         }
 
         // ── Project settings ───────────────────────────────────────────────
@@ -3398,7 +3567,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the views are built on.
         module.exports.internals = {
-            valueIn, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, nestingPlan,
+            valueIn, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, nestingRules,
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS,
             changesOf, changesText, lastChange, REVIEW_PREFIX,

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { effectiveSettings, applyRoute, checkSelection } from '../plugins/projects/lib/settings.js';
 import { handbackMessage, idleMessage, rosterLines, memoryExcerpt } from '../plugins/projects/lib/prompts.js';
 import { ensurePrivateDir } from '../plugins/projects/lib/store.js';
-import { mkdtempSync, mkdirSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -67,4 +67,20 @@ test('projects: private folders are 700 even under a narrowed umask, and an unus
     mkdirSync(join(root, 'shared'), { mode: 0o755 });
     ensurePrivateDir(join(root, 'shared'));
     assert.equal(mode(join(root, 'shared')), 0o755, 'a usable folder keeps its mode');
+});
+
+test('projects: DSH lists the plugin as "Projects", with one plain sentence and its icon', () => {
+    const dir = new URL('../plugins/projects/', import.meta.url);
+    const pkg = JSON.parse(readFileSync(new URL('package.json', dir), 'utf8'));
+    const meta = JSON.parse(readFileSync(new URL('locale/en.json', dir), 'utf8')).meta;
+    assert.equal(meta.title, 'Projects');
+    assert.match(meta.description, /^[^.\n]+\.$/);
+    assert.doesNotMatch(`${meta.description} ${pkg.description}`, /Claude/);
+    // DSH reads both through the package's exports, and the icon as a file in the package (at most 256 KiB).
+    assert.equal(pkg.exports['./locale/*.json'], './locale/*.json');
+    assert.equal(pkg.exports['./package.json'], './package.json');
+    assert.ok(pkg.files.includes('locale') && pkg.files.includes(pkg.icon.replace(/^\.\//, '')));
+    const icon = readFileSync(new URL(pkg.icon, dir), 'utf8');
+    assert.match(icon, /^<svg [^>]*viewBox="0 0 36 36"/);
+    assert.ok(Buffer.byteLength(icon) < 256 * 1024);
 });

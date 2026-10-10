@@ -369,7 +369,7 @@ try {
     check('thread gets the brief', t1Reqs[0]?.fresh.includes(`[Brief from the coordinator of "${PROJECT}" · you are thread t1, "Alpha"]`));
     check('handback reaches the coordinator', saw.fresh.includes('[Handback from thread t1 · "Alpha" · status: done]') && saw.fresh.includes('Alpha finished'), saw.fresh.slice(0, 300));
     const t1 = threadSession('t1');
-    check('thread session is titled "E2E Project › Alpha"', (await bridge('GET', `/sessions/${t1}`)).title === `${PROJECT} › Alpha`);
+    check('thread session is titled "Alpha"', (await bridge('GET', `/sessions/${t1}`)).title === 'Alpha');
     check('roster shows the handback', saw.system.includes('- t1 · "Alpha" · ') && saw.system.includes('last handback: done'));
     // The window's view, folded by DSH from the real session events.
     const view = await waitFor(() => (windowView(coord)?.threads?.some((t) => t.id === 't1' && t.handback?.status === 'done') ? windowView(coord) : null),
@@ -428,7 +428,7 @@ try {
     }));
     saw = await coordinatorSaw(mark, 'SAW-APPROVAL', 'the Delta approval note');
     check('approval note names the tool and the session', saw.fresh.includes('[Thread waiting for approval: t4 · "Delta"]')
-        && saw.fresh.includes('It asked to use write: ') && saw.fresh.includes('E2E approval check.') && saw.fresh.includes(`in the "${PROJECT} › Delta" session`), saw.fresh.slice(0, 400));
+        && saw.fresh.includes('It asked to use write: ') && saw.fresh.includes('E2E approval check.') && saw.fresh.includes('in the "Delta" session'), saw.fresh.slice(0, 400));
     mark = model.requests.length;
     await bridge('POST', `/sessions/${threadSession('t4')}/cancel`, {});
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Delta stopped note');
@@ -478,6 +478,11 @@ try {
     await say(coord, call('project_thread_update', { thread: 't2', resolved: true }));
     reqs = await say(coord, call('project_thread_list', {}));
     check('resolved threads leave the list', !resultOf(reqs).includes('Beta') && resultOf(reqs).includes('Alpha'), resultOf(reqs));
+    // A title longer than DSH keeps (80 bytes) is cut once, at a word, with "…", and DSH keeps exactly that.
+    reqs = await say(coord, call('project_thread_update', { thread: 't2', title: 'Draft the spring launch announcement with product highlights, pricing tiers and a wholesale FAQ' }));
+    const longTitle = 'Draft the spring launch announcement with product highlights, pricing tiers…';
+    check('a long title is cut once, at a word, and DSH keeps it whole', resultOf(reqs).includes(`renamed to "${longTitle}"`)
+        && (await bridge('GET', `/sessions/${t2}`)).title === longTitle, `${resultOf(reqs).slice(0, 200)} / ${(await bridge('GET', `/sessions/${t2}`)).title}`);
 
     // 13. Pause holds a handback; resume delivers it.
     reqs = await say(coord, call('project_settings', { paused: true }));

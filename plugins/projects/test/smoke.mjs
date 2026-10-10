@@ -16,9 +16,10 @@ import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
 import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol';
 import * as plugin from '../lib/index.js';
 import { effectiveSettings, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
-import { slugify, timing } from '../lib/projects.js';
+import { slugify, timing, clipTitle } from '../lib/projects.js';
 import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS } from '../lib/changes.js';
 import { describeEnding, endingStateOf, continueMessage, readableError } from '../lib/prompts.js';
+import { ProjectStore } from '../lib/store.js';
 
 const CATALOG = {
     default: { provider: 'deepseek', model: 'deepseek-v4' },
@@ -209,6 +210,11 @@ function fakeHost({ selection = false, hostListener = selection, gateway = false
                 return { accepted: true };
             },
             async rename(req) { sessions.get(req.sessionId).title = req.title; return { title: req.title, seq: 1 }; },
+            /** Like DSH's list: a summary per session, its title in the title projection. */
+            async list() {
+                if (host.listError) throw host.listError;
+                return { items: [...sessions].map(([sessionId, s]) => ({ sessionId, updatedAt: 0, running: false, ...(s.title ? { projections: { kind: 'cached', asOfSeq: 1, values: { title: s.title } } } : {}) })) };
+            },
             cancel(req) { sessions.get(req.sessionId).cancelled = true; return {}; },
             async modelCatalog() { return CATALOG; },
         },
@@ -360,7 +366,8 @@ test('thread start → brief → handback → coordinator turn', async () => {
 
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
     const ts = host.sessions.get(thread.id);
-    assert.equal(ts.title, 'DSH Plugins › Add CI');
+    // The session is titled by the thread alone: the list nests it under its ◆ coordinator.
+    assert.equal(ts.title, 'Add CI');
     assert.equal(ts.prompts.length, 1);
     assert.equal(ts.prompts[0].mode, 'queue');
     assert.match(ts.prompts[0].text, /^\[Brief from the coordinator of "DSH Plugins" · you are thread t1, "Add CI"\]\n\nAdd a GitHub Actions/);
@@ -673,7 +680,7 @@ test('defaults form: a saved default switches what follows the defaults, and a p
     assert.deepEqual(efforts(), ['high', 'max'], 'a coordinator on the default switches from its next request');
     assert.match(await coord.ctx.call('project_settings', {}), /New threads: DSH default model · effort max \(DSH default \/ project setting\)/, 'the project\'s own choice stays');
     assert.match(await coord.ctx.call('project_thread_start', { title: 'After', brief: 'Go.' }), /Started t1/);
-    const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'DSH Plugins › After');
+    const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'After');
     assert.equal(host.selections.find((s) => s.sessionId === t1.id).selection.reasoningEffort, 'max');
 
     // A coordinator with its own effort keeps it through later saves.
@@ -735,7 +742,7 @@ test('picker: a model the user picks in DSH\'s own picker becomes the project\'s
     assert.equal(host.selections.length, selectionsBefore, 'the coordinator already runs on the pick, so nothing selects it again');
     // In a thread, the pick becomes that thread's model.
     await coord.ctx.call('project_thread_start', { title: 'Picked', brief: 'Go.' });
-    const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'DSH Plugins › Picked');
+    const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Picked');
     t1.ctx.sessionEvent({ type: 'model/selection', data: { provider: 'other', model: 'big-model' } });
     assert.deepEqual(await threadRoute(), ['t1 other:big-model null']);
     // Selections the plugin makes itself, and malformed events, change no setting.
@@ -790,7 +797,7 @@ test('window: the Project settings endpoints read and change a project the way i
 
     // A thread, named by its own session: its model changes from its next request.
     await coord.ctx.call('project_thread_start', { title: 'Window', brief: 'Go.', model: 'deepseek-v4' });
-    const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'DSH Plugins › Window');
+    const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Window');
     after = await remote.update(t1.id, { thread: 't1', model: 'deepseek:deepseek-v4-flash', effort: 'off' });
     assert.deepEqual(plain(after.threads.map(({ id, title, session, resolved, model, effort }) => ({ id, title, session, resolved, model, effort }))),
         [{ id: 't1', title: 'Window', session: t1.id, resolved: false, model: 'deepseek:deepseek-v4-flash', effort: 'off' }]);
@@ -916,8 +923,11 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
         ['conversation.session.header.actions', 'dsh-plugin-projects/threads-menu', -25],
         ['conversation.chat.turnTail', 'dsh-plugin-projects/thread-cards', 30],
         ['sidebar.session.row.leading', 'dsh-plugin-projects/thread-mark', 20],
+        ['sidebar.workspaces.session.row.action', 'dsh-plugin-projects/row-place', 900],
         ['conversation.input.dock', 'dsh-plugin-projects/paused-bar', 15],
         ['sidebar.session.row.hover', 'dsh-plugin-projects/thread-hover', 20],
+        ['main', 'dsh-plugin-projects/projects', null],
+        ['sidebar.panellist', 'dsh-plugin-projects/projects', 5],
         ['sidebar.right.pane.tab', 'dsh-plugin-projects/thread-chat', null],
         ['sidebar.right.pane.tab.title', 'dsh-plugin-projects/thread-chat', null],
         ['projects.thread.conversation', null, null],
@@ -925,7 +935,7 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
         ['sidebar.right.pane.tab', 'dsh-plugin-projects/thread-link', null],
     ]);
     // The thread chat tab hosts the conversation slot it renders.
-    assert.deepEqual(plain(registered[7].children), { 'projects.thread.conversation': { kind: 'single', scope: 'session' } });
+    assert.deepEqual(plain(registered[10].children), { 'projects.thread.conversation': { kind: 'single', scope: 'session' } });
     assert.deepEqual(protocols, ['projectthread']);
     assert.deepEqual(types.map((t) => [t.id, t.kind, t.patterns ? [...t.patterns] : null]), [
         ['dsh-plugin-projects/thread-chat', 'projectthread', ['dsh-resource://projectthread/session/**']],
@@ -1365,38 +1375,49 @@ test('browser half: a failed or stopped thread reads Failed or Stopped everywher
     assert.equal(continueError({ code: 'projects/unreachable', message: 'socket' }), 'Couldn\'t reach the thread.');
 });
 
-test('browser half: a thread row nests only right under its coordinator or a nested sibling', () => {
+test('browser half: each session list row says its place in a project, and the CSS nests by it', () => {
     const { client } = loadClient();
-    const { nestingPlan } = client.internals;
+    const { rowPlace, nestingRules } = client.internals;
     const coord = (name) => ({ role: 'coordinator', project: { name }, threads: [] });
     const state = {
         byId: {
             c: { title: '◆ DSH Plugins', projectionValues: { projectSession: coord('DSH Plugins') } },
             t1: { title: 'DSH Plugins › Add CI' },
-            t2: { title: 'DSH Plugins › Fix login', projectionValues: { projectSession: { role: 'thread', coordinator: 'c', thread: { id: 't2' } } } },
+            t2: { title: 'Fix login', projectionValues: { projectSession: { role: 'thread', coordinator: 'c', thread: { id: 't2' } } } },
             t3: { title: 'Renamed by hand', projectionValues: { projectSession: { role: 'thread', coordinator: 'c', thread: { id: 't3' } } } },
-            t4: { title: 'DSH Plugins › Spike' },
             o: { title: '◆ Other' },
             ot: { title: 'Other › Its thread' },
             plain: { title: 'Release notes' },
+            odd: { title: 'Nobody › Not a thread' },
+            lost: { title: 'x', projectionValues: { projectSession: { role: 'thread', thread: { id: 't9' } } } },
         },
     };
-    const plan = (keys) => Object.fromEntries([...nestingPlan(state, keys.map((k) => (k.startsWith('workspace:') ? k : `session:${k}`)))]
-        .map(([key, e]) => [key.replace('session:', ''), e.nested ? e.short ?? `(full) ${e.full}` : 'flat']));
-    // Under the coordinator, a run of its threads nests; the prefix goes, a title without it stays whole.
-    assert.deepEqual(plan(['workspace:w', 'c', 't1', 't2', 't3', 'plain', 't4']),
-        { t1: 'Add CI', t2: 'Fix login', t3: '(full) Renamed by hand', t4: 'flat' });
-    // Recency put a thread above its coordinator, another session between them, or another project's coordinator above.
-    assert.deepEqual(plan(['t1', 'c', 't2']), { t1: 'flat', t2: 'Fix login' });
-    assert.deepEqual(plan(['c', 'plain', 't1', 't2']), { t1: 'flat', t2: 'flat' });
-    assert.deepEqual(plan(['o', 't1', 'ot']), { t1: 'flat', ot: 'flat' });
-    assert.deepEqual(plan(['o', 'ot', 'c', 't4']), { ot: 'Its thread', t4: 'Spike' });
-    // A workspace header ends the run; a thread never nests under a nested thread of another project.
-    assert.deepEqual(plan(['c', 'workspace:w2', 't1']), { t1: 'flat' });
-    assert.deepEqual(plan(['c', 't1', 'ot']), { t1: 'Add CI', ot: 'flat' });
-    // Nothing to nest without a coordinator in the list; plain rows never appear in the plan.
-    assert.deepEqual(plan(['plain', 't1']), { t1: 'flat' });
-    assert.equal(nestingPlan({ byId: {} }, ['session:x', 'workspace:y', null]).size, 0);
+    // A coordinator by its projection or its "◆ " title; a thread by its projection whatever its title,
+    // or (before its projection reaches the list) by an old "<project> › " title with that coordinator listed.
+    assert.equal(rowPlace(state, 'c'), 'coordinator:c');
+    assert.equal(rowPlace(state, 'o'), 'coordinator:o');
+    assert.equal(rowPlace(state, 't1'), 'thread:c');
+    assert.equal(rowPlace(state, 't2'), 'thread:c');
+    assert.equal(rowPlace(state, 't3'), 'thread:c');
+    assert.equal(rowPlace(state, 'ot'), 'thread:o');
+    assert.equal(rowPlace(state, 'plain'), '');
+    assert.equal(rowPlace(state, 'odd'), '');
+    assert.equal(rowPlace(state, 'lost'), '');
+    assert.equal(rowPlace(state, 'missing'), '');
+    assert.equal(rowPlace(undefined, 'c'), '');
+
+    // The rules name the coordinator in every selector and only change rows through the plugin's own marks.
+    const css = nestingRules('ses_01.ab-c:9');
+    assert.equal(css.split('\n').length, 3);
+    for (const rule of css.split('\n')) {
+        assert.ok(rule.startsWith('[role="tree"] :has(>[data-row-key] [data-projects-row="coordinator"][data-projects-of="ses_01.ab-c:9"])~'), rule);
+        assert.ok(rule.includes(':not(:has(>[data-row-key] [data-projects-row="thread"][data-projects-of="ses_01.ab-c:9"]))~*'), rule);
+    }
+    assert.match(css, />\[data-row-key\]\{padding-inline-start:calc\(var\(--dshp-nest,30px\) \+ var\(--dsh-workspace-indent,0px\)\)\}/);
+    // An id that could break out of the selector gets no rules.
+    assert.equal(nestingRules('a"] *{display:none} [x="'), '');
+    assert.equal(nestingRules(''), '');
+    assert.equal(nestingRules(undefined), '');
 });
 
 test('session mode: a failed selection is reported, and the coordinator retries later', async () => {
@@ -1611,7 +1632,7 @@ test('a permission prompt left unanswered tells the coordinator', async () => {
     await wait();
     const cp = host.sessions.get(coord.id).prompts;
     assert.equal(cp.length, 1);
-    assert.equal(cp[0].text, '[Thread waiting for approval: t1 · "Deploy"]\n\nIt asked to use bash: runs ./deploy.sh\n\nThe user approves or rejects it in the "DSH Plugins › Deploy" session.');
+    assert.equal(cp[0].text, '[Thread waiting for approval: t1 · "Deploy"]\n\nIt asked to use bash: runs ./deploy.sh\n\nThe user approves or rejects it in the "Deploy" session.');
 
     // The user is in the thread directly: the prompt is in front of them.
     userSays(host, thread.id, 'Go ahead and deploy.');
@@ -1779,6 +1800,70 @@ test('a thread turn cut off by a DSH stop is reported at the next start, once', 
     const third = restart(first.host.sessions, first.config);
     await tick();
     assert.equal(third.sessions.get(coord.id).prompts.length, 0, 'reported once');
+});
+
+test('a long thread title is cut once, after a whole word, with "…", and fits DSH\'s 80-byte session titles', () => {
+    const long = 'Draft the spring launch announcement with product highlights, pricing tiers and a wholesale FAQ';
+    assert.equal(clipTitle(long), 'Draft the spring launch announcement with product highlights, pricing tiers…');
+    assert.equal(clipTitle('  Fix   the login\nloop '), 'Fix the login loop');
+    assert.equal(clipTitle('x'.repeat(80)), 'x'.repeat(80));
+    const wide = clipTitle('多'.repeat(40));
+    assert.ok(Buffer.byteLength(wide) <= 80 && wide.endsWith('…'), wide);
+    assert.equal(clipTitle('x'.repeat(100)), `${'x'.repeat(77)}…`);
+    // A title an older version cut at 80 characters ends at its last whole word.
+    assert.equal(clipTitle(long.slice(0, 80), { cut: true }), 'Draft the spring launch announcement with product highlights, pricing tiers…');
+});
+
+test('thread sessions an older version titled "<project> › <title>" are renamed once; a title the user changed stays', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const first = setup({}, dir);
+    await tick();
+    const coord = coordinatorOf(first.host);
+    for (const title of ['Old', 'Mine', 'Cold', 'Long']) await coord.ctx.call('project_thread_start', { title, brief: `Do ${title}.` });
+    const idOf = (title) => [...first.host.sessions].find(([, s]) => s.title === title)[0];
+    const [old, mine, cold, long] = ['Old', 'Mine', 'Cold', 'Long'].map(idOf);
+    // As an older version titled them, one renamed by the user, one whose title only its log has.
+    first.host.sessions.get(old).title = 'DSH Plugins › Old';
+    first.host.sessions.get(mine).title = 'My own name';
+    first.host.sessions.get(cold).title = null;
+    first.host.sessions.get(cold).events.push({ seq: 90, type: 'session/title', data: { title: 'Cold start' } }, { seq: 91, type: 'session/title', data: { title: 'DSH Plugins › Cold' } });
+    // The window's store is shared by the plugin's instances in one DSH, as when it reloads.
+    const store = ProjectStore.open(join(dir, 'projects.json'));
+    assert.equal(store.project('dsh-plugins').plainTitles, true, 'a new project needs no pass');
+    store.putProject('dsh-plugins', { plainTitles: undefined });
+    // An older version also cut a long title at 80 characters, and DSH cut the session's title at 80 bytes.
+    const cut80 = 'Draft the spring launch announcement with product highlights, pricing tiers and a wholesale FAQ'.slice(0, 80);
+    store.putThread('dsh-plugins', 't4', { title: cut80 });
+    let dshCut = '';
+    for (const char of `DSH Plugins › ${cut80}`) { if (Buffer.byteLength(dshCut + char) > 80) break; dshCut += char; }
+    first.host.sessions.get(long).title = dshCut.trimEnd();
+
+    const second = restart(first.host.sessions, first.config);
+    await tick();
+    assert.equal(second.sessions.get(old).title, 'Old');
+    assert.equal(second.sessions.get(mine).title, 'My own name');
+    assert.equal(second.sessions.get(cold).title, 'Cold');
+    const whole = 'Draft the spring launch announcement with product highlights, pricing tiers…';
+    assert.equal(second.sessions.get(long).title, whole);
+    assert.equal(store.thread('dsh-plugins', 't4').title, whole);
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /thread-titles renamed=3/);
+
+    // Once: an old-style title the user sets later stays.
+    second.sessions.get(old).title = 'DSH Plugins › Old';
+    const third = restart(second.sessions, first.config);
+    await tick();
+    assert.equal(third.sessions.get(old).title, 'DSH Plugins › Old');
+
+    // A list DSH can't read is logged and tried again at the next start; the start itself goes on.
+    store.putProject('dsh-plugins', { plainTitles: undefined });
+    const fourth = fakeHost();
+    for (const [id, s] of third.sessions) fourth.sessions.set(id, { ...s, prompts: [] });
+    fourth.listError = new Error('list is down');
+    plugin.apply(fourth, first.config);
+    await tick();
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /error thread-titles list is down/);
+    assert.equal(store.project('dsh-plugins').plainTitles, undefined);
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /coordinator dsh-plugins s1 resumed[^]*error thread-titles/);
 });
 
 test('a config reload while a thread runs still reports its turn and its permission prompt', async () => {

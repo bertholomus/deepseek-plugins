@@ -47,6 +47,45 @@ import { changeRecord, changeTotals, withChange } from './changes.js';
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
 const SECTION_ORDER = 9500;
 const HOUR = 60 * 60 * 1000;
+/** DSH keeps a session title to 80 bytes of UTF-8 (`maxTitleBytes` in its base profile) and cuts anything longer. */
+const TITLE_BYTES = 80;
+
+/**
+ * A thread's one title, used for its session and everywhere the plugin names it. It fits DSH's session-title
+ * limit, so DSH never cuts it again; a longer title is cut once, after the last whole word that fits, with "…".
+ * `cut` says the text was already cut short (by an older version), so it ends at a word with "…" even if it fits.
+ */
+export function clipTitle(value, { cut = false } = {}) {
+    const line = String(value ?? '').replace(/\s+/g, ' ').trim();
+    if (!cut && Buffer.byteLength(line) <= TITLE_BYTES) return line;
+    const room = TITLE_BYTES - Buffer.byteLength('…');
+    let fit = '';
+    let bytes = 0;
+    for (const char of line) {
+        bytes += Buffer.byteLength(char);
+        if (bytes > room) break;
+        fit += char;
+    }
+    // Back up to the end of the last whole word, unless that would leave less than half.
+    if (fit.length < line.length ? line[fit.length] !== ' ' : cut) {
+        const space = fit.lastIndexOf(' ');
+        if (space >= fit.length / 2) fit = fit.slice(0, space);
+    }
+    const end = fit.replace(/[\s.,;:!?…–—-]+$/u, '');
+    return `${end === '' ? fit : end}…`;
+}
+
+/** A title as DSH keeps it: one line, cut at its byte limit wherever that falls. */
+function dshTitle(value) {
+    let out = '';
+    let bytes = 0;
+    for (const char of String(value ?? '').replace(/\s+/g, ' ').trim()) {
+        bytes += Buffer.byteLength(char);
+        if (bytes > TITLE_BYTES) break;
+        out += char;
+    }
+    return out.trimEnd();
+}
 
 /** Delivery retry delays for a coordinator that cannot take a message; tests shorten them. */
 export const timing = { retryMs: 60000, maxRetryMs: 15 * 60000 };
@@ -350,6 +389,7 @@ export class ProjectManager {
             await this.flushPending(id);
             await this.catchUp(id);
         }
+        if (!this.disposed) await this.plainThreadTitles();
     }
 
     async dispose() {
@@ -362,6 +402,56 @@ export class ProjectManager {
         for (const sessionId of [...this.approvals.keys()]) this.clearApprovals(sessionId);
         for (const { timer } of this.retries.values()) clearTimeout(timer);
         this.retries.clear();
+    }
+
+    /**
+     * Threads started before thread sessions lost the project's name in
+     * front ("Storefront › Fix login") keep it until renamed. Once per
+     * project, a thread session still titled exactly that is renamed to the
+     * thread's own title; a title the user changed is left as it is.
+     */
+    async plainThreadTitles() {
+        try {
+            const todo = [...this.projects.keys()].filter((id) => this.store.project(id).plainTitles !== true);
+            if (todo.length === 0) return;
+            const old = new Map();
+            for (const projectId of todo) {
+                const name = this.project(projectId).name;
+                for (const [threadId, t] of Object.entries(this.store.project(projectId).threads ?? {})) {
+                    const was = t?.title;
+                    if (typeof was !== 'string' || was === '') continue;
+                    // Older versions cut titles at 80 characters, mid-word and without "…".
+                    const title = clipTitle(was, { cut: was.length >= 80 });
+                    if (title !== was) this.store.putThread(projectId, threadId, { title });
+                    if (typeof t.sessionId === 'string') old.set(t.sessionId, { from: dshTitle(`${name} › ${was}`), to: title });
+                }
+            }
+            let renamed = 0;
+            if (old.size > 0) {
+                const { items } = await this.sc.list({}, AbortSignal.timeout(20000));
+                const titles = new Map((Array.isArray(items) ? items : []).map((item) => [item?.sessionId, item?.projections?.values?.title]));
+                for (const [sessionId, { from, to }] of old) {
+                    if (this.disposed) return;
+                    let now = titles.get(sessionId);
+                    if (typeof now !== 'string') now = await this.sessionTitle(sessionId).catch(() => undefined);
+                    if (now !== from) continue;
+                    await this.sc.rename({ sessionId, title: to }).then(() => { renamed += 1; }, () => {});
+                }
+            }
+            for (const projectId of todo) this.store.putProject(projectId, { plainTitles: true });
+            this.log(`thread-titles renamed=${renamed}`);
+        } catch (error) {
+            this.log(`error thread-titles ${String(error?.message ?? error).slice(0, 300)}`);
+        }
+    }
+
+    /** A session's title as its log has it (its newest title event), or undefined. */
+    async sessionTitle(sessionId) {
+        const { events } = await this.sc.inspect(sessionId, AbortSignal.timeout(20000));
+        for (let i = (events?.length ?? 0) - 1; i >= 0; i--) {
+            if (events[i]?.type === 'session/title' && typeof events[i].data?.title === 'string') return events[i].data.title;
+        }
+        return undefined;
     }
 
     /** Whether a session exists. Only "not found" means no; any other read error is thrown. */
@@ -882,8 +972,7 @@ export class ProjectManager {
         const turn = await this.readTurn(agent.id, { current: true });
         // The user is talking to the thread directly, so the prompt is in front of them.
         if (!turn.fromProject || !this.allowHandback(projectId, threadId)) return;
-        const sessionTitle = `${this.project(projectId).name} › ${t.title}`;
-        await this.deliver(projectId, approvalMessage(threadId, t.title, sessionTitle, String(data.toolName ?? 'a tool'), data.reason));
+        await this.deliver(projectId, approvalMessage(threadId, t.title, t.title, String(data.toolName ?? 'a tool'), data.reason));
         this.log(`approval-note ${projectId}/${threadId} tool=${String(data.toolName ?? '').slice(0, 60)}`);
     }
 
@@ -1075,7 +1164,7 @@ export class ProjectManager {
     async startThread(projectId, { title, brief, model, effort }) {
         const project = this.project(projectId);
         if (this.paused(projectId)) throw new ProjectError('the project is paused; new threads are blocked until it resumes');
-        const cleanTitle = String(title ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+        const cleanTitle = clipTitle(title);
         if (!cleanTitle) throw new ProjectError('title is required');
         if (!String(brief ?? '').trim()) throw new ProjectError('brief is required');
         const s = this.settings(projectId);
@@ -1116,7 +1205,7 @@ export class ProjectManager {
                 });
             }
         }
-        await this.sc.rename({ sessionId, title: `${project.name} › ${cleanTitle}` }).catch(() => {});
+        await this.sc.rename({ sessionId, title: cleanTitle }).catch(() => {});
         await this.prompt(sessionId, briefMessage(project.name, threadId, cleanTitle, brief.trim()), 'queue', this.store.project(projectId).coordinatorSessionId);
         this.log(`thread-start ${projectId}/${threadId} ${sessionId} brief-chars=${brief.length}`);
         return { threadId, sessionId, title: cleanTitle, route: describeRoute(check.model, check.effort), notes };
@@ -1176,8 +1265,8 @@ export class ProjectManager {
         const out = [];
         const fields = {};
         if (changes.title !== undefined && String(changes.title).trim()) {
-            fields.title = String(changes.title).replace(/\s+/g, ' ').trim().slice(0, 80);
-            await this.sc.rename({ sessionId: t.sessionId, title: `${this.project(projectId).name} › ${fields.title}` }).catch(() => {});
+            fields.title = clipTitle(changes.title);
+            await this.sc.rename({ sessionId: t.sessionId, title: fields.title }).catch(() => {});
             out.push(`renamed to "${fields.title}"`);
         }
         if (changes.model !== undefined || changes.effort !== undefined) {
