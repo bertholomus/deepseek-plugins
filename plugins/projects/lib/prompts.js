@@ -46,7 +46,11 @@ export function rosterLines(threads, liveStatus) {
             ? ` · the user talked to it directly; its reply: "${clip(t.lastDirect.reply, 120)}"`
             : '';
         const changed = changesLine(changeTotals(t.changes));
-        return `- ${id} · "${t.title}" · ${status}${last}${direct}${changed ? ` · ${changed}` : ''}`;
+        // A turn that failed or stopped after the last handback is the thread's news.
+        const ended = !t.resolved && t.lastEnding?.text && !(t.lastHandback && t.lastHandback.at > t.lastEnding.at)
+            ? ` · ${clip(t.lastEnding.text.replace(/^The turn/, 'its last turn'), 200)}`
+            : '';
+        return `- ${id} · "${t.title}" · ${status}${last}${direct}${ended}${changed ? ` · ${changed}` : ''}`;
     });
 }
 
@@ -70,7 +74,7 @@ export function coordinatorPolicy(p) {
         '- Write each brief so the thread can work without this conversation: the user\'s ask in their own words, the facts it needs from project memory, and the default you picked where the ask is ambiguous. Do not add deliverables the user did not ask for.',
         `- Tell the user in one line that the thread started, naming it as a Markdown link to the thread: [Fix the login bug](${threadLink('t3')}) for thread t3. In DSH that link opens the thread. Link a thread the same way whenever you name it to the user.`,
         `- Threads report back with handbacks. A handback arrives here as a message starting with "${TAGS.handback}". Tell the user the result in a line or two and name the thread. If the thread asks a question you can answer from what you know, answer it with project_thread_send; otherwise ask the user. When a thread is done and nothing is open, resolve it with project_thread_update.`,
-        `- A message starting with "${TAGS.idle}" is automatic: the thread ended a turn you started without calling project_handback. If it says the turn failed, was stopped or was cut off, tell the user, and retry only if they ask, in the same thread with project_thread_send rather than a new thread. Otherwise read the thread with project_thread_read only if it matters, and nudge the thread if it stalled.`,
+        `- A message starting with "${TAGS.idle}" is automatic: the thread ended a turn you started without calling project_handback. If it says the turn failed, was stopped or was cut off, tell the user (the thread's card in DSH has Retry or Resume), and retry only if they ask, in the same thread with project_thread_send rather than a new thread. Otherwise read the thread with project_thread_read only if it matters, and nudge the thread if it stalled.`,
         `- A message starting with "${TAGS.approval}" is automatic: a thread you started is stopped on a permission prompt. Tell the user which thread and what it wants to do; they approve or reject it in that thread's session. Do not start another thread for the same work.`,
         `- A message starting with "${TAGS.welcome}" is automatic: the project was just set up. Introduce yourself to the user in two or three short sentences: what the project is for, and that they can hand you work here, which you run in threads. Answer from what you already know: run no tools and start no thread for it.`,
         '- The user can talk to a thread directly in its own session. Those turns do not come to you; the roster below notes them. Do not answer them here.',
@@ -153,16 +157,62 @@ export function idleMessage(threadId, title, lastText, ending = '') {
     return `${TAGS.idle}: ${threadId} · "${title}"]\n\n${ending ? `${ending}\n\n` : ''}${body}`;
 }
 
+/**
+ * An error message as a person reads it: the provider's own message when
+ * DSH logged a status and a JSON body (`400: {"message": …}`), on one line,
+ * clipped to 240 characters. '' when there is none.
+ */
+export function readableError(message) {
+    let text = typeof message === 'string' ? message.trim() : '';
+    const brace = text.indexOf('{');
+    if (brace >= 0 && text.endsWith('}')) {
+        try {
+            const body = JSON.parse(text.slice(brace));
+            const inner = [body?.message, body?.error?.message, body?.error, body?.detail].find((x) => typeof x === 'string' && x.trim() !== '');
+            if (inner) text = inner.trim();
+        } catch {}
+    }
+    text = text.replace(/\s+/g, ' ');
+    return text.length > 240 ? `${text.slice(0, 239)}…` : text;
+}
+
 /** One line for a turn that did not complete normally, or ''. */
 export function describeEnding(reason) {
     switch (reason?.kind) {
-        case 'error': return `The turn failed: ${clip(reason.error?.message ?? 'unknown error', 300)}`;
-        case 'aborted': return 'The turn was stopped before it finished.';
+        case 'error': {
+            // The provider's own words, with the HTTP status DSH logged before them (`400: {…}`).
+            const message = typeof reason.error?.message === 'string' ? reason.error.message.trim() : '';
+            const status = /^(\d{3}):?\s*\{/.exec(message)?.[1];
+            return `The turn failed${status ? ` (HTTP ${status})` : ''}: ${clip(readableError(message) || 'unknown error', 300)}`;
+        }
+        case 'aborted':
+            // DSH shows this one as a failure too.
+            if (reason.reason?.kind === 'hook' && reason.reason.reason === 'deepseek-account/signed-out') return 'The turn failed: the user signed out of DeepSeek.';
+            return 'The turn was stopped before it finished.';
         case 'max-tokens': return 'The turn hit the output token limit.';
         case 'blocked': return 'The turn was blocked.';
         case 'interrupted': return 'The turn was cut off because DSH stopped while it ran.';
         default: return '';
     }
+}
+
+/** Whether a describeEnding line tells of a failed or a stopped turn: 'failed', 'stopped' or undefined. */
+export function endingStateOf(line) {
+    const text = String(line ?? '');
+    if (/^The turn (failed|was blocked)\b/.test(text)) return 'failed';
+    if (/^The turn (was stopped|hit the output token limit|was cut off)\b/.test(text)) return 'stopped';
+    return undefined;
+}
+
+/**
+ * What a thread hears when the user retries (a failed turn) or resumes (a
+ * stopped one) it from the DSH window. It comes from the coordinator, so
+ * the handback goes there as usual.
+ * @param {string} ending - describeEnding's line for that turn.
+ */
+export function continueMessage(ending, retry) {
+    const why = ending ? ` ${ending.replace(/^The turn/, 'Your last turn')}${/[.!?…]$/.test(ending) ? '' : '.'}` : '';
+    return `The user asked you to ${retry ? 'try again' : 'continue'}.${why} Carry on from where you left off.`;
 }
 
 /**

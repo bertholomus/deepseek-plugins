@@ -39,7 +39,7 @@ import { ProjectStore, expand, ensurePrivateDir } from './store.js';
 import { SETTING_KEYS, effectiveSettings, applyRoute, checkSelection, describeRoute, parseModelSpec, pluginDefaults } from './settings.js';
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage,
-    handbackMessage, idleMessage, approvalMessage, welcomeMessage, describeEnding, HANDBACK_STATUSES, TAGS,
+    handbackMessage, idleMessage, approvalMessage, welcomeMessage, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS,
 } from './prompts.js';
 import { META_MARK, MAX_THREADS } from './projection.js';
 import { changeRecord, changeTotals, withChange } from './changes.js';
@@ -752,7 +752,12 @@ export class ProjectManager {
         if (!t || t.resolved || (catchUp && !turn.ended)) return;
         if (turn.ended) {
             if (t.seenTurn === turn.key) return;
-            this.store.putThread(projectId, threadId, { seenTurn: turn.key });
+            // How the turn ended, for the coordinator's roster: kept while it failed or stopped.
+            const ending = !turn.handedBack && endingStateOf(turn.ending) ? turn.ending.slice(0, 400) : undefined;
+            this.store.putThread(projectId, threadId, {
+                seenTurn: turn.key,
+                lastEnding: ending ? { text: ending, kind: turn.endKind, at: new Date().toISOString() } : undefined,
+            });
         }
         if (turn.handedBack) return;
         // The coordinator stopped this turn itself, so a note would only echo that back.
@@ -1125,6 +1130,26 @@ export class ProjectManager {
         await this.prompt(t.sessionId, coordinatorMessage(text.trim()), steer ? 'steer' : 'queue', this.store.project(projectId).coordinatorSessionId);
         this.log(`thread-send ${projectId}/${id} mode=${steer ? 'steer' : 'queue'} chars=${text.length}`);
         return `${steer ? 'Steered' : 'Sent to'} ${id}${t.resolved ? ' (reopened)' : ''}.`;
+    }
+
+    /**
+     * Run a thread again after its last turn failed or stopped: Retry and
+     * Resume in the DSH window. The thread hears it from its coordinator,
+     * so its handback, or the idle note, reaches the coordinator as usual.
+     * Refused for a resolved or running thread, and for one whose last turn
+     * finished.
+     * @returns the project as describeProject shows it.
+     */
+    async continueThread(projectId, threadKey) {
+        const { id, t } = this.requireThread(projectId, threadKey);
+        if (t.resolved) throw new ProjectError(`${id} is resolved`);
+        if (this.ctx.agents.get(t.sessionId)?.status === 'running') throw new ProjectError(`${id} is running already`);
+        const turn = await this.readTurn(t.sessionId);
+        const state = turn.ended && !turn.handedBack ? endingStateOf(turn.ending) : undefined;
+        if (!state) throw new ProjectError(`${id}'s last turn finished, so there is nothing to retry`);
+        await this.sendToThread(projectId, id, continueMessage(turn.ending, state === 'failed'), false);
+        this.log(`thread-continue ${projectId}/${id} after=${turn.endKind}`);
+        return this.describeProject(projectId);
     }
 
     listThreads(projectId, includeResolved) {

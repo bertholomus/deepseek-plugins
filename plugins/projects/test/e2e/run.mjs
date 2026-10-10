@@ -10,8 +10,9 @@
  * waiting on approval, cut off by a DSH crash), queued turns, direct talk,
  * settings, memory, pause, a restart, the browser half DSH serves for the
  * plugin's page, a saved default that applies without a restart, the Project
- * settings endpoints the window calls, a pick in DSH's own model picker, and
- * a thread's code changes as DSH records them.
+ * settings endpoints the window calls, a pick in DSH's own model picker,
+ * a thread's code changes as DSH records them, and failed and stopped
+ * threads as the window shows them, with Retry and Resume.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/projects/test/e2e/run.mjs
  *
@@ -416,7 +417,7 @@ try {
     check('roster notes the direct talk', since(mark, 'coordinator')[0]?.system.includes('- t2 · "Beta" · idle · no handback yet · the user talked to it directly; its reply: "Plain reply."'),
         since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => l.startsWith('- t')).join(' | '));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Gamma failure note');
-    check('failure note says the turn failed', saw.fresh.includes('[Thread idle without a handback: t3 · "Gamma"]') && saw.fresh.includes('The turn failed:'), saw.fresh.slice(0, 300));
+    check('failure note says the turn failed, in the provider\'s words', saw.fresh.includes('[Thread idle without a handback: t3 · "Gamma"]') && saw.fresh.includes('The turn failed (HTTP 400): fake model rejected the request'), saw.fresh.slice(0, 300));
 
     // 6. A thread waiting on a permission prompt, then stopped.
     mark = model.requests.length;
@@ -520,7 +521,7 @@ try {
     const t7Reqs = since(mark, 't7');
     check('the second message was queued while the first turn ran', sent[0].at < (t7Reqs[1]?.at ?? 0), describe(since(mark)));
     check('the first turn handed back', since(mark, 'coordinator').some((r) => r.fresh.includes('Eta part one done.')));
-    check('the queued turn that failed gets its note', saw.fresh.includes('[Thread idle without a handback: t7 · "Eta"]') && saw.fresh.includes('The turn failed:'), saw.fresh.slice(0, 300));
+    check('the queued turn that failed gets its note', saw.fresh.includes('[Thread idle without a handback: t7 · "Eta"]') && saw.fresh.includes('The turn failed (HTTP 400):'), saw.fresh.slice(0, 300));
 
     // 16. DSH dies mid-turn. At the next start the coordinator hears the thread
     // was cut off. Then: same coordinator, routes kept, threads still wired.
@@ -681,6 +682,51 @@ try {
     const lambdaLine = since(mark, 'coordinator')[0]?.system.split('\n').find((l) => l.startsWith(`- ${lambdaId} · "Lambda" · `)) ?? '';
     check('the coordinator\'s roster says what the thread changed', lambdaLine.startsWith(`- ${lambdaId} · "Lambda" · idle · no handback yet · the user talked to it directly`)
         && lambdaLine.endsWith(' · changed 1 file (+4 -1)'), lambdaLine);
+
+    // 23. Failed and stopped threads: each thread's own view says how its
+    // last turn ended (read cold after the restart), the roster tells the
+    // coordinator, and Retry and Resume from the window send the thread on.
+    const viewOf = async (sessionId) => {
+        const read = await webApi(webAgain, 'session/projections', { request: { sessionId } });
+        const value = read.ok ? read.value?.values?.projectSession : undefined;
+        return value?.role ? value : value?.v;
+    };
+    const endings = {};
+    for (const id of ['t1', 't3', 't4', 't6', 't7', 't8']) endings[id] = (await viewOf(threadSession(id)))?.ending;
+    const shape = (e) => (e ? [e.state, e.kind, e.cause ?? null] : null);
+    check('a thread\'s own view says how its last turn ended', JSON.stringify(['t1', 't3', 't4', 't6', 't7', 't8'].map((id) => shape(endings[id])))
+        === JSON.stringify([null, ['failed', 'error', null], ['stopped', 'aborted', 'user'], ['stopped', 'aborted', 'user'], ['failed', 'error', null], ['stopped', 'interrupted', null]]),
+        JSON.stringify(endings));
+    check('a failure reads as the provider\'s message', endings.t3?.message === 'fake model rejected the request' && typeof endings.t3?.code === 'string', JSON.stringify(endings.t3));
+    mark = model.requests.length;
+    await say(coord, 'Which threads failed?');
+    const roster = since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => l.startsWith('- t')) ?? [];
+    const lineOf = (id) => roster.find((l) => l.startsWith(`- ${id} · `)) ?? '';
+    check('the roster tells the coordinator which threads failed or stopped', lineOf('t3').includes('· its last turn failed (HTTP 400): fake model rejected the request')
+        && lineOf('t4').includes('· its last turn was stopped before it finished.') && lineOf('t8').includes('· its last turn was cut off because DSH stopped while it ran.')
+        && lineOf('t7').includes('last handback: done') && lineOf('t7').includes('its last turn failed') && !lineOf('t1').includes('its last turn'), roster.join('\n'));
+    // Retry: the thread hears it from its coordinator, runs, and its failure clears.
+    const refusedWhy = (answer) => (answer.ok ? 'ok' : `${answer.error?.code}: ${answer.error?.message}`);
+    let answer2 = await webApi(webAgain, 'dsh-plugin-projects/continueThread', { target: coord, thread: 't1' });
+    check('a thread whose last turn finished has nothing to retry', !answer2.ok && answer2.error?.code === 'projects/refused' && /nothing to retry/.test(answer2.error.message), refusedWhy(answer2));
+    answer2 = await webApi(webAgain, 'dsh-plugin-projects/continueThread', { target: coord, thread: 't2' });
+    check('a resolved thread is not retried', !answer2.ok && /is resolved/.test(answer2.error?.message ?? ''), refusedWhy(answer2));
+    mark = model.requests.length;
+    answer2 = await webApi(webAgain, 'dsh-plugin-projects/continueThread', { target: threadSession('t3'), thread: 't3' });
+    saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Gamma retry\'s idle note');
+    const retried = since(mark, 't3')[0];
+    check('Retry sends the thread on from its coordinator', answer2.ok && answer2.value?.project?.id === PROJECT_ID
+        && retried?.fresh.includes('[From the coordinator]\n\nThe user asked you to try again. Your last turn failed (HTTP 400): fake model rejected the request. Carry on from where you left off.') && retried.action.text === 'RESUMED'
+        && fromSession(startingWith(await messagesOf(threadSession('t3')), '[From the coordinator]'), coord), `${refusedWhy(answer2)} ${retried?.fresh.slice(0, 300)}`);
+    check('the coordinator hears how the retry went', saw.fresh.includes('[Thread idle without a handback: t3 · "Gamma"]') && saw.fresh.includes('RESUMED'), saw.fresh.slice(0, 300));
+    check('a turn that finishes clears the failure', (await viewOf(threadSession('t3')))?.ending === undefined, JSON.stringify(await viewOf(threadSession('t3'))));
+    // Resume: the same for a stopped thread.
+    mark = model.requests.length;
+    answer2 = await webApi(webAgain, 'dsh-plugin-projects/continueThread', { target: coord, thread: 't4' });
+    await coordinatorSaw(mark, 'SAW-IDLE', 'the Delta resume\'s idle note');
+    check('Resume continues a stopped thread', answer2.ok && since(mark, 't4')[0]?.fresh.includes('The user asked you to continue. Your last turn was stopped before it finished.')
+        && (await viewOf(threadSession('t4')))?.ending === undefined, `${refusedWhy(answer2)} ${since(mark, 't4')[0]?.fresh.slice(0, 300)}`);
+    check('the plugin logs each retry', readText(logFile).includes(`thread-continue ${PROJECT_ID}/t3 after=error`) && readText(logFile).includes(`thread-continue ${PROJECT_ID}/t4 after=aborted`));
     check('no errors in the projects log', !/ error /.test(readText(logFile)), readText(logFile).split('\n').filter((l) => / error /.test(l)).join('\n'));
 } catch (error) {
     failed += 1;

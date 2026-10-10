@@ -18,6 +18,7 @@ import * as plugin from '../lib/index.js';
 import { effectiveSettings, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
 import { slugify, timing } from '../lib/projects.js';
 import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS } from '../lib/changes.js';
+import { describeEnding, endingStateOf, continueMessage, readableError } from '../lib/prompts.js';
 
 const CATALOG = {
     default: { provider: 'deepseek', model: 'deepseek-v4' },
@@ -758,7 +759,7 @@ test('window: the Project settings endpoints read and change a project the way i
     // DSH's gateway finds the service by its binding and method markers.
     assert.equal(remote.typertRemote.namespace, 'dsh-plugin-projects');
     assert.equal(remote.typertRemote.serviceKey, 'dshPluginProjectsRemote');
-    assert.deepEqual(remoteMethods(remote).map((m) => m.method), ['describe', 'list', 'update']);
+    assert.deepEqual(remoteMethods(remote).map((m) => m.method), ['describe', 'list', 'update', 'continueThread']);
     const refused = async (promise, pattern) => {
         await assert.rejects(promise, (error) => error.code === 'projects/refused' && pattern.test(error.message));
     };
@@ -1124,10 +1125,10 @@ test('browser half: thread rows, cards and links read the projection as DSH send
     assert.deepEqual(plain(rows.map((r) => [r.id, r.group, r.dot, r.line])), [
         ['t3', 'running', 'ongoing', 'Working…'],
         ['t2', 'waiting', 'warning', 'Needs your decision · Pick A or B.'],
-        ['t1', 'idle', 'done', 'Done · CI added.'],
+        ['t1', 'done', 'done', 'Done · CI added.'],
         ['t4', 'resolved', 'done', 'Resolved'],
     ]);
-    assert.deepEqual(plain(countsOf(rows)), { open: 3, running: 1, waiting: 1, resolved: 1 });
+    assert.deepEqual(plain(countsOf(rows)), { open: 3, running: 1, waiting: 1, resolved: 1, failed: 0 });
     assert.equal(summaryText(countsOf(rows)), '3 open · 1 waiting on you · 1 running · 1 resolved');
     // A thread reads the roster from its coordinator, and knows it is still loading before then.
     const thread = projectContext(state, 's-t3');
@@ -1148,6 +1149,13 @@ test('browser half: thread rows, cards and links read the projection as DSH send
     // In a thread, its own handback card points back at the coordinator.
     const own = cardView(threadValue.cards[0], thread, statuses, state.byId, 's-t3');
     assert.deepEqual(plain([own.verb, own.title, own.session]), ['Handed back to the coordinator · Progress update', '◆ DSH Plugins', 's-c']);
+    // While the project is paused, the thread's own card says its handback waits, and the coordinator's cards
+    // read a held handback as the Threads menu does.
+    const heldOwn = cardView(threadValue.cards[0], thread, statuses, state.byId, 's-t3', undefined, [{ thread: 't3', status: 'progress' }]);
+    assert.deepEqual(plain([heldOwn.verb, heldOwn.note, heldOwn.icon]), ['Handback held · Progress update', 'The project is paused, so the coordinator gets this handback when you resume.', 'IconPauseOutlineRegular']);
+    assert.equal(cardView(threadValue.cards[0], thread, statuses, state.byId, 's-t3', undefined, [{ thread: 't9', status: 'done' }]).verb, 'Handed back to the coordinator · Progress update');
+    const heldCard = cardView({ turn: 2, seq: 12, kind: 'send', thread: 't2' }, coord, statuses, state.byId, 's-c', undefined, [{ thread: 't2', status: 'blocked' }]);
+    assert.deepEqual(plain([heldCard.state.label, heldCard.state.dot, heldCard.row.line, heldCard.row.held]), ['Blocked', 'warning', 'Blocked · held until you resume', true]);
 
     // A thread link as DSH resolves `.dsh-thread/t3` against the coordinator's session.
     const target = linkTarget(`dsh-resource://file/session/${encodeURIComponent('s-c')}/.dsh-thread/T3`);
@@ -1165,6 +1173,99 @@ test('browser half: thread rows, cards and links read the projection as DSH send
 
     // Sidebar marks: from the projection, or from the "<project> › " title before DSH has folded the row.
     assert.deepEqual(['s-t3', 's-t1', 's-c', 's-plain'].map((id) => isThreadRow(state, id)), [true, true, false, false]);
+});
+
+test('browser half: a failed or stopped thread reads Failed or Stopped everywhere, with its reason and Retry or Resume', () => {
+    const { client } = loadClient();
+    const { projectContext, rowsOf, countsOf, cardView, rowState, endingIn, endingLine, openSessions, markState, hoverLine, withHeld, continueError, GROUPS } = client.internals;
+    const at = (h) => `2026-10-10T${String(h).padStart(2, '0')}:00:00.000Z`;
+    const failed = { state: 'failed', kind: 'error', message: 'The model rejected the request.', turn: 1, seq: 9, at: at(10) };
+    const stopped = { state: 'stopped', kind: 'aborted', cause: 'user', turn: 1, seq: 7, at: at(10) };
+    const coordValue = { role: 'coordinator', project: { id: 'p', name: 'Storefront' }, threads: [
+        { id: 't6', session: 's-t6', title: 'Refactor cart state', resolved: false, created: at(8) },
+        { id: 't7', session: 's-t7', title: 'Generate size-guide tables', resolved: false, created: at(8) },
+        // A done handback after a stop: the handback is the news.
+        { id: 't8', session: 's-t8', title: 'Caching spike', resolved: false, created: at(8), handback: { status: 'done', summary: 'Spike done.', at: at(11) } },
+        // A failure after a decision handback: the failure is the news.
+        { id: 't9', session: 's-t9', title: 'Fix the login loop', resolved: false, created: at(8), handback: { status: 'needs_decision', summary: 'A or B?', at: at(9) } },
+        { id: 't10', session: 's-t10', title: 'Old', resolved: true, created: at(7) },
+    ], cards: [
+        { turn: 4, seq: 30, kind: 'start', thread: 't7' },
+        { turn: 5, seq: 40, kind: 'idle', thread: 't7', status: 'failed' },
+        { turn: 5, seq: 41, kind: 'idle', thread: 't6', status: 'stopped' },
+        { turn: 5, seq: 42, kind: 'idle', thread: 't8' },
+    ] };
+    const thread = (id, ending) => ({ role: 'thread', project: { name: 'Storefront' }, coordinator: 's-c', thread: { id }, ...(ending ? { ending } : {}) });
+    const state = {
+        byId: { 's-c': { id: 's-c', title: '◆ Storefront', projectionValues: { projectSession: coordValue } } },
+        projectionsBySession: {
+            's-t6': { values: { projectSession: thread('t6', stopped) } },
+            's-t7': { values: { projectSession: thread('t7', failed) } },
+            's-t8': { values: { projectSession: thread('t8', stopped) } },
+            's-t9': { values: { projectSession: thread('t9', { ...failed, at: at(12) }) } },
+            's-t10': { values: { projectSession: thread('t10', failed) } },
+        },
+    };
+    const coord = projectContext(state, 's-c');
+    assert.deepEqual(plain(openSessions(coord.roster)), ['s-t6', 's-t7', 's-t8', 's-t9'], 'resolved threads need no ending');
+    const endings = Object.fromEntries(openSessions(coord.roster).map((id) => [id, endingIn(state, id)]).filter(([, e]) => e));
+    const rows = rowsOf(coord.roster, new Map(), state.byId, endings);
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    assert.deepEqual(plain(['t7', 't6', 't8', 't9', 't10'].map((id) => [id, byId[id].group, byId[id].dot, byId[id].stateLabel, byId[id].line])), [
+        ['t7', 'waiting', 'error', 'Failed', 'Failed · The model rejected the request.'],
+        ['t6', 'idle', 'idle', 'Stopped', 'Stopped before it finished'],
+        ['t8', 'done', 'done', 'Done', 'Done · Spike done.'],
+        ['t9', 'waiting', 'error', 'Failed', 'Failed · The model rejected the request.'],
+        ['t10', 'resolved', 'done', 'Resolved', 'Resolved'],
+    ]);
+    assert.deepEqual(plain(countsOf(rows)), { open: 4, running: 0, waiting: 2, resolved: 1, failed: 2 });
+    assert.deepEqual(plain(GROUPS.map((g) => g.label)), ['Waiting on you', 'Running', 'Done', 'Idle', 'Resolved']);
+    // Running, a prompt and resolved win over an old ending; a held handback is newer than any.
+    assert.equal(rowState({ running: true, ending: failed }).label, 'Running');
+    assert.equal(rowState({ pending: { kind: 'approval' }, ending: failed }).label, 'Needs you');
+    assert.equal(rowState({ resolved: true, ending: failed }).label, 'Resolved');
+    assert.equal(rowState({ hb: { status: 'blocked' } }).label, 'Blocked');
+    assert.deepEqual(plain(withHeld([byId.t7], [{ thread: 't7', status: 'done' }]).map((r) => [r.group, r.stateLabel, r.line, r.ending])),
+        [['done', 'Done', 'Done · held until you resume', null]]);
+    // Why, for each way a turn ends.
+    assert.deepEqual(plain([
+        { state: 'failed', kind: 'blocked' }, { state: 'failed', kind: 'signed-out' }, { state: 'failed', kind: 'error' },
+        { state: 'stopped', kind: 'interrupted' }, { state: 'stopped', kind: 'max-tokens' }, { state: 'stopped', kind: 'aborted', cause: 'hook', hook: 'budget' },
+        { state: 'stopped', kind: 'aborted', cause: 'disposed' },
+    ].map(endingLine)), [
+        'Failed · A DSH plugin blocked the turn.', 'Failed · You signed out of DeepSeek.', 'Failed · DSH couldn\'t finish the turn.',
+        'Stopped · DSH closed while it ran.', 'Stopped · It reached the output token limit.', 'Stopped · A DSH plugin stopped it (budget).',
+        'Stopped · Its session closed while it ran.',
+    ]);
+
+    // Cards: the idle note's card names the failure; every card of the thread says its state now.
+    const statuses = new Map();
+    const views = coordValue.cards.map((card) => cardView(card, coord, statuses, state.byId, 's-c', endings));
+    assert.deepEqual(plain(views.map((v) => [v.threadId, v.verb, v.tone ?? null, v.state.label, v.row.ending?.state ?? null])), [
+        ['t7', 'Started a thread', null, 'Failed', 'failed'],
+        ['t7', 'Turn failed', 'error', 'Failed', 'failed'],
+        ['t6', 'Stopped before it finished', null, 'Stopped', 'stopped'],
+        ['t8', 'Went idle without a handback', null, 'Done', null],
+    ]);
+    assert.deepEqual(plain(views.slice(0, 3).map((v) => v.icon)), ['IconBranchOutlineRegular', 'IconWarningTriangleOutlineRegular', 'IconStopFillRegular']);
+
+    // The session list: a failed thread's mark is red, a waiting one's amber; DSH draws running ones.
+    const marked = { ...state, projectionsBySession: { ...state.projectionsBySession, 's-t11': { values: { projectSession: thread('t11') } } } };
+    marked.byId = { ...state.byId, 's-c': { ...state.byId['s-c'], projectionValues: { projectSession: { ...coordValue, threads: [...coordValue.threads,
+        { id: 't11', session: 's-t11', title: 'CDN', resolved: false, handback: { status: 'blocked', summary: 'Token expired.', at: at(9) } }] } } } };
+    assert.deepEqual(plain(['s-t7', 's-t6', 's-t8', 's-t11', 's-t10', 's-c', 'nope'].map((id) => markState(marked, id))),
+        ['error:Failed', '', '', 'warning:Blocked', '', '', '']);
+
+    // The hover card says what the thread last did; DSH ends it with the session's own status.
+    assert.deepEqual(plain(['t7', 't6', 't8', 't9'].map((id) => hoverLine(byId[id]))), [
+        'Last turn failed · The model rejected the request.', 'Last turn stopped before it finished', 'Last handback · Done · Spike done.', 'Last turn failed · The model rejected the request.',
+    ]);
+    assert.equal(hoverLine({ ...byId.t7, pending: true }), undefined);
+    assert.equal(hoverLine(rowsOf([{ id: 't1', session: 's1', title: 'x', resolved: false }], new Map(), {}, {})[0]), 'No handback yet');
+
+    // A refusal reads as the plugin's sentence.
+    assert.equal(continueError({ code: 'projects/refused', message: 't7 is running already' }), 'T7 is running already.');
+    assert.equal(continueError({ code: 'projects/unreachable', message: 'socket' }), 'Couldn\'t reach the thread.');
 });
 
 test('browser half: a thread row nests only right under its coordinator or a nested sibling', () => {
@@ -1273,6 +1374,97 @@ test('the idle note says when a thread turn failed', async () => {
     thread.ctx.emitStatus(thread, 'idle');
     await tick();
     assert.match(host.sessions.get(coord.id).prompts[0].text, /^\[Thread idle without a handback: t1 · "Flaky"\]\n\nThe turn failed: provider unavailable\n\nIt produced no reply text\./);
+});
+
+test('a failed or stopped thread shows in the roster until a turn finishes; Retry and Resume send it on from its coordinator', async () => {
+    const { host, dir } = setup({}, undefined, { gateway: true });
+    await tick();
+    const coord = coordinatorOf(host);
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    await coord.ctx.call('project_thread_start', { title: 'Flaky', brief: 'Call the lane.' });
+    const thread = [...host.live.values()].find((a) => a.id !== coord.id);
+    const ts = host.sessions.get(thread.id);
+    const turn = (reason) => {
+        thread.ctx.emitStatus(thread, 'running');
+        ts.events.push({ seq: ts.events.length + 1, type: 'turn/start', data: { turn: ts.events.length } });
+        ts.events.push({ seq: ts.events.length + 1, type: 'turn/end', data: { turn: ts.events.length, reason } });
+        thread.ctx.emitStatus(thread, 'idle');
+    };
+    const refused = (promise, pattern) => assert.rejects(promise, (error) => error.code === 'projects/refused' && pattern.test(error.message));
+
+    // A turn that finished leaves nothing to retry.
+    turn({ kind: 'completed' });
+    await tick();
+    await refused(remote.continueThread(coord.id, 't1'), /nothing to retry/);
+
+    // A failed turn: the coordinator's roster says so, until a later turn finishes.
+    turn({ kind: 'error', error: { message: '400: {"message":"The model rejected the request."}', code: 'INVALID_REQUEST' } });
+    await tick();
+    assert.match(coord.ctx.section(), /- t1 · "Flaky" · idle · no handback yet · its last turn failed \(HTTP 400\): The model rejected the request\.$/m);
+    thread.status = 'running';
+    await refused(remote.continueThread(coord.id, 't1'), /running already/);
+    thread.status = 'idle';
+    await refused(remote.continueThread(coord.id, 't9'), /no thread "t9"/);
+    await refused(remote.continueThread(coord.id, ''), /thread is required/);
+
+    // Retry (from any session of the project) sends the thread a message from its coordinator.
+    const sent = ts.prompts.length;
+    const described = await remote.continueThread(thread.id, 't1');
+    assert.equal(described.project.id, 'dsh-plugins');
+    assert.equal(ts.prompts.length, sent + 1);
+    assert.equal(ts.prompts.at(-1).text, '[From the coordinator]\n\nThe user asked you to try again. Your last turn failed (HTTP 400): The model rejected the request. Carry on from where you left off.');
+    assert.deepEqual(plain(ts.events.at(-1).data.source), { kind: 'agent-message', form: 'relay', senderSessionId: coord.id });
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /thread-continue dsh-plugins\/t1 after=error/);
+    turn({ kind: 'completed' });
+    await tick();
+    assert.doesNotMatch(coord.ctx.section(), /its last turn/);
+
+    // A stopped turn resumes; a handback after it is newer news.
+    turn({ kind: 'aborted', reason: { kind: 'user' } });
+    await tick();
+    assert.match(coord.ctx.section(), /no handback yet · its last turn was stopped before it finished\./);
+    await remote.continueThread(coord.id, 't1');
+    assert.match(ts.prompts.at(-1).text, /^\[From the coordinator\]\n\nThe user asked you to continue\. Your last turn was stopped before it finished\. Carry on/);
+    thread.ctx.emitStatus(thread, 'running');
+    await thread.ctx.call('project_handback', { status: 'done', summary: 'Lane called.' });
+    ts.events.push({ seq: ts.events.length + 1, type: 'turn/end', data: { turn: 99, reason: { kind: 'error', error: { message: 'late' } } } });
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    assert.match(coord.ctx.section(), /- t1 · "Flaky" · idle · last handback: done, "Lane called\."(?! · its last turn)/);
+    await refused(remote.continueThread(coord.id, 't1'), /nothing to retry/);
+
+    // A resolved thread has nothing to retry.
+    await coord.ctx.call('project_thread_update', { thread: 't1', resolved: true });
+    await refused(remote.continueThread(coord.id, 't1'), /is resolved/);
+});
+
+test('turn endings: what the coordinator is told, what the thread hears on Retry or Resume, and the error a person reads', () => {
+    const lines = [
+        [{ kind: 'error', error: { message: 'boom' } }, 'The turn failed: boom', 'failed'],
+        [{ kind: 'error', error: { message: '429: {"error":{"message":"Rate limited.","type":"rate_limit"}}' } }, 'The turn failed (HTTP 429): Rate limited.', 'failed'],
+        [{ kind: 'blocked' }, 'The turn was blocked.', 'failed'],
+        [{ kind: 'aborted', reason: { kind: 'hook', reason: 'deepseek-account/signed-out' } }, 'The turn failed: the user signed out of DeepSeek.', 'failed'],
+        [{ kind: 'aborted', reason: { kind: 'user' } }, 'The turn was stopped before it finished.', 'stopped'],
+        [{ kind: 'interrupted' }, 'The turn was cut off because DSH stopped while it ran.', 'stopped'],
+        [{ kind: 'max-tokens' }, 'The turn hit the output token limit.', 'stopped'],
+        [{ kind: 'completed' }, '', undefined],
+    ];
+    for (const [reason, line, state] of lines) {
+        assert.equal(describeEnding(reason), line);
+        assert.equal(endingStateOf(line), state, line);
+    }
+    assert.equal(endingStateOf('The turnover was high.'), undefined);
+    assert.equal(continueMessage('The turn hit the output token limit.', false), 'The user asked you to continue. Your last turn hit the output token limit. Carry on from where you left off.');
+    assert.equal(continueMessage('', true), 'The user asked you to try again. Carry on from where you left off.');
+    assert.equal(continueMessage('The turn failed (HTTP 400): bad attachment', true), 'The user asked you to try again. Your last turn failed (HTTP 400): bad attachment. Carry on from where you left off.');
+    // DSH logs a provider's status and JSON body; people read the message inside.
+    assert.equal(readableError('400: {"message":"The model rejected the request: bad attachment.","type":"invalid_request_error"}'), 'The model rejected the request: bad attachment.');
+    assert.equal(readableError('429 {"error":{"message":"Rate limited.","type":"rate_limit"}}'), 'Rate limited.');
+    assert.equal(readableError('503: {"error":"Lane busy"}'), 'Lane busy');
+    assert.equal(readableError('fetch failed\n  caused by: ECONNREFUSED'), 'fetch failed caused by: ECONNREFUSED');
+    assert.equal(readableError('500: {not json}'), '500: {not json}');
+    assert.equal(readableError(undefined), '');
+    assert.equal(readableError('x'.repeat(500)).length, 240);
 });
 
 test('a stop the coordinator asks for does not come back as a note', async () => {
@@ -1696,6 +1888,9 @@ test('browser half: one store of what the plugin says about projects, shared by 
     assert.equal(withHeld(rows, []), rows);
     assert.deepEqual(plain(withHeld(rows, [{ thread: 't1', status: 'done' }, { thread: 't2', status: 'blocked' }]).map((r) => r.line)),
         ['Done · held until you resume', 'Working…', 'No handback yet']);
+    // And sits where that handback puts it: Done, or Waiting on you for a decision or a block.
+    assert.deepEqual(plain(withHeld(rows, [{ thread: 't1', status: 'done' }, { thread: 't3', status: 'needs_decision' }]).map((r) => [r.group, r.dot, r.stateLabel])),
+        [['done', 'done', 'Done'], ['running', null, null], ['waiting', 'warning', 'Needs a decision']]);
 });
 
 // ── code changes (changes.js) ──────────────────────────────────────────────
@@ -1871,7 +2066,7 @@ test('projection: sessions the store knows are seeded; older events add cards bu
 test('projection: a new coordinator\'s welcome turn, and whether the user has asked anything since', () => {
     const { host } = setup();
     const def = host.projections[0];
-    assert.equal(def.stateVersion, 3, 'the fold changed, so DSH folds every session again');
+    assert.equal(def.stateVersion, 4, 'the fold changed, so DSH folds every session again');
     const msg = (seq, text, source) => ({ type: 'user/message', seq, time: seq, data: { content: [{ type: 'text', text }], ...(source ? { source } : {}) } });
     let s = def.apply(def.init({ id: 'new' }), { type: 'turn/start', data: { turn: 0 } });
     s = def.apply(s, msg(1, '[Project created: "DSH Plugins"]\n\nThis is the first message in this coordinator session.', { kind: 'cordis-host-runner' }));
@@ -1906,6 +2101,50 @@ test('projection: a thread notes each turn that changed files, a newer announcem
     assert.equal(def.apply(plainState, { type: 'workspace/changes', seq: 3, data: { turn: 1 } }), plainState);
     const welcome = def.apply(def.init({ id: 'c' }), { type: 'user/message', seq: 1, time: 1, data: { content: [{ type: 'text', text: '[Project created: "DSH Plugins"]\n\nHi.' }], source: { kind: 'cordis-host-runner' } } });
     assert.equal(def.apply(welcome, { type: 'workspace/changes', seq: 4, data: { turn: 0 } }), welcome);
+});
+
+test('projection: a thread\'s last turn that failed or stopped, until a turn finishes or hands back', () => {
+    const { host } = setup();
+    const def = host.projections[0];
+    const T0 = Date.parse('2026-10-10T10:00:00.000Z');
+    const brief = { type: 'user/message', seq: 1, time: T0, data: { content: [{ type: 'text', text: '[Brief from the coordinator of "DSH Plugins" · you are thread t1, "Flaky"]\n\nGo.' }], source: { kind: 'agent-message', form: 'relay', senderSessionId: 'c' } } };
+    const end = (seq, reason, turn = 1) => ({ type: 'turn/end', seq, time: T0 + seq, data: { turn, reason } });
+    let s = def.apply(def.apply(def.init({ id: 't' }), { type: 'turn/start', data: { turn: 1 } }), brief);
+    s = def.apply(s, end(2, { kind: 'error', error: { message: '400: {"message":"The model rejected the request: bad attachment.","type":"invalid_request_error"}', code: 'INVALID_REQUEST' } }));
+    assert.deepEqual(plain(def.wire.view(s).ending), {
+        turn: 1, seq: 2, at: new Date(T0 + 2).toISOString(), state: 'failed', kind: 'error', message: 'The model rejected the request: bad attachment.', code: 'INVALID_REQUEST',
+    });
+    // Stopped by the user, cut off by DSH closing, at the token limit; blocked and a sign-out read as failed, as DSH shows them.
+    for (const [reason, want] of [
+        [{ kind: 'aborted', reason: { kind: 'user' } }, ['stopped', 'aborted', 'user', undefined]],
+        [{ kind: 'aborted', reason: { kind: 'hook', reason: 'budget' } }, ['stopped', 'aborted', 'hook', 'budget']],
+        [{ kind: 'interrupted' }, ['stopped', 'interrupted', undefined, undefined]],
+        [{ kind: 'max-tokens' }, ['stopped', 'max-tokens', undefined, undefined]],
+        [{ kind: 'blocked' }, ['failed', 'blocked', undefined, undefined]],
+        [{ kind: 'aborted', reason: { kind: 'hook', reason: 'deepseek-account/signed-out' } }, ['failed', 'signed-out', undefined, undefined]],
+    ]) {
+        const e = def.wire.view(def.apply(s, end(3, reason, 2))).ending;
+        assert.deepEqual([e.state, e.kind, e.cause, e.hook, e.turn, e.seq], [...want, 2, 3], JSON.stringify(reason));
+    }
+    // A turn that finishes clears it; an ending this fold doesn't know, or none, keeps what was.
+    assert.equal(def.wire.view(def.apply(s, end(4, { kind: 'completed' }, 2))).ending, undefined);
+    assert.equal(def.apply(s, end(5, { kind: 'forked' })), s);
+    assert.equal(def.apply(s, { type: 'turn/end', seq: 6, data: { turn: 2 } }), s);
+    // A turn that handed back a result is told by its handback, even when it failed after; a progress handback isn't a result.
+    const handback = (seq, status, turn) => ({ type: 'tool/result', seq, time: T0 + seq, data: { turn, meta: { dshProjects: 1, role: 'thread', project: { id: 'p', name: 'DSH Plugins' }, thread: { id: 't1', title: 'Flaky' }, coordinator: 'c', action: { kind: 'handback', thread: 't1', status } } } });
+    let h = def.apply(def.apply(s, { type: 'turn/start', data: { turn: 3 } }), handback(7, 'done', 3));
+    assert.equal(def.wire.view(def.apply(h, end(8, { kind: 'error', error: { message: 'late' } }, 3))).ending, undefined);
+    h = def.apply(def.apply(s, { type: 'turn/start', data: { turn: 3 } }), handback(7, 'progress', 3));
+    assert.equal(def.wire.view(def.apply(h, end(8, { kind: 'aborted', reason: { kind: 'user' } }, 3))).ending.state, 'stopped');
+    // A coordinator's turns keep no ending.
+    const welcome = def.apply(def.init({ id: 'c' }), { type: 'user/message', seq: 1, time: 1, data: { content: [{ type: 'text', text: '[Project created: "DSH Plugins"]\n\nHi.' }], source: { kind: 'cordis-host-runner' } } });
+    assert.equal(def.apply(welcome, end(2, { kind: 'error', error: { message: 'x' } }, 0)), welcome);
+    // The coordinator's idle card says when the thread's turn failed or stopped (the note's first line).
+    const idle = (seq, first) => ({ type: 'user/message', seq, time: seq, data: { content: [{ type: 'text', text: `[Thread idle without a handback: t1 · "Flaky"]\n\n${first}\n\nIt produced no reply text.` }], source: { kind: 'cordis-host-runner' } } });
+    let c = def.apply(welcome, idle(3, 'The turn failed: 400: {"message":"x"}'));
+    c = def.apply(c, idle(4, 'The turn was cut off because DSH stopped while it ran.'));
+    c = def.apply(c, idle(5, 'Its last reply:'));
+    assert.deepEqual(plain(c.v.cards.slice(1).map((card) => card.status ?? null)), ['failed', 'stopped', null]);
 });
 
 test('projection: unrelated and malformed events keep the same state; parsing never throws', () => {

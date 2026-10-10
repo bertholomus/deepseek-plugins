@@ -5,6 +5,7 @@
  *
  *   E2E:call <tool> <json args>   call that tool (the rest of the line is the JSON)
  *   E2E:fail                      answer HTTP 400, so the turn fails
+ *   …asked you to try again/continue  (Retry or Resume from the window) reply RESUMED
  *   E2E:slow <ms>                 on a line of its own: answer after that long
  *   [Handback from thread …       reply SAW-HANDBACK
  *   [Thread idle without …        reply SAW-IDLE
@@ -39,6 +40,8 @@ function decide(body, text) {
     const tools = new Set((body.tools ?? []).map((t) => t.function?.name));
     const last = messages.at(-1);
     if (last?.role === 'tool') return { text: `TOOL-RESULT: ${textOf(last).slice(0, 2000)}` };
+    // Retry or Resume from the DSH window: the thread picks the work back up, whatever failed before.
+    if (/The user asked you to (try again|continue)\./.test(text)) return { text: 'RESUMED' };
     const call = /E2E:call (\w+) (.*)$/m.exec(text);
     if (call) {
         if (!tools.has(call[1])) return { text: `MISSING TOOL ${call[1]}` };

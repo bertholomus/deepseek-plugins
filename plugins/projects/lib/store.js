@@ -8,6 +8,7 @@
  *     threads: { [threadId]: { sessionId, title, model?, effort?, resolved, createdAt,
  *       lastHandback?: { status, summary, at }, lastDirect?: { at, reply }, handbackTimes: [ms],
  *       busy?: true while a turn runs, seenTurn?: key of the last turn reviewed,
+ *       lastEnding?: { text, kind, at }: that turn, when it failed or stopped without a handback (prompts.js describeEnding),
  *       changes?: [{ turn, seq, added, deleted, total, files: [{ path, added, deleted, binary?, oversized? }], turns? }] (changes.js) } } } } }
  *
  * Settings here are the project's own: set in its Project settings dialog,

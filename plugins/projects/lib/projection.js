@@ -12,10 +12,11 @@
  * messages the plugin sends (prompts.js), which DSH logs as an agent's or a
  * plugin's message (earlier versions sent them as the user's, with a
  * request id that marks them), whether the user has written in a
- * coordinator yet (a new project suggests first asks until then), and the
+ * coordinator yet (a new project suggests first asks until then), the
  * turns in which a thread changed files (DSH's `workspace/changes` events;
- * the window then reads the numbers from the plugin). A
- * session the store already knows
+ * the window then reads the numbers from the plugin), and how a thread's
+ * last turn ended (DSH's `turn/end`), so a failed or stopped thread says so.
+ * A session the store already knows
  * is seeded from the store the first time DSH folds it, so sessions from
  * before this version show their project and threads at once; replayed
  * events older than the seed then add cards but never overwrite the roster.
@@ -27,21 +28,28 @@
  *
  * { role: 'coordinator'|'thread', project: { id?, name }, coordinator?: sessionId,
  *   thread?: { id, title }, threads?: [{ id, session, title, resolved, created?, handback? }],
- *   cards?: [{ turn, seq, kind, thread?, status? }], asked?: true, changes?: [{ turn, seq }] }
+ *   cards?: [{ turn, seq, kind, thread?, status? }], asked?: true, changes?: [{ turn, seq }],
+ *   ending?: { state: 'failed'|'stopped', kind, turn, seq, at, message?, code?, cause?, hook? } }
  *
  * Card kinds: start, send, update (tool results), handback, idle, approval
  * (the plugin's messages), and welcome: the turn a new coordinator
- * introduced itself in. `asked` is set once the user writes in a coordinator.
- * `changes` lists a thread's turns that changed files, oldest first.
+ * introduced itself in. An idle card's status says when the thread's turn
+ * failed or stopped (from the note's first line). `asked` is set once the
+ * user writes in a coordinator. `changes` lists a thread's turns that
+ * changed files, oldest first. `ending` is a thread's last turn when it
+ * didn't finish: it failed (DSH logged an error, a plugin blocked it, or
+ * the user signed out) or it stopped (stopped, cut off by DSH closing, or at
+ * the output token limit); a turn that finishes, or hands back a result
+ * before it ends, clears it.
  *
  * @module dsh-plugin-projects/projection
  */
-import { TAGS } from './prompts.js';
+import { TAGS, endingStateOf, readableError } from './prompts.js';
 
 /** The projection key; the browser half reads the same name. */
 export const PROJECTION_KEY = 'projectSession';
 /** Bump when the state shape or fold changes; DSH then refolds from the log. */
-export const STATE_VERSION = 3;
+export const STATE_VERSION = 4;
 /** Most recent cards kept per session; older turns rarely scroll into view. */
 export const MAX_CARDS = 60;
 /** Threads kept in a roster: every open one, then the newest resolved ones. */
@@ -188,7 +196,9 @@ function applyMessage(state, event) {
     for (const [tag, pattern, kind] of [[TAGS.idle, IDLE, 'idle'], [TAGS.approval, APPROVAL, 'approval']]) {
         if (text.startsWith(tag) && (m = pattern.exec(head))) {
             if (state.v?.role === 'thread') return state;
-            return { ...state, v: withCard(identify(state.v, 'coordinator', {}), { turn: state.turn, seq: event.seq, kind, thread: m[1] }) };
+            // An idle note says first when the turn failed or stopped (prompts.js idleMessage).
+            const ended = kind === 'idle' && newline >= 0 ? endingStateOf(text.slice(newline).trim()) : undefined;
+            return { ...state, v: withCard(identify(state.v, 'coordinator', {}), { turn: state.turn, seq: event.seq, kind, thread: m[1], ...(ended ? { status: ended } : {}) }) };
         }
     }
     return state;
@@ -235,6 +245,53 @@ function applyChanges(state, event) {
     return { ...state, v: { ...state.v, changes: list.slice(-MAX_CHANGES) } };
 }
 
+/**
+ * How a turn ended, as the window shows a thread's last turn: null when it
+ * finished, undefined for an ending this fold doesn't know (it keeps what
+ * it had). DSH shows a sign-out as a failure, so this does too.
+ */
+function endingOf(reason, event, turn) {
+    if (!isObject(reason) || typeof reason.kind !== 'string') return undefined;
+    const base = { turn, seq: event.seq, at: Number.isFinite(event.time) ? new Date(event.time).toISOString() : null };
+    switch (reason.kind) {
+        case 'completed': return null;
+        case 'error': {
+            const error = isObject(reason.error) ? reason.error : {};
+            const code = str(error.code, 60);
+            return { ...base, state: 'failed', kind: 'error', message: readableError(error.message), ...(code ? { code } : {}) };
+        }
+        case 'blocked': return { ...base, state: 'failed', kind: 'blocked' };
+        case 'aborted': {
+            const cause = isObject(reason.reason) ? reason.reason : {};
+            if (cause.kind === 'hook' && cause.reason === 'deepseek-account/signed-out') return { ...base, state: 'failed', kind: 'signed-out' };
+            const kind = str(cause.kind, 20);
+            const hook = cause.kind === 'hook' ? str(cause.reason, 120) : undefined;
+            return { ...base, state: 'stopped', kind: 'aborted', ...(kind ? { cause: kind } : {}), ...(hook ? { hook } : {}) };
+        }
+        case 'interrupted': return { ...base, state: 'stopped', kind: 'interrupted' };
+        case 'max-tokens': return { ...base, state: 'stopped', kind: 'max-tokens' };
+        default: return undefined;
+    }
+}
+
+/**
+ * A thread's turn ended: keep how, when it didn't finish, so the window
+ * shows the thread as failed or stopped until a later turn finishes. A
+ * turn that handed back a result (not just progress) is told by its
+ * handback instead.
+ */
+function applyTurnEnd(state, event) {
+    if (state.v?.role !== 'thread') return state;
+    const turn = Number.isSafeInteger(event.data?.turn) ? event.data.turn : state.turn;
+    const handedBack = (state.v.cards ?? []).some((c) => c?.kind === 'handback' && c.turn === turn && c.status !== 'progress');
+    const ending = handedBack ? null : endingOf(event.data?.reason, event, turn);
+    if (ending === undefined) return state;
+    if (ending !== null) return { ...state, v: { ...state.v, ending } };
+    if (state.v.ending === undefined) return state;
+    const { ending: _finished, ...v } = state.v;
+    return { ...state, v };
+}
+
 /** One event folded into the state; the same reference when the event says nothing about projects. */
 export function applyEvent(state, event) {
     try {
@@ -246,6 +303,7 @@ export function applyEvent(state, event) {
             case 'user/message': return applyMessage(state, event);
             case 'tool/result': return applyToolMeta(state, event);
             case 'workspace/changes': return applyChanges(state, event);
+            case 'turn/end': return applyTurnEnd(state, event);
             default: return state;
         }
     } catch {

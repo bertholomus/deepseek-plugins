@@ -5,8 +5,9 @@
  * app and in a browser). This module adds one more, `dsh-plugin-projects`,
  * so the Project settings dialog in lib/client.js reads and changes a
  * project's models, effort and pause the way the coordinator's
- * project_settings tool does, through the same manager methods, and the
- * plugin's page lists every project with its models.
+ * project_settings tool does, through the same manager methods, the
+ * plugin's page lists every project with its models, and a failed or
+ * stopped thread runs again from its card (Retry, Resume).
  *
  * The gateway finds a Remote service by its `typertRemote` binding and the
  * method markers on its prototype; DSH's own services get both from
@@ -64,6 +65,21 @@ export class ProjectsRemote {
     }
 
     /**
+     * Run a thread again after its last turn failed (Retry) or stopped (Resume).
+     * @param target - as for describe.
+     * @param thread - the thread's id (t3).
+     * @returns the project as describe returns it.
+     */
+    async continueThread(target, thread) {
+        try {
+            if (typeof thread !== 'string' || thread === '') throw new ProjectError('thread is required');
+            return await this.manager.continueThread(this.manager.projectFor(target), thread);
+        } catch (error) {
+            throw failure(error);
+        }
+    }
+
+    /**
      * Change a project's settings, or one thread's model and effort. Values
      * are strings; null goes back to the default. `paused` is a boolean.
      * @param target - as for describe.
@@ -90,4 +106,4 @@ function markRemote(Class, names) {
         });
     }
 }
-markRemote(ProjectsRemote, ['describe', 'list', 'update']);
+markRemote(ProjectsRemote, ['describe', 'list', 'update', 'continueThread']);

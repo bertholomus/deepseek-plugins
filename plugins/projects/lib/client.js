@@ -227,6 +227,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-card-state{flex:none;display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap}',
             '.dshp-t-card-actions{flex:none;display:inline-flex;align-items:center;gap:4px}',
             '.dshp-t-card-actions .dshp-t-icon{width:28px;height:28px;margin:0}',
+            // Threads: a thread whose last turn failed or stopped, on its newest card
+            '.dshp-t-card[data-card-tone=error] .dshp-t-card-icon{color:var(--dsw-alias-state-error-primary)}',
+            '.dshp-t-card-why{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}',
+            '.dshp-t-row-acts{display:inline-flex;align-items:center;gap:2px}',
+            '.dshp-t-icon:disabled{cursor:default}',
             '@container (width<=460px){.dshp-t-card-state-label{display:none}}',
             // Threads: a thread's code changes, in DSH's colors for added and deleted lines
             '.dshp-t-changes{flex:none;display:inline-flex;align-items:center;gap:6px;box-sizing:border-box;height:26px;padding:0 7px;border:0;border-radius:var(--dsw-radius-md);background:none;font:inherit;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);white-space:nowrap}',
@@ -1039,6 +1044,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             pausedCoordinator: 'New threads and handbacks wait until you resume.',
             pausedThread: 'This thread\'s handbacks wait until the project resumes.',
             heldLine: 'held until you resume',
+            handbackHeld: 'Handback held',
+            handbackHeldWhy: 'The project is paused, so the coordinator gets this handback when you resume.',
             resume: 'Resume',
             resuming: 'Resuming…',
             resumeFailed: 'Couldn\'t resume the project.',
@@ -1047,6 +1054,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             reviewChanges: 'Review changes',
             reviewLatest: 'Review the latest changes',
             diffGone: 'DSH no longer has this diff. It keeps diffs until it restarts.',
+            retryThread: 'Retry',
+            resumeThread: 'Resume',
+            retrying: 'Retrying…',
+            resumingThread: 'Resuming…',
+            continueFailed: 'Couldn\'t reach the thread.',
         };
         /** A new project's first asks, shown under the coordinator's greeting until the user writes. */
         const SUGGESTIONS = [
@@ -1057,6 +1069,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const GROUPS = [
             { id: 'waiting', label: 'Waiting on you' },
             { id: 'running', label: 'Running' },
+            { id: 'done', label: 'Done' },
             { id: 'idle', label: 'Idle' },
             { id: 'resolved', label: 'Resolved' },
         ];
@@ -1279,6 +1292,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     if (result.ok) put(target, result.value);
                     return result;
                 },
+                /** Run a thread again after its last turn failed or stopped (remote.js `continueThread`). */
+                async continueThread(target, thread) {
+                    const result = await link.call('continueThread', { target, thread });
+                    if (result.ok) put(target, result.value);
+                    return result;
+                },
             };
         }
 
@@ -1314,15 +1333,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** The handbacks a pause holds ([{thread, status}]), as last read. */
         const useHeldHandbacks = (facts, coordinator) => React.useSyncExternalStore(facts.subscribe, () => facts.info(coordinator)?.paused?.handbacks ?? EMPTY);
 
-        /** A thread whose handback a pause holds says so, instead of "No handback yet". */
+        /**
+         * A thread whose handback a pause holds says so, instead of "No
+         * handback yet", and sits where that handback puts it (Done, or
+         * Waiting on you for a decision).
+         */
         function withHeld(rows, handbacks) {
             if (!Array.isArray(handbacks) || handbacks.length === 0) return rows;
             const held = new Map();
             for (const hb of handbacks) if (isObject(hb) && typeof hb.thread === 'string') held.set(hb.thread, hb.status);
             return rows.map((row) => {
-                if (!held.has(row.id) || row.group === 'running' || row.group === 'resolved') return row;
-                const label = HANDBACK_LABELS[held.get(row.id)] ?? 'Handback';
-                return { ...row, line: `${label} · ${TEXT.heldLine}`, held: true };
+                if (!held.has(row.id) || row.running || row.pending || row.group === 'running' || row.group === 'resolved') return row;
+                const status = held.get(row.id);
+                const state = rowState({ resolved: false, running: false, pending: undefined, hb: { status }, ending: undefined });
+                const label = HANDBACK_LABELS[status] ?? 'Handback';
+                return { ...row, group: state.group, dot: state.dot, stateLabel: state.label, ending: undefined, line: `${label} · ${TEXT.heldLine}`, held: true };
             });
         }
 
@@ -1381,30 +1406,104 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return `${label} · ${summary}`;
         }
 
+        /** A thread's last turn when it failed or stopped (its own projection value's `ending`), or undefined. */
+        function endingOf(value) {
+            const ending = value?.ending;
+            return isObject(ending) && (ending.state === 'failed' || ending.state === 'stopped') ? ending : undefined;
+        }
+        const endingIn = (state, sessionId) => endingOf(valueIn(state, sessionId));
+        const sameEndings = (a, b) => {
+            const keys = Object.keys(a);
+            return keys.length === Object.keys(b).length && keys.every((key) => a[key]?.seq === b[key]?.seq && a[key]?.state === b[key]?.state);
+        };
+
+        /** The failed or stopped last turns of some sessions, by session id; the same object until one of them changes. */
+        function useEndings(useSessions, sessionIds) {
+            const key = sessionIds.join('\n');
+            // The ids are read through `key`, so a new array of the same ids keeps the selector.
+            const select = React.useCallback((state) => {
+                const out = {};
+                for (const id of sessionIds) {
+                    const ending = endingIn(state, id);
+                    if (ending) out[id] = ending;
+                }
+                return out;
+            }, [key]);
+            return useSessions(select, sameEndings);
+        }
+
+        /** Why a thread's last turn didn't finish, as a sentence ('' when it was simply stopped). */
+        function endingReason(ending) {
+            switch (ending?.kind) {
+                case 'error': return typeof ending.message === 'string' && ending.message !== '' ? ending.message : 'DSH couldn\'t finish the turn.';
+                case 'blocked': return 'A DSH plugin blocked the turn.';
+                case 'signed-out': return 'You signed out of DeepSeek.';
+                case 'interrupted': return 'DSH closed while it ran.';
+                case 'max-tokens': return 'It reached the output token limit.';
+                default:
+                    if (ending?.cause === 'hook') return ending.hook ? `A DSH plugin stopped it (${ending.hook}).` : 'A DSH plugin stopped it.';
+                    if (ending?.cause === 'disposed') return 'Its session closed while it ran.';
+                    return '';
+            }
+        }
+
+        /** A failed or stopped last turn as one line: "Failed · <why>", "Stopped before it finished", "Stopped · <why>". */
+        function endingLine(ending) {
+            const why = endingReason(ending);
+            if (ending.state === 'failed') return `Failed · ${why}`;
+            return why ? `Stopped · ${why}` : 'Stopped before it finished';
+        }
+
+        /**
+         * A thread's state in the one vocabulary every view uses: its group
+         * in the Threads menu, its dot, its label. A failed or stopped last
+         * turn counts when it came after the last handback.
+         */
+        function rowState({ resolved, running, pending, hb, ending }) {
+            const later = ending !== undefined && !(Date.parse(hb?.at ?? '') > Date.parse(ending.at ?? ''));
+            const ended = !resolved && !running && !pending && later ? ending : undefined;
+            const failed = ended?.state === 'failed';
+            const asks = !ended && (hb?.status === 'needs_decision' || hb?.status === 'blocked');
+            const done = !ended && hb?.status === 'done';
+            const group = resolved ? 'resolved' : pending || (!running && (asks || failed)) ? 'waiting' : running ? 'running' : done ? 'done' : 'idle';
+            const dot = resolved ? 'done' : pending ? 'warning' : running ? 'ongoing' : failed ? 'error' : asks ? 'warning' : done ? 'done' : 'idle';
+            const label = resolved ? 'Resolved' : pending ? 'Needs you' : running ? 'Running' : failed ? 'Failed' : ended ? 'Stopped'
+                : hb?.status === 'blocked' ? 'Blocked' : asks ? 'Needs a decision' : done ? 'Done' : 'Idle';
+            return { group, dot, label, ending: ended };
+        }
+
         /** One roster entry with its live state, as the menu, the pane and the cards show it. */
-        function threadRow(entry, statuses, byId) {
+        function threadRow(entry, statuses, byId, endings) {
             const session = typeof entry.session === 'string' && entry.session !== '' ? entry.session : undefined;
             const status = session ? statuses?.get?.(session) : undefined;
             const summary = session ? byId?.[session] : undefined;
             const running = (status?.running ?? summary?.running) === true;
             const pending = status?.pendingInteraction ?? undefined;
             const hb = isObject(entry.handback) ? entry.handback : undefined;
-            const asks = hb?.status === 'needs_decision' || hb?.status === 'blocked';
-            const group = entry.resolved ? 'resolved' : pending || (!running && asks) ? 'waiting' : running ? 'running' : 'idle';
-            const dot = group === 'waiting' ? 'warning' : group === 'running' ? 'ongoing' : group === 'resolved' || hb?.status === 'done' ? 'done' : 'idle';
+            const state = rowState({ resolved: entry.resolved === true, running, pending, hb, ending: session ? endings?.[session] : undefined });
             const told = hb ? toldText(hb) : undefined;
             const line = pending ? pendingLine(pending)
                 : running ? (hb?.status === 'progress' && hb.summary ? `Working… · ${hb.summary}` : 'Working…')
-                    : told ?? (entry.resolved ? 'Resolved' : 'No handback yet');
-            const stateLabel = group === 'running' ? 'Running'
-                : group === 'waiting' ? (pending ? 'Needs you' : hb?.status === 'blocked' ? 'Blocked' : 'Needs a decision')
-                    : group === 'resolved' ? 'Resolved' : hb?.status === 'done' ? 'Done' : 'Idle';
+                    : state.ending ? endingLine(state.ending)
+                        : told ?? (entry.resolved ? 'Resolved' : 'No handback yet');
             const at = Number.isFinite(summary?.updatedAt) ? summary.updatedAt : Date.parse(hb?.at ?? entry.created ?? '');
-            return { entry, id: entry.id, title: entry.title || entry.id, session, group, dot, line, stateLabel, at: Number.isFinite(at) ? at : undefined };
+            return {
+                entry, id: entry.id, title: entry.title || entry.id, session, group: state.group, dot: state.dot, line, stateLabel: state.label,
+                running, pending: pending !== undefined, ending: state.ending, at: Number.isFinite(at) ? at : undefined,
+            };
         }
 
-        function rowsOf(roster, statuses, byId) {
-            const rows = (roster ?? EMPTY).filter((entry) => isObject(entry) && typeof entry.id === 'string').map((entry) => threadRow(entry, statuses, byId));
+        /** The sessions of a roster's open threads, whose own projections say how their last turn ended. */
+        function openSessions(roster) {
+            const out = [];
+            for (const entry of Array.isArray(roster) ? roster : EMPTY) {
+                if (isObject(entry) && entry.resolved !== true && typeof entry.session === 'string' && entry.session !== '') out.push(entry.session);
+            }
+            return out;
+        }
+
+        function rowsOf(roster, statuses, byId, endings) {
+            const rows = (roster ?? EMPTY).filter((entry) => isObject(entry) && typeof entry.id === 'string').map((entry) => threadRow(entry, statuses, byId, endings));
             // Newest activity first within a group; then the newest thread.
             return rows.sort((a, b) => (b.at ?? 0) - (a.at ?? 0) || threadNumber(b.id) - threadNumber(a.id));
         }
@@ -1414,7 +1513,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         function countsOf(rows) {
             const count = (group) => rows.filter((row) => row.group === group).length;
-            return { open: rows.length - count('resolved'), running: count('running'), waiting: count('waiting'), resolved: count('resolved') };
+            return {
+                open: rows.length - count('resolved'), running: count('running'), waiting: count('waiting'), resolved: count('resolved'),
+                failed: rows.filter((row) => row.dot === 'error').length,
+            };
         }
 
         function summaryText(counts) {
@@ -1452,9 +1554,65 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             else if (event.key === 'End') at(items.length - 1);
         }
 
-        function ThreadRow({ row, current, now, model, changes, onOpen, action }) {
+        /** A refusal from the plugin as a sentence, or that the thread couldn't be reached. */
+        function continueError(error) {
+            const message = String(error?.message ?? '').trim();
+            if (error?.code === 'projects/refused' && message) return `${message.replace(/^./, (c) => c.toUpperCase())}${/[.!?]$/.test(message) ? '' : '.'}`;
+            return TEXT.continueFailed;
+        }
+
+        /**
+         * Retry a thread whose last turn failed, or resume one that stopped:
+         * the plugin sends it on with a message from its coordinator. Busy
+         * until the thread runs again (its row then stops offering it), with
+         * the plugin's refusal when it says no.
+         */
+        function useContinue(projects, row) {
+            const [state, setState] = React.useState({ busy: false, error: '' });
+            const alive = React.useRef(true);
+            React.useEffect(() => () => { alive.current = false; }, []);
+            React.useEffect(() => {
+                if (!state.busy) return undefined;
+                // A thread that doesn't start (DSH refused the message) is offered again.
+                const timer = setTimeout(() => { if (alive.current) setState({ busy: false, error: '' }); }, 15000);
+                return () => clearTimeout(timer);
+            }, [state.busy]);
+            const session = row?.session;
+            const thread = row?.id;
+            const run = React.useCallback(async () => {
+                if (typeof session !== 'string' || typeof thread !== 'string') return;
+                setState({ busy: true, error: '' });
+                const result = await projects.facts.continueThread(session, thread);
+                if (alive.current && !result.ok) setState({ busy: false, error: continueError(result.error) });
+            }, [projects, session, thread]);
+            return { ...state, run, retry: row?.ending?.state === 'failed' };
+        }
+
+        /** Retry or Resume as an icon button on a Threads menu or pane row. */
+        function RowContinue({ row, projects }) {
+            const { busy, error, run, retry } = useContinue(projects, row);
+            const label = retry ? TEXT.retryThread : TEXT.resumeThread;
+            return h(ui.Tooltip, { label: error || label, side: 'bottom', align: 'end', portal: true },
+                h('button', {
+                    type: 'button', className: error ? 'dshp-t-icon dshp-t-error' : 'dshp-t-icon', disabled: busy, 'aria-busy': busy || undefined,
+                    'aria-label': `${label}: ${row.title}${error ? `. ${error}` : ''}`, 'data-projects-continue': retry ? 'retry' : 'resume',
+                    onClick: (event) => { event.preventDefault(); event.stopPropagation(); void run(); },
+                    onKeyDown: (event) => event.stopPropagation(),
+                }, busy ? h(ui.StateDot, { state: 'ongoing' }) : h(retry ? ui.IconRefreshOutlineRegular : ui.IconPlayOutlineRegular, { size: 14 })));
+        }
+
+        function ThreadRow({ row, current, now, model, changes, onOpen, action, projects }) {
             const enabled = !current && row.session !== undefined;
             const open = () => { if (enabled) onOpen(row); };
+            const acts = [
+                row.ending && row.session !== undefined && projects ? h(RowContinue, { key: 'continue', row, projects }) : null,
+                action && enabled ? h(ui.Tooltip, { key: 'action', label: action.label, side: 'bottom', align: 'end', portal: true },
+                    h('button', {
+                        type: 'button', className: 'dshp-t-icon', 'aria-label': `${action.label}: ${row.title}`,
+                        onClick: (event) => { event.preventDefault(); event.stopPropagation(); action.run(row); },
+                        onKeyDown: (event) => event.stopPropagation(),
+                    }, h(action.icon, { size: 14 }))) : null,
+            ].filter(Boolean);
             return h('div', {
                 className: 'dshp-t-row', role: 'button', tabIndex: enabled ? 0 : -1,
                 'data-dshp-item': '', 'data-thread': row.id, 'data-changes': changes ? '' : undefined,
@@ -1468,7 +1626,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     open();
                 },
             },
-            h('span', { className: 'dshp-t-dot' }, h(ui.StateDot, { state: row.dot })),
+            h('span', { className: 'dshp-t-dot', 'data-state': row.dot }, h(ui.StateDot, { state: row.dot })),
             h('span', { className: 'dshp-t-text' },
                 h('span', { className: 'dshp-t-name' }, row.title),
                 changes ? h('span', { className: 'dshp-t-row-changes', 'data-projects-changes': '' }, ...changeCounts(changes)) : null,
@@ -1476,22 +1634,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             h('span', { className: 'dshp-t-meta' },
                 model ? h('span', { className: 'dshp-t-model', title: model, 'data-projects-thread-model': '' }, model) : null,
                 row.at !== undefined ? h('span', { className: 'dshp-t-ago' }, ago(row.at, now)) : null),
-            action && enabled ? h(ui.Tooltip, { label: action.label, side: 'bottom', align: 'end', portal: true },
-                h('button', {
-                    type: 'button', className: 'dshp-t-icon', 'aria-label': `${action.label}: ${row.title}`,
-                    onClick: (event) => { event.preventDefault(); event.stopPropagation(); action.run(row); },
-                    onKeyDown: (event) => event.stopPropagation(),
-                }, h(action.icon, { size: 14 }))) : null);
+            acts.length > 0 ? h('span', { className: 'dshp-t-row-acts' }, ...acts) : null);
         }
 
-        /** Rows grouped as Waiting on you, Running, Idle and Resolved (folded). */
-        function ThreadList({ rows, current, now, models, changes, onOpen, action }) {
+        /** Rows grouped as Waiting on you, Running, Done, Idle and Resolved (folded). */
+        function ThreadList({ rows, current, now, models, changes, onOpen, action, projects }) {
             const [showResolved, setShowResolved] = React.useState(() => rows.some((row) => row.group === 'resolved' && row.session === current));
             return GROUPS.map((group) => {
                 const members = rows.filter((row) => row.group === group.id);
                 if (members.length === 0) return null;
                 const list = members.map((row) => h(ThreadRow, {
-                    key: row.id, row, current: row.session !== undefined && row.session === current, now, onOpen, action,
+                    key: row.id, row, current: row.session !== undefined && row.session === current, now, onOpen, action, projects,
                     model: row.session !== undefined ? models?.[row.session] : undefined,
                     changes: changes?.[row.id],
                 }));
@@ -1558,6 +1711,22 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 coordinator: (coordinator ? models[coordinator] : undefined) ?? route('coordinatorModel', 'coordinatorEffort'),
                 thread: route('threadModel', 'threadEffort'),
             };
+        }
+
+        /**
+         * A roster's rows with their live state, each open thread's own
+         * ending included. Thread sessions this window hasn't loaded are read
+         * once, so a thread that failed or stopped says so from the start.
+         * @param held - the handbacks a pause holds ([{thread, status}]).
+         */
+        function useRows(projects, useSessions, roster, statuses, byId, held) {
+            const sessions = React.useMemo(() => openSessions(roster), [roster]);
+            const endings = useEndings(useSessions, sessions);
+            const key = sessions.join('\n');
+            React.useEffect(() => {
+                for (const id of sessions) projects.refresh(id);
+            }, [key, projects]);
+            return React.useMemo(() => withHeld(rowsOf(roster, statuses, byId, endings), held), [roster, statuses, byId, endings, held]);
         }
 
         /** The model labels of a roster's sessions and its coordinator, read live from DSH. */
@@ -1744,14 +1913,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, [away, unknown, open, coordinator, projects]);
             const paused = usePaused(projects.facts, coordinator, coordinator ? `d:${coordinator}` : null) === true;
             const handbacks = useHeldHandbacks(projects.facts, coordinator);
-            const rows = React.useMemo(() => withHeld(rowsOf(info?.roster, statuses, byId), paused ? handbacks : EMPTY), [info?.roster, statuses, byId, paused, handbacks]);
+            const rows = useRows(projects, useSessions, info?.roster, statuses, byId, paused ? handbacks : EMPTY);
             const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, open);
             const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), open);
             const described = useProjectInfo(projects.facts, sessionId, info !== undefined, open);
             if (info === undefined) return null;
 
             const counts = countsOf(rows);
-            const signal = counts.waiting > 0 ? 'warning' : counts.running > 0 ? 'ongoing' : null;
+            const signal = counts.failed > 0 ? 'error' : counts.waiting > 0 ? 'warning' : counts.running > 0 ? 'ongoing' : null;
             const threadsLabel = counts.open > 0 ? plural(counts.open, 'thread') : TEXT.threads;
             const label = paused ? `${TEXT.paused} · ${threadsLabel}` : threadsLabel;
             const openSession = (target) => { change(false); projects.openSession(target); };
@@ -1813,7 +1982,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             paused ? h(PausedNotice, { coordinator, role: info.me.role, projects }) : null,
             h('div', { className: 'dshp-t-menu-body' },
                 notice ?? h(ThreadList, {
-                    rows, current: sessionId, now, models, changes,
+                    rows, current: sessionId, now, models, changes, projects,
                     onOpen: (row) => openSession(row.session),
                     action: { label: TEXT.openBeside, icon: ui.IconCompareSplitOutlineRegular, run: (row) => { change(false); projects.openBeside(row.session); } },
                 })),
@@ -1848,7 +2017,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const visible = tab.visible !== false;
             const paused = usePaused(projects.facts, coordinator, coordinator && visible ? `d:${coordinator}` : null) === true;
             const handbacks = useHeldHandbacks(projects.facts, coordinator);
-            const rows = React.useMemo(() => withHeld(rowsOf(info?.roster, statuses, byId), paused ? handbacks : EMPTY), [info?.roster, statuses, byId, paused, handbacks]);
+            const rows = useRows(projects, useSessions, info?.roster, statuses, byId, paused ? handbacks : EMPTY);
             const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, info !== undefined && visible);
             const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), info !== undefined && visible);
             const described = useProjectInfo(projects.facts, sessionId, info !== undefined, visible);
@@ -1871,7 +2040,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             h(ModelsSummary, { ...summaryModels(cv, models, coordinator, described), onPick: settingsOn ? (pick) => projects.settings.open(sessionId, { pick }) : undefined }),
             paused ? h(PausedNotice, { coordinator, role: info.me.role, projects }) : null,
             notice ?? h(ThreadList, {
-                rows, current: sessionId, now, models, changes,
+                rows, current: sessionId, now, models, changes, projects,
                 onOpen: (row) => {
                     try { tab.actions.openResource(chatAddress(row.session)); } catch { projects.openBeside(row.session); }
                 },
@@ -1960,7 +2129,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const status = useSessionStatus((map) => map.get(threadSession));
             const running = (status?.running ?? listRunning) === true;
             const title = value?.role === 'thread' ? value.thread?.title ?? displayTitle : displayTitle;
-            const dot = status?.pendingInteraction ? 'warning' : running ? 'ongoing' : 'idle';
+            const dot = status?.pendingInteraction ? 'warning' : running ? 'ongoing' : endingOf(value)?.state === 'failed' ? 'error' : 'idle';
             return { value, title: title || TEXT.thread, running, dot };
         }
 
@@ -2064,24 +2233,37 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         const UPDATE_VERBS = { stopped: 'Stopped a thread', resolved: 'Resolved a thread', reopened: 'Reopened a thread', renamed: 'Renamed a thread' };
         const UPDATE_ICONS = { stopped: 'IconStopFillRegular', resolved: 'IconCheckCircleOutlineRegular', reopened: 'IconRefreshOutlineRegular', renamed: 'IconEditOutlineRegular' };
+        /** An idle note's card when the thread's turn failed or stopped (the note says so first). */
+        const IDLE_VIEWS = {
+            failed: { icon: 'IconWarningTriangleOutlineRegular', verb: 'Turn failed', tone: 'error' },
+            stopped: { icon: 'IconStopFillRegular', verb: 'Stopped before it finished' },
+        };
 
-        /** How one card reads: its icon, its line above the name, and what it opens. */
-        function cardView(card, info, statuses, byId, here) {
+        /**
+         * How one card reads: its icon, its line above the name, and what it
+         * opens. `held` lists the handbacks a paused project holds.
+         */
+        function cardView(card, info, statuses, byId, here, endings, held = EMPTY) {
             const handback = HANDBACK_LABELS[card.status] ?? card.status;
             if (info.me.role === 'thread') {
                 // A thread's own turn: only its handback is news, and it points at the coordinator.
                 if (card.kind !== 'handback' || !info.coordinator) return null;
+                // While the project is paused, the thread's newest handback waits for Resume.
+                const waits = held.some((hb) => isObject(hb) && hb.thread === info.me.thread?.id)
+                    && !(info.me.cards ?? EMPTY).some((c) => isObject(c) && c.kind === 'handback' && c.seq > card.seq);
                 return {
-                    key: `handback-${card.seq ?? ''}`, kind: card.kind, icon: ui.IconTreeCornerRegular,
-                    verb: `Handed back to the coordinator${handback ? ` · ${handback}` : ''}`,
+                    key: `handback-${card.seq ?? ''}`, kind: card.kind, icon: waits ? ui.IconPauseOutlineRegular : ui.IconTreeCornerRegular,
+                    verb: `${waits ? TEXT.handbackHeld : 'Handed back to the coordinator'}${handback ? ` · ${handback}` : ''}`,
+                    note: waits ? TEXT.handbackHeldWhy : undefined,
                     title: `◆ ${info.project.name || TEXT.coordinator}`, session: info.coordinator === here ? undefined : info.coordinator,
                 };
             }
             const entry = (info.roster ?? EMPTY).find((t) => isObject(t) && t.id === card.thread);
-            const row = entry ? threadRow(entry, statuses, byId) : undefined;
+            // A handback a pause holds counts as the thread's state, as in the Threads menu.
+            const row = entry ? withHeld([threadRow(entry, statuses, byId, endings)], held)[0] : undefined;
             const base = {
-                key: card.thread ?? `${card.kind}-${card.seq ?? ''}`, kind: card.kind, threadId: card.thread,
-                title: row?.title ?? card.thread ?? TEXT.thread, session: row?.session,
+                key: card.thread ?? `${card.kind}-${card.seq ?? ''}`, kind: card.kind, threadId: card.thread, seq: card.seq,
+                title: row?.title ?? card.thread ?? TEXT.thread, session: row?.session, row,
                 state: row ? { dot: row.dot, label: row.stateLabel } : undefined,
             };
             switch (card.kind) {
@@ -2089,7 +2271,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 case 'send': return { ...base, icon: ui.IconSendOutlineRegular, verb: card.status === 'steer' ? 'Steered a running thread' : 'Sent a message to a thread' };
                 case 'update': return { ...base, icon: ui[UPDATE_ICONS[card.status]] ?? ui.IconEditOutlineRegular, verb: UPDATE_VERBS[card.status] ?? 'Updated a thread' };
                 case 'handback': return { ...base, icon: ui.IconTreeCornerRegular, verb: `Handback${handback ? ` · ${handback}` : ''}` };
-                case 'idle': return { ...base, icon: ui.IconPauseOutlineRegular, verb: 'Went idle without a handback' };
+                case 'idle': {
+                    const ended = IDLE_VIEWS[card.status];
+                    return { ...base, icon: (ended && ui[ended.icon]) || ui.IconPauseOutlineRegular, verb: ended?.verb ?? 'Went idle without a handback', tone: ended?.tone };
+                }
                 case 'approval': return { ...base, icon: ui.IconWarningOutlineRegular, verb: 'Is waiting for your approval' };
                 default: return null;
             }
@@ -2097,16 +2282,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         function ThreadCard({ view, projects }) {
             const enabled = view.session !== undefined;
-            return h('div', { className: 'dshp-t-card', 'data-thread': view.threadId, 'data-card-kind': view.kind },
+            // The thread's newest card says why its last turn failed or stopped, and offers to run it again.
+            const ending = enabled && view.newest ? view.row?.ending : undefined;
+            const go = useContinue(projects, ending ? view.row : undefined);
+            const why = ending ? go.error || endingReason(ending) : '';
+            const goLabel = go.retry ? TEXT.retryThread : TEXT.resumeThread;
+            return h('div', { className: 'dshp-t-card', 'data-thread': view.threadId, 'data-card-kind': view.kind, 'data-card-tone': view.tone },
                 h('span', { className: 'dshp-t-card-icon', 'aria-hidden': true }, h(view.icon, { size: 16 })),
                 h('div', { className: 'dshp-t-card-text' },
-                    h('span', { className: 'dshp-t-card-verb', title: view.model ? `${view.verb} · ${view.model}` : undefined },
+                    h('span', { className: 'dshp-t-card-verb', title: view.note ?? (view.model ? `${view.verb} · ${view.model}` : undefined) },
                         view.verb, view.model ? h('span', { className: 'dshp-t-card-model', 'data-projects-thread-model': '' }, ` · ${view.model}`) : null),
                     h('button', {
                         type: 'button', className: 'dshp-t-card-title', disabled: !enabled,
                         title: enabled ? `${TEXT.open}: ${view.title}` : undefined,
                         onClick: () => projects.openSession(view.session),
-                    }, view.title)),
+                    }, view.title),
+                    why ? h('span', {
+                        className: go.error ? 'dshp-t-card-why dshp-t-error' : 'dshp-t-card-why', title: why,
+                        role: go.error ? 'alert' : undefined, 'data-projects-ending': ending.state,
+                    }, why) : null),
                 view.changes ? h(CardChanges, {
                     changes: view.changes,
                     onReview: enabled && view.changes.last ? () => projects.openReview(view.session, view.changes.last) : undefined,
@@ -2115,6 +2309,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h(ui.StateDot, { state: view.state.dot }),
                     h('span', { className: 'dshp-t-card-state-label' }, view.state.label)) : null,
                 enabled ? h('div', { className: 'dshp-t-card-actions' },
+                    ending ? h(ui.Button, {
+                        variant: 'outline', size: 'sm', disabled: go.busy, 'aria-label': `${goLabel}: ${view.title}`,
+                        'data-projects-continue': go.retry ? 'retry' : 'resume',
+                        icon: h(go.retry ? ui.IconRefreshOutlineRegular : ui.IconPlayOutlineRegular, { size: 14 }),
+                        onClick: () => { void go.run(); },
+                    }, go.busy ? (go.retry ? TEXT.retrying : TEXT.resumingThread) : goLabel) : null,
                     h(ui.Tooltip, { label: TEXT.openBeside, side: 'top', align: 'end' },
                         h('button', {
                             type: 'button', className: 'dshp-t-icon', 'aria-label': `${TEXT.openBeside}: ${view.title}`,
@@ -2127,7 +2327,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const info = useSessions((state) => projectContext(state, sessionId), sameContext);
             const statuses = useSessionStatus((value) => value);
             const byId = useSessions((state) => state.byId);
-            const views = info === undefined ? EMPTY : cards.map((card) => cardView(card, info, statuses, byId, sessionId)).filter(Boolean);
+            // How each card's thread last ended, from the thread's own projection.
+            const ofCards = info?.me.role === 'coordinator'
+                ? cards.map((card) => (info.roster ?? EMPTY).find((t) => isObject(t) && t.id === card.thread)?.session).filter((id) => typeof id === 'string' && id !== '')
+                : EMPTY;
+            const endings = useEndings(useSessions, ofCards);
+            // What a pause holds, so a held handback reads the same here as in the Threads menu.
+            const coordinator = info?.me.role === 'coordinator' ? sessionId : info?.coordinator;
+            const paused = usePaused(projects.facts, coordinator, coordinator ? 'list' : null) === true;
+            const heldList = useHeldHandbacks(projects.facts, coordinator);
+            React.useEffect(() => { if (paused && coordinator) void projects.facts.describe(coordinator, 15000); }, [paused, coordinator, projects]);
+            const held = paused ? heldList : EMPTY;
+            const all = info?.me.role === 'coordinator' && Array.isArray(info.me.cards) ? info.me.cards : EMPTY;
+            const newest = (view) => view.threadId !== undefined && !all.some((c) => isObject(c) && c.thread === view.threadId && c.seq > view.seq);
+            const views = info === undefined ? EMPTY : cards.map((card) => cardView(card, info, statuses, byId, sessionId, endings, held)).filter(Boolean)
+                .map((view) => (newest(view) ? { ...view, newest: true } : view));
             // A coordinator's cards say what each thread runs on.
             const threadSessions = views.filter((view) => view.threadId !== undefined && view.session !== undefined).map((view) => view.session);
             const selections = useSelections(useSessions, threadSessions);
@@ -2249,21 +2463,48 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
+         * What an idle thread row's mark says beyond "a thread": that it
+         * failed, or waits on the user (a decision, a block), as its rows in
+         * the Threads menu say. DSH draws its own dot while a thread runs or
+         * waits on a prompt. '' for nothing to say.
+         */
+        function markState(state, sessionId) {
+            const value = valueIn(state, sessionId);
+            if (value?.role !== 'thread') return '';
+            const roster = valueIn(state, value.coordinator)?.threads;
+            const entry = Array.isArray(roster) ? roster.find((t) => isObject(t) && t.session === sessionId) : undefined;
+            if (entry?.resolved === true) return '';
+            const row = rowState({ resolved: false, running: false, pending: undefined, hb: isObject(entry?.handback) ? entry.handback : undefined, ending: endingIn(state, sessionId) });
+            return row.dot === 'error' || row.dot === 'warning' ? `${row.dot}:${row.label}` : '';
+        }
+
+        /**
          * A row's mark: a corner while it nests under its coordinator, a
-         * branch anywhere else (CSS picks); a pause sign on a paused project's
+         * branch anywhere else (CSS picks), or the thread's state dot when it
+         * failed or waits on the user; a pause sign on a paused project's
          * coordinator.
          */
         function ThreadMark({ sessionId, useSessions, nesting, projects }) {
             const thread = useSessions((state) => isThreadRow(state, sessionId));
             const coordinator = useSessions((state) => !isThreadRow(state, sessionId) && coordinatorName(state, sessionId) !== undefined);
             const paused = usePaused(projects.facts, coordinator ? sessionId : undefined, coordinator ? 'list' : null) === true;
+            const mark = useSessions((state) => (thread ? markState(state, sessionId) : ''));
+            const parent = useSessions((state) => (thread ? valueIn(state, sessionId)?.coordinator : undefined));
             // Every idle row mounts this seat, so a list that comes back (the sidebar reopened) gets nested again.
             React.useLayoutEffect(() => { nesting?.soon(); }, [nesting, thread]);
+            // A thread row's state comes from its own session and its coordinator's roster; read both once if DSH hasn't.
+            React.useEffect(() => { if (thread) projects.refresh(sessionId); }, [thread, sessionId, projects]);
+            React.useEffect(() => { if (typeof parent === 'string' && parent !== '') projects.refresh(parent); }, [parent, projects]);
             if (paused) {
                 return h('span', { className: 'dshp-t-mark dshp-t-paused-mark', role: 'img', 'aria-label': TEXT.projectPaused, title: TEXT.projectPaused, 'data-projects-paused-mark': '' },
                     h(ui.IconPauseOutlineRegular, { size: 12 }));
             }
             if (!thread) return null;
+            if (mark !== '') {
+                const [dot, label] = [mark.slice(0, mark.indexOf(':')), mark.slice(mark.indexOf(':') + 1)];
+                return h('span', { className: 'dshp-t-mark', role: 'img', 'aria-label': `Project thread: ${label}`, title: label, 'data-projects-thread-mark': dot },
+                    h(ui.StateDot, { state: dot }));
+            }
             return h('span', { className: 'dshp-t-mark', role: 'img', 'aria-label': 'Project thread', 'data-projects-thread-mark': '' },
                 h('span', { className: 'dshp-t-corner' }, h(ui.IconTreeCornerRegular, { size: 12 })),
                 h('span', { className: 'dshp-t-branch' }, h(ui.IconBranchOutlineRegular, { size: 12 })));
@@ -2430,10 +2671,29 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
         }
 
+        /**
+         * A thread's state in its session-list hover card. DSH ends the card
+         * with the session's own status ("● Idle", "● Running"), so this says
+         * what the thread last did: its handback, or how its last turn ended.
+         */
+        function hoverLine(row) {
+            if (row.pending) return undefined;
+            if (row.running || row.held || row.entry.resolved) return row.line;
+            if (row.ending) {
+                const why = endingReason(row.ending);
+                if (row.ending.state === 'failed') return `Last turn failed · ${why}`;
+                return why ? `Last turn stopped · ${why}` : 'Last turn stopped before it finished';
+            }
+            return isObject(row.entry.handback) ? `Last handback · ${row.line}` : row.line;
+        }
+
         function ThreadHover({ sessionId, useSessions, useSessionStatus, projects }) {
             const info = useSessions((state) => projectContext(state, sessionId), sameContext);
             const statuses = useSessionStatus((value) => value);
             const byId = useSessions((state) => state.byId);
+            const own = info?.me.role === 'thread';
+            const endingSessions = React.useMemo(() => (own ? [sessionId] : openSessions(info?.roster)), [own, sessionId, info?.roster]);
+            const endings = useEndings(useSessions, endingSessions);
             const picked = useSessions((state) => selectionIn(state, sessionId), sameSelection);
             const cv = useCatalogView(projects.catalog, info !== undefined);
             const paused = usePaused(projects.facts, info?.coordinator, info?.coordinator ? 'list' : null) === true;
@@ -2448,14 +2708,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const pause = paused ? h('div', { className: 'dshp-t-hover-line', 'data-projects-paused': '' }, `${TEXT.projectPaused}. ${pausedText(info.me.role, 0)}`) : null;
             if (info.me.role === 'thread') {
                 const entry = (info.roster ?? EMPTY).find((t) => isObject(t) && t.session === sessionId);
-                const row = entry ? withHeld([threadRow(entry, statuses, byId)], paused ? handbacks : EMPTY)[0] : undefined;
+                const row = entry ? withHeld([threadRow(entry, statuses, byId, endings)], paused ? handbacks : EMPTY)[0] : undefined;
+                const line = row ? hoverLine(row) : undefined;
                 return h('div', { className: 'dshp-t-hover', 'data-projects-thread-hover': '' },
                     h('div', { className: 'dshp-t-hover-head' }, h(ui.IconTreeCornerRegular, { size: 12 }), `Thread ${info.me.thread?.id ?? ''} of ◆ ${project}`),
-                    row && row.line ? h('div', { className: 'dshp-t-hover-line' }, row.line) : null,
+                    line ? h('div', { className: 'dshp-t-hover-line', 'data-projects-state': row.dot }, line) : null,
                     changed ? h('div', { className: 'dshp-t-hover-line', 'data-projects-changes': '' }, ...changeCounts(changed)) : null,
                     runs, pause);
             }
-            const counts = countsOf(rowsOf(info.roster, statuses, byId));
+            const counts = countsOf(rowsOf(info.roster, statuses, byId, endings));
             return h('div', { className: 'dshp-t-hover', 'data-projects-thread-hover': '' },
                 h('div', { className: 'dshp-t-hover-head' }, h('span', { 'aria-hidden': true }, '◆'), `Coordinator of ${project}`),
                 h('div', { className: 'dshp-t-hover-line' }, counts.open + counts.resolved > 0 ? summaryText(counts).replace(/^(\d+) open/, (m, n) => plural(Number(n), 'open thread')) : 'No threads yet'),
@@ -2776,7 +3037,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * then holds; it reads again every few seconds, so a change made in a
          * chat or by the coordinator shows up too.
          */
-        function ProjectSettings({ target, pick, link, facts, dialog, openDefaults, useSessionStatus }) {
+        /** Stands in for DSH's session store where a slot doesn't get one: nothing known. */
+        const noSessions = (select) => select({});
+
+        function ProjectSettings({ target, pick, link, facts, dialog, openDefaults, useSessionStatus, useSessions = noSessions }) {
             const catalog = React.useSyncExternalStore(link.catalog.subscribe, link.catalog.getSnapshot);
             const statuses = useSessionStatus((value) => value);
             const [data, setData] = React.useState(null);
@@ -2787,6 +3051,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const reads = React.useRef(0);
             const alive = React.useRef(true);
             React.useEffect(() => () => { alive.current = false; }, []);
+            // Each thread's dot says what the Threads menu says, a failed or stopped last turn included.
+            const threadSessions = React.useMemo(() => openSessions(Array.isArray(data?.threads)
+                ? data.threads.map((t) => (isObject(t) ? { ...t, resolved: t.resolved === true } : t)) : EMPTY), [data?.threads]);
+            const endings = useEndings(useSessions, threadSessions);
             const read = React.useCallback(async () => {
                 const seq = ++reads.current;
                 const result = await link.call('describe', { target });
@@ -2874,10 +3142,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     const key = `thread:${t.id}`;
                     const status = typeof t.session === 'string' ? statuses?.get?.(t.session) : undefined;
                     const running = status?.running === true;
-                    // The same states as the Threads menu: a thread that asked for a decision waits on you.
-                    const asks = t.handback === 'needs_decision' || t.handback === 'blocked';
-                    const dot = t.resolved ? 'done' : status?.pendingInteraction || (!running && asks) ? 'warning'
-                        : running ? 'ongoing' : t.handback === 'done' ? 'done' : 'idle';
+                    // The same states as the Threads menu.
+                    const { dot } = rowState({
+                        resolved: t.resolved === true, running, pending: status?.pendingInteraction ?? undefined,
+                        hb: typeof t.handback === 'string' ? { status: t.handback } : undefined,
+                        ending: typeof t.session === 'string' ? endings[t.session] : undefined,
+                    });
                     return h(SettingRow, {
                         key, id: key, title: t.title || t.id, tag: t.id, message: messageFor(key),
                         note: notesFor(resolveRoute(cv, t.model ?? undefined, t.effort ?? undefined), t.live),
@@ -2924,11 +3194,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /** The dialog in DSH's overlay layer, mounted while a project's settings are open. */
-        function ProjectSettingsOverlay({ dialog, link, facts, openDefaults, useSessionStatus }) {
+        function ProjectSettingsOverlay({ dialog, link, facts, openDefaults, useSessionStatus, useSessions }) {
             const state = React.useSyncExternalStore(dialog.subscribe, dialog.getSnapshot);
             if (state.target === null) return null;
             return h(ProjectSettings, {
-                key: `${state.target}\u0000${state.seq}`, target: state.target, pick: state.pick, link, facts, dialog, useSessionStatus,
+                key: `${state.target}\u0000${state.seq}`, target: state.target, pick: state.pick, link, facts, dialog, useSessionStatus, useSessions,
                 openDefaults: openDefaults(false) ? openDefaults : undefined,
             });
         }
@@ -2998,6 +3268,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             catalogView, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
+            rowState, endingOf, endingIn, endingReason, endingLine, openSessions, markState, hoverLine, continueError, GROUPS,
         };
         return module.exports;
     },
