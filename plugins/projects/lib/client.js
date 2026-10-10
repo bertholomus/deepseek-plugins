@@ -10,7 +10,7 @@
  *   session list. It sets the coordinator's and new threads' model and
  *   effort, each open thread's, and pause, through the plugin's endpoints
  *   (remote.js), with a model picker shaped like DSH's own.
- * - Threads in the chat window, as in Claude Code: a Threads menu in the
+ * - Threads in the chat window: a Threads menu in the
  *   header of every project session (a thread also gets a link back to its
  *   coordinator), a Threads pane in the right sidebar, thread cards under the
  *   coordinator turns that started or heard from a thread, a thread's chat

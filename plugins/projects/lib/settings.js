@@ -1,5 +1,5 @@
 /**
- * Model and effort settings. Four settings mirror Claude Code's project page:
+ * Model and effort settings. Four settings per project:
  * coordinator model, coordinator effort, thread model, thread effort. Each
  * resolves from the first layer that sets it:
  *

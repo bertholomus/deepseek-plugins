@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { effectiveSettings, applyRoute, checkSelection } from '../plugins/projects/lib/settings.js';
 import { handbackMessage, idleMessage, rosterLines, memoryExcerpt } from '../plugins/projects/lib/prompts.js';
 import { ensurePrivateDir } from '../plugins/projects/lib/store.js';
-import { mkdtempSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -83,4 +83,22 @@ test('projects: DSH lists the plugin as "Projects", with one plain sentence and 
     const icon = readFileSync(new URL(pkg.icon, dir), 'utf8');
     assert.match(icon, /^<svg [^>]*viewBox="0 0 36 36"/);
     assert.ok(Buffer.byteLength(icon) < 256 * 1024);
+});
+
+test('plugins and docs carry no third-party assistant branding', () => {
+    const root = new URL('../', import.meta.url);
+    const skip = new Set(['node_modules', '.git', 'HANDOFF.md']);
+    const hits = [];
+    const walk = (dir) => {
+        for (const e of readdirSync(dir, { withFileTypes: true })) {
+            if (skip.has(e.name)) continue;
+            const p = join(dir, e.name);
+            if (e.isDirectory()) walk(p);
+            else if (/\.(m?js|json|md|ya?ml|css|html)$/.test(e.name) && !p.endsWith(join('test', 'projects.test.js'))) {
+                if (/claude|anthropic/i.test(readFileSync(p, 'utf8'))) hits.push(p);
+            }
+        }
+    };
+    walk(root.pathname);
+    assert.deepEqual(hits, []);
 });

@@ -1,5 +1,5 @@
 /**
- * dsh-plugin-projects — Claude-Code-style projects for DSH Desktop.
+ * dsh-plugin-projects — projects for DSH Desktop.
  *
  * Each project in the plugin config gets one coordinator session in its
  * workspace. The coordinator starts thread sessions for focused work with
@@ -8,8 +8,8 @@
  * DSH session made through the Host's sessionController, so the user watches
  * and talks to the coordinator and every thread in the DSH window.
  *
- * Settings mirror Claude Code's project settings: coordinator model and
- * effort, thread model and effort, plus pause. Each project sets its own in
+ * Settings: coordinator model and effort, thread model and effort, plus
+ * pause. Each project sets its own in
  * its Project settings dialog (lib/client.js, through remote.js), by picking
  * a model in its coordinator's DSH model picker, or through the coordinator;
  * projects that set none use the plugin-wide defaults. Those are live config,

@@ -1,6 +1,6 @@
 # Two-account handoff rules
 
-Two Claude accounts work on this repo. Either one can run out of usage at any time.
+Two accounts work on this repo. Either one can run out of usage at any time.
 The repo is the only shared memory. Chat history is NOT shared.
 
 ## At the start of every session

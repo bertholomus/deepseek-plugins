@@ -21,7 +21,7 @@ These messages go the way DSH sends one agent's message to another, so they are 
 
 ## In the DSH window
 
-Threads show up the way Claude Code shows sub-sessions:
+Threads show up in the DSH window like this:
 
 - **Thread cards.** Under each coordinator reply, a card for every thread that turn started, messaged, steered, stopped, resolved or heard back from, with the thread's live state (running, waiting on you, done, failed, stopped, resolved) and the model and effort it runs on. The line above the name says what happened (*Started a thread*, *Handback*, *Ended without a handback*), and the state is said once, on the right. Click the thread's name or **Open** to open it beside the coordinator, in the right sidebar, where you can read and talk to it; **Full view** makes it the main chat instead (see [Side by side](#side-by-side)). In a narrow chat, for example with the Threads panel open on a small screen, a card's code changes move up to its first line and its state and buttons to a row of their own, so the thread's name keeps its room.
 - **Threads menu.** At the top of every project session, **N threads** (with a red dot when a thread failed, an orange one when a thread waits on you, or a spinner while one runs) opens the project's threads grouped as *Waiting on you*, *Running*, *Done*, *Idle* and *Resolved*. Each row leads with the thread's name; under it are its last handback, its code changes and when it last ran. At the top, **Coordinator** and **New threads** say what the coordinator and new threads run on; click either to open Project settings with that model menu already open. A row names its model only when it differs from **New threads**; hover a row to see it either way, and the Threads panel always shows it. A pick in any thread's or coordinator's own model menu shows up here within a second, and because DSH makes every pick its default model, **New threads** follows a pick in any chat when the project starts threads on DSH's default. Hover or click it; the arrow keys move through it. **Open the Threads panel** keeps the list in the right sidebar, where a click opens a thread's chat as a tab.
@@ -72,9 +72,9 @@ It reads the old file, DSH's workspaces and the plugin's store, and lists each p
 
 ## Settings
 
-The four settings match Claude Code's project page:
+Each project has these settings:
 
-| Claude Code | Here | Where |
+| Setting | Key | Where |
 | --- | --- | --- |
 | Coordinator model | `coordinatorModel` | Project settings, the coordinator's model picker, `project_settings`, project row, or the plugin's page for every project |
 | Coordinator effort | `coordinatorEffort` | same |
@@ -85,7 +85,7 @@ The four settings match Claude Code's project page:
 
 ### Project settings
 
-Each project has its own **Project settings**, like a Claude Code project's settings page. Open it from any of the project's sessions: the sliders icon next to **N threads** at the top, **Project settings** at the bottom of the Threads menu, the same icon in the Threads panel, or **Project settings** in the session's **⋯** menu in the session list.
+Each project has its own **Project settings** page. Open it from any of the project's sessions: the sliders icon next to **N threads** at the top, **Project settings** at the bottom of the Threads menu, the same icon in the Threads panel, or **Project settings** in the session's **⋯** menu in the session list.
 
 - **Models.** The coordinator's model and effort, and what new threads start on. Each picker works like DSH's own model menu: **Model** lists DSH's models grouped by provider, with search when there are many, and **Effort** lists what the chosen model offers. **Default** follows the plugin's Default models, and the row says where the current value comes from. A value set for this project shows **● Set for this project** with **Use default** next to it.
 - **Threads.** Every thread with its state (the same dots as the Threads menu) and the model and effort it runs on. Change one to switch that thread from its next request; a running thread finishes its current request first. Resolved threads are behind **Show resolved threads**.
@@ -103,7 +103,7 @@ Under it, **Projects** lists every project with what its coordinator and its new
 
 ### The model picker in a chat
 
-Picking a model or effort in a coordinator's own DSH model picker (the composer's model menu, or `/model`) makes it that project's coordinator setting, as in Claude Code, so Project settings shows it as **Set for this project**. In a thread, a pick changes that thread's model and effort. DSH also makes a pick your DSH default model, as it does for any session. The plugin's own model changes never count as picks, and it never changes your DSH default model itself.
+Picking a model or effort in a coordinator's own DSH model picker (the composer's model menu, or `/model`) makes it that project's coordinator setting, so Project settings shows it as **Set for this project**. In a thread, a pick changes that thread's model and effort. DSH also makes a pick your DSH default model, as it does for any session. The plugin's own model changes never count as picks, and it never changes your DSH default model itself.
 
 ### Which setting wins
 
