@@ -1,11 +1,11 @@
 # Handoff
 
-Updated: 2026-10-09 21:12 PT by B (bertholomus)
+Updated: 2026-10-09 21:25 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 
 ## Doing now
 - Threads UI done and pushed (cfe8791, 79c21e6), PR #1 body updated, checked in a browser on DSH 0.2.0-rc.2 and 0.2.1-alpha.2, light and dark. Screenshots for the user in project files `projects-plugin/threads-ui/`.
-- Mac load blocked (20:25 PT): the repo is private now (GitHub API `visibility: private`), and the Mac has no GitHub sign-in, so its checkout can't fetch. It is still at fe19700, nothing changed. The user typed "sign in" (21:08 PT). The `gh` on the Mac's PATH is the user's household shim that routes to their StackNUC GitHub broker, which refuses this Mac, so the Mac session installed GitHub's own CLI from Homebrew (`/opt/homebrew/bin/gh`, shim untouched) and started a device sign-in, to be wired only to the deepseek-plugins checkout. The user was told that approving gives the Mac a sign-in outside the broker. Once approved, the Mac continues the load (Next steps 1).
+- Mac load (21:25 PT): the user approved a GitHub device sign-in, so the Mac is signed in as bertholomus. The `gh` on its PATH is the user's household shim that routes to their StackNUC GitHub broker, which refuses this Mac, so the Mac session installed GitHub's own CLI from Homebrew (`/opt/homebrew/bin/gh`, shim untouched) and wired it as the credential helper in the deepseek-plugins checkout only. The checkout fast-forwarded to 01357a3 (has the threads UI); smoke 46/46, npm 28/28 on the Mac. The DSH restart waits for two running sessions to finish, then 2 idle minutes; then the live look.
 - The cloud thread pushes fixes. Until the Mac signs in, it can't pull or push (see blockers).
 
 ## Done since last handoff
@@ -69,13 +69,13 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 - Tests: `npm test` 28/28, `node plugins/projects/test/smoke.mjs` 36/36, e2e 49/49 as root and as a normal user (adds queued turns and a SIGKILL mid-turn).
 
 ## Next steps (in order)
-1. Mac load step, when the user's next message wakes the Mac thread's Remote Control session: pull `~/.dsh-plugins/deepseek-plugins` (to 79c21e6 or later), `dsh-idle.mjs --wait 120`, restart DSH Desktop (host code changed: projection, tools, prompts), then look at the coordinator: cards, Threads menu, a thread link. Needs the user's typed OK in the Mac thread for the restart if the Mac session asks.
+1. Mac (in progress, the Mac session drives it): restart DSH Desktop once two running sessions finish and 2 idle minutes pass (host code changed: projection, tools, prompts), then the live look: the coordinator's "N threads" menu, a small test thread through dshb, its card with Open / Open beside, and a thread link.
 2. Ask the user: load the plugin on the Mac from its own clone, so the project's work in `~/.dsh-plugins/deepseek-plugins` doesn't change what DSH loads. Changing `workspacePath` instead wouldn't move the existing coordinator (see Gotchas). Needs their typed OK and an idle-checked restart.
 3. Only if the user asks: threads that start threads of their own (nested threads), a "New thread" button in the Threads menu, and tool-call views for the project tools (`tool.call.toolview`).
 4. Later: a Discord thread as a project thread or coordinator (the user's existing flow), and auto-continue after usage limits.
 
 ## Open questions / blockers
-- The Mac has no GitHub credentials for bertholomus (gh auth is broken, HTTPS asks for a username, the SSH key is refused), and since the repo went private (by 2026-10-10 03:25Z) it can't pull either. The fix is the user's own device sign-in on the Mac (`gh auth login -w`, then `gh auth setup-git`). Don't move code to the Mac around GitHub: a cloud attempt to pass a git bundle through session messages was refused by auto mode as weakening security.
+- The Mac is signed in to GitHub as bertholomus (2026-10-10, user-approved device sign-in) through a Homebrew gh wired only into the deepseek-plugins checkout, so it can pull and push there. Its household `gh` shim goes through the user's StackNUC broker, which refuses the Mac; leave the shim alone. Only one side pushes the branch at a time. Don't move code to the Mac around GitHub: a cloud attempt to pass a git bundle through session messages was refused by auto mode as weakening security.
 - The Mac Remote Control session parks after sitting idle; only the user's next message in the thread wakes it.
 - Probably not a bug after all (corrected 2026-10-09 17:33 PT): the discord plugin's `/model` and `/effort` use a plain `agent/request` override (plugins/discord/lib/router.js `installRouteOverride`). The session controller installs its overriding selection listener only on sessions it creates or resumes itself (`composeAgent` → `installSelection`), or when its `selectionFor` runs (DSH's model picker via `selectForNextRequest`, or an image prompt). The discord plugin creates and resumes its sessions with `ctx.agents` directly, so its override normally stands; after someone uses DSH's model picker on a Discord session, the picker's choice wins. Not tested on a real host. Projects needed the fix because it creates sessions through the session controller.
 - session-bridge `POST /sessions/:id/model` still saves the global DSH default (it calls `selectModel`). Offered to fix; no answer yet.
