@@ -1,11 +1,12 @@
 # Handoff
 
-Updated: 2026-10-09 19:22 PT by B (bertholomus)
+Updated: 2026-10-09 20:35 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 
 ## Doing now
-- Threads UI done and pushed (cfe8791, 79c21e6), PR #1 body updated, checked in a browser on DSH 0.2.0-rc.2 and 0.2.1-alpha.2, light and dark. Screenshots for the user in project files `projects-plugin/threads-ui/`. Waiting on the user's next message in the Mac thread: it wakes the parked Remote Control session for the load step (Next steps 1).
-- The cloud thread pushes fixes. The Mac can't push to GitHub (see blockers), so it sends fixes back to the cloud thread instead.
+- Threads UI done and pushed (cfe8791, 79c21e6), PR #1 body updated, checked in a browser on DSH 0.2.0-rc.2 and 0.2.1-alpha.2, light and dark. Screenshots for the user in project files `projects-plugin/threads-ui/`.
+- Mac load blocked (20:25 PT): the repo is private now (GitHub API `visibility: private`), and the Mac has no GitHub sign-in, so its checkout can't fetch. It is still at fe19700, nothing changed. Asked the user to type "sign in" in the Mac thread; the Mac session then runs `gh auth login -h github.com -p https -w`, posts the device code, runs `gh auth setup-git`, and continues the load (Next steps 1).
+- The cloud thread pushes fixes. Until the Mac signs in, it can't pull or push (see blockers).
 
 ## Done since last handoff
 - 79c21e6: the Threads panel tab keeps DSH's plain "Threads" title (a custom title with an icon clipped it in the 80-170px tab chip). PR #1 body now covers the threads UI and the new tests. The browser check on DSH 0.2.1-alpha.2, light and dark, matched rc.2.
@@ -74,13 +75,14 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 4. Later: a Discord thread as a project thread or coordinator (the user's existing flow), and auto-continue after usage limits.
 
 ## Open questions / blockers
-- The Mac has no GitHub push credentials for bertholomus. gh auth is broken, HTTPS asks for a username and the SSH key is refused. Fixes made on the Mac go through the cloud session.
+- The Mac has no GitHub credentials for bertholomus (gh auth is broken, HTTPS asks for a username, the SSH key is refused), and since the repo went private (by 2026-10-10 03:25Z) it can't pull either. The fix is the user's own device sign-in on the Mac (`gh auth login -w`, then `gh auth setup-git`). Don't move code to the Mac around GitHub: a cloud attempt to pass a git bundle through session messages was refused by auto mode as weakening security.
 - The Mac Remote Control session parks after sitting idle; only the user's next message in the thread wakes it.
 - Probably not a bug after all (corrected 2026-10-09 17:33 PT): the discord plugin's `/model` and `/effort` use a plain `agent/request` override (plugins/discord/lib/router.js `installRouteOverride`). The session controller installs its overriding selection listener only on sessions it creates or resumes itself (`composeAgent` → `installSelection`), or when its `selectionFor` runs (DSH's model picker via `selectForNextRequest`, or an image prompt). The discord plugin creates and resumes its sessions with `ctx.agents` directly, so its override normally stands; after someone uses DSH's model picker on a Discord session, the picker's choice wins. Not tested on a real host. Projects needed the fix because it creates sessions through the session controller.
 - session-bridge `POST /sessions/:id/model` still saves the global DSH default (it calls `selectModel`). Offered to fix; no answer yet.
 - Not confirmed: that the user made the 5:28 PM Default models save (threads at Max).
 
 ## Gotchas (things that broke, decisions made and why)
+- The cloud thread can't `send_message` to the Mac's Remote Control session ("receives only that person's own messages"). Steer it with `start_rc_session` instructions on the user's latest message; they arrive as "delivered" while it runs.
 - DSH loads a plugin package only if the profile lists it in `dsh.profile.bundles`. A patch row alone does nothing. `dsh plugin --profile desktop add <path>` adds the link dependency, the `node_modules` symlink and the bundles entry. Use the `dsh` that DSH Desktop installs, because the npm `dsh` refuses the desktop profile. A running DSH doesn't load new bundles, so restart it.
 - With the bundle listed, the bundle's own patch inserts the row. Configure it with an address row (`- id: projects` plus `config:`). An extra insert row duplicates the id. DSH still boots and the later (configured) row runs, because cordis-plugin-include indexes rows by id. That was checked on a real host.
 - DSH's `installModelSelection` (dsh-agent) puts an `agent/request` listener on every API session at agent setup. It runs outside any plugin listener and replaces provider/model/effort with the session's selection, so a plugin's `agent/request` override is lost. Use `sessionController.agents.selectForNextRequest(agent, selection)` instead. It is internal: it is what `selectModel` does, minus saving the global default. The plugin falls back to a `{ prepend: true }` override when the method is missing (tested on the real host too).
