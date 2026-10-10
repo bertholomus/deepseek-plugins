@@ -50,6 +50,8 @@ All requests and replies are JSON.
 
 `steer` sends the text into the running turn. `followup` queues it for after the turn ends.
 
+Each `user/message` event carries its `source`: `{kind: "user"}` for the user (or this bridge), `{kind: "agent-message", senderSessionId}` for a message another session sent, and a plugin's own kind for plugin notes.
+
 Errors come back as `{error: {code, message}}` with status 400, 404, 405, 409, 413 or 500.
 
 ## Examples

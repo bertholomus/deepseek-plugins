@@ -8,8 +8,12 @@
  * which never reads session logs itself.
  *
  * The fold reads only what project sessions already record: the
- * presentation meta of project tool results (tools.js) and the tagged
- * messages the plugin sends (prompts.js). A session the store already knows
+ * presentation meta of project tool results (tools.js), the tagged
+ * messages the plugin sends (prompts.js), which DSH logs as an agent's or a
+ * plugin's message (earlier versions sent them as the user's, with a
+ * request id that marks them), and whether the user has written in a
+ * coordinator yet (a new project suggests first asks until then). A
+ * session the store already knows
  * is seeded from the store the first time DSH folds it, so sessions from
  * before this version show their project and threads at once; replayed
  * events older than the seed then add cards but never overwrite the roster.
@@ -21,7 +25,11 @@
  *
  * { role: 'coordinator'|'thread', project: { id?, name }, coordinator?: sessionId,
  *   thread?: { id, title }, threads?: [{ id, session, title, resolved, created?, handback? }],
- *   cards?: [{ turn, seq, kind, thread, status? }] }
+ *   cards?: [{ turn, seq, kind, thread?, status? }], asked?: true }
+ *
+ * Card kinds: start, send, update (tool results), handback, idle, approval
+ * (the plugin's messages), and welcome: the turn a new coordinator
+ * introduced itself in. `asked` is set once the user writes in a coordinator.
  *
  * @module dsh-plugin-projects/projection
  */
@@ -30,7 +38,7 @@ import { TAGS } from './prompts.js';
 /** The projection key; the browser half reads the same name. */
 export const PROJECTION_KEY = 'projectSession';
 /** Bump when the state shape or fold changes; DSH then refolds from the log. */
-export const STATE_VERSION = 1;
+export const STATE_VERSION = 2;
 /** Most recent cards kept per session; older turns rarely scroll into view. */
 export const MAX_CARDS = 60;
 /** Threads kept in a roster: every open one, then the newest resolved ones. */
@@ -39,8 +47,11 @@ export const MAX_THREADS = 60;
 export const META_MARK = 'dshProjects';
 
 const INITIAL = Object.freeze({ turn: 0, v: null });
-/** Request ids of plugin prompts: `projects-<uuid>`, then `@<coordinator session>` since this version. */
+/** Request ids of plugin prompts sent as the user's (earlier versions): `projects-<uuid>`, then `@<coordinator session>`. */
 const RPC = /^projects-[^@]*(?:@(.+))?$/;
+/** Source kinds of the plugin's messages now: an agent's (from the coordinator or a thread) or a plugin's. */
+const AGENT_MESSAGE = 'agent-message';
+const PLUGIN_MESSAGE = 'cordis-host-runner';
 const BRIEF = /^\[Brief from the coordinator of "(.*)" · you are thread (t\d+), "(.*)"\]$/;
 const HANDBACK = /^\[Handback from thread (t\d+) · "(.*)" · status: ([a-z_]+)\]$/;
 const IDLE = /^\[Thread idle without a handback: (t\d+) · "(.*)"\]$/;
@@ -97,26 +108,47 @@ function identify(v, role, project, extra = {}) {
     return next;
 }
 
-/** Text and source of a user message, or null. */
+/**
+ * Text and sender of a message this plugin sent, or null. `sender` is the
+ * session it came from, when known: the coordinator for a brief or a
+ * coordinator's message, the thread for a handback.
+ */
 function messageOf(event) {
     const data = event?.data;
     const message = isObject(data?.message) ? data.message : data;
     if (!isObject(message) || !Array.isArray(message.content)) return null;
     const source = isObject(message.source) ? message.source : {};
-    if (source.kind !== undefined && source.kind !== 'user') return null;
-    const rpc = RPC.exec(typeof source.rpcId === 'string' ? source.rpcId : '');
-    // Only messages this plugin sent carry project meaning; a user typing a tag does not.
-    if (!rpc) return null;
+    let sender;
+    if (source.kind === AGENT_MESSAGE) {
+        sender = str(source.senderSessionId, 120);
+        if (!sender) return null;
+    } else if (source.kind !== PLUGIN_MESSAGE) {
+        if (source.kind !== undefined && source.kind !== 'user') return null;
+        const rpc = RPC.exec(typeof source.rpcId === 'string' ? source.rpcId : '');
+        // Only messages this plugin sent carry project meaning; a user typing a tag does not.
+        if (!rpc) return null;
+        sender = rpc[1];
+    }
     let text = '';
     for (const block of message.content) if (block?.type === 'text' && typeof block.text === 'string') text += block.text;
-    return text.startsWith('[') ? { text, coordinator: rpc[1] } : null;
+    return text.startsWith('[') ? { text, sender } : null;
 }
 
-/** Fold one plugin message into the state, or return the same state. */
+/** The user's own words in a coordinator: from now on it has been asked something. */
+function applyUserMessage(state, event) {
+    if (state.v?.role !== 'coordinator' || state.v.asked === true) return state;
+    const data = event?.data;
+    const message = isObject(data?.message) ? data.message : data;
+    const kind = isObject(message?.source) ? message.source.kind : undefined;
+    if (kind !== undefined && kind !== 'user') return state;
+    return { ...state, v: { ...state.v, asked: true } };
+}
+
+/** Fold one plugin message (or the user's) into the state, or return the same state. */
 function applyMessage(state, event) {
     const message = messageOf(event);
-    if (!message) return state;
-    const { text, coordinator } = message;
+    if (!message) return applyUserMessage(state, event);
+    const { text, sender } = message;
     const newline = text.indexOf('\n');
     const head = newline < 0 ? text : text.slice(0, newline);
     const fresh = !(state.since > 0) || !(event.time < state.since);
@@ -124,17 +156,18 @@ function applyMessage(state, event) {
     if (text.startsWith(TAGS.brief) && (m = BRIEF.exec(head))) {
         const v = identify(state.v, 'thread', { name: m[1] }, {
             thread: { id: m[2], title: clip(m[3], 120) },
-            ...(coordinator ? { coordinator } : {}),
+            ...(sender ? { coordinator: sender } : {}),
         });
         return { ...state, v: state.v?.role === 'coordinator' ? state.v : v };
     }
     if (text.startsWith(TAGS.coordinator)) {
         // A coordinator made again (the old one was deleted) writes from its new session.
-        if (state.v?.role !== 'thread' || !coordinator || state.v.coordinator === coordinator) return state;
-        return { ...state, v: { ...state.v, coordinator } };
+        if (state.v?.role !== 'thread' || !sender || state.v.coordinator === sender) return state;
+        return { ...state, v: { ...state.v, coordinator: sender } };
     }
     if (text.startsWith(TAGS.welcome) && (m = WELCOME.exec(head))) {
-        return { ...state, v: identify(state.v, 'coordinator', { name: m[1] }) };
+        if (state.v?.role === 'thread') return state;
+        return { ...state, v: withCard(identify(state.v, 'coordinator', { name: m[1] }), { turn: state.turn, seq: event.seq, kind: 'welcome' }) };
     }
     if (text.startsWith(TAGS.handback) && (m = HANDBACK.exec(head))) {
         if (state.v?.role === 'thread') return state;

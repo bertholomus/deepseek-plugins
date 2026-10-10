@@ -307,6 +307,16 @@ async function coordinatorSaw(mark, reply, what) {
 }
 
 let child;
+/** Each user message in a session: who sent it (its `source`) and its text. */
+async function messagesOf(sessionId) {
+    const { events } = await bridge('GET', `/sessions/${sessionId}/events?types=user/message&limit=2000&full=1`);
+    return events.map((e) => ({ source: e.source, text: e.text ?? '' }));
+}
+const startingWith = (msgs, prefix) => msgs.findLast((m) => m.text.startsWith(prefix));
+const fromPlugin = (m) => m?.source?.kind === 'cordis-host-runner';
+const fromSession = (m, sessionId) => m?.source?.kind === 'agent-message' && m.source.form === 'relay' && m.source.senderSessionId === sessionId;
+const sourcesText = (msgs) => JSON.stringify(msgs.map((m) => [m.source?.kind, m.source?.senderSessionId?.slice(0, 8), m.text.slice(0, 40)]));
+
 let coord;
 try {
     // 1. Boot: the coordinator appears on its project route, with private state.
@@ -366,6 +376,8 @@ try {
         && view.threads?.[0]?.session === t1 && view.threads[0].title === 'Alpha'
         && ['start', 'handback'].every((kind) => view.cards?.some((c) => c.kind === kind && c.thread === 't1' && Number.isSafeInteger(c.turn))),
         JSON.stringify(view)?.slice(0, 400));
+    check('the window view marks the welcome turn and that the user has asked something since', view?.cards?.some((c) => c.kind === 'welcome' && Number.isSafeInteger(c.turn))
+        && view.asked === true, JSON.stringify(view?.cards)?.slice(0, 300));
     const threadView = windowView(t1);
     check('the window view of a thread names its coordinator', threadView?.role === 'thread' && threadView.coordinator === coord
         && threadView.thread?.id === 't1' && threadView.cards?.some((c) => c.kind === 'handback'), JSON.stringify(threadView)?.slice(0, 300));
@@ -385,6 +397,17 @@ try {
     await sleep(1500);
     check('direct talk does not wake the coordinator', since(mark, 'coordinator').length === 0, describe(since(mark)));
     check('direct talk is logged', readText(logFile).includes(`direct-turn ${PROJECT_ID}/t2`));
+    // Who DSH shows as the sender: a brief or a handback comes from the session
+    // that sent it (DSH draws a "Task message received" notice), a note from the
+    // plugin ("Plugin status updated"); the user's own words stay the user's.
+    const coordMsgs = await messagesOf(coord);
+    check('the welcome and the idle note come from the plugin', fromPlugin(startingWith(coordMsgs, '[Project created'))
+        && fromPlugin(startingWith(coordMsgs, '[Thread idle without a handback: t2')), sourcesText(coordMsgs));
+    check('a handback comes from its thread', fromSession(startingWith(coordMsgs, '[Handback from thread t1'), t1), sourcesText(coordMsgs));
+    const t1Msgs = await messagesOf(t1);
+    check('a brief comes from the coordinator', fromSession(startingWith(t1Msgs, '[Brief from the coordinator'), coord), sourcesText(t1Msgs));
+    const t2Msgs = await messagesOf(t2);
+    check('the user\'s own words stay the user\'s', startingWith(t2Msgs, 'Hello from the user.')?.source?.kind === 'user', sourcesText(t2Msgs));
 
     // 5. A failed turn: the note says so. The roster now notes the direct talk.
     mark = model.requests.length;
@@ -435,6 +458,7 @@ try {
     const t1More = since(mark, 't1');
     check('thread override reaches the wire', t1More.length > 0 && t1More.every((r) => r.effort === 'max'), describe(t1More));
     check('thread gets the coordinator message', t1More[0]?.fresh.includes('[From the coordinator]\n\nOne more check, please.'));
+    check('a coordinator message comes from the coordinator', fromSession(startingWith(await messagesOf(t1), '[From the coordinator]'), coord));
 
     // 10. Memory reaches the coordinator's next request and new threads.
     reqs = await say(coord, call('project_memory', { action: 'append', text: '- E2E memory fact.' }));
@@ -465,6 +489,8 @@ try {
     check('resume delivers the held handback', resultOf(reqs).includes('delivered 1 held handback'), resultOf(reqs));
     saw = await coordinatorSaw(mark, 'SAW-HANDBACK', 'the held handback');
     check('held handback arrives', saw.fresh.includes('Held while paused.'));
+    const held = (await messagesOf(coord)).findLast((m) => m.text.includes('Held while paused.'));
+    check('a held handback still comes from its thread', fromSession(held, t1), JSON.stringify(held?.source));
 
     // 14. A stop the coordinator asks for is not echoed back to it.
     mark = model.requests.length;

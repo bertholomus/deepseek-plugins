@@ -23,11 +23,18 @@
  * for a thread becomes that thread's, so the project's settings always say
  * what its sessions run on.
  *
+ * The plugin's messages go into a session the way DSH's own agents and
+ * plugins send theirs, not as the user's: a brief or a coordinator's message
+ * is an agent's message from the coordinator, a handback one from the
+ * thread, and the automatic notes and the welcome are a plugin's message.
+ * DSH draws each as a collapsed notice ("Task message received", "Plugin
+ * status updated") instead of a user bubble; the model reads the same text.
+ *
  * @module dsh-plugin-projects/projects
  */
 import { appendFileSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { ProjectStore, expand, ensurePrivateDir } from './store.js';
 import { SETTING_KEYS, effectiveSettings, applyRoute, checkSelection, describeRoute, parseModelSpec, pluginDefaults } from './settings.js';
 import {
@@ -86,6 +93,17 @@ function rosterIds(threads) {
     return ids.filter((id) => keep.has(id));
 }
 
+/** The handbacks among the messages a pause holds: which thread, with what status. */
+function heldHandbacks(pending) {
+    const out = [];
+    for (const item of Array.isArray(pending) ? pending : []) {
+        const text = typeof item === 'string' ? item : typeof item?.text === 'string' ? item.text : '';
+        const m = /^\[Handback from thread (t\d+) · ".*" · status: ([a-z_]+)\]$/.exec(text.split('\n', 1)[0]);
+        if (m) out.push({ thread: m[1], status: m[2] });
+    }
+    return out;
+}
+
 /** Arguments of a logged tool call: an object, or JSON text. */
 function argsOf(value) {
     if (typeof value !== 'string') return value ?? {};
@@ -108,21 +126,32 @@ function roleOf(event) {
     return null;
 }
 
-/** Request ids of the prompts this plugin sends; they mark coordinator-driven turns. */
+/** Request ids of the prompts earlier versions sent as the user's; they mark coordinator-driven turns. */
 const RPC_PREFIX = 'projects-';
 
+/** Who a plugin message comes from, as DSH records its own: an agent (a session) or a plugin. */
+const agentSource = (senderSessionId) => ({ kind: 'agent-message', form: 'relay', senderSessionId });
+const PLUGIN_SOURCE = Object.freeze({ kind: 'cordis-host-runner' });
+const PLUGIN_KINDS = new Set(['agent-message', PLUGIN_SOURCE.kind]);
+const PROJECT_TAGS = Object.values(TAGS);
+
 /**
- * A prompt someone sent to the session, or null. User-role messages the Host
- * injects (runtime context, model-change notices) have another source kind.
+ * A prompt someone sent to the session, or null. The user's own messages
+ * have source kind "user"; so did this plugin's before it sent them as an
+ * agent's or a plugin's message. Other user-role messages DSH adds (runtime
+ * context, model-change notices, its own agents' messages) are not prompts.
  */
 function promptOf(event) {
     if (roleOf(event) !== 'user') return null;
     const source = (event?.data?.message ?? event?.data)?.source;
-    if (source?.kind !== undefined && source.kind !== 'user') return null;
     const text = textOf(event);
     if (!text) return null;
-    const fromProject = String(source?.rpcId ?? '').startsWith(RPC_PREFIX) || text.startsWith(TAGS.brief) || text.startsWith(TAGS.coordinator);
-    return { text, fromProject };
+    if (source?.kind === undefined || source.kind === 'user') {
+        const fromProject = String(source?.rpcId ?? '').startsWith(RPC_PREFIX) || text.startsWith(TAGS.brief) || text.startsWith(TAGS.coordinator);
+        return { text, fromProject };
+    }
+    if (PLUGIN_KINDS.has(source.kind) && PROJECT_TAGS.some((tag) => text.startsWith(tag))) return { text, fromProject: true };
+    return null;
 }
 
 /**
@@ -430,17 +459,24 @@ export class ProjectManager {
     }
 
     /**
-     * @param {string} [from] - the coordinator session sending to a thread. It
-     *   rides in the request id, which the session log keeps with the message,
-     *   so the thread's projection can link back to its coordinator.
+     * Send a session a message, waking it when idle, as DSH's own agents and
+     * scheduled tasks do. Done once the session log has it.
+     * @param {'queue'|'steer'} mode - its next turn, or into the turn running now.
+     * @param {string} [from] - the session it comes from (an agent's message,
+     *   which also tells a thread's projection its coordinator), or none for
+     *   the plugin's own notes.
      */
     async prompt(sessionId, text, mode = 'queue', from = undefined) {
-        await this.sc.prompt({
-            sessionId,
-            requestId: `${RPC_PREFIX}${randomUUID()}${from ? `@${from}` : ''}`,
-            mode,
-            content: [{ type: 'text', text }],
-        }, AbortSignal.timeout(60000));
+        const found = await this.sc.resolveAgent(sessionId);
+        if (!found?.agent) throw new Error(`session ${sessionId} is not available: ${found?.error?.message ?? found?.error?.code ?? 'not found'}`);
+        this.maybeInstall(found.agent);
+        const message = createUserMessage({ content: [{ type: 'text', text }], source: from ? agentSource(from) : PLUGIN_SOURCE });
+        if (mode === 'steer') found.agent.steer(message);
+        else found.agent.followup(message);
+        const sessions = this.ctx.get?.('sessions');
+        if (typeof sessions?.flush === 'function' && found.agent.session && !await sessions.flush(found.agent.session)) {
+            throw new Error(`session ${sessionId} did not save the message`);
+        }
     }
 
     // ── agent scope ────────────────────────────────────────────────────────
@@ -867,12 +903,13 @@ export class ProjectManager {
      * Send text to the coordinator after anything held before it. It is
      * held while the project is paused, and retried when the coordinator
      * cannot take it.
+     * @param {string} [from] - the thread session it comes from; none for the plugin's own notes.
      * @returns {Promise<'delivered'|'held'>}
      */
-    deliver(projectId, text) {
+    deliver(projectId, text, from = undefined) {
         return this.serial(projectId, async () => {
             const pending = this.store.project(projectId).pendingHandbacks;
-            this.store.putProject(projectId, { pendingHandbacks: [...pending, text] });
+            this.store.putProject(projectId, { pendingHandbacks: [...pending, from ? { text, from } : text] });
             if (this.paused(projectId)) return 'held';
             return (await this.sendHeld(projectId)) === 0 ? 'delivered' : 'held';
         });
@@ -895,8 +932,11 @@ export class ProjectManager {
         // No coordinator yet: the next start makes one and sends them.
         if (!sessionId) return this.store.project(projectId).pendingHandbacks.length;
         while (this.store.project(projectId).pendingHandbacks.length > 0 && !this.paused(projectId)) {
+            // A held message is its text (the plugin's own note) or {text, from} (a thread's handback).
+            const next = this.store.project(projectId).pendingHandbacks[0];
+            const text = typeof next === 'string' ? next : typeof next?.text === 'string' ? next.text : '';
             try {
-                await this.prompt(sessionId, this.store.project(projectId).pendingHandbacks[0], 'queue');
+                if (text.trim() !== '') await this.prompt(sessionId, text, 'queue', typeof next?.from === 'string' ? next.from : undefined);
             } catch (error) {
                 this.log(`error deliver ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
                 this.retryLater(projectId);
@@ -1206,7 +1246,8 @@ export class ProjectManager {
     /**
      * A project as its Project settings dialog shows it: each of the four
      * settings with its source and what it falls back to without the
-     * project's own, pause, and every thread with its model.
+     * project's own, pause (with how many messages it holds and whose
+     * handbacks), and every thread with its model.
      */
     describeProject(projectId) {
         const project = this.project(projectId);
@@ -1223,7 +1264,10 @@ export class ProjectManager {
                 live: this.liveSelection(stored.coordinatorSessionId) ?? null,
             },
             settings: Object.fromEntries(SETTING_KEYS.map((key) => [key, { ...settings[key], inherited: inherited[key] }])),
-            paused: { value: this.paused(projectId), source: own ? 'project setting' : 'project config', inherited: project.paused === true },
+            paused: {
+                value: this.paused(projectId), source: own ? 'project setting' : 'project config', inherited: project.paused === true,
+                held: stored.pendingHandbacks.length, handbacks: heldHandbacks(stored.pendingHandbacks),
+            },
             threads: rosterIds(stored.threads).map((id) => {
                 const t = stored.threads[id];
                 return {
@@ -1322,7 +1366,7 @@ export class ProjectManager {
             throw new ProjectError(`handback limit reached (${this.config.maxHandbacksPerHour} per hour); finish the work and hand back once`);
         }
         this.store.putThread(projectId, threadId, { lastHandback: { status, summary: text.slice(0, 500), at: new Date().toISOString() } });
-        const outcome = await this.deliver(projectId, handbackMessage(threadId, t.title, status, text));
+        const outcome = await this.deliver(projectId, handbackMessage(threadId, t.title, status, text), t.sessionId);
         this.log(`handback ${projectId}/${threadId} status=${status} chars=${text.length} ${outcome}`);
         if (outcome === 'delivered') return HANDBACK_SENT;
         return this.paused(projectId) ? HANDBACK_HELD : HANDBACK_RETRY;

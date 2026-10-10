@@ -3,7 +3,7 @@
  *
  * { version: 1, projects: { [projectId]: {
  *     coordinatorSessionId, settings: { coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused? },
- *     nextThread, pendingHandbacks: [text], threadStarts: [ms], rowSeen?: { the project row's models and efforts last seen },
+ *     nextThread, pendingHandbacks: [text | {text, from: thread session}], threadStarts: [ms], rowSeen?: { the project row's models and efforts last seen },
  *     welcomedSession?: the coordinator session that got (or never needed) its first-turn welcome,
  *     threads: { [threadId]: { sessionId, title, model?, effort?, resolved, createdAt,
  *       lastHandback?: { status, summary, at }, lastDirect?: { at, reply }, handbackTimes: [ms],

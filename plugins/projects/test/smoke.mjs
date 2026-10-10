@@ -153,10 +153,24 @@ function fakeHost({ selection = false, hostListener = selection, gateway = false
         emit(event, payload) { for (const fn of listeners.get(event) ?? []) fn(payload); },
         agents: { get: (id) => live.get(id), list: () => [...live.values()] },
         workspaceRegistry: { async create(path) { return { id: `ws:${path}`, path }; } },
+        /**
+         * Like DSH's agent inbox: a message is logged as a user message with
+         * its source (the user's, an agent's or a plugin's). Tests replace it
+         * to refuse a session.
+         */
+        accept(sessionId, mode, message) {
+            const s = sessions.get(sessionId);
+            s.prompts.push({ mode, text: message.content[0].text });
+            s.events.push({ seq: s.events.length + 1, type: 'user/message', time: Date.now(), data: { ...message } });
+        },
         wake(id) {
             if (live.has(id)) return live.get(id);
             const ctx = new FakeScope();
-            const agent = { id, status: 'idle', ctx };
+            const agent = {
+                id, status: 'idle', ctx, session: { id },
+                followup(message) { host.accept(id, 'queue', message); },
+                steer(message) { host.accept(id, 'steer', message); },
+            };
             ctx.agent = agent;
             ctx.log = () => sessions.get(id)?.events;
             if (hostListener) {
@@ -186,12 +200,10 @@ function fakeHost({ selection = false, hostListener = selection, gateway = false
                 const open = events.findLastIndex((e) => e.type === 'turn/start') > events.findLastIndex((e) => e.type === 'turn/end');
                 return { meta: {}, events: open ? [...events, { seq: events.length + 1, type: 'turn/end', data: { reason: { kind: 'interrupted' } } }] : events };
             },
+            /** What the window sends when the user types: logged as the user's, with its request id. */
             async prompt(req) {
                 assert.ok(req.requestId && req.content[0].text);
-                const s = sessions.get(req.sessionId);
-                s.prompts.push({ mode: req.mode, text: req.content[0].text });
-                // Like DSH: the prompt is logged as a user message with its request id.
-                s.events.push({ seq: s.events.length + 1, type: 'user/message', time: Date.now(), data: { content: req.content, source: { kind: 'user', rpcId: req.requestId } } });
+                host.accept(req.sessionId, req.mode, { id: `m-${req.requestId}`, role: 'user', content: req.content, source: { kind: 'user', rpcId: req.requestId } });
                 return { accepted: true };
             },
             async rename(req) { sessions.get(req.sessionId).title = req.title; return { title: req.title, seq: 1 }; },
@@ -236,6 +248,8 @@ function saveDefaults(host, config, values) {
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 10));
+/** The source of the nth message a session was sent. */
+const sourceOf = (session, n) => session.events.filter((e) => e.type === 'user/message')[n]?.data.source;
 const coordinatorOf = (host) => [...host.live.values()].find((a) => host.sessions.get(a.id).title === '◆ DSH Plugins');
 
 // ── pure settings ───────────────────────────────────────────────────────────
@@ -348,6 +362,8 @@ test('thread start → brief → handback → coordinator turn', async () => {
     assert.equal(ts.prompts.length, 1);
     assert.equal(ts.prompts[0].mode, 'queue');
     assert.match(ts.prompts[0].text, /^\[Brief from the coordinator of "DSH Plugins" · you are thread t1, "Add CI"\]\n\nAdd a GitHub Actions/);
+    // As DSH sends its own agents' messages, so DSH draws a notice, not a user bubble.
+    assert.deepEqual(sourceOf(ts, 0), { kind: 'agent-message', form: 'relay', senderSessionId: coord.id });
     assert.deepEqual([...thread.ctx.registered.keys()].sort(), ['project_handback', 'project_memory']);
     assert.match(thread.ctx.section(), /You are thread t1, "Add CI"/);
     assert.equal((await thread.ctx.request({ provider: 'deepseek', model: 'deepseek-v4' })).reasoningEffort, 'high');
@@ -360,7 +376,11 @@ test('thread start → brief → handback → coordinator turn', async () => {
     const cp = host.sessions.get(coord.id).prompts;
     assert.equal(cp.length, 1);
     assert.match(cp[0].text, /^\[Handback from thread t1 · "Add CI" · status: done\]\n\nCI added/);
+    assert.deepEqual(sourceOf(host.sessions.get(coord.id), 0), { kind: 'agent-message', form: 'relay', senderSessionId: thread.id }, 'a handback comes from its thread');
     assert.match(coord.ctx.section(), /t1 · "Add CI" · idle · last handback: done, "CI added/);
+    // A coordinator's message to a thread comes from the coordinator too.
+    assert.equal(await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Also cache npm.', steer: true }), 'Steered t1.');
+    assert.deepEqual([ts.prompts[1].mode, sourceOf(ts, 1)], ['steer', { kind: 'agent-message', form: 'relay', senderSessionId: coord.id }]);
 
     // Schema-invalid input is rejected by dsh-tools before execute; ordinary failures come back as text.
     await assert.rejects(thread.ctx.call('project_handback', { status: 'finished', summary: 'x' }), { code: 'INVALID_ARGS' });
@@ -383,6 +403,8 @@ test('idle without a handback sends the automatic note with the last reply', asy
     const cp = host.sessions.get(coord.id).prompts;
     assert.equal(cp.length, 2, 'progress handback plus idle note');
     assert.match(cp[1].text, /^\[Thread idle without a handback: t1 · "Docs"\]\n\nIts last reply:\n\nI wrote half the docs\./);
+    // The plugin's own note, which DSH draws as "Plugin status updated".
+    assert.deepEqual(sourceOf(host.sessions.get(coord.id), 1), { kind: 'cordis-host-runner' });
     assert.match(await coord.ctx.call('project_thread_read', { thread: 't1' }), /## assistant\nI wrote half the docs\./);
 });
 
@@ -744,7 +766,7 @@ test('window: the Project settings endpoints read and change a project the way i
     assert.deepEqual(plain(read.project), { id: 'dsh-plugins', name: 'DSH Plugins', workspace: '/work/dsh', coordinator: coord.id, live: null });
     assert.deepEqual(plain(read.settings.coordinatorEffort), { value: 'max', source: 'project config', inherited: { value: 'max', source: 'project config' } });
     assert.deepEqual(plain(read.settings.threadEffort), { value: 'high', source: 'plugin default', inherited: { value: 'high', source: 'plugin default' } });
-    assert.deepEqual(plain(read.paused), { value: false, source: 'project config', inherited: false });
+    assert.deepEqual(plain(read.paused), { value: false, source: 'project config', inherited: false, held: 0, handbacks: [] });
     assert.deepEqual(read.threads, []);
     assert.deepEqual(plain(await remote.describe('dsh-plugins')), plain(read));
     await refused(remote.describe('nope'), /"nope" is not a project here/);
@@ -775,12 +797,15 @@ test('window: the Project settings endpoints read and change a project the way i
 
     // Pause, and back to what the profile says.
     after = await remote.update(coord.id, { paused: true });
-    assert.deepEqual(plain(after.paused), { value: true, source: 'project setting', inherited: false });
+    assert.deepEqual(plain(after.paused), { value: true, source: 'project setting', inherited: false, held: 0, handbacks: [] });
     await refused(coord.ctx.call('project_thread_start', { title: 'Blocked', brief: 'Go.' }).then((text) => {
         throw Object.assign(new Error(text), { code: /paused/.test(text) ? 'projects/refused' : 'unexpected' });
     }), /paused/);
+    // What a pause holds for the coordinator is counted, for the window's pause bar.
+    await t1.ctx.call('project_handback', { status: 'done', summary: 'Held.' });
+    assert.deepEqual(plain((await remote.describe(coord.id)).paused), { value: true, source: 'project setting', inherited: false, held: 1, handbacks: [{ thread: 't1', status: 'done' }] });
     after = await remote.update(coord.id, { paused: null });
-    assert.deepEqual(plain(after.paused), { value: false, source: 'project config', inherited: false });
+    assert.deepEqual(plain(after.paused), { value: false, source: 'project config', inherited: false, held: 0, handbacks: [] });
 
     // The plugin's page lists every project with its settings and where each comes from.
     const listed = plain(await remote.list());
@@ -801,7 +826,9 @@ test('window: the Project settings endpoints read and change a project the way i
  */
 function loadClient() {
     let loaded;
-    runInNewContext(readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'), { window: { __ModuleLoader__: { load: (m) => { loaded = m; } } }, URL, console });
+    runInNewContext(readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'), {
+        window: { __ModuleLoader__: { load: (m) => { loaded = m; } } }, URL, console, setInterval, clearInterval, setTimeout, clearTimeout,
+    });
     const base = {
         SettingsFormModel: class {
             constructor(scope) { this.scope = scope; }
@@ -887,6 +914,7 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
         ['conversation.session.header.actions', 'dsh-plugin-projects/threads-menu', -25],
         ['conversation.chat.turnTail', 'dsh-plugin-projects/thread-cards', 30],
         ['sidebar.session.row.leading', 'dsh-plugin-projects/thread-mark', 20],
+        ['conversation.input.dock', 'dsh-plugin-projects/paused-bar', 15],
         ['sidebar.session.row.hover', 'dsh-plugin-projects/thread-hover', 20],
         ['sidebar.right.pane.tab', 'dsh-plugin-projects/thread-chat', null],
         ['sidebar.right.pane.tab.title', 'dsh-plugin-projects/thread-chat', null],
@@ -895,7 +923,7 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
         ['sidebar.right.pane.tab', 'dsh-plugin-projects/thread-link', null],
     ]);
     // The thread chat tab hosts the conversation slot it renders.
-    assert.deepEqual(plain(registered[6].children), { 'projects.thread.conversation': { kind: 'single', scope: 'session' } });
+    assert.deepEqual(plain(registered[7].children), { 'projects.thread.conversation': { kind: 'single', scope: 'session' } });
     assert.deepEqual(protocols, ['projectthread']);
     assert.deepEqual(types.map((t) => [t.id, t.kind, t.patterns ? [...t.patterns] : null]), [
         ['dsh-plugin-projects/thread-chat', 'projectthread', ['dsh-resource://projectthread/session/**']],
@@ -1387,6 +1415,7 @@ test('a new coordinator introduces itself once, so DSH lists it', async () => {
     assert.deepEqual(first.host.sessions.get(coord.id).prompts, [
         { mode: 'queue', text: '[Project created: "DSH Plugins"]\n\nThis is the first message in this coordinator session. Introduce yourself from what you already know, without running any tools.' },
     ]);
+    assert.deepEqual(sourceOf(first.host.sessions.get(coord.id), 0), { kind: 'cordis-host-runner' }, 'the welcome is the plugin\'s, not the user\'s');
     assert.match(coord.ctx.section(), /A message starting with "\[Project created" is automatic/);
     // On the Mac a coordinator ran `git pull` in its workspace during its welcome.
     assert.match(coord.ctx.section(), /run no tools and start no thread for it/);
@@ -1517,11 +1546,11 @@ test('a handback the coordinator cannot take is retried, in order', async () => 
         const coord = coordinatorOf(host);
         await coord.ctx.call('project_thread_start', { title: 'Retry', brief: 'x' });
         const thread = threadOf(host, coord);
-        const prompt = host.sessionController.prompt;
+        const accept = host.accept;
         let refuse = true;
-        host.sessionController.prompt = async (req) => {
-            if (refuse && req.sessionId === coord.id) throw new Error('session/writer-held');
-            return prompt(req);
+        host.accept = (sessionId, mode, message) => {
+            if (refuse && sessionId === coord.id) throw new Error('session/writer-held');
+            return accept(sessionId, mode, message);
         };
         const retrying = 'Handback saved; the coordinator could not take it just now, and it is sent again automatically.';
         assert.equal(await thread.ctx.call('project_handback', { status: 'progress', summary: 'First.' }), retrying);
@@ -1606,6 +1635,68 @@ test('empty optional arguments count as not given; thread ids are trimmed', asyn
     assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'].threads), ['t1', 't2']);
 });
 
+test('browser half: one store of what the plugin says about projects, shared by the views and read while they watch', async () => {
+    const { client } = loadClient();
+    const { projectFacts, pausedText, withHeld, SUGGESTIONS } = client.internals;
+    const calls = [];
+    let paused = true;
+    const project = () => ({
+        project: { id: 'p1', name: 'P', coordinator: 'c1' }, settings: {},
+        paused: { value: paused, source: 'project setting', inherited: false, held: paused ? 2 : 0 },
+        threads: [{ id: 't1', session: 's1' }],
+    });
+    const link = {
+        async call(method, args) {
+            calls.push(method);
+            if (method === 'describe') return { ok: true, value: project() };
+            if (method === 'list') return { ok: true, value: { projects: [{ id: 'p1', coordinator: 'c1', paused }, { id: 'p2', coordinator: 'c2', paused: false }] } };
+            if (method === 'update' && args.target === 'c1') { paused = args.changes.paused; return { ok: true, value: project() }; }
+            return { ok: false, error: { code: 'projects/refused', message: 'no' } };
+        },
+    };
+    const facts = projectFacts(link);
+    let changes = 0;
+    facts.subscribe(() => { changes += 1; });
+    assert.equal(facts.paused('c1'), undefined, 'unknown until read');
+    // A thread's session reads its project; the coordinator and the other threads share it.
+    await facts.describe('s1');
+    assert.equal(facts.info('s1').project.id, 'p1');
+    assert.equal(facts.info('c1'), facts.info('s1'));
+    assert.equal(facts.paused('c1'), true);
+    await facts.describe('s1', 60000);
+    assert.deepEqual(calls, ['describe'], 'a fresh read is not repeated');
+    // The list covers every coordinator, the session list's paused marks.
+    await facts.list();
+    assert.deepEqual([facts.paused('c1'), facts.paused('c2'), facts.paused('c3')], [true, false, undefined]);
+    // A change answers with the project, and every view shows it at once.
+    const before = changes;
+    assert.equal((await facts.change('c1', { paused: false })).ok, true);
+    assert.equal(facts.paused('c1'), false);
+    assert.equal(facts.info('s1').paused.held, 0);
+    assert.ok(changes > before);
+    assert.equal((await facts.change('c2', { paused: false })).ok, false);
+    // A watch reads now (unless just read) and every 15 s; the last unwatch stops the timer, so this test can end.
+    const fresh = projectFacts(link);
+    const stop = fresh.watch('list');
+    const again = fresh.watch('list');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(fresh.paused('c2'), false);
+    stop();
+    again();
+    assert.equal(typeof fresh.watch(''), 'function');
+    // What a pause means where it shows.
+    assert.equal(pausedText('coordinator', 0), 'New threads and handbacks wait until you resume.');
+    assert.equal(pausedText('coordinator', 1), 'New threads and handbacks wait until you resume. 1 message held.');
+    assert.equal(pausedText('coordinator', 2, 2), 'New threads and handbacks wait until you resume. 2 handbacks held.');
+    assert.equal(pausedText('thread', 3), 'This thread\'s handbacks wait until the project resumes.');
+    assert.equal(SUGGESTIONS.length, 3);
+    // A thread whose handback the pause holds says so, instead of "No handback yet"; running and resolved rows keep theirs.
+    const rows = [{ id: 't1', group: 'idle', line: 'No handback yet' }, { id: 't2', group: 'running', line: 'Working…' }, { id: 't3', group: 'idle', line: 'No handback yet' }];
+    assert.equal(withHeld(rows, []), rows);
+    assert.deepEqual(plain(withHeld(rows, [{ thread: 't1', status: 'done' }, { thread: 't2', status: 'blocked' }]).map((r) => r.line)),
+        ['Done · held until you resume', 'Working…', 'No handback yet']);
+});
+
 // ── the DSH window's view (projection.js) ───────────────────────────────────
 
 /** Fold a session log through the registered projection, as DSH's drive does. */
@@ -1680,6 +1771,29 @@ test('projection: sessions the store knows are seeded; older events add cards bu
     assert.equal(fold(host, 'plain-session', []), null);
 });
 
+test('projection: a new coordinator\'s welcome turn, and whether the user has asked anything since', () => {
+    const { host } = setup();
+    const def = host.projections[0];
+    assert.equal(def.stateVersion, 2, 'the fold changed, so DSH folds every session again');
+    const msg = (seq, text, source) => ({ type: 'user/message', seq, time: seq, data: { content: [{ type: 'text', text }], ...(source ? { source } : {}) } });
+    let s = def.apply(def.init({ id: 'new' }), { type: 'turn/start', data: { turn: 0 } });
+    s = def.apply(s, msg(1, '[Project created: "DSH Plugins"]\n\nThis is the first message in this coordinator session.', { kind: 'cordis-host-runner' }));
+    assert.deepEqual([s.v.role, s.v.project.name, s.v.asked], ['coordinator', 'DSH Plugins', undefined]);
+    assert.deepEqual(s.v.cards, [{ turn: 0, seq: 1, kind: 'welcome' }]);
+    // Another plugin's or another session's message is not the user asking.
+    assert.equal(def.apply(s, msg(2, 'Cordis install x completed successfully.', { kind: 'cordis-host-runner' })), s);
+    assert.equal(def.apply(s, msg(2, 'Agent s9 sent a message.', { kind: 'agent-message', form: 'relay', senderSessionId: 's9' })), s);
+    s = def.apply(s, { type: 'turn/start', data: { turn: 1 } });
+    const asked = def.apply(s, msg(3, 'Plan the work.', { kind: 'user', rpcId: 'browser-1' }));
+    assert.equal(asked.v.asked, true);
+    assert.equal(def.apply(asked, msg(4, 'More.', { kind: 'user', rpcId: 'browser-2' })), asked, 'once is enough');
+    assert.equal(def.apply(s, msg(3, 'Plan the work.')).v.asked, true, 'a message without a source is the user\'s');
+    // A thread's own user messages leave it as it is.
+    const brief = def.apply(def.init({ id: 't' }), msg(1, '[Brief from the coordinator of "DSH Plugins" · you are thread t1, "Go"]\n\nGo.', { kind: 'agent-message', form: 'relay', senderSessionId: 'c' }));
+    assert.equal(def.apply(brief, msg(2, 'Hello.', { kind: 'user', rpcId: 'browser-3' })), brief);
+    assert.equal(def.apply(brief, msg(3, '[Project created: "DSH Plugins"]\n\nx', { kind: 'cordis-host-runner' })), brief, 'a thread never takes a welcome');
+});
+
 test('projection: unrelated and malformed events keep the same state; parsing never throws', () => {
     const { host } = setup();
     const def = host.projections[0];
@@ -1687,7 +1801,12 @@ test('projection: unrelated and malformed events keep the same state; parsing ne
     for (const event of [null, {}, { type: 'assistant/message' }, { type: 'tool/result', data: { meta: { other: 1 } } }, { type: 'user/message', data: null },
         // A user typing a tag is not the plugin speaking.
         { type: 'user/message', data: { content: [{ type: 'text', text: '[Handback from thread t1 · "x" · status: done]' }], source: { kind: 'user', rpcId: 'browser-1' } } },
-        { type: 'user/message', data: { content: [{ type: 'text', text: '[Handback from thread t1 · "x" · status: done]' }], source: { kind: 'runtime-context' } } }]) {
+        { type: 'user/message', data: { content: [{ type: 'text', text: '[Handback from thread t1 · "x" · status: done]' }], source: { kind: 'runtime-context' } } },
+        // An agent's message names its sender; one that doesn't is not the plugin's.
+        { type: 'user/message', data: { content: [{ type: 'text', text: '[Handback from thread t1 · "x" · status: done]' }], source: { kind: 'agent-message', form: 'relay' } } },
+        // DSH's own agents and plugins send untagged text.
+        { type: 'user/message', data: { content: [{ type: 'text', text: 'Agent s9 sent a message: done' }], source: { kind: 'agent-message', form: 'relay', senderSessionId: 's9' } } },
+        { type: 'user/message', data: { content: [{ type: 'text', text: 'Cordis install x completed successfully.' }], source: { kind: 'cordis-host-runner' } } }]) {
         assert.equal(def.apply(state, event), state);
     }
     // A turn moves the internal turn counter but not the value DSH sends.
@@ -1705,4 +1824,13 @@ test('projection: unrelated and malformed events keep the same state; parsing ne
     s = def.apply(s, { type: 'user/message', seq: 40, time: 5, data: { content: [{ type: 'text', text: '[Handback from thread t2 · "Say "hi"" · status: needs_decision]\n\nPick A or B.\n\n(Full conversation: project_thread_read thread="t2".)' }], source: { kind: 'user', rpcId: 'projects-abc' } } });
     assert.deepEqual(s.v.cards, [{ turn: 7, seq: 40, kind: 'handback', thread: 't2', status: 'needs_decision' }]);
     assert.deepEqual(s.v.threads, [{ id: 't2', session: null, title: 'Say "hi"', resolved: false, handback: { status: 'needs_decision', summary: 'Pick A or B.', at: new Date(5).toISOString() } }]);
+    // Messages sent as an agent's (the coordinator's brief, a thread's handback) or a plugin's (the notes) fold the same way.
+    s = def.apply(s, { type: 'user/message', seq: 41, time: 6, data: { content: [{ type: 'text', text: '[Handback from thread t3 · "Docs" · status: done]\n\nWritten.' }], source: { kind: 'agent-message', form: 'relay', senderSessionId: 's-t3' } } });
+    s = def.apply(s, { type: 'user/message', seq: 42, time: 7, data: { content: [{ type: 'text', text: '[Thread idle without a handback: t2 · "Say "hi""]\n\nIt stopped.' }], source: { kind: 'cordis-host-runner' } } });
+    assert.deepEqual(s.v.cards.slice(1), [{ turn: 7, seq: 41, kind: 'handback', thread: 't3', status: 'done' }, { turn: 7, seq: 42, kind: 'idle', thread: 't2' }]);
+    assert.equal(s.v.threads.find((t) => t.id === 't3').handback.summary, 'Written.');
+    let brief = def.apply(def.stateSchema.parse(undefined), { type: 'user/message', seq: 1, time: 1, data: { content: [{ type: 'text', text: '[Brief from the coordinator of "DSH Plugins" · you are thread t4, "Ship"]\n\nShip it.' }], source: { kind: 'agent-message', form: 'relay', senderSessionId: 's-c' } } });
+    assert.deepEqual([brief.v.role, brief.v.coordinator, brief.v.thread], ['thread', 's-c', { id: 't4', title: 'Ship' }]);
+    brief = def.apply(brief, { type: 'user/message', seq: 2, time: 2, data: { content: [{ type: 'text', text: '[From the coordinator]\n\nAlso this.' }], source: { kind: 'agent-message', form: 'relay', senderSessionId: 's-c2' } } });
+    assert.equal(brief.v.coordinator, 's-c2', 'a coordinator made again writes from its new session');
 });

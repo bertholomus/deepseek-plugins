@@ -228,6 +228,29 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-card-actions{flex:none;display:inline-flex;align-items:center;gap:4px}',
             '.dshp-t-card-actions .dshp-t-icon{width:28px;height:28px;margin:0}',
             '@container (width<=460px){.dshp-t-card-state-label{display:none}}',
+            // Threads: a new project's suggested first asks, under the coordinator's greeting
+            '.dshp-t-suggest{display:flex;flex-direction:column;gap:8px}',
+            '.dshp-t-suggest-label{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-t-suggest-list{display:flex;flex-wrap:wrap;gap:8px}',
+            '.dshp-t-suggest-item{display:inline-flex;align-items:center;gap:6px;box-sizing:border-box;max-width:100%;min-height:32px;padding:5px 12px 5px 10px;border:.5px solid var(--dsw-alias-border-l3);border-radius:999px;background:var(--dsw-alias-bg-layer-1);font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;transition:background-color .1s}',
+            '.dshp-t-suggest-item:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+            '.dshp-t-suggest-item:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}',
+            '.dshp-t-suggest-item svg{flex:none;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-t-suggest-note{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+            // Threads: a paused project, in the menu and the pane
+            '.dshp-t-paused{display:flex;align-items:center;gap:10px;margin:0 0 4px;padding:8px 8px 8px 10px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-interactive-bg-hover);font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-t-paused-icon{flex:none;display:inline-flex;color:var(--dsw-alias-label-primary)}',
+            '.dshp-t-paused-text{flex:1;min-width:0}',
+            '.dshp-t-paused-text b{font-weight:600;color:var(--dsw-alias-label-primary)}',
+            '.dshp-t-pane .dshp-t-paused{margin:0 0 8px;padding:10px 10px 10px 12px;font-size:13px;line-height:19px}',
+            '.dshp-t-paused-mark{color:var(--dsw-alias-label-secondary)}',
+            // A paused project, above the message box (as DSH docks a goal there)
+            '.dshp-dock{box-sizing:border-box;width:calc(100% - 2 * var(--dsh-composer-side-clearance,0px) - 4 * var(--dsh-composer-dock-inset,0px));margin:0 auto}',
+            '.dshp-dock-bar{isolation:isolate;position:relative;box-sizing:border-box;display:flex;align-items:center;gap:10px;width:100%;max-width:calc(var(--dsh-composer-card-max-width,760px) - 4 * var(--dsh-composer-dock-inset,0px));min-height:36px;margin:0 auto;padding:4px 5px 4px 12px;border-radius:var(--dsw-radius-md);box-shadow:var(--dsw-elevation-panel);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)}',
+            '.dshp-dock-bar::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:inherit;background:var(--dsw-specific-menu);backdrop-filter:var(--dsw-menu-backdrop-filter);pointer-events:none}',
+            '.dshp-dock-glyph{flex:none;display:inline-flex;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-dock-label{flex:none;font-size:13px;font-weight:500;line-height:24px;color:var(--dsw-alias-label-primary)}',
+            '.dshp-dock-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary-dimmed,var(--dsw-alias-label-secondary))}',
             // Threads: `[title](.dsh-thread/t3)` in a reply (DSH draws it as a file link)
             'button[title*=".dsh-thread/"]>svg:first-child{display:none}',
             `button[title*=".dsh-thread/"]::before{content:"";display:inline-block;flex:none;width:1.1em;height:1.1em;margin-right:5px;vertical-align:-.25em;background-color:currentColor;-webkit-mask:${BRANCH_MASK} center/contain no-repeat;mask:${BRANCH_MASK} center/contain no-repeat}`,
@@ -962,6 +985,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             link: `${BUNDLE}/thread-link`,
             settings: `${BUNDLE}/project-settings`,
             settingsItem: `${BUNDLE}/project-settings-item`,
+            paused: `${BUNDLE}/paused-bar`,
         };
         /** The conversation inside a thread's sidebar chat; its tab body declares it. */
         const CONVERSATION_SLOT = 'projects.thread.conversation';
@@ -992,7 +1016,23 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             chatGone: 'This thread\'s chat can\'t be opened. It may have been deleted.',
             linkLoading: 'Opening the thread…',
             linkNotProject: 'This chat isn\'t part of a project, so it has no threads.',
+            paused: 'Paused',
+            projectPaused: 'Project paused',
+            pausedCoordinator: 'New threads and handbacks wait until you resume.',
+            pausedThread: 'This thread\'s handbacks wait until the project resumes.',
+            heldLine: 'held until you resume',
+            resume: 'Resume',
+            resuming: 'Resuming…',
+            resumeFailed: 'Couldn\'t resume the project.',
+            tryAsking: 'Try asking',
+            suggestCopied: 'Copied. Paste it in the message box below.',
         };
+        /** A new project's first asks, shown under the coordinator's greeting until the user writes. */
+        const SUGGESTIONS = [
+            'Look around this folder and suggest what to work on first',
+            'Plan the work and start a thread for each part',
+            'Start a thread that reviews the code for bugs',
+        ];
         const GROUPS = [
             { id: 'waiting', label: 'Waiting on you' },
             { id: 'running', label: 'Running' },
@@ -1103,28 +1143,186 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
+         * What the plugin says about projects (remote.js), shared by every
+         * view in the window: `describe` for one project's settings and
+         * pause, `list` for every project's pause (the session list marks a
+         * paused coordinator). A view watches what it shows; while any does
+         * and the window is visible, it is read again every 15 s, and a
+         * change made in this window shows everywhere at once.
+         * @param link - the plugin's endpoints (hostLink).
+         */
+        function projectFacts(link) {
+            const described = new Map();
+            const projectOf = new Map();
+            const pausedAt = new Map();
+            const last = new Map();
+            const reading = new Map();
+            const watching = new Map();
+            const listeners = new Set();
+            let version = 0;
+            let timer;
+            const emit = () => {
+                version += 1;
+                for (const listener of [...listeners]) listener();
+            };
+            const once = (key, maxAge, run) => {
+                if (reading.has(key)) return reading.get(key);
+                if (Date.now() - (last.get(key) ?? 0) < maxAge) return Promise.resolve();
+                const promise = run().catch(() => {}).finally(() => {
+                    last.set(key, Date.now());
+                    reading.delete(key);
+                });
+                reading.set(key, promise);
+                return promise;
+            };
+            const put = (target, value) => {
+                if (!isObject(value) || !isObject(value.project) || typeof value.project.id !== 'string' || !isObject(value.settings)) return;
+                const id = value.project.id;
+                if (typeof target === 'string') projectOf.set(target, id);
+                if (typeof value.project.coordinator === 'string') {
+                    projectOf.set(value.project.coordinator, id);
+                    pausedAt.set(value.project.coordinator, value.paused?.value === true);
+                }
+                for (const t of Array.isArray(value.threads) ? value.threads : []) {
+                    if (typeof t?.session === 'string') projectOf.set(t.session, id);
+                }
+                described.set(id, value);
+                emit();
+            };
+            const describe = (target, maxAge = 0) => {
+                if (typeof target !== 'string' || target === '') return Promise.resolve();
+                return once(`d:${target}`, maxAge, async () => {
+                    const result = await link.call('describe', { target });
+                    if (result.ok) put(target, result.value);
+                });
+            };
+            const list = (maxAge = 0) => once('list', maxAge, async () => {
+                const result = await link.call('list', {});
+                if (!result.ok || !Array.isArray(result.value?.projects)) return;
+                for (const p of result.value.projects) {
+                    if (!isObject(p) || typeof p.coordinator !== 'string') continue;
+                    pausedAt.set(p.coordinator, p.paused === true);
+                    if (typeof p.id !== 'string') continue;
+                    projectOf.set(p.coordinator, p.id);
+                    const d = described.get(p.id);
+                    if (d && (d.paused?.value === true) !== (p.paused === true)) described.set(p.id, { ...d, paused: { ...d.paused, value: p.paused === true } });
+                }
+                emit();
+            });
+            const read = (key, maxAge) => (key === 'list' ? list(maxAge) : describe(key.slice(2), maxAge));
+            const tick = () => {
+                if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+                for (const key of watching.keys()) void read(key, 10000);
+            };
+            return {
+                subscribe(listener) {
+                    listeners.add(listener);
+                    return () => { listeners.delete(listener); };
+                },
+                getSnapshot: () => version,
+                /** describe's answer for the project a session (or project id) belongs to, or null. */
+                info(target) {
+                    const id = projectOf.get(target) ?? (described.has(target) ? target : undefined);
+                    return id === undefined ? null : described.get(id) ?? null;
+                },
+                /** Whether a coordinator's project is paused, as last read; undefined until read. */
+                paused(coordinator) {
+                    const d = this.info(coordinator);
+                    return d ? d.paused?.value === true : pausedAt.get(coordinator);
+                },
+                put,
+                describe,
+                list,
+                /**
+                 * Keep reading `d:<session>` (its project) or `list` while
+                 * the returned function has not been called.
+                 */
+                watch(key) {
+                    if (typeof key !== 'string' || key === '' || key === 'd:') return () => {};
+                    watching.set(key, (watching.get(key) ?? 0) + 1);
+                    void read(key, 5000);
+                    timer ??= setInterval(tick, 15000);
+                    return () => {
+                        const n = (watching.get(key) ?? 1) - 1;
+                        if (n > 0) watching.set(key, n);
+                        else watching.delete(key);
+                        if (watching.size === 0 && timer !== undefined) {
+                            clearInterval(timer);
+                            timer = undefined;
+                        }
+                    };
+                },
+                /** Change a project's settings (remote.js `update`); its answer updates every view. */
+                async change(target, changes) {
+                    const result = await link.call('update', { target, changes });
+                    if (result.ok) put(target, result.value);
+                    return result;
+                },
+            };
+        }
+
+        /** Re-render when anything the plugin says about projects changes. */
+        const useFacts = (facts) => React.useSyncExternalStore(facts.subscribe, facts.getSnapshot);
+        /** Watch a facts key (`d:<session>` or `list`) while `on`. */
+        function useWatch(facts, key, on = true) {
+            React.useEffect(() => (on && key ? facts.watch(key) : undefined), [facts, key, on]);
+        }
+
+        /**
          * A project as the plugin describes it (remote.js `describe`): read
          * when `enabled` turns on, and again every 15 s while `active`.
          */
-        function useProjectInfo(link, target, enabled, active) {
-            const [info, setInfo] = React.useState(null);
+        function useProjectInfo(facts, target, enabled, active) {
+            useFacts(facts);
+            React.useEffect(() => { if (enabled) void facts.describe(target, 5000); }, [facts, target, enabled]);
+            useWatch(facts, typeof target === 'string' ? `d:${target}` : null, enabled && active);
+            return enabled ? facts.info(target) : null;
+        }
+
+        /**
+         * Whether a coordinator's project is paused (undefined until known),
+         * kept current by watching `watch` (`d:<coordinator>` or `list`).
+         */
+        function usePaused(facts, coordinator, watch) {
+            useWatch(facts, watch, typeof coordinator === 'string');
+            return React.useSyncExternalStore(facts.subscribe, () => (typeof coordinator === 'string' ? facts.paused(coordinator) : undefined));
+        }
+
+        /** How many messages a pause holds for a coordinator, as last read. */
+        const useHeld = (facts, coordinator) => React.useSyncExternalStore(facts.subscribe, () => facts.info(coordinator)?.paused?.held ?? 0);
+        /** The handbacks a pause holds ([{thread, status}]), as last read. */
+        const useHeldHandbacks = (facts, coordinator) => React.useSyncExternalStore(facts.subscribe, () => facts.info(coordinator)?.paused?.handbacks ?? EMPTY);
+
+        /** A thread whose handback a pause holds says so, instead of "No handback yet". */
+        function withHeld(rows, handbacks) {
+            if (!Array.isArray(handbacks) || handbacks.length === 0) return rows;
+            const held = new Map();
+            for (const hb of handbacks) if (isObject(hb) && typeof hb.thread === 'string') held.set(hb.thread, hb.status);
+            return rows.map((row) => {
+                if (!held.has(row.id) || row.group === 'running' || row.group === 'resolved') return row;
+                const label = HANDBACK_LABELS[held.get(row.id)] ?? 'Handback';
+                return { ...row, line: `${label} · ${TEXT.heldLine}`, held: true };
+            });
+        }
+
+        /** Resume a paused project; `failed` says the last try didn't go through. */
+        function useResume(facts, target) {
+            const [state, setState] = React.useState('idle');
             const alive = React.useRef(true);
-            React.useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-            const read = React.useCallback(async () => {
-                if (typeof target !== 'string' || target === '') return;
-                const result = await link.call('describe', { target });
-                if (alive.current && result.ok && isObject(result.value) && isObject(result.value.settings)) setInfo(result.value);
-            }, [link, target]);
-            React.useEffect(() => { if (enabled) void read(); }, [enabled, read]);
-            React.useEffect(() => {
-                if (!enabled || !active) return undefined;
-                void read();
-                const timer = setInterval(() => {
-                    if (typeof document === 'undefined' || document.visibilityState !== 'hidden') void read();
-                }, 15000);
-                return () => clearInterval(timer);
-            }, [enabled, active, read]);
-            return info;
+            React.useEffect(() => () => { alive.current = false; }, []);
+            const resume = React.useCallback(async () => {
+                setState('busy');
+                const result = await facts.change(target, { paused: false });
+                if (alive.current) setState(result.ok ? 'idle' : 'failed');
+            }, [facts, target]);
+            return { busy: state === 'busy', failed: state === 'failed', resume };
+        }
+
+        /** What a pause means where it is shown, with how many messages it holds for the coordinator. */
+        function pausedText(role, held, handbacks = 0) {
+            if (role === 'thread') return TEXT.pausedThread;
+            if (!(held > 0)) return TEXT.pausedCoordinator;
+            return `${TEXT.pausedCoordinator} ${held === handbacks ? plural(held, 'handback') : plural(held, 'message')} held.`;
         }
 
         /**
@@ -1425,14 +1623,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             React.useEffect(() => {
                 if (away && (unknown || open)) projects.refresh(coordinator);
             }, [away, unknown, open, coordinator, projects]);
-            const rows = React.useMemo(() => rowsOf(info?.roster, statuses, byId), [info?.roster, statuses, byId]);
+            const paused = usePaused(projects.facts, coordinator, coordinator ? `d:${coordinator}` : null) === true;
+            const handbacks = useHeldHandbacks(projects.facts, coordinator);
+            const rows = React.useMemo(() => withHeld(rowsOf(info?.roster, statuses, byId), paused ? handbacks : EMPTY), [info?.roster, statuses, byId, paused, handbacks]);
             const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, open);
-            const described = useProjectInfo(projects.link, sessionId, info !== undefined, open);
+            const described = useProjectInfo(projects.facts, sessionId, info !== undefined, open);
             if (info === undefined) return null;
 
             const counts = countsOf(rows);
             const signal = counts.waiting > 0 ? 'warning' : counts.running > 0 ? 'ongoing' : null;
-            const label = counts.open > 0 ? plural(counts.open, 'thread') : TEXT.threads;
+            const threadsLabel = counts.open > 0 ? plural(counts.open, 'thread') : TEXT.threads;
+            const label = paused ? `${TEXT.paused} · ${threadsLabel}` : threadsLabel;
             const openSession = (target) => { change(false); projects.openSession(target); };
             const parent = info.me.role === 'thread' && coordinator
                 ? h(ui.Tooltip, { label: `Open ◆ ${info.project.name || TEXT.coordinator}`, side: 'bottom' },
@@ -1443,8 +1644,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const trigger = h('button', {
                 ref: triggerRef, type: 'button', className: 'dshp-t-trigger',
                 'aria-haspopup': 'dialog', 'aria-expanded': open,
-                'aria-label': `${TEXT.threads}: ${info.roster === null ? TEXT.loading : summaryText(counts)}`,
-                'data-projects-threads-trigger': '',
+                'aria-label': `${TEXT.threads}: ${paused ? `${TEXT.projectPaused}, ` : ''}${info.roster === null ? TEXT.loading : summaryText(counts)}`,
+                'data-projects-threads-trigger': '', 'data-projects-paused': paused ? '' : undefined,
                 onMouseEnter: () => {
                     cancelHover();
                     if (open) return;
@@ -1463,7 +1664,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     else { focusFirst.current = true; change(true); }
                 },
             },
-            signal ? h('span', { className: 'dshp-t-signal' }, h(ui.StateDot, { state: signal })) : h(ui.IconBranchOutlineRegular, { size: 14 }),
+            signal ? h('span', { className: 'dshp-t-signal' }, h(ui.StateDot, { state: signal }))
+                : paused ? h(ui.IconPauseOutlineRegular, { size: 14 }) : h(ui.IconBranchOutlineRegular, { size: 14 }),
             h('span', { className: 'dshp-t-label' }, label),
             h(ui.IconChevronDownOutlineRegular, { size: 12, className: open ? 'dshp-t-chev dshp-t-chev-open' : 'dshp-t-chev' }));
 
@@ -1488,6 +1690,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 h(ProjectName, { info, here: sessionId, onOpen: () => openSession(coordinator) }),
                 info.roster !== null ? h('span', { className: 'dshp-t-count' }, summaryText(counts)) : null),
             h(ModelsSummary, { ...summaryModels(cv, models, coordinator, described), onPick: settingsOn ? openSettings : undefined }),
+            paused ? h(PausedNotice, { coordinator, role: info.me.role, projects }) : null,
             h('div', { className: 'dshp-t-menu-body' },
                 notice ?? h(ThreadList, {
                     rows, current: sessionId, now, models,
@@ -1522,10 +1725,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             React.useEffect(() => {
                 if (coordinator !== undefined && coordinator !== sessionId) projects.refresh(coordinator);
             }, [coordinator, sessionId, projects]);
-            const rows = React.useMemo(() => rowsOf(info?.roster, statuses, byId), [info?.roster, statuses, byId]);
             const visible = tab.visible !== false;
+            const paused = usePaused(projects.facts, coordinator, coordinator && visible ? `d:${coordinator}` : null) === true;
+            const handbacks = useHeldHandbacks(projects.facts, coordinator);
+            const rows = React.useMemo(() => withHeld(rowsOf(info?.roster, statuses, byId), paused ? handbacks : EMPTY), [info?.roster, statuses, byId, paused, handbacks]);
             const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, info !== undefined && visible);
-            const described = useProjectInfo(projects.link, sessionId, info !== undefined, visible);
+            const described = useProjectInfo(projects.facts, sessionId, info !== undefined, visible);
             if (info === undefined) {
                 return h('div', { className: 'dshp-t-pane', 'data-projects-threads-pane': '' }, h('div', { className: 'dshp-t-empty' }, TEXT.notProject));
             }
@@ -1543,6 +1748,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         onClick: () => projects.settings.open(sessionId),
                     }, h(ui.IconSlidersTwoOutlineRegular, { size: 14 })))) : null),
             h(ModelsSummary, { ...summaryModels(cv, models, coordinator, described), onPick: settingsOn ? (pick) => projects.settings.open(sessionId, { pick }) : undefined }),
+            paused ? h(PausedNotice, { coordinator, role: info.me.role, projects }) : null,
             notice ?? h(ThreadList, {
                 rows, current: sessionId, now, models,
                 onOpen: (row) => {
@@ -1805,7 +2011,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             React.useEffect(() => {
                 for (const id of threadSessions) projects.refresh(id);
             }, [key, projects]);
-            if (views.length === 0) return null;
+            // A new project suggests first asks under its greeting until the user writes or a thread starts.
+            const suggest = info !== undefined && info.me.role === 'coordinator' && info.me.asked !== true
+                && Array.isArray(info.roster) && info.roster.length === 0 && cards.some((card) => card.kind === 'welcome');
+            if (views.length === 0) return suggest ? h(Suggestions, { sessionId, projects }) : null;
             return h('div', { className: 'dshp-t-cards', 'data-projects-thread-cards': '' },
                 ...views.map((view) => h(ThreadCard, {
                     key: view.key, projects,
@@ -1818,6 +2027,67 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const cards = useProjection(KEY, (value) => cardsOf(value, turn?.turn), sameList);
             if (cards.length === 0) return null;
             return h(ThreadCardList, { sessionId, cards, useSessions, useSessionStatus, projects });
+        }
+
+        /**
+         * A new project's first asks, under the coordinator's greeting until
+         * the user writes or a thread starts. One goes into the message box,
+         * ready to send or change.
+         */
+        function Suggestions({ sessionId, projects }) {
+            const [copied, setCopied] = React.useState(false);
+            const use = (text) => {
+                if (projects.draft(sessionId, text)) return;
+                // No message box to fill (DSH changed it): copy the ask instead.
+                Promise.resolve(globalThis.navigator?.clipboard?.writeText(text)).then(() => setCopied(true), () => {});
+            };
+            return h('div', { className: 'dshp-t-suggest', 'data-projects-suggestions': '' },
+                h('div', { className: 'dshp-t-suggest-label', id: `dshp-suggest-${sessionId}` }, TEXT.tryAsking),
+                h('div', { className: 'dshp-t-suggest-list', role: 'group', 'aria-labelledby': `dshp-suggest-${sessionId}` },
+                    ...SUGGESTIONS.map((text) => h('button', {
+                        key: text, type: 'button', className: 'dshp-t-suggest-item', 'data-projects-suggestion': '', onClick: () => use(text),
+                    }, h(ui.IconSparkleRegular, { size: 14 }), h('span', null, text)))),
+                copied ? h('div', { className: 'dshp-t-suggest-note', role: 'status' }, TEXT.suggestCopied) : null);
+        }
+
+        /** A paused project's line in the Threads menu and pane, with Resume. */
+        function PausedNotice({ coordinator, role, projects }) {
+            const { busy, failed, resume } = useResume(projects.facts, coordinator);
+            const held = useHeld(projects.facts, coordinator);
+            const handbacks = useHeldHandbacks(projects.facts, coordinator);
+            return h('div', { className: 'dshp-t-paused', 'data-projects-paused': role },
+                h('span', { className: 'dshp-t-paused-icon', 'aria-hidden': true }, h(ui.IconPauseOutlineRegular, { size: 14 })),
+                h('div', { className: 'dshp-t-paused-text', role: 'status' },
+                    h('b', null, TEXT.projectPaused), ' ', pausedText(role, held, handbacks.length),
+                    failed ? h('span', { className: 'dshp-t-error' }, ` ${TEXT.resumeFailed}`) : null),
+                h(ui.Button, {
+                    variant: 'outline', size: 'sm', disabled: busy, 'data-projects-resume': '',
+                    icon: h(ui.IconPlayOutlineRegular, { size: 14 }), onClick: () => { void resume(); },
+                }, busy ? TEXT.resuming : TEXT.resume));
+        }
+
+        /**
+         * Above the message box of every session of a paused project, the way
+         * DSH shows a goal: what the pause means here, and Resume.
+         */
+        function PausedBar({ sessionId, useSessions, projects }) {
+            const info = useSessions((state) => projectContext(state, sessionId), sameContext);
+            const coordinator = info?.coordinator;
+            const paused = usePaused(projects.facts, coordinator, coordinator ? `d:${coordinator}` : null);
+            const held = useHeld(projects.facts, coordinator);
+            const handbacks = useHeldHandbacks(projects.facts, coordinator);
+            const { busy, failed, resume } = useResume(projects.facts, coordinator);
+            if (info === undefined || paused !== true) return null;
+            const text = failed ? TEXT.resumeFailed : pausedText(info.me.role, held, handbacks.length);
+            return h('div', { className: 'dshp-dock', 'data-projects-paused-bar': info.me.role },
+                h('div', { className: 'dshp-dock-bar', role: 'status', title: text },
+                    h('span', { className: 'dshp-dock-glyph', 'aria-hidden': true }, h(ui.IconPauseOutlineRegular, { size: 14 })),
+                    h('span', { className: 'dshp-dock-label' }, TEXT.projectPaused),
+                    h('span', { className: failed ? 'dshp-dock-text dshp-t-error' : 'dshp-dock-text' }, text),
+                    h(ui.Button, {
+                        variant: 'outline', size: 'sm', disabled: busy, 'data-projects-resume': '',
+                        icon: h(ui.IconPlayOutlineRegular, { size: 14 }), onClick: () => { void resume(); },
+                    }, busy ? TEXT.resuming : TEXT.resume)));
         }
 
         /** Coordinator project names in a session list ("◆ name" titles), once per list. */
@@ -1849,11 +2119,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return at > 0 && namesOf(state.byId).has(title.slice(0, at));
         }
 
-        /** A row's mark: a corner while it nests under its coordinator, a branch anywhere else (CSS picks). */
-        function ThreadMark({ sessionId, useSessions, nesting }) {
+        /**
+         * A row's mark: a corner while it nests under its coordinator, a
+         * branch anywhere else (CSS picks); a pause sign on a paused project's
+         * coordinator.
+         */
+        function ThreadMark({ sessionId, useSessions, nesting, projects }) {
             const thread = useSessions((state) => isThreadRow(state, sessionId));
+            const coordinator = useSessions((state) => !isThreadRow(state, sessionId) && coordinatorName(state, sessionId) !== undefined);
+            const paused = usePaused(projects.facts, coordinator ? sessionId : undefined, coordinator ? 'list' : null) === true;
             // Every idle row mounts this seat, so a list that comes back (the sidebar reopened) gets nested again.
             React.useLayoutEffect(() => { nesting?.soon(); }, [nesting, thread]);
+            if (paused) {
+                return h('span', { className: 'dshp-t-mark dshp-t-paused-mark', role: 'img', 'aria-label': TEXT.projectPaused, title: TEXT.projectPaused, 'data-projects-paused-mark': '' },
+                    h(ui.IconPauseOutlineRegular, { size: 12 }));
+            }
             if (!thread) return null;
             return h('span', { className: 'dshp-t-mark', role: 'img', 'aria-label': 'Project thread', 'data-projects-thread-mark': '' },
                 h('span', { className: 'dshp-t-corner' }, h(ui.IconTreeCornerRegular, { size: 12 })),
@@ -2027,22 +2307,27 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const byId = useSessions((state) => state.byId);
             const picked = useSessions((state) => selectionIn(state, sessionId), sameSelection);
             const cv = useCatalogView(projects.catalog, info !== undefined);
+            const paused = usePaused(projects.facts, info?.coordinator, info?.coordinator ? 'list' : null) === true;
+            const handbacks = useHeldHandbacks(projects.facts, info?.coordinator);
+            // Which handbacks a pause holds is in the project's description; read it once for this card.
+            React.useEffect(() => { if (paused && info?.coordinator) void projects.facts.describe(info.coordinator, 15000); }, [paused, info?.coordinator, projects]);
             if (info === undefined) return null;
             const project = info.project.name ?? '';
             const runs = picked ? h('div', { className: 'dshp-t-hover-line', 'data-projects-thread-model': '' }, `Runs on ${selectionText(cv, picked)}`) : null;
+            const pause = paused ? h('div', { className: 'dshp-t-hover-line', 'data-projects-paused': '' }, `${TEXT.projectPaused}. ${pausedText(info.me.role, 0)}`) : null;
             if (info.me.role === 'thread') {
                 const entry = (info.roster ?? EMPTY).find((t) => isObject(t) && t.session === sessionId);
-                const row = entry ? threadRow(entry, statuses, byId) : undefined;
+                const row = entry ? withHeld([threadRow(entry, statuses, byId)], paused ? handbacks : EMPTY)[0] : undefined;
                 return h('div', { className: 'dshp-t-hover', 'data-projects-thread-hover': '' },
                     h('div', { className: 'dshp-t-hover-head' }, h(ui.IconTreeCornerRegular, { size: 12 }), `Thread ${info.me.thread?.id ?? ''} of ◆ ${project}`),
                     row && row.line ? h('div', { className: 'dshp-t-hover-line' }, row.line) : null,
-                    runs);
+                    runs, pause);
             }
             const counts = countsOf(rowsOf(info.roster, statuses, byId));
             return h('div', { className: 'dshp-t-hover', 'data-projects-thread-hover': '' },
                 h('div', { className: 'dshp-t-hover-head' }, h('span', { 'aria-hidden': true }, '◆'), `Coordinator of ${project}`),
                 h('div', { className: 'dshp-t-hover-line' }, counts.open + counts.resolved > 0 ? summaryText(counts).replace(/^(\d+) open/, (m, n) => plural(Number(n), 'open thread')) : 'No threads yet'),
-                runs);
+                runs, pause);
         }
 
         /** Navigation the thread views share, with the model catalog and the plugin's endpoints; nothing here throws into React. */
@@ -2054,6 +2339,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
             const failed = new Set();
             const catalog = shared.catalog ?? catalogSource(() => undefined);
+            const link = shared.link ?? hostLink(() => undefined, catalog);
+            /** DSH's message box of a session (its composer's shell), or undefined. */
+            const composerOf = (sessionId) => {
+                const scope = ctx.sessions?.scope?.(sessionId);
+                const shell = scope?.get?.('conversation')?.input?.for?.(scope);
+                return shell && (typeof shell.actions?.setDraft === 'function' || typeof shell.setDraft === 'function') ? shell : undefined;
+            };
             return {
                 openSession,
                 /** The Project settings dialog, for the entry points. */
@@ -2061,7 +2353,26 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 /** DSH's model catalog, to name the models sessions run on. */
                 catalog,
                 /** The plugin's endpoints (remote.js). */
-                link: shared.link ?? hostLink(() => undefined, catalog),
+                link,
+                /** What the plugin says about projects, shared by the window's views. */
+                facts: shared.facts ?? projectFacts(link),
+                /**
+                 * Put text in a session's message box and move the keyboard
+                 * there, ready to send or change. @returns whether it could.
+                 */
+                draft(sessionId, text) {
+                    try {
+                        const shell = typeof sessionId === 'string' && sessionId !== '' ? composerOf(sessionId) : undefined;
+                        if (!shell) return false;
+                        if (typeof shell.actions?.setDraft === 'function') shell.actions.setDraft(text);
+                        else shell.setDraft(text);
+                        shell.focus?.();
+                        return true;
+                    } catch (error) {
+                        warn('could not put the ask in the message box', error);
+                        return false;
+                    }
+                },
                 openBeside(sessionId) {
                     if (typeof sessionId !== 'string' || sessionId === '') return;
                     try {
@@ -2103,8 +2414,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const nesting = rowNesting(ctx.sessions);
             ctx.effect(() => nesting.start(), 'projects: threads under their coordinator in the session list');
             ctx.slots.inject('sidebar.session.row.leading', () => ctx.slots.register({
-                name: 'sidebar.session.row.leading', id: IDS.mark, order: 20, inject: () => ({ nesting }),
+                name: 'sidebar.session.row.leading', id: IDS.mark, order: 20, inject: () => ({ nesting, projects }),
             }, ThreadMark));
+            ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+                name: 'conversation.input.dock', id: IDS.paused, order: 15, inject: withApi,
+            }, PausedBar));
             ctx.slots.inject('sidebar.session.row.hover', () => ctx.slots.register({
                 name: 'sidebar.session.row.hover', id: IDS.hover, order: 20, inject: withApi,
             }, ThreadHover));
@@ -2167,7 +2481,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             noThreads: 'No threads yet. Each thread the coordinator starts shows up here with its model.',
             allResolved: 'Every thread is resolved.',
             pause: 'Pause this project',
-            pauseHint: 'New threads wait and handbacks are held until you resume.',
+            pauseHint: 'New threads and handbacks wait until you resume.',
             own: 'Set for this project',
             useDefault: 'Use default',
             running: 'Running. A change applies from its next request.',
@@ -2292,7 +2606,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * then holds; it reads again every few seconds, so a change made in a
          * chat or by the coordinator shows up too.
          */
-        function ProjectSettings({ target, pick, link, dialog, openDefaults, useSessionStatus }) {
+        function ProjectSettings({ target, pick, link, facts, dialog, openDefaults, useSessionStatus }) {
             const catalog = React.useSyncExternalStore(link.catalog.subscribe, link.catalog.getSnapshot);
             const statuses = useSessionStatus((value) => value);
             const [data, setData] = React.useState(null);
@@ -2310,6 +2624,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (result.ok && isObject(result.value) && isObject(result.value.settings)) {
                     setData(result.value);
                     setFailure(null);
+                    facts?.put(target, result.value);
                 } else {
                     setFailure(errorText(result.ok ? undefined : result.error));
                 }
@@ -2335,7 +2650,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     setMessage({ key, kind: 'error', text: errorText(result.error) });
                     return;
                 }
-                if (isObject(result.value) && isObject(result.value.settings)) setData(result.value);
+                if (isObject(result.value) && isObject(result.value.settings)) {
+                    setData(result.value);
+                    // The other views (the pause bar, the menu, the session list) show the change at once.
+                    facts?.put(target, result.value);
+                }
                 const note = noteText(result.value?.notes);
                 if (note) setMessage({ key, kind: 'info', text: note });
             };
@@ -2435,11 +2754,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /** The dialog in DSH's overlay layer, mounted while a project's settings are open. */
-        function ProjectSettingsOverlay({ dialog, link, openDefaults, useSessionStatus }) {
+        function ProjectSettingsOverlay({ dialog, link, facts, openDefaults, useSessionStatus }) {
             const state = React.useSyncExternalStore(dialog.subscribe, dialog.getSnapshot);
             if (state.target === null) return null;
             return h(ProjectSettings, {
-                key: `${state.target}\u0000${state.seq}`, target: state.target, pick: state.pick, link, dialog, useSessionStatus,
+                key: `${state.target}\u0000${state.seq}`, target: state.target, pick: state.pick, link, facts, dialog, useSessionStatus,
                 openDefaults: openDefaults(false) ? openDefaults : undefined,
             });
         }
@@ -2458,7 +2777,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, SETTINGS.title);
         }
 
-        function applySettings(ctx, dialog, link) {
+        function applySettings(ctx, dialog, link, facts) {
             /** DSH's Plugins page, at this plugin; false when this DSH can't open it. Called without `go`, it only asks. */
             const openDefaults = (go = true) => {
                 let nav;
@@ -2468,7 +2787,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 try { nav.openBundle(BUNDLE); return true; } catch { return false; }
             };
             ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-                name: 'shell.overlay', id: IDS.settings, inject: () => ({ dialog, link, openDefaults }),
+                name: 'shell.overlay', id: IDS.settings, inject: () => ({ dialog, link, facts, openDefaults }),
             }, ProjectSettingsOverlay));
             ctx.slots.inject('sidebar.workspaces.session.menu.item', () => ctx.slots.register({
                 name: 'sidebar.workspaces.session.menu.item', id: IDS.settingsItem, order: 250, inject: () => ({ dialog }),
@@ -2491,13 +2810,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, `projects: ${name}`);
             const catalog = catalogSource(() => bound.remote);
             const link = hostLink(() => bound.connection, catalog);
+            const facts = projectFacts(link);
             const sessionsOf = () => bound.sessions;
             ctx.inject(['remote', 'remote.session'], bind('remote', () => catalog.reset()));
             ctx.inject(['connection'], bind('connection'));
             ctx.inject(['sessions'], bind('sessions'));
             ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => applyDefaultsForm(scope, { catalog, link, dialog, sessionsOf }));
-            ctx.inject(['connection', 'remote', 'remote.session'], (scope) => applySettings(scope, dialog, link));
-            ctx.inject(['sessions', 'uiWorkspace', 'sidebarRight'], (scope) => applyThreads(scope, dialog, { catalog, link }));
+            ctx.inject(['connection', 'remote', 'remote.session'], (scope) => applySettings(scope, dialog, link, facts));
+            ctx.inject(['sessions', 'uiWorkspace', 'sidebarRight'], (scope) => applyThreads(scope, dialog, { catalog, link, facts }));
         }
 
         module.exports.inject = inject;
@@ -2506,7 +2826,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.internals = {
             valueIn, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, nestingPlan,
             catalogView, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
-            selectionIn, selectionText, summaryModels, sourceLine, toldText,
+            selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS,
         };
         return module.exports;
     },

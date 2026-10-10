@@ -27,6 +27,7 @@
   "engines": { "node": ">=22" },
   "peerDependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",
+    "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-tools": "*",
     "@deepseek-ai/dsh-typert-protocol": "*"
   }

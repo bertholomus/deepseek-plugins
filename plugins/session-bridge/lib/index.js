@@ -55,6 +55,8 @@ function summarize(event, full) {
     if (event.type === 'turn/end') out.reason = d.reason;
     if (event.type === 'model/selection') out.selection = d;
     if (event.type === 'session/title') out.title = d.title;
+    // Who sent a user message: the user, another session or a plugin.
+    if (event.type === 'user/message' && d.source !== undefined) out.source = d.source;
     if (event.type === 'agent/error' || event.type?.endsWith('/error')) out.error = JSON.stringify(d).slice(0, 2000);
     const text = textOf(event);
     if (text) out.text = full ? text : text.length > 4000 ? `${text.slice(0, 4000)}…(+${text.length - 4000})` : text;
