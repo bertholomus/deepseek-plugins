@@ -1,11 +1,11 @@
 # Handoff
 
-Updated: 2026-10-09 20:35 PT by B (bertholomus)
+Updated: 2026-10-09 21:12 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 
 ## Doing now
 - Threads UI done and pushed (cfe8791, 79c21e6), PR #1 body updated, checked in a browser on DSH 0.2.0-rc.2 and 0.2.1-alpha.2, light and dark. Screenshots for the user in project files `projects-plugin/threads-ui/`.
-- Mac load blocked (20:25 PT): the repo is private now (GitHub API `visibility: private`), and the Mac has no GitHub sign-in, so its checkout can't fetch. It is still at fe19700, nothing changed. Asked the user to type "sign in" in the Mac thread; the Mac session then runs `gh auth login -h github.com -p https -w`, posts the device code, runs `gh auth setup-git`, and continues the load (Next steps 1).
+- Mac load blocked (20:25 PT): the repo is private now (GitHub API `visibility: private`), and the Mac has no GitHub sign-in, so its checkout can't fetch. It is still at fe19700, nothing changed. The user typed "sign in" (21:08 PT). The `gh` on the Mac's PATH is the user's household shim that routes to their StackNUC GitHub broker, which refuses this Mac, so the Mac session installed GitHub's own CLI from Homebrew (`/opt/homebrew/bin/gh`, shim untouched) and started a device sign-in, to be wired only to the deepseek-plugins checkout. The user was told that approving gives the Mac a sign-in outside the broker. Once approved, the Mac continues the load (Next steps 1).
 - The cloud thread pushes fixes. Until the Mac signs in, it can't pull or push (see blockers).
 
 ## Done since last handoff
