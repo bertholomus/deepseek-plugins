@@ -1089,6 +1089,103 @@ test('browser half: rows, cards and the plugin page name what each session runs 
     assert.equal(toldText({ status: 'progress' }), 'Progress update');
 });
 
+test('browser half: New threads follows DSH\'s default after a pick in any chat; a row names a model the menu already names only on hover', async () => {
+    const { client } = loadClient();
+    const { catalogSource, picksIn, followDefault, ThreadRow } = client.internals;
+    // DSH saves a composer pick as its default in the background, so the catalog is read again.
+    let def = { provider: 'p', model: 'old' };
+    let reads = 0;
+    let answer;
+    const remote = { session: { modelCatalog: () => { reads += 1; return new Promise((resolve) => { answer = () => resolve({ ok: true, value: { default: def, groups: [] } }); }); } } };
+    const catalog = catalogSource(() => remote);
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+    catalog.ensure();
+    await tick();
+    assert.equal(reads, 1);
+    // A reload asked for mid-read waits for that read, then reads once more.
+    catalog.reload();
+    catalog.reload();
+    await tick();
+    assert.equal(reads, 1);
+    def = { provider: 'p', model: 'new' };
+    answer();
+    await tick();
+    assert.equal(reads, 2);
+    assert.equal(catalog.getSnapshot().status, 'loading');
+    answer();
+    await tick();
+    assert.deepEqual(plain([catalog.getSnapshot().status, catalog.getSnapshot().value.default.model, reads]), ['ready', 'new', 2]);
+
+    // Picks per loaded session; one DSH has not sent is left out.
+    const pick = (model, effort) => ({ lastUsed: null, next: { provider: 'p', model, ...(effort ? { reasoningEffort: effort } : {}) } });
+    let state = {
+        byId: { a: {}, b: {}, cold: {} },
+        projectionsBySession: { a: { values: { modelSelection: pick('m1', 'high') } }, b: { values: { modelSelection: { lastUsed: null, next: null } } } },
+    };
+    assert.deepEqual(plain([...picksIn(state)]), [['a', 'p:m1:high'], ['b', '']]);
+    const listeners = new Set();
+    const sessions = { list: { getSnapshot: () => state, subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); } } };
+    const frames = [];
+    const timers = [];
+    const fake = { reloads: 0, status: 'idle', value: { default: { provider: 'p', model: 'm1', reasoningEffort: 'high' } } };
+    const watched = { reload: () => { fake.reloads += 1; }, getSnapshot: () => ({ status: fake.status, value: fake.value }) };
+    const stop = followDefault(sessions, watched, {
+        frame: (fn) => frames.push(fn), cancel: () => {}, later: (fn, ms) => (timers.push({ fn, ms }), timers.length), clear: () => {},
+    });
+    const emit = (next) => { state = next; for (const fn of listeners) fn(); while (frames.length) frames.shift()(); };
+    // While nothing has read the catalog, a pick leaves it for the first view that needs it.
+    emit({ ...state, projectionsBySession: { ...state.projectionsBySession, a: { values: { modelSelection: pick('m1', 'max') } } } });
+    emit({ ...state, projectionsBySession: { ...state.projectionsBySession, a: { values: { modelSelection: pick('m1', 'high') } } } });
+    assert.deepEqual([fake.reloads, timers.length], [0, 0]);
+    fake.status = 'ready';
+    // A session DSH sends for the first time is not a pick.
+    emit({ ...state, projectionsBySession: { ...state.projectionsBySession, cold: { values: { modelSelection: pick('m9') } } } });
+    assert.equal(fake.reloads, 0);
+    // A pick in a session that had none (a new chat), then a changed pick: each reads the catalog again.
+    emit({ ...state, projectionsBySession: { ...state.projectionsBySession, b: { values: { modelSelection: pick('m2') } } } });
+    assert.equal(fake.reloads, 1);
+    // The save had not landed by the first read: more reads a moment later, while the catalog names another default.
+    assert.deepEqual(timers.map((x) => x.ms), [300]);
+    timers.at(-1).fn();
+    assert.deepEqual([fake.reloads, ...timers.map((x) => x.ms)], [2, 300, 700]);
+    timers.at(-1).fn();
+    timers.at(-1).fn();
+    assert.deepEqual([fake.reloads, ...timers.map((x) => x.ms)], [4, 300, 700, 1500], 'at most three more reads');
+    // A changed effort is a pick too; once a read names it, no more reads.
+    timers.length = 0;
+    emit({ ...state, projectionsBySession: { ...state.projectionsBySession, a: { values: { modelSelection: pick('m1', 'low') } } } });
+    assert.equal(fake.reloads, 5);
+    fake.value = { default: { provider: 'p', model: 'm1', reasoningEffort: 'low' } };
+    timers.at(-1).fn();
+    assert.deepEqual([fake.reloads, timers.length], [5, 1]);
+    // Changes that are not picks: a turn using the pick, an unrelated session update.
+    emit({ ...state, byId: { ...state.byId, a: { title: 'renamed' } } });
+    emit({ ...state, projectionsBySession: { ...state.projectionsBySession, a: { values: { modelSelection: { lastUsed: pick('m1', 'low').next, next: pick('m1', 'low').next } } } } });
+    assert.equal(fake.reloads, 5);
+    stop();
+    assert.equal(listeners.size, 0);
+
+    // The menu names New threads' model at its top, so a row on the same model names it in a tooltip only.
+    const row = { id: 't1', title: 'Fix login', line: 'Running', dot: 'ongoing', session: 's1' };
+    const bodyOf = (el) => (el.props.className === 'dshp-t-row' ? el : el.children[0]);
+    const meta = (props) => {
+        const text = bodyOf(ThreadRow({ row, now: 0, onOpen() {}, ...props })).children.find((c) => c?.props?.className === 'dshp-t-text');
+        const second = text.children.find((c) => c?.props?.className === 'dshp-t-second');
+        return second.children.find((c) => c?.props?.className === 'dshp-t-meta');
+    };
+    const modelOf = (props) => meta(props).children.find((c) => c?.props?.className === 'dshp-t-model');
+    const quiet = ThreadRow({ row, now: 0, model: 'V4 · High', quietModel: 'V4 · High', onOpen() {} });
+    assert.deepEqual(plain([quiet.props.label, quiet.props.delayMs > 0, bodyOf(quiet).props['data-projects-runs-on'], bodyOf(quiet).props['aria-label']]),
+        ['Runs on V4 · High', true, 'V4 · High', 'Fix login. Running. Runs on V4 · High']);
+    assert.equal(modelOf({ model: 'V4 · High', quietModel: 'V4 · High' }), undefined);
+    assert.equal(modelOf({ model: 'V4 · Low', quietModel: 'V4 · High' }).children[0], 'V4 · Low');
+    assert.equal(ThreadRow({ row, now: 0, model: 'V4 · Low', quietModel: 'V4 · High', onOpen() {} }).props.className, 'dshp-t-row', 'no tooltip when the row shows its model');
+    assert.equal(modelOf({}), undefined);
+    // The code changes sit on the second line with the model and the time, not beside the name.
+    const counted = meta({ changes: { added: 18, deleted: 3, files: 2 }, model: 'V4 · Low' }).children.filter(Boolean).map((c) => c.props.className);
+    assert.deepEqual(counted, ['dshp-t-row-changes', 'dshp-t-model']);
+});
+
 test('browser half: thread rows, cards and links read the projection as DSH sends it', () => {
     const { client } = loadClient();
     const { projectContext, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow } = client.internals;

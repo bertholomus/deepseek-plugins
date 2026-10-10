@@ -142,7 +142,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-chev{transition:transform .12s}',
             '.dshp-t-chev-open{transform:rotate(180deg)}',
             '@container (width<=480px){.dshp-t-parent .dshp-t-label{display:none}}',
-            '.dshp-t-menu{position:fixed;z-index:100;box-sizing:border-box;display:flex;flex-direction:column;width:360px;max-width:calc(100vw - 32px);max-height:min(560px,calc(100vh - 120px));padding:4px;box-shadow:var(--dsw-elevation-prominent);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);color:var(--dsw-alias-label-primary);outline:none}',
+            '.dshp-t-menu{position:fixed;z-index:100;box-sizing:border-box;display:flex;flex-direction:column;width:400px;max-width:calc(100vw - 32px);max-height:min(560px,calc(100vh - 120px));padding:4px;box-shadow:var(--dsw-elevation-prominent);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);color:var(--dsw-alias-label-primary);outline:none}',
             '.dshp-t-menu-head{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:6px 9px 4px}',
             '.dshp-t-menu-head .dshp-t-project{max-width:100%}',
             '.dshp-t-project{display:inline-flex;align-items:center;gap:6px;flex:1;min-width:0;padding:2px 0;border:0;border-radius:var(--dsw-radius-sm);background:none;font:inherit;font-size:12px;font-weight:600;line-height:18px;color:var(--dsw-alias-label-primary);text-align:left}',
@@ -171,19 +171,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             'button.dshp-t-group svg{flex:none;transition:transform .12s}',
             'button.dshp-t-group[aria-expanded=true] svg{transform:rotate(90deg)}',
             // Threads: rows (menu and pane)
-            '.dshp-t-row{position:relative;display:grid;grid-template-columns:14px minmax(0,1fr) auto auto;column-gap:8px;align-items:start;box-sizing:border-box;width:100%;min-height:44px;padding:6px 6px 6px 9px;border-radius:var(--dsw-radius-lg);font-size:12px;line-height:17px;color:var(--dsw-alias-label-primary);cursor:pointer;outline:none}',
+            '.dshp-t-row{position:relative;display:grid;grid-template-columns:14px minmax(0,1fr) auto;column-gap:8px;align-items:start;box-sizing:border-box;width:100%;min-height:44px;padding:6px 6px 6px 9px;border-radius:var(--dsw-radius-lg);font-size:12px;line-height:17px;color:var(--dsw-alias-label-primary);cursor:pointer;outline:none}',
             '.dshp-t-row:hover,.dshp-t-row:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}',
             '.dshp-t-row[aria-disabled=true]{cursor:default}',
             '.dshp-t-row[aria-disabled=true]:hover{background:none}',
             '.dshp-t-dot{grid-column:1;grid-row:1;display:inline-flex;align-items:center;justify-content:center;width:14px;height:17px}',
             '.dshp-t-text{display:contents}',
-            '.dshp-t-name{grid-column:2/4;grid-row:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshp-t-name{grid-column:2;grid-row:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            // The second line: the summary keeps at least 150px; the counts, model and time wrap under it when they need more.
+            '.dshp-t-second{grid-column:2;grid-row:2;display:flex;flex-wrap:wrap;align-items:center;column-gap:8px;row-gap:1px;min-width:0}',
             '.dshp-t-row[aria-current=true] .dshp-t-name{font-weight:600}',
-            '.dshp-t-line{grid-column:2;grid-row:2;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-t-meta{grid-column:3;grid-row:2;justify-self:end;display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:190px;height:16px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;white-space:nowrap}',
+            '.dshp-t-line{flex:1 1 150px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-t-meta{flex:none;margin-left:auto;display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%;height:16px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;white-space:nowrap}',
             '.dshp-t-model{min-width:0;overflow:hidden;text-overflow:ellipsis}',
             '.dshp-t-ago{flex:none}',
-            '.dshp-t-row>:not(.dshp-t-dot):not(.dshp-t-text):not(.dshp-t-meta){grid-column:4;grid-row:1/3;align-self:center}',
+            '.dshp-t-row>:not(.dshp-t-dot):not(.dshp-t-text){grid-column:3;grid-row:1/3;align-self:center}',
             '.dshp-t-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;margin:-4px -2px -4px 0;padding:0;border:0;border-radius:var(--dsw-radius-sm);background:none;color:var(--dsw-alias-label-tertiary);cursor:pointer}',
             '.dshp-t-icon:hover,.dshp-t-icon:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
             '.dshp-t-notice{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 9px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
@@ -201,8 +203,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-pane .dshp-t-dot{height:18px}',
             '.dshp-t-pane .dshp-t-meta{height:17px;line-height:17px}',
             '.dshp-t-pane .dshp-t-line{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;font-size:12px;line-height:17px}',
-            // A narrow pane gives the line the row's width and puts model and time under it.
-            '@container dshp-pane (width<=440px){.dshp-t-pane .dshp-t-line{grid-column:2/4}.dshp-t-pane .dshp-t-meta{grid-column:2/4;grid-row:3;justify-self:start;margin-top:2px}.dshp-t-pane .dshp-t-row>:not(.dshp-t-dot):not(.dshp-t-text):not(.dshp-t-meta){grid-row:1/4}}',
             '.dshp-t-pane .dshp-t-group{padding:12px 10px 4px}',
             '.dshp-t-empty{padding:28px 16px;text-align:center;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
             // Threads: a thread's chat in the right sidebar
@@ -216,23 +216,30 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-tab-title>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             // Threads: cards under a turn
             '.dshp-t-cards{display:flex;flex-direction:column;overflow:hidden;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1);container-type:inline-size}',
-            '.dshp-t-card{display:flex;align-items:center;gap:10px;box-sizing:border-box;min-height:48px;padding:8px 10px 8px 12px}',
+            // A card is a grid: icon, then verb, name and reason stacked, then counts, state and actions.
+            '.dshp-t-card{display:grid;grid-template-columns:28px minmax(0,1fr) auto auto auto;align-items:center;row-gap:1px;box-sizing:border-box;min-height:48px;padding:8px 10px 8px 12px}',
             '.dshp-t-card+.dshp-t-card{border-top:.5px solid var(--dsw-alias-border-l2)}',
-            '.dshp-t-card-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary)}',
-            '.dshp-t-card-text{display:flex;flex-direction:column;gap:1px;flex:1;min-width:0}',
-            '.dshp-t-card-verb{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}',
-            '.dshp-t-card-title{align-self:flex-start;max-width:100%;overflow:hidden;padding:0;border:0;background:none;font:inherit;font-size:13px;font-weight:500;line-height:19px;color:var(--dsw-alias-label-primary);text-align:left;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}',
+            '.dshp-t-card-icon{grid-column:1;grid-row:1/4;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary)}',
+            '.dshp-t-card-text{display:contents}',
+            '.dshp-t-card-verb{grid-column:2;grid-row:1;min-width:0;margin-left:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}',
+            '.dshp-t-card-title{grid-column:2;grid-row:2;justify-self:start;max-width:calc(100% - 10px);margin-left:10px;overflow:hidden;padding:0;border:0;background:none;font:inherit;font-size:13px;font-weight:500;line-height:19px;color:var(--dsw-alias-label-primary);text-align:left;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}',
             '.dshp-t-card-title:hover,.dshp-t-card-title:focus-visible{outline:none;text-decoration:underline}',
             '.dshp-t-card-title:disabled{cursor:default;text-decoration:none}',
-            '.dshp-t-card-state{flex:none;display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap}',
-            '.dshp-t-card-actions{flex:none;display:inline-flex;align-items:center;gap:4px}',
+            '.dshp-t-card-state{grid-column:4;grid-row:1/4;margin-left:10px;display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap}',
+            '.dshp-t-card-actions{grid-column:5;grid-row:1/4;margin-left:10px;display:inline-flex;align-items:center;gap:4px}',
+            '.dshp-t-card>.dshp-t-changes{grid-column:3;grid-row:1/4;margin-left:10px}',
+            '.dshp-t-card-side{display:contents}',
             '.dshp-t-card-actions .dshp-t-icon{width:28px;height:28px;margin:0}',
             // Threads: a thread whose last turn failed or stopped, on its newest card
             '.dshp-t-card[data-card-tone=error] .dshp-t-card-icon{color:var(--dsw-alias-state-error-primary)}',
-            '.dshp-t-card-why{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}',
+            '.dshp-t-card-why{grid-column:2;grid-row:3;margin-left:10px;display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}',
             '.dshp-t-row-acts{display:inline-flex;align-items:center;gap:2px}',
             '.dshp-t-icon:disabled{cursor:default}',
-            '@container (width<=460px){.dshp-t-card-state-label{display:none}}',
+            // A narrow chat gives the name the counts' room: they join the verb line, and drop their file count first.
+            '@container (width<=560px){.dshp-t-card>.dshp-t-changes{grid-row:1;height:16px;margin-left:6px;padding:0 3px}.dshp-t-card>.dshp-t-changes .dshp-t-changes-icon{display:none}.dshp-t-card-title,.dshp-t-card-why{grid-column:2/4}}',
+            // Narrower still, the state and buttons move to a row of their own under the name, which keeps the card's width.
+            '@container (width<=460px){.dshp-t-card .dshp-t-files{display:none}.dshp-t-card-icon{align-self:start}.dshp-t-card-side{grid-column:2/4;grid-row:4;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0 0 10px}.dshp-t-card-side>.dshp-t-card-state,.dshp-t-card-side>.dshp-t-card-actions{margin-left:0}.dshp-t-card-side>.dshp-t-card-actions:only-child{margin-left:auto}}',
+            '@container (width<=300px){.dshp-t-go-label{display:none}}',
             // Threads: a thread's code changes, in DSH's colors for added and deleted lines
             '.dshp-t-changes{flex:none;display:inline-flex;align-items:center;gap:6px;box-sizing:border-box;height:26px;padding:0 7px;border:0;border-radius:var(--dsw-radius-md);background:none;font:inherit;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);white-space:nowrap}',
             'button.dshp-t-changes{cursor:pointer}',
@@ -246,9 +253,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // DSH's hover card is dark in both themes.
             '.dshp-t-hover-line .dshp-t-added{color:var(--dsw-alias-state-success-primary)}',
             '.dshp-t-hover-line .dshp-t-deleted{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 60%,white)}',
-            '@container (width<=400px){.dshp-t-card .dshp-t-files{display:none}}',
-            '.dshp-t-row[data-changes] .dshp-t-name{grid-column:2}',
-            '.dshp-t-row-changes{grid-column:3;grid-row:1;justify-self:end;display:inline-flex;align-items:center;gap:5px;min-width:0;font-size:11px;line-height:17px;color:var(--dsw-alias-label-tertiary);white-space:nowrap}',
+            '.dshp-t-row-changes{flex:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}',
             // Threads: a new project's suggested first asks, under the coordinator's greeting
             '.dshp-t-suggest{display:flex;flex-direction:column;gap:8px}',
             '.dshp-t-suggest-label{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
@@ -284,6 +289,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-hover{display:flex;flex-direction:column;gap:2px;font-size:12px;line-height:16px;color:#cfd3d6}',
             '.dshp-t-hover-head{display:flex;align-items:center;gap:6px;color:#fff}',
             '.dshp-t-hover-line{color:#adb2b8;overflow-wrap:anywhere}',
+            // The same 6px between the counts and "· N files" as on cards and rows.
+            '.dshp-t-hover-line[data-projects-changes]{display:flex;align-items:center;gap:6px}',
             // Project settings dialog
             '.dshp-t-gear{padding:3px 5px}',
             '.dshp-t-pane-head{position:relative;padding-right:40px}',
@@ -345,10 +352,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function catalogSource(remoteOf) {
             let snapshot = { status: 'idle', value: undefined };
             let tried = 0;
+            // A reload asked for while a read is in flight runs once that read lands.
+            let again = false;
             const listeners = new Set();
             const set = (next) => {
                 snapshot = next;
                 for (const listener of [...listeners]) listener();
+                if (again && next.status !== 'loading') {
+                    again = false;
+                    source.load();
+                }
             };
             const source = {
                 getSnapshot: () => snapshot,
@@ -379,8 +392,78 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 reset() {
                     if (snapshot.status !== 'loading') set({ status: 'idle', value: snapshot.value });
                 },
+                /** DSH's default model may have changed: read again now, or right after the read in flight. */
+                reload() {
+                    if (snapshot.status === 'loading') again = true;
+                    else source.load();
+                },
             };
             return source;
+        }
+
+        const selectionKey = (s) => (s ? `${s.provider}:${s.model}:${s.reasoningEffort ?? ''}` : '');
+
+        /**
+         * Each loaded session's model pick, keyed as selectionKey ('' for a
+         * session DSH has sent with no pick yet); sessions DSH has not sent
+         * are left out, so loading one is not taken for a pick.
+         */
+        function picksIn(state) {
+            const out = new Map();
+            const ids = new Set([...Object.keys(state?.projectionsBySession ?? {}), ...Object.keys(state?.byId ?? {})]);
+            for (const id of ids) {
+                const value = state.projectionsBySession?.[id]?.values?.modelSelection ?? state.byId?.[id]?.projectionValues?.modelSelection;
+                if (isObject(value)) out.set(id, selectionKey(selectionIn(state, id)));
+            }
+            return out;
+        }
+
+        /** After a pick, when to read the catalog again while it still names another default (ms after the pick). */
+        const DEFAULT_RETRIES = [300, 1000, 2500];
+
+        /**
+         * A pick in any chat's composer is also DSH's new default model, saved
+         * in the background (its session controller's selectModel). The
+         * catalog read once would keep naming the old one, so a new pick in a
+         * loaded session reads it again, and again a moment later while the
+         * save has not landed. The plugin's own picks for its sessions leave
+         * DSH's default as it is; they cost a few reads.
+         * @returns a stop function.
+         */
+        function followDefault(sessions, catalog, timers = {}) {
+            const frame = timers.frame ?? (typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => setTimeout(fn, 16));
+            const cancel = timers.cancel ?? (typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : clearTimeout);
+            const later = timers.later ?? setTimeout;
+            const clear = timers.clear ?? clearTimeout;
+            let seen = picksIn(sessions.list.getSnapshot());
+            let pending = 0;
+            let retry;
+            const check = () => {
+                pending = 0;
+                const now = picksIn(sessions.list.getSnapshot());
+                let picked;
+                for (const [id, key] of now) if (key !== '' && seen.has(id) && seen.get(id) !== key) picked = key;
+                seen = now;
+                // A catalog nothing has read yet is read fresh by the first view that needs it.
+                if (picked === undefined || catalog.getSnapshot().status === 'idle') return;
+                clear(retry);
+                catalog.reload();
+                const again = (i, at) => {
+                    if (i >= DEFAULT_RETRIES.length) { retry = undefined; return; }
+                    retry = later(() => {
+                        if (selectionKey(catalog.getSnapshot().value?.default) === picked) { retry = undefined; return; }
+                        catalog.reload();
+                        again(i + 1, DEFAULT_RETRIES[i]);
+                    }, DEFAULT_RETRIES[i] - at);
+                };
+                again(0, 0);
+            };
+            const off = sessions.list.subscribe(() => { if (!pending) pending = frame(check); });
+            return () => {
+                off();
+                if (pending) cancel(pending);
+                clear(retry);
+            };
         }
 
         /** Every model in a catalog, keyed "provider:model" as the plugin stores it. */
@@ -1601,8 +1684,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }, busy ? h(ui.StateDot, { state: 'ongoing' }) : h(retry ? ui.IconRefreshOutlineRegular : ui.IconPlayOutlineRegular, { size: 14 })));
         }
 
-        function ThreadRow({ row, current, now, model, changes, onOpen, action, projects }) {
+        /**
+         * One thread: its name on the first line; its state and summary on
+         * the second, with its code changes, its model and the time. A model
+         * equal to `quietModel` (what new threads start on, which the menu
+         * names once at its top) is left off the line and named in a tooltip
+         * when the row is hovered or focused, so the summary keeps its room.
+         */
+        function ThreadRow({ row, current, now, model, quietModel, changes, onOpen, action, projects }) {
             const enabled = !current && row.session !== undefined;
+            const quiet = model !== undefined && model === quietModel;
             const open = () => { if (enabled) onOpen(row); };
             const acts = [
                 row.ending && row.session !== undefined && projects ? h(RowContinue, { key: 'continue', row, projects }) : null,
@@ -1613,12 +1704,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         onKeyDown: (event) => event.stopPropagation(),
                     }, h(action.icon, { size: 14 }))) : null,
             ].filter(Boolean);
-            return h('div', {
+            const body = h('div', {
                 className: 'dshp-t-row', role: 'button', tabIndex: enabled ? 0 : -1,
                 'data-dshp-item': '', 'data-thread': row.id, 'data-changes': changes ? '' : undefined,
                 'aria-current': current ? 'true' : undefined,
                 'aria-disabled': enabled ? undefined : 'true',
                 'aria-label': `${row.title}. ${current ? `${TEXT.current}. ` : ''}${row.line}${changes ? `. ${changesText(changes)}` : ''}${model ? `. Runs on ${model}` : ''}`,
+                'data-projects-runs-on': model || undefined,
                 onClick: open,
                 onKeyDown: (event) => {
                     if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
@@ -1629,22 +1721,24 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             h('span', { className: 'dshp-t-dot', 'data-state': row.dot }, h(ui.StateDot, { state: row.dot })),
             h('span', { className: 'dshp-t-text' },
                 h('span', { className: 'dshp-t-name' }, row.title),
-                changes ? h('span', { className: 'dshp-t-row-changes', 'data-projects-changes': '' }, ...changeCounts(changes)) : null,
-                h('span', { className: 'dshp-t-line' }, current ? `${TEXT.current} · ${row.line}` : row.line)),
-            h('span', { className: 'dshp-t-meta' },
-                model ? h('span', { className: 'dshp-t-model', title: model, 'data-projects-thread-model': '' }, model) : null,
-                row.at !== undefined ? h('span', { className: 'dshp-t-ago' }, ago(row.at, now)) : null),
+                h('span', { className: 'dshp-t-second' },
+                    h('span', { className: 'dshp-t-line' }, current ? `${TEXT.current} · ${row.line}` : row.line),
+                    h('span', { className: 'dshp-t-meta' },
+                        changes ? h('span', { className: 'dshp-t-row-changes', 'data-projects-changes': '' }, ...changeCounts(changes)) : null,
+                        model && !quiet ? h('span', { className: 'dshp-t-model', title: model, 'data-projects-thread-model': '' }, model) : null,
+                        row.at !== undefined ? h('span', { className: 'dshp-t-ago' }, ago(row.at, now)) : null))),
             acts.length > 0 ? h('span', { className: 'dshp-t-row-acts' }, ...acts) : null);
+            return quiet ? h(ui.Tooltip, { label: `Runs on ${model}`, side: 'right', delayMs: 500, focusDelayMs: 300, portal: true }, body) : body;
         }
 
         /** Rows grouped as Waiting on you, Running, Done, Idle and Resolved (folded). */
-        function ThreadList({ rows, current, now, models, changes, onOpen, action, projects }) {
+        function ThreadList({ rows, current, now, models, quietModel, changes, onOpen, action, projects }) {
             const [showResolved, setShowResolved] = React.useState(() => rows.some((row) => row.group === 'resolved' && row.session === current));
             return GROUPS.map((group) => {
                 const members = rows.filter((row) => row.group === group.id);
                 if (members.length === 0) return null;
                 const list = members.map((row) => h(ThreadRow, {
-                    key: row.id, row, current: row.session !== undefined && row.session === current, now, onOpen, action, projects,
+                    key: row.id, row, current: row.session !== undefined && row.session === current, now, onOpen, action, projects, quietModel,
                     model: row.session !== undefined ? models?.[row.session] : undefined,
                     changes: changes?.[row.id],
                 }));
@@ -1959,6 +2053,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             h(ui.IconChevronDownOutlineRegular, { size: 12, className: open ? 'dshp-t-chev dshp-t-chev-open' : 'dshp-t-chev' }));
 
             const notice = rosterNotice(info, rows, projects);
+            const summary = summaryModels(cv, models, coordinator, described);
             const openSettings = (pick) => { change(false); projects.settings.open(sessionId, typeof pick === 'string' ? { pick } : undefined); };
             const foot = [
                 projects.hasPane() ? h('button', { key: 'pane', type: 'button', className: 'dshp-t-foot-btn', 'data-dshp-item': '', onClick: () => { change(false); projects.openPane(); } },
@@ -1978,11 +2073,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             h('div', { className: 'dshp-t-menu-head' },
                 h(ProjectName, { info, here: sessionId, onOpen: () => openSession(coordinator) }),
                 info.roster !== null ? h('span', { className: 'dshp-t-count' }, summaryText(counts)) : null),
-            h(ModelsSummary, { ...summaryModels(cv, models, coordinator, described), onPick: settingsOn ? openSettings : undefined }),
+            h(ModelsSummary, { ...summary, onPick: settingsOn ? openSettings : undefined }),
             paused ? h(PausedNotice, { coordinator, role: info.me.role, projects }) : null,
             h('div', { className: 'dshp-t-menu-body' },
                 notice ?? h(ThreadList, {
                     rows, current: sessionId, now, models, changes, projects,
+                    // The menu names what new threads start on at its top; a row names its model only when it differs.
+                    quietModel: summary.thread,
                     onOpen: (row) => openSession(row.session),
                     action: { label: TEXT.openBeside, icon: ui.IconCompareSplitOutlineRegular, run: (row) => { change(false); projects.openBeside(row.session); } },
                 })),
@@ -2305,6 +2402,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     changes: view.changes,
                     onReview: enabled && view.changes.last ? () => projects.openReview(view.session, view.changes.last) : undefined,
                 }) : null,
+                view.state || enabled ? h('div', { className: 'dshp-t-card-side' },
                 view.state ? h('span', { className: 'dshp-t-card-state' },
                     h(ui.StateDot, { state: view.state.dot }),
                     h('span', { className: 'dshp-t-card-state-label' }, view.state.label)) : null,
@@ -2314,13 +2412,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         'data-projects-continue': go.retry ? 'retry' : 'resume',
                         icon: h(go.retry ? ui.IconRefreshOutlineRegular : ui.IconPlayOutlineRegular, { size: 14 }),
                         onClick: () => { void go.run(); },
-                    }, go.busy ? (go.retry ? TEXT.retrying : TEXT.resumingThread) : goLabel) : null,
+                    }, h('span', { className: 'dshp-t-go-label' }, go.busy ? (go.retry ? TEXT.retrying : TEXT.resumingThread) : goLabel)) : null,
                     h(ui.Tooltip, { label: TEXT.openBeside, side: 'top', align: 'end' },
                         h('button', {
                             type: 'button', className: 'dshp-t-icon', 'aria-label': `${TEXT.openBeside}: ${view.title}`,
                             onClick: () => projects.openBeside(view.session),
                         }, h(ui.IconCompareSplitOutlineRegular, { size: 16 }))),
-                    h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => projects.openSession(view.session) }, TEXT.open)) : null);
+                    h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => projects.openSession(view.session) }, TEXT.open)) : null) : null);
         }
 
         function ThreadCardList({ sessionId, cards, useSessions, useSessionStatus, projects }) {
@@ -3254,7 +3352,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const sessionsOf = () => bound.sessions;
             ctx.inject(['remote', 'remote.session'], bind('remote', () => catalog.reset()));
             ctx.inject(['connection'], bind('connection'));
-            ctx.inject(['sessions'], bind('sessions'));
+            ctx.inject(['sessions'], (scope) => {
+                bind('sessions')(scope);
+                // New threads on DSH's default name what the next one runs, after a pick anywhere changes it.
+                scope.effect(() => followDefault(scope.sessions, catalog), 'projects: DSH default model');
+            });
             ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => applyDefaultsForm(scope, { catalog, link, dialog, sessionsOf }));
             ctx.inject(['connection', 'remote', 'remote.session'], (scope) => applySettings(scope, dialog, link, facts));
             ctx.inject(['sessions', 'uiWorkspace', 'sidebarRight'], (scope) => applyThreads(scope, dialog, { catalog, link, facts }));
@@ -3265,7 +3367,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         // For the plugin's own tests: the pure helpers the views are built on.
         module.exports.internals = {
             valueIn, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, nestingPlan,
-            catalogView, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
+            catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
             rowState, endingOf, endingIn, endingReason, endingLine, openSessions, markState, hoverLine, continueError, GROUPS,
