@@ -1,12 +1,13 @@
 # Handoff
 
-Updated: 2026-10-09 21:25 PT by B (bertholomus)
+Updated: 2026-10-09 23:25 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 
 ## Doing now
 - Threads UI done and pushed (cfe8791, 79c21e6), PR #1 body updated, checked in a browser on DSH 0.2.0-rc.2 and 0.2.1-alpha.2, light and dark. Screenshots for the user in project files `projects-plugin/threads-ui/`.
-- Mac load (21:25 PT): the user approved a GitHub device sign-in, so the Mac is signed in as bertholomus. The `gh` on its PATH is the user's household shim that routes to their StackNUC GitHub broker, which refuses this Mac, so the Mac session installed GitHub's own CLI from Homebrew (`/opt/homebrew/bin/gh`, shim untouched) and wired it as the credential helper in the deepseek-plugins checkout only. The checkout fast-forwarded to 01357a3 (has the threads UI); smoke 46/46, npm 28/28 on the Mac. The DSH restart waits for two running sessions to finish, then 2 idle minutes; then the live look.
-- The cloud thread pushes fixes. Until the Mac signs in, it can't pull or push (see blockers).
+- Mac load (21:25 PT): the user approved a GitHub device sign-in, so the Mac is signed in as bertholomus. The `gh` on its PATH is the user's household shim that routes to their StackNUC GitHub broker, which refuses this Mac, so the Mac session installed GitHub's own CLI from Homebrew (`/opt/homebrew/bin/gh`, shim untouched) and wired it as the credential helper in the deepseek-plugins checkout only. The checkout fast-forwarded to 01357a3 (has the threads UI); smoke 46/46, npm 28/28 on the Mac. The live DSH restart that was queued then is called off (see the DSH Test switch below); the checkout stays at 01357a3, so the threads UI loads on the live DSH only at its next restart.
+- **Switched to DSH Test (23:17 PT, the user's DSHTEST-PLUGINS-1010 message in the project chat):** plugin tests that need a restart now run in "DSH Test", a second, isolated DSH on the Mac: DeepSeek Harness.app with `DSH_HOME=~/.dsh-test`, Electron data `~/.dsh-test-electron`, web port 19487, bridge socket `~/.dsh-test/session-bridge/bridge.sock`, models through the owner gateway (GLM-5.3-Flash-EXL3, DeepSeek-V4.1-Flash-TF). Control: `~/.local/bin/dsh-test up|down|restart|status|logs|url|doctor|reset|load <plugin dir> [--config row.yml]|prompt "..."`; sessions: `DSHB_SOCK=~/.dsh-test/session-bridge/bridge.sock ~/.local/bin/dshb ...`; README `~/Projects/dsh-test-harness`; test clone `~/.dsh-test-plugins/deepseek-plugins`. Rules: restart DSH Test freely; never restart, quit or edit the live DSH (`~/.dsh`, the running DeepSeek Harness.app) for testing; Discord and dsh-site stay off in DSH Test; loading a change into the live DSH is a separate step with Albert's OK. The Mac session has instructions (held until its device reconnects, i.e. the user's next message in the Mac thread) to call off the live restart and test the threads UI in DSH Test.
+- The cloud thread pushes fixes; the Mac checkout can now pull and push too (only one side pushes the branch at a time).
 
 ## Done since last handoff
 - 79c21e6: the Threads panel tab keeps DSH's plain "Threads" title (a custom title with an icon clipped it in the 80-170px tab chip). PR #1 body now covers the threads UI and the new tests. The browser check on DSH 0.2.1-alpha.2, light and dark, matched rc.2.
@@ -69,7 +70,7 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 - Tests: `npm test` 28/28, `node plugins/projects/test/smoke.mjs` 36/36, e2e 49/49 as root and as a normal user (adds queued turns and a SIGKILL mid-turn).
 
 ## Next steps (in order)
-1. Mac (in progress, the Mac session drives it): restart DSH Desktop once two running sessions finish and 2 idle minutes pass (host code changed: projection, tools, prompts), then the live look: the coordinator's "N threads" menu, a small test thread through dshb, its card with Open / Open beside, and a thread link.
+1. DSH Test (the Mac session drives it, once the user's next message in the Mac thread wakes it): bring `~/.dsh-test-plugins/deepseek-plugins` to 01357a3 or later by fetching from `~/.dsh-plugins/deepseek-plugins` (no network), smoke 46, `dsh-test load` + `restart` + `doctor`, then through the DSH Test bridge a coordinator → thread ("UI check") → handback, and check in its window (port 19487): the thread card with Open / Open beside, the "N threads" menu, a thread link opening beside the chat, the thread's ◆ Coordinator button. Screenshots in the report. Then ask Albert before loading it into the live DSH (an idle-checked restart; the live checkout already holds 01357a3).
 2. Ask the user: load the plugin on the Mac from its own clone, so the project's work in `~/.dsh-plugins/deepseek-plugins` doesn't change what DSH loads. Changing `workspacePath` instead wouldn't move the existing coordinator (see Gotchas). Needs their typed OK and an idle-checked restart.
 3. Only if the user asks: threads that start threads of their own (nested threads), a "New thread" button in the Threads menu, and tool-call views for the project tools (`tool.call.toolview`).
 4. Later: a Discord thread as a project thread or coordinator (the user's existing flow), and auto-continue after usage limits.
@@ -82,6 +83,7 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 - Not confirmed: that the user made the 5:28 PM Default models save (threads at Max).
 
 ## Gotchas (things that broke, decisions made and why)
+- Never test on the live DSH: restart-needing plugin tests go to DSH Test (see Doing now). A live restart, even after the idle check, needs Albert's OK for that load.
 - The cloud thread can't `send_message` to the Mac's Remote Control session ("receives only that person's own messages"). Steer it with `start_rc_session` instructions on the user's latest message; they arrive as "delivered" while it runs.
 - DSH loads a plugin package only if the profile lists it in `dsh.profile.bundles`. A patch row alone does nothing. `dsh plugin --profile desktop add <path>` adds the link dependency, the `node_modules` symlink and the bundles entry. Use the `dsh` that DSH Desktop installs, because the npm `dsh` refuses the desktop profile. A running DSH doesn't load new bundles, so restart it.
 - With the bundle listed, the bundle's own patch inserts the row. Configure it with an address row (`- id: projects` plus `config:`). An extra insert row duplicates the id. DSH still boots and the later (configured) row runs, because cordis-plugin-include indexes rows by id. That was checked on a real host.
