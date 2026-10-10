@@ -265,7 +265,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // Narrower still, the state and buttons move to a row of their own under the name, which keeps the card's width.
             '@container (width<=460px){.dshp-t-card .dshp-t-files{display:none}.dshp-t-card-icon{align-self:start}.dshp-t-card-side{grid-column:2/4;grid-row:4;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0 0 10px}.dshp-t-card-side>.dshp-t-card-state,.dshp-t-card-side>.dshp-t-card-actions{margin-left:0}.dshp-t-card-side>.dshp-t-card-actions:only-child{margin-left:auto}}',
             '@container (460px<width<=560px){.dshp-t-full-label{display:none}}',
+            // A coordinator beside its thread is about 400 px wide: Full view keeps its icon and tooltip, and a long state gives way before a button wraps.
+            '@container (width<=400px){.dshp-t-full-label{display:none}.dshp-t-card-side>.dshp-t-card-state{min-width:0;overflow:hidden}.dshp-t-card-state-label{min-width:0;overflow:hidden;text-overflow:ellipsis}}',
             '@container (width<=300px){.dshp-t-go-label,.dshp-t-full-label{display:none}}',
+            '.dshp-t-go-label,.dshp-t-full-label{white-space:nowrap}',
             // Threads: a thread's code changes, in DSH's colors for added and deleted lines
             '.dshp-t-changes{flex:none;display:inline-flex;align-items:center;gap:6px;box-sizing:border-box;height:26px;padding:0 7px;border:0;border-radius:var(--dsw-radius-md);background:none;font:inherit;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);white-space:nowrap}',
             'button.dshp-t-changes{cursor:pointer}',
