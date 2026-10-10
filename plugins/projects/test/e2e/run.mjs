@@ -431,10 +431,15 @@ try {
     saw = await coordinatorSaw(mark, 'SAW-APPROVAL', 'the Delta approval note');
     check('approval note names the tool and the session', saw.fresh.includes('[Thread waiting for approval: t4 · "Delta"]')
         && saw.fresh.includes('It asked to use write: ') && saw.fresh.includes('E2E approval check.') && saw.fresh.includes('in the "Delta" session'), saw.fresh.slice(0, 400));
+    // A person's stop stays a stop: no note goes to the coordinator (so it can't send the thread on by
+    // itself), and its roster says the user stopped it.
     mark = model.requests.length;
     await bridge('POST', `/sessions/${threadSession('t4')}/cancel`, {});
-    saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Delta stopped note');
-    check('stopped note says the turn was stopped', saw.fresh.includes('t4 · "Delta"') && saw.fresh.includes('The turn was stopped before it finished.'), saw.fresh.slice(0, 300));
+    await waitFor(() => readText(logFile).includes(`user-stop ${PROJECT_ID}/t4`) && project().threads?.t4?.lastEnding, 'the Delta user-stop log');
+    await waitIdle(threadSession('t4'));
+    await sleep(1500);
+    check('a person\'s stop sends the coordinator no note', since(mark, 'coordinator').length === 0
+        && project().threads.t4.lastEnding.text === 'The turn was stopped by the user before it finished.', `${describe(since(mark, 'coordinator'))} ${JSON.stringify(project().threads.t4.lastEnding)}`);
     check('nothing was written without approval', !existsSync(probe));
 
     // 7. Coordinator effort changes from the next request, mid-turn.
@@ -730,8 +735,9 @@ try {
     const roster = since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => l.startsWith('- t')) ?? [];
     const lineOf = (id) => roster.find((l) => l.startsWith(`- ${id} · `)) ?? '';
     check('the roster tells the coordinator which threads failed or stopped', lineOf('t3').includes('· its last turn failed (HTTP 400): fake model rejected the request')
-        && lineOf('t4').includes('· its last turn was stopped before it finished.') && lineOf('t8').includes('· its last turn was cut off because DSH stopped while it ran.')
+        && lineOf('t4').includes('· its last turn was stopped by the user before it finished.') && lineOf('t8').includes('· its last turn was cut off because DSH stopped while it ran.')
         && lineOf('t7').includes('last handback: done') && lineOf('t7').includes('its last turn failed') && !lineOf('t1').includes('its last turn'), roster.join('\n'));
+    check('the coordinator is told to leave a thread the user stopped stopped', since(mark, 'coordinator')[0]?.system.includes('- A thread the user stopped stays stopped'));
     // Retry: the thread hears it from its coordinator, runs, and its failure clears.
     const refusedWhy = (answer) => (answer.ok ? 'ok' : `${answer.error?.code}: ${answer.error?.message}`);
     let answer2 = await webApi(webAgain, 'dsh-plugin-projects/continueThread', { target: coord, thread: 't1' });
@@ -751,7 +757,7 @@ try {
     mark = model.requests.length;
     answer2 = await webApi(webAgain, 'dsh-plugin-projects/continueThread', { target: coord, thread: 't4' });
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Delta resume\'s idle note');
-    check('Resume continues a stopped thread', answer2.ok && since(mark, 't4')[0]?.fresh.includes('The user asked you to continue. Your last turn was stopped before it finished.')
+    check('Resume continues a stopped thread', answer2.ok && since(mark, 't4')[0]?.fresh.includes('The user asked you to continue. Your last turn was stopped by the user before it finished.')
         && (await viewOf(threadSession('t4')))?.ending === undefined, `${refusedWhy(answer2)} ${since(mark, 't4')[0]?.fresh.slice(0, 300)}`);
     check('the plugin logs each retry', readText(logFile).includes(`thread-continue ${PROJECT_ID}/t3 after=error`) && readText(logFile).includes(`thread-continue ${PROJECT_ID}/t4 after=aborted`));
 

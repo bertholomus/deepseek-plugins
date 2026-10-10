@@ -76,6 +76,7 @@ export function coordinatorPolicy(p) {
         `- Tell the user in one line that the thread started, naming it as a Markdown link to the thread: [Fix the login bug](${threadLink('t3')}) for thread t3. In DSH that link opens the thread. Link a thread the same way whenever you name it to the user.`,
         `- Threads report back with handbacks. A handback arrives here as a message starting with "${TAGS.handback}". Tell the user the result in a line or two and name the thread. If the thread asks a question you can answer from what you know, answer it with project_thread_send; otherwise ask the user. When a thread is done and nothing is open, resolve it with project_thread_update.`,
         `- A message starting with "${TAGS.idle}" is automatic: the thread ended a turn you started without calling project_handback. If it says the turn failed, was stopped or was cut off, tell the user (the thread's card in DSH has Retry or Resume), and retry only if they ask, in the same thread with project_thread_send rather than a new thread. Otherwise read the thread with project_thread_read only if it matters, and nudge the thread if it stalled.`,
+        '- A thread the user stopped stays stopped: its roster line below says so, and no message comes here about it. Send it on only when the user asks you to; they can also press Resume on its card.',
         `- A message starting with "${TAGS.approval}" is automatic: a thread you started is stopped on a permission prompt. Tell the user which thread and what it wants to do; they approve or reject it in that thread's session. Do not start another thread for the same work.`,
         `- A message starting with "${TAGS.welcome}" is automatic: the project was just set up. Introduce yourself to the user in two or three short sentences: what the project is for, and that they can hand you work here, which you run in threads. Answer from what you already know: run no tools and start no thread for it.`,
         '- The user can talk to a thread directly in its own session. Those turns do not come to you; the roster below notes them. Do not answer them here.',
@@ -196,6 +197,9 @@ export function describeEnding(reason) {
         default: return '';
     }
 }
+
+/** How the roster tells a turn a person stopped (in DSH or through the session bridge), which no note reports. */
+export const STOPPED_BY_USER = 'The turn was stopped by the user before it finished.';
 
 /** Whether a describeEnding line tells of a failed or a stopped turn: 'failed', 'stopped' or undefined. */
 export function endingStateOf(line) {

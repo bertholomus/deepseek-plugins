@@ -29,7 +29,7 @@
  * { role: 'coordinator'|'thread', project: { id?, name }, coordinator?: sessionId,
  *   thread?: { id, title }, threads?: [{ id, session, title, resolved, created?, handback? }],
  *   cards?: [{ turn, seq, kind, thread?, status? }], asked?: true, changes?: [{ turn, seq }],
- *   ending?: { state: 'failed'|'stopped', kind, turn, seq, at, message?, code?, cause?, hook? } }
+ *   ending?: { state: 'failed'|'stopped', kind, turn, seq, at, message?, code?, cause?, hook?, times? } }
  *
  * Card kinds: start, send, update (tool results), handback, idle, approval
  * (the plugin's messages), and welcome: the turn a new coordinator
@@ -40,7 +40,8 @@
  * didn't finish: it failed (DSH logged an error, a plugin blocked it, or
  * the user signed out) or it stopped (stopped, cut off by DSH closing, or at
  * the output token limit); a turn that finishes, or hands back a result
- * before it ends, clears it.
+ * before it ends, clears it. `times` counts the same ending in a row, from
+ * 2 (a thread retried that failed again).
  *
  * @module dsh-plugin-projects/projection
  */
@@ -49,7 +50,7 @@ import { TAGS, endingStateOf, readableError } from './prompts.js';
 /** The projection key; the browser half reads the same name. */
 export const PROJECTION_KEY = 'projectSession';
 /** Bump when the state shape or fold changes; DSH then refolds from the log. */
-export const STATE_VERSION = 4;
+export const STATE_VERSION = 5;
 /** Most recent cards kept per session; older turns rarely scroll into view. */
 export const MAX_CARDS = 60;
 /** Threads kept in a roster: every open one, then the newest resolved ones. */
@@ -286,7 +287,12 @@ function applyTurnEnd(state, event) {
     const handedBack = (state.v.cards ?? []).some((c) => c?.kind === 'handback' && c.turn === turn && c.status !== 'progress');
     const ending = handedBack ? null : endingOf(event.data?.reason, event, turn);
     if (ending === undefined) return state;
-    if (ending !== null) return { ...state, v: { ...state.v, ending } };
+    if (ending !== null) {
+        // The same ending again (a retry that failed again, a resume stopped again): count it, so the window says so.
+        const before = state.v.ending;
+        const times = before?.state === ending.state && before.turn !== turn ? (Number.isSafeInteger(before.times) ? before.times : 1) + 1 : 1;
+        return { ...state, v: { ...state.v, ending: times > 1 ? { ...ending, times } : ending } };
+    }
     if (state.v.ending === undefined) return state;
     const { ending: _finished, ...v } = state.v;
     return { ...state, v };

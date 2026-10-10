@@ -148,8 +148,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // Threads: header menu
             '.dshp-t-hdr{position:relative;display:inline-flex;align-items:center;gap:2px;min-width:0}',
             // A project session's title is its own name (no project prefix), so its header crumb may use more of the
-            // header than DSH's 220 px; it still gives way first when the header is narrow.
-            'header:has([data-projects-threads]) nav [class*="crumbCurrent"]{max-width:min(560px,40vw)}',
+            // header than DSH's 220 px; it still gives way first when the header is narrow. Found by DSH's markup
+            // (the title is a span in the hierarchy nav's last part, the nav right before the header actions that
+            // hold the Threads menu), not by its generated class names.
+            'nav[aria-label]:has(+div [data-projects-threads])>span:last-child>span{max-width:min(560px,40vw)}',
             '.dshp-t-trigger{display:inline-flex;align-items:center;gap:5px;min-width:0;min-height:28px;padding:3px 6px;border:0;border-radius:var(--dsw-radius-sm);background:none;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap;cursor:pointer}',
             '.dshp-t-trigger:hover,.dshp-t-trigger:focus-visible,.dshp-t-trigger[aria-expanded=true]{color:var(--dsw-alias-label-primary)}',
             `.dshp-t-trigger:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover);box-shadow:inset 0 0 0 2px ${RING}}`,
@@ -191,22 +193,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             'button.dshp-t-group svg{flex:none;transition:transform .12s}',
             'button.dshp-t-group[aria-expanded=true] svg{transform:rotate(90deg)}',
             // Threads: rows (menu and pane)
-            '.dshp-t-row{position:relative;display:grid;grid-template-columns:14px minmax(0,1fr) auto;column-gap:8px;align-items:start;box-sizing:border-box;width:100%;min-height:44px;padding:6px 6px 6px 9px;border-radius:var(--dsw-radius-lg);font-size:12px;line-height:17px;color:var(--dsw-alias-label-primary);cursor:pointer;outline:none}',
-            '.dshp-t-row:hover,.dshp-t-row:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}',
-            `.dshp-t-row:focus-visible{box-shadow:inset 0 0 0 2px ${RING}}`,
-            '.dshp-t-row[aria-disabled=true]{cursor:default}',
-            '.dshp-t-row[aria-disabled=true]:hover{background:none}',
+            // A row is its open button (the whole row) with its Retry, Resume or Open beside buttons laid over the
+            // button's right end, which keeps their room free (--dshp-t-acts): no control sits inside another.
+            '.dshp-t-row{position:relative;box-sizing:border-box;width:100%;border-radius:var(--dsw-radius-lg);font-size:12px;line-height:17px;color:var(--dsw-alias-label-primary);outline:none}',
+            '.dshp-t-row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+            '.dshp-t-row:has(>.dshp-t-main[aria-disabled=true]):hover{background:none}',
+            '.dshp-t-main{display:grid;grid-template-columns:14px minmax(0,1fr);column-gap:8px;align-items:start;box-sizing:border-box;width:100%;min-height:44px;margin:0;padding:6px 6px 6px 9px;border:0;border-radius:inherit;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;outline:none}',
+            '.dshp-t-row[data-acts]>.dshp-t-main{padding-right:calc(14px + var(--dshp-t-acts))}',
+            `.dshp-t-main:focus-visible{background:var(--dsw-alias-interactive-bg-hover);box-shadow:inset 0 0 0 2px ${RING}}`,
+            '.dshp-t-main[aria-disabled=true]{cursor:default}',
             '.dshp-t-dot{grid-column:1;grid-row:1;display:inline-flex;align-items:center;justify-content:center;width:14px;height:17px}',
             '.dshp-t-text{display:contents}',
             '.dshp-t-name{grid-column:2;grid-row:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             // The second line: the summary keeps at least 150px; the counts, model and time wrap under it when they need more.
             '.dshp-t-second{grid-column:2;grid-row:2;display:flex;flex-wrap:wrap;align-items:center;column-gap:8px;row-gap:1px;min-width:0}',
-            '.dshp-t-row[aria-current=true] .dshp-t-name{font-weight:600}',
+            '.dshp-t-main[aria-current=true] .dshp-t-name{font-weight:600}',
             '.dshp-t-line{flex:1 1 150px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}',
             '.dshp-t-meta{flex:none;margin-left:auto;display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%;height:16px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;white-space:nowrap}',
             '.dshp-t-model{min-width:0;overflow:hidden;text-overflow:ellipsis}',
             '.dshp-t-ago{flex:none}',
-            '.dshp-t-row>:not(.dshp-t-dot):not(.dshp-t-text){grid-column:3;grid-row:1/3;align-self:center}',
             '.dshp-t-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;margin:-4px -2px -4px 0;padding:0;border:0;border-radius:var(--dsw-radius-sm);background:none;color:var(--dsw-alias-label-tertiary);cursor:pointer}',
             '.dshp-t-icon:hover,.dshp-t-icon:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
             `.dshp-t-icon:focus-visible{box-shadow:inset 0 0 0 2px ${RING}}`,
@@ -223,7 +228,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-pane-head{display:flex;flex-direction:column;gap:2px;padding:0 10px 8px}',
             '.dshp-t-pane-head .dshp-t-project{font-size:14px;line-height:20px}',
             '.dshp-t-pane-head .dshp-t-count{font-size:12px;line-height:18px}',
-            '.dshp-t-pane .dshp-t-row{min-height:54px;padding:8px 8px 8px 10px;font-size:13px;line-height:18px}',
+            '.dshp-t-pane .dshp-t-row{font-size:13px;line-height:18px}',
+            '.dshp-t-pane .dshp-t-main{min-height:54px;padding:8px 8px 8px 10px}',
+            '.dshp-t-pane .dshp-t-row[data-acts]>.dshp-t-main{padding-right:calc(16px + var(--dshp-t-acts))}',
+            '.dshp-t-pane .dshp-t-row-acts{right:8px}',
             '.dshp-t-pane .dshp-t-dot{height:18px}',
             '.dshp-t-pane .dshp-t-meta{height:17px;line-height:17px}',
             '.dshp-t-pane .dshp-t-line{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;font-size:12px;line-height:17px}',
@@ -257,8 +265,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-card-actions .dshp-t-icon{width:28px;height:28px;margin:0}',
             // Threads: a thread whose last turn failed or stopped, on its newest card
             '.dshp-t-card[data-card-tone=error] .dshp-t-card-icon{color:var(--dsw-alias-state-error-primary)}',
+            '.dshp-t-card-when{font-variant-numeric:tabular-nums}',
             '.dshp-t-card-why{grid-column:2;grid-row:3;margin-left:10px;display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}',
-            '.dshp-t-row-acts{display:inline-flex;align-items:center;justify-content:flex-end;gap:2px}',
+            // The actions' box lets clicks through to the row under it; only its buttons take them.
+            '.dshp-t-row-acts{position:absolute;top:0;bottom:0;right:6px;display:inline-flex;align-items:center;justify-content:flex-end;gap:2px;pointer-events:none}',
+            '.dshp-t-row-acts>*{pointer-events:auto}',
             '.dshp-t-icon:disabled{cursor:default}',
             // A narrow chat gives the name the counts' room: they join the verb line, and drop their file count first.
             '@container (width<=560px){.dshp-t-card>.dshp-t-changes{grid-row:1;height:16px;margin-left:6px;padding:0 3px}.dshp-t-card>.dshp-t-changes .dshp-t-changes-icon{display:none}.dshp-t-card-title,.dshp-t-card-why{grid-column:2/4}}',
@@ -266,7 +277,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '@container (width<=460px){.dshp-t-card .dshp-t-files{display:none}.dshp-t-card-icon{align-self:start}.dshp-t-card-side{grid-column:2/4;grid-row:4;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0 0 10px}.dshp-t-card-side>.dshp-t-card-state,.dshp-t-card-side>.dshp-t-card-actions{margin-left:0}.dshp-t-card-side>.dshp-t-card-actions:only-child{margin-left:auto}}',
             '@container (460px<width<=560px){.dshp-t-full-label{display:none}}',
             // A coordinator beside its thread is about 400 px wide: Full view keeps its icon and tooltip, and a long state gives way before a button wraps.
-            '@container (width<=400px){.dshp-t-full-label{display:none}.dshp-t-card-side>.dshp-t-card-state{min-width:0;overflow:hidden}.dshp-t-card-state-label{min-width:0;overflow:hidden;text-overflow:ellipsis}}',
+            '@container (width<=400px){.dshp-t-full-label{display:none}.dshp-t-card-side>.dshp-t-card-state{min-width:0;overflow:hidden}.dshp-t-card-state-text{min-width:0;overflow:hidden;text-overflow:ellipsis}}',
             '@container (width<=300px){.dshp-t-go-label,.dshp-t-full-label{display:none}}',
             '.dshp-t-go-label,.dshp-t-full-label{white-space:nowrap}',
             // Threads: a thread's code changes, in DSH's colors for added and deleted lines
@@ -433,7 +444,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             'button.dshp-pg-model:hover{background:var(--dsw-alias-interactive-bg-hover)}',
             `button.dshp-pg-model:focus-visible{outline:none;box-shadow:inset 0 0 0 2px ${RING}}`,
             '.dshp-pg-body .dshp-t-paused{margin:0 0 6px}',
-            '.dshp-pg-body .dshp-t-row{grid-template-columns:16px minmax(0,1fr) auto;column-gap:10px;min-height:52px;padding:8px 10px;border-radius:12px;font-size:14px;line-height:21px}',
+            '.dshp-pg-body .dshp-t-row{border-radius:12px;font-size:14px;line-height:21px}',
+            '.dshp-pg-body .dshp-t-main{grid-template-columns:16px minmax(0,1fr);column-gap:10px;min-height:52px;padding:8px 10px}',
+            '.dshp-pg-body .dshp-t-row[data-acts]>.dshp-t-main{padding-right:calc(20px + var(--dshp-t-acts))}',
+            '.dshp-pg-body .dshp-t-row-acts{right:10px}',
             '.dshp-pg-body .dshp-t-dot{width:16px;height:21px}',
             '.dshp-pg-body .dshp-t-line,.dshp-pg-body .dshp-t-meta{height:auto;font-size:13px;line-height:20px}',
             '.dshp-pg-body .dshp-t-group{padding:8px 10px 4px;font-size:12px;line-height:18px}',
@@ -1481,6 +1495,20 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }
         }
 
+        /** A moment as DSH's chat times its messages: "14:58" today, else with the date ("Oct 9, 14:58"). */
+        function clockOf(at, now = Date.now()) {
+            if (!Number.isFinite(at)) return '';
+            const d = new Date(at);
+            const n = new Date(now);
+            const clock = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+            if (d.toDateString() === n.toDateString()) return clock;
+            const day = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() === n.getFullYear() ? {} : { year: 'numeric' }) });
+            return `${day}, ${clock}`;
+        }
+
+        /** How many times in a row a thread's last turn ended the same way, when more than once: "twice", "3 times". */
+        const againText = (times) => (Number.isSafeInteger(times) && times > 1 ? (times === 2 ? 'twice' : `${times} times`) : '');
+
         /**
          * What a session's next request runs on, from DSH's own
          * `modelSelection` projection (the one its composer picker shows), or
@@ -1999,7 +2027,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function ThreadRow({ row, current, now, model, quietModel, changes, onOpen, action, projects, slots = 0 }) {
             const enabled = !current && row.session !== undefined;
             const quiet = model !== undefined && model === quietModel;
-            const open = () => { if (enabled) onOpen(row); };
             const acts = [
                 row.ending && row.session !== undefined && projects ? h(RowContinue, { key: 'continue', row, projects }) : null,
                 action && enabled ? h(ui.Tooltip, { key: 'action', label: action.label, side: 'bottom', align: 'end', portal: true },
@@ -2009,19 +2036,23 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         onKeyDown: (event) => event.stopPropagation(),
                     }, h(action.icon, { size: 14 }))) : null,
             ].filter(Boolean);
+            // The room the buttons take at the row's right end: as wide as the list's busiest row's,
+            // so every row's time sits in one column.
+            const room = Math.max(slots * 28, acts.length > 0 ? acts.length * 26 - 2 : 0);
             const body = h('div', {
-                className: 'dshp-t-row', role: 'button', tabIndex: enabled ? 0 : -1,
-                'data-dshp-item': '', 'data-thread': row.id, 'data-changes': changes ? '' : undefined,
+                className: 'dshp-t-row', 'data-thread': row.id, 'data-changes': changes ? '' : undefined,
+                'data-projects-runs-on': model || undefined,
+                'data-acts': room > 0 ? '' : undefined, style: room > 0 ? { '--dshp-t-acts': `${room}px` } : undefined,
+                // Focusing the row itself (a script may) focuses its open button.
+                tabIndex: -1,
+                onFocus: (event) => { if (event.target === event.currentTarget) event.currentTarget.firstElementChild?.focus(); },
+            },
+            h('button', {
+                type: 'button', className: 'dshp-t-main', tabIndex: enabled ? 0 : -1, 'data-dshp-item': '',
                 'aria-current': current ? 'true' : undefined,
                 'aria-disabled': enabled ? undefined : 'true',
                 'aria-label': `${row.title}. ${current ? `${TEXT.current}. ` : ''}${row.line}${changes ? `. ${changesText(changes)}` : ''}${model ? `. Runs on ${model}` : ''}`,
-                'data-projects-runs-on': model || undefined,
-                onClick: open,
-                onKeyDown: (event) => {
-                    if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
-                    event.preventDefault();
-                    open();
-                },
+                onClick: () => { if (enabled) onOpen(row); },
             },
             h('span', { className: 'dshp-t-dot', 'data-state': row.dot }, h(ui.StateDot, { state: row.dot })),
             h('span', { className: 'dshp-t-text' },
@@ -2031,8 +2062,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h('span', { className: 'dshp-t-meta' },
                         changes ? h('span', { className: 'dshp-t-row-changes', 'data-projects-changes': '' }, ...changeCounts(changes)) : null,
                         model && !quiet ? h('span', { className: 'dshp-t-model', title: model, 'data-projects-thread-model': '' }, model) : null,
-                        row.at !== undefined ? h('span', { className: 'dshp-t-ago' }, ago(row.at, now)) : null))),
-            // As wide as the list's busiest row, so every row's time sits in one column.
+                        row.at !== undefined ? h('span', { className: 'dshp-t-ago' }, ago(row.at, now)) : null)))),
             acts.length > 0 || slots > 0 ? h('span', { className: 'dshp-t-row-acts', style: slots > 0 ? { minWidth: slots * 28 } : undefined }, ...acts) : null);
             return quiet ? h(ui.Tooltip, { label: `Runs on ${model}`, side: 'right', delayMs: 500, focusDelayMs: 300, portal: true }, body) : body;
         }
@@ -2664,6 +2694,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             failed: { icon: 'IconWarningTriangleOutlineRegular', verb: 'Turn failed', tone: 'error' },
             stopped: { icon: 'IconStopFillRegular', verb: 'Stopped before it finished' },
         };
+        /**
+         * The state a card's event left its thread in, in the words the
+         * card's state uses. While the thread is still there, the card says
+         * the state once, beside the name, and its line names only the event.
+         */
+        const OUTCOMES = {
+            handback: { done: 'Done', blocked: 'Blocked', needs_decision: 'Needs a decision' },
+            idle: { failed: 'Failed', stopped: 'Stopped', '': 'Idle' },
+            update: { stopped: 'Stopped', resolved: 'Resolved' },
+        };
+        const SHORT_VERBS = { handback: 'Handback', idle: 'Ended without a handback', update: 'Updated a thread' };
 
         /**
          * How one card reads: its icon, its line above the name, and what it
@@ -2692,16 +2733,24 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 title: row?.title ?? card.thread ?? TEXT.thread, session: row?.session, row,
                 state: row ? { dot: row.dot, label: row.stateLabel } : undefined,
             };
+            // Said beside the name already: the line names only the event.
+            const told = row !== undefined && OUTCOMES[card.kind]?.[card.status ?? ''] === row.stateLabel;
             switch (card.kind) {
                 case 'start': return { ...base, icon: ui.IconBranchOutlineRegular, verb: 'Started a thread' };
-                case 'send': return { ...base, icon: ui.IconSendOutlineRegular, verb: card.status === 'steer' ? 'Steered a running thread' : 'Sent a message to a thread' };
-                case 'update': return { ...base, icon: ui[UPDATE_ICONS[card.status]] ?? ui.IconEditOutlineRegular, verb: UPDATE_VERBS[card.status] ?? 'Updated a thread' };
-                case 'handback': return { ...base, icon: ui.IconTreeCornerRegular, verb: `Handback${handback ? ` · ${handback}` : ''}` };
+                case 'send': return { ...base, icon: ui.IconSendOutlineRegular, verb: card.status === 'steer' ? 'Steered a thread' : 'Sent a message to a thread' };
+                case 'update': return { ...base, icon: ui[UPDATE_ICONS[card.status]] ?? ui.IconEditOutlineRegular, verb: told ? SHORT_VERBS.update : UPDATE_VERBS[card.status] ?? 'Updated a thread' };
+                case 'handback': {
+                    const verb = card.status === 'progress' ? handback : told ? SHORT_VERBS.handback : `Handback${handback ? ` · ${handback}` : ''}`;
+                    return { ...base, icon: ui.IconTreeCornerRegular, verb };
+                }
                 case 'idle': {
                     const ended = IDLE_VIEWS[card.status];
-                    return { ...base, icon: (ended && ui[ended.icon]) || ui.IconPauseOutlineRegular, verb: ended?.verb ?? 'Went idle without a handback', tone: ended?.tone };
+                    return {
+                        ...base, icon: (ended && ui[ended.icon]) || ui.IconPauseOutlineRegular,
+                        verb: told ? SHORT_VERBS.idle : ended?.verb ?? 'Went idle without a handback', tone: ended?.tone,
+                    };
                 }
-                case 'approval': return { ...base, icon: ui.IconWarningOutlineRegular, verb: 'Is waiting for your approval' };
+                case 'approval': return { ...base, icon: ui.IconWarningOutlineRegular, verb: 'Asked for your approval' };
                 default: return null;
             }
         }
@@ -2714,7 +2763,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // The thread's newest card says why its last turn failed or stopped, and offers to run it again.
             const ending = enabled && view.newest ? view.row?.ending : undefined;
             const go = useContinue(projects, ending ? view.row : undefined);
-            const why = ending ? go.error || endingReason(ending) : '';
+            // When it ended, so a retry that failed again reads differently from the failure before it.
+            const at = ending ? Date.parse(ending.at ?? '') : NaN;
+            const when = clockOf(at);
+            const reason = ending ? endingReason(ending) : '';
+            const why = go.error || [when, reason].filter(Boolean).join(' · ');
+            const again = ending ? againText(ending.times) : '';
             const goLabel = go.retry ? TEXT.retryThread : TEXT.resumeThread;
             return h('div', { className: 'dshp-t-card', 'data-thread': view.threadId, 'data-card-kind': view.kind, 'data-card-tone': view.tone },
                 h('span', { className: 'dshp-t-card-icon', 'aria-hidden': true }, h(view.icon, { size: 16 })),
@@ -2726,10 +2780,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         title: !enabled ? undefined : thread ? `${beside ? TEXT.openTip : TEXT.openFull}: ${view.title}` : TEXT.openCoordinator,
                         onClick: () => projects.openThread(view.session),
                     }, view.title),
-                    why ? h('span', {
+                    ending && why ? h('span', {
                         className: go.error ? 'dshp-t-card-why dshp-t-error' : 'dshp-t-card-why', title: why,
                         role: go.error ? 'alert' : undefined, 'data-projects-ending': ending.state,
-                    }, why) : null),
+                    }, go.error || [
+                        when ? h('time', { key: 'when', className: 'dshp-t-card-when', dateTime: new Date(at).toISOString() }, when) : null,
+                        when && reason ? ' · ' : null, reason || null,
+                    ]) : null),
                 view.changes ? h(CardChanges, {
                     changes: view.changes,
                     onReview: enabled && view.changes.last ? () => projects.openReview(view.session, view.changes.last) : undefined,
@@ -2737,7 +2794,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 view.state || enabled ? h('div', { className: 'dshp-t-card-side' },
                 view.state ? h('span', { className: 'dshp-t-card-state' },
                     h(ui.StateDot, { state: view.state.dot }),
-                    h('span', { className: 'dshp-t-card-state-label' }, view.state.label)) : null,
+                    h('span', { className: 'dshp-t-card-state-text' },
+                        h('span', { className: 'dshp-t-card-state-label' }, view.state.label), again ? ` ${again}` : null)) : null,
                 enabled ? h('div', { className: 'dshp-t-card-actions' },
                     ending ? h(ui.Button, {
                         variant: 'outline', size: 'sm', disabled: go.busy, 'aria-label': `${goLabel}: ${view.title}`,
@@ -2895,7 +2953,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 h('div', { className: 'dshp-dock-bar', role: 'status', title: text },
                     h('span', { className: 'dshp-dock-glyph', 'data-state': ending.state, 'aria-hidden': true },
                         retry ? h(ui.StateDot, { state: 'error' }) : h(ui.IconStopFillRegular, { size: 12 })),
-                    h('span', { className: 'dshp-dock-label' }, retry ? TEXT.endedFailed : TEXT.endedStopped),
+                    h('span', { className: 'dshp-dock-label' }, [retry ? TEXT.endedFailed : TEXT.endedStopped, againText(ending.times)].filter(Boolean).join(' ')),
                     text ? h('span', { className: error ? 'dshp-dock-text dshp-t-error' : 'dshp-dock-text' }, text) : h('span', { className: 'dshp-dock-text' }),
                     Number.isFinite(at) ? h('span', { className: 'dshp-dock-time' }, ago(at, now)) : null,
                     h(ui.Button, {
@@ -3214,6 +3272,34 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 },
                 openFull,
                 /**
+                 * A click on a thread's row in DSH's session list opens the
+                 * pair at once, so DSH never shows the thread as the main
+                 * chat first. (Its right sidebar would open a view for the
+                 * thread and drop it a moment later, which DSH logs as an
+                 * error.) A click on the row's own buttons, with a modifier
+                 * key, or where the thread would open on its own anyway, is
+                 * DSH's as before; followOpens covers DSH's other ways in.
+                 * @returns the unsubscribe.
+                 */
+                followRowClicks() {
+                    if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return () => {};
+                    const onClick = (event) => {
+                        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                        const target = typeof event.target?.closest === 'function' ? event.target : undefined;
+                        const row = target?.closest('[data-row-key^="session:"]');
+                        if (!row) return;
+                        const control = target.closest('button, a[href], input, select, textarea, [role="button"], [role="menuitem"], [role="switch"]');
+                        if (control && control !== row && row.contains(control)) return;
+                        const sessionId = row.getAttribute('data-row-key').slice('session:'.length);
+                        if (!besidePref.get() || sessionId === mainChat() || coordinatorOf(sessionId) === undefined || !roomBeside()) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        openPaired(sessionId);
+                    };
+                    document.addEventListener('click', onClick, true);
+                    return () => document.removeEventListener('click', onClick, true);
+                },
+                /**
                  * Threads open side by side wherever DSH opens them: its session
                  * list, its search, the plugin's pages. DSH's main view shows the
                  * session it holds as the main chat. When DSH starts moving that
@@ -3418,7 +3504,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.slots.inject('sidebar.workspaces.session.menu.item', () => ctx.slots.register({
                 name: 'sidebar.workspaces.session.menu.item', id: IDS.fullItem, order: 50, inject: withApi,
             }, FullViewMenuItem));
-            // A thread opened anywhere lands beside its coordinator.
+            // A thread opened anywhere lands beside its coordinator; from DSH's session list, straight there.
+            ctx.effect(() => projects.followRowClicks(), 'projects: thread rows open beside their coordinator');
             ctx.effect(() => projects.followOpens(), 'projects: threads beside their coordinator');
             // DSH's session list by project: a header over each project's workspaces.
             ctx.slots.inject('shell.overlay', () => ctx.slots.register({
@@ -4941,7 +5028,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
             rowState, endingOf, endingIn, endingReason, endingLine, openSessions, markState, hoverLine, continueError, GROUPS,
-            roomFor, besidePref, sidebarGroups, sidebarRules, placeWorkspaces, chatsIn, pulseOf, pulseText, listText, OTHERS,
+            roomFor, besidePref, sidebarGroups, sidebarRules, placeWorkspaces, chatsIn, pulseOf, pulseText, listText, OTHERS, clockOf, againText, ThreadCard, EndingBar,
         };
         return module.exports;
     },

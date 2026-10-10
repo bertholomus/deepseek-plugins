@@ -863,11 +863,12 @@ test('window: the Project settings endpoints read and change a project the way i
  * factory to the module loader, which calls it with DSH's module require.
  * The primitives are stand-ins; an icon is its own name.
  */
-function loadClient({ storage } = {}) {
+function loadClient({ storage, document, innerWidth } = {}) {
     let loaded;
     const localStorage = storage ? { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => { storage.set(key, String(value)); } } : undefined;
+    const window = { __ModuleLoader__: { load: (m) => { loaded = m; } }, localStorage, addEventListener: () => {}, removeEventListener: () => {}, innerWidth };
     runInNewContext(readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'), {
-        window: { __ModuleLoader__: { load: (m) => { loaded = m; } }, localStorage, addEventListener: () => {}, removeEventListener: () => {} },
+        window, ...(document ? { document } : {}),
         URL, console, setInterval, clearInterval, setTimeout, clearTimeout, queueMicrotask,
     });
     const base = {
@@ -883,11 +884,29 @@ function loadClient({ storage } = {}) {
     };
     const ui = new Proxy(base, { get: (target, name) => (name in target ? target[name] : typeof name === 'string' && name.startsWith('Icon') ? name : undefined) });
     const modules = {
-        react: { createElement: (type, props, ...children) => ({ type, props, children }), useSyncExternalStore: (_subscribe, get) => get() },
+        react: {
+            createElement: (type, props, ...children) => ({ type, props, children }), useSyncExternalStore: (_subscribe, get) => get(),
+            // Enough of React's hooks to call a component once and read what it draws.
+            useState: (init) => [typeof init === 'function' ? init() : init, () => {}], useRef: (current) => ({ current }),
+            useEffect: () => {}, useCallback: (fn) => fn, useMemo: (fn) => fn(),
+        },
         'react-dom': {}, '@deepseek-ai/dsh-client-ui-primitives': ui,
     };
-    return { id: loaded.id, client: loaded.factory((name) => modules[name]) };
+    return { id: loaded.id, client: loaded.factory((name) => modules[name]), window };
 }
+
+/** Every element in a tree a component returned (the test React's {type, props, children}), depth first. */
+function elementsOf(node, out = []) {
+    if (Array.isArray(node)) { for (const child of node) elementsOf(child, out); return out; }
+    if (node === null || typeof node !== 'object') return out;
+    out.push(node);
+    elementsOf(node.children, out);
+    return out;
+}
+/** The text an element tree shows. */
+const textIn = (node) => (Array.isArray(node) ? node.map(textIn).join('') : node === null || node === undefined || node === false ? ''
+    : typeof node === 'object' ? textIn(node.children) : String(node));
+const byClass = (tree, name) => elementsOf(tree).filter((e) => String(e.props?.className ?? '').split(' ').includes(name));
 
 /** Values made inside the script's context, copied so they compare as plain data. */
 const plain = (value) => JSON.parse(JSON.stringify(value));
@@ -1218,14 +1237,15 @@ test('browser half: New threads follows DSH\'s default after a pick in any chat;
     // The menu names New threads' model at its top, so a row on the same model names it in a tooltip only.
     const row = { id: 't1', title: 'Fix login', line: 'Running', dot: 'ongoing', session: 's1' };
     const bodyOf = (el) => (el.props.className === 'dshp-t-row' ? el : el.children[0]);
+    const mainOf = (el) => bodyOf(el).children.find((c) => c?.props?.className === 'dshp-t-main');
     const meta = (props) => {
-        const text = bodyOf(ThreadRow({ row, now: 0, onOpen() {}, ...props })).children.find((c) => c?.props?.className === 'dshp-t-text');
+        const text = mainOf(ThreadRow({ row, now: 0, onOpen() {}, ...props })).children.find((c) => c?.props?.className === 'dshp-t-text');
         const second = text.children.find((c) => c?.props?.className === 'dshp-t-second');
         return second.children.find((c) => c?.props?.className === 'dshp-t-meta');
     };
     const modelOf = (props) => meta(props).children.find((c) => c?.props?.className === 'dshp-t-model');
     const quiet = ThreadRow({ row, now: 0, model: 'V4 · High', quietModel: 'V4 · High', onOpen() {} });
-    assert.deepEqual(plain([quiet.props.label, quiet.props.delayMs > 0, bodyOf(quiet).props['data-projects-runs-on'], bodyOf(quiet).props['aria-label']]),
+    assert.deepEqual(plain([quiet.props.label, quiet.props.delayMs > 0, bodyOf(quiet).props['data-projects-runs-on'], mainOf(quiet).props['aria-label']]),
         ['Runs on V4 · High', true, 'V4 · High', 'Fix login. Running. Runs on V4 · High']);
     assert.equal(modelOf({ model: 'V4 · High', quietModel: 'V4 · High' }), undefined);
     assert.equal(modelOf({ model: 'V4 · Low', quietModel: 'V4 · High' }).children[0], 'V4 · Low');
@@ -1234,6 +1254,30 @@ test('browser half: New threads follows DSH\'s default after a pick in any chat;
     // The code changes sit on the second line with the model and the time, not beside the name.
     const counted = meta({ changes: { added: 18, deleted: 3, files: 2 }, model: 'V4 · Low' }).children.filter(Boolean).map((c) => c.props.className);
     assert.deepEqual(counted, ['dshp-t-row-changes', 'dshp-t-model']);
+
+    // No control sits inside another: the row's open button holds its text, and Retry and Open beside are the button's siblings.
+    const opened = [];
+    const action = { label: 'Open beside', icon: () => null, run() {} };
+    const failed = ThreadRow({ row: { ...row, ending: { state: 'failed' } }, now: 0, onOpen: (r) => opened.push(r.id), action, projects: {}, slots: 2 });
+    const main = mainOf(failed);
+    const acts = bodyOf(failed).children.find((c) => c?.props?.className === 'dshp-t-row-acts');
+    assert.equal(main.type, 'button');
+    assert.equal(bodyOf(failed).props.role, undefined, 'the row itself is no button');
+    assert.deepEqual(elementsOf(main.children).filter((e) => e.type === 'button' || e.props?.['aria-label'] !== undefined), [], 'nothing pressable inside the open button');
+    assert.equal(acts.children.length, 2, 'Retry and Open beside sit beside the open button');
+    assert.deepEqual(plain([main.props['data-dshp-item'], main.props.tabIndex, bodyOf(failed).props['data-acts'], bodyOf(failed).props.style]), ['', 0, '', { '--dshp-t-acts': '56px' }]);
+    main.props.onClick();
+    assert.deepEqual(opened, ['t1']);
+    // The current chat's row: read out as current, left out of arrow keys, and opening it does nothing.
+    const here = mainOf(ThreadRow({ row, current: true, now: 0, onOpen: (r) => opened.push(r.id) }));
+    assert.deepEqual(plain([here.props['aria-current'], here.props['aria-disabled'], here.props.tabIndex]), ['true', 'true', -1]);
+    here.props.onClick();
+    assert.deepEqual(opened, ['t1']);
+    // Focusing the row itself focuses its open button.
+    let focused = '';
+    const rowEl = { firstElementChild: { focus: () => { focused = 'main'; } } };
+    bodyOf(failed).props.onFocus({ target: rowEl, currentTarget: rowEl });
+    assert.equal(focused, 'main');
 });
 
 test('browser half: thread rows, cards and links read the projection as DSH sends it', () => {
@@ -1289,10 +1333,21 @@ test('browser half: thread rows, cards and links read the projection as DSH send
     assert.deepEqual(plain(cardsOf(coordValue, 2).map((c) => [c.kind, c.thread])), [['start', 't3'], ['start', 't4']]);
     assert.equal(cardsOf(coordValue, 9).length, 0);
     const [handback] = cardsOf(coordValue, 3).map((card) => cardView(card, coord, statuses, state.byId, 's-c'));
-    assert.deepEqual(plain([handback.verb, handback.title, handback.session, handback.state.label, handback.icon]), ['Handback · Needs your decision', 'Fix login', 's-t2', 'Needs a decision', 'IconTreeCornerRegular']);
+    // A card says its thread's state once, beside the name: while the handback's state is the thread's, its line says only "Handback".
+    assert.deepEqual(plain([handback.verb, handback.title, handback.session, handback.state.label, handback.icon]), ['Handback', 'Fix login', 's-t2', 'Needs a decision', 'IconTreeCornerRegular']);
     const steer = cardView({ turn: 2, seq: 11, kind: 'send', thread: 't3', status: 'steer' }, coord, statuses, state.byId, 's-c');
-    assert.deepEqual(plain([steer.verb, steer.state.label]), ['Steered a running thread', 'Running']);
-    assert.equal(cardView({ turn: 2, seq: 1, kind: 'update', thread: 't4', status: 'resolved' }, coord, statuses, state.byId, 's-c').verb, 'Resolved a thread');
+    assert.deepEqual(plain([steer.verb, steer.state.label]), ['Steered a thread', 'Running']);
+    const verbOf = (card) => { const v = cardView({ turn: 2, seq: 1, ...card }, coord, statuses, state.byId, 's-c'); return [v.verb, v.state.label]; };
+    assert.deepEqual(plain([
+        verbOf({ kind: 'update', thread: 't4', status: 'resolved' }), verbOf({ kind: 'update', thread: 't3', status: 'resolved' }),
+        verbOf({ kind: 'handback', thread: 't3', status: 'done' }), verbOf({ kind: 'handback', thread: 't3', status: 'progress' }),
+        verbOf({ kind: 'approval', thread: 't3' }),
+    ]), [
+        ['Updated a thread', 'Resolved'], ['Resolved a thread', 'Running'],
+        // Once the thread moved on, the line keeps what the event said.
+        ['Handback · Done', 'Running'], ['Progress update', 'Running'],
+        ['Asked for your approval', 'Running'],
+    ]);
     // In a thread, its own handback card points back at the coordinator.
     const own = cardView(threadValue.cards[0], thread, statuses, state.byId, 's-t3');
     assert.deepEqual(plain([own.verb, own.title, own.session]), ['Handed back to the coordinator · Progress update', '◆ DSH Plugins', 's-c']);
@@ -1390,10 +1445,12 @@ test('browser half: a failed or stopped thread reads Failed or Stopped everywher
     const views = coordValue.cards.map((card) => cardView(card, coord, statuses, state.byId, 's-c', endings));
     assert.deepEqual(plain(views.map((v) => [v.threadId, v.verb, v.tone ?? null, v.state.label, v.row.ending?.state ?? null])), [
         ['t7', 'Started a thread', null, 'Failed', 'failed'],
-        ['t7', 'Turn failed', 'error', 'Failed', 'failed'],
-        ['t6', 'Stopped before it finished', null, 'Stopped', 'stopped'],
+        ['t7', 'Ended without a handback', 'error', 'Failed', 'failed'],
+        ['t6', 'Ended without a handback', null, 'Stopped', 'stopped'],
         ['t8', 'Went idle without a handback', null, 'Done', null],
     ]);
+    // No word twice on a card: the state is said beside the name, not again in its line.
+    for (const v of views) assert.ok(!v.verb.split(/\W+/).includes(v.state.label), `${v.verb} / ${v.state.label}`);
     assert.deepEqual(plain(views.slice(0, 3).map((v) => v.icon)), ['IconBranchOutlineRegular', 'IconWarningTriangleOutlineRegular', 'IconStopFillRegular']);
 
     // The session list: a failed thread's mark is red, a waiting one's amber; DSH draws running ones.
@@ -1619,6 +1676,95 @@ test('browser half: with "Open threads beside their coordinator" off, a thread o
     assert.equal(loadClient().client.internals.besidePref.get(), true);
 });
 
+test('browser half: a click on a thread row in DSH\'s session list opens the pair straight away, so DSH never shows the thread first', () => {
+    let onClick;
+    const document = {
+        addEventListener: (type, fn, capture) => { if (type === 'click' && capture === true) onClick = fn; },
+        removeEventListener: () => {}, querySelector: () => null,
+        createElement: () => ({ dataset: {} }), head: { appendChild: () => {} },
+    };
+    const storage = new Map();
+    const { client, window } = loadClient({ document, innerWidth: 1440, storage });
+    const coordValue = { role: 'coordinator', project: { name: 'P' }, threads: [] };
+    const threadValue = { role: 'thread', coordinator: 'c', thread: { id: 't1' } };
+    const row = (value, main = 0) => ({ title: 'x', ...(value ? { projectionValues: { projectSession: value } } : {}), retainedBy: { mainView: main } });
+    const snapshot = { ids: ['c', 't', 'p'], byId: { c: row(coordValue), t: row(threadValue), p: row(null, 1) }, phase: 'ready', projectionsBySession: {} };
+    const opened = [];
+    const beside = [];
+    const ctx = {
+        effect: (fn) => fn(),
+        inject: (names, fn) => { if (!names.includes('configForms')) fn(ctx); },
+        slots: { inject: (_name, fn) => fn(), register: () => () => {} },
+        resources: { register: () => () => {} },
+        sidebarRightTabs: { register: () => () => {} },
+        sessions: { list: { getSnapshot: () => snapshot, subscribe: () => () => {} }, retain: () => ({ release: () => {} }) },
+        uiWorkspace: { openSession: (id) => opened.push(id) },
+        sidebarRight: { mounted: { getSnapshot: () => 'c' }, openResource: (address, options) => beside.push([decodeURIComponent(address.split('/').pop()), options.kind]) },
+    };
+    client.apply(ctx);
+    assert.equal(typeof onClick, 'function', 'one capturing listener for the whole window');
+    // A click on a row of DSH's list (data-row-key="session:<id>"), or on a button inside it.
+    const click = (id, { inButton = false, ...event } = {}) => {
+        const rowEl = { getAttribute: (name) => (name === 'data-row-key' ? `session:${id}` : null), contains: () => true };
+        const target = { closest: (selector) => (selector.includes('data-row-key') ? rowEl : inButton ? { button: true } : null) };
+        const e = { button: 0, defaultPrevented: false, target, prevented: false, stopped: false, ...event };
+        e.preventDefault = () => { e.prevented = true; };
+        e.stopPropagation = () => { e.stopped = true; };
+        onClick(e);
+        return e.prevented && e.stopped;
+    };
+    // A thread: its coordinator as the main chat and the thread beside it, without DSH opening the thread first.
+    assert.equal(click('t'), true);
+    assert.deepEqual([opened, beside], [['c'], [['t', 'projectthread']]]);
+    // DSH's as before: another chat, the row's own buttons, a modifier key, another mouse button, a click already handled.
+    opened.length = 0;
+    beside.length = 0;
+    assert.deepEqual([click('p'), click('t', { inButton: true }), click('t', { metaKey: true }), click('t', { button: 1 }), click('t', { defaultPrevented: true })],
+        [false, false, false, false, false]);
+    // Also when the window has no room for both, or the setting is off.
+    window.innerWidth = 700;
+    assert.equal(click('t'), false);
+    window.innerWidth = 1440;
+    client.internals.besidePref.set(false);
+    assert.equal(click('t'), false);
+    client.internals.besidePref.set(true);
+    // And for the thread that is already the main chat (full view).
+    snapshot.byId = { ...snapshot.byId, t: row(threadValue, 1), p: row(null, 0) };
+    assert.equal(click('t'), false);
+    assert.deepEqual([opened, beside], [[], []]);
+});
+
+test('browser half: a thread\'s newest card says when its last turn ended, and how many times in a row', () => {
+    const { client } = loadClient();
+    const { ThreadCard, clockOf, againText } = client.internals;
+    const now = Date.parse('2026-10-10T18:30:00');
+    assert.deepEqual([clockOf(Date.parse('2026-10-10T14:58:00'), now), clockOf(Date.parse('2026-10-09T09:05:00'), now), clockOf(Date.parse('2025-12-31T23:59:00'), now), clockOf(NaN, now)],
+        ['14:58', 'Oct 9, 09:05', 'Dec 31, 2025, 23:59', '']);
+    assert.deepEqual([1, 2, 3, undefined].map(againText), ['', 'twice', '3 times', '']);
+    const at = new Date(Date.now() - 60000);
+    const hhmm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+    const projects = { openThread: () => {}, openPaired: () => {}, openFull: () => {}, openReview: () => {}, facts: { continueThread: async () => ({ ok: true }) } };
+    const view = (ending, state) => ({
+        key: 't7', kind: 'idle', threadId: 't7', seq: 5, newest: true, title: 'Generate size-guide tables', session: 's-t7', verb: 'Ended without a handback', icon: 'IconWarningTriangleOutlineRegular',
+        state, row: { id: 't7', session: 's-t7', title: 'Generate size-guide tables', ending },
+    });
+    const failed = { state: 'failed', kind: 'error', message: 'The model rejected the request.', turn: 3, seq: 9, at: at.toISOString() };
+    // Failed once: the state once, beside the name; the time and the reason under it; Retry.
+    let card = ThreadCard({ view: view(failed, { dot: 'error', label: 'Failed' }), projects });
+    assert.deepEqual([textIn(byClass(card, 'dshp-t-card-state-label')), textIn(byClass(card, 'dshp-t-card-state-text')), textIn(byClass(card, 'dshp-t-card-why'))],
+        ['Failed', 'Failed', `${hhmm} · The model rejected the request.`]);
+    assert.equal(elementsOf(card).find((e) => e.props?.['data-projects-continue'])?.props['data-projects-continue'], 'retry');
+    // Retried and failed again: it says so, and the time moves on.
+    card = ThreadCard({ view: view({ ...failed, times: 2, turn: 4 }, { dot: 'error', label: 'Failed' }), projects });
+    assert.deepEqual([textIn(byClass(card, 'dshp-t-card-state-label')), textIn(byClass(card, 'dshp-t-card-state-text'))], ['Failed', 'Failed twice']);
+    // Stopped with no reason to give: just when.
+    card = ThreadCard({ view: view({ state: 'stopped', kind: 'aborted', cause: 'user', turn: 3, seq: 9, at: at.toISOString() }, { dot: 'idle', label: 'Stopped' }), projects });
+    assert.equal(textIn(byClass(card, 'dshp-t-card-why')), hhmm);
+    // A card that isn't the thread's newest says none of it.
+    card = ThreadCard({ view: { ...view(failed, { dot: 'error', label: 'Failed' }), newest: false }, projects });
+    assert.deepEqual([byClass(card, 'dshp-t-card-why').length, textIn(byClass(card, 'dshp-t-card-state-text'))], [0, 'Failed']);
+});
+
 test('browser half: DSH\'s session list is grouped by project, collapsible, with Other workspaces last', () => {
     const { client } = loadClient();
     const { sidebarGroups, sidebarRules, OTHERS } = client.internals;
@@ -1811,9 +1957,9 @@ test('a failed or stopped thread shows in the roster until a turn finishes; Retr
     // A stopped turn resumes; a handback after it is newer news.
     turn({ kind: 'aborted', reason: { kind: 'user' } });
     await tick();
-    assert.match(coord.ctx.section(), /no handback yet · its last turn was stopped before it finished\./);
+    assert.match(coord.ctx.section(), /no handback yet · its last turn was stopped by the user before it finished\./);
     await remote.continueThread(coord.id, 't1');
-    assert.match(ts.prompts.at(-1).text, /^\[From the coordinator\]\n\nThe user asked you to continue\. Your last turn was stopped before it finished\. Carry on/);
+    assert.match(ts.prompts.at(-1).text, /^\[From the coordinator\]\n\nThe user asked you to continue\. Your last turn was stopped by the user before it finished\. Carry on/);
     thread.ctx.emitStatus(thread, 'running');
     await thread.ctx.call('project_handback', { status: 'done', summary: 'Lane called.' });
     ts.events.push({ seq: ts.events.length + 1, type: 'turn/end', data: { turn: 99, reason: { kind: 'error', error: { message: 'late' } } } });
@@ -1856,8 +2002,8 @@ test('turn endings: what the coordinator is told, what the thread hears on Retry
     assert.equal(readableError('x'.repeat(500)).length, 240);
 });
 
-test('a stop the coordinator asks for does not come back as a note', async () => {
-    const { host } = setup();
+test('a stop the coordinator asks for, or a person makes, does not come back as a note', async () => {
+    const { host, dir } = setup();
     await tick();
     const coord = coordinatorOf(host);
     await coord.ctx.call('project_thread_start', { title: 'Long', brief: 'Run the long job.' });
@@ -1873,11 +2019,25 @@ test('a stop the coordinator asks for does not come back as a note', async () =>
     await tick();
     assert.equal(host.sessions.get(coord.id).prompts.length, 0, 'no note for its own stop');
 
-    // A stop from anywhere else (the user, in the thread's session) is still reported.
+    // A person's stop (DSH's stop button, the session bridge) sends no note either, so the coordinator can't send
+    // the thread on by itself; its roster says the user stopped it.
     await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Try again.' });
-    thread.ctx.emitStatus(thread, 'running');
-    endTurn('aborted');
-    thread.ctx.emitStatus(thread, 'idle');
+    const stopBy = (cause) => {
+        thread.ctx.emitStatus(thread, 'running');
+        ts.events.push({ seq: ts.events.length + 1, type: 'turn/start', data: { turn: ts.events.length } });
+        ts.events.push({ seq: ts.events.length + 1, type: 'turn/end', data: { turn: ts.events.length, reason: { kind: 'aborted', reason: cause } } });
+        thread.ctx.emitStatus(thread, 'idle');
+    };
+    stopBy({ kind: 'user' });
+    await tick();
+    assert.deepEqual(host.sessions.get(coord.id).prompts.map((p) => p.text.slice(0, 120)), [], 'no note for a person\'s stop');
+    assert.match(coord.ctx.section(), /- t1 · "Long" · idle · no handback yet · its last turn was stopped by the user before it finished\./);
+    assert.match(coord.ctx.section(), /A thread the user stopped stays stopped/);
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /user-stop dsh-plugins\/t1/);
+
+    // Any other stop (a plugin's hook, a closed session) is still reported, and the coordinator decides.
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Try again.' });
+    stopBy({ kind: 'hook', reason: 'budget' });
     await tick();
     const cp = host.sessions.get(coord.id).prompts;
     assert.equal(cp.length, 1);
@@ -2794,7 +2954,7 @@ test('projection: sessions the store knows are seeded; older events add cards bu
 test('projection: a new coordinator\'s welcome turn, and whether the user has asked anything since', () => {
     const { host } = setup();
     const def = host.projections[0];
-    assert.equal(def.stateVersion, 4, 'the fold changed, so DSH folds every session again');
+    assert.equal(def.stateVersion, 5, 'the fold changed, so DSH folds every session again');
     const msg = (seq, text, source) => ({ type: 'user/message', seq, time: seq, data: { content: [{ type: 'text', text }], ...(source ? { source } : {}) } });
     let s = def.apply(def.init({ id: 'new' }), { type: 'turn/start', data: { turn: 0 } });
     s = def.apply(s, msg(1, '[Project created: "DSH Plugins"]\n\nThis is the first message in this coordinator session.', { kind: 'cordis-host-runner' }));
@@ -2854,6 +3014,14 @@ test('projection: a thread\'s last turn that failed or stopped, until a turn fin
         const e = def.wire.view(def.apply(s, end(3, reason, 2))).ending;
         assert.deepEqual([e.state, e.kind, e.cause, e.hook, e.turn, e.seq], [...want, 2, 3], JSON.stringify(reason));
     }
+    // The same ending again in a later turn is counted, so a retry that failed again says so; any other ending,
+    // the same turn's end again, or a finished turn in between starts the count over.
+    const fail = (seq, turn) => end(seq, { kind: 'error', error: { message: 'again' } }, turn);
+    const again = def.apply(s, fail(3, 2));
+    assert.deepEqual([def.wire.view(again).ending.times, def.wire.view(def.apply(again, fail(4, 3))).ending.times], [2, 3]);
+    assert.equal(def.wire.view(def.apply(again, end(4, { kind: 'aborted', reason: { kind: 'user' } }, 3))).ending.times, undefined);
+    assert.equal(def.wire.view(def.apply(s, fail(3, 1))).ending.times, undefined);
+    assert.equal(def.wire.view(def.apply(def.apply(again, end(4, { kind: 'completed' }, 3)), fail(5, 4))).ending.times, undefined);
     // A turn that finishes clears it; an ending this fold doesn't know, or none, keeps what was.
     assert.equal(def.wire.view(def.apply(s, end(4, { kind: 'completed' }, 2))).ending, undefined);
     assert.equal(def.apply(s, end(5, { kind: 'forked' })), s);

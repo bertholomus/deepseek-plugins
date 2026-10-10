@@ -39,7 +39,7 @@ import { ProjectStore, expand, dataPath, dshHome, ensurePrivateDir } from './sto
 import { SETTING_KEYS, effectiveSettings, applyRoute, checkSelection, describeRoute, parseModelSpec, pluginDefaults } from './settings.js';
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage,
-    handbackMessage, idleMessage, approvalMessage, welcomeMessage, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS,
+    handbackMessage, idleMessage, approvalMessage, welcomeMessage, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS, STOPPED_BY_USER,
 } from './prompts.js';
 import { META_MARK, MAX_THREADS } from './projection.js';
 import { changeRecord, changeTotals, withChange } from './changes.js';
@@ -998,18 +998,26 @@ export class ProjectManager {
         const turn = await this.readTurn(sessionId);
         const t = this.store.thread(projectId, threadId);
         if (!t || t.resolved || (catchUp && !turn.ended)) return;
+        // The coordinator stopped this turn itself, so a note would only echo that back.
+        const byCoordinator = Boolean(stopped && stopped.key === turn.key && turn.endKind === 'aborted');
+        // A person stopped it, in DSH or through the session bridge: it stays stopped until they resume it.
+        const byUser = !byCoordinator && turn.endKind === 'aborted' && turn.stopCause === 'user';
         if (turn.ended) {
             if (t.seenTurn === turn.key) return;
             // How the turn ended, for the coordinator's roster: kept while it failed or stopped.
-            const ending = !turn.handedBack && endingStateOf(turn.ending) ? turn.ending.slice(0, 400) : undefined;
+            const text = byUser ? STOPPED_BY_USER : turn.ending;
+            const ending = !turn.handedBack && endingStateOf(text) ? text.slice(0, 400) : undefined;
             this.store.putThread(projectId, threadId, {
                 seenTurn: turn.key,
                 lastEnding: ending ? { text: ending, kind: turn.endKind, at: new Date().toISOString() } : undefined,
             });
         }
-        if (turn.handedBack) return;
-        // The coordinator stopped this turn itself, so a note would only echo that back.
-        if (stopped && stopped.key === turn.key && turn.endKind === 'aborted') return;
+        if (turn.handedBack || byCoordinator) return;
+        if (byUser) {
+            // No note, so the coordinator takes no turn and can't send it on by itself.
+            this.log(`user-stop ${projectId}/${threadId}`);
+            return;
+        }
         if (!turn.fromProject) {
             this.store.putThread(projectId, threadId, { lastDirect: { at: new Date().toISOString(), reply: turn.reply.slice(0, 500) } });
             this.log(`direct-turn ${projectId}/${threadId} chars=${turn.reply.length}`);
@@ -1087,9 +1095,15 @@ export class ProjectManager {
                 return;
             }
             const record = changeRecord(seq, summary);
-            const t = this.store.thread(projectId, threadId);
-            if (!record || !t) return;
-            this.store.putThread(projectId, threadId, { changes: withChange(t.changes, record) });
+            try {
+                const t = this.store.thread(projectId, threadId);
+                if (!record || !t) return;
+                this.store.putThread(projectId, threadId, { changes: withChange(t.changes, record) });
+            } catch (error) {
+                // A throw in a timer would end DSH's Host.
+                this.log(`error changes ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
+                return;
+            }
             this.log(`changes ${projectId}/${threadId} turn=${record.turn} files=${record.total} +${record.added} -${record.deleted}`);
         }, attempt === 0 ? 0 : 200 * 2 ** attempt);
         timer.unref?.();
@@ -1177,6 +1191,8 @@ export class ProjectManager {
             key: events[start]?.seq ?? start,
             ended,
             endKind: reason?.kind,
+            // Who stopped a stopped turn: 'user' when a person did (DSH's stop button, the session bridge) or the coordinator did.
+            stopCause: reason?.kind === 'aborted' && typeof reason.reason?.kind === 'string' ? reason.reason.kind : undefined,
             ending: describeEnding(reason),
             reply,
             handedBack,
@@ -1252,7 +1268,10 @@ export class ProjectManager {
         retry.attempt += 1;
         retry.timer = setTimeout(() => {
             retry.timer = undefined;
-            void this.flushPending(projectId);
+            // DSH quits on any unhandled rejection in the Host, so a failed flush is only logged.
+            void this.flushPending(projectId).catch((error) => {
+                this.log(`error flush ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
+            });
         }, delay);
         retry.timer.unref?.();
         this.retries.set(projectId, retry);
@@ -1414,7 +1433,9 @@ export class ProjectManager {
         const turn = await this.readTurn(t.sessionId);
         const state = turn.ended && !turn.handedBack ? endingStateOf(turn.ending) : undefined;
         if (!state) throw new ProjectError(`${id}'s last turn finished, so there is nothing to retry`);
-        await this.sendToThread(projectId, id, continueMessage(turn.ending, state === 'failed'), false);
+        // As the roster tells it (a person's stop says so), once that turn was reviewed.
+        const ending = t.seenTurn === turn.key && t.lastEnding?.text ? t.lastEnding.text : turn.ending;
+        await this.sendToThread(projectId, id, continueMessage(ending, state === 'failed'), false);
         this.log(`thread-continue ${projectId}/${id} after=${turn.endKind}`);
         return this.describeProject(projectId);
     }
