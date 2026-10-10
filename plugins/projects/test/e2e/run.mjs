@@ -15,8 +15,9 @@
  * as the window shows them, with Retry and Resume, categories of
  * workspaces: the one-time import of the old sidebar's projects as
  * categories, the Projects page's endpoints and DSH's own workspace order
- * kept in step, a thread in its project's workspace, and the user's tools
- * and permissions: an MCP
+ * kept in step, a thread in its project's workspace, a coordinator's
+ * message to a chat in no project and to another project's coordinator,
+ * and the user's tools and permissions: an MCP
  * server named as one of the user's tools that no coordinator is offered
  * and a thread gets only from the user's words, threads on Workspace Write.
  *
@@ -936,6 +937,36 @@ try {
     described = await webApi(webAgain, 'dsh-plugin-projects/describe', { target: madeCoord });
     check('a thread on Read Only can\'t write even in its own folder', described.value?.threads?.find((t) => t.title === 'Read only')?.permission === 'read-only' && !existsSync(readOnlyFile),
         resultOf(since(mark).filter((r) => /You are thread t\d+, "Read only", in the DSH project/.test(r.system))));
+
+    // 26. A coordinator's message out of its project (project_message): to a chat in no project, and to another
+    // project's coordinator. The chat stays outside: no project tools or prompt, no role in the window. Its answer
+    // comes back to the coordinator once, and a turn the message started can't send one on.
+    const plainTitle = (await bridge('GET', `/sessions/${plainId}`)).title;
+    const ours = (r) => r.system.includes(`You are the coordinator of the DSH project "${PROJECT}"`);
+    mark = model.requests.length;
+    reqs = await say(coord, call('project_message', { to: plainId, ask: 'Say hello to my plain chat for me.', text: 'Hello from the e2e project.' }));
+    check('a coordinator sends a chat in no project the message the user asked for', resultOf(reqs) === `TOOL-RESULT: Sent to "${plainTitle}". Its reply comes back to you once, as a note.`, resultOf(reqs));
+    const plainSaw = await waitFor(() => since(mark).find((r) => r.fresh.includes(`[Message from the coordinator of "${PROJECT}"]`)), 'the chat\'s turn on the message');
+    check('the chat reads it as from the project, with the user\'s words, and has no project tools or prompt', plainSaw.fresh.includes('The user asked: "Say hello to my plain chat for me."')
+        && plainSaw.fresh.includes('Hello from the e2e project.') && !plainSaw.tools.some((t) => t.startsWith('project_')) && !/Project (coordinator|thread)/.test(plainSaw.system),
+    `${plainSaw.tools.filter((t) => t.startsWith('project_')).join(',')} | ${plainSaw.fresh.slice(0, 300)}`);
+    const replyReq = await waitFor(() => since(mark).find((r) => ours(r) && r.fresh.includes(`[Reply from "${plainTitle}"]`)), 'the reply note');
+    await waitIdle(coord);
+    check('its answer comes back to the coordinator as a note', replyReq.fresh.includes('SAW-MESSAGE') && replyReq.action.text === 'SAW-REPLY'
+        && readText(logFile).includes(`message-reply ${PROJECT_ID} ${plainId} delivered`), replyReq.fresh.slice(0, 300));
+    check('the window shows no project on that chat', !(await viewOf(plainId)), JSON.stringify(await viewOf(plainId)));
+    mark = model.requests.length;
+    await say(plainId, 'Second hello.');
+    await new Promise((r) => setTimeout(r, 1500));
+    check('a later turn of that chat sends the coordinator nothing', !since(mark).some((r) => ours(r)), describe(since(mark)));
+    mark = model.requests.length;
+    const bounce = call('project_message', { to: PROJECT, ask: 'Tell the E2E project hello.', text: 'Hello back.' });
+    reqs = await say(coord, call('project_message', { to: '◆ Made Here', ask: 'Ask Made Here to say hello back.', text: bounce }));
+    check('a coordinator sends another project\'s coordinator a message', resultOf(reqs) === 'TOOL-RESULT: Sent to ◆ Made Here. Its reply comes back to you once, as a note.', resultOf(reqs));
+    const back = await waitFor(() => since(mark).find((r) => ours(r) && r.fresh.includes('[Reply from ◆ Made Here]')), 'Made Here\'s reply');
+    await waitIdle(coord);
+    check('that coordinator can\'t send one on in a turn the message started, and its answer comes back', back.fresh.includes('TOOL-RESULT: Failed: a message goes out of the project only in a turn the user started')
+        && readText(logFile).includes(` guard ${madeId} message-not-asked`) && !readText(logFile).includes(`message ${madeId} `), back.fresh.slice(0, 400));
     check('no errors in the projects log', !/ error /.test(readText(logFile)), readText(logFile).split('\n').filter((l) => / error /.test(l)).join('\n'));
 } catch (error) {
     failed += 1;

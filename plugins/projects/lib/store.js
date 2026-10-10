@@ -14,6 +14,9 @@
  *       lastEnding?: { text, kind, at }: that turn, when it failed or stopped without a handback (prompts.js describeEnding),
  *       changes?: [{ turn, seq, added, deleted, total, files: [{ path, added, deleted, binary?, oversized? }], turns? }] (changes.js) } },
  *     home?: id of the DSH workspace its coordinator and threads work in,
+ *     awaiting?: [{ to: a chat's session id, name: as the coordinator named it, from: the coordinator's session id,
+ *       after: the chat's last event seq before the message, at }]: messages to chats outside the project (project_message)
+ *       whose reply hasn't come back yet,
  *     A project made on the Projects page also keeps its definition here (a profile row has its own):
  *     name, source: 'page' | 'import', createdAt, order: its place among them, importedFrom?: the old project's id } },
  *   categories: { [categoryId]: { name, order: its place in the list, createdAt, source: 'group' | 'page' | 'import',
@@ -21,7 +24,7 @@
  *   categoryOf: { [DSH workspace id]: categoryId }: the category each workspace is in, one at most,
  *   workspaceOf: { [DSH workspace id]: projectId }: before categories, the group each workspace was in. Kept as it
  *     was when categories replaced groups, so an older version of the plugin still finds its groups; never written now,
- *   imports: { fleetShell?: { at, file, projects, workspaces, skipped }, categories?: { at, categories, workspaces } }:
+ *   imports: { fleetShell?: { at, file, categories, joined, workspaces, skipped }, categories?: { at, categories, workspaces, backup? } }:
  *     one-time imports and moves already made }
  *
  * Until categories, a project made on the Projects page or imported was a

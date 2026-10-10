@@ -20,7 +20,7 @@ import * as plugin from '../lib/index.js';
 import { effectiveSettings, effectiveAccess, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
 import { slugify, timing, clipTitle, guardList, guardedIn } from '../lib/projects.js';
 import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS } from '../lib/changes.js';
-import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, cardSummary, threadMarkdown } from '../lib/prompts.js';
+import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, cardSummary, threadMarkdown, outsideMessage, replyMessage } from '../lib/prompts.js';
 import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
 import { planFleetShellImport } from '../lib/fleet-shell.js';
 
@@ -329,7 +329,7 @@ function fakeHost({ selection = false, hostListener = selection, gateway = false
             /** Like DSH's list: a summary per session, its title in the title projection. */
             async list() {
                 if (host.listError) throw host.listError;
-                return { items: [...sessions].map(([sessionId, s]) => ({ sessionId, updatedAt: 0, running: false, ...(s.title ? { projections: { kind: 'cached', asOfSeq: 1, values: { title: s.title } } } : {}) })) };
+                return { items: [...sessions].map(([sessionId, s]) => ({ sessionId, updatedAt: 0, running: false, ...(typeof s.cwd === 'string' ? { cwd: s.cwd } : {}), ...(s.title ? { projections: { kind: 'cached', asOfSeq: 1, values: { title: s.title } } } : {}) })) };
             },
             cancel(req) { sessions.get(req.sessionId).cancelled = true; return {}; },
             async modelCatalog() { return CATALOG; },
@@ -470,7 +470,7 @@ test('coordinator is created, titled and gets coordinator tools', async () => {
     assert.ok(coord, 'coordinator session exists');
     assert.equal(host.sessions.get(coord.id).cwd, 'ws:/work/dsh');
     assert.deepEqual([...coord.ctx.registered.keys()].sort(), [
-        'project_memory', 'project_settings', 'project_thread_list', 'project_thread_read',
+        'project_memory', 'project_message', 'project_settings', 'project_thread_list', 'project_thread_read',
         'project_thread_send', 'project_thread_start', 'project_thread_update',
     ]);
     const text = coord.ctx.section();
@@ -2720,6 +2720,122 @@ test('permissions: a project row sets them, and a permission DSH doesn\'t offer 
     assert.equal(host.live.size, 1, 'no thread session was made');
 });
 
+test('project_message: a coordinator messages a chat or another project when the user asks, never adopts it, and hears the answer once', async () => {
+    const { host, dir, config } = setup({
+        guardedTools: ['lane-catalog'],
+        projects: [
+            { name: 'DSH Plugins', goal: 'Ship good DSH plugins', workspacePath: '/work/dsh', coordinatorEffort: 'max' },
+            { name: 'Storefront', workspacePath: '/work/shop' },
+        ],
+    });
+    await tick();
+    const coord = coordinatorOf(host);
+    const shop = [...host.live.values()].find((a) => host.sessions.get(a.id).title === '◆ Storefront');
+    const say = userTyping(host);
+    const log = () => readFileSync(join(dir, 'projects.log'), 'utf8');
+    const store = () => JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects;
+    // Chats outside any project, as DSH lists them; two share a title.
+    host.sessions.set('chat-login', { events: [], prompts: [], title: 'Fix login', cwd: '/work/dsh' });
+    host.sessions.set('chat-notes-a', { events: [], prompts: [], title: 'Notes', cwd: '/work/a' });
+    host.sessions.set('chat-notes-b', { events: [], prompts: [], title: 'Notes', cwd: '/work/b' });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Chat', brief: 'Help the user.' });
+    await shop.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Checkout', brief: 'Fix checkout.' });
+    const asked = 'Tell the Fix login chat that the tests pass on main.';
+    const send = (args) => coord.ctx.call('project_message', { to: 'Fix login', ask: asked, text: 'The tests pass on main.', ...args });
+
+    // Only in a turn the user started, with the user's own words.
+    assert.equal(await send(), 'Failed: a message goes out of the project only in a turn the user started. Tell the user what came in, and send it when they ask');
+    await say(coord, `${asked} Thanks!`);
+    assert.equal(await send({ ask: 'tell fix login the tests pass' }), 'Failed: ask must be the user\'s own words, copied from their message here');
+    assert.match(log(), /guard dsh-plugins message-not-asked\n[^]*guard dsh-plugins message-unsaid\n/);
+    // Who it can reach: not itself or its own threads, not another project's thread, and one chat per name.
+    assert.equal(await send({ to: '◆ DSH Plugins' }), 'Failed: that is this project: you are its coordinator');
+    assert.equal(await send({ to: 'Chat' }), 'Failed: that is this project\'s thread t1: use project_thread_send');
+    assert.equal(await send({ to: 'Checkout' }), 'Failed: that is a thread of ◆ Storefront, and a thread stays with its project. Send it to ◆ Storefront instead');
+    assert.equal(await send({ to: 'Notes' }), 'Failed: 2 chats are called "Notes": chat-notes-a (in /work/a); chat-notes-b (in /work/b). Put the id of the one the user means in to, or ask the user');
+    assert.equal(await send({ to: 'Fix logins' }), 'Failed: no chat or project here is called "Fix logins". Other projects: ◆ Storefront. Recent chats: "Fix login", "Notes", "Notes". Put one of these in to as it is written, or ask the user which chat they mean');
+    // A chat outside a project has all of the user's tools, so the message may name one only when the user's words do.
+    assert.match(await send({ text: 'Then check lane-catalog.' }), /^Failed: this would use lane-catalog, and the user's words do not ask for it\. .*If the user did ask, put their words in ask\. /);
+    assert.equal(host.sessions.get('chat-login').prompts.length, 0, 'nothing was sent');
+
+    assert.equal(await send(), 'Sent to "Fix login". Its reply comes back to you once, as a note.');
+    const chat = host.live.get('chat-login');
+    const sent = host.sessions.get('chat-login').prompts;
+    assert.deepEqual(sent.map((p) => p.mode), ['queue']);
+    assert.equal(sent[0].text, outsideMessage('DSH Plugins', asked, 'The tests pass on main.'));
+    assert.match(sent[0].text, /^\[Message from the coordinator of "DSH Plugins"\]\n\nThe user asked: "Tell the Fix login chat that the tests pass on main\."\n\nThe tests pass on main\.\n\n\(Sent by the coordinator of the project "DSH Plugins" at the user's request\. This chat stays outside that project\. Answer here: your reply goes back to that coordinator once\.\)$/);
+    assert.deepEqual(sourceOf(host.sessions.get('chat-login'), 0), { kind: 'agent-message', form: 'relay', senderSessionId: coord.id });
+    // Never adopted: no project tools, no project section, no role in the window, no place in the store.
+    assert.equal(chat.ctx.registered.size, 0);
+    assert.equal(chat.ctx.sections.size, 0);
+    assert.equal(fold(host, 'chat-login'), null);
+    assert.equal(Object.values(store()).some((p) => Object.values(p.threads ?? {}).some((t) => t.sessionId === 'chat-login')), false);
+    assert.deepEqual(store()['dsh-plugins'].awaiting.map((w) => [w.to, w.name, w.from, w.after]), [['chat-login', '"Fix login"', coord.id, -1]]);
+    assert.match(log(), new RegExp(`message dsh-plugins to=chat chat-login chars=23 ask-chars=${asked.length}\\n`));
+
+    // The chat answers in its own turn; the coordinator hears it once, from that chat.
+    const before = host.sessions.get(coord.id).prompts.length;
+    const marks = turnMarks(host, 'chat-login');
+    host.emit('agent/status', { agent: chat, status: 'running' });
+    marks.start();
+    assistantSays(host, 'chat-login', 'Thanks, I will rebase on main.');
+    marks.end();
+    host.emit('agent/status', { agent: chat, status: 'idle' });
+    await tick();
+    host.emit('agent/status', { agent: chat, status: 'idle' });
+    await tick();
+    const notes = host.sessions.get(coord.id).prompts.slice(before);
+    assert.deepEqual(notes.map((p) => p.text), [replyMessage('"Fix login"', 'Thanks, I will rebase on main.')]);
+    assert.match(notes[0].text, /^\[Reply from "Fix login"\]\n\nThanks, I will rebase on main\.\n\n\(The user has not seen this\. Tell them in a line or two what "Fix login" answered\. Send it nothing more unless the user asks\.\)$/);
+    assert.equal(sourceOf(host.sessions.get(coord.id), before)?.senderSessionId, 'chat-login');
+    assert.equal(store()['dsh-plugins'].awaiting.length, 0);
+    assert.match(log(), /message-reply dsh-plugins chat-login delivered chars=30\n/);
+    // A note is not the user: it can't send another message on its own.
+    assert.match(await send(), /^Failed: a message goes out of the project only in a turn the user started\./);
+    // The user's words don't count as theirs in the chat it reached either: the window counts it as a message from that project.
+    assert.equal(fold(host, shop.id)?.asked ?? false, false);
+
+    // Another project's coordinator, by its name. It isn't the user there, so it gives that project nothing the user didn't.
+    const toShop = 'Ask Storefront whether the checkout tests pass.';
+    await say(coord, toShop);
+    assert.equal(await coord.ctx.call('project_message', { to: 'Storefront', ask: toShop, text: 'Do the checkout tests pass?' }), 'Sent to ◆ Storefront. Its reply comes back to you once, as a note.');
+    assert.match(host.sessions.get(shop.id).prompts.at(-1).text, /^\[Message from the coordinator of "DSH Plugins"\]\n\nThe user asked: "Ask Storefront whether the checkout tests pass\."\n\nDo the checkout tests pass\?\n\n/);
+    assert.equal(fold(host, shop.id)?.asked ?? false, false, 'the other project\'s window does not take it for its user\'s words');
+    await say(shop, 'Hello from the shop user.');
+    assert.equal(fold(host, shop.id)?.asked, true);
+    // The other coordinator's turn fails: the note says so first.
+    const shopTurn = turnMarks(host, shop.id);
+    shopTurn.start();
+    shopTurn.end('error', '500: {"message":"gateway down"}');
+    host.emit('agent/status', { agent: shop, status: 'idle' });
+    await tick();
+    assert.equal(host.sessions.get(coord.id).prompts.at(-1).text, replyMessage('◆ Storefront', '', 'The turn failed (HTTP 500): gateway down'));
+    assert.match(log(), /message-reply dsh-plugins s\d+ delivered chars=0 ended=other\n/);
+
+    // A message whose answer comes while DSH is off is delivered at the next start, once.
+    await say(coord, `${asked} Again please.`);
+    assert.match(await send({ ask: `${asked} Again please.`, text: 'Main is green again.' }), /^Sent to "Fix login"\./);
+    for (const dispose of host.effects.splice(0)) await dispose();
+    marks.start();
+    assistantSays(host, 'chat-login', 'Noted.');
+    marks.end();
+    const again = restart(host.sessions, config);
+    await tick();
+    await tick();
+    const coordAgain = coordinatorOf(again);
+    assert.equal(again.sessions.get(coordAgain.id).prompts.filter((p) => p.text.startsWith('[Reply from')).map((p) => p.text).join('|'), replyMessage('"Fix login"', 'Noted.'));
+    assert.equal(store()['dsh-plugins'].awaiting.length, 0);
+    // A message older than a day is let go at start.
+    for (const dispose of again.effects.splice(0)) await dispose();
+    const kept = ProjectStore.open(config.storeFile);
+    kept.putProject('dsh-plugins', { awaiting: [{ to: 'chat-notes-a', name: '"Notes"', from: coordAgain.id, after: -1, at: '2026-01-01T00:00:00.000Z' }] });
+    restart(again.sessions, config);
+    await tick();
+    assert.equal(store()['dsh-plugins'].awaiting.length, 0);
+    assert.match(log(), /message-expired dsh-plugins n=1\n/);
+    assert.doesNotMatch(log(), / error /);
+});
+
 test('browser half: the plugin\'s messages get a notice that names them, without the note to the coordinator', () => {
     const { client } = loadClient();
     const { noticeOf } = client.internals;
@@ -2731,6 +2847,12 @@ test('browser half: the plugin\'s messages get a notice that names them, without
     assert.equal(noticeOf(data(approvalMessage('t4', 'Deploy', 'Deploy', 'shell', 'rm -rf build'), 'cordis-host-runner')).body,
         'It asked to use shell: rm -rf build\n\nThe user approves or rejects it in the "Deploy" session.');
     assert.equal(noticeOf(data(welcomeMessage('Recipes', ''), 'cordis-host-runner')).kind, 'welcome');
+    // A message from another project's coordinator, and the answer it brings back.
+    assert.deepEqual(plain(noticeOf(data(outsideMessage('DSH Plugins', 'Tell Fix login.', 'Main is green.')))),
+        { kind: 'message', project: 'DSH Plugins', body: 'The user asked: "Tell Fix login."\n\nMain is green.' });
+    assert.deepEqual(plain(noticeOf(data(replyMessage('"Fix login"', 'Thanks.')))), { kind: 'reply', name: 'Fix login', status: '', body: 'Thanks.' });
+    assert.deepEqual(plain(noticeOf(data(replyMessage('◆ Storefront', '', 'The turn failed (HTTP 500): down')))),
+        { kind: 'reply', name: '◆ Storefront', status: 'failed', body: 'The turn failed (HTTP 500): down\n\nIt answered without text.' });
     // The user's own words, and other agents' messages, keep DSH's own notice.
     assert.equal(noticeOf(data(handback, 'user')), undefined);
     assert.equal(noticeOf(data('A message from another agent.')), undefined);

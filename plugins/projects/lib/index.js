@@ -139,6 +139,10 @@ export function apply(ctx, config) {
     ctx.on('agent/disposed', ({ agent }) => {
         manager.forget(agent);
     });
+    // A chat a coordinator messaged (project_message) went idle: its answer goes back to that coordinator once.
+    ctx.on('agent/status', ({ agent, status }) => {
+        manager.onAgentStatus(agent, status);
+    });
     // The defaults form saved: only the live fields changed, so the plugin keeps running.
     ctx.on('loader/volatile-update', () => {
         void manager.onDefaultsChanged();

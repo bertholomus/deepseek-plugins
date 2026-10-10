@@ -1464,6 +1464,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             noticeBriefWhy: 'The coordinator started this thread with this brief.',
             noticeCoordinator: 'Message from the coordinator',
             noticeCoordinatorWhy: 'The coordinator sent this thread a message.',
+            noticeMessage: 'Message from',
+            noticeMessageWhy: 'That project\'s coordinator sent it at your request. This chat stays outside the project; its answer goes back to that coordinator once.',
+            noticeReply: 'Reply from',
+            noticeReplyWhy: 'The answer to the message this coordinator sent at your request.',
             noticeOther: 'Message received',
             needsYou: 'Needs you',
             threads: 'Threads',
@@ -3080,11 +3084,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ['welcome', /^\[Project created: "(.*)"\]$/],
             ['brief', /^\[Brief from the coordinator of "(.*)" · you are thread (t\d+), "(.*)"\]$/],
             ['coordinator', /^\[From the coordinator\]$/],
+            ['message', /^\[Message from the coordinator of "(.*)"\]$/],
+            ['reply', /^\[Reply from (.+)\]$/],
         ];
         /** The sources DSH draws those messages with: another session's (a handback, a brief) and a plugin's (the notes). */
         const NOTICE_SOURCES = new Set(['agent-message', 'cordis-host-runner']);
         /** The closing note in which the plugin tells the coordinator how to answer (prompts.js NOTE_START); the user's notice leaves it out. */
-        const CLOSING_NOTE = /(?:^|\n\n)\((?:The user has not seen this|For the user|Full conversation|Tell the user|If its last reply)\b[^\n]*\)\s*$/;
+        const CLOSING_NOTE = /(?:^|\n\n)\((?:The user has not seen this|For the user|Full conversation|Tell the user|If its last reply|Sent by the coordinator of)\b[^\n]*\)\s*$/;
         /** A handback's state as its notice says it: the state the thread reported, not its state now. */
         const NOTICE_STATES = {
             done: { dot: 'done', label: 'Done' },
@@ -3118,6 +3124,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     }
                     case 'approval': return { kind, thread: m[1], name: m[2], body };
                     case 'welcome': return { kind, project: m[1], body };
+                    case 'message': return { kind, project: m[1], body };
+                    case 'reply': {
+                        // Its first line says when the chat's turn failed or stopped, as an idle note's does.
+                        const ended = /^The turn (failed|was blocked)\b/.test(body) ? 'failed' : /^The turn (was stopped|hit the output token limit|was cut off)\b/.test(body) ? 'stopped' : '';
+                        return { kind, name: m[1].replace(/^"([^]*)"$/, '$1'), status: ended, body };
+                    }
                     case 'brief': return { kind, project: m[1], thread: m[2], name: m[3], body };
                     default: return { kind, body };
                 }
@@ -3145,6 +3157,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     return { icon: ui.IconCordisPluginOutlineRegular, lead: TEXT.noticeWelcome, why: TEXT.noticeWelcomeWhy };
                 case 'brief':
                     return { icon: ui.IconPaperPlaneOutlineRegular, lead: TEXT.noticeBrief, name: `◆ ${notice.project}`, why: TEXT.noticeBriefWhy };
+                case 'message':
+                    return { icon: ui.IconPaperPlaneOutlineRegular, lead: TEXT.noticeMessage, name: `◆ ${notice.project}`, why: TEXT.noticeMessageWhy };
+                case 'reply': {
+                    const failed = notice.status === 'failed';
+                    return {
+                        icon: ui.IconSendOutlineRegular, lead: TEXT.noticeReply, name: notice.name, why: TEXT.noticeReplyWhy,
+                        state: notice.status ? { dot: failed ? 'error' : 'idle', label: failed ? 'Failed' : 'Stopped' } : undefined,
+                    };
+                }
                 default:
                     return { icon: ui.IconPaperPlaneOutlineRegular, lead: TEXT.noticeCoordinator, why: TEXT.noticeCoordinatorWhy };
             }

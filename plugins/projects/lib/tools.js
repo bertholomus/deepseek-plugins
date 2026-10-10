@@ -1,7 +1,7 @@
 /**
  * Model-facing project tools, registered in one agent's scope. The coordinator
- * gets the thread and settings tools, a thread gets project_handback, and both
- * get project_memory. Each tool is bound to its project (and thread) when it
+ * gets the thread, message and settings tools, a thread gets project_handback,
+ * and both get project_memory. Each tool is bound to its project (and thread) when it
  * is registered, so a call can never reach another project.
  *
  * @module dsh-plugin-projects/tools
@@ -128,6 +128,19 @@ export function projectTools(manager, who) {
             async execute(args) {
                 const text = await manager.sendToThread(projectId, args.thread, args.text, args.steer === true, { ask: given(args.ask), guard: true });
                 return result(text, { action: { kind: 'send', thread: id(args.thread), ...(args.steer === true ? { status: 'steer' } : {}) }, threads: [id(args.thread)] });
+            },
+        }),
+        tool({
+            name: 'project_message',
+            description: 'Send a message to a chat outside this project, or to another project\'s coordinator, when the user asks you to. That chat stays outside this project: it gets no thread, card or tools. Its reply comes back to you once, as a note. For this project\'s threads, use project_thread_send.',
+            parameters: {
+                to: { type: 'string', required: true, description: 'Another project\'s name, or the chat\'s title as DSH lists it (or its session id)' },
+                ask: { type: 'string', required: true, description: 'The user\'s request to send it, copied word for word from their message' },
+                text: { type: 'string', required: true, description: 'The message' },
+            },
+            async execute(args) {
+                const target = await manager.sendMessage(projectId, { to: args.to, ask: given(args.ask), text: args.text });
+                return result(`Sent to ${target.name}. Its reply comes back to you once, as a note.`);
             },
         }),
         tool({

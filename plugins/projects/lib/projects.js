@@ -51,6 +51,7 @@ import {
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage, cardSummary,
     handbackMessage, idleMessage, approvalMessage, welcomeMessage, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS, STOPPED_BY_USER,
+    outsideMessage, replyMessage,
 } from './prompts.js';
 import { META_MARK, MAX_THREADS } from './projection.js';
 import { changeRecord, changeTotals, withChange } from './changes.js';
@@ -165,7 +166,14 @@ export function guardedIn(text, guard, { aliases = false } = {}) {
 const isHome = (folder) => typeof folder === 'string' && expand(folder).replace(/\/+$/, '') === homedir().replace(/\/+$/, '');
 
 /** The plugin's own tools, never taken for one of the user's even when a guarded name is a word in them. */
-const OWN_TOOLS = new Set(['project_memory', 'project_handback', 'project_thread_start', 'project_thread_send', 'project_thread_list', 'project_thread_read', 'project_thread_update', 'project_settings']);
+const OWN_TOOLS = new Set(['project_memory', 'project_handback', 'project_thread_start', 'project_thread_send', 'project_thread_list', 'project_thread_read', 'project_thread_update', 'project_settings', 'project_message']);
+
+/** Text as its words alone (lower case, no punctuation), to find an ask in what the user wrote. */
+const wordsKey = (text) => String(text ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+/** Messages to chats outside a project that wait for their reply: at most this many per project, for this long. */
+const MAX_AWAITING = 20;
+const AWAIT_MS = 24 * 60 * 60 * 1000;
 
 /** The guarded names (guardList) a tool's name holds: mcp__lane-catalog__lanes_status holds lane-catalog. */
 const guardsOfTool = (name, guard) => (typeof name === 'string' && !OWN_TOOLS.has(name) ? guardedIn(name, guard) : []);
@@ -370,6 +378,10 @@ export class ProjectManager {
         this.ownPermissions = new Map();
         /** The pending pass over every wall after DSH's tool list changed. */
         this.wallTimer = undefined;
+        /** Session ids of chats outside a project that owe a coordinator the reply to its message (project_message). */
+        this.awaited = new Set();
+        /** sessionId → the check of its replies running now, so one reply is never delivered twice. */
+        this.replyChecks = new Map();
     }
 
     /** One action line, mode 600. Sizes and ids only, never prompt text. */
@@ -1071,6 +1083,7 @@ export class ProjectManager {
             await this.flushPending(id);
             await this.catchUp(id);
         }
+        if (!this.disposed) await this.catchUpReplies();
         if (!this.disposed) await this.plainThreadTitles();
     }
 
@@ -2006,7 +2019,7 @@ export class ProjectManager {
         if (blocked.length === 0) return;
         this.log(`guard ${projectId} ${what} ${blocked.join(',')}`);
         const them = blocked.length > 1 ? 'them' : 'it';
-        const how = what === 'start' ? 'put their words in ask' : 'put their words in ask, or start a thread for it with their words in ask';
+        const how = what === 'send' ? 'put their words in ask, or start a thread for it with their words in ask' : 'put their words in ask';
         throw new ProjectError(`this would use ${blocked.join(', ')}, and the user's words do not ask for ${them}. Keep the work inside the workspace, or ask the user first. If the user did ask, ${how}. If the text only says not to use ${them}, leave that out: threads already have that rule`);
     }
 
@@ -2115,6 +2128,213 @@ export class ProjectManager {
         await this.prompt(t.sessionId, coordinatorMessage(text.trim(), userWords), steer ? 'steer' : 'queue', this.store.project(projectId).coordinatorSessionId);
         this.log(`thread-send ${projectId}/${id} mode=${steer ? 'steer' : 'queue'} chars=${text.length}`);
         return `${steer ? 'Steered' : 'Sent to'} ${id}${t.resolved ? ' (reopened)' : ''}.`;
+    }
+
+    // ── messages to chats outside the project ──────────────────────────────
+
+    /**
+     * Whether the coordinator's turn now is one the user started: the
+     * newest prompt in it is the user's own message, not a note from a
+     * thread, the plugin or another chat. A message out of the project goes
+     * only from such a turn, so two coordinators can't keep answering each
+     * other's replies.
+     */
+    async userTurn(projectId) {
+        const sessionId = this.store.project(projectId).coordinatorSessionId;
+        if (!sessionId) return false;
+        return (await this.readTurn(sessionId, { current: true })).fromProject === false;
+    }
+
+    /** The chats DSH lists (newest first), without subagents' sessions or empty ones. */
+    async chatList() {
+        const { items } = await this.sc.list({}, AbortSignal.timeout(20000));
+        return (Array.isArray(items) ? items : [])
+            .filter((item) => typeof item?.sessionId === 'string' && typeof item.cwd === 'string' && !item.parentSessionId && item.blank !== true)
+            .map((item) => ({
+                sessionId: item.sessionId,
+                title: typeof item.projections?.values?.title === 'string' ? item.projections.values.title : '',
+                cwd: item.cwd,
+                updatedAt: item.updatedAt,
+            }));
+    }
+
+    /**
+     * The chat project_message names: another project's coordinator (its
+     * name, with or without ◆, or its id), or a chat that belongs to no
+     * project (its title as DSH lists it, or its session id). A thread
+     * stays with its project, so naming one is refused with where to send
+     * instead; so is a title several chats share.
+     * @returns {Promise<{sessionId: string, name: string, kind: 'project'|'chat'}>}
+     */
+    async messageTarget(projectId, to) {
+        const raw = String(to ?? '').trim();
+        if (!raw) throw new ProjectError('to is required: a chat\'s title, or another project\'s name');
+        const bare = raw.replace(/^◆\s*/, '').replace(/^"([^]*)"$/, '$1').trim();
+        const key = bare.toLowerCase();
+        const own = this.project(projectId);
+        if (bare === projectId || String(own.name).trim().toLowerCase() === key) throw new ProjectError('that is this project: you are its coordinator');
+        const toProject = (id) => {
+            const name = this.project(id).name;
+            const sessionId = this.store.project(id).coordinatorSessionId;
+            if (!sessionId) throw new ProjectError(`◆ ${name} has no coordinator right now`);
+            return { sessionId, name: `◆ ${name}`, kind: 'project' };
+        };
+        for (const [id, p] of this.projects) {
+            if (id === bare || String(p.name).trim().toLowerCase() === key) return toProject(id);
+        }
+        const chats = await this.chatList();
+        const byId = chats.find((c) => c.sessionId === raw);
+        const found = byId ? [byId] : chats.filter((c) => c.title.trim().toLowerCase() === key);
+        if (found.length === 0) {
+            const others = [...this.projects].filter(([id]) => id !== projectId && this.store.project(id).coordinatorSessionId).map(([, p]) => `◆ ${p.name}`);
+            const recent = chats.filter((c) => !this.store.lookup(c.sessionId) && c.title).slice(0, 8).map((c) => `"${c.title}"`);
+            throw new ProjectError(`no chat or project here is called "${clipTitle(bare)}".${others.length ? ` Other projects: ${others.join(', ')}.` : ''}`
+                + `${recent.length ? ` Recent chats: ${recent.join(', ')}.` : ''} Put one of these in to as it is written, or ask the user which chat they mean`);
+        }
+        if (found.length > 1) {
+            const list = found.slice(0, 8).map((c) => `${c.sessionId} (in ${c.cwd}${Number.isFinite(c.updatedAt) && c.updatedAt > 0 ? `, last active ${new Date(c.updatedAt).toISOString().slice(0, 16).replace('T', ' ')} UTC` : ''})`);
+            throw new ProjectError(`${found.length} chats are called "${clipTitle(bare)}": ${list.join('; ')}. Put the id of the one the user means in to, or ask the user`);
+        }
+        const chat = found[0];
+        const who = this.store.lookup(chat.sessionId);
+        if (who?.projectId === projectId) {
+            if (who.role === 'coordinator') throw new ProjectError('that is this chat: you are its coordinator');
+            throw new ProjectError(`that is this project's thread ${who.threadId}: use project_thread_send`);
+        }
+        if (who && this.projects.has(who.projectId)) {
+            if (who.role === 'coordinator') return toProject(who.projectId);
+            throw new ProjectError(`that is a thread of ◆ ${this.project(who.projectId).name}, and a thread stays with its project. Send it to ◆ ${this.project(who.projectId).name} instead`);
+        }
+        return { sessionId: chat.sessionId, name: `"${chat.title || chat.sessionId}"`, kind: 'chat' };
+    }
+
+    /** The seq of a session's newest logged event, or -1. */
+    async lastSeq(sessionId) {
+        const events = (await this.sc.inspect(sessionId, AbortSignal.timeout(20000))).events ?? [];
+        const last = events.length - 1;
+        return last < 0 ? -1 : Number.isSafeInteger(events[last]?.seq) ? events[last].seq : last;
+    }
+
+    /**
+     * project_message: send a chat outside the project, or another
+     * project's coordinator, a message the user asked for. It goes only in
+     * a turn the user started, with their words (`ask`) as they wrote them,
+     * and a guarded tool in it needs the user's words for it, as a thread's
+     * start does. The chat stays outside the project: it gets no thread,
+     * card, tools or place in the project. Its answer to the message comes
+     * back to the coordinator once, as a note (collectReplies).
+     * @returns the chat it went to.
+     */
+    async sendMessage(projectId, { to, ask, text }) {
+        const body = String(text ?? '').trim();
+        if (!body) throw new ProjectError('text is required');
+        const userWords = typeof ask === 'string' ? ask.trim().slice(0, 4000) : '';
+        if (!userWords) throw new ProjectError('ask is required: copy the user\'s words from their message');
+        const from = this.store.project(projectId).coordinatorSessionId;
+        if (!from) throw new ProjectError('this project has no coordinator right now');
+        if (!await this.userTurn(projectId)) {
+            this.log(`guard ${projectId} message-not-asked`);
+            throw new ProjectError('a message goes out of the project only in a turn the user started. Tell the user what came in, and send it when they ask');
+        }
+        if (!wordsKey(await this.userText(projectId)).includes(wordsKey(userWords))) {
+            this.log(`guard ${projectId} message-unsaid`);
+            throw new ProjectError('ask must be the user\'s own words, copied from their message here');
+        }
+        const target = await this.messageTarget(projectId, to);
+        // The user's tools: a chat outside a project has all of them, so the message may name only the ones the user's words do.
+        const tools = await this.askedTools(projectId, userWords);
+        this.guard(projectId, 'message', `${userWords}\n${body}`, tools);
+        const after = await this.lastSeq(target.sessionId);
+        await this.prompt(target.sessionId, outsideMessage(this.project(projectId).name, userWords, body), 'queue', from);
+        const waiting = this.store.project(projectId).awaiting ?? [];
+        if (!waiting.some((w) => w.to === target.sessionId)) {
+            const entry = { to: target.sessionId, name: target.name, from, after, at: new Date().toISOString() };
+            this.store.putProject(projectId, { awaiting: [...waiting, entry].slice(-MAX_AWAITING) });
+        }
+        this.awaited.add(target.sessionId);
+        this.log(`message ${projectId} to=${target.kind} ${target.sessionId} chars=${body.length} ask-chars=${userWords.length}`);
+        return target;
+    }
+
+    /**
+     * The turn in which a chat answered a coordinator's message: the first
+     * of its messages from `from` after `after`, and the turn that took it.
+     */
+    async messageTurn(sessionId, after, from) {
+        const events = (await this.sc.inspect(sessionId, AbortSignal.timeout(20000))).events ?? [];
+        const seqOf = (event, i) => (Number.isSafeInteger(event?.seq) ? event.seq : i);
+        const at = events.findIndex((event, i) => seqOf(event, i) > after && roleOf(event) === 'user'
+            && (event.data?.message ?? event.data)?.source?.senderSessionId === from && textOf(event).startsWith(TAGS.message));
+        if (at < 0) return { found: false, ended: false };
+        const end = events.findIndex((event, i) => i > at && event?.type === 'turn/end');
+        if (end < 0) return { found: true, ended: false };
+        let reply = '';
+        for (let i = at + 1; i < end; i++) if (roleOf(events[i]) === 'assistant') reply = textOf(events[i]) || reply;
+        return { found: true, ended: true, reply: reply.trim(), ending: describeEnding(events[end].data?.reason ?? null) };
+    }
+
+    /** A session went idle: if it owes a coordinator a reply, look for it, one check at a time. */
+    onAgentStatus(agent, status) {
+        const id = agent?.id;
+        if (status !== 'idle' || this.disposed || !this.awaited.has(id)) return;
+        const run = (this.replyChecks.get(id) ?? Promise.resolve()).then(() => this.collectReplies(id)).catch((error) => {
+            this.log(`error message-reply ${id} ${String(error?.message ?? error).slice(0, 200)}`);
+        });
+        this.replyChecks.set(id, run);
+        void run.finally(() => { if (this.replyChecks.get(id) === run) this.replyChecks.delete(id); });
+    }
+
+    /**
+     * Deliver each reply a chat owes a coordinator, once: the answer of the
+     * turn that took the message, once that turn ended. A chat DSH no
+     * longer has owes nothing.
+     */
+    async collectReplies(target) {
+        for (const projectId of [...this.projects.keys()]) {
+            const mine = (this.store.project(projectId).awaiting ?? []).find((w) => w?.to === target);
+            if (!mine) continue;
+            let turn;
+            try {
+                turn = await this.messageTurn(target, mine.after, mine.from);
+            } catch (error) {
+                if (await this.exists(target).catch(() => true)) throw error;
+                turn = undefined;
+            }
+            if (turn && !turn.ended) continue;
+            this.store.putProject(projectId, { awaiting: (this.store.project(projectId).awaiting ?? []).filter((w) => w?.to !== target) });
+            if (!turn) {
+                this.log(`message-gone ${projectId} ${target}`);
+                continue;
+            }
+            const outcome = await this.deliver(projectId, replyMessage(mine.name, turn.reply, turn.ending), target);
+            this.log(`message-reply ${projectId} ${target} ${outcome} chars=${turn.reply.length}${turn.ending ? ' ended=other' : ''}`);
+        }
+        if (![...this.projects.keys()].some((id) => (this.store.project(id).awaiting ?? []).some((w) => w?.to === target))) this.awaited.delete(target);
+    }
+
+    /**
+     * At start: the replies still owed. One that came while DSH was off is
+     * delivered now; one older than a day is let go.
+     */
+    async catchUpReplies() {
+        const now = Date.now();
+        for (const projectId of this.projects.keys()) {
+            const waiting = this.store.projects[projectId]?.awaiting;
+            if (!Array.isArray(waiting) || waiting.length === 0) continue;
+            const fresh = waiting.filter((w) => typeof w?.to === 'string' && now - Date.parse(w.at) < AWAIT_MS);
+            if (fresh.length !== waiting.length) {
+                this.store.putProject(projectId, { awaiting: fresh });
+                this.log(`message-expired ${projectId} n=${waiting.length - fresh.length}`);
+            }
+            for (const w of fresh) this.awaited.add(w.to);
+        }
+        for (const target of [...this.awaited]) {
+            if (this.disposed) return;
+            if (this.ctx.agents.get(target)?.status === 'running') continue;
+            await this.collectReplies(target).catch((error) => {
+                this.log(`error message-reply ${target} ${String(error?.message ?? error).slice(0, 200)}`);
+            });
+        }
     }
 
     /**

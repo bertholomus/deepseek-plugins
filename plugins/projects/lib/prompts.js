@@ -15,6 +15,8 @@ export const TAGS = {
     idle: '[Thread idle without a handback',
     approval: '[Thread waiting for approval',
     welcome: '[Project created',
+    message: '[Message from the coordinator of',
+    reply: '[Reply from',
 };
 
 export const HANDBACK_STATUSES = ['done', 'blocked', 'needs_decision', 'progress'];
@@ -116,7 +118,7 @@ export function coordinatorPolicy(p) {
         p.guarded?.length && p.yourTools !== 'always'
             ? `   You don't have these here: ${p.guarded.join(', ')}. When the user's words ask for work that needs one, start a thread with their words in \`ask\`; the thread gets the ones their words name.`
             : p.guarded?.length ? `   Here those include: ${p.guarded.join(', ')}.` : null,
-        '3. For work, start a thread with project_thread_start, not with DSH\'s subagent or workflow tools. One thread per distinct ask; put the user\'s words in `ask`, word for word. A follow-up on a thread\'s work goes to that thread with project_thread_send.',
+        '3. For work, start a thread with project_thread_start, not with DSH\'s subagent or workflow tools. One thread per distinct ask; put the user\'s words in `ask`, word for word. A follow-up on a thread\'s work goes to that thread with project_thread_send. Something the user wants sent to another chat or project goes with project_message.',
         `4. Name a thread to the user only as a link: [Fix the login bug](${threadLink('t3')}) for thread t3.`,
         '5. Answer yourself only what you already know: thread status, project memory, this conversation. Keep your turns short.',
         '6. Before you or a thread delete files, push, publish, send or post anything, spend money, or change settings outside the workspace, ask the user, unless their words asked for exactly that.',
@@ -188,6 +190,25 @@ export function coordinatorMessage(text, ask) {
     return `${TAGS.coordinator}]\n\n${ask ? `The user asked: "${ask}"\n\n` : ''}${text}`;
 }
 
+/**
+ * A coordinator's message to a chat outside its project, or to another
+ * project's coordinator (project_message): the user's words, the message,
+ * and a note that the chat stays outside the project.
+ */
+export function outsideMessage(projectName, ask, text) {
+    return `${TAGS.message} "${projectName}"]\n\nThe user asked: "${ask}"\n\n${text}\n\n(Sent by the coordinator of the project "${projectName}" at the user's request. This chat stays outside that project. Answer here: your reply goes back to that coordinator once.)`;
+}
+
+/**
+ * The answer to a project_message, as its coordinator sees it, once.
+ * @param {string} name - the chat as the coordinator named it: "title", or ◆ project.
+ * @param {string} ending - how the turn ended when it did not complete, or ''.
+ */
+export function replyMessage(name, reply, ending = '') {
+    const body = reply ? clip(reply, 3000) : 'It answered without text.';
+    return `${TAGS.reply} ${name}]\n\n${ending ? `${ending}\n\n` : ''}${body}\n\n(The user has not seen this. Tell them in a line or two what ${name} answered. Send it nothing more unless the user asks.)`;
+}
+
 /** What the first line of the coordinator's reply to a handback carries, by its status. */
 const LEAD = {
     done: 'the result in one sentence. Then at most two short lines',
@@ -197,7 +218,7 @@ const LEAD = {
 };
 
 /** How the closing notes of the plugin's messages begin (old ones: "(For the user" and "(Full conversation"). */
-export const NOTE_START = /\n\n\((?:The user has not seen this|For the user|Full conversation|Tell the user|If its last reply)\b[^\n]*\)\s*$/;
+export const NOTE_START = /\n\n\((?:The user has not seen this|For the user|Full conversation|Tell the user|If its last reply|Sent by the coordinator of)\b[^\n]*\)\s*$/;
 
 /**
  * An explicit handback, as the coordinator sees it. Its closing note says
