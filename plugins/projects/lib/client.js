@@ -910,10 +910,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             : h(SessionProvider, { session: resource.value.reference }, renderSlot(CONVERSATION_SLOT, {}))));
         }
 
-        function ThreadsPaneTitle() {
-            return h('span', { className: 'dshp-t-tab-title' }, h(ui.IconFlatListOutlineRegular, { size: 14 }), h('span', null, TEXT.threads));
-        }
-
         function ThreadChatTitle({ useTabInfo, useSessions, useSessionStatus }) {
             const { tab } = useTabInfo();
             const facts = useChatFacts(chatSessionOf(tab.contentId), useSessions, useSessionStatus);
@@ -1206,9 +1202,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
                     name: 'sidebar.right.pane.tab', key: IDS.pane, inject: withApi,
                 }, ThreadsPane));
-                scope.slots.inject('sidebar.right.pane.tab.title', () => scope.slots.register({
-                    name: 'sidebar.right.pane.tab.title', key: IDS.pane,
-                }, ThreadsPaneTitle));
                 scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
                     name: 'sidebar.right.pane.tab', key: IDS.link, inject: withApi,
                 }, ThreadLinkTab));

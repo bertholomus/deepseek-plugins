@@ -721,7 +721,6 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
         ['sidebar.right.pane.tab.title', 'dsh-plugin-projects/thread-chat', null],
         ['projects.thread.conversation', null, null],
         ['sidebar.right.pane.tab', 'dsh-plugin-projects/threads-pane', null],
-        ['sidebar.right.pane.tab.title', 'dsh-plugin-projects/threads-pane', null],
         ['sidebar.right.pane.tab', 'dsh-plugin-projects/thread-link', null],
     ]);
     // The thread chat tab hosts the conversation slot it renders.
