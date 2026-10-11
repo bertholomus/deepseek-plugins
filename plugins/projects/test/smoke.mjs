@@ -1051,16 +1051,17 @@ test('browser half: the Projects page is headed Categories, each row says what i
     const value = (v) => ({ values: { projectSession: v } });
     const sessions = {
         phase: 'ready',
-        byId: { c: { id: 'c', title: '◆ DSH Plugins' }, t1: { id: 't1', title: 'Fix the page' }, x: { id: 'x', title: 'A chat' }, n: { id: 'n', title: 'Notes' } },
+        byId: { c: { id: 'c', title: '◆ DSH Plugins' }, t1: { id: 't1', title: 'Fix the page' }, t2: { id: 't2', title: 'Old fix' }, x: { id: 'x', title: 'A chat' }, n: { id: 'n', title: 'Notes' } },
         projectionsBySession: {
-            c: value({ role: 'coordinator', project: { id: 'dsh-plugins', name: 'DSH Plugins' } }),
+            c: value({ role: 'coordinator', project: { id: 'dsh-plugins', name: 'DSH Plugins' }, threads: [{ id: 't1', session: 't1', resolved: false }, { id: 't2', session: 't2', resolved: true }] }),
             t1: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' } }),
+            t2: value({ role: 'thread', coordinator: 'c', thread: { id: 't2' } }),
         },
     };
     let workspaces = {
         phase: 'ready', archivedSessionIds: [],
         items: [
-            { workspaceId: 'w-dsh', title: 'deepseek-plugins', path: '/home/u/deepseek-plugins', sessionIds: ['c', 't1', 'x'] },
+            { workspaceId: 'w-dsh', title: 'deepseek-plugins', path: '/home/u/deepseek-plugins', sessionIds: ['c', 't1', 't2', 'x'] },
             { workspaceId: 'w-notes', title: 'notes', path: '/Users/u/notes', sessionIds: ['n'] },
             { workspaceId: 'w-loose', title: 'loose', path: '/tmp/loose', sessionIds: [] },
         ],
@@ -1096,8 +1097,9 @@ test('browser half: the Projects page is headed Categories, each row says what i
     assert.deepEqual(plain(rows), [
         [1, 'category', '', 'DSH Plugins', 'Category · 1 workspace'],
         [2, 'workspace', '', 'deepseek-plugins', '~/deepseek-plugins'],
-        [3, 'project', '◆', 'DSH Plugins', 'Project · 1 thread'],
+        [3, 'project', '◆', 'DSH Plugins', 'Project · 1 open thread · 1 resolved'],
         [4, 'thread', '', 'Fix the page', ''],
+        [4, 'thread', '', 'Old fix', ''],
         [3, 'session', '', 'A chat', ''],
         [1, 'category', '', 'General', 'Category · 1 workspace'],
         [2, 'workspace', '', 'notes', '~/notes'],
@@ -1106,7 +1108,8 @@ test('browser half: the Projects page is headed Categories, each row says what i
         [2, 'workspace', '', 'loose', '/tmp/loose'],
     ]);
     assert.deepEqual([treeMeta({ kind: 'category', id: 'new', children: [] }), treeMeta({ kind: 'project', id: 'c', children: [] }), treeMeta({ kind: 'workspace', id: 'w', path: '', children: [] })],
-        ['Category · 0 workspaces', 'Project · 0 threads', null]);
+        ['Category · 0 workspaces', 'Project · no threads yet', null]);
+    assert.equal(treeMeta({ kind: 'project', id: 'c', children: [{ resolved: false }, { resolved: false }, { resolved: true }, { resolved: true }] }), 'Project · 2 open threads · 2 resolved');
 
     // New category asks for a name, in the sidebar's words; a refusal shows under the field, and the dialog stays.
     newButton(page).props.onClick();

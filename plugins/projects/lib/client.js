@@ -4322,7 +4322,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.slots.inject('shell.overlay', () => ctx.slots.register({
                 name: 'shell.overlay', id: IDS.news, inject: withApi,
             }, NewsNotice));
-            // DSH's session list by project: a header over each project's workspaces.
+            // DSH's session list by category: a header over each category's workspaces, then Other workspaces.
             ctx.slots.inject('shell.overlay', () => ctx.slots.register({
                 name: 'shell.overlay', id: IDS.sidebar, inject: withApi,
             }, SidebarTree));
@@ -4391,6 +4391,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // What each level is, on its row, so a category never reads as a project.
             category: 'Category',
             project: 'Project',
+            noThreads: 'no threads yet',
             cancel: 'Cancel',
             close: 'Close',
             newChat: 'New chat',
@@ -4551,7 +4552,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * thread is drawn under its project wherever it works, never apart
          * from it (the user's rule); workspaces in no category come last,
          * under Other workspaces.
-         * @returns {Array<{kind, id, title, children, row?, project?, path?}>}
+         * @returns {Array<{kind, id, title, children, row?, project?, path?, resolved?}>}
          */
         function pageModel({ categories, listed, items, sessions, archived }) {
             const byId = sessions?.byId ?? {};
@@ -4560,13 +4561,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const coordOf = new Map(listed.filter((p) => typeof p?.coordinator === 'string' && p.coordinator !== '').map((p) => [p.coordinator, p]));
             const threadsOf = new Map();
             const threadIds = new Set();
+            // The threads each coordinator's roster calls resolved, so a project's count reads as its Threads menu does.
+            const resolvedOf = (coordinator) => new Set((Array.isArray(valueIn(sessions, coordinator)?.threads) ? valueIn(sessions, coordinator).threads : EMPTY)
+                .filter((t) => isObject(t) && t.resolved === true && typeof t.session === 'string').map((t) => t.session));
+            const resolvedBy = new Map();
             for (const ws of items) {
                 for (const id of Array.isArray(ws?.sessionIds) ? ws.sessionIds : EMPTY) {
                     if (hidden(id) || coordOf.has(id) || !isThreadRow(sessions, id)) continue;
                     const parent = valueIn(sessions, id)?.coordinator ?? known.map.get(id)?.coordinator;
                     if (typeof parent !== 'string' || !coordOf.has(parent)) continue;
                     if (!threadsOf.has(parent)) threadsOf.set(parent, []);
-                    threadsOf.get(parent).push({ kind: 'thread', id, title: titleOf(byId[id]), row: byId[id], children: EMPTY });
+                    if (!resolvedBy.has(parent)) resolvedBy.set(parent, resolvedOf(parent));
+                    threadsOf.get(parent).push({ kind: 'thread', id, title: titleOf(byId[id]), row: byId[id], resolved: resolvedBy.get(parent).has(id), children: EMPTY });
                     threadIds.add(id);
                 }
             }
@@ -4617,7 +4623,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function treeMeta(node) {
             const n = node.children.length;
             if (node.kind === 'category') return node.id === OTHERS ? plural(n, 'workspace') : `${PAGE.category} · ${plural(n, 'workspace')}`;
-            if (node.kind === 'project') return `${PAGE.project} · ${plural(n, 'thread')}`;
+            if (node.kind === 'project') {
+                // Open threads as the hover card and the plugin's page count them, then the resolved ones drawn with them.
+                const resolved = node.children.filter((child) => child.resolved === true).length;
+                const open = n - resolved;
+                if (n === 0) return `${PAGE.project} · ${PAGE.noThreads}`;
+                return `${PAGE.project} · ${plural(open, 'open thread')}${resolved > 0 ? ` · ${resolved} resolved` : ''}`;
+            }
             return node.kind === 'workspace' && node.path ? shortPath(node.path) : null;
         }
 
