@@ -488,6 +488,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-tree-item[data-projects-unread]>.dshp-tree-row .dshp-tree-title{font-weight:600}',
             '.dshp-tree-glyph{display:inline-flex;width:14px;flex:none;opacity:.75}',
             '.dshp-pg-count{font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
+            `.dshp-pg-said{${HIDDEN}}`,
             // Find by name, above the tree; a found name's words are marked in its title.
             '.dshp-pg-find{position:relative;max-width:360px;margin:0 0 10px}',
             '.dshp-pg-find .dshp-pg-find-box{display:flex;width:100%;box-sizing:border-box}',
@@ -4595,6 +4596,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             find: 'Find by name',
             findClear: 'Clear the find',
             findNone: (words) => `Nothing matches “${words}”.`,
+            // What Alt and an arrow on the tree answer: nothing on the page moves, and why.
+            threadOrder: 'A project\'s threads keep the session list\'s order, open ones first.',
+            threadIn: 'A thread can\'t go inside another thread.',
+            projectOrder: 'Projects keep the order of the workspaces they work in.',
         };
 
         /**
@@ -4786,12 +4791,43 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
+         * What Alt and an arrow answer on the Projects page, where nothing
+         * moves: a project goes where the workspace it works in goes, and a
+         * thread stays in its project, in the session list's order. Up from a
+         * project's first thread, Down from its last and Left would take the
+         * thread out, so they say it stays.
+         * @param tree - the whole tree (pageModel), not a find's.
+         * @returns the reason, or null for an item or a key it doesn't answer.
+         */
+        function pageRefusal(tree, key, arrow) {
+            const at = String(key ?? '').indexOf(':');
+            const kind = String(key ?? '').slice(0, Math.max(0, at));
+            const id = String(key ?? '').slice(at + 1);
+            const nodes = Array.isArray(tree) ? tree : EMPTY;
+            const vertical = arrow === 'ArrowUp' || arrow === 'ArrowDown';
+            if (kind === 'project' && nodes.some((p) => p.id === id)) {
+                if (vertical) return PAGE.projectOrder;
+                if (arrow === 'ArrowRight') return SIDEBAR.projectIn;
+                return arrow === 'ArrowLeft' ? SIDEBAR.projectStays : null;
+            }
+            const threads = kind === 'thread' ? nodes.find((p) => p.children.some((t) => t.id === id))?.children : undefined;
+            if (!threads) return null;
+            const i = threads.findIndex((t) => t.id === id);
+            if (arrow === 'ArrowLeft' || (arrow === 'ArrowUp' && i === 0) || (arrow === 'ArrowDown' && i === threads.length - 1)) return SIDEBAR.threadStays;
+            if (vertical) return PAGE.threadOrder;
+            return arrow === 'ArrowRight' ? PAGE.threadIn : null;
+        }
+
+        /**
          * The Projects page's tree, as a screen reader and the keys expect:
          * one tab stop, Up and Down in drawn order, Right opens a project or
          * goes into it, Left closes it or goes to its project, Home and End,
-         * Enter opens a project's coordinator or a thread.
+         * Enter opens a project's coordinator or a thread. Alt and an arrow
+         * go to onMove, which says why the item stays (pageRefusal); the
+         * focus stays on it.
+         * @param onMove - (key, arrow) => the reason said, or null for a key left to DSH.
          */
-        function PageTree({ tree, label, onOpenSession, statuses, find = '', treeRef }) {
+        function PageTree({ tree, label, onOpenSession, onMove, statuses, find = '', treeRef }) {
             const [stored, toggleStored] = useStoredSet(CLOSED_KEY);
             // While a find is on, everything it keeps starts open, and what is closed then is forgotten when the
             // find changes (React's way to reset state when a prop changes: set it while drawing).
@@ -4814,6 +4850,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const activate = (x) => onOpenSession(x.node.id);
             const onKeyDown = (event) => {
                 const x = shown.find((item) => item.key === current) ?? shown[0];
+                if (x && event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey && /^Arrow(Up|Down|Left|Right)$/.test(event.key)) {
+                    if ((onMove?.(x.key, event.key) ?? null) !== null) event.preventDefault();
+                    return;
+                }
                 if (!x || event.altKey || event.metaKey || event.ctrlKey) return;
                 const i = shown.indexOf(x);
                 const go = (y) => { if (y) { event.preventDefault(); focusKey(y.key); } };
@@ -4919,6 +4959,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // Until DSH's own list has its workspaces, an empty tree means nothing yet.
             const pending = useWorkspaces((state) => state.phase) === 'pending';
             const [find, setFind] = React.useState('');
+            const [said, setSaid] = React.useState('');
             const treeRef = React.useRef(null);
             const findRef = React.useRef(null);
             const archived = React.useMemo(() => new Set(Array.isArray(archivedIds) ? archivedIds : EMPTY), [archivedIds]);
@@ -4926,6 +4967,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 listed, items, sessions, archived,
                 pausedOf: (coordinator) => projects.facts.paused?.(coordinator), newsOf: (coordinator) => projects.facts.newsOf?.(coordinator),
             });
+            // Alt and an arrow on the tree, answered on the whole tree (a find shows only part of it); the same words twice are said twice.
+            const move = (key, arrow) => {
+                const reason = pageRefusal(tree, key, arrow);
+                if (reason !== null) setSaid((prev) => (prev === reason ? `${reason} ` : reason));
+                return reason;
+            };
             let content;
             if (listed === null && failed) {
                 content = h('div', { className: 'dshp-pg-state dshp-t-error', role: 'alert' }, SETTINGS.unreachable, ' ',
@@ -4955,7 +5002,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         type: 'button', className: 'dshp-mp-search-clear', 'aria-label': PAGE.findClear, 'data-projects-find-clear': '',
                         onClick: () => { setFind(''); findRef.current?.focus(); },
                     }, h(ui.IconCloseFillRegular, null)) : null),
-                    kept.length > 0 ? h(PageTree, { tree: kept, label: PAGE.title, statuses, find, treeRef, onOpenSession: (id) => projects.openSession(id) })
+                    kept.length > 0 ? h(PageTree, { tree: kept, label: PAGE.title, statuses, find, treeRef, onMove: move, onOpenSession: (id) => projects.openSession(id) })
                         : h('div', { className: 'dshp-pg-state dshp-pg-find-none', role: 'status', 'data-projects-find-none': '' }, PAGE.findNone(find.trim())));
             }
             return h('div', { className: 'dshp-pg', 'data-projects-page': '' },
@@ -4964,7 +5011,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         h('div', { className: 'dshp-pg-heading' },
                             h('h1', null, PAGE.title),
                             tree.length > 0 ? h('span', { className: 'dshp-pg-count' }, plural(tree.length, 'project')) : null),
-                        content)));
+                        content)),
+                // What the keys answered, said to screen readers.
+                h('div', { className: 'dshp-pg-said', role: 'status', 'aria-live': 'polite', 'data-projects-page-said': '' }, said));
         }
 
         // ── DSH's session list ─────────────────────────────────────────────
@@ -6068,7 +6117,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the views are built on.
         module.exports.internals = {
-            pageModel, visibleItems, treeMeta, PageTree, ProjectsPage, findInTree, withHit,
+            pageModel, visibleItems, pageRefusal, treeMeta, PageTree, ProjectsPage, findInTree, withHit,
             valueIn, takeKnown, coordinatorName, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, nestingRules, sectionGroups, nestingCss, nestedOrder, readInOrder, describeRows, undoRows, rowWords,
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,

@@ -1212,7 +1212,7 @@ test('browser half: the Projects page is headed Projects with how many, and a pr
 
 test('browser half: the Projects page gives each thread its state, marks a paused project and its news, and a chevron folds a project', () => {
     const { client, react } = loadClient();
-    const { ProjectsPage, PageTree } = client.internals;
+    const { ProjectsPage, PageTree, pageRefusal } = client.internals;
     const value = (v) => ({ values: { projectSession: v } });
     const at = (minutes) => new Date(Date.UTC(2026, 9, 11, 2, minutes)).toISOString();
     const thread = (id) => value({ role: 'thread', coordinator: 'c', thread: { id } });
@@ -1260,7 +1260,8 @@ test('browser half: the Projects page gives each thread its state, marks a pause
         useSessions: (select) => select(sessions), useSessionStatus: (select) => select(statuses), useWorkspaces: (select) => select(workspaces),
         projects: { facts, openSession: (id) => opened.push(id) },
     };
-    const page = mount(react, () => ProjectsPage(props))();
+    const drawPage = mount(react, () => ProjectsPage(props));
+    const page = drawPage();
     const treeEl = elementsOf(page).find((e) => e.type === PageTree);
     const drawTree = mount(react, () => PageTree(treeEl.props));
     const items = (tree) => elementsOf(tree).filter((e) => e.props?.role === 'treeitem');
@@ -1333,6 +1334,40 @@ test('browser half: the Projects page gives each thread its state, marks a pause
     assert.equal(row(drawTree(), 'dt').props.tabIndex, 0);
     key('Home');
     assert.equal(row(drawTree(), 'c').props.tabIndex, 0);
+    // Alt and an arrow move nothing on the page: each says why, and the focus stays. A project goes where the workspace it
+    // works in goes; a thread stays in its project, in the session list's order, and can't leave it at either end.
+    const said = () => textIn(elementsOf(drawPage()).find((e) => e.props?.['data-projects-page-said'] !== undefined));
+    const alt = (name, extra = {}) => {
+        let prevented = 0;
+        elementsOf(drawTree()).find((e) => e.props?.role === 'tree').props.onKeyDown({ key: name, altKey: true, preventDefault: () => { prevented += 1; }, ...extra });
+        return [prevented, said().trim()];
+    };
+    assert.equal(said(), '');
+    assert.deepEqual(alt('ArrowDown'), [1, 'Projects keep the order of the workspaces they work in.']);
+    assert.deepEqual(alt('ArrowRight'), [1, 'A project can\'t go inside another project.']);
+    assert.deepEqual(alt('ArrowLeft'), [1, 'A project stays in its workspace.']);
+    assert.equal(row(drawTree(), 'c').props.tabIndex, 0);
+    key('ArrowDown');
+    assert.deepEqual(alt('ArrowUp'), [1, 'A thread stays with the project it started in.']);
+    assert.deepEqual(alt('ArrowDown'), [1, 'A project\'s threads keep the session list\'s order, open ones first.']);
+    assert.deepEqual(alt('ArrowLeft'), [1, 'A thread stays with the project it started in.']);
+    assert.deepEqual(alt('ArrowRight'), [1, 'A thread can\'t go inside another thread.']);
+    assert.equal(row(drawTree(), 'run').props.tabIndex, 0);
+    key('End');
+    assert.deepEqual(alt('ArrowDown'), [1, 'A thread stays with the project it started in.']);
+    const once = said();
+    alt('ArrowDown');
+    assert.notEqual(said(), once, 'the same words again are said again');
+    assert.equal(row(drawTree(), 'dt').props.tabIndex, 0);
+    // With Shift, Ctrl or Meta too, the keys are DSH's own.
+    assert.deepEqual(alt('ArrowDown', { shiftKey: true })[0], 0);
+    assert.deepEqual(alt('ArrowLeft', { metaKey: true })[0], 0);
+    // On the whole tree, though a find shows only part of it: the last open thread isn't the project's last.
+    const whole = treeEl.props.tree;
+    assert.deepEqual(plain(['idle', 'gone'].map((id) => pageRefusal(whole, `thread:${id}`, 'ArrowDown'))), [
+        'A project\'s threads keep the session list\'s order, open ones first.', 'A thread stays with the project it started in.',
+    ]);
+    assert.deepEqual(plain([pageRefusal(whole, 'thread:x', 'ArrowDown'), pageRefusal(whole, 'project:nope', 'ArrowUp'), pageRefusal(whole, 'project:c', 'Enter')]), [null, null, null]);
     // Keys with a modifier are DSH's own.
     assert.equal(elementsOf(drawTree()).find((e) => e.props?.role === 'tree').props.onKeyDown({ key: 'ArrowDown', metaKey: true, preventDefault: () => assert.fail('taken') }), undefined);
 });
