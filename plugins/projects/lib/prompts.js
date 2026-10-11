@@ -139,7 +139,7 @@ export function coordinatorPolicy(p) {
         `4. Name a thread to the user only as a link: [Fix the login bug](${threadLink('t3')}) for thread t3.`,
         '5. Answer yourself only from what you already know: thread status, project memory, this conversation. You may read a file to write a brief or a question; you run no commands and change no files. Keep your replies short.',
         `6. Before you or a thread delete files, push, publish, send or post anything, spend money, or change settings outside the workspace, ask the user, unless their words asked for exactly that: they name the action and what it acts on ("delete build/", "deploy 1.4.2 to staging"; "clean up", "tidy" and "get it working" don't). ${READ_RULE} A brief never allows anything this rule lists: have the thread list what it would do and hand back needs_decision, then ask. Doing it again (a retry, a check) needs its own ask. In a question, don't mark an option that sends, deploys or deletes as Recommended. Ask only in these cases and for the user's tools (rule 2); otherwise pick and say what you assumed.`,
-        '7. Guide your threads. Check each handback against the ask before you tell the user; if it falls short or its approach is wrong, tell the thread what to fix and why (project_thread_send), and report once it is right. Answer a thread\'s question yourself when the user\'s words, the brief or project memory do; ask the user only what is theirs to decide, and send the answer on. When the user\'s wishes or priorities change, redirect a running thread (steer=true). Notes to a thread go to it, not into your reply.',
+        '7. Guide your threads. Check each handback against the ask before you tell the user; if it falls short or its approach is wrong, tell the thread what to fix and why (project_thread_send), and report once it is right. Answer a thread\'s question yourself when the user\'s words, the brief or project memory do; ask the user only what is theirs to decide, and send the answer on. When the user\'s wishes or priorities change, redirect the thread; a running one reads it now. Notes to a thread go to it, not into your reply.',
         '8. Messages that start with "[" come from threads or the plugin, not the user: do what the note in them says. For "[Project created", run no tools and start no thread for it. Handbacks and questions arrive on their own; never poll threads, not even in a "<goal_round>".',
         '9. The user may talk to a thread directly or stop it; its line under Threads then says so. A thread the user stopped stays stopped: when you mention it, say the user stopped it and it can be resumed. Act on either only when the user asks you here.',
         '10. Only when the user asks: resolve a thread (project_thread_update) or change models, effort or pause (project_settings; with no arguments it shows them).',
@@ -283,13 +283,18 @@ export const userMustFix = (ending) => /^The turn (was blocked|failed: the user 
 /** What a thread is sent once after a turn that failed or stopped without a handback: the plugin sends it itself. */
 export const NUDGE = 'Carry on from where you left off and finish the task.';
 
+/** What a thread is sent once after a turn that just ended without a handback: the plugin sends it itself. */
+export const IDLE_NUDGE = 'Finish the task and call project_handback.';
+
 /**
  * The automatic note when a thread goes idle without a handback. Each such
- * turn gets one nudge in a row: after a failed or stopped turn the plugin
- * sends NUDGE itself (a coordinator turn would only say so), and after one
- * that just ended the coordinator answers it, nudges it or passes on its
- * result. When the thread ends that way again, or only the user can fix
- * it, the coordinator tells the user in one line and sends nothing more.
+ * turn gets one nudge in a row, which the plugin sends itself (a coordinator
+ * turn would only say so): NUDGE after a turn that failed or stopped,
+ * IDLE_NUDGE after one that just ended. So the coordinator gets this note
+ * when the thread ends that way again, or only the user can fix it, and
+ * tells the user in one line and sends nothing more; or when the plugin
+ * couldn't send the nudge (the project was paused), and then nudges it, or
+ * after a turn that just ended answers it or passes on its result.
  * @param {string} ending - how the turn ended when it did not complete, or ''.
  * @param {object} [options]
  * @param {boolean} [options.nudge] - ask the coordinator to nudge a failed or stopped turn (when the plugin can't send it).
@@ -303,8 +308,8 @@ export function idleMessage(threadId, title, lastText, ending = '', { nudge = fa
     let next;
     if (ending && nudge) next = `(The user has not seen this. Nudge it once: send it "${NUDGE}" with ${send}, and say nothing to the user unless it ${failed ? 'fails' : 'stops'} again.)`;
     else if (ending) next = `(Tell the user in one line, starting with ${link}, that its turn ${failed ? 'failed' : 'stopped'}${again ? ' again after a nudge' : ''} and why; its card has ${failed ? 'Retry' : 'Resume'}. Send it nothing more unless the user asks.)`;
-    else if (again) next = `(It ended its turn again without a handback after it was nudged. Tell the user in one line, starting with ${link}, what its last reply says. Send it nothing more unless the user asks.)`;
-    else next = `(If its last reply is a result, check it against the ask and pass it on as you would a handback, starting with ${link}. Otherwise send it one message with ${send}: the answer to its question when the user's words, the brief or project memory answer it (ask the user only what is theirs to decide), else "Finish the task and call project_handback.". Send nothing more if it ends this way again: you will be told to tell the user.)`;
+    else if (again) next = `(It was nudged once already to finish and hand back, and ended its turn again without a handback. Tell the user in one line, starting with ${link}, what its last reply says. Don't nudge it again: send it nothing more unless the user asks.)`;
+    else next = `(If its last reply is a result, check it against the ask and pass it on as you would a handback, starting with ${link}. Otherwise send it one message with ${send}: the answer to its question when the user's words, the brief or project memory answer it (ask the user only what is theirs to decide), else "${IDLE_NUDGE}". Send nothing more if it ends this way again: you will be told to tell the user.)`;
     return `${TAGS.idle}: ${threadId} · "${title}"]\n\n${ending ? `${ending}\n\n` : ''}${body}\n\n${next}`;
 }
 
@@ -339,10 +344,12 @@ export function describeEnding(reason) {
         case 'aborted':
             // DSH shows this one as a failure too.
             if (reason.reason?.kind === 'hook' && reason.reason.reason === 'deepseek-account/signed-out') return 'The turn failed: the user signed out of DeepSeek.';
+            // DSH closed its session under it, as when DSH quits.
+            if (reason.reason?.kind === 'disposed') return 'The turn was cut off because its session closed while it ran.';
             return 'The turn was stopped before it finished.';
         case 'max-tokens': return 'The turn hit the output token limit.';
         case 'blocked': return 'The turn was blocked.';
-        case 'interrupted': return 'The turn was cut off because DSH stopped while it ran.';
+        case 'interrupted': return 'The turn was cut off because DSH closed while it ran.';
         default: return '';
     }
 }

@@ -6,8 +6,9 @@
  * this repo's projects and session-bridge plugins and a scripted model
  * server, then drives the coordinator and its threads through the bridge
  * socket and checks what reached the model: models and efforts on the wire,
- * tool scoping, handbacks, the automatic notes (idle, failed, stopped,
- * waiting on approval, cut off by a DSH crash), queued turns, direct talk,
+ * tool scoping, handbacks, the plugin's nudges and automatic notes (idle,
+ * failed, stopped, waiting on approval, cut off by a DSH crash), queued turns, a message
+ * that reaches a thread's running turn, direct talk,
  * settings, memory, pause, a restart, the browser half DSH serves for the
  * plugin's page, a saved default that applies without a restart, the Project
  * settings endpoints the window calls, a pick in DSH's own model picker,
@@ -296,8 +297,7 @@ function writePatch(modelPort, defaults) {
               high: high
 - id: projects
   config:
-${Object.entries(defaults).map(([key, value]) => `    ${key}: ${q(value)}\n`).join('')}    approvalNoticeSeconds: 1
-    storeFile: ${q(storeFile)}
+${Object.entries(defaults).map(([key, value]) => `    ${key}: ${q(value)}\n`).join('')}    storeFile: ${q(storeFile)}
     memoryDir: ${q(memoryDir)}
     logFile: ${q(logFile)}
     guardedTools:
@@ -500,12 +500,18 @@ try {
     await sleep(1000);
     check('a turn that handed back sends no idle note', !readText(logFile).includes(`idle-note ${PROJECT_ID}/t1 `) && since(mark, 'coordinator').every((r) => r.action.text !== 'SAW-IDLE'), describe(since(mark)));
 
-    // 3. A thread that stops without a handback: the idle note.
+    // 3. A thread that ends its turn without a handback: the plugin nudges it once, from its coordinator, which takes
+    // no turn for it; when it ends that way again, the coordinator gets the idle note.
     mark = model.requests.length;
     await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Beta', brief: 'Just answer.' }));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Beta idle note');
     check('idle note reaches the coordinator', saw.fresh.includes('[Thread idle without a handback: t2 · "Beta"]') && saw.fresh.includes('Plain reply.'), saw.fresh.slice(0, 300));
     const t2 = threadSession('t2');
+    const beta = since(mark, 't2');
+    check('a turn that ends without a handback gets one nudge from its coordinator, sent by the plugin, and the note comes when it ends that way again', beta.length === 2
+        && beta[1].fresh.includes('[From the coordinator]\n\nFinish the task and call project_handback.') && readText(logFile).includes(`nudge ${PROJECT_ID}/t2 idle`)
+        && saw.fresh.includes('(It was nudged once already to finish and hand back') && since(mark, 'coordinator').filter((r) => r.fresh.includes('t2 · "Beta"')).length === 1
+        && fromSession(startingWith(await messagesOf(t2), '[From the coordinator]'), coord), `${describe(since(mark))} | ${saw.fresh.slice(-300)}`);
 
     // 4. The user talks to a thread directly: the coordinator is not woken.
     mark = model.requests.length;
@@ -550,6 +556,9 @@ try {
     saw = await coordinatorSaw(mark, 'SAW-APPROVAL', 'the Delta approval note');
     check('approval note names the tool and the session', saw.fresh.includes('[Thread waiting for approval: t4 · "Delta"]')
         && saw.fresh.includes('It asked to use write: ') && saw.fresh.includes('E2E approval check.') && saw.fresh.includes('in the "Delta" session'), saw.fresh.slice(0, 400));
+    // At once, as the plugin's default has it: the thread asked for the write in its first request.
+    const deltaAsked = since(mark, 't4')[0];
+    check('the approval note comes at once', deltaAsked !== undefined && saw.at - deltaAsked.at < 5000, `${deltaAsked ? saw.at - deltaAsked.at : '?'} ms after the thread's request`);
     // A person's stop stays a stop: no note goes to the coordinator (so it can't send the thread on by
     // itself), and its roster says the user stopped it.
     mark = model.requests.length;
@@ -640,25 +649,27 @@ try {
     await sleep(1500);
     check('its own stop is not echoed back to it', !since(mark, 'coordinator').some((r) => r.fresh.includes('t6 · "Zeta"')), describe(since(mark, 'coordinator')));
 
-    // 15. Queued turns: the coordinator queues a second message while the first
-    // turn runs; DSH runs both before going idle. The first hands back, the
-    // second fails, and the coordinator hears about both.
+    // 15. Queued turns: the coordinator queues a second message (steer=false)
+    // while the first turn runs; DSH runs both before going idle. The first
+    // hands back, the second fails, and the coordinator hears about both.
     mark = model.requests.length;
     await say(coord, call('project_thread_start', {
         ask: 'Please do this.',
         title: 'Eta',
         brief: `E2E:slow 4000\n${call('project_handback', { status: 'done', summary: 'Eta part one done.' })}`,
     }));
-    const sent = await say(coord, call('project_thread_send', { thread: 't7', text: 'E2E:fail' }));
+    const sent = await say(coord, call('project_thread_send', { thread: 't7', text: 'E2E:fail', steer: false }));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Eta failure note');
     const t7Reqs = since(mark, 't7');
-    check('the second message was queued while the first turn ran', sent[0].at < (t7Reqs[1]?.at ?? 0), describe(since(mark)));
+    check('the second message was queued while the first turn ran, and the coordinator heard so', sent[0].at < (t7Reqs[1]?.at ?? 0)
+        && resultOf(sent.filter((r) => whoOf(r) === 'coordinator')) === 'TOOL-RESULT: Queued: t7 sees this when its turn ends; steer=true redirects it now.',
+        `${describe(since(mark))} | ${resultOf(sent.filter((r) => whoOf(r) === 'coordinator'))}`);
     check('the first turn handed back', since(mark, 'coordinator').some((r) => r.fresh.includes('Eta part one done.')));
     check('the queued turn that failed gets its note', saw.fresh.includes('[Thread idle without a handback: t7 · "Eta"]') && saw.fresh.includes('The turn failed (HTTP 400):'), saw.fresh.slice(0, 300));
 
-    // 16. DSH dies mid-turn. At the next start the plugin nudges the thread that
-    // was cut off, and the coordinator hears how that went. Then: same
-    // coordinator, routes kept, threads still wired.
+    // 16. DSH dies mid-turn. At the next start the coordinator hears once that
+    // the thread was cut off, and nothing sends the thread on: it waits for the
+    // user's Resume. Then: same coordinator, routes kept, threads still wired.
     mark = model.requests.length;
     await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Theta', brief: 'E2E:slow 120000\nWork for a long time.' }));
     await waitFor(() => since(mark, 't8').length > 0, 'the Theta request');
@@ -671,12 +682,12 @@ try {
     await waitFor(() => readText(logFile).includes(`coordinator ${PROJECT_ID} ${coord} resumed`), 'the plugin to resume the coordinator');
     check('restart keeps the coordinator', project().coordinatorSessionId === coord);
     check('a restart does not welcome the coordinator again', model.requests.filter((r) => r.fresh.includes('[Project created')).length === 1);
-    saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Theta idle note after its nudge');
-    const theta = since(mark, 't8')[0];
-    check('a turn cut off by the crash gets the nudge at the next start, and the coordinator hears how it went', readText(logFile).includes(`nudge ${PROJECT_ID}/t8 ended=interrupted`)
-        && theta?.fresh.includes('[From the coordinator]\n\nCarry on from where you left off and finish the task.') && theta.action.text === 'NUDGED'
-        && saw.fresh.includes('[Thread idle without a handback: t8 · "Theta"]') && saw.fresh.includes('NUDGED')
-        && !since(mark, 'coordinator').some((r) => r.fresh.includes('The turn was cut off because DSH stopped while it ran.')), `${theta?.fresh.slice(0, 300)} | ${saw.fresh.slice(0, 300)}`);
+    saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Theta note after the restart');
+    await sleep(1000);
+    check('a turn cut off by the crash is told once at the next start, and the thread is not sent on', saw.fresh.includes('[Thread idle without a handback: t8 · "Theta"]')
+        && saw.fresh.includes('The turn was cut off because DSH closed while it ran.') && saw.fresh.includes('its card has Resume')
+        && since(mark, 'coordinator').filter((r) => r.fresh.includes('t8 · "Theta"')).length === 1
+        && since(mark, 't8').length === 0 && !readText(logFile).includes(`nudge ${PROJECT_ID}/t8 `), `${describe(since(mark))} | ${saw.fresh.slice(0, 300)}`);
     mark = model.requests.length;
     await say(coord, call('project_thread_send', { thread: 't1', text: 'After the restart.' }));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the t1 idle note after restart');
@@ -904,19 +915,59 @@ try {
         && sub.edits[0]?.by === 'Write a file' && sub.edits[0].hunks[0]?.newText === 'sub one\nsub two\n' && sub.edits[0].turn > bNew?.edits[0].turn,
         JSON.stringify(tabSub?.value ?? null).slice(0, 700));
 
+    // 22c. A message to a thread in the middle of a turn reaches that turn, so an answer the user gives the
+    // coordinator gets there now, not when the turn ends (behaviour review 4, S3); steer=false queues it (15).
+    mark = model.requests.length;
+    await say(coord, call('project_thread_start', {
+        ask: 'Please do this.',
+        title: 'Xi',
+        brief: `E2E:slow 4000\n${call('project_handback', { status: 'done', summary: 'Xi done.' })}`,
+    }));
+    const xiId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Xi')?.[0];
+    const steered = (await say(coord, call('project_thread_send', { thread: xiId, text: 'XI-ANSWER: the user picked the blue theme.' }))).filter((r) => whoOf(r) === 'coordinator');
+    await coordinatorSaw(mark, 'SAW-HANDBACK', 'the Xi handback');
+    await waitIdle(threadSession(xiId));
+    const xiReqs = since(mark, xiId);
+    check('a message to a thread in the middle of a turn goes into that turn, and the coordinator hears so', resultOf(steered) === `TOOL-RESULT: Steered into ${xiId}'s running turn.`
+        && xiReqs.length === 2 && xiReqs[1].fresh.includes('XI-ANSWER') && readText(logFile).includes(`thread-send ${PROJECT_ID}/${xiId} mode=steer `),
+        `${describe(xiReqs)} | ${resultOf(steered)} | ${xiReqs[1]?.fresh.slice(0, 200)}`);
+
+    // 22d. The user quits DSH while a thread waits on a permission prompt. At the next start the
+    // coordinator hears once that DSH closed while it ran, and nothing sends the thread on, so it
+    // asks for nothing again.
+    mark = model.requests.length;
+    const quitProbe = join(root, 'outside', 'quit-probe.txt');
+    await say(coord, call('project_thread_start', {
+        ask: 'Please do this.',
+        title: 'Nu',
+        brief: call('write', { file_path: quitProbe, content: 'x', sandbox_permissions: 'danger-full-access', justification: 'E2E quit check.' }),
+    }));
+    await coordinatorSaw(mark, 'SAW-APPROVAL', 'the Nu approval note');
+    const nuId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Nu')?.[0];
+
     // DSH restarts: the totals stay with the plugin, and Review is no longer offered.
     const lastSeq = lc?.last.seq;
     const signIns = () => [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].length;
     const signInsBefore = signIns();
+    const quitMark = model.requests.length;
     await stopDsh(child);
     // (25) Views saved by an older version of the plugin, which DSH drops until the session is next loaded.
     const agedViews = ageViews([coord, threadSession('t1')], STATE_VERSION - 1);
     child = startDsh(dsh);
     await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge after the second restart', 90000);
+    const nuNote = await coordinatorSaw(quitMark, 'SAW-IDLE', 'the Nu note after the quit');
+    // A prompt asked again would have been told by now (the plugin tells the coordinator at once).
+    await sleep(3000);
+    check('a thread waiting on a prompt when DSH quits is told once at the next start, is not sent on, and its prompt is not told again',
+        nuNote.fresh.includes(`[Thread idle without a handback: ${nuId} · "Nu"]`) && nuNote.fresh.includes('The turn was cut off because DSH closed while it ran.')
+        && since(quitMark, 'coordinator').filter((r) => r.fresh.includes(`${nuId} · "Nu"`)).length === 1 && since(quitMark, nuId).length === 0
+        && !readText(logFile).includes(`nudge ${PROJECT_ID}/${nuId} `) && !existsSync(quitProbe), `${describe(since(quitMark))} | ${nuNote.fresh.slice(0, 300)}`);
     const viewsBack = await waitFor(() => agedViews.length === 2 && agedViews.every((id) => savedVersion(id) === STATE_VERSION), 'the old views read again', 30000).catch(() => false);
-    check('views an older version of the plugin saved are read again at start, from the store', viewsBack && /records refreshed=2\b/.test(readText(logFile))
+    // The two aged views, and any DSH hadn't saved yet when it quit (the thread cut off above).
+    const refreshed = Number([...readText(logFile).matchAll(/records refreshed=(\d+)/g)].at(-1)?.[1] ?? 0);
+    check('views an older version of the plugin saved are read again at start, from the store', viewsBack && refreshed >= 2
         && windowView(threadSession('t1'))?.role === 'thread' && windowView(threadSession('t1'))?.coordinator === coord && windowView(coord)?.role === 'coordinator',
-        `${agedViews.length} aged; ${agedViews.map((id) => savedVersion(id)).join(',')}; ${(/records refreshed=\d+/.exec(readText(logFile)) ?? ['no refresh'])[0]}`);
+        `${agedViews.length} aged; ${agedViews.map((id) => savedVersion(id)).join(',')}; records refreshed=${refreshed}`);
     await waitFor(() => signIns() > signInsBefore, 'the new web sign-in link', 30000);
     const webAgain = await signInWeb();
     lc = await waitFor(() => changesOf(webAgain), 'the project after the second restart', 30000).catch(() => undefined);
@@ -936,7 +987,7 @@ try {
         && lambdaLine.endsWith(' · changed 1 file (+4 -1)'), lambdaLine);
 
     // 23. Failed and stopped threads: each thread's own view says how its
-    // last turn ended (read cold after the restart; Theta's nudge finished it),
+    // last turn ended (read cold after the restart; the crash cut Theta off),
     // the roster tells the coordinator, and Retry and Resume from the window
     // send the thread on.
     const viewOf = async (sessionId) => {
@@ -948,7 +999,7 @@ try {
     for (const id of ['t1', 't3', 't4', 't6', 't7', 't8']) endings[id] = (await viewOf(threadSession(id)))?.ending;
     const shape = (e) => (e ? [e.state, e.kind, e.cause ?? null] : null);
     check('a thread\'s own view says how its last turn ended', JSON.stringify(['t1', 't3', 't4', 't6', 't7', 't8'].map((id) => shape(endings[id])))
-        === JSON.stringify([null, ['failed', 'error', null], ['stopped', 'aborted', 'user'], ['stopped', 'aborted', 'user'], ['failed', 'error', null], null]),
+        === JSON.stringify([null, ['failed', 'error', null], ['stopped', 'aborted', 'user'], ['stopped', 'aborted', 'user'], ['failed', 'error', null], ['stopped', 'interrupted', null]]),
         JSON.stringify(endings));
     check('a failure reads as the provider\'s message', endings.t3?.message === 'fake model rejected the request' && typeof endings.t3?.code === 'string', JSON.stringify(endings.t3));
     mark = model.requests.length;
@@ -956,7 +1007,7 @@ try {
     const roster = since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => l.startsWith('- t')) ?? [];
     const lineOf = (id) => roster.find((l) => l.startsWith(`- ${id} · `)) ?? '';
     check('the roster tells the coordinator which threads failed or stopped', lineOf('t3').includes('· its last turn failed (HTTP 400): fake model rejected the request')
-        && lineOf('t4').includes('· stopped by the user (they can resume it) ·') && lineOf('t8') !== '' && !lineOf('t8').includes('its last turn')
+        && lineOf('t4').includes('· stopped by the user (they can resume it) ·') && lineOf('t8').includes('· its last turn was cut off because DSH closed while it ran.')
         && lineOf('t7').includes('last handback: done') && lineOf('t7').includes('its last turn failed') && !lineOf('t1').includes('its last turn'), roster.join('\n'));
     check('the coordinator is told to leave a thread the user stopped stopped', since(mark, 'coordinator')[0]?.system.includes('A thread the user stopped stays stopped: when you mention it, say the user stopped it and it can be resumed.'));
     // Retry: the thread hears it from its coordinator, runs, and its failure clears.
@@ -972,7 +1023,9 @@ try {
     check('Retry sends the thread on from its coordinator', answer2.ok && answer2.value?.project?.id === PROJECT_ID
         && retried?.fresh.includes('[From the coordinator]\n\nThe user asked you to try again. Your last turn failed (HTTP 400): fake model rejected the request. Carry on from where you left off.') && retried.action.text === 'RESUMED'
         && fromSession(startingWith(await messagesOf(threadSession('t3')), '[From the coordinator]'), coord), `${refusedWhy(answer2)} ${retried?.fresh.slice(0, 300)}`);
-    check('the coordinator hears how the retry went', saw.fresh.includes('[Thread idle without a handback: t3 · "Gamma"]') && saw.fresh.includes('RESUMED'), saw.fresh.slice(0, 300));
+    // Retry starts the count again, so the plugin nudges the retried turn that ended without a handback, and the coordinator hears after that.
+    check('the coordinator hears how the retry went, after the plugin\'s nudge', saw.fresh.includes('[Thread idle without a handback: t3 · "Gamma"]')
+        && since(mark, 't3').length === 2 && since(mark, 't3')[1].fresh.includes('Finish the task and call project_handback.'), `${describe(since(mark))} | ${saw.fresh.slice(0, 300)}`);
     check('a turn that finishes clears the failure', (await viewOf(threadSession('t3')))?.ending === undefined, JSON.stringify(await viewOf(threadSession('t3'))));
     // Resume: the same for a stopped thread.
     mark = model.requests.length;

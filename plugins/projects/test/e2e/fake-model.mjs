@@ -7,7 +7,7 @@
  *   E2E:force <tool> <json args>  call it even if the session is not offered it
  *   E2E:fail                      answer HTTP 400, so the turn fails
  *   …asked you to try again/continue  (Retry or Resume from the window) reply RESUMED
- *   Carry on from where you left off and finish the task.  (the plugin's nudge) reply NUDGED at once,
+ *   Carry on from where you left off and finish the task.  (the plugin's nudge after a failed turn) reply NUDGED at once,
  *                                 unless E2E:fail is there too
  *   E2E:slow <ms>                 on a line of its own: answer after that long
  *   [Handback from thread …       reply SAW-HANDBACK

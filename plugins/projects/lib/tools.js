@@ -129,16 +129,16 @@ export function projectTools(manager, who) {
         }),
         tool({
             name: 'project_thread_send',
-            description: 'Send a message to a thread. By default it is queued as the thread\'s next turn; steer=true delivers it into the running turn at the next step.',
+            description: 'Send a message to a thread. A running thread reads it in the turn it is running, at its next step; steer=false queues it until that turn ends. An idle thread starts its next turn with it.',
             parameters: {
                 thread: { type: 'string', required: true, description: 'Thread id, e.g. "t3"' },
                 text: { type: 'string', required: true, description: 'The message' },
                 ask: { type: 'string', description: 'When the message passes on a request of the user\'s: their words, copied word for word' },
-                steer: { type: 'boolean', description: 'Deliver into the running turn instead of queueing' },
+                steer: { type: 'boolean', description: 'For a running thread: true (the default) delivers it into the running turn, false queues it until that turn ends' },
             },
             async execute(args) {
-                const text = await manager.sendToThread(projectId, args.thread, args.text, args.steer === true, { ask: given(args.ask), guard: true });
-                return result(text, { action: { kind: 'send', thread: id(args.thread), ...(args.steer === true ? { status: 'steer' } : {}) }, threads: [id(args.thread)] });
+                const sent = await manager.sendToThread(projectId, args.thread, args.text, args.steer !== false, { ask: given(args.ask), guard: true });
+                return result(sent.text, { action: { kind: 'send', thread: id(args.thread), ...(sent.mode === 'steer' ? { status: 'steer' } : {}) }, threads: [id(args.thread)] });
             },
         }),
         tool({

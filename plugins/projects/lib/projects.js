@@ -51,7 +51,7 @@ import {
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage, cardSummary,
     handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, welcomeMessage, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS, STOPPED_BY_USER, NUDGE,
-    outsideMessage, replyMessage,
+    IDLE_NUDGE, outsideMessage, replyMessage,
 } from './prompts.js';
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
 import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS, diffFiles, subagentsIn, placeIn } from './changes.js';
@@ -2080,32 +2080,38 @@ export class ProjectManager {
         if (this.config.autoHandback !== 'idle' || !this.allowHandback(projectId, threadId)) return;
         // One nudge in a row for a turn that ended without a handback, counted apart for a turn that failed or stopped
         // and one that just ended, so each note says what happened; the user hears when it didn't help, or when only they
-        // can fix it, and the coordinator sends nothing more. A failed or stopped turn's nudge the plugin sends itself,
-        // since a coordinator turn would only say so; while the project is paused its note waits like any other, and the
+        // can fix it, and the coordinator sends nothing more. The plugin sends the nudge itself, since a coordinator turn
+        // would only say so (and tell the user); while the project is paused its note waits like any other, and the
         // coordinator nudges it on resume. A handback, the user's words or their Retry start the count again.
+        // A turn cut off because DSH closed while it ran (a quit, or a crash: its log can't tell them apart) gets no
+        // nudge and doesn't count, so nothing starts again on its own after the user quits: the note tells them, and
+        // the thread waits for their Resume.
         const ended = Boolean(endingStateOf(turn.ending));
-        const again = ended ? t.nudged === true : t.stalled === true;
-        const nudge = !again && !(ended && userMustFix(turn.ending));
-        this.store.putThread(projectId, threadId, ended ? { nudged: nudge ? true : undefined } : { nudged: undefined, stalled: true });
-        if (nudge && ended && !this.held(projectId) && await this.nudgeThread(projectId, threadId, turn)) return;
+        const cutOff = turn.endKind === 'interrupted' || (turn.endKind === 'aborted' && turn.stopCause === 'disposed');
+        const again = !cutOff && (ended ? t.nudged === true : t.stalled === true);
+        const nudge = !again && !cutOff && !(ended && userMustFix(turn.ending));
+        if (!cutOff) this.store.putThread(projectId, threadId, ended ? { nudged: nudge ? true : undefined } : { nudged: undefined, stalled: true });
+        if (nudge && !this.held(projectId) && await this.nudgeThread(projectId, threadId, turn, ended)) return;
         const news = nudge && ended ? undefined : { kind: ended ? endingStateOf(turn.ending) : 'finished', thread: threadId };
         await this.deliver(projectId, idleMessage(threadId, t.title, turn.reply, turn.ending, { nudge: nudge && ended, again }), undefined, news);
         this.log(`idle-note ${projectId}/${threadId} chars=${turn.reply.length}${turn.ending ? ` ended=${turn.endKind}` : ''}${nudge && ended ? ' nudge' : ''}${again ? ' again' : ''}`);
     }
 
     /**
-     * The one nudge after a turn that failed or stopped without a handback, sent to the thread as from its
-     * coordinator (the next turn's end is reviewed as the coordinator's).
+     * The one nudge after a turn that ended without a handback (NUDGE after one that failed or stopped, IDLE_NUDGE
+     * after one that just ended), sent to the thread as from its coordinator (the next turn's end is reviewed as the
+     * coordinator's).
+     * @param {boolean} ended - the turn failed or stopped.
      * @returns whether it went; when it didn't, the coordinator gets the note and nudges it.
      */
-    async nudgeThread(projectId, threadId, turn) {
+    async nudgeThread(projectId, threadId, turn, ended) {
         try {
-            await this.sendToThread(projectId, threadId, NUDGE, false);
+            await this.sendToThread(projectId, threadId, ended ? NUDGE : IDLE_NUDGE, false);
         } catch (error) {
             this.log(`error nudge ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
             return false;
         }
-        this.log(`nudge ${projectId}/${threadId} ended=${turn.endKind}`);
+        this.log(`nudge ${projectId}/${threadId} ${ended ? `ended=${turn.endKind}` : 'idle'}`);
         return true;
     }
 
@@ -2128,9 +2134,9 @@ export class ProjectManager {
     }
 
     /**
-     * Watch a thread's permission prompts. One still unanswered after
-     * approvalNoticeSeconds tells the coordinator, so a thread it started
-     * does not sit on a prompt nobody sees.
+     * Watch a thread's permission prompts. Each tells the coordinator, at
+     * once or when still unanswered after approvalNoticeSeconds, so a thread
+     * it started does not sit on a prompt nobody sees.
      */
     onThreadEvent(projectId, threadId, agent, event) {
         if (event?.type === 'model/selection') {
@@ -2168,14 +2174,22 @@ export class ProjectManager {
             this.approvals.get(agent.id)?.delete(id);
             return;
         }
-        if (event.type !== 'approval/asked' || !(this.config.approvalNoticeSeconds > 0)) return;
+        if (event.type !== 'approval/asked') return;
+        const notice = () => {
+            void this.noticeApproval(projectId, threadId, agent, event.data).catch((error) => {
+                this.log(`error approval ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
+            });
+        };
+        // At once by default: each send a thread makes waits on a prompt, and the user should hear of it then.
+        if (!(this.config.approvalNoticeSeconds > 0)) {
+            notice();
+            return;
+        }
         const pending = this.approvals.get(agent.id) ?? new Map();
         this.approvals.set(agent.id, pending);
         const timer = setTimeout(() => {
             pending.delete(id);
-            void this.noticeApproval(projectId, threadId, agent, event.data).catch((error) => {
-                this.log(`error approval ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
-            });
+            notice();
         }, this.config.approvalNoticeSeconds * 1000);
         timer.unref?.();
         pending.set(id, timer);
@@ -2886,7 +2900,10 @@ export class ProjectManager {
      * passes on their request; the coordinator's own messages (`ask`
      * undefined) and the plugin's (`guard` false) say only what they say.
      * The user's tools the checked ask names join the thread's before it
-     * reads the message.
+     * reads the message. A thread in the middle of a turn reads it in that
+     * turn, at its next step, unless `steer` is false: then it waits for the
+     * turn to end. An idle thread starts its next turn with it.
+     * @returns {{text: string, mode: 'steer'|'queue'}} what happened, in the words the coordinator reads.
      */
     async sendToThread(projectId, threadId, text, steer, { ask, guard = false } = {}) {
         const { id, t } = this.requireThread(projectId, threadId);
@@ -2908,10 +2925,15 @@ export class ProjectManager {
         if (t.question) this.store.putThread(projectId, id, { question: undefined });
         // The user's words make it new work: a turn that then ends without a handback gets its own nudge.
         if (userWords !== '' && (t.nudged || t.stalled)) this.store.putThread(projectId, id, { nudged: undefined, stalled: undefined });
+        // A user's answer or change of plan reaches a running turn now, not when the turn ends.
+        const running = this.liveStatus(t.sessionId) === 'running';
+        const mode = steer && running ? 'steer' : 'queue';
         // The coordinator's own words (project_thread_send) carry rule 3's bar under them, as a brief does.
-        await this.prompt(t.sessionId, coordinatorMessage(text.trim(), userWords, { note: guard }), steer ? 'steer' : 'queue', this.store.project(projectId).coordinatorSessionId);
-        this.log(`thread-send ${projectId}/${id} mode=${steer ? 'steer' : 'queue'} chars=${text.length}`);
-        return `${steer ? 'Steered' : 'Sent to'} ${id}${t.resolved ? ' (reopened)' : ''}.`;
+        await this.prompt(t.sessionId, coordinatorMessage(text.trim(), userWords, { note: guard }), mode, this.store.project(projectId).coordinatorSessionId);
+        this.log(`thread-send ${projectId}/${id} mode=${mode}${running && mode === 'queue' ? ' after-turn' : ''} chars=${text.length}`);
+        const reopened = t.resolved ? ' (reopened)' : '';
+        if (mode === 'steer') return { mode, text: `Steered into ${id}'s running turn${reopened}.` };
+        return { mode, text: running ? `Queued: ${id} sees this when its turn ends${reopened}; steer=true redirects it now.` : `Sent to ${id}${reopened}.` };
     }
 
     // ── messages to chats outside the project ──────────────────────────────
