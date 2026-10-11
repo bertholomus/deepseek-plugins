@@ -615,6 +615,11 @@ export class CalendarManager {
             else prefs.weekStart = patch.weekStart;
         }
         if (typeof patch.view === 'string' && ['month', 'week', 'day', 'agenda'].includes(patch.view)) prefs.view = patch.view;
+        // What Week and Month show: on with true, off (not kept) with false; anything else leaves it as it is.
+        for (const key of ['hideWeekends', 'weekNumbers']) {
+            if (patch[key] === true) prefs[key] = true;
+            else if (patch[key] === false) delete prefs[key];
+        }
         if (typeof patch.googleClientId === 'string') prefs.googleClientId = patch.googleClientId.trim();
         if (typeof patch.microsoftClientId === 'string') prefs.microsoftClientId = patch.microsoftClientId.trim();
         if (typeof patch.microsoftTenant === 'string') prefs.microsoftTenant = patch.microsoftTenant.trim();
@@ -2281,6 +2286,8 @@ export class CalendarManager {
             prefs: {
                 ...(this.store.prefs.weekStart !== undefined ? { weekStart: this.store.prefs.weekStart } : {}),
                 ...(this.store.prefs.view ? { view: this.store.prefs.view } : {}),
+                ...(this.store.prefs.hideWeekends === true ? { hideWeekends: true } : {}),
+                ...(this.store.prefs.weekNumbers === true ? { weekNumbers: true } : {}),
             },
             syncing: this.syncing.size > 0,
             // calendar.json couldn't be read at this start: the name it is kept under beside it (held: it couldn't be moved, and isn't written over).

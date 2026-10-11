@@ -965,6 +965,53 @@ test('the calendars kept here are named "Kept in DSH", an older store\'s too; on
     }
 });
 
+test('the window\'s week choices: weekends hidden and week numbers go on with true and off with false, nothing else changes them, and a restart keeps them', async () => {
+    const { make, config, done } = setup();
+    let m = make();
+    try {
+        await m.start();
+        assert.deepEqual(m.state().prefs, {}, 'both off at first');
+        m.setPrefs({ hideWeekends: true });
+        assert.deepEqual(m.state().prefs, { hideWeekends: true });
+        m.setPrefs({ weekNumbers: true, weekStart: 1 });
+        assert.deepEqual(m.state().prefs, { weekStart: 1, hideWeekends: true, weekNumbers: true });
+        // Anything but true or false leaves them as they are, and so does a change to another choice.
+        for (const junk of ['true', 'false', 1, 0, null, {}, [true]]) m.setPrefs({ hideWeekends: junk, weekNumbers: junk });
+        m.setPrefs({ view: 'month' });
+        m.setPrefs({});
+        assert.deepEqual(m.state().prefs, { weekStart: 1, view: 'month', hideWeekends: true, weekNumbers: true });
+
+        // Saved with the other choices: a restart has them.
+        m.dispose();
+        assert.deepEqual(JSON.parse(readFileSync(config.storeFile, 'utf8')).prefs, { weekStart: 1, hideWeekends: true, weekNumbers: true, view: 'month' });
+        m = make();
+        await m.start();
+        assert.deepEqual(m.state().prefs, { weekStart: 1, view: 'month', hideWeekends: true, weekNumbers: true });
+
+        // Off takes each away, the other one and the other choices staying; off again changes nothing.
+        m.setPrefs({ hideWeekends: false });
+        assert.deepEqual(m.state().prefs, { weekStart: 1, view: 'month', weekNumbers: true });
+        m.setPrefs({ weekNumbers: false, hideWeekends: false });
+        assert.deepEqual(m.state().prefs, { weekStart: 1, view: 'month' });
+        assert.ok(!('hideWeekends' in m.store.prefs) && !('weekNumbers' in m.store.prefs), 'off is not kept as false');
+        m.dispose();
+        m = make();
+        await m.start();
+        assert.deepEqual(m.state().prefs, { weekStart: 1, view: 'month' });
+
+        // A settings file that says something other than true for them (edited by hand) is read as off.
+        m.dispose();
+        const file = JSON.parse(readFileSync(config.storeFile, 'utf8'));
+        writeFileSync(config.storeFile, JSON.stringify({ ...file, prefs: { ...file.prefs, hideWeekends: 'yes', weekNumbers: 1 } }));
+        m = make();
+        await m.start();
+        assert.deepEqual(m.state().prefs, { weekStart: 1, view: 'month' });
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
 // ── Round 2: who the user is, re-checked changes, Google's guests, one check ──
 
 /** A meeting as a CalDAV server holds it, with its organizer and people as whole iCalendar lines. */
