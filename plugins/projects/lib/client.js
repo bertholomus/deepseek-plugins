@@ -450,6 +450,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-ps-more svg{transition:transform .12s}',
             '.dshp-ps-more[aria-expanded=true] svg{transform:rotate(90deg)}',
             '.dshp-ps-note{margin:18px 2px 0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+            // The confirmation before a project is archived (ArchiveConfirm).
+            '.dshp-ar-line{margin:0 0 10px;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
+            `.dshp-ar-error{color:${ERROR_TEXT}}`,
             '.dshp-ps-state{display:flex;flex-direction:column;align-items:center;gap:10px;padding:36px 12px;text-align:center;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
             `.dshp-ps-state.dshp-ps-error{color:${ERROR_TEXT}}`,
             '.dshp-ps-controls{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;min-width:0;max-width:100%}',
@@ -1355,6 +1358,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             link: `${BUNDLE}/thread-link`,
             settings: `${BUNDLE}/project-settings`,
             settingsItem: `${BUNDLE}/project-settings-item`,
+            archive: `${BUNDLE}/archive`,
+            archiveItem: `${BUNDLE}/archive-item`,
             fullItem: `${BUNDLE}/full-view-item`,
             paused: `${BUNDLE}/paused-bar`,
             ending: `${BUNDLE}/ending-bar`,
@@ -2052,6 +2057,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             timer = undefined;
                         }
                     };
+                },
+                /**
+                 * Archive a project with its coordinator and threads, or with
+                 * `restore` bring it back (remote.js `archive`, `restore`);
+                 * the answer updates every view.
+                 */
+                async archive(target, restore = false) {
+                    const result = await link.call(restore ? 'restore' : 'archive', { project: target });
+                    if (result.ok) take(result.value);
+                    return result;
                 },
                 /** Change a project's settings (remote.js `update`); its answer updates every view. */
                 async change(target, changes) {
@@ -4452,7 +4467,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const titleOf = (row) => (typeof row?.title === 'string' && row.title.trim() !== '' ? row.title : PAGE.newChat);
             const coordOf = new Map();
             for (const p of Array.isArray(listed) ? listed : EMPTY) {
-                if (isObject(p) && typeof p.coordinator === 'string' && p.coordinator !== '' && !coordOf.has(p.coordinator)) coordOf.set(p.coordinator, p);
+                // An archived project leaves the page with its coordinator and threads (DSH archives its ◆ row first when the user does it there).
+                if (!isObject(p) || p.archived === true || typeof p.coordinator !== 'string' || p.coordinator === '' || archived.has(p.coordinator)) continue;
+                if (!coordOf.has(p.coordinator)) coordOf.set(p.coordinator, p);
             }
             const workspaces = (Array.isArray(items) ? items : EMPTY).filter((ws) => typeof ws?.workspaceId === 'string');
             const rosterOf = (coordinator) => { const threads = valueIn(sessions, coordinator)?.threads; return Array.isArray(threads) ? threads : null; };
@@ -5060,6 +5077,22 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             allTools: (names) => `Every coordinator and thread in projects that don't choose their own can then use ${listText(names)} on its own, even when your words don't ask for them. Only use it when you trust what runs there.`,
             toolsConfirm: 'Use always',
         };
+        /** Archiving a project from its ◆ row, and bringing it back. */
+        const ARCHIVE = {
+            item: 'Archive project…',
+            restore: 'Restore project',
+            title: (name) => `Archive ◆ ${name}?`,
+            body: (threads) => `Its coordinator${threads > 0 ? ` and its ${plural(threads, 'thread')}` : ''} leave the session list and the Projects page, and whatever runs in them stops first. Nothing is deleted.`,
+            running: (names) => `Running now: ${listText(names)}.`,
+            back: 'To bring them back, show archived chats in the session list and choose Restore project in the ◆ row\'s menu.',
+            confirm: 'Archive project',
+            cancel: 'Cancel',
+            pending: 'Archiving…',
+            loading: 'Reading this project…',
+            done: (name, threads) => `◆ ${name} archived${threads > 0 ? ` with its ${plural(threads, 'thread')}` : ''}.`,
+            restored: (name) => `◆ ${name} is back with its threads.`,
+            undo: 'Undo',
+        };
         const SETTING_ROUTES = [
             { id: 'coordinator', title: 'Coordinator', hint: 'The ◆ session you talk to. A model you pick in its chat lands here too.', model: 'coordinatorModel', effort: 'coordinatorEffort' },
             { id: 'thread', title: 'New threads', hint: 'What each new thread starts on. Running threads keep theirs.', model: 'threadModel', effort: 'threadEffort' },
@@ -5604,6 +5637,130 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }
         }
 
+        /**
+         * Archiving a project from its ◆ row: the confirmation open for a
+         * coordinator's session (`target`), and the notice after (`said`).
+         */
+        function archiveFlow() {
+            let snapshot = { target: null, seq: 0, available: false, said: null };
+            const listeners = new Set();
+            const set = (next) => {
+                snapshot = { ...snapshot, ...next };
+                for (const listener of [...listeners]) listener();
+            };
+            return {
+                getSnapshot: () => snapshot,
+                subscribe: (listener) => {
+                    listeners.add(listener);
+                    return () => listeners.delete(listener);
+                },
+                open(target) {
+                    if (typeof target === 'string' && target !== '' && snapshot.available) set({ target, seq: snapshot.seq + 1 });
+                },
+                close() {
+                    if (snapshot.target !== null) set({ target: null });
+                },
+                /** @param said - {text, undo?: the coordinator to restore, error?}, or null for none. */
+                say(said) {
+                    set({ said: said ? { ...said, key: snapshot.seq + 1 } : null, seq: snapshot.seq + 1 });
+                },
+                connect() {
+                    set({ available: true });
+                    return () => set({ available: false, target: null, said: null });
+                },
+            };
+        }
+
+        /**
+         * Bring an archived project back from its ◆ row or the notice's Undo,
+         * and say how it went.
+         */
+        async function restoreProject(flow, facts, target, name) {
+            flow.say(null);
+            const result = await facts.archive(target, true);
+            flow.say(result.ok ? { text: ARCHIVE.restored(name) } : { text: errorText(result.error), error: true });
+        }
+
+        /**
+         * The confirmation before a project is archived: what goes (its
+         * coordinator and how many threads), what runs and stops, and where
+         * to bring it back from. Archive project archives them all, closes
+         * it and says so, with Undo.
+         */
+        function ArchiveConfirm({ target, flow, facts, useSessionStatus }) {
+            useFacts(facts);
+            const [busy, setBusy] = React.useState(false);
+            const [error, setError] = React.useState(null);
+            React.useEffect(() => { void facts.describe(target); }, [facts, target]);
+            const statuses = typeof useSessionStatus === 'function' ? useSessionStatus((value) => value) : undefined;
+            const info = facts.info(target);
+            const name = info?.project?.name || TABLE.project;
+            const threads = Array.isArray(info?.threads) ? info.threads : EMPTY;
+            const running = threads.filter((t) => typeof t?.session === 'string' && statuses?.get?.(t.session)?.running === true).map((t) => t.title || t.id);
+            const close = () => { if (!busy) flow.close(); };
+            const confirm = async () => {
+                setBusy(true);
+                setError(null);
+                const result = await facts.archive(target);
+                setBusy(false);
+                if (!result.ok) {
+                    setError(errorText(result.error));
+                    return;
+                }
+                flow.close();
+                flow.say({ text: ARCHIVE.done(name, threads.length), undo: target, name });
+            };
+            return h(ui.Modal, {
+                open: true, title: info ? ARCHIVE.title(name) : ARCHIVE.item, closeLabel: SETTINGS.close, className: 'dshp-ar', onClose: close,
+                description: info ? ARCHIVE.body(threads.length) : ARCHIVE.loading,
+                footer: h(React.Fragment, null,
+                    h(ui.Button, { key: 'cancel', variant: 'outline', disabled: busy, onClick: close }, ARCHIVE.cancel),
+                    h(ui.Button, { key: 'confirm', variant: 'outline', disabled: busy || !info, onClick: () => { void confirm(); }, 'data-projects-archive-confirm': '' }, ARCHIVE.confirm)),
+            },
+            running.length > 0 ? h('p', { key: 'running', className: 'dshp-ar-line' }, ARCHIVE.running(running)) : null,
+            h('p', { key: 'back', className: 'dshp-ar-line' }, ARCHIVE.back),
+            busy ? h('p', { key: 'busy', className: 'dshp-ar-line', role: 'status' }, ARCHIVE.pending) : null,
+            error ? h('p', { key: 'error', className: 'dshp-ar-line dshp-ar-error', role: 'alert' }, error) : null);
+        }
+
+        /** The confirmation in DSH's overlay layer while one is open, and the notice after an archive or a restore. */
+        function ArchiveOverlay({ flow, facts, useSessionStatus }) {
+            const state = React.useSyncExternalStore(flow.subscribe, flow.getSnapshot);
+            const said = state.said;
+            return h(React.Fragment, null,
+                state.target === null ? null : h(ArchiveConfirm, { key: `${state.target}\u0000${state.seq}`, target: state.target, flow, facts, useSessionStatus }),
+                said === null || typeof ui.Toast !== 'function' ? null : h(ui.Toast, {
+                    key: `said:${said.key}`, text: said.text, holdMs: 8000,
+                    ...(said.error ? { icon: h(ui.IconWarningOutlineRegular, { size: 16 }) } : { tone: 'success' }),
+                    actions: said.undo ? [{ prefix: ' ', label: ARCHIVE.undo, onClick: () => { void restoreProject(flow, facts, said.undo, said.name); } }] : [],
+                    onDone: () => { if (flow.getSnapshot().said === said) flow.say(null); },
+                }));
+        }
+
+        /**
+         * "Archive project…" in a ◆ coordinator's menu in the session list,
+         * beside Project settings; "Restore project" there while it is
+         * archived (shown with DSH's archived chats).
+         */
+        function ArchiveMenuItem({ sessionId, useMenuOpenState, useSessions, useWorkspaces = noWorkspaces, flow, facts }) {
+            useKnown();
+            const [, setMenuOpen] = useMenuOpenState();
+            const name = useSessions((state) => {
+                const coordinator = valueIn(state, sessionId)?.role === 'coordinator' || (valueIn(state, sessionId) === undefined && known.map.get(sessionId)?.role === 'coordinator');
+                return coordinator ? coordinatorName(state, sessionId) ?? '' : undefined;
+            });
+            const archived = useWorkspaces((state) => Array.isArray(state?.archivedSessionIds) && state.archivedSessionIds.includes(sessionId));
+            if (name === undefined || !flow.getSnapshot().available) return null;
+            return h(ui.MenuItemButton, {
+                icon: h(archived ? ui.IconUnarchiveOutlineRegular : ui.IconArchiveOutlineRegular, {}),
+                onSelect: () => {
+                    setMenuOpen(false);
+                    if (archived) void restoreProject(flow, facts, sessionId, name || TABLE.project);
+                    else flow.open(sessionId);
+                },
+            }, archived ? ARCHIVE.restore : ARCHIVE.item);
+        }
+
         /** "Project settings" in a project session's menu in the session list. */
         function SettingsMenuItem({ sessionId, useMenuOpenState, useSessions, dialog }) {
             const [, setMenuOpen] = useMenuOpenState();
@@ -5618,7 +5775,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, SETTINGS.title);
         }
 
-        function applySettings(ctx, dialog, link, facts) {
+        function applySettings(ctx, dialog, link, facts, flow) {
             /** DSH's Plugins page, at this plugin; false when this DSH can't open it. Called without `go`, it only asks. */
             const openDefaults = (go = true) => {
                 let nav;
@@ -5634,6 +5791,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 name: 'sidebar.workspaces.session.menu.item', id: IDS.settingsItem, order: 250, inject: () => ({ dialog }),
             }, SettingsMenuItem));
             ctx.effect(() => dialog.connect(), 'projects: project settings');
+            ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+                name: 'shell.overlay', id: IDS.archive, inject: () => ({ flow, facts }),
+            }, ArchiveOverlay));
+            ctx.slots.inject('sidebar.workspaces.session.menu.item', () => ctx.slots.register({
+                name: 'sidebar.workspaces.session.menu.item', id: IDS.archiveItem, order: 260, inject: () => ({ flow, facts }),
+            }, ArchiveMenuItem));
+            ctx.effect(() => flow.connect(), 'projects: archive');
         }
 
         /** Required services (cordis inject); each part below waits for its own. */
@@ -5641,6 +5805,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         function apply(ctx) {
             const dialog = settingsDialog();
+            const flow = archiveFlow();
             // DSH's services the parts share, once DSH provides them: one model catalog and one link to the plugin.
             const bound = {};
             const bind = (name, then) => (scope) => scope.effect(() => {
@@ -5661,7 +5826,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 scope.effect(() => followDefault(scope.sessions, catalog), 'projects: DSH default model');
             });
             ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => applyDefaultsForm(scope, { catalog, link, dialog, sessionsOf }));
-            ctx.inject(['connection', 'remote', 'remote.session'], (scope) => applySettings(scope, dialog, link, facts));
+            ctx.inject(['connection', 'remote', 'remote.session'], (scope) => applySettings(scope, dialog, link, facts, flow));
             ctx.inject(['sessions', 'uiWorkspace', 'sidebarRight'], (scope) => applyThreads(scope, dialog, { catalog, link, facts }));
         }
 
@@ -5679,7 +5844,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             SessionList, SIDEBAR,
             noticeOf, noticeView, TriggerNotice, ProjectNotice,
             permissionName, permissionShown, permissionIn, toolsText, accessOf, accessSummary, PermissionPicker, ToolsControl, ModelsSummary,
-            NewsNotice, newsLine, newsDot, ThreadMark, RowPlace, CoordinatorOffer, workspaceOfSession, projectIn, GoalRow,
+            NewsNotice, newsLine, newsDot, ThreadMark, archiveFlow, ArchiveConfirm, ArchiveOverlay, ArchiveMenuItem, ARCHIVE, RowPlace, CoordinatorOffer, workspaceOfSession, projectIn, GoalRow,
         };
         return module.exports;
     },

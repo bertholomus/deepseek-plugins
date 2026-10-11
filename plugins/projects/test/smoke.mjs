@@ -1721,6 +1721,8 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
     assert.deepEqual(registered.map((r) => [r.name, r.id ?? r.key ?? null, r.order ?? null]), [
         ['shell.overlay', 'dsh-plugin-projects/project-settings', null],
         ['sidebar.workspaces.session.menu.item', 'dsh-plugin-projects/project-settings-item', 250],
+        ['shell.overlay', 'dsh-plugin-projects/archive', null],
+        ['sidebar.workspaces.session.menu.item', 'dsh-plugin-projects/archive-item', 260],
         ['conversation.session.header.actions', 'dsh-plugin-projects/threads-menu', -25],
         ['conversation.chat.turnTail', 'dsh-plugin-projects/thread-cards', 30],
         ['conversation.chat.node', 'turn-trigger', null],
@@ -4953,4 +4955,91 @@ test('archiving refuses what DSH refuses, and a session DSH no longer has counts
     registry.archiveSession = real;
     assert.equal((await remote.archive('dsh-plugins')).archived, 1, 'trying again archives what was left');
     assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /error archive dsh-plugins s1 disk full/);
+});
+
+test('browser half: an archived project leaves the Projects page, and its ◆ row\'s menu archives it or brings it back', async () => {
+    const { client, react } = loadClient();
+    const { pageModel, takeKnown, archiveFlow, ArchiveMenuItem, ArchiveConfirm, ArchiveOverlay, ARCHIVE } = client.internals;
+    takeKnown({});
+    const value = (v) => ({ values: { projectSession: v } });
+    const sessions = {
+        byId: { c: { id: 'c', title: '◆ Storefront' }, t1: { id: 't1', title: 'Fix cart' }, d: { id: 'd', title: '◆ Data' }, x: { id: 'x', title: 'A chat' } },
+        projectionsBySession: {
+            c: value({ role: 'coordinator', project: { id: 'storefront', name: 'Storefront' }, threads: [{ id: 't1', session: 't1' }] }),
+            t1: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' } }),
+            d: value({ role: 'coordinator', project: { id: 'data', name: 'Data' }, threads: [] }),
+        },
+    };
+    const items = [{ workspaceId: 'w', title: 'w', path: '/w', sessionIds: ['c', 't1', 'd', 'x'] }];
+    const listed = [{ id: 'storefront', name: 'Storefront', coordinator: 'c', home: 'w' }, { id: 'data', name: 'Data', coordinator: 'd', home: 'w' }];
+    const titles = (tree) => plain(tree.map((n) => n.title));
+    assert.deepEqual(titles(pageModel({ listed, items, sessions, archived: new Set() })), ['Storefront', 'Data']);
+    // Archived by the plugin, or its ◆ row archived in DSH (the plugin follows): off the page, threads and all.
+    assert.deepEqual(titles(pageModel({ listed: [{ ...listed[0], archived: true }, listed[1]], items, sessions, archived: new Set() })), ['Data']);
+    assert.deepEqual(titles(pageModel({ listed, items, sessions, archived: new Set(['d']) })), ['Storefront']);
+
+    const calls = [];
+    let answer = { ok: true, value: { projects: [] } };
+    const facts = {
+        info: () => ({ project: { id: 'storefront', name: 'Storefront' }, threads: [{ id: 't1', title: 'Fix cart', session: 't1' }, { id: 't2', title: 'Old copy', session: 't2' }] }),
+        describe: async () => {}, subscribe: () => () => {}, getSnapshot: () => 0,
+        archive: async (target, restore) => { calls.push([target, restore === true]); return answer; },
+    };
+    const flow = archiveFlow();
+    flow.connect();
+    const closed = [];
+    const item = (sessionId, archived = []) => ArchiveMenuItem({
+        sessionId, useMenuOpenState: () => [true, (open) => closed.push(open)], useSessions: (select) => select(sessions),
+        useWorkspaces: (select) => select({ archivedSessionIds: archived }), flow, facts,
+    });
+    // Only on a ◆ row: a thread or a chat has none.
+    assert.equal(item('t1'), null);
+    assert.equal(item('x'), null);
+    const archiveItem = item('c');
+    assert.equal(textIn(archiveItem), ARCHIVE.item);
+    assert.equal(archiveItem.props.icon.type, 'IconArchiveOutlineRegular');
+    archiveItem.props.onSelect();
+    assert.deepEqual(closed, [false]);
+    assert.equal(flow.getSnapshot().target, 'c');
+
+    // It asks first: what goes, what runs now and stops, and how to bring it back.
+    const statuses = new Map([['t1', { running: true }]]);
+    const draw = mount(react, () => ArchiveConfirm({ target: 'c', flow, facts, useSessionStatus: (select) => select(statuses) }));
+    let modal = draw();
+    assert.equal(modal.props.title, 'Archive ◆ Storefront?');
+    assert.equal(modal.props.description, 'Its coordinator and its 2 threads leave the session list and the Projects page, and whatever runs in them stops first. Nothing is deleted.');
+    assert.match(textIn(modal.children), /^Running now: Fix cart\.To bring them back, show archived chats in the session list and choose Restore project in the ◆ row's menu\.$/);
+    const confirmOf = (m) => elementsOf(m.props.footer).find((e) => e.props?.['data-projects-archive-confirm'] === '');
+    // DSH refuses part of it: the dialog stays, and says so.
+    answer = { ok: false, error: { code: 'projects/refused', message: 'DSH didn\'t archive 1 of ◆ Storefront\'s sessions; try again' } };
+    confirmOf(modal).props.onClick();
+    await tick();
+    modal = draw();
+    assert.equal(byClass(modal.children, 'dshp-ar-error')[0].props.role, 'alert');
+    assert.equal(textIn(byClass(modal.children, 'dshp-ar-error')), 'DSH didn\'t archive 1 of ◆ Storefront\'s sessions; try again.');
+    assert.equal(flow.getSnapshot().target, 'c');
+    answer = { ok: true, value: { projects: [] } };
+    confirmOf(modal).props.onClick();
+    await tick();
+    assert.deepEqual(calls, [['c', false], ['c', false]]);
+    assert.equal(flow.getSnapshot().target, null, 'archived: the dialog closes');
+
+    // The notice says so, with Undo, which brings it all back.
+    let toast = elementsOf(ArchiveOverlay({ flow, facts })).find((e) => e.props?.holdMs);
+    assert.equal(toast.props.text, '◆ Storefront archived with its 2 threads.');
+    assert.equal(toast.props.actions[0].label, 'Undo');
+    toast.props.actions[0].onClick();
+    await tick();
+    assert.deepEqual(calls.at(-1), ['c', true]);
+    toast = elementsOf(ArchiveOverlay({ flow, facts })).find((e) => e.props?.holdMs);
+    assert.equal(toast.props.text, '◆ Storefront is back with its threads.');
+    assert.deepEqual(plain(toast.props.actions), []);
+
+    // Shown with DSH's archived chats, the ◆ row's menu restores it.
+    const restoreItem = item('c', ['c']);
+    assert.equal(textIn(restoreItem), ARCHIVE.restore);
+    assert.equal(restoreItem.props.icon.type, 'IconUnarchiveOutlineRegular');
+    restoreItem.props.onSelect();
+    await tick();
+    assert.deepEqual(calls.at(-1), ['c', true]);
 });
