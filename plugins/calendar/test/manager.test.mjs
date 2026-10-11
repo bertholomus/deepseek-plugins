@@ -1239,8 +1239,10 @@ test('a series moved into Google or Microsoft: what it would lose is said first,
         await assert.rejects(tools.calendar_update_event.execute({ id: yoga()[0].id, scope: 'all', calendar_id: 'cal-g' }),
             /If the user agrees to lose them, call again with drop_changes: true; otherwise leave it where it is\.$/);
         assert.equal(google.length + ms.length, 0, 'nothing made');
-        // Agreed: it goes, its skipped date with it (Google keeps those).
-        await m.updateEvent(yoga()[0].id, { calendarId: 'cal-g', dropChanges: true });
+        // Agreed: it goes, its skipped date with it (Google keeps those). The answer is the event where it went,
+        // found by the uid the server gave it.
+        const moved = await m.updateEvent(yoga()[0].id, { calendarId: 'cal-g', dropChanges: true });
+        assert.deepEqual([moved.title, moved.calendarId, moved.startLocal], ['Yoga', 'cal-g', '2026-10-12T07:00']);
         assert.equal(google.at(-1).op, 'create');
         assert.equal(google.at(-1).record.exdates?.length, 1);
         assert.equal(yoga().filter((o) => o.calendarId === personal.id).length, 0, 'gone from Personal');

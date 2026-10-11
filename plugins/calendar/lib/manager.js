@@ -2085,7 +2085,10 @@ export class CalendarManager {
             await this.changing(target.id, async () => {
                 const copies = copiesNow();
                 const copy = copies.find((r) => !r.recurrenceId) ?? copies[0];
-                this.takeItems(target, await to.create({ ...target }, { ...copy, ...(mail.invites ? { notify: true } : {}) }));
+                const made = await to.create({ ...target }, { ...copy, ...(mail.invites ? { notify: true } : {}) });
+                this.takeItems(target, made);
+                // The server can give the copy a uid of its own (Graph's iCalUId): it is found by that.
+                uid = made?.[0]?.events?.[0]?.uid ?? uid;
             }, { retry: false, recheck });
         }
         // Out of here, with the cancellation the move said it sends (none when it sends none).
