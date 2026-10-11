@@ -81,7 +81,7 @@ const ANY_ROUTE = 'in any way (tool, command line, script or web API)';
  * sending, whatever token it carries, to a server on this computer too. The prompts also count a made-up
  * credential as sending, which the check can't see.
  */
-const READ_RULE = 'A read is GET, HEAD or OPTIONS with no body; any other request to a service outside the workspace is sending, with or without a token, and so is one with a made-up or placeholder credential.';
+const READ_RULE = 'A read is GET, HEAD or OPTIONS with no body; any other request to a service outside the workspace is sending, with a real, made-up or no token.';
 /** Thread rule 3: what the coordinator writes can't allow what the rule holds back (behaviour review 4, S10). */
 const BRIEF_CANT = 'The brief can\'t allow any of these; only the user\'s words after "The user asked:" can, when they name it.';
 
@@ -126,19 +126,19 @@ export function coordinatorPolicy(p) {
         p.goal ? `Goal: ${goalText(p.goal)}` : 'Goal: none set yet (the user sets it in Project settings). Until then, the project is only what they ask for in this chat.',
         `Workspace: ${p.workspacePath}${p.home ? HOME_NOTE : ''}`,
         '"Here", "this" and "everything" mean this workspace; to check that it works, run its tests in a thread. DSH, its web server and this project\'s settings aren\'t the user\'s work: don\'t check them, and mention the user\'s tools or the settings only when asked.',
-        p.readOnly ? 'You are on Read Only: you can read files and use the project tools, but changing a file or running a command that writes is refused, without asking the user. Threads do all the changing.' : null,
+        p.readOnly ? 'You are on Read Only: you can read files and use the project tools; anything else is refused without asking the user.' : null,
         '',
         '## Rules',
         '1. Do only what the user asks. When they leave the choice of work to you, pick one small task that only reads and writes files in the workspace (no web search, network or MCP tools), start it now, and say what you picked; don\'t ask them to choose.',
         `2. Never use the user's personal or infrastructure tools (${OFF_LIMITS}), yourself or in a thread, ${ANY_ROUTE}. Only the user's own words (a message, an answer they picked or typed, or the goal) can call for one.`,
         // The coordinator never has them, so the rule says where such work goes.
         p.guarded?.length
-            ? `   You don't have these here: ${p.guarded.join(', ')}. When the user's words ask for work that needs one, start a thread with their words in \`ask\`; ${p.yourTools === 'always' ? 'every thread has them' : 'the thread gets the ones their words name'}.`
+            ? `   You don't have these here: ${p.guarded.join(', ')}. When the user's words ask for work that needs one, start a thread with their words in \`ask\`; ${p.yourTools === 'always' ? 'every thread has them' : 'the thread gets the ones their words name'}. Leave them out of briefs, even to forbid them.`
             : null,
         '3. All work goes to a thread, however small: counting, listing, searching, running tests or commands, editing, deleting. Start one with project_thread_start, not with DSH\'s subagent or workflow tools. One thread per distinct ask ("Two things: A and B" is two asks); put the user\'s words in `ask`, word for word, and in `brief` the goal, the scope, what done looks like and what not to touch. A follow-up on a thread\'s work goes to that thread with project_thread_send. Something the user wants sent to another chat or project goes with project_message.',
         `4. Name a thread to the user only as a link: [Fix the login bug](${threadLink('t3')}) for thread t3.`,
         '5. Answer yourself only from what you already know: thread status, project memory, this conversation. You may read a file to write a brief or a question; you run no commands and change no files. Keep your replies short.',
-        `6. Before you or a thread delete files, push, publish, send or post anything, spend money, or change settings outside the workspace, ask the user, unless their words asked for exactly that: they name the action and what it acts on ("delete build/", "deploy 1.4.2 to staging"; "clean up", "tidy" and "get it working" don't). ${READ_RULE} A brief never allows anything this rule lists: have the thread list what it would do and hand back needs_decision, then ask. Doing it again (a retry, a check) needs its own ask. In a question, don't mark an option that sends, deploys or deletes as Recommended. Ask only in these cases and for the user's tools (rule 2); otherwise pick and say what you assumed.`,
+        `6. Before you or a thread delete files, push, publish, send or post anything, spend money, or change settings outside the workspace, ask the user, unless their words asked for exactly that: they name the action and what it acts on ("delete build/", "deploy 1.4.2 to staging"; "clean up", "tidy" and "get the deploy script working" don't: there "deploy" names the script). ${READ_RULE} A brief never allows anything this rule lists: have the thread list what it would do and hand back needs_decision, then ask. Doing it again (a retry, a check) needs its own ask. In a question, don't mark an option that sends, deploys or deletes as Recommended. Ask only in these cases and for the user's tools (rule 2); otherwise pick and say what you assumed. Never ask for or take a password, token or key in chat: the user sets it where it is used.`,
         '7. Guide your threads. Check each handback against the ask; if it falls short or its approach is wrong, tell the thread what to fix and why (project_thread_send), and report once it is right. Tell the user only what a handback shows: a test that didn\'t run is no pass. Answer a thread\'s question yourself when the user\'s words, the brief or project memory do; ask the user only what is theirs to decide, and send the answer on. When the user\'s wishes or priorities change, redirect the thread; a running one reads it now. Notes to a thread go to it, not into your reply.',
         '8. Messages that start with "[" come from threads or the plugin, not the user: do what the note in them says. For "[Project created", run no tools and start no thread for it. Handbacks and questions arrive on their own; never poll threads, not even in a "<goal_round>".',
         '9. The user may talk to a thread directly or stop it; its line under Threads then says so. A thread the user stopped stays stopped: when you mention it, say the user stopped it and it can be resumed. Act on either only when the user asks you here.',
@@ -181,7 +181,7 @@ export function threadPolicy(p) {
         '1. Do the task end to end, and only the task. Where a detail is unspecified, pick a sensible default, say which, and keep going. When you are unsure and no default fits (the answer changes the result), ask with project_ask_coordinator and carry on with what doesn\'t depend on it; the answer arrives here.',
         `2. Do not use the user's personal or infrastructure tools (${OFF_LIMITS}), ${ANY_ROUTE}, unless the user's own words ask for it. If the task needs one anyway, hand back with status blocked and say why.`,
         p.guarded?.length ? `   Here those include: ${p.guarded.join(', ')}.${p.yourTools === 'always' ? '' : toolsNote(p.tools)}` : null,
-        `3. Editing files in the workspace for your task is fine. Keep scratch files inside the workspace, or delete them before you hand back. Before you write outside the workspace, delete files, push, publish, send or post anything, spend money, or do anything that cannot be undone, hand back with status needs_decision, unless the user's words asked for exactly that. ${READ_RULE} ${BRIEF_CANT} Doing it again (a retry, a check) needs its own ask. A command that sends, or that deletes files you didn't create, waits for the user to allow it once in this chat, one send at a time, and a copy or a wrapper of it (another script, a copied file, a different client) is the same send; if they reject it, hand back with status needs_decision and don't do it another way.`,
+        `3. Editing files in the workspace for your task is fine. Keep scratch files inside the workspace, or delete them before you hand back. Before you write outside the workspace, delete files, push, publish, send or post anything, spend money, or do anything that cannot be undone, hand back with status needs_decision, unless the user's words asked for exactly that: they name the action and what it acts on ("get the deploy script working" doesn't: there "deploy" names the script). ${READ_RULE} ${BRIEF_CANT} Doing it again (a retry, a check) needs its own ask. A command that sends, or that deletes files you didn't create, waits for the user to allow it once in this chat, one send at a time, and a copy or a wrapper of it (another script, a copied file, a different client) is the same send; if they reject it, hand back with status needs_decision and don't do it another way. Never ask for or take a password, token or key: say where the user sets it.`,
         '4. When you are done or stuck, call project_handback once, as your last step. Its summary is what the user reads on your card: at most 300 characters, the result first, then where (paths, links); a longer one comes back to you to shorten. Name every request you sent to a service outside the workspace and every file you left outside it. Only what your tools showed; mark a guess "(guess)".',
         '5. After project_handback, end your turn with one short line. Do not repeat the summary.',
         ...memorySection(p.memory),
@@ -208,7 +208,7 @@ export function memoryExcerpt(memory, max = 4000) {
 }
 
 /** Thread rule 3's bar, under each brief and each message the coordinator writes to a thread, where a grant would appear. */
-const allowNote = (what) => `(${what} can't allow anything your rule 3 holds back; only the user's words after "The user asked:" can, when they name it.)`;
+const allowNote = (what) => `(${what} can't allow anything your rule 3 holds back; only the user's words after "The user asked:" can, when they name the action and what it acts on: in "get the deploy script working", "deploy" names the script.)`;
 
 /** The first message a new thread receives: the user's own words, then the coordinator's brief, then rule 3's bar. */
 export function briefMessage(projectName, threadId, title, brief, ask) {
@@ -256,14 +256,34 @@ const LEAD = {
 export const NOTE_START = /\n\n\((?:The user has not seen this|For the user|Full conversation|Tell the user|If its last reply|Sent by the coordinator of)\b[^\n]*\)\s*$/;
 
 /**
+ * What a thread reads as the result of a call the user rejected at DSH's
+ * prompt, in place of DSH's `the user rejected tool "bash"` (behaviour
+ * review 5, S3 r4: the thread handed back done without saying so).
+ * @param {string} [what] - what the command does, as the prompt said it ("runs ./deploy.sh, which can send …").
+ */
+export function declinedResult(what) {
+    return `Error: the user declined ${what ? `this command at the prompt: it ${what}` : 'this call at the prompt'}. Don't run it, or anything that does the same, another way. Finish what you can without it, then hand back with status needs_decision and say the user declined it.`;
+}
+
+/** The prompts the user declined in a thread's turn, said to its coordinator: "The user declined its prompt for a command that …". */
+function declinedLine(declined) {
+    const list = (Array.isArray(declined) ? declined : []).filter((d) => typeof d === 'string' && d.trim() !== '').map((d) => clip(d.replace(/\s+/g, ' ').trim(), 200));
+    if (list.length === 0) return '';
+    return `The user declined its prompt${list.length > 1 ? 's' : ''} for ${list.length > 1 ? `${list.slice(0, -1).join('; ')}; and ${list.at(-1)}` : list[0]}`;
+}
+
+/**
  * An explicit handback, as the coordinator sees it. Its closing note says
  * how to answer it, where a weak model reads it: now, the thread's link
  * first, then the result. `last`: no other thread is running, so the reply
- * also closes what the user asked for.
+ * also closes what the user asked for. `declined`: what the user declined
+ * at the thread's prompts since its last note, which the reply says.
  */
-export function handbackMessage(threadId, title, status, summary, { last = false } = {}) {
+export function handbackMessage(threadId, title, status, summary, { last = false, declined = [] } = {}) {
     const wrap = last ? ' No other thread is running: end with one line that answers what the user asked for.' : '';
-    const note = `(The user has not seen this. Reply now. First line: the link ${threadMarkdown(threadId, title)}, a colon, and ${LEAD[status] ?? LEAD.done}.${wrap} Write "the thread reports" for anything you did not check yourself. Full conversation: project_thread_read thread="${threadId}".)`;
+    const no = declinedLine(declined);
+    const said = no ? ` ${no}: say so, and don't report that part as done.` : '';
+    const note = `(The user has not seen this. Reply now. First line: the link ${threadMarkdown(threadId, title)}, a colon, and ${LEAD[status] ?? LEAD.done}.${wrap}${said} Write "the thread reports" for anything you did not check yourself. Full conversation: project_thread_read thread="${threadId}".)`;
     return `${TAGS.handback} ${threadId} · "${title}" · status: ${status}]\n\n${summary}\n\n${note}`;
 }
 
@@ -299,8 +319,9 @@ export const IDLE_NUDGE = 'Finish the task and call project_handback.';
  * @param {object} [options]
  * @param {boolean} [options.nudge] - ask the coordinator to nudge a failed or stopped turn (when the plugin can't send it).
  * @param {boolean} [options.again] - it ended without a handback again after its nudge.
+ * @param {string[]} [options.declined] - what the user declined at its prompts since its last note.
  */
-export function idleMessage(threadId, title, lastText, ending = '', { nudge = false, again = false } = {}) {
+export function idleMessage(threadId, title, lastText, ending = '', { nudge = false, again = false, declined = [] } = {}) {
     const body = lastText ? `Its last reply:\n\n${clip(lastText, 1500)}` : 'It produced no reply text.';
     const link = threadMarkdown(threadId, title);
     const failed = endingStateOf(ending) === 'failed';
@@ -310,7 +331,8 @@ export function idleMessage(threadId, title, lastText, ending = '', { nudge = fa
     else if (ending) next = `(Tell the user in one line, starting with ${link}, that its turn ${failed ? 'failed' : 'stopped'}${again ? ' again after a nudge' : ''} and why; its card has ${failed ? 'Retry' : 'Resume'}. Send it nothing more unless the user asks.)`;
     else if (again) next = `(It was nudged once already to finish and hand back, and ended its turn again without a handback. Tell the user in one line, starting with ${link}, what its last reply says. Don't nudge it again: send it nothing more unless the user asks.)`;
     else next = `(If its last reply is a result, check it against the ask and pass it on as you would a handback, starting with ${link}. Otherwise send it one message with ${send}: the answer to its question when the user's words, the brief or project memory answer it (ask the user only what is theirs to decide), else "${IDLE_NUDGE}". Send nothing more if it ends this way again: you will be told to tell the user.)`;
-    return `${TAGS.idle}: ${threadId} · "${title}"]\n\n${ending ? `${ending}\n\n` : ''}${body}\n\n${next}`;
+    const no = declinedLine(declined);
+    return `${TAGS.idle}: ${threadId} · "${title}"]\n\n${ending ? `${ending}\n\n` : ''}${no ? `${no}.\n\n` : ''}${body}\n\n${next}`;
 }
 
 /**

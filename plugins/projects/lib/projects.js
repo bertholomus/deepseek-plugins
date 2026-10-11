@@ -40,7 +40,7 @@
  *
  * @module dsh-plugin-projects/projects
  */
-import { appendFileSync, readFileSync, writeFileSync, statSync, realpathSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync, statSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
@@ -51,14 +51,14 @@ import {
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage, cardSummary,
     handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, welcomeMessage, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS, STOPPED_BY_USER, NUDGE,
-    IDLE_NUDGE, outsideMessage, replyMessage,
+    IDLE_NUDGE, outsideMessage, replyMessage, declinedResult,
 } from './prompts.js';
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
 import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS, diffFiles, subagentsIn, placeIn, MAX_NET_CHARS, MAX_VIEW_CHARS } from './changes.js';
 import { NetTexts, changedPath, canonicalPath } from './net.js';
 import { sendOf, codeSendOf, described, withoutCredentials } from './sends.js';
 import { grantsIn, asksFor as asksToDo, doing } from './grants.js';
-import { deletesOf, codeDeletesOf, deletesWhat, isFree } from './deletes.js';
+import { deletesOf, codeDeletesOf, deletesWhat, isFree, madeDirsOf } from './deletes.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
 const SECTION_ORDER = 9500;
@@ -125,6 +125,11 @@ const READ_ONLY_REASON = 'You are on Read Only, so you don\'t change files. Star
  * refused before DSH asks anyone, so it never reads as the user's refusal and isn't taken for a reason to widen its access.
  */
 const READ_ONLY_WIDER = 'You are on Read Only, so this didn\'t run and nobody was asked: a step that needs more than reading belongs in a thread. Start one for it with project_thread_start, or send it to the thread already doing that work. Don\'t suggest widening your access.';
+/**
+ * A coordinator on Read Only running a command while DSH offers no Read Only preset to hold it (the plugin's
+ * fallback keeps it on DSH's default): refused, as a write is (behaviour review 5, S3 r2's coordinator ran ls).
+ */
+const READ_ONLY_COMMAND = 'You are on Read Only, so you don\'t run commands: this didn\'t run and nobody was asked. Read files with your read tools; anything that needs a command goes to a thread: start one with project_thread_start, or send it to the thread already doing that work.';
 /** Whether a call asks for a sandbox wider than reading. */
 const asksWider = (exec) => {
     const mode = isObject(exec?.arguments) ? exec.arguments.sandbox_permissions : undefined;
@@ -598,6 +603,8 @@ export class ProjectManager {
         this.pendingSends = new Map();
         /** Thread sessionId → (callId → {turn, step}), from its tool/call events: the model step each call came in. */
         this.callSteps = new Map();
+        /** Thread sessionId → (callId → what it does): the calls of its turn the plugin asked the user about (declined). */
+        this.askedCalls = new Map();
         /** projectId → tail of its delivery chain, so messages reach the coordinator in order. */
         this.chains = new Map();
         /** projectId → {timer, attempt} for held messages waiting on a retry. */
@@ -881,16 +888,21 @@ export class ProjectManager {
 
     /**
      * Why a call is refused, or undefined: a file change by a coordinator
-     * on Read Only; wallReason by the tool's name; and for DSH's MCP
+     * on Read Only, and a command too while DSH's own Read Only preset
+     * doesn't hold it; wallReason by the tool's name; and for DSH's MCP
      * resource tools by the server their `server` argument names, so the
      * user's servers can't be read around the wall.
      */
-    callReason(who, exec) {
+    callReason(who, exec, agent = undefined) {
         const name = exec?.name;
         if (who.role === 'coordinator' && WRITE_TOOLS.has(name) && !(name === 'str_replace_editor' && exec.arguments?.command === 'view')
             && this.readOnlyCoordinator(who.projectId)) {
             this.log(`read-only-refused ${who.projectId}/coordinator ${name}`);
             return READ_ONLY_REASON;
+        }
+        if (who.role === 'coordinator' && SEND_TOOLS.has(name) && this.readOnlyCoordinator(who.projectId) && this.permissionOf(agent?.id ?? exec?.agent?.id) !== 'read-only') {
+            this.log(`read-only-refused ${who.projectId}/coordinator ${name} command`);
+            return READ_ONLY_COMMAND;
         }
         if (who.role === 'coordinator' && asksWider(exec) && this.readOnlyCoordinator(who.projectId)) {
             this.log(`read-only-refused ${who.projectId}/coordinator ${name} wider`);
@@ -967,6 +979,7 @@ export class ProjectManager {
                 return { kind: 'deny', reason: SEND_REASONS.pending(found.what) };
             }
             this.pendingSends.set(exec.agent.id, { callId: exec.callId, ...step });
+            this.noteAsked(exec, found.what);
             this.log(`send-ask ${label}`);
             const said = described(found);
             const words = threadWords(args);
@@ -1037,6 +1050,7 @@ export class ProjectManager {
                 this.log(`delete-refused ${label} never-asks`);
                 return { kind: 'deny', reason: DELETE_REASONS.never(what) };
             }
+            this.noteAsked(exec, what);
             this.log(`delete-ask ${label}`);
             const theirs = asked?.kind === 'ask' ? asked : undefined;
             const also = withoutCredentials(theirs?.displayReason?.en ?? theirs?.reason).trim();
@@ -1068,6 +1082,48 @@ export class ProjectManager {
         } else if (event?.type === 'turn/end') {
             this.pendingSends.delete(sessionId);
             this.callSteps.delete(sessionId);
+            this.askedCalls.delete(sessionId);
+        }
+    }
+
+    /** What a thread's call the plugin asked the user about does, for the result if they decline it (declined). */
+    noteAsked(exec, what) {
+        if (typeof exec.callId !== 'string') return;
+        const asked = this.askedCalls.get(exec.agent.id) ?? new Map();
+        asked.set(exec.callId, String(what ?? ''));
+        for (const key of [...asked.keys()].slice(0, -20)) asked.delete(key);
+        this.askedCalls.set(exec.agent.id, asked);
+    }
+
+    /**
+     * A thread's call the user rejected at DSH's prompt (DSH's result is
+     * `the user rejected tool "bash"`), as DSH's `tools/post-execute` sees it
+     * (index.js). The thread reads, as the call's result, what the user
+     * declined and to hand back needs_decision saying so; its coordinator
+     * reads it in the thread's next handback or idle note, so its reply
+     * says so too (behaviour review 5, S3 r4: a done handback and "That's
+     * the script working" after a Reject). A rejection DSH made itself, for
+     * a session whose approvals never ask, isn't the user's.
+     * @returns {{kind: 'accept', content: object[]} | undefined} the result's new content, or undefined to leave it.
+     */
+    declined(exec, result) {
+        try {
+            if (this.disposed || !exec?.agent) return undefined;
+            const asked = this.askedCalls.get(exec.agent.id);
+            const what = asked?.get(exec.callId);
+            asked?.delete(exec.callId);
+            if (!result?.isError || result.error?.message !== `the user rejected tool "${exec.name}"`) return undefined;
+            const who = this.store.lookup(exec.agent.id);
+            if (who?.role !== 'thread' || !this.projects.has(who.projectId) || this.approvalPolicyOf(exec.agent.session) !== 'ask') return undefined;
+            const t = this.store.thread(who.projectId, who.threadId);
+            if (!t) return undefined;
+            const said = withoutCredentials(what ?? '').trim();
+            this.store.putThread(who.projectId, who.threadId, { declined: [...(Array.isArray(t.declined) ? t.declined : []), said ? `a command that ${said}` : `a ${exec.name} call`].slice(-3) });
+            this.log(`declined ${who.projectId}/${who.threadId} ${exec.name}`);
+            return { kind: 'accept', content: [{ type: 'text', text: declinedResult(said) }] };
+        } catch (error) {
+            this.log(`error declined ${String(error?.message ?? error).slice(0, 200)}`);
+            return undefined;
         }
     }
 
@@ -1873,7 +1929,7 @@ export class ProjectManager {
                 }));
                 add(scoped.on('session/event', (_session, event) => this.onThreadEvent(projectId, threadId, agent, event)));
                 add(() => this.clearApprovals(agent.id));
-                add(() => { this.pendingSends.delete(agent.id); this.callSteps.delete(agent.id); });
+                add(() => { this.pendingSends.delete(agent.id); this.callSteps.delete(agent.id); this.askedCalls.delete(agent.id); });
             } else {
                 add(scoped.on('session/event', (_session, event) => {
                     if (event?.type === 'model/selection') this.onSelection(who, agent, event.data);
@@ -1891,7 +1947,7 @@ export class ProjectManager {
             add(() => this.ownSelections.delete(agent.id));
             add(() => this.ownPermissions.delete(agent.id));
             // The user's tools it may not use: left out of what its model is offered, and refused if called anyway.
-            if (typeof scoped.tools?.guard === 'function') add(scoped.tools.guard((exec) => this.callReason(who, exec)));
+            if (typeof scoped.tools?.guard === 'function') add(scoped.tools.guard((exec) => this.callReason(who, exec, agent)));
             add(() => this.dropWall(agent));
             this.applyWall(agent, who);
         } catch (error) {
@@ -2167,7 +2223,9 @@ export class ProjectManager {
         if (!cutOff) this.store.putThread(projectId, threadId, ended ? { nudged: nudge ? true : undefined } : { nudged: undefined, stalled: true });
         if (nudge && !this.held(projectId) && await this.nudgeThread(projectId, threadId, turn, ended)) return;
         const news = nudge && ended ? undefined : { kind: ended ? endingStateOf(turn.ending) : 'finished', thread: threadId };
-        await this.deliver(projectId, idleMessage(threadId, t.title, turn.reply, turn.ending, { nudge: nudge && ended, again }), undefined, news);
+        const declined = Array.isArray(this.store.thread(projectId, threadId)?.declined) ? this.store.thread(projectId, threadId).declined : [];
+        if (declined.length > 0) this.store.putThread(projectId, threadId, { declined: undefined });
+        await this.deliver(projectId, idleMessage(threadId, t.title, turn.reply, turn.ending, { nudge: nudge && ended, again, declined }), undefined, news);
         this.log(`idle-note ${projectId}/${threadId} chars=${turn.reply.length}${turn.ending ? ` ended=${turn.endKind}` : ''}${nudge && ended ? ' nudge' : ''}${again ? ' again' : ''}`);
     }
 
@@ -2446,17 +2504,62 @@ export class ProjectManager {
      * One tool call as DSH runs it (`tools/execute`): a file-tool call of a
      * thread, or of a subagent working for one, keeps the file's text from
      * before the thread's first edit of it and after each (net.js), for the
-     * one diff per file its Changes tab shows. Any other call runs as it is,
-     * and keeping the texts never fails a call.
+     * one diff per file its Changes tab shows; their bash or pwsh command
+     * that makes folders keeps the ones it made as the thread's own, for
+     * the delete check (madeTarget). Any other call runs as it is, and
+     * keeping either never fails a call.
      */
     aroundTool(exec, next) {
         let target = null;
+        let made = null;
         try {
             target = this.netTarget(exec);
+            if (!target) made = this.madeTarget(exec);
         } catch (error) {
             this.log(`error net-target ${String(error?.message ?? error).slice(0, 200)}`);
         }
+        if (made) return this.aroundMade(made, next);
         return target ? this.net.around(target.thread, target.file, next, typeof exec.callId === 'string' ? exec.callId : undefined) : next();
+    }
+
+    /**
+     * The folders a thread's (or its subagent's) bash or pwsh command
+     * makes (deletes.js madeDirsOf) that aren't there yet: {thread, dirs},
+     * or null.
+     */
+    madeTarget(exec) {
+        if (this.disposed || (exec?.name !== 'bash' && exec?.name !== 'pwsh') || !exec.agent) return null;
+        const args = argsOf(exec.arguments);
+        const command = typeof args.command === 'string' ? args.command : '';
+        if (!/\b(?:mkdir|md|new-item|ni)\b/i.test(command)) return null;
+        const session = exec.agent.session;
+        const id = session?.id ?? exec.agent.id;
+        const own = this.store.lookup(id);
+        const thread = own?.role === 'thread' ? id : own ? null : this.threadAbove(session);
+        if (!thread) return null;
+        const who = own ?? this.store.lookup(thread);
+        const t = who?.role === 'thread' ? this.store.thread(who.projectId, who.threadId) : null;
+        const cwd = [session?.header?.cwd, t?.folder, this.projects.get(who?.projectId)?.workspacePath].find((p) => typeof p === 'string' && p !== '');
+        if (cwd === undefined) return null;
+        const here = typeof args.workdir === 'string' && args.workdir.trim() !== '' ? resolve(expand(cwd), expand(args.workdir.trim())) : resolve(expand(cwd));
+        const dirs = madeDirsOf(command, { shell: exec.name, cwd: here }).filter((dir) => !existsSync(dir));
+        return dirs.length > 0 ? { thread, dirs } : null;
+    }
+
+    /** Run a command, then keep the folders it made as its thread's own (noteCreated). */
+    async aroundMade({ thread, dirs }, next) {
+        const result = await next();
+        try {
+            if (!result?.isError) {
+                const made = dirs.filter((dir) => { try { return statSync(dir).isDirectory(); } catch { return false; } });
+                for (const dir of made) this.noteCreated(thread, dir);
+                const who = this.store.lookup(thread);
+                if (made.length > 0) this.log(`made-dirs ${who?.projectId}/${who?.threadId} ${made.length}`);
+            }
+        } catch (error) {
+            this.log(`error made-dirs ${String(error?.message ?? error).slice(0, 200)}`);
+        }
+        return result;
     }
 
     /** The thread whose net texts a file-tool call changes, and its file as an absolute path: {thread, file}, or null. */
@@ -2963,17 +3066,24 @@ export class ProjectManager {
      * grants.js), unless the user's words in `asks` name that action. In
      * behaviour review 4 a thread deleted build/ because its brief said it
      * could; only the user's words allow that, so the thread lists what it
-     * would do and the coordinator asks.
+     * would do and the coordinator asks. The refusal names the words that
+     * matched, so the coordinator changes those and not the whole brief
+     * (review 5, S10 r1).
      */
     guardGrants(projectId, what, text, asks) {
         const granted = grantsIn(text).filter(({ action }) => !asks.some((ask) => asksToDo(ask, action)));
         if (granted.length === 0) return;
         const actions = granted.map((g) => g.action);
         this.log(`grant ${projectId} ${what} ${actions.join(',')}`);
-        const { sentence } = granted[0];
-        const said = sentence.length > 80 ? `${sentence.slice(0, 80).replace(/[\s,;:]*\S*$/, '') || sentence.slice(0, 79)}…` : sentence;
+        const sentences = new Map();
+        for (const { sentence, words: [action, grant], excerpt } of granted) {
+            const one = sentences.get(sentence) ?? sentences.set(sentence, { excerpt, actions: [], grants: [] }).get(sentence);
+            one.actions.push(`"${action}"`);
+            if (!one.grants.includes(`"${grant}"`)) one.grants.push(`"${grant}"`);
+        }
+        const found = [...sentences.values()].map((one) => `"${one.excerpt}" (${one.actions.join(' and ')} with ${one.grants.join(' and ')})`).join('; ');
         const where = what === 'start' ? 'the brief' : 'the text';
-        throw new ProjectError(`${where} allows ${doing(actions)} ("${said}"), and only the user's words can allow that (rule 6). If they asked for it, put their words in ask. If not, take it out of ${where}: have the thread list what it would do and hand back needs_decision, then ask the user`);
+        throw new ProjectError(`${where} allows ${doing(actions)}: ${found}. Only the user's words can allow that (rule 6). If they asked for it, put their words in ask. If not, take that out of ${where} (words that only forbid it are fine): have the thread list what it would do and hand back needs_decision, then ask the user`);
     }
 
     async startThread(projectId, { title, ask, brief, model, effort }) {
@@ -4086,12 +4196,13 @@ export class ProjectManager {
         if (!this.allowHandback(projectId, threadId)) {
             throw new ProjectError(`handback limit reached (${this.config.maxHandbacksPerHour} per hour); finish the work and hand back once`);
         }
-        this.store.putThread(projectId, threadId, { lastHandback: { status, summary: cardSummary(text, 500), at: new Date().toISOString() }, nudged: undefined, stalled: undefined, question: undefined, shorten: undefined });
+        const declined = Array.isArray(t.declined) ? t.declined : [];
+        this.store.putThread(projectId, threadId, { lastHandback: { status, summary: cardSummary(text, 500), at: new Date().toISOString() }, nudged: undefined, stalled: undefined, question: undefined, shorten: undefined, declined: undefined });
         // With no other thread at work, the reply to this one also closes what the user asked for.
         const others = Object.entries(this.store.project(projectId).threads).filter(([id, o]) => id !== threadId && !o.resolved);
         const last = status !== 'progress' && !others.some(([, o]) => this.liveStatus(o.sessionId) !== 'idle');
         const news = status === 'progress' ? undefined : { kind: 'handback', thread: threadId, status };
-        const outcome = await this.deliver(projectId, handbackMessage(threadId, t.title, status, text, { last }), t.sessionId, news);
+        const outcome = await this.deliver(projectId, handbackMessage(threadId, t.title, status, text, { last, declined }), t.sessionId, news);
         this.log(`handback ${projectId}/${threadId} status=${status} chars=${text.length}${length > CARD_CHARS ? ' long' : ''} ${outcome}`);
         if (outcome === 'delivered') return HANDBACK_SENT;
         return this.held(projectId) ? HANDBACK_HELD : HANDBACK_RETRY;

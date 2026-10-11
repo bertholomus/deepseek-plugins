@@ -1313,9 +1313,19 @@ function scriptSendOf(path, how, ctx) {
     return sendingName(name, file !== undefined) ? byName(shown, name, file !== undefined, name) : null;
 }
 
-/** A send inside what a command runs, said through it: "runs ./deploy.sh, which sends a POST to …". */
+/**
+ * What something does, as what a script that holds it can do: "sends a POST" → "can send a POST". A script may
+ * not reach the line (a guard test that exits first, behaviour review 5), so the prompt doesn't say it will.
+ */
+export function canDo(what) {
+    const [verb, ...rest] = String(what).split(' ');
+    const base = /(?:sh|ch|ss|x|z)es$/.test(verb) ? verb.slice(0, -2) : /ies$/.test(verb) ? `${verb.slice(0, -3)}y` : verb.replace(/s$/, '');
+    return ['can', base, ...rest].join(' ');
+}
+
+/** A send inside what a command runs, said through it: "runs ./deploy.sh, which can send a POST to …". */
 function runs(label, inside) {
-    return { kind: 'script', program: inside.program, what: `runs ${label}, which ${inside.what}`, ...(inside.unread ? { unread: inside.unread } : {}) };
+    return { kind: 'script', program: inside.program, what: `runs ${label}, which ${canDo(inside.what)}`, ...(inside.unread ? { unread: inside.unread } : {}) };
 }
 
 /**

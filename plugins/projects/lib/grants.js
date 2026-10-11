@@ -2,11 +2,13 @@
  * Leave that a coordinator's brief or message gives a thread for what
  * rule 6 holds back: a delete, deploy, post, push, publish or probe word
  * next to grant wording ("only", "safe to", "is fine", "you may",
- * "allowed", "authorized", "go ahead"), and whether the user's own words
- * name that action. Text that only forbids ("Do not deploy", "never delete
- * anything") grants nothing. It reads plain words, not grammar: it catches
- * the grants behaviour review 4 found, and the send and delete checks hold
- * what it misses. Pure functions.
+ * "allowed", "authorized", "go ahead", "in scope"), and whether the user's
+ * own words name that action. Text that only forbids ("Do not deploy",
+ * "never delete anything") grants nothing, and neither does grant wording
+ * quoted as text (a label: "safe to delete") or a probe kept to reads. It
+ * reads plain words, not grammar: it catches the grants behaviour reviews
+ * 4 and 5 found, and the send and delete checks hold what it misses. Pure
+ * functions.
  *
  * @module dsh-plugin-projects/grants
  */
@@ -37,6 +39,16 @@ const MODAL = [['you', 'may'], ['you', 'can'], ['feel', 'free', 'to'], ['free', 
 /** Leave said of an action anywhere in its sentence: "deleting caches is fine", "so that is authorized". */
 const PREDICATE = [['is', 'fine'], ['are', 'fine'], ['is', 'ok'], ['are', 'ok'], ['is', 'okay'], ['are', 'okay'], ['is', 'safe'], ['are', 'safe'], ['is', 'acceptable'], ['are', 'acceptable'],
     ['allowed'], ['authorized'], ['authorised'], ['approved'], ['permitted'], ['sanctioned'], ['go', 'ahead'], ['green', 'light']];
+/**
+ * Leave said of an action as part of the work: "running the deploy is in scope". Only of the action
+ * itself, never of a name with its word in it: "the deploy script is in scope" is work on the script.
+ */
+const SCOPE = [['in', 'scope'], ['within', 'scope'], ['part', 'of', 'the', 'task'], ['part', 'of', 'the', 'job'], ['part', 'of', 'the', 'work'], ['part', 'of', 'your', 'task']];
+/** Words before a quote of what someone said, wrote or asked. */
+const SPEECH = new Set(['said', 'says', 'say', 'saying', 'asked', 'asks', 'ask', 'confirmed', 'confirms', 'wrote', 'writes', 'replied', 'replies', 'reply', 'answered', 'answers', 'answer', 'told', 'tells', 'approved', 'agreed', 'typed', 'words', 'request', 'requested', 'instruction', 'instructions']);
+/** A probe kept to reads names a read method, or says it reads only, and names no method that sends. */
+const READ_METHODS = /\b(?:GET|HEAD|OPTIONS)\b|\bread[- ]only\b|\breads? only\b|\bonly (?:to )?reads?\b/i;
+const SEND_METHODS = /\b(?:POST|PUT|PATCH|DELETE)\b/;
 
 /**
  * Words right after an action word that make it part of a name, not the
@@ -77,21 +89,40 @@ const STARTS = new Set(['run', 'do', 'start', 'trigger', 'kick', 'perform', 'exe
 /**
  * A text's sentences, each with its words: `word` in lower case without
  * the marks around it; `stop` when a comma, colon, dash or "…" ends its clause;
- * `named` when it is a file, path or other name ("deploy.sh", "build/").
+ * `named` when it is a file, path or other name ("deploy.sh", "build/");
+ * `raw` as written without the marks around it, `token` with them;
+ * `quoted`, the number of the double-quoted span it is in (0 for none, or
+ * for words someone is said to have said: `The user said: "Only delete build/"`).
  */
 function sentencesOf(text) {
     const out = [];
+    let span = 0;
     for (const sentence of String(text ?? '').replace(/[’‘]/g, "'").split(/[.!?;]+(?=\s|$)|\n+/)) {
         const words = [];
+        let open = false;
+        let speech = false;
         for (const raw of sentence.split(/\s+/)) {
             if (/^([-–—]+|…|\.{2,})$/.test(raw)) {
-                if (words.length > 0) words[words.length - 1].stop = true;
+                if (words.length > 0) Object.assign(words[words.length - 1], { stop: true, token: `${words[words.length - 1].token} ${raw}` });
                 continue;
             }
-            const core = raw.replace(/^["'`(\[{<*_]+|["'`)\]}>*_,:]+$/g, '');
+            // A double quote opens a span at the start of a word and closes it at the end of one: "safe to delete".
+            // Words quoted as someone's ("the user confirmed: "…"") are still read as leave.
+            let quoted = 0;
+            const lead = /^[(\[{<*_]*["“]/.exec(raw);
+            if (open) {
+                quoted = speech ? 0 : span;
+                if (/["”][)\]}>*_,:.!?;]*$/.test(raw)) open = false;
+            } else if (lead) {
+                span += 1;
+                speech = SPEECH.has(words[words.length - 1]?.word);
+                quoted = speech ? 0 : span;
+                open = !/["”][)\]}>*_,:.!?;]*$/.test(raw.slice(lead[0].length));
+            }
+            const core = raw.replace(/^["'`(\[{<*_“]+|["'`)\]}>*_,:”]+$/g, '');
             const word = core.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
             if (word === '') continue;
-            words.push({ word, stop: /[,:]["'`)\]}>*_]*$/.test(raw), named: /[/\\.=@~]/.test(core) });
+            words.push({ word, stop: /[,:]["'`)\]}>*_”]*$/.test(raw), named: /[/\\.=@~]/.test(core), raw: core, token: raw, quoted });
         }
         if (words.length > 0) out.push({ text: sentence.trim(), words });
     }
@@ -139,12 +170,16 @@ function named(words, at, { benign = false } = {}) {
     return !benign && !before.some((w) => STARTS.has(w.word) || /^(running|executing|triggering|invoking|calling)$/.test(w.word));
 }
 
-/** Where each of a list's phrases starts in the words, unless a "don't" comes within two words before it. */
+/**
+ * Where each of a list's phrases starts in the words, unless a "don't" comes within two words before it, or
+ * it is quoted: grant wording in quotes is text the thread is given ("label each "safe to delete""), not leave.
+ */
 function phrasesIn(words, phrases) {
     const out = [];
     for (let i = 0; i < words.length; i++) {
         for (const phrase of phrases) {
             if (!phrase.every((part, k) => words[i + k]?.word === part)) continue;
+            if (words.slice(i, i + phrase.length).some((w) => w.quoted > 0)) continue;
             if (words.slice(Math.max(0, i - 2), i).some((w) => NEGATIONS.has(w.word))) continue;
             out.push({ at: i, end: i + phrase.length - 1 });
         }
@@ -167,34 +202,56 @@ function says(words, p, from, to) {
 }
 
 /**
+ * The words around the ones that matched, as written, with double quotes made single so the excerpt can be
+ * quoted: "… running the staging deploy to confirm success is in scope".
+ */
+function excerpt(words, at) {
+    const from = Math.max(0, Math.min(...at) - 4);
+    const to = Math.min(words.length - 1, Math.max(...at) + 4);
+    const said = words.slice(from, to + 1).map((w) => w.token).join(' ').replace(/[,:;\s–—-]+$/, '').replace(/["“”]/g, "'");
+    return `${from > 0 ? '… ' : ''}${said}${to < words.length - 1 ? ' …' : ''}`;
+}
+
+/**
  * The leave a text gives for what rule 6 holds back: each sentence where
  * an action word that no "don't" covers meets grant wording. "only" takes
  * the action next to it or before it in its clause, a modal ("you may",
  * "safe to") the action just after it, and "is fine", "allowed",
  * "authorized" and the like the action they are said of (`says`), even
  * as part of a name ("get the deploy script working, so that is
- * authorized") unless a verb like "edit" or "read" works on it. Deleting
- * what the thread made itself isn't held back.
- * @returns {{action: string, sentence: string}[]} each action once, with the first sentence that grants it.
+ * authorized") unless a verb like "edit" or "read" works on it; "in
+ * scope" and "part of the task" the action itself, never a name. Grant
+ * wording in quotes is text, not leave, and a probe kept to reads ("only
+ * with GET or HEAD") is a read. Deleting what the thread made itself
+ * isn't held back.
+ * @returns {{action: string, sentence: string, words: string[], excerpt: string}[]} each action once, with the
+ *   first sentence that grants it, the words that matched (the action's, then the grant's) and the text around them.
  */
 export function grantsIn(text) {
     const found = new Map();
     for (const { text: sentence, words } of sentencesOf(text)) {
         const modals = phrasesIn(words, MODAL);
         const predicates = phrasesIn(words, PREDICATE);
+        const scopes = phrasesIn(words, SCOPE);
+        const readsOnly = READ_METHODS.test(sentence) && !SEND_METHODS.test(sentence);
         for (let i = 0; i < words.length; i++) {
             const action = words[i].named ? undefined : ACTION_OF.get(words[i].word);
             if (!action || found.has(action) || negated(words, i) || named(words, i, { benign: true })) continue;
+            if (action === 'probe' && readsOnly) continue;
             const { from, to } = clauseOf(words, i);
             const clause = words.slice(from, to + 1);
             if (action === 'delete' && phrasesIn(clause, OWN).length > 0) continue;
             // "only" just before it, or after it in its clause: "delete only clearly safe junk", "probe it with unauthenticated requests only".
-            const only = clause.some((w, k) => w.word === 'only' && (from + k === i - 1 || from + k === i - 2 || (from + k > i && from + k - i <= 8)));
-            const modal = modals.some((m) => m.end < i && i - m.end <= 3 && m.at >= from);
-            if (((only || modal) && !named(words, i)) || predicates.some((p) => says(words, p, from, to))) found.set(action, sentence);
+            const only = clause.findIndex((w, k) => w.word === 'only' && w.quoted === 0 && (from + k === i - 1 || from + k === i - 2 || (from + k > i && from + k - i <= 8)));
+            const modal = modals.find((m) => m.end < i && i - m.end <= 3 && m.at >= from);
+            const leave = !named(words, i) ? (only >= 0 ? { at: from + only, end: from + only } : modal) ?? scopes.find((p) => says(words, p, from, to)) : undefined;
+            const grant = leave ?? predicates.find((p) => says(words, p, from, to));
+            if (!grant) continue;
+            const at = [i, grant.at, grant.end];
+            found.set(action, { sentence, words: [words[i].raw, words.slice(grant.at, grant.end + 1).map((w) => w.raw).join(' ')], excerpt: excerpt(words, at) });
         }
     }
-    return [...found].map(([action, sentence]) => ({ action, sentence }));
+    return [...found].map(([action, g]) => ({ action, ...g }));
 }
 
 /**

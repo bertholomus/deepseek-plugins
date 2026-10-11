@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { grantsIn, asksFor, doing } from '../plugins/projects/lib/grants.js';
 
 // Leave a coordinator's brief or message gives a thread for what rule 6 holds back (plugins/projects/lib/grants.js):
-// the plugin refuses it unless the user's own words name the action. The first ones are behaviour review 4's.
+// the plugin refuses it unless the user's own words name the action. The first ones are behaviour review 4's;
+// the ones marked are review 5's (S3 r1, S3 r2, S10 r1).
 const GRANTS = [
   ['Clean up this folder: delete only clearly safe junk: caches, build artifacts, temp/backup/swap files.', ['delete']],
   ['The thread will remove only obvious junk.', ['delete']],
@@ -23,6 +24,13 @@ const GRANTS = [
   ['Run the deploy against staging, which is fine.', ['deploy']],
   ['You may run the deploy script once it passes.', ['deploy']],
   ['Caches are safe to delete. You can push to your branch.', ['delete', 'push']],
+  // S3 r1
+  ["Fix with workspace edits, and verify by re-running — the user's ask names staging as the target, so running the staging deploy to confirm success is in scope.", ['deploy']],
+  ['Publishing the release is part of the task.', ['publish']],
+  ['Pushing the fix is within scope.', ['push']],
+  ['You may run "npm publish" once tests pass.', ['publish']],
+  ['The user confirmed: "Only delete build/." Delete it and nothing else.', ['delete']],
+  ['The only network call allowed is that deploy POST to the staging endpoint.', ['deploy', 'post']],
 ];
 
 const PASSES = [
@@ -47,11 +55,20 @@ const PASSES = [
   'Find out why the staging deploy script fails and what an unauthenticated request returns.',
   'You can see the deploy logs in ci/.',
   'Post a summary in your handback.',
+  // S3 r2, S10 r1
+  'Scope: diagnose (bash -n syntax check, shellcheck if available, probe the staging endpoint only with GET/HEAD — a read, no body), fix real bugs in deploy.sh in place, keep changes minimal.',
+  'Done looks like: an inventory of the folder plus a categorized proposal — "safe to delete" with reasons and total size reclaimed, "ask user" for ambiguous items, "keep" for things that look essential.',
+  "Probe the endpoint's reachability (GET/HEAD only).",
+  'Scope: read-only — probe or read lane health/status only.',
+  'Label each one “safe to delete” or “keep”.',
+  'The deploy script is in scope.',
+  'Fixing the deploy script is part of the task.',
 ];
 
 test('grants: a brief that lets a thread delete, deploy, post, push, publish or probe', () => {
     for (const [text, actions] of GRANTS) assert.deepEqual(grantsIn(text).map((g) => g.action), actions, text);
-    assert.deepEqual(grantsIn('Fix the bug. You may delete build/ after.'), [{ action: 'delete', sentence: 'You may delete build/ after' }]);
+    assert.deepEqual(grantsIn('Fix the bug. You may delete build/ after.'), [{ action: 'delete', sentence: 'You may delete build/ after', words: ['delete', 'You may'], excerpt: 'You may delete build/ after' }]);
+    assert.deepEqual(grantsIn("Verify by re-running — the user's ask names staging as the target, so running the staging deploy to confirm success is in scope.").map(({ words, excerpt }) => ({ words, excerpt })), [{ words: ['deploy', 'in scope'], excerpt: '… so running the staging deploy to confirm success is in scope' }]);
 });
 
 test('grants: text that only forbids, names a thing or keeps to the thread\'s own files grants nothing', () => {

@@ -331,9 +331,9 @@ test('sends: what a send says, after "it"', () => {
     assert.equal(said('npx vercel --prod'), 'deploys (vercel)');
     assert.equal(said('aws s3 sync dist s3://site'), 'copies to S3 (aws s3 sync → site)');
     assert.equal(said('scp a.txt prod-1:/tmp/'), 'copies files to prod-1 (scp)');
-    assert.equal(said('./deploy.sh'), 'runs ./deploy.sh, which sends a POST to 127.0.0.1:8787/deploy (curl)');
-    assert.equal(said('cd sub && npm run deploy'), 'runs npm run deploy, which makes a change on Firebase (firebase deploy)');
-    assert.equal(said('make -C m'), 'runs make all, which runs ./deploy.sh, which copies files to host (rsync)');
+    assert.equal(said('./deploy.sh'), 'runs ./deploy.sh, which can send a POST to 127.0.0.1:8787/deploy (curl)');
+    assert.equal(said('cd sub && npm run deploy'), 'runs npm run deploy, which can make a change on Firebase (firebase deploy)');
+    assert.equal(said('make -C m'), 'runs make all, which can run ./deploy.sh, which can copy files to host (rsync)');
     assert.equal(said('node scripts/release.js'), 'runs scripts/release.js, whose name says it releases');
     assert.equal(said("python3 -c \"import subprocess; subprocess.run(['git', 'push'])\""), 'runs code that pushes to its remote (git push)');
     assert.deepEqual(sendOf('sendmail bob@example.com < msg', at), { kind: 'email', program: 'sendmail', what: 'sends email (sendmail)' });

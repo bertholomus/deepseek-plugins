@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { deletesOf, codeDeletesOf, deletesWhat, isFree } from '../plugins/projects/lib/deletes.js';
+import { deletesOf, codeDeletesOf, deletesWhat, isFree, madeDirsOf } from '../plugins/projects/lib/deletes.js';
 
 // What a project thread's command deletes (plugins/projects/lib/deletes.js): the plugin asks the user before one that
 // deletes files the thread didn't create. Scripts the thread created are read through `read`, here from this table.
@@ -105,7 +105,7 @@ test('deletes: what a delete says, after "the command"', () => {
     assert.equal(said('git clean -fdx && rm -rf build'), 'deletes untracked and ignored files (git clean) and build (rm)');
     assert.equal(said("find . -name '*.o' -delete"), 'deletes what it finds in . (find -delete)');
     assert.equal(said('ls | xargs rm'), 'deletes the files named on its input (xargs rm)');
-    assert.equal(said('sh tidy.sh'), 'runs tidy.sh, which deletes build (rm)');
+    assert.equal(said('sh tidy.sh'), 'runs tidy.sh, which can delete build (rm)');
     assert.equal(said('npm run clean'), 'runs npm run clean, whose name says it deletes files');
     assert.equal(said('cargo clean'), 'runs cargo clean, whose name says it deletes files');
     assert.equal(said("python3 -c \"import shutil; shutil.rmtree('build')\""), 'runs code that deletes build (python3)');
@@ -140,6 +140,22 @@ test('deletes: free are the files the thread created, a folder of only those, th
     // The temp folder doesn't make a workspace inside it free, nor a folder that holds one.
     assert.equal(isFree({ program: 'rm', path: 'x', full: join(work, 'build') }, { work: [work] }), false);
     assert.equal(isFree({ program: 'rm', path: 'x', full: '/tmp' }, { work: ['/w'] }), false);
+    // A folder the thread made (madeDirsOf) is its own with what is in it, even empty; not a .git in it.
+    mkdirSync(join(work, '_qa', 'profile', '.git'), { recursive: true });
+    writeFileSync(join(work, '_qa', 'profile', 'Cookies'), 'x');
+    const made = new Set([...created, join(work, '_qa')]);
+    const freeMade = (command) => deletesOf(command, { cwd: work }).every((d) => isFree(d, { work: [work], created: made }));
+    for (const command of ['rm -rf _qa', 'rm -rf _qa/profile', 'rm _qa/profile/Cookies', 'rm -rf _qa/*']) assert.ok(freeMade(command), command);
+    for (const command of ['rm -rf _qa/profile/.git', 'rm -rf build']) assert.ok(!freeMade(command), command);
+});
+
+test('deletes: the folders a command makes, for the thread\'s own', () => {
+    assert.deepEqual(madeDirsOf('set -e\nmkdir -p _qa\nbrowser --user-data-dir="$PWD/_qa/profile"', { cwd: '/w/site' }), ['/w/site/_qa', '/w/site', '/w']);
+    assert.deepEqual(madeDirsOf('mkdir build dist && cd build && mkdir -m 700 out', { cwd: '/w' }), ['/w/build', '/w/dist', '/w/build/out']);
+    assert.deepEqual(madeDirsOf('sudo mkdir -p /opt/app && bash -c "mkdir inner"', { cwd: '/w' }), ['/opt/app', '/opt', '/w/inner']);
+    assert.deepEqual(madeDirsOf('mkdir "$(date +%s)" $X ~user/x "*" && cd $D && mkdir y', { cwd: '/w' }), []);
+    assert.deepEqual(madeDirsOf('mkdir x', {}), [], 'a relative path with no folder to take it from');
+    assert.deepEqual(madeDirsOf('New-Item -ItemType Directory -Path out\\logs -Force; New-Item -Path notes.txt; md tmp', { cwd: '/w', shell: 'pwsh' }), ['/w/out/logs', '/w/out', '/w', '/w/tmp']);
 });
 
 test('deletes: code deletes by its calls; its strings count as commands only where it runs commands', () => {

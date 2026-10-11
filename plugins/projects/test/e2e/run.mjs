@@ -749,7 +749,7 @@ try {
     reqs = await say(coord, call('project_thread_start', { ask: 'Write a haiku about rain.', title: 'Lanes', brief: 'Use mcp__lane-catalog__lanes_status to list the lanes.' }));
     check('a start that would use a guarded tool the user did not ask for is refused', resultOf(reqs).startsWith('TOOL-RESULT: Failed: this would use lane-catalog, and the user\'s words do not ask for it.')
         && readText(logFile).includes(`guard ${PROJECT_ID} start lane-catalog`), resultOf(reqs));
-    check('the coordinator\'s rules name the user\'s tools it doesn\'t have', reqs.some((r) => r.system.includes('\n   You don\'t have these here: lane-catalog, notes-app. When the user\'s words ask for work that needs one, start a thread with their words in `ask`; the thread gets the ones their words name.\n')),
+    check('the coordinator\'s rules name the user\'s tools it doesn\'t have', reqs.some((r) => r.system.includes('\n   You don\'t have these here: lane-catalog, notes-app. When the user\'s words ask for work that needs one, start a thread with their words in `ask`; the thread gets the ones their words name. Leave them out of briefs, even to forbid them.\n')),
         reqs.at(-1)?.system.split('\n').filter((l) => /these here|include/.test(l)).join(' | '));
     reqs = await say(coord, call('project_thread_start', { title: 'No ask', brief: 'Just answer.' }));
     check('a start without the user\'s words is rejected before it runs', resultOf(reqs) !== '' && /\bask\b/.test(resultOf(reqs))
@@ -1228,9 +1228,14 @@ try {
         await say(coord, call('project_thread_send', { thread: sendId, text: call('bash', deploy) }));
         const again = await prompts.next('the retry\'s prompt', ofDeploy);
         await prompts.answer(again, 'rejected');
-        await coordinatorSaw(mark, 'SAW-IDLE', 'the retry\'s idle note');
-        check('the same command again, as a retry, asks again, and a Reject sends nothing', again.eventId !== first.eventId && asks() === 2 && posted() === 1
-            && resultOf(since(mark, sendId)).includes('the user rejected tool "bash"'), `${asks()} ${hits.join()} ${resultOf(since(mark, sendId))}`);
+        const retrySaw = await coordinatorSaw(mark, 'SAW-IDLE', 'the retry\'s idle note');
+        check('the same command again, as a retry, asks again, and a Reject sends nothing', again.eventId !== first.eventId && asks() === 2 && posted() === 1,
+            `${asks()} ${hits.join()}`);
+        // Behaviour review 5, S3 r4: the thread reads what the user declined and to hand back needs_decision, and its
+        // coordinator hears it with the thread's next note, so its reply says so.
+        check('after a Reject, the thread reads what the user declined, and its coordinator hears it',
+            resultOf(since(mark, sendId)).includes(`Error: the user declined this command at the prompt: it ${sends}. Don't run it`)
+            && retrySaw.fresh.includes(`The user declined its prompt for a command that ${sends}.`), `${resultOf(since(mark, sendId))} ${retrySaw.fresh.slice(0, 600)}`);
         // Its first turn used up its nudge, and the coordinator's retry starts no new count; the user's answer does, so
         // the retry's turn that ended without a handback was nudged before the coordinator heard.
         const retryLog = readText(logFile).split('\n').filter((line) => line.includes(` ${PROJECT_ID}/${sendId} `) && / (prompt-answered|nudge|idle-note) /.test(line)).slice(-3).map((line) => line.split(' ')[1]);

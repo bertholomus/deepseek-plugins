@@ -19,7 +19,7 @@
 import { lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { splitShell } from './sends.js';
+import { canDo, splitShell } from './sends.js';
 
 /** How deep command lines inside command lines, code and scripts are followed. */
 const MAX_DEPTH = 3;
@@ -299,7 +299,7 @@ function script(path, how, ctx) {
             : kind === 'pwsh' || kind === 'powershell' || /\.ps1$/i.test(path) ? lineDeletes(text, { ...deeper, shell: 'pwsh' })
                 : codeDeletes(text, deeper, kind ?? 'code');
         // What it does counts, not what it is called.
-        return inside.map((d) => ({ ...d, said: `runs ${path}, which ${said(d)}` }));
+        return inside.map((d) => ({ ...d, said: `runs ${path}, which ${canDo(said(d))}` }));
     }
     return cleaning(basename(path)) ? [byName(path, 'script')] : [];
 }
@@ -545,11 +545,20 @@ function tempRoots() {
 /** Whether a path is inside a folder (not the folder itself). */
 const inside = (path, root) => path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
 
+/** Whether a path is in a folder from `created`: one the thread made itself, with what it put there. */
+function madeAbove(path, created) {
+    for (let up = dirname(path); up !== dirname(up); up = dirname(up)) {
+        if (created.has(up)) return true;
+    }
+    return false;
+}
+
 /**
  * Whether a path holds only files from `created`, read from the disk: a
  * file in the list, a folder whose files all are (at most `budget` of
- * them), or nothing at all. An empty folder, a link and anything in a .git
- * folder are not: who made them can't be told.
+ * them), a folder the thread made itself (in the list too: madeDirsOf)
+ * or anything in one, or nothing at all. Any other empty folder, a link
+ * and anything in a .git folder are not: who made them can't be told.
  */
 function owned(path, created, budget = { left: 500 }) {
     let stat;
@@ -558,8 +567,9 @@ function owned(path, created, budget = { left: 500 }) {
     } catch (error) {
         return error?.code === 'ENOENT' || error?.code === 'ENOTDIR';
     }
-    if (!stat.isDirectory()) return stat.isFile() && created.has(path);
-    if (basename(path) === '.git') return false;
+    if (path.split(sep).includes('.git') || stat.isSymbolicLink()) return false;
+    if (created.has(path) || madeAbove(path, created)) return true;
+    if (!stat.isDirectory()) return false;
     let names;
     try { names = readdirSync(path); } catch { return false; }
     if (names.length === 0) return false;
@@ -645,6 +655,84 @@ export function deletesWhat(items) {
 export function deletesOf(command, options = {}) {
     if (typeof command !== 'string' || command.trim() === '') return [];
     return lineDeletes(command, { depth: 0, shell: options.shell ?? 'bash', cwd: options.cwd, read: options.read, vars: new Map() });
+}
+
+// ── What a command makes ──────────────────────────────────────────────────
+
+/** A folder a mkdir names, as an absolute path, or undefined when it can't be told (a variable, a pattern, `~user`). */
+function madePath(word, here) {
+    let path = String(word).replace(/^\$(?:PWD|\{PWD\})(?=\/|$)/, typeof here === 'string' ? here : '$PWD');
+    if (path === '~' || path.startsWith('~/')) path = `${homedir()}${path.slice(1)}`;
+    if (path === '' || /[$`*?[~]/.test(path)) return undefined;
+    if (isAbsolute(path)) return resolve(path);
+    return typeof here === 'string' ? resolve(here, path) : undefined;
+}
+
+/**
+ * The folders a shell command line makes: mkdir in bash, and New-Item
+ * -ItemType Directory, md and mkdir in PowerShell, as absolute paths, with
+ * their parents when the command makes those too (`mkdir -p`; PowerShell
+ * always does). The caller keeps the ones missing before the command and
+ * there after it: the folders the thread made itself, which the delete
+ * check lets it delete with what it put in them (behaviour review 5, S1
+ * r1: a scratch folder of a headless browser's profile was held). A path
+ * that can't be told is left out, and so is what comes after a `cd` it
+ * can't follow.
+ * @param {string} command - the command line, as the shell tool gets it.
+ * @param {{shell?: 'bash'|'pwsh', cwd?: string}} [options] - which shell, and the folder it runs in.
+ * @returns {string[]}
+ */
+export function madeDirsOf(command, { shell = 'bash', cwd } = {}) {
+    const out = new Set();
+    const pwsh = shell === 'pwsh';
+    const add = (word, here, parents) => {
+        const path = madePath(word, here);
+        if (path === undefined) return;
+        out.add(path);
+        if (!parents) return;
+        for (let up = dirname(path); up !== dirname(up); up = dirname(up)) out.add(up);
+    };
+    const walk = (text, start, depth) => {
+        let here = start;
+        const { commands, nested } = splitShell(pwsh ? String(text).replace(/\\/g, '/') : text);
+        for (const { words: raw } of commands) {
+            if (['cd', 'pushd', 'set-location', 'sl', 'chdir'].includes(raw[0]?.toLowerCase())) {
+                here = raw.length === 2 ? madePath(raw[1], here) ?? null : null;
+                continue;
+            }
+            const { words } = unwrap(raw);
+            const name = programOf(words[0] ?? '');
+            const args = words.slice(1);
+            if (SHELLS.has(name) && args.includes('-c') && depth < MAX_DEPTH) {
+                walk(args[args.indexOf('-c') + 1] ?? '', here, depth + 1);
+            } else if (name === 'mkdir' && !pwsh) {
+                let parents = false;
+                const dirs = [];
+                for (let i = 0; i < args.length; i++) {
+                    const a = args[i];
+                    if (a === '-m' || a === '--mode') { i++; continue; }
+                    if (/^--(parents)$/.test(a) || /^-[a-zA-Z]*p/.test(a)) parents = true;
+                    if (a.startsWith('-') && a !== '-') continue;
+                    dirs.push(a);
+                }
+                for (const d of dirs) add(d, here, parents);
+            } else if (pwsh && ['mkdir', 'md', 'new-item', 'ni'].includes(name)) {
+                const lower = args.map((a) => a.toLowerCase());
+                const type = lower.findIndex((a) => /^-(itemtype|type|it)$/.test(a));
+                if ((name === 'new-item' || name === 'ni') && !(type >= 0 && /^(directory|dir)$/i.test(args[type + 1] ?? ''))) continue;
+                const named = lower.findIndex((a) => /^-(path|literalpath|name)$/.test(a));
+                const dirs = named >= 0 ? [args[named + 1]] : args.filter((a, i) => !a.startsWith('-') && !(i > 0 && /^-(itemtype|type|it|value)$/i.test(args[i - 1])));
+                for (const d of dirs) if (typeof d === 'string') for (const one of d.split(',')) add(one.trim().replace(/^['"]|['"]$/g, ''), here, true);
+            }
+        }
+        if (depth < MAX_DEPTH) for (const inner of nested) walk(inner, here, depth + 1);
+    };
+    try {
+        walk(command, typeof cwd === 'string' && isAbsolute(cwd) ? cwd : null, 0);
+    } catch {
+        return [];
+    }
+    return [...out].slice(0, 50);
 }
 
 /** What code run as it is (DSH's run_code) deletes. */
