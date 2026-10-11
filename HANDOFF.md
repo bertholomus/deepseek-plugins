@@ -509,13 +509,14 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 
 _Its own section, kept by the "Calendar plugin" project thread; "Doing now" above stays the projects plugin's._
 
-Updated: 2026-10-11 08:56 PT by B (bertholomus)
+Updated: 2026-10-11 09:58 PT by B (bertholomus)
 Branch: the PR branch named at the top (PR #1), fast-forwarded from a local branch, never forced.
 
 The user's goal (2026-10-11, relayed from the project chat): "create a sane calendar plugin that agents and user can use - allows syncing apple, google, exchange, other popular calendar syncing.  works with our wallpaper and glass plugin".
 
 ### Doing now (calendar)
-- Round 4's minors, on a local branch: E (an occurrence that starts a `RANGE=THISANDFUTURE` change, changed or deleted alone), F (a move asked again after 'half-moved'), G (a CalDAV server that keeps no tags), D's CalDAV part (a delete stops on someone taken off too), `notify` in the window's yes, and run.mjs's cleanup. Major C and D for Google and Microsoft are pushed (below) for round 4's re-check; the window's round 4 is still running.
+- The window's round 4 (/mnt/project-files/calendar/review/round-4-window.md), on local branches: M6 (a save refused after the question says so where the user is looking, with Look at it again), m15 (a change stopped because the event changed meanwhile, with nobody new, gets the `changed` code), m20 (an edited event asks before it is dropped), the Graph stand-in's If-Match; and in the views m14 (Alt and an arrow gather presses and save once), m16 to m19 (narrow dates, toasts over dialogs, cut headings, the opening scroll), touch drags; then m21 and m22 (a refused chat card's words, receipts). After that push, the window's look at the new head.
+- The blank DSH window the review saw twice on 0.2.0-rc.2 is DSH's own hot reload, not the calendar: see Gotchas and /mnt/project-files/calendar/blank-window/.
 
 ### Done (calendar)
 - Host half: `ical.js` (RFC 5545, keeps lines it doesn't know), `recur.js` (RRULE expansion and its words), `zones.js` (IANA through Intl, Windows names for Graph), `expand.js` (series with moved and cancelled occurrences), `store.js` (`~/.dsh/calendar`, 700/600, follows DSH_HOME), `manager.js` (accounts, sync every `syncMinutes`, every change to the server first, scope one/following/all, moves, import/export, search, free time), `http.js` (Authorization dropped when a redirect leaves the site; no secret or query in an error), `oauth.js` (loopback with PKCE, or a pasted address), `remote.js` (the window's endpoints, `/api/dsh-plugin-calendar/<method>`).
@@ -541,11 +542,18 @@ The user's goal (2026-10-11, relayed from the project chat): "create a sane cale
 - Round 4 of the review, host (round-4.md):
   - Major C: a change or delete of a whole series, or from an occurrence on, is worked out on everyone on the parts it reaches (`manager.recordOf`, `partsReached`): the series and its occurrences changed on their own (for "this and following", those from the occurrence on, and any range reaching past it); a move counts them too. Before such a write, Microsoft reads the series' occurrences in the synced window (`occurrencesNow`) and Google the series' changed occurrences (`seriesNow`, by uid), even with the series' etag held. The manager hands the sources `planned` and, for a change from an occurrence on, `from`.
   - D (Google and Microsoft): where a source reads the event before writing, it stops on anyone added or taken off since the change was worked out (`otherPeople`), so a change never puts back a guest another app removed, or says they were told.
+- Round 4 of the review, host, minors (round-4.md):
+  - E: an occurrence that starts a "this and following" change (`RANGE=THISANDFUTURE`), changed or deleted alone, hands the range to the next occurrence without a change of its own (`manager.rangeFromNext`), so the later ones stay as that change set them.
+  - F: a move that stopped halfway (`half-moved`) is refused when asked again while its copy is still in the other calendar; the manager keeps it in memory for a day, and forgets it when the copy is gone (or the plugin restarts).
+  - D for CalDAV, and G: with no tag held, a delete stops when the server's copy names other people, either way; a change stops when its organizer, title, times, place, notes, link, status, rule, skipped or extra dates, or which occurrences changed on their own, differ from what the plugin read (a guest's answer, reminders and stamps are written over).
+  - The window's yes holds to whether the change tells the guests (`asked.js` keeps `notify` with it; a `needs-notify` question counts as notify).
+  - The re-check's P2: a whole Microsoft series changed right after a start, before its first sync of this run, is compared over the window its events were synced over (the stored sync state), not a default one.
+  - run.mjs stops a DSH that didn't come up, and keeps its bridge socket short under a long TMPDIR.
 - Window prefs (m13's rest but Undo): Show weekends and Show week numbers in the settings menu (`hideWeekends`, `weekNumbers` in `setPrefs` and `state().prefs`); Week and Month without Saturday and Sunday, ISO week numbers in Month, the small month and beside the title.
-- Tests: 181 unit tests with Radicale and 35 for the window's helpers (`test/client.mjs`), in `npm test` (317 in all with Radicale) through `test/calendar.test.js`; on DSH 0.2.0-rc.2 and 0.2.1-alpha.2, `npm run test:e2e:calendar` 47/47 and `npm run test:e2e:calendar-ui` 46/46 (needs Playwright and Chromium).
+- Tests: 189 unit tests with Radicale and 35 for the window's helpers (`test/client.mjs`), in `npm test` (336 in all with Radicale, at this push) through `test/calendar.test.js`; on DSH 0.2.0-rc.2 and 0.2.1-alpha.2, `npm run test:e2e:calendar` 47/47 and `npm run test:e2e:calendar-ui` 46/46 (needs Playwright and Chromium).
 
 ### Next steps (calendar)
-1. Round 4's re-check of Major C, and the window's round 4. The calendar isn't loaded into the live DSH before the reviews say the host side meets the bar, and then only with the user's OK.
+1. Round 4's re-check of the host minors (E, F, G, D for CalDAV, notify, P2), and the window's look at the new head once its round-4 fixes are pushed. The calendar isn't loaded into the live DSH before the reviews say both sides meet the bar, and then only with the user's OK.
 2. iCalendar ranges in changes: a split ("this and following") from inside a `RANGE=THISANDFUTURE` change (reading them, and a change to one occurrence under one, are done).
 3. Native moves within one account (Google `events.move`, WebDAV MOVE), so a moved meeting isn't a new one for its guests.
 4. Real accounts only when the user wants them, and they give what each needs: Google, their own OAuth client (Desktop app) id and secret; Microsoft, their own Entra app's client id (redirect `http://localhost` under Mobile and desktop applications); iCloud, Fastmail and Yahoo, app passwords. One iCloud meeting made on an iPhone would confirm N1 on a real server.
@@ -572,3 +580,4 @@ The user's goal (2026-10-11, relayed from the project chat): "create a sane cale
 - A change to one occurrence doesn't change the series' etag, on Google or Microsoft: a whole-series write reads the occurrences too (Google by uid, Microsoft's instances in the synced window), held etag or not. Compare like with like: the plan's records and the server's read must cover the same occurrences, or a change can stop again and again.
 - The window's yes counts only for the same change (`asked.js` keys it by event, scope and fields, `notify` and `approved` aside): a Send must repeat the refused call's patch exactly, or the host asks again.
 - A CalDAV server names the user by several addresses (mailto, `urn:uuid:`, the principal's URL or path); compare them with `addressKey`, never by mailto alone.
+- A blank DSH window with the page error "scope 'session-maybe' rendered without an installed adapter" is DSH's own hot reload: when one of DSH's browser files (its session part, its sessions service or its renderer) changes on disk while it runs, even only its mtime or ctime, DSH swaps it in place and its root throws in the gap. The calendar never writes there. Don't write or touch a DSH install a test run is using; give each run its own (/mnt/project-files/calendar/blank-window/ has the trace and a repro).
