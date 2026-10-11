@@ -1797,8 +1797,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * Before a change emails or reaches people: everyone it names, with
-         * what each gets, and why; then the change or not. Not making it has
-         * the first focus.
+         * what each gets, and why (and for a dragged event, where it goes:
+         * question.move); then the change or not. Not making it has the first
+         * focus.
          */
         function ConsentDialog({ question, onYes, onClose }) {
             const q = question;
@@ -1810,6 +1811,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h(ui.Button, { variant: 'primary', onClick: onYes, 'data-calendar-send': '' }, q.yes)),
             },
             h('div', { className: 'dshcal-form', 'data-calendar-consent': q.code },
+                q.move ? h('div', { 'data-calendar-consent-move': '' }, q.move) : null,
                 q.changed ? h('div', { className: 'dshcal-hint dshcal-warn', 'data-calendar-consent-changed': '' },
                     'It changed meanwhile, on its server or in another app, so nothing was done yet. This is everyone it reaches now.') : null,
                 q.people.length ? h('ul', {
@@ -3089,6 +3091,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /** How far apart the times a drag lands on are, in minutes. */
         const SNAP = 15;
+        /** How long after the last press of Alt and an arrow key the move is saved, in ms. */
+        const KEYS_PAUSE = 1500;
+        /** The keys that move an event, in its tooltip: a timed one in Week and Day, and one in the all-day row. */
+        const KEYS_TIP = {
+            timed: `Alt and ↑ ↓ move it by ${SNAP} minutes, ← → by a day.`,
+            days: 'Alt and ← → move it by a day.',
+        };
         /** Minutes to the nearest step. */
         const snapTo = (minutes, step = SNAP) => Math.round(minutes / step) * step;
         /** A day and minutes into it as one wall-clock number (ms, read as UTC). */
@@ -3130,6 +3139,22 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 return { allDay: true, startDay, lastDay: addDays(o.lastDay ?? o.startDay, days), start: o.start + days * DAY, end: o.end + days * DAY };
             }
             const start = toInstant(wallOf(startWall(o, zone) + days * DAY), zone);
+            return { start, end: start + Math.max(0, o.end - o.start) };
+        }
+
+        /**
+         * Where one press of Alt and an arrow key takes an event from where it is: a quarter hour earlier or later
+         * (up, down), or a day back or on (left, right; a day shown, past hidden weekends). byDays: one in the all-day
+         * row, which goes by days alone. → {start, end} (and an all-day one's days), or null for any other key.
+         */
+        function keyedTo(o, key, zone, { byDays = false, hideWeekends = false } = {}) {
+            const step = { ArrowUp: [-SNAP, 0], ArrowDown: [SNAP, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[key];
+            if (!step || (byDays && step[1] === 0)) return null;
+            if (step[1] !== 0) {
+                const from = o.allDay ? o.startDay : dayIn(o.start, zone);
+                return shiftedBy(o, zone, daysBetween(from, addShownDays(from, step[1], hideWeekends)));
+            }
+            const start = toInstant(wallOf(startWall(o, zone) + step[0] * MINUTE), zone);
             return { start, end: start + Math.max(0, o.end - o.start) };
         }
 
@@ -3320,10 +3345,27 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [drag, setDrag] = React.useState(null);
             const dragRef = React.useRef(null);
             dragRef.current = drag;
-            // An event being dragged: {id, mode ('move', 'resize', 'days'), title, t: where it would go}.
+            // An event being dragged, or moved with the keys: {id, mode ('move', 'resize', 'days'), title, t: where it would go,
+            // and for the keys, keys: true and words: where, in a sentence}.
             const [moving, setMoving] = React.useState(null);
             // An event moved with the keys, to keep in focus where it lands: {id, until}.
             const refocus = React.useRef(null);
+            // Presses of Alt and an arrow key, gathered: {o, t, timer}; saved once after a pause or on Enter, dropped on Escape.
+            const keyMove = React.useRef(null);
+            const dropRef = React.useRef(onDrop);
+            dropRef.current = onDrop;
+            const endKeys = (save) => {
+                const k = keyMove.current;
+                if (!k) return;
+                keyMove.current = null;
+                clearTimeout(k.timer);
+                setMoving(null);
+                if (!save) return;
+                refocus.current = { id: k.o.id, until: Date.now() + 20_000 };
+                dropRef.current?.(k.o, k.t);
+            };
+            // Leaving the view saves a move the keys started.
+            React.useEffect(() => () => endKeys(true), []);
             // Where the view opens (see openingMinute): again whenever the days shown change, and once more when their
             // events are read; each time only if the user hasn't scrolled since it was last placed.
             const daysKey = days.join(' ');
@@ -3391,6 +3433,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             /** A timed event pressed: dragged to another time or day, or by its bottom edge to another end. */
             const pressEvent = (event, o) => {
                 if (!draggable(event, o)) return;
+                endKeys(true);
                 const mode = event.target?.closest?.('.dshcal-ev-grip') ? 'resize' : 'move';
                 const grab = pointAt(event.clientX, event.clientY);
                 if (!grab) return;
@@ -3438,6 +3481,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             /** An event in the all-day row pressed: dragged to another day. */
             const pressBar = (event, o) => {
                 if (!draggable(event, o)) return;
+                endKeys(true);
                 const grabDay = laneDayAt(event.clientX);
                 if (!grabDay) return;
                 let at = '';
@@ -3458,37 +3502,54 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     onCancel: done,
                 });
             };
-            /** Alt with an arrow key: the event in focus a quarter hour earlier or later, or a day back or on (a day shown: past hidden weekends). */
+            /**
+             * Alt with an arrow key on the event in focus (see keyedTo): each press from where the ones before took it,
+             * shown as a drag shows it, and saved once, a moment after the last press or on Enter; Escape drops it.
+             */
             const nudge = (event, o, byDays) => {
+                const k = keyMove.current?.o.id === o.id ? keyMove.current : null;
+                if (k && !event.altKey && (event.key === 'Enter' || event.key === 'Escape')) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    endKeys(event.key === 'Enter');
+                    return;
+                }
                 if (!event.altKey || event.ctrlKey || event.metaKey || typeof movable !== 'function' || !movable(o)) return;
-                const step = { ArrowUp: [-SNAP, 0], ArrowDown: [SNAP, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[event.key];
-                if (!step || (byDays && step[1] === 0)) return;
+                const t = keyedTo(k ? placedAt(o, k.t) : o, event.key, zone, { byDays, hideWeekends });
+                if (!t) return;
                 event.preventDefault();
                 event.stopPropagation();
-                let t;
-                if (step[1] !== 0) {
-                    const from = o.allDay ? o.startDay : dayIn(o.start, zone);
-                    t = shiftedBy(o, zone, daysBetween(from, addShownDays(from, step[1], hideWeekends)));
-                } else {
-                    const start = toInstant(wallOf(startWall(o, zone) + step[0] * MINUTE), zone);
-                    t = { start, end: start + Math.max(0, o.end - o.start) };
-                }
-                refocus.current = { id: o.id, until: Date.now() + 20_000 };
-                onDrop?.(o, t);
+                // Another event's move, saved before this one starts.
+                if (!k) endKeys(true);
+                clearTimeout(k?.timer);
+                keyMove.current = { o, t, timer: setTimeout(() => endKeys(true), KEYS_PAUSE) };
+                setMoving({
+                    id: o.id, mode: byDays ? 'days' : 'move', title: o.title, t, keys: true,
+                    words: `“${o.title}” to ${whenText(placedAt(o, t), zone)}. Enter saves it, Escape leaves it.`,
+                });
             };
+            // Moved with the keys past the days shown: the nearest day shown, where it shows instead, its day named.
+            const movedDays = moving?.t ? coveredDays(moving.t, zone) : null;
+            const away = moving?.keys && movedDays ? (movedDays[1] < days[0] ? days[0] : movedDays[0] > days[days.length - 1] ? days[days.length - 1] : '') : '';
             /** Where the dragged event would go on a day: its piece of that day, in minutes, or null. */
             const ghostOn = (day) => {
                 const t = moving?.t;
                 if (!t || moving.mode === 'days') return null;
                 const dayStart = startOfDay(day, zone);
                 const dayEnd = startOfDay(addDays(day, 1), zone);
+                if (away) {
+                    if (day !== away) return null;
+                    const from = minutesIn(t.start, zone);
+                    const to = dayIn(t.end, zone) === dayIn(t.start, zone) ? minutesIn(t.end, zone) : 1440;
+                    return { from, to: Math.max(to, Math.min(1440, from + SNAP)), first: true, day: dayIn(t.start, zone) };
+                }
                 if (t.end <= dayStart || t.start >= dayEnd) return null;
                 const from = t.start <= dayStart ? 0 : minutesIn(t.start, zone);
                 const to = t.end >= dayEnd ? 1440 : minutesIn(t.end, zone);
                 return { from, to: Math.max(to, Math.min(1440, from + SNAP)), first: t.start >= dayStart };
             };
             // The days an event dragged in the all-day row would cover.
-            const dropDays = moving?.mode === 'days' && moving.t ? coveredDays(moving.t, zone) : null;
+            const dropDays = moving?.mode === 'days' && movedDays ? (away ? [away, away] : movedDays) : null;
             React.useEffect(() => {
                 const el = scrollRef.current;
                 if (!el || !scrollTo) return;
@@ -3559,6 +3620,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const lanesShown = Math.max(1, cap);
             const nowMinutes = minutesIn(now, zone);
             return h('div', { className: 'dshcal-wk', style: { '--days': n, '--hour': `${HOUR_PX}px` }, 'data-calendar-grid': n === 1 ? 'day' : 'week' },
+                // Where the keys would move an event, for screen readers (the ghost shows it).
+                h('div', { className: 'dshcal-sr', role: 'status', 'data-calendar-keys': '' }, moving?.keys ? moving.words : ''),
                 h('div', { className: 'dshcal-wk-head' },
                     h('div', null),
                     days.map((day) => h('button', {
@@ -3586,6 +3649,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                 key: `${piece.key}:${piece.a}`, type: 'button', className: 'dshcal-bar', style: { ...evStyle(o.color), gridColumn: `${piece.a + 1} / ${piece.b + 2}`, gridRow: `${piece.lane + 1}` },
                                 'data-look': lookOf(o), 'data-past': o.end <= now ? '' : undefined, 'data-cont-start': piece.contStart ? '' : undefined, 'data-cont-end': piece.contEnd ? '' : undefined,
                                 'aria-label': `${o.title}, ${shortWhen(o, zone)}, ${o.calendar}`, 'data-calendar-event': o.id, 'data-moving': moving?.id === o.id ? '' : undefined,
+                                title: typeof movable === 'function' && movable(o) ? `${o.title}\n${KEYS_TIP.days}` : undefined,
                                 onClick: (event) => onOpen(o, event.currentTarget),
                                 onPointerDown: (event) => pressBar(event, o),
                                 onKeyDown: (event) => nudge(event, o, true),
@@ -3620,7 +3684,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                             ...evStyle(o.color), '--lines': lines, top: (from / 60) * HOUR_PX + 1, height, zIndex: 2 + place.level,
                                             left: `calc(${place.left * 100}% + 2px)`, width: `calc(${place.width * 100}% - ${place.left + place.width > 0.999 ? 8 : 3}px)`,
                                         },
-                                        'aria-label': `${o.title}, ${shortWhen(o, zone, day)}, ${o.calendar}`,
+                                        'aria-label': `${o.title}, ${shortWhen(o, zone, day)}, ${o.calendar}`, title: can ? `${o.title}\n${KEYS_TIP.timed}` : undefined,
                                         onClick: (event) => onOpen(o, event.currentTarget),
                                         onPointerDown: (event) => pressEvent(event, o),
                                         onKeyDown: (event) => nudge(event, o, false),
@@ -3646,7 +3710,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                 ghost ? h('div', {
                                     className: 'dshcal-wk-ghost', 'data-calendar-ghost': moving.mode,
                                     style: { top: (ghost.from / 60) * HOUR_PX, height: Math.max(12, ((ghost.to - ghost.from) / 60) * HOUR_PX) },
-                                }, ghost.first ? h('span', null, moving.title) : null, ghost.first ? h('span', null, ghostWords(moving.t, zone)) : null) : null,
+                                }, ghost.first ? h('span', null, moving.title) : null,
+                                ghost.first ? h('span', null, ghost.day ? `${dayText(ghost.day)} · ${ghostWords(moving.t, zone)}` : ghostWords(moving.t, zone)) : null) : null,
                                 day === today ? h('div', { className: 'dshcal-now', style: { top: (nowMinutes / 60) * HOUR_PX }, 'aria-hidden': true }) : null);
                         }))));
         }
@@ -5231,11 +5296,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // them, and one the host says would email people asks first (withConsent).
             const movable = (o) => canDrag(o, store.calendar(o.calendarId));
             const saveDrop = async ({ o, t, patch, key }, scope, tell) => {
-                const result = await withConsent(drops.ask, 'Don\'t move it', (given) => store.act('updateEvent', {
+                // The question says where it goes.
+                const ask = (question) => drops.ask({ ...question, move: `Moving “${o.title}” to ${whenText(placedAt(o, t), zoneRef.current)}.` });
+                const result = await withConsent(ask, 'Don\'t move it', (given) => store.act('updateEvent', {
                     id: o.id, patch: { ...patch, ...(tell ? { notify: true } : {}), ...consentArgs(given) }, scope,
                 }));
                 if (!result.ok) {
                     setPending((p) => (p?.key === key ? null : p));
+                    // Changed on its server meanwhile: read again, as the dialogs do.
+                    if (result.error?.code === 'calendar/changed') void store.refresh();
                     return result.kept ? '' : errorText(result.error);
                 }
                 setPending((p) => (p?.key === key ? { ...p, saved: true, data: dataRef.current } : p));
@@ -6090,7 +6159,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             rgbOf, textOn, colorOf, contrast, luminance,
             parseRule, untilValue, untilDay, repeatChoices, repeatFromRule, ruleFromRepeat, repeatProblem,
             columnsOf, lanesOf, fitLanes, daySegments, barItems, agendaDays, rangeOf, stepFrom, dayList,
-            SNAP, snapTo, canDrag, movedTo, resizedTo, shiftedBy, coveredDays, placedAt, dropPatch, consentArgs, movedWords, ghostWords, openingMinute, clockText, clockRangeText, searchGroups,
+            SNAP, snapTo, canDrag, movedTo, resizedTo, shiftedBy, keyedTo, KEYS_PAUSE, coveredDays, placedAt, dropPatch, consentArgs, movedWords, ghostWords, openingMinute, clockText, clockRangeText, searchGroups,
             draftFrom, draftProblems, createInput, changePatch, draftChanged, writableCalendars,
             roleOf, othersOf, mailMode, peopleText, sameOccurrence, placed, emailedText, contactText, CHOOSE_CALENDAR, withConsent, consentQuestion, consentWords, asked, removalNotice, returnAddress,
             callArgs, argWhen, runningTitle, doneTitle, resultText, failureText, refusedEmailText, saysNotDone, saysPartly, NOT_DONE,

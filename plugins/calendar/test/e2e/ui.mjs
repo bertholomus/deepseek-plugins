@@ -40,7 +40,9 @@
  * - dragging: an event in Week to another time and day (Escape first,
  *   leaving it), by its bottom edge to another end, and on with Alt and an
  *   arrow key; in Month to another day at the same time; a repeating one,
- *   asked which occurrences move;
+ *   asked which occurrences move; Alt and an arrow key twice on a meeting:
+ *   shown where it goes, then one question naming it and one save (Escape
+ *   dropping a move, Enter saving it at once);
  * - search: / to the field, the events found by day, one opened with its
  *   way to the calendar, Escape to clear it;
  * - Accounts: the account list and every Add account choice up to its form,
@@ -130,8 +132,11 @@
  * (at its narrowest too) and an event's details beside it, chat cards (a
  * refused one, one in dark), the side column folded, a drag, search
  * results, a narrow window; Week and Month with weekends hidden and week
- * numbers, light, dark and narrow, and the settings menu; and the window
- * whenever a step fails). KEEP=1 keeps the temporary folder.
+ * numbers, light, dark and narrow, and the settings menu; a toast over the
+ * event dialog, Day opened at an early event (narrow too), a move by the
+ * keys and its question, the title in Day and Agenda, and the narrow event
+ * dialog; and the window whenever a step fails). KEEP=1 keeps the temporary
+ * folder.
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -1365,6 +1370,77 @@ try {
             && starts.includes(`${day1}T09:00`) && starts.includes(`${addDays(day1, 7)}T08:00`) && !starts.includes(`${day1}T08:00`),
             JSON.stringify({ question, shownThere, starts }));
         await api('deleteEvent', { id: series?.id, scope: 'all' }).catch(() => {});
+    });
+
+    // 8b'. Alt and an arrow key on a meeting: the presses gathered, shown where they take it, then one question naming where, and
+    // one save (the host's answer played as in 6); Escape drops a move, Enter saves it at once.
+    await step('Alt and an arrow key twice on a meeting: one question, naming where it goes, and one save', async () => {
+        const made = (await api('createEvent', { input: { title: 'E2E Key meeting', start: `${day1}T09:00`, end: `${day1}T09:30`, timeZone: ZONE } })).value?.occurrence;
+        await page.locator('[data-calendar-view="week"]').click();
+        await showDay(day1);
+        const ev = grid.locator(`.dshcal-ev[data-calendar-event="${made?.id}"]`);
+        await ev.waitFor({ state: 'visible', timeout: 10000 });
+        const guests = ['ann@example.com', 'bob@example.com'];
+        const why = 'Microsoft emails a meeting\'s guests about each change to it';
+        const sent = [];
+        await page.route(updateCalls, async (route) => {
+            const body = JSON.parse(route.request().postData() ?? '{}');
+            const args = body.payload?.args ?? {};
+            sent.push(args);
+            if (args.patch?.notify !== true) {
+                return route.fulfill({
+                    status: 200, contentType: 'application/json',
+                    body: JSON.stringify({
+                        type: 'server-response', rpcId: body.rpcId,
+                        result: { ok: false, error: { code: 'calendar/needs-notify', message: 'It would email its guests.', details: { people: guests, mail: { emailed: { what: 'an update', to: guests }, why } } } },
+                    }),
+                });
+            }
+            const patch = { ...args.patch };
+            delete patch.notify;
+            return route.fulfill({ response: await route.fetch({ postData: JSON.stringify({ ...body, payload: { args: { ...args, patch } } }) }) });
+        });
+        try {
+            const tip = (await ev.getAttribute('title')) ?? '';
+            // Escape drops a move before it's saved.
+            await ev.focus();
+            await page.keyboard.press('Alt+ArrowDown');
+            const first = (await page.locator('[data-calendar-ghost]').textContent().catch(() => '')) ?? '';
+            await page.keyboard.press('Escape');
+            await page.waitForTimeout(2500);
+            const dropped = sent.length === 0 && (await page.locator('[data-calendar-ghost]').count()) === 0;
+            // Twice, quickly: shown at 9:30, then one question naming it, one save there.
+            await ev.focus();
+            await page.keyboard.press('Alt+ArrowDown');
+            await page.keyboard.press('Alt+ArrowDown');
+            const ghost = (await page.locator('[data-calendar-ghost]').textContent().catch(() => '')) ?? '';
+            const live = (await page.locator('[data-calendar-keys]').textContent()) ?? '';
+            await shot(page, 'keys-move');
+            const question = await consent();
+            await shot(page, 'keys-move-question');
+            await question.answer(true);
+            const moved = await waitFor(async () => (await events(day1, day1)).find((o) => o.id === made?.id && o.startLocal === `${day1}T09:30`), 'the meeting at 9:30', 10000);
+            const twice = sent.splice(0);
+            // Enter saves at once, without opening the event.
+            await ev.focus();
+            await page.keyboard.press('Alt+ArrowUp');
+            await page.keyboard.press('Enter');
+            const ghostAfterEnter = await page.locator('[data-calendar-ghost]').count();
+            const again = await consent();
+            const opened = await page.locator('[data-calendar-details]').count();
+            await again.answer(true);
+            const back = await waitFor(async () => (await events(day1, day1)).find((o) => o.id === made?.id && o.startLocal === `${day1}T09:15`), 'the meeting at 9:15', 10000);
+            const at = (o) => new Date(o.start).toISOString();
+            check('Alt and an arrow key pressed twice on a meeting: shown where it goes, then one question naming it and one save there; Escape drops a move, Enter saves at once; the keys in its tooltip',
+                /Alt/.test(tip) && /9:15/.test(first) && dropped && /E2E Key meeting/.test(ghost) && /9:30/.test(ghost) && /9:30/.test(live)
+                && question.title === 'Email an update to 2 guests?' && /Moving “E2E Key meeting” to .*9:30/.test(question.text)
+                && twice.length === 2 && twice.every((u) => u.id === made?.id && u.patch?.start === at(moved)) && twice[0].patch.notify === undefined && twice[1].patch.notify === true
+                && ghostAfterEnter === 0 && opened === 0 && /9:15/.test(again.text) && sent.length === 2 && sent.every((u) => u.patch?.start === at(back)),
+                JSON.stringify({ tip, first, dropped, ghost, live, question: { title: question.title, text: question.text }, twice, ghostAfterEnter, opened, again: again.text, sent }));
+        } finally {
+            await page.unroute(updateCalls);
+            await api('deleteEvent', { id: made?.id, scope: 'all' }).catch(() => {});
+        }
     });
 
     // 8c. Search.

@@ -847,6 +847,28 @@ test('a dragged event: a quarter hour at a time on the page\'s clock, its length
     assert.deepEqual([I.placedAt(trip, later).startDay, I.placedAt(trip, later).lastDay], ['2026-10-12', '2026-10-14']);
 });
 
+test('Alt and an arrow key: a quarter hour or a day a press, each from where the one before took it', () => {
+    const at = (iso) => Date.parse(iso);
+    // 9:00–10:00 on Friday, October 30 in Los Angeles.
+    const ev = { id: 'e', start: at('2026-10-30T16:00:00Z'), end: at('2026-10-30T17:00:00Z') };
+    assert.deepEqual(plain(I.keyedTo(ev, 'ArrowDown', LA)), { start: at('2026-10-30T16:15:00Z'), end: at('2026-10-30T17:15:00Z') });
+    assert.deepEqual(plain(I.keyedTo(ev, 'ArrowUp', LA)), { start: at('2026-10-30T15:45:00Z'), end: at('2026-10-30T16:45:00Z') });
+    // Twice: from where the first took it.
+    const twice = I.keyedTo(I.placedAt(ev, I.keyedTo(ev, 'ArrowDown', LA)), 'ArrowDown', LA);
+    assert.deepEqual(plain(twice), { start: at('2026-10-30T16:30:00Z'), end: at('2026-10-30T17:30:00Z') });
+    // A day on, over the clock change (Nov 1) to Monday: 9:00 on the clock still.
+    assert.deepEqual(plain(I.keyedTo(ev, 'ArrowRight', LA, { hideWeekends: true })), { start: at('2026-11-02T17:00:00Z'), end: at('2026-11-02T18:00:00Z') });
+    assert.deepEqual(plain(I.keyedTo(ev, 'ArrowRight', LA)), { start: at('2026-10-31T16:00:00Z'), end: at('2026-10-31T17:00:00Z') });
+    assert.deepEqual(plain(I.keyedTo(ev, 'ArrowLeft', LA)), { start: at('2026-10-29T16:00:00Z'), end: at('2026-10-29T17:00:00Z') });
+    // In the all-day row, by days alone; any other key, nothing.
+    const trip = { id: 't', allDay: true, startDay: '2026-10-09', lastDay: '2026-10-11', start: at('2026-10-09T07:00:00Z'), end: at('2026-10-12T07:00:00Z') };
+    const on = I.keyedTo(trip, 'ArrowRight', LA, { byDays: true });
+    assert.deepEqual([on.allDay, on.startDay, on.lastDay], [true, '2026-10-10', '2026-10-12']);
+    assert.equal(I.keyedTo(trip, 'ArrowDown', LA, { byDays: true }), null);
+    assert.equal(I.keyedTo(ev, 'Enter', LA), null);
+    assert.ok(I.KEYS_PAUSE >= 1000 && I.KEYS_PAUSE <= 2000);
+});
+
 test('a drop\'s change for the host: instants for a timed event, days for an all-day one, nothing when it didn\'t move', () => {
     const at = (iso) => Date.parse(iso);
     const ev = { id: 'e', start: at('2026-10-12T16:00:00Z'), end: at('2026-10-12T17:00:00Z') };
