@@ -533,7 +533,7 @@ try {
     check('one occurrence isn\'t moved to another calendar, and the series stays whole where it is', /Only a whole event or series moves to another calendar/.test(call.result)
         && standups.length === 3 && standups.every((o) => o.calendarId === personal.id), `${call.result} ${JSON.stringify(standups.map((o) => o.calendarId))}`);
     call = await agentCall('calendar_create_event', { title: 'Party', start: '2026-10-17T19:00', guests: ['ann@example.com'], notify_guests: true });
-    check('telling guests from a calendar that can\'t email is refused before anything is made', /Calendars on this computer can't email anyone/.test(call.result)
+    check('telling guests from a calendar that can\'t email is refused before anything is made', /Calendars kept in DSH can't email anyone/.test(call.result)
         && (await api('search', { query: 'party' })).value?.occurrences?.length === 0, call.result);
     call = await agentCall('calendar_free_time', { from: '2026-10-13', to: '2026-10-13', minutes: 60 });
     check('free time leaves out busy times', /Free slots:/.test(call.result) && /10:15–17:00/.test(call.result), call.result);

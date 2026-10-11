@@ -4,7 +4,7 @@
  *
  * Calendars come from iCloud, Fastmail, Nextcloud and other CalDAV servers,
  * Google, Microsoft 365 and Outlook.com, subscribed .ics feeds, and
- * calendars kept on this computer (lib/sources). The host half
+ * calendars kept in DSH (lib/sources). The host half
  * (lib/manager.js) syncs them into the plugin's own store and routes every
  * change to the server that holds the event. The window (lib/client.js) has
  * a Calendar page and an agenda beside chats, styled to sit on the

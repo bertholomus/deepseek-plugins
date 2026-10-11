@@ -637,7 +637,7 @@ test('CalDAV that doesn\'t schedule, and calendars kept here: nothing is emailed
         const personal = m.state().calendars.find((c) => c.name === 'Personal');
         assert.equal(personal.canEmail, false);
         const local = await m.createEvent({ calendarId: personal.id, title: 'Y', start: '2026-10-14T12:00', attendees: ['ann@example.com'] });
-        await assert.rejects(m.deleteEvent(local.id, 'all', 'window', { notify: true }), /Calendars on this computer can't email anyone/);
+        await assert.rejects(m.deleteEvent(local.id, 'all', 'window', { notify: true }), /Calendars kept in DSH can't email anyone/);
         // Without guests, telling them is nothing to refuse.
         const alone = await m.createEvent({ calendarId: personal.id, title: 'Z', start: '2026-10-14T15:00', notify: true });
         assert.equal(alone.emailed, undefined);
@@ -905,6 +905,28 @@ test('removing an account withdraws its access where the provider can, and says 
         assert.doesNotMatch(log, /token-/);
     } finally {
         m.dispose();
+        done();
+    }
+});
+
+test('the calendars kept here are named "Kept in DSH", an older store\'s too; only Microsoft signs in with a code', async () => {
+    const { make, done } = setup();
+    try {
+        const m = make();
+        await m.start();
+        assert.equal(m.state().accounts.find((a) => a.kind === 'local').kindName, 'Kept in DSH');
+        assert.equal(m.store.accounts.local.name, 'Kept in DSH');
+        m.store.accounts.local.name = 'On this computer';
+        m.saveState();
+        m.dispose();
+
+        const again = make();
+        await again.start();
+        assert.equal(again.store.accounts.local.name, 'Kept in DSH');
+        await assert.rejects(again.startSignIn('google', undefined, { method: 'code' }), /Only a Microsoft account signs in with a code/);
+        await assert.rejects(again.startSignIn('microsoft', undefined, { method: 'fax' }), /Only a Microsoft account signs in with a code/);
+        again.dispose();
+    } finally {
         done();
     }
 });

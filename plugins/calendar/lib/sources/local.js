@@ -1,5 +1,5 @@
 /**
- * Calendars kept on this computer only, in the plugin's own store: nothing
+ * Calendars kept in DSH only, in the plugin's own store: nothing
  * to sign in to and nothing to sync. Their events are iCalendar text like a
  * CalDAV server's, so moving one to a synced calendar keeps everything.
  *

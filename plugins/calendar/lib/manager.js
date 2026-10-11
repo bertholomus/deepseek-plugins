@@ -66,7 +66,7 @@ function timeOfCompact(text, tz) {
 /** Colors for calendars that come without one. */
 export const PALETTE = ['#4f7cff', '#e5484d', '#30a46c', '#f5a524', '#8e4ec6', '#12a594', '#e54666', '#0090ff', '#ad7f58', '#6e56cf'];
 
-const KIND_NAMES = { local: 'On this computer', ics: 'Subscription', caldav: 'CalDAV', google: 'Google', microsoft: 'Microsoft' };
+const KIND_NAMES = { local: 'Kept in DSH', ics: 'Subscription', caldav: 'CalDAV', google: 'Google', microsoft: 'Microsoft' };
 
 /** Fields a change may set, as the window and the tools give them. */
 const INPUT_FIELDS = ['title', 'start', 'end', 'allDay', 'timeZone', 'location', 'description', 'url', 'repeat', 'alarms', 'attendees', 'busy', 'privacy', 'status', 'conference'];
@@ -117,6 +117,8 @@ export class CalendarManager {
             };
             this.log('account added local');
         }
+        // The calendars kept here were once named "On this computer", which read as the Mac's own.
+        for (const account of Object.values(this.store.accounts)) if (account.kind === 'local' && account.name === 'On this computer') account.name = KIND_NAMES.local;
         await this.refreshCalendars('local');
         // Once Personal is known: leftover temporary files go, other calendars' events files stay.
         this.store.sweep();
@@ -333,7 +335,7 @@ export class CalendarManager {
      * The calendar new events go to: the user's choice; else the main
      * calendar of the first account added that names one (Google's primary,
      * Microsoft's default, a CalDAV server's default); else the accounts'
-     * only writable calendar; else the one on this computer. Never a pick
+     * only writable calendar; else the one kept in DSH. Never a pick
      * among an account's calendars, where one can be shared with a team or a
      * family.
      */
@@ -499,7 +501,7 @@ export class CalendarManager {
      */
     async removeAccount(id) {
         const account = this.account(id);
-        if (account.kind === 'local') throw new CalendarError('The calendars on this computer stay; delete a calendar instead.');
+        if (account.kind === 'local') throw new CalendarError('The calendars kept in DSH stay; delete a calendar instead.');
         const withdrawn = await this.withdraw(account);
         this.forgetAccount(id);
         await this.secrets.clear(id).catch(() => {});
@@ -533,7 +535,7 @@ export class CalendarManager {
         this.sources.delete(id);
     }
 
-    /** A new calendar on this computer. */
+    /** A new calendar kept in DSH. */
     async createCalendar({ name, color } = {}) {
         const account = this.account('local');
         const title = String(name ?? '').trim();
@@ -546,12 +548,12 @@ export class CalendarManager {
         return this.calendarView(this.calendar(calendarIdOf('local', remoteId)));
     }
 
-    /** Delete a calendar on this computer, with its events. */
+    /** Delete a calendar kept in DSH, with its events. */
     async deleteCalendar(id) {
         const calendar = this.calendar(id);
-        if (calendar.accountId !== 'local') throw new CalendarError('Only calendars on this computer are deleted here; hide a synced one, or delete it in its own app.');
+        if (calendar.accountId !== 'local') throw new CalendarError('Only calendars kept in DSH are deleted here; hide a synced one, or delete it in its own app.');
         const account = this.account('local');
-        if ((account.calendars ?? []).length <= 1) throw new CalendarError('This is the last calendar on this computer; it stays.');
+        if ((account.calendars ?? []).length <= 1) throw new CalendarError('This is the last calendar kept in DSH; it stays.');
         account.calendars = account.calendars.filter((c) => c.remoteId !== calendar.remoteId);
         this.sources.delete('local');
         await this.refreshCalendars('local');
@@ -617,8 +619,14 @@ export class CalendarManager {
      * computer (or paste where it ends with finishSignIn). Microsoft: open
      * `verificationUri` anywhere and enter `userCode`.
      */
-    async startSignIn(kind, accountId) {
+    /**
+     * Start signing in to Google or Microsoft, for a new account or again
+     * for accountId. method 'code' (Microsoft only): a code to enter on
+     * Microsoft's page, from any device, instead of its page in the browser.
+     */
+    async startSignIn(kind, accountId, { method } = {}) {
         if (kind !== 'google' && kind !== 'microsoft') throw new CalendarError('Signing in is for Google and Microsoft accounts.');
+        if (method !== undefined && method !== 'browser' && !(method === 'code' && kind === 'microsoft')) throw new CalendarError('Only a Microsoft account signs in with a code.');
         const existing = accountId ? this.account(accountId) : undefined;
         if (existing && existing.kind !== kind) throw new CalendarError('That account is of another kind.');
         for (const [id, flow] of this.flows) {
@@ -631,7 +639,7 @@ export class CalendarManager {
         const env = await this.envFor(existing ?? { id: 'new', kind });
         let handle;
         try {
-            handle = kind === 'google' ? await module.signIn(env, existing?.email ? { loginHint: existing.email } : {}) : await module.signIn(env);
+            handle = await module.signIn(env, { ...(existing?.email ? { loginHint: existing.email } : {}), ...(method === 'code' ? { method } : {}) });
         } catch (error) {
             throw asCalendarError(error);
         }
@@ -1262,7 +1270,7 @@ export class CalendarManager {
 
     /** Why a calendar can't email guests. */
     cannotMail(calendar) {
-        if (this.store.accounts[calendar.accountId]?.kind === 'local') return 'Calendars on this computer can\'t email anyone. Save it without telling the guests, and tell them another way.';
+        if (this.store.accounts[calendar.accountId]?.kind === 'local') return 'Calendars kept in DSH can\'t email anyone. Save it without telling the guests, and tell them another way.';
         return 'This calendar\'s server doesn\'t email guests. Save it without telling them, and tell them another way.';
     }
 
@@ -1973,7 +1981,7 @@ export class CalendarManager {
         const account = this.store.accounts[calendar.accountId];
         const { source, style } = await this.source(account);
         // Imported events invite nobody: on a server their guests and organizer stay out (a server that
-        // schedules, and Microsoft, would email them all). Calendars on this computer keep everything.
+        // schedules, and Microsoft, would email them all). Calendars kept in DSH keep everything.
         const keep = (r) => {
             if (account.kind === 'local') return r;
             const copy = structuredClone(r);

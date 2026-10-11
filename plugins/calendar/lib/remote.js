@@ -151,11 +151,12 @@ export class CalendarRemote {
 
     /**
      * Start signing in to Google ('google') or Microsoft ('microsoft'), for a
-     * new account or again for accountId. {flow, kind, status, url? (Google:
-     * open it), userCode?, verificationUri?, message? (Microsoft: show them)}.
+     * new account or again for accountId. {flow, kind, status, url? (open it
+     * in the browser), userCode?, verificationUri?, message? (a code to enter
+     * on Microsoft's page: method 'code')}.
      */
-    async startSignIn(kind, accountId) {
-        return this.run(async () => this.manager.startSignIn(text(kind), text(accountId) || undefined));
+    async startSignIn(kind, accountId, method) {
+        return this.run(async () => this.manager.startSignIn(text(kind), text(accountId) || undefined, text(method) ? { method: text(method) } : {}));
     }
 
     /** How a sign-in stands: status 'waiting', 'done' (with account) or 'failed' (with error). */
@@ -163,7 +164,7 @@ export class CalendarRemote {
         return this.run(async () => this.manager.signInStatus(text(flow)));
     }
 
-    /** Google: finish with the address the browser ended on, when it couldn't come back here. */
+    /** Finish with the address the browser ended on, when it couldn't come back here. */
     async finishSignIn(flow, url) {
         return this.run(async () => this.manager.finishSignIn(text(flow), text(url)));
     }

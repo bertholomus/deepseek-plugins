@@ -17,7 +17,7 @@ Your calendars in DSH, for you and for your agents: iCloud, Google, Microsoft 36
 | Google Calendar | Google Calendar API, signing in in your browser | Once: an OAuth client of your own (see [Google](#google)). |
 | Microsoft 365, Outlook.com, Exchange Online | Microsoft Graph, signing in with a code | Once: an app registration of your own (see [Microsoft](#microsoft)). |
 | A subscribed calendar | An `https://` or `webcal://` address of an `.ics` file (holidays, a team's published calendar, sports fixtures, a booking site) | Nothing else. It is read only, and fetched again only when the server says it changed. |
-| On this computer | The plugin's own store | Nothing. **Personal** is made at the first start; you can add more. |
+| Kept in DSH | The plugin's own store | Nothing. **Personal** is made at the first start; you can add more. |
 
 Passwords and sign-ins are kept in DSH's credential store, never in the plugin's files or its log, and a password goes only to the host its account names (for iCloud, its other `icloud.com` hosts too, such as `pNN-caldav.icloud.com`). A server that points elsewhere gets no password: if your domain's `/.well-known/caldav` sends clients on to another host, give that host's address instead. No server or feed can send the plugin on to an address on this computer or its network, unless the account itself is there. A subscription's address is kept there too, since a private feed's address is its password (Google's secret address, a published iCloud or Outlook calendar): the plugin's files, its messages and what agents see name only the feed's site. Removing an account removes its password, sign-in or address and its copies of the events; its events stay on the server. Removing a Google account also ends the plugin's access at Google, or, when Google can't be reached, links the page where you remove it.
 
@@ -69,7 +69,7 @@ Before a change is made, the plugin works out who it would email, the same way t
 
 - **Google** emails guests only when the change says to tell them.
 - **Microsoft**, and **iCloud, Fastmail, Nextcloud and other CalDAV servers that schedule** (the plugin asks the server whether it does), email a meeting's guests themselves whenever the meeting you organize is saved, changed or cancelled. Someone else's invitation that you delete tells its organizer you declined, unless the plugin asks the server not to, which it does unless you say to tell them.
-- **Calendars on this computer, subscriptions and CalDAV servers that don't schedule** email no one. A change that says to tell the guests there is refused, so nobody thinks they were told.
+- **Calendars kept in DSH, subscriptions and CalDAV servers that don't schedule** email no one. A change that says to tell the guests there is refused, so nobody thinks they were told.
 
 A change that would email someone without saying to tell them is refused, and the refusal names who would get what (*This would email an update to ann@example.com and bob@example.com …*). The model is told to ask you first; in the window, you're asked whether to send. Your own reminders tell no one anything. Telling the guests of a CalDAV event names you as its organizer, so the server sends the invitations. Events imported into a server's calendar leave their guests and organizer out.
 
