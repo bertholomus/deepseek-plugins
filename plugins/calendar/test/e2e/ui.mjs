@@ -48,7 +48,9 @@
  *   (askBeforeEmails off); someone else's invitation there, whose
  *   organizer's fields the dialog keeps as they are, and Show me as saved;
  *   one whose guests may change it, where Show me as asks first, naming its
- *   organizer and the other guest;
+ *   organizer and the other guest; a move that made its copy but couldn't
+ *   take the meeting out of Google ('calendar/half-moved'): a notice that
+ *   stays until closed, and the move not made again;
  * - a series with an occurrence changed on its own moved to Microsoft: the
  *   host refuses ('calendar/drops-changes'), Don't move it keeps it, Move
  *   anyway moves it without that occurrence;
@@ -1325,6 +1327,48 @@ try {
             && asked.sentBefore === 0 && patches() === first + 1 && design?.busy === false
             && calls.length === 2 && sameChange(calls[0], calls[1]) && JSON.stringify([...(calls[1]?.patch?.approved ?? [])].sort()) === JSON.stringify(['olga@example.com', 'pat@example.com']),
             JSON.stringify({ asked, patches: patches() - first, busy: design?.busy, calls }));
+    });
+
+    // 12c. A move that made its copy but couldn't take the event out of its old calendar: said until closed, never made again.
+    await step('a move that stopped halfway', async () => {
+        const google = providers.google;
+        const day = addDays(today, 5);
+        const made = (await api('createEvent', { input: { calendarId: googleCalendar.id, title: 'E2E Halfway', start: `${day}T10:00`, end: `${day}T10:30`, timeZone: ZONE } })).value?.occurrence;
+        // Google won't take it out: the copy is made in the side calendar, and the event stays where it was too.
+        google.store.failNext({ method: 'DELETE', status: 403, reason: 'forbidden', message: 'The stand-in keeps this one.' });
+        let notice = '';
+        let buttons = [];
+        let stays = 0;
+        const calls = await callsTo('updateEvent', async () => {
+            await showDay(day);
+            await eventOnPage('E2E Halfway').click();
+            await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+            await page.locator('[data-calendar-edit]').click();
+            const form = page.locator('[data-calendar-event-form="edit"]');
+            await form.waitFor({ state: 'visible' });
+            await form.locator('[data-calendar-calendar]').selectOption(side.id);
+            await page.locator('[data-calendar-save]').click();
+            await dialogGone();
+            const kept = page.locator('[data-calendar-kept-notice]');
+            await kept.waitFor({ state: 'visible', timeout: 10000 });
+            notice = (await kept.textContent()) ?? '';
+            buttons = await kept.locator('button').evaluateAll((els) => els.map((el) => el.getAttribute('aria-label') || el.textContent));
+            await shot(page, 'half-moved');
+            // Still there after a toast would have gone, and nothing tried again.
+            await sleep(8000);
+            stays = await kept.count();
+        });
+        const copies = (await events(day, day)).filter((o) => o.title === 'E2E Halfway').map((o) => o.calendarId).sort();
+        await page.locator('[data-calendar-kept-notice] button').click();
+        await page.locator('[data-calendar-kept-notice]').waitFor({ state: 'detached' });
+        check('a move that made its copy but couldn\'t take the event out of its old calendar: the dialog closes, a notice says what was done and what is left to do until it is closed, and the move isn\'t made again',
+            made?.calendarId === googleCalendar.id && calls.length === 1 && stays === 1
+            && notice.includes(`It was copied to E2E Side, but not taken out of ${googleCalendar.name}`) && notice.includes('moving it again would make a second copy')
+            && JSON.stringify(buttons) === JSON.stringify(['Close this notice']) && JSON.stringify(copies) === JSON.stringify([googleCalendar.id, side.id].sort()),
+            JSON.stringify({ made: made?.calendarId, calls: calls.length, notice, buttons, stays, copies }));
+        // The one left in Google goes, for the steps after this one.
+        const left = (await events(day, day)).find((o) => o.title === 'E2E Halfway' && o.calendarId === googleCalendar.id);
+        if (left) await api('deleteEvent', { id: left.id, scope: 'all' });
     });
 
     // 13. A series with an occurrence changed on its own, moved to Microsoft, which would drop that occurrence: asked first.

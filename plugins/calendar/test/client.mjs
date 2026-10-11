@@ -424,7 +424,7 @@ test('a series that would lose part of itself on a move asks first, then may ask
 });
 
 test('the window\'s own refusals keep the host\'s words', () => {
-    for (const code of ['calendar/changed', 'calendar/drops-changes', 'calendar/choose-calendar', 'calendar/needs-approval']) {
+    for (const code of ['calendar/changed', 'calendar/drops-changes', 'calendar/choose-calendar', 'calendar/needs-approval', 'calendar/half-moved']) {
         assert.equal(I.errorText({ code, message: 'the host says why' }), 'The host says why.');
     }
     assert.equal(I.CHOOSE_CALENDAR, 'Choose the calendar it goes to.');
@@ -479,6 +479,12 @@ test('the store asks the host\'s version and reads state again only when it move
     assert.equal(result.ok, true);
     assert.equal(store.state().version, 3);
     assert.deepEqual(plain(store.state().calendars), [{ id: 'cal-new' }], 'the new calendar is there once the change is done');
+    // A notice that stays until it's closed (a move that stopped halfway).
+    store.keepNotice('It was copied to Work, but not taken out of Home.');
+    store.keepNotice('Another one.');
+    assert.deepEqual(plain(store.notices().map((n) => n.text)), ['It was copied to Work, but not taken out of Home.', 'Another one.']);
+    store.closeNotice(store.notices()[0].id);
+    assert.deepEqual(plain(store.notices().map((n) => n.text)), ['Another one.']);
 });
 
 test('what was emailed, in a sentence', () => {
@@ -607,6 +613,17 @@ test('a call that didn\'t work says what it didn\'t do, and why, without what it
     assert.equal(I.failureText('Not done: “team_sync” is in a calendar that can\'t be written.'), '“team_sync” is in a calendar that can\'t be written.');
     assert.equal(I.failureText(''), '');
     assert.equal(I.failureText('x'.repeat(500)).length, 400);
+    // What it tells the agent to say to the user, or to ask, isn't for the user.
+    assert.equal(I.failureText('Error: Not done: This event repeats: say scope "one" (this occurrence) or "all" (the series). Ask the user if they didn\'t say.'),
+        'This event repeats: say scope "one" (this occurrence) or "all" (the series).');
+    assert.equal(I.failureText('Error: Changing the user\'s calendars from chats is switched off in the calendar plugin\'s settings. Tell the user what you would change; they can do it on the Calendar page.'),
+        'Changing the user\'s calendars from chats is switched off in the calendar plugin\'s settings.');
+    // A move that stopped halfway: what was done, and what is left to do.
+    const partly = 'Error: Done in part: It was copied to Work (invitations sent to ann@example.com), but not taken out of Home, which stopped: The server said no. '
+        + 'Delete it from Home to finish the move; moving it again would make a second copy. Don\'t move it again: tell the user, and delete it from the calendar it came from only if they say so.';
+    assert.equal(I.failureText(partly), 'It was copied to Work (invitations sent to ann@example.com), but not taken out of Home, which stopped: The server said no. '
+        + 'Delete it from Home to finish the move; moving it again would make a second copy.');
+    assert.deepEqual([I.saysPartly(partly), I.saysNotDone(partly), I.saysPartly('Error: Not done: no')], [true, true, false]);
     for (const text of ['Not done: no', 'Failed: timeout', 'Error: Failed: timeout', '  not done: x']) assert.equal(I.saysNotDone(text), true, text);
     for (const text of ['Added: Lunch', 'Changed.', '', undefined]) assert.equal(I.saysNotDone(text), false, String(text));
     assert.deepEqual(plain(I.NOT_DONE), { calendar_create_event: 'Not added', calendar_update_event: 'Not changed', calendar_delete_event: 'Not deleted', calendar_respond: 'Not answered' });

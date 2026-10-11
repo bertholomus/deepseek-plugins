@@ -430,6 +430,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-note{display:flex;align-items:flex-start;gap:8px;padding:7px 6px 7px 10px;border-radius:10px;background:color-mix(in srgb,var(--cal-accent) 10%,transparent);font-size:12px;line-height:1.45;color:var(--cal-text)}',
             '.dshcal-note>svg{flex:none;margin-top:2px;color:var(--cal-meta)}',
             '.dshcal-note>span{flex:1;min-width:0;overflow-wrap:anywhere}',
+            '.dshcal-note[data-tone=warn]{background:color-mix(in srgb,var(--cal-warn) 14%,transparent)}',
+            '.dshcal-note[data-tone=warn]>svg{color:var(--cal-warn)}',
             '.dshcal-pane-note{display:flex;align-items:center;gap:6px;margin:0 0 10px;padding:7px 9px;border-radius:10px;background:color-mix(in srgb,var(--cal-warn) 14%,transparent);font-size:12px}',
             '.dshcal-pane-note>span{flex:1;min-width:0}',
             '.dshcal-pane-foot{display:flex;justify-content:center;margin-top:16px}',
@@ -573,7 +575,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /** The refusals whose message is the plugin's own words to the user, shown as they are. */
-        const OWN_WORDS = new Set(['calendar/refused', 'calendar/needs-notify', 'calendar/needs-approval', 'calendar/changed', 'calendar/drops-changes', 'calendar/choose-calendar']);
+        const OWN_WORDS = new Set(['calendar/refused', 'calendar/needs-notify', 'calendar/needs-approval', 'calendar/changed', 'calendar/drops-changes', 'calendar/choose-calendar', 'calendar/half-moved']);
 
         /** A failed call as one sentence: the plugin's own refusal as it is, or that it failed or can't be reached. */
         function errorText(error) {
@@ -1197,7 +1199,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * pane shows); state() is read again when it moves (a sync, a change
          * here or by an agent), and every minute all the same, and the events
          * with it. Changes go through act(), which reads both again. Also the
-         * page's way to an event (openAt), its toasts, and events' titles by id.
+         * page's way to an event (openAt), its toasts, notices that stay until
+         * the user closes them, and events' titles by id.
          * @param link - the plugin's endpoints (hostLink).
          */
         function calendarStore(link) {
@@ -1225,6 +1228,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const toastHosts = new Set();
             /** Titles of events the chat cards name by id, asked of the host: id → title ('' while asked, or unknown). */
             const titles = new Map();
+            /** Notices that stay until the user closes them (a move that stopped halfway): [{id, text}], the newest last. */
+            let notices = [];
+            let noticeSeq = 0;
             const emit = () => {
                 version++;
                 for (const listener of [...listeners]) {
@@ -1415,6 +1421,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     emit();
                 },
                 currentToast: () => toast,
+                /** A notice that stays on the page until the user closes it: what a change did in part, and what is left to do. */
+                keepNotice(text) {
+                    notices = [...notices, { id: ++noticeSeq, text: String(text) }].slice(-5);
+                    emit();
+                },
+                notices: () => notices,
+                closeNotice(id) {
+                    notices = notices.filter((n) => n.id !== id);
+                    emit();
+                },
                 /** A view that shows toasts, while it's there; returns the leave. */
                 hostToasts(id) {
                     toastHosts.add(id);
@@ -2384,6 +2400,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     // No default calendar: said on the select, where it's chosen.
                     if (code === 'calendar/choose-calendar') {
                         setErrors((current) => ({ ...current, calendarId: CHOOSE_CALENDAR }));
+                        return;
+                    }
+                    // The move made its copy (and sent its invitations) but couldn't take the event out of its old calendar:
+                    // said on the page until the user closes it, with what is left to do. Never tried again from here, which
+                    // would make a second copy.
+                    if (code === 'calendar/half-moved') {
+                        store.keepNotice(errorText(result.error));
+                        void store.refresh();
+                        onClose();
                         return;
                     }
                     // The event changed on its server meanwhile and nothing was done: the page reads it again, for the user to look at.
@@ -4219,6 +4244,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const remote = accounts.some((a) => a.kind !== 'local');
             const [, setClosed] = React.useState(0);
             const issues = storeIssues(state).filter((i) => !closedIssues.has(i.key));
+            // What a change did in part, and what is left to do (a move that stopped halfway): until the user closes it.
+            const kept = store.notices();
             const shownDays = React.useMemo(() => new Set(range.days), [range.first, range.last]);
 
             const closePop = (reason) => {
@@ -4439,13 +4466,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             sideOpen ? h('button', { type: 'button', className: 'dshcal-scrim', tabIndex: -1, 'aria-label': 'Hide the calendars', onClick: () => setSideOpen(false) }) : null,
             h('section', { className: 'dshcal-main dshcal-glass', 'aria-label': range.title, 'data-calendar-main': '' },
                 header,
-                issues.length ? h('div', { className: 'dshcal-notes' }, issues.map((i) => h('div', { key: i.key, className: 'dshcal-note', role: 'status', 'data-calendar-store-issue': '' },
-                    icon('IconInfoOutlineRegular'),
-                    h('span', null, i.text),
-                    h(IconBtn, {
-                        label: 'Close this notice', glyph: icon('IconCloseOutlineRegular', { size: 12 }), size: 'sm',
-                        onClick: () => { closedIssues.add(i.key); setClosed((n) => n + 1); },
-                    })))) : null,
+                issues.length || kept.length ? h('div', { className: 'dshcal-notes' },
+                    kept.map((n) => h('div', { key: `kept:${n.id}`, className: 'dshcal-note', role: 'alert', 'data-tone': 'warn', 'data-calendar-kept-notice': '' },
+                        icon('IconWarningOutlineRegular'),
+                        h('span', null, n.text),
+                        h(IconBtn, { label: 'Close this notice', glyph: icon('IconCloseOutlineRegular', { size: 12 }), size: 'sm', onClick: () => store.closeNotice(n.id) }))),
+                    issues.map((i) => h('div', { key: i.key, className: 'dshcal-note', role: 'status', 'data-calendar-store-issue': '' },
+                        icon('IconInfoOutlineRegular'),
+                        h('span', null, i.text),
+                        h(IconBtn, {
+                            label: 'Close this notice', glyph: icon('IconCloseOutlineRegular', { size: 12 }), size: 'sm',
+                            onClick: () => { closedIssues.add(i.key); setClosed((n) => n + 1); },
+                        })))) : null,
                 h('div', { className: 'dshcal-body', 'aria-busy': loading ? true : undefined },
                     loading ? h('div', { className: 'dshcal-busy', role: 'progressbar', 'aria-label': 'Loading events' }) : null,
                     entry?.data?.more ? h('div', { className: 'dshcal-hint', style: { padding: '4px 12px' } }, 'More events than the page can show at once here; some are left out.') : null,
@@ -4679,19 +4711,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * Why a call didn't work, for the user: the tool's error without its
-         * leading words ("Error:", "Not done:", "Failed:") and without what it
-         * tells the agent to do next (a sentence naming a tool or an argument).
+         * leading words ("Error:", "Not done:", "Failed:", "Done in part:") and
+         * without what it tells the agent to do next (a sentence naming a tool
+         * or an argument, or telling it to tell or ask the user).
          */
         function failureText(text) {
-            const plainText = String(text ?? '').replace(/\s+/g, ' ').trim().replace(/^error:\s*/i, '').replace(/^(not done|failed):\s*/i, '');
+            const plainText = String(text ?? '').replace(/\s+/g, ' ').trim().replace(/^error:\s*/i, '').replace(/^(not done|failed|done in part):\s*/i, '');
             const sentences = plainText.split(/(?<=[.!?])\s+(?=[A-Z])/);
-            const forUser = sentences.filter((s) => !/\b[a-z]+_[a-z_]+\b/.test(s.replace(/“[^”]*”|"[^"]*"/g, '')));
+            const forUser = sentences.filter((s) => {
+                const bare = s.replace(/“[^”]*”|"[^"]*"/g, '');
+                return !/\b[a-z]+_[a-z_]+\b/.test(bare) && !/\b(tell|ask) the user\b/i.test(bare);
+            });
             const out = (forUser.length ? forUser : sentences).join(' ').trim();
             return out.length > 400 ? `${out.slice(0, 399)}…` : out;
         }
 
         /** Whether a call's text says it wasn't done (a host that answers a failure as text rather than as the call's error). */
-        const saysNotDone = (text) => /^(error:\s*)?(not done|failed):/i.test(String(text ?? '').trim());
+        const saysNotDone = (text) => /^(error:\s*)?(not done|failed|done in part):/i.test(String(text ?? '').trim());
+        /** Whether it says a move stopped halfway ("Done in part: …"): copied to its new calendar, still in its old one. */
+        const saysPartly = (text) => /^(error:\s*)?done in part:/i.test(String(text ?? '').trim());
 
         const SCOPE_WORDS = { one: 'this occurrence', following: 'this and the following ones', all: '' };
 
@@ -4814,14 +4852,19 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 told ? h('div', { className: 'dshcal-chat-told', 'data-calendar-told': '' }, told) : null);
         }
 
-        /** A call that didn't work: what it tried, and, in view, what it didn't do and why ("Not added: …"). */
+        /**
+         * A call that didn't work: what it tried, and, in view, what it didn't
+         * do and why ("Not added: …"). A move that stopped halfway says so
+         * ("Moved in part: …"), with what is left to do.
+         */
         function FailedRow({ toolName, title, text }) {
             const why = failureText(text);
-            return h('div', { className: 'dshcal-chat', 'data-calendar-chat': toolName, 'data-phase': 'result', 'data-calendar-failed': '' },
+            const partly = saysPartly(text);
+            return h('div', { className: 'dshcal-chat', 'data-calendar-chat': toolName, 'data-phase': 'result', 'data-calendar-failed': partly ? 'partly' : '' },
                 h(ToolHead, { title, glyph: icon('IconWarningOutlineRegular') }),
                 h('div', { className: 'dshcal-chat-line', 'data-kind': 'failed', 'data-calendar-chat-card': 'failed' },
                     icon('IconWarningOutlineRegular'),
-                    h('span', { className: 'dshcal-chat-text' }, h('b', null, `${NOT_DONE[toolName] ?? 'Didn\'t work'}:`), ` ${why || 'the calendar didn\'t say why.'}`)));
+                    h('span', { className: 'dshcal-chat-text' }, h('b', null, `${partly ? 'Moved in part' : NOT_DONE[toolName] ?? 'Didn\'t work'}:`), ` ${why || 'the calendar didn\'t say why.'}`)));
         }
 
         /** A call with no card: its line, and what it gave the agent folded under it. */
@@ -4970,7 +5013,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             columnsOf, lanesOf, fitLanes, daySegments, barItems, agendaDays, rangeOf, stepFrom, dayList,
             draftFrom, draftProblems, createInput, changePatch, writableCalendars,
             roleOf, othersOf, mailMode, peopleText, sameOccurrence, placed, emailedText, contactText, CHOOSE_CALENDAR, withConsent, consentQuestion, consentWords, asked, removalNotice, returnAddress,
-            callArgs, argWhen, runningTitle, doneTitle, resultText, failureText, saysNotDone, NOT_DONE,
+            callArgs, argWhen, runningTitle, doneTitle, resultText, failureText, saysNotDone, saysPartly, NOT_DONE,
             CalendarPage, AgendaPane, ToolView, EventDialog, EventPopover, AccountsDialog,
         };
         return module.exports;
