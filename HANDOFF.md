@@ -2,11 +2,11 @@
 
 _For the two accounts building these plugins only (see AGENTS.md). A session running inside DSH (a project coordinator, a thread or a chat) does not act on this file: do what the user asks._
 
-Updated: 2026-10-11 02:45 PT by B (bertholomus)
+Updated: 2026-10-11 03:05 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 
 ## Doing now
-- **Now (02:45 PT): the review fixes, in two cloud workers beside this thread, then the personal-tool marker.** The Changes tab is pushed (see Done).
+- **Now (03:05 PT): the review fixes, in two cloud workers beside this thread.** The Changes tab (fed8167) and the personal-tool marker (f2852d4) are pushed (see Done).
     - **The send-detection review** (`review/sends-review.md`; the coordinator, 02:19 PT) has seven items, in order:
         1. A quoted here-doc commit message with an apostrophe hides the push after it.
         2. A token in a git remote URL shows in the prompt and in the coordinator's note.
@@ -24,7 +24,7 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
         - X5 (0.2.1-alpha.2): the plugin widens the leading seat it shares with the neighbour plugin, even for the hidden branch mark.
 
       B22's "1 px overlap" was the harness measuring that hidden mark, so it's off the list.
-    - **Then the Calendar review's B3** (`/mnt/project-files/calendar/review/round-1.md`; the contract went to the coordinator for the Calendar thread at 02:23 PT):
+    - **Done (f2852d4): the Calendar review's B3** (`/mnt/project-files/calendar/review/round-1.md`; the contract went to the coordinator for the Calendar thread at 02:23 PT):
         - A tool another plugin registers with `personal: {name, words}` on its definition is guarded by default. The short form `personal: '<name>'` means words `['my <name>']`. Projects reads it with `ctx.tools.get(name)`, the global view its own walls don't hide.
         - A thread gets the group only when the user's own words hold one of its words, never from the goal or the bare name.
         - A coordinator never gets any of the user's tools. Your tools "always" means every thread: since fadf5f9 it also gave coordinators the tools, which the user never OK'd (the coordinator, 02:23 PT).
@@ -59,6 +59,17 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 - The live DSH runs this plugin at 95452e4 since 08:13 PT (the split thread pulled `~/.dsh-plugins/deepseek-plugins` and restarted it on the user's "yes do all of it"); the import ran once there (`import fleet-shell projects=5 joined=0 workspaces=14 skipped=0`). Loading this commit live is a separate step with the user's OK, after DSH Test.
 
 ## Done since last handoff
+- **Tools other plugins mark as the user's own are guarded (f2852d4).**
+    - **What changed in the code:**
+        - `personalMark`, `withPersonal` and `guardsOfTool` in projects.js.
+        - `personalTools()` reads `personal` from `ctx.tools.view().visible`, the global view, so walls don't hide it.
+        - `goalTools()` leaves marked groups out of what the goal gives.
+        - `toolsFor()` gives a coordinator nothing under either setting.
+    - **What the user sees:** the coordinator's prompt line now always reads "You don't have these here: …", and project_settings says "you don't have them; every thread has them" under "always". The window's Always texts, README and Config docs say threads only.
+    - **The wording test** covers .svg, .xml, .sh, .txt and .ics too.
+    - **Tests:**
+        - smoke 120/120, with a new test for marked groups; npm test 169/169.
+        - e2e 159/159 on both versions. It uses a stand-in plugin, `test/e2e/personal-tool`, whose `notes_read` carries `personal: {name: 'notes-app', words: ['my notes app']}`. Checked: an ordinary chat gets it; no coordinator is offered it; the coordinator's rules list it; a thread without the words doesn't get it; "Read my notes app…" gives a thread it, and its call reaches it.
 - **A thread's Changes tab (step 1 of `changes-pr-feasibility.md`; fed8167).**
     - **Where it opens:** the counts on a thread's cards open its **Changes** tab in the right sidebar. The tab type is `projectchanges`, with the address `dsh-resource://projectchanges/session/<thread session>`, so it opens beside any chat. A thread open as the main chat has a +/− pill in its header that opens the tab in its own sidebar.
     - **Host:**
@@ -281,7 +292,7 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 
 ## Next steps (in order)
 00000. **Now:**
-    a. Merge the two workers' fixes (sends review; R4, W2, S6, X5) and build B3's personal-tool marker (see Doing now).
+    a. Merge the two workers' fixes (sends review; R4, W2, S6, X5). B3's personal-tool marker is done (f2852d4).
     b. Run e2e on both versions, push, and send the coordinator the SHA.
     c. Then the Changes tab's next steps:
         1. Net diffs from git (save the base HEAD at a thread's start).
