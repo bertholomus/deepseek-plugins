@@ -50,7 +50,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const ACCESS_FIELDS = ['yourTools', 'coordinatorPermission', 'threadPermission'];
         const FORM_FIELDS = [...FIELDS, ...ACCESS_FIELDS];
         /** What an empty access field means. */
-        const ACCESS_BUILTIN = { yourTools: 'asked', coordinatorPermission: 'default', threadPermission: 'workspace-write' };
+        const ACCESS_BUILTIN = { yourTools: 'asked', coordinatorPermission: 'read-only', threadPermission: 'workspace-write' };
         const LABELS = {
             unavailable: 'The projects plugin is not running, so its defaults cannot be changed right now.',
             readOnly: 'This DSH stores settings read-only.',
@@ -1476,6 +1476,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             noticeIdleWhy: 'The thread ended a turn without reporting back, so the plugin told the coordinator.',
             noticeApproval: 'is waiting for approval',
             noticeApprovalWhy: 'The thread waits on a permission prompt in its own chat, so the plugin told the coordinator.',
+            noticeQuestion: 'asked a question',
+            noticeQuestionWhy: 'The thread asked its coordinator while it works. The coordinator answers it, or asks you when only you can decide.',
             noticeWelcome: 'Project created',
             noticeWelcomeWhy: 'The plugin started this coordinator, which introduces itself.',
             noticeBrief: 'Brief from',
@@ -3133,6 +3135,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     };
                 }
                 case 'approval': return { ...base, icon: ui.IconWarningOutlineRegular, verb: 'Asked for your approval' };
+                case 'question': return { ...base, icon: ui.IconQuestionOutlineRegular ?? ui.IconSendOutlineRegular, verb: 'Asked the coordinator a question' };
                 default: return null;
             }
         }
@@ -3147,6 +3150,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ['handback', /^\[Handback from thread (t\d+) · "(.*)" · status: ([a-z_]+)\]$/],
             ['idle', /^\[Thread idle without a handback: (t\d+) · "(.*)"\]$/],
             ['approval', /^\[Thread waiting for approval: (t\d+) · "(.*)"\]$/],
+            ['question', /^\[Question from thread (t\d+) · "(.*)"\]$/],
             ['welcome', /^\[Project created: "(.*)"\]$/],
             ['brief', /^\[Brief from the coordinator of "(.*)" · you are thread (t\d+), "(.*)"\]$/],
             ['coordinator', /^\[From the coordinator\]$/],
@@ -3189,6 +3193,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         return { kind, thread: m[1], name: m[2], status: ended, body };
                     }
                     case 'approval': return { kind, thread: m[1], name: m[2], body };
+                    case 'question': return { kind, thread: m[1], name: m[2], body };
                     case 'welcome': return { kind, project: m[1], body };
                     case 'message': return { kind, project: m[1], body };
                     case 'reply': {
@@ -3219,6 +3224,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }
                 case 'approval':
                     return { icon: ui.IconWarningOutlineRegular, name: notice.name, tail: TEXT.noticeApproval, state: { dot: 'warning', label: TEXT.needsYou }, why: TEXT.noticeApprovalWhy };
+                case 'question':
+                    return { icon: ui.IconQuestionOutlineRegular ?? ui.IconSendOutlineRegular, name: notice.name, tail: TEXT.noticeQuestion, why: TEXT.noticeQuestionWhy };
                 case 'welcome':
                     return { icon: ui.IconCordisPluginOutlineRegular, lead: TEXT.noticeWelcome, why: TEXT.noticeWelcomeWhy };
                 case 'brief':
@@ -5910,7 +5917,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             toolsAlwaysAll: 'Every coordinator and thread has them, in every project that doesn\'t choose its own.',
             noTools: 'None are listed yet, so no session is kept from any. List your personal and infrastructure tools under guardedTools in this plugin\'s config.',
             coordinatorPermission: 'Coordinator permission',
-            coordinatorPermissionHint: 'Where the ◆ session can write, and what it asks you first. A permission you pick in its chat lands here too.',
+            coordinatorPermissionHint: 'Where the ◆ session can write, and what it asks you first. On Read Only it writes nothing and asks you nothing; its threads do the changing. A permission you pick in its chat lands here too.',
             threadPermission: 'New threads\' permission',
             threadPermissionHint: 'What each new thread starts on. Running threads keep theirs; change one under Threads.',
             permission: 'Permission',

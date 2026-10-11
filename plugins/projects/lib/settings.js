@@ -30,12 +30,14 @@ export const SETTING_KEYS = ['coordinatorModel', 'coordinatorEffort', 'threadMod
  *     for DSH's default for new sessions.
  *
  * Without any setting they are the plugin's own defaults below, not DSH's:
+ * the coordinator is on Read Only (it reads, and its threads do the
+ * changing; what would need approval is refused without asking), and
  * threads start on Workspace Write. Only the user changes them (Project
  * settings, the plugin's page, the profile); no project tool does.
  */
 export const ACCESS_KEYS = ['yourTools', 'coordinatorPermission', 'threadPermission'];
 export const TOOL_MODES = ['asked', 'always'];
-export const ACCESS_DEFAULTS = Object.freeze({ yourTools: 'asked', coordinatorPermission: 'default', threadPermission: 'workspace-write' });
+export const ACCESS_DEFAULTS = Object.freeze({ yourTools: 'asked', coordinatorPermission: 'read-only', threadPermission: 'workspace-write' });
 
 const set = (v) => typeof v === 'string' && v.trim() !== '';
 

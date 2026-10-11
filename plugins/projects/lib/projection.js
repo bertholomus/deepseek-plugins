@@ -70,6 +70,7 @@ const BRIEF = /^\[Brief from the coordinator of "(.*)" · you are thread (t\d+),
 const HANDBACK = /^\[Handback from thread (t\d+) · "(.*)" · status: ([a-z_]+)\]$/;
 const IDLE = /^\[Thread idle without a handback: (t\d+) · "(.*)"\]$/;
 const APPROVAL = /^\[Thread waiting for approval: (t\d+) · "(.*)"\]$/;
+const QUESTION = /^\[Question from thread (t\d+) · "(.*)"\]$/;
 const WELCOME = /^\[Project created: "(.*)"\]$/;
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -194,7 +195,7 @@ function applyMessage(state, event) {
         }
         return { ...state, v: withCard(v, { turn: state.turn, seq: event.seq, kind: 'handback', thread: m[1], status: m[3] }) };
     }
-    for (const [tag, pattern, kind] of [[TAGS.idle, IDLE, 'idle'], [TAGS.approval, APPROVAL, 'approval']]) {
+    for (const [tag, pattern, kind] of [[TAGS.idle, IDLE, 'idle'], [TAGS.approval, APPROVAL, 'approval'], [TAGS.question, QUESTION, 'question']]) {
         if (text.startsWith(tag) && (m = pattern.exec(head))) {
             if (state.v?.role === 'thread') return state;
             // An idle note says first when the turn failed or stopped (prompts.js idleMessage).

@@ -50,7 +50,7 @@ import {
 } from './settings.js';
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage, cardSummary,
-    handbackMessage, idleMessage, approvalMessage, welcomeMessage, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS, STOPPED_BY_USER,
+    handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, welcomeMessage, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS, STOPPED_BY_USER,
     outsideMessage, replyMessage,
 } from './prompts.js';
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
@@ -108,6 +108,14 @@ export const timing = { retryMs: 60000, maxRetryMs: 15 * 60000 };
 const HANDBACK_SENT = 'Handback delivered to the coordinator.';
 const HANDBACK_HELD = 'Handback saved; the coordinator gets it when the project resumes.';
 const HANDBACK_RETRY = 'Handback saved; the coordinator could not take it just now, and it is sent again automatically.';
+const QUESTION_SENT = 'Asked. Carry on with what doesn\'t depend on the answer; it arrives here as a message from the coordinator. If nothing can go on without it, end your turn with one short line.';
+const QUESTION_HELD = 'Saved; the coordinator gets it when the project resumes. Pick a sensible default, say which, and carry on.';
+const QUESTION_RETRY = 'Saved; the coordinator could not take it just now, and it is sent again automatically. Carry on with what doesn\'t depend on the answer.';
+/** DSH's tools that change files, which a coordinator on Read Only is refused (str_replace_editor's view only reads). */
+const WRITE_TOOLS = new Set(['write', 'edit', 'str_replace_editor']);
+const READ_ONLY_REASON = 'You are on Read Only, so you don\'t change files. Start a thread for this change with project_thread_start, or send it to the thread already doing that work.';
+/** DSH's tools that reach an MCP server named in their `server` argument, not in their own name. */
+const SERVER_TOOLS = new Set(['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource']);
 
 /** A stored project's name, trimmed; '' when the store holds none. */
 const storedName = (stored) => (typeof stored?.name === 'string' ? stored.name.trim() : '');
@@ -155,6 +163,32 @@ function holds(words, name) {
 }
 
 /**
+ * The user's answers in DSH's question box (ask_user_question) in a
+ * session's log: the options they picked and what they typed. The tool's
+ * result is the answers as JSON ({answers: [{id, selected, custom?}]}).
+ */
+export function questionAnswers(events) {
+    const asked = new Set();
+    const out = [];
+    for (const event of Array.isArray(events) ? events : []) {
+        const data = event?.data;
+        if (event?.type === 'tool/call' && data?.name === 'ask_user_question' && typeof data.callId === 'string') {
+            asked.add(data.callId);
+            continue;
+        }
+        if (event?.type !== 'tool/result' || !asked.has(data?.message?.toolCallId) || data.error !== undefined || data.message.isError === true) continue;
+        const text = (Array.isArray(data.message.content) ? data.message.content : []).find((b) => b?.type === 'text')?.text;
+        let parsed;
+        try { parsed = JSON.parse(text); } catch { continue; }
+        for (const answer of Array.isArray(parsed?.answers) ? parsed.answers : []) {
+            for (const picked of Array.isArray(answer?.selected) ? answer.selected : []) if (typeof picked === 'string') out.push(picked);
+            if (typeof answer?.custom === 'string') out.push(answer.custom);
+        }
+    }
+    return out;
+}
+
+/**
  * The guarded tools a text names: by name, also inside a tool id such as
  * mcp__lane-catalog__lanes_status, and with `aliases`, by the words the
  * user may call one by. A brief uses a tool when it names it; the user's
@@ -165,11 +199,36 @@ export function guardedIn(text, guard, { aliases = false } = {}) {
     return guard.filter(([name, alias]) => holds(words, name) || (aliases && alias.some((a) => holds(words, a)))).map(([name]) => name);
 }
 
+/** A thread's latest tool calls, newest last, each with the argument that says what it touched: 'bash "npm test"; read "src/a.js"'. */
+function stepsOf(events, max = 8) {
+    const calls = events.filter((e) => e?.type === 'tool/call' && typeof e.data?.name === 'string').slice(-max);
+    return calls.map((e) => {
+        const args = argsOf(e.data.arguments);
+        const what = ['command', 'path', 'file_path', 'pattern', 'query', 'url', 'thread', 'question']
+            .map((key) => args?.[key]).find((v) => typeof v === 'string' && v.trim() !== '');
+        return what ? `${e.data.name} ${JSON.stringify(what.replace(/\s+/g, ' ').slice(0, 80))}` : e.data.name;
+    }).join('; ');
+}
+
+/** The files a thread's turns changed, merged by path: "src/a.js (+3 −1), README.md (+10 −0)", or ''. */
+function changedFiles(records, max = 12) {
+    const byPath = new Map();
+    for (const r of Array.isArray(records) ? records : []) {
+        for (const f of Array.isArray(r?.files) ? r.files : []) {
+            if (typeof f?.path !== 'string' || f.path === '') continue;
+            const was = byPath.get(f.path) ?? { added: 0, deleted: 0 };
+            byPath.set(f.path, { added: was.added + (Number(f.added) || 0), deleted: was.deleted + (Number(f.deleted) || 0) });
+        }
+    }
+    const list = [...byPath].slice(0, max).map(([path, n]) => `${path} (+${n.added} −${n.deleted})`);
+    return list.length === 0 ? '' : `${list.join(', ')}${byPath.size > max ? `, and ${byPath.size - max} more` : ''}`;
+}
+
 /** Whether a folder is the user's home folder, where a project must not scatter files. */
 const isHome = (folder) => typeof folder === 'string' && expand(folder).replace(/\/+$/, '') === homedir().replace(/\/+$/, '');
 
 /** The plugin's own tools, never taken for one of the user's even when a guarded name is a word in them. */
-const OWN_TOOLS = new Set(['project_memory', 'project_handback', 'project_thread_start', 'project_thread_send', 'project_thread_list', 'project_thread_read', 'project_thread_update', 'project_settings', 'project_message']);
+const OWN_TOOLS = new Set(['project_memory', 'project_handback', 'project_ask_coordinator', 'project_thread_start', 'project_thread_send', 'project_thread_list', 'project_thread_read', 'project_thread_update', 'project_settings', 'project_message']);
 
 /** Text as its words alone (lower case, no punctuation), to find an ask in what the user wrote. */
 const wordsKey = (text) => String(text ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
@@ -781,6 +840,29 @@ export class ProjectManager {
         }
     }
 
+    /**
+     * Why a call is refused, or undefined: a file change by a coordinator
+     * on Read Only; wallReason by the tool's name; and for DSH's MCP
+     * resource tools by the server their `server` argument names, so the
+     * user's servers can't be read around the wall.
+     */
+    callReason(who, exec) {
+        const name = exec?.name;
+        if (who.role === 'coordinator' && WRITE_TOOLS.has(name) && !(name === 'str_replace_editor' && exec.arguments?.command === 'view')
+            && this.readOnlyCoordinator(who.projectId)) {
+            this.log(`read-only-refused ${who.projectId}/coordinator ${name}`);
+            return READ_ONLY_REASON;
+        }
+        const byName = this.wallReason(who, name);
+        if (byName !== undefined || !SERVER_TOOLS.has(name)) return byName;
+        try {
+            const server = exec.arguments?.server;
+            return typeof server === 'string' && server.trim() !== '' ? this.wallReason(who, `mcp__${server.trim()}__${name}`) : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
     /** Every installed session's wall again (of one project, or all). */
     rewall(projectId) {
         for (const [agent, who] of this.roles) {
@@ -801,15 +883,15 @@ export class ProjectManager {
 
     /**
      * What the user wrote to the coordinator: their own messages in its
-     * chat, not the plugin's or the threads'. '' when there is no
-     * coordinator or its log can't be read.
+     * chat and their answers in DSH's question box, not the plugin's or the
+     * threads'. '' when there is no coordinator or its log can't be read.
      */
     async userText(projectId) {
         const sessionId = this.store.project(projectId).coordinatorSessionId;
         if (!sessionId) return '';
         try {
             const events = (await this.sc.inspect(sessionId, AbortSignal.timeout(20000))).events ?? [];
-            return events.map(promptOf).filter((p) => p && !p.fromProject).map((p) => p.text).join('\n');
+            return [...events.map(promptOf).filter((p) => p && !p.fromProject).map((p) => p.text), ...questionAnswers(events)].join('\n');
         } catch (error) {
             this.log(`error user-words ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
             return '';
@@ -924,6 +1006,15 @@ export class ProjectManager {
         }
     }
 
+    /** Whether the project's coordinator is set to Read Only (the plugin's default), whatever DSH offers. */
+    readOnlyCoordinator(projectId) {
+        try {
+            return this.access(projectId).coordinatorPermission.value === 'read-only';
+        } catch {
+            return false;
+        }
+    }
+
     /**
      * Put the coordinator on its permission setting when the setting
      * differs from the one it last got. A coordinator on DSH's default needs
@@ -942,7 +1033,12 @@ export class ProjectManager {
         }
         const live = agent ?? this.ctx.agents.get(stored.coordinatorSessionId);
         if (!live) return true;
-        const preset = this.presetOf(want);
+        let preset = this.presetOf(want);
+        if (!preset && want === 'read-only') {
+            // A DSH without a Read Only preset keeps it on its default; the refusals above still keep it from writing.
+            preset = this.presetOf('default');
+            this.log(`permission ${projectId}/coordinator read-only not offered, on ${preset ?? 'unknown'}`);
+        }
         if (!preset) {
             this.log(`permission ${projectId}/coordinator unknown preset ${want}`);
             return false;
@@ -1522,13 +1618,19 @@ export class ProjectManager {
                     if (event?.type === 'model/selection') this.onSelection(who, agent, event.data);
                     else if (event?.type === 'permission/preset') this.onPermission(who, agent, event.data);
                 }));
+                // On Read Only, what would need the user's approval (a write, a wider sandbox) is refused without asking them.
+                add(scoped.on('approval/request', (req, next) => {
+                    if (!this.readOnlyCoordinator(projectId)) return next();
+                    this.log(`read-only-refused ${projectId}/coordinator ${String(req?.toolName ?? 'request').slice(0, 80)}`);
+                    return 'rejected';
+                }, { prepend: true }));
                 // A setting changed while it was not loaded.
                 this.applyCoordinatorPermission(projectId, agent);
             }
             add(() => this.ownSelections.delete(agent.id));
             add(() => this.ownPermissions.delete(agent.id));
             // The user's tools it may not use: left out of what its model is offered, and refused if called anyway.
-            if (typeof scoped.tools?.guard === 'function') add(scoped.tools.guard((exec) => this.wallReason(who, exec?.name)));
+            if (typeof scoped.tools?.guard === 'function') add(scoped.tools.guard((exec) => this.callReason(who, exec)));
             add(() => this.dropWall(agent));
             this.applyWall(agent, who);
         } catch (error) {
@@ -1680,6 +1782,7 @@ export class ProjectManager {
             home: isHome(project.workspacePath),
             guarded: this.guards().map(([name]) => name),
             yourTools: this.access(projectId).yourTools.value,
+            readOnly: this.readOnlyCoordinator(projectId),
             paused: this.paused(projectId),
             threads: this.store.project(projectId).threads,
             memory: this.readMemory(projectId),
@@ -1760,13 +1863,23 @@ export class ProjectManager {
             return;
         }
         if (!turn.fromProject) {
-            this.store.putThread(projectId, threadId, { lastDirect: { at: new Date().toISOString(), reply: turn.reply.slice(0, 500) } });
+            // The user talked to it there, so a question it had asked the coordinator is theirs to answer now.
+            this.store.putThread(projectId, threadId, { lastDirect: { at: new Date().toISOString(), reply: turn.reply.slice(0, 500) }, question: undefined });
             this.log(`direct-turn ${projectId}/${threadId} chars=${turn.reply.length}`);
             return;
         }
+        if (t.question && !turn.ending) {
+            // It ended its turn to wait for the answer to its question, which the coordinator already has.
+            this.log(`idle-question ${projectId}/${threadId}`);
+            return;
+        }
         if (this.config.autoHandback !== 'idle' || !this.allowHandback(projectId, threadId)) return;
-        await this.deliver(projectId, idleMessage(threadId, t.title, turn.reply, turn.ending));
-        this.log(`idle-note ${projectId}/${threadId} chars=${turn.reply.length}${turn.ending ? ` ended=${turn.endKind}` : ''}`);
+        // A failed or stopped turn: the coordinator nudges it first, once in a row; the user hears when that didn't help.
+        const ended = Boolean(endingStateOf(turn.ending));
+        const nudge = ended && !t.nudged && !userMustFix(turn.ending);
+        this.store.putThread(projectId, threadId, { nudged: nudge ? true : undefined });
+        await this.deliver(projectId, idleMessage(threadId, t.title, turn.reply, turn.ending, { nudge, again: ended && t.nudged === true }));
+        this.log(`idle-note ${projectId}/${threadId} chars=${turn.reply.length}${turn.ending ? ` ended=${turn.endKind}${nudge ? ' nudge' : ''}` : ''}`);
     }
 
     /**
@@ -2228,6 +2341,8 @@ export class ProjectManager {
         if (t.resolved) this.store.putThread(projectId, id, { resolved: false });
         await this.attach(t.sessionId);
         this.addThreadTools(projectId, id, tools, 'from the user\'s words in a message');
+        // Whatever the coordinator sends answers the thread's open question, if it had one.
+        if (t.question) this.store.putThread(projectId, id, { question: undefined });
         await this.prompt(t.sessionId, coordinatorMessage(text.trim(), userWords), steer ? 'steer' : 'queue', this.store.project(projectId).coordinatorSessionId);
         this.log(`thread-send ${projectId}/${id} mode=${steer ? 'steer' : 'queue'} chars=${text.length}`);
         return `${steer ? 'Steered' : 'Sent to'} ${id}${t.resolved ? ' (reopened)' : ''}.`;
@@ -2478,7 +2593,15 @@ export class ProjectManager {
             .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.text);
         const n = Math.max(1, Math.min(Number(count) || 6, 30));
         const lines = msgs.slice(-n).map((m) => `## ${m.role}\n${m.text.length > 3000 ? `${m.text.slice(0, 3000)}…` : m.text}`);
-        return [`${id} · "${t.title}" · ${t.resolved ? 'resolved' : this.liveStatus(t.sessionId)}`, ...lines].join('\n\n');
+        // What it is doing and what it changed, so the coordinator can follow it between handbacks.
+        const steps = stepsOf(r.events ?? []);
+        const files = changedFiles(t.changes);
+        return [
+            `${id} · "${t.title}" · ${t.resolved ? 'resolved' : this.liveStatus(t.sessionId)}`,
+            files ? `Changed so far: ${files}` : null,
+            steps ? `Latest steps: ${steps}` : null,
+            ...lines,
+        ].filter((line) => line !== null).join('\n\n');
     }
 
     async updateThread(projectId, threadKey, changes) {
@@ -2598,8 +2721,9 @@ export class ProjectManager {
         const guarded = this.guards().map(([name]) => name);
         const permission = (value) => (value === 'default' ? `DSH's default (${this.presets()?.defaultPreset ?? 'unknown'})` : value);
         return [
+            // Without their names: the coordinator mentions the user's tools only when asked (its rule 2 names them).
             guarded.length === 0 ? null
-                : `The user's tools (${guarded.join(', ')}): ${a.yourTools.value === 'always' ? 'every session has them' : 'you don\'t have them; a thread has the ones the user\'s words for it name'}`,
+                : `The user's tools: ${a.yourTools.value === 'always' ? 'every session has them' : 'you don\'t have them; a thread has the ones the user\'s words for it name'}`,
             this.presets() ? `Permissions: coordinator ${permission(a.coordinatorPermission.value)}, new threads ${permission(a.threadPermission.value)}` : null,
             'The user changes these in Project settings; project_settings can\'t.',
         ].filter((line) => line !== null);
@@ -2933,7 +3057,7 @@ export class ProjectManager {
         if (!this.allowHandback(projectId, threadId)) {
             throw new ProjectError(`handback limit reached (${this.config.maxHandbacksPerHour} per hour); finish the work and hand back once`);
         }
-        this.store.putThread(projectId, threadId, { lastHandback: { status, summary: cardSummary(text, 500), at: new Date().toISOString() } });
+        this.store.putThread(projectId, threadId, { lastHandback: { status, summary: cardSummary(text, 500), at: new Date().toISOString() }, nudged: undefined, question: undefined });
         // With no other thread at work, the reply to this one also closes what the user asked for.
         const others = Object.entries(this.store.project(projectId).threads).filter(([id, o]) => id !== threadId && !o.resolved);
         const last = status !== 'progress' && !others.some(([, o]) => this.liveStatus(o.sessionId) !== 'idle');
@@ -2941,5 +3065,24 @@ export class ProjectManager {
         this.log(`handback ${projectId}/${threadId} status=${status} chars=${text.length} ${outcome}`);
         if (outcome === 'delivered') return HANDBACK_SENT;
         return this.paused(projectId) ? HANDBACK_HELD : HANDBACK_RETRY;
+    }
+
+    /**
+     * A thread's question to its coordinator while it works. It counts
+     * against the thread's handbacks per hour, and stays on the
+     * coordinator's roster until something is sent to the thread.
+     */
+    async askCoordinator(projectId, threadId, question) {
+        const text = String(question ?? '').trim();
+        if (!text) throw new ProjectError('question is required');
+        const { t } = this.requireThread(projectId, threadId);
+        if (!this.allowHandback(projectId, threadId)) {
+            throw new ProjectError(`limit reached (${this.config.maxHandbacksPerHour} messages to the coordinator per hour); pick a sensible default, say which, and carry on`);
+        }
+        this.store.putThread(projectId, threadId, { question: { text: text.slice(0, 500), at: new Date().toISOString() } });
+        const outcome = await this.deliver(projectId, questionMessage(threadId, t.title, text), t.sessionId);
+        this.log(`question ${projectId}/${threadId} chars=${text.length} ${outcome}`);
+        if (outcome === 'delivered') return QUESTION_SENT;
+        return this.paused(projectId) ? QUESTION_HELD : QUESTION_RETRY;
     }
 }

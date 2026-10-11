@@ -20,7 +20,7 @@ import * as plugin from '../lib/index.js';
 import { effectiveSettings, effectiveAccess, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
 import { slugify, timing, clipTitle, guardList, guardedIn } from '../lib/projects.js';
 import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS } from '../lib/changes.js';
-import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, cardSummary, threadMarkdown, outsideMessage, replyMessage } from '../lib/prompts.js';
+import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, cardSummary, threadMarkdown, outsideMessage, replyMessage } from '../lib/prompts.js';
 import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
 import { planFleetShellImport } from '../lib/fleet-shell.js';
 
@@ -84,6 +84,12 @@ class FakeScope {
         this.listeners.set(event, list);
         return () => this.listeners.set(event, (this.listeners.get(event) ?? []).filter((f) => f !== fn));
     }
+    /** Run the `approval/request` waterfall as DSH's approval service does; past every listener, the user is asked. */
+    async approval(req) {
+        const list = this.listeners.get('approval/request') ?? [];
+        const run = (i) => (i >= list.length ? Promise.resolve('asked the user') : Promise.resolve(list[i](req, () => run(i + 1))));
+        return run(0);
+    }
     /** Run the `agent/request` waterfall as cordis does: the first listener is outermost. */
     async request(base) {
         const list = this.listeners.get('agent/request') ?? [];
@@ -108,9 +114,9 @@ class FakeScope {
         return (this.host?.toolNames ?? []).filter((name) => !denied.has(name));
     }
     /** What DSH's guards say before this agent calls a tool: the first refusal, or undefined. */
-    refusal(name) {
+    refusal(name, args = {}) {
         for (const check of this.guards) {
-            const reason = check({ name, agent: this.agent });
+            const reason = check({ name, agent: this.agent, arguments: args });
             if (reason !== undefined) return reason;
         }
         return undefined;
@@ -398,10 +404,10 @@ test('settings resolve override → project → plugin → DSH default', () => {
     assert.equal(pluginDefaults(parsed).threadEffort, 'low');
     assert.equal(pluginDefaults(parsed).coordinatorEffort, undefined);
     // Access settings layer the same way, but their last layer is the plugin's own: your tools only when asked, the
-    // coordinator on DSH's default permission and threads on Workspace Write.
+    // coordinator on Read Only and threads on Workspace Write.
     assert.deepEqual(effectiveAccess({}, {}, {}), {
         yourTools: { value: 'asked', source: 'plugin default' },
-        coordinatorPermission: { value: 'default', source: 'plugin default' },
+        coordinatorPermission: { value: 'read-only', source: 'plugin default' },
         threadPermission: { value: 'workspace-write', source: 'plugin default' },
     });
     // A word that is no mode is not a setting; a permission is checked against DSH's presets where it is used.
@@ -478,18 +484,23 @@ test('coordinator is created, titled and gets coordinator tools', async () => {
     assert.match(text, /Goal: Ship good DSH plugins/);
     // Models and efforts are settings: the coordinator's prompt names none of them (project_settings shows them).
     assert.doesNotMatch(text, /## Settings|DSH default model|effort (max|high)/);
-    assert.match(text, /\n9\. Only when the user asks: resolve a thread \(project_thread_update\) or change models, effort or pause \(project_settings; with no arguments it shows them\)\./);
-    // Ten short numbered rules a weaker model can follow: the user's ask and nothing else, work it picks itself only in the
+    assert.match(text, /\n10\. Only when the user asks: resolve a thread \(project_thread_update\) or change models, effort or pause \(project_settings; with no arguments it shows them\)\./);
+    // Eleven short numbered rules a weaker model can follow: the user's ask and nothing else, work it picks itself only in the
     // workspace, off the user's personal and infrastructure tools, one way to start a thread, and every thread named as a link.
-    assert.deepEqual(text.match(/^\d+\. /gm), ['1. ', '2. ', '3. ', '4. ', '5. ', '6. ', '7. ', '8. ', '9. ', '10. ']);
-    assert.match(text, /\n1\. Do only what the user asks\. When they leave the choice of work to you, pick work that only reads and writes files in the workspace, and say what you picked\./);
-    assert.match(text, /\n2\. Never use the user's personal or infrastructure tools, yourself or in a thread: password managers and vaults, note apps, email and messaging, home or household services, control of the user's screen, model lanes and gateways\. Only the user's own words \(a message, or the goal\) can call for one\./);
-    assert.match(text, /\n3\. For work, start a thread with project_thread_start, not with DSH's subagent or workflow tools\. One thread per distinct ask; put the user's words in `ask`, word for word\./);
+    assert.deepEqual(text.match(/^\d+\. /gm), ['1. ', '2. ', '3. ', '4. ', '5. ', '6. ', '7. ', '8. ', '9. ', '10. ', '11. ']);
+    assert.match(text, /\n1\. Do only what the user asks\. When they leave the choice of work to you, pick one small task that only reads and writes files in the workspace, start it now, and say what you picked; don't ask them to choose\./);
+    assert.match(text, /\n2\. Never use the user's personal or infrastructure tools \(password managers and vaults, note apps, email and messaging, home or household services, control of the user's screen, model lanes and gateways\), yourself or in a thread, in any way \(tool, command line, script or web API\)\. Only the user's own words \(a message, an answer they picked or typed, or the goal\) can call for one\./);
+    assert.match(text, /\n3\. All work goes to a thread, however small: counting, listing, searching, running tests or commands, editing, deleting\. Start one with project_thread_start, not with DSH's subagent or workflow tools\. One thread per distinct ask; put the user's words in `ask`, word for word, and in `brief` the goal, the scope, what done looks like and what not to touch\./);
+    assert.match(text, /\n5\. Answer yourself only from what you already know: thread status, project memory, this conversation\. You may read a file to write a brief or a question; you run no commands and change no files\./);
+    assert.match(text, /\n7\. Guide your threads\. Check each handback against the ask before you tell the user; if it falls short, tell the thread what to fix and why/);
+    // "Everything" is the workspace, never DSH or the project's settings.
+    assert.match(text, /\n"Here", "this" and "everything" mean this workspace; to check that it works, run its tests in a thread\. DSH, its web server and this project's settings aren't the user's work/);
     assert.match(text, /\n4\. Name a thread to the user only as a link: \[Fix the login bug\]\(\.dsh-thread\/t3\) for thread t3\./);
     assert.match(text, /\n6\. Before you or a thread delete files, push, publish, send or post anything, spend money, or change settings outside the workspace, ask the user/);
-    assert.match(text, /\n10\. Write to project_memory only decisions and preferences the user stated\./);
+    assert.match(text, /\n11\. Write to project_memory only decisions and preferences the user stated\./);
     assert.doesNotMatch(text, /home folder|Here those include|PAUSED/);
-    assert.ok(text.length < 2400, `short enough for a weaker model: ${text.length} characters`);
+    // The rules behind the second behaviour review and the user's advising asks made it longer; it stays one screen.
+    assert.ok(text.length < 4000, `short enough for a weaker model: ${text.length} characters`);
     // Nor do the tools' descriptions name a provider's efforts.
     for (const [name, def] of coord.ctx.registered) assert.doesNotMatch(JSON.stringify([def.description, def.parameters]), /deepseek|off, low, high, max/i, name);
     // Coordinator requests run at effort max, model untouched.
@@ -523,11 +534,11 @@ test('thread start → brief → handback → coordinator turn', async () => {
     assert.match(ts.prompts[0].text, /^\[Brief from the coordinator of "DSH Plugins" · you are thread t1, "Add CI"\]\n\nThe user asked: "Add CI that runs our tests\."\n\nAdd a GitHub Actions/);
     // As DSH sends its own agents' messages, so DSH draws a notice, not a user bubble.
     assert.deepEqual(sourceOf(ts, 0), { kind: 'agent-message', form: 'relay', senderSessionId: coord.id });
-    assert.deepEqual([...thread.ctx.registered.keys()].sort(), ['project_handback', 'project_memory']);
+    assert.deepEqual([...thread.ctx.registered.keys()].sort(), ['project_ask_coordinator', 'project_handback', 'project_memory']);
     assert.match(thread.ctx.section(), /You are thread t1, "Add CI"/);
     // A thread does the task and only the task, off the user's own tools, and hands back once, result first.
     assert.match(thread.ctx.section(), /\n1\. Do the task end to end, and only the task\./);
-    assert.match(thread.ctx.section(), /\n2\. Do not use the user's personal or infrastructure tools \(password managers and vaults, note apps, .*\) unless the user's own words ask for it\./);
+    assert.match(thread.ctx.section(), /\n2\. Do not use the user's personal or infrastructure tools \(password managers and vaults, note apps, .*\), in any way \(tool, command line, script or web API\), unless the user's own words ask for it\./);
     assert.match(thread.ctx.section(), /\n3\. Editing files for your task is fine\. Before you delete files, push, publish/);
     assert.match(thread.ctx.section(), /\n4\. When you are done or stuck, call project_handback once, as your last step\..*shows 300 characters: the result first/);
     assert.match(thread.ctx.section(), /\n5\. After project_handback, end your turn with one short line\./);
@@ -2363,7 +2374,7 @@ test('a failed or stopped thread shows in the roster until a turn finishes; Retr
     // A stopped turn resumes; a handback after it is newer news.
     turn({ kind: 'aborted', reason: { kind: 'user' } });
     await tick();
-    assert.match(coord.ctx.section(), /no handback yet · its last turn was stopped by the user before it finished\./);
+    assert.match(coord.ctx.section(), /idle · stopped by the user \(they can resume it\) · no handback yet(\n|$)/);
     await remote.continueThread(coord.id, 't1');
     assert.match(ts.prompts.at(-1).text, /^\[From the coordinator\]\n\nThe user asked you to continue\. Your last turn was stopped by the user before it finished\. Carry on/);
     thread.ctx.emitStatus(thread, 'running');
@@ -2437,7 +2448,7 @@ test('a stop the coordinator asks for, or a person makes, does not come back as 
     stopBy({ kind: 'user' });
     await tick();
     assert.deepEqual(host.sessions.get(coord.id).prompts.map((p) => p.text.slice(0, 120)), [], 'no note for a person\'s stop');
-    assert.match(coord.ctx.section(), /- t1 · "Long" · idle · no handback yet · its last turn was stopped by the user before it finished\./);
+    assert.match(coord.ctx.section(), /- t1 · "Long" · idle · stopped by the user \(they can resume it\) · no handback yet(\n|$)/);
     assert.match(coord.ctx.section(), /A thread the user stopped stays stopped/);
     assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /user-stop dsh-plugins\/t1/);
 
@@ -2469,7 +2480,7 @@ test('a permission prompt left unanswered tells the coordinator', async () => {
     await wait();
     const cp = host.sessions.get(coord.id).prompts;
     assert.equal(cp.length, 1);
-    assert.equal(cp[0].text, '[Thread waiting for approval: t1 · "Deploy"]\n\nIt asked to use bash: runs ./deploy.sh\n\nThe user approves or rejects it in the "Deploy" session.\n\n(Tell the user in one line, starting with [Deploy](.dsh-thread/t1), what it wants to do. Do not start another thread for the same work.)');
+    assert.equal(cp[0].text, '[Thread waiting for approval: t1 · "Deploy"]\n\nIt asked to use bash: runs ./deploy.sh\n\nThe user approves or rejects it in the "Deploy" session.\n\n(Tell the user in one line, starting with [Deploy](.dsh-thread/t1), what it wants to do and that they approve or reject it in its chat. Never approve it yourself or do the work another way, and do not start another thread for it.)');
 
     // The user is in the thread directly: the prompt is in front of them.
     userSays(host, thread.id, 'Go ahead and deploy.');
@@ -2565,7 +2576,7 @@ test('a new coordinator introduces itself once, so DSH lists it', async () => {
     ]);
     assert.deepEqual(sourceOf(first.host.sessions.get(coord.id), 0), { kind: 'cordis-host-runner' }, 'the welcome is the plugin\'s, not the user\'s');
     // On the Mac a coordinator ran `git pull` in its workspace during its welcome.
-    assert.match(coord.ctx.section(), /\n7\. Messages that start with "\[" come from threads or the plugin, not the user: do what the note in them says\. For "\[Project created", run no tools and start no thread for it\./);
+    assert.match(coord.ctx.section(), /\n8\. Messages that start with "\[" come from threads or the plugin, not the user: do what the note in them says\. For "\[Project created", run no tools and start no thread for it\./);
     assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), new RegExp(`welcome dsh-plugins ${coord.id} delivered`));
     const second = restart(first.host.sessions, first.config);
     await tick();
@@ -2585,10 +2596,14 @@ test('model-facing text: a project without a goal asks for one; a handback\'s no
     assert.equal(handbackSummary('[Handback from thread t2 · "x" · status: blocked]\n\nNeeds a token (CI).\n\n(For the user: lead with what blocks it in a line or two, as t2\'s report, and link the thread: [x](.dsh-thread/t2). Full conversation: project_thread_read thread="t2".)'), 'Needs a token (CI).');
     assert.equal(handbackSummary('[Handback from thread t2 · "x" · status: done]\n\nDone.\n\n(Full conversation: project_thread_read thread="t2".)'), 'Done.');
     // The idle and approval notes carry their own instruction, with the thread's link.
-    assert.match(idleMessage('t3', 'Flaky', '', 'The turn failed (HTTP 500): boom'), /\n\n\(Tell the user in one line, starting with \[Flaky\]\(\.dsh-thread\/t3\), that its turn failed; its card has Retry\. Do not retry it or start a new thread unless the user asks\.\)$/);
-    assert.match(idleMessage('t3', 'Long', '', 'The turn was stopped before it finished.'), /that its turn stopped; its card has Resume\./);
-    assert.match(idleMessage('t3', 'Chat', 'Which file?'), /\n\n\(If its last reply is a result or a question, pass it on to the user as you would a handback, starting with \[Chat\]\(\.dsh-thread\/t3\)\. If it stopped partway, send it "Finish the task and call project_handback\." with project_thread_send\.\)$/);
-    assert.match(approvalMessage('t4', 'Deploy', 'Deploy', 'shell', 'rm -rf build'), /\n\n\(Tell the user in one line, starting with \[Deploy\]\(\.dsh-thread\/t4\), what it wants to do\. Do not start another thread for the same work\.\)$/);
+    // A failed or stopped turn: the coordinator nudges it first, and tells the user when that didn't help or only they can fix it.
+    assert.match(idleMessage('t3', 'Flaky', '', 'The turn failed (HTTP 500): boom', { nudge: true }), /\n\n\(The user has not seen this\. Nudge it once: send it "Carry on from where you left off and finish the task\." with project_thread_send thread="t3", and say nothing to the user unless it fails again\.\)$/);
+    assert.match(idleMessage('t3', 'Flaky', '', 'The turn failed (HTTP 500): boom', { again: true }), /\n\n\(Tell the user in one line, starting with \[Flaky\]\(\.dsh-thread\/t3\), that its turn failed again after a nudge and why; its card has Retry\. Send it nothing more unless the user asks\.\)$/);
+    assert.match(idleMessage('t3', 'Long', '', 'The turn was stopped before it finished.'), /that its turn stopped and why; its card has Resume\./);
+    assert.equal(userMustFix('The turn failed: the user signed out of DeepSeek.'), true);
+    assert.equal(userMustFix('The turn failed (HTTP 500): boom'), false);
+    assert.match(idleMessage('t3', 'Chat', 'Which file?'), /\n\n\(If its last reply is a result, check it against the ask and pass it on as you would a handback, starting with \[Chat\]\(\.dsh-thread\/t3\)\. If it asks something, answer it with project_thread_send thread="t3" when the user's words, the brief or project memory answer it, and ask the user only what is theirs to decide\. If it stopped partway, send it "Finish the task and call project_handback\." with project_thread_send thread="t3"; if it seems stuck, ask it what is blocking it\.\)$/);
+    assert.match(approvalMessage('t4', 'Deploy', 'Deploy', 'shell', 'rm -rf build'), /\n\n\(Tell the user in one line, starting with \[Deploy\]\(\.dsh-thread\/t4\), what it wants to do and that they approve or reject it in its chat\. Never approve it yourself or do the work another way, and do not start another thread for it\.\)$/);
     // A card or roster line is cut at a sentence end, or a word end, never inside a name (the first real run's card ended
     // "…deepseek-v41-a7 (DeepSeek-V4.1-Flash-T").
     const t2 = 'Lane probe (2026-10-10 10:48 AM PDT, read-only, no files touched): 3 lanes in ~/.dsh/lanes.json — 1 up, 2 down, 0 busy, 0 auth_failed. Up: glm53-a5 (GLM-5.3-Flash-EXL3, 850k ctx, traits long/reasoning/vision/primary). Down: glm53-full-a1a4 (the 1M-ctx lane) and deepseek-v41-a7 (DeepSeek-V4.1-Flash-TF), both with the same detail.';
@@ -2607,7 +2622,7 @@ test('scope: a thread start or message that would use a guarded tool needs the u
     await tick();
     const coord = coordinatorOf(host);
     const say = userTyping(host);
-    assert.match(coord.ctx.section(), /\n2\. Never use the user's personal or infrastructure tools, [^\n]*\n   You don't have these here: lane-catalog, family_1password, cua\. When the user's words ask for work that needs one, start a thread with their words in `ask`; the thread gets the ones their words name\.\n3\. /);
+    assert.match(coord.ctx.section(), /\n2\. Never use the user's personal or infrastructure tools \([^\n]*\n   You don't have these here: lane-catalog, family_1password, cua\. When the user's words ask for work that needs one, start a thread with their words in `ask`; the thread gets the ones their words name\.\n3\. /);
     // The first real run's t2: a test task the coordinator picked itself, sent to the user's model lanes.
     const drift = await coord.ctx.call('project_thread_start', {
         ask: 'I\'m simply testing out the effectiveness of the coordinator - can we find a small test-task or a couple test-tasks to roll on for this test?',
@@ -2680,6 +2695,92 @@ test('scope: the user\'s word for a guarded tool, or the goal, asks for it; a ho
 
 /** DSH's own tools and the user's MCP servers, as a session is offered them before any restriction. */
 const HOST_TOOLS = ['shell', 'read_file', 'mcp__lane-catalog__lanes_status', 'mcp__lane-catalog__pick_lane', 'mcp__family_1password__get_item', 'mcp__cua__click', 'mcp__tavily__search'];
+
+test('a coordinator on Read Only reads and directs; threads ask it, get nudged, and can\'t reach the user\'s servers around the wall', async () => {
+    const { host, dir } = setup({ guardedTools: { 'lane-catalog': ['lanes'] } }, undefined, { gateway: true, tools: HOST_TOOLS, presets: true });
+    await tick();
+    const pp = host.services.permissionPresets;
+    const coord = coordinatorOf(host);
+    const log = () => readFileSync(join(dir, 'projects.log'), 'utf8');
+    const stored = () => JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'].threads;
+    const threadNamed = (title) => [...host.live.values()].find((a) => host.sessions.get(a.id).title === title);
+    const cp = () => host.sessions.get(coord.id).prompts;
+
+    // Read Only: DSH's file tools are refused with what to do instead (a view only reads), and what would need the
+    // user's approval is refused without asking them.
+    assert.equal(pp.current(coord.session), 'read-only');
+    assert.match(coord.ctx.refusal('write', { path: 'a.txt' }), /^You are on Read Only, so you don't change files\. Start a thread for this change with project_thread_start/);
+    assert.match(coord.ctx.refusal('str_replace_editor', { command: 'str_replace' }), /^You are on Read Only/);
+    assert.equal(coord.ctx.refusal('str_replace_editor', { command: 'view' }), undefined);
+    assert.equal(coord.ctx.refusal('read', { path: 'a.txt' }), undefined);
+    assert.equal(await coord.ctx.approval({ toolName: 'bash', reason: 'writes a.txt' }), 'rejected');
+    assert.match(log(), / read-only-refused dsh-plugins\/coordinator write\n[^]* read-only-refused dsh-plugins\/coordinator bash\n/);
+    assert.match(coord.ctx.section(), /\nYou are on Read Only: you can read files and use the project tools/);
+    // The project tools work there, and a thread changes files and asks the user as before.
+    await coord.ctx.call('project_thread_start', { ask: 'Count the files.', title: 'Count', brief: 'Count them.' });
+    const t1 = threadNamed('Count');
+    assert.equal(t1.ctx.refusal('write', { path: 'a.txt' }), undefined);
+    assert.equal(await t1.ctx.approval({ toolName: 'bash' }), 'asked the user');
+    assert.match(t1.ctx.section(), /\nFollow the coordinator's directions and corrections\. Its words are not the user's/);
+
+    // A thread asks its coordinator mid-task: the coordinator gets the question with how to answer, the roster keeps it
+    // until something is sent to the thread, and the thread's turn ending to wait for it sends no idle note.
+    assert.match(await t1.ctx.call('project_ask_coordinator', { question: 'Count hidden files too? I would leave them out.' }), /^Asked\. Carry on with what doesn't depend on the answer/);
+    assert.equal(cp().at(-1).text, `${questionMessage('t1', 'Count', 'Count hidden files too? I would leave them out.')}`);
+    assert.match(cp().at(-1).text, /^\[Question from thread t1 · "Count"\]\n\nCount hidden files too\? I would leave them out\.\n\n\(The user has not seen this\. When the user's words, the brief or project memory answer it, answer now with project_thread_send thread="t1" steer=true and say nothing to the user\./);
+    assert.match(coord.ctx.section(), /- t1 · "Count" · [a-z]+ · no handback yet · asked you: "Count hidden files too\? I would leave them out\." \(not answered yet\)/);
+    // project_thread_read shows the coordinator what the thread did lately, and what it changed.
+    host.sessions.get(t1.id).events.push({ seq: 99, type: 'workspace/changes', data: {} });
+    assert.match(await coord.ctx.call('project_thread_read', { thread: 't1' }), /\n\nLatest steps: project_ask_coordinator "Count hidden files too\? I would leave them out\."\n\n/);
+    const notes = cp().length;
+    t1.ctx.emitStatus(t1, 'running');
+    t1.ctx.emitStatus(t1, 'idle');
+    await tick();
+    assert.equal(cp().length, notes, 'no idle note while its question waits');
+    assert.match(log(), / idle-question dsh-plugins\/t1\n/);
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Leave them out.', steer: true });
+    assert.equal(stored().t1.question, undefined);
+    assert.doesNotMatch(coord.ctx.section(), /asked you:/);
+
+    // A turn that fails: the coordinator nudges the thread first, and tells the user when it fails again.
+    const ts = host.sessions.get(t1.id);
+    const turn = (reason) => {
+        t1.ctx.emitStatus(t1, 'running');
+        ts.events.push({ seq: ts.events.length + 1, type: 'turn/start', data: { turn: ts.events.length } });
+        ts.events.push({ seq: ts.events.length + 1, type: 'turn/end', data: { turn: ts.events.length, reason } });
+        t1.ctx.emitStatus(t1, 'idle');
+    };
+    const failure = { kind: 'error', error: { message: '500: {"message":"Upstream timed out."}' } };
+    turn(failure);
+    await tick();
+    assert.match(cp().at(-1).text, /\n\n\(The user has not seen this\. Nudge it once: send it "Carry on from where you left off and finish the task\." with project_thread_send thread="t1", and say nothing to the user unless it fails again\.\)$/);
+    turn(failure);
+    await tick();
+    assert.match(cp().at(-1).text, /\n\n\(Tell the user in one line, starting with \[Count\]\(\.dsh-thread\/t1\), that its turn failed again after a nudge and why; its card has Retry\./);
+    assert.match(log(), / idle-note dsh-plugins\/t1 chars=0 ended=error nudge\n[^]* idle-note dsh-plugins\/t1 chars=0 ended=error\n/);
+    // Only the user can fix a sign-in: they hear of it at once.
+    turn({ kind: 'aborted', reason: { kind: 'hook', reason: 'deepseek-account/signed-out' } });
+    await tick();
+    assert.match(cp().at(-1).text, /^\[Thread idle without a handback: t1 · "Count"\]\n\nThe turn failed: the user signed out of DeepSeek\.[^]*\n\n\(Tell the user in one line/);
+
+    // DSH's resource tools name the server in an argument: a thread without the user's lane catalog can't read it that way.
+    assert.match(t1.ctx.refusal('read_mcp_resource', { server: 'lane-catalog', uri: 'lanes://all' }), /^This is one of the user's own tools/);
+    assert.match(t1.ctx.refusal('list_mcp_resources', { server: 'lane-catalog' }), /^This is one of the user's own tools/);
+    assert.equal(t1.ctx.refusal('list_mcp_resources', { server: 'tavily' }), undefined);
+
+    // An answer the user picked or typed in DSH's question box is their words: an ask from it may name their tools.
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Check my lanes.', title: 'Lanes', brief: 'Report.' }), /^Failed: ask names lane-catalog, but the user's messages don't/);
+    const events = coord.ctx.log();
+    events.push({ seq: events.length + 1, type: 'tool/call', data: { callId: 'q1', name: 'ask_user_question', arguments: {} } });
+    events.push({ seq: events.length + 1, type: 'tool/result', data: { message: { role: 'tool', toolCallId: 'q1', content: [{ type: 'text', text: JSON.stringify({ answers: [{ id: 'what', selected: [], custom: 'Check my lanes.' }] }) }] } } });
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Check my lanes.', title: 'Lanes', brief: 'Report.' }), /^Started t2 "Lanes"/);
+
+    // The user's own pick of another permission lifts Read Only.
+    pp.pick(coord.id, 'workspace-write');
+    assert.equal(coord.ctx.refusal('write', { path: 'a.txt' }), undefined);
+    assert.equal(await coord.ctx.approval({ toolName: 'bash' }), 'asked the user');
+    assert.doesNotMatch(coord.ctx.section(), /You are on Read Only/);
+});
 
 test('your tools: a coordinator never has the user\'s tools, and a thread has only the ones the user\'s own words name', async () => {
     const { host, dir, config } = setup({ guardedTools: { 'lane-catalog': ['lanes'], family_1password: ['1password'], cua: [] } }, undefined, { gateway: true, tools: HOST_TOOLS });
@@ -2757,13 +2858,14 @@ test('your tools: a coordinator never has the user\'s tools, and a thread has on
     assert.equal(coord.ctx.refusal('mcp__lane-catalog__lanes_status'), undefined);
     // The coordinator can see the setting, and can't change it.
     const shown = await coord.ctx.call('project_settings', {});
-    assert.match(shown, /\nThe user's tools \(lane-catalog, family_1password, cua\): every session has them\nThe user changes these in Project settings; project_settings can't\.$/);
+    // Without the tools' names: the coordinator mentions them only when asked.
+    assert.match(shown, /\nThe user's tools: every session has them\nThe user changes these in Project settings; project_settings can't\.$/);
     assert.equal(coord.ctx.registered.get('project_settings').parameters.your_tools, undefined);
     // Back to the default, and only the two words are settings.
     read = await remote.update(coord.id, { yourTools: null });
     assert.deepEqual([read.access.yourTools.source, coord.ctx.offered()], ['plugin default', OTHERS]);
     await assert.rejects(remote.update(coord.id, { yourTools: 'sometimes' }), (error) => error.code === 'projects/refused' && /your tools must be "asked" or "always"/.test(error.message));
-    assert.match(await coord.ctx.call('project_settings', {}), /\nThe user's tools \(lane-catalog, family_1password, cua\): you don't have them; a thread has the ones the user's words for it name\n/);
+    assert.match(await coord.ctx.call('project_settings', {}), /\nThe user's tools: you don't have them; a thread has the ones the user's words for it name\n/);
 
     // The list of the user's tools is live: the plugin page saves it, and every wall and prompt follows without a reload.
     saveDefaults(host, config, { guardedTools: ['lane-catalog'] });
@@ -2793,7 +2895,7 @@ test('your tools: a reload attaches to loaded coordinators without reading their
     assert.deepEqual([coord.ctx.restrictions.length, coord.ctx.guards.length, t1.ctx.guards.length], [1, 1, 1]);
 });
 
-test('permissions: threads start on Workspace Write, the coordinator stays on DSH\'s default, and the user\'s picks become the settings', async () => {
+test('permissions: threads start on Workspace Write, the coordinator on Read Only, and the user\'s picks become the settings', async () => {
     const { host, dir } = setup({}, undefined, { gateway: true, presets: true });
     await tick();
     const pp = host.services.permissionPresets;
@@ -2805,14 +2907,15 @@ test('permissions: threads start on Workspace Write, the coordinator stays on DS
     const refused = async (promise, pattern) => {
         await assert.rejects(promise, (error) => error.code === 'projects/refused' && pattern.test(error.message));
     };
-    // The coordinator keeps the permission DSH gave it, the user's default: the plugin changes nothing.
-    assert.deepEqual([pp.current(coord.session), pp.sets, stored().coordinatorAccess], ['danger-full-access', [], 'default']);
+    // The coordinator goes on Read Only, the plugin's default, when it loads.
+    assert.deepEqual([pp.current(coord.session), pp.sets.map((x) => [x.sessionId, x.preset]), stored().coordinatorAccess], ['read-only', [[coord.id, 'read-only']], 'read-only']);
+    assert.match(log(), / permission dsh-plugins\/coordinator read-only\n/);
 
     // A thread is on Workspace Write before it reads its brief.
     await coord.ctx.call('project_thread_start', { ask: 'Add CI.', title: 'CI', brief: 'Add CI.' });
     const t1 = threadNamed('CI');
     assert.equal(pp.current(t1.session), 'workspace-write');
-    assert.deepEqual(pp.sets, [{ sessionId: t1.id, preset: 'workspace-write', promptsBefore: 0 }]);
+    assert.deepEqual(pp.sets.at(-1), { sessionId: t1.id, preset: 'workspace-write', promptsBefore: 0 });
     assert.equal(stored().threads.t1.permission, 'workspace-write');
     assert.match(log(), / permission dsh-plugins\/t1 workspace-write\n/);
     // That change was the plugin's own, not a pick of the user's.
@@ -2820,29 +2923,29 @@ test('permissions: threads start on Workspace Write, the coordinator stays on DS
 
     // The window: each setting with its source, every thread's permission, and the presets DSH offers (not Auto).
     let read = await remote.describe(coord.id);
-    assert.equal(read.project.permission, 'danger-full-access');
-    assert.deepEqual(plain(read.access.coordinatorPermission), { value: 'default', source: 'plugin default', inherited: { value: 'default', source: 'plugin default' } });
+    assert.equal(read.project.permission, 'read-only');
+    assert.deepEqual(plain(read.access.coordinatorPermission), { value: 'read-only', source: 'plugin default', inherited: { value: 'read-only', source: 'plugin default' } });
     assert.deepEqual(plain(read.access.threadPermission), { value: 'workspace-write', source: 'plugin default', inherited: { value: 'workspace-write', source: 'plugin default' } });
     assert.deepEqual(plain(read.permissions.options.map((o) => [o.value, o.name])), [['read-only', 'Read Only'], ['workspace-write', 'Workspace Write'], ['danger-full-access', 'Full access']]);
     assert.equal(read.permissions.defaultPreset, 'danger-full-access');
     assert.deepEqual(read.threads.map((t) => t.permission), ['workspace-write']);
-    assert.equal(plain(await remote.list()).projects[0].permission, 'danger-full-access');
+    assert.equal(plain(await remote.list()).projects[0].permission, 'read-only');
 
     // The user picks Full access for the thread in DSH's own permission menu: its setting follows.
     pp.pick(t1.id, 'danger-full-access');
     assert.equal(stored().threads.t1.permission, 'danger-full-access');
     assert.match(log(), / picked-permission dsh-plugins\/t1 danger-full-access\n/);
-    // And Read Only for the coordinator: that becomes the project's coordinator setting.
-    pp.pick(coord.id, 'read-only');
+    // And Workspace Write for the coordinator: that becomes the project's coordinator setting.
+    pp.pick(coord.id, 'workspace-write');
     read = await remote.describe(coord.id);
-    assert.deepEqual(plain(read.access.coordinatorPermission), { value: 'read-only', source: 'project setting', inherited: { value: 'default', source: 'plugin default' } });
-    assert.equal(read.project.permission, 'read-only');
+    assert.deepEqual(plain(read.access.coordinatorPermission), { value: 'workspace-write', source: 'project setting', inherited: { value: 'read-only', source: 'plugin default' } });
+    assert.equal(read.project.permission, 'workspace-write');
 
-    // Project settings moves the coordinator at once; null goes back to DSH's default.
-    read = await remote.update(coord.id, { coordinatorPermission: 'workspace-write' });
-    assert.deepEqual([pp.current(coord.session), read.notes], ['workspace-write', []]);
+    // Project settings moves the coordinator at once; null goes back to the plugin's Read Only.
+    read = await remote.update(coord.id, { coordinatorPermission: 'danger-full-access' });
+    assert.deepEqual([pp.current(coord.session), read.notes], ['danger-full-access', []]);
     read = await remote.update(coord.id, { coordinatorPermission: null });
-    assert.deepEqual([pp.current(coord.session), read.access.coordinatorPermission.source], ['danger-full-access', 'plugin default']);
+    assert.deepEqual([pp.current(coord.session), read.access.coordinatorPermission.source], ['read-only', 'plugin default']);
     assert.equal(log().match(/picked-permission dsh-plugins\/coordinator/g).length, 1, 'only the user\'s own pick');
     // New threads start on what Project settings says; running threads keep theirs.
     await remote.update(coord.id, { threadPermission: 'read-only' });
@@ -2855,7 +2958,7 @@ test('permissions: threads start on Workspace Write, the coordinator stays on DS
     await refused(remote.update(coord.id, { threadPermission: 'yolo' }), /^"yolo" is not one of DSH's permissions \(default, read-only, workspace-write, danger-full-access\)$/);
     await refused(remote.update(coord.id, { thread: 't1', permission: 'auto' }), /^"auto" is not one of DSH's permissions$/);
     // The coordinator sees them, and has no way to change them.
-    assert.match(await coord.ctx.call('project_settings', {}), /\nPermissions: coordinator DSH's default \(danger-full-access\), new threads read-only\nThe user changes these in Project settings; project_settings can't\.$/);
+    assert.match(await coord.ctx.call('project_settings', {}), /\nPermissions: coordinator read-only, new threads read-only\nThe user changes these in Project settings; project_settings can't\.$/);
     // A thread DSH won't put on its permission doesn't start: its session never gets the brief.
     pp.fail = true;
     assert.equal(await coord.ctx.call('project_thread_start', { ask: 'More.', title: 'Stuck', brief: 'Go.' }),
@@ -3096,8 +3199,8 @@ test('a thread turn cut off by a DSH stop is reported at the next start, once', 
     await tick();
     const cp = second.sessions.get(coord.id).prompts;
     assert.equal(cp.length, 1);
-    assert.equal(cp[0].text, '[Thread idle without a handback: t1 · "Long"]\n\nThe turn was cut off because DSH stopped while it ran.\n\nIts last reply:\n\nStarting the job.\n\n(Tell the user in one line, starting with [Long](.dsh-thread/t1), that its turn stopped; its card has Resume. Do not retry it or start a new thread unless the user asks.)');
-    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /idle-note dsh-plugins\/t1 chars=17 ended=interrupted/);
+    assert.equal(cp[0].text, '[Thread idle without a handback: t1 · "Long"]\n\nThe turn was cut off because DSH stopped while it ran.\n\nIts last reply:\n\nStarting the job.\n\n(The user has not seen this. Nudge it once: send it "Carry on from where you left off and finish the task." with project_thread_send thread="t1", and say nothing to the user unless it stops again.)');
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /idle-note dsh-plugins\/t1 chars=17 ended=interrupted nudge/);
 
     const third = restart(first.host.sessions, first.config);
     await tick();
@@ -3265,7 +3368,7 @@ test('a thread started while the plugin reloads stays a project thread', async (
     release();
     assert.match(await started, /^Started t1 "Mid"/);
     const thread = threadOf(host, coord);
-    assert.deepEqual([...thread.ctx.registered.keys()].sort(), ['project_handback', 'project_memory']);
+    assert.deepEqual([...thread.ctx.registered.keys()].sort(), ['project_ask_coordinator', 'project_handback', 'project_memory']);
     // A write by the new instance keeps the thread.
     await coord.ctx.call('project_settings', { thread_effort: 'max' });
     assert.ok(JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'].threads.t1);
@@ -3443,11 +3546,11 @@ test('projects page: a new project is a coordinator in a workspace, started at o
     assert.deepEqual([settings.coordinatorEffort, settings.threadEffort], [{ value: null, source: 'DSH default' }, { value: 'high', source: 'plugin default' }]);
     assert.deepEqual(access, {
         yourTools: { value: 'asked', source: 'plugin default' },
-        coordinatorPermission: { value: 'default', source: 'plugin default' },
+        coordinatorPermission: { value: 'read-only', source: 'plugin default' },
         threadPermission: { value: 'workspace-write', source: 'plugin default' },
     });
     assert.ok(coord.ctx.registered.has('project_thread_start'), 'the coordinator gets the project tools');
-    assert.match(coord.ctx.section(), /You are the coordinator of the DSH project "Recipes"\. The user talks to you here\. You run their work in threads and tell them what each thread found\.\nGoal: none set yet\. Until the user gives one, the project is only what they ask for in this chat\.\nWorkspace: \/work\/b\n\n## Rules/);
+    assert.match(coord.ctx.section(), /You are the coordinator of the DSH project "Recipes"\. The user talks to you here\. You run their work in threads, guide the threads while they work, and tell the user what each thread found\.\nGoal: none set yet\. Until the user gives one, the project is only what they ask for in this chat\.\nWorkspace: \/work\/b\n"Here", "this" and "everything" mean this workspace;[^\n]*\nYou are on Read Only:[^\n]*\n\n## Rules/);
     // A workspace can hold more than one project; names are unique ids.
     assert.equal((await remote.create('Recipes', 'ws:/work/b')).project, 'recipes-2');
     await refused(remote.create('   ', 'ws:/work/a'), /a project needs a name/);

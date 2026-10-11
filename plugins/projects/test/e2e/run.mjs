@@ -821,9 +821,9 @@ try {
     const roster = since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => l.startsWith('- t')) ?? [];
     const lineOf = (id) => roster.find((l) => l.startsWith(`- ${id} · `)) ?? '';
     check('the roster tells the coordinator which threads failed or stopped', lineOf('t3').includes('· its last turn failed (HTTP 400): fake model rejected the request')
-        && lineOf('t4').includes('· its last turn was stopped by the user before it finished.') && lineOf('t8').includes('· its last turn was cut off because DSH stopped while it ran.')
+        && lineOf('t4').includes('· stopped by the user (they can resume it) ·') && lineOf('t8').includes('· its last turn was cut off because DSH stopped while it ran.')
         && lineOf('t7').includes('last handback: done') && lineOf('t7').includes('its last turn failed') && !lineOf('t1').includes('its last turn'), roster.join('\n'));
-    check('the coordinator is told to leave a thread the user stopped stopped', since(mark, 'coordinator')[0]?.system.includes('A thread the user stopped stays stopped.'));
+    check('the coordinator is told to leave a thread the user stopped stopped', since(mark, 'coordinator')[0]?.system.includes('A thread the user stopped stays stopped: when you mention it, say the user stopped it and it can be resumed.'));
     // Retry: the thread hears it from its coordinator, runs, and its failure clears.
     const refusedWhy = (answer) => (answer.ok ? 'ok' : `${answer.error?.code}: ${answer.error?.message}`);
     let answer2 = await webApi(webAgain, 'dsh-plugin-projects/continueThread', { target: coord, thread: 't1' });
@@ -945,8 +945,8 @@ try {
     // Permissions, as DSH itself holds them.
     let described = await webApi(webAgain, 'dsh-plugin-projects/describe', { target: madeCoord });
     const lanesRow = described.value?.threads?.find((t) => t.title === 'Lanes up');
-    check('a thread runs on Workspace Write, its coordinator on DSH\'s default (Full access here), and the window shows both', described.ok && lanesRow?.permission === 'workspace-write'
-        && described.value.project.permission === 'danger-full-access' && lanesRow.tools?.join() === 'lane-catalog' && described.value.project.tools?.length === 0
+    check('a thread runs on Workspace Write, its coordinator on Read Only, and the window shows both', described.ok && lanesRow?.permission === 'workspace-write'
+        && described.value.project.permission === 'read-only' && lanesRow.tools?.join() === 'lane-catalog' && described.value.project.tools?.length === 0
         && described.value.permissions?.options?.map((o) => o.value).join() === 'read-only,workspace-write,danger-full-access', JSON.stringify(described.value ?? described).slice(0, 600));
     const lanesThread = madeThreads().find((t) => t.title === 'Lanes up');
     const lanesEvents = (await bridge('GET', `/sessions/${lanesThread?.sessionId}/events?types=permission/preset,user/message&limit=50`)).events;
@@ -960,7 +960,16 @@ try {
     check('Project settings moves a coordinator to another permission', changed.ok && changed.value.project.permission === 'workspace-write'
         && changed.value.access.coordinatorPermission.source === 'project setting', JSON.stringify(changed).slice(0, 400));
     changed = await webApi(webAgain, 'dsh-plugin-projects/update', { target: madeCoord, changes: { coordinatorPermission: null, threadPermission: 'read-only' } });
-    check('and back to DSH\'s default', changed.ok && changed.value.project.permission === 'danger-full-access' && changed.value.access.threadPermission.value === 'read-only', JSON.stringify(changed).slice(0, 400));
+    check('and back to Read Only, the plugin\'s default', changed.ok && changed.value.project.permission === 'read-only' && changed.value.access.threadPermission.value === 'read-only', JSON.stringify(changed).slice(0, 400));
+    // On Read Only a coordinator changes no files, and what would need approval is refused without asking the user.
+    const coordinatorFile = join(dirA, 'coordinator-probe.txt');
+    mark = model.requests.length;
+    await say(madeCoord, call('write', { file_path: coordinatorFile, content: 'x', sandbox_permissions: 'danger-full-access', justification: 'E2E coordinator check.' }));
+    await waitFor(() => readText(logFile).includes(` read-only-refused ${madeId}/coordinator write`), 'the coordinator\'s refused write');
+    const pending = (await bridge('GET', `/sessions/${madeCoord}/events?types=approval/asked,approval/decided&limit=20`)).events ?? [];
+    check('a coordinator on Read Only writes nothing, and asks the user nothing', !existsSync(coordinatorFile)
+        && pending.filter((e) => e.type === 'approval/decided').every((e) => e.data?.outcome !== 'allowed-once'),
+        `${existsSync(coordinatorFile)} ${JSON.stringify(pending.map((e) => [e.type, e.data?.outcome]))} ${resultOf(since(mark).filter((r) => whoOf(r) === 'coordinator')).slice(0, 300)}`);
     const readOnlyFile = join(dirA, 'read-only-probe.txt');
     mark = model.requests.length;
     await say(madeCoord, call('project_thread_start', { ask: 'Please do this.', title: 'Read only', brief: call('write', { file_path: readOnlyFile, content: 'x' }) }));

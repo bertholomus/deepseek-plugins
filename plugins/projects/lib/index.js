@@ -90,7 +90,7 @@ export const Config = z.object({
      * stand between them and the model.
      */
     yourTools: live(z.string()),
-    /** Plugin-wide coordinator permission: a DSH permission preset (read-only, workspace-write, danger-full-access), or empty or "default" for DSH's default for new sessions. */
+    /** Plugin-wide coordinator permission: a DSH permission preset (read-only, workspace-write, danger-full-access), or "default" for DSH's default for new sessions. Empty means read-only: the coordinator reads, its threads change files, and what would need approval is refused without asking. */
     coordinatorPermission: live(z.string()),
     /** Plugin-wide permission new threads start on: a DSH permission preset, or "default" for DSH's default. Empty means workspace-write. */
     threadPermission: live(z.string()),

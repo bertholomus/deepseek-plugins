@@ -89,6 +89,17 @@ export function projectTools(manager, who) {
                     return result(text, { action: { kind: 'handback', thread: threadId, status: args.status } });
                 },
             }),
+            tool({
+                name: 'project_ask_coordinator',
+                description: 'Ask your coordinator a question while you work, when you are unsure and no sensible default fits. Its answer arrives here as a message from the coordinator. Not for results: those go in project_handback.',
+                parameters: {
+                    question: { type: 'string', required: true, description: 'One short question, with the options you see and the one you would pick' },
+                },
+                async execute(args) {
+                    const text = await manager.askCoordinator(projectId, threadId, args.question);
+                    return result(text, { action: { kind: 'question', thread: threadId } });
+                },
+            }),
         ];
     }
 
@@ -155,7 +166,7 @@ export function projectTools(manager, who) {
         }),
         tool({
             name: 'project_thread_read',
-            description: 'Read the latest messages of a thread (user and assistant text).',
+            description: 'Read how a thread is doing: the files it changed so far, its latest steps, and its latest messages (user and assistant text).',
             parameters: {
                 thread: { type: 'string', required: true, description: 'Thread id, e.g. "t3"' },
                 count: { type: 'number', description: 'How many recent messages (default 6, max 30)' },
