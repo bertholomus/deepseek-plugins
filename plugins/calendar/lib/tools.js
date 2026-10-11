@@ -9,9 +9,11 @@
  * change something).
  *
  * Every tool returns text for the model and a view the chat draws as a
- * card (client.js), never secrets. Event text (titles, places, notes,
- * names) comes from calendars other people write to, so the model is told
- * it is information, never instructions.
+ * card (client.js), never secrets. A calendar's or an account's problem is
+ * given as its fixed category (`problem`), never its message, which can
+ * hold a server's own words. Event text (titles, places, notes, names)
+ * comes from calendars other people write to, so the model is told it is
+ * information, never instructions.
  *
  * @module dsh-plugin-calendar/tools
  */
@@ -110,6 +112,9 @@ function agenda(list, zone, opts) {
     return out.join('\n');
 }
 
+/** A calendar for the chat card: its problem's category stays, its message doesn't. */
+const calendarCard = (c) => Object.fromEntries(Object.entries(c).filter(([k]) => k !== 'error'));
+
 /** A smaller occurrence for the chat card. */
 function card(o) {
     const keep = ['id', 'title', 'calendar', 'color', 'start', 'end', 'allDay', 'startDay', 'lastDay', 'timeZone', 'location', 'conference', 'repeats', 'myStatus', 'status', 'readOnly'];
@@ -170,10 +175,10 @@ export function calendarTools(manager) {
             parameters: {},
             async execute() {
                 const { calendars, accounts } = manager.state();
-                const lines = calendars.map((c) => `- ${c.name} · ${c.account}${c.readOnly ? ' · read only' : ''}${c.isDefault ? ' · default for new events' : ''}${c.hidden ? ' · hidden in the window' : ''}${c.error ? ` · problem: ${c.error}` : ''}  [id ${c.id}]`);
-                const troubled = accounts.filter((a) => a.status === 'signin' || a.status === 'error').map((a) => `- ${a.name}: ${a.error ?? 'needs attention'}`);
+                const lines = calendars.map((c) => `- ${c.name} · ${c.account}${c.readOnly ? ' · read only' : ''}${c.isDefault ? ' · default for new events' : ''}${c.hidden ? ' · hidden in the window' : ''}${c.problem ? ` · problem: ${c.problem}` : ''}  [id ${c.id}]`);
+                const troubled = accounts.filter((a) => a.status === 'signin' || a.status === 'error').map((a) => `- ${a.name}: ${a.problem ?? 'needs attention'}`);
                 const text = [header(), 'Calendars:', ...lines, ...(troubled.length ? ['Accounts with problems:', ...troubled] : [])].join('\n');
-                return { text, view: { kind: 'calendars', calendars } };
+                return { text, view: { kind: 'calendars', calendars: calendars.map(calendarCard) } };
             },
         }),
         tool({

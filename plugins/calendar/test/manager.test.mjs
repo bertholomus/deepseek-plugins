@@ -2,17 +2,27 @@
  * The manager on calendars kept on this computer and a subscribed feed:
  * adding, reading, changing (one occurrence, this and the following ones,
  * the whole series), moving, deleting, answering, searching, free time,
- * export and import, and a restart that keeps everything.
+ * export and import, and a restart that keeps everything. A feed's address
+ * stays in its credential record, out of the files, the log and anything
+ * the window or an agent gets.
  *
  *   node --test plugins/calendar/test/manager.test.mjs
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { register } from 'node:module';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CalendarError, CalendarManager } from '../lib/manager.js';
+import { CalendarError, CalendarManager, calendarIdOf } from '../lib/manager.js';
+
+// The agents' tools without DSH: a stand-in for its tool package, whose defineTool hands each tool back as it is.
+const TOOLS_STANDIN = 'data:text/javascript,export const defineTool = (tool) => tool;';
+register(`data:text/javascript,${encodeURIComponent(`export async function resolve(specifier, context, next) {
+    return specifier === '@deepseek-ai/dsh-tools' ? { shortCircuit: true, url: ${JSON.stringify(TOOLS_STANDIN)} } : next(specifier, context);
+}`)}`);
+const { calendarTools } = await import('../lib/tools.js');
 
 const ZONE = 'Europe/Berlin';
 const NOW = Date.parse('2026-10-11T10:00:00Z');
@@ -307,20 +317,29 @@ test('answering an invitation on a calendar whose account has the user\'s addres
     }
 });
 
-test('a subscribed feed is read only, follows its ETag, and survives a restart', async (t) => {
+test('a subscribed feed is read only, follows its ETag, survives a restart, and its address stays a secret', async (t) => {
     let hits = 0;
+    let answer = 200;
     let body = [
         'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Test//Feed//EN', 'X-WR-CALNAME:Holidays', 'X-WR-TIMEZONE:Europe/Berlin',
         'BEGIN:VEVENT', 'UID:h1@test', 'DTSTAMP:20260101T000000Z', 'DTSTART;VALUE=DATE:20261103', 'DTEND;VALUE=DATE:20261104', 'SUMMARY:Holiday', 'END:VEVENT',
         'BEGIN:VEVENT', 'UID:h2@test', 'DTSTAMP:20260101T000000Z', 'DTSTART:20261104T170000Z', 'DURATION:PT2H', 'SUMMARY:Webinar', 'END:VEVENT',
         'END:VCALENDAR', '',
     ].join('\r\n');
+    // A private feed's address, like Google's secret one: its key is in the path (and here in the query too).
+    const key = 'private-9f8e7d6c5b4a3928';
+    const query = 'token=1706f5e4d3c2b1a0';
+    const path = `/calendar/ical/me%40example.com/${key}/basic.ics?${query}`;
     const server = createServer((req, res) => {
-        if (req.url !== '/feed.ics') {
+        if (req.url !== path) {
             res.writeHead(404);
             return res.end('not here');
         }
         hits++;
+        if (answer !== 200) {
+            res.writeHead(answer, answer === 429 ? { 'retry-after': '120' } : {});
+            return res.end();
+        }
         if (req.headers['if-none-match'] === '"v1"' && body.includes('Webinar')) {
             res.writeHead(304);
             return res.end();
@@ -330,14 +349,34 @@ test('a subscribed feed is read only, follows its ETag, and survives a restart',
     });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     t.after(() => server.close());
-    const url = `http://127.0.0.1:${server.address().port}/feed.ics`;
-    const { make, done } = setup();
+    const host = `127.0.0.1:${server.address().port}`;
+    const url = `http://${host}${path}`;
+    const { dir, vault, config, make, done } = setup();
+    // The address may be in the account's credential record only. Each check says where it looked, never what it found.
+    const hidden = (text, where) => assert.ok(!String(text).includes(key) && !String(text).includes(query), `${where} holds the feed's address`);
+    const listCalendars = (manager) => calendarTools(manager).find((tool) => tool.name === 'calendar_list_calendars').execute({});
+    /** Not in calendar.json, the events files or the log, nor in what the window or an agent gets. */
+    const hiddenEverywhere = async (manager) => {
+        manager.store.flush();
+        const events = join(dir, 'events');
+        for (const file of [config.storeFile, config.logFile, ...readdirSync(events).map((name) => join(events, name))]) hidden(readFileSync(file, 'utf8'), file);
+        hidden(JSON.stringify(manager.state()), 'the window\'s state');
+        hidden(JSON.stringify(await listCalendars(manager)), 'calendar_list_calendars');
+    };
     let m = make();
     try {
         await m.start();
         const account = await m.addAccount({ kind: 'ics', url });
+        // The account shows its host; the address is in its record, and its calendar has a fixed remote id.
+        hidden(JSON.stringify(account), 'the account view');
+        await hiddenEverywhere(m);
         assert.equal(account.name, 'Holidays', 'named by the feed');
+        assert.equal(account.host, host);
+        assert.ok(!('url' in account), 'the account view has no url');
+        assert.ok(vault.get(account.id)?.url === url, 'the address is in the account\'s record');
+        assert.equal(JSON.parse(readFileSync(config.storeFile, 'utf8')).accounts[account.id].host, host);
         const cal = m.state().calendars.find((c) => c.accountId === account.id);
+        assert.ok(m.store.calendars[cal.id].remoteId === 'feed', 'the feed\'s calendar has a fixed remote id');
         assert.equal(cal.readOnly, true);
         const list = m.events({ from: at('2026-11-01T00:00'), to: at('2026-11-08T00:00') }).occurrences;
         assert.deepEqual(list.map((o) => o.title), ['Holiday', 'Webinar']);
@@ -350,6 +389,33 @@ test('a subscribed feed is read only, follows its ETag, and survives a restart',
         await m.syncAccount(account.id);
         assert.equal(hits, 2);
         assert.equal(m.events({ from: at('2026-11-01T00:00'), to: at('2026-11-08T00:00') }).occurrences.length, 2, 'a 304 changes nothing');
+        await hiddenEverywhere(m);
+
+        // A failed fetch: the window's message names the host only, and agents get a fixed category, never the message.
+        answer = 500;
+        await m.syncAccount(account.id);
+        const failed = m.state().calendars.find((c) => c.id === cal.id);
+        hidden(failed.error, 'the calendar\'s error');
+        assert.equal(failed.error, `Reading the calendar at ${host}: the server answered HTTP 500.`);
+        assert.equal(failed.problem, 'server error');
+        const listed = await listCalendars(m);
+        hidden(JSON.stringify(listed), 'calendar_list_calendars');
+        assert.match(listed.text, /^- Holidays · Holidays · read only · problem: server error {2}\[id cal-/m);
+        assert.ok(!('error' in listed.view.calendars.find((c) => c.id === cal.id)), 'the chat card has no message');
+        await hiddenEverywhere(m);
+        // Told to wait, the account has a problem too.
+        answer = 429;
+        await m.syncAccount(account.id);
+        await hiddenEverywhere(m);
+        const waiting = m.state().accounts.find((a) => a.id === account.id);
+        assert.equal(waiting.status, 'error');
+        assert.equal(waiting.problem, 'rate limited');
+        assert.match((await listCalendars(m)).text, /\nAccounts with problems:\n- Holidays: rate limited$/);
+        answer = 200;
+        await m.syncAccount(account.id);
+        assert.equal(m.state().calendars.find((c) => c.id === cal.id).error, undefined);
+        assert.equal(m.state().accounts.find((a) => a.id === account.id).status, 'ok');
+
         // The feed drops an event.
         body = body.replace(/BEGIN:VEVENT\r\nUID:h2@test[\s\S]*?END:VEVENT\r\n/, '');
         await m.syncAccount(account.id);
@@ -357,15 +423,65 @@ test('a subscribed feed is read only, follows its ETag, and survives a restart',
         const ids = m.events({ from: at('2026-11-01T00:00'), to: at('2026-11-08T00:00') }).occurrences.map((o) => o.id);
         m.dispose();
 
-        // The next start reads the files: same calendars, same ids.
+        // The next start reads the files (same calendars, same ids), and the feed from the address in its record.
         m = make();
         await m.start();
         assert.deepEqual(m.events({ from: at('2026-11-01T00:00'), to: at('2026-11-08T00:00') }).occurrences.map((o) => o.id), ids);
+        const before = hits;
+        await m.syncAccount(account.id);
+        assert.ok(hits > before, 'fetched from the address in its record');
+        await hiddenEverywhere(m);
+        assert.equal(m.state().calendars.find((c) => c.id === cal.id).error, undefined);
+        m.dispose();
+
+        // A calendar.json from before the address moved to the record: it was the account's url, and the
+        // calendar's remoteId (so its id too), and old errors named it. The next start moves it, once.
+        const old = JSON.parse(readFileSync(config.storeFile, 'utf8'));
+        const oldId = calendarIdOf(account.id, url);
+        old.accounts[account.id] = { ...old.accounts[account.id], url, error: { code: 'rate', message: `Reading ${url}: the server asked to wait.`, at: NOW, until: NOW } };
+        delete old.accounts[account.id].host;
+        old.calendars[oldId] = { ...old.calendars[cal.id], id: oldId, remoteId: url, own: { name: 'Feiertage' }, error: { code: 'server', message: `Reading ${url}: the server answered HTTP 500.`, at: NOW } };
+        delete old.calendars[cal.id];
+        writeFileSync(config.storeFile, JSON.stringify(old));
+        vault.delete(account.id);
+        m = make();
+        assert.ok(!('url' in m.state().accounts.find((a) => a.id === account.id)), 'before the move too, the window gets no url for a feed');
+        await m.start();
+        await hiddenEverywhere(m);
+        assert.ok(vault.get(account.id)?.url === url, 'the address moved to the account\'s record');
+        assert.equal(m.store.accounts[account.id].host, host);
+        assert.deepEqual(m.state().calendars.filter((c) => c.accountId === account.id).map((c) => [c.id, c.name, c.error]), [[cal.id, 'Feiertage', undefined]],
+            'the calendar has the feed\'s id again, with the user\'s name for it');
+        await m.syncAccount(account.id);
+        assert.deepEqual(m.events({ from: at('2026-11-01T00:00'), to: at('2026-11-08T00:00') }).occurrences.map((o) => o.title), ['Holiday'], 'its events come again');
+        await hiddenEverywhere(m);
+        m.dispose();
+        m = make();
+        await m.start();
+        assert.equal(readFileSync(config.logFile, 'utf8').match(/address moved/g)?.length, 1, 'moved once');
+
+        // Removing the account removes its record.
         await m.removeAccount(account.id);
         assert.equal(m.state().calendars.length, 1);
+        assert.equal(vault.has(account.id), false);
         await assert.rejects(m.addAccount({ kind: 'ics', url: 'ftp://example.com/x.ics' }), /https/);
-        await assert.rejects(m.addAccount({ kind: 'ics', url: `http://127.0.0.1:${server.address().port}/missing` }), CalendarError);
+        // A feed that fails is refused in words that name the host only, and neither it nor its record is kept.
+        const refused = await m.addAccount({ kind: 'ics', url: `http://${host}/calendar/ical/me%40example.com/${key}-gone/basic.ics?${query}` }).then(() => undefined, (error) => error);
+        assert.ok(refused instanceof CalendarError, 'a feed that fails is refused');
+        hidden(refused.message, 'the refusal');
+        assert.equal(refused.message, `Reading the calendar at ${host}: the server has no such thing (any more).`);
+        // Nothing answers at the address: the network's error names the host only too.
+        const closed = createServer();
+        await new Promise((r) => closed.listen(0, '127.0.0.1', r));
+        const nobody = `127.0.0.1:${closed.address().port}`;
+        await new Promise((r) => closed.close(r));
+        const unreachable = await m.addAccount({ kind: 'ics', url: `http://${nobody}${path}` }).then(() => undefined, (error) => error);
+        assert.ok(unreachable instanceof CalendarError, 'a feed nobody answers for is refused');
+        hidden(unreachable.message, 'the refusal');
+        assert.equal(unreachable.message, `Couldn't reach ${nobody}: the connection was refused`);
         assert.equal(m.state().accounts.length, 1, 'a feed that fails is not kept');
+        assert.equal(vault.size, 0, 'nor its record');
+        await hiddenEverywhere(m);
     } finally {
         m.dispose();
         done();

@@ -13,7 +13,8 @@
  *   create(account, env) → a source for one account (below).
  *
  * `account` is what the plugin stores about an account, never a secret:
- *   {id, kind, name, url?, username?, email?, preset?, allowHttp?}.
+ *   {id, kind, name, url?, host?, username?, email?, preset?, allowHttp?}.
+ *   A subscription has its host only: its address is its secret.
  *
  * `env` is what a source may use:
  *   request(url, init) - lib/http.js `request`, with the account's allowHttp
@@ -21,8 +22,10 @@
  *                        through it.
  *   secret             - the account's secret in DSH's credential store:
  *                        `get()` → payload or undefined, `set(payload)`, `clear()`.
- *                        A password, or an OAuth grant {refreshToken, accessToken,
- *                        expiresAt, scope}. Never logged, never returned.
+ *                        A password, an OAuth grant {refreshToken, accessToken,
+ *                        expiresAt, scope}, or a subscription's address {url}
+ *                        (a private feed's key is in its path). Never logged,
+ *                        never returned.
  *   log(line)          - the plugin's log: ids and counts, never secrets,
  *                        event text or URLs with queries.
  *   now()              - epoch ms (tests move it).
@@ -68,7 +71,8 @@
  * (sign in again), 'conflict' (changed on the server meanwhile: the manager
  * syncs and tries once more), 'not-found', 'forbidden' (read-only),
  * 'rate' (with retryAfter in seconds), 'server', 'network', 'config'.
- * Messages are for the user: plain, without secrets.
+ * Messages are for the user: plain, without secrets. Agents get a fixed
+ * category by the code instead (PROBLEMS), never a message.
  *
  * @module dsh-plugin-calendar/sources
  */
@@ -101,6 +105,19 @@ export function statusError(status, what, headers) {
     }
     return new SourceError('server', `${what}: the server answered HTTP ${status}.`, { status });
 }
+
+/**
+ * A calendar's or an account's problem as agents see it: a fixed category
+ * by its code. The message stays for the window: it can hold a server's
+ * own words.
+ */
+export const PROBLEMS = {
+    auth: 'sign-in needed', network: 'can\'t reach the server', forbidden: 'the server refused', 'not-found': 'not found',
+    rate: 'rate limited', server: 'server error', config: 'setup problem',
+};
+
+/** The category for an error's code; any other code is a server error. */
+export const problemOf = (code) => (Object.hasOwn(PROBLEMS, code) ? PROBLEMS[code] : PROBLEMS.server);
 
 /** The source modules by account kind, loaded when first needed. */
 const LOADERS = {

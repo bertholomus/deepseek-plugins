@@ -9,8 +9,9 @@
  * - the plugin starts with its calendar on this computer, its folder 700
  *   and its files 600;
  * - the window's endpoints add, read, change and delete events, subscribe
- *   to a feed served here, and refuse what they should, with messages for
- *   the user;
+ *   to a private feed served here (its address goes to DSH's credential
+ *   store, never into the plugin's files or log), and refuse what they
+ *   should, with messages for the user;
  * - with a CalDAV server (Radicale, when RADICALE_VENV points at a
  *   virtualenv that has it), a CalDAV account is added: its password goes
  *   to DSH's credential store, never into the plugin's files or log, and
@@ -50,6 +51,12 @@ function findDsh() {
     return null;
 }
 
+// The subscribed feed's address is a private one, like Google's secret address: its key is in the path.
+const feedKey = `private-${randomUUID().replaceAll('-', '')}`;
+const feedPath = `/calendar/ical/me%40example.com/${feedKey}/basic.ics`;
+/** What this test prints never holds the feed's key. */
+const redact = (text) => String(text).replaceAll(feedKey, '(the feed\'s key)');
+
 let passed = 0;
 let failed = 0;
 function check(name, ok, detail = '') {
@@ -58,7 +65,7 @@ function check(name, ok, detail = '') {
         console.log(`ok - ${name}`);
     } else {
         failed += 1;
-        console.log(`not ok - ${name}${detail ? `\n    ${String(detail).slice(0, 1500)}` : ''}`);
+        console.log(`not ok - ${name}${detail ? `\n    ${redact(detail).slice(0, 1500)}` : ''}`);
     }
 }
 
@@ -126,6 +133,16 @@ function httpGet(url, headers = {}) {
 const readText = (file) => { try { return readFileSync(file, 'utf8'); } catch { return ''; } };
 const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return {}; } };
 const modeOf = (file) => statSync(file).mode & 0o777;
+
+/** One record in DSH's credentials file (YAML): its key's line and the lines under it. */
+function recordIn(text, key) {
+    const lines = text.split('\n');
+    const at = lines.findIndex((line) => [`${key}:`, `"${key}":`, `'${key}':`].includes(line.trim()));
+    if (at < 0) return '';
+    const depth = (line) => line.length - line.trimStart().length;
+    const end = lines.findIndex((line, i) => i > at && line.trim() !== '' && depth(line) <= depth(lines[at]));
+    return lines.slice(at, end < 0 ? lines.length : end).join('\n');
+}
 
 async function signInWeb() {
     const signIn = [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].at(-1)?.[1] ?? '';
@@ -331,7 +348,7 @@ const model = await startFakeModel();
 let child;
 let radicale;
 const feed = createServer((req, res) => {
-    if (req.url !== '/team.ics') {
+    if (req.url !== feedPath) {
         res.writeHead(404);
         return res.end();
     }
@@ -388,12 +405,17 @@ try {
     r = await api('search', { query: 'dentist' });
     check('search finds it', r.ok && r.value?.occurrences?.[0]?.id === dentist.id, JSON.stringify(r).slice(0, 300));
 
-    r = await api('addAccount', { input: { kind: 'ics', url: `http://127.0.0.1:${feed.address().port}/team.ics` } });
+    r = await api('addAccount', { input: { kind: 'ics', url: `http://127.0.0.1:${feed.address().port}${feedPath}` } });
     const feedAccount = r.value?.account;
-    check('a subscribed feed is added and named by the feed', r.ok && feedAccount?.name === 'Team' && feedAccount.kind === 'ics', JSON.stringify(r));
+    check('a subscribed feed is added and named by the feed, its account showing the host only', r.ok && feedAccount?.name === 'Team' && feedAccount.kind === 'ics'
+        && feedAccount.host === `127.0.0.1:${feed.address().port}` && !('url' in feedAccount), JSON.stringify(r));
     r = await api('events', { from: Date.parse('2026-11-01T00:00:00+01:00'), to: Date.parse('2026-11-10T00:00:00+01:00') });
     const offsite = r.value?.occurrences?.find((o) => o.title === 'Team offsite');
     check('its events show, read only', offsite?.allDay === true && offsite.startDay === '2026-11-05' && offsite.lastDay === '2026-11-06' && offsite.readOnly === true, JSON.stringify(offsite));
+    const feedRecord = recordIn(readText(credentialsFile), `calendar/${feedAccount?.id}`);
+    const feedLeaks = [storeFile, logFile].filter((f) => readText(f).includes(feedPath) || readText(f).includes(feedKey));
+    check('the feed\'s address is in DSH\'s credential store under its account\'s record, and not in the plugin\'s files or log',
+        feedAccount !== undefined && feedRecord.includes(feedPath) && feedLeaks.length === 0, `in the record: ${feedRecord.includes(feedPath)}; in ${feedLeaks.join(', ') || 'no file'}`);
     r = await api('deleteEvent', { id: offsite?.id, scope: 'all' });
     check('and can\'t be deleted here', !r.ok && /read only/.test(r.error?.message ?? ''), JSON.stringify(r));
     r = await api('addAccount', { input: { kind: 'ics', url: 'https://' } });
@@ -429,7 +451,7 @@ try {
         const leaks = [storeFile, logFile, join(calendarDir, 'events', `${homeCal?.id}.json`)].filter((f) => readText(f).includes(password));
         check('and nowhere in the plugin\'s files or log', leaks.length === 0, leaks.join(', '));
         r = await api('removeAccount', { id: caldavAccount?.id });
-        check('removing the account removes its password', r.ok && !readText(credentialsFile).includes(password), readText(credentialsFile).slice(0, 300));
+        check('removing the account removes its password', r.ok && !readText(credentialsFile).includes(password), JSON.stringify(r));
     } else {
         console.log('# skipped the CalDAV account: set RADICALE_VENV to a virtualenv with radicale installed');
     }
@@ -491,13 +513,13 @@ try {
     check('no event text in the log', !/Dentist|Standup|Haircut|Main Street|Plumber|Team offsite/.test(readText(logFile)), readText(logFile).slice(-800));
 } catch (error) {
     failed += 1;
-    console.log(`not ok - the run stopped: ${error?.stack ?? error}`);
+    console.log(`not ok - the run stopped: ${redact(error?.stack ?? error)}`);
 } finally {
     await stopDsh(child);
     radicale?.server.kill();
     feed.close();
     await model.close();
-    if (failed > 0) console.log(`# DSH log tail:\n${readText(dshLog).split('\n').slice(-40).join('\n')}\n# calendar log tail:\n${readText(logFile).split('\n').slice(-20).join('\n')}`);
+    if (failed > 0) console.log(redact(`# DSH log tail:\n${readText(dshLog).split('\n').slice(-40).join('\n')}\n# calendar log tail:\n${readText(logFile).split('\n').slice(-20).join('\n')}`));
     if (process.env.KEEP === '1') console.log(`# kept ${root}`);
     else rmSync(root, { recursive: true, force: true });
 }

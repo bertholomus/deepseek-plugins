@@ -12,8 +12,9 @@
  * (lib/tools.js), and whether a chat may change calendars is decided per
  * call by its permission (lib/policy.js).
  *
- * Passwords and sign-ins are kept in DSH's credential store, never in the
- * plugin's files or log.
+ * Passwords, sign-ins and subscriptions' addresses (a private feed's key is
+ * in its path) are kept in DSH's credential store, never in the plugin's
+ * files or log.
  *
  * @module dsh-plugin-calendar
  */

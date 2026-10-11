@@ -18,12 +18,12 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { appendFileSync, chmodSync, existsSync } from 'node:fs';
 import { occurrences } from './expand.js';
-import { request } from './http.js';
+import { request, safeHost } from './http.js';
 import { editIcs, newUid, readIcs } from './ical.js';
 import { cleanRecord, instantOf, sameTime } from './model.js';
 import { describeRule, expandWall, parseRule, ruleText, WEEKDAYS } from './recur.js';
 import { CalendarStore, dataPath, ensurePrivateDir } from './store.js';
-import { SourceError, sourceModule } from './sources/index.js';
+import { SourceError, problemOf, sourceModule } from './sources/index.js';
 import { addDays, dayIn, daysBetween, isDay, isZone, localZone, normalLocal, toInstant, toLocal, wallMs, wallOf } from './zones.js';
 import { dirname } from 'node:path';
 
@@ -106,6 +106,8 @@ export class CalendarManager {
     // ── Lifecycle ──────────────────────────────────────────────────────
 
     async start() {
+        // A feed's address kept in calendar.json by an older version moves to the credential store, once.
+        await this.moveFeedAddresses();
         if (!Object.values(this.store.accounts).some((a) => a.kind === 'local')) {
             this.store.accounts.local = {
                 id: 'local', kind: 'local', name: KIND_NAMES.local, createdAt: this.now(),
@@ -122,6 +124,45 @@ export class CalendarManager {
         const every = setInterval(() => { void this.syncAll(); }, minutes * MINUTE);
         every.unref?.();
         this.timers.add({ clear: () => clearInterval(every) });
+    }
+
+    /**
+     * A subscription's address lives in its credential record. A store from
+     * before kept it in calendar.json, as the account's url and its
+     * calendar's remoteId: moved to the record once, and out of the file
+     * (with the old errors, whose messages named it). The calendar takes the
+     * feed's id with the user's choices for it; its events come again with
+     * the next sync.
+     */
+    async moveFeedAddresses() {
+        const { FEED, feedUrl } = await sourceModule('ics');
+        let moved = 0;
+        for (const account of Object.values(this.store.accounts)) {
+            if (account.kind !== 'ics' || typeof account.url !== 'string') continue;
+            try {
+                await this.secrets.set(account.id, { url: account.url });
+            } catch {
+                // It stays in the file until the record can be written: the next start tries again.
+                this.log(`error move ${account.id}`);
+                continue;
+            }
+            account.host = safeHost(feedUrl(account.url));
+            delete account.url;
+            delete account.error;
+            for (const calendar of Object.values(this.store.calendars)) {
+                if (calendar.accountId !== account.id || calendar.remoteId === FEED) continue;
+                const id = calendarIdOf(account.id, FEED);
+                const kept = { ...calendar, id, remoteId: FEED };
+                delete kept.sync;
+                delete kept.syncedAt;
+                delete kept.error;
+                this.store.dropCalendar(calendar.id);
+                this.store.calendars[id] = kept;
+            }
+            moved++;
+            this.log(`address moved ${account.id} to the credential store`);
+        }
+        if (moved > 0) this.saveState();
     }
 
     dispose() {
@@ -248,7 +289,7 @@ export class CalendarManager {
             canEmail: this.mailerOf(calendar) !== 'never',
             ...(calendar.timeZone ? { timeZone: calendar.timeZone } : {}),
             ...(calendar.description ? { description: calendar.description } : {}),
-            ...(calendar.error ? { error: calendar.error.message } : {}),
+            ...(calendar.error ? { error: calendar.error.message, problem: problemOf(calendar.error.code) } : {}),
             ...(synced?.at ? { syncedAt: synced.at } : {}),
             // Its events file couldn't be read at this start: the name it is kept under in the events folder.
             ...(issue ? { storeIssue: { ...issue } } : {}),
@@ -264,6 +305,11 @@ export class CalendarManager {
             .map((c) => this.calendarView(c));
     }
 
+    /**
+     * An account as the window sees it. A subscription shows its `host`, never
+     * its address (a secret); a CalDAV account its server's `url`. `error` is
+     * for the user; `problem`, its fixed category, is all agents are told.
+     */
     accountView(account) {
         return {
             id: account.id,
@@ -272,10 +318,11 @@ export class CalendarManager {
             name: account.name,
             ...(account.email ? { email: account.email } : {}),
             ...(account.username ? { username: account.username } : {}),
-            ...(account.url ? { url: safeAddress(account.url) } : {}),
+            ...(account.url && account.kind !== 'ics' ? { url: safeAddress(account.url) } : {}),
+            ...(account.host ? { host: account.host } : {}),
             ...(account.preset ? { preset: account.preset } : {}),
             status: this.syncing.has(account.id) ? 'syncing' : account.error?.code === 'auth' ? 'signin' : account.error ? 'error' : 'ok',
-            ...(account.error ? { error: account.error.message } : {}),
+            ...(account.error ? { error: account.error.message, problem: problemOf(account.error.code) } : {}),
             ...(account.syncedAt ? { syncedAt: account.syncedAt } : {}),
         };
     }
@@ -359,7 +406,9 @@ export class CalendarManager {
         }
         if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new CalendarError('A subscribed calendar\'s address starts with https:// or webcal://.');
         const id = this.newAccountId();
-        const account = { id, kind: 'ics', name: String(input.name ?? '').trim() || url.hostname, url: raw, createdAt: this.now(), ...(input.allowHttp === true ? { allowHttp: true } : {}) };
+        // The address is a secret (a private feed's key is in its path): kept like a password, and the file has its host.
+        const account = { id, kind: 'ics', name: String(input.name ?? '').trim() || url.hostname, host: url.host, createdAt: this.now(), ...(input.allowHttp === true ? { allowHttp: true } : {}) };
+        await this.secrets.set(id, { url: raw });
         this.store.accounts[id] = account;
         try {
             await this.refreshCalendars(id);
@@ -368,6 +417,8 @@ export class CalendarManager {
             if (!input.name && calendar.name) account.name = calendar.name;
         } catch (error) {
             this.forgetAccount(id);
+            await this.secrets.clear(id).catch(() => {});
+            this.saveState();
             throw asCalendarError(error);
         }
         this.log(`account added ${id} ics`);
