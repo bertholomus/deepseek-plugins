@@ -1377,7 +1377,7 @@ test('browser half: the Projects page gives each thread its state, marks a pause
     assert.equal(elementsOf(drawTree()).find((e) => e.props?.role === 'tree').props.onKeyDown({ key: 'ArrowDown', metaKey: true, preventDefault: () => assert.fail('taken') }), undefined);
 });
 
-test('browser half: a row on the Projects page has ⋯: a project\'s settings and Archive project…, a thread\'s other way to open and its project\'s settings', () => {
+test('browser half: a row on the Projects page has ⋯: a project\'s settings and Archive project…, a thread\'s other way to open and its project\'s settings', async () => {
     const storage = new Map();
     const { client, react } = loadClient({ storage });
     const { ProjectsPage, PageTree, RowMenu } = client.internals;
@@ -1432,7 +1432,9 @@ test('browser half: a row on the Projects page has ⋯: a project\'s settings an
     assert.deepEqual(picks(row(tree, 'run')), [['full', 'Open in full view', 'IconRightUpOutlineRegular'], ['settings', 'Project settings', 'IconSlidersTwoOutlineRegular']]);
     // Each is named for its row, opens on its own, and keeps the tree's one tab stop.
     const menu = drawn(row(tree, 'c'));
-    assert.deepEqual(plain([menu.props.open, menu.props.portal, menu.props.align, menu.props.autoFocus, menu.props.closeOnPointerLeave]), [false, true, 'end', true, true]);
+    // DSH's autoFocus misses a list in the page's body (hidden while it measures it), so the page's own hook finds it by its class.
+    assert.deepEqual(plain([menu.props.open, menu.props.portal, menu.props.align, menu.props.autoFocus === true, menu.props.closeOnPointerLeave, /^dshp-menu-\d+$/.test(menu.props.listClassName)]),
+        [false, true, 'end', false, true, true]);
     const button = menu.props.anchor;
     assert.deepEqual(plain([button.type, button.props.className, button.props.tabIndex, button.props['aria-label'], button.props['aria-haspopup'], button.props['aria-expanded'], button.props['data-projects-page-menu']]),
         ['button', 'dshp-tree-more', -1, 'Project actions: Storefront', 'menu', false, '']);
@@ -1516,6 +1518,16 @@ test('browser half: a row on the Projects page has ⋯: a project\'s settings an
     archiveOn = true;
     tree = drawTree();
     assert.deepEqual(plain(later.RowMenu(laterMenu(row(tree, 'd')).props).props.items.map((item) => item.id)), ['archive']);
+    // Where the plugin can change a thread, its ⋯ has Mark resolved (Stop while it runs), sent as the user's own.
+    const changed = [];
+    facts.change = async (target, changes) => { changed.push([target, plain(changes)]); return { ok: true, value: {} }; };
+    tree = drawTree();
+    const resolving = later.RowMenu(laterMenu(row(tree, 'run')).props);
+    assert.deepEqual(plain(resolving.props.items.map((item) => [item.id, item.label])), [['beside', 'Open beside its coordinator'], ['resolve', 'Mark resolved']]);
+    resolving.props.onSelect('resolve');
+    await tick();
+    assert.deepEqual(changed, [['run', { thread: 't1', resolved: true }]]);
+    delete facts.change;
 });
 
 test('browser half: Find by name on the Projects page keeps each match under its project, and its folds are its own', () => {
@@ -2266,7 +2278,7 @@ test('browser half: New threads follows DSH\'s default after a pick in any chat;
     const counted = meta({ changes: { added: 18, deleted: 3, files: 2 }, model: 'V4 · Low' }).children.filter(Boolean).map((c) => c.props.className);
     assert.deepEqual(counted, ['dshp-t-row-changes', 'dshp-t-model']);
 
-    // No control sits inside another: the row's open button holds its text, and Retry and Open beside are the button's siblings.
+    // No control sits inside another: the row's open button holds its text, and Retry and its ⋯ are the button's siblings.
     const opened = [];
     const action = { label: 'Open beside', icon: () => null, run() {} };
     const failed = ThreadRow({ row: { ...row, ending: { state: 'failed' } }, now: 0, onOpen: (r) => opened.push(r.id), action, projects: {}, slots: 2 });
@@ -2275,7 +2287,7 @@ test('browser half: New threads follows DSH\'s default after a pick in any chat;
     assert.equal(main.type, 'button');
     assert.equal(bodyOf(failed).props.role, undefined, 'the row itself is no button');
     assert.deepEqual(elementsOf(main.children).filter((e) => e.type === 'button' || e.props?.['aria-label'] !== undefined), [], 'nothing pressable inside the open button');
-    assert.equal(acts.children.length, 2, 'Retry and Open beside sit beside the open button');
+    assert.equal(acts.children.length, 2, 'Retry and the ⋯ sit beside the open button');
     assert.deepEqual(plain([main.props['data-dshp-item'], main.props.tabIndex, bodyOf(failed).props['data-acts'], bodyOf(failed).props.style]), ['', 0, '', { '--dshp-t-acts': '56px' }]);
     main.props.onClick();
     assert.deepEqual(opened, ['t1']);
@@ -2289,6 +2301,136 @@ test('browser half: New threads follows DSH\'s default after a pick in any chat;
     const rowEl = { firstElementChild: { focus: () => { focused = 'main'; } } };
     bodyOf(failed).props.onFocus({ target: rowEl, currentTarget: rowEl });
     assert.equal(focused, 'main');
+});
+
+test('browser half: a thread row\'s ⋯ holds the other way to open it, its changes, Stop, and Mark resolved or Reopen', async () => {
+    const { client, react } = loadClient();
+    const { ThreadRow, ThreadMore, ThreadList, threadMenuItems, rowMenuItems, runThreadItem, inMoreList } = client.internals;
+    const row = { id: 't1', title: 'Fix login', line: 'Done · Fixed it', dot: 'done', session: 's1', group: 'done', running: false };
+    const did = [];
+    const facts = { change: async (target, changes) => { did.push(['change', target, plain(changes)]); return { ok: true, value: {} }; } };
+    const projects = { facts, hasChanges: () => true, openChanges: (id) => did.push(['changes', id]) };
+    const action = { label: 'Open in full view', icon: 'IconRightUpOutlineRegular', run: (r) => did.push(['full', r.session]) };
+    const changes = { added: 18, deleted: 3, files: 2, turns: 2, reviewable: true, last: { seq: 9, turn: 2 } };
+    const ids = (items) => plain(items.map((item) => item.id));
+    // A finished thread: the other way to open it, its changes, Mark resolved.
+    assert.deepEqual(plain(rowMenuItems({ row, action, changes, projects }).map((i) => [i.id, i.label])),
+        [['open', 'Open in full view'], ['changes', 'See what this thread changed'], ['resolve', 'Mark resolved']]);
+    // Running, with no changes yet: Stop instead, and no changes to see.
+    assert.deepEqual(ids(rowMenuItems({ row: { ...row, running: true, group: 'running' }, action, projects })), ['open', 'stop']);
+    // Resolved: Reopen. The chat you're in has no other way to open it.
+    assert.deepEqual(ids(rowMenuItems({ row: { ...row, group: 'resolved' }, current: true, action, projects })), ['reopen']);
+    // A DSH without the Changes tab offers DSH's Review, as the cards do; without the plugin to change it, only the ways to open it.
+    assert.deepEqual(plain(rowMenuItems({ row, action, changes, projects: { hasChanges: () => false, openReview() {} } }).map((i) => i.label)), ['Open in full view', 'Review the latest changes']);
+    // A thread with no session yet has no ⋯; the Projects page's (threadMenuItems alone) has Stop while it runs.
+    assert.deepEqual(plain(rowMenuItems({ row: { ...row, session: undefined }, action, changes, projects })), []);
+    assert.deepEqual(ids(threadMenuItems({ thread: { running: true, resolved: false }, live: true })), ['stop']);
+    assert.deepEqual(ids(threadMenuItems({ thread: { running: false, resolved: false }, live: false })), []);
+
+    // The row: its ⋯ sits at its end, and a right-click on the row or Shift+F10 on its button opens it.
+    const draw = mount(react, () => ThreadRow({ row, now: 0, onOpen() {}, action, changes, projects, onLeave: () => did.push(['leave']) }));
+    const moreOf = (el) => el.children.find((c) => c?.props?.className === 'dshp-t-row-acts').children.find((c) => c?.type === ThreadMore);
+    let el = draw();
+    assert.deepEqual([ids(moreOf(el).props.items), moreOf(el).props.open, el.children[0].props['aria-keyshortcuts']], [['open', 'changes', 'resolve'], false, 'Shift+F10']);
+    const event = (extra = {}) => ({ preventDefault() {}, stopPropagation() {}, ...extra });
+    el.props.onContextMenu(event());
+    el = draw();
+    assert.equal(moreOf(el).props.open, true);
+    moreOf(el).props.setOpen(false);
+    el = draw();
+    el.children[0].props.onKeyDown(event({ key: 'F10' }));
+    assert.equal(moreOf(draw()).props.open, false, 'F10 alone is DSH\'s');
+    el.children[0].props.onKeyDown(event({ key: 'ContextMenu' }));
+    assert.equal(moreOf(draw()).props.open, true);
+    // Its items: the other way to open it, its Changes tab (the list closes first), and the change through the plugin.
+    await moreOf(el).props.run('open');
+    await moreOf(el).props.run('changes');
+    assert.equal(await moreOf(el).props.run('resolve'), '');
+    assert.deepEqual(did, [['full', 's1'], ['leave'], ['changes', 's1'], ['change', 's1', { thread: 't1', resolved: true }]]);
+
+    // What each change sends, and the plugin's refusal or a failure as a sentence.
+    did.length = 0;
+    await runThreadItem('stop', { target: 'c', thread: 't2', facts });
+    await runThreadItem('reopen', { target: 'c', thread: 't2', facts });
+    assert.deepEqual(did, [['change', 'c', { thread: 't2', stop: true }], ['change', 'c', { thread: 't2', resolved: false }]]);
+    const refusing = { change: async () => ({ ok: false, error: { code: 'projects/refused', message: 'the turn could not be stopped (busy)' } }) };
+    assert.equal(await runThreadItem('stop', { target: 'c', thread: 't2', facts: refusing }), 'The turn could not be stopped (busy).');
+    assert.equal(await runThreadItem('stop', { target: 'c', thread: 't2', facts: { change: async () => { throw new Error('gone'); } } }), 'Couldn\'t change the thread.');
+
+    // The ⋯ itself: named for its thread, and a refusal shows on it as Retry's does.
+    const drawMore = mount(react, () => ThreadMore({ title: 'Fix login', items: [{ id: 'stop', label: 'Stop' }], run: async () => 'The turn could not be stopped (busy).', open: false, setOpen() {} }));
+    let menu = drawMore();
+    assert.deepEqual(plain([menu.props.anchor.props['aria-label'], menu.props.anchor.props['data-projects-row-menu'], menu.props.anchor.props['aria-haspopup'], /^dshp-t-more-list dshp-menu-\d+$/.test(menu.props.listClassName), menu.props.autoFocus === true]),
+        ['Thread actions: Fix login', '', 'menu', true, false]);
+    // Its keys reach DSH's menu: nothing on the ⋯ stops them on their way.
+    assert.equal(menu.props.anchor.props.onKeyDown, undefined);
+    menu.props.onSelect('stop');
+    await tick();
+    menu = drawMore();
+    assert.deepEqual([menu.props.anchor.props.className, menu.props.anchor.props['aria-label']], ['dshp-t-icon dshp-t-error', 'Thread actions: Fix login. The turn could not be stopped (busy).']);
+
+    // Its list is drawn in the page's body, and the Threads menu counts a click there as its own.
+    const list = { nodeType: 1, closest: (sel) => (sel === '.dshp-t-more-list' ? {} : null) };
+    assert.deepEqual([inMoreList(list), inMoreList({ nodeType: 3, parentElement: list }), inMoreList({ nodeType: 1, closest: () => null }), inMoreList(null)], [true, true, false, false]);
+
+    // Every row with a session has its ⋯, so a list keeps one button's room for it, two with Retry.
+    const room = (rows) => elementsOf(ThreadList({ rows, now: 0, onOpen() {}, action, projects })).find((e) => e.type === ThreadRow).props.slots;
+    assert.equal(room([row]), 1);
+    assert.equal(room([row, { ...row, id: 't2', session: 's2', group: 'waiting', ending: { state: 'failed' } }]), 2);
+});
+
+test('browser half: the arrows leave a row\'s open ⋯ to DSH\'s menu, and go on from a row\'s ⋯ when it is closed', () => {
+    const focused = [];
+    const doc = {
+        activeElement: null,
+        addEventListener: () => {}, removeEventListener: () => {}, createElement: () => ({ dataset: {} }), head: { appendChild: () => {} }, querySelector: () => null,
+    };
+    const { client } = loadClient({ document: doc });
+    const { arrowKeys } = client.internals;
+    const item = (name) => ({ name, focus() { focused.push(name); doc.activeElement = this; }, closest: () => null });
+    const rows = [item('a'), item('b'), item('c')];
+    const row = (main) => ({ contains: (node) => node === main });
+    const more = (main, open) => ({ name: `${main.name}-more`, closest: (sel) => (sel === '.dshp-t-row' ? row(main) : sel === '[data-projects-row-menu][aria-expanded="true"]' && open ? {} : null) });
+    const root = { querySelectorAll: () => rows };
+    const press = (key, target) => {
+        let prevented = false;
+        doc.activeElement = target;
+        arrowKeys({ key, target, preventDefault: () => { prevented = true; } }, root);
+        return prevented;
+    };
+    // From b's ⋯ (closed), Down goes to c and Up to a, not to the list's ends.
+    assert.equal(press('ArrowDown', more(rows[1], false)), true);
+    assert.equal(press('ArrowUp', more(rows[1], false)), true);
+    // From a row's button, as before.
+    press('ArrowDown', rows[2]);
+    assert.deepEqual(focused, ['c', 'a', 'a']);
+    // With b's list open, the keys are DSH's menu's: nothing moves and nothing is prevented.
+    assert.equal(press('ArrowDown', more(rows[1], true)), false);
+    assert.deepEqual(focused, ['c', 'a', 'a']);
+});
+
+test('browser half: Mark resolved or Reopen from a row shows at once, and the coordinator\'s own later change wins', () => {
+    const { client } = loadClient();
+    const { resolvedRoster } = client.internals;
+    const seen = new Map();
+    const roster = (t1, t2 = true) => [{ id: 't1', resolved: t1 }, { id: 't2', resolved: t2 }];
+    const answer = (t1, t2 = true) => [{ id: 't1', resolved: t1 }, { id: 't2', resolved: t2 }];
+    const shown = (r, a) => plain(resolvedRoster(r, a, seen, 'c').map((e) => e.resolved));
+    // Agreeing, the roster itself comes back.
+    const same = roster(false);
+    assert.equal(resolvedRoster(same, answer(false), seen, 'c'), same);
+    // Mark resolved in the window: the plugin's answer changed last.
+    assert.deepEqual(shown(roster(false), answer(true)), [true, true]);
+    // The coordinator's next project tool records it too.
+    assert.deepEqual(shown(roster(true), answer(true)), [true, true]);
+    // The coordinator reopens it with its tool: the roster changed last, before the plugin is read again.
+    assert.deepEqual(shown(roster(false), answer(true)), [false, true]);
+    assert.deepEqual(shown(roster(false), answer(false)), [false, true]);
+    // After a reload the first look takes the plugin's answer (the roster waits on the coordinator's next tool).
+    assert.deepEqual(plain(resolvedRoster(roster(false), answer(true), new Map(), 'c').map((e) => e.resolved)), [true, true]);
+    // Threads the plugin hasn't named, or no answer yet: the roster as it is.
+    assert.deepEqual(plain(resolvedRoster(roster(false), [{ id: 't9', resolved: true }], new Map(), 'c').map((e) => e.resolved)), [false, true]);
+    assert.equal(resolvedRoster(same, undefined, new Map(), 'c'), same);
 });
 
 test('browser half: access reads as DSH names it, and each thread row says what it can reach', () => {
@@ -3377,6 +3519,51 @@ test('a stop the coordinator asks for, or a person makes, does not come back as 
     await tick();
     assert.equal(cp.length, 1);
     assert.match(cp[0].text, /^\[Thread idle without a handback: t1 · "Long"\]\n\nThe turn was stopped before it finished\./);
+});
+
+test('window: a thread row\'s ⋯ stops it as the user\'s own stop, and marks it resolved or reopens it', async () => {
+    const { host, dir } = setup({}, undefined, { ...SELECTING, gateway: true });
+    await tick();
+    const coord = coordinatorOf(host);
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Long', brief: 'Run the long job.' });
+    const thread = [...host.live.values()].find((a) => a.id !== coord.id);
+    const ts = host.sessions.get(thread.id);
+    const refused = (promise, pattern) => assert.rejects(promise, (error) => error.code === 'projects/refused' && pattern.test(error.message));
+
+    // Nothing running: nothing stopped, and the answer says so.
+    let after = await remote.update(thread.id, { thread: 't1', stop: true });
+    assert.deepEqual([after.notes, ts.cancelled], [['t1: no turn was running.'], undefined]);
+    // Running: DSH's own stop, which the plugin doesn't mark as the coordinator's, so the turn's end reads as the user's:
+    // no note, and the coordinator can't send it on by itself.
+    thread.ctx.emitStatus(thread, 'running');
+    after = await remote.update(thread.id, { thread: 't1', stop: true });
+    assert.deepEqual([after.notes, ts.cancelled], [['t1: current turn stopped (queued messages kept).'], true]);
+    ts.events.push({ seq: ts.events.length + 1, type: 'turn/start', data: { turn: 1 } });
+    ts.events.push({ seq: ts.events.length + 1, type: 'turn/end', data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } } });
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    assert.deepEqual(host.sessions.get(coord.id).prompts, []);
+    assert.match(coord.ctx.section(), /- t1 · "Long" · idle · stopped by the user \(they can resume it\)/);
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /thread-update dsh-plugins\/t1 ,stop by-user/);
+    // A stop changes nothing else: no model or effort is picked for it.
+    const picks = host.selections.length;
+    thread.ctx.emitStatus(thread, 'running');
+    await remote.update(coord.id, { thread: 't1', stop: true });
+    assert.equal(host.selections.length, picks);
+    // A stop DSH refuses is refused in the window, where the user tried it.
+    host.sessionController.cancel = () => { throw new Error('busy'); };
+    await refused(remote.update(coord.id, { thread: 't1', stop: true }), /^the turn could not be stopped \(busy\)$/);
+    thread.ctx.emitStatus(thread, 'idle');
+
+    // Mark resolved, then Reopen: the answer says so at once, and the coordinator's list follows.
+    after = await remote.update(coord.id, { thread: 't1', resolved: true });
+    assert.deepEqual([after.notes, after.threads[0].resolved], [['t1: resolved.'], true]);
+    assert.match(await coord.ctx.call('project_thread_list', {}), /\(1 resolved hidden\)/);
+    after = await remote.update(coord.id, { thread: 't1', resolved: false });
+    assert.deepEqual([after.notes, after.threads[0].resolved], [['t1: reopened.'], false]);
+    assert.doesNotMatch(await coord.ctx.call('project_thread_list', {}), /resolved hidden/);
+    await refused(remote.update(coord.id, { thread: 't9', resolved: true }), /no thread "t9"/);
 });
 
 test('a permission prompt left unanswered tells the coordinator', async () => {

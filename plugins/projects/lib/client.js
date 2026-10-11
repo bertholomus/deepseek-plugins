@@ -246,7 +246,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-tools>svg{flex:none}',
             '.dshp-t-ago{flex:none}',
             '.dshp-t-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;margin:-4px -2px -4px 0;padding:0;border:0;border-radius:var(--dsw-radius-sm);background:none;color:var(--dsw-alias-label-tertiary);cursor:pointer}',
-            '.dshp-t-icon:hover,.dshp-t-icon:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
+            '.dshp-t-icon:hover,.dshp-t-icon:focus-visible,.dshp-t-icon[aria-expanded=true]{outline:none;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
             `.dshp-t-icon:focus-visible{box-shadow:inset 0 0 0 2px ${RING}}`,
             '.dshp-t-notice{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 9px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
             `.dshp-t-error{color:${ERROR_TEXT}}`,
@@ -1547,6 +1547,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             changesFolded: (n) => `${plural(n, 'file')} folded. Open one to see its diff.`,
             retryThread: 'Retry',
             resumeThread: 'Resume',
+            // A thread row's ⋯, in the Threads menu and panel and on the Projects page.
+            stopThread: 'Stop',
+            resolveThread: 'Mark resolved',
+            reopenThread: 'Reopen',
+            threadChangeFailed: 'Couldn\'t change the thread.',
             retrying: 'Retrying…',
             resumingThread: 'Resuming…',
             continueFailed: 'Couldn\'t reach the thread.',
@@ -2438,9 +2443,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return root ? Array.from(root.querySelectorAll('[data-dshp-item]:not([aria-disabled="true"])')) : [];
         }
         function arrowKeys(event, root) {
+            // A row's ⋯ with its list open: DSH's menu walks the list.
+            if (typeof event.target?.closest === 'function' && event.target.closest('[data-projects-row-menu][aria-expanded="true"]')) return;
             const items = focusables(root);
             if (items.length === 0) return;
-            const index = items.indexOf(document.activeElement);
+            const active = document.activeElement;
+            // From a row's other button (Retry, its ⋯), the walk goes on from that row.
+            const row = items.includes(active) || typeof active?.closest !== 'function' ? null : active.closest('.dshp-t-row');
+            const index = row ? items.findIndex((item) => row.contains(item)) : items.indexOf(active);
             const at = (i) => { event.preventDefault(); items[(i + items.length) % items.length].focus(); };
             if (event.key === 'ArrowDown') at(index + 1);
             else if (event.key === 'ArrowUp') at(index < 0 ? items.length - 1 : index - 1);
@@ -2496,6 +2506,126 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
+         * What a thread's ⋯ offers: the other way to open it (`open`, the
+         * list's action), its changes (`opener`, changesOpener's), Stop while
+         * it runs, and Mark resolved or Reopen. Stop and the rest need the
+         * plugin (`live`), which makes the change as the user's own.
+         * @param thread - {running, resolved}.
+         * @returns [{id, label, icon}] in the order shown.
+         */
+        function threadMenuItems({ thread, open, opener, changes, live }) {
+            const icon = (name) => (ui[name] ? h(ui[name], {}) : undefined);
+            const review = changes?.turns > 1 ? TEXT.reviewLatest : TEXT.reviewChanges;
+            return [
+                open ? { id: 'open', label: open.label, icon: h(open.icon, {}) } : null,
+                opener?.onOpen ? { id: 'changes', label: opener.review ? review : TEXT.openChanges, icon: icon('IconCodeOutlineRegular') } : null,
+                live && thread.running ? { id: 'stop', label: TEXT.stopThread, icon: icon('IconStopFillRegular') } : null,
+                live && thread.resolved ? { id: 'reopen', label: TEXT.reopenThread, icon: icon('IconRefreshOutlineRegular') } : null,
+                live && !thread.resolved && !thread.running ? { id: 'resolve', label: TEXT.resolveThread, icon: icon('IconCheckCircleOutlineRegular') } : null,
+            ].filter(Boolean);
+        }
+
+        /**
+         * Do what a thread's ⋯ item says: open it or its changes, or stop,
+         * resolve or reopen it through the plugin (remote.js `update`).
+         * @param target - a session of the thread's project, which the change goes through.
+         * @returns the plugin's refusal as a sentence, or '' when it's done.
+         */
+        async function runThreadItem(id, { target, thread, open, opener, facts }) {
+            if (id === 'open') open?.();
+            else if (id === 'changes') opener?.onOpen?.();
+            const changes = id === 'stop' ? { stop: true } : id === 'resolve' ? { resolved: true } : id === 'reopen' ? { resolved: false } : null;
+            if (changes === null || typeof facts?.change !== 'function') return '';
+            const said = (error) => (continueError(error) === TEXT.continueFailed ? TEXT.threadChangeFailed : continueError(error));
+            try {
+                const result = await facts.change(target, { thread, ...changes });
+                return result?.ok === false ? said(result.error) : '';
+            } catch (error) {
+                return said(error);
+            }
+        }
+
+        let menuMarks = 0;
+        /**
+         * Hand the keyboard to a menu's first item once its list shows. DSH
+         * draws a list that sits in the page's body hidden for its first
+         * frame while it measures it, and a hidden item can't take the
+         * keyboard, so DSH's own autoFocus misses it there (and the arrows
+         * then start on the second item). Opened from the keyboard, the item
+         * shows its ring; opened with the pointer it doesn't, as in DSH's menus.
+         * @returns the class for the menu's list (listClassName), which finds it.
+         */
+        function useFirstItemFocus(open) {
+            const [mark] = React.useState(() => `dshp-menu-${(menuMarks += 1)}`);
+            React.useEffect(() => {
+                if (!open || typeof requestAnimationFrame !== 'function') return undefined;
+                const keys = document.activeElement?.matches?.(':focus-visible') === true;
+                let frame = 0;
+                let tries = 0;
+                const step = () => {
+                    const list = document.querySelector(`.${mark}`);
+                    const first = list?.querySelector('[role="menuitem"]:not(:disabled)');
+                    if (!first || getComputedStyle(list).visibility === 'hidden') {
+                        if ((tries += 1) < 30) frame = requestAnimationFrame(step);
+                        return;
+                    }
+                    if (list.contains(document.activeElement)) return;
+                    if (keys || typeof ui.focusWithoutRing !== 'function') first.focus();
+                    else ui.focusWithoutRing(first);
+                };
+                frame = requestAnimationFrame(step);
+                return () => cancelAnimationFrame(frame);
+            }, [open, mark]);
+            return mark;
+        }
+
+        /**
+         * ⋯ at the end of a thread's row in the Threads menu and panel: its
+         * items (threadMenuItems) in DSH's menu. A right-click on the row,
+         * Shift+F10 or the context-menu key opens it too (ThreadRow). A
+         * change the plugin refuses shows on the button, as Retry's does.
+         */
+        function ThreadMore({ title, items, run, open, setOpen }) {
+            const [error, setError] = React.useState('');
+            const alive = React.useRef(true);
+            React.useEffect(() => () => { alive.current = false; }, []);
+            const mark = useFirstItemFocus(open);
+            return h(ui.Menu, {
+                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end',
+                // Its list is drawn in the page's body; the Threads menu counts it as its own (ThreadsMenu).
+                listClassName: `dshp-t-more-list ${mark}`,
+                onSelect: (id) => {
+                    setOpen(false);
+                    setError('');
+                    void Promise.resolve(run(id)).then((said) => { if (alive.current) setError(said || ''); });
+                },
+                anchor: h('button', {
+                    type: 'button', className: error ? 'dshp-t-icon dshp-t-error' : 'dshp-t-icon', title: error || undefined,
+                    'aria-label': `${PAGE.threadActions(title)}${error ? `. ${error}` : ''}`, 'aria-haspopup': 'menu', 'aria-expanded': open,
+                    'data-projects-row-menu': '',
+                    onClick: (event) => { event.preventDefault(); event.stopPropagation(); setOpen(!open); },
+                }, h(ui.IconEllipsisOutlineRegular, { size: 14 })),
+            });
+        }
+
+        /** Whether a node is in a thread row's ⋯ list, which DSH draws in the page's body. */
+        function inMoreList(node) {
+            const el = node?.nodeType === 1 ? node : node?.parentElement;
+            return typeof el?.closest === 'function' && el.closest('.dshp-t-more-list') !== null;
+        }
+
+        /** A thread row's ⋯ items in a list (threadMenuItems), as the row and the list's room both need them. */
+        function rowMenuItems({ row, current, action, changes, projects }) {
+            if (row.session === undefined) return EMPTY;
+            return threadMenuItems({
+                thread: { running: row.running === true, resolved: row.group === 'resolved' },
+                open: action && !current ? action : undefined,
+                opener: projects && changes ? changesOpener(projects, row.session, changes) : undefined,
+                changes, live: typeof projects?.facts?.change === 'function',
+            });
+        }
+
+        /**
          * One thread: its name on the first line; its state and summary on
          * the second, with its code changes, its model and the time. A model
          * equal to `quietModel` (what new threads start on, which the menu
@@ -2506,21 +2636,29 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * @param props.access - {permission?, tools}: what it can reach (accessOf), or undefined.
          * @param props.permissions - the permissions DSH offers, for their names.
          */
-        function ThreadRow({ row, current, now, model, quietModel, access, quietPermission, permissions, changes, onOpen, action, projects, slots = 0 }) {
+        function ThreadRow({ row, current, now, model, quietModel, access, quietPermission, permissions, changes, onOpen, action, onLeave, projects, slots = 0 }) {
             const enabled = !current && row.session !== undefined;
             const quiet = model !== undefined && model === quietModel;
             const permission = access?.permission !== undefined && access.permission !== quietPermission ? access.permission : undefined;
             const permissionText = permission !== undefined ? permissionName(permission, permissions) : undefined;
             const tools = access?.tools === 'all' || (Array.isArray(access?.tools) && access.tools.length > 0) ? toolsText(access.tools) : undefined;
+            // ⋯: the other way to open it, its changes, Stop, Mark resolved or Reopen.
+            const items = rowMenuItems({ row, current, action, changes, projects });
+            const [menuOpen, setMenuOpen] = React.useState(false);
+            const run = (id) => {
+                const opener = projects && changes ? changesOpener(projects, row.session, changes) : undefined;
+                if (id === 'changes') onLeave?.();
+                return runThreadItem(id, { target: row.session, thread: row.id, open: () => action?.run(row), opener, facts: projects?.facts });
+            };
             const acts = [
                 row.ending && row.session !== undefined && projects ? h(RowContinue, { key: 'continue', row, projects }) : null,
-                action && enabled ? h(ui.Tooltip, { key: 'action', label: action.label, side: 'bottom', align: 'end', portal: true },
-                    h('button', {
-                        type: 'button', className: 'dshp-t-icon', 'aria-label': `${action.label}: ${row.title}`,
-                        onClick: (event) => { event.preventDefault(); event.stopPropagation(); action.run(row); },
-                        onKeyDown: (event) => event.stopPropagation(),
-                    }, h(action.icon, { size: 14 }))) : null,
+                items.length > 0 ? h(ThreadMore, { key: 'more', title: row.title, items, run, open: menuOpen, setOpen: setMenuOpen }) : null,
             ].filter(Boolean);
+            const openMenu = items.length > 0 ? (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setMenuOpen(true);
+            } : undefined;
             // The room the buttons take at the row's right end: as wide as the list's busiest row's,
             // so every row's time sits in one column.
             const room = Math.max(slots * 28, acts.length > 0 ? acts.length * 26 - 2 : 0);
@@ -2531,14 +2669,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 // Focusing the row itself (a script may) focuses its open button.
                 tabIndex: -1,
                 onFocus: (event) => { if (event.target === event.currentTarget) event.currentTarget.firstElementChild?.focus(); },
+                // A right-click anywhere on the row opens its ⋯, as in DSH's session list.
+                onContextMenu: openMenu,
             },
             h('button', {
                 type: 'button', className: 'dshp-t-main', tabIndex: enabled ? 0 : -1, 'data-dshp-item': '',
                 'aria-current': current ? 'true' : undefined,
                 'aria-disabled': enabled ? undefined : 'true',
+                'aria-keyshortcuts': items.length > 0 ? 'Shift+F10' : undefined,
                 'aria-label': `${row.title}. ${current ? `${TEXT.current}. ` : ''}${row.line}${changes ? `. ${changesText(changes)}` : ''}${model ? `. Runs on ${model}` : ''}`
                     + `${permissionText ? `. ${permissionText}` : ''}${tools ? `. Your tools: ${tools}` : ''}`,
                 onClick: () => { if (enabled) onOpen(row); },
+                onKeyDown: openMenu ? (event) => {
+                    if (event.altKey || event.ctrlKey || event.metaKey || !((event.key === 'F10' && event.shiftKey) || event.key === 'ContextMenu')) return;
+                    openMenu(event);
+                } : undefined,
             },
             h('span', { className: 'dshp-t-dot', 'data-state': row.dot }, h(ui.StateDot, { state: row.dot })),
             h('span', { className: 'dshp-t-text' },
@@ -2564,13 +2709,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * Rows grouped as Waiting on you, Running, Done, Idle and Resolved.
          * A group in `fold` shows as "Resolved · 3" and opens on a click; it
          * starts open when it holds the current chat's row.
+         * @param props.action - {label, icon, run(row)}: the other way to open a thread, first in its row's ⋯.
+         * @param props.onLeave - called before a row's ⋯ opens the thread's changes elsewhere.
          */
-        function ThreadList({ rows, current, now, models, quietModel, access, quietPermission, permissions, changes, onOpen, action, projects, fold = FOLDED }) {
+        function ThreadList({ rows, current, now, models, quietModel, access, quietPermission, permissions, changes, onOpen, action, onLeave, projects, fold = FOLDED }) {
             const [shown, setShown] = React.useState(() => new Set(rows.filter((row) => row.session !== undefined && row.session === current).map((row) => row.group)));
-            // The most buttons a row has (Retry or Resume, and the list's own action).
+            // The most buttons a row has (Retry or Resume, and its ⋯).
             const slots = rows.reduce((most, row) => {
-                const enabled = row.session !== undefined && row.session !== current;
-                return Math.max(most, (row.ending && row.session !== undefined && projects ? 1 : 0) + (action && enabled ? 1 : 0));
+                const here = row.session !== undefined && row.session === current;
+                const more = rowMenuItems({ row, current: here, action, changes: changes?.[row.id], projects }).length > 0;
+                return Math.max(most, (row.ending && row.session !== undefined && projects ? 1 : 0) + (more ? 1 : 0));
             }, 0);
             const toggle = (id) => setShown((prev) => {
                 const next = new Set(prev);
@@ -2582,7 +2730,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const members = rows.filter((row) => row.group === group.id);
                 if (members.length === 0) return null;
                 const list = members.map((row) => h(ThreadRow, {
-                    key: row.id, row, current: row.session !== undefined && row.session === current, now, onOpen, action, projects, quietModel, slots,
+                    key: row.id, row, current: row.session !== undefined && row.session === current, now, onOpen, action, onLeave, projects, quietModel, slots,
                     model: row.session !== undefined ? models?.[row.session] : undefined,
                     access: row.session !== undefined ? access?.[row.session] : undefined, quietPermission, permissions,
                     changes: changes?.[row.id],
@@ -2660,12 +2808,49 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
+         * A roster with each thread's resolved state from the plugin's
+         * answer (describe's `threads`) where that changed after the roster
+         * did. The roster comes from the coordinator's session (its project
+         * tools' results), so Mark resolved or Reopen from a row's ⋯ reaches
+         * it only at the coordinator's next project tool, and after a reload
+         * the plugin's answer is the newer; a resolve by the coordinator
+         * reaches the roster first. Whichever changed last wins, the plugin's
+         * at the first look.
+         * @param seen - Map `<scope>/<thread>` → {roster, plugin, winner}, kept across draws by the caller.
+         */
+        function resolvedRoster(roster, threads, seen, scope = '') {
+            if (!Array.isArray(roster) || !Array.isArray(threads)) return roster;
+            const told = new Map();
+            for (const t of threads) if (isObject(t) && typeof t.id === 'string') told.set(t.id, t.resolved === true);
+            let changed = false;
+            const out = roster.map((entry) => {
+                if (!isObject(entry) || typeof entry.id !== 'string' || !told.has(entry.id)) return entry;
+                const key = `${scope}/${entry.id}`;
+                const listed = entry.resolved === true;
+                const plugin = told.get(entry.id);
+                const last = seen.get(key);
+                const winner = !last ? 'plugin' : last.listed !== listed ? 'roster' : last.plugin !== plugin ? 'plugin' : last.winner;
+                seen.set(key, { listed, plugin, winner });
+                const resolved = winner === 'roster' ? listed : plugin;
+                if (resolved === listed) return entry;
+                changed = true;
+                return { ...entry, resolved };
+            });
+            return changed ? out : roster;
+        }
+
+        /**
          * A roster's rows with their live state, each open thread's own
          * ending included. Thread sessions this window hasn't loaded are read
          * once, so a thread that failed or stopped says so from the start.
          * @param held - the handbacks a pause holds ([{thread, status}]).
+         * @param threads - describe's threads for the project, for resolvedRoster; `scope` its coordinator.
          */
-        function useRows(projects, useSessions, roster, statuses, byId, held) {
+        function useRows(projects, useSessions, listed, statuses, byId, held, threads, scope) {
+            // Mark resolved or Reopen from a row's ⋯ shows at once (resolvedRoster).
+            const seen = React.useRef(null);
+            if (seen.current === null) seen.current = new Map();
+            const roster = React.useMemo(() => resolvedRoster(listed, threads, seen.current, scope), [listed, threads, scope]);
             const sessions = React.useMemo(() => openSessions(roster), [roster]);
             const endings = useEndings(useSessions, sessions);
             const key = sessions.join('\n');
@@ -2841,13 +3026,20 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (pinned.current) return;
                 hoverTimer.current = setTimeout(() => change(false), 120);
             };
-            ui.useDismissOnOutsidePointer(rootRef, open, change, panelRef);
+            // A row's ⋯ draws its list in the page's body; a click there is still in the menu.
+            const within = React.useMemo(() => ({
+                get current() {
+                    return { contains: (node) => panelRef.current?.contains(node) === true || inMoreList(node) };
+                },
+            }), []);
+            ui.useDismissOnOutsidePointer(rootRef, open, change, within);
             React.useEffect(() => { change(false); }, [sessionId, change]);
             React.useEffect(() => cancelHover, []);
             React.useEffect(() => {
                 if (!open) return undefined;
                 const dismiss = (event) => {
-                    if (event.key !== 'Escape') return;
+                    // Escape in a row's ⋯ (DSH's menu takes it first) closes only that.
+                    if (event.key !== 'Escape' || event.defaultPrevented) return;
                     event.preventDefault();
                     const inside = panelRef.current?.contains(document.activeElement);
                     change(false);
@@ -2869,13 +3061,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, [away, unknown, open, coordinator, projects]);
             const paused = usePaused(projects.facts, coordinator, coordinator ? `d:${coordinator}` : null) === true;
             const handbacks = useHeldHandbacks(projects.facts, coordinator);
-            const rows = useRows(projects, useSessions, info?.roster, statuses, byId, paused ? handbacks : EMPTY);
+            const described = useProjectInfo(projects.facts, sessionId, info !== undefined, open);
+            const rows = useRows(projects, useSessions, info?.roster, statuses, byId, paused ? handbacks : EMPTY, described?.threads, coordinator);
             const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, open);
             const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), open);
             // In a thread, its own changes as a pill in its header.
             const ownId = info?.me?.role === 'thread' && typeof info.me.thread?.id === 'string' ? info.me.thread.id : undefined;
             const own = useThreadChanges(projects, useSessions, coordinator, ownId !== undefined ? [sessionId] : EMPTY, ownId !== undefined)[ownId];
-            const described = useProjectInfo(projects.facts, sessionId, info !== undefined, open);
             const permissions = usePermissions(useSessions, rowSessions(rows));
             if (info === undefined) return null;
 
@@ -2935,7 +3127,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 style: position ?? { visibility: 'hidden', left: 0, top: 0 },
                 onMouseEnter: cancelHover,
                 onMouseLeave: scheduleClose,
-                onKeyDown: (event) => arrowKeys(event, panelRef.current),
+                // Keys in a row's ⋯ (its list is drawn in the page's body) are that menu's own.
+                onKeyDown: (event) => { if (panelRef.current?.contains(event.target)) arrowKeys(event, panelRef.current); },
             },
             h('div', { className: 'dshp-t-menu-head' },
                 h(ProjectName, { info, here: sessionId, onOpen: () => openSession(coordinator) }),
@@ -2949,10 +3142,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     quietModel: summary.thread,
                     access: accessOf(described, permissions), quietPermission, permissions: described?.permissions,
                     onOpen: (row) => { change(false); projects.openThread(row.session); },
-                    // A row opens the thread as the setting says; its button does the other.
+                    // A row opens the thread as the setting says; its ⋯ does the other first.
                     action: beside
                         ? { label: TEXT.openFull, icon: ui.IconRightUpOutlineRegular, run: (row) => { change(false); projects.openFull(row.session); } }
                         : { label: TEXT.openBeside, icon: ui.IconCompareSplitOutlineRegular, run: (row) => { change(false); projects.openPaired(row.session); } },
+                    onLeave: () => change(false),
                 })),
             foot.length > 0 ? h('div', { className: 'dshp-t-menu-foot' }, ...foot) : null), document.body) : null;
             const pill = own && projects.hasChanges?.() === true ? h(ui.Tooltip, { label: TEXT.openChanges, side: 'bottom' },
@@ -2992,10 +3186,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const visible = tab.visible !== false;
             const paused = usePaused(projects.facts, coordinator, coordinator && visible ? `d:${coordinator}` : null) === true;
             const handbacks = useHeldHandbacks(projects.facts, coordinator);
-            const rows = useRows(projects, useSessions, info?.roster, statuses, byId, paused ? handbacks : EMPTY);
+            const described = useProjectInfo(projects.facts, sessionId, info !== undefined, visible);
+            const rows = useRows(projects, useSessions, info?.roster, statuses, byId, paused ? handbacks : EMPTY, described?.threads, coordinator);
             const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, info !== undefined && visible);
             const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), info !== undefined && visible);
-            const described = useProjectInfo(projects.facts, sessionId, info !== undefined, visible);
             const permissions = usePermissions(useSessions, rowSessions(rows));
             if (info === undefined) {
                 return h('div', { className: 'dshp-t-pane', 'data-projects-threads-pane': '' }, h('div', { className: 'dshp-t-empty' }, TEXT.notProject));
@@ -3003,7 +3197,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const notice = rosterNotice(info, rows, projects);
             return h('div', {
                 ref: rootRef, className: 'dshp-t-pane', 'data-projects-threads-pane': '',
-                onKeyDown: (event) => arrowKeys(event, rootRef.current),
+                onKeyDown: (event) => { if (rootRef.current?.contains(event.target)) arrowKeys(event, rootRef.current); },
             },
             h('div', { className: 'dshp-t-pane-head' },
                 h(ProjectName, { info, here: sessionId, onOpen: () => projects.openSession(coordinator) }),
@@ -5003,7 +5197,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * @param newsOf - coordinator => its unread news ({unread}), or undefined.
          * @returns {Array<{kind, id, title, children, row?, project?, folder?, counts?, resolved?, handback?, ending?, paused?, news?}>}
          */
-        function pageModel({ listed, items, sessions, archived, pausedOf, newsOf }) {
+        function pageModel({ listed, items, sessions, archived, pausedOf, newsOf, describedOf, seen }) {
             const byId = sessions?.byId ?? {};
             const hidden = (id) => { const row = byId[id]; return !row || row.blank === true || archived.has(id); };
             const titleOf = (row) => (typeof row?.title === 'string' && row.title.trim() !== '' ? row.title : PAGE.newChat);
@@ -5014,7 +5208,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (!coordOf.has(p.coordinator)) coordOf.set(p.coordinator, p);
             }
             const workspaces = (Array.isArray(items) ? items : EMPTY).filter((ws) => typeof ws?.workspaceId === 'string');
-            const rosterOf = (coordinator) => { const threads = valueIn(sessions, coordinator)?.threads; return Array.isArray(threads) ? threads : null; };
+            // A coordinator's roster, with Mark resolved and Reopen from a row's ⋯ shown at once (resolvedRoster).
+            const rosterOf = (coordinator) => {
+                const threads = valueIn(sessions, coordinator)?.threads;
+                if (!Array.isArray(threads)) return null;
+                return seen instanceof Map ? resolvedRoster(threads, describedOf?.(coordinator), seen, coordinator) : threads;
+            };
             // Each coordinator's roster by thread session: what it calls resolved, and each thread's last handback.
             const rosters = new Map();
             const entryOf = (coordinator, id) => {
@@ -5032,7 +5231,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     const entry = entryOf(parent, id);
                     if (!threadsOf.has(parent)) threadsOf.set(parent, []);
                     threadsOf.get(parent).push({
-                        kind: 'thread', id, title: titleOf(byId[id]), row: byId[id], resolved: entry?.resolved === true,
+                        kind: 'thread', id, thread: typeof entry?.id === 'string' ? entry.id : undefined, title: titleOf(byId[id]), row: byId[id], resolved: entry?.resolved === true,
                         handback: isObject(entry?.handback) ? entry.handback : undefined, ending: endingIn(sessions, id), children: EMPTY,
                     });
                 }
@@ -5145,8 +5344,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * @param items - [{id, label, icon}]; `run(id)` does the one picked.
          */
         function RowMenu({ label, items, run, open, setOpen }) {
+            const mark = useFirstItemFocus(open);
             return h(ui.Menu, {
-                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end', autoFocus: true,
+                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end', listClassName: mark,
                 onSelect: (id) => {
                     setOpen(false);
                     run(id);
@@ -5169,8 +5369,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * go to onMove, which says why the item stays (pageRefusal); the
          * focus stays on it. An item with a menu has ⋯ at the end of its
          * row, and a right-click, Shift+F10 or the context-menu key opens it
-         * too, the keyboard then on its ⋯ (DSH's menu walks its items from
-         * its own button).
+         * too, the keyboard then on its first item (Escape gives it back to
+         * the ⋯).
          * @param onMove - (key, arrow) => the reason said, or null for a key left to DSH.
          * @param menu - {has(node), draw({node, open, setOpen})}: which items have a menu, and each one's (an element).
          */
@@ -5343,12 +5543,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const pending = useWorkspaces((state) => state.phase) === 'pending';
             const [find, setFind] = React.useState('');
             const [said, setSaid] = React.useState('');
+            const [told, setTold] = React.useState(null);
             const treeRef = React.useRef(null);
             const findRef = React.useRef(null);
             const archived = React.useMemo(() => new Set(Array.isArray(archivedIds) ? archivedIds : EMPTY), [archivedIds]);
+            const seen = React.useRef(null);
+            if (seen.current === null) seen.current = new Map();
             const tree = pageModel({
                 listed, items, sessions, archived,
                 pausedOf: (coordinator) => projects.facts.paused?.(coordinator), newsOf: (coordinator) => projects.facts.newsOf?.(coordinator),
+                describedOf: (coordinator) => projects.facts.info?.(coordinator)?.threads, seen: seen.current,
             });
             // A row's ⋯: Project settings where DSH lets the plugin open them, Archive project… where it can ask first,
             // and for a thread the other way to open it.
@@ -5364,6 +5568,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         ...(archiveOn ? [{ id: 'archive', label: ARCHIVE.item, icon: h(ui.IconArchiveOutlineRegular, {}) }] : []),
                     ] : [
                         beside ? { id: 'full', label: TEXT.openFull, icon: h(ui.IconRightUpOutlineRegular, {}) } : { id: 'beside', label: TEXT.openBeside, icon: h(ui.IconCompareSplitOutlineRegular, {}) },
+                        // Stop, Mark resolved or Reopen, as on its row in the Threads menu and panel.
+                        ...threadMenuItems({
+                            thread: { running: (statuses?.get?.(node.id)?.running ?? node.row?.running) === true, resolved: node.resolved === true },
+                            live: typeof node.thread === 'string' && typeof projects.facts?.change === 'function',
+                        }),
                         ...(settingsOn ? [{ id: 'settings', label: SETTINGS.title, icon: sliders }] : []),
                     ];
                     return h(RowMenu, {
@@ -5373,6 +5582,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             else if (id === 'archive') flow?.open(node.id);
                             else if (id === 'full') projects.openFull(node.id);
                             else if (id === 'beside') projects.openPaired(node.id);
+                            else {
+                                void runThreadItem(id, { target: node.id, thread: node.thread, facts: projects.facts }).then((refusal) => {
+                                    if (refusal) setTold((prev) => ({ text: refusal, seq: (prev?.seq ?? 0) + 1 }));
+                                });
+                            }
                         },
                     });
                 },
@@ -5423,7 +5637,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             tree.length > 0 ? h('span', { className: 'dshp-pg-count' }, plural(tree.length, 'project')) : null),
                         content)),
                 // What the keys answered, said to screen readers.
-                h('div', { className: 'dshp-pg-said', role: 'status', 'aria-live': 'polite', 'data-projects-page-said': '' }, said));
+                h('div', { className: 'dshp-pg-said', role: 'status', 'aria-live': 'polite', 'data-projects-page-said': '' }, said),
+                // A Stop, Mark resolved or Reopen the plugin refused, in DSH's banner.
+                told !== null && ui.Toast ? h(ui.Toast, {
+                    key: told.seq, text: told.text, icon: h(ui.IconInfoOutlineRegular, { size: 16 }), holdMs: 4000,
+                    onDone: () => setTold((prev) => (prev?.seq === told.seq ? null : prev)),
+                }) : null);
         }
 
         // ── DSH's session list ─────────────────────────────────────────────
@@ -6535,6 +6754,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
             CardChanges, changesOpener, ThreadChangesTab, ThreadChangesTitle, ChangedFile, editsText, fileAddress, readFailure, changesAddress, changesSessionOf, DIFF_LABELS,
+            threadMenuItems, rowMenuItems, runThreadItem, ThreadMore, ThreadList, inMoreList, resolvedRoster, arrowKeys,
             rowState, endingOf, endingIn, endingReason, endingLine, openSessions, markState, hoverLine, continueError, GROUPS,
             roomFor, besidePref, sectionWorkspace, sectionAt, listText, clockOf, againText, ThreadCard, EndingBar,
             SessionList, SIDEBAR,

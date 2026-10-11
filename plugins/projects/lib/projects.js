@@ -3021,7 +3021,15 @@ export class ProjectManager {
         ].filter((line) => line !== null).join('\n\n');
     }
 
-    async updateThread(projectId, threadKey, changes) {
+    /**
+     * Rename a thread, change its route, resolve or reopen it, or stop its
+     * turn: the coordinator's project_thread_update, or (`by: 'user'`) the
+     * user's own from a row's ⋯ in the window. The user's stop is DSH's own
+     * stop, so the thread waits for them as after DSH's stop button, and a
+     * stop that fails is refused rather than noted.
+     * @returns a note of what changed.
+     */
+    async updateThread(projectId, threadKey, changes, { by = 'coordinator' } = {}) {
         const { id: threadId, t } = this.requireThread(projectId, threadKey);
         const out = [];
         const fields = {};
@@ -3057,17 +3065,20 @@ export class ProjectManager {
                 out.push('no turn was running');
             } else {
                 const state = this.turns.get(t.sessionId);
-                if (state?.running) state.stopped = { key: (await this.readTurn(t.sessionId, { current: true })).key };
+                // The coordinator's stop is marked, so its turn's end isn't news to it; the user's reads as theirs.
+                if (state?.running && by !== 'user') state.stopped = { key: (await this.readTurn(t.sessionId, { current: true })).key };
                 try {
                     await this.sc.cancel({ sessionId: t.sessionId });
                     out.push('current turn stopped (queued messages kept)');
                 } catch (error) {
                     if (state) state.stopped = undefined;
-                    out.push(`the turn could not be stopped (${String(error?.message ?? error).slice(0, 200)})`);
+                    const why = String(error?.message ?? error).slice(0, 200);
+                    if (by === 'user') throw new ProjectError(`the turn could not be stopped (${why})`);
+                    out.push(`the turn could not be stopped (${why})`);
                 }
             }
         }
-        this.log(`thread-update ${projectId}/${threadId} ${Object.keys(fields).join(',')}${changes.stop ? ',stop' : ''}`);
+        this.log(`thread-update ${projectId}/${threadId} ${Object.keys(fields).join(',')}${changes.stop ? ',stop' : ''}${by === 'user' ? ' by-user' : ''}`);
         return out.length ? `${threadId}: ${out.join('; ')}.` : `${threadId}: nothing to change.`;
     }
 
@@ -3645,11 +3656,12 @@ export class ProjectManager {
     }
 
     /**
-     * A change from the Project settings dialog: the project's settings, or
-     * one thread's model, effort and permission. null puts a value back to
-     * its default.
+     * A change from the window: from the Project settings dialog, the
+     * project's settings or one thread's model, effort and permission (null
+     * puts a value back to its default); from a thread row's ⋯, the thread
+     * stopped, resolved or reopened as the user's own (updateThread).
      * @param {object} changes - {coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?, goal?, yourTools?,
-     *   coordinatorPermission?, threadPermission?} or {thread, model?, effort?, permission?}.
+     *   coordinatorPermission?, threadPermission?} or {thread, model?, effort?, permission?, resolved?, stop?}.
      * @returns the project as describeProject shows it, with `notes` from the change.
      */
     async changeFromWindow(projectId, changes) {
@@ -3659,7 +3671,11 @@ export class ProjectManager {
         let notes = [];
         if (changes.thread !== undefined) {
             const { id } = this.requireThread(projectId, changes.thread);
-            if (changes.model !== undefined || changes.effort !== undefined || changes.permission === undefined) {
+            // A row's ⋯: Stop, Mark resolved or Reopen, the user's own.
+            const resolved = typeof changes.resolved === 'boolean' ? changes.resolved : undefined;
+            const stop = changes.stop === true;
+            if (resolved !== undefined || stop) notes.push(await this.updateThread(projectId, id, { resolved, stop }, { by: 'user' }));
+            if (changes.model !== undefined || changes.effort !== undefined || (changes.permission === undefined && resolved === undefined && !stop)) {
                 notes.push(await this.updateThread(projectId, id, { model: text(changes.model), effort: text(changes.effort) }));
             }
             if (changes.permission !== undefined) notes.push(await this.changeThreadPermission(projectId, id, word(changes.permission)));
