@@ -41,7 +41,7 @@
  * @module dsh-plugin-projects/projects
  */
 import { appendFileSync, readFileSync, writeFileSync, statSync, realpathSync } from 'node:fs';
-import { dirname, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { ProjectStore, expand, dataPath, ensurePrivateDir } from './store.js';
@@ -56,6 +56,8 @@ import {
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
 import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS, diffFiles, subagentsIn, placeIn } from './changes.js';
 import { sendOf, codeSendOf } from './sends.js';
+import { grantsIn, asksFor as asksToDo, doing } from './grants.js';
+import { deletesOf, codeDeletesOf, deletesWhat, isFree } from './deletes.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
 const SECTION_ORDER = 9500;
@@ -142,6 +144,12 @@ const SEND_REASONS = {
     coordinator: (what) => `Not run: the command ${what}. You don't send anything yourself: start a thread with the user's words in \`ask\`; it asks the user before each command that sends.`,
     subagent: (what) => `Not run: the command ${what}. A subagent doesn't send anything outside the workspace: say in your result what you would send, and the thread you work for asks the user first.`,
     never: (what) => `Not run: the command ${what}. A thread asks the user before each command that sends outside the workspace, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would send; the user can put this thread on Workspace Write so it can ask. Don't send it another way.`,
+};
+/** Why a command that deletes didn't run, by who tried it; `what` says what it deletes ("deletes build/ (rm)"). */
+const DELETE_REASONS = {
+    coordinator: (what) => `Not run: the command ${what}. You don't delete files yourself: start a thread with the user's words in \`ask\`; it asks the user before each command that deletes files it didn't create.`,
+    subagent: (what) => `Not run: the command ${what}. A subagent doesn't delete files its thread didn't create: say in your result what you would delete, and the thread you work for asks the user first.`,
+    never: (what) => `Not run: the command ${what}. A thread asks the user before each command that deletes files it didn't create, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would delete; the user can put this thread on Workspace Write so it can ask. Don't delete it another way.`,
 };
 
 /** DSH's tools that reach an MCP server named in their `server` argument, not in their own name. */
@@ -597,6 +605,8 @@ export class ProjectManager {
         this.subCalls = new Map();
         /** A subagent's sessionId → the thread session it works for, or null when none. */
         this.subThreads = new Map();
+        /** Thread sessionId → the files it and its subagents created with DSH's file tools, as absolute paths (holdDelete). */
+        this.created = new Map();
         /** A session's id → the project session it works for as a subagent ({projectId, role, threadId?}), or null. */
         this.subProjects = new Map();
         /** How long a thread turn's changes wait for DSH's announcement before they are kept without it. */
@@ -927,6 +937,71 @@ export class ProjectManager {
             };
         } catch (error) {
             this.log(`error send-check ${String(error?.message ?? error).slice(0, 200)}`);
+            return undefined;
+        }
+    }
+
+    /**
+     * Rule 6 for deletes, held the way holdSend holds sends: a command that
+     * deletes files (lib/deletes.js) its thread didn't create waits for the
+     * user in DSH's approval prompt, every time; a thread whose approvals
+     * never ask, a coordinator and a subagent are refused. Free to delete:
+     * the files the thread's change records and this turn's edits show it
+     * (or its subagents) created, a folder of only those, and what is in the
+     * OS temp folder outside the workspace or made by mktemp. The
+     * workspace's .git never is, and what can't be told (a variable, a
+     * pattern, a list on the input, a cleaning script) asks. A script the
+     * thread created is read for what it deletes. Undefined lets it run, as
+     * in holdSend. Never logs the command or a path.
+     */
+    holdDelete(exec) {
+        try {
+            if (this.disposed || !SEND_TOOLS.has(exec?.name) || !exec.agent) return undefined;
+            const session = exec.agent.session;
+            const own = this.store.lookup(exec.agent.id);
+            const who = own ?? this.projectAbove(session);
+            if (!who || !this.projects.has(who.projectId)) return undefined;
+            const args = argsOf(exec.arguments);
+            const project = this.project(who.projectId);
+            const t = who.role === 'thread' ? this.store.thread(who.projectId, who.threadId) : undefined;
+            const folder = t?.folder ?? project.workspacePath;
+            const cwd = typeof session?.header?.cwd === 'string' ? session.header.cwd : folder;
+            const work = [cwd, folder, project.workspacePath].filter((root) => typeof root === 'string' && root !== '').map((root) => resolve(expand(root)));
+            const here = typeof args.workdir === 'string' && args.workdir.trim() !== '' ? resolve(expand(cwd), expand(args.workdir.trim())) : expand(cwd);
+            // What the thread created: its change records (paths as they keep them, from its folder) and this turn's edits.
+            const created = new Set(t ? this.created.get(t.sessionId) ?? [] : []);
+            for (const r of Array.isArray(t?.changes) ? t.changes : []) {
+                for (const f of Array.isArray(r?.files) ? r.files : []) {
+                    if (f?.created === true && typeof f.path === 'string') created.add(resolve(expand(cwd), expand(f.path)));
+                }
+            }
+            const read = (path) => (created.has(path) ? textInside([dirname(path)], path) : undefined);
+            const found = exec.name === 'run_code' ? codeDeletesOf(String(args.code ?? ''), { cwd: here, read }) : deletesOf(String(args.command ?? ''), { shell: exec.name, cwd: here, read });
+            const held = found.filter((d) => !isFree(d, { work, created }));
+            if (held.length === 0) return undefined;
+            const what = deletesWhat(held);
+            const programs = [...new Set(held.map((d) => String(d.program).replace(/\s+/g, '-')))].join(',').slice(0, 40);
+            const label = `${who.projectId}/${who.threadId ?? 'coordinator'}${own ? '' : ' subagent'} ${programs}`;
+            if (!own) {
+                this.log(`delete-refused ${label}`);
+                return { kind: 'deny', reason: DELETE_REASONS.subagent(what) };
+            }
+            if (who.role !== 'thread') {
+                this.log(`delete-refused ${label}`);
+                return { kind: 'deny', reason: DELETE_REASONS.coordinator(what) };
+            }
+            if (this.approvalPolicyOf(session) !== 'ask') {
+                this.log(`delete-refused ${label} never-asks`);
+                return { kind: 'deny', reason: DELETE_REASONS.never(what) };
+            }
+            this.log(`delete-ask ${label}`);
+            return {
+                kind: 'ask',
+                reason: `the command ${what}; if the user doesn't allow it, hand back with status needs_decision`,
+                displayReason: { en: `This command ${what}. A thread asks you before each command that deletes files it didn't create.` },
+            };
+        } catch (error) {
+            this.log(`error delete-check ${String(error?.message ?? error).slice(0, 200)}`);
             return undefined;
         }
     }
@@ -2229,9 +2304,11 @@ export class ProjectManager {
             if (typeof id !== 'string') return;
             if (type === 'tool/call') {
                 if (!FILE_TOOLS.has(event.data?.name) || typeof event.data.callId !== 'string') return;
-                const thread = this.threadAbove(session);
+                // A thread's own calls too, only for the files it creates (its edits are read from its log).
+                const self = this.store.lookup(id)?.role === 'thread';
+                const thread = self ? id : this.threadAbove(session);
                 if (!thread) return;
-                this.subCalls.set(`${id}\n${event.data.callId}`, { name: event.data.name, args: event.data.arguments, thread });
+                this.subCalls.set(`${id}\n${event.data.callId}`, { name: event.data.name, args: event.data.arguments, thread, self, cwd: session.header?.cwd });
                 for (const key of [...this.subCalls.keys()].slice(0, -200)) this.subCalls.delete(key);
                 return;
             }
@@ -2245,12 +2322,26 @@ export class ProjectManager {
             if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
             const edit = editOf(call.name, args, event.data?.meta);
             if (!edit || !(edit.added + edit.deleted > 0 || edit.created)) return;
+            if (edit.created) this.noteCreated(call.thread, edit.path, call.cwd);
+            if (call.self) return;
             const list = this.subEdits.get(call.thread) ?? [];
             list.push({ turn: this.threadTurns.get(call.thread) ?? null, seq: event.seq, ...edit });
             this.subEdits.set(call.thread, list.slice(-500));
         } catch (error) {
             this.log(`error subagent-edit ${String(error?.message ?? error).slice(0, 200)}`);
         }
+    }
+
+    /** A file a thread (or its subagent) created, kept for the delete check: it may delete it without asking. */
+    noteCreated(thread, path, cwd) {
+        const base = typeof cwd === 'string' ? cwd : this.ctx.agents.get(thread)?.session?.header?.cwd;
+        if (typeof path !== 'string' || path === '' || (!isAbsolute(expand(path)) && typeof base !== 'string')) return;
+        const files = this.created.get(thread) ?? new Set();
+        files.add(resolve(expand(base ?? '/'), expand(path)));
+        for (const old of [...files].slice(0, -500)) files.delete(old);
+        this.created.delete(thread);
+        this.created.set(thread, files);
+        for (const key of [...this.created.keys()].slice(0, -200)) this.created.delete(key);
     }
 
     /** The thread session a subagent's session works for: its nearest ancestor that is a thread, or null. */
@@ -2686,6 +2777,25 @@ export class ProjectManager {
         throw new ProjectError(`this would use ${blocked.join(', ')}, and the user's words do not ask for ${them}. Keep the work inside the workspace, or ask the user first. If the user did ask, ${how}. If the text only says not to use ${them}, leave that out: threads already have that rule`);
     }
 
+    /**
+     * Refuse a brief or message that gives a thread leave for what rule 6
+     * holds back ("delete only clearly safe junk", "so that is authorized":
+     * grants.js), unless the user's words in `asks` name that action. In
+     * behaviour review 4 a thread deleted build/ because its brief said it
+     * could; only the user's words allow that, so the thread lists what it
+     * would do and the coordinator asks.
+     */
+    guardGrants(projectId, what, text, asks) {
+        const granted = grantsIn(text).filter(({ action }) => !asks.some((ask) => asksToDo(ask, action)));
+        if (granted.length === 0) return;
+        const actions = granted.map((g) => g.action);
+        this.log(`grant ${projectId} ${what} ${actions.join(',')}`);
+        const { sentence } = granted[0];
+        const said = sentence.length > 80 ? `${sentence.slice(0, 80).replace(/[\s,;:]*\S*$/, '') || sentence.slice(0, 79)}…` : sentence;
+        const where = what === 'start' ? 'the brief' : 'the text';
+        throw new ProjectError(`${where} allows ${doing(actions)} ("${said}"), and only the user's words can allow that (rule 6). If they asked for it, put their words in ask. If not, take it out of ${where}: have the thread list what it would do and hand back needs_decision, then ask the user`);
+    }
+
     async startThread(projectId, { title, ask, brief, model, effort }) {
         const project = this.project(projectId);
         if (this.archived(projectId)) throw new ProjectError(ARCHIVED);
@@ -2702,6 +2812,7 @@ export class ProjectManager {
         const tools = await this.askedTools(projectId, userWords);
         this.guard(projectId, 'start', `${cleanTitle}\n${userWords}\n${brief}`, tools);
         await this.requireUserWords(projectId, userWords, 'start');
+        this.guardGrants(projectId, 'start', `${cleanTitle}\n${brief}`, [userWords]);
         const access = this.access(projectId);
         // Its permission preset; one DSH doesn't offer (any more) is not one to start a thread on.
         const preset = this.presets() ? this.presetOf(access.threadPermission.value) : undefined;
@@ -2788,6 +2899,7 @@ export class ProjectManager {
             tools = await this.askedTools(projectId, userWords);
             this.guard(projectId, 'send', `${userWords}\n${text}`, [...(Array.isArray(t.tools) ? t.tools : []), ...tools]);
             if (userWords !== '') await this.requireUserWords(projectId, userWords, 'send');
+            this.guardGrants(projectId, 'send', text, [userWords, t.ask ?? '']);
         }
         if (t.resolved) this.store.putThread(projectId, id, { resolved: false });
         await this.attach(t.sessionId);
@@ -2796,7 +2908,8 @@ export class ProjectManager {
         if (t.question) this.store.putThread(projectId, id, { question: undefined });
         // The user's words make it new work: a turn that then ends without a handback gets its own nudge.
         if (userWords !== '' && (t.nudged || t.stalled)) this.store.putThread(projectId, id, { nudged: undefined, stalled: undefined });
-        await this.prompt(t.sessionId, coordinatorMessage(text.trim(), userWords), steer ? 'steer' : 'queue', this.store.project(projectId).coordinatorSessionId);
+        // The coordinator's own words (project_thread_send) carry rule 3's bar under them, as a brief does.
+        await this.prompt(t.sessionId, coordinatorMessage(text.trim(), userWords, { note: guard }), steer ? 'steer' : 'queue', this.store.project(projectId).coordinatorSessionId);
         this.log(`thread-send ${projectId}/${id} mode=${steer ? 'steer' : 'queue'} chars=${text.length}`);
         return `${steer ? 'Steered' : 'Sent to'} ${id}${t.resolved ? ' (reopened)' : ''}.`;
     }
@@ -3780,7 +3893,7 @@ export class ProjectManager {
         if (length > CARD_CHARS && !t.shorten) {
             this.store.putThread(projectId, threadId, { shorten: true });
             this.log(`handback-long ${projectId}/${threadId} chars=${length}`);
-            throw new ProjectError(`summary is ${length} characters, and your card shows ${CARD_CHARS}. Call project_handback again with at most ${CARD_CHARS}: the result first, then where (paths, links), then what you need, keeping any request sent or file written outside the workspace; leave out how you got there`);
+            throw new ProjectError(`summary is ${length} characters, and your card shows ${CARD_CHARS}. Call project_handback again with at most ${CARD_CHARS}: the result first, then where (paths, links), then what you need, keeping any request sent or file left outside the workspace; leave out how you got there`);
         }
         if (!this.allowHandback(projectId, threadId)) {
             throw new ProjectError(`handback limit reached (${this.config.maxHandbacksPerHour} per hour); finish the work and hand back once`);

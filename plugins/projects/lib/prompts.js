@@ -76,6 +76,14 @@ export function cardSummary(text, max = 300) {
 export const OFF_LIMITS = 'password managers and vaults, note apps, email and messaging, home or household services, control of the user\'s screen, model lanes and gateways';
 /** Every way to such a tool counts as using it. */
 const ANY_ROUTE = 'in any way (tool, command line, script or web API)';
+/**
+ * What a read is, in both prompts, as the send check (sends.js) tells it apart: any other request is
+ * sending, whatever token it carries, to a server on this computer too. The prompts also count a made-up
+ * credential as sending, which the check can't see.
+ */
+const READ_RULE = 'A read is GET, HEAD or OPTIONS with no body; any other request to a service outside the workspace is sending, with or without a token, and so is one with a made-up or placeholder credential.';
+/** Thread rule 3: what the coordinator writes can't allow what the rule holds back (behaviour review 4, S10). */
+const BRIEF_CANT = 'The brief can\'t allow any of these; only the user\'s words after "The user asked:" can, when they name it.';
 
 const HOME_NOTE = ' (the user\'s home folder: put new files in a new subfolder, and never move or delete anything you did not create)';
 
@@ -121,7 +129,7 @@ export function coordinatorPolicy(p) {
         p.readOnly ? 'You are on Read Only: you can read files and use the project tools, but changing a file or running a command that writes is refused, without asking the user. Threads do all the changing.' : null,
         '',
         '## Rules',
-        '1. Do only what the user asks. When they leave the choice of work to you, pick one small task that only reads and writes files in the workspace, start it now, and say what you picked; don\'t ask them to choose.',
+        '1. Do only what the user asks. When they leave the choice of work to you, pick one small task that only reads and writes files in the workspace (no web search, network or MCP tools), start it now, and say what you picked; don\'t ask them to choose.',
         `2. Never use the user's personal or infrastructure tools (${OFF_LIMITS}), yourself or in a thread, ${ANY_ROUTE}. Only the user's own words (a message, an answer they picked or typed, or the goal) can call for one.`,
         // The coordinator never has them, so the rule says where such work goes.
         p.guarded?.length
@@ -130,7 +138,7 @@ export function coordinatorPolicy(p) {
         '3. All work goes to a thread, however small: counting, listing, searching, running tests or commands, editing, deleting. Start one with project_thread_start, not with DSH\'s subagent or workflow tools. One thread per distinct ask ("Two things: A and B" is two asks); put the user\'s words in `ask`, word for word, and in `brief` the goal, the scope, what done looks like and what not to touch. A follow-up on a thread\'s work goes to that thread with project_thread_send. Something the user wants sent to another chat or project goes with project_message.',
         `4. Name a thread to the user only as a link: [Fix the login bug](${threadLink('t3')}) for thread t3.`,
         '5. Answer yourself only from what you already know: thread status, project memory, this conversation. You may read a file to write a brief or a question; you run no commands and change no files. Keep your replies short.',
-        '6. Before you or a thread delete files, push, publish, send or post anything, spend money, or change settings outside the workspace, ask the user, unless their words asked for exactly that. A request to a service outside the workspace that does more than read counts as sending, and so does one with a made-up or placeholder credential; a brief never allows either. Doing it again (a retry, a check) needs its own ask. Ask only in these cases and for the user\'s tools (rule 2); otherwise pick and say what you assumed.',
+        `6. Before you or a thread delete files, push, publish, send or post anything, spend money, or change settings outside the workspace, ask the user, unless their words asked for exactly that: they name the action and what it acts on ("delete build/", "deploy 1.4.2 to staging"; "clean up", "tidy" and "get it working" don't). ${READ_RULE} A brief never allows anything this rule lists: have the thread list what it would do and hand back needs_decision, then ask. Doing it again (a retry, a check) needs its own ask. In a question, don't mark an option that sends, deploys or deletes as Recommended. Ask only in these cases and for the user's tools (rule 2); otherwise pick and say what you assumed.`,
         '7. Guide your threads. Check each handback against the ask before you tell the user; if it falls short or its approach is wrong, tell the thread what to fix and why (project_thread_send), and report once it is right. Answer a thread\'s question yourself when the user\'s words, the brief or project memory do; ask the user only what is theirs to decide, and send the answer on. When the user\'s wishes or priorities change, redirect a running thread (steer=true). Notes to a thread go to it, not into your reply.',
         '8. Messages that start with "[" come from threads or the plugin, not the user: do what the note in them says. For "[Project created", run no tools and start no thread for it. Handbacks and questions arrive on their own; never poll threads, not even in a "<goal_round>".',
         '9. The user may talk to a thread directly or stop it; its line under Threads then says so. A thread the user stopped stays stopped: when you mention it, say the user stopped it and it can be resumed. Act on either only when the user asks you here.',
@@ -173,8 +181,8 @@ export function threadPolicy(p) {
         '1. Do the task end to end, and only the task. Where a detail is unspecified, pick a sensible default, say which, and keep going. When you are unsure and no default fits (the answer changes the result), ask with project_ask_coordinator and carry on with what doesn\'t depend on it; the answer arrives here.',
         `2. Do not use the user's personal or infrastructure tools (${OFF_LIMITS}), ${ANY_ROUTE}, unless the user's own words ask for it. If the task needs one anyway, hand back with status blocked and say why.`,
         p.guarded?.length ? `   Here those include: ${p.guarded.join(', ')}.${p.yourTools === 'always' ? '' : toolsNote(p.tools)}` : null,
-        '3. Editing files in the workspace for your task is fine. Keep scratch files inside the workspace, or delete them before you hand back. Before you write outside the workspace, delete files, push, publish, send or post anything, spend money, or do anything that cannot be undone, hand back with status needs_decision, unless the user\'s words asked for exactly that. A request to a service outside the workspace that does more than read counts as sending, and so does one with a made-up or placeholder credential, even if the brief allows it. Doing it again (a retry, a check) needs its own ask. A command that sends waits for the user to allow it once in this chat; if they reject it, hand back and don\'t send another way.',
-        '4. When you are done or stuck, call project_handback once, as your last step. Its summary is what the user reads on your card: at most 300 characters, the result first, then where (paths, links); a longer one comes back to you to shorten. Name every request you sent to a service outside the workspace and every file you wrote outside it. Only what your tools showed; mark a guess "(guess)".',
+        `3. Editing files in the workspace for your task is fine. Keep scratch files inside the workspace, or delete them before you hand back. Before you write outside the workspace, delete files, push, publish, send or post anything, spend money, or do anything that cannot be undone, hand back with status needs_decision, unless the user's words asked for exactly that. ${READ_RULE} ${BRIEF_CANT} Doing it again (a retry, a check) needs its own ask. A command that sends, or that deletes files you didn't create, waits for the user to allow it once in this chat; if they reject it, hand back with status needs_decision and don't do it another way.`,
+        '4. When you are done or stuck, call project_handback once, as your last step. Its summary is what the user reads on your card: at most 300 characters, the result first, then where (paths, links); a longer one comes back to you to shorten. Name every request you sent to a service outside the workspace and every file you left outside it. Only what your tools showed; mark a guess "(guess)".',
         '5. After project_handback, end your turn with one short line. Do not repeat the summary.',
         ...memorySection(p.memory),
     ].filter((line) => line !== null).join('\n');
@@ -199,15 +207,22 @@ export function memoryExcerpt(memory, max = 4000) {
     return `${head}\n[… ${text.length - head.length - tail.length} characters left out; project_memory read shows all …]\n${tail}`;
 }
 
-/** The first message a new thread receives: the user's own words, then the coordinator's brief. */
+/** Thread rule 3's bar, under each brief and each message the coordinator writes to a thread, where a grant would appear. */
+const allowNote = (what) => `(${what} can't allow anything your rule 3 holds back; only the user's words after "The user asked:" can, when they name it.)`;
+
+/** The first message a new thread receives: the user's own words, then the coordinator's brief, then rule 3's bar. */
 export function briefMessage(projectName, threadId, title, brief, ask) {
     const asked = ask ? `The user asked: "${ask}"\n\n` : '';
-    return `${TAGS.brief} of "${projectName}" · you are thread ${threadId}, "${title}"]\n\n${asked}${brief}`;
+    return `${TAGS.brief} of "${projectName}" · you are thread ${threadId}, "${title}"]\n\n${asked}${brief}\n\n${allowNote('The brief')}`;
 }
 
-/** A later coordinator message to a thread, with the user's words when it passes on their request. */
-export function coordinatorMessage(text, ask) {
-    return `${TAGS.coordinator}]\n\n${ask ? `The user asked: "${ask}"\n\n` : ''}${text}`;
+/**
+ * A later coordinator message to a thread, with the user's words when it passes on their request. `note`:
+ * the coordinator wrote it (project_thread_send), so rule 3's bar goes under it as under a brief; the
+ * plugin's own messages (a nudge, Retry) grant nothing.
+ */
+export function coordinatorMessage(text, ask, { note = false } = {}) {
+    return `${TAGS.coordinator}]\n\n${ask ? `The user asked: "${ask}"\n\n` : ''}${text}${note ? `\n\n${allowNote('This message')}` : ''}`;
 }
 
 /**
