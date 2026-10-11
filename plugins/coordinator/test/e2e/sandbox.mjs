@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
- * Real-host test: where a project thread on Workspace Write can write, and
- * what happens when it tries to write outside its folder.
+ * Real-host test: where a thread on Workspace Write can write, and what
+ * happens when it tries to write outside its folder.
  *
  * Boots a real DSH (the shipped web profile, a temporary DSH_HOME, no MCP
- * servers) with this repo's projects and session-bridge plugins and a
+ * servers) with this repo's coordinator and session-bridge plugins and a
  * scripted model, with DSH's default set to Full access (approvals
- * "never"), as in the user's DSH. A thread then writes one file inside its
- * folder and one just outside it, first plainly and then with DSH's wider
+ * "never"), as in the user's DSH. A chat runs /coordinate and starts a
+ * thread, which writes one file inside its folder and one just outside it,
+ * first plainly and then with DSH's wider
  * access retry, with DSH's write tool and then in its shell (which DSH runs
  * under the system's sandbox: sandbox-exec on macOS, bubblewrap or Landlock
  * on Linux, and refuses to run without one); a plain session on DSH's
@@ -25,6 +26,7 @@
  */
 import { spawn, execFileSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { request } from 'node:http';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -33,8 +35,8 @@ import { startFakeModel } from './fake-model.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pluginsDir = resolve(here, '../../..');
-const PROJECT = 'Sandbox Check';
-const PROJECT_ID = 'sandbox-check';
+/** The chat that runs /coordinate. */
+const CHAT = 'Sandbox Check';
 
 function findDsh() {
     const bin = process.env.DSH_BIN;
@@ -115,9 +117,54 @@ function bridge(method, path, body) {
     });
 }
 
+/** GET from the DSH web server. */
+function httpGet(url, headers = {}) {
+    return new Promise((resolvePromise, reject) => {
+        const req = request(url, { headers }, (res) => {
+            let text = '';
+            res.setEncoding('utf8');
+            res.on('data', (c) => { text += c; });
+            res.on('end', () => resolvePromise({ status: res.statusCode, headers: res.headers, text }));
+        });
+        req.on('error', reject);
+        req.end();
+    });
+}
+
+/** Sign in to DSH's web server as a browser does, from the sign-in link in its log. */
+async function signInWeb() {
+    const signIn = [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].at(-1)?.[1] ?? '';
+    const cookie = String((await httpGet(signIn)).headers['set-cookie']?.[0] ?? '').split(';')[0];
+    return { base: new URL('./', signIn), cookie };
+}
+
+/** Call a Remote endpoint the way the window does: POST /api/<endpoint> with a client-request envelope. */
+function webApi(web, endpoint, args) {
+    return new Promise((resolvePromise, reject) => {
+        const body = JSON.stringify({ type: 'client-request', rpcId: randomUUID(), method: endpoint, payload: { args } });
+        const req = request(new URL(`api/${endpoint}`, web.base), {
+            method: 'POST',
+            headers: { cookie: web.cookie, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+        }, (res) => {
+            let text = '';
+            res.setEncoding('utf8');
+            res.on('data', (c) => { text += c; });
+            res.on('end', () => {
+                let result;
+                try { result = JSON.parse(text).result; } catch {}
+                resolvePromise(result ?? { ok: false, error: { code: `http/${res.statusCode}`, message: text.slice(0, 300) } });
+            });
+        });
+        req.on('error', reject);
+        req.end(body);
+    });
+}
+
 const readText = (file) => { try { return readFileSync(file, 'utf8'); } catch { return ''; } };
 const store = () => { try { return JSON.parse(readFileSync(storeFile, 'utf8')); } catch { return {}; } };
-const project = () => store().projects?.[PROJECT_ID] ?? {};
+/** The chat's session id, once the test made it: the store keeps a coordinating chat under it. */
+let chat;
+const project = () => (chat ? store().projects?.[chat] ?? {} : {});
 /** The model sees "E2E:call <tool> <json>" and calls that tool (fake-model.mjs). */
 const call = (tool, args) => `E2E:call ${tool} ${JSON.stringify(args)}`;
 const events = async (sessionId, types) => (await bridge('GET', `/sessions/${sessionId}/events?types=${types}&limit=500&full=1`)).events;
@@ -183,9 +230,6 @@ function writeProfile(modelPort) {
     storeFile: ${q(storeFile)}
     memoryDir: ${q(join(stateDir, 'memory'))}
     logFile: ${q(logFile)}
-    projects:
-      - name: ${q(PROJECT)}
-        workspacePath: ${q(ws)}
 - id: session-bridge
   config:
     socketPath: ${q(sock)}
@@ -218,10 +262,10 @@ async function stopDsh(child) {
 const model = await startFakeModel({ models: ['fake-model'] });
 writeProfile(model.port);
 const resultsSince = (mark, needle) => model.requests.slice(mark).map((r) => r.action.text ?? '').filter((t) => t.startsWith('TOOL-RESULT:') && (!needle || t.includes(needle)));
-/** Tool results the thread (not its coordinator) saw since `mark`. */
-const threadResultsSince = (mark) => model.requests.slice(mark).filter((r) => !r.system.includes('You are the coordinator'))
+/** Tool results the thread (not its chat) saw since `mark`. */
+const threadResultsSince = (mark) => model.requests.slice(mark).filter((r) => r.system.includes('You are thread t1, '))
     .map((r) => r.action.text ?? '').filter((t) => t.startsWith('TOOL-RESULT:'));
-const coordinatorSaw = (mark, reply) => model.requests.slice(mark).some((r) => r.action.text === reply && r.system.includes('You are the coordinator'));
+const coordinatorSaw = (mark, reply) => model.requests.slice(mark).some((r) => r.action.text === reply && r.system.includes('# Coordinating threads'));
 
 async function waitIdle(sessionId, timeout = 30000) {
     await waitFor(async () => {
@@ -235,13 +279,18 @@ const summary = {};
 try {
     child = startDsh();
     await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge', 120000);
-    const coord = await waitFor(() => project().coordinatorSessionId, 'the coordinator session', 60000);
-    await waitFor(() => coordinatorSaw(0, 'SAW-WELCOME'), 'the coordinator welcome', 60000);
-    await waitIdle(coord);
+    // A chat in the folder runs /coordinate, typed as the window sends it.
+    chat = (await bridge('POST', '/sessions', { workspacePath: ws, title: CHAT, text: 'Hello.' })).sessionId;
+    await waitFor(() => model.requests.some((r) => r.fresh.includes('Hello.')), 'the chat\'s first turn', 60000);
+    await waitIdle(chat);
+    const web = await signInWeb();
+    const answer = await webApi(web, 'commands/execute', { agentId: chat, line: '/coordinate', submittedAttachments: [] });
+    check('the chat coordinates after /coordinate', answer.ok && answer.value?.result?.kind === 'success' && project().coordinatorSessionId === chat,
+        JSON.stringify(answer).slice(0, 300));
 
-    // 1. The coordinator starts a thread whose brief writes inside its folder.
+    // 1. The chat starts a thread whose brief writes inside its folder.
     let mark = model.requests.length;
-    await bridge('POST', `/sessions/${coord}/prompt`, {
+    await bridge('POST', `/sessions/${chat}/prompt`, {
         text: call('thread_start', { ask: 'Write a note in the project folder.', title: 'Notes', brief: call('write', { file_path: inside, content: 'inside\n' }) }),
     });
     const thread = await waitFor(() => project().threads?.t1?.sessionId, 'the thread session');
@@ -250,19 +299,19 @@ try {
     // DSH writes the cache after the turn ends, so an earlier record (the one from the thread's creation) can still be there.
     let mine = null;
     await waitFor(() => (mine = permissionsOf(thread))?.preset === 'workspace-write', 'the thread\'s permission record', 15000).catch(() => null);
-    const theirs = permissionsOf(coord);
+    const theirs = permissionsOf(chat);
     summary.thread = mine;
-    summary.coordinator = theirs;
+    summary.chat = theirs;
     check('the thread runs on Workspace Write with approvals "ask", though DSH\'s default here is Full access with approvals "never"',
         mine?.preset === 'workspace-write' && mine.sandbox === 'workspace-write' && mine.approval === 'ask', JSON.stringify(mine));
-    check('its coordinator is on Read Only, the plugin\'s default for coordinators', theirs?.preset === 'read-only' && theirs.sandbox === 'read-only', JSON.stringify(theirs));
+    check('its chat keeps its own permission, DSH\'s default here', theirs?.preset === 'danger-full-access' && theirs.sandbox === 'danger-full-access', JSON.stringify(theirs));
     const order = (await events(thread, 'permission/preset,user/message')).map((e) => e.type);
     check('the thread is on Workspace Write before it reads its brief', order.indexOf('permission/preset') >= 0 && order.indexOf('permission/preset') < order.indexOf('user/message'), JSON.stringify(order));
     check('a write inside its folder goes through', readText(inside) === 'inside\n', JSON.stringify(resultsSince(mark)).slice(0, 400));
 
-    // 2. The coordinator sends the thread on to a file just outside its folder.
-    const send = (text) => bridge('POST', `/sessions/${coord}/prompt`, { text: call('thread_send', { thread: 't1', text }) });
-    await waitIdle(coord);
+    // 2. The chat sends the thread on to a file just outside its folder.
+    const send = (text) => bridge('POST', `/sessions/${chat}/prompt`, { text: call('thread_send', { thread: 't1', text }) });
+    await waitIdle(chat);
     mark = model.requests.length;
     await send(call('write', { file_path: beside, content: 'outside\n' }));
     const refused = await waitFor(() => resultsSince(mark).find((t) => t.includes('sandbox')), 'the outside write\'s result', 60000);
@@ -274,16 +323,16 @@ try {
     check('the refusal itself asks nothing', (await events(thread, 'approval/asked')).length === 0);
 
     // 3. The retry with wider access, as DSH's note says: DSH asks the user, and nothing is written meanwhile.
-    await waitIdle(coord);
+    await waitIdle(chat);
     mark = model.requests.length;
     await send(call('write', { file_path: beside, content: 'outside\n', sandbox_permissions: 'danger-full-access', justification: 'The user asked for a note next to the project folder.' }));
     await waitFor(async () => (await events(thread, 'approval/asked')).length > 0, 'DSH\'s approval request', 60000);
     summary.retryWithWiderAccess = 'DSH asks the user (approval/asked) and the turn waits for the answer';
     const waiting = await bridge('GET', `/sessions/${thread}`);
     check('the retry raises DSH\'s approval request, the thread waits on it, and nothing is written yet', waiting.turns.started > waiting.turns.ended && !existsSync(beside), JSON.stringify(waiting.turns));
-    await waitFor(() => coordinatorSaw(mark, 'SAW-APPROVAL'), 'the coordinator\'s approval note', 30000).catch(() => null);
+    await waitFor(() => coordinatorSaw(mark, 'SAW-APPROVAL'), 'the chat\'s approval note', 30000).catch(() => null);
     const note = model.requests.slice(mark).find((r) => r.action.text === 'SAW-APPROVAL');
-    check('the coordinator is told the thread waits on the user\'s approval of the write', note?.fresh.includes('[Thread waiting for approval: t1 · "Notes"]') === true
+    check('the chat is told the thread waits on the user\'s approval of the write', note?.fresh.includes('[Thread waiting for approval: t1 · "Notes"]') === true
         && note.fresh.includes('It asked to use write') && note.fresh.includes('The user asked for a note next to the project folder.'), note?.fresh.slice(0, 400) ?? 'no note');
 
     // 4. The user stops it instead of answering: nothing is written.
@@ -297,7 +346,7 @@ try {
     const shell = (command, extra = {}) => call('bash', { command, description: 'Write a note', ...extra });
     const insideShell = join(ws, 'inside-shell.txt');
     const besideShell = join(root, 'beside-shell.txt');
-    await waitIdle(coord);
+    await waitIdle(chat);
     mark = model.requests.length;
     await send(shell(`printf 'inside\\n' > ${JSON.stringify(insideShell)}`));
     const ran = await waitFor(() => threadResultsSince(mark)[0], 'the shell write inside', 60000);
@@ -306,7 +355,7 @@ try {
     summary.shellInside = unavailable ? ran.replace('TOOL-RESULT: ', '').slice(0, 400) : (readText(insideShell) === 'inside\n' ? 'written' : ran.slice(0, 300));
     check('the thread\'s shell runs on Workspace Write (DSH has a sandbox backend here) and writes inside its folder', !unavailable && readText(insideShell) === 'inside\n', ran.slice(0, 500));
     if (!unavailable) {
-        await waitIdle(coord);
+        await waitIdle(chat);
         mark = model.requests.length;
         await send(shell(`printf 'outside\\n' > ${JSON.stringify(besideShell)}`));
         const denied = await waitFor(() => threadResultsSince(mark)[0], 'the shell write outside', 60000);
@@ -315,7 +364,7 @@ try {
         check('the thread\'s shell can\'t write just outside its folder, and DSH says a retry asks the user', !existsSync(besideShell)
             && denied.includes('the approval prompt asks the user'), denied.slice(0, 500));
         const before = (await events(thread, 'approval/asked')).length;
-        await waitIdle(coord);
+        await waitIdle(chat);
         mark = model.requests.length;
         await send(shell(`printf 'outside\\n' > ${JSON.stringify(besideShell)}`, { sandbox_permissions: 'danger-full-access', justification: 'The user asked for a note next to the project folder.' }));
         await waitFor(async () => (await events(thread, 'approval/asked')).length > before, 'DSH\'s approval request for the shell', 60000).catch(() => null);

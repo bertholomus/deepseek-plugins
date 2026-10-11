@@ -14,8 +14,7 @@
  *   [Handback from thread …       reply SAW-HANDBACK
  *   [Thread idle without …        reply SAW-IDLE
  *   [Thread waiting for approval… reply SAW-APPROVAL
- *   [Project created …            reply SAW-WELCOME
- *   [Message from the coordinator of …  reply SAW-MESSAGE
+ *   [Message from the chat …      reply SAW-MESSAGE
  *   [Reply from …                 reply SAW-REPLY
  *   anything else                 reply "Plain reply."
  *
@@ -63,8 +62,7 @@ function decide(body, text) {
     if (text.includes('[Handback from thread')) return { text: 'SAW-HANDBACK' };
     if (text.includes('[Thread idle without a handback')) return { text: 'SAW-IDLE' };
     if (text.includes('[Thread waiting for approval')) return { text: 'SAW-APPROVAL' };
-    if (text.includes('[Project created')) return { text: 'SAW-WELCOME' };
-    if (text.includes('[Message from the coordinator of')) return { text: 'SAW-MESSAGE' };
+    if (text.includes('[Message from the chat')) return { text: 'SAW-MESSAGE' };
     if (text.includes('[Reply from')) return { text: 'SAW-REPLY' };
     return { text: 'Plain reply.' };
 }

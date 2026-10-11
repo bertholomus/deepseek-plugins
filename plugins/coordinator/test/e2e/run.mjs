@@ -1,29 +1,30 @@
 #!/usr/bin/env node
 /**
- * Real-host end-to-end test for the projects plugin.
+ * Real-host end-to-end test for the coordinator plugin.
  *
  * Boots a real DSH (the shipped web profile, in a temporary DSH_HOME) with
- * this repo's projects and session-bridge plugins and a scripted model
- * server, then drives the coordinator and its threads through the bridge
- * socket and checks what reached the model: models and efforts on the wire,
- * tool scoping, handbacks, the plugin's nudges and automatic notes (idle,
- * failed, stopped, waiting on approval, cut off by a DSH crash), queued turns, a message
- * that reaches a thread's running turn, direct talk,
- * settings, memory, pause, a restart, the browser half DSH serves for the
- * plugin's page, a saved default that applies without a restart, the Project
- * settings endpoints the window calls, a pick in DSH's own model picker,
- * a thread's code changes as DSH records them and its Changes tab reads
- * them (a subagent's too), failed and stopped threads
- * as the window shows them, with Retry and Resume, a project made in the
- * window and the Projects page's order, a thread in its project's
- * workspace, a coordinator's message to a chat in no project and to
- * another project's coordinator,
- * and the user's tools and permissions: an MCP
- * server named as one of the user's tools that no coordinator is offered
- * and a thread gets only from the user's words, threads on Workspace Write,
- * and a thread's command that sends outside the workspace waiting for the
- * user's Allow once each time, answered as the window does, while a
- * coordinator's is refused.
+ * this repo's coordinator and session-bridge plugins and a scripted model
+ * server. An ordinary chat runs /coordinate; the test then drives it and its
+ * threads through the bridge socket and the window's own endpoints, and
+ * checks what reached the model: models and efforts on the wire, tool
+ * scoping, handbacks, the plugin's nudges and automatic notes (idle,
+ * failed, stopped, waiting on approval, cut off by a DSH crash), queued
+ * turns, a message that reaches a thread's running turn, direct talk,
+ * settings, memory, pause, /coordinate off and on again, a restart, the
+ * window's record of the chat that DSH folds from the command, the browser
+ * half DSH serves for the plugin's page, a saved default that applies
+ * without a restart, the Thread settings endpoints the window calls, picks
+ * in DSH's own model picker, a thread's code changes as DSH records them and
+ * its Changes tab reads them (a subagent's too), failed and stopped threads
+ * as the window shows them, with Retry and Resume, a second chat that
+ * coordinates from its Coordinate button with threads of its own, a chat's
+ * message to a chat that doesn't coordinate and to one that does, archive,
+ * and the user's tools and permissions: an MCP server named as one of the
+ * user's tools that a coordinating chat has, as any chat does, and a thread
+ * gets only from the user's words, threads on Workspace Write, and a
+ * thread's command that sends outside the workspace waiting for the user's
+ * Allow once each time, answered as the window does, while the chat's own
+ * runs as DSH decides.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/coordinator/test/e2e/run.mjs
  *
@@ -44,8 +45,11 @@ import { STATE_VERSION } from '../../lib/projection.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pluginsDir = resolve(here, '../../..');
-const PROJECT = 'E2E Project';
-const PROJECT_ID = 'e2e-project';
+/** The chat that runs /coordinate, and a second one that coordinates from its Coordinate button. */
+const CHAT = 'E2E Chat';
+const SECOND = 'Second Chat';
+/** What DSH shows under /coordinate once a chat coordinates. */
+const COORDINATING = 'Coordinating. Ask for work here as usual: what runs long or splits into parts goes to threads that report back to this chat.';
 
 // ── harness ─────────────────────────────────────────────────────────────────
 
@@ -88,7 +92,7 @@ async function waitFor(fn, what, timeout = 30000) {
     throw new Error(`timed out waiting for ${what}${last ? ` (last error: ${last.message})` : ''}`);
 }
 
-const root = mkdtempSync(join(tmpdir(), 'dsh-projects-e2e-'));
+const root = mkdtempSync(join(tmpdir(), 'dsh-coordinator-e2e-'));
 const home = join(root, 'home');
 const ws = join(root, 'ws');
 const stateDir = join(root, 'state');
@@ -140,6 +144,15 @@ async function signInWeb() {
     const signIn = [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].at(-1)?.[1] ?? '';
     const cookie = String((await httpGet(signIn)).headers['set-cookie']?.[0] ?? '').split(';')[0];
     return { base: new URL('./', signIn), cookie };
+}
+
+/** How many web sign-in links DSH has printed: one each time it starts. */
+const signIns = () => [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].length;
+
+/** Sign in again once DSH, started again, has printed a new sign-in link. */
+async function signInAgain(before) {
+    await waitFor(() => signIns() > before, 'the new web sign-in link', 30000);
+    return signInWeb();
 }
 
 /** Call a Remote endpoint the way the window does: POST /api/<endpoint> with a client-request envelope. */
@@ -205,10 +218,17 @@ async function approvalsOf(web) {
 
 const readText = (file) => { try { return readFileSync(file, 'utf8'); } catch { return ''; } };
 const store = () => { try { return JSON.parse(readFileSync(storeFile, 'utf8')); } catch { return {}; } };
-const project = () => store().projects?.[PROJECT_ID] ?? {};
+/** The session ids of the two coordinating chats, once the test made them. */
+let coord;
+let second;
+/** What the store keeps for the chat: the store keys a coordinating chat by its session id. */
+const project = () => (coord ? store().projects?.[coord] ?? {} : {});
 const threadSession = (id) => project().threads?.[id]?.sessionId;
+const secondThreads = () => Object.values((second ? store().projects?.[second]?.threads : undefined) ?? {});
 const modeOf = (file) => statSync(file).mode & 0o777;
 const octal = (mode) => mode.toString(8);
+/** Lines of the stand-in MCP server's call log. */
+const mcpCount = () => readText(mcpCalls).split('\n').filter(Boolean).length;
 
 /** The model sees "E2E:call <tool> <json>" and calls that tool. */
 const call = (tool, args) => `E2E:call ${tool} ${JSON.stringify(args)}`;
@@ -229,7 +249,7 @@ function writeProfile(modelPort) {
         dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', ...Object.keys(plugins)] } },
     }, null, 2)}\n`);
     for (const [name, dir] of Object.entries(plugins)) symlinkSync(dir, join(profile, 'node_modules', name), 'dir');
-    writePatch(modelPort, { coordinatorEffort: 'max', threadEffort: 'high' });
+    writePatch(modelPort, { threadEffort: 'high' });
 }
 
 /**
@@ -239,7 +259,7 @@ function writeProfile(modelPort) {
  */
 function writePatch(modelPort, defaults) {
     const q = JSON.stringify;
-    // The DSH default effort is "low", so a missed project selection shows on the wire. lane-catalog
+    // The DSH default effort is "low", so a thread setting that is missed shows on the wire. lane-catalog
     // stands in for one of the user's MCP servers; new sessions get Full access, as in the user's DSH.
     writeFileSync(join(profile, 'cordis.patch.yml'), `- insert:
     - id: mcp-lane-catalog
@@ -303,10 +323,6 @@ ${Object.entries(defaults).map(([key, value]) => `    ${key}: ${q(value)}\n`).jo
     guardedTools:
       lane-catalog:
         - lanes
-    projects:
-      - name: ${q(PROJECT)}
-        goal: Prove the plugin on a real host
-        workspacePath: ${q(ws)}
 - id: session-bridge
   config:
     socketPath: ${q(sock)}
@@ -348,8 +364,19 @@ mkdirSync(join(root, 'outside'));
 const model = await startFakeModel();
 writeProfile(model.port);
 
-const whoOf = (r) => /You are thread (t\d+)/.exec(r.system)?.[1]
-    ?? (r.system.includes('You are the coordinator of the DSH project') ? 'coordinator' : 'other');
+/** The chat's folder as its rules name it ("Threads work in: …"), which tells its requests from the second chat's. */
+let coordFolder = ws;
+/**
+ * Who sent a request: a thread of the chat (t3), a thread of the second chat ("Second Chat/t1"), the chat while it
+ * coordinates ('coordinator'), the second chat ('second'), or any other session ('other'), the chat after
+ * /coordinate off among them.
+ */
+const whoOf = (r) => {
+    const thread = /You are thread (t\d+), ".*", started by the DSH chat "(.*)", your coordinator\./.exec(r.system);
+    if (thread) return thread[2] === CHAT ? thread[1] : `${thread[2]}/${thread[1]}`;
+    if (!r.system.includes('# Coordinating threads')) return 'other';
+    return r.system.includes(`\nThreads work in: ${coordFolder}\n`) ? 'coordinator' : 'second';
+};
 const since = (mark, who) => model.requests.slice(mark).filter((r) => !who || whoOf(r) === who);
 const resultOf = (reqs) => reqs.find((r) => r.action.text?.startsWith('TOOL-RESULT:'))?.action.text ?? '';
 const describe = (reqs) => reqs.map((r) => `${r.n} ${whoOf(r)} ${r.model} effort=${r.effort ?? '-'}`).join('; ');
@@ -408,14 +435,27 @@ function ageViews(ids, ver) {
     return aged;
 }
 
-/** Wait for the coordinator to answer an automatic message, then for it to be idle. */
+/** Wait for the coordinating chat to answer an automatic message, then for it to be idle. */
 async function coordinatorSaw(mark, reply, what) {
     const req = await waitFor(() => since(mark, 'coordinator').find((r) => r.action.text === reply), what);
-    await waitIdle(project().coordinatorSessionId);
+    await waitIdle(coord);
     return req;
 }
 
 let child;
+/** The window's signed-in connection to DSH; a new one after each start. */
+let web;
+/** Type a command in a chat, as DSH's composer sends it (its commands remote). */
+const command = (sessionId, line) => webApi(web, 'commands/execute', { agentId: sessionId, line, submittedAttachments: [] });
+/**
+ * A session's `coordinatorSession` value as the running DSH has it now, which it sends the window. DSH saves its
+ * projection cache at a turn's end, so a command's result is read here.
+ */
+async function viewOf(sessionId) {
+    const read = await webApi(web, 'session/projections', { request: { sessionId } });
+    const value = read.ok ? read.value?.values?.coordinatorSession : undefined;
+    return value?.role ? value : value?.v;
+}
 /** Each user message in a session: who sent it (its `source`) and its text. */
 async function messagesOf(sessionId) {
     const { events } = await bridge('GET', `/sessions/${sessionId}/events?types=user/message&limit=2000&full=1`);
@@ -426,34 +466,50 @@ const fromPlugin = (m) => m?.source?.kind === 'cordis-host-runner';
 const fromSession = (m, sessionId) => m?.source?.kind === 'agent-message' && m.source.form === 'relay' && m.source.senderSessionId === sessionId;
 const sourcesText = (msgs) => JSON.stringify(msgs.map((m) => [m.source?.kind, m.source?.senderSessionId?.slice(0, 8), m.text.slice(0, 40)]));
 
-let coord;
 try {
-    // 1. Boot: the coordinator appears on its project route, with private state.
+    // 1. Boot. An ordinary chat runs /coordinate, typed as the window sends it: from then on it coordinates
+    // threads, kept under its own session id, with private state. DSH logs the command and its result in the
+    // chat, and folds the window's record of the chat from them.
     child = startDsh(dsh);
     await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge', 90000);
-    coord = await waitFor(() => project().coordinatorSessionId, 'the coordinator session');
-    await waitFor(() => readText(logFile).includes(`select ${PROJECT_ID}/coordinator`), 'the coordinator selection');
-    check('coordinator session is titled "◆ E2E Project"', (await bridge('GET', `/sessions/${coord}`)).title === `◆ ${PROJECT}`);
-    check('coordinator selection is logged', readText(logFile).includes(`select ${PROJECT_ID}/coordinator fake:fake-model effort=max`), readText(logFile));
-    // DSH lists a session only after its first turn, so a new coordinator introduces itself.
-    const welcome = await coordinatorSaw(0, 'SAW-WELCOME', 'the coordinator welcome');
-    check('a new coordinator introduces itself', welcome.fresh.includes(`[Project created: "${PROJECT}"]`) && welcome.effort === 'max', welcome.fresh.slice(0, 200));
+    coord = (await bridge('POST', '/sessions', { workspacePath: ws, title: CHAT, text: 'Hello, chat.' })).sessionId;
+    const plainTurn = await waitFor(() => model.requests.find((r) => r.fresh.includes('Hello, chat.')), 'the chat\'s first turn');
+    await waitIdle(coord);
+    check('a chat that hasn\'t run /coordinate is a plain chat: no thread tools or rules, nothing in the store', !plainTurn.tools.includes('thread_start')
+        && !plainTurn.system.includes('# Coordinating threads') && store().projects?.[coord] === undefined, plainTurn.tools.join(','));
+    web = await signInWeb();
+    let mark = model.requests.length;
+    let answer = await command(coord, '/coordinate');
+    check('/coordinate makes it coordinate, and DSH shows the plugin\'s answer under the command', answer.ok && answer.value?.result?.kind === 'success'
+        && answer.value.result.text === COORDINATING, JSON.stringify(answer).slice(0, 300));
+    coordFolder = project().folder ?? ws;
+    check('the store keeps the chat under its session id, with its folder and title', project().coordinatorSessionId === coord && [ws, realpathSync(ws)].includes(project().folder)
+        && project().name === CHAT && readText(logFile).includes(`attach coordinator ${coord} ${coord}\n`) && readText(logFile).includes(`coordinate ${coord} on\n`),
+        `${JSON.stringify(project()).slice(0, 300)} | ${readText(logFile).slice(0, 400)}`);
+    await sleep(1000);
+    const ran = (await bridge('GET', `/sessions/${coord}/events?types=command/run,command/done,user/message,turn/start&limit=50`)).events.map((e) => e.type);
+    check('/coordinate sends the chat nothing and starts no turn; its title stays the user\'s', since(mark).length === 0
+        && ran.slice(ran.indexOf('command/run')).join() === 'command/run,command/done' && (await bridge('GET', `/sessions/${coord}`)).title === CHAT, `${ran.join()} | ${describe(since(mark))}`);
+    const folded = await viewOf(coord);
+    check('the window\'s record of the chat, folded by DSH from the command and its result, says it coordinates, by its title', folded?.role === 'coordinator'
+        && folded.project?.id === coord && folded.project.name === CHAT && folded.off === undefined, JSON.stringify(folded));
+    answer = await command(coord, '/coordinate');
+    check('/coordinate again says so and changes nothing', answer.ok && answer.value?.result?.text === 'This chat already coordinates threads.'
+        && !readText(logFile).includes(`coordinate ${coord} on again`), JSON.stringify(answer).slice(0, 300));
     mkdirSync(join(root, 'plain'));
     const blankSession = (await bridge('POST', '/sessions', { workspacePath: join(root, 'plain') })).sessionId;
     const listed = await bridge('GET', '/sessions');
-    check('DSH lists the coordinator; a session without a turn stays hidden',
+    check('DSH lists the chat; a session without a turn stays hidden',
         listed.find((s) => s.sessionId === coord)?.blank === false && listed.find((s) => s.sessionId === blankSession)?.blank === true,
-        JSON.stringify(listed.map((s) => [s.sessionId === coord ? 'coordinator' : s.sessionId === blankSession ? 'blank' : 'other', s.blank])));
+        JSON.stringify(listed.map((s) => [s.sessionId === coord ? 'chat' : s.sessionId === blankSession ? 'blank' : 'other', s.blank])));
     check('state folder is 700', modeOf(stateDir) === 0o700, octal(modeOf(stateDir)));
     check('store file is 600', modeOf(storeFile) === 0o600, octal(modeOf(storeFile)));
     check('log file is 600', modeOf(logFile) === 0o600, octal(modeOf(logFile)));
     // The browser half: DSH serves it for the plugin's page, and it parses
     // (DSH sends browser halves in batches, so one that does not parse breaks others).
-    const signIn = /dsh web: (\S+)/.exec(readText(dshLog))?.[1] ?? '';
-    const cookie = String((await httpGet(signIn)).headers['set-cookie']?.[0] ?? '').split(';')[0];
-    const app = await httpGet(new URL('./', signIn).href, { cookie });
+    const app = await httpGet(web.base.href, { cookie: web.cookie });
     const clientUrl = /"id":"dsh-plugin-coordinator","url":"([^"]+)"/.exec(app.text)?.[1];
-    const client = clientUrl ? await httpGet(new URL(clientUrl, new URL('./', signIn)).href, { cookie }) : { status: 0, text: '' };
+    const client = clientUrl ? await httpGet(new URL(clientUrl, web.base).href, { cookie: web.cookie }) : { status: 0, text: '' };
     let parses = false;
     try { new Script(client.text); parses = true; } catch {}
     check('DSH serves the browser half and it parses', client.status === 200 && client.text.includes("'plugins.bundle.config'")
@@ -461,7 +517,7 @@ try {
         `${clientUrl ?? 'not in the boot graph'}: ${client.status}`);
 
     // 2. Thread start and handback.
-    let mark = model.requests.length;
+    mark = model.requests.length;
     await say(coord, call('thread_start', {
         ask: 'Check the Alpha work and report.',
         title: 'Alpha',
@@ -469,69 +525,65 @@ try {
     }));
     let saw = await coordinatorSaw(mark, 'SAW-HANDBACK', 'the Alpha handback');
     const firstCoord = since(mark, 'coordinator')[0];
-    check('coordinator asks with effort max', firstCoord.effort === 'max', describe(since(mark, 'coordinator')));
-    check('coordinator has coordinator tools only', firstCoord.tools.includes('thread_start') && !firstCoord.tools.includes('thread_handback'));
+    check('the chat keeps its own model and effort', firstCoord.model === 'fake-model' && firstCoord.effort === 'low', describe(since(mark, 'coordinator')));
+    check('the chat has the tools that run threads, not a thread\'s', firstCoord.tools.includes('thread_start') && !firstCoord.tools.includes('thread_handback'));
     const t1Reqs = since(mark, 't1');
     check('thread asks with effort high', t1Reqs.length > 0 && t1Reqs.every((r) => r.model === 'fake-model' && r.effort === 'high'), describe(t1Reqs));
     check('thread has thread tools only', t1Reqs[0]?.tools.includes('thread_handback') && !t1Reqs[0]?.tools.includes('thread_start'));
-    // A DSH goal's rounds had a coordinator poll its threads (behaviour review 3), so it isn't offered create_goal; threads are.
-    check('a coordinator is kept off DSH goals, and a thread is not', !firstCoord.tools.includes('create_goal') && firstCoord.tools.includes('update_goal')
+    check('the chat keeps all of DSH\'s tools, goals too, and so does a thread', firstCoord.tools.includes('create_goal') && firstCoord.tools.includes('bash')
         && t1Reqs[0]?.tools.includes('create_goal'), `${firstCoord.tools.join(',')} | ${t1Reqs[0]?.tools.join(',')}`);
-    check('thread gets the brief, the user\'s words first', t1Reqs[0]?.fresh.includes(`[Brief from the coordinator of "${PROJECT}" · you are thread t1, "Alpha"]\n\nThe user asked: "Check the Alpha work and report."\n\nDo the work`), t1Reqs[0]?.fresh.slice(0, 300));
-    check('handback reaches the coordinator', saw.fresh.includes('[Handback from thread t1 · "Alpha" · status: done]') && saw.fresh.includes('Alpha finished'), saw.fresh.slice(0, 300));
+    check('thread gets the brief, the user\'s words first', t1Reqs[0]?.fresh.includes(`[Brief from the chat "${CHAT}" · you are thread t1, "Alpha"]\n\nThe user asked: "Check the Alpha work and report."\n\nDo the work`), t1Reqs[0]?.fresh.slice(0, 300));
+    check('handback reaches the chat', saw.fresh.includes('[Handback from thread t1 · "Alpha" · status: done]') && saw.fresh.includes('Alpha finished'), saw.fresh.slice(0, 300));
     check('the handback says how to answer it: now, the thread\'s link first, then the result', saw.fresh.includes('(The user has not seen this. Reply now. First line: the link [Alpha](.dsh-thread/t1), a colon, and the result in one sentence.'), saw.fresh.slice(-400));
     const t1 = threadSession('t1');
     check('thread session is titled "Alpha"', (await bridge('GET', `/sessions/${t1}`)).title === 'Alpha');
     check('roster shows the handback', saw.system.includes('- t1 · "Alpha" · ') && saw.system.includes('last handback: done'));
     // The window's view, folded by DSH from the real session events.
     const view = await waitFor(() => (windowView(coord)?.threads?.some((t) => t.id === 't1' && t.handback?.status === 'done') ? windowView(coord) : null),
-        'the coordinator view with the Alpha handback', 15000).catch(() => windowView(coord));
-    check('the window view lists the thread, its handback and its cards', view?.role === 'coordinator' && view.project?.name === PROJECT
+        'the chat view with the Alpha handback', 15000).catch(() => windowView(coord));
+    check('the window view lists the thread, its handback and its cards', view?.role === 'coordinator' && view.project?.id === coord && view.project.name === CHAT
         && view.threads?.[0]?.session === t1 && view.threads[0].title === 'Alpha'
         && ['start', 'handback'].every((kind) => view.cards?.some((c) => c.kind === kind && c.thread === 't1' && Number.isSafeInteger(c.turn))),
         JSON.stringify(view)?.slice(0, 400));
-    check('the window view marks the welcome turn and that the user has asked something since', view?.cards?.some((c) => c.kind === 'welcome' && Number.isSafeInteger(c.turn))
-        && view.asked === true, JSON.stringify(view?.cards)?.slice(0, 300));
-    // DSH folds the thread's own view from its events; it can trail the coordinator's by a moment.
+    // DSH folds the thread's own view from its events; it can trail the chat's by a moment.
     const threadView = await waitFor(() => (windowView(t1)?.cards?.some((c) => c.kind === 'handback') ? windowView(t1) : null),
         'the thread view with its handback card', 15000).catch(() => windowView(t1));
-    check('the window view of a thread names its coordinator', threadView?.role === 'thread' && threadView.coordinator === coord
+    check('the window view of a thread names its chat', threadView?.role === 'thread' && threadView.coordinator === coord && threadView.project?.name === CHAT
         && threadView.thread?.id === 't1' && threadView.cards?.some((c) => c.kind === 'handback'), JSON.stringify(threadView)?.slice(0, 300));
     await sleep(1000);
-    check('a turn that handed back sends no idle note', !readText(logFile).includes(`idle-note ${PROJECT_ID}/t1 `) && since(mark, 'coordinator').every((r) => r.action.text !== 'SAW-IDLE'), describe(since(mark)));
+    check('a turn that handed back sends no idle note', !readText(logFile).includes(`idle-note ${coord}/t1 `) && since(mark, 'coordinator').every((r) => r.action.text !== 'SAW-IDLE'), describe(since(mark)));
 
-    // 3. A thread that ends its turn without a handback: the plugin nudges it once, from its coordinator, which takes
-    // no turn for it; when it ends that way again, the coordinator gets the idle note.
+    // 3. A thread that ends its turn without a handback: the plugin nudges it once, from its chat, which takes
+    // no turn for it; when it ends that way again, the chat gets the idle note.
     mark = model.requests.length;
     await say(coord, call('thread_start', { ask: 'Please do this.', title: 'Beta', brief: 'Just answer.' }));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Beta idle note');
-    check('idle note reaches the coordinator', saw.fresh.includes('[Thread idle without a handback: t2 · "Beta"]') && saw.fresh.includes('Plain reply.'), saw.fresh.slice(0, 300));
+    check('idle note reaches the chat', saw.fresh.includes('[Thread idle without a handback: t2 · "Beta"]') && saw.fresh.includes('Plain reply.'), saw.fresh.slice(0, 300));
     const t2 = threadSession('t2');
     const beta = since(mark, 't2');
-    check('a turn that ends without a handback gets one nudge from its coordinator, sent by the plugin, and the note comes when it ends that way again', beta.length === 2
-        && beta[1].fresh.includes('[From the coordinator]\n\nFinish the task and call thread_handback.') && readText(logFile).includes(`nudge ${PROJECT_ID}/t2 idle`)
+    check('a turn that ends without a handback gets one nudge from its chat, sent by the plugin, and the note comes when it ends that way again', beta.length === 2
+        && beta[1].fresh.includes('[From the coordinator]\n\nFinish the task and call thread_handback.') && readText(logFile).includes(`nudge ${coord}/t2 idle`)
         && saw.fresh.includes('(It was nudged once already to finish and hand back') && since(mark, 'coordinator').filter((r) => r.fresh.includes('t2 · "Beta"')).length === 1
         && fromSession(startingWith(await messagesOf(t2), '[From the coordinator]'), coord), `${describe(since(mark))} | ${saw.fresh.slice(-300)}`);
 
-    // 4. The user talks to a thread directly: the coordinator is not woken.
+    // 4. The user talks to a thread directly: the chat is not woken.
     mark = model.requests.length;
     await say(t2, 'Hello from the user.');
     await sleep(1500);
-    check('direct talk does not wake the coordinator', since(mark, 'coordinator').length === 0, describe(since(mark)));
-    check('direct talk is logged', readText(logFile).includes(`direct-turn ${PROJECT_ID}/t2`));
+    check('direct talk does not wake the chat', since(mark, 'coordinator').length === 0, describe(since(mark)));
+    check('direct talk is logged', readText(logFile).includes(`direct-turn ${coord}/t2`));
     // Who DSH shows as the sender: a brief or a handback comes from the session
     // that sent it (DSH draws a "Task message received" notice), a note from the
     // plugin ("Plugin status updated"); the user's own words stay the user's.
     const coordMsgs = await messagesOf(coord);
-    check('the welcome and the idle note come from the plugin', fromPlugin(startingWith(coordMsgs, '[Project created'))
-        && fromPlugin(startingWith(coordMsgs, '[Thread idle without a handback: t2')), sourcesText(coordMsgs));
+    check('the idle note comes from the plugin', fromPlugin(startingWith(coordMsgs, '[Thread idle without a handback: t2')), sourcesText(coordMsgs));
     check('a handback comes from its thread', fromSession(startingWith(coordMsgs, '[Handback from thread t1'), t1), sourcesText(coordMsgs));
     const t1Msgs = await messagesOf(t1);
-    check('a brief comes from the coordinator', fromSession(startingWith(t1Msgs, '[Brief from the coordinator'), coord), sourcesText(t1Msgs));
+    check('a brief comes from the chat', fromSession(startingWith(t1Msgs, '[Brief from the chat'), coord), sourcesText(t1Msgs));
     const t2Msgs = await messagesOf(t2);
     check('the user\'s own words stay the user\'s', startingWith(t2Msgs, 'Hello from the user.')?.source?.kind === 'user', sourcesText(t2Msgs));
 
-    // 5. A failed turn: the plugin nudges it once, from its coordinator; when it fails again, the note says so.
+    // 5. A failed turn: the plugin nudges it once, from its chat; when it fails again, the note says so.
     // The roster now notes the direct talk.
     mark = model.requests.length;
     await say(coord, call('thread_start', { ask: 'Please do this.', title: 'Gamma', brief: 'E2E:fail' }));
@@ -540,8 +592,8 @@ try {
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Gamma failure note');
     check('failure note says the turn failed, in the provider\'s words', saw.fresh.includes('[Thread idle without a handback: t3 · "Gamma"]') && saw.fresh.includes('The turn failed (HTTP 400): fake model rejected the request'), saw.fresh.slice(0, 300));
     const gamma = since(mark, 't3');
-    check('a failed turn gets one nudge from its coordinator, sent by the plugin, and the note comes when it fails again', gamma.length >= 2
-        && gamma.at(-1).fresh.includes('[From the coordinator]\n\nCarry on from where you left off and finish the task.') && readText(logFile).includes(`nudge ${PROJECT_ID}/t3 ended=error`)
+    check('a failed turn gets one nudge from its chat, sent by the plugin, and the note comes when it fails again', gamma.length >= 2
+        && gamma.at(-1).fresh.includes('[From the coordinator]\n\nCarry on from where you left off and finish the task.') && readText(logFile).includes(`nudge ${coord}/t3 ended=error`)
         && saw.fresh.includes('that its turn failed again after a nudge') && !since(mark, 'coordinator').some((r) => r.fresh.includes('Nudge it once'))
         && fromSession(startingWith(await messagesOf(threadSession('t3')), '[From the coordinator]'), coord), describe(since(mark)));
 
@@ -559,24 +611,19 @@ try {
     // At once, as the plugin's default has it: the thread asked for the write in its first request.
     const deltaAsked = since(mark, 't4')[0];
     check('the approval note comes at once', deltaAsked !== undefined && saw.at - deltaAsked.at < 5000, `${deltaAsked ? saw.at - deltaAsked.at : '?'} ms after the thread's request`);
-    // A person's stop stays a stop: no note goes to the coordinator (so it can't send the thread on by
+    // A person's stop stays a stop: no note goes to the chat (so it can't send the thread on by
     // itself), and its roster says the user stopped it.
     mark = model.requests.length;
     await bridge('POST', `/sessions/${threadSession('t4')}/cancel`, {});
-    await waitFor(() => readText(logFile).includes(`user-stop ${PROJECT_ID}/t4`) && project().threads?.t4?.lastEnding, 'the Delta user-stop log');
+    await waitFor(() => readText(logFile).includes(`user-stop ${coord}/t4`) && project().threads?.t4?.lastEnding, 'the Delta user-stop log');
     await waitIdle(threadSession('t4'));
     await sleep(1500);
-    check('a person\'s stop sends the coordinator no note', since(mark, 'coordinator').length === 0
+    check('a person\'s stop sends the chat no note', since(mark, 'coordinator').length === 0
         && project().threads.t4.lastEnding.text === 'The turn was stopped by the user before it finished.', `${describe(since(mark, 'coordinator'))} ${JSON.stringify(project().threads.t4.lastEnding)}`);
     check('nothing was written without approval', !existsSync(probe));
 
-    // 7. Coordinator effort changes from the next request, mid-turn.
-    mark = model.requests.length;
-    let reqs = await say(coord, call('thread_settings', { coordinator_effort: 'low' }));
-    check('settings change applies from the next request', reqs[0]?.effort === 'max' && reqs.at(-1)?.effort === 'low', describe(reqs));
-
-    // 8. A thread model without efforts, and a bad effort.
-    reqs = await say(coord, call('thread_settings', { thread_model: 'fake-flash' }));
+    // 7. A thread model without efforts, and a bad effort.
+    let reqs = await say(coord, call('thread_settings', { thread_model: 'fake-flash' }));
     check('settings note the dropped effort', resultOf(reqs).includes('has no effort levels'), resultOf(reqs));
     mark = model.requests.length;
     reqs = await say(coord, call('thread_start', { ask: 'Please do this.', title: 'Epsilon', brief: 'Just answer.' }));
@@ -586,7 +633,7 @@ try {
     reqs = await say(coord, call('thread_settings', { thread_effort: 'ultra' }));
     check('bad effort is refused', /ultra/.test(resultOf(reqs)) && project().settings?.threadEffort !== 'ultra', resultOf(reqs));
 
-    // 9. One thread's effort, then a coordinator message to it.
+    // 8. One thread's effort, then a message from the chat to it.
     reqs = await say(coord, call('thread_update', { thread: 't1', effort: 'max' }));
     check('thread update reports the change', /effort/.test(resultOf(reqs)), resultOf(reqs));
     mark = model.requests.length;
@@ -594,22 +641,22 @@ try {
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the t1 idle note');
     const t1More = since(mark, 't1');
     check('thread override reaches the wire', t1More.length > 0 && t1More.every((r) => r.effort === 'max'), describe(t1More));
-    check('thread gets the coordinator message', t1More[0]?.fresh.includes('[From the coordinator]\n\nOne more check, please.'));
-    check('a coordinator message comes from the coordinator', fromSession(startingWith(await messagesOf(t1), '[From the coordinator]'), coord));
+    check('thread gets the chat\'s message', t1More[0]?.fresh.includes('[From the coordinator]\n\nOne more check, please.'));
+    check('a message from the chat comes from the chat', fromSession(startingWith(await messagesOf(t1), '[From the coordinator]'), coord));
 
-    // 10. Memory reaches the coordinator's next request and new threads.
+    // 9. Memory reaches the chat's next request and new threads.
     reqs = await say(coord, call('shared_notes', { action: 'append', text: '- E2E memory fact.' }));
-    check('memory is written', resultOf(reqs).includes('appended') && readText(join(memoryDir, `${PROJECT_ID}.md`)).includes('E2E memory fact.'));
-    check('memory is in the coordinator prompt', reqs.at(-1)?.system.includes('E2E memory fact.'));
+    check('memory is written', resultOf(reqs).includes('appended') && readText(join(memoryDir, `${coord}.md`)).includes('E2E memory fact.'));
+    check('memory is in the chat\'s rules', reqs.at(-1)?.system.includes('E2E memory fact.'));
     check('memory folder is 700', modeOf(memoryDir) === 0o700, octal(modeOf(memoryDir)));
 
-    // 11. List and read.
+    // 10. List and read.
     reqs = await say(coord, call('thread_list', { include_resolved: true }));
     check('list shows every thread', ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon'].every((t) => resultOf(reqs).includes(t)), resultOf(reqs));
     reqs = await say(coord, call('thread_read', { thread: 't2' }));
     check('read shows what the user said, not injected context', resultOf(reqs).includes('Hello from the user.') && !resultOf(reqs).includes('Current runtime context'), resultOf(reqs));
 
-    // 12. Resolve.
+    // 11. Resolve.
     await say(coord, call('thread_update', { thread: 't2', resolved: true }));
     reqs = await say(coord, call('thread_list', {}));
     check('resolved threads leave the list', !resultOf(reqs).includes('Beta') && resultOf(reqs).includes('Alpha'), resultOf(reqs));
@@ -619,7 +666,7 @@ try {
     check('a long title is cut once, at a word, and DSH keeps it whole', resultOf(reqs).includes(`renamed to "${longTitle}"`)
         && (await bridge('GET', `/sessions/${t2}`)).title === longTitle, `${resultOf(reqs).slice(0, 200)} / ${(await bridge('GET', `/sessions/${t2}`)).title}`);
 
-    // 13. Pause holds a handback; resume delivers it.
+    // 12. Pause holds a handback; resume delivers it.
     reqs = await say(coord, call('thread_settings', { paused: true }));
     check('pause is on', resultOf(reqs).includes('Paused: yes'), resultOf(reqs));
     mark = model.requests.length;
@@ -634,7 +681,39 @@ try {
     const held = (await messagesOf(coord)).findLast((m) => m.text.includes('Held while paused.'));
     check('a held handback still comes from its thread', fromSession(held, t1), JSON.stringify(held?.source));
 
-    // 14. A stop the coordinator asks for is not echoed back to it.
+    // 13. /coordinate off: the chat is a plain chat again, and the window's record of it says it stopped. Its
+    // threads keep running, and what they hand back waits; /coordinate again brings its tools back and
+    // delivers what waited, after DSH logs the command's result.
+    mark = model.requests.length;
+    await say(coord, call('thread_send', { thread: 't1', text: `E2E:slow 5000\n${call('thread_handback', { status: 'done', summary: 'Finished while the chat was off.' })}` }));
+    answer = await command(coord, '/coordinate off');
+    const stoppedView = await viewOf(coord);
+    check('/coordinate off stops it, says its threads keep running, and the window\'s record of the chat says it stopped', answer.ok
+        && /^Stopped coordinating\. Its \d+ threads keep running; reports wait until you run \/coordinate here again\.$/.test(answer.value?.result?.text ?? '')
+        && project().off === true && readText(logFile).includes(`coordinate ${coord} off\n`) && stoppedView?.role === 'coordinator' && stoppedView.off === true,
+        `${JSON.stringify(answer).slice(0, 300)} ${JSON.stringify(stoppedView)}`);
+    const heldBack = await waitFor(() => resultOf(since(mark, 't1')), 't1\'s handback while the chat is off', 30000);
+    await waitIdle(t1);
+    await sleep(1000);
+    check('its thread keeps running, and what it hands back waits', heldBack === 'TOOL-RESULT: Handback saved; the coordinator gets it when it takes reports again.'
+        && since(mark).every((r) => r.action.text !== 'SAW-HANDBACK') && project().pendingHandbacks?.length === 1, `${heldBack} | ${describe(since(mark))}`);
+    reqs = await say(coord, 'Are you still coordinating?');
+    check('meanwhile the chat is a plain chat: no thread tools or rules', reqs.length > 0
+        && reqs.every((r) => !r.tools.includes('thread_start') && !r.system.includes('# Coordinating threads')), reqs[0]?.tools.join(','));
+    mark = model.requests.length;
+    answer = await command(coord, '/coordinate');
+    saw = await coordinatorSaw(mark, 'SAW-HANDBACK', 'the handback that waited');
+    const chatLog = (await bridge('GET', `/sessions/${coord}/events?types=command/done,user/message&limit=2000&full=1`)).events;
+    const doneAt = chatLog.findLast((e) => e.type === 'command/done')?.seq ?? Infinity;
+    const waited = chatLog.find((e) => e.type === 'user/message' && e.text?.startsWith('[Handback from thread t1') && e.text.includes('Finished while the chat was off.'));
+    check('/coordinate again brings its tools back and delivers what waited, after the command\'s result', answer.ok && answer.value?.result?.text === COORDINATING
+        && saw.fresh.includes('[Handback from thread t1 · "Alpha" · status: done]') && saw.tools.includes('thread_start') && waited?.seq > doneAt && fromSession(waited, t1)
+        && readText(logFile).includes(`coordinate ${coord} on again\n`) && project().pendingHandbacks?.length === 0,
+        `${JSON.stringify(answer).slice(0, 200)} done=${doneAt} handback=${waited?.seq} ${JSON.stringify(waited?.source)}`);
+    const onAgain = await viewOf(coord);
+    check('and the window\'s record of the chat says it coordinates again', onAgain?.role === 'coordinator' && onAgain.off === undefined && onAgain.project?.name === CHAT, JSON.stringify(onAgain));
+
+    // 14. A stop the chat asks for is not echoed back to it.
     mark = model.requests.length;
     await say(coord, call('thread_start', {
         ask: 'Please do this.',
@@ -644,14 +723,14 @@ try {
     await coordinatorSaw(mark, 'SAW-APPROVAL', 'the Zeta approval note');
     mark = model.requests.length;
     reqs = await say(coord, call('thread_update', { thread: 't6', stop: true }));
-    check('coordinator can stop a thread', resultOf(reqs).includes('current turn stopped'), resultOf(reqs));
+    check('the chat can stop a thread', resultOf(reqs).includes('current turn stopped'), resultOf(reqs));
     await waitIdle(threadSession('t6'));
     await sleep(1500);
     check('its own stop is not echoed back to it', !since(mark, 'coordinator').some((r) => r.fresh.includes('t6 · "Zeta"')), describe(since(mark, 'coordinator')));
 
-    // 15. Queued turns: the coordinator queues a second message (steer=false)
+    // 15. Queued turns: the chat queues a second message (steer=false)
     // while the first turn runs; DSH runs both before going idle. The first
-    // hands back, the second fails, and the coordinator hears about both.
+    // hands back, the second fails, and the chat hears about both.
     mark = model.requests.length;
     await say(coord, call('thread_start', {
         ask: 'Please do this.',
@@ -661,113 +740,109 @@ try {
     const sent = await say(coord, call('thread_send', { thread: 't7', text: 'E2E:fail', steer: false }));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Eta failure note');
     const t7Reqs = since(mark, 't7');
-    check('the second message was queued while the first turn ran, and the coordinator heard so', sent[0].at < (t7Reqs[1]?.at ?? 0)
+    check('the second message was queued while the first turn ran, and the chat heard so', sent[0].at < (t7Reqs[1]?.at ?? 0)
         && resultOf(sent.filter((r) => whoOf(r) === 'coordinator')) === 'TOOL-RESULT: Queued: t7 sees this when its turn ends; steer=true redirects it now.',
         `${describe(since(mark))} | ${resultOf(sent.filter((r) => whoOf(r) === 'coordinator'))}`);
     check('the first turn handed back', since(mark, 'coordinator').some((r) => r.fresh.includes('Eta part one done.')));
     check('the queued turn that failed gets its note', saw.fresh.includes('[Thread idle without a handback: t7 · "Eta"]') && saw.fresh.includes('The turn failed (HTTP 400):'), saw.fresh.slice(0, 300));
 
-    // 16. DSH dies mid-turn. At the next start the coordinator hears once that
-    // the thread was cut off, and nothing sends the thread on: it waits for the
-    // user's Resume. Then: same coordinator, routes kept, threads still wired.
+    // 16. DSH dies mid-turn. At the next start the chat hears once that the
+    // thread was cut off, and nothing sends the thread on: it waits for the
+    // user's Resume. Then: the same chat still coordinates, threads still wired.
     mark = model.requests.length;
     await say(coord, call('thread_start', { ask: 'Please do this.', title: 'Theta', brief: 'E2E:slow 120000\nWork for a long time.' }));
     await waitFor(() => since(mark, 't8').length > 0, 'the Theta request');
+    const resumes = () => readText(logFile).split('\n').filter((l) => l.endsWith(` coordinator ${coord} ${coord} resumed`)).length;
+    const resumedBefore = resumes();
+    let signInsBefore = signIns();
     const exited = new Promise((r) => child.once('exit', r));
     child.kill('SIGKILL');
     await exited;
     mark = model.requests.length;
     child = startDsh(dsh);
     await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge after restart', 90000);
-    await waitFor(() => readText(logFile).includes(`coordinator ${PROJECT_ID} ${coord} resumed`), 'the plugin to resume the coordinator');
-    check('restart keeps the coordinator', project().coordinatorSessionId === coord);
-    check('a restart does not welcome the coordinator again', model.requests.filter((r) => r.fresh.includes('[Project created')).length === 1);
+    await waitFor(() => resumes() > resumedBefore, 'the plugin to bring the chat up again');
+    check('a restart keeps the chat coordinating', project().coordinatorSessionId === coord && project().off === undefined, JSON.stringify(project()).slice(0, 200));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Theta note after the restart');
     await sleep(1000);
     check('a turn cut off by the crash is told once at the next start, and the thread is not sent on', saw.fresh.includes('[Thread idle without a handback: t8 · "Theta"]')
         && saw.fresh.includes('The turn was cut off because DSH closed while it ran.') && saw.fresh.includes('its card has Resume')
         && since(mark, 'coordinator').filter((r) => r.fresh.includes('t8 · "Theta"')).length === 1
-        && since(mark, 't8').length === 0 && !readText(logFile).includes(`nudge ${PROJECT_ID}/t8 `), `${describe(since(mark))} | ${saw.fresh.slice(0, 300)}`);
+        && since(mark, 't8').length === 0 && !readText(logFile).includes(`nudge ${coord}/t8 `), `${describe(since(mark))} | ${saw.fresh.slice(0, 300)}`);
     mark = model.requests.length;
     await say(coord, call('thread_send', { thread: 't1', text: 'After the restart.' }));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the t1 idle note after restart');
-    check('coordinator keeps its effort after restart', since(mark, 'coordinator').every((r) => r.effort === 'low'), describe(since(mark, 'coordinator')));
+    check('after a restart the chat still coordinates, on its own model', since(mark, 'coordinator').every((r) => r.tools.includes('thread_start') && r.effort === 'low'),
+        describe(since(mark, 'coordinator')));
     const t1After = since(mark, 't1');
     check('thread keeps its effort and tools after restart', t1After.length > 0 && t1After.every((r) => r.effort === 'max' && r.tools.includes('thread_handback')), describe(t1After));
+    web = await signInAgain(signInsBefore);
 
     // 17. New defaults saved while DSH runs (the form on the plugin's page
     // writes the same file) apply without restarting the plugin, to whatever
-    // follows the defaults. The project's own choices (coordinator effort
-    // low, thread model fake-flash) stay: a project's choice comes first.
-    const starts = () => readText(logFile).split('\n').filter((l) => l.includes(` coordinator ${PROJECT_ID} `)).length;
+    // follows the defaults. The chat's own choice (thread model fake-flash)
+    // stays: a chat's choice comes first.
+    const starts = () => readText(logFile).split('\n').filter((l) => l.includes(` coordinator ${coord} `)).length;
     const saves = () => readText(logFile).split('\n').filter((l) => l.endsWith(' defaults saved')).length;
     const startsBefore = starts();
     const savesBefore = saves();
-    writePatch(model.port, { coordinatorEffort: 'high', threadModel: 'fake:fake-model', threadEffort: 'max' });
+    writePatch(model.port, { threadModel: 'fake:fake-model', threadEffort: 'max' });
     await waitFor(() => saves() > savesBefore, 'the plugin to see the saved defaults');
-    check('saved defaults leave the project\'s own choices', project().settings?.coordinatorEffort === 'low' && project().settings?.threadModel === 'fake:fake-flash'
-        && !readText(logFile).includes(' replaced '), JSON.stringify(project().settings));
+    check('saved defaults leave the chat\'s own choices', project().settings?.threadModel === 'fake:fake-flash' && !readText(logFile).includes(' replaced '), JSON.stringify(project().settings));
     check('the plugin was not restarted', starts() === startsBefore, `${startsBefore} → ${starts()}`);
 
-    // 18. The Project settings dialog's endpoints, called as the window calls them.
-    const web = await signInWeb();
-    let answer = await webApi(web, 'dsh-plugin-coordinator/describe', { target: threadSession('t1') });
-    check('the window reads a project through one of its threads', answer.ok && answer.value.project.id === PROJECT_ID && answer.value.project.coordinator === coord
-        && answer.value.settings.coordinatorEffort.value === 'low' && answer.value.settings.coordinatorEffort.inherited.value === 'high'
+    // 18. The Thread settings dialog's endpoints, called as the window calls them.
+    answer = await webApi(web, 'dsh-plugin-coordinator/describe', { target: threadSession('t1') });
+    check('the window reads a chat through one of its threads, with the defaults saved meanwhile', answer.ok && answer.value.project.id === coord && answer.value.project.coordinator === coord
+        && answer.value.project.name === CHAT && answer.value.settings.threadModel.value === 'fake:fake-flash' && answer.value.settings.threadModel.inherited.value === 'fake:fake-model'
+        && answer.value.settings.threadEffort.value === 'max' && answer.value.settings.threadEffort.source === 'plugin default'
         && answer.value.threads.some((t) => t.id === 't5' && t.model === 'fake:fake-flash'), JSON.stringify(answer).slice(0, 500));
-    answer = await webApi(web, 'dsh-plugin-coordinator/update', { target: coord, changes: { coordinatorEffort: null } });
-    await waitFor(() => readText(logFile).includes(`select ${PROJECT_ID}/coordinator fake:fake-model effort=high`), 'the coordinator to follow the default again');
-    check('"Use default" in the window hands the coordinator back to the saved default', answer.ok && answer.value.settings.coordinatorEffort.source === 'plugin default'
-        && answer.value.settings.coordinatorEffort.value === 'high', JSON.stringify(answer).slice(0, 300));
+    answer = await webApi(web, 'dsh-plugin-coordinator/update', { target: coord, changes: { threadModel: null } });
+    check('"Use default" in the window hands the threads back to the saved default', answer.ok && answer.value.settings.threadModel.source === 'plugin default'
+        && answer.value.settings.threadModel.value === 'fake:fake-model' && project().settings?.threadModel === undefined, JSON.stringify(answer).slice(0, 300));
     answer = await webApi(web, 'dsh-plugin-coordinator/update', { target: coord, changes: { threadEffort: 'ultra' } });
     check('the window gets the plugin\'s refusal', answer.ok === false && answer.error?.code === 'coordinator/refused' && /ultra/.test(answer.error.message), JSON.stringify(answer));
-    // The goal: set in the window, over the profile row's, and read by the coordinator and threads from their next request.
-    answer = await webApi(web, 'dsh-plugin-coordinator/update', { target: coord, changes: { goal: 'Prove the plugin on a real host.\nKeep each check small.' } });
-    check('the window sets the project\'s goal over its profile row\'s', answer.ok && answer.value.goal.value === 'Prove the plugin on a real host.\nKeep each check small.'
-        && answer.value.goal.source === 'project setting' && answer.value.goal.inherited === 'Prove the plugin on a real host' && project().settings?.goal === answer.value.goal.value,
-        JSON.stringify(answer.value?.goal ?? answer).slice(0, 300));
     mark = model.requests.length;
     await say(coord, call('thread_start', { ask: 'Please do this.', title: 'Iota', brief: 'Just answer.' }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Iota idle note');
-    check('the coordinator asks with the default effort again', since(mark, 'coordinator').every((r) => r.effort === 'high'), describe(since(mark, 'coordinator')));
-    // Models and efforts are settings: neither the coordinator's own prompt section nor its start result names them unless it chose one.
+    // Models and efforts are settings: neither the chat's rules nor its start result names them unless it chose one.
     const iota = since(mark, 'coordinator');
-    const policyOf = (r) => { const at = r.system.indexOf('# Project coordinator'); return at < 0 ? '' : r.system.slice(at, r.system.indexOf('\n## Threads', at)); };
-    check('the coordinator\'s prompt and start result name no model', iota.length > 0 && iota.every((r) => policyOf(r) !== '' && !/fake-|effort (max|high)|## Settings/.test(policyOf(r)))
+    const policyOf = (r) => { const at = r.system.indexOf('# Coordinating threads'); return at < 0 ? '' : r.system.slice(at, r.system.indexOf('\n## Threads', at)); };
+    check('the chat\'s rules and its start result name no model', iota.length > 0 && iota.every((r) => policyOf(r) !== '' && !/fake-|effort (max|high)|## Settings/.test(policyOf(r)))
         && resultOf(iota) === 'TOOL-RESULT: Started t9 "Iota". It reports back when done. Link it as [Iota](.dsh-thread/t9).',
         `${resultOf(iota)} || ${iota.map((r) => policyOf(r).split('\n').filter((l) => /fake-|effort|Settings/.test(l)).join(' | ')).join(' ;; ')}`);
     const t9Reqs = since(mark, 't9');
-    check('a new thread starts on the project\'s own thread model', t9Reqs.length > 0 && t9Reqs.every((r) => r.model === 'fake-flash' && r.effort === undefined), describe(t9Reqs));
-    check('the coordinator and a new thread read the goal set in the window', iota.every((r) => policyOf(r).includes('\nGoal: Prove the plugin on a real host.\n  Keep each check small.\nWorkspace: '))
-        && t9Reqs.every((r) => r.system.includes('\nProject goal: Prove the plugin on a real host.\n  Keep each check small.\n')),
-        `${iota.map((r) => policyOf(r).split('\n').slice(3, 6).join(' | ')).join(' ;; ')} || ${t9Reqs.map((r) => (r.system.match(/Project goal:[^]{0,80}/) ?? [''])[0]).join(' ;; ')}`);
-    answer = await webApi(web, 'dsh-plugin-coordinator/update', { target: coord, changes: { goal: null } });
-    check('"Use your profile\'s" gives the project its row\'s goal back', answer.ok && answer.value.goal.value === 'Prove the plugin on a real host' && answer.value.goal.source === 'project config'
-        && project().settings?.goal === undefined, JSON.stringify(answer.value?.goal ?? answer).slice(0, 300));
+    check('a new thread starts on the defaults saved while DSH ran', t9Reqs.length > 0 && t9Reqs.every((r) => r.model === 'fake-model' && r.effort === 'max'), describe(t9Reqs));
 
     // Scope: a start that would use a guarded tool the user's words don't name is refused, and one without their words never runs.
     reqs = await say(coord, call('thread_start', { ask: 'Write a haiku about rain.', title: 'Lanes', brief: 'Use mcp__lane-catalog__lanes_status to list the lanes.' }));
     check('a start that would use a guarded tool the user did not ask for is refused', resultOf(reqs).startsWith('TOOL-RESULT: Failed: this would use lane-catalog, and the user\'s words do not ask for it.')
-        && readText(logFile).includes(`guard ${PROJECT_ID} start lane-catalog`), resultOf(reqs));
-    check('the coordinator\'s rules name the user\'s tools it doesn\'t have', reqs.some((r) => r.system.includes('\n   You don\'t have these here: lane-catalog, notes-app. When the user\'s words ask for work that needs one, start a thread with their words in `ask`; the thread gets the ones their words name. Leave them out of briefs, even to forbid them.\n')),
-        reqs.at(-1)?.system.split('\n').filter((l) => /these here|include/.test(l)).join(' | '));
+        && readText(logFile).includes(`guard ${coord} start lane-catalog`), resultOf(reqs));
+    check('the chat\'s rules name the user\'s tools a thread gets only from their words', reqs.some((r) => r.system.includes(' Here those are: lane-catalog, notes-app; a thread gets the ones the user\'s words in `ask` name. Leave them out of briefs, even to forbid them.\n')),
+        reqs.at(-1)?.system.split('\n').filter((l) => /those are|briefs/.test(l)).join(' | '));
     reqs = await say(coord, call('thread_start', { title: 'No ask', brief: 'Just answer.' }));
     check('a start without the user\'s words is rejected before it runs', resultOf(reqs) !== '' && /\bask\b/.test(resultOf(reqs))
         && !Object.values(project().threads ?? {}).some((t) => t.title === 'No ask' || t.title === 'Lanes'), resultOf(reqs).slice(0, 300));
 
-    // 19. A model picked in DSH's own picker (the composer's model menu) becomes the project's coordinator setting.
+    // 19. DSH's own model picker (the composer's model menu). A pick in the chat is the chat's own, as in any
+    // chat: it changes no setting. A pick in a thread's own picker becomes that thread's model.
+    const settingsBefore = JSON.stringify(project().settings);
     answer = await webApi(web, 'session/selectModel', { request: { sessionId: coord, provider: 'fake', model: 'fake-model', reasoningEffort: 'max' } });
-    await waitFor(() => readText(logFile).includes(`picked ${PROJECT_ID}/coordinator fake:fake-model effort=max`), 'the pick to reach the project', 10000).catch(() => {});
-    check('a pick in DSH\'s model picker becomes the coordinator setting', answer.ok && project().settings?.coordinatorModel === 'fake:fake-model' && project().settings?.coordinatorEffort === 'max',
+    await sleep(1000);
+    check('a pick in the chat\'s picker changes no setting', answer.ok && !/ picked /.test(readText(logFile)) && JSON.stringify(project().settings) === settingsBefore,
         `${JSON.stringify(answer).slice(0, 200)} ${JSON.stringify(project().settings)}`);
-    check('selections the plugin makes itself are not taken for picks', readText(logFile).split('\n').filter((l) => / picked /.test(l)).length === 1,
-        readText(logFile).split('\n').filter((l) => / picked | select /.test(l)).join('\n'));
     mark = model.requests.length;
     await say(coord, call('thread_send', { thread: 't5', text: 'After the new defaults.' }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the t5 idle note after the new defaults');
-    check('the coordinator runs on the pick', since(mark, 'coordinator').every((r) => r.model === 'fake-model' && r.effort === 'max'), describe(since(mark, 'coordinator')));
+    check('the chat runs on its pick', since(mark, 'coordinator').every((r) => r.model === 'fake-model' && r.effort === 'max'), describe(since(mark, 'coordinator')));
     const t5After = since(mark, 't5');
     check('a thread keeps the model it started with', t5After.length > 0 && t5After.every((r) => r.model === 'fake-flash' && r.effort === undefined), describe(t5After));
+    answer = await webApi(web, 'session/selectModel', { request: { sessionId: threadSession('t5'), provider: 'fake', model: 'fake-model', reasoningEffort: 'high' } });
+    await waitFor(() => readText(logFile).includes(`picked ${coord}/t5 fake:fake-model effort=high`), 'the thread\'s pick to reach the plugin', 10000).catch(() => {});
+    check('a pick in a thread\'s own picker becomes its model', answer.ok && project().threads?.t5?.model === 'fake:fake-model' && project().threads.t5.effort === 'high',
+        `${JSON.stringify(answer).slice(0, 200)} ${JSON.stringify(project().threads?.t5 ?? {}).slice(0, 200)}`);
+    check('selections the plugin makes itself are not taken for picks', readText(logFile).split('\n').filter((l) => / picked /.test(l)).length === 1,
+        readText(logFile).split('\n').filter((l) => / picked | select /.test(l)).join('\n'));
 
     // 20. An effort the thread model lacks never stops a start: the thread runs at the nearest level it offers.
     answer = await webApi(web, 'dsh-plugin-coordinator/update', { target: coord, changes: { threadModel: 'fake:fake-mini' } });
@@ -779,22 +854,22 @@ try {
     const kappa = since(mark, 't10');
     check('a thread whose model lacks the default effort starts at the nearest one', kappa.length > 0 && kappa.every((r) => r.model === 'fake-mini' && r.effort === 'high'), describe(kappa));
 
-    // 21. The plugin's page lists every project with what it runs and where each setting comes from.
+    // 21. The plugin's page lists every coordinating chat with its thread settings and where each comes from.
     answer = await webApi(web, 'dsh-plugin-coordinator/list', {});
-    const row = answer.ok ? answer.value.projects.find((p) => p.id === PROJECT_ID) : undefined;
-    check('the plugin page lists the project, its settings and where each comes from', row?.coordinator === coord && row.paused === false
-        && row.settings.coordinatorModel.value === 'fake:fake-model' && row.settings.coordinatorModel.source === 'project setting'
-        && row.settings.threadModel.value === 'fake:fake-mini' && row.settings.threadEffort.source === 'plugin default'
-        && row.live?.model === 'fake-model' && row.live?.reasoningEffort === 'max' && row.threads.open > 0, JSON.stringify(answer).slice(0, 600));
+    const row = answer.ok ? answer.value.projects.find((p) => p.id === coord) : undefined;
+    check('the plugin page lists the chat, its settings and where each comes from', row?.coordinator === coord && row.name === CHAT && row.paused === false && row.off === false
+        && row.settings.threadModel.value === 'fake:fake-mini' && row.settings.threadModel.source === 'chat setting' && row.settings.threadEffort.source === 'plugin default'
+        && row.access.threadPermission.value === 'workspace-write' && row.threads.open > 0 && Object.keys(answer.value).sort().join() === 'guarded,permissions,projects',
+        JSON.stringify(answer).slice(0, 600));
 
-    // 21b. News: what threads hand back or finish waits for the user, from anywhere in the window, until they open the coordinator.
+    // 21b. News: what threads hand back or finish waits for the user, from anywhere in the window, until they open the chat.
     answer = await webApi(web, 'dsh-plugin-coordinator/news', {});
     const newsHere = answer.ok ? answer.value.news.find((n) => n.coordinator === coord) : undefined;
-    check('the window hears what threads finished, newest last, until the user opens the coordinator', newsHere?.project === PROJECT_ID && newsHere.unread.length > 0
+    check('the window hears what threads finished, newest last, until the user opens the chat', newsHere?.project === coord && newsHere.name === CHAT && newsHere.unread.length > 0
         && newsHere.unread.at(-1).thread === 't10' && newsHere.unread.at(-1).kind === 'finished' && newsHere.unread.at(-1).title === 'Kappa'
-        && readText(logFile).includes(`news ${PROJECT_ID}/t10 finished`), JSON.stringify(answer).slice(-600));
+        && readText(logFile).includes(`news ${coord}/t10 finished`), JSON.stringify(answer).slice(-600));
     answer = await webApi(web, 'dsh-plugin-coordinator/seeNews', { target: coord, seq: newsHere?.seq });
-    check('opening the coordinator sees its news', answer.ok && answer.value.news.find((n) => n.coordinator === coord)?.unread.length === 0, JSON.stringify(answer).slice(0, 300));
+    check('opening the chat sees its news', answer.ok && answer.value.news.find((n) => n.coordinator === coord)?.unread.length === 0, JSON.stringify(answer).slice(0, 300));
 
     // 22. Code changes: a thread's edits show as +a -d · N files, as DSH's own
     // "Edited N files" card counts them, with the turn DSH's Review tab opens.
@@ -835,18 +910,16 @@ try {
         `${JSON.stringify(lc)} ${card.status} ${JSON.stringify(card.value)?.slice(0, 200)}`);
     // The window's live copy: DSH writes its projection cache at the turn's
     // end, before it announces the turn's changes, so ask the running Host.
-    const projected = await webApi(web, 'session/projections', { request: { sessionId: lambda } });
-    const pv = projected.ok ? projected.value?.values?.coordinatorSession : undefined;
-    const lambdaView = pv?.role ? pv : pv?.v;
+    const lambdaView = await viewOf(lambda);
     check('the thread\'s own view marks the turn, so the window reads its changes again', lambdaView?.role === 'thread'
-        && lambdaView.changes?.some((c) => c.seq === lc?.last.seq && c.turn === lc?.last.turn), projected.ok ? JSON.stringify(lambdaView) : JSON.stringify(projected).slice(0, 400));
+        && lambdaView.changes?.some((c) => c.seq === lc?.last.seq && c.turn === lc?.last.turn), JSON.stringify(lambdaView)?.slice(0, 400));
     // A second turn (the user talking to the thread) edits the file it wrote: lines add up, the file counts once.
     await say(lambda, call('edit', { file_path: join(ws, 'notes.md'), old_string: 'two', new_string: 'TWO' }));
     await turnsKept(2);
     lc = await changesOf(web);
     check('changes add up over the thread\'s turns, and Review opens the newest', lc?.added === 4 && lc.deleted === 1 && lc.files === 1 && lc.turns === 2
         && lc.reviewable === true && lc.last.seq > firstSeq && lc.last.seq === project().threads[lambdaId].changes[1].seq, JSON.stringify(lc));
-    // 22b. Two threads of the project in one folder (the changes study's P1): A only waits while B
+    // 22b. Two threads of the chat in one folder (the changes study's P1): A only waits while B
     // edits, so DSH's summary of each of A's turns lists B's edits. The plugin counts each thread's
     // own: A changed nothing, B the file it wrote (its shell edit isn't counted until shell edits are).
     const quietThread = async (title) => {
@@ -869,11 +942,7 @@ try {
     };
     await overlap(wait6, call('write', { file_path: join(ws, 'b-new.txt'), content: 'from B\n' }));
     await overlap(wait6, call('bash', { command: "printf 'from B shell\\n' >> README.md", description: 'append' }));
-    const marksOf = async (sessionId) => {
-        const got = await webApi(web, 'session/projections', { request: { sessionId } });
-        const value = got.ok ? got.value?.values?.coordinatorSession : undefined;
-        return (value?.role ? value : value?.v)?.changes ?? [];
-    };
+    const marksOf = async (sessionId) => (await viewOf(sessionId))?.changes ?? [];
     const filesIn = async (sessionId, seq) => {
         const res = await httpGet(new URL(`api/changes.summary?${new URLSearchParams({ sessionId, seq: String(seq) })}`, web.base).href, { cookie: web.cookie });
         try { return (JSON.parse(res.text)?.files ?? []).map((f) => f.display ?? f.path); } catch { return []; }
@@ -934,8 +1003,8 @@ try {
     check('a subagent\'s edit is in its thread\'s one diff of the file', sub?.net?.created === true && sub.net.hunks[0]?.newText === 'sub one\nsub two'
         && bNew?.net?.hunks[0]?.newText === 'from B', `${JSON.stringify(sub?.net ?? null)} ${JSON.stringify(bNew?.net ?? null)}`);
 
-    // 22c. A message to a thread in the middle of a turn reaches that turn, so an answer the user gives the
-    // coordinator gets there now, not when the turn ends (behaviour review 4, S3); steer=false queues it (15).
+    // 22d. A message to a thread in the middle of a turn reaches that turn, so an answer the user gives the
+    // chat gets there now, not when the turn ends (behaviour review 4, S3); steer=false queues it (15).
     mark = model.requests.length;
     await say(coord, call('thread_start', {
         ask: 'Please do this.',
@@ -947,12 +1016,12 @@ try {
     await coordinatorSaw(mark, 'SAW-HANDBACK', 'the Xi handback');
     await waitIdle(threadSession(xiId));
     const xiReqs = since(mark, xiId);
-    check('a message to a thread in the middle of a turn goes into that turn, and the coordinator hears so', resultOf(steered) === `TOOL-RESULT: Steered into ${xiId}'s running turn.`
-        && xiReqs.length === 2 && xiReqs[1].fresh.includes('XI-ANSWER') && readText(logFile).includes(`thread-send ${PROJECT_ID}/${xiId} mode=steer `),
+    check('a message to a thread in the middle of a turn goes into that turn, and the chat hears so', resultOf(steered) === `TOOL-RESULT: Steered into ${xiId}'s running turn.`
+        && xiReqs.length === 2 && xiReqs[1].fresh.includes('XI-ANSWER') && readText(logFile).includes(`thread-send ${coord}/${xiId} mode=steer `),
         `${describe(xiReqs)} | ${resultOf(steered)} | ${xiReqs[1]?.fresh.slice(0, 200)}`);
 
-    // 22d. The user quits DSH while a thread waits on a permission prompt. At the next start the
-    // coordinator hears once that DSH closed while it ran, and nothing sends the thread on, so it
+    // 22e. The user quits DSH while a thread waits on a permission prompt. At the next start the
+    // chat hears once that DSH closed while it ran, and nothing sends the thread on, so it
     // asks for nothing again.
     mark = model.requests.length;
     const quitProbe = join(root, 'outside', 'quit-probe.txt');
@@ -966,36 +1035,34 @@ try {
 
     // DSH restarts: the totals stay with the plugin, and Review is no longer offered.
     const lastSeq = lc?.last.seq;
-    const signIns = () => [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].length;
-    const signInsBefore = signIns();
+    signInsBefore = signIns();
     const quitMark = model.requests.length;
     await stopDsh(child);
-    // (25) Views saved by an older version of the plugin, which DSH drops until the session is next loaded.
+    // Views saved by an older version of the plugin, which DSH drops until the session is next loaded.
     const agedViews = ageViews([coord, threadSession('t1')], STATE_VERSION - 1);
     child = startDsh(dsh);
     await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge after the second restart', 90000);
     const nuNote = await coordinatorSaw(quitMark, 'SAW-IDLE', 'the Nu note after the quit');
-    // A prompt asked again would have been told by now (the plugin tells the coordinator at once).
+    // A prompt asked again would have been told by now (the plugin tells the chat at once).
     await sleep(3000);
     check('a thread waiting on a prompt when DSH quits is told once at the next start, is not sent on, and its prompt is not told again',
         nuNote.fresh.includes(`[Thread idle without a handback: ${nuId} · "Nu"]`) && nuNote.fresh.includes('The turn was cut off because DSH closed while it ran.')
         && since(quitMark, 'coordinator').filter((r) => r.fresh.includes(`${nuId} · "Nu"`)).length === 1 && since(quitMark, nuId).length === 0
-        && !readText(logFile).includes(`nudge ${PROJECT_ID}/${nuId} `) && !existsSync(quitProbe), `${describe(since(quitMark))} | ${nuNote.fresh.slice(0, 300)}`);
+        && !readText(logFile).includes(`nudge ${coord}/${nuId} `) && !existsSync(quitProbe), `${describe(since(quitMark))} | ${nuNote.fresh.slice(0, 300)}`);
     const viewsBack = await waitFor(() => agedViews.length === 2 && agedViews.every((id) => savedVersion(id) === STATE_VERSION), 'the old views read again', 30000).catch(() => false);
     // The two aged views, and any DSH hadn't saved yet when it quit (the thread cut off above).
     const refreshed = Number([...readText(logFile).matchAll(/records refreshed=(\d+)/g)].at(-1)?.[1] ?? 0);
     check('views an older version of the plugin saved are read again at start, from the store', viewsBack && refreshed >= 2
         && windowView(threadSession('t1'))?.role === 'thread' && windowView(threadSession('t1'))?.coordinator === coord && windowView(coord)?.role === 'coordinator',
         `${agedViews.length} aged; ${agedViews.map((id) => savedVersion(id)).join(',')}; records refreshed=${refreshed}`);
-    await waitFor(() => signIns() > signInsBefore, 'the new web sign-in link', 30000);
-    const webAgain = await signInWeb();
-    lc = await waitFor(() => changesOf(webAgain), 'the project after the second restart', 30000).catch(() => undefined);
-    card = lastSeq !== undefined ? await dshCard(webAgain, lastSeq) : { status: 0, value: null };
+    web = await signInAgain(signInsBefore);
+    lc = await waitFor(() => changesOf(web), 'the chat after the second restart', 30000).catch(() => undefined);
+    card = lastSeq !== undefined ? await dshCard(web, lastSeq) : { status: 0, value: null };
     check('after a restart the thread\'s changes stay, without a diff to review', lc?.added === 4 && lc.deleted === 1 && lc.files === 1 && lc.reviewable === false && card.status === 404,
         `${JSON.stringify(lc)} ${card.status}`);
-    tab = await tabOf(webAgain, lambda);
+    tab = await tabOf(web, lambda);
     notes = notesIn(tab);
-    const subAgain = subIn(await tabOf(webAgain, coord, writesId));
+    const subAgain = subIn(await tabOf(web, coord, writesId));
     check('after a restart the Changes tab still shows the diffs, its subagent\'s too, and no turn to review in DSH', notes?.added === 4 && notes.edits.length === 2
         && tab.value.turns.length === 2 && tab.value.turns.every((t) => t.reviewable !== true) && subAgain?.edits[0]?.by === 'Write a file',
         `${JSON.stringify(tab).slice(0, 500)} ${JSON.stringify(subAgain ?? null).slice(0, 200)}`);
@@ -1004,18 +1071,13 @@ try {
     mark = model.requests.length;
     await say(coord, 'Which threads changed files?');
     const lambdaLine = since(mark, 'coordinator')[0]?.system.split('\n').find((l) => l.startsWith(`- ${lambdaId} · "Lambda" · `)) ?? '';
-    check('the coordinator\'s roster says what the thread changed', lambdaLine.startsWith(`- ${lambdaId} · "Lambda" · idle · no handback yet · the user talked to it directly`)
+    check('the chat\'s roster says what the thread changed', lambdaLine.startsWith(`- ${lambdaId} · "Lambda" · idle · no handback yet · the user talked to it directly`)
         && lambdaLine.endsWith(' · changed 1 file (+4 -1)'), lambdaLine);
 
     // 23. Failed and stopped threads: each thread's own view says how its
     // last turn ended (read cold after the restart; the crash cut Theta off),
-    // the roster tells the coordinator, and Retry and Resume from the window
+    // the roster tells the chat, and Retry and Resume from the window
     // send the thread on.
-    const viewOf = async (sessionId) => {
-        const read = await webApi(webAgain, 'session/projections', { request: { sessionId } });
-        const value = read.ok ? read.value?.values?.coordinatorSession : undefined;
-        return value?.role ? value : value?.v;
-    };
     const endings = {};
     for (const id of ['t1', 't3', 't4', 't6', 't7', 't8']) endings[id] = (await viewOf(threadSession(id)))?.ending;
     const shape = (e) => (e ? [e.state, e.kind, e.cause ?? null] : null);
@@ -1027,81 +1089,69 @@ try {
     await say(coord, 'Which threads failed?');
     const roster = since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => l.startsWith('- t')) ?? [];
     const lineOf = (id) => roster.find((l) => l.startsWith(`- ${id} · `)) ?? '';
-    check('the roster tells the coordinator which threads failed or stopped', lineOf('t3').includes('· its last turn failed (HTTP 400): fake model rejected the request')
+    check('the roster tells the chat which threads failed or stopped', lineOf('t3').includes('· its last turn failed (HTTP 400): fake model rejected the request')
         && lineOf('t4').includes('· stopped by the user (they can resume it) ·') && lineOf('t8').includes('· its last turn was cut off because DSH closed while it ran.')
         && lineOf('t7').includes('last handback: done') && lineOf('t7').includes('its last turn failed') && !lineOf('t1').includes('its last turn'), roster.join('\n'));
-    check('the coordinator is told to leave a thread the user stopped stopped', since(mark, 'coordinator')[0]?.system.includes('A thread the user stopped stays stopped: when you mention it, say the user stopped it and it can be resumed.'));
-    // Retry: the thread hears it from its coordinator, runs, and its failure clears.
+    check('the chat is told to leave a thread the user stopped stopped', since(mark, 'coordinator')[0]?.system.includes('A thread the user stopped stays stopped: when you mention it, say the user stopped it and it can be resumed.'));
+    // Retry: the thread hears it from its chat, runs, and its failure clears.
     const refusedWhy = (answer) => (answer.ok ? 'ok' : `${answer.error?.code}: ${answer.error?.message}`);
-    let answer2 = await webApi(webAgain, 'dsh-plugin-coordinator/continueThread', { target: coord, thread: 't1' });
-    check('a thread whose last turn finished has nothing to retry', !answer2.ok && answer2.error?.code === 'coordinator/refused' && /nothing to retry/.test(answer2.error.message), refusedWhy(answer2));
-    answer2 = await webApi(webAgain, 'dsh-plugin-coordinator/continueThread', { target: coord, thread: 't2' });
-    check('a resolved thread is not retried', !answer2.ok && /is resolved/.test(answer2.error?.message ?? ''), refusedWhy(answer2));
+    answer = await webApi(web, 'dsh-plugin-coordinator/continueThread', { target: coord, thread: 't1' });
+    check('a thread whose last turn finished has nothing to retry', !answer.ok && answer.error?.code === 'coordinator/refused' && /nothing to retry/.test(answer.error.message), refusedWhy(answer));
+    answer = await webApi(web, 'dsh-plugin-coordinator/continueThread', { target: coord, thread: 't2' });
+    check('a resolved thread is not retried', !answer.ok && /is resolved/.test(answer.error?.message ?? ''), refusedWhy(answer));
     mark = model.requests.length;
-    answer2 = await webApi(webAgain, 'dsh-plugin-coordinator/continueThread', { target: threadSession('t3'), thread: 't3' });
+    answer = await webApi(web, 'dsh-plugin-coordinator/continueThread', { target: threadSession('t3'), thread: 't3' });
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Gamma retry\'s idle note');
     const retried = since(mark, 't3')[0];
-    check('Retry sends the thread on from its coordinator', answer2.ok && answer2.value?.project?.id === PROJECT_ID
+    check('Retry sends the thread on from its chat', answer.ok && answer.value?.project?.id === coord
         && retried?.fresh.includes('[From the coordinator]\n\nThe user asked you to try again. Your last turn failed (HTTP 400): fake model rejected the request. Carry on from where you left off.') && retried.action.text === 'RESUMED'
-        && fromSession(startingWith(await messagesOf(threadSession('t3')), '[From the coordinator]'), coord), `${refusedWhy(answer2)} ${retried?.fresh.slice(0, 300)}`);
-    // Retry starts the count again, so the plugin nudges the retried turn that ended without a handback, and the coordinator hears after that.
-    check('the coordinator hears how the retry went, after the plugin\'s nudge', saw.fresh.includes('[Thread idle without a handback: t3 · "Gamma"]')
+        && fromSession(startingWith(await messagesOf(threadSession('t3')), '[From the coordinator]'), coord), `${refusedWhy(answer)} ${retried?.fresh.slice(0, 300)}`);
+    // Retry starts the count again, so the plugin nudges the retried turn that ended without a handback, and the chat hears after that.
+    check('the chat hears how the retry went, after the plugin\'s nudge', saw.fresh.includes('[Thread idle without a handback: t3 · "Gamma"]')
         && since(mark, 't3').length === 2 && since(mark, 't3')[1].fresh.includes('Finish the task and call thread_handback.'), `${describe(since(mark))} | ${saw.fresh.slice(0, 300)}`);
     check('a turn that finishes clears the failure', (await viewOf(threadSession('t3')))?.ending === undefined, JSON.stringify(await viewOf(threadSession('t3'))));
     // Resume: the same for a stopped thread.
     mark = model.requests.length;
-    answer2 = await webApi(webAgain, 'dsh-plugin-coordinator/continueThread', { target: coord, thread: 't4' });
+    answer = await webApi(web, 'dsh-plugin-coordinator/continueThread', { target: coord, thread: 't4' });
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Delta resume\'s idle note');
-    check('Resume continues a stopped thread', answer2.ok && since(mark, 't4')[0]?.fresh.includes('The user asked you to continue. Your last turn was stopped by the user before it finished.')
-        && (await viewOf(threadSession('t4')))?.ending === undefined, `${refusedWhy(answer2)} ${since(mark, 't4')[0]?.fresh.slice(0, 300)}`);
-    check('the plugin logs each retry', readText(logFile).includes(`thread-continue ${PROJECT_ID}/t3 after=error`) && readText(logFile).includes(`thread-continue ${PROJECT_ID}/t4 after=aborted`));
+    check('Resume continues a stopped thread', answer.ok && since(mark, 't4')[0]?.fresh.includes('The user asked you to continue. Your last turn was stopped by the user before it finished.')
+        && (await viewOf(threadSession('t4')))?.ending === undefined, `${refusedWhy(answer)} ${since(mark, 't4')[0]?.fresh.slice(0, 300)}`);
+    check('the plugin logs each retry', readText(logFile).includes(`thread-continue ${coord}/t3 after=error`) && readText(logFile).includes(`thread-continue ${coord}/t4 after=aborted`));
 
-    // 24. Projects made in the window. New project starts a ◆ coordinator in
-    // a workspace at once; the Projects page lists every project in DSH's
-    // own workspace order; a profile project is renamed in the profile, and
-    // one with a coordinator isn't deleted. A thread works in its project's
-    // workspace, whatever folder is named.
-    const dirA = join(root, 'made-here');
-    const dirB = join(root, 'elsewhere');
-    mkdirSync(dirA);
-    mkdirSync(dirB);
-    const wsA = (await bridge('POST', '/sessions', { workspacePath: dirA })).workspace.id;
-    await bridge('POST', '/sessions', { workspacePath: dirB });
-    const api = (method, args) => webApi(webAgain, `dsh-plugin-coordinator/${method}`, args);
+    // 24. Another chat, in another folder, coordinates too: its Coordinate button (the plugin's coordinate
+    // endpoint) runs /coordinate there, so DSH shows it in that chat and folds the chat's record from it. Its
+    // threads are its own, numbered from t1, and work in its folder. A thread can't coordinate.
+    const secondDir = join(root, 'second');
+    mkdirSync(secondDir);
+    second = (await bridge('POST', '/sessions', { workspacePath: secondDir, title: SECOND, text: 'Hello, second chat.' })).sessionId;
+    await waitFor(() => model.requests.some((r) => r.fresh.includes('Hello, second chat.')), 'the second chat\'s first turn');
+    await waitIdle(second);
+    const api = (method, args) => webApi(web, `dsh-plugin-coordinator/${method}`, args);
+    answer = await api('coordinate', { target: second, on: true });
+    check('Coordinate in another chat makes it coordinate, as /coordinate does', answer.ok && answer.value.coordinating === true && answer.value.session === second
+        && answer.value.text === COORDINATING && answer.value.projects.map((p) => p.id).sort().join() === [coord, second].sort().join(), JSON.stringify(answer).slice(0, 400));
+    const secondRan = (await bridge('GET', `/sessions/${second}/events?types=command/run,command/done&limit=20`)).events.map((e) => e.type);
+    const secondView = await viewOf(second);
+    check('DSH runs it as the command in that chat, and the window\'s record of the chat names it by its title', secondRan.join() === 'command/run,command/done'
+        && secondView?.role === 'coordinator' && secondView.project?.id === second && secondView.project.name === SECOND, `${secondRan.join()} ${JSON.stringify(secondView)}`);
+    answer = await api('coordinate', { target: threadSession('t1'), on: true });
+    check('a thread can\'t coordinate: it reports to its chat', !answer.ok && answer.error?.code === 'coordinator/refused'
+        && (answer.error.message ?? '').includes(`This chat is a thread: it reports to "${CHAT}", which coordinates it.`), JSON.stringify(answer).slice(0, 300));
     mark = model.requests.length;
-    let lists = await api('create', { name: 'Made Here', workspace: wsA });
-    const madeId = lists.value?.project;
-    const madeCoord = lists.value?.coordinator;
-    await waitFor(() => since(mark).some((r) => r.system.includes('You are the coordinator of the DSH project "Made Here"') && r.fresh.includes('[Project created')), 'the new coordinator\'s welcome');
-    const madeView = madeCoord ? await bridge('GET', `/sessions/${madeCoord}`) : null;
-    check('New project starts a welcomed ◆ coordinator in its workspace', lists.ok && madeView?.cwd === realpathSync(dirA) && madeView?.title === '◆ Made Here'
-        && lists.value.projects.find((p) => p.id === madeId)?.home === wsA, JSON.stringify(madeView).slice(0, 300));
-    lists = await api('list', {});
-    const order = (await bridge('GET', '/workspaces')).map((w) => w.id);
-    const places = lists.value?.projects?.map((p) => order.indexOf(p.home)) ?? [];
-    check('the Projects page lists every project in DSH\'s own workspace order, with no categories', lists.ok
-        && lists.value.projects.map((p) => p.id).sort().join() === [PROJECT_ID, madeId].sort().join()
-        && places.every((at, i) => at >= 0 && (i === 0 || places[i - 1] <= at)) && Object.keys(lists.value).sort().join() === 'guarded,permissions,projects',
-    `${JSON.stringify(lists.value?.projects?.map((p) => [p.id, p.home]))} ${JSON.stringify(order)}`);
-    let refused = await api('rename', { project: PROJECT_ID, name: 'Nope' });
-    check('a profile project is renamed in the profile, not here', !refused.ok && /set in your profile/.test(refused.error?.message ?? ''), JSON.stringify(refused));
-    refused = await api('remove', { project: madeId });
-    check('a project with a coordinator isn\'t deleted', !refused.ok && /has a coordinator/.test(refused.error?.message ?? ''), JSON.stringify(refused));
-    refused = await api('createCategory', { name: 'Later', workspace: wsA });
-    check('categories are no part of this plugin', !refused.ok, JSON.stringify(refused).slice(0, 300));
-    mark = model.requests.length;
-    await say(coord, call('thread_start', { ask: 'Please do this.', title: 'Mu', brief: 'Just answer.', folder: 'elsewhere' }));
-    await coordinatorSaw(mark, 'SAW-IDLE', 'the Mu idle note');
-    const muId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Mu')?.[0];
-    const muView = muId ? await bridge('GET', `/sessions/${threadSession(muId)}`) : null;
-    check('a thread works in its project\'s workspace, whatever folder is named', muView?.cwd === realpathSync(ws), JSON.stringify(muView).slice(0, 300));
-    check('the coordinator isn\'t offered other folders', !since(mark, 'coordinator')[0]?.system.includes('other folders'), since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => /folder/i.test(l)).join(' | '));
+    await say(second, call('thread_start', { ask: 'Please do this.', title: 'Elsewhere', brief: 'Just answer.' }));
+    await waitFor(() => since(mark, 'second').some((r) => r.action.text === 'SAW-IDLE'), 'the Elsewhere idle note');
+    await waitIdle(second);
+    const elsewhere = store().projects?.[second]?.threads?.t1;
+    const elsewhereView = elsewhere ? await bridge('GET', `/sessions/${elsewhere.sessionId}`) : null;
+    check('its threads are its own, numbered from t1, and work in its folder', elsewhere?.title === 'Elsewhere' && elsewhereView?.cwd === realpathSync(secondDir)
+        && since(mark, `${SECOND}/t1`)[0]?.fresh.includes(`[Brief from the chat "${SECOND}" · you are thread t1, "Elsewhere"]`)
+        && !Object.values(project().threads ?? {}).some((t) => t.title === 'Elsewhere'), `${JSON.stringify(elsewhereView).slice(0, 200)} | ${describe(since(mark))}`);
 
     // 25. The user's tools and permissions. lane-catalog, one of the user's own tools in this profile
-    // (guardedTools), runs as an MCP server for every session. Under "Your tools: Only when asked", the
-    // default, no coordinator is offered it or can call it, and a thread has it only when the user's own
-    // words for it name it. Threads run on Workspace Write; DSH's default here is Full access, as in the
-    // user's own DSH, and coordinators keep it.
+    // (guardedTools), runs as an MCP server for every session. A coordinating chat has it, as any chat does;
+    // under "Your tools: Only when asked", the default, a thread has it only when the user's own words for it
+    // name it. Threads run on Workspace Write; DSH's default here is Full access, as in the user's own DSH,
+    // and a coordinating chat keeps its own permission.
     const LANES = 'mcp__lane-catalog__lanes_status';
     const plainId = (await bridge('POST', '/sessions', { workspacePath: join(root, 'plain'), text: 'Hello plain session.' })).sessionId;
     await waitIdle(plainId);
@@ -1111,99 +1161,78 @@ try {
     const NOTES = 'notes_read';
     check('a tool another plugin marks as the user\'s own reaches an ordinary session too', plainReq?.tools.includes(NOTES) === true, plainReq?.tools.join(','));
     reqs = await say(coord, `E2E:force ${LANES} {}`);
-    check('a coordinator is never offered the user\'s tool', reqs[0]?.tools.includes('bash') && !reqs[0].tools.includes(LANES)
-        && model.requests.filter((r) => whoOf(r) === 'coordinator').every((r) => !r.tools.includes(LANES)), reqs[0]?.tools.join(','));
-    check('nor one another plugin marks as the user\'s own, read from DSH\'s registry', model.requests.filter((r) => whoOf(r) === 'coordinator').every((r) => !r.tools.includes(NOTES))
-        && reqs[0]?.system.includes('You don\'t have these here: lane-catalog, notes-app.'), reqs[0]?.system.split('\n').find((l) => l.includes('have these here')));
-    check('its call to it anyway is refused before it reaches the server, with what to do instead', resultOf(reqs).includes('which this project keeps out of the coordinator. When the user asks for work that needs it, start a thread')
-        && readText(mcpCalls) === '', resultOf(reqs));
-    // Made Here's coordinator is new: the user has written nothing to it yet. The start's arguments go as JSON with every "l"
+    check('a coordinating chat has the user\'s tools, as any chat does, the one another plugin marks too', reqs[0]?.tools.includes(LANES) && reqs[0].tools.includes(NOTES)
+        && reqs[0].tools.includes('thread_start'), reqs[0]?.tools.join(','));
+    check('and its call reaches the server', resultOf(reqs).includes('alpha up, beta up') && mcpCount() === 1, `${resultOf(reqs)} | ${mcpCount()}`);
+    // The second chat: the user hasn't named the tool there. The start's arguments go as JSON with every "l"
     // escaped, so the message that carries them (the user's words, here) names no tool, nor "lanes", while the ask does.
-    const madeThreads = () => Object.values(store().projects?.[madeId]?.threads ?? {});
     const s4 = 'Use lane-catalog to check which of my model lanes are up right now.';
     const lanesStart = `E2E:call thread_start ${JSON.stringify({ ask: s4, title: 'Lanes up', brief: `Report which are up. E2E:force ${LANES} {}` }).replace(/l/g, '\\u006c').replace(/L/g, '\\u004c')}`;
-    reqs = await say(madeCoord, lanesStart);
+    reqs = await say(second, lanesStart);
     check('an ask that names the user\'s tool when the user never did is refused', resultOf(reqs).startsWith('TOOL-RESULT: Failed: ask names lane-catalog, but the user\'s messages don\'t.')
-        && readText(logFile).includes(` guard ${madeId} ask-unsaid lane-catalog`) && !madeThreads().some((t) => t.title === 'Lanes up'), resultOf(reqs));
-    await say(madeCoord, s4);
+        && readText(logFile).includes(` guard ${second} ask-unsaid lane-catalog`) && !secondThreads().some((t) => t.title === 'Lanes up'), resultOf(reqs));
+    await say(second, s4);
     mark = model.requests.length;
-    reqs = await say(madeCoord, lanesStart);
-    check('once the user asks for it by name, the thread starts with it', /^TOOL-RESULT: Started t\d+ "Lanes up"\. It reports back when done\. The user's words give it lane-catalog\./.test(resultOf(reqs)), resultOf(reqs));
-    await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Made Here"') && whoOf(r) === 'coordinator' && r.action.text === 'SAW-IDLE'), 'the Lanes up idle note');
-    await waitIdle(madeCoord);
-    const lanesReqs = since(mark).filter((r) => /You are thread t\d+, "Lanes up", in the DSH project "Made Here"/.test(r.system));
+    reqs = await say(second, lanesStart);
+    check('once the user asks for it by name, the thread starts with it', /^TOOL-RESULT: Started t\d+ "Lanes up"\. It reports back when done\. The user's words give it lane-catalog\./.test(resultOf(reqs.filter((r) => whoOf(r) === 'second'))),
+        resultOf(reqs.filter((r) => whoOf(r) === 'second')));
+    await waitFor(() => since(mark, 'second').some((r) => r.action.text === 'SAW-IDLE'), 'the Lanes up idle note');
+    await waitIdle(second);
+    const lanesReqs = since(mark).filter((r) => /You are thread t\d+, "Lanes up", started by the DSH chat "Second Chat"/.test(r.system));
     check('the thread is offered the tool the user\'s words name, and its call reaches the server', lanesReqs[0]?.tools.includes(LANES) && resultOf(lanesReqs).includes('alpha up, beta up')
-        && readText(mcpCalls).trim().split('\n').length === 1 && readText(logFile).includes(` wall ${madeId}/coordinator `), `${lanesReqs[0]?.tools.filter((t) => t.startsWith('mcp__')).join(',')} | ${resultOf(lanesReqs)}`);
+        && mcpCount() === 2 && new RegExp(` wall ${second}/t\\d+ \\S+ hid=\\d+ allowed=lane-catalog\\n`).test(readText(logFile)),
+        `${lanesReqs[0]?.tools.filter((t) => t.startsWith('mcp__')).join(',')} | ${resultOf(lanesReqs)} | ${mcpCount()}`);
     check('and not the marked tool its words don\'t ask for', lanesReqs.length > 0 && lanesReqs.every((r) => !r.tools.includes(NOTES)), lanesReqs[0]?.tools.join(','));
     // The user's own words give the marked tool's group to a thread, by the words its plugin set ("my notes app").
     const notesAsk = 'Read my notes app and tell me the first line.';
-    await say(madeCoord, notesAsk);
+    await say(second, notesAsk);
     mark = model.requests.length;
-    reqs = await say(madeCoord, call('thread_start', { ask: notesAsk, title: 'Notes', brief: `Read them. E2E:force ${NOTES} {}` }));
-    await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Made Here"') && whoOf(r) === 'coordinator' && r.action.text === 'SAW-IDLE'), 'the Notes idle note');
-    await waitIdle(madeCoord);
-    const notesReqs = since(mark).filter((r) => /You are thread t\d+, "Notes", in the DSH project "Made Here"/.test(r.system));
-    check('the user\'s own words give a thread the marked tool, and its call reaches it', /The user's words give it notes-app\./.test(resultOf(reqs))
+    reqs = await say(second, call('thread_start', { ask: notesAsk, title: 'Notes', brief: `Read them. E2E:force ${NOTES} {}` }));
+    await waitFor(() => since(mark, 'second').some((r) => r.action.text === 'SAW-IDLE'), 'the Notes idle note');
+    await waitIdle(second);
+    const notesReqs = since(mark).filter((r) => /You are thread t\d+, "Notes", started by the DSH chat "Second Chat"/.test(r.system));
+    check('the user\'s own words give a thread the marked tool, and its call reaches it', /The user's words give it notes-app\./.test(resultOf(reqs.filter((r) => whoOf(r) === 'second')))
         && notesReqs[0]?.tools.includes(NOTES) && resultOf(notesReqs).includes('NOTES: buy milk'), `${resultOf(reqs).slice(0, 200)} | ${resultOf(notesReqs).slice(0, 200)}`);
     // The user writes to a thread directly: the tools their words there name are its own from that turn on.
     mark = model.requests.length;
     await say(t2, `Please ask lane-catalog which are up. E2E:force ${LANES} {}`);
-    const direct = since(mark, 't2').filter((r) => r.system.includes(`in the DSH project "${PROJECT}"`));
+    const direct = since(mark, 't2');
     check('the user\'s own words in a thread give it that tool for the same turn', direct[0]?.tools.includes(LANES) && resultOf(direct).includes('alpha up, beta up')
-        && readText(logFile).includes(`tools ${PROJECT_ID}/t2 +lane-catalog from the user in the thread`), `${direct[0]?.tools.filter((t) => t.startsWith('mcp__')).join(',')} | ${resultOf(direct)}`);
+        && readText(logFile).includes(`tools ${coord}/t2 +lane-catalog from the user in the thread`), `${direct[0]?.tools.filter((t) => t.startsWith('mcp__')).join(',')} | ${resultOf(direct)}`);
     // Permissions, as DSH itself holds them.
-    let described = await webApi(webAgain, 'dsh-plugin-coordinator/describe', { target: madeCoord });
+    let described = await webApi(web, 'dsh-plugin-coordinator/describe', { target: second });
     const lanesRow = described.value?.threads?.find((t) => t.title === 'Lanes up');
-    check('a thread runs on Workspace Write, its coordinator on Read Only, and the window shows both', described.ok && lanesRow?.permission === 'workspace-write'
-        && described.value.project.permission === 'read-only' && lanesRow.tools?.join() === 'lane-catalog' && described.value.project.tools?.length === 0
-        && described.value.permissions?.options?.map((o) => o.value).join() === 'read-only,workspace-write,danger-full-access', JSON.stringify(described.value ?? described).slice(0, 600));
-    const lanesThread = madeThreads().find((t) => t.title === 'Lanes up');
+    const secondValues = await webApi(web, 'session/projections', { request: { sessionId: second } });
+    check('a thread runs on Workspace Write, its chat keeps its own permission (DSH\'s default here), and the window shows both', described.ok && lanesRow?.permission === 'workspace-write'
+        && lanesRow.tools?.join() === 'lane-catalog' && secondValues.value?.values?.permissions?.currentValue === 'danger-full-access'
+        && described.value.permissions?.options?.map((o) => o.value).join() === 'read-only,workspace-write,danger-full-access',
+        `${JSON.stringify(described.value ?? described).slice(0, 500)} ${JSON.stringify(secondValues.value?.values?.permissions ?? secondValues).slice(0, 200)}`);
+    const lanesThread = secondThreads().find((t) => t.title === 'Lanes up');
     const lanesEvents = (await bridge('GET', `/sessions/${lanesThread?.sessionId}/events?types=permission/preset,user/message&limit=50`)).events;
     const presetAt = lanesEvents.findLastIndex((e) => e.type === 'permission/preset');
     check('it is on Workspace Write before it reads its brief', presetAt > 0 && lanesEvents.findIndex((e) => e.type === 'user/message') > presetAt, JSON.stringify(lanesEvents.map((e) => e.type)));
-    described = await webApi(webAgain, 'dsh-plugin-coordinator/describe', { target: coord });
+    described = await webApi(web, 'dsh-plugin-coordinator/describe', { target: coord });
     check('every thread the plugin started ran on Workspace Write', described.ok && described.value.threads.length > 3 && described.value.threads.every((t) => t.permission === 'workspace-write'),
         JSON.stringify(described.value?.threads?.map((t) => [t.id, t.permission])));
-    // Project settings moves the coordinator at once, and new threads start on what it says.
-    let changed = await webApi(webAgain, 'dsh-plugin-coordinator/update', { target: madeCoord, changes: { coordinatorPermission: 'workspace-write' } });
-    check('Project settings moves a coordinator to another permission', changed.ok && changed.value.project.permission === 'workspace-write'
-        && changed.value.access.coordinatorPermission.source === 'project setting', JSON.stringify(changed).slice(0, 400));
-    changed = await webApi(webAgain, 'dsh-plugin-coordinator/update', { target: madeCoord, changes: { coordinatorPermission: null, threadPermission: 'read-only' } });
-    check('and back to Read Only, the plugin\'s default', changed.ok && changed.value.project.permission === 'read-only' && changed.value.access.threadPermission.value === 'read-only', JSON.stringify(changed).slice(0, 400));
-    // On Read Only a coordinator changes no files, and what would need approval is refused without asking the user.
-    const coordinatorFile = join(dirA, 'coordinator-probe.txt');
+    // Thread settings puts new threads on another permission.
+    let changed = await webApi(web, 'dsh-plugin-coordinator/update', { target: second, changes: { threadPermission: 'read-only' } });
+    check('Thread settings puts the chat\'s new threads on another permission', changed.ok && changed.value.access.threadPermission.value === 'read-only'
+        && changed.value.access.threadPermission.source === 'chat setting', JSON.stringify(changed).slice(0, 400));
+    const readOnlyFile = join(secondDir, 'read-only-probe.txt');
     mark = model.requests.length;
-    await say(madeCoord, call('write', { file_path: coordinatorFile, content: 'x', sandbox_permissions: 'danger-full-access', justification: 'E2E coordinator check.' }));
-    await waitFor(() => readText(logFile).includes(` read-only-refused ${madeId}/coordinator write`), 'the coordinator\'s refused write');
-    const pending = (await bridge('GET', `/sessions/${madeCoord}/events?types=approval/asked,approval/decided&limit=20`)).events ?? [];
-    check('a coordinator on Read Only writes nothing, and asks the user nothing', !existsSync(coordinatorFile)
-        && pending.filter((e) => e.type === 'approval/decided').every((e) => e.data?.outcome !== 'allowed-once'),
-        `${existsSync(coordinatorFile)} ${JSON.stringify(pending.map((e) => [e.type, e.data?.outcome]))} ${resultOf(since(mark).filter((r) => whoOf(r) === 'coordinator')).slice(0, 300)}`);
-    // A call asking for a wider sandbox is refused before DSH would ask anyone, in words that aren't the user's no.
-    const wideFile = join(dirA, 'coordinator-wide.txt');
-    mark = model.requests.length;
-    const wide = await say(madeCoord, call('bash', { command: `touch ${JSON.stringify(wideFile)}`, description: 'Touch a file', sandbox_permissions: 'danger-full-access', justification: 'E2E coordinator check.' }));
-    await waitFor(() => readText(logFile).includes(` read-only-refused ${madeId}/coordinator bash wider`), 'the coordinator\'s refused wider call');
-    const asked = (await bridge('GET', `/sessions/${madeCoord}/events?types=approval/asked&limit=20`)).events ?? [];
-    const wideResult = resultOf(wide.filter((r) => whoOf(r) === 'coordinator'));
-    check('a coordinator on Read Only asking for a wider sandbox is refused before anyone is asked, and not as the user\'s no', !existsSync(wideFile)
-        && wideResult.includes('You are on Read Only, so this didn\'t run and nobody was asked') && !/rejected/.test(wideResult) && asked.length === pending.filter((e) => e.type === 'approval/asked').length,
-        `${existsSync(wideFile)} ${asked.length} ${wideResult.slice(0, 300)}`);
-    const readOnlyFile = join(dirA, 'read-only-probe.txt');
-    mark = model.requests.length;
-    await say(madeCoord, call('thread_start', { ask: 'Please do this.', title: 'Read only', brief: call('write', { file_path: readOnlyFile, content: 'x' }) }));
+    await say(second, call('thread_start', { ask: 'Please do this.', title: 'Read only', brief: call('write', { file_path: readOnlyFile, content: 'x' }) }));
     // DSH's sandbox refuses the write, or asks the user; either way nothing is written.
-    await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Made Here"') && whoOf(r) === 'coordinator' && /^SAW-(IDLE|APPROVAL)$/.test(r.action.text ?? '')), 'the Read only note');
-    described = await webApi(webAgain, 'dsh-plugin-coordinator/describe', { target: madeCoord });
+    await waitFor(() => since(mark, 'second').some((r) => /^SAW-(IDLE|APPROVAL)$/.test(r.action.text ?? '')), 'the Read only note');
+    described = await webApi(web, 'dsh-plugin-coordinator/describe', { target: second });
     check('a thread on Read Only can\'t write even in its own folder', described.value?.threads?.find((t) => t.title === 'Read only')?.permission === 'read-only' && !existsSync(readOnlyFile),
-        resultOf(since(mark).filter((r) => /You are thread t\d+, "Read only", in the DSH project/.test(r.system))));
+        resultOf(since(mark).filter((r) => /You are thread t\d+, "Read only", started by the DSH chat/.test(r.system))));
 
     // 25b. Rule 6, held by the plugin: a thread's command that sends outside the workspace waits for the user in DSH's
-    // prompt, which says what it sends, and its coordinator hears so; Allow once runs it once, and the same command
+    // prompt, which says what it sends, and its chat hears so; Allow once runs it once, and the same command
     // again, as a retry, asks again (a Reject sends nothing); a read runs; two sends in one step ask once; a send that
-    // asks for a wider sandbox is asked about before DSH asks to widen it; the coordinator's own send is refused without
-    // asking anyone; a thread whose approvals never ask is refused, with what the user can do. The test answers the
-    // prompt as the window does.
+    // asks for a wider sandbox is asked about before DSH asks to widen it; a thread whose approvals never ask is refused,
+    // with what the user can do. The coordinating chat's own sends and deletes run as DSH decides for any chat. The
+    // test answers the prompt as the window does.
     const hits = [];
     const sink = createServer((req, res) => {
         hits.push(`${req.method} ${req.url}`);
@@ -1213,7 +1242,7 @@ try {
     await new Promise((r) => sink.listen(0, '127.0.0.1', r));
     const sinkAt = `127.0.0.1:${sink.address().port}`;
     const posted = () => hits.filter((h) => !h.startsWith('GET ')).length;
-    const prompts = await approvalsOf(webAgain);
+    const prompts = await approvalsOf(web);
     try {
         const deploy = { command: `curl -sS -X POST --data '{"v":1}' http://${sinkAt}/deploy`, description: 'Deploy the build' };
         const sends = `sends a POST to ${sinkAt}/deploy (curl)`;
@@ -1223,11 +1252,11 @@ try {
         const first = await prompts.next('the Send prompt', ofDeploy);
         saw = await coordinatorSaw(mark, 'SAW-APPROVAL', 'the Send approval note');
         const sendId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Send')?.[0];
-        const asks = () => readText(logFile).split('\n').filter((line) => line.endsWith(` send-ask ${PROJECT_ID}/${sendId} request curl`)).length;
+        const asks = () => readText(logFile).split('\n').filter((line) => line.endsWith(` send-ask ${coord}/${sendId} request curl`)).length;
         check('a thread\'s command that sends waits for the user in DSH\'s prompt, which says what it sends, then the thread\'s own words for it',
             first.request.displayReason?.en === `This command ${sends}. A thread asks you before each command that sends outside the workspace.\nThe thread says: "Deploy the build"`
             && posted() === 0 && asks() === 1, JSON.stringify(first.request));
-        check('its coordinator hears what it waits on', saw.fresh.includes(`[Thread waiting for approval: ${sendId} · "Send"]`)
+        check('its chat hears what it waits on', saw.fresh.includes(`[Thread waiting for approval: ${sendId} · "Send"]`)
             && saw.fresh.includes(`It asked to use bash: the command ${sends}`), saw.fresh.slice(0, 400));
         mark = model.requests.length;
         const allowed = await prompts.answer(first, 'allowed-once');
@@ -1242,13 +1271,13 @@ try {
         check('the same command again, as a retry, asks again, and a Reject sends nothing', again.eventId !== first.eventId && asks() === 2 && posted() === 1,
             `${asks()} ${hits.join()}`);
         // Behaviour review 5, S3 r4: the thread reads what the user declined and to hand back needs_decision, and its
-        // coordinator hears it with the thread's next note, so its reply says so.
-        check('after a Reject, the thread reads what the user declined, and its coordinator hears it',
+        // chat hears it with the thread's next note, so its reply says so.
+        check('after a Reject, the thread reads what the user declined, and its chat hears it',
             resultOf(since(mark, sendId)).includes(`Error: the user declined this command at the prompt: it ${sends}. Don't run it`)
             && retrySaw.fresh.includes(`The user declined its prompt for a command that ${sends}.`), `${resultOf(since(mark, sendId))} ${retrySaw.fresh.slice(0, 600)}`);
-        // Its first turn used up its nudge, and the coordinator's retry starts no new count; the user's answer does, so
-        // the retry's turn that ended without a handback was nudged before the coordinator heard.
-        const retryLog = readText(logFile).split('\n').filter((line) => line.includes(` ${PROJECT_ID}/${sendId} `) && / (prompt-answered|nudge|idle-note) /.test(line)).slice(-3).map((line) => line.split(' ')[1]);
+        // Its first turn used up its nudge, and the chat's retry starts no new count; the user's answer does, so
+        // the retry's turn that ended without a handback was nudged before the chat heard.
+        const retryLog = readText(logFile).split('\n').filter((line) => line.includes(` ${coord}/${sendId} `) && / (prompt-answered|nudge|idle-note) /.test(line)).slice(-3).map((line) => line.split(' ')[1]);
         check('after the user answers its prompt, a turn that ends without a handback gets its own nudge', retryLog.join() === 'prompt-answered,nudge,idle-note', retryLog.join());
         mark = model.requests.length;
         await say(coord, call('thread_start', { ask: 'Check that staging is up.', title: 'Read', brief: call('bash', { command: `curl -sS http://${sinkAt}/health`, description: 'Check staging' }) }));
@@ -1268,7 +1297,7 @@ try {
         const bothAsked = (await bridge('GET', `/sessions/${threadSession(bothId)}/events?types=approval/asked&limit=20`)).events ?? [];
         check('two sends in one step put one prompt in front of the user; the other is refused unasked, with what to do', bothAsked.length === 1 && posted() === 1
             && resultOf(since(mark, bothId)).includes(`the command sends a POST to ${sinkAt}/second (curl). Another command of yours that sends, from the same step, went to the user first`)
-            && readText(logFile).includes(`send-refused ${PROJECT_ID}/${bothId} request curl one-at-a-time`), `${bothAsked.length} ${hits.join()} ${resultOf(since(mark, bothId))}`);
+            && readText(logFile).includes(`send-refused ${coord}/${bothId} request curl one-at-a-time`), `${bothAsked.length} ${hits.join()} ${resultOf(since(mark, bothId))}`);
         // A send that asks for a wider sandbox: the plugin's prompt comes first, and DSH asks to widen the sandbox only
         // once that one is allowed, in the tool itself. A Reject there sends nothing.
         mark = model.requests.length;
@@ -1282,26 +1311,35 @@ try {
         check('a send that asks for a wider sandbox shows the plugin\'s prompt first, and DSH asks to widen it only after that Allow once',
             ours.request.displayReason?.en === `This command sends a POST to ${sinkAt}/wide (curl). A thread asks you before each command that sends outside the workspace.\nThe thread says: "Send it wide" and, for wider access, "E2E escalation check."`
             && posted() === 1, `${JSON.stringify(ours.request)} ${JSON.stringify(widen.request)} ${hits.join()}`);
-        const coordAsked = async () =>((await bridge('GET', `/sessions/${coord}/events?types=approval/asked&limit=50`)).events ?? []).length;
+        // The coordinating chat keeps the user's own access: on Full access its send and its delete run without a prompt,
+        // and the plugin holds neither.
+        const coordAsked = async () => ((await bridge('GET', `/sessions/${coord}/events?types=approval/asked&limit=50`)).events ?? []).length;
         const askedBefore = await coordAsked();
+        const holds = () => readText(logFile).split('\n').filter((line) => / (send|delete)-(ask|refused) /.test(line)).length;
+        const holdsBefore = holds();
         reqs = await say(coord, call('bash', { command: `curl -sS -X POST http://${sinkAt}/deploy`, description: 'Deploy' }));
-        check('a coordinator\'s send is refused, and nobody is asked', resultOf(reqs).includes(`Not run: the command ${sends}. You don't send anything yourself`)
-            && posted() === 1 && (await coordAsked()) === askedBefore && readText(logFile).includes(`send-refused ${PROJECT_ID}/coordinator request curl`), resultOf(reqs));
-        changed = await webApi(webAgain, 'dsh-plugin-coordinator/update', { target: madeCoord, changes: { threadPermission: 'danger-full-access' } });
+        check('a coordinating chat\'s own send runs as DSH decides: here, on Full access, without a prompt', resultOf(reqs).includes('SINK-RECEIVED')
+            && posted() === 2 && (await coordAsked()) === askedBefore && holds() === holdsBefore, `${resultOf(reqs).slice(0, 300)} ${hits.join()} ${holds() - holdsBefore}`);
+        const chatOld = join(ws, 'chat-old');
+        mkdirSync(chatOld);
+        writeFileSync(join(chatOld, 'notes.txt'), 'the user\'s notes\n');
+        reqs = await say(coord, call('bash', { command: `rm -rf ${JSON.stringify(chatOld)}`, description: 'Remove the old notes' }));
+        check('and so does its delete of files it didn\'t create', !existsSync(chatOld) && (await coordAsked()) === askedBefore && holds() === holdsBefore,
+            `${existsSync(chatOld)} ${resultOf(reqs).slice(0, 300)} ${holds() - holdsBefore}`);
+        changed = await webApi(web, 'dsh-plugin-coordinator/update', { target: second, changes: { threadPermission: 'danger-full-access' } });
         mark = model.requests.length;
-        await say(madeCoord, call('thread_start', { ask: 'Please do this.', title: 'Never asks', brief: call('bash', { command: `curl -sS -X POST http://${sinkAt}/deploy`, description: 'Deploy' }) }));
-        await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Made Here"') && whoOf(r) === 'coordinator' && r.action.text === 'SAW-IDLE'), 'the Never asks idle note');
-        await waitIdle(madeCoord);
-        const neverReqs = since(mark).filter((r) => /You are thread t\d+, "Never asks", in the DSH project "Made Here"/.test(r.system));
+        await say(second, call('thread_start', { ask: 'Please do this.', title: 'Never asks', brief: call('bash', { command: `curl -sS -X POST http://${sinkAt}/deploy`, description: 'Deploy' }) }));
+        await waitFor(() => since(mark, 'second').some((r) => r.action.text === 'SAW-IDLE'), 'the Never asks idle note');
+        await waitIdle(second);
+        const neverReqs = since(mark).filter((r) => /You are thread t\d+, "Never asks", started by the DSH chat "Second Chat"/.test(r.system));
         check('a thread whose approvals never ask can\'t send, and hears what the user can do', changed.ok && resultOf(neverReqs).includes('this thread\'s permission never asks')
-            && resultOf(neverReqs).includes('the user can put this thread on Workspace Write') && posted() === 1 && new RegExp(` send-refused ${madeId}/t\\d+ request curl never-asks`).test(readText(logFile)), resultOf(neverReqs));
-        await webApi(webAgain, 'dsh-plugin-coordinator/update', { target: madeCoord, changes: { threadPermission: 'read-only' } });
+            && resultOf(neverReqs).includes('the user can put this thread on Workspace Write') && posted() === 2 && new RegExp(` send-refused ${second}/t\\d+ request curl never-asks`).test(readText(logFile)), resultOf(neverReqs));
+        await webApi(web, 'dsh-plugin-coordinator/update', { target: second, changes: { threadPermission: 'read-only' } });
 
         // 25c. Deletes (batch 5 review M1, M2): a folder a thread's command made is its own with what it put there, but
         // not with the user's folder moved into it (B1); on DSH 0.2.1 a relative path is from the thread's working
-        // directory (M2). The project is at its threads-per-hour limit by now, so the threads above do these. The test
-        // rejects each prompt, so nothing goes.
-        const deleteAsks = (id) => readText(logFile).split('\n').filter((line) => line.endsWith(` delete-ask ${PROJECT_ID}/${id} rm`)).length;
+        // directory (M2). The threads above do these. The test rejects each prompt, so nothing goes.
+        const deleteAsks = (id) => readText(logFile).split('\n').filter((line) => line.endsWith(` delete-ask ${coord}/${id} rm`)).length;
         mkdirSync(join(ws, 'legacy'), { recursive: true });
         writeFileSync(join(ws, 'legacy', 'notes.txt'), 'the user\'s notes\n');
         // The user's folder is from before the thread's command, past the clock's slack the plugin allows.
@@ -1310,7 +1348,7 @@ try {
         mark = model.requests.length;
         await say(coord, call('thread_send', { thread: tidyId, text: call('bash', { command: `cd ${ws} && mkdir old && mv legacy old/ && mkdir -p scratch && echo hi > scratch/a.txt`, description: 'Move the old notes' }) }));
         await coordinatorSaw(mark, 'SAW-IDLE', 'the Tidy idle note');
-        check('a thread\'s command that makes folders keeps them as its own', existsSync(join(ws, 'old', 'legacy', 'notes.txt')) && readText(logFile).includes(`made-dirs ${PROJECT_ID}/${tidyId} 2`),
+        check('a thread\'s command that makes folders keeps them as its own', existsSync(join(ws, 'old', 'legacy', 'notes.txt')) && readText(logFile).includes(`made-dirs ${coord}/${tidyId} 2`),
             readText(logFile).split('\n').filter((line) => line.includes('made-dirs')).join(' | '));
         mark = model.requests.length;
         await say(coord, call('thread_send', { thread: tidyId, text: call('bash', { command: `cd ${ws} && rm -rf scratch`, description: 'Clean up the scratch folder' }) }));
@@ -1327,7 +1365,7 @@ try {
         mkdirSync(join(ws, 'packages', 'web', 'src'), { recursive: true });
         writeFileSync(join(ws, 'packages', 'web', 'src', 'main.js'), 'console.log(1);\n');
         const webId = readId;
-        if (model.requests.some((r) => whoOf(r) === webId && r.system.includes(`in the DSH project "${PROJECT}"`) && r.tools.includes('working_directory'))) {
+        if (model.requests.some((r) => whoOf(r) === webId && r.tools.includes('working_directory'))) {
             mark = model.requests.length;
             await say(coord, call('thread_send', { thread: webId, text: call('working_directory', { cd: join(ws, 'packages', 'web') }) }));
             await coordinatorSaw(mark, 'SAW-IDLE', 'the working directory idle note');
@@ -1346,91 +1384,93 @@ try {
         sink.close();
     }
 
-    // 26. A coordinator's message out of its project (chat_message): to a chat in no project, and to another
-    // project's coordinator. The chat stays outside: no project tools or prompt, no role in the window. Its answer
-    // comes back to the coordinator once, and a turn the message started can't send one on.
-    const plainTitle = (await bridge('GET', `/sessions/${plainId}`)).title;
-    const ours = (r) => r.system.includes(`You are the coordinator of the DSH project "${PROJECT}"`);
+    // 26. A coordinating chat's message to another chat (chat_message): to a chat that doesn't coordinate, and to
+    // one that does. The chat that gets it stays as it is: no thread tools or rules, no role in the window. Its
+    // answer comes back once, and a turn the message started can't send one on.
+    const plainName = (await bridge('GET', `/sessions/${plainId}`)).title || plainId;
+    const ours = (r) => whoOf(r) === 'coordinator';
     mark = model.requests.length;
-    reqs = await say(coord, call('chat_message', { to: plainId, ask: 'Say hello to my plain chat for me.', text: 'Hello from the e2e project.' }));
-    check('a coordinator sends a chat in no project the message the user asked for', resultOf(reqs) === `TOOL-RESULT: Sent to "${plainTitle}". Its reply comes back to you once, as a note.`, resultOf(reqs));
-    const plainSaw = await waitFor(() => since(mark).find((r) => r.fresh.includes(`[Message from the coordinator of "${PROJECT}"]`)), 'the chat\'s turn on the message');
-    check('the chat reads it as from the project, with the user\'s words, and has no project tools or prompt', plainSaw.fresh.includes('The user asked: "Say hello to my plain chat for me."')
-        && plainSaw.fresh.includes('Hello from the e2e project.') && !plainSaw.tools.some((t) => t.startsWith('project_')) && !/Project (coordinator|thread)/.test(plainSaw.system),
-    `${plainSaw.tools.filter((t) => t.startsWith('project_')).join(',')} | ${plainSaw.fresh.slice(0, 300)}`);
-    const replyReq = await waitFor(() => since(mark).find((r) => ours(r) && r.fresh.includes(`[Reply from "${plainTitle}"]`)), 'the reply note');
+    reqs = await say(coord, call('chat_message', { to: plainId, ask: 'Say hello to my plain chat for me.', text: 'Hello from the e2e chat.' }));
+    check('a coordinating chat sends another chat the message the user asked for', resultOf(reqs) === `TOOL-RESULT: Sent to "${plainName}". Its reply comes back to you once, as a note.`, resultOf(reqs));
+    const plainSaw = await waitFor(() => since(mark).find((r) => r.fresh.includes(`[Message from the chat "${CHAT}"]`)), 'the chat\'s turn on the message');
+    check('the chat reads it as from the coordinating chat, with the user\'s words, and has no thread tools or rules', plainSaw.fresh.includes('The user asked: "Say hello to my plain chat for me."')
+        && plainSaw.fresh.includes('Hello from the e2e chat.') && !plainSaw.tools.some((t) => t.startsWith('thread_')) && whoOf(plainSaw) === 'other',
+    `${plainSaw.tools.filter((t) => t.startsWith('thread_')).join(',')} | ${plainSaw.fresh.slice(0, 300)}`);
+    const replyReq = await waitFor(() => since(mark).find((r) => ours(r) && r.fresh.includes(`[Reply from "${plainName}"]`)), 'the reply note');
     await waitIdle(coord);
-    check('its answer comes back to the coordinator as a note', replyReq.fresh.includes('SAW-MESSAGE') && replyReq.action.text === 'SAW-REPLY'
-        && readText(logFile).includes(`message-reply ${PROJECT_ID} ${plainId} delivered`), replyReq.fresh.slice(0, 300));
-    check('the window shows no project on that chat', !(await viewOf(plainId)), JSON.stringify(await viewOf(plainId)));
+    check('its answer comes back to the coordinating chat as a note', replyReq.fresh.includes('SAW-MESSAGE') && replyReq.action.text === 'SAW-REPLY'
+        && readText(logFile).includes(`message-reply ${coord} ${plainId} delivered`), replyReq.fresh.slice(0, 300));
+    check('the window shows no role on that chat', !(await viewOf(plainId)), JSON.stringify(await viewOf(plainId)));
     mark = model.requests.length;
     await say(plainId, 'Second hello.');
-    await new Promise((r) => setTimeout(r, 1500));
-    check('a later turn of that chat sends the coordinator nothing', !since(mark).some((r) => ours(r)), describe(since(mark)));
+    await sleep(1500);
+    check('a later turn of that chat sends the coordinating chat nothing', !since(mark).some((r) => ours(r)), describe(since(mark)));
     mark = model.requests.length;
-    const bounce = call('chat_message', { to: PROJECT, ask: 'Tell the E2E project hello.', text: 'Hello back.' });
-    reqs = await say(coord, call('chat_message', { to: '◆ Made Here', ask: 'Ask Made Here to say hello back.', text: bounce }));
-    check('a coordinator sends another project\'s coordinator a message', resultOf(reqs) === 'TOOL-RESULT: Sent to ◆ Made Here. Its reply comes back to you once, as a note.', resultOf(reqs));
-    const back = await waitFor(() => since(mark).find((r) => ours(r) && r.fresh.includes('[Reply from ◆ Made Here]')), 'Made Here\'s reply');
+    const bounce = call('chat_message', { to: CHAT, ask: 'Tell the E2E chat hello.', text: 'Hello back.' });
+    reqs = await say(coord, call('chat_message', { to: SECOND, ask: 'Ask Second Chat to say hello back.', text: bounce }));
+    check('a coordinating chat sends another coordinating chat a message', resultOf(reqs.filter((r) => ours(r))) === `TOOL-RESULT: Sent to "${SECOND}". Its reply comes back to you once, as a note.`,
+        resultOf(reqs.filter((r) => ours(r))));
+    const back = await waitFor(() => since(mark).find((r) => ours(r) && r.fresh.includes(`[Reply from "${SECOND}"]`)), 'the second chat\'s reply');
     await waitIdle(coord);
-    check('that coordinator can\'t send one on in a turn the message started, and its answer comes back', back.fresh.includes('TOOL-RESULT: Failed: a message goes out of the project only in a turn the user started')
-        && readText(logFile).includes(` guard ${madeId} message-not-asked`) && !readText(logFile).includes(`message ${madeId} `), back.fresh.slice(0, 400));
+    check('that chat can\'t send one on in a turn the message started, and its answer comes back', back.fresh.includes('TOOL-RESULT: Failed: a message goes to another chat only in a turn the user started')
+        && readText(logFile).includes(` guard ${second} message-not-asked`) && !readText(logFile).includes(`message ${second} `), back.fresh.slice(0, 400));
 
-    // 27. Archive: the project goes with its coordinator and threads, and comes back with them. A new start leaves
-    // it archived without making a coordinator, and DSH's own Archive and Unarchive on the ◆ row take the threads too.
-    const webArchive = await signInWeb();
+    // 27. Archive: the chat goes with its threads, and comes back with them. A new start leaves it archived and wakes
+    // nothing of it, and DSH's own Archive and Unarchive on the chat's row take the threads too.
     // DSH's archive set, read through its own endpoint: unarchiving an id it doesn't hold changes nothing and answers with the set.
-    const archivedNow = async () => (await webApi(webArchive, 'workspace/unarchiveSession', { request: { sessionId: 'e2e-none' } })).value?.archivedSessionIds ?? [];
-    const projectSessions = [coord, ...Object.values(project().threads ?? {}).map((t) => t.sessionId).filter(Boolean)];
-    let archiveAnswer = await webApi(webArchive, 'dsh-plugin-coordinator/archive', { project: coord });
+    const archivedNow = async () => (await webApi(web, 'workspace/unarchiveSession', { request: { sessionId: 'e2e-none' } })).value?.archivedSessionIds ?? [];
+    const chatSessions = [coord, ...Object.values(project().threads ?? {}).map((t) => t.sessionId).filter(Boolean)];
+    let archiveAnswer = await webApi(web, 'dsh-plugin-coordinator/archive', { project: coord });
     let inArchive = await archivedNow();
-    check('Archive project archives the coordinator and every thread in DSH', archiveAnswer.ok && archiveAnswer.value.archived === projectSessions.length
-        && projectSessions.every((id) => inArchive.includes(id)), `${JSON.stringify(archiveAnswer).slice(0, 200)} ${projectSessions.length} ${inArchive.length}`);
-    check('the list says the project is archived', archiveAnswer.value?.projects?.find((p) => p.id === PROJECT_ID)?.archived === true
+    check('Archive archives the chat and every thread of it in DSH', archiveAnswer.ok && archiveAnswer.value.archived === chatSessions.length
+        && chatSessions.every((id) => inArchive.includes(id)), `${JSON.stringify(archiveAnswer).slice(0, 200)} ${chatSessions.length} ${inArchive.length}`);
+    check('the list says the chat is archived', archiveAnswer.value?.projects?.find((p) => p.id === coord)?.archived === true
         && project().archived?.via === 'window', JSON.stringify(project().archived));
     mark = model.requests.length;
+    signInsBefore = signIns();
     await stopDsh(child);
     const logBefore = readText(logFile).length;
     child = startDsh(dsh);
     await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge after the archive', 90000);
-    // The other project's coordinator resumes as usual: the plugin's start is past this project by then.
-    await waitFor(() => readText(logFile).slice(logBefore).includes(`coordinator ${madeId} `), 'the plugin to start again', 60000);
-    await new Promise((r) => setTimeout(r, 1500));
-    const webAfter = await signInWeb();
-    const heldAfter = (await webApi(webAfter, 'workspace/unarchiveSession', { request: { sessionId: 'e2e-none' } })).value?.archivedSessionIds ?? [];
-    check('a new start keeps it archived, wakes nothing of it and makes no coordinator', project().coordinatorSessionId === coord && project().archived
-        && projectSessions.every((id) => heldAfter.includes(id)) && !readText(logFile).slice(logBefore).includes(`coordinator ${PROJECT_ID} `)
-        && since(mark).every((r) => !r.system.includes(`You are the coordinator of the DSH project "${PROJECT}"`)), readText(logFile).slice(logBefore).slice(0, 600));
-    archiveAnswer = await webApi(webAfter, 'dsh-plugin-coordinator/restore', { project: PROJECT_ID });
-    inArchive = (await webApi(webAfter, 'workspace/unarchiveSession', { request: { sessionId: 'e2e-none' } })).value?.archivedSessionIds ?? [];
-    check('Restore project brings the coordinator and every thread back', archiveAnswer.ok && archiveAnswer.value.restored === projectSessions.length
-        && projectSessions.every((id) => !inArchive.includes(id)) && project().archived === undefined
-        && readText(logFile).includes(`coordinator ${PROJECT_ID} ${coord} resumed`), JSON.stringify(archiveAnswer).slice(0, 200));
-    // DSH's own Archive on the idle ◆ row, as its menu or shortcut does it: the plugin takes the threads.
-    let own = await webApi(webAfter, 'workspace/archiveSession', { request: { sessionId: coord } });
+    // The second chat comes up as usual: the plugin's start is past this one by then.
+    await waitFor(() => readText(logFile).slice(logBefore).includes(`coordinator ${second} `), 'the plugin to start again', 60000);
+    await sleep(1500);
+    web = await signInAgain(signInsBefore);
+    const heldAfter = await archivedNow();
+    check('a new start keeps it archived and wakes nothing of it', project().coordinatorSessionId === coord && project().archived
+        && chatSessions.every((id) => heldAfter.includes(id)) && !readText(logFile).slice(logBefore).includes(` coordinator ${coord} `)
+        && since(mark).every((r) => whoOf(r) !== 'coordinator'), readText(logFile).slice(logBefore).slice(0, 600));
+    archiveAnswer = await webApi(web, 'dsh-plugin-coordinator/restore', { project: coord });
+    inArchive = await archivedNow();
+    check('Restore brings the chat and every thread of it back', archiveAnswer.ok && archiveAnswer.value.restored === chatSessions.length
+        && chatSessions.every((id) => !inArchive.includes(id)) && project().archived === undefined
+        && readText(logFile).slice(logBefore).includes(`coordinator ${coord} ${coord} resumed`), JSON.stringify(archiveAnswer).slice(0, 200));
+    // DSH's own Archive on the chat's idle row, as its menu or shortcut does it: the plugin takes the threads.
+    let own = await webApi(web, 'workspace/archiveSession', { request: { sessionId: coord } });
     if (!own.ok && own.error?.code === 'workspace/session-active') {
-        // Something of the project still runs, so DSH asks first; its dialog's Stop and archive does this.
-        own = await webApi(webAfter, 'workspace/archiveSession', { request: { sessionId: coord, stopActivity: true } });
+        // Something of the chat still runs, so DSH asks first; its dialog's Stop and archive does this.
+        own = await webApi(web, 'workspace/archiveSession', { request: { sessionId: coord, stopActivity: true } });
     }
     const followed = await waitFor(async () => {
-        const ids = (await webApi(webAfter, 'workspace/unarchiveSession', { request: { sessionId: 'e2e-none' } })).value?.archivedSessionIds ?? [];
-        return projectSessions.every((id) => ids.includes(id)) ? ids : null;
-    }, 'the threads following the ◆ row into the archive', 15000).catch(() => null);
-    check('DSH\'s own Archive on the ◆ row archives the project\'s threads too', own.ok && followed !== null && project().archived?.via === 'dsh', JSON.stringify(own).slice(0, 200));
-    await webApi(webAfter, 'workspace/unarchiveSession', { request: { sessionId: coord } });
+        const ids = await archivedNow();
+        return chatSessions.every((id) => ids.includes(id)) ? ids : null;
+    }, 'the threads following the chat\'s row into the archive', 15000).catch(() => null);
+    check('DSH\'s own Archive on the chat\'s row archives its threads too', own.ok && followed !== null && project().archived?.via === 'dsh', JSON.stringify(own).slice(0, 200));
+    await webApi(web, 'workspace/unarchiveSession', { request: { sessionId: coord } });
     const cameBack = await waitFor(async () => {
-        const ids = (await webApi(webAfter, 'workspace/unarchiveSession', { request: { sessionId: 'e2e-none' } })).value?.archivedSessionIds ?? [];
-        return projectSessions.every((id) => !ids.includes(id)) ? true : null;
-    }, 'the threads coming back with the ◆ row', 15000).catch(() => false);
-    check('DSH\'s own Unarchive on the ◆ row brings them back', cameBack === true && project().archived === undefined
-        && /archive e2e-project via=dsh sessions=\d+\n[^]*restore e2e-project via=dsh sessions=\d+/.test(readText(logFile)), readText(logFile).split('\n').filter((l) => /archive|restore/.test(l)).join('\n'));
-    check('no errors in the projects log', !/ error /.test(readText(logFile)), readText(logFile).split('\n').filter((l) => / error /.test(l)).join('\n'));
+        const ids = await archivedNow();
+        return chatSessions.every((id) => !ids.includes(id)) ? true : null;
+    }, 'the threads coming back with the chat\'s row', 15000).catch(() => false);
+    check('DSH\'s own Unarchive on the chat\'s row brings them back', cameBack === true && project().archived === undefined
+        && new RegExp(`archive ${coord} via=dsh sessions=\\d+\\n[^]*restore ${coord} via=dsh sessions=\\d+`).test(readText(logFile)),
+        readText(logFile).split('\n').filter((l) => /archive|restore/.test(l)).join('\n'));
+    check('no errors in the coordinator log', !/ error /.test(readText(logFile)), readText(logFile).split('\n').filter((l) => / error /.test(l)).join('\n'));
 } catch (error) {
     failed += 1;
     console.log(`not ok - ${error.message}`);
     console.log('--- requests');
     for (const r of model.requests.slice(-12)) console.log(`${r.n} ${whoOf(r)} ${r.model} effort=${r.effort ?? '-'} ${JSON.stringify(r.action).slice(0, 160)}`);
-    console.log('--- projects.log (tail)');
+    console.log('--- coordinator.log (tail)');
     console.log(readText(logFile).split('\n').slice(-25).join('\n'));
     console.log('--- dsh.log (tail)');
     console.log(readText(dshLog).split('\n').slice(-40).join('\n'));
