@@ -1544,6 +1544,39 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return isObject(value) && (value.role === 'coordinator' || value.role === 'thread') ? value : undefined;
         }
 
+        /**
+         * The coordinator and thread sessions the plugin's store knows, by id:
+         * {role, name, coordinator?} (remote.js `sessions`). DSH lists a
+         * session without the plugin's value while the value it saved is from
+         * another version of the plugin, until the session is next loaded; the
+         * session list's rows go by this then, not by their titles.
+         */
+        const known = { map: new Map(), version: 0, listeners: new Set() };
+        const subscribeKnown = (listener) => {
+            known.listeners.add(listener);
+            return () => { known.listeners.delete(listener); };
+        };
+        const knownVersion = () => known.version;
+        /** Re-render with the sessions the store knows, once they are read. */
+        const useKnown = () => React.useSyncExternalStore(subscribeKnown, knownVersion);
+        function takeKnown(sessions) {
+            const map = new Map();
+            for (const [id, s] of Object.entries(isObject(sessions) ? sessions : {})) {
+                if (!isObject(s) || (s.role !== 'coordinator' && s.role !== 'thread')) continue;
+                map.set(id, {
+                    role: s.role,
+                    name: typeof s.name === 'string' ? s.name.trim() : '',
+                    ...(typeof s.coordinator === 'string' && s.coordinator !== '' ? { coordinator: s.coordinator } : {}),
+                });
+            }
+            known.map = map;
+            known.version += 1;
+            // Answers worked out from the list before are stale now.
+            coordinatorIdsCache = new WeakMap();
+            threadRowsCache = new WeakMap();
+            for (const listener of [...known.listeners]) listener();
+        }
+
         const chatAddress = (sessionId) => `${CHAT_PREFIX}${encodeURIComponent(sessionId)}`;
 
         /** The sessions DSH's main view holds (its "mainView" references): the main chat, or two for a moment while DSH switches. */
@@ -1930,6 +1963,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (guarded.join('\n') !== listedAccess.guarded.join('\n') || JSON.stringify(permissions) !== JSON.stringify(listedAccess.permissions)) listedAccess = { guarded, permissions };
                 take(result.value.projects);
             });
+            /** The sessions the plugin's store knows (remote.js `sessions`), once per window; again a minute after a failed read. */
+            let knownRead = false;
+            const sessions = () => (knownRead ? Promise.resolve() : once('sessions', 60000, async () => {
+                const result = await link.call('sessions', {});
+                if (!result.ok || !isObject(result.value?.sessions)) return;
+                knownRead = true;
+                takeKnown(result.value.sessions);
+            }));
             const read = (key, maxAge) => (key === 'list' ? list(maxAge) : describe(key.slice(2), maxAge));
             const tick = () => {
                 if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
@@ -1959,6 +2000,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 put,
                 describe,
                 list,
+                sessions,
                 /**
                  * Keep reading `d:<session>` (its project) or `list` while
                  * the returned function has not been called.
@@ -2908,7 +2950,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const facts = useChatFacts(threadSession, useSessions, useSessionStatus);
             const value = facts.value;
             const sub = value?.role === 'thread'
-                ? `${value.thread?.id ?? TEXT.thread} · ◆ ${value.project?.name ?? ''}`
+                ? `${value.thread?.id ?? TEXT.thread} · ◆ ${value.project?.name || TEXT.coordinator}`
                 : value?.role === 'coordinator' ? `◆ ${TEXT.coordinator}` : '';
             return h('div', { className: 'dshp-t-chat', 'data-projects-thread-chat': threadSession ?? '' },
                 h('div', { className: 'dshp-t-chat-bar' },
@@ -3422,6 +3464,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function isThreadRow(state, sessionId) {
             const value = valueIn(state, sessionId);
             if (value) return value.role === 'thread';
+            const stored = known.map.get(sessionId);
+            if (stored) return stored.role === 'thread';
             const title = state.byId?.[sessionId]?.title;
             if (typeof title !== 'string') return false;
             const at = title.indexOf(' › ');
@@ -3451,13 +3495,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * coordinator.
          */
         function ThreadMark({ sessionId, useSessions, projects }) {
+            useKnown();
+            // The sessions the plugin's store knows, for rows DSH lists without the plugin's value.
+            React.useEffect(() => { void projects.facts.sessions?.(); }, [projects]);
             const thread = useSessions((state) => isThreadRow(state, sessionId));
             const coordinator = useSessions((state) => !isThreadRow(state, sessionId) && coordinatorName(state, sessionId) !== undefined);
             const paused = usePaused(projects.facts, coordinator ? sessionId : undefined, coordinator ? 'list' : null) === true;
             const mark = useSessions((state) => (thread ? markState(state, sessionId) : ''));
-            const parent = useSessions((state) => (thread ? valueIn(state, sessionId)?.coordinator : undefined));
-            // A thread row's state comes from its own session and its coordinator's roster; read both once if DSH hasn't.
-            React.useEffect(() => { if (thread) projects.refresh(sessionId); }, [thread, sessionId, projects]);
+            const parent = useSessions((state) => (thread ? valueIn(state, sessionId)?.coordinator ?? known.map.get(sessionId)?.coordinator : undefined));
+            const stale = useSessions((state) => known.map.has(sessionId) && valueIn(state, sessionId) === undefined);
+            // A thread row's state comes from its own session and its coordinator's roster; read both once if DSH hasn't,
+            // and any session the store knows that DSH listed without a value.
+            React.useEffect(() => { if (thread || stale) projects.refresh(sessionId); }, [thread, stale, sessionId, projects]);
             React.useEffect(() => { if (typeof parent === 'string' && parent !== '') projects.refresh(parent); }, [parent, projects]);
             if (paused) {
                 return h('span', { className: 'dshp-t-mark dshp-t-paused-mark', role: 'img', 'aria-label': TEXT.projectPaused, title: TEXT.projectPaused, 'data-projects-paused-mark': '' },
@@ -3478,12 +3527,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function coordinatorName(state, sessionId) {
             const value = valueIn(state, sessionId);
             if (value?.role === 'coordinator' && typeof value.project?.name === 'string' && value.project.name !== '') return value.project.name;
+            const stored = known.map.get(sessionId);
+            if ((!value || value.role === 'coordinator') && stored?.role === 'coordinator' && stored.name !== '') return stored.name;
             const title = state?.byId?.[sessionId]?.title;
             return typeof title === 'string' && title.startsWith('◆ ') && title.length > 2 ? title.slice(2) : undefined;
         }
 
         /** Coordinator session ids by project name, once per session list state. */
-        const coordinatorIdsCache = new WeakMap();
+        let coordinatorIdsCache = new WeakMap();
         function coordinatorIds(state) {
             if (!isObject(state)) return new Map();
             let ids = coordinatorIdsCache.get(state);
@@ -3505,6 +3556,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function rowPlace(state, sessionId) {
             if (!isObject(state)) return '';
             const value = valueIn(state, sessionId);
+            if (!value) {
+                // DSH has no value for it (one saved by another version of the plugin): the store says what it is.
+                const stored = known.map.get(sessionId);
+                if (stored?.role === 'coordinator') return `coordinator:${sessionId}`;
+                if (stored?.role === 'thread') return stored.coordinator ? `thread:${stored.coordinator}` : '';
+            }
             if (value?.role === 'coordinator' || (!value && coordinatorName(state, sessionId) !== undefined)) return `coordinator:${sessionId}`;
             if (value?.role === 'thread') return typeof value.coordinator === 'string' && value.coordinator !== '' ? `thread:${value.coordinator}` : '';
             if (value || !isThreadRow(state, sessionId)) return '';
@@ -3515,7 +3572,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /** Each coordinator's thread sessions in the list, by its session id, once per session list state. */
-        const threadRowsCache = new WeakMap();
+        let threadRowsCache = new WeakMap();
         function threadRows(state) {
             if (!isObject(state)) return new Map();
             let rows = threadRowsCache.get(state);
@@ -3595,6 +3652,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * frame. Nothing of DSH's own is changed.
          */
         function RowPlace({ sessionId, useSessions }) {
+            useKnown();
             const place = useSessions((state) => rowPlace(state, sessionId));
             const coordinator = place === `coordinator:${sessionId}`;
             const threads = useSessions((state) => (coordinator ? (threadRows(state).get(sessionId) ?? EMPTY).slice().sort().join(' ') : ''));
@@ -5756,7 +5814,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the views are built on.
         module.exports.internals = {
-            valueIn, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, nestingRules, threadRows, firstPlace,
+            valueIn, takeKnown, coordinatorName, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, nestingRules, threadRows, firstPlace,
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,
             changesOf, changesText, lastChange, REVIEW_PREFIX,

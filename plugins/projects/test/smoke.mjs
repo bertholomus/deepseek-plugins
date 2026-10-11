@@ -916,6 +916,101 @@ test('picker: a model the user picks in DSH\'s own picker becomes the project\'s
     assert.deepEqual(await threadRoute(), ['t1 deepseek:deepseek-v4 low']);
 });
 
+test('old session records: each project session DSH lists without a value is read again from its log, and a nameless project takes its coordinator\'s title', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    // A store from before: a project made on the page, and two the store holds no name for (profile rows since
+    // removed), one whose coordinator's title says its name and one whose title is a bare "◆ ".
+    writeFileSync(join(dir, 'projects.json'), JSON.stringify({ version: 1, projects: {
+        storefront: { name: 'Storefront', coordinatorSessionId: 'c1', threads: { t1: { title: 'Fix login', sessionId: 'a1' }, t2: { title: 'Ship', sessionId: 'a2' }, t3: { title: 'Gone', sessionId: 'gone' } } },
+        'old-plugins': { name: '', coordinatorSessionId: 'c2', threads: { t1: { title: 'Smoke test', sessionId: 'b1' } } },
+        bare: { coordinatorSessionId: 'c3', threads: {} },
+        nothing: { name: '' },
+    } }));
+    const host = fakeHost({ gateway: true });
+    for (const [id, title] of [['c1', '◆ Storefront'], ['a1', 'Fix login'], ['a2', 'Ship'], ['c2', '◆ Old Plugins'], ['b1', 'Smoke test'], ['c3', '◆ ']]) {
+        host.sessions.set(id, { events: [{ seq: 1, type: 'turn/start', data: {} }], prompts: [], title, cwd: 'w' });
+    }
+    // DSH has a1 loaded (it folds as it runs), and lists a2 with a value of the current version; the rest without one.
+    const reads = [];
+    host.services.sessions = { get: (id) => (id === 'a1' ? { id } : undefined) };
+    host.services.sessionProjectionCache = { coldSnapshot(meta, inherited, events) { reads.push([meta.id, inherited, events.length]); return { values: {} }; } };
+    host.sessionController.inspect = async (id) => {
+        if (!host.sessions.has(id)) throw new Error('session/not-found');
+        return { meta: { id }, inheritedEventCount: 0, events: host.sessions.get(id).events };
+    };
+    const list = host.sessionController.list;
+    host.sessionController.list = async () => {
+        const { items } = await list();
+        return { items: items.map((item) => (item.sessionId === 'a2' ? { ...item, projections: { ...item.projections, values: { ...item.projections.values, projectSession: { role: 'thread' } } } } : item)) };
+    };
+    const raw = { welcome: false, storeFile: join(dir, 'projects.json'), memoryDir: join(dir, 'memory'), logFile: join(dir, 'projects.log'), projects: [] };
+    plugin.apply(host, plugin.Config(raw));
+    const log = () => { try { return readFileSync(raw.logFile, 'utf8'); } catch { return ''; } };
+    for (let i = 0; i < 50 && !/records refreshed/.test(log()); i += 1) await tick();
+    // Read again: each one DSH lists without a value and hasn't loaded; not the loaded one, the current one, or one DSH no longer has.
+    assert.deepEqual(reads, [['c1', 0, 1], ['c2', 0, 1], ['b1', 0, 1], ['c3', 0, 1]]);
+    assert.match(log(), /records refreshed=4/);
+    // The nameless project is named after its coordinator, once; a bare "◆ " leaves it its id. One with no coordinator stays out.
+    const store = JSON.parse(readFileSync(raw.storeFile, 'utf8'));
+    assert.equal(store.projects['old-plugins'].name, 'Old Plugins');
+    assert.equal(store.projects.bare.name, undefined);
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    const listed = (await remote.list()).projects.map((p) => [p.id, p.name, p.coordinator]);
+    assert.deepEqual(plain(listed).sort(), [['bare', 'bare', 'c3'], ['old-plugins', 'Old Plugins', 'c2'], ['storefront', 'Storefront', 'c1']]);
+    // The session list's fallback: every coordinator and thread session the store knows, with its project's name.
+    assert.deepEqual(plain((await remote.sessions()).sessions), {
+        c1: { role: 'coordinator', project: 'storefront', name: 'Storefront' },
+        a1: { role: 'thread', project: 'storefront', name: 'Storefront', thread: 't1', coordinator: 'c1' },
+        a2: { role: 'thread', project: 'storefront', name: 'Storefront', thread: 't2', coordinator: 'c1' },
+        gone: { role: 'thread', project: 'storefront', name: 'Storefront', thread: 't3', coordinator: 'c1' },
+        c2: { role: 'coordinator', project: 'old-plugins', name: 'Old Plugins' },
+        b1: { role: 'thread', project: 'old-plugins', name: 'Old Plugins', thread: 't1', coordinator: 'c2' },
+        c3: { role: 'coordinator', project: 'bare', name: 'bare' },
+    });
+    // The projection's init seeds a re-read thread from the store: its project and coordinator.
+    const seeded = host.projections[0].init({ id: 'b1' });
+    assert.deepEqual(plain({ role: seeded.v.role, project: seeded.v.project, coordinator: seeded.v.coordinator }), { role: 'thread', project: { id: 'old-plugins', name: 'Old Plugins' }, coordinator: 'c2' });
+
+    // A DSH without the cache service reads nothing again, and starts as before.
+    const host2 = fakeHost();
+    const dir2 = mkdtempSync(join(tmpdir(), 'projects-'));
+    writeFileSync(join(dir2, 'projects.json'), readFileSync(join(dir, 'projects.json')));
+    for (const id of ['c1', 'a1', 'c2', 'b1', 'c3']) host2.sessions.set(id, { events: [], prompts: [], title: host.sessions.get(id).title, cwd: 'w' });
+    plugin.apply(host2, plugin.Config({ ...raw, storeFile: join(dir2, 'projects.json'), logFile: join(dir2, 'projects.log') }));
+    await tick();
+    await tick();
+    assert.doesNotMatch(readFileSync(join(dir2, 'projects.log'), 'utf8'), /records refreshed|error record/);
+});
+
+test('browser half: a session DSH lists without the plugin\'s value is placed by what the plugin\'s store knows, not by its title', async () => {
+    const { client } = loadClient();
+    const { rowPlace, isThreadRow, coordinatorName, takeKnown, threadRows, projectFacts } = client.internals;
+    // DSH dropped the saved values of an older version: the threads' titles say nothing of their project.
+    const state = { byId: { c: { id: 'c', title: '◆ DSH Plugins' }, t: { id: 't', title: 'Smoke test' }, x: { id: 'x', title: 'A chat' }, n: { id: 'n', title: 'Nameless' } } };
+    assert.deepEqual(['c', 't', 'x'].map((id) => rowPlace(state, id)), ['coordinator:c', '', '']);
+    assert.equal(threadRows(state).size, 0);
+    // The plugin's store: c and its thread t; n a coordinator retitled by the user.
+    const link = { calls: 0, async call(method) { this.calls += 1; assert.equal(method, 'sessions'); return { ok: true, value: { sessions: {
+        c: { role: 'coordinator', project: 'dsh-plugins', name: 'DSH Plugins' },
+        t: { role: 'thread', project: 'dsh-plugins', name: 'DSH Plugins', thread: 't1', coordinator: 'c' },
+        n: { role: 'coordinator', project: 'p', name: 'Pricing' },
+        bad: { role: 'chat' },
+    } } }; } };
+    const facts = projectFacts(link);
+    await facts.sessions();
+    await facts.sessions();
+    assert.equal(link.calls, 1, 'once per window');
+    assert.deepEqual(['c', 't', 'x', 'n'].map((id) => rowPlace(state, id)), ['coordinator:c', 'thread:c', '', 'coordinator:n']);
+    assert.deepEqual([isThreadRow(state, 't'), isThreadRow(state, 'x'), coordinatorName(state, 'n'), coordinatorName(state, 't')], [true, false, 'Pricing', undefined]);
+    // Worked out again from the same list, now that the store is known.
+    assert.deepEqual(plain([...threadRows(state)]), [['c', ['t']]]);
+    // DSH's own value wins once it has one.
+    const folded = { ...state, projectionsBySession: { t: { values: { projectSession: { role: 'thread', coordinator: 'c2', project: { id: 'q', name: 'Q' } } } } } };
+    assert.equal(rowPlace(folded, 't'), 'thread:c2');
+    takeKnown({});
+    assert.equal(rowPlace(state, 't'), '');
+});
+
 test('window: the Project settings endpoints read and change a project the way its coordinator does', async () => {
     const { host } = setup({}, undefined, { ...SELECTING, gateway: true });
     await tick();
@@ -924,7 +1019,7 @@ test('window: the Project settings endpoints read and change a project the way i
     // DSH's gateway finds the service by its binding and method markers.
     assert.equal(remote.typertRemote.namespace, 'dsh-plugin-projects');
     assert.equal(remote.typertRemote.serviceKey, 'dshPluginProjectsRemote');
-    assert.deepEqual(remoteMethods(remote).map((m) => m.method), ['describe', 'list', 'update', 'continueThread', 'create', 'move', 'rename', 'remove', 'addCoordinator']);
+    assert.deepEqual(remoteMethods(remote).map((m) => m.method), ['describe', 'list', 'sessions', 'update', 'continueThread', 'create', 'move', 'rename', 'remove', 'addCoordinator']);
     const refused = async (promise, pattern) => {
         await assert.rejects(promise, (error) => error.code === 'projects/refused' && pattern.test(error.message));
     };

@@ -71,6 +71,19 @@ export class ProjectsRemote {
     }
 
     /**
+     * Every coordinator and thread session the plugin knows, by session id,
+     * for the session list while DSH has no value of the plugin's
+     * projection for one (a session from before an update, not opened since).
+     */
+    async sessions() {
+        try {
+            return { sessions: this.manager.knownSessions() };
+        } catch (error) {
+            throw failure(error);
+        }
+    }
+
+    /**
      * A new project from the Projects page, without a coordinator.
      * @param name - its name.
      * @param workspace - optional: a DSH workspace id it holds from the start.
@@ -178,4 +191,4 @@ function markRemote(Class, names) {
         });
     }
 }
-markRemote(ProjectsRemote, ['describe', 'list', 'update', 'continueThread', 'create', 'move', 'rename', 'remove', 'addCoordinator']);
+markRemote(ProjectsRemote, ['describe', 'list', 'sessions', 'update', 'continueThread', 'create', 'move', 'rename', 'remove', 'addCoordinator']);
