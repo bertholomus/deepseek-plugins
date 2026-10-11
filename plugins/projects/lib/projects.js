@@ -126,6 +126,12 @@ const asksWider = (exec) => {
     const mode = isObject(exec?.arguments) ? exec.arguments.sandbox_permissions : undefined;
     return typeof mode === 'string' && mode.trim() !== '' && mode.trim() !== 'read-only';
 };
+/**
+ * DSH's tools a coordinator is kept off: a DSH goal's rounds had it read and steer its threads again and again
+ * (behaviour review 3), while their handbacks come on their own. A goal the user sets with /goal still runs.
+ */
+const COORDINATOR_HIDDEN = new Set(['create_goal']);
+const GOAL_REASON = 'A coordinator doesn\'t set DSH goals: your threads hand back when they finish, so nothing needs to continue in rounds. The project\'s goal is the user\'s, in Project settings.';
 /** DSH's tools that reach an MCP server named in their `server` argument, not in their own name. */
 const SERVER_TOOLS = new Set(['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource']);
 
@@ -250,6 +256,24 @@ const OWN_TOOLS = new Set(['project_memory', 'project_handback', 'project_ask_co
 
 /** Text as its words alone (lower case, no punctuation), to find an ask in what the user wrote. */
 const wordsKey = (text) => String(text ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+/**
+ * The first sentence of an `ask` that isn't in what the user wrote, or '':
+ * each must be there word for word (case and punctuation aside), so the
+ * user's sentences may come from different messages but none may be the
+ * coordinator's own.
+ */
+export function unsaidPart(ask, said) {
+    const corpus = ` ${wordsKey(said)} `;
+    for (const part of String(ask ?? '').split(/[.!?;…]+(?=\s|$)|\n+/)) {
+        const key = wordsKey(part);
+        if (key !== '' && !corpus.includes(` ${key} `)) return part.trim();
+    }
+    return '';
+}
+
+/** What a handback's card shows of its summary, in characters. */
+const CARD_CHARS = 300;
 
 /** Messages to chats outside a project that wait for their reply: at most this many per project, for this long. */
 const MAX_AWAITING = 20;
@@ -635,7 +659,8 @@ export class ProjectManager {
         const label = `${who.projectId}/${who.threadId ?? 'coordinator'}`;
         let deny;
         try {
-            deny = this.walledTools(agent, who).sort();
+            const own = who.role === 'coordinator' ? this.toolNames(agent).filter((name) => COORDINATOR_HIDDEN.has(name)) : [];
+            deny = [...this.walledTools(agent, who), ...own].sort();
         } catch (error) {
             this.log(`error wall ${label} ${String(error?.message ?? error).slice(0, 200)}`);
             return;
@@ -705,6 +730,10 @@ export class ProjectManager {
             this.log(`read-only-refused ${who.projectId}/coordinator ${name} wider`);
             return READ_ONLY_WIDER;
         }
+        if (who.role === 'coordinator' && COORDINATOR_HIDDEN.has(name)) {
+            this.log(`goal-refused ${who.projectId}/coordinator ${name}`);
+            return GOAL_REASON;
+        }
         const byName = this.wallReason(who, name);
         if (byName !== undefined || !SERVER_TOOLS.has(name)) return byName;
         try {
@@ -769,6 +798,24 @@ export class ProjectManager {
             throw new ProjectError(`ask names ${unsaid.join(', ')}, but the user's messages don't. Put only the user's own words in ask, copied from their message, or ask the user first`);
         }
         return named;
+    }
+
+    /**
+     * An `ask` holds only the user's words: each of its sentences copied
+     * from what they wrote to the coordinator (their messages, their
+     * answers in DSH's question box) or from the project's goal, so a
+     * thread never reads the coordinator's own words after "The user
+     * asked:". Before the user has written anything (or when the log can't
+     * be read) there is nothing to check against, and it passes.
+     */
+    async requireUserWords(projectId, ask, kind) {
+        const wrote = await this.userText(projectId);
+        if (wrote.trim() === '') return;
+        const part = unsaidPart(ask, `${this.goalOf(projectId)}\n${wrote}`);
+        if (part === '') return;
+        this.log(`guard ${projectId} ask-not-theirs ${kind}`);
+        const shown = part.length > 80 ? `${part.slice(0, 79)}…` : part;
+        throw new ProjectError(`ask holds only the user's own words, copied from their messages, and they didn't write "${shown}". Put what you add (the task you picked, the scope) in ${kind === 'start' ? 'brief' : 'text'}`);
     }
 
     /** Give a thread more of the user's tools, named by the user's words; its wall follows at once. */
@@ -2343,6 +2390,7 @@ export class ProjectManager {
         // The user's tools the thread gets: the ones the ask names that the user really wrote.
         const tools = await this.askedTools(projectId, userWords);
         this.guard(projectId, 'start', `${cleanTitle}\n${userWords}\n${brief}`, tools);
+        await this.requireUserWords(projectId, userWords, 'start');
         const access = this.access(projectId);
         // Its permission preset; one DSH doesn't offer (any more) is not one to start a thread on.
         const preset = this.presets() ? this.presetOf(access.threadPermission.value) : undefined;
@@ -2428,6 +2476,7 @@ export class ProjectManager {
             // More of the user's tools only when the user's checked words for this message name them.
             tools = await this.askedTools(projectId, userWords);
             this.guard(projectId, 'send', `${userWords}\n${text}`, [...(Array.isArray(t.tools) ? t.tools : []), ...tools]);
+            if (userWords !== '') await this.requireUserWords(projectId, userWords, 'send');
         }
         if (t.resolved) this.store.putThread(projectId, id, { resolved: false });
         await this.attach(t.sessionId);
@@ -3396,16 +3445,23 @@ export class ProjectManager {
         const text = String(summary ?? '').trim();
         if (!text) throw new ProjectError('summary is required');
         const { t } = this.requireThread(projectId, threadId);
+        // The card shows CARD_CHARS: a longer summary goes back once to be shortened, and the next one is taken as it is.
+        const length = cardSummary(text, Number.MAX_SAFE_INTEGER).length;
+        if (length > CARD_CHARS && !t.shorten) {
+            this.store.putThread(projectId, threadId, { shorten: true });
+            this.log(`handback-long ${projectId}/${threadId} chars=${length}`);
+            throw new ProjectError(`summary is ${length} characters, and your card shows ${CARD_CHARS}. Call project_handback again with at most ${CARD_CHARS}: the result first, then where (paths, links), then what you need, keeping any request sent or file written outside the workspace; leave out how you got there`);
+        }
         if (!this.allowHandback(projectId, threadId)) {
             throw new ProjectError(`handback limit reached (${this.config.maxHandbacksPerHour} per hour); finish the work and hand back once`);
         }
-        this.store.putThread(projectId, threadId, { lastHandback: { status, summary: cardSummary(text, 500), at: new Date().toISOString() }, nudged: undefined, stalled: undefined, question: undefined });
+        this.store.putThread(projectId, threadId, { lastHandback: { status, summary: cardSummary(text, 500), at: new Date().toISOString() }, nudged: undefined, stalled: undefined, question: undefined, shorten: undefined });
         // With no other thread at work, the reply to this one also closes what the user asked for.
         const others = Object.entries(this.store.project(projectId).threads).filter(([id, o]) => id !== threadId && !o.resolved);
         const last = status !== 'progress' && !others.some(([, o]) => this.liveStatus(o.sessionId) !== 'idle');
         const news = status === 'progress' ? undefined : { kind: 'handback', thread: threadId, status };
         const outcome = await this.deliver(projectId, handbackMessage(threadId, t.title, status, text, { last }), t.sessionId, news);
-        this.log(`handback ${projectId}/${threadId} status=${status} chars=${text.length} ${outcome}`);
+        this.log(`handback ${projectId}/${threadId} status=${status} chars=${text.length}${length > CARD_CHARS ? ' long' : ''} ${outcome}`);
         if (outcome === 'delivered') return HANDBACK_SENT;
         return this.held(projectId) ? HANDBACK_HELD : HANDBACK_RETRY;
     }

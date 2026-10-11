@@ -427,6 +427,9 @@ try {
     const t1Reqs = since(mark, 't1');
     check('thread asks with effort high', t1Reqs.length > 0 && t1Reqs.every((r) => r.model === 'fake-model' && r.effort === 'high'), describe(t1Reqs));
     check('thread has thread tools only', t1Reqs[0]?.tools.includes('project_handback') && !t1Reqs[0]?.tools.includes('project_thread_start'));
+    // A DSH goal's rounds had a coordinator poll its threads (behaviour review 3), so it isn't offered create_goal; threads are.
+    check('a coordinator is kept off DSH goals, and a thread is not', !firstCoord.tools.includes('create_goal') && firstCoord.tools.includes('update_goal')
+        && t1Reqs[0]?.tools.includes('create_goal'), `${firstCoord.tools.join(',')} | ${t1Reqs[0]?.tools.join(',')}`);
     check('thread gets the brief, the user\'s words first', t1Reqs[0]?.fresh.includes(`[Brief from the coordinator of "${PROJECT}" · you are thread t1, "Alpha"]\n\nThe user asked: "Check the Alpha work and report."\n\nDo the work`), t1Reqs[0]?.fresh.slice(0, 300));
     check('handback reaches the coordinator', saw.fresh.includes('[Handback from thread t1 · "Alpha" · status: done]') && saw.fresh.includes('Alpha finished'), saw.fresh.slice(0, 300));
     check('the handback says how to answer it: now, the thread\'s link first, then the result', saw.fresh.includes('(The user has not seen this. Reply now. First line: the link [Alpha](.dsh-thread/t1), a colon, and the result in one sentence.'), saw.fresh.slice(-400));

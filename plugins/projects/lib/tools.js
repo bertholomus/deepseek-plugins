@@ -82,7 +82,7 @@ export function projectTools(manager, who) {
                 description: 'Your report to the user, through the coordinator. Call it once, as your last step: done when finished, blocked when stuck, needs_decision when the user must choose.',
                 parameters: {
                     status: { type: 'string', required: true, enum: HANDBACK_STATUSES, description: 'done, blocked or needs_decision; progress only for news the coordinator needs before you finish' },
-                    summary: { type: 'string', required: true, description: 'The result first, then where (paths, links), then what you need, if anything. The card shows 300 characters. Only what your tools showed; mark a guess "(guess)".' },
+                    summary: { type: 'string', required: true, description: 'At most 300 characters, what your card shows (a longer one comes back to you to shorten): the result first, then where (paths, links), then what you need, if anything. Only what your tools showed; mark a guess "(guess)".' },
                 },
                 async execute(args) {
                     const text = await manager.handback(projectId, threadId, args.status, args.summary);

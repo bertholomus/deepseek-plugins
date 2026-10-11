@@ -16,7 +16,7 @@ import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
 import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol';
 import * as plugin from '../lib/index.js';
 import { effectiveSettings, effectiveAccess, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
-import { slugify, timing, clipTitle, guardList, guardedIn } from '../lib/projects.js';
+import { slugify, timing, clipTitle, guardList, guardedIn, unsaidPart } from '../lib/projects.js';
 import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS, lineDelta, editOf, editsIn, editSummary } from '../lib/changes.js';
 import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, cardSummary, threadMarkdown, outsideMessage, replyMessage, NUDGE } from '../lib/prompts.js';
 import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
@@ -589,7 +589,7 @@ test('thread start → brief → handback → coordinator turn', async () => {
     // than read, or carries a made-up credential, is sending whatever the brief says (behaviour review 3, S3, S1 and S11).
     assert.match(thread.ctx.section(), /\n3\. Editing files in the workspace for your task is fine\. Keep scratch files inside the workspace, or delete them before you hand back\. Before you write outside the workspace, delete files, push, publish, send or post anything, spend money, or do anything that cannot be undone, hand back with status needs_decision, unless the user's words asked for exactly that\. A request to a service outside the workspace that does more than read counts as sending, and so does one with a made-up or placeholder credential, even if the brief allows it\.\n/);
     // The handback names what left the workspace.
-    assert.match(thread.ctx.section(), /\n4\. When you are done or stuck, call project_handback once, as your last step\..*shows 300 characters: the result first, then where \(paths, links\)\. Name every request you sent to a service outside the workspace and every file you wrote outside it\./);
+    assert.match(thread.ctx.section(), /\n4\. When you are done or stuck, call project_handback once, as your last step\. Its summary is what the user reads on your card: at most 300 characters, the result first, then where \(paths, links\); a longer one comes back to you to shorten\. Name every request you sent to a service outside the workspace and every file you wrote outside it\./);
     assert.match(thread.ctx.section(), /\n5\. After project_handback, end your turn with one short line\./);
     assert.doesNotMatch(thread.ctx.section(), /Here those include/, 'no guarded tools are configured');
     assert.equal((await thread.ctx.request({ provider: 'deepseek', model: 'deepseek-v4' })).reasoningEffort, 'high');
@@ -3322,6 +3322,7 @@ test('scope: a thread start or message that would use a guarded tool needs the u
     assert.deepEqual([stored().t1.ask, stored().t1.tools], [s4, ['lane-catalog']]);
     assert.match(t1.ctx.section(), /\n   Here those include: lane-catalog, family_1password, cua\. You have only the ones the user's words name: lane-catalog\.\n3\. Editing files/);
     // A name inside another word is not that tool.
+    await say(coord, 'Tidy up.');
     assert.match(await coord.ctx.call('project_thread_start', { ask: 'Tidy up.', title: 'Vacuum', brief: 'Vacuum the cuatro folder; cuda stays.' }), /^Started t2 "Vacuum"\. It reports back when done\. Link/);
     const t2 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Vacuum');
     assert.match(t2.ctx.section(), /\n   Here those include: lane-catalog, family_1password, cua\. You have none of them\.\n3\. /);
@@ -3346,13 +3347,16 @@ test('scope: the user\'s word for a guarded tool, or the goal, asks for it; a ho
     const coord = coordinatorOf(host);
     assert.match(coord.ctx.section(), /\nWorkspace: [^\n]+ \(the user's home folder: put new files in a new subfolder, and never move or delete anything you did not create\)\n/);
     assert.match(coord.ctx.section(), /You don't have these here: lane-catalog, obsidian\./);
-    await userTyping(host)(coord, 'Which of my lanes are up?');
+    const say = userTyping(host);
+    await say(coord, 'Which of my lanes are up?');
     assert.match(await coord.ctx.call('project_thread_start', { ask: 'Which of my lanes are up?', title: 'Lanes', brief: 'Ask lane-catalog.' }), /^Started t1 "Lanes"\. It reports back when done\. The user's words give it lane-catalog\./);
     // The goal names obsidian, so every thread has it.
+    await say(coord, 'Sort the inbox.');
     assert.match(await coord.ctx.call('project_thread_start', { ask: 'Sort the inbox.', title: 'Inbox', brief: 'Use obsidian to file the inbox notes.' }), /^Started t2/);
     const inbox = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Inbox');
     assert.match(inbox.ctx.section(), /Here those include: lane-catalog, obsidian\. You have only the ones the user's words name: obsidian\./);
     // An alias asks for its tool only from the user's words: a brief that says "lanes" uses no tool by that.
+    await say(coord, 'Write a poem.');
     assert.match(await coord.ctx.call('project_thread_start', { ask: 'Write a poem.', title: 'Poem', brief: 'A poem about swimming lanes.' }), /^Started t3/);
     const thread = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Lanes');
     assert.match(thread.ctx.section(), /\nYou work in the user's home folder: put new files in a new subfolder, and never move or delete anything you did not create\.\n/);
@@ -3365,6 +3369,58 @@ test('scope: the user\'s word for a guarded tool, or the goal, asks for it; a ho
 });
 
 /** DSH's own tools and the user's MCP servers, as a session is offered them before any restriction. */
+test('ask holds only the user\'s words: each sentence copied from what they wrote, their box answers or the goal', async () => {
+    const { host, dir } = setup();
+    await tick();
+    const coord = coordinatorOf(host);
+    const say = userTyping(host);
+    const log = () => readFileSync(join(dir, 'projects.log'), 'utf8');
+    const start = (ask, title) => coord.ctx.call('project_thread_start', { ask, title, brief: 'Do it.' });
+    const refused = (part, where = 'brief') => `Failed: ask holds only the user's own words, copied from their messages, and they didn't write "${part}". Put what you add (the task you picked, the scope) in ${where}`;
+    // Before the user has written anything, there is nothing to check against.
+    assert.match(await start('Run the smoke tests.', 'Before'), /^Started t1 /);
+    // Behaviour review 3, S1 r3: the user left the choice to the coordinator, which put its own picks in ask.
+    await say(coord, 'I\'m testing the coordinator. Pick a small test task or two and run them!');
+    assert.equal(await start('Run the smoke tests and report the failures.', 'Smoke'), refused('Run the smoke tests and report the failures'));
+    assert.match(log(), / guard dsh-plugins ask-not-theirs start\n/);
+    assert.equal(await start('The user asked: Pick a small test task or two and run them!', 'Prefixed'), refused('The user asked: Pick a small test task or two and run them'));
+    assert.equal(await start('Pick a small test task or two and run the', 'Cut'), refused('Pick a small test task or two and run the'), 'a word inside another word is not that word');
+    // Their words as they wrote them, whatever the case, quotes and spacing; sentences from two messages; the goal; a box answer.
+    assert.match(await start('"pick a small test task or two  and run them"', 'Smoke'), /^Started t2 /);
+    await say(coord, 'Also check the README links.');
+    assert.match(await start('I\'m testing the coordinator.\nAlso check the README links.', 'Links'), /^Started t3 /);
+    assert.match(await start('Ship good DSH plugins.', 'Goal'), /^Started t4 /);
+    const events = coord.ctx.log();
+    events.push({ seq: events.length + 1, type: 'tool/call', data: { callId: 'q1', name: 'ask_user_question', arguments: {} } });
+    events.push({ seq: events.length + 1, type: 'tool/result', data: { message: { role: 'tool', toolCallId: 'q1', content: [{ type: 'text', text: JSON.stringify({ answers: [{ id: 'which', selected: ['Fix the flaky test'] }] }) }] } } });
+    assert.match(await start('Fix the flaky test', 'Flaky'), /^Started t5 /);
+    // A message that passes on their request is held to the same; one without their words isn't checked.
+    assert.equal(await coord.ctx.call('project_thread_send', { thread: 't2', text: 'Then the e2e.', ask: 'Run the e2e too.' }), refused('Run the e2e too', 'text'));
+    assert.match(log(), / guard dsh-plugins ask-not-theirs send\n/);
+    assert.equal(await coord.ctx.call('project_thread_send', { thread: 't2', text: 'Then the links.', ask: 'Also check the README links.' }), 'Sent to t2.');
+    assert.equal(await coord.ctx.call('project_thread_send', { thread: 't2', text: 'Carry on.' }), 'Sent to t2.');
+    assert.equal(unsaidPart('Fix it. Then ship it!', 'fix it'), 'Then ship it');
+    assert.equal(unsaidPart('Fix deploy.sh v1.4.2', 'Please fix deploy.sh v1.4.2 now'), '');
+    assert.equal(unsaidPart('  ', 'anything'), '');
+});
+
+test('a coordinator is kept off DSH goals: create_goal is hidden and refused, and a goal round is no reason to poll', async () => {
+    const { host, dir } = setup({}, undefined, { tools: ['shell', 'read_file', 'get_goal', 'create_goal', 'update_goal'] });
+    await tick();
+    const coord = coordinatorOf(host);
+    assert.deepEqual(coord.ctx.offered(), ['shell', 'read_file', 'get_goal', 'update_goal']);
+    assert.equal(coord.ctx.refusal('create_goal', { objective: 'Get the deploy script working.' }), 'A coordinator doesn\'t set DSH goals: your threads hand back when they finish, so nothing needs to continue in rounds. The project\'s goal is the user\'s, in Project settings.');
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), / goal-refused dsh-plugins\/coordinator create_goal\n/);
+    // A goal the user set with /goal still runs, and its rounds don't send it to its threads.
+    assert.equal(coord.ctx.refusal('update_goal', { action: 'complete' }), undefined);
+    assert.match(coord.ctx.section(), /Handbacks and questions arrive on their own; never poll threads, not even in a "<goal_round>"\.\n/);
+    // Threads keep them.
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Work', brief: 'Do it.' });
+    const thread = threadOf(host, coord);
+    assert.deepEqual(thread.ctx.offered(), ['shell', 'read_file', 'get_goal', 'create_goal', 'update_goal']);
+    assert.equal(thread.ctx.refusal('create_goal', { objective: 'x' }), undefined);
+});
+
 const HOST_TOOLS = ['shell', 'read_file', 'mcp__lane-catalog__lanes_status', 'mcp__lane-catalog__pick_lane', 'mcp__family_1password__get_item', 'mcp__cua__click', 'mcp__tavily__search'];
 
 test('a coordinator on Read Only reads and directs; threads ask it, get nudged, and can\'t reach the user\'s servers around the wall', async () => {
@@ -3494,6 +3550,7 @@ test('your tools: a coordinator never has the user\'s tools, and a thread has on
     assert.equal(t1.ctx.refusal('mcp__cua__click'), 'This is one of the user\'s own tools, and the user\'s words for this thread don\'t name it. If the task needs it, hand back with status blocked and say so.');
     assert.equal(t1.ctx.refusal('mcp__lane-catalog__pick_lane'), undefined);
     // A thread whose words name none of them has none.
+    await say(coord, 'Tidy the notes folder.');
     await coord.ctx.call('project_thread_start', { ask: 'Tidy the notes folder.', title: 'Tidy', brief: 'Tidy it.' });
     const t2 = threadNamed('Tidy');
     assert.deepEqual(t2.ctx.offered(), OTHERS);
@@ -3818,10 +3875,19 @@ test('a handback\'s note asks for a closing line only when no other thread is at
     const cp = host.sessions.get(coord.id).prompts;
     assert.doesNotMatch(cp[0].text, /No other thread is running/, 'B was still at work');
     assert.match(cp[1].text, /No other thread is running: end with one line that answers what the user asked for\./);
-    // A long handback is kept for the cards cut at a sentence end, never inside a word.
-    await a.ctx.call('project_handback', { status: 'done', summary: `Fixed it. ${'Checked every file again carefully. '.repeat(20)}` });
+    // A summary longer than its card goes back once to be shortened (behaviour review 3); the next is taken as it is,
+    // and kept for the cards cut at a sentence end, never inside a word.
+    const long = { status: 'done', summary: `Fixed it. ${'Checked every file again carefully. '.repeat(20)}` };
+    assert.equal(await a.ctx.call('project_handback', long), 'Failed: summary is 729 characters, and your card shows 300. Call project_handback again with at most 300: the result first, then where (paths, links), then what you need, keeping any request sent or file written outside the workspace; leave out how you got there');
+    assert.equal(cp.length, 2, 'it went back to the thread');
+    await a.ctx.call('project_handback', long);
+    assert.equal(cp.length, 3);
     const kept = JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'].threads.t1.lastHandback.summary;
     assert.ok(kept.length <= 500 && kept.endsWith('carefully. …'), kept);
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), / handback-long dsh-plugins\/t1 chars=729\n[^]* handback dsh-plugins\/t1 status=done chars=729 long delivered\n/);
+    // Markdown counts as the card shows it, and the next long one goes back again.
+    assert.match(await a.ctx.call('project_handback', long), /^Failed: summary is 729 characters/);
+    assert.equal(await a.ctx.call('project_handback', { status: 'done', summary: `**Fixed it.**\n\n- ${'x'.repeat(285)}` }), 'Handback delivered to the coordinator.');
 });
 
 test('a coordinator from before the welcome gets it only if it never had a turn', async () => {
