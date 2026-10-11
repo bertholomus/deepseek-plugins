@@ -1,24 +1,25 @@
 /**
  * dsh-plugin-coordinator, browser half. Three parts:
  *
- * - The "Default models" form on the plugin's page in DSH (Plugins →
- *   Projects). It edits the four plugin-wide defaults through
- *   DSH's own settings forms, so a save lands in the profile's
- *   cordis.patch.yml and the running plugin switches without a restart.
- * - Project settings: a dialog per project, opened from a project
- *   session's header, its Threads menu and pane, or its row's menu in the
- *   session list. It sets the coordinator's and new threads' model and
- *   effort, each open thread's, and pause, through the plugin's endpoints
- *   (remote.js), with a model picker shaped like DSH's own.
- * - Threads in the chat window: a Threads menu in the
- *   header of every project session (a thread also gets a link back to its
- *   coordinator), a Threads pane in the right sidebar, thread cards under the
- *   coordinator turns that started or heard from a thread, a thread's chat
- *   opened beside the current one, thread names in replies that open the
- *   thread, thread rows in the session list marked and nested under their
- *   coordinator, and the Projects page: every project with its threads. It
- *   reads the `coordinatorSession` projection the host half folds (projection.js)
- *   and never reads session logs itself.
+ * - The defaults form on the plugin's page in DSH (Plugins →
+ *   Coordinator). It edits the plugin-wide thread model, effort and access
+ *   defaults through DSH's own settings forms, so a save lands in the
+ *   profile's cordis.patch.yml and the running plugin switches without a
+ *   restart.
+ * - Thread settings: a dialog per coordinating chat, opened from its
+ *   header, its Threads menu and pane, or its row's menu in the session
+ *   list. It sets new threads' model and effort, each open thread's, the
+ *   user's tools, new threads' permission and pause, through the plugin's
+ *   endpoints (remote.js), with a model picker shaped like DSH's own.
+ * - Threads in the chat window: a Coordinate action in the header of a
+ *   plain chat, a Threads menu in the header of a coordinating chat and of
+ *   each thread (a thread also gets a link back to its chat), a Threads pane
+ *   in the right sidebar, thread cards under the turns that started or heard
+ *   from a thread, a thread's chat opened beside the current one, thread
+ *   names in replies that open the thread, and thread rows in the session
+ *   list marked and nested under the chat that started them. It reads the
+ *   `coordinatorSession` projection the host half folds (projection.js) and
+ *   never reads session logs itself.
  *
  * Hand-written in the module format DSH serves to the browser, so the plugin
  * needs no build step: the factory gets DSH's module `require` and returns
@@ -42,25 +43,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const ENTRY = 'coordinator';
         /** The package whose page shows the form. */
         const BUNDLE = 'dsh-plugin-coordinator';
+        /** What the defaults form sets a model and effort for: new threads (a coordinating chat keeps the user's own). */
         const ROUTES = [
-            { id: 'coordinator', title: 'Coordinator', hint: 'The ◆ session you talk to in each project.', model: 'coordinatorModel', effort: 'coordinatorEffort' },
             { id: 'thread', title: 'New threads', hint: 'A running thread keeps the model it started with.', model: 'threadModel', effort: 'threadEffort' },
         ];
         const FIELDS = ROUTES.flatMap((route) => [route.model, route.effort]);
         /** The plugin-wide access defaults, in the same form; empty is the plugin's own default. */
-        const ACCESS_FIELDS = ['yourTools', 'coordinatorPermission', 'threadPermission'];
+        const ACCESS_FIELDS = ['yourTools', 'threadPermission'];
         const FORM_FIELDS = [...FIELDS, ...ACCESS_FIELDS];
         /** What an empty access field means. */
-        const ACCESS_BUILTIN = { yourTools: 'asked', coordinatorPermission: 'read-only', threadPermission: 'workspace-write' };
+        const ACCESS_BUILTIN = { yourTools: 'asked', threadPermission: 'workspace-write' };
         const LABELS = {
-            unavailable: 'The projects plugin is not running, so its defaults cannot be changed right now.',
+            unavailable: 'The coordinator plugin is not running, so its defaults cannot be changed right now.',
             readOnly: 'This DSH stores settings read-only.',
             saveFailed: 'DSH did not save these. Your choices are still here, so you can try again.',
             save: 'Save',
             saving: 'Saving…',
         };
         const INSERTED_TWICE = 'DSH can\'t save here because your profile adds this plugin with "insert:" (the older setup). In cordis.patch.yml, change that row to "- id: coordinator" with its "config:", as in the plugin README. Below is what the plugin runs with now.';
-        const NOTE = 'These apply to every project that doesn\'t set its own. A project\'s own choice, made in its Project settings, in its coordinator\'s model menu or by asking the coordinator, comes first. Default follows DSH\'s default model, which is the one last picked in any DSH chat.';
+        const NOTE = 'These apply to every coordinating chat that doesn\'t set its own. A chat\'s own choice, made in its Thread settings or by asking in the chat, comes first. Default follows DSH\'s default model, which is the one last picked in any DSH chat.';
 
         /** DSH's branch glyph, as a mask for links drawn by DSH's markdown. */
         const BRANCH_MASK = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.3"><path d="M1.015 8h4.681c.723 0 1.085 0 1.425-.08.302-.072.591-.19.857-.35.3-.18.558-.433 1.075-.939l2.275-2.225"/><path d="M1.012 8h4.684c.723 0 1.085 0 1.425.08.302.072.591.19.857.35.3.18.558.433 1.075.939l2.275 2.225"/><circle cx="12.45" cy="3.308" r="1.57"/><circle cx="12.45" cy="12.692" r="1.57"/></svg>')}")`;
@@ -79,7 +80,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const CSS = [
             // Keyboard focus: DSH's ring on every plugin control. DSH's own buttons (Open, Retry, Save…) get its outline;
             // the plugin's own controls draw it inset below, so a scrolling list can't clip it.
-            `:where(.dshp-t-card-actions,.dshp-t-paused,.dshp-dock,.dshp-ps,.dshp-page,.dshp-pg,.dshp-t-chat-bar,.dshp-t-pane-gear) button:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid ${RING};outline-offset:2px}`,
+            `:where(.dshp-t-card-actions,.dshp-t-paused,.dshp-dock,.dshp-ps,.dshp-page,.dshp-t-chat-bar,.dshp-t-pane-gear) button:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid ${RING};outline-offset:2px}`,
             // Default models form
             '.dshp-heading{margin:0 0 4px;font-size:14px;font-weight:600;line-height:1.5;color:var(--dsw-alias-label-primary)}',
             '.dshp-section{display:flex;flex-direction:column;gap:2px;padding:12px 0}',
@@ -93,33 +94,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-route-text .dshp-hint{margin:0}',
             '.dshp-route-note{color:var(--dsw-alias-label-secondary)}',
             '.dshp-route>.dshp-hint{flex:1 1 220px}',
-            // The plugin's page: every project and what it runs
+            // The plugin's page: the defaults, then the thread options
             '.dshp-page{display:flex;flex-direction:column}',
-            '.dshp-projects{display:flex;flex-direction:column;gap:2px;margin-top:12px;padding:16px 0 4px;border-top:.5px solid var(--dsw-alias-border-l2)}',
             '.dshp-options{display:flex;flex-direction:column;margin-top:12px;padding:16px 0 4px;border-top:.5px solid var(--dsw-alias-border-l2)}',
             '.dshp-option{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:8px 0}',
             '.dshp-option-text{min-width:0}',
             '.dshp-option-title{font-size:14px;line-height:20px;color:var(--dsw-alias-label-primary)}',
             '.dshp-option-hint{margin-top:4px;max-width:560px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
             '.dshp-option>span{flex:none;display:flex}',
-            '.dshp-projects .dshp-hint{color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pt{display:flex;flex-direction:column;margin-top:10px;border:.5px solid var(--dsw-alias-settings-card-stroke,var(--dsw-alias-border-l4));border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill,var(--dsw-alias-bg-layer-2));container-type:inline-size}',
-            '.dshp-pt-row{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) minmax(0,1fr) 84px;align-items:center;gap:6px 16px;box-sizing:border-box;min-height:60px;padding:10px 14px}',
-            '.dshp-pt-row+.dshp-pt-row{border-top:.5px solid var(--dsw-alias-border-l2)}',
-            '.dshp-pt-head{min-height:0;padding-top:9px;padding-bottom:7px;font-size:12px;font-weight:500;line-height:18px;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pt-cell{display:flex;flex-direction:column;min-width:0}',
-            '.dshp-pt-label{display:none}',
-            '.dshp-pt-name{display:flex;align-items:center;gap:6px;min-width:0;font-size:13px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-primary)}',
-            '.dshp-pt-name-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-            '.dshp-pt-diamond{flex:none;font-size:10px;line-height:1}',
-            '.dshp-pt-badge{flex:none;padding:0 6px;border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-interactive-bg-hover);font-size:11px;font-weight:500;line-height:18px;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pt-value{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary)}',
-            '.dshp-pt-source{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pt-action{align-items:flex-end}',
-            '.dshp-pt-perm{display:inline-flex;align-items:center;gap:5px;min-width:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pt-perm>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-            '.dshp-pt-state{padding:14px 0 6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
-            '@container (width<=560px){.dshp-pt-head{display:none}.dshp-pt-row{grid-template-columns:minmax(0,1fr) auto}.dshp-pt-row>.dshp-pt-cell:nth-child(2),.dshp-pt-row>.dshp-pt-cell:nth-child(3){grid-column:1/-1}.dshp-pt-action{grid-row:1;grid-column:2}.dshp-pt-label{display:block;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}}',
             // Model picker: DSH's composer model menu, as a settings control
             '.dshp-mp{position:relative;display:inline-flex;flex:none;min-width:0;max-width:100%}',
             '.dshp-mp-trigger{display:inline-flex;align-items:center;gap:8px;box-sizing:border-box;min-width:0;max-width:min(300px,100%);height:32px;padding:0 10px 0 12px;border:0;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-module-platform);font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);white-space:nowrap;cursor:pointer}',
@@ -176,10 +158,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-heading-next{margin-top:20px}',
             // Threads: header menu
             '.dshp-t-hdr{position:relative;display:inline-flex;align-items:center;gap:2px;min-width:0}',
-            // A project session's title is its own name (no project prefix), so its header crumb may use more of the
-            // header than DSH's 220 px; it still gives way first when the header is narrow. Found by DSH's markup
-            // (the title is a span in the hierarchy nav's last part, the nav right before the header actions that
-            // hold the Threads menu), not by its generated class names.
+            // In a chat with a Threads menu, the title crumb may use more of the header than DSH's 220 px; it still
+            // gives way first when the header is narrow. Found by DSH's markup (the title is a span in the hierarchy
+            // nav's last part, the nav right before the header actions that hold the Threads menu), not by its
+            // generated class names.
             'nav[aria-label]:has(+div [data-projects-threads])>span:last-child>span{max-width:min(560px,40vw)}',
             '.dshp-t-trigger{display:inline-flex;align-items:center;gap:5px;min-width:0;min-height:28px;padding:3px 6px;border:0;border-radius:var(--dsw-radius-sm);background:none;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap;cursor:pointer}',
             '.dshp-t-trigger:hover,.dshp-t-trigger:focus-visible,.dshp-t-trigger[aria-expanded=true]{color:var(--dsw-alias-label-primary)}',
@@ -187,11 +169,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-trigger svg{flex:none}',
             '.dshp-t-label{min-width:0;overflow:hidden;text-overflow:ellipsis}',
             '.dshp-t-parent .dshp-t-label{max-width:180px}',
-            '.dshp-t-diamond{flex:none;font-size:10px;line-height:1}',
             '.dshp-t-signal{flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px}',
             '.dshp-t-chev{transition:transform .12s}',
             '.dshp-t-chev-open{transform:rotate(180deg)}',
-            '@container (width<=480px){.dshp-t-parent .dshp-t-label{display:none}}',
+            // In a narrow header the link back to a thread's chat and Coordinate keep only their icons (and their names for screen readers).
+            '@container (width<=480px){.dshp-t-parent .dshp-t-label,.dshp-t-coordinate .dshp-t-label{display:none}}',
             '.dshp-t-menu{position:fixed;z-index:100;box-sizing:border-box;display:flex;flex-direction:column;width:400px;max-width:calc(100vw - 32px);max-height:min(560px,calc(100vh - 120px));padding:4px;box-shadow:var(--dsw-elevation-prominent);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);color:var(--dsw-alias-label-primary);outline:none}',
             '.dshp-t-menu-head{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:6px 9px 4px}',
             '.dshp-t-menu-head .dshp-t-project{max-width:100%}',
@@ -203,7 +185,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-count{flex:none;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;white-space:nowrap}',
             '.dshp-t-menu-body{flex:1 1 auto;min-height:0;overflow:auto}',
             '.dshp-t-menu-foot{margin-top:3px;padding-top:3px;border-top:.5px solid var(--dsw-alias-border-l2)}',
-            // Threads: what the coordinator and new threads run on, under the project name
+            // Threads: what new threads run on and can reach, under the chat's name
             '.dshp-t-models{display:flex;flex-direction:column;margin:0 0 3px;padding:0 0 3px;border-bottom:.5px solid var(--dsw-alias-border-l2)}',
             '.dshp-t-models-row{display:flex;align-items:center;gap:8px;box-sizing:border-box;width:100%;min-height:28px;padding:4px 9px;border:0;border-radius:var(--dsw-radius-md);background:none;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);text-align:left}',
             'button.dshp-t-models-row{cursor:pointer}',
@@ -274,6 +256,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-find .dshp-t-find-box{display:flex;width:100%;box-sizing:border-box}',
             '.dshp-t-find .dshp-t-find-query{padding-right:34px}',
             '.dshp-t-notice.dshp-t-find-none{padding:6px 10px}',
+            '.dshp-t-hit{background:none;color:inherit;font-weight:600}',
             '.dshp-t-empty{padding:28px 16px;text-align:center;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
             // Threads: a thread's chat in the right sidebar
             '.dshp-t-chat{display:flex;flex-direction:column;width:100%;height:100%;min-width:0;min-height:0}',
@@ -416,23 +399,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-hover-line .dshp-t-added{color:var(--dsw-alias-state-success-primary)}',
             '.dshp-t-hover-line .dshp-t-deleted{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 60%,white)}',
             '.dshp-t-row-changes{flex:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}',
-            // Threads: a new project's suggested first asks, under the coordinator's greeting
-            '.dshp-t-suggest{display:flex;flex-direction:column;gap:8px}',
-            '.dshp-t-suggest-label{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-t-suggest-list{display:flex;flex-wrap:wrap;gap:8px}',
-            '.dshp-t-suggest-item{display:inline-flex;align-items:center;gap:6px;box-sizing:border-box;max-width:100%;min-height:32px;padding:5px 12px 5px 10px;border:.5px solid var(--dsw-alias-border-l3);border-radius:999px;background:var(--dsw-alias-bg-layer-1);font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer;transition:background-color .1s}',
-            '.dshp-t-suggest-item:hover{background:var(--dsw-alias-interactive-bg-hover)}',
-            '.dshp-t-suggest-item:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}',
-            '.dshp-t-suggest-item svg{flex:none;color:var(--dsw-alias-label-tertiary)}',
-            '.dshp-t-suggest-note{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
-            // Threads: a paused project, in the menu and the pane
+            // Threads: paused threads, in the menu and the pane
             '.dshp-t-paused{display:flex;align-items:center;gap:10px;margin:0 0 4px;padding:8px 8px 8px 10px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-interactive-bg-hover);font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
             '.dshp-t-paused-icon{flex:none;display:inline-flex;color:var(--dsw-alias-label-primary)}',
             '.dshp-t-paused-text{flex:1;min-width:0}',
             '.dshp-t-paused-text b{font-weight:600;color:var(--dsw-alias-label-primary)}',
             '.dshp-t-pane .dshp-t-paused{margin:0 0 8px;padding:10px 10px 10px 12px;font-size:13px;line-height:19px}',
             '.dshp-t-paused-mark{color:var(--dsw-alias-label-secondary)}',
-            // A paused project, above the message box (as DSH docks a goal there)
+            // Paused threads, above the message box (as DSH docks a goal there)
             '.dshp-dock{box-sizing:border-box;width:calc(100% - 2 * var(--dsh-composer-side-clearance,0px) - 4 * var(--dsh-composer-dock-inset,0px));margin:0 auto;container:dshp-dock/inline-size}',
             '.dshp-dock-bar{isolation:isolate;position:relative;box-sizing:border-box;display:flex;align-items:center;gap:10px;width:100%;max-width:calc(var(--dsh-composer-card-max-width,760px) - 4 * var(--dsh-composer-dock-inset,0px));min-height:36px;margin:0 auto;padding:4px 5px 4px 12px;border-radius:var(--dsw-radius-md);box-shadow:var(--dsw-elevation-panel);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)}',
             '.dshp-dock-bar::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:inherit;background:var(--dsw-specific-menu);backdrop-filter:var(--dsw-menu-backdrop-filter);pointer-events:none}',
@@ -442,7 +416,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // A failed thread's reason may run long: two lines, then the bar's tooltip.
             '.dshp-dock-wrap .dshp-dock-text{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal}',
             '.dshp-dock-glyph[data-state=stopped]{color:var(--dsw-alias-label-secondary)}',
-            '.dshp-offer-glyph{font-size:12px;line-height:20px;color:var(--dsw-alias-label-primary)}',
             '.dshp-dock-time{flex:none;font-size:12px;line-height:20px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
             // In a narrow chat the text takes its own line under the label, so the held count and what it means stay whole.
             '@container dshp-dock (max-width:600px){.dshp-dock-bar{flex-wrap:wrap;row-gap:0;padding-bottom:7px}.dshp-dock-label{flex:1 1 auto}.dshp-dock-text{order:1;box-sizing:border-box;flex:1 1 100%;padding-inline:24px 7px;white-space:normal}}',
@@ -469,7 +442,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-hover-line[data-projects-changes]{display:flex;align-items:center;gap:6px}',
             '.dshp-t-hover-line[data-projects-access]{display:flex;align-items:flex-start;gap:6px}',
             '.dshp-t-hover-line[data-projects-access]>.dshp-perm-glyph{margin-top:2px}',
-            // Project settings dialog
+            // Thread settings dialog
             '.dshp-t-gear{padding:3px 5px}',
             '.dshp-t-pane-head{position:relative;padding-right:40px}',
             '.dshp-t-pane-gear{position:absolute;top:2px;right:6px}',
@@ -501,14 +474,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             `.dshp-ps-link:focus-visible{border-radius:3px;box-shadow:0 0 0 2px ${RING}}`,
             '.dshp-ps-link:disabled{cursor:default;opacity:.6}',
             '.dshp-ps-alert{flex:1 0 100%;margin:0;padding:6px 8px;border-radius:var(--dsw-radius-sm);font-size:12px;line-height:18px}',
-            // The goal: its text box takes the row's whole width, Save and Cancel under it while it is changed.
-            '.dshp-ps-goal{align-items:stretch}',
-            '.dshp-ps-goal>.dshp-ps-text{flex:1 0 100%}',
-            '.dshp-ps-goal-input{flex:1 0 100%;box-sizing:border-box;min-height:64px;padding:8px 10px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:none;font:inherit;font-size:13px;line-height:19px;color:var(--dsw-alias-label-primary);resize:vertical;outline:none}',
-            `.dshp-ps-goal-input:focus{outline:2px solid ${RING};outline-offset:-2px}`,
-            '.dshp-ps-goal-input::placeholder{color:var(--dsw-alias-label-secondary)}',
-            '.dshp-ps-goal>.dshp-ps-fit{flex:1 0 100%}',
-            '.dshp-ps-goal-actions{display:flex;flex:1 0 100%;justify-content:flex-end;gap:8px}',
             `.dshp-ps-alert.dshp-ps-error{background:var(--dsw-alias-interactive-bg-hover-danger,var(--dsw-alias-interactive-bg-hover));color:${ERROR_TEXT}}`,
             '.dshp-ps-alert.dshp-ps-info{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}',
             '.dshp-ps-empty{padding:16px 14px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
@@ -518,7 +483,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-ps-more svg{transition:transform .12s}',
             '.dshp-ps-more[aria-expanded=true] svg{transform:rotate(90deg)}',
             '.dshp-ps-note{margin:18px 2px 0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
-            // The confirmation before a project is archived (ArchiveConfirm).
+            // Rename… (RenameThread): its line, its error and its field.
             '.dshp-ar-line{margin:0 0 10px;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
             `.dshp-ar-error{color:${ERROR_TEXT}}`,
             '.dshp-rn-form{margin:0 0 10px}',
@@ -529,54 +494,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-ps-reach{display:inline-flex;align-items:flex-start;gap:5px;min-width:0}',
             '.dshp-ps-reach>.dshp-perm-glyph{margin-top:3px}',
             '.dshp-ps-reach>span:last-child{min-width:0}',
-            // The Projects page (its entry in DSH's sidebar): DSH's page layout, as on
-            // Automation tasks, with every ◆ project and its threads.
-            '.dshp-pg{display:flex;width:100%;min-width:0;height:100%;min-height:0;overflow:hidden;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);font-size:14px;line-height:1.6}',
-            '.dshp-pg-scroll{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;container-type:inline-size;--dsh-scrollbar-width:9px;--dsh-scrollbar-thumb-border:2px}',
-            '.dshp-pg-content{max-width:960px;margin:0 auto;padding:0 clamp(24px,4vw,48px) 48px}',
-            '.dshp-pg-heading{display:flex;align-items:baseline;gap:12px;margin-bottom:16px;padding-top:28px}',
-            '[data-platform=darwin] .dshp-pg-heading{padding-top:calc(28px + var(--dsh-frame-top-clearance,0px))}',
-            '.dshp-pg-heading h1{margin:0;font-size:20px;font-weight:500;line-height:28px}',
-            '.dshp-tree,.dshp-tree-group{list-style:none;margin:0;padding:0}',
-            '.dshp-tree-item{outline:none}',
-            '.dshp-tree-row{display:flex;align-items:center;gap:6px;min-height:30px;padding-inline-end:10px;border-radius:6px;cursor:default}',
-            '.dshp-tree-row:hover{background:var(--dsh-color-bg-hover,rgba(127,127,127,.08))}',
-            '.dshp-tree-item:focus-visible>.dshp-tree-row{outline:2px solid var(--dsw-focus-ring-color,Highlight);outline-offset:-2px}',
-            // The chevron's target is wider than it looks (20 px), and takes no more room in the row.
-            '.dshp-tree-chevron{display:inline-flex;align-items:center;justify-content:center;width:20px;align-self:stretch;margin-inline:-4px;flex:none;opacity:.7}',
-            '.dshp-tree-diamond{width:14px;text-align:center;flex:none;font-size:12px}',
-            '.dshp-tree-title{flex:0 1 auto;min-width:4em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-            // What follows a title (where a project works and its threads, a thread's state) gives way before the title does.
-            '.dshp-tree-meta{margin-left:auto;padding-left:12px;flex:0 100 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12px;opacity:.65;white-space:nowrap}',
-            '.dshp-tree-dot{display:inline-flex;flex:none}',
-            // A thread's state: its dot in full colour, then its word.
-            '.dshp-tree-state{display:flex;align-items:center;gap:6px;opacity:1;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-tree-state-word{min-width:0;overflow:hidden;text-overflow:ellipsis}',
-            // A ◆ project with news the user hasn't seen reads bold, as its row in the session list does.
-            '.dshp-tree-item[data-projects-unread]>.dshp-tree-row .dshp-tree-title{font-weight:600}',
-            '.dshp-tree-glyph{display:inline-flex;width:14px;flex:none;opacity:.75}',
-            // A project's or a thread's ⋯ at the end of its row, as on DSH's own rows: shown while the row is pointed at,
-            // has the focus or has its menu open, its place kept meanwhile. DSH's menu wraps the button in a box of its
-            // own, which takes the menu's class (RowMenu).
-            '.dshp-tree-row>.dshp-tree-act{flex:none;display:inline-flex;margin-left:auto;margin-right:-6px}',
-            '.dshp-tree-meta+.dshp-tree-act{margin-left:4px}',
-            '.dshp-tree-more{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:var(--dsw-radius-sm,4px);background:none;color:var(--dsw-alias-label-secondary);cursor:pointer;visibility:hidden}',
-            '.dshp-tree-more:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
-            '.dshp-tree-row:hover .dshp-tree-more,.dshp-tree-item:focus-visible>.dshp-tree-row .dshp-tree-more,.dshp-tree-more:focus,.dshp-tree-more[aria-expanded="true"]{visibility:visible}',
-            '.dshp-pg-count{font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
-            `.dshp-pg-said{${HIDDEN}}`,
-            // Find by name, above the tree; a found name's words are marked in its title.
-            '.dshp-pg-find{position:relative;max-width:360px;margin:0 0 10px}',
-            '.dshp-pg-find .dshp-pg-find-box{display:flex;width:100%;box-sizing:border-box}',
-            '.dshp-pg-find .dshp-pg-find-query{padding-right:34px}',
-            '.dshp-pg-state.dshp-pg-find-none{padding:6px 8px}',
-            '.dshp-tree-hit{background:none;color:inherit;font-weight:600}',
-            '.dshp-pg-state{padding:48px 0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
-            `.dshp-pg-state.dshp-t-error{color:${ERROR_TEXT}}`,
-            '.dshp-pg-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:72px 20px;text-align:center;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pg-empty-glyph{display:inline-flex;margin-bottom:4px;color:var(--dsw-alias-label-tertiary)}',
-            '.dshp-pg-empty h2{margin:0;font-size:15px;font-weight:500;line-height:22px;color:var(--dsw-alias-label-primary)}',
-            '.dshp-pg-empty p{max-width:440px;margin:0;font-size:13px;line-height:21px}',
             // A place DSH's own drag may not drop a session (useSessionDragGuard): no line there.
             '[data-projects-refused] [data-row-key^="session:"]::before,[data-projects-refused] [data-row-key^="session:"]::after{display:none!important}',
         ].join('');
@@ -929,7 +846,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 intent.current = 'first';
                 setOpen(true);
             };
-            // Opened from a project's models summary, or at one thread: this menu is what the user asked for.
+            // Opened from the Threads menu's models summary, or at one thread: this menu is what the user asked for.
             React.useEffect(() => { if (autoOpen) show(); }, [autoOpen]);
             const drill = (next) => {
                 setQuery('');
@@ -1167,13 +1084,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return value;
         }
 
-        const ACCESS_NOTE = 'These apply to every project that doesn\'t set its own in its Project settings or its row in your profile. Your tools are the ones listed under guardedTools in this plugin\'s config.';
+        const ACCESS_NOTE = 'These apply to every coordinating chat that doesn\'t set its own in its Thread settings. Your tools are the ones listed under guardedTools in this plugin\'s config.';
 
         /**
          * The plugin-wide access defaults, in the same form as the default
-         * models (one Save): Your tools, and the permission coordinators and
-         * new threads start on. An empty field is the plugin's own default;
-         * picking that value stages a clear.
+         * models (one Save): Your tools, and the permission new threads start
+         * on. An empty field is the plugin's own default; picking that value
+         * stages a clear.
          * @param props.listed - useListedAccess' answer.
          */
         function accessDefaults({ state, actions, disabled, listed }) {
@@ -1197,7 +1114,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     guarded.length === 0 ? SETTINGS.noTools : tools === 'always' ? SETTINGS.toolsAlwaysAll : SETTINGS.toolsAsked,
                     h(ToolsControl, { id: 'dshp-your-tools', value: tools, names: guarded, risk: RISK.allTools, disabled, onPick: (next) => pick('yourTools', next) }),
                     guarded.length > 0 ? h(ToolNames, { names: guarded }) : null),
-                perms ? permission('coordinatorPermission', SETTINGS.coordinatorPermission, 'Where each ◆ session can write, and what it asks you first. DSH default is the permission DSH gives new chats.', RISK.allCoordinators) : null,
                 perms ? permission('threadPermission', SETTINGS.threadPermission, 'What each new thread starts on. A running thread keeps its own.', RISK.allThreads) : null,
                 h('p', { key: 'n', className: 'dshp-note' }, ACCESS_NOTE),
             ];
@@ -1221,23 +1137,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     ...accessDefaults({ state, actions: form.actions, disabled, listed })));
         }
 
-        const TABLE = {
-            heading: 'Projects',
-            hint: 'What each project runs on and can reach. A value with no note under it follows the defaults above; one set for the project, or in its row in your profile, says so.',
-            noCoordinator: 'No coordinator yet',
-            archived: 'Archived',
-            loading: 'Loading projects…',
-            failed: 'The projects plugin didn\'t answer, so its projects can\'t be listed right now.',
-            none: 'No projects yet. Add one under "projects" in this plugin\'s config.',
-            project: 'Project',
-            settings: 'Settings',
-            paused: 'Paused',
-        };
-        /** Sources a project inherits from: the table says nothing under them, as its hint explains. */
-        const INHERITED = new Set(['plugin default', 'DSH default']);
-        /** Where a project's model and effort come from: a line for one source, a phrase each for two. */
-        const SOURCE_LINE = { 'project setting': 'Set for this project', 'project config': 'From your profile', 'plugin default': 'From Default models', 'DSH default': 'Follows DSH\'s default model' };
-        const SOURCE_PHRASE = { 'project setting': 'set for this project', 'project config': 'from your profile', 'plugin default': 'from Default models', 'DSH default': 'follows DSH' };
+        /** Where a thread setting comes from: a line for one source, a phrase each for two. */
+        const SOURCE_LINE = { 'chat setting': 'Set for this chat', 'plugin default': 'From Default models', 'DSH default': 'Follows DSH\'s default model' };
+        const SOURCE_PHRASE = { 'chat setting': 'set for this chat', 'plugin default': 'from Default models', 'DSH default': 'follows DSH' };
 
         /**
          * The source of a model and effort pair, naming the effort's own
@@ -1251,146 +1153,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return `Model ${SOURCE_PHRASE[m?.source] ?? ''} · effort ${SOURCE_PHRASE[e.source] ?? ''}`;
         }
 
-        const hasCoordinator = (p) => typeof p?.coordinator === 'string' && p.coordinator !== '';
-
-        /** A coordinator selection signature, to read the table again when a pick changes one. */
-        function selectionsKey(state, sessionIds) {
-            return sessionIds.map((id) => {
-                const picked = selectionIn(state, id);
-                return picked ? `${picked.provider}:${picked.model}:${picked.reasoningEffort ?? ''}` : '';
-            }).join('|');
-        }
-
-        /**
-         * Every project with what its coordinator and new threads run on and
-         * where each setting comes from, as the plugin resolves them. It reads
-         * again every few seconds while shown, and soon after a pick in a
-         * coordinator's model menu.
-         */
-        function ProjectsTable({ link, dialog, catalog, sessionsOf }) {
-            const cat = React.useSyncExternalStore(catalog.subscribe, catalog.getSnapshot);
-            const cv = React.useMemo(() => catalogView(cat.value), [cat.value]);
-            const settingsOn = useSettingsAvailable(dialog);
-            const [list, setList] = React.useState(null);
-            const [listed, setListed] = React.useState(null);
-            const [failed, setFailed] = React.useState(false);
-            const alive = React.useRef(true);
-            const read = React.useCallback(async () => {
-                const result = await link.call('list', {});
-                if (!alive.current) return;
-                if (result.ok && Array.isArray(result.value?.projects)) {
-                    setList(result.value.projects.filter((p) => isObject(p) && typeof p.id === 'string'));
-                    const guarded = Array.isArray(result.value.guarded) ? result.value.guarded.filter((name) => typeof name === 'string' && name !== '') : [];
-                    const permissions = isObject(result.value.permissions) && Array.isArray(result.value.permissions.options) && result.value.permissions.options.length > 0 ? result.value.permissions : null;
-                    setListed((was) => (was && was.guarded.join('\n') === guarded.join('\n') && JSON.stringify(was.permissions) === JSON.stringify(permissions) ? was : { guarded, permissions }));
-                    setFailed(false);
-                } else {
-                    setFailed(true);
-                }
-            }, [link]);
-            React.useEffect(() => {
-                alive.current = true;
-                catalog.ensure();
-                void read();
-                const timer = setInterval(() => {
-                    if (typeof document === 'undefined' || document.visibilityState !== 'hidden') void read();
-                }, 3000);
-                return () => { alive.current = false; clearInterval(timer); };
-            }, [read, catalog]);
-            const coordinators = (list ?? EMPTY).map((p) => p.coordinator).filter((id) => typeof id === 'string' && id !== '');
-            const key = coordinators.join('\n');
-            React.useEffect(() => {
-                const sessions = sessionsOf();
-                if (!sessions?.list || coordinators.length === 0) return undefined;
-                let last = selectionsKey(sessions.list.getSnapshot(), coordinators);
-                const timers = new Set();
-                const later = (ms) => { const t = setTimeout(() => { timers.delete(t); void read(); }, ms); timers.add(t); };
-                const unsubscribe = sessions.list.subscribe(() => {
-                    const next = selectionsKey(sessions.list.getSnapshot(), coordinators);
-                    if (next === last) return;
-                    last = next;
-                    // The plugin records a pick as it happens; read once soon and once more to be sure.
-                    later(300);
-                    later(1500);
-                });
-                return () => { unsubscribe(); for (const t of timers) clearTimeout(t); };
-            }, [key, read, sessionsOf]);
-
-            const head = [
-                h('h3', { key: 'h', className: 'dshp-heading' }, TABLE.heading),
-                h('p', { key: 'p', className: 'dshp-hint' }, TABLE.hint),
-            ];
-            let body;
-            if (list === null) {
-                body = h('div', { className: 'dshp-pt-state', role: failed ? 'alert' : 'status' }, failed ? TABLE.failed : TABLE.loading);
-            } else if (list.length === 0) {
-                body = h('div', { className: 'dshp-pt-state' }, TABLE.none);
-            } else {
-                const perms = listed?.permissions ?? null;
-                const guarded = listed?.guarded ?? EMPTY;
-                const cell = (key, label, value, caption, extra) => h('div', { key, className: 'dshp-pt-cell', role: 'cell' },
-                    h('span', { className: 'dshp-pt-label' }, label),
-                    h('span', { className: 'dshp-pt-value', title: value }, value),
-                    caption ? h('span', { className: 'dshp-pt-source' }, caption) : null,
-                    extra ?? null);
-                // Where the coordinator (now, when DSH has it loaded) or new threads can write, with where that comes from.
-                const permissionLine = (p, key, live) => {
-                    const a = p.access?.[key];
-                    if (!perms || !isObject(a)) return null;
-                    const shown = live ? { preset: live, name: permissionName(live, perms) } : permissionShown(a.value, perms);
-                    if (!shown.name) return null;
-                    return h('span', { className: 'dshp-pt-perm', 'data-projects-table-permission': shown.preset ?? '', title: ACCESS_SOURCE[a.source] ?? undefined },
-                        permissionGlyph(shown.preset, 12), h('span', null, shown.name));
-                };
-                const routeCell = (p, key, label, mKey, eKey, live, permission) => {
-                    const m = p.settings?.[mKey];
-                    const e = p.settings?.[eKey];
-                    const route = resolveRoute(cv, m?.value ?? undefined, e?.value ?? undefined);
-                    const effort = levelsOf(route) ? e : undefined;
-                    // Only what a project sets itself gets a note: the defaults would say the same in every cell.
-                    const inherited = INHERITED.has(m?.source) && (!isObject(effort) || effort.value == null || INHERITED.has(effort.source));
-                    return cell(key, label, routeLabel(route), (live ? liveNote(cv, route, live) : undefined) ?? (inherited ? undefined : sourceLine(m, effort)), permission);
-                };
-                // A project whose coordinator hasn't started has nothing running for it to show.
-                const noCoordinator = (p) => h('div', { key: 'c', className: 'dshp-pt-cell', role: 'cell', 'data-projects-table-no-coordinator': '' },
-                    h('span', { className: 'dshp-pt-label' }, TEXT.coordinator),
-                    h('span', { className: 'dshp-pt-source' }, TABLE.noCoordinator));
-                const threadsLine = (t) => {
-                    const open = Number(t?.open) || 0;
-                    const resolved = Number(t?.resolved) || 0;
-                    if (open + resolved === 0) return 'No threads yet';
-                    return resolved > 0 ? `${plural(open, 'open thread')} · ${resolved} resolved` : plural(open, 'open thread');
-                };
-                const toolsLine = (p) => (guarded.length === 0 || !isObject(p.access?.yourTools) ? null
-                    : h('span', { className: 'dshp-pt-source', 'data-projects-table-tools': p.access.yourTools.value }, p.access.yourTools.value === 'always' ? 'Your tools: always' : 'Your tools: only when asked'));
-                body = h('div', { className: 'dshp-pt', role: 'table', 'aria-label': TABLE.heading },
-                    h('div', { className: 'dshp-pt-row dshp-pt-head', role: 'row' },
-                        ...[TABLE.project, TEXT.coordinator, 'New threads', ''].map((text, i) => h('span', { key: i, role: 'columnheader' }, text))),
-                    ...list.map((p) => h('div', { key: p.id, className: 'dshp-pt-row', role: 'row', 'data-projects-table-row': p.id },
-                        h('div', { className: 'dshp-pt-cell', role: 'cell' },
-                            h('span', { className: 'dshp-pt-name' },
-                                h('span', { className: 'dshp-pt-diamond', 'aria-hidden': true }, hasCoordinator(p) ? '◆' : '◇'),
-                                h('span', { className: 'dshp-pt-name-text', title: p.workspace || undefined }, p.name || p.id),
-                                p.archived ? h('span', { className: 'dshp-pt-badge' }, TABLE.archived) : p.paused ? h('span', { className: 'dshp-pt-badge' }, TABLE.paused) : null),
-                            h('span', { className: 'dshp-pt-source' }, threadsLine(p.threads)),
-                            toolsLine(p)),
-                        hasCoordinator(p)
-                            ? routeCell(p, 'c', TEXT.coordinator, 'coordinatorModel', 'coordinatorEffort', p.live, permissionLine(p, 'coordinatorPermission', typeof p.permission === 'string' ? p.permission : undefined))
-                            : noCoordinator(p),
-                        routeCell(p, 't', 'New threads', 'threadModel', 'threadEffort', undefined, permissionLine(p, 'threadPermission')),
-                        h('div', { className: 'dshp-pt-cell dshp-pt-action', role: 'cell' },
-                            settingsOn ? h(ui.Button, {
-                                variant: 'outline', size: 'sm', 'aria-label': `${SETTINGS.title}: ${p.name || p.id}`,
-                                onClick: () => dialog.open(p.id),
-                            }, TABLE.settings) : null))));
-            }
-            return h('section', { className: 'dshp-projects', 'data-projects-table': '' }, ...head, body);
-        }
-
         const OPTIONS = {
             heading: 'Threads',
             beside: 'Open threads beside their coordinator',
-            besideHint: 'A thread you open from the sidebar, a card or the Projects page shows in the right panel, beside its coordinator\'s chat, when the window has room for both. Off, a thread opens on its own, and "Open beside its coordinator" in its menus still pairs them.',
+            besideHint: 'A thread you open from the sidebar or a card shows in the right panel, beside the chat that started it, when the window has room for both. Off, a thread opens on its own, and "Open beside its coordinator" in its menus still pairs them.',
         };
 
         /** The plugin page's switches, which this window keeps (no Save). */
@@ -1406,7 +1172,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         h(ui.Switch, { checked: beside, label: OPTIONS.beside, onChange: (on) => besidePref.set(on) }))));
         }
 
-        function applyDefaultsForm(ctx, { catalog, link, dialog, sessionsOf }) {
+        function applyDefaultsForm(ctx, { catalog, link }) {
             const scope = ctx.configForms.get(ENTRY);
             const model = new ui.SettingsFormModel(scope, FORM_FIELDS.map((name) => ui.settingsTextField(name)));
             const store = model.bind(() => ({
@@ -1421,11 +1187,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
             ctx.effect(() => () => model.dispose(), 'coordinator: defaults form');
             const Page = (props) => (props.view === 'summary'
-                ? 'Default models, effort and access for coordinators and threads.'
+                ? 'Default models, effort and access for threads.'
                 : h('div', { className: 'dshp-page' },
                     h(DefaultsForm, { form, catalog, link }),
-                    h(ThreadOptions),
-                    h(ProjectsTable, { link, dialog, catalog, sessionsOf })));
+                    h(ThreadOptions)));
             ctx.effect(() => ctx.configForms.whileServed([ENTRY], () => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
                 name: 'plugins.bundle.config',
                 key: BUNDLE,
@@ -1456,17 +1221,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             changes: `${BUNDLE}/thread-changes`,
             settings: `${BUNDLE}/project-settings`,
             settingsItem: `${BUNDLE}/project-settings-item`,
-            archive: `${BUNDLE}/archive`,
-            archiveItem: `${BUNDLE}/archive-item`,
             rename: `${BUNDLE}/rename`,
             fullItem: `${BUNDLE}/full-view-item`,
             paused: `${BUNDLE}/paused-bar`,
             ending: `${BUNDLE}/ending-bar`,
             place: `${BUNDLE}/row-place`,
-            page: `${BUNDLE}/projects`,
             sessionList: `${BUNDLE}/session-list`,
             news: `${BUNDLE}/news-notice`,
-            offer: `${BUNDLE}/coordinator-offer`,
+            coordinate: `${BUNDLE}/coordinate`,
         };
         /** The conversation inside a thread's sidebar chat; its tab body declares it. */
         const CONVERSATION_SLOT = 'projects.thread.conversation';
@@ -1479,33 +1241,29 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** The short `[title](.t3)` a reply may write instead: `.t` and digits exactly, so `.tmp` or `.tool-versions` stay files. */
         const SHORT_LINK = /^dsh-resource:\/\/file\/session\/([^/?#]+)\/\.(t\d+)\/?(?:[?#].*)?$/;
         const EMPTY = Object.freeze([]);
-        /** A set with nothing in it, never added to. */
-        const EMPTY_SET = new Set();
         const NO_PROJECT = Object.freeze({});
         const TEXT = {
             // The plugin's messages between sessions, as their notices name them.
             noticeHandback: 'Handback from',
-            noticeHandbackWhy: 'What the thread reported. The coordinator answers it below.',
+            noticeHandbackWhy: 'What the thread reported. This chat answers it below.',
             noticeIdle: 'ended without a handback',
-            noticeIdleWhy: 'The thread ended a turn without reporting back, so the plugin told the coordinator.',
+            noticeIdleWhy: 'The thread ended a turn without reporting back, so the plugin told this chat.',
             noticeApproval: 'is waiting for approval',
-            noticeApprovalWhy: 'The thread waits on a permission prompt in its own chat, so the plugin told the coordinator.',
+            noticeApprovalWhy: 'The thread waits on a permission prompt in its own chat, so the plugin told this chat.',
             noticeQuestion: 'asked a question',
-            noticeQuestionWhy: 'The thread asked its coordinator while it works. The coordinator answers it, or asks you when only you can decide.',
-            noticeWelcome: 'Project created',
-            noticeWelcomeWhy: 'The plugin started this coordinator, which introduces itself.',
+            noticeQuestionWhy: 'The thread asked this chat while it works. This chat answers it, or asks you when only you can decide.',
             noticeBrief: 'Brief from',
-            noticeBriefWhy: 'The coordinator started this thread with this brief.',
-            noticeCoordinator: 'Message from the coordinator',
-            noticeCoordinatorWhy: 'The coordinator sent this thread a message.',
+            noticeBriefWhy: 'The chat that started this thread sent this brief.',
+            noticeCoordinator: 'Message from the coordinating chat',
+            noticeCoordinatorWhy: 'The chat that started this thread sent it a message.',
             noticeMessage: 'Message from',
-            noticeMessageWhy: 'That project\'s coordinator sent it at your request. This chat stays outside the project; its answer goes back to that coordinator once.',
+            noticeMessageWhy: 'A coordinating chat sent it at your request. This chat doesn\'t join its threads; its answer goes back to that chat once.',
             noticeReply: 'Reply from',
-            noticeReplyWhy: 'The answer to the message this coordinator sent at your request.',
+            noticeReplyWhy: 'The answer to the message this chat sent at your request.',
             noticeOther: 'Message received',
             needsYou: 'Needs you',
             running: 'Running',
-            // What a coordinator's row and the window's notice say about news from its threads.
+            // What a coordinating chat's row and the window's notice say about news from its threads.
             news: {
                 handback: (title, status) => (status === 'blocked' ? `“${title}” is blocked` : status === 'needs_decision' ? `“${title}” needs a decision` : `“${title}” handed back`),
                 finished: (title) => `“${title}” finished its turn`,
@@ -1516,16 +1274,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             newsMore: (n) => (n === 1 ? ', and one more' : `, and ${n} more`),
             newsOpen: 'Open',
             newsMark: (n, line) => (n === 1 ? `New: ${line}` : `${n} new, latest: ${line}`),
-            // Above the message box of a plain chat in a workspace where a project works.
-            offerLabel: 'This folder has a project.',
-            offerText: 'Its coordinator runs the work in threads.',
-            offerTextDraft: 'What you typed goes with you.',
-            offerOpen: (name) => `Talk to ◆ ${name}`,
-            offerOff: (name) => `Don't offer ◆ ${name} in this folder`,
+            // In a chat's header: start coordinating there, or stop.
+            coordinate: 'Coordinate',
+            coordinateTip: 'Run work from this chat in threads that report back here',
+            stopCoordinating: 'Stop coordinating',
             threads: 'Threads',
             thread: 'Thread',
             coordinator: 'Coordinator',
-            openCoordinator: 'Open the coordinator',
+            openCoordinator: 'Open the chat that started this thread',
             open: 'Open',
             openTip: 'Open it beside this chat',
             fullView: 'Full view',
@@ -1534,30 +1290,29 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             openPane: 'Open the Threads panel',
             current: 'This chat',
             loading: 'Loading threads…',
-            failed: 'Could not load this project\'s threads.',
-            noCoordinator: 'This thread\'s coordinator isn\'t known yet.',
+            failed: 'Could not load this chat\'s threads.',
+            noCoordinator: 'The chat that started this thread isn\'t known yet.',
             retry: 'Retry',
-            empty: 'No threads yet. When work needs its own session, the coordinator starts a thread and it shows up here.',
-            notProject: 'Threads belong to projects. Open a project\'s ◆ coordinator or one of its threads to see them here.',
+            empty: 'No threads yet. When work needs its own session, this chat starts a thread and it shows up here.',
+            notProject: 'This chat has no threads. Open a chat that coordinates threads, or one of its threads, to see them here.',
             chatGone: 'This thread\'s chat can\'t be opened. It may have been deleted.',
             linkLoading: 'Opening the thread…',
-            linkNotProject: 'This chat isn\'t part of a project, so it has no threads.',
+            linkNotProject: 'This chat doesn\'t coordinate threads, so it has none to open.',
             paused: 'Paused',
-            projectPaused: 'Project paused',
-            // What a project's rows in the session list say after their titles, to a screen reader.
-            rowProject: 'Project',
-            rowThread: 'Project thread',
+            projectPaused: 'Threads paused',
+            // What a coordinating chat's and its threads' rows in the session list say after their titles, to a screen reader.
+            rowProject: 'Coordinating',
+            rowStopped: 'Stopped coordinating',
+            rowThread: 'Thread',
             pausedCoordinator: 'New threads and handbacks wait until you resume.',
             pausedNewThreads: 'New threads wait too.',
-            pausedThread: 'This thread\'s handbacks wait until the project resumes.',
+            pausedThread: 'This thread\'s handbacks wait until you resume.',
             heldLine: 'held until you resume',
             handbackHeld: 'Handback held',
-            handbackHeldWhy: 'The project is paused, so the coordinator gets this handback when you resume.',
+            handbackHeldWhy: 'Threads are paused, so the chat that started this thread gets this handback when you resume.',
             resume: 'Resume',
             resuming: 'Resuming…',
-            resumeFailed: 'Couldn\'t resume the project.',
-            tryAsking: 'Try asking',
-            suggestCopied: 'Copied. Paste it in the message box below.',
+            resumeFailed: 'Couldn\'t resume the threads.',
             reviewChanges: 'Review changes',
             reviewLatest: 'Review the latest changes',
             diffGone: 'DSH has no diff of this to show. It keeps diffs only until it restarts.',
@@ -1595,9 +1350,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             changesFolded: (n) => `${plural(n, 'file')} folded. Open one to see its diff.`,
             retryThread: 'Retry',
             resumeThread: 'Resume',
-            // A thread row's ⋯, in the Threads menu and panel and on the Projects page.
+            // A thread row's ⋯, in the Threads menu and panel.
             renameThread: 'Rename…',
+            threadActions: (name) => `Thread actions: ${name}`,
             findThread: 'Find a thread',
+            findClear: 'Clear the find',
+            findNone: (words) => `Nothing matches “${words}”.`,
             steps: 'Steps done',
             threadSettings: 'Model and permission…',
             stopThread: 'Stop',
@@ -1613,19 +1371,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             youStopped: 'You stopped it.',
             youStoppedEarly: 'You stopped it before it finished.',
         };
-        /** A new project's first asks, shown under the coordinator's greeting until the user writes. */
-        const SUGGESTIONS = [
-            'Look around this folder and suggest what to work on first',
-            'Plan the work and start a thread for each part',
-            'Start a thread that reviews the code for bugs',
-        ];
-        /** The same for a project in the user's home folder, where "this folder" and "the code" would be all of it. */
-        const HOME_SUGGESTIONS = [
-            'Plan the work and start a thread for each part',
-            'Start a thread that writes a small test script in a new folder',
-        ];
-        /** The first asks for a project as `describe` answered; none until it has. */
-        const suggestionsFor = (described) => (isObject(described) ? (described.project?.homeFolder === true ? HOME_SUGGESTIONS : SUGGESTIONS) : null);
         const GROUPS = [
             { id: 'waiting', label: 'Waiting on you' },
             { id: 'running', label: 'Running' },
@@ -1638,6 +1383,20 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
         const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
         const threadNumber = (id) => Number(String(id).slice(1)) || 0;
+        /** Names as a sentence lists them: "A", "A and B", "A, B and C". */
+        const listText = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
+        /** For a DSH without workspaces or session statuses on its slot props: none. */
+        const NO_WORKSPACES = Object.freeze({ items: EMPTY, archivedSessionIds: EMPTY, phase: 'none' });
+        const noWorkspaces = (select) => select(NO_WORKSPACES);
+        const noStatuses = (select) => select(new Map());
+
+        /** A title with the found words marked, as parts to draw. */
+        function withHit(title, find) {
+            const words = String(find ?? '').trim();
+            const at = words === '' ? -1 : String(title).toLowerCase().indexOf(words.toLowerCase());
+            if (at < 0) return [title];
+            return [title.slice(0, at), h('mark', { key: 'hit', className: 'dshp-t-hit' }, title.slice(at, at + words.length)), title.slice(at + words.length)].filter((part) => part !== '');
+        }
 
         /** A session's `coordinatorSession` value from DSH's shared session store, or undefined. */
         function valueIn(state, sessionId) {
@@ -1648,7 +1407,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * The coordinator and thread sessions the plugin's store knows, by id:
-         * {role, name, coordinator?} (remote.js `sessions`). DSH lists a
+         * {role, coordinator?} (remote.js `sessions`). DSH lists a
          * session without the plugin's value while the value it saved is from
          * another version of the plugin, until the session is next loaded; the
          * session list's rows go by this then, not by their titles.
@@ -1665,16 +1424,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const map = new Map();
             for (const [id, s] of Object.entries(isObject(sessions) ? sessions : {})) {
                 if (!isObject(s) || (s.role !== 'coordinator' && s.role !== 'thread')) continue;
-                map.set(id, {
-                    role: s.role,
-                    name: typeof s.name === 'string' ? s.name.trim() : '',
-                    ...(typeof s.coordinator === 'string' && s.coordinator !== '' ? { coordinator: s.coordinator } : {}),
-                });
+                map.set(id, { role: s.role, ...(typeof s.coordinator === 'string' && s.coordinator !== '' ? { coordinator: s.coordinator } : {}) });
             }
             known.map = map;
             known.version += 1;
-            // Answers worked out from the list before are stale now.
-            coordinatorIdsCache = new WeakMap();
             for (const listener of [...known.listeners]) listener();
         }
 
@@ -1949,10 +1702,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * What each thread of a described project can reach, by session id:
+         * What each thread of a described chat can reach, by session id:
          * {permission, tools}. The preset DSH shows now wins over the one the
          * plugin last saw; which of the user's tools it has only the plugin
-         * knows. Empty until the project is described.
+         * knows. Empty until the chat is described.
          * @param info - describe's answer, or null.
          * @param live - usePermissions' answer.
          */
@@ -1967,10 +1720,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * The access rows at the top of the Threads menu and pane and on the
-         * Projects page: the permission new threads start on (when DSH offers
-         * permissions), and whether sessions get the user's tools (when any
-         * are listed). Each is undefined until the project is described.
+         * The access rows at the top of the Threads menu and pane: the
+         * permission new threads start on (when DSH offers permissions), and
+         * whether threads get the user's tools (when any are listed). Each is
+         * undefined until the chat is described.
          * @returns {{permission?: {preset?: string, name: string}, tools?: string}}
          */
         function accessSummary(info) {
@@ -1992,10 +1745,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * What the plugin says about projects (remote.js), shared by every
-         * view in the window: `describe` for one project's settings and
-         * pause, `list` for every project's pause (the session list marks a
-         * paused coordinator). A view watches what it shows; while any does
+         * What the plugin says about coordinating chats and their threads
+         * (remote.js), shared by every view in the window: `describe` for one
+         * chat's thread settings and pause, `list` for every coordinating
+         * chat's pause (the session list marks a paused one). Each answer is
+         * kept by the chat's id (`project.id`, which is its session id). A
+         * view watches what it shows; while any does
          * and the window is visible, it is read again every 15 s, and a
          * change made in this window shows everywhere at once.
          * @param link - the plugin's endpoints (hostLink).
@@ -2013,7 +1768,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             /** The last list answer (null until one came), and whether the last read failed. */
             let listed = null;
             let listFailed = false;
-            /** What list says besides the projects: the user's tools (guardedTools) and the permissions DSH offers. */
+            /** What list says besides the coordinating chats: the user's tools (guardedTools) and the permissions DSH offers. */
             let listedAccess = { guarded: EMPTY, permissions: null };
             /** What the user hasn't seen, by coordinator (remote.js `news`), and the notice the window shows for the newest. */
             let newsBy = new Map();
@@ -2058,7 +1813,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     if (result.ok) put(target, result.value);
                 });
             };
-            /** Take every project as the plugin listed them. */
+            /** Take every coordinating chat as the plugin listed them. */
             const take = (value) => {
                 const projects = Array.isArray(value?.projects) ? value.projects : EMPTY;
                 listFailed = false;
@@ -2100,7 +1855,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     const unread = (Array.isArray(raw.unread) ? raw.unread : EMPTY).filter((item) => isObject(item) && Number.isInteger(item.seq) && typeof item.kind === 'string');
                     const entry = { project: raw.project, name: typeof raw.name === 'string' ? raw.name : '', coordinator: raw.coordinator, seq: Number.isInteger(raw.seq) ? raw.seq : 0, unread };
                     next.set(entry.coordinator, entry);
-                    // A coordinator the window hasn't seen before (a new project) has had all its news since.
+                    // A coordinator the window hasn't seen before (a chat that just started coordinating) has had all its news since.
                     const before = announced.has(entry.coordinator) ? announced.get(entry.coordinator) : first ? entry.seq : 0;
                     // An answer to seeNews only updates the marks: what it brings is announced by the next read.
                     if (first || typeof open === 'function') announced.set(entry.coordinator, Math.max(before, entry.seq));
@@ -2153,17 +1908,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     return () => { listeners.delete(listener); };
                 },
                 getSnapshot: () => version,
-                /** describe's answer for the project a session (or project id) belongs to, or null. */
+                /** describe's answer for the coordinating chat a session belongs to (itself, or a thread's chat), or null. */
                 info(target) {
                     const id = projectOf.get(target) ?? (described.has(target) ? target : undefined);
                     return id === undefined ? null : described.get(id) ?? null;
                 },
-                /** Every project as `list` last answered (null until it has), and whether the last read failed. */
+                /** Every coordinating chat as `list` last answered (null until it has), and whether the last read failed. */
                 projects: () => listed,
                 listFailed: () => listFailed,
                 /** The user's tools and DSH's permissions as `list` last answered: {guarded, permissions}; the same object until they change. */
                 listedAccess: () => listedAccess,
-                /** Whether a coordinator's project is paused, as last read; undefined until read. */
+                /** Whether a coordinating chat's threads are paused, as last read; undefined until read. */
                 paused(coordinator) {
                     const d = this.info(coordinator);
                     return d ? d.paused?.value === true : pausedAt.get(coordinator);
@@ -2198,7 +1953,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     if (result?.ok) takeNews(result.value);
                 },
                 /**
-                 * Keep reading `d:<session>` (its project) or `list` while
+                 * Keep reading `d:<session>` (its chat's description) or `list` while
                  * the returned function has not been called.
                  */
                 watch(key) {
@@ -2217,16 +1972,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     };
                 },
                 /**
-                 * Archive a project with its coordinator and threads, or with
-                 * `restore` bring it back (remote.js `archive`, `restore`);
-                 * the answer updates every view.
+                 * Start or stop coordinating in a chat (remote.js `coordinate`):
+                 * {coordinating, session, text, projects}. Its list of
+                 * coordinating chats updates every view.
                  */
-                async archive(target, restore = false) {
-                    const result = await link.call(restore ? 'restore' : 'archive', { project: target });
-                    if (result.ok) take(result.value);
+                async coordinate(target, on) {
+                    const result = await link.call('coordinate', { target, on: on === true });
+                    if (result.ok && Array.isArray(result.value?.projects)) take(result.value);
                     return result;
                 },
-                /** Change a project's settings (remote.js `update`); its answer updates every view. */
+                /** Change a chat's thread settings or one thread (remote.js `update`); its answer updates every view. */
                 async change(target, changes) {
                     const result = await link.call('update', { target, changes });
                     if (result.ok) put(target, result.value);
@@ -2241,7 +1996,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
         }
 
-        /** Re-render when anything the plugin says about projects changes. */
+        /** Re-render when anything the plugin says about coordinating chats changes. */
         const useFacts = (facts) => React.useSyncExternalStore(facts.subscribe, facts.getSnapshot);
         /** Facts that never change, for a view drawn without the plugin's (a test's). */
         const NO_FACTS = Object.freeze({ subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {}, paused: () => undefined, newsOf: () => undefined });
@@ -2251,7 +2006,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * A project as the plugin describes it (remote.js `describe`): read
+         * A coordinating chat as the plugin describes it (remote.js `describe`): read
          * when `enabled` turns on, and again every 15 s while `active`.
          */
         function useProjectInfo(facts, target, enabled, active) {
@@ -2262,7 +2017,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * Whether a coordinator's project is paused (undefined until known),
+         * Whether a coordinating chat's threads are paused (undefined until known),
          * kept current by watching `watch` (`d:<coordinator>` or `list`).
          */
         function usePaused(facts, coordinator, watch) {
@@ -2293,7 +2048,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             });
         }
 
-        /** Resume a paused project; `failed` says the last try didn't go through. */
+        /** Resume paused threads; `failed` says the last try didn't go through. */
         function useResume(facts, target) {
             const [state, setState] = React.useState('idle');
             const alive = React.useRef(true);
@@ -2315,8 +2070,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * Where a session sits in its project: its own value, its coordinator,
-         * the project, and the coordinator's roster (null while unknown).
+         * Where a session sits among coordinating chats and threads: its own
+         * value, its coordinating chat (itself, for one), that chat's name as
+         * `project`, and its roster of threads (null while unknown).
          */
         function projectContext(state, sessionId) {
             const me = valueIn(state, sessionId);
@@ -2332,6 +2088,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
         const sameContext = (a, b) => a === b || (a !== undefined && b !== undefined && a.me === b.me && a.coordinator === b.coordinator
             && a.project === b.project && a.roster === b.roster && a.load === b.load);
+        /** A chat that stopped coordinating with no threads left: as plain as any other chat. */
+        const stoppedEmpty = (info) => info?.me.role === 'coordinator' && info.me.off === true && (info.roster ?? EMPTY).length === 0;
 
         /** What a pending interaction asks of the user, in a few words. */
         function pendingLine(pending) {
@@ -2571,12 +2329,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /**
          * What a thread's ⋯ offers: the other way to open it (`open`, the
          * list's action), its changes (`opener`, changesOpener's), Rename…,
-         * Model and permission… (Project settings at its row), Stop while it
+         * Model and permission… (Thread settings at its row), Stop while it
          * runs, and Mark resolved or Reopen. Rename, Stop and the rest need
          * the plugin (`live`), which makes the change as the user's own.
          * @param thread - {running, resolved}.
          * @param rename - the Rename dialog (renameFlow), when this window has it.
-         * @param settings - the Project settings dialog, when this window has it.
+         * @param settings - the Thread settings dialog, when this window has it.
          * @returns [{id, label, icon}] in the order shown.
          */
         function threadMenuItems({ thread, open, opener, changes, live, rename, settings }) {
@@ -2595,10 +2353,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * Do what a thread's ⋯ item says: open it or its changes, ask for a
-         * new name (`rename`, renameFlow) or show its row in Project settings
+         * new name (`rename`, renameFlow) or show its row in Thread settings
          * (`settings`), or stop, resolve or reopen it through the plugin
          * (remote.js `update`).
-         * @param target - a session of the thread's project, which the change goes through.
+         * @param target - the thread's chat or the thread itself, which the change goes through.
          * @param title - the thread's name now, for Rename.
          * @returns the plugin's refusal as a sentence, or '' when it's done.
          */
@@ -2674,7 +2432,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 },
                 anchor: h('button', {
                     type: 'button', className: error ? 'dshp-t-icon dshp-t-error' : 'dshp-t-icon', title: error || undefined,
-                    'aria-label': `${PAGE.threadActions(title)}${error ? `. ${error}` : ''}`, 'aria-haspopup': 'menu', 'aria-expanded': open,
+                    'aria-label': `${TEXT.threadActions(title)}${error ? `. ${error}` : ''}`, 'aria-haspopup': 'menu', 'aria-expanded': open,
                     'data-projects-row-menu': '',
                     onClick: (event) => { event.preventDefault(); event.stopPropagation(); setOpen(!open); },
                 }, h(ui.IconEllipsisOutlineRegular, { size: 14 })),
@@ -2841,14 +2599,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * What the project runs on, at the top of the Threads menu and pane:
-         * the coordinator's model and effort, what new threads start on, and
-         * (once the project is described) the permission new threads start
-         * on and whether they get the user's tools. Each opens Project
-         * settings with that model menu open, or at Access.
+         * What new threads run on and can reach, at the top of the Threads
+         * menu and pane: the model and effort they start on and (once the
+         * chat is described) the permission they start on and whether they
+         * get the user's tools. Each opens Thread settings with that model
+         * menu open, or at Access.
          * @param props.access - accessSummary's answer, or undefined.
          */
-        function ModelsSummary({ coordinator, thread, access, onPick }) {
+        function ModelsSummary({ thread, access, onPick }) {
             const item = (id, label, text, glyph, pick = id) => {
                 const shown = text ?? '…';
                 const content = [
@@ -2864,24 +2622,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }, ...content, h(ui.IconChevronRightOutlineRegular, { key: 'c', size: 12 }));
             };
             return h('div', { className: 'dshp-t-models', role: 'group', 'aria-label': 'Models and access' },
-                item('coordinator', TEXT.coordinator, coordinator),
                 item('thread', 'New threads', thread),
                 access?.permission ? item('access', SETTINGS.threadAccess, access.permission.name, permissionGlyph(access.permission.preset, 12)) : null,
                 access?.tools ? item('tools', SETTINGS.yourTools, access.tools, toolsGlyph(), 'access') : null);
         }
 
-        /**
-         * The labels ModelsSummary shows: what the coordinator runs on now
-         * (its own model selection), else its setting, and the setting new
-         * threads start on.
-         */
-        function summaryModels(cv, models, coordinator, info) {
+        /** The label ModelsSummary shows: the setting new threads start on, once the chat is described. */
+        function summaryModels(cv, info) {
             const s = info?.settings;
-            const route = (model, effort) => (s ? routeLabel(resolveRoute(cv, s[model]?.value ?? undefined, s[effort]?.value ?? undefined)) : undefined);
-            return {
-                coordinator: (coordinator ? models[coordinator] : undefined) ?? route('coordinatorModel', 'coordinatorEffort'),
-                thread: route('threadModel', 'threadEffort'),
-            };
+            return { thread: s ? routeLabel(resolveRoute(cv, s.threadModel?.value ?? undefined, s.threadEffort?.value ?? undefined)) : undefined };
         }
 
         /** What newestRoster takes from the plugin's answer: [field, its value there, its value in the roster]. */
@@ -2893,9 +2642,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /**
          * A roster with each thread's resolved state and name from the
          * plugin's answer (describe's `threads`) where that changed after the
-         * roster did. The roster comes from the coordinator's session (its
-         * project tools' results), so Rename, Mark resolved or Reopen from a
-         * row's ⋯ reaches it only at the coordinator's next project tool, and
+         * roster did. The roster comes from the coordinating chat's session
+         * (its thread tools' results), so Rename, Mark resolved or Reopen from
+         * a row's ⋯ reaches it only at the chat's next thread tool, and
          * after a reload the plugin's answer is the newer; a change by the
          * coordinator reaches the roster first. Whichever changed last wins,
          * the plugin's at the first look.
@@ -2931,7 +2680,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * ending included. Thread sessions this window hasn't loaded are read
          * once, so a thread that failed or stopped says so from the start.
          * @param held - the handbacks a pause holds ([{thread, status}]).
-         * @param threads - describe's threads for the project, for newestRoster; `scope` its coordinator.
+         * @param threads - describe's threads for the chat, for newestRoster; `scope` that chat.
          */
         function useRows(projects, useSessions, listed, statuses, byId, held, threads, scope) {
             // Rename, Mark resolved or Reopen from a row's ⋯ shows at once (newestRoster).
@@ -2948,13 +2697,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return React.useMemo(() => withHeld(rowsOf(roster, statuses, byId, endings, live), held), [roster, statuses, byId, endings, live, held]);
         }
 
-        /** The model labels of a roster's sessions and its coordinator, read live from DSH. */
-        function useRosterModels(projects, useSessions, rows, coordinator, active) {
-            const ids = React.useMemo(() => {
-                const out = rows.map((row) => row.session).filter((id) => id !== undefined);
-                if (coordinator) out.push(coordinator);
-                return out;
-            }, [rows, coordinator]);
+        /** The model labels of a roster's sessions, read live from DSH. */
+        function useRosterModels(projects, useSessions, rows, active) {
+            const ids = React.useMemo(() => rows.map((row) => row.session).filter((id) => id !== undefined), [rows]);
             const selections = useSelections(useSessions, ids);
             const cv = useCatalogView(projects.catalog, active);
             const key = ids.join('\n');
@@ -3010,7 +2755,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * Each thread's code changes, by thread id, as the plugin counts them
          * from the thread's own edits (describe's `threads[].changes`). A
          * thread's own projection marks each turn DSH announces changes for,
-         * and the project is read again then, so a card updates as the turn
+         * and the chat's description is read again then, so a card updates as the turn
          * ends.
          * @param {string[]} sessions - the shown threads' sessions.
          */
@@ -3072,22 +2817,100 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return changes.reviewable && changes.last ? { onOpen: () => projects.openReview(sessionId, changes.last), review: true } : {};
         }
 
-        /** The project name, as a link to the coordinator unless that is where the user is. */
+        /** The coordinating chat's name, as a link to it unless that is where the user is. */
         function ProjectName({ info, here, onOpen }) {
             const name = info.project.name || TEXT.coordinator;
-            const content = [h('span', { key: 'd', className: 'dshp-t-diamond', 'aria-hidden': true }, '◆'), h('span', { key: 'n', className: 'dshp-t-project-name' }, name)];
+            const content = [h('span', { key: 'n', className: 'dshp-t-project-name' }, name)];
             if (!info.coordinator || info.coordinator === here) return h('span', { className: 'dshp-t-project' }, ...content);
             return h('button', { type: 'button', className: 'dshp-t-project', 'data-dshp-item': '', title: TEXT.openCoordinator, onClick: onOpen }, ...content);
         }
 
         /**
-         * The Threads menu at the top of a project session: a count with the
-         * live state of the project's threads, opening a menu of them grouped
-         * by state. In a thread, a link back to the coordinator comes first.
+         * Start or stop coordinating in a chat, with DSH's banner for what
+         * came of it: the plugin's refusal, or what the chat does now that it
+         * coordinates. The chat's value is read again at once, so its header
+         * changes without waiting for the chat's next event.
+         */
+        function useCoordinate(projects, sessionId) {
+            const [busy, setBusy] = React.useState(false);
+            const [said, setSaid] = React.useState(null);
+            const alive = React.useRef(true);
+            React.useEffect(() => {
+                alive.current = true;
+                return () => { alive.current = false; };
+            }, []);
+            const run = async (on) => {
+                setBusy(true);
+                const result = await projects.facts.coordinate(sessionId, on);
+                if (!alive.current) return;
+                setBusy(false);
+                if (result.ok) projects.refresh(sessionId, true);
+                const text = !result.ok ? errorText(result.error) : on && typeof result.value?.text === 'string' ? result.value.text.trim() : '';
+                if (text !== '') setSaid((prev) => ({ text, failed: !result.ok, seq: (prev?.seq ?? 0) + 1 }));
+            };
+            const banner = said === null || typeof ui.Toast !== 'function' ? null : h(ui.Toast, {
+                key: `coordinate:${said.seq}`, text: said.text, holdMs: said.failed ? 8000 : 5000,
+                ...(said.failed ? { icon: h(ui.IconWarningOutlineRegular, { size: 16 }) } : { tone: 'success' }),
+                onDone: () => setSaid((prev) => (prev?.seq === said.seq ? null : prev)),
+            });
+            return { busy, run, banner };
+        }
+
+        /**
+         * Whether a session is a plain chat of the user's own, not coordinating
+         * now: not a thread, nor a subagent's or teammate's session DSH started
+         * under another, and either no value of the plugin's or a coordinating
+         * one the user stopped. Not while DSH is still reading its value, so a
+         * coordinating chat never shows Coordinate for a moment.
+         */
+        function canCoordinate(state, sessionId) {
+            const row = state?.byId?.[sessionId];
+            if (!isObject(row)) return false;
+            const named = (id) => typeof id === 'string' && id !== '';
+            if (named(row.parentId) || named(row.parentSessionId) || row.origin === 'subagent' || row.origin === 'teammate') return false;
+            const value = valueIn(state, sessionId);
+            if (value) return value.role === 'coordinator' && value.off === true;
+            if (state.projectionsBySession?.[sessionId]?.state === 'loading') return false;
+            return !known.map.has(sessionId);
+        }
+
+        /**
+         * Coordinate, in the header of a plain chat that isn't coordinating
+         * (canCoordinate): a click makes the chat coordinate, so the work the
+         * user asks for there runs in threads that report back to it. A chat
+         * that stopped coordinating gets it back here, beside the Threads menu
+         * it keeps while it has threads. A refusal shows as DSH's banner.
+         */
+        function CoordinateAction({ sessionId, useSessions, projects }) {
+            useKnown();
+            // The sessions the plugin's store knows: one DSH shows without the plugin's value may still be a thread or coordinate.
+            React.useEffect(() => { void projects.facts.sessions?.(); }, [projects]);
+            const shown = useSessions((state) => canCoordinate(state, sessionId));
+            const { busy, run, banner } = useCoordinate(projects, sessionId);
+            if (!shown) return banner;
+            return h('div', { className: 'dshp-t-hdr', 'data-projects-coordinate': '' },
+                h(ui.Tooltip, { label: TEXT.coordinateTip, side: 'bottom' },
+                    h('button', {
+                        type: 'button', className: 'dshp-t-trigger dshp-t-coordinate', 'aria-label': TEXT.coordinate, 'aria-description': TEXT.coordinateTip,
+                        disabled: busy, 'aria-busy': busy || undefined, 'data-projects-coordinate-button': '', onClick: () => { void run(true); },
+                    },
+                    h(ui.IconBranchOutlineRegular, { size: 14 }),
+                    h('span', { className: 'dshp-t-label' }, TEXT.coordinate))),
+                banner);
+        }
+
+        /**
+         * The Threads menu at the top of a coordinating chat and of each of
+         * its threads: a count with the live state of the chat's threads,
+         * opening a menu of them grouped by state. In a thread, a link back
+         * to its chat comes first. While the chat coordinates, its own menu
+         * ends with Stop coordinating; a chat that stopped keeps the menu
+         * while it has threads.
          */
         function ThreadsMenu({ sessionId, useSessions, useSessionStatus, projects }) {
             const info = useSessions((state) => projectContext(state, sessionId), sameContext);
             const settingsOn = useSettingsAvailable(projects.settings);
+            const stopping = useCoordinate(projects, sessionId);
             const beside = useBesidePref();
             const statuses = useSessionStatus((value) => value);
             const byId = useSessions((state) => state.byId);
@@ -3154,13 +2977,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const handbacks = useHeldHandbacks(projects.facts, coordinator);
             const described = useProjectInfo(projects.facts, sessionId, info !== undefined, open);
             const rows = useRows(projects, useSessions, info?.roster, statuses, byId, paused ? handbacks : EMPTY, described?.threads, coordinator);
-            const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, open);
+            const { cv, models } = useRosterModels(projects, useSessions, rows, open);
             const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), open);
             // In a thread, its own changes as a pill in its header.
             const ownId = info?.me?.role === 'thread' && typeof info.me.thread?.id === 'string' ? info.me.thread.id : undefined;
             const own = useThreadChanges(projects, useSessions, coordinator, ownId !== undefined ? [sessionId] : EMPTY, ownId !== undefined)[ownId];
             const permissions = usePermissions(useSessions, rowSessions(rows));
-            if (info === undefined) return null;
+            if (info === undefined || stoppedEmpty(info)) return stopping.banner;
 
             const counts = countsOf(rows);
             const signal = counts.failed > 0 ? 'error' : counts.waiting > 0 ? 'warning' : counts.running > 0 ? 'ongoing' : null;
@@ -3168,9 +2991,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const label = paused ? `${TEXT.paused} · ${threadsLabel}` : threadsLabel;
             const openSession = (target) => { change(false); projects.openSession(target); };
             const parent = info.me.role === 'thread' && coordinator
-                ? h(ui.Tooltip, { label: `Open ◆ ${info.project.name || TEXT.coordinator}`, side: 'bottom' },
+                ? h(ui.Tooltip, { label: `Open ${info.project.name || TEXT.coordinator}`, side: 'bottom' },
                     h('button', { type: 'button', className: 'dshp-t-trigger dshp-t-parent', 'aria-label': TEXT.openCoordinator, onClick: () => openSession(coordinator) },
-                        h('span', { className: 'dshp-t-diamond', 'aria-hidden': true }, '◆'),
+                        h(ui.IconChevronLeftOutlineRegular, { size: 14 }),
                         h('span', { className: 'dshp-t-label' }, TEXT.coordinator)))
                 : null;
             const trigger = h('button', {
@@ -3213,7 +3036,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             h(ui.IconChevronDownOutlineRegular, { size: 12, className: open ? 'dshp-t-chev dshp-t-chev-open' : 'dshp-t-chev' }));
 
             const notice = rosterNotice(info, rows, projects);
-            const summary = summaryModels(cv, models, coordinator, described);
+            const summary = summaryModels(cv, described);
             const openSettings = (pick) => { change(false); projects.settings.open(sessionId, typeof pick === 'string' ? { pick } : undefined); };
             const quietPermission = permissionShown(described?.access?.threadPermission?.value, described?.permissions).preset;
             const foot = [
@@ -3221,6 +3044,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h(ui.IconFlatListOutlineRegular, { size: 14 }), TEXT.openPane) : null,
                 settingsOn ? h('button', { key: 'settings', type: 'button', className: 'dshp-t-foot-btn', 'data-dshp-item': '', onClick: openSettings },
                     h(ui.IconSlidersTwoOutlineRegular, { size: 14 }), SETTINGS.title) : null,
+                // Only in the chat that coordinates, while it does: Coordinate in its header starts it again.
+                info.me.role === 'coordinator' && info.me.off !== true ? h('button', {
+                    key: 'stop', type: 'button', className: 'dshp-t-foot-btn', 'data-dshp-item': '', 'data-projects-stop-coordinating': '',
+                    disabled: stopping.busy, 'aria-busy': stopping.busy || undefined, onClick: () => { change(false); void stopping.run(false); },
+                }, h(ui.IconCloseOutlineRegular, { size: 14 }), TEXT.stopCoordinating) : null,
             ].filter(Boolean);
             const menu = open ? ReactDOM.createPortal(h(ui.MenuSurface, {
                 ref: panelRef, className: 'dshp-t-menu', role: 'dialog', tabIndex: -1,
@@ -3265,11 +3093,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }, h(ui.IconSlidersTwoOutlineRegular, { size: 14 }))) : null;
 
             return h('div', { ref: rootRef, className: 'dshp-t-hdr', 'data-projects-threads': info.me.role, onMouseLeave: scheduleClose },
-                parent, pill, trigger, gear, menu);
+                parent, pill, trigger, gear, menu, stopping.banner);
         }
 
         /**
-         * The Threads pane in the right sidebar: the project's threads by state.
+         * The Threads pane in the right sidebar: a coordinating chat's threads by state.
          * A row opens the thread's chat as a tab here; its button makes it the
          * main chat.
          */
@@ -3299,7 +3127,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     else if (event.key === 'Escape' && find !== '') { event.preventDefault(); event.stopPropagation(); setFind(''); }
                 },
             }), find !== '' ? h('button', {
-                type: 'button', className: 'dshp-mp-search-clear', 'aria-label': PAGE.findClear, 'data-projects-thread-find-clear': '',
+                type: 'button', className: 'dshp-mp-search-clear', 'aria-label': TEXT.findClear, 'data-projects-thread-find-clear': '',
                 onClick: () => { setFind(''); inputRef.current?.focus(); },
             }, h(ui.IconCloseFillRegular, null)) : null);
         }
@@ -3323,10 +3151,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const handbacks = useHeldHandbacks(projects.facts, coordinator);
             const described = useProjectInfo(projects.facts, sessionId, info !== undefined, visible);
             const rows = useRows(projects, useSessions, info?.roster, statuses, byId, paused ? handbacks : EMPTY, described?.threads, coordinator);
-            const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, info !== undefined && visible);
+            const { cv, models } = useRosterModels(projects, useSessions, rows, info !== undefined && visible);
             const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), info !== undefined && visible);
             const permissions = usePermissions(useSessions, rowSessions(rows));
-            if (info === undefined) {
+            if (info === undefined || stoppedEmpty(info)) {
                 return h('div', { className: 'dshp-t-pane', 'data-projects-threads-pane': '' }, h('div', { className: 'dshp-t-empty' }, TEXT.notProject));
             }
             const notice = rosterNotice(info, rows, projects);
@@ -3346,10 +3174,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         type: 'button', className: 'dshp-t-icon', 'aria-label': SETTINGS.title, 'data-projects-settings-trigger': '',
                         onClick: () => projects.settings.open(sessionId),
                     }, h(ui.IconSlidersTwoOutlineRegular, { size: 14 })))) : null),
-            h(ModelsSummary, { ...summaryModels(cv, models, coordinator, described), access: accessSummary(described), onPick: settingsOn ? (pick) => projects.settings.open(sessionId, { pick }) : undefined }),
+            h(ModelsSummary, { ...summaryModels(cv, described), access: accessSummary(described), onPick: settingsOn ? (pick) => projects.settings.open(sessionId, { pick }) : undefined }),
             paused ? h(PausedNotice, { coordinator, role: info.me.role, projects }) : null,
             finding ? h(ThreadFind, { find, setFind, inputRef: findRef }) : null,
-            notice ?? (found.length === 0 ? h('div', { className: 'dshp-t-notice dshp-t-find-none', role: 'status', 'data-projects-thread-find-none': '' }, PAGE.findNone(words)) : h(ThreadList, {
+            notice ?? (found.length === 0 ? h('div', { className: 'dshp-t-notice dshp-t-find-none', role: 'status', 'data-projects-thread-find-none': '' }, TEXT.findNone(words)) : h(ThreadList, {
                 rows: found, current: sessionId, now, models, changes, projects, find: words, fold: words !== '' ? [] : FOLDED,
                 access: accessOf(described, permissions), permissions: described?.permissions,
                 quietPermission: permissionShown(described?.access?.threadPermission?.value, described?.permissions).preset,
@@ -3453,8 +3281,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const facts = useChatFacts(threadSession, useSessions, useSessionStatus);
             const value = facts.value;
             const sub = value?.role === 'thread'
-                ? `${TEXT.thread} of ◆ ${value.project?.name || TEXT.coordinator}`
-                : value?.role === 'coordinator' ? `◆ ${TEXT.coordinator}` : '';
+                ? (value.project?.name ? `${TEXT.thread} of ${value.project.name}` : TEXT.thread)
+                : value?.role === 'coordinator' ? (value.off === true ? TEXT.rowStopped : TEXT.rowProject) : '';
             return h('div', { className: 'dshp-t-chat', 'data-projects-thread-chat': threadSession ?? '' },
                 h('div', { className: 'dshp-t-chat-bar' },
                     h(ui.StateDot, { state: facts.dot }),
@@ -3521,7 +3349,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
             const text = found.state === 'found' || found.state === 'loading' ? TEXT.linkLoading
                 : found.state === 'not-project' ? TEXT.linkNotProject
-                    : `Thread ${target?.threadId ?? ''} isn't in this project's thread list.`;
+                    : `Thread ${target?.threadId ?? ''} isn't one of this chat's threads.`;
             return h('div', { className: 'dshp-t-pane', 'data-projects-thread-link': found.state },
                 h('div', { className: 'dshp-t-empty', role: 'status' }, text,
                     found.state === 'missing' ? h('div', null, h('button', { type: 'button', className: 'dshp-t-retry', onClick: retry },
@@ -3906,21 +3734,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * How one card reads: its icon, its line above the name, and what it
-         * opens. `held` lists the handbacks a paused project holds.
+         * opens. `held` lists the handbacks a pause holds.
          */
         function cardView(card, info, statuses, byId, here, endings, held = EMPTY) {
             const handback = HANDBACK_LABELS[card.status] ?? card.status;
             if (info.me.role === 'thread') {
-                // A thread's own turn: only its handback is news, and it points at the coordinator.
+                // A thread's own turn: only its handback is news, and it points at the chat that started it.
                 if (card.kind !== 'handback' || !info.coordinator) return null;
-                // While the project is paused, the thread's newest handback waits for Resume.
+                // While threads are paused, the thread's newest handback waits for Resume.
                 const waits = held.some((hb) => isObject(hb) && hb.thread === info.me.thread?.id)
                     && !(info.me.cards ?? EMPTY).some((c) => isObject(c) && c.kind === 'handback' && c.seq > card.seq);
                 return {
                     key: `handback-${card.seq ?? ''}`, kind: card.kind, icon: waits ? ui.IconPauseOutlineRegular : ui.IconTreeCornerRegular,
-                    verb: `${waits ? TEXT.handbackHeld : 'Handed back to the coordinator'}${handback ? ` · ${handback}` : ''}`,
+                    verb: `${waits ? TEXT.handbackHeld : 'Handed back'}${handback ? ` · ${handback}` : ''}`,
                     note: waits ? TEXT.handbackHeldWhy : undefined,
-                    title: `◆ ${info.project.name || TEXT.coordinator}`, session: info.coordinator === here ? undefined : info.coordinator,
+                    title: info.project.name || TEXT.coordinator, session: info.coordinator === here ? undefined : info.coordinator,
                 };
             }
             const entry = (info.roster ?? EMPTY).find((t) => isObject(t) && t.id === card.thread);
@@ -3949,7 +3777,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     };
                 }
                 case 'approval': return { ...base, icon: ui.IconWarningOutlineRegular, verb: 'Asked for your approval' };
-                case 'question': return { ...base, icon: ui.IconQuestionOutlineRegular ?? ui.IconSendOutlineRegular, verb: 'Asked the coordinator a question' };
+                case 'question': return { ...base, icon: ui.IconQuestionOutlineRegular ?? ui.IconSendOutlineRegular, verb: 'Asked a question' };
                 default: return null;
             }
         }
@@ -3965,7 +3793,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ['idle', /^\[Thread idle without a handback: (t\d+) · "(.*)"\]$/],
             ['approval', /^\[Thread waiting for approval: (t\d+) · "(.*)"\]$/],
             ['question', /^\[Question from thread (t\d+) · "(.*)"\]$/],
-            ['welcome', /^\[Project created: "(.*)"\]$/],
             ['brief', /^\[Brief from the coordinator of "(.*)" · you are thread (t\d+), "(.*)"\]$/],
             ['coordinator', /^\[From the coordinator\]$/],
             ['message', /^\[Message from the coordinator of "(.*)"\]$/],
@@ -3985,7 +3812,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * What one of the plugin's messages says, for its notice: its kind,
-         * the thread or project it names, and its text without the tag (a
+         * the thread or chat it names, and its text without the tag (a
          * handback's without its closing note to the coordinator). undefined
          * for any other message, which keeps DSH's own notice.
          */
@@ -4008,12 +3835,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     }
                     case 'approval': return { kind, thread: m[1], name: m[2], body };
                     case 'question': return { kind, thread: m[1], name: m[2], body };
-                    case 'welcome': return { kind, project: m[1], body };
                     case 'message': return { kind, project: m[1], body };
                     case 'reply': {
                         // Its first line says when the chat's turn failed or stopped, as an idle note's does.
                         const ended = /^The turn (failed|was blocked)\b/.test(body) ? 'failed' : /^The turn (was stopped|hit the output token limit|was cut off)\b/.test(body) ? 'stopped' : '';
-                        return { kind, name: m[1].replace(/^"([^]*)"$/, '$1'), status: ended, body };
+                        // A chat named by an earlier version may still carry its "◆ " mark.
+                        return { kind, name: m[1].replace(/^"([^]*)"$/, '$1').replace(/^◆ /, ''), status: ended, body };
                     }
                     case 'brief': return { kind, project: m[1], thread: m[2], name: m[3], body };
                     default: return { kind, body };
@@ -4040,12 +3867,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     return { icon: ui.IconWarningOutlineRegular, name: notice.name, tail: TEXT.noticeApproval, state: { dot: 'warning', label: TEXT.needsYou }, why: TEXT.noticeApprovalWhy };
                 case 'question':
                     return { icon: ui.IconQuestionOutlineRegular ?? ui.IconSendOutlineRegular, name: notice.name, tail: TEXT.noticeQuestion, why: TEXT.noticeQuestionWhy };
-                case 'welcome':
-                    return { icon: ui.IconCordisPluginOutlineRegular, lead: TEXT.noticeWelcome, why: TEXT.noticeWelcomeWhy };
                 case 'brief':
-                    return { icon: ui.IconPaperPlaneOutlineRegular, lead: TEXT.noticeBrief, name: `◆ ${notice.project}`, why: TEXT.noticeBriefWhy };
+                    return { icon: ui.IconPaperPlaneOutlineRegular, lead: TEXT.noticeBrief, name: notice.project, why: TEXT.noticeBriefWhy };
                 case 'message':
-                    return { icon: ui.IconPaperPlaneOutlineRegular, lead: TEXT.noticeMessage, name: `◆ ${notice.project}`, why: TEXT.noticeMessageWhy };
+                    return { icon: ui.IconPaperPlaneOutlineRegular, lead: TEXT.noticeMessage, name: notice.project, why: TEXT.noticeMessageWhy };
                 case 'reply': {
                     const failed = notice.status === 'failed';
                     return {
@@ -4210,10 +4035,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // And what each changed in the workspace, and what it is doing now.
             const changes = useThreadChanges(projects, useSessions, info?.me.role === 'coordinator' ? sessionId : undefined, threadSessions, true);
             const live = useThreadLive(useSessions, threadSessions);
-            // A new project suggests first asks under its greeting until the user writes or a thread starts.
-            const suggest = info !== undefined && info.me.role === 'coordinator' && info.me.asked !== true
-                && Array.isArray(info.roster) && info.roster.length === 0 && cards.some((card) => card.kind === 'welcome');
-            if (views.length === 0) return suggest ? h(Suggestions, { sessionId, projects }) : null;
+            if (views.length === 0) return null;
             return h('div', { className: 'dshp-t-cards', 'data-projects-thread-cards': '' },
                 ...views.map((view) => h(ThreadCard, {
                     key: view.key, projects,
@@ -4230,30 +4052,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return h(ThreadCardList, { sessionId, cards, useSessions, useSessionStatus, projects });
         }
 
-        /**
-         * A new project's first asks, under the coordinator's greeting until
-         * the user writes or a thread starts. One goes into the message box,
-         * ready to send or change.
-         */
-        function Suggestions({ sessionId, projects }) {
-            const [copied, setCopied] = React.useState(false);
-            const asks = suggestionsFor(useProjectInfo(projects.facts, sessionId, true, false));
-            if (asks === null) return null;
-            const use = (text) => {
-                if (projects.draft(sessionId, text)) return;
-                // No message box to fill (DSH changed it): copy the ask instead.
-                Promise.resolve(globalThis.navigator?.clipboard?.writeText(text)).then(() => setCopied(true), () => {});
-            };
-            return h('div', { className: 'dshp-t-suggest', 'data-projects-suggestions': '' },
-                h('div', { className: 'dshp-t-suggest-label', id: `dshp-suggest-${sessionId}` }, TEXT.tryAsking),
-                h('div', { className: 'dshp-t-suggest-list', role: 'group', 'aria-labelledby': `dshp-suggest-${sessionId}` },
-                    ...asks.map((text) => h('button', {
-                        key: text, type: 'button', className: 'dshp-t-suggest-item', 'data-projects-suggestion': '', onClick: () => use(text),
-                    }, h(ui.IconSparkleRegular, { size: 14 }), h('span', null, text)))),
-                copied ? h('div', { className: 'dshp-t-suggest-note', role: 'status' }, TEXT.suggestCopied) : null);
-        }
-
-        /** A paused project's line in the Threads menu and pane, with Resume. */
+        /** Paused threads' line in the Threads menu and pane, with Resume. */
         function PausedNotice({ coordinator, role, projects }) {
             const { busy, failed, resume } = useResume(projects.facts, coordinator);
             const held = useHeld(projects.facts, coordinator);
@@ -4269,82 +4068,20 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }, busy ? TEXT.resuming : TEXT.resume));
         }
 
-        /** Workspaces where the user turned the coordinator offer off (the window's own storage). */
-        const OFFER_OFF_KEY = `${BUNDLE}/offer-off`;
-
-        /** The workspace in DSH's list that holds a session, or undefined. */
-        function workspaceOfSession(snapshot, sessionId) {
-            for (const ws of Array.isArray(snapshot?.items) ? snapshot.items : EMPTY) {
-                if (typeof ws?.workspaceId === 'string' && Array.isArray(ws.sessionIds) && ws.sessionIds.includes(sessionId)) return ws.workspaceId;
-            }
-            return undefined;
-        }
-
-        /** The project whose ◆ coordinator works in a workspace, as the plugin lists them, or undefined. */
-        function projectIn(listed, workspaceId, archived = EMPTY_SET) {
-            if (typeof workspaceId !== 'string' || !Array.isArray(listed)) return undefined;
-            // An archived project, or one whose ◆ row DSH has archived (until the plugin's list says so), offers nothing.
-            return listed.find((p) => isObject(p) && p.home === workspaceId && typeof p.coordinator === 'string' && p.coordinator !== ''
-                && p.archived !== true && !archived.has(p.coordinator));
-        }
-
         /**
-         * Above the message box of a plain chat in a workspace where a ◆
-         * project works, a new one (DSH's hero) included: an offer to talk to
-         * its coordinator instead, which opens it in one click and takes along
-         * what the user typed. A plugin can't make DSH's own New Session open
-         * the coordinator, so the offer meets each new chat there; the user
-         * can turn it off for the folder.
-         */
-        function CoordinatorOffer({ sessionId, useSessions, useWorkspaces = noWorkspaces, useInput, inputActions, projects }) {
-            useKnown();
-            useFacts(projects.facts);
-            const [off, toggleOff] = useStoredSet(OFFER_OFF_KEY);
-            React.useEffect(() => { void projects.facts.list(60000); }, [projects]);
-            // A chat of the user's own: not a coordinator or a thread, nor a subagent or teammate DSH started under one.
-            const plain = useSessions((state) => {
-                const row = state?.byId?.[sessionId];
-                return isObject(row) && (row.parentId === undefined || row.parentId === null) && rowPlace(state, sessionId) === '' && !isThreadRow(state, sessionId);
-            });
-            const workspaceId = useWorkspaces((snapshot) => workspaceOfSession(snapshot, sessionId));
-            // The sessions DSH has archived, as one string so an unchanged list draws nothing again.
-            const archivedKey = useWorkspaces((snapshot) => (Array.isArray(snapshot?.archivedSessionIds) ? snapshot.archivedSessionIds.join('\n') : ''));
-            const archived = React.useMemo(() => new Set(archivedKey === '' ? EMPTY : archivedKey.split('\n')), [archivedKey]);
-            const draft = typeof useInput === 'function' ? useInput((input) => (typeof input?.draft === 'string' ? input.draft : '')) : '';
-            const project = projectIn(projects.facts.projects(), workspaceId, archived);
-            if (!plain || !project || project.coordinator === sessionId || off.has(workspaceId)) return null;
-            const name = project.name || project.id;
-            const go = () => {
-                const text = draft.trim();
-                if (text !== '') {
-                    try { inputActions?.setDraft?.(''); } catch { /* the chat keeps its draft */ }
-                }
-                projects.openWithDraft(project.coordinator, text);
-            };
-            return h('div', { className: 'dshp-dock', 'data-projects-offer': project.id },
-                h('div', { className: 'dshp-dock-bar' },
-                    h('span', { className: 'dshp-dock-glyph dshp-offer-glyph', 'aria-hidden': true }, '◆'),
-                    h('span', { className: 'dshp-dock-label' }, TEXT.offerLabel),
-                    h('span', { className: 'dshp-dock-text', title: draft.trim() ? TEXT.offerTextDraft : TEXT.offerText }, draft.trim() ? TEXT.offerTextDraft : TEXT.offerText),
-                    h(ui.Button, { variant: 'outline', size: 'sm', 'data-projects-offer-open': '', onClick: go }, TEXT.offerOpen(name)),
-                    h('button', {
-                        type: 'button', className: 'dshp-t-icon', 'aria-label': TEXT.offerOff(name), title: TEXT.offerOff(name), 'data-projects-offer-off': '',
-                        onClick: () => toggleOff(workspaceId, true),
-                    }, h(ui.IconCloseOutlineRegular, { size: 14 }))));
-        }
-
-        /**
-         * Above the message box of every session of a paused project, the way
-         * DSH shows a goal: what the pause means here, and Resume.
+         * Above the message box of a coordinating chat whose threads are
+         * paused, and of each of its threads, the way DSH shows a goal: what
+         * the pause means here, and Resume.
          */
         function PausedBar({ sessionId, useSessions, projects }) {
             const info = useSessions((state) => projectContext(state, sessionId), sameContext);
-            const coordinator = info?.coordinator;
+            // A chat that stopped coordinating and has no threads left has nothing to pause.
+            const coordinator = stoppedEmpty(info) ? undefined : info?.coordinator;
             const paused = usePaused(projects.facts, coordinator, coordinator ? `d:${coordinator}` : null);
             const held = useHeld(projects.facts, coordinator);
             const handbacks = useHeldHandbacks(projects.facts, coordinator);
             const { busy, failed, resume } = useResume(projects.facts, coordinator);
-            if (info === undefined || paused !== true) return null;
+            if (info === undefined || coordinator === undefined || paused !== true) return null;
             const text = failed ? TEXT.resumeFailed : pausedText(info.me.role, held, handbacks.length);
             return h('div', { className: 'dshp-dock', 'data-projects-paused-bar': info.me.role },
                 h('div', { className: 'dshp-dock-bar', role: 'status', title: text },
@@ -4393,35 +4130,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     }, busy ? (retry ? TEXT.retrying : TEXT.resumingThread) : action)));
         }
 
-        /** Coordinator project names in a session list ("◆ name" titles), once per list. */
-        const coordinatorNames = new WeakMap();
-        function namesOf(byId) {
-            let names = coordinatorNames.get(byId);
-            if (names === undefined) {
-                names = new Set();
-                for (const row of Object.values(byId)) {
-                    const title = row?.title;
-                    if (typeof title === 'string' && title.startsWith('◆ ')) names.add(title.slice(2));
-                }
-                coordinatorNames.set(byId, names);
-            }
-            return names;
-        }
-
         /**
-         * Whether a session list row is a project thread: its projection says
-         * so, or (before DSH has folded it) its title is "<project> › <thread>"
-         * and a "◆ <project>" coordinator is in the list.
+         * Whether a session list row is a thread: its projection says so, or
+         * (before DSH has folded it) the plugin's store does.
          */
         function isThreadRow(state, sessionId) {
             const value = valueIn(state, sessionId);
             if (value) return value.role === 'thread';
-            const stored = known.map.get(sessionId);
-            if (stored) return stored.role === 'thread';
-            const title = state.byId?.[sessionId]?.title;
-            if (typeof title !== 'string') return false;
-            const at = title.indexOf(' › ');
-            return at > 0 && namesOf(state.byId).has(title.slice(0, at));
+            return known.map.get(sessionId)?.role === 'thread';
         }
 
         /**
@@ -4456,16 +4172,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * The window's notice when a thread hands back or needs the user and
-         * its coordinator isn't the chat they're looking at: DSH's own
-         * banner at the top, with Open, wherever they are. The ◆ row keeps
-         * the news (ThreadMark, RowPlace) until they open the coordinator.
+         * the chat that started it isn't the one they're looking at: DSH's own
+         * banner at the top, with Open, wherever they are. That chat's row
+         * keeps the news (ThreadMark, RowPlace) until they open it.
          */
         function NewsNotice({ projects }) {
             useFacts(projects.facts);
             const notice = projects.facts.notice?.() ?? null;
             if (notice === null || typeof ui.Toast !== 'function') return null;
             const needsYou = newsDot([notice.item]) !== 'done';
-            const text = `◆ ${notice.name || TABLE.project}: ${newsLine(notice.item)}${notice.more > 0 ? TEXT.newsMore(notice.more) : ''}.`;
+            const text = `${notice.name || TEXT.threads}: ${newsLine(notice.item)}${notice.more > 0 ? TEXT.newsMore(notice.more) : ''}.`;
             return h(ui.Toast, {
                 key: notice.key, text, holdMs: 8000,
                 ...(needsYou ? { icon: h(ui.IconWarningOutlineRegular, { size: 16 }) } : { tone: 'success' }),
@@ -4479,11 +4195,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * A row's mark in its leading seat: a branch on a thread (while it
-         * nests under its coordinator, nestingCss draws a corner in its
+         * nests under its coordinating chat, nestingCss draws a corner in its
          * indent instead), or the thread's state dot when it failed or waits
-         * on the user; a pause sign on a paused project's coordinator, and a
-         * dot on a coordinator with news the user hasn't seen (DSH's own dot
-         * takes the seat while the coordinator runs or waits). It is drawn
+         * on the user; a pause sign on a coordinating chat whose threads are
+         * paused, and a dot on one with news the user hasn't seen (DSH's own
+         * dot takes the seat while the chat runs or waits). It is drawn
          * only: the seat comes before the title, so what it shows is read
          * after the title, from the row's description (RowPlace, rowWords).
          * It gives way to any other mark in the seat, DSH's or another
@@ -4495,7 +4211,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // The sessions the plugin's store knows, for rows DSH lists without the plugin's value.
             React.useEffect(() => { void projects.facts.sessions?.(); }, [projects]);
             const thread = useSessions((state) => isThreadRow(state, sessionId));
-            const coordinator = useSessions((state) => !isThreadRow(state, sessionId) && coordinatorName(state, sessionId) !== undefined);
+            const coordinator = useSessions((state) => rowPlace(state, sessionId) === `coordinator:${sessionId}`);
             const paused = usePaused(projects.facts, coordinator ? sessionId : undefined, coordinator ? 'list' : null) === true;
             const mark = useSessions((state) => (thread ? markState(state, sessionId) : ''));
             const parent = useSessions((state) => (thread ? valueIn(state, sessionId)?.coordinator ?? known.map.get(sessionId)?.coordinator : undefined));
@@ -4524,76 +4240,48 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 h(ui.IconBranchOutlineRegular, { size: 12 }));
         }
 
-        /** What a coordinator's news says: “4 new, latest: “Deploy” failed”. */
+        /** What a coordinating chat's news says: “4 new, latest: “Deploy” failed”. */
         function newsWords(news) {
             return TEXT.newsMark(news.unread.length, newsLine(news.unread[news.unread.length - 1]));
         }
 
         /**
-         * What a project's row in the session list says to a screen reader
-         * after its title: what the row is, then what its mark shows (a
-         * pause, news from its threads, a thread that failed or waits on the
-         * user). '' for a row of no project.
+         * What a coordinating chat's or a thread's row in the session list
+         * says to a screen reader after its title: what the row is, then what
+         * its mark shows (a pause, news from its threads, a thread that
+         * failed or waits on the user). '' for any other row.
          * @param role - 'coordinator', 'thread' or ''.
+         * @param off - a chat that stopped coordinating and still has threads.
          * @param mark - a thread's markState: '' for none.
          */
-        function rowWords({ role, paused = false, news, mark = '' }) {
-            if (role === 'coordinator') return [paused ? TEXT.projectPaused : TEXT.rowProject, news ? newsWords(news) : ''].filter((part) => part !== '').join(', ');
+        function rowWords({ role, off = false, paused = false, news, mark = '' }) {
+            if (role === 'coordinator') return [paused ? TEXT.projectPaused : off ? TEXT.rowStopped : TEXT.rowProject, news ? newsWords(news) : ''].filter((part) => part !== '').join(', ');
             if (role === 'thread') return mark === '' ? TEXT.rowThread : `${TEXT.rowThread}: ${mark.slice(mark.indexOf(':') + 1)}`;
             return '';
         }
 
-        /** The project name a coordinator session stands for, or undefined. */
-        function coordinatorName(state, sessionId) {
-            const value = valueIn(state, sessionId);
-            if (value?.role === 'coordinator' && typeof value.project?.name === 'string' && value.project.name !== '') return value.project.name;
-            const stored = known.map.get(sessionId);
-            if ((!value || value.role === 'coordinator') && stored?.role === 'coordinator' && stored.name !== '') return stored.name;
-            const title = state?.byId?.[sessionId]?.title;
-            return typeof title === 'string' && title.startsWith('◆ ') && title.length > 2 ? title.slice(2) : undefined;
-        }
-
-        /** Coordinator session ids by project name, once per session list state. */
-        let coordinatorIdsCache = new WeakMap();
-        function coordinatorIds(state) {
-            if (!isObject(state)) return new Map();
-            let ids = coordinatorIdsCache.get(state);
-            if (ids === undefined) {
-                ids = new Map();
-                for (const id of Object.keys(state.byId ?? {})) {
-                    const name = coordinatorName(state, id);
-                    if (name !== undefined && !ids.has(name)) ids.set(name, id);
-                }
-                coordinatorIdsCache.set(state, ids);
-            }
-            return ids;
-        }
-
         /**
-         * A session list row's place in a project: `coordinator:<its id>`,
-         * `thread:<its coordinator's id>`, or '' for any other session.
+         * A session list row's place: `coordinator:<its id>` for a chat that
+         * coordinates threads (or did, and still has some), `thread:<its
+         * chat's id>` for a thread, or '' for any other session. Only the
+         * plugin's value says it, or its store for a session DSH lists without
+         * one; a title never does.
          */
         function rowPlace(state, sessionId) {
             if (!isObject(state)) return '';
             const value = valueIn(state, sessionId);
-            if (!value) {
-                // DSH has no value for it (one saved by another version of the plugin): the store says what it is.
-                const stored = known.map.get(sessionId);
-                if (stored?.role === 'coordinator') return `coordinator:${sessionId}`;
-                if (stored?.role === 'thread') return stored.coordinator ? `thread:${stored.coordinator}` : '';
-            }
-            if (value?.role === 'coordinator' || (!value && coordinatorName(state, sessionId) !== undefined)) return `coordinator:${sessionId}`;
+            if (value?.role === 'coordinator') return value.off === true && !(Array.isArray(value.threads) && value.threads.length > 0) ? '' : `coordinator:${sessionId}`;
             if (value?.role === 'thread') return typeof value.coordinator === 'string' && value.coordinator !== '' ? `thread:${value.coordinator}` : '';
-            if (value || !isThreadRow(state, sessionId)) return '';
-            // A thread from before titles lost "<project> › ", whose projection hasn't reached the list yet.
-            const title = state.byId[sessionId].title;
-            const of = coordinatorIds(state).get(title.slice(0, title.indexOf(' › ')));
-            return of === undefined ? '' : `thread:${of}`;
+            // DSH has no value for it (one saved by another version of the plugin): the store says what it is.
+            const stored = known.map.get(sessionId);
+            if (stored?.role === 'coordinator') return `coordinator:${sessionId}`;
+            if (stored?.role === 'thread' && stored.coordinator) return `thread:${stored.coordinator}`;
+            return '';
         }
 
         /**
-         * The projects drawn in one of DSH's workspace sections, read from the
-         * marks RowPlace puts in each row: every coordinator there with at
+         * The coordinating chats drawn in one of DSH's workspace sections, read
+         * from the marks RowPlace puts in each row: every coordinator there with at
          * least one of its threads there too, with its wrapper's position in
          * the section (from 1) and its threads in DSH's order. A section's
          * children are its rows' wrappers; a thread in another workspace
@@ -4638,21 +4326,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 .sort((a, b) => a.at - b.at);
         }
 
-        /** The plugin's marks for the nesting (markNesting): a section that nests a project, the order each of its children is drawn in, and a nested thread's wrapper. */
+        /** The plugin's marks for the nesting (markNesting): a section that nests threads, the order each of its children is drawn in, and a nested thread's wrapper. */
         const NEST = 'data-projects-nests';
         const NEST_ORDER = 'data-projects-order';
         const NESTED = 'data-projects-nested';
-        /** The orders the nesting CSS always has a rule for: ten projects in one workspace, three each. More add rules. */
+        /** The orders the nesting CSS always has a rule for: ten coordinating chats in one workspace, three each. More add rules. */
         const NEST_ORDERS = 30;
 
         /**
-         * The CSS that nests each project's threads under its coordinator in
-         * one of DSH's workspace sections, whatever order DSH lists them in.
-         * The section lays its rows' wrappers out as a column, and each
-         * project is drawn where its coordinator's row is: the coordinator,
-         * then its threads in DSH's order. So dragging the ◆ row moves the
-         * project, a thread is never drawn apart from it, and two projects in
-         * one workspace stay apart. The rows DSH lists after a coordinator
+         * The CSS that nests each chat's threads under it in one of DSH's
+         * workspace sections, whatever order DSH lists them in. The section
+         * lays its rows' wrappers out as a column, and each coordinating chat
+         * is drawn with its threads where its row is: the chat, then its
+         * threads in DSH's order. So dragging the chat's row moves its threads
+         * along, a thread is never drawn apart from it, and two coordinating
+         * chats in one workspace stay apart. The rows DSH lists after a coordinator
          * follow its threads. DSH's order, data and wrappers stay as they
          * are. A nested thread is indented, with its corner drawn in the
          * indent: the row's leading seat stays free for DSH's marks and other
@@ -4679,10 +4367,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ];
             for (let order = 1; order <= last; order += 1) rules.push(`${S}>[${NEST_ORDER}="${order}"]{order:${order}}`);
             rules.push(
-                // A thread's title 16 px in from its project's: enough to show the tree, and the thread keeps room for its title.
+                // A thread's title 16 px in from its chat's: enough to show the tree, and the thread keeps room for its title.
                 `${T}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,24px) + var(--dsh-workspace-indent,0px))}`,
                 `${T}::before{${NEST_CORNER}}`,
-                // The branch mark gives way to the corner; the row's description still says "Project thread".
+                // The branch mark gives way to the corner; the row's description still says "Thread".
                 `${T} .dshp-t-mark[data-projects-thread-mark=""]{${HIDDEN}}`,
                 // DSH's time (the row's child after its title, before its actions) gives way to the indent, still read
                 // aloud, so the title keeps the room it has in DSH's own rows. A status DSH writes there instead
@@ -4695,7 +4383,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /**
          * Where nestingCss draws each child of a section: the order it gets
          * (0 for what DSH lists before the first coordinator; then, for the
-         * k-th project from 0, 3k+1 its coordinator, 3k+2 its threads and
+         * k-th coordinating chat from 0, 3k+1 its row, 3k+2 its threads and
          * 3k+3 what DSH lists after the coordinator), and whether it holds a
          * thread nested under its coordinator. null with nothing to nest.
          * @param groups - sectionGroups' answer for the section.
@@ -4735,7 +4423,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return drawn.some((at, i) => at !== i + 1) ? drawn : null;
         }
 
-        /** The sections of DSH's list that hold a coordinator's row: where the plugin may nest a project. */
+        /** The sections of DSH's list that hold a coordinating chat's row: where the plugin may nest threads. */
         function projectSections(tree) {
             const sections = new Set();
             for (const mark of tree?.querySelectorAll?.('[data-projects-row="coordinator"]') ?? EMPTY) {
@@ -4756,8 +4444,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * Mark DSH's list for nestingCss: each section that holds a project
-         * with threads, the order each of its children is drawn in there (0
+         * Mark DSH's list for nestingCss: each section that holds a
+         * coordinating chat with threads, the order each of its children is drawn in there (0
          * too, so a child without one is one DSH added since), and each
          * wrapper of a thread nested under its coordinator. Only a
          * section inside the list nests (a list drawn as one flat list keeps
@@ -4805,8 +4493,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * A screen reader meets each project's rows in the order nestingCss
-         * draws them, the threads after their coordinator: the section owns
+         * A screen reader meets a coordinating chat's rows in the order
+         * nestingCss draws them, the threads after their chat: the section owns
          * its children in that order (aria-owns, which gives each child that
          * has no id one of the plugin's). Only a section the CSS nests (a div
          * inside the list) is reordered, and one it no longer nests gets its
@@ -4829,7 +4517,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         const SAID = 'data-projects-said';
         /**
-         * Each project's row in the list says the plugin's words for it
+         * Each coordinating chat's and thread's row in the list says the plugin's words for it
          * (rowWords, which RowPlace carries) after its title: they are the
          * row's description, since the plugin's only seat before the title
          * would be read first. A description DSH gives a row (an archived
@@ -4860,7 +4548,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         const UNREAD_ROW = 'data-projects-unread-row';
         /**
-         * A coordinator's row with news the user hasn't seen (RowPlace's
+         * A coordinating chat's row with news the user hasn't seen (RowPlace's
          * mark in it says so) is marked itself, so the CSS that makes it bold
          * names the row, rather than looking into every row for the mark.
          */
@@ -4887,11 +4575,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * A row's place in its project, from inside the row: a hidden mark in
-         * the row's actions seat, which DSH mounts on every row whether it is
-         * idle or busy. The sidebar reads the marks to nest each project's
-         * threads under its coordinator (nestingCss) and to keep DSH's own
-         * drags from taking a thread out of its project or a chat into one
+         * A row's place (rowPlace), from inside the row: a hidden mark in the
+         * row's actions seat, which DSH mounts on every row whether it is idle
+         * or busy. The sidebar reads the marks to nest each chat's threads
+         * under it (nestingCss) and to keep DSH's own drags from taking a
+         * thread away from its chat or a chat in among another's threads
          * (useSessionDragGuard). It also carries what the row says to a
          * screen reader after its title (rowWords, describeRows): DSH's own
          * status can take the leading seat from ThreadMark, never this one.
@@ -4906,14 +4594,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const role = place.slice(0, Math.max(0, at));
             const paused = usePaused(facts, role === 'coordinator' ? sessionId : undefined, role === 'coordinator' ? 'list' : null) === true;
             const mark = useSessions((state) => (role === 'thread' ? markState(state, sessionId) : ''));
+            const off = useSessions((state) => role === 'coordinator' && valueIn(state, sessionId)?.off === true);
             if (place === '') return null;
             const news = role === 'coordinator' ? facts.newsOf?.(sessionId) : undefined;
-            // A coordinator with news the user hasn't seen: its row's title reads bold (CSS), like unread mail.
+            // A coordinating chat with news the user hasn't seen: its row's title reads bold (CSS), like unread mail.
             const unread = news?.unread.length ?? 0;
             return h('span', {
                 hidden: true, 'data-projects-row': role, 'data-projects-of': place.slice(at + 1),
                 'data-projects-node': role === 'coordinator' ? 'project' : 'thread', 'data-projects-id': sessionId,
-                'data-projects-words': rowWords({ role, paused, news: unread > 0 ? news : undefined, mark }),
+                'data-projects-words': rowWords({ role, off, paused, news: unread > 0 ? news : undefined, mark }),
                 ...(unread > 0 ? { 'data-projects-unread': unread } : {}),
             });
         }
@@ -4949,14 +4638,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const thread = info?.me.role === 'thread';
             const changed = useThreadChanges(projects, useSessions, thread ? info.coordinator : undefined, thread ? [sessionId] : EMPTY, true)[info?.me.thread?.id];
             const live = useSessions((state) => permissionIn(state, sessionId));
-            // Which handbacks a pause holds, and which of the user's tools a session has, are in the project's description; read it for this card.
+            // Which handbacks a pause holds, and which of the user's tools a thread has, are in the chat's description; read it for this card.
             React.useEffect(() => { if (info?.coordinator) void projects.facts.describe(info.coordinator, 15000); }, [info?.coordinator, projects]);
             const described = React.useSyncExternalStore(projects.facts.subscribe, () => (info?.coordinator ? projects.facts.info(info.coordinator) : null));
-            if (info === undefined) return null;
+            if (info === undefined || stoppedEmpty(info)) return null;
             const project = info.project.name ?? '';
             const runs = picked ? h('div', { className: 'dshp-t-hover-line', 'data-projects-thread-model': '' }, `Runs on ${selectionText(cv, picked)}`) : null;
-            // Where it can write, and which of the user's tools it has (named only when some are listed).
-            const mine = thread ? described?.threads?.find?.((t) => isObject(t) && t.session === sessionId) : described?.project;
+            // Where it can write, and which of the user's tools a thread has (named only when some are listed); a coordinating chat keeps the user's own.
+            const mine = thread ? described?.threads?.find?.((t) => isObject(t) && t.session === sessionId) : undefined;
             const preset = live ?? (typeof mine?.permission === 'string' ? mine.permission : undefined);
             const listed = Array.isArray(described?.guarded) && described.guarded.length > 0 && mine;
             const reach = joined([preset ? permissionName(preset, described?.permissions) : null, listed ? toolsWords(mine.tools) : null]);
@@ -4967,14 +4656,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const row = entry ? withHeld([threadRow(entry, statuses, byId, endings)], paused ? handbacks : EMPTY)[0] : undefined;
                 const line = row ? hoverLine(row) : undefined;
                 return h('div', { className: 'dshp-t-hover', 'data-projects-thread-hover': '' },
-                    h('div', { className: 'dshp-t-hover-head' }, h(ui.IconTreeCornerRegular, { size: 12 }), `Thread of ◆ ${project}`),
+                    h('div', { className: 'dshp-t-hover-head' }, h(ui.IconTreeCornerRegular, { size: 12 }), project ? `${TEXT.thread} of ${project}` : TEXT.thread),
                     line ? h('div', { className: 'dshp-t-hover-line', 'data-projects-state': row.dot }, line) : null,
                     changed ? h('div', { className: 'dshp-t-hover-line', 'data-projects-changes': '' }, ...changeCounts(changed)) : null,
                     runs, access, pause);
             }
             const counts = countsOf(rowsOf(info.roster, statuses, byId, endings));
             return h('div', { className: 'dshp-t-hover', 'data-projects-thread-hover': '' },
-                h('div', { className: 'dshp-t-hover-head' }, h('span', { 'aria-hidden': true }, '◆'), `Coordinator of ${project}`),
+                h('div', { className: 'dshp-t-hover-head' }, h(ui.IconBranchOutlineRegular, { size: 12 }), info.me.off === true ? TEXT.rowStopped : TEXT.rowProject),
                 h('div', { className: 'dshp-t-hover-line' }, counts.open + counts.resolved > 0 ? summaryText(counts).replace(/^(\d+) open/, (m, n) => plural(Number(n), 'open thread')) : 'No threads yet'),
                 runs, access, pause);
         }
@@ -5047,12 +4736,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const failed = new Set();
             const catalog = shared.catalog ?? catalogSource(() => undefined);
             const link = shared.link ?? hostLink(() => undefined, catalog);
-            /** DSH's message box of a session (its composer's shell), or undefined. */
-            const composerOf = (sessionId) => {
-                const scope = ctx.sessions?.scope?.(sessionId);
-                const shell = scope?.get?.('conversation')?.input?.for?.(scope);
-                return shell && (typeof shell.actions?.setDraft === 'function' || typeof shell.setDraft === 'function') ? shell : undefined;
-            };
             /** Open a thread as the main chat, where it stays until another chat is opened. */
             const openFull = (sessionId) => {
                 if (typeof sessionId !== 'string' || sessionId === '') return;
@@ -5073,7 +4756,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     openSession(sessionId);
                     return;
                 }
-                // Also when the coordinator is the main chat already: that closes a page (Projects, say) shown over it.
+                // Also when the coordinator is the main chat already: that closes a page (Plugins, say) shown over it.
                 openSession(coordinator);
                 besideIn(coordinator, sessionId);
             };
@@ -5246,7 +4929,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         clearTimeout(timer);
                     };
                 },
-                /** The Project settings dialog, for the entry points. */
+                /** The Thread settings dialog, for the entry points. */
                 settings: dialog,
                 /** The Rename dialog, for a thread's ⋯. */
                 rename: shared.renames,
@@ -5254,39 +4937,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 catalog,
                 /** The plugin's endpoints (remote.js). */
                 link,
-                /** What the plugin says about projects, shared by the window's views. */
+                /** What the plugin says about coordinating chats and their threads, shared by the window's views. */
                 facts: shared.facts ?? projectFacts(link),
-                /**
-                 * Open a session as the main chat and, once DSH has drawn its
-                 * message box (within 3 s), put text there, ready to send.
-                 */
-                openWithDraft(sessionId, text) {
-                    openSession(sessionId);
-                    if (typeof text !== 'string' || text.trim() === '') return;
-                    let tries = 0;
-                    const put = () => {
-                        if (this.draft(sessionId, text) || ++tries >= 30) return;
-                        setTimeout(put, 100);
-                    };
-                    setTimeout(put, 50);
-                },
-                /**
-                 * Put text in a session's message box and move the keyboard
-                 * there, ready to send or change. @returns whether it could.
-                 */
-                draft(sessionId, text) {
-                    try {
-                        const shell = typeof sessionId === 'string' && sessionId !== '' ? composerOf(sessionId) : undefined;
-                        if (!shell) return false;
-                        if (typeof shell.actions?.setDraft === 'function') shell.actions.setDraft(text);
-                        else shell.setDraft(text);
-                        shell.focus?.();
-                        return true;
-                    } catch (error) {
-                        warn('could not put the ask in the message box', error);
-                        return false;
-                    }
-                },
                 openBeside(sessionId) {
                     if (typeof sessionId !== 'string' || sessionId === '') return;
                     try {
@@ -5354,7 +5006,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 hasPane() {
                     try { return ctx.get('sidebarRightTabs')?.get?.(KINDS.pane) !== undefined; } catch { return false; }
                 },
-                /** DSH's Plugins page at this plugin (its Default models and projects); undefined where DSH can't open it. */
+                /** DSH's Plugins page at this plugin (its defaults for threads); undefined where DSH can't open it. */
                 get openDefaults() {
                     let nav;
                     try { nav = ctx.get?.('pluginNavigation'); } catch { nav = undefined; }
@@ -5383,6 +5035,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
                 name: 'conversation.session.header.actions', id: IDS.menu, order: -25, inject: withApi,
             }, ThreadsMenu));
+            // Coordinate, next to it: a plain chat starts running work in threads from there.
+            ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
+                name: 'conversation.session.header.actions', id: IDS.coordinate, order: -24, inject: withApi,
+            }, CoordinateAction));
             ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
                 name: 'conversation.chat.turnTail', id: IDS.cards, order: 30, inject: withApi,
             }, ThreadCards));
@@ -5396,13 +5052,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.slots.inject('sidebar.session.row.leading', () => ctx.slots.register({
                 name: 'sidebar.session.row.leading', id: IDS.mark, order: 20, inject: withApi,
             }, ThreadMark));
-            // Threads under their coordinator in the session list: a mark inside each row, read by CSS.
+            // Threads under the chat that started them in the session list: a mark inside each row, read by CSS.
             ctx.slots.inject('sidebar.workspaces.session.row.action', () => ctx.slots.register({
                 name: 'sidebar.workspaces.session.row.action', id: IDS.place, order: 900, inject: withApi,
             }, RowPlace));
-            ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
-                name: 'conversation.input.dock', id: IDS.offer, order: 14, inject: withApi,
-            }, CoordinatorOffer));
             ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
                 name: 'conversation.input.dock', id: IDS.paused, order: 15, inject: withApi,
             }, PausedBar));
@@ -5418,22 +5071,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // A thread opened anywhere lands beside its coordinator; from DSH's session list, straight there.
             ctx.effect(() => projects.followRowClicks(), 'coordinator: thread rows open beside their coordinator');
             ctx.effect(() => projects.followOpens(), 'coordinator: threads beside their coordinator');
-            // What threads hand back, or need the user for: a mark on the ◆ row and a notice wherever the user is.
+            // What threads hand back, or need the user for: a mark on their chat's row and a notice wherever the user is.
             ctx.effect(() => projects.followNews(), 'coordinator: news from threads');
             ctx.slots.inject('shell.overlay', () => ctx.slots.register({
                 name: 'shell.overlay', id: IDS.news, inject: withApi,
             }, NewsNotice));
-            // DSH's session list: each project's threads under its coordinator, and DSH's own drags kept to what a project allows.
+            // DSH's session list: each chat's threads under it, and DSH's own drags kept from pulling them apart.
             ctx.slots.inject('shell.overlay', () => ctx.slots.register({
                 name: 'shell.overlay', id: IDS.sessionList, inject: withApi,
             }, SessionList));
-            // The Projects entry in DSH's sidebar, after Plugins, and the page it opens.
-            ctx.slots.inject('main', () => ctx.slots.register({
-                name: 'main', key: IDS.page, inject: () => ({ projects, flow: shared.flow }),
-            }, ProjectsPage));
-            ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
-                name: 'sidebar.panellist', id: IDS.page, order: 5, label: PAGE.entry,
-            }, ProjectsIcon));
             // The right-sidebar parts: a thread's chat, the Threads pane, thread links from replies, and a thread's Changes.
             ctx.inject(['resources', 'sidebarRightTabs'], (scope) => {
                 scope.effect(() => scope.resources.register(threadChatResources(scope.sessions)), 'coordinator: thread chat resources');
@@ -5492,591 +5138,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             });
         }
 
-        // ── Projects page ──────────────────────────────────────────────────
-
-        const PAGE = {
-            /** The entry in DSH's sidebar that opens the page, named as the page is headed. */
-            entry: 'Projects',
-            title: 'Projects',
-            loading: 'Loading projects…',
-            emptyTitle: 'No projects yet',
-            emptyText: 'A project is a ◆ coordinator in one of your workspaces, with the threads it starts. Add one under projects in your profile\'s cordis.patch.yml, and it shows up here.',
-            noThreads: 'no threads yet',
-            newChat: 'New chat',
-            find: 'Find by name',
-            findClear: 'Clear the find',
-            findNone: (words) => `Nothing matches “${words}”.`,
-            // What Alt and an arrow on the tree answer: nothing on the page moves, and why.
-            threadOrder: 'A project\'s threads keep the session list\'s order, open ones first.',
-            threadIn: 'A thread can\'t go inside another thread.',
-            projectOrder: 'Projects keep the order of the workspaces they work in.',
-            // A row's ⋯: what DSH's session list offers for it.
-            projectActions: (name) => `Project actions: ${name}`,
-            threadActions: (name) => `Thread actions: ${name}`,
-        };
-
-        /**
-         * The Projects entry's icon, drawn like DSH's own (a 16 px grid and a
-         * 1 px stroke): a project's ◆ coordinator branching into its threads.
-         */
-        function ProjectsIcon({ size = 16 }) {
-            return h('svg', {
-                width: size, height: size, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor',
-                strokeWidth: 1, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true,
-            },
-            h('path', { d: 'M4.6 5 7.6 8l-3 3-3-3Z' }),
-            h('path', { d: 'M7.6 8 11.32 4.4M7.6 8l3.72 3.6' }),
-            h('circle', { cx: 12.45, cy: 3.31, r: 1.57 }),
-            h('circle', { cx: 12.45, cy: 12.69, r: 1.57 }));
-        }
-
-        /** For a DSH without workspaces or session statuses on its slot props: none. */
-        const NO_WORKSPACES = Object.freeze({ items: EMPTY, archivedSessionIds: EMPTY, phase: 'none' });
-        const noWorkspaces = (select) => select(NO_WORKSPACES);
-        const noStatuses = (select) => select(new Map());
-
-        /** Names as a sentence lists them: "A", "A and B", "A, B and C". */
-        const listText = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
-
-        /** A session's dot as DSH's session list draws it: waiting on the user, running, or none. */
-        function chatDot(row, statuses) {
-            const status = statuses?.get?.(row.id);
-            if (status?.pendingInteraction) return 'warning';
-            return (status?.running ?? row.running) === true ? 'ongoing' : null;
-        }
-
-        /**
-         * A set of ids kept in the window's storage, so it holds across
-         * restarts (the projects folded on the page, the folders where the
-         * coordinator's offer is off). Without storage it lasts until the
-         * window closes.
-         */
-        function useStoredSet(key) {
-            const [set, setSet] = React.useState(() => {
-                try {
-                    const saved = JSON.parse(window.localStorage.getItem(key) ?? '[]');
-                    return new Set(Array.isArray(saved) ? saved.filter((id) => typeof id === 'string') : EMPTY);
-                } catch {
-                    return new Set();
-                }
-            });
-            const first = React.useRef(true);
-            React.useEffect(() => {
-                if (first.current) { first.current = false; return; }
-                try { window.localStorage.setItem(key, JSON.stringify([...set])); } catch { /* no storage */ }
-            }, [set]);
-            /** Add or remove an id; `on` undefined flips it. */
-            const toggle = React.useCallback((id, on) => setSet((prev) => {
-                const next = on === undefined ? !prev.has(id) : on;
-                if (next === prev.has(id)) return prev;
-                const copy = new Set(prev);
-                if (next) copy.add(id);
-                else copy.delete(id);
-                return copy;
-            }), []);
-            return [set, toggle];
-        }
-
-        /** Where the page's folded projects are kept (the window's own storage); every project starts open. */
-        const CLOSED_KEY = `${BUNDLE}/page-closed`;
-
-        /** The name DSH shows for a workspace: its title, else its folder's. */
-        const workspaceName = (ws) => (typeof ws?.title === 'string' && ws.title !== '' ? ws.title : typeof ws?.path === 'string' && ws.path !== '' ? folderName(ws.path) : '');
-
-        /**
-         * The page's tree: every ◆ project in the list's order (DSH's order of
-         * the workspaces they work in, then the profile's), each with its
-         * threads, open ones first and then the resolved ones, each in DSH's
-         * order. A thread is drawn under its project wherever it works. Every
-         * thread DSH lists is there, except archived ones and an empty New
-         * Session; a project whose coordinator hasn't started isn't, as there
-         * is nothing to open. A project carries the workspace it works in, its
-         * threads as its Threads menu counts them (its coordinator's roster;
-         * the list's count until this window has the roster), whether it is
-         * paused and its news; a thread what its coordinator's roster and its
-         * own session say of it (its state, as the Threads menu gives it),
-         * with the handback a pause holds for it.
-         * @param pausedOf - coordinator => whether its project is paused, else the list's word.
-         * @param newsOf - coordinator => its unread news ({unread}), or undefined.
-         * @param heldOf - coordinator => the handbacks its pause holds ([{thread, status}]), as the Threads menu has them.
-         * @returns {Array<{kind, id, title, children, row?, project?, folder?, counts?, resolved?, handback?, ending?, held?, paused?, news?}>}
-         */
-        function pageModel({ listed, items, sessions, archived, pausedOf, newsOf, describedOf, seen, heldOf }) {
-            const byId = sessions?.byId ?? {};
-            const hidden = (id) => { const row = byId[id]; return !row || row.blank === true || archived.has(id); };
-            const titleOf = (row) => (typeof row?.title === 'string' && row.title.trim() !== '' ? row.title : PAGE.newChat);
-            const coordOf = new Map();
-            for (const p of Array.isArray(listed) ? listed : EMPTY) {
-                // An archived project leaves the page with its coordinator and threads (DSH archives its ◆ row first when the user does it there).
-                if (!isObject(p) || p.archived === true || typeof p.coordinator !== 'string' || p.coordinator === '' || archived.has(p.coordinator)) continue;
-                if (!coordOf.has(p.coordinator)) coordOf.set(p.coordinator, p);
-            }
-            const pausedNow = (p) => (pausedOf?.(p.coordinator) ?? p.paused) === true;
-            const workspaces = (Array.isArray(items) ? items : EMPTY).filter((ws) => typeof ws?.workspaceId === 'string');
-            // A coordinator's roster, with Rename, Mark resolved and Reopen from a row's ⋯ shown at once (newestRoster).
-            const rosterOf = (coordinator) => {
-                const threads = valueIn(sessions, coordinator)?.threads;
-                if (!Array.isArray(threads)) return null;
-                return seen instanceof Map ? newestRoster(threads, describedOf?.(coordinator), seen, coordinator) : threads;
-            };
-            // Each coordinator's roster by thread session: what it calls resolved, and each thread's last handback.
-            const rosters = new Map();
-            const entryOf = (coordinator, id) => {
-                if (!rosters.has(coordinator)) rosters.set(coordinator, new Map((rosterOf(coordinator) ?? EMPTY).filter((t) => isObject(t) && typeof t.session === 'string').map((t) => [t.session, t])));
-                return rosters.get(coordinator).get(id);
-            };
-            // What a paused project's pause holds, by thread: that thread reads as its handback (withHeld).
-            const helds = new Map();
-            const heldFor = (coordinator, entry) => {
-                if (!helds.has(coordinator)) {
-                    const list = pausedNow(coordOf.get(coordinator)) ? heldOf?.(coordinator) : undefined;
-                    helds.set(coordinator, new Map((Array.isArray(list) ? list : EMPTY).filter((hb) => isObject(hb) && typeof hb.thread === 'string' && typeof hb.status === 'string').map((hb) => [hb.thread, hb.status])));
-                }
-                return typeof entry?.id === 'string' ? helds.get(coordinator).get(entry.id) : undefined;
-            };
-            const threadsOf = new Map();
-            const placed = new Set();
-            for (const ws of workspaces) {
-                for (const id of Array.isArray(ws.sessionIds) ? ws.sessionIds : EMPTY) {
-                    if (placed.has(id) || hidden(id) || coordOf.has(id) || !isThreadRow(sessions, id)) continue;
-                    const parent = valueIn(sessions, id)?.coordinator ?? known.map.get(id)?.coordinator;
-                    if (typeof parent !== 'string' || !coordOf.has(parent)) continue;
-                    placed.add(id);
-                    const entry = entryOf(parent, id);
-                    if (!threadsOf.has(parent)) threadsOf.set(parent, []);
-                    threadsOf.get(parent).push({
-                        kind: 'thread', id, thread: typeof entry?.id === 'string' ? entry.id : undefined, title: titleOf(byId[id]), row: byId[id], resolved: entry?.resolved === true,
-                        handback: isObject(entry?.handback) ? entry.handback : undefined, ending: endingIn(sessions, id), held: heldFor(parent, entry), children: EMPTY,
-                    });
-                }
-            }
-            return [...coordOf.values()].map((p) => {
-                const threads = threadsOf.get(p.coordinator) ?? EMPTY;
-                const roster = rosterOf(p.coordinator);
-                const listedCount = isObject(p.threads) ? p.threads : {};
-                const counts = roster ? countsOf(rowsOf(roster)) : { open: Number(listedCount.open) || 0, resolved: Number(listedCount.resolved) || 0 };
-                const home = workspaces.find((ws) => ws.workspaceId === p.home) ?? (Array.isArray(p.workspaces) ? p.workspaces[0] : undefined);
-                return {
-                    kind: 'project', id: p.coordinator, title: p.name || p.id, project: p, row: byId[p.coordinator],
-                    folder: workspaceName(home) || (typeof p.workspace === 'string' && p.workspace !== '' ? folderName(p.workspace) : ''),
-                    counts: { open: counts.open, resolved: counts.resolved },
-                    children: [...threads.filter((t) => !t.resolved), ...threads.filter((t) => t.resolved)],
-                    paused: pausedNow(p), news: newsOf?.(p.coordinator),
-                };
-            });
-        }
-
-        /** The items a tree shows now, in drawn order, each with its key, level, parent and place among its siblings. */
-        function visibleItems(tree, closed) {
-            const out = [];
-            const walk = (nodes, level, parent) => nodes.forEach((node, i) => {
-                const key = `${node.kind}:${node.id}`;
-                const open = node.children.length > 0 && !closed.has(key);
-                out.push({ node, key, level, parent, pos: i + 1, size: nodes.length, open });
-                if (open) walk(node.children, level + 1, key);
-            });
-            walk(tree, 1, null);
-            return out;
-        }
-
-        const TREE_GLYPHS = { thread: 'IconBranchOutlineRegular' };
-
-        /**
-         * What a project's row says after its title: the workspace it works
-         * in, then its open threads as its Threads menu counts them and the
-         * resolved ones; a paused project says so first. A thread's row says
-         * its state instead (treeThreadState).
-         */
-        function treeMeta(node) {
-            if (node.kind !== 'project') return null;
-            const open = Number(node.counts?.open) || 0;
-            const resolved = Number(node.counts?.resolved) || 0;
-            const threads = open + resolved === 0 ? PAGE.noThreads : `${plural(open, 'open thread')}${resolved > 0 ? ` · ${resolved} resolved` : ''}`;
-            return [node.paused === true ? TEXT.paused : '', node.folder ?? '', threads].filter((part) => part !== '').join(' · ');
-        }
-
-        /**
-         * A thread's state on the page, in the Threads menu's words and dots,
-         * live from DSH's own status of its session. While it isn't running or
-         * waiting on the user, one whose handback a pause holds reads as that
-         * handback, as the Threads menu has it (withHeld).
-         */
-        function treeThreadState(node, statuses) {
-            const status = statuses?.get?.(node.id);
-            const running = (status?.running ?? node.row?.running) === true;
-            const pending = status?.pendingInteraction ?? undefined;
-            const held = typeof node.held === 'string' && node.resolved !== true && !running && pending === undefined;
-            const state = rowState({
-                resolved: node.resolved === true, running, pending,
-                hb: held ? { status: node.held } : node.handback, ending: held ? undefined : node.ending,
-            });
-            return { dot: state.dot, label: state.label };
-        }
-
-        /**
-         * The dot after a ◆ project's title, with what it means: its news
-         * the user hasn't seen, as its row in the session list shows it, else
-         * DSH's own dot for its coordinator (running, or waiting on the
-         * user). null for none.
-         */
-        function treeDot(node, statuses) {
-            const unread = node.news?.unread;
-            if (Array.isArray(unread) && unread.length > 0) {
-                return { dot: newsDot(unread), label: TEXT.newsMark(unread.length, newsLine(unread[unread.length - 1])) };
-            }
-            const dot = node.row ? chatDot(node.row, statuses) : null;
-            return dot ? { dot, label: dot === 'warning' ? TEXT.needsYou : TEXT.running } : null;
-        }
-
-        /**
-         * What Alt and an arrow answer on the Projects page, where nothing
-         * moves: a project goes where the workspace it works in goes, and a
-         * thread stays in its project, in the session list's order. Up from a
-         * project's first thread, Down from its last and Left would take the
-         * thread out, so they say it stays.
-         * @param tree - the whole tree (pageModel), not a find's.
-         * @returns the reason, or null for an item or a key it doesn't answer.
-         */
-        function pageRefusal(tree, key, arrow) {
-            const at = String(key ?? '').indexOf(':');
-            const kind = String(key ?? '').slice(0, Math.max(0, at));
-            const id = String(key ?? '').slice(at + 1);
-            const nodes = Array.isArray(tree) ? tree : EMPTY;
-            const vertical = arrow === 'ArrowUp' || arrow === 'ArrowDown';
-            if (kind === 'project' && nodes.some((p) => p.id === id)) {
-                if (vertical) return PAGE.projectOrder;
-                if (arrow === 'ArrowRight') return SIDEBAR.projectIn;
-                return arrow === 'ArrowLeft' ? SIDEBAR.projectStays : null;
-            }
-            const threads = kind === 'thread' ? nodes.find((p) => p.children.some((t) => t.id === id))?.children : undefined;
-            if (!threads) return null;
-            const i = threads.findIndex((t) => t.id === id);
-            if (arrow === 'ArrowLeft' || (arrow === 'ArrowUp' && i === 0) || (arrow === 'ArrowDown' && i === threads.length - 1)) return SIDEBAR.threadStays;
-            if (vertical) return PAGE.threadOrder;
-            return arrow === 'ArrowRight' ? PAGE.threadIn : null;
-        }
-
-        /**
-         * ⋯ on a project's or a thread's row on the Projects page: what the
-         * plugin adds to the row's menu in the session list. A project's:
-         * Project settings and Archive project…; a thread's: the other way
-         * to open it (Open in full view, or beside its coordinator) and its
-         * project's settings. A right-click, Shift+F10 or the context-menu
-         * key on the row opens it too.
-         * @param items - [{id, label, icon}]; `run(id)` does the one picked.
-         */
-        function RowMenu({ label, items, run, open, setOpen }) {
-            const mark = useFirstItemFocus(open);
-            return h(ui.Menu, {
-                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end', className: 'dshp-tree-act', listClassName: mark,
-                onSelect: (id) => {
-                    setOpen(false);
-                    run(id);
-                },
-                anchor: h('button', {
-                    type: 'button', className: 'dshp-tree-more', tabIndex: -1, 'aria-label': label, 'aria-haspopup': 'menu', 'aria-expanded': open, 'data-projects-page-menu': '',
-                    onClick: (event) => {
-                        event.stopPropagation();
-                        setOpen(!open);
-                    },
-                }, h(ui.IconEllipsisOutlineRegular, { size: 14 })),
-            });
-        }
-
-        /**
-         * The Projects page's tree, as a screen reader and the keys expect:
-         * one tab stop, Up and Down in drawn order, Right opens a project or
-         * goes into it, Left closes it or goes to its project, Home and End,
-         * Enter opens a project's coordinator or a thread. Alt and an arrow
-         * go to onMove, which says why the item stays (pageRefusal); the
-         * focus stays on it. An item with a menu has ⋯ at the end of its
-         * row, and a right-click, Shift+F10 or the context-menu key opens it
-         * too, the keyboard then on its first item (Escape gives it back to
-         * the ⋯).
-         * @param onMove - (key, arrow) => the reason said, or null for a key left to DSH.
-         * @param menu - {has(node), draw({node, open, setOpen})}: which items have a menu, and each one's (an element).
-         */
-        function PageTree({ tree, label, onOpenSession, onMove, menu, statuses, find = '', treeRef }) {
-            const [stored, toggleStored] = useStoredSet(CLOSED_KEY);
-            // While a find is on, everything it keeps starts open, and what is closed then is forgotten when the
-            // find changes (React's way to reset state when a prop changes: set it while drawing).
-            const [found, setFound] = React.useState({ find, closed: EMPTY_SET });
-            if (found.find !== find) setFound({ find, closed: EMPTY_SET });
-            const finding = find.trim() !== '';
-            const closed = !finding ? stored : found.find === find ? found.closed : EMPTY_SET;
-            const toggleClosed = !finding ? toggleStored : (key, on) => setFound((prev) => {
-                const copy = new Set(prev.find === find ? prev.closed : EMPTY_SET);
-                if (on) copy.add(key);
-                else copy.delete(key);
-                return { find, closed: copy };
-            });
-            const shown = visibleItems(tree, closed);
-            const [current, setCurrent] = React.useState(null);
-            const refs = React.useRef(new Map());
-            const at = Math.max(0, shown.findIndex((x) => x.key === current));
-            const focusKey = (key) => { setCurrent(key); refs.current.get(key)?.focus(); };
-            // Every row is a session: a project's opens its coordinator.
-            const activate = (x) => onOpenSession(x.node.id);
-            // The item whose menu is open; one opened by its keys hands the keyboard to the row's ⋯ once it shows.
-            const [menuKey, setMenuKey] = React.useState(null);
-            const byKey = React.useRef(false);
-            React.useLayoutEffect(() => {
-                if (menuKey === null || !byKey.current) return;
-                byKey.current = false;
-                refs.current.get(menuKey)?.querySelector(':scope>.dshp-tree-row .dshp-tree-more')?.focus();
-            }, [menuKey]);
-            // Clicks and keys in a menu (drawn elsewhere in the page) reach the tree through React, not the page.
-            const inside = (event) => !event.target || typeof event.currentTarget?.contains !== 'function' || event.currentTarget.contains(event.target);
-            const onKeyDown = (event) => {
-                if (!inside(event)) return;
-                // A row's ⋯ has its own keys while its menu is open, and Enter and Space always; else the tree's keys work from it.
-                const onItem = typeof event.target?.matches !== 'function' || event.target.matches('[role="treeitem"]');
-                if (!onItem && (menuKey !== null || event.key === 'Enter' || event.key === ' ')) return;
-                const x = shown.find((item) => item.key === current) ?? shown[0];
-                if (x && menu?.has(x.node) && !event.altKey && !event.ctrlKey && !event.metaKey && ((event.key === 'F10' && event.shiftKey) || event.key === 'ContextMenu')) {
-                    event.preventDefault();
-                    byKey.current = true;
-                    setMenuKey(x.key);
-                    return;
-                }
-                if (x && event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey && /^Arrow(Up|Down|Left|Right)$/.test(event.key)) {
-                    if ((onMove?.(x.key, event.key) ?? null) !== null) event.preventDefault();
-                    return;
-                }
-                if (!x || event.altKey || event.metaKey || event.ctrlKey) return;
-                const i = shown.indexOf(x);
-                const go = (y) => { if (y) { event.preventDefault(); focusKey(y.key); } };
-                switch (event.key) {
-                    case 'ArrowDown': go(shown[i + 1]); break;
-                    case 'ArrowUp': go(shown[i - 1]); break;
-                    case 'Home': go(shown[0]); break;
-                    case 'End': go(shown[shown.length - 1]); break;
-                    case 'ArrowRight':
-                        event.preventDefault();
-                        if (x.node.children.length > 0 && !x.open) toggleClosed(x.key, false);
-                        else if (x.open) focusKey(shown[i + 1].key);
-                        break;
-                    case 'ArrowLeft':
-                        event.preventDefault();
-                        if (x.open) toggleClosed(x.key, true);
-                        else if (x.parent) focusKey(x.parent);
-                        break;
-                    case 'Enter': case ' ': event.preventDefault(); activate(x); break;
-                    default:
-                }
-            };
-            const item = (x) => {
-                const { node } = x;
-                const kids = x.open ? shown.filter((y) => y.parent === x.key) : EMPTY;
-                const Icon = ui[TREE_GLYPHS[node.kind]];
-                const glyph = node.kind === 'project' ? h('span', { className: 'dshp-tree-diamond', 'aria-hidden': true }, '◆')
-                    : Icon ? h('span', { className: 'dshp-tree-glyph', 'aria-hidden': true }, h(Icon, { size: 14 })) : h('span', { className: 'dshp-tree-glyph', 'aria-hidden': true });
-                const thread = node.kind === 'thread' ? treeThreadState(node, statuses) : null;
-                const dot = thread ? null : treeDot(node, statuses);
-                const meta = treeMeta(node);
-                const unread = node.news?.unread?.length ?? 0;
-                const menuOn = menu?.has(node) === true;
-                return h('li', {
-                    key: x.key, role: 'treeitem', 'aria-level': x.level, 'aria-setsize': x.size, 'aria-posinset': x.pos,
-                    'aria-expanded': node.children.length > 0 ? x.open : undefined, tabIndex: x === shown[at] ? 0 : -1,
-                    'aria-keyshortcuts': menuOn ? 'Shift+F10' : undefined,
-                    className: `dshp-tree-item dshp-tree-${node.kind}`, 'data-projects-node': node.kind, 'data-projects-id': node.id,
-                    'data-projects-paused': node.paused === true ? '' : undefined, 'data-projects-unread': unread > 0 ? unread : undefined,
-                    ref: (el) => { if (el) refs.current.set(x.key, el); else refs.current.delete(x.key); },
-                    onFocus: (event) => { if (event.target === event.currentTarget) setCurrent(x.key); },
-                    onClick: (event) => {
-                        if (!inside(event)) return;
-                        event.stopPropagation();
-                        setCurrent(x.key);
-                        activate(x);
-                    },
-                    // A right-click on the row itself (not an item inside it) opens its menu.
-                    onContextMenu: menuOn ? (event) => {
-                        if (!inside(event) || (event.target?.closest && event.target.closest('[role="treeitem"]') !== event.currentTarget)) return;
-                        event.preventDefault();
-                        event.stopPropagation();
-                        setCurrent(x.key);
-                        setMenuKey(x.key);
-                    } : undefined,
-                },
-                h('div', { className: 'dshp-tree-row', style: { paddingInlineStart: `${8 + (x.level - 1) * 20}px` } },
-                    // The chevron folds a project's threads; a click on the rest of its row opens its coordinator.
-                    h('span', {
-                        className: 'dshp-tree-chevron', 'aria-hidden': true, 'data-projects-chevron': node.children.length > 0 ? '' : undefined,
-                        onClick: node.children.length > 0 ? (event) => { event.stopPropagation(); setCurrent(x.key); toggleClosed(x.key, x.open); } : undefined,
-                    }, node.children.length > 0 ? h(x.open ? ui.IconChevronDownOutlineRegular : ui.IconChevronRightOutlineRegular, { size: 12 }) : null),
-                    glyph,
-                    h('span', { className: 'dshp-tree-title', 'data-projects-title': node.title }, ...(finding ? withHit(node.title, find) : [node.title])),
-                    // A paused project's sign, as on its row in the session list; its row says Paused in words.
-                    node.paused === true ? h('span', { className: 'dshp-tree-dot dshp-t-paused-mark', 'aria-hidden': true }, h(ui.IconPauseOutlineRegular, { size: 12 })) : null,
-                    dot ? h('span', {
-                        className: 'dshp-tree-dot', role: 'img', 'aria-label': dot.label, title: dot.label, 'data-projects-news-mark': unread > 0 ? unread : undefined,
-                    }, ui.StateDot ? h(ui.StateDot, { state: dot.dot }) : null) : null,
-                    // A thread's state, in the Threads menu's words; a project's row says where it works and its threads.
-                    thread ? h('span', { className: 'dshp-tree-meta dshp-tree-state', 'data-projects-state': thread.dot },
-                        ui.StateDot ? h('span', { className: 'dshp-tree-dot', 'aria-hidden': true }, h(ui.StateDot, { state: thread.dot })) : null,
-                        h('span', { className: 'dshp-tree-state-word' }, thread.label))
-                        : meta ? h('span', { className: 'dshp-tree-meta' }, meta) : null,
-                    menuOn ? menu.draw({ node, open: menuKey === x.key, setOpen: (on) => { if (on) setCurrent(x.key); setMenuKey(on ? x.key : null); } }) : null),
-                kids.length > 0 ? h('ul', { role: 'group', className: 'dshp-tree-group' }, ...kids.map(item)) : null);
-            };
-            return h('ul', { role: 'tree', 'aria-label': label, className: 'dshp-tree', onKeyDown, ref: treeRef }, ...shown.filter((x) => x.level === 1).map(item));
-        }
-
-        /**
-         * The tree cut down to a find: an item whose name holds the words (in
-         * any case) with everything in it, and the items above each such
-         * item, so a match is shown where it lives.
-         */
-        function findInTree(nodes, find) {
-            const words = String(find ?? '').trim().toLowerCase();
-            if (words === '') return nodes;
-            const keep = (node) => {
-                if (String(node.title).toLowerCase().includes(words)) return node;
-                const children = node.children.map(keep).filter(Boolean);
-                return children.length > 0 ? { ...node, children } : null;
-            };
-            return nodes.map(keep).filter(Boolean);
-        }
-
-        /** A title with the found words marked, as parts to draw. */
-        function withHit(title, find) {
-            const words = String(find ?? '').trim();
-            const at = words === '' ? -1 : String(title).toLowerCase().indexOf(words.toLowerCase());
-            if (at < 0) return [title];
-            return [title.slice(0, at), h('mark', { key: 'hit', className: 'dshp-tree-hit' }, title.slice(at, at + words.length)), title.slice(at + words.length)].filter((part) => part !== '');
-        }
-
-        /**
-         * The page the Projects entry in DSH's sidebar opens, headed Projects
-         * with how many: every ◆ project with its threads (pageModel), with
-         * Find by name over them.
-         */
-        function ProjectsPage({ useSessions, useSessionStatus, useWorkspaces = noWorkspaces, projects, flow }) {
-            useFacts(projects.facts);
-            useWatch(projects.facts, 'list');
-            const listed = projects.facts.projects();
-            const failed = projects.facts.listFailed();
-            const sessions = useSessions((state) => state);
-            const statuses = useSessionStatus((value) => value);
-            const items = useWorkspaces((state) => state.items);
-            const archivedIds = useWorkspaces((state) => state.archivedSessionIds);
-            // Until DSH's own list has its workspaces, an empty tree means nothing yet.
-            const pending = useWorkspaces((state) => state.phase) === 'pending';
-            const [find, setFind] = React.useState('');
-            const [said, setSaid] = React.useState('');
-            const [told, setTold] = React.useState(null);
-            const treeRef = React.useRef(null);
-            const findRef = React.useRef(null);
-            const archived = React.useMemo(() => new Set(Array.isArray(archivedIds) ? archivedIds : EMPTY), [archivedIds]);
-            const seen = React.useRef(null);
-            if (seen.current === null) seen.current = new Map();
-            const tree = pageModel({
-                listed, items, sessions, archived,
-                pausedOf: (coordinator) => projects.facts.paused?.(coordinator), newsOf: (coordinator) => projects.facts.newsOf?.(coordinator),
-                describedOf: (coordinator) => projects.facts.info?.(coordinator)?.threads, seen: seen.current,
-                heldOf: (coordinator) => projects.facts.info?.(coordinator)?.paused?.handbacks,
-            });
-            // What a paused project's pause holds comes with its description: read it while the page shows the project.
-            const pausedKey = tree.filter((node) => node.paused).map((node) => node.id).join('\n');
-            React.useEffect(() => {
-                const stops = pausedKey === '' ? EMPTY : pausedKey.split('\n').map((coordinator) => projects.facts.watch(`d:${coordinator}`));
-                return () => { for (const stop of stops) stop(); };
-            }, [projects.facts, pausedKey]);
-            // A row's ⋯: Project settings where DSH lets the plugin open them, Archive project… where it can ask first,
-            // and for a thread the other way to open it.
-            const settingsOn = useSettingsAvailable(projects.settings ?? NO_DIALOG);
-            const archiveOn = React.useSyncExternalStore(flow?.subscribe ?? NO_DIALOG.subscribe, () => flow?.getSnapshot().available === true);
-            const beside = useBesidePref();
-            const sliders = h(ui.IconSlidersTwoOutlineRegular, {});
-            const menu = {
-                has: (node) => (node.kind === 'project' ? settingsOn || archiveOn : node.kind === 'thread'),
-                draw: ({ node, open, setOpen }) => {
-                    const items = node.kind === 'project' ? [
-                        ...(settingsOn ? [{ id: 'settings', label: SETTINGS.title, icon: sliders }] : []),
-                        ...(archiveOn ? [{ id: 'archive', label: ARCHIVE.item, icon: h(ui.IconArchiveOutlineRegular, {}) }] : []),
-                    ] : [
-                        beside ? { id: 'full', label: TEXT.openFull, icon: h(ui.IconRightUpOutlineRegular, {}) } : { id: 'beside', label: TEXT.openBeside, icon: h(ui.IconCompareSplitOutlineRegular, {}) },
-                        // Rename…, Model and permission…, Stop, Mark resolved or Reopen, as on its row in the Threads menu and panel.
-                        ...threadMenuItems({
-                            thread: { running: (statuses?.get?.(node.id)?.running ?? node.row?.running) === true, resolved: node.resolved === true },
-                            live: typeof node.thread === 'string' && typeof projects.facts?.change === 'function',
-                            rename: projects.rename, settings: typeof node.thread === 'string' ? projects.settings : undefined,
-                        }),
-                        ...(settingsOn ? [{ id: 'settings', label: SETTINGS.title, icon: sliders }] : []),
-                    ];
-                    return h(RowMenu, {
-                        label: node.kind === 'project' ? PAGE.projectActions(node.title) : PAGE.threadActions(node.title), items, open, setOpen,
-                        run: (id) => {
-                            if (id === 'settings') projects.settings.open(node.id);
-                            else if (id === 'archive') flow?.open(node.id);
-                            else if (id === 'full') projects.openFull(node.id);
-                            else if (id === 'beside') projects.openPaired(node.id);
-                            else {
-                                void runThreadItem(id, {
-                                    target: node.id, thread: node.thread, title: node.title, facts: projects.facts, rename: projects.rename, settings: projects.settings,
-                                }).then((refusal) => {
-                                    if (refusal) setTold((prev) => ({ text: refusal, seq: (prev?.seq ?? 0) + 1 }));
-                                });
-                            }
-                        },
-                    });
-                },
-            };
-            // Alt and an arrow on the tree, answered on the whole tree (a find shows only part of it); the same words twice are said twice.
-            const move = (key, arrow) => {
-                const reason = pageRefusal(tree, key, arrow);
-                if (reason !== null) setSaid((prev) => (prev === reason ? `${reason} ` : reason));
-                return reason;
-            };
-            let content;
-            if (listed === null && failed) {
-                content = h('div', { className: 'dshp-pg-state dshp-t-error', role: 'alert' }, SETTINGS.unreachable, ' ',
-                    h('button', { type: 'button', className: 'dshp-t-retry', onClick: () => { void projects.facts.list(0); } },
-                        h(ui.IconRefreshOutlineRegular, { size: 12 }), TEXT.retry));
-            } else if (listed === null || (tree.length === 0 && pending)) {
-                content = h('div', { className: 'dshp-pg-state', role: 'status' }, PAGE.loading);
-            } else if (tree.length === 0) {
-                content = h('div', { className: 'dshp-pg-empty', 'data-projects-empty': '' },
-                    h('span', { className: 'dshp-pg-empty-glyph' }, h(ProjectsIcon, { size: 28 })),
-                    h('h2', null, PAGE.emptyTitle),
-                    h('p', null, PAGE.emptyText));
-            } else {
-                const kept = findInTree(tree, find);
-                content = h(React.Fragment, null,
-                    // Find by name: one box over every project's and thread's name.
-                    h('div', { className: 'dshp-pg-find' }, h(ui.Input, {
-                        ref: findRef, type: 'text', role: 'searchbox', value: find, placeholder: PAGE.find, 'aria-label': PAGE.find, 'data-projects-find': '',
-                        className: find !== '' ? 'dshp-pg-find-box dshp-pg-find-query' : 'dshp-pg-find-box',
-                        icon: ui.IconSearchOutlineRegular ? h(ui.IconSearchOutlineRegular, { size: 14 }) : undefined,
-                        onChange: (event) => setFind(event.target.value),
-                        onKeyDown: (event) => {
-                            if (event.key === 'Escape' && find !== '') { event.preventDefault(); event.stopPropagation(); setFind(''); }
-                            else if (event.key === 'ArrowDown') { event.preventDefault(); treeRef.current?.querySelector('[role="treeitem"][tabindex="0"]')?.focus(); }
-                        },
-                    }), find !== '' ? h('button', {
-                        type: 'button', className: 'dshp-mp-search-clear', 'aria-label': PAGE.findClear, 'data-projects-find-clear': '',
-                        onClick: () => { setFind(''); findRef.current?.focus(); },
-                    }, h(ui.IconCloseFillRegular, null)) : null),
-                    kept.length > 0 ? h(PageTree, { tree: kept, label: PAGE.title, statuses, find, treeRef, onMove: move, menu, onOpenSession: (id) => projects.openSession(id) })
-                        : h('div', { className: 'dshp-pg-state dshp-pg-find-none', role: 'status', 'data-projects-find-none': '' }, PAGE.findNone(find.trim())));
-            }
-            return h('div', { className: 'dshp-pg', 'data-projects-page': '' },
-                h('div', { className: 'dshp-pg-scroll' },
-                    h('div', { className: 'dshp-pg-content' },
-                        h('div', { className: 'dshp-pg-heading' },
-                            h('h1', null, PAGE.title),
-                            tree.length > 0 ? h('span', { className: 'dshp-pg-count' }, plural(tree.length, 'project')) : null),
-                        content)),
-                // What the keys answered, said to screen readers.
-                h('div', { className: 'dshp-pg-said', role: 'status', 'aria-live': 'polite', 'data-projects-page-said': '' }, said),
-                // A Stop, Mark resolved or Reopen the plugin refused, in DSH's banner.
-                told !== null && ui.Toast ? h(ui.Toast, {
-                    key: told.seq, text: told.text, icon: h(ui.IconInfoOutlineRegular, { size: 16 }), holdMs: 4000,
-                    onDone: () => setTold((prev) => (prev?.seq === told.seq ? null : prev)),
-                }) : null);
-        }
-
         // ── DSH's session list ─────────────────────────────────────────────
 
         /** DSH's workspace list in its sidebar. */
@@ -6084,11 +5145,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /** DSH's own drags of session rows, refused with the reason (useSessionDragGuard). */
         const SIDEBAR = {
-            threadStays: 'A thread stays with the project it started in.',
-            chatOut: 'A chat can\'t become a project\'s thread. The project\'s coordinator can message it instead.',
-            projectIn: 'A project can\'t go inside another project.',
+            threadStays: 'A thread stays with the chat that started it.',
+            chatOut: 'A chat can\'t join another chat\'s threads. That chat can message it instead.',
+            coordinatorIn: 'A chat with threads can\'t go in among another chat\'s threads.',
             chatStays: 'A chat stays in the folder it started in.',
-            projectStays: 'A project stays in its workspace.',
+            coordinatorStays: 'A chat with threads stays in its workspace.',
         };
 
         /**
@@ -6146,8 +5207,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /**
          * Keep the plugin's marks in DSH's list in step with it: the nesting
          * (markNesting, for nestingCss's sheet) with what a screen reader gets
-         * from it, the rows in drawn order (readInOrder), each project row's
-         * words after its title (describeRows), and the rows with unread news
+         * from it, the rows in drawn order (readInOrder), the words after the
+         * title of each coordinating chat's and thread's row (describeRows), and the rows with unread news
          * (markUnread). DSH redraws rows on its own (a fold, Show more, a
          * session moving up), so this runs again on every change to the list
          * and to the rows' marks, before it is painted, and after every render
@@ -6190,12 +5251,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * DSH's own drags of session rows, kept to what a project allows. DSH
-         * moves a row among the rows of its workspace; the plugin only
-         * watches, and refuses, with the reason, a drop that would take a
-         * thread out of its project, put a chat or another project inside a
-         * project, or move a session to another workspace (its folder is
-         * fixed). A refused place shows no drop line and the "no" pointer,
+         * DSH's own drags of session rows, kept from pulling a chat and its
+         * threads apart. DSH moves a row among the rows of its workspace; the
+         * plugin only watches, and refuses, with the reason, a drop that would
+         * take a thread away from its chat, put another chat in among a
+         * chat's threads, or move a session to another workspace (its folder
+         * is fixed). A refused place shows no drop line and the "no" pointer,
          * and DSH saves nothing: DSH saves the last place it marked when the
          * drag ends, wherever it ends, so the plugin first drops the row on
          * itself, which DSH takes as a drop where it already is.
@@ -6220,25 +5281,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     if (el instanceof Element && tree.contains(el)) {
                         // Anywhere in the list outside the row's own section: another workspace, or what another plugin draws there.
                         const section = sectionAt(tree, el);
-                        if (section && section !== drag.section) return role === 'thread' ? SIDEBAR.threadStays : role === 'coordinator' ? SIDEBAR.projectStays : SIDEBAR.chatStays;
-                        // A thread onto its own workspace: out of its project.
+                        if (section && section !== drag.section) return role === 'thread' ? SIDEBAR.threadStays : role === 'coordinator' ? SIDEBAR.coordinatorStays : SIDEBAR.chatStays;
+                        // A thread onto its own workspace: out from under its chat.
                         if (role === 'thread' && el.closest('[data-row-key^="workspace:"]')) return SIDEBAR.threadStays;
                     }
                     const marker = drag.marker;
                     if (!marker) return null;
                     const groups = sectionGroups(drag.section);
                     if (role === 'thread') {
-                        // Below its coordinator, or among its project's threads.
+                        // Below its chat, or among that chat's threads.
                         const own = groups.find((g) => g.coordinator === drag.place.of);
                         return !own || (marker.id === own.coordinator && marker.half === 'after') || own.threads.includes(marker.id) ? null : SIDEBAR.threadStays;
                     }
-                    // Onto a project's row, or in among its threads.
-                    if (marker.project && marker.id !== drag.id && marker.into) return role === 'coordinator' ? SIDEBAR.projectIn : SIDEBAR.chatOut;
+                    // Onto a coordinating chat's row, or in among its threads.
+                    if (marker.project && marker.id !== drag.id && marker.into) return role === 'coordinator' ? SIDEBAR.coordinatorIn : SIDEBAR.chatOut;
                     for (const g of groups) {
                         if (g.coordinator === drag.id) continue;
                         const last = g.threads[g.threads.length - 1];
                         const inside = marker.id === g.coordinator ? marker.half === 'after' : g.threads.includes(marker.id) && !(marker.id === last && marker.half === 'after');
-                        if (inside) return role === 'coordinator' ? SIDEBAR.projectIn : SIDEBAR.chatOut;
+                        if (inside) return role === 'coordinator' ? SIDEBAR.coordinatorIn : SIDEBAR.chatOut;
                     }
                     return null;
                 };
@@ -6322,10 +5383,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * DSH's session list, as the plugin keeps it: each project's threads
-         * nest under its coordinator (useNesting), and DSH's own drags of
-         * session rows keep a thread in its project and a chat out of one
-         * (useSessionDragGuard), each refusal said in DSH's banner at the top
+         * DSH's session list, as the plugin keeps it: each coordinating chat's
+         * threads nest under it (useNesting), and DSH's own drags of session
+         * rows keep a thread with its chat and another chat out from among
+         * its threads (useSessionDragGuard), each refusal said in DSH's banner at the top
          * of the window. Not centered over the list: the list is narrower than
          * any of the reasons, and DSH's banner doesn't keep to the window, so
          * it would cut off the start of the sentence. DSH's rows, its order,
@@ -6348,46 +5409,35 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             });
         }
 
-        // ── Project settings ───────────────────────────────────────────────
+        // ── Thread settings ────────────────────────────────────────────────
 
         const SETTINGS = {
-            title: 'Project settings',
+            title: 'Thread settings',
             close: 'Close',
-            loading: 'Loading this project\'s settings…',
-            unreachable: 'The projects plugin didn\'t answer. If it was just updated, restart DSH so the new version loads.',
+            loading: 'Loading this chat\'s thread settings…',
+            unreachable: 'The coordinator plugin didn\'t answer. If it was just updated, restart DSH so the new version loads.',
             retry: 'Try again',
             catalogFailed: 'DSH\'s model list didn\'t load, so the pickers can\'t list models.',
             models: 'Models',
             threads: 'Threads',
-            project: 'Project',
-            noThreads: 'No threads yet. Each thread the coordinator starts shows up here with its model.',
+            project: 'This chat',
+            noThreads: 'No threads yet. Each thread this chat starts shows up here with its model.',
             allResolved: 'Every thread is resolved.',
-            goal: 'Goal',
-            goalHint: 'What this project is for. The coordinator and its threads read it with every request.',
-            goalPlaceholder: 'What this project is for',
-            goalFromProfile: 'From your profile',
-            goalUseProfile: 'Use your profile\'s',
-            goalTools: (names) => `It names ${listText(names)}, so every thread in this project can use ${names.length === 1 ? 'it' : 'them'}.`,
-            save: 'Save',
-            saving: 'Saving…',
-            cancel: 'Cancel',
-            pause: 'Pause this project',
+            pause: 'Pause threads',
             pauseHint: 'New threads and handbacks wait until you resume.',
-            own: 'Set for this project',
+            own: 'Set for this chat',
             useDefault: 'Use default',
             running: 'Running. A change applies from its next request.',
             resolved: 'Resolved.',
-            note: 'Projects that don\'t choose their own models or access use the plugin\'s defaults.',
-            openDefaults: 'Defaults for all projects',
+            note: 'Chats that don\'t choose their own thread models or access use the plugin\'s defaults.',
+            openDefaults: 'Defaults for all chats',
             access: 'Access',
             threadAccess: 'Thread access',
             yourTools: 'Your tools',
-            toolsAsked: 'The coordinator never has them. A thread has only the ones your words for it name.',
-            toolsAlways: 'Every thread in this project has them. The coordinator never does.',
-            toolsAlwaysAll: 'Every thread has them, in every project that doesn\'t choose its own. Coordinators never do.',
-            noTools: 'None are listed yet, so no session is kept from any. List your personal and infrastructure tools under guardedTools in this plugin\'s config.',
-            coordinatorPermission: 'Coordinator permission',
-            coordinatorPermissionHint: 'Where the ◆ session can write, and what it asks you first. On Read Only it writes nothing and asks you nothing; its threads do the changing. A permission you pick in its chat lands here too.',
+            toolsAsked: 'A thread has only the ones your words for it name.',
+            toolsAlways: 'Every thread of this chat has them.',
+            toolsAlwaysAll: 'Every thread has them, unless its chat chooses otherwise.',
+            noTools: 'None are listed yet, so no thread is kept from any. List your personal and infrastructure tools under guardedTools in this plugin\'s config.',
             threadPermission: 'New threads\' permission',
             threadPermissionHint: 'What each new thread starts on. Running threads keep theirs; change one under Threads.',
             permission: 'Permission',
@@ -6396,53 +5446,33 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** The two values of Your tools, as the controls name them. */
         const TOOL_MODES = [{ value: 'asked', label: 'Only when asked' }, { value: 'always', label: 'Always' }];
         /** Where an inherited access setting comes from, in the pickers' Default rows. */
-        const ACCESS_LABELS = { 'project config': 'Your profile', 'plugin default': 'Default access' };
-        const ACCESS_SOURCE = { 'project setting': 'Set for this project', 'project config': 'From your profile', 'plugin default': 'From Default access' };
+        const ACCESS_LABELS = { 'plugin default': 'Default access', 'DSH default': 'DSH default' };
+        const ACCESS_SOURCE = { 'chat setting': 'Set for this chat', 'plugin default': 'From Default access', 'DSH default': 'Follows DSH' };
         /** DSH's own confirmation copy for Full access, and ours for Always. */
         const RISK = {
             acknowledge: 'I understand the risks and want to continue',
             cancel: 'Cancel',
             fullTitle: 'Enable Full access?',
             fullConfirm: 'Enable Full access',
-            coordinator: 'Full access lets the coordinator reduce confirmation steps and perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust what it does.',
-            threads: 'Full access lets this project\'s new threads reduce confirmation steps and perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust the tasks they get.',
+            threads: 'Full access lets this chat\'s new threads reduce confirmation steps and perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust the tasks they get.',
             thread: 'Full access reduces confirmation steps and lets the agent perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust the current task.',
-            allCoordinators: 'Full access lets the coordinator of every project that doesn\'t choose its own reduce confirmation steps and perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust what they do.',
-            allThreads: 'Full access lets new threads in every project that doesn\'t choose its own reduce confirmation steps and perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust the tasks they get.',
+            allThreads: 'Full access lets new threads of every chat that doesn\'t choose its own reduce confirmation steps and perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust the tasks they get.',
             toolsTitle: 'Give every thread your tools?',
-            tools: (names) => `Every thread in this project can then use ${listText(names)} on its own, even when your words don't ask for them. Only use it when you trust what runs here.`,
-            allTools: (names) => `Every thread in projects that don't choose their own can then use ${listText(names)} on its own, even when your words don't ask for them. Only use it when you trust what runs there.`,
+            tools: (names) => `Every thread of this chat can then use ${listText(names)} on its own, even when your words don't ask for them. Only use it when you trust what runs here.`,
+            allTools: (names) => `Every thread of chats that don't choose their own can then use ${listText(names)} on its own, even when your words don't ask for them. Only use it when you trust what runs there.`,
             toolsConfirm: 'Use always',
         };
-        /** Archiving a project from its ◆ row, and bringing it back. */
-        const ARCHIVE = {
-            item: 'Archive project…',
-            restore: 'Restore project',
-            title: (name) => `Archive ◆ ${name}?`,
-            body: (threads) => (threads > 0
-                ? `Its coordinator and its ${plural(threads, 'thread')} leave the session list and the Projects page, and whatever runs in them stops first. Nothing is deleted.`
-                : 'Its coordinator leaves the session list and the Projects page, and whatever runs in it stops first. Nothing is deleted.'),
-            running: (names) => `Running now: ${listText(names)}.`,
-            back: (threads) => `To bring ${threads > 0 ? 'them' : 'it'} back, show archived chats in the session list and choose Restore project in the ◆ row's menu.`,
-            confirm: 'Archive project',
-            cancel: 'Cancel',
-            pending: 'Archiving…',
-            loading: 'Reading this project…',
-            done: (name, threads) => `◆ ${name} archived${threads > 0 ? ` with its ${plural(threads, 'thread')}` : ''}.`,
-            restored: (name, threads) => `◆ ${name} is back${threads > 0 ? ` with its ${plural(threads, 'thread')}` : ''}.`,
-            undo: 'Undo',
-        };
         const SETTING_ROUTES = [
-            { id: 'coordinator', title: 'Coordinator', hint: 'The ◆ session you talk to. A model you pick in its chat lands here too.', model: 'coordinatorModel', effort: 'coordinatorEffort' },
             { id: 'thread', title: 'New threads', hint: 'What each new thread starts on. Running threads keep theirs.', model: 'threadModel', effort: 'threadEffort' },
         ];
         /** Where an inherited value comes from, in the pickers' Default rows and under a row. */
-        const SOURCE_LABELS = { 'project setting': 'This project', 'project config': 'Your profile', 'plugin default': 'Default models', 'DSH default': 'DSH default' };
+        const SOURCE_LABELS = { 'chat setting': 'This chat', 'plugin default': 'Default models', 'DSH default': 'DSH default' };
 
         /**
-         * Which project the dialog shows, if any. Any part of the window opens
-         * it with a session (or project) id; the dialog part, once its DSH
-         * services are there, marks it available so the entry points show.
+         * Which coordinating chat the dialog shows, if any. Any part of the
+         * window opens it with a session id (the chat's or one of its
+         * threads'); the dialog part, once its DSH services are there, marks
+         * it available so the entry points show.
          */
         function settingsDialog() {
             let snapshot = { target: null, seq: 0, available: false, pick: null };
@@ -6458,12 +5488,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     return () => listeners.delete(listener);
                 },
                 /**
-                 * @param options - {pick?: 'coordinator'|'thread'|'access'|'thread:<id>'}: open with that model menu
+                 * @param options - {pick?: 'thread'|'access'|'thread:<id>'}: open with that model menu
                  *   open (New threads', or one thread's on its own row), or at Access.
                  */
                 open(target, options) {
                     const named = typeof options?.pick === 'string' && /^thread:[\w-]+$/.test(options.pick);
-                    const pick = named || options?.pick === 'coordinator' || options?.pick === 'thread' || options?.pick === 'access' ? options.pick : null;
+                    const pick = named || options?.pick === 'thread' || options?.pick === 'access' ? options.pick : null;
                     if (typeof target === 'string' && target !== '' && snapshot.available) set({ target, seq: snapshot.seq + 1, pick });
                 },
                 close() {
@@ -6476,8 +5506,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
         }
         const useSettingsAvailable = (dialog) => React.useSyncExternalStore(dialog.subscribe, () => dialog.getSnapshot().available);
-        /** For a part drawn without Project settings or the archive flow: neither can open. */
-        const NO_DIALOG = Object.freeze({ subscribe: () => () => {}, getSnapshot: () => ({ available: false }) });
 
         /**
          * The plugin's endpoints (remote.js) over the window's own connection,
@@ -6667,50 +5695,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }, message.text) : null);
         }
 
-        /**
-         * The project's goal: the user's own text, saved with Save (or Ctrl+Enter),
-         * or the profile row's. The user's tools it names are open to every
-         * thread in the project, so the row says which.
-         * @param props.goal - {value, source: 'project setting'|'project config'|'none', inherited, tools, max}.
-         * @param props.onSave - (changes) => Promise<boolean>: whether the plugin took it.
-         */
-        function GoalRow({ goal, busy, message, onSave }) {
-            const [draft, setDraft] = React.useState(null);
-            const saved = typeof goal?.value === 'string' ? goal.value : '';
-            const text = draft ?? saved;
-            const changed = draft !== null && draft.trim() !== saved;
-            const save = async () => { if (await onSave({ goal: text })) setDraft(null); };
-            const profile = typeof goal?.inherited === 'string' && goal.inherited !== '';
-            const own = goal?.source === 'project setting' && (saved !== '' || profile);
-            const source = own ? [h('span', { key: 'own', className: 'dshp-ps-own' }, SETTINGS.own), profile ? h('button', {
-                key: 'reset', type: 'button', className: 'dshp-ps-link', disabled: busy, 'data-projects-goal-reset': '', onClick: () => { setDraft(null); void onSave({ goal: null }); },
-            }, SETTINGS.goalUseProfile) : null] : profile ? [h('span', { key: 'from' }, SETTINGS.goalFromProfile)] : null;
-            const tools = Array.isArray(goal?.tools) ? goal.tools.filter((name) => typeof name === 'string') : EMPTY;
-            return h('div', { className: 'dshp-ps-row dshp-ps-goal', 'data-projects-setting': 'goal' },
-                h('div', { className: 'dshp-ps-text' },
-                    h('label', { className: 'dshp-ps-title', htmlFor: 'dshp-ps-goal' }, h('span', null, SETTINGS.goal)),
-                    h('div', { className: 'dshp-ps-desc', id: 'dshp-ps-goal-hint' }, SETTINGS.goalHint),
-                    source ? h('div', { className: 'dshp-ps-source' }, ...source.filter(Boolean)) : null),
-                h('textarea', {
-                    id: 'dshp-ps-goal', className: 'dshp-ps-goal-input', value: text, rows: 3, maxLength: Number.isFinite(goal?.max) ? goal.max : undefined,
-                    placeholder: SETTINGS.goalPlaceholder, 'aria-describedby': 'dshp-ps-goal-hint', readOnly: busy, 'data-projects-goal': '',
-                    onChange: (event) => setDraft(event.target.value),
-                    onKeyDown: (event) => {
-                        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && changed) { event.preventDefault(); void save(); }
-                        // Escape puts the text back, and closes the dialog only once nothing is changed.
-                        else if (event.key === 'Escape' && changed) { event.preventDefault(); event.stopPropagation(); setDraft(null); }
-                    },
-                }),
-                tools.length > 0 ? h('div', { className: 'dshp-ps-fit', 'data-projects-goal-tools': '' }, SETTINGS.goalTools(tools)) : null,
-                changed ? h('div', { className: 'dshp-ps-goal-actions' },
-                    h(ui.Button, { variant: 'outline', size: 'sm', disabled: busy, onClick: () => setDraft(null) }, SETTINGS.cancel),
-                    h(ui.Button, { variant: 'primary', size: 'sm', disabled: busy, onClick: () => void save(), 'data-projects-goal-save': '' }, busy ? SETTINGS.saving : SETTINGS.save)) : null,
-                message ? h('p', {
-                    className: `dshp-ps-alert ${message.kind === 'error' ? 'dshp-ps-error' : 'dshp-ps-info'}`,
-                    role: message.kind === 'error' ? 'alert' : 'status',
-                }, message.text) : null);
-        }
-
         function Section({ id, heading, meta, children }) {
             return h('section', { className: 'dshp-ps-section', 'data-projects-settings-section': id },
                 h('div', { className: 'dshp-ps-head' },
@@ -6719,18 +5703,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 h('div', { className: 'dshp-ps-card' }, children));
         }
 
-        /**
-         * One project's settings: its goal and pause, the coordinator's and
-         * new threads' model and effort, access, and each thread's. Every
-         * change but the goal's text (Save) goes to the plugin at once, like
-         * DSH's own settings, and the dialog shows what the plugin
-         * then holds; it reads again every few seconds, so a change made in a
-         * chat or by the coordinator shows up too.
-         */
         /** Stands in for DSH's session store where a slot doesn't get one: nothing known. */
         const noSessions = (select) => select({});
 
-        function ProjectSettings({ target, pick, link, facts, dialog, openDefaults, useSessionStatus, useSessions = noSessions }) {
+        /**
+         * One coordinating chat's thread settings: pause, new threads' model
+         * and effort, access (the user's tools, new threads' permission), and
+         * each thread's. Every change goes to the plugin at once, like DSH's
+         * own settings, and the dialog shows what the plugin then holds; it
+         * reads again every few seconds, so a change asked for in the chat
+         * shows up too.
+         */
+        function ThreadSettings({ target, pick, link, facts, dialog, openDefaults, useSessionStatus, useSessions = noSessions }) {
             const catalog = React.useSyncExternalStore(link.catalog.subscribe, link.catalog.getSnapshot);
             const statuses = useSessionStatus((value) => value);
             const [data, setData] = React.useState(null);
@@ -6805,7 +5789,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (typeof requestAnimationFrame === 'function') requestAnimationFrame(show);
                 else show();
             }, [atThread, data]);
-            // Opened at Access (the Access row of the Threads menu or the Projects page): that section, its first control focused.
+            // Opened at Access (the Access row of the Threads menu or pane): that section, its first control focused.
             const shownAccess = React.useRef(false);
             React.useEffect(() => {
                 if (pick !== 'access' || data === null || shownAccess.current || typeof document === 'undefined') return;
@@ -6829,7 +5813,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     const m = data.settings[route.model] ?? {};
                     const e = data.settings[route.effort] ?? {};
                     const shown = resolveRoute(cv, m.value ?? undefined, e.value ?? undefined);
-                    const own = { model: m.source === 'project setting', effort: e.source === 'project setting' };
+                    const own = { model: m.source === 'chat setting', effort: e.source === 'chat setting' };
                     const reset = { ...(own.model ? { [route.model]: null } : {}), ...(own.effort ? { [route.effort]: null } : {}) };
                     const source = own.model || own.effort
                         ? [h('span', { key: 'own', className: 'dshp-ps-own' }, SETTINGS.own),
@@ -6837,7 +5821,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         : [h('span', { key: 'from' }, sourceLine(m, levelsOf(shown) ? e : undefined, { long: true }))];
                     return h(SettingRow, {
                         key: route.id, id: route.id, title: route.title, description: route.hint, source, message: messageFor(route.id),
-                        note: notesFor(shown, route.id === 'coordinator' ? data.project?.live : undefined, own.effort),
+                        note: notesFor(shown, undefined, own.effort),
                         control: h(ModelPicker, {
                             id: `dshp-ps-${route.id}`, label: route.title, catalog: catalog.value, busy: busy === route.id, disabled,
                             value: { model: m.value, effort: e.value }, own, autoOpen: pick === route.id,
@@ -6852,11 +5836,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         }),
                     });
                 };
-                // Access: the user's tools, and where the coordinator and threads can write.
+                // Access: the user's tools for threads, and where new threads can write.
                 const perms = isObject(data.permissions) && Array.isArray(data.permissions.options) && data.permissions.options.length > 0 ? data.permissions : null;
                 const guarded = Array.isArray(data.guarded) ? data.guarded.filter((name) => typeof name === 'string' && name !== '') : [];
                 const access = isObject(data.access) ? data.access : {};
-                const accessSource = (key) => (access[key]?.source === 'project setting'
+                const accessSource = (key) => (access[key]?.source === 'chat setting'
                     ? [h('span', { key: 'own', className: 'dshp-ps-own' }, SETTINGS.own),
                         h('button', { key: 'reset', type: 'button', className: 'dshp-ps-link', disabled, onClick: () => change(key, { [key]: null }) }, SETTINGS.useDefault)]
                     : [h('span', { key: 'from' }, ACCESS_SOURCE[access[key]?.source] ?? '')]);
@@ -6868,15 +5852,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     note: guarded.length > 0 ? h(ToolNames, { names: guarded }) : undefined,
                     control: h(ToolsControl, { id: 'dshp-ps-your-tools', value: tools, names: guarded, risk: RISK.tools, disabled, onPick: (next) => change('yourTools', { yourTools: next }) }),
                 });
-                const permissionRow = (key, title, hint, risk, live) => {
+                const permissionRow = (key, title, hint, risk) => {
                     const a = access[key] ?? {};
-                    const shown = permissionShown(a.value, perms);
                     return h(SettingRow, {
                         key, id: key, title, description: hint, source: accessSource(key), message: messageFor(key),
-                        // The coordinator can be on another preset for a moment, or one this setting can't name.
-                        note: live && shown.preset && live !== shown.preset ? `Now on ${permissionName(live, perms)}.` : undefined,
                         control: h(PermissionPicker, {
-                            id: `dshp-ps-${key}`, label: title, catalog: perms, value: a.value, own: a.source === 'project setting', risk, busy: busy === key, disabled,
+                            id: `dshp-ps-${key}`, label: title, catalog: perms, value: a.value, own: a.source === 'chat setting', risk, busy: busy === key, disabled,
                             fallback: { value: a.inherited?.value, label: ACCESS_LABELS[a.inherited?.source] },
                             onPick: (next) => change(key, { [key]: next }),
                         }),
@@ -6921,9 +5902,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 body = [
                     catalog.status === 'failed' && !catalog.value ? h('p', { key: 'catalog', className: 'dshp-ps-alert dshp-ps-info', role: 'status' }, SETTINGS.catalogFailed, ' ',
                         h('button', { type: 'button', className: 'dshp-ps-link', onClick: () => link.catalog.load() }, SETTINGS.retry)) : null,
-                    // What the project is for comes first, and whether it runs.
+                    // Whether this chat's threads run comes first.
                     h(Section, { key: 'project', id: 'project', heading: SETTINGS.project },
-                        h(GoalRow, { goal: data.goal, busy: busy === 'goal', message: messageFor('goal'), onSave: (changes) => change('goal', changes) }),
                         h(SettingRow, {
                             id: 'paused', title: SETTINGS.pause, description: SETTINGS.pauseHint, message: messageFor('paused'),
                             control: h(ui.Switch, { checked: data.paused?.value === true, label: SETTINGS.pause, disabled, onChange: (next) => change('paused', { paused: next }) }),
@@ -6931,7 +5911,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h(Section, { key: 'models', id: 'models', heading: SETTINGS.models }, ...SETTING_ROUTES.map(routeRow)),
                     h(Section, { key: 'access', id: 'access', heading: SETTINGS.access },
                         toolsRow,
-                        perms ? permissionRow('coordinatorPermission', SETTINGS.coordinatorPermission, SETTINGS.coordinatorPermissionHint, RISK.coordinator, data.project?.permission) : null,
                         perms ? permissionRow('threadPermission', SETTINGS.threadPermission, SETTINGS.threadPermissionHint, RISK.threads) : null),
                     h(Section, { key: 'threads', id: 'threads', heading: SETTINGS.threads, meta: threads.length > 0 ? `${open.length} open` : undefined },
                         shown.length === 0 ? h('div', { key: 'empty', className: 'dshp-ps-empty' }, threads.length === 0 ? SETTINGS.noThreads : SETTINGS.allResolved) : null,
@@ -6951,7 +5930,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 open: true, title: SETTINGS.title, closeLabel: SETTINGS.close, className: 'dshp-ps', contentClassName: 'dshp-ps-content',
                 onClose: () => dialog.close(),
                 description: project ? h('span', { className: 'dshp-ps-sub', 'data-projects-settings': project.id },
-                    h('span', null, '◆ ', h('b', null, project.name)),
+                    h('span', null, h('b', null, project.name)),
                     // The folder by name, as DSH's session list shows it; the whole path on hover.
                     project.workspace ? h('span', { className: 'dshp-ps-path', title: project.workspace, 'data-projects-workspace': project.workspace },
                         ui.IconFolderCloseRegular ? h(ui.IconFolderCloseRegular, { size: 13, 'aria-hidden': true }) : null,
@@ -6959,11 +5938,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, body);
         }
 
-        /** The dialog in DSH's overlay layer, mounted while a project's settings are open. */
-        function ProjectSettingsOverlay({ dialog, link, facts, openDefaults, useSessionStatus, useSessions }) {
+        /** The dialog in DSH's overlay layer, mounted while a chat's thread settings are open. */
+        function ThreadSettingsOverlay({ dialog, link, facts, openDefaults, useSessionStatus, useSessions }) {
             const state = React.useSyncExternalStore(dialog.subscribe, dialog.getSnapshot);
             if (state.target === null) return null;
-            return h(ProjectSettings, {
+            return h(ThreadSettings, {
                 key: `${state.target}\u0000${state.seq}`, target: state.target, pick: state.pick, link, facts, dialog, useSessionStatus, useSessions,
                 openDefaults: openDefaults(false) ? openDefaults : undefined,
             });
@@ -6999,10 +5978,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }
         }
 
-        /**
-         * Archiving a project from its ◆ row: the confirmation open for a
-         * coordinator's session (`target`), and the notice after (`said`).
-         */
+        /** What Rename… from a thread's ⋯ says. */
         const RENAME = Object.freeze({
             title: 'Rename thread',
             label: 'Thread name',
@@ -7011,112 +5987,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             pending: 'Renaming…',
         });
 
-        function archiveFlow() {
-            let snapshot = { target: null, seq: 0, available: false, said: null };
-            const listeners = new Set();
-            const set = (next) => {
-                snapshot = { ...snapshot, ...next };
-                for (const listener of [...listeners]) listener();
-            };
-            return {
-                getSnapshot: () => snapshot,
-                subscribe: (listener) => {
-                    listeners.add(listener);
-                    return () => listeners.delete(listener);
-                },
-                open(target) {
-                    if (typeof target === 'string' && target !== '' && snapshot.available) set({ target, seq: snapshot.seq + 1 });
-                },
-                close() {
-                    if (snapshot.target !== null) set({ target: null });
-                },
-                /** @param said - {text, undo?: the coordinator to restore, error?}, or null for none. */
-                say(said) {
-                    set({ said: said ? { ...said, key: snapshot.seq + 1 } : null, seq: snapshot.seq + 1 });
-                },
-                connect() {
-                    set({ available: true });
-                    return () => set({ available: false, target: null, said: null });
-                },
-            };
-        }
-
-        /**
-         * Bring an archived project back from its ◆ row or the notice's Undo,
-         * and say how it went.
-         */
-        async function restoreProject(flow, facts, target, name) {
-            flow.say(null);
-            const result = await facts.archive(target, true);
-            if (!result.ok) {
-                flow.say({ text: errorText(result.error), error: true });
-                return;
-            }
-            // Its threads as the plugin lists them now that it is back.
-            const listed = facts.projects?.().find((p) => p?.coordinator === target || p?.id === target);
-            const threads = (Number(listed?.threads?.open) || 0) + (Number(listed?.threads?.resolved) || 0);
-            flow.say({ text: ARCHIVE.restored(name, threads) });
-        }
-
-        /**
-         * The confirmation before a project is archived: what goes (its
-         * coordinator and how many threads), what runs and stops, and where
-         * to bring it back from. Archive project archives them all, closes
-         * it and says so, with Undo.
-         */
-        function ArchiveConfirm({ target, flow, facts, useSessionStatus }) {
-            useFacts(facts);
-            const [busy, setBusy] = React.useState(false);
-            const [error, setError] = React.useState(null);
-            React.useEffect(() => { void facts.describe(target); }, [facts, target]);
-            const statuses = typeof useSessionStatus === 'function' ? useSessionStatus((value) => value) : undefined;
-            const info = facts.info(target);
-            const name = info?.project?.name || TABLE.project;
-            const threads = Array.isArray(info?.threads) ? info.threads : EMPTY;
-            const running = threads.filter((t) => typeof t?.session === 'string' && statuses?.get?.(t.session)?.running === true).map((t) => t.title || t.id);
-            const close = () => { if (!busy) flow.close(); };
-            const confirm = async () => {
-                setBusy(true);
-                setError(null);
-                const result = await facts.archive(target);
-                setBusy(false);
-                if (!result.ok) {
-                    setError(errorText(result.error));
-                    return;
-                }
-                flow.close();
-                flow.say({ text: ARCHIVE.done(name, threads.length), undo: target, name });
-            };
-            return h(ui.Modal, {
-                open: true, title: info ? ARCHIVE.title(name) : ARCHIVE.item, closeLabel: SETTINGS.close, className: 'dshp-ar', onClose: close,
-                description: info ? ARCHIVE.body(threads.length) : ARCHIVE.loading,
-                footer: h(React.Fragment, null,
-                    h(ui.Button, { key: 'cancel', variant: 'outline', disabled: busy, onClick: close }, ARCHIVE.cancel),
-                    h(ui.Button, { key: 'confirm', variant: 'outline', disabled: busy || !info, onClick: () => { void confirm(); }, 'data-projects-archive-confirm': '' }, ARCHIVE.confirm)),
-            },
-            running.length > 0 ? h('p', { key: 'running', className: 'dshp-ar-line' }, ARCHIVE.running(running)) : null,
-            h('p', { key: 'back', className: 'dshp-ar-line' }, ARCHIVE.back(threads.length)),
-            busy ? h('p', { key: 'busy', className: 'dshp-ar-line', role: 'status' }, ARCHIVE.pending) : null,
-            error ? h('p', { key: 'error', className: 'dshp-ar-line dshp-ar-error', role: 'alert' }, error) : null);
-        }
-
-        /** The confirmation in DSH's overlay layer while one is open, and the notice after an archive or a restore. */
-        function ArchiveOverlay({ flow, facts, useSessionStatus }) {
-            const state = React.useSyncExternalStore(flow.subscribe, flow.getSnapshot);
-            const said = state.said;
-            return h(React.Fragment, null,
-                state.target === null ? null : h(ArchiveConfirm, { key: `${state.target}\u0000${state.seq}`, target: state.target, flow, facts, useSessionStatus }),
-                said === null || typeof ui.Toast !== 'function' ? null : h(ui.Toast, {
-                    key: `said:${said.key}`, text: said.text, holdMs: 8000,
-                    ...(said.error ? { icon: h(ui.IconWarningOutlineRegular, { size: 16 }) } : { tone: 'success' }),
-                    actions: said.undo ? [{ prefix: ' ', label: ARCHIVE.undo, onClick: () => { void restoreProject(flow, facts, said.undo, said.name); } }] : [],
-                    onDone: () => { if (flow.getSnapshot().said === said) flow.say(null); },
-                }));
-        }
-
         /**
          * Rename… from a thread's ⋯: which thread is being renamed, through
-         * which session of its project. Drawn in DSH's overlay layer
+         * which session (its chat's, or its own). Drawn in DSH's overlay layer
          * (RenameOverlay), so it outlives the menu it came from.
          */
         function renameFlow() {
@@ -7132,7 +6005,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     listeners.add(listener);
                     return () => listeners.delete(listener);
                 },
-                /** @param ask - {target, thread, title}: a session of the thread's project, the thread's id and its name now. */
+                /** @param ask - {target, thread, title}: the thread's chat or the thread itself, the thread's id and its name now. */
                 open(ask) {
                     if (!snapshot.available || typeof ask?.target !== 'string' || ask.target === '' || typeof ask.thread !== 'string') return;
                     set({ ask: { target: ask.target, thread: ask.thread, title: typeof ask.title === 'string' ? ask.title : '' }, seq: snapshot.seq + 1 });
@@ -7200,35 +6073,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return state.ask === null ? null : h(RenameThread, { key: state.seq, ask: state.ask, flow, facts });
         }
 
-        /**
-         * "Archive project…" in a ◆ coordinator's menu in the session list,
-         * beside Project settings; "Restore project" there while it is
-         * archived (shown with DSH's archived chats).
-         */
-        function ArchiveMenuItem({ sessionId, useMenuOpenState, useSessions, useWorkspaces = noWorkspaces, flow, facts }) {
+        /** "Thread settings" in the menu of a coordinating chat or a thread in the session list. */
+        function SettingsMenuItem({ sessionId, useMenuOpenState, useSessions, dialog }) {
             useKnown();
             const [, setMenuOpen] = useMenuOpenState();
-            const name = useSessions((state) => {
-                const coordinator = valueIn(state, sessionId)?.role === 'coordinator' || (valueIn(state, sessionId) === undefined && known.map.get(sessionId)?.role === 'coordinator');
-                return coordinator ? coordinatorName(state, sessionId) ?? '' : undefined;
-            });
-            const archived = useWorkspaces((state) => Array.isArray(state?.archivedSessionIds) && state.archivedSessionIds.includes(sessionId));
-            if (name === undefined || !flow.getSnapshot().available) return null;
-            return h(ui.MenuItemButton, {
-                icon: h(archived ? ui.IconUnarchiveOutlineRegular : ui.IconArchiveOutlineRegular, {}),
-                onSelect: () => {
-                    setMenuOpen(false);
-                    if (archived) void restoreProject(flow, facts, sessionId, name || TABLE.project);
-                    else flow.open(sessionId);
-                },
-            }, archived ? ARCHIVE.restore : ARCHIVE.item);
-        }
-
-        /** "Project settings" in a project session's menu in the session list. */
-        function SettingsMenuItem({ sessionId, useMenuOpenState, useSessions, dialog }) {
-            const [, setMenuOpen] = useMenuOpenState();
-            const project = useSessions((state) => valueIn(state, sessionId) !== undefined || isThreadRow(state, sessionId) || coordinatorName(state, sessionId) !== undefined);
-            if (!project) return null;
+            const placed = useSessions((state) => rowPlace(state, sessionId) !== '');
+            if (!placed) return null;
             return h(ui.MenuItemButton, {
                 icon: h(ui.IconSlidersTwoOutlineRegular, {}),
                 onSelect: () => {
@@ -7238,7 +6088,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, SETTINGS.title);
         }
 
-        function applySettings(ctx, dialog, link, facts, flow, renames) {
+        function applySettings(ctx, dialog, link, facts, renames) {
             /** DSH's Plugins page, at this plugin; false when this DSH can't open it. Called without `go`, it only asks. */
             const openDefaults = (go = true) => {
                 let nav;
@@ -7249,18 +6099,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
             ctx.slots.inject('shell.overlay', () => ctx.slots.register({
                 name: 'shell.overlay', id: IDS.settings, inject: () => ({ dialog, link, facts, openDefaults }),
-            }, ProjectSettingsOverlay));
+            }, ThreadSettingsOverlay));
             ctx.slots.inject('sidebar.workspaces.session.menu.item', () => ctx.slots.register({
                 name: 'sidebar.workspaces.session.menu.item', id: IDS.settingsItem, order: 250, inject: () => ({ dialog }),
             }, SettingsMenuItem));
-            ctx.effect(() => dialog.connect(), 'coordinator: project settings');
-            ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-                name: 'shell.overlay', id: IDS.archive, inject: () => ({ flow, facts }),
-            }, ArchiveOverlay));
-            ctx.slots.inject('sidebar.workspaces.session.menu.item', () => ctx.slots.register({
-                name: 'sidebar.workspaces.session.menu.item', id: IDS.archiveItem, order: 260, inject: () => ({ flow, facts }),
-            }, ArchiveMenuItem));
-            ctx.effect(() => flow.connect(), 'coordinator: archive');
+            ctx.effect(() => dialog.connect(), 'coordinator: thread settings');
             if (renames) {
                 ctx.slots.inject('shell.overlay', () => ctx.slots.register({
                     name: 'shell.overlay', id: IDS.rename, inject: () => ({ flow: renames, facts }),
@@ -7274,7 +6117,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         function apply(ctx) {
             const dialog = settingsDialog();
-            const flow = archiveFlow();
             const renames = renameFlow();
             // DSH's services the parts share, once DSH provides them: one model catalog and one link to the plugin.
             const bound = {};
@@ -7287,7 +6129,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const catalog = catalogSource(() => bound.remote);
             const link = hostLink(() => bound.connection, catalog);
             const facts = projectFacts(link);
-            const sessionsOf = () => bound.sessions;
             ctx.inject(['remote', 'remote.session'], bind('remote', () => catalog.reset()));
             ctx.inject(['connection'], bind('connection'));
             ctx.inject(['sessions'], (scope) => {
@@ -7295,19 +6136,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 // New threads on DSH's default name what the next one runs, after a pick anywhere changes it.
                 scope.effect(() => followDefault(scope.sessions, catalog), 'coordinator: DSH default model');
             });
-            ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => applyDefaultsForm(scope, { catalog, link, dialog, sessionsOf }));
-            ctx.inject(['connection', 'remote', 'remote.session'], (scope) => applySettings(scope, dialog, link, facts, flow, renames));
-            ctx.inject(['sessions', 'uiWorkspace', 'sidebarRight'], (scope) => applyThreads(scope, dialog, { catalog, link, facts, flow, renames }));
+            ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => applyDefaultsForm(scope, { catalog, link }));
+            ctx.inject(['connection', 'remote', 'remote.session'], (scope) => applySettings(scope, dialog, link, facts, renames));
+            ctx.inject(['sessions', 'uiWorkspace', 'sidebarRight'], (scope) => applyThreads(scope, dialog, { catalog, link, facts, renames }));
         }
 
         module.exports.inject = inject;
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the views are built on.
         module.exports.internals = {
-            pageModel, visibleItems, pageRefusal, treeMeta, PageTree, ProjectsPage, RowMenu, findInTree, withHit,
-            valueIn, takeKnown, coordinatorName, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, sectionGroups, nestingCss, nestedPlaces, nestedOrder, markNesting, readInOrder, describeRows, markUnread, undoRows, rowWords,
+            withHit, valueIn, takeKnown, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, sectionGroups, nestingCss, nestedPlaces, nestedOrder, markNesting, readInOrder, describeRows, markUnread, undoRows, rowWords,
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
-            selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,
+            selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
             CardChanges, changesOpener, ThreadChangesTab, ThreadChangesTitle, ChangedFile, shownCounts, editsText, fileAddress, readFailure, changesAddress, changesSessionOf, DIFF_LABELS,
             threadMenuItems, rowMenuItems, runThreadItem, ThreadMore, ThreadList, inMoreList, newestRoster, arrowKeys, ThreadFind, findRows, FIND_FROM, ThreadsMenu,
@@ -7318,7 +6158,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             SessionList, SIDEBAR,
             noticeOf, noticeView, TriggerNotice, ProjectNotice,
             permissionName, permissionShown, permissionIn, toolsText, accessOf, accessSummary, PermissionPicker, ToolsControl, ModelsSummary,
-            NewsNotice, newsLine, newsDot, ThreadMark, archiveFlow, ArchiveConfirm, ArchiveOverlay, ArchiveMenuItem, ARCHIVE, RowPlace, CoordinatorOffer, workspaceOfSession, projectIn, GoalRow,
+            NewsNotice, newsLine, newsDot, ThreadMark, RowPlace, SettingsMenuItem,
+            CoordinateAction, canCoordinate, stoppedEmpty, ThreadSettings, Section, SettingRow, SETTINGS,
         };
         return module.exports;
     },

@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { welcomeMessage, handbackMessage, idleMessage, approvalMessage, outsideMessage, replyMessage } from '../lib/prompts.js';
+import { handbackMessage, idleMessage, approvalMessage, outsideMessage, replyMessage } from '../lib/prompts.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 10));
 /** Values made inside the script's context, copied so they compare as plain data. */
@@ -156,653 +156,18 @@ function liveMount(react, render) {
     };
 }
 
-test('browser half: the Projects page is every ◆ project in the list\'s order, each with its threads wherever they work, open ones first', () => {
+test('browser half: a session DSH lists without the plugin\'s value is placed by what the plugin\'s store knows, never by its title', async () => {
     const { client } = loadClient();
-    const { pageModel, visibleItems, takeKnown } = client.internals;
-    takeKnown({});
-    const value = (v) => ({ values: { coordinatorSession: v } });
-    const sessions = {
-        byId: {
-            c: { id: 'c', title: '◆ Storefront' }, t1: { id: 't1', title: 'Fix cart' }, t2: { id: 't2', title: 'Hero images' }, t3: { id: 't3', title: 'Old copy' },
-            y: { id: 'y', title: 'Archived one' }, d: { id: 'd', title: '◆ Data' }, dt: { id: 'dt', title: 'Nightly load' }, x: { id: 'x', title: 'A chat' }, z: { id: 'z', title: 'Notes' },
-            e: { id: 'e', title: '◆ Ops' },
-        },
-        projectionsBySession: {
-            c: value({ role: 'coordinator', project: { id: 'storefront', name: 'Storefront' }, threads: [
-                { id: 't1', session: 't1' }, { id: 't2', session: 't2' }, { id: 't3', session: 't3', resolved: true }, { id: 't4', session: 'y' },
-            ] }),
-            t1: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' } }),
-            t2: value({ role: 'thread', coordinator: 'c', thread: { id: 't2' } }),
-            t3: value({ role: 'thread', coordinator: 'c', thread: { id: 't3' } }),
-            y: value({ role: 'thread', coordinator: 'c', thread: { id: 't4' } }),
-            d: value({ role: 'coordinator', project: { id: 'data', name: 'Data' }, threads: [{ id: 't1', session: 'dt' }] }),
-            dt: value({ role: 'thread', coordinator: 'd', thread: { id: 't1' } }),
-        },
-    };
-    const items = [
-        { workspaceId: 'w-sf', title: 'storefront', path: '/home/u/storefront', sessionIds: ['t3', 'c', 't1', 'x', 'y'] },
-        { workspaceId: 'w-assets', title: 'storefront-assets', path: '/home/u/storefront-assets', sessionIds: ['t2'] },
-        { workspaceId: 'w-data', title: '', path: '/home/u/data-pipeline', sessionIds: ['d', 'dt', 'z'] },
-    ];
-    const listed = [
-        { id: 'data', name: 'Data', coordinator: 'd', home: 'w-data' },
-        { id: 'storefront', name: 'Storefront', coordinator: 'c', home: 'w-sf', paused: true },
-        // One whose coordinator never started has nothing to open; one DSH doesn't list yet goes by what the list says.
-        { id: 'later', name: 'Later', coordinator: null, home: 'w-sf' },
-        { id: 'ops', name: 'Ops', coordinator: 'e', home: 'w-gone', workspace: '/srv/ops', workspaces: [], threads: { open: 2, resolved: 1 } },
-    ];
-    const tree = pageModel({ listed, items, sessions, archived: new Set(['y']) });
-    const shape = (nodes) => nodes.map((n) => [n.kind, n.title, ...(n.children.length ? [shape(n.children)] : [])]);
-    // Projects only, in the list's order. A project's threads in DSH's order, the resolved one last, the thread that
-    // works in storefront-assets under its project; no chats, and no archived thread.
-    assert.deepEqual(plain(shape(tree)), [
-        ['project', 'Data', [['thread', 'Nightly load']]],
-        ['project', 'Storefront', [['thread', 'Fix cart'], ['thread', 'Hero images'], ['thread', 'Old copy']]],
-        ['project', 'Ops'],
-    ]);
-    // Each carries the name of the workspace it works in, its threads as its Threads menu counts them (its roster:
-    // the archived thread too), and its pause.
-    assert.deepEqual(plain(tree.map((n) => [n.id, n.folder, n.counts, n.paused])), [
-        ['d', 'data-pipeline', { open: 1, resolved: 0 }, false],
-        ['c', 'storefront', { open: 3, resolved: 1 }, true],
-        ['e', 'ops', { open: 2, resolved: 1 }, false],
-    ]);
-    // Levels, places among siblings, and a folded project hides its threads.
-    const shown = visibleItems(tree, new Set());
-    assert.deepEqual(plain(shown.map((x) => [x.node.title, x.level, `${x.pos}/${x.size}`, x.open])), [
-        ['Data', 1, '1/3', true], ['Nightly load', 2, '1/1', false],
-        ['Storefront', 1, '2/3', true], ['Fix cart', 2, '1/3', false], ['Hero images', 2, '2/3', false], ['Old copy', 2, '3/3', false],
-        ['Ops', 1, '3/3', false],
-    ]);
-    assert.deepEqual(plain(visibleItems(tree, new Set(['project:c'])).map((x) => x.node.title)), ['Data', 'Nightly load', 'Storefront', 'Ops']);
-    // The newest paused word wins over the list's.
-    assert.deepEqual(plain(pageModel({ listed, items, sessions, archived: new Set(), pausedOf: (id) => (id === 'c' ? false : undefined) }).map((n) => n.paused)), [false, false, false]);
-});
-
-test('browser half: the Projects page is headed Projects with how many, and a project\'s row says where it works and its threads', () => {
-    const { client, react } = loadClient();
-    const { ProjectsPage, PageTree, treeMeta, listText } = client.internals;
-    const value = (v) => ({ values: { coordinatorSession: v } });
-    const sessions = {
-        phase: 'ready',
-        byId: { c: { id: 'c', title: '◆ DSH Plugins' }, t1: { id: 't1', title: 'Fix the page' }, t2: { id: 't2', title: 'Old fix' }, x: { id: 'x', title: 'A chat' }, r: { id: 'r', title: '◆ Recipes' } },
-        projectionsBySession: {
-            c: value({ role: 'coordinator', project: { id: 'dsh-plugins', name: 'DSH Plugins' }, threads: [{ id: 't1', session: 't1', resolved: false }, { id: 't2', session: 't2', resolved: true }] }),
-            t1: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' } }),
-            t2: value({ role: 'thread', coordinator: 'c', thread: { id: 't2' } }),
-            r: value({ role: 'coordinator', project: { id: 'recipes', name: 'Recipes' }, threads: [] }),
-        },
-    };
-    let workspaces = {
-        phase: 'ready', archivedSessionIds: [],
-        items: [
-            { workspaceId: 'w-dsh', title: 'deepseek-plugins', path: '/home/u/deepseek-plugins', sessionIds: ['c', 't2', 't1', 'x'] },
-            { workspaceId: 'w-notes', title: 'notes', path: '/Users/u/notes', sessionIds: ['r'] },
-        ],
-    };
-    let listed = [
-        { id: 'dsh-plugins', name: 'DSH Plugins', coordinator: 'c', home: 'w-dsh', source: 'profile' },
-        { id: 'recipes', name: 'Recipes', coordinator: 'r', home: 'w-notes', source: 'page' },
-    ];
-    const facts = { subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {}, list: async () => {}, projects: () => listed, listFailed: () => false };
-    const props = {
-        useSessions: (select) => select(sessions), useSessionStatus: (select) => select(new Map()), useWorkspaces: (select) => select(workspaces),
-        projects: { facts, openSession: () => {} },
-    };
-    const draw = mount(react, () => ProjectsPage(props));
-    const classed = (tree, name) => textIn(byClass(tree, name));
-    let page = draw();
-    // Headed Projects, with how many; nothing else on it but Find by name and the tree.
-    assert.equal(textIn(elementsOf(page).filter((e) => e.type === 'h1')), 'Projects');
-    assert.equal(classed(page, 'dshp-pg-count'), '2 projects');
-    assert.doesNotMatch(textIn(page), /categor|workspace|chat/i);
-    assert.equal(elementsOf(page).some((e) => e.props?.['data-projects-new'] !== undefined || typeof e.props?.onSubmit === 'function'), false);
-    const treeEl = elementsOf(page).find((e) => e.type === PageTree);
-    assert.equal(treeEl.props.label, 'Projects');
-    const items = elementsOf(mount(react, () => PageTree(treeEl.props))()).filter((e) => e.props?.role === 'treeitem');
-    // A ◆ project, the workspace it works in and its threads as its Threads menu counts them; under it its threads, open
-    // ones first, each with its state.
-    assert.deepEqual(plain(items.map((li) => [li.props['aria-level'], li.props['data-projects-node'], classed(li.children[0], 'dshp-tree-diamond'),
-        classed(li.children[0], 'dshp-tree-title'), classed(li.children[0], 'dshp-tree-meta')])), [
-        [1, 'project', '◆', 'DSH Plugins', 'deepseek-plugins · 1 open thread · 1 resolved'],
-        [2, 'thread', '', 'Fix the page', 'Idle'],
-        [2, 'thread', '', 'Old fix', 'Resolved'],
-        [1, 'project', '◆', 'Recipes', 'notes · no threads yet'],
-    ]);
-    // One tab stop; a project without threads has nothing to fold.
-    assert.deepEqual(items.map((li) => li.props.tabIndex), [0, -1, -1, -1]);
-    assert.deepEqual(items.map((li) => li.props['aria-expanded']), [true, undefined, undefined, undefined]);
-    assert.equal(elementsOf(items[3].children[0]).some((e) => e.props?.['data-projects-chevron'] !== undefined), false);
-    assert.deepEqual([
-        treeMeta({ kind: 'project', id: 'c', folder: 'shop', counts: { open: 2, resolved: 0 }, children: [] }),
-        treeMeta({ kind: 'project', id: 'c', folder: 'shop', paused: true, counts: { open: 0, resolved: 3 }, children: [] }),
-        treeMeta({ kind: 'project', id: 'c', folder: '', counts: { open: 0, resolved: 0 }, children: [] }),
-        treeMeta({ kind: 'thread', id: 't', children: [] }),
-    ], ['shop · 2 open threads', 'Paused · shop · 0 open threads · 3 resolved', 'no threads yet', null]);
-
-    // No project yet: loading until DSH has its workspaces, then the empty state says what a project is and where one comes from.
-    listed = [];
-    workspaces = { ...workspaces, items: [], phase: 'pending' };
-    page = draw();
-    assert.equal(classed(page, 'dshp-pg-state'), 'Loading projects…');
-    workspaces = { ...workspaces, phase: 'ready' };
-    page = draw();
-    const empty = byClass(page, 'dshp-pg-empty')[0];
-    assert.equal(textIn(elementsOf(empty).filter((e) => e.type === 'h2')), 'No projects yet');
-    assert.match(textIn(elementsOf(empty).filter((e) => e.type === 'p')), /^A project is a ◆ coordinator in one of your workspaces, with the threads it starts\./);
-    assert.equal(classed(page, 'dshp-pg-count'), '');
-    // Still loading the plugin's list.
-    listed = null;
-    assert.equal(classed(draw(), 'dshp-pg-state'), 'Loading projects…');
-
-    // The entry in DSH's sidebar is named as the page is headed.
-    const registered = [];
-    const ctx = {
-        effect: (fn) => fn(),
-        inject: (names, fn) => { if (!names.includes('configForms')) fn(ctx); },
-        slots: { inject: (_name, fn) => fn(), register: (slot) => { registered.push(slot); return () => {}; } },
-        resources: { register: () => () => {} },
-        sidebarRightTabs: { register: () => () => {} },
-        sessions: { list: { getSnapshot: () => ({ ids: [], byId: {}, phase: 'ready', projectionsBySession: {} }), subscribe: () => () => {} } },
-        uiWorkspace: {},
-        sidebarRight: {},
-    };
-    client.apply(ctx);
-    assert.equal(registered.find((r) => r.name === 'sidebar.panellist')?.label, 'Projects');
-    // Names as a sentence lists them (the access texts use it).
-    assert.deepEqual([listText([]), listText(['A']), listText(['A', 'B']), listText(['A', 'B', 'C'])], ['', 'A', 'A and B', 'A, B and C']);
-});
-
-test('browser half: the Projects page gives each thread its state, marks a paused project and its news, and a chevron folds a project', () => {
-    const { client, react } = loadClient();
-    const { ProjectsPage, PageTree, pageRefusal } = client.internals;
-    const value = (v) => ({ values: { coordinatorSession: v } });
-    const at = (minutes) => new Date(Date.UTC(2026, 9, 11, 2, minutes)).toISOString();
-    const thread = (id) => value({ role: 'thread', coordinator: 'c', thread: { id } });
-    const titles = { run: 'Upgrade the payments SDK', wait: 'Write outside', fail: 'Bad request', stop: 'Stopped one', block: 'Blocked one', ask: 'Pick a colour', done: 'Hero images', idle: 'Not started', gone: 'Resolved one' };
-    const sessions = {
-        phase: 'ready',
-        byId: { c: { id: 'c', title: '◆ Storefront' }, d: { id: 'd', title: '◆ Data Pipeline' }, dt: { id: 'dt', title: 'Nightly load' }, x: { id: 'x', title: 'A chat' },
-            ...Object.fromEntries(Object.entries(titles).map(([id, title]) => [id, { id, title }])) },
-        projectionsBySession: {
-            c: value({ role: 'coordinator', project: { id: 'storefront', name: 'Storefront' }, threads: [
-                { id: 't1', session: 'fail', handback: { status: 'done', at: at(1) } },
-                { id: 't2', session: 'stop' },
-                { id: 't3', session: 'block', handback: { status: 'blocked', at: at(3) } },
-                { id: 't4', session: 'ask', handback: { status: 'needs_decision', at: at(4) } },
-                { id: 't5', session: 'done', handback: { status: 'done', at: at(5) } },
-                { id: 't6', session: 'idle' }, { id: 't7', session: 'run' }, { id: 't8', session: 'wait' }, { id: 't9', session: 'gone', resolved: true },
-            ] }),
-            fail: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' }, ending: { state: 'failed', at: at(2), kind: 'error', message: 'HTTP 400' } }),
-            stop: value({ role: 'thread', coordinator: 'c', thread: { id: 't2' }, ending: { state: 'stopped', at: at(2) } }),
-            ...Object.fromEntries(['block', 'ask', 'done', 'idle', 'run', 'wait', 'gone'].map((id) => [id, thread(id)])),
-            d: value({ role: 'coordinator', project: { id: 'data-pipeline', name: 'Data Pipeline' }, threads: [{ id: 't1', session: 'dt', handback: { status: 'done', at: at(6) } }] }),
-            dt: value({ role: 'thread', coordinator: 'd', thread: { id: 't1' } }),
-        },
-    };
-    const workspaces = {
-        phase: 'ready', archivedSessionIds: [],
-        items: [
-            // The resolved thread comes first in DSH's list, and is drawn last.
-            { workspaceId: 'w-sf', title: 'storefront', path: '/home/u/storefront', sessionIds: ['c', 'gone', ...Object.keys(titles).filter((id) => id !== 'gone'), 'x'] },
-            { workspaceId: 'w-dp', title: 'data-pipeline', path: '/home/u/data-pipeline', sessionIds: ['d', 'dt'] },
-        ],
-    };
-    const listed = [{ id: 'storefront', name: 'Storefront', coordinator: 'c', home: 'w-sf' }, { id: 'data-pipeline', name: 'Data Pipeline', coordinator: 'd', home: 'w-dp', paused: false }];
-    let news = { c: { unread: [{ kind: 'handback', status: 'blocked', title: 'Blocked one' }] } };
-    const facts = {
-        subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {}, list: async () => {},
-        projects: () => listed, listFailed: () => false,
-        // Data Pipeline was paused since the list was read: the newer word wins.
-        paused: (coordinator) => (coordinator === 'd' ? true : undefined), newsOf: (coordinator) => news[coordinator],
-    };
-    // DSH's own status: one thread runs, one waits on the user's approval.
-    const statuses = new Map([['run', { running: true }], ['wait', { running: true, pendingInteraction: { kind: 'approval' } }]]);
-    const opened = [];
-    const props = {
-        useSessions: (select) => select(sessions), useSessionStatus: (select) => select(statuses), useWorkspaces: (select) => select(workspaces),
-        projects: { facts, openSession: (id) => opened.push(id) },
-    };
-    const drawPage = mount(react, () => ProjectsPage(props));
-    const page = drawPage();
-    const treeEl = elementsOf(page).find((e) => e.type === PageTree);
-    const drawTree = mount(react, () => PageTree(treeEl.props));
-    const items = (tree) => elementsOf(tree).filter((e) => e.props?.role === 'treeitem');
-    const row = (tree, id) => items(tree).find((li) => li.props['data-projects-id'] === id);
-    let tree = drawTree();
-    // Each thread in the Threads menu's words and dots: what DSH says of its session first, then a failed or stopped
-    // last turn after its handback, then the handback; the resolved one last.
-    const states = items(row(tree, 'c').children[1]).map((li) => {
-        const state = byClass(li.children[0], 'dshp-tree-state')[0];
-        return [textIn(byClass(li.children[0], 'dshp-tree-title')), state.props['data-projects-state'], textIn(state)];
-    });
-    assert.deepEqual(plain(states), [
-        ['Upgrade the payments SDK', 'ongoing', 'Running'], ['Write outside', 'warning', 'Needs you'], ['Bad request', 'error', 'Failed'],
-        ['Stopped one', 'idle', 'Stopped'], ['Blocked one', 'warning', 'Blocked'], ['Pick a colour', 'warning', 'Needs a decision'],
-        ['Hero images', 'done', 'Done'], ['Not started', 'idle', 'Idle'], ['Resolved one', 'done', 'Resolved'],
-    ]);
-    // A paused project says so first, with the pause sign; one with news reads bold, its dot named for screen readers.
-    const dp = row(tree, 'd');
-    assert.equal(dp.props['data-projects-paused'], '');
-    assert.equal(textIn(byClass(dp.children[0], 'dshp-tree-meta')), 'Paused · data-pipeline · 1 open thread');
-    assert.equal(byClass(dp.children[0], 'dshp-t-paused-mark').length, 1);
-    const sf = row(tree, 'c');
-    assert.deepEqual([sf.props['data-projects-paused'], sf.props['data-projects-unread'], byClass(sf.children[0], 'dshp-t-paused-mark').length], [undefined, 1, 0]);
-    assert.equal(textIn(byClass(sf.children[0], 'dshp-tree-meta')), 'storefront · 8 open threads · 1 resolved');
-    const mark = elementsOf(sf.children[0]).find((e) => e.props?.['data-projects-news-mark'] !== undefined);
-    assert.deepEqual([mark.props.role, mark.props['aria-label']], ['img', 'New: “Blocked one” is blocked']);
-    // Seen: no mark; the project's own dot is DSH's for its coordinator (none while it is idle, Running while it runs).
-    news = {};
-    const fresh = () => mount(react, () => PageTree(elementsOf(mount(react, () => ProjectsPage(props))()).find((e) => e.type === PageTree).props))();
-    tree = fresh();
-    assert.equal(row(tree, 'c').props['data-projects-unread'], undefined);
-    assert.equal(elementsOf(row(tree, 'c').children[0]).some((e) => e.props?.role === 'img'), false);
-    statuses.set('c', { running: true });
-    assert.equal(elementsOf(row(fresh(), 'c').children[0]).find((e) => e.props?.role === 'img')?.props['aria-label'], 'Running');
-    // The chevron folds a project's threads and stays on the page; the rest of its row, or Enter, opens the coordinator.
-    tree = drawTree();
-    const chevron = (li) => elementsOf(li.children[0]).find((e) => e.props?.['data-projects-chevron'] !== undefined);
-    assert.equal(row(tree, 'c').props['aria-expanded'], true);
-    let stopped = 0;
-    chevron(row(tree, 'c')).props.onClick({ stopPropagation: () => { stopped += 1; } });
-    tree = drawTree();
-    assert.equal(row(tree, 'c').props['aria-expanded'], false);
-    assert.equal(row(tree, 'run'), undefined);
-    assert.deepEqual([opened, stopped], [[], 1]);
-    chevron(row(tree, 'c')).props.onClick({ stopPropagation: () => {} });
-    tree = drawTree();
-    assert.equal(row(tree, 'c').props['aria-expanded'], true);
-    row(tree, 'c').props.onClick({ stopPropagation: () => {} });
-    assert.deepEqual(opened, ['c']);
-    // The keys, from the project's row: ↓ to its first thread, which becomes the one tab stop, and Enter opens it;
-    // ← goes back to the project, Enter opens its coordinator, ← again folds it and → opens it; End and Home.
-    row(drawTree(), 'c').props.onFocus({ target: 1, currentTarget: 1 });
-    const key = (name) => {
-        let prevented = 0;
-        elementsOf(drawTree()).find((e) => e.props?.role === 'tree').props.onKeyDown({ key: name, preventDefault: () => { prevented += 1; } });
-        return prevented;
-    };
-    assert.equal(key('ArrowDown'), 1);
-    assert.deepEqual([row(drawTree(), 'run').props.tabIndex, row(drawTree(), 'c').props.tabIndex], [0, -1]);
-    assert.equal(key('Enter'), 1);
-    assert.deepEqual(opened, ['c', 'run']);
-    key('ArrowLeft');
-    key('Enter');
-    assert.deepEqual(opened, ['c', 'run', 'c']);
-    key('ArrowLeft');
-    assert.equal(row(drawTree(), 'c').props['aria-expanded'], false);
-    key('ArrowRight');
-    assert.equal(row(drawTree(), 'c').props['aria-expanded'], true);
-    key('End');
-    assert.equal(row(drawTree(), 'dt').props.tabIndex, 0);
-    key('Home');
-    assert.equal(row(drawTree(), 'c').props.tabIndex, 0);
-    // Alt and an arrow move nothing on the page: each says why, and the focus stays. A project goes where the workspace it
-    // works in goes; a thread stays in its project, in the session list's order, and can't leave it at either end.
-    const said = () => textIn(elementsOf(drawPage()).find((e) => e.props?.['data-projects-page-said'] !== undefined));
-    const alt = (name, extra = {}) => {
-        let prevented = 0;
-        elementsOf(drawTree()).find((e) => e.props?.role === 'tree').props.onKeyDown({ key: name, altKey: true, preventDefault: () => { prevented += 1; }, ...extra });
-        return [prevented, said().trim()];
-    };
-    assert.equal(said(), '');
-    assert.deepEqual(alt('ArrowDown'), [1, 'Projects keep the order of the workspaces they work in.']);
-    assert.deepEqual(alt('ArrowRight'), [1, 'A project can\'t go inside another project.']);
-    assert.deepEqual(alt('ArrowLeft'), [1, 'A project stays in its workspace.']);
-    assert.equal(row(drawTree(), 'c').props.tabIndex, 0);
-    key('ArrowDown');
-    assert.deepEqual(alt('ArrowUp'), [1, 'A thread stays with the project it started in.']);
-    assert.deepEqual(alt('ArrowDown'), [1, 'A project\'s threads keep the session list\'s order, open ones first.']);
-    assert.deepEqual(alt('ArrowLeft'), [1, 'A thread stays with the project it started in.']);
-    assert.deepEqual(alt('ArrowRight'), [1, 'A thread can\'t go inside another thread.']);
-    assert.equal(row(drawTree(), 'run').props.tabIndex, 0);
-    key('End');
-    assert.deepEqual(alt('ArrowDown'), [1, 'A thread stays with the project it started in.']);
-    const once = said();
-    alt('ArrowDown');
-    assert.notEqual(said(), once, 'the same words again are said again');
-    assert.equal(row(drawTree(), 'dt').props.tabIndex, 0);
-    // With Shift, Ctrl or Meta too, the keys are DSH's own.
-    assert.deepEqual(alt('ArrowDown', { shiftKey: true })[0], 0);
-    assert.deepEqual(alt('ArrowLeft', { metaKey: true })[0], 0);
-    // On the whole tree, though a find shows only part of it: the last open thread isn't the project's last.
-    const whole = treeEl.props.tree;
-    assert.deepEqual(plain(['idle', 'gone'].map((id) => pageRefusal(whole, `thread:${id}`, 'ArrowDown'))), [
-        'A project\'s threads keep the session list\'s order, open ones first.', 'A thread stays with the project it started in.',
-    ]);
-    assert.deepEqual(plain([pageRefusal(whole, 'thread:x', 'ArrowDown'), pageRefusal(whole, 'project:nope', 'ArrowUp'), pageRefusal(whole, 'project:c', 'Enter')]), [null, null, null]);
-    // Keys with a modifier are DSH's own.
-    assert.equal(elementsOf(drawTree()).find((e) => e.props?.role === 'tree').props.onKeyDown({ key: 'ArrowDown', metaKey: true, preventDefault: () => assert.fail('taken') }), undefined);
-});
-
-test('browser half: on the Projects page, a thread whose handback a pause holds reads as its Threads menu says', () => {
-    const { client, react } = loadClient();
-    const { ProjectsPage, PageTree, rowsOf, withHeld } = client.internals;
-    const value = (v) => ({ values: { coordinatorSession: v } });
-    const roster = [{ id: 't1', session: 'held' }, { id: 't2', session: 'ask' }, { id: 't3', session: 'run' }, { id: 't4', session: 'none' }];
-    const titles = { held: 'Audit the nightly backfill job', ask: 'Pick a warehouse', run: 'Load the archive', none: 'Not started' };
-    const sessions = {
-        phase: 'ready',
-        byId: { d: { id: 'd', title: '◆ Data Pipeline' }, ...Object.fromEntries(Object.entries(titles).map(([id, title]) => [id, { id, title }])) },
-        projectionsBySession: {
-            d: value({ role: 'coordinator', project: { id: 'data-pipeline', name: 'Data Pipeline' }, threads: roster }),
-            ...Object.fromEntries(roster.map((t) => [t.session, value({ role: 'thread', coordinator: 'd', thread: { id: t.id } })])),
-        },
-    };
-    const workspaces = { phase: 'ready', archivedSessionIds: [], items: [{ workspaceId: 'w-dp', title: 'data-pipeline', path: '/home/u/data-pipeline', sessionIds: ['d', ...Object.keys(titles)] }] };
-    // The pause holds t1's done handback, t2's question, and one from t3, which runs again.
-    const handbacks = [{ thread: 't1', status: 'done' }, { thread: 't2', status: 'needs_decision' }, { thread: 't3', status: 'done' }];
-    let paused = true;
-    const watched = [];
-    const facts = {
-        subscribe: () => () => {}, getSnapshot: () => 0, list: async () => {}, newsOf: () => undefined,
-        projects: () => [{ id: 'data-pipeline', name: 'Data Pipeline', coordinator: 'd', home: 'w-dp', paused }], listFailed: () => false,
-        paused: () => paused,
-        // describe's answer, which the Threads menu reads the held handbacks from too.
-        info: (target) => (target === 'd' ? { paused: { value: paused, held: handbacks.length, handbacks } } : null),
-        watch: (key) => { watched.push(key); return () => {}; },
-    };
-    const statuses = new Map([['run', { running: true }]]);
-    const props = { useSessions: (select) => select(sessions), useSessionStatus: (select) => select(statuses), useWorkspaces: (select) => select(workspaces), projects: { facts, openSession: () => {} } };
-    // The page's own effects run, so what it reads shows.
-    let effects = [];
-    const states = () => {
-        effects = [];
-        react.useEffect = (effect) => { effects.push(effect); };
-        const treeEl = elementsOf(mount(react, () => ProjectsPage(props))()).find((e) => e.type === PageTree);
-        react.useEffect = () => {};
-        const tree = mount(react, () => PageTree(treeEl.props))();
-        return Object.fromEntries(elementsOf(tree).filter((e) => e.props?.role === 'treeitem' && e.props['data-projects-node'] === 'thread').map((li) => {
-            const state = byClass(li.children[0], 'dshp-tree-state')[0];
-            return [textIn(byClass(li.children[0], 'dshp-tree-title')), [state.props['data-projects-state'], textIn(state)]];
-        }));
-    };
-    // The Threads menu's dot and word for each thread.
-    const menu = () => Object.fromEntries(withHeld(rowsOf(roster, statuses, sessions.byId, {}), paused ? handbacks : []).map((row) => [titles[row.session], [row.dot, row.stateLabel]]));
-    let page = states();
-    assert.deepEqual(plain(page), {
-        'Audit the nightly backfill job': ['done', 'Done'], 'Pick a warehouse': ['warning', 'Needs a decision'], 'Load the archive': ['ongoing', 'Running'], 'Not started': ['idle', 'Idle'],
-    });
-    assert.deepEqual(plain(page), plain(menu()));
-    // It reads the paused project's description while it shows it, as the Threads menu does.
-    for (const effect of effects) effect();
-    assert.deepEqual(watched, ['list', 'd:d']);
-    // Resumed: nothing is held, and the page no longer reads it.
-    paused = false;
-    page = states();
-    assert.deepEqual(plain(page), {
-        'Audit the nightly backfill job': ['idle', 'Idle'], 'Pick a warehouse': ['idle', 'Idle'], 'Load the archive': ['ongoing', 'Running'], 'Not started': ['idle', 'Idle'],
-    });
-    assert.deepEqual(plain(page), plain(menu()));
-    watched.length = 0;
-    for (const effect of effects) effect();
-    assert.deepEqual(watched, ['list']);
-});
-
-test('browser half: a row on the Projects page has ⋯: a project\'s settings and Archive project…, a thread\'s other way to open and its project\'s settings', async () => {
-    const storage = new Map();
-    const { client, react } = loadClient({ storage });
-    const { ProjectsPage, PageTree, RowMenu } = client.internals;
-    const value = (v) => ({ values: { coordinatorSession: v } });
-    const sessions = {
-        phase: 'ready',
-        byId: { c: { id: 'c', title: '◆ Storefront' }, run: { id: 'run', title: 'Upgrade the payments SDK' }, ask: { id: 'ask', title: 'Pick a colour' }, d: { id: 'd', title: '◆ Data Pipeline' } },
-        projectionsBySession: {
-            c: value({ role: 'coordinator', project: { id: 'storefront', name: 'Storefront' }, threads: [{ id: 't1', session: 'run' }, { id: 't2', session: 'ask' }] }),
-            run: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' } }),
-            ask: value({ role: 'thread', coordinator: 'c', thread: { id: 't2' } }),
-            d: value({ role: 'coordinator', project: { id: 'data-pipeline', name: 'Data Pipeline' }, threads: [] }),
-        },
-    };
-    const workspaces = {
-        phase: 'ready', archivedSessionIds: [],
-        items: [{ workspaceId: 'w-sf', title: 'storefront', path: '/home/u/storefront', sessionIds: ['c', 'run', 'ask'] }, { workspaceId: 'w-dp', title: 'data-pipeline', path: '/home/u/data-pipeline', sessionIds: ['d'] }],
-    };
-    const listed = [{ id: 'storefront', name: 'Storefront', coordinator: 'c', home: 'w-sf' }, { id: 'data-pipeline', name: 'Data Pipeline', coordinator: 'd', home: 'w-dp' }];
-    const facts = { subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {}, list: async () => {}, projects: () => listed, listFailed: () => false };
-    // Project settings and the archive's confirmation open where DSH lets the plugin draw them.
-    const done = [];
-    let settingsOn = true;
-    let archiveOn = true;
-    const settings = { subscribe: () => () => {}, getSnapshot: () => ({ available: settingsOn }), open: (id, options) => done.push(['settings', id, options]) };
-    const flow = { subscribe: () => () => {}, getSnapshot: () => ({ available: archiveOn }), open: (id) => done.push(['archive', id]) };
-    const projects = {
-        facts, settings,
-        openSession: (id) => done.push(['open', id]), openFull: (id) => done.push(['full', id]), openPaired: (id) => done.push(['beside', id]),
-    };
-    const props = { useSessions: (select) => select(sessions), useSessionStatus: (select) => select(new Map()), useWorkspaces: (select) => select(workspaces), projects, flow };
-    // The page drawn afresh each time (what it passes reads the switches above), the tree's own state kept.
-    const treeOf = (lib, r) => {
-        let now;
-        const draw = mount(r, () => lib.PageTree(now));
-        return () => {
-            now = elementsOf(mount(r, () => lib.ProjectsPage(props))()).find((e) => e.type === lib.PageTree).props;
-            return draw();
-        };
-    };
-    let drawTree = treeOf(client.internals, react);
-    const items = (tree) => elementsOf(tree).filter((e) => e.props?.role === 'treeitem');
-    const row = (tree, id) => items(tree).find((li) => li.props['data-projects-id'] === id);
-    // A row's ⋯ is its own part, last in the row; Menu is DSH's, drawn by RowMenu.
-    const menuOf = (li) => elementsOf(li.children[0]).find((e) => e.type === RowMenu);
-    const drawn = (li) => RowMenu(menuOf(li).props);
-    const picks = (li) => plain(drawn(li).props.items.map((item) => [item.id, item.label, item.icon?.type]));
-    let tree = drawTree();
-    assert.equal(menuOf(row(tree, 'c')), elementsOf(row(tree, 'c').children[0]).at(-1));
-    assert.deepEqual(picks(row(tree, 'c')), [['settings', 'Project settings', 'IconSlidersTwoOutlineRegular'], ['archive', 'Archive project…', 'IconArchiveOutlineRegular']]);
-    // A thread opens beside its coordinator from its row, so its ⋯ offers the full view; with that turned off, the other way.
-    assert.deepEqual(picks(row(tree, 'run')), [['full', 'Open in full view', 'IconRightUpOutlineRegular'], ['thread-settings', 'Model and permission…', 'IconSlidersTwoOutlineRegular'], ['settings', 'Project settings', 'IconSlidersTwoOutlineRegular']]);
-    // Each is named for its row, opens on its own, and keeps the tree's one tab stop.
-    const menu = drawn(row(tree, 'c'));
-    // DSH's autoFocus misses a list in the page's body (hidden while it measures it), so the page's own hook finds it by its class.
-    assert.deepEqual(plain([menu.props.open, menu.props.portal, menu.props.align, menu.props.autoFocus === true, menu.props.closeOnPointerLeave, /^dshp-menu-\d+$/.test(menu.props.listClassName)]),
-        [false, true, 'end', false, true, true]);
-    const button = menu.props.anchor;
-    assert.deepEqual(plain([button.type, button.props.className, button.props.tabIndex, button.props['aria-label'], button.props['aria-haspopup'], button.props['aria-expanded'], button.props['data-projects-page-menu']]),
-        ['button', 'dshp-tree-more', -1, 'Project actions: Storefront', 'menu', false, '']);
-    assert.equal(drawn(row(tree, 'ask')).props.anchor.props['aria-label'], 'Thread actions: Pick a colour');
-    assert.deepEqual(items(tree).map((li) => li.props['aria-keyshortcuts']), ['Shift+F10', 'Shift+F10', 'Shift+F10', 'Shift+F10']);
-    // A click on ⋯ opens its menu and not the row's chat; picking an item closes it and does it.
-    let stopped = 0;
-    button.props.onClick({ stopPropagation: () => { stopped += 1; } });
-    tree = drawTree();
-    assert.deepEqual([stopped, drawn(row(tree, 'c')).props.open, drawn(row(tree, 'run')).props.open, drawn(row(tree, 'c')).props.anchor.props['aria-expanded']], [1, true, false, true]);
-    assert.equal(row(tree, 'c').props.tabIndex, 0);
-    drawn(row(tree, 'c')).props.onSelect('settings');
-    tree = drawTree();
-    assert.equal(drawn(row(tree, 'c')).props.open, false);
-    drawn(row(tree, 'c')).props.onSelect('archive');
-    drawn(row(tree, 'run')).props.onSelect('full');
-    drawn(row(tree, 'ask')).props.onSelect('settings');
-    assert.deepEqual(plain(done), [['settings', 'c', null], ['archive', 'c'], ['full', 'run'], ['settings', 'ask', null]]);
-    // The keys: Shift+F10 or the context-menu key opens the focused row's menu (the keyboard then on its ⋯, which DSH's
-    // menu walks from); while it is open, keys from ⋯ are the menu's; Escape closes it and the tree's keys work again.
-    done.length = 0;
-    const tabStop = (t) => items(t).find((li) => li.props.tabIndex === 0).props['data-projects-id'];
-    const key = (name, extra = {}) => {
-        let prevented = 0;
-        elementsOf(drawTree()).find((e) => e.props?.role === 'tree').props.onKeyDown({ key: name, preventDefault: () => { prevented += 1; }, ...extra });
-        return prevented;
-    };
-    const onItem = { target: { matches: (selector) => selector === '[role="treeitem"]' } };
-    const onMore = { target: { matches: () => false } };
-    assert.equal(key('ArrowDown', onItem), 1);
-    assert.equal(tabStop(drawTree()), 'run');
-    assert.equal(key('F10', { shiftKey: true, ...onItem }), 1);
-    tree = drawTree();
-    assert.deepEqual([drawn(row(tree, 'run')).props.open, drawn(row(tree, 'c')).props.open], [true, false]);
-    assert.equal(key('ArrowDown', onMore), 0);
-    assert.equal(tabStop(drawTree()), 'run');
-    drawn(row(drawTree(), 'run')).props.onClose();
-    assert.equal(drawn(row(drawTree(), 'run')).props.open, false);
-    assert.equal(key('ArrowDown', onMore), 1);
-    assert.equal(tabStop(drawTree()), 'ask');
-    // From ⋯, Enter and Space are its own (they open the menu), whatever the tree would do.
-    assert.deepEqual([key('Enter', onMore), key(' ', onMore)], [0, 0]);
-    assert.deepEqual(plain(done), []);
-    assert.equal(key('ContextMenu', onItem), 1);
-    assert.equal(drawn(row(drawTree(), 'ask')).props.open, true);
-    drawn(row(drawTree(), 'ask')).props.onClose();
-    // With Alt, Ctrl or Meta, F10 and the context-menu key are DSH's.
-    assert.deepEqual([key('F10', { shiftKey: true, altKey: true, ...onItem }), key('ContextMenu', { ctrlKey: true, ...onItem })], [0, 0]);
-    // A right-click on the row opens its menu; one inside a nested row is that row's, not its project's.
-    const li = { closest: () => li, contains: () => true };
-    let prevented = 0;
-    row(drawTree(), 'c').props.onContextMenu({ target: li, currentTarget: li, preventDefault: () => { prevented += 1; }, stopPropagation: () => {} });
-    assert.deepEqual([prevented, drawn(row(drawTree(), 'c')).props.open, tabStop(drawTree())], [1, true, 'c']);
-    drawn(row(drawTree(), 'c')).props.onClose();
-    const nested = { closest: () => 'the thread\'s row' };
-    row(drawTree(), 'c').props.onContextMenu({ target: nested, currentTarget: li, preventDefault: () => assert.fail('taken'), stopPropagation: () => {} });
-    assert.equal(drawn(row(drawTree(), 'c')).props.open, false);
-    // Clicks and keys in a menu, drawn elsewhere in the page, reach the tree through React: it leaves them be.
-    const outside = { target: { matches: () => true }, currentTarget: { contains: () => false } };
-    row(drawTree(), 'run').props.onClick({ ...outside, stopPropagation: () => assert.fail('taken') });
-    assert.equal(key('ArrowUp', outside), 0);
-    assert.equal(key('F10', { shiftKey: true, ...outside }), 0);
-    assert.deepEqual(plain(done), []);
-    // With the beside view off, a thread's ⋯ opens it beside its coordinator; without Project settings or the archive,
-    // a project has no ⋯ and its keys open nothing, and a thread's offers only the other way to open it.
-    storage.set('dsh-plugin-coordinator/open-beside', 'off');
-    const fresh = loadClient({ storage });
-    const later = fresh.client.internals;
-    settingsOn = false;
-    archiveOn = false;
-    drawTree = treeOf(later, fresh.react);
-    tree = drawTree();
-    const laterMenu = (el) => elementsOf(el.children[0]).find((e) => e.type === later.RowMenu);
-    assert.deepEqual([laterMenu(row(tree, 'c')), row(tree, 'c').props['aria-keyshortcuts'], row(tree, 'c').props.onContextMenu], [undefined, undefined, undefined]);
-    const threadMenu = later.RowMenu(laterMenu(row(tree, 'run')).props);
-    assert.deepEqual(plain(threadMenu.props.items.map((item) => [item.id, item.label, item.icon?.type])), [['beside', 'Open beside its coordinator', 'IconCompareSplitOutlineRegular']]);
-    threadMenu.props.onSelect('beside');
-    assert.deepEqual(plain(done), [['beside', 'run']]);
-    assert.equal(elementsOf(drawTree()).find((e) => e.props?.role === 'tree').props.onKeyDown({ key: 'F10', shiftKey: true, ...onItem, preventDefault: () => assert.fail('taken') }), undefined);
-    // Only one archive's confirmation: a project the page shows is never archived (it leaves the page first).
-    archiveOn = true;
-    tree = drawTree();
-    assert.deepEqual(plain(later.RowMenu(laterMenu(row(tree, 'd')).props).props.items.map((item) => item.id)), ['archive']);
-    // Where the plugin can change a thread, its ⋯ has Mark resolved (Stop while it runs), sent as the user's own.
-    const changed = [];
-    facts.change = async (target, changes) => { changed.push([target, plain(changes)]); return { ok: true, value: {} }; };
-    tree = drawTree();
-    const resolving = later.RowMenu(laterMenu(row(tree, 'run')).props);
-    assert.deepEqual(plain(resolving.props.items.map((item) => [item.id, item.label])), [['beside', 'Open beside its coordinator'], ['resolve', 'Mark resolved']]);
-    resolving.props.onSelect('resolve');
-    await tick();
-    assert.deepEqual(changed, [['run', { thread: 't1', resolved: true }]]);
-    delete facts.change;
-});
-
-test('browser half: Find by name on the Projects page keeps each match under its project, and its folds are its own', () => {
-    const { client, react } = loadClient();
-    const { ProjectsPage, PageTree, findInTree, withHit } = client.internals;
-    const value = (v) => ({ values: { coordinatorSession: v } });
-    const sessions = {
-        phase: 'ready',
-        byId: { c: { id: 'c', title: '◆ Storefront' }, t1: { id: 't1', title: 'Fix the cart' }, t2: { id: 't2', title: 'Hero images' }, t3: { id: 't3', title: 'Fleet power budget' },
-            f: { id: 'f', title: '◆ Fleet Ops' }, n: { id: 'n', title: 'Lane restarts' } },
-        projectionsBySession: {
-            c: value({ role: 'coordinator', project: { id: 'storefront', name: 'Storefront' }, threads: [{ id: 't1', session: 't1' }, { id: 't2', session: 't2', resolved: true }, { id: 't3', session: 't3' }] }),
-            t1: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' } }),
-            t2: value({ role: 'thread', coordinator: 'c', thread: { id: 't2' } }),
-            t3: value({ role: 'thread', coordinator: 'c', thread: { id: 't3' } }),
-            f: value({ role: 'coordinator', project: { id: 'fleet-ops', name: 'Fleet Ops' }, threads: [{ id: 't1', session: 'n' }] }),
-            n: value({ role: 'thread', coordinator: 'f', thread: { id: 't1' } }),
-        },
-    };
-    const workspaces = {
-        phase: 'ready', archivedSessionIds: [],
-        items: [
-            { workspaceId: 'w-sf', title: 'storefront', path: '/home/u/storefront', sessionIds: ['c', 't1', 't2', 't3'] },
-            { workspaceId: 'w-ops', title: 'fleet-ops', path: '/home/u/fleet-ops', sessionIds: ['f', 'n'] },
-        ],
-    };
-    const facts = {
-        subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {}, list: async () => {},
-        projects: () => [{ id: 'storefront', name: 'Storefront', coordinator: 'c', home: 'w-sf' }, { id: 'fleet-ops', name: 'Fleet Ops', coordinator: 'f', home: 'w-ops' }],
-        listFailed: () => false,
-    };
-    const props = {
-        useSessions: (select) => select(sessions), useSessionStatus: (select) => select(new Map()), useWorkspaces: (select) => select(workspaces),
-        projects: { facts, openSession: () => {} },
-    };
-    const draw = mount(react, () => ProjectsPage(props));
-    const find = (page) => elementsOf(page).find((e) => e.props?.['data-projects-find'] !== undefined);
-    const treeOf = (page) => elementsOf(page).find((e) => e.type === PageTree);
-    const titles = (tree) => elementsOf(tree).filter((e) => e.props?.role === 'treeitem').map((li) => textIn(byClass(li.children[0], 'dshp-tree-title')));
-    let page = draw();
-    const clear = (tree) => elementsOf(tree).find((e) => e.props?.['data-projects-find-clear'] !== undefined);
-    assert.deepEqual([find(page).props['aria-label'], find(page).props.role, find(page).props.value, clear(page)], ['Find by name', 'searchbox', '', undefined]);
-    assert.equal(treeOf(page).props.find, '');
-    const whole = treeOf(page).props.tree;
-    // A thread's name: its project stays around it, and nothing else; the project still counts all its threads.
-    find(page).props.onChange({ target: { value: 'cart' } });
-    page = draw();
-    let tree = mount(react, () => PageTree(treeOf(page).props))();
-    assert.deepEqual(titles(tree), ['Storefront', 'Fix the cart']);
-    assert.equal(textIn(byClass(elementsOf(tree).find((e) => e.props?.['data-projects-node'] === 'project').children[0], 'dshp-tree-meta')), 'storefront · 2 open threads · 1 resolved');
-    // The words are marked in the title, which keeps its whole name for the review's hooks.
-    const hit = elementsOf(tree).find((e) => e.type === 'mark');
-    assert.deepEqual([textIn(hit), hit.props.className], ['cart', 'dshp-tree-hit']);
-    assert.deepEqual(plain(withHit('Fix the cart', 'CART').map((part) => (typeof part === 'string' ? part : `[${textIn(part)}]`))), ['Fix the ', '[cart]']);
-    assert.deepEqual(plain(withHit('Fix', 'zz')), ['Fix']);
-    // A project's name keeps the whole project; any case matches; a thread's name keeps only it under its project.
-    assert.deepEqual(plain(findInTree(whole, 'FLEET').map((n) => [n.title, n.children.map((t) => t.title)])), [
-        ['Storefront', ['Fleet power budget']],
-        ['Fleet Ops', ['Lane restarts']],
-    ]);
-    // Closing a project while finding is the find's own: the page's kept folds don't change, and a new find starts open.
-    find(page).props.onChange({ target: { value: 'storefront' } });
-    let treeProps = treeOf(draw()).props;
-    const drawTree = mount(react, () => PageTree(treeProps));
-    const project = (t) => elementsOf(t).find((e) => e.props?.['data-projects-node'] === 'project');
-    const fold = (t) => elementsOf(project(t).children[0]).find((e) => e.props?.['data-projects-chevron'] !== undefined).props.onClick({ stopPropagation: () => {} });
-    fold(drawTree());
-    assert.equal(project(drawTree()).props['aria-expanded'], false);
-    find(page).props.onChange({ target: { value: 'store' } });
-    treeProps = treeOf(draw()).props;
-    assert.equal(project(drawTree()).props['aria-expanded'], true);
-    find(page).props.onChange({ target: { value: '' } });
-    treeProps = treeOf(draw()).props;
-    assert.equal(project(drawTree()).props['aria-expanded'], true);
-    // Without a find, a fold is the page's own again.
-    fold(drawTree());
-    assert.equal(project(drawTree()).props['aria-expanded'], false);
-    find(page).props.onChange({ target: { value: 'storefront' } });
-    treeProps = treeOf(draw()).props;
-    assert.equal(project(drawTree()).props['aria-expanded'], true);
-    find(page).props.onChange({ target: { value: '' } });
-    treeProps = treeOf(draw()).props;
-    assert.equal(project(drawTree()).props['aria-expanded'], false);
-    fold(drawTree());
-    // Nothing found: said in words, and Escape empties the box.
-    find(page).props.onChange({ target: { value: 'zzz' } });
-    page = draw();
-    assert.equal(treeOf(page), undefined);
-    const none = elementsOf(page).find((e) => e.props?.['data-projects-find-none'] !== undefined);
-    assert.deepEqual([none.props.role, textIn(none)], ['status', 'Nothing matches “zzz”.']);
-    // Its × empties the box too.
-    assert.equal(clear(page).props['aria-label'], 'Clear the find');
-    clear(page).props.onClick();
-    assert.equal(find(draw()).props.value, '');
-    find(page).props.onChange({ target: { value: 'zzz' } });
-    page = draw();
-    let prevented = 0;
-    find(page).props.onKeyDown({ key: 'Escape', preventDefault: () => { prevented += 1; }, stopPropagation: () => {} });
-    page = draw();
-    assert.deepEqual([find(page).props.value, prevented, titles(mount(react, () => PageTree(treeOf(page).props))()).length], ['', 1, 6]);
-});
-
-test('browser half: a session DSH lists without the plugin\'s value is placed by what the plugin\'s store knows, not by its title', async () => {
-    const { client } = loadClient();
-    const { rowPlace, isThreadRow, coordinatorName, takeKnown, projectFacts } = client.internals;
-    // DSH dropped the saved values of an older version: the threads' titles say nothing of their project.
-    const state = { byId: { c: { id: 'c', title: '◆ DSH Plugins' }, t: { id: 't', title: 'Smoke test' }, x: { id: 'x', title: 'A chat' }, n: { id: 'n', title: 'Nameless' } } };
-    assert.deepEqual(['c', 't', 'x'].map((id) => rowPlace(state, id)), ['coordinator:c', '', '']);
-    // The plugin's store: c and its thread t; n a coordinator retitled by the user.
+    const { rowPlace, isThreadRow, takeKnown, projectFacts } = client.internals;
+    // DSH dropped the saved values of an older version: no title says what a session is, a "◆ " one included.
+    const state = { byId: { c: { id: 'c', title: '◆ DSH Plugins' }, t: { id: 't', title: 'DSH Plugins › Smoke test' }, x: { id: 'x', title: 'A chat' }, n: { id: 'n', title: 'Pricing' } } };
+    assert.deepEqual(['c', 't', 'x', 'n'].map((id) => rowPlace(state, id)), ['', '', '', '']);
+    assert.equal(isThreadRow(state, 't'), false);
+    // The plugin's store: c and its thread t; n another coordinating chat.
     const link = { calls: 0, async call(method) { this.calls += 1; assert.equal(method, 'sessions'); return { ok: true, value: { sessions: {
-        c: { role: 'coordinator', project: 'dsh-plugins', name: 'DSH Plugins' },
-        t: { role: 'thread', project: 'dsh-plugins', name: 'DSH Plugins', thread: 't1', coordinator: 'c' },
-        n: { role: 'coordinator', project: 'p', name: 'Pricing' },
+        c: { role: 'coordinator', project: 'c', name: 'DSH Plugins' },
+        t: { role: 'thread', project: 'c', name: 'DSH Plugins', thread: 't1', coordinator: 'c' },
+        n: { role: 'coordinator', project: 'n', name: 'Pricing' },
         bad: { role: 'chat' },
     } } }; } };
     const facts = projectFacts(link);
@@ -810,10 +175,14 @@ test('browser half: a session DSH lists without the plugin\'s value is placed by
     await facts.sessions();
     assert.equal(link.calls, 1, 'once per window');
     assert.deepEqual(['c', 't', 'x', 'n'].map((id) => rowPlace(state, id)), ['coordinator:c', 'thread:c', '', 'coordinator:n']);
-    assert.deepEqual([isThreadRow(state, 't'), isThreadRow(state, 'x'), coordinatorName(state, 'n'), coordinatorName(state, 't')], [true, false, 'Pricing', undefined]);
-    // DSH's own value wins once it has one.
-    const folded = { ...state, projectionsBySession: { t: { values: { coordinatorSession: { role: 'thread', coordinator: 'c2', project: { id: 'q', name: 'Q' } } } } } };
+    assert.deepEqual([isThreadRow(state, 't'), isThreadRow(state, 'x')], [true, false]);
+    // DSH's own value wins once it has one: a thread nests under the session its value names.
+    const folded = { ...state, projectionsBySession: { t: { values: { coordinatorSession: { role: 'thread', coordinator: 'c2', project: { id: 'c2', name: 'Q' } } } } } };
     assert.equal(rowPlace(folded, 't'), 'thread:c2');
+    // A chat that stopped coordinating keeps its place while it has threads, and is a plain chat without.
+    const stopped = (threads) => ({ ...state, projectionsBySession: { n: { values: { coordinatorSession: { role: 'coordinator', project: { id: 'n', name: 'Pricing' }, off: true, threads } } } } });
+    assert.equal(rowPlace(stopped([{ id: 't1', session: 's1', title: 'Deploy', resolved: true }]), 'n'), 'coordinator:n');
+    assert.equal(rowPlace(stopped([]), 'n'), '');
     takeKnown({});
     assert.equal(rowPlace(state, 't'), '');
 });
@@ -823,7 +192,7 @@ test('browser half: the defaults form registers on the plugin page, read-only wh
     assert.equal(id, 'dsh-plugin-coordinator');
     // Each part waits for its own DSH services, so only the slots are required.
     assert.deepEqual([...client.inject], ['slots']);
-    let snapshot = { status: 'ready', value: { coordinatorEffort: 'max' }, base: {}, user: { coordinatorEffort: 'max' }, writable: true, revision: 1 };
+    let snapshot = { status: 'ready', value: { threadEffort: 'max' }, base: {}, user: { threadEffort: 'max' }, writable: true, revision: 1 };
     const registered = [];
     const groups = [];
     const ctx = {
@@ -845,25 +214,28 @@ test('browser half: the defaults form registers on the plugin page, read-only wh
         ['configForms', 'remote', 'remote.session'], ['connection', 'remote', 'remote.session'], ['sessions', 'uiWorkspace', 'sidebarRight']]);
     assert.deepEqual(registered.map((r) => ({ ...r.slot })), [{ name: 'plugins.bundle.config', key: 'dsh-plugin-coordinator' }]);
     const page = registered[0].component;
-    assert.match(page({ view: 'summary' }), /^Default models/);
-    // The page: the Default models form, the Threads switch, then every project with what it runs.
-    const [formPart, optionsPart, tablePart] = page({ view: 'page' }).children;
-    assert.equal(optionsPart.type.name, 'ThreadOptions');
-    assert.equal(tablePart.type.name, 'ProjectsTable');
-    assert.deepEqual(Object.keys(tablePart.props).sort(), ['catalog', 'dialog', 'link', 'sessionsOf']);
-    const form = formPart.props.form;
-    assert.equal(form.getSnapshot().coordinatorEffort.text, 'max');
+    assert.equal(page({ view: 'summary' }), 'Default models, effort and access for threads.');
+    // The page: the defaults form, then the Threads switch, and nothing more.
+    const parts = page({ view: 'page' }).children;
+    assert.deepEqual(parts.map((part) => part.type.name), ['DefaultsForm', 'ThreadOptions']);
+    const form = parts[0].props.form;
+    // The form sets what new threads run on and can reach; a coordinating chat keeps the user's own.
+    assert.deepEqual(Object.keys(form.getSnapshot()).filter((key) => /^(thread|coordinator|your)/.test(key)).sort(), ['threadEffort', 'threadModel', 'threadPermission', 'yourTools']);
+    const drawn = parts[0].type(parts[0].props);
+    assert.deepEqual(elementsOf(drawn).filter((e) => e.type?.name === 'RouteSection').map((e) => e.props.route.id), ['thread']);
+    assert.doesNotMatch(textIn(drawn), /project|coordinator|◆/i);
+    assert.equal(form.getSnapshot().threadEffort.text, 'max');
     assert.equal(form.getSnapshot().insertedTwice, false);
     // The older setup adds the row with insert: the value the plugin runs with comes from neither layer a save edits.
     snapshot = { ...snapshot, user: {} };
     assert.equal(form.getSnapshot().insertedTwice, true);
-    snapshot = { ...snapshot, base: { coordinatorEffort: 'max' } };
+    snapshot = { ...snapshot, base: { threadEffort: 'max' } };
     assert.equal(form.getSnapshot().insertedTwice, false);
     snapshot = { status: 'loading', value: undefined, base: undefined, user: undefined, writable: true, revision: undefined };
     assert.equal(form.getSnapshot().insertedTwice, false);
 });
 
-test('browser half: threads add a header menu, turn cards, sidebar marks and right-sidebar tabs', () => {
+test('browser half: threads add a header menu and Coordinate, turn cards, sidebar marks and right-sidebar tabs', () => {
     const { client } = loadClient();
     const registered = [];
     const types = [];
@@ -882,23 +254,19 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
     assert.deepEqual(registered.map((r) => [r.name, r.id ?? r.key ?? null, r.order ?? null]), [
         ['shell.overlay', 'dsh-plugin-coordinator/project-settings', null],
         ['sidebar.workspaces.session.menu.item', 'dsh-plugin-coordinator/project-settings-item', 250],
-        ['shell.overlay', 'dsh-plugin-coordinator/archive', null],
-        ['sidebar.workspaces.session.menu.item', 'dsh-plugin-coordinator/archive-item', 260],
         ['shell.overlay', 'dsh-plugin-coordinator/rename', null],
         ['conversation.session.header.actions', 'dsh-plugin-coordinator/threads-menu', -25],
+        ['conversation.session.header.actions', 'dsh-plugin-coordinator/coordinate', -24],
         ['conversation.chat.turnTail', 'dsh-plugin-coordinator/thread-cards', 30],
         ['conversation.chat.node', 'turn-trigger', null],
         ['sidebar.session.row.leading', 'dsh-plugin-coordinator/thread-mark', 20],
         ['sidebar.workspaces.session.row.action', 'dsh-plugin-coordinator/row-place', 900],
-        ['conversation.input.dock', 'dsh-plugin-coordinator/coordinator-offer', 14],
         ['conversation.input.dock', 'dsh-plugin-coordinator/paused-bar', 15],
         ['conversation.input.dock', 'dsh-plugin-coordinator/ending-bar', 16],
         ['sidebar.session.row.hover', 'dsh-plugin-coordinator/thread-hover', 20],
         ['sidebar.workspaces.session.menu.item', 'dsh-plugin-coordinator/full-view-item', 50],
         ['shell.overlay', 'dsh-plugin-coordinator/news-notice', null],
         ['shell.overlay', 'dsh-plugin-coordinator/session-list', null],
-        ['main', 'dsh-plugin-coordinator/projects', null],
-        ['sidebar.panellist', 'dsh-plugin-coordinator/projects', 5],
         ['sidebar.right.pane.tab', 'dsh-plugin-coordinator/thread-chat', null],
         ['sidebar.right.pane.tab.title', 'dsh-plugin-coordinator/thread-chat', null],
         ['projects.thread.conversation', null, null],
@@ -940,7 +308,7 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
     assert.equal(changes.title('dsh-resource://projectchanges/session/s1'), 'Changes · Thread');
 });
 
-test('browser half: Project settings opens per session, calls the plugin\'s endpoints and reads models as DSH does', async () => {
+test('browser half: Thread settings opens per session, calls the plugin\'s endpoints and reads models as DSH does', async () => {
     const { client } = loadClient();
     const { settingsDialog, hostLink, errorText, noteText, catalogView, resolveRoute, effortNote, liveNote } = client.internals;
     // The dialog opens only once its part is running, and closes when that part stops.
@@ -956,12 +324,15 @@ test('browser half: Project settings opens per session, calls the plugin\'s endp
     assert.deepEqual(plain(dialog.getSnapshot()), { target: 's1', seq: 2, available: true, pick: 'thread' }, 'opening again starts fresh, here with the New threads menu open');
     dialog.open('s1', { pick: 'nope' });
     assert.equal(dialog.getSnapshot().pick, null);
+    // A coordinating chat runs on the user's own model, so there is no coordinator menu to open.
+    dialog.open('s1', { pick: 'coordinator' });
+    assert.equal(dialog.getSnapshot().pick, null);
     dialog.close();
     dialog.open('');
     assert.equal(dialog.getSnapshot().target, null);
     disconnect();
-    assert.deepEqual(plain(dialog.getSnapshot()), { target: null, seq: 3, available: false, pick: null });
-    assert.equal(changes, 6);
+    assert.deepEqual(plain(dialog.getSnapshot()), { target: null, seq: 4, available: false, pick: null });
+    assert.equal(changes, 7);
 
     // Calls go over the window's connection to /api/dsh-plugin-coordinator/<method>.
     const sent = [];
@@ -1029,72 +400,7 @@ test('browser half: Project settings opens per session, calls the plugin\'s endp
     assert.equal(live('other:big-model', undefined, { provider: 'other', model: 'big-model' }), null);
 });
 
-test('browser half: the goal in Project settings is saved with Save, put back with Escape, and says which of the user\'s tools it opens', async () => {
-    const { client, react } = loadClient();
-    const { GoalRow } = client.internals;
-    const saves = [];
-    let accept = true;
-    let goal = { value: 'Ship good DSH plugins', source: 'project config', inherited: 'Ship good DSH plugins', tools: [], max: 2000 };
-    const draw = mount(react, () => GoalRow({ goal, busy: false, message: null, onSave: async (changes) => { saves.push(changes); return accept; } }));
-    const hook = (row, name) => elementsOf(row).find((e) => e.props?.[name] !== undefined);
-    const box = (row) => hook(row, 'data-projects-goal');
-    const key = (row, k, mods = {}) => {
-        const seen = { prevented: false, stopped: false };
-        box(row).props.onKeyDown({ key: k, ...mods, preventDefault: () => { seen.prevented = true; }, stopPropagation: () => { seen.stopped = true; } });
-        return seen;
-    };
-    let row = draw();
-    // From the profile: its text in the box, where it comes from, and nothing to save.
-    assert.deepEqual(plain([box(row).props.value, box(row).props.maxLength, textIn(byClass(row, 'dshp-ps-source')), hook(row, 'data-projects-goal-save') ?? null]),
-        ['Ship good DSH plugins', 2000, 'From your profile', null]);
-    assert.equal(textIn(byClass(row, 'dshp-ps-title')), 'Goal');
-    // Typing shows Save and Cancel; the same text again, spaces aside, has nothing to save.
-    box(row).props.onChange({ target: { value: 'Keep the storefront fast. ' } });
-    row = draw();
-    assert.deepEqual([textIn(hook(row, 'data-projects-goal-save')), textIn(byClass(row, 'dshp-ps-goal-actions'))], ['Save', 'CancelSave']);
-    box(row).props.onChange({ target: { value: 'Ship good DSH plugins  ' } });
-    assert.equal(hook(draw(), 'data-projects-goal-save'), undefined);
-    // Escape while it is changed puts the text back, and the dialog stays open; with nothing changed, Escape is the dialog's.
-    box(row).props.onChange({ target: { value: 'Keep the storefront fast.' } });
-    assert.deepEqual(key(draw(), 'Escape'), { prevented: true, stopped: true });
-    row = draw();
-    assert.deepEqual([box(row).props.value, hook(row, 'data-projects-goal-save') ?? null], ['Ship good DSH plugins', null]);
-    assert.deepEqual(key(row, 'Escape'), { prevented: false, stopped: false });
-    // Enter alone is a new line; Save, or Ctrl+Enter, sends the text, and once the plugin takes it the box shows what it holds.
-    box(row).props.onChange({ target: { value: 'Keep the storefront fast.' } });
-    assert.deepEqual(key(draw(), 'Enter'), { prevented: false, stopped: false });
-    hook(draw(), 'data-projects-goal-save').props.onClick();
-    await tick();
-    assert.deepEqual(plain(saves), [{ goal: 'Keep the storefront fast.' }]);
-    goal = { ...goal, value: 'Keep the storefront fast.', source: 'project setting', tools: [] };
-    row = draw();
-    assert.deepEqual([box(row).props.value, hook(row, 'data-projects-goal-save') ?? null, textIn(byClass(row, 'dshp-ps-source'))],
-        ['Keep the storefront fast.', null, 'Set for this projectUse your profile\'s']);
-    // A refused save keeps what was typed.
-    accept = false;
-    box(row).props.onChange({ target: { value: 'x'.repeat(10) } });
-    assert.deepEqual(key(draw(), 'Enter', { ctrlKey: true }), { prevented: true, stopped: false });
-    await tick();
-    assert.deepEqual([plain(saves.at(-1)), box(draw()).props.value], [{ goal: 'xxxxxxxxxx' }, 'xxxxxxxxxx']);
-    // "Use your profile's" gives the profile row's goal back.
-    accept = true;
-    hook(draw(), 'data-projects-goal-reset').props.onClick();
-    await tick();
-    assert.deepEqual(plain(saves.at(-1)), { goal: null });
-    goal = { ...goal, value: 'Ship good DSH plugins', source: 'project config' };
-    assert.equal(box(draw()).props.value, 'Ship good DSH plugins');
-    // The user's tools a goal names are open to every thread, so the row names them.
-    goal = { ...goal, value: 'Keep the obsidian inbox tidy', source: 'project setting', tools: ['obsidian'] };
-    assert.equal(textIn(hook(draw(), 'data-projects-goal-tools')), 'It names obsidian, so every thread in this project can use it.');
-    goal = { ...goal, tools: ['obsidian', 'dsh_vault'] };
-    assert.equal(textIn(hook(draw(), 'data-projects-goal-tools')), 'It names obsidian and dsh_vault, so every thread in this project can use them.');
-    // A project made in the window has no profile goal: an empty box, its placeholder, and no source line.
-    goal = { value: '', source: 'none', inherited: '', tools: [], max: 2000 };
-    row = draw();
-    assert.deepEqual([box(row).props.value, box(row).props.placeholder, byClass(row, 'dshp-ps-source').length], ['', 'What this project is for', 0]);
-});
-
-test('browser half: rows, cards and the plugin page name what each session runs on, as DSH\'s model menu does', () => {
+test('browser half: rows, cards and Thread settings name what each session runs on, as DSH\'s model menu does', () => {
     const { client } = loadClient();
     const { selectionIn, selectionText, summaryModels, sourceLine, toldText, catalogView } = client.internals;
     const cv = catalogView({
@@ -1127,27 +433,111 @@ test('browser half: rows, cards and the plugin page name what each session runs 
     assert.equal(selectionText(cv, { provider: 'other', model: 'big-model', reasoningEffort: 'high' }), 'Big', 'a model without levels shows none');
     assert.equal(selectionText(catalogView(undefined), { provider: 'x', model: 'm1', reasoningEffort: 'high' }), 'm1 · High', 'before the catalog arrives');
     assert.equal(selectionText(cv, undefined), undefined);
-    // The menu's summary: what the coordinator runs on now, else its setting; what new threads start on.
-    const info = { settings: {
-        coordinatorModel: { value: null, source: 'DSH default' }, coordinatorEffort: { value: 'max', source: 'project config' },
-        threadModel: { value: 'other:big-model', source: 'project setting' }, threadEffort: { value: 'high', source: 'plugin default' },
-    } };
-    assert.deepEqual(plain(summaryModels(cv, {}, 'c1', info)), { coordinator: 'V4 · Max', thread: 'Big' });
-    assert.deepEqual(plain(summaryModels(cv, { c1: 'V4 Flash · Off' }, 'c1', info)), { coordinator: 'V4 Flash · Off', thread: 'Big' });
-    assert.deepEqual(plain(summaryModels(cv, {}, 'c1', null)), {});
-    // Where a project's setting comes from, on the plugin page.
-    assert.equal(sourceLine({ value: 'a:b', source: 'project setting' }, { value: 'max', source: 'project setting' }), 'Set for this project');
-    assert.equal(sourceLine({ value: 'a:b', source: 'plugin default' }, { value: 'max', source: 'project config' }), 'Model from Default models · effort from your profile');
+    // The menu's summary: what new threads start on; the coordinating chat runs on the user's own pick.
+    const info = { settings: { threadModel: { value: 'other:big-model', source: 'chat setting' }, threadEffort: { value: 'high', source: 'plugin default' } } };
+    assert.deepEqual(plain(summaryModels(cv, info)), { thread: 'Big' });
+    assert.deepEqual(plain(summaryModels(cv, { settings: { threadModel: { value: null, source: 'DSH default' }, threadEffort: { value: 'max', source: 'plugin default' } } })), { thread: 'V4 · Max' });
+    assert.deepEqual(plain(summaryModels(cv, null)), {});
+    // Where a chat's thread setting comes from, in Thread settings.
+    assert.equal(sourceLine({ value: 'a:b', source: 'chat setting' }, { value: 'max', source: 'chat setting' }), 'Set for this chat');
+    assert.equal(sourceLine({ value: 'a:b', source: 'plugin default' }, { value: 'max', source: 'chat setting' }), 'Model from Default models · effort set for this chat');
     assert.equal(sourceLine({ value: null, source: 'DSH default' }, { value: 'max', source: 'plugin default' }), 'Model follows DSH · effort from Default models');
     assert.equal(sourceLine({ value: null, source: 'DSH default' }, { value: null, source: 'DSH default' }), 'Follows DSH\'s default model');
     assert.equal(sourceLine({ value: null, source: 'DSH default' }, { value: null, source: 'DSH default' }, { long: true }), 'Follows DSH\'s default model, the one last picked in any DSH chat');
-    assert.equal(sourceLine({ value: 'a:b', source: 'project setting' }, { value: null, source: 'DSH default' }), 'Set for this project', 'an effort set nowhere is the model\'s own');
+    assert.equal(sourceLine({ value: 'a:b', source: 'chat setting' }, { value: null, source: 'DSH default' }), 'Set for this chat', 'an effort set nowhere is the model\'s own');
+    // Sources of the older plugin are not named.
+    assert.equal(sourceLine({ value: 'a:b', source: 'project setting' }), '');
     // A handback that starts with its own state doesn't say it twice.
     assert.equal(toldText({ status: 'blocked', summary: 'Blocked: the token expired.' }), 'Blocked: the token expired.');
     assert.equal(toldText({ status: 'done', summary: 'done.' }), 'done.');
     assert.equal(toldText({ status: 'done', summary: 'Doneness checks pass.' }), 'Done · Doneness checks pass.');
     assert.equal(toldText({ status: 'needs_decision', summary: 'Pick A or B.' }), 'Needs your decision · Pick A or B.');
     assert.equal(toldText({ status: 'progress' }), 'Progress update');
+});
+
+test('browser half: Thread settings holds this chat\'s pause, new threads\' model and access, and its threads, with no coordinator or goal, and says which are set for this chat', async () => {
+    const { client, react } = loadClient({ primitives: { Modal: 'Modal', Switch: 'Switch' } });
+    const { ThreadSettings, Section, SettingRow } = client.internals;
+    const permissions = { defaultPreset: 'danger-full-access', options: [{ value: 'read-only', name: 'read-only' }, { value: 'workspace-write', name: 'Workspace Write' }] };
+    // describe's answer for a coordinating chat: each setting with where it comes from, and what it would be without this chat's own.
+    const described = {
+        project: { id: 'c', name: 'Shop', workspace: '/work/shop', homeFolder: false, coordinator: 'c', archived: false, off: false },
+        settings: {
+            threadModel: { value: 'deepseek-account:deepseek-v4', source: 'chat setting', inherited: { value: null, source: 'DSH default' } },
+            threadEffort: { value: 'max', source: 'plugin default', inherited: { value: 'max', source: 'plugin default' } },
+        },
+        access: {
+            yourTools: { value: 'always', source: 'chat setting', inherited: { value: 'asked', source: 'plugin default' } },
+            threadPermission: { value: 'workspace-write', source: 'plugin default', inherited: { value: 'workspace-write', source: 'plugin default' } },
+        },
+        guarded: ['lane-catalog'], permissions,
+        paused: { value: false, source: 'chat setting', inherited: false, held: 0 },
+        threads: [{ id: 't1', session: 's-t1', title: 'Deploy', resolved: false, model: 'deepseek-account:deepseek-v4', effort: 'max', permission: 'workspace-write', tools: [] }],
+    };
+    const calls = [];
+    const link = {
+        catalog: { subscribe: () => () => {}, getSnapshot: () => ({ status: 'ready', value: undefined }), load: () => {} },
+        async call(method, args) { calls.push([method, plain(args)]); return { ok: true, value: described }; },
+    };
+    const put = [];
+    // State and refs hold between draws; the effects run once, after the first draw, as when the dialog opens, and are undone when it closes.
+    const refs = [];
+    const undo = [];
+    let opened = false;
+    const draw = mount(react, () => {
+        let at = 0;
+        const effects = [];
+        react.useRef = (init) => {
+            const k = at++;
+            if (!(k in refs)) refs[k] = { current: init };
+            return refs[k];
+        };
+        react.useEffect = (fn) => { effects.push(fn); };
+        const out = ThreadSettings({ target: 'c', pick: null, link, facts: { put: (target) => put.push(target) }, dialog: { close() {} }, openDefaults: () => true, useSessionStatus: (select) => select(new Map()) });
+        if (!opened) {
+            opened = true;
+            for (const fn of effects) { const done = fn(); if (typeof done === 'function') undo.push(done); }
+        }
+        return out;
+    });
+    try {
+        draw();
+        await tick();
+        const tree = draw();
+        assert.deepEqual(plain([calls[0], put]), [['describe', { target: 'c' }], ['c']]);
+        // Titled for threads, with the chat's name and folder under it.
+        const sub = tree.props.description;
+        assert.deepEqual(plain([tree.type, tree.props.title, sub.props['data-projects-settings'], textIn(sub.children[0]), byClass(sub, 'dshp-ps-path').map((e) => [e.props.title, textIn(e)])]),
+            ['Modal', 'Thread settings', 'c', 'Shop', [['/work/shop', 'shop']]]);
+        // This chat's pause, the model new threads start on, their access, and each thread: no coordinator's model, no goal.
+        const all = elementsOf(tree);
+        assert.deepEqual(plain(all.filter((e) => e.type === Section).map((e) => [e.props.id, e.props.heading])),
+            [['project', 'This chat'], ['models', 'Models'], ['access', 'Access'], ['threads', 'Threads']]);
+        const rows = all.filter((e) => e.type === SettingRow);
+        assert.deepEqual(plain(rows.map((e) => [e.props.id, e.props.title])),
+            [['paused', 'Pause threads'], ['thread', 'New threads'], ['yourTools', 'Your tools'], ['threadPermission', 'New threads\' permission'], ['thread:t1', 'Deploy']]);
+        // Set for this chat, with the way back to the default; or where the value comes from.
+        const row = (id) => rows.find((e) => e.props.id === id).props;
+        assert.deepEqual(plain(['thread', 'yourTools', 'threadPermission'].map((id) => textIn(row(id).source))), ['Set for this chatUse default', 'Set for this chatUse default', 'From Default access']);
+        // The pickers' Default rows name what the chat would follow without its own.
+        const picker = row('thread').control.props;
+        assert.deepEqual(plain([picker.own, picker.fallback.modelLabel, picker.fallback.effortLabel]), [{ model: true, effort: false }, 'DSH default', 'Default models']);
+        assert.equal(row('threadPermission').control.props.fallback.label, 'Default access');
+        // Nothing in it speaks of a project, a coordinator or a goal.
+        const words = [textIn(tree), ...rows.map((e) => textIn(SettingRow(e.props))), ...all.filter((e) => e.type === Section).map((e) => textIn(Section(e.props)))].join(' ');
+        assert.doesNotMatch(words, /project|coordinator|goal|◆/i);
+        assert.match(words, /Defaults for all chats/);
+
+        // Use default sends only what this chat set; the pause goes to the plugin as it changes.
+        calls.length = 0;
+        row('thread').source[1].props.onClick();
+        await tick();
+        elementsOf(draw()).find((e) => e.type === SettingRow && e.props.id === 'paused').props.control.props.onChange(true);
+        await tick();
+        assert.deepEqual(calls, [['update', { target: 'c', changes: { threadModel: null } }], ['update', { target: 'c', changes: { paused: true } }]]);
+    } finally {
+        for (const done of undo) done();
+    }
 });
 
 test('browser half: New threads follows DSH\'s default after a pick in any chat; a row names a model the menu already names only on hover', async () => {
@@ -1291,7 +681,7 @@ test('browser half: a thread row\'s ⋯ holds the other way to open it, its chan
     assert.deepEqual(ids(rowMenuItems({ row: { ...row, group: 'resolved' }, current: true, action, projects })), ['reopen']);
     // A DSH without the Changes tab offers DSH's Review, as the cards do; without the plugin to change it, only the ways to open it.
     assert.deepEqual(plain(rowMenuItems({ row, action, changes, projects: { hasChanges: () => false, openReview() {} } }).map((i) => i.label)), ['Open in full view', 'Review the latest changes']);
-    // A thread with no session yet has no ⋯; the Projects page's (threadMenuItems alone) has Stop while it runs.
+    // A thread with no session yet has no ⋯; its items alone (threadMenuItems) have Stop while it runs.
     assert.deepEqual(plain(rowMenuItems({ row: { ...row, session: undefined }, action, changes, projects })), []);
     assert.deepEqual(ids(threadMenuItems({ thread: { running: true, resolved: false }, live: true })), ['stop']);
     assert.deepEqual(ids(threadMenuItems({ thread: { running: false, resolved: false }, live: false })), []);
@@ -1348,7 +738,7 @@ test('browser half: a thread row\'s ⋯ holds the other way to open it, its chan
     assert.equal(room([row, { ...row, id: 't2', session: 's2', group: 'waiting', ending: { state: 'failed' } }]), 2);
 });
 
-test('browser half: a thread\'s ⋯ has Rename…, which renames it through the plugin in a dialog, and Model and permission…, which opens Project settings at its row', async () => {
+test('browser half: a thread\'s ⋯ has Rename…, which renames it through the plugin in a dialog, and Model and permission…, which opens Thread settings at its row', async () => {
     const { client, react } = loadClient();
     const { ThreadRow, ThreadMore, rowMenuItems, threadMenuItems, runThreadItem, renameFlow, RenameThread, RenameOverlay, settingsDialog } = client.internals;
     const rename = renameFlow();
@@ -1370,7 +760,7 @@ test('browser half: a thread\'s ⋯ has Rename…, which renames it through the 
         ['thread-settings', 'Model and permission…', 'IconSlidersTwoOutlineRegular'], ['resolve', 'Mark resolved', 'IconCheckCircleOutlineRegular'],
     ]);
     assert.deepEqual(ids(rowMenuItems({ row: { ...row, running: true, group: 'running' }, action, projects })), ['open', 'rename', 'thread-settings', 'stop']);
-    // Without the plugin to rename it, only its row in Project settings.
+    // Without the plugin to rename it, only its row in Thread settings.
     assert.deepEqual(ids(threadMenuItems({ thread: { running: false, resolved: false }, live: false, rename, settings })), ['thread-settings']);
 
     // Each opens elsewhere, so the Threads menu closes first; neither changes anything by itself.
@@ -1382,11 +772,11 @@ test('browser half: a thread\'s ⋯ has Rename…, which renames it through the 
     assert.equal(await moreOf(draw()).props.run('thread-settings'), '');
     assert.deepEqual([settings.getSnapshot().target, settings.getSnapshot().pick], ['s1', 'thread:t1']);
     assert.deepEqual([left, did], [['leave', 'leave'], []]);
-    // As the Projects page runs them, through any session of the project.
+    // Through the chat that started the thread, as through the thread's own session.
     rename.close();
     await runThreadItem('rename', { target: 'c', thread: 't2', title: 'Old copy', rename, settings });
     assert.deepEqual(plain(rename.getSnapshot().ask), { target: 'c', thread: 't2', title: 'Old copy' });
-    // Project settings takes a thread's own row (thread:<id>), and nothing else that looks like one.
+    // Thread settings takes a thread's own row (thread:<id>), and nothing else that looks like one.
     settings.open('c', { pick: 'thread:t2' });
     assert.equal(settings.getSnapshot().pick, 'thread:t2');
     settings.open('c', { pick: 'thread:../t2' });
@@ -1418,12 +808,12 @@ test('browser half: a thread\'s ⋯ has Rename…, which renames it through the 
     const again = mount(react, () => RenameThread(RenameOverlay({ flow: rename, facts }).props));
     dialog = again();
     input(dialog).props.onChange({ target: { value: '  Sign-in   fix ' } });
-    answer = { ok: false, error: { code: 'coordinator/refused', message: 'no thread t1 in this project' } };
+    answer = { ok: false, error: { code: 'coordinator/refused', message: 'no thread t1 in this chat' } };
     submit(again());
     await tick();
     dialog = again();
     const alert = byClass(dialog.children, 'dshp-ar-error')[0];
-    assert.deepEqual([alert.props.role, textIn(alert), rename.getSnapshot().ask?.thread], ['alert', 'No thread t1 in this project.', 't1']);
+    assert.deepEqual([alert.props.role, textIn(alert), rename.getSnapshot().ask?.thread], ['alert', 'No thread t1 in this chat.', 't1']);
     // While the plugin answers: Renaming…, and nothing to press twice.
     let finish;
     facts.change = (target, changes) => { did.push(['change', target, plain(changes)]); return new Promise((resolve) => { finish = resolve; }); };
@@ -1446,7 +836,7 @@ test('browser half: a thread\'s ⋯ has Rename…, which renames it through the 
 
 test('browser half: over 8 threads, Find a thread keeps the rows whose name holds the words, resolved ones too, with the words marked', () => {
     const { client, react } = loadClient();
-    const { ThreadFind, ThreadList, ThreadRow, findRows, FIND_FROM } = client.internals;
+    const { ThreadFind, ThreadList, ThreadRow, findRows, withHit, FIND_FROM } = client.internals;
     const rows = ['Fix login', 'Hero images', 'Cart totals', 'Login copy'].map((title, i) => ({
         id: `t${i + 1}`, title, line: 'Done', dot: 'done', session: `s${i + 1}`, group: i === 3 ? 'resolved' : 'done', running: false,
     }));
@@ -1461,8 +851,10 @@ test('browser half: over 8 threads, Find a thread keeps the rows whose name hold
     // A row marks the words in its name, which keeps its whole name for its label.
     const drawn = mount(react, () => ThreadRow({ row: rows[3], now: 0, onOpen() {}, find: 'login' }))();
     const name = byClass(drawn, 'dshp-t-name')[0];
-    assert.deepEqual(plain([textIn(name), name.children.map((c) => (typeof c === 'string' ? c : `[${textIn(c)}]`)), byClass(name, 'dshp-tree-hit').length]), ['Login copy', ['[Login]', ' copy'], 1]);
+    assert.deepEqual(plain([textIn(name), name.children.map((c) => (typeof c === 'string' ? c : `[${textIn(c)}]`)), byClass(name, 'dshp-t-hit').length]), ['Login copy', ['[Login]', ' copy'], 1]);
     assert.match(drawn.children[0].props['aria-label'], /^Login copy\. /);
+    assert.deepEqual(plain(withHit('Fix the cart', 'CART').map((part) => (typeof part === 'string' ? part : `[${textIn(part)}]`))), ['Fix the ', '[cart]']);
+    assert.deepEqual(plain(withHit('Fix', 'zz')), ['Fix']);
 
     // The box: one of the panel's items, so the arrows go on to the rows; Home and End stay in its words, and Escape clears them.
     const said = [];
@@ -1602,7 +994,180 @@ test('browser half: the Threads menu opens when the pointer moves onto its trigg
     assert.equal(shown().open, true);
 });
 
-test('browser half: Rename, Mark resolved or Reopen from a row shows at once, and the coordinator\'s own later change wins', () => {
+test('browser half: Coordinate shows in the header of a plain top-level chat that isn\'t coordinating, and makes it coordinate', async () => {
+    const Toast = () => null;
+    const { client, react } = loadClient({ primitives: { Tooltip: 'Tooltip', Toast } });
+    const { CoordinateAction, canCoordinate, takeKnown, projectFacts } = client.internals;
+    const thread = { role: 'thread', project: { id: 'c', name: 'Shop' }, coordinator: 'c', thread: { id: 't1' } };
+    const coordinating = (id, more) => ({ role: 'coordinator', project: { id, name: 'Shop' }, threads: [], ...more });
+    const state = {
+        byId: {
+            p: { id: 'p', title: 'Pricing' },
+            n: { id: 'n', title: 'Notes', projectionValues: { coordinatorSession: coordinating('n', { off: true }) } },
+            c: { id: 'c', title: 'Shop', projectionValues: { coordinatorSession: coordinating('c') } },
+            t: { id: 't', title: 'Fix login', projectionValues: { coordinatorSession: thread } },
+            sa: { id: 'sa', title: 'Explore the code', parentId: 'p', origin: 'subagent' },
+            sb: { id: 'sb', title: 'Review', origin: 'subagent' },
+            old: { id: 'old', title: 'Storefront' },
+            cold: { id: 'cold', title: 'Not read yet' },
+        },
+        projectionsBySession: { cold: { state: 'loading', values: {} } },
+    };
+    takeKnown({ old: { role: 'coordinator', project: 'old', name: 'Storefront' } });
+    // A plain chat of the user's own, or one that stopped coordinating; not a thread, a subagent's session, a chat that
+    // coordinates, one the plugin's store knows as either, or one whose value DSH is still reading.
+    assert.deepEqual(['p', 'n', 'c', 't', 'sa', 'sb', 'old', 'cold', 'missing'].map((id) => canCoordinate(state, id)),
+        [true, true, false, false, false, false, false, false, false]);
+
+    const calls = [];
+    const refreshed = [];
+    let answer;
+    const link = {
+        async call(method, args) {
+            calls.push([method, plain(args)]);
+            await null;
+            // As the plugin does: once it answers, the chat's value says it coordinates.
+            if (answer.ok && args.on) state.byId[args.target] = { ...state.byId[args.target], projectionValues: { coordinatorSession: coordinating(args.target) } };
+            return answer;
+        },
+    };
+    const projects = { facts: projectFacts(link), refresh: (id, now) => refreshed.push([id, now]) };
+    const draw = (sessionId) => mount(react, () => CoordinateAction({ sessionId, useSessions: (select) => select(state), projects }));
+    const buttonOf = (tree) => elementsOf(tree).find((e) => e.props?.['data-projects-coordinate-button'] !== undefined);
+    const toastOf = (tree) => elementsOf(tree).find((e) => e.type === Toast);
+    for (const id of ['c', 't', 'sa', 'old', 'cold']) assert.equal(draw(id)(), null, id);
+
+    // The button names what it does; its tooltip says why.
+    const chat = draw('p');
+    let tree = chat();
+    const tip = elementsOf(tree).find((e) => e.type === 'Tooltip');
+    assert.deepEqual(plain([textIn(tree), buttonOf(tree).props['aria-label'], buttonOf(tree).props['aria-description'], tip.props.label]),
+        ['Coordinate', 'Coordinate', 'Run work from this chat in threads that report back here', 'Run work from this chat in threads that report back here']);
+    // A click asks the plugin to make this session coordinate, and reads its value again at once; while it asks, nothing to press twice.
+    answer = { ok: true, value: { coordinating: true, session: 'p', text: 'This chat now runs work in threads.', projects: [{ id: 'p', coordinator: 'p', paused: false }] } };
+    buttonOf(tree).props.onClick();
+    assert.equal(buttonOf(chat()).props.disabled, true);
+    await tick();
+    assert.deepEqual(calls, [['coordinate', { target: 'p', on: true }]]);
+    assert.deepEqual(refreshed, [['p', true]]);
+    // Coordinating now: the button leaves the header, and what the plugin said shows as DSH's banner.
+    tree = chat();
+    assert.equal(buttonOf(tree), undefined);
+    assert.deepEqual(plain([toastOf(tree).props.text, toastOf(tree).props.tone]), ['This chat now runs work in threads.', 'success']);
+    assert.equal(canCoordinate(state, 'p'), false);
+
+    // A refusal shows as DSH's banner, as a warning, and the button stays.
+    answer = { ok: false, error: { code: 'coordinator/refused', message: 'this chat is still answering; try again when its turn ends' } };
+    const stopped = draw('n');
+    buttonOf(stopped()).props.onClick();
+    await tick();
+    assert.deepEqual(calls.at(-1), ['coordinate', { target: 'n', on: true }]);
+    tree = stopped();
+    assert.deepEqual(plain([toastOf(tree).props.text, toastOf(tree).props.tone ?? null, toastOf(tree).props.icon.type, toastOf(tree).props.holdMs, buttonOf(tree).props.disabled]),
+        ['This chat is still answering; try again when its turn ends.', null, 'IconWarningOutlineRegular', 8000, false]);
+    assert.equal(refreshed.length, 1, 'nothing changed, so nothing to read again');
+    // The banner goes when DSH is done with it.
+    toastOf(tree).props.onDone();
+    assert.equal(toastOf(stopped()), undefined);
+});
+
+test('browser half: while a chat coordinates, its Threads menu ends with Stop coordinating; one that stopped keeps the menu while it has threads, beside Coordinate', async () => {
+    const doc = { body: 'body', addEventListener: () => {}, removeEventListener: () => {}, querySelector: () => ({}) };
+    const Toast = () => null;
+    const { client, react } = loadClient({ document: doc, primitives: { useAnchoredPosition: () => null, useDismissOnOutsidePointer: () => {}, MenuSurface: 'MenuSurface', Toast } });
+    const { ThreadsMenu, CoordinateAction, canCoordinate, stoppedEmpty, projectContext } = client.internals;
+    const threads = [{ id: 't1', session: 's-t1', title: 'Deploy', resolved: false, created: '2026-10-10T10:00:00.000Z' }];
+    const chat = (id, more) => ({ id, title: id, projectionValues: { coordinatorSession: { role: 'coordinator', project: { id, name: id }, threads, ...more } } });
+    const state = {
+        byId: {
+            c: chat('c'), n: chat('n', { off: true }), e: chat('e', { off: true, threads: [] }),
+            's-t1': { id: 's-t1', title: 'Deploy', projectionValues: { coordinatorSession: { role: 'thread', project: { id: 'c', name: 'c' }, coordinator: 'c', thread: { id: 't1' } } } },
+        },
+    };
+    const quiet = { subscribe: () => () => {} };
+    const calls = [];
+    const refreshed = [];
+    let answer = { ok: true, value: { coordinating: false, session: 'c', text: 'This chat stopped coordinating.', projects: [] } };
+    const projects = {
+        facts: {
+            ...quiet, getSnapshot: () => 0, watch: () => () => {}, paused: () => false, info: () => undefined, describe: async () => {},
+            coordinate: async (target, on) => {
+                calls.push([target, on]);
+                if (answer.ok) state.byId[target] = chat(target, { off: true });
+                return answer;
+            },
+        },
+        settings: { ...quiet, getSnapshot: () => ({ available: false }) },
+        catalog: { ...quiet, getSnapshot: () => ({ status: 'ready', value: undefined }), ensure: () => {} },
+        refresh: (id, now) => refreshed.push([id, now]), hasPane: () => false, hasChanges: () => false,
+    };
+    // State and refs hold between draws, as React's do; effects don't run.
+    const drawn = (component, sessionId) => {
+        const refs = [];
+        return mount(react, () => {
+            let at = 0;
+            react.useRef = (init) => {
+                const k = at++;
+                if (!(k in refs)) refs[k] = { current: init };
+                return refs[k];
+            };
+            return component({ sessionId, useSessions: (select) => select(state), useSessionStatus: (select) => select(new Map()), projects });
+        });
+    };
+    const menuOf = (sessionId) => {
+        const draw = drawn(ThreadsMenu, sessionId);
+        return () => {
+            const tree = draw();
+            const all = elementsOf(tree);
+            const trigger = all.find((e) => e.props?.['data-projects-threads-trigger'] === '')?.props;
+            return { tree, trigger, open: trigger?.['aria-expanded'] === true, stop: all.find((e) => e.props?.['data-projects-stop-coordinating'] === ''), toast: all.find((e) => e.type === Toast) };
+        };
+    };
+    const coordinateShown = (sessionId) => drawn(CoordinateAction, sessionId)() !== null;
+
+    // The coordinating chat's own menu ends with Stop coordinating; Coordinate isn't there.
+    const menu = menuOf('c');
+    menu().trigger.onClick();
+    let at = menu();
+    assert.equal(at.open, true);
+    assert.deepEqual(plain([textIn(at.stop), at.stop.children[0].type, at.stop.props.disabled]), ['Stop coordinating', 'IconCloseOutlineRegular', false]);
+    assert.equal(coordinateShown('c'), false);
+    // A thread's menu has no such item.
+    const own = menuOf('s-t1');
+    own().trigger.onClick();
+    assert.deepEqual([own().open, own().stop], [true, undefined]);
+    // A click closes the menu and asks the plugin to stop, with no confirmation; done, it needs no banner.
+    at.stop.props.onClick();
+    assert.deepEqual(calls, [['c', false]]);
+    await tick();
+    assert.deepEqual(refreshed, [['c', true]]);
+    at = menu();
+    assert.deepEqual([at.open, at.toast], [false, undefined]);
+
+    // Stopped with threads: the menu stays, without Stop coordinating, and Coordinate is back beside it.
+    assert.equal(stoppedEmpty(projectContext(state, 'c')), false);
+    at.trigger.onClick();
+    at = menu();
+    assert.deepEqual([at.open, at.trigger['aria-label'], at.stop], [true, 'Threads: 1 open', undefined]);
+    assert.equal(coordinateShown('c'), true);
+    assert.equal(canCoordinate(state, 'n'), true);
+    // Stopped with no threads: a chat like any other, with Coordinate alone.
+    assert.equal(stoppedEmpty(projectContext(state, 'e')), true);
+    assert.equal(menuOf('e')().tree, null);
+    assert.equal(coordinateShown('e'), true);
+
+    // A refusal shows as DSH's banner where the menu was.
+    state.byId.c = chat('c');
+    answer = { ok: false, error: { code: 'coordinator/refused', message: 'a thread is still running' } };
+    menu().trigger.onClick();
+    menu().stop.props.onClick();
+    await tick();
+    at = menu();
+    assert.deepEqual(plain([at.toast.props.text, at.toast.props.icon.type]), ['A thread is still running.', 'IconWarningOutlineRegular']);
+    assert.deepEqual(calls, [['c', false], ['c', false]]);
+});
+
+test('browser half: Rename, Mark resolved or Reopen from a row shows at once, and the coordinating chat\'s own later change wins', () => {
     const { client } = loadClient();
     const { newestRoster: resolvedRoster } = client.internals;
     const seen = new Map();
@@ -1614,17 +1179,17 @@ test('browser half: Rename, Mark resolved or Reopen from a row shows at once, an
     assert.equal(resolvedRoster(same, answer(false), seen, 'c'), same);
     // Mark resolved in the window: the plugin's answer changed last.
     assert.deepEqual(shown(roster(false), answer(true)), [true, true]);
-    // The coordinator's next project tool records it too.
+    // The coordinating chat's next thread tool records it too.
     assert.deepEqual(shown(roster(true), answer(true)), [true, true]);
-    // The coordinator reopens it with its tool: the roster changed last, before the plugin is read again.
+    // The chat reopens it with its tool: the roster changed last, before the plugin is read again.
     assert.deepEqual(shown(roster(false), answer(true)), [false, true]);
     assert.deepEqual(shown(roster(false), answer(false)), [false, true]);
-    // After a reload the first look takes the plugin's answer (the roster waits on the coordinator's next tool).
+    // After a reload the first look takes the plugin's answer (the roster waits on the chat's next tool).
     assert.deepEqual(plain(resolvedRoster(roster(false), answer(true), new Map(), 'c').map((e) => e.resolved)), [true, true]);
     // Threads the plugin hasn't named, or no answer yet: the roster as it is.
     assert.deepEqual(plain(resolvedRoster(roster(false), [{ id: 't9', resolved: true }], new Map(), 'c').map((e) => e.resolved)), [false, true]);
     assert.equal(resolvedRoster(same, undefined, new Map(), 'c'), same);
-    // A name works the same way: Rename in the window shows at once, and the coordinator's own rename after it wins.
+    // A name works the same way: Rename in the window shows at once, and the chat's own rename after it wins.
     const names = new Map();
     const named = (r, a) => plain(resolvedRoster([{ id: 't1', title: r }], [{ id: 't1', title: a }], names, 'c').map((e) => e.title));
     assert.deepEqual(named('Fix login', 'Fix login'), ['Fix login']);
@@ -1692,18 +1257,18 @@ test('browser half: access reads as DSH names it, and each thread row says what 
         { label: 'Check lanes. Running. Full access. Your tools: all of them', tools: 'all of them', permission: [['danger-full-access', 'Full access']] });
     assert.deepEqual(plain(chips(undefined)), { label: 'Check lanes. Running', tools: '', permission: [] });
 
-    // The menu's top: rows for new threads' permission and the user's tools, each opening Project settings at Access.
+    // The menu's top: rows for new threads' permission and the user's tools, each opening Thread settings at Access.
     const picked = [];
-    const summary = ModelsSummary({ coordinator: 'V4 · Max', thread: 'V4 · High', access: accessSummary(info), onPick: (id) => picked.push(id) });
+    const summary = ModelsSummary({ thread: 'V4 · High', access: accessSummary(info), onPick: (id) => picked.push(id) });
     const rows = summary.children.filter(Boolean);
-    assert.deepEqual(rows.map((r) => r.props['data-projects-models']), ['coordinator', 'thread', 'access', 'tools']);
-    assert.deepEqual(rows.slice(2).map((r) => r.props['aria-label']),
-        ['Thread access: Workspace Write. Change it in Project settings', 'Your tools: Only when asked. Change it in Project settings']);
+    assert.deepEqual(rows.map((r) => r.props['data-projects-models']), ['thread', 'access', 'tools']);
+    assert.deepEqual(rows.slice(1).map((r) => r.props['aria-label']),
+        ['Thread access: Workspace Write. Change it in Thread settings', 'Your tools: Only when asked. Change it in Thread settings']);
+    rows[1].props.onClick();
     rows[2].props.onClick();
-    rows[3].props.onClick();
     assert.deepEqual(picked, ['access', 'access']);
-    assert.equal(ModelsSummary({ coordinator: 'V4 · Max', thread: 'V4 · High' }).children.filter(Boolean).length, 2);
-    assert.equal(ModelsSummary({ coordinator: 'V4 · Max', thread: 'V4 · High', access: {} }).children.filter(Boolean).length, 2);
+    assert.equal(ModelsSummary({ thread: 'V4 · High' }).children.filter(Boolean).length, 1);
+    assert.equal(ModelsSummary({ thread: 'V4 · High', access: {} }).children.filter(Boolean).length, 1);
 });
 
 test('browser half: thread rows, cards and links read the projection as DSH sends it', () => {
@@ -1727,9 +1292,9 @@ test('browser half: thread rows, cards and links read the projection as DSH send
         ids: ['s-c', 's-t1', 's-t3', 's-plain'],
         phase: 'ready',
         byId: {
-            's-c': { id: 's-c', title: '◆ DSH Plugins', projectionValues: { coordinatorSession: coordValue } },
-            's-t1': { id: 's-t1', title: 'DSH Plugins › Add CI' },
-            's-t3': { id: 's-t3', title: 'DSH Plugins › Write docs', running: true, updatedAt: Date.parse('2026-10-09T15:00:00.000Z') },
+            's-c': { id: 's-c', title: 'DSH Plugins', projectionValues: { coordinatorSession: coordValue } },
+            's-t1': { id: 's-t1', title: 'Add CI' },
+            's-t3': { id: 's-t3', title: 'Write docs', running: true, updatedAt: Date.parse('2026-10-09T15:00:00.000Z') },
             's-plain': { id: 's-plain', title: 'Something else' },
         },
         projectionsBySession: { 's-t3': { state: 'ready', values: { coordinatorSession: threadValue } } },
@@ -1774,14 +1339,15 @@ test('browser half: thread rows, cards and links read the projection as DSH send
         ['Handback · Done', 'Running'], ['Progress update', 'Running'],
         ['Asked for your approval', 'Running'],
     ]);
-    // In a thread, its own handback card points back at the coordinator.
+    // In a thread, its own handback card points back at the chat that started it, by that chat's name.
     const own = cardView(threadValue.cards[0], thread, statuses, state.byId, 's-t3');
-    assert.deepEqual(plain([own.verb, own.title, own.session]), ['Handed back to the coordinator · Progress update', '◆ DSH Plugins', 's-c']);
-    // While the project is paused, the thread's own card says its handback waits, and the coordinator's cards
+    assert.deepEqual(plain([own.verb, own.title, own.session]), ['Handed back · Progress update', 'DSH Plugins', 's-c']);
+    // While threads are paused, the thread's own card says its handback waits, and the coordinating chat's cards
     // read a held handback as the Threads menu does.
     const heldOwn = cardView(threadValue.cards[0], thread, statuses, state.byId, 's-t3', undefined, [{ thread: 't3', status: 'progress' }]);
-    assert.deepEqual(plain([heldOwn.verb, heldOwn.note, heldOwn.icon]), ['Handback held · Progress update', 'The project is paused, so the coordinator gets this handback when you resume.', 'IconPauseOutlineRegular']);
-    assert.equal(cardView(threadValue.cards[0], thread, statuses, state.byId, 's-t3', undefined, [{ thread: 't9', status: 'done' }]).verb, 'Handed back to the coordinator · Progress update');
+    assert.deepEqual(plain([heldOwn.verb, heldOwn.note, heldOwn.icon]),
+        ['Handback held · Progress update', 'Threads are paused, so the chat that started this thread gets this handback when you resume.', 'IconPauseOutlineRegular']);
+    assert.equal(cardView(threadValue.cards[0], thread, statuses, state.byId, 's-t3', undefined, [{ thread: 't9', status: 'done' }]).verb, 'Handed back · Progress update');
     const heldCard = cardView({ turn: 2, seq: 12, kind: 'send', thread: 't2' }, coord, statuses, state.byId, 's-c', undefined, [{ thread: 't2', status: 'blocked' }]);
     assert.deepEqual(plain([heldCard.state.label, heldCard.state.dot, heldCard.row.line, heldCard.row.held]), ['Blocked', 'warning', 'Blocked · held until you resume', true]);
 
@@ -1803,8 +1369,9 @@ test('browser half: thread rows, cards and links read the projection as DSH send
     assert.equal(chatSessionOf(chatAddress('sess/with ?#%')), 'sess/with ?#%');
     assert.equal(chatSessionOf('dsh-resource://subagentchat/session/x'), undefined);
 
-    // Sidebar marks: from the projection, or from the "<project> › " title before DSH has folded the row.
-    assert.deepEqual(['s-t3', 's-t1', 's-c', 's-plain'].map((id) => isThreadRow(state, id)), [true, true, false, false]);
+    // Sidebar marks: from the projection, or from what the plugin's store knows; never from a title.
+    assert.deepEqual(['s-t3', 's-t1', 's-c', 's-plain'].map((id) => isThreadRow(state, id)), [true, false, false, false]);
+    assert.equal(isThreadRow({ ...state, byId: { ...state.byId, 's-t1': { id: 's-t1', title: 'DSH Plugins › Add CI' } } }, 's-t1'), false);
 });
 
 test('browser half: a failed or stopped thread reads Failed or Stopped everywhere, with its reason and Retry or Resume', () => {
@@ -1829,7 +1396,7 @@ test('browser half: a failed or stopped thread reads Failed or Stopped everywher
     ] };
     const thread = (id, ending) => ({ role: 'thread', project: { name: 'Storefront' }, coordinator: 's-c', thread: { id }, ...(ending ? { ending } : {}) });
     const state = {
-        byId: { 's-c': { id: 's-c', title: '◆ Storefront', projectionValues: { coordinatorSession: coordValue } } },
+        byId: { 's-c': { id: 's-c', title: 'Storefront', projectionValues: { coordinatorSession: coordValue } } },
         projectionsBySession: {
             's-t6': { values: { coordinatorSession: thread('t6', stopped) } },
             's-t7': { values: { coordinatorSession: thread('t7', failed) } },
@@ -1894,9 +1461,10 @@ test('browser half: a failed or stopped thread reads Failed or Stopped everywher
     const { RowPlace, rowWords } = client.internals;
     const useMarked = (select) => select(marked);
     assert.deepEqual(plain(['s-t7', 's-t11', 's-t8', 's-c', 'nope'].map((id) => RowPlace({ sessionId: id, useSessions: useMarked })?.props['data-projects-words'] ?? null)),
-        ['Project thread: Failed', 'Project thread: Blocked', 'Project thread', 'Project', null]);
-    assert.equal(rowWords({ role: 'coordinator', paused: true }), 'Project paused');
-    assert.equal(rowWords({ role: 'coordinator', paused: true, news: { unread: [{ kind: 'failed', title: 'Deploy' }] } }), 'Project paused, New: “Deploy” failed');
+        ['Thread: Failed', 'Thread: Blocked', 'Thread', 'Coordinating', null]);
+    assert.equal(rowWords({ role: 'coordinator', paused: true }), 'Threads paused');
+    assert.equal(rowWords({ role: 'coordinator', paused: true, news: { unread: [{ kind: 'failed', title: 'Deploy' }] } }), 'Threads paused, New: “Deploy” failed');
+    assert.equal(rowWords({ role: 'coordinator', off: true }), 'Stopped coordinating');
     assert.equal(rowWords({ role: '' }), '');
 
     // The hover card says what the thread last did; DSH ends it with the session's own status.
@@ -1911,40 +1479,43 @@ test('browser half: a failed or stopped thread reads Failed or Stopped everywher
     assert.equal(continueError({ code: 'projects/unreachable', message: 'socket' }), 'Couldn\'t reach the thread.');
 });
 
-test('browser half: each session list row says its place in a project, and the CSS nests each project by it', () => {
+test('browser half: each session list row says its place by the chat its value names, never by a title, and the CSS nests each chat\'s threads under it', () => {
     const { client } = loadClient();
-    const { rowPlace, nestingCss, nestedPlaces } = client.internals;
-    const coord = (name) => ({ role: 'coordinator', project: { name }, threads: [] });
+    const { rowPlace, nestingCss, nestedPlaces, takeKnown } = client.internals;
+    takeKnown({});
+    const coord = (id, name) => ({ role: 'coordinator', project: { id, name }, threads: [] });
+    const thread = (coordinator, id) => ({ role: 'thread', project: { id: coordinator, name: 'DSH Plugins' }, coordinator, thread: { id } });
     const state = {
         byId: {
-            c: { title: '◆ DSH Plugins', projectionValues: { coordinatorSession: coord('DSH Plugins') } },
-            t1: { title: 'DSH Plugins › Add CI' },
-            t2: { title: 'Fix login', projectionValues: { coordinatorSession: { role: 'thread', coordinator: 'c', thread: { id: 't2' } } } },
-            t3: { title: 'Renamed by hand', projectionValues: { coordinatorSession: { role: 'thread', coordinator: 'c', thread: { id: 't3' } } } },
+            c: { title: 'DSH Plugins', projectionValues: { coordinatorSession: coord('c', 'DSH Plugins') } },
+            t2: { title: 'Fix login', projectionValues: { coordinatorSession: thread('c', 't2') } },
+            t3: { title: 'Renamed by hand', projectionValues: { coordinatorSession: thread('c', 't3') } },
+            // Another chat with the same name: its thread goes under it, not under c.
+            t4: { title: 'DSH Plugins › Deploy', projectionValues: { coordinatorSession: thread('d', 't4') } },
             o: { title: '◆ Other' },
             ot: { title: 'Other › Its thread' },
+            t1: { title: 'DSH Plugins › Add CI' },
             plain: { title: 'Release notes' },
-            odd: { title: 'Nobody › Not a thread' },
             lost: { title: 'x', projectionValues: { coordinatorSession: { role: 'thread', thread: { id: 't9' } } } },
         },
+        projectionsBySession: { d: { values: { coordinatorSession: coord('d', 'DSH Plugins') } } },
     };
-    // A coordinator by its projection or its "◆ " title; a thread by its projection whatever its title,
-    // or (before its projection reaches the list) by an old "<project> › " title with that coordinator listed.
-    assert.equal(rowPlace(state, 'c'), 'coordinator:c');
-    assert.equal(rowPlace(state, 'o'), 'coordinator:o');
-    assert.equal(rowPlace(state, 't1'), 'thread:c');
-    assert.equal(rowPlace(state, 't2'), 'thread:c');
-    assert.equal(rowPlace(state, 't3'), 'thread:c');
-    assert.equal(rowPlace(state, 'ot'), 'thread:o');
-    assert.equal(rowPlace(state, 'plain'), '');
-    assert.equal(rowPlace(state, 'odd'), '');
-    assert.equal(rowPlace(state, 'lost'), '');
-    assert.equal(rowPlace(state, 'missing'), '');
+    // A coordinating chat by its value; a thread by the chat id its value names, whatever either is called.
+    assert.deepEqual(['c', 't2', 't3', 'd', 't4'].map((id) => rowPlace(state, id)), ['coordinator:c', 'thread:c', 'thread:c', 'coordinator:d', 'thread:d']);
+    // No title places a row: not a "◆ " one, not a "<name> › " one; nor a thread value that names no chat.
+    assert.deepEqual(['o', 'ot', 't1', 'plain', 'lost', 'missing'].map((id) => rowPlace(state, id)), ['', '', '', '', '', '']);
     assert.equal(rowPlace(undefined, 'c'), '');
+    // Each row's mark says its role and the id of the chat it nests under, which the CSS and DSH's drags go by.
+    const { RowPlace } = client.internals;
+    const markOfRow = (id) => {
+        const el = RowPlace({ sessionId: id, useSessions: (select) => select(state) });
+        return el && [el.props['data-projects-row'], el.props['data-projects-of']];
+    };
+    assert.deepEqual(plain(['c', 't2', 'd', 't4', 'o', 't1'].map(markOfRow)), [['coordinator', 'c'], ['thread', 'c'], ['coordinator', 'd'], ['thread', 'd'], null, null]);
 
-    // The projects drawn in a section, read from the marks in its rows: each coordinator there with its threads
-    // there, at its wrapper's place (from 1), its threads in DSH's order; a coordinator without threads here, or a
-    // thread whose coordinator is elsewhere, nests nothing.
+    // The groups drawn in a section, read from the marks in its rows: each coordinating chat there with its threads
+    // there, at its wrapper's place (from 1), its threads in DSH's order; a chat without threads here, or a
+    // thread whose chat is elsewhere, nests nothing.
     const { sectionGroups } = client.internals;
     const markOf = (mark) => (mark ? { getAttribute: (name) => ({ 'data-projects-row': mark[0], 'data-projects-of': mark[1] })[name] ?? null } : null);
     const rowEl = (key, mark) => ({ getAttribute: (name) => (name === 'data-row-key' ? key : null), querySelector: (sel) => (sel === '[data-projects-row]' ? markOf(mark) : null) });
@@ -1974,7 +1545,7 @@ test('browser half: each session list row says its place in a project, and the C
         assert.doesNotMatch(rule.slice(0, rule.indexOf('{')), /:has\(|~|\+/, rule);
     }
     assert.ok(rules.includes(`${S}{display:flex;flex-direction:column}`));
-    // Each order a mark can say has its rule, ten projects' worth; a section with more gets more.
+    // Each order a mark can say has its rule, ten coordinating chats' worth; a section with more gets more.
     assert.equal(rules.filter((rule) => rule.includes('[data-projects-order=')).length, 30);
     assert.ok(rules.includes(`${S}>[data-projects-order="3"]{order:3}`));
     assert.equal(nestingCss(33).split('\n').filter((rule) => rule.includes('[data-projects-order=')).length, 33);
@@ -1990,8 +1561,8 @@ test('browser half: each session list row says its place in a project, and the C
     // DSH's time (the row's third child, before its actions) leaves the row too, still read aloud, so the indent
     // doesn't cost the title its room; a status DSH writes there instead ("Approval") and the actions stay.
     assert.ok(rules.includes(`${T}>[data-row-key]>:nth-child(3):not(:last-child,[aria-hidden="true"]){position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}`));
-    // Where each child is drawn: what DSH lists before the first coordinator stays first, then each project where its
-    // coordinator is (the coordinator, its threads, what DSH lists after it), so two projects in one workspace stay apart.
+    // Where each child is drawn: what DSH lists before the first coordinating chat stays first, then each such chat
+    // where it is (the chat, its threads, what DSH lists after it), so two of them in one workspace stay apart.
     const keys = ['', 'x', 'a', 'y', 'at2', 'bt', 'b', 'z', 'at1'];
     assert.deepEqual(plain(nestedPlaces([{ coordinator: 'b', at: 7, threads: ['bt'] }, { coordinator: 'a', at: 3, threads: ['at1', 'at2'] }], keys)), {
         order: [0, 0, 1, 3, 2, 5, 4, 6, 2],
@@ -2024,10 +1595,10 @@ test('browser half: the plugin\'s mark gives way to any other mark in a row\'s l
     ]);
 });
 
-test('browser half: a screen reader meets each project\'s rows in drawn order, and hears the plugin\'s words after each title', () => {
+test('browser half: a screen reader meets each coordinating chat\'s rows in drawn order, and hears the plugin\'s words after each title', () => {
     const { client } = loadClient();
     const { nestedPlaces, nestedOrder, markNesting, readInOrder, describeRows, markUnread, undoRows } = client.internals;
-    // The order the CSS draws a section in: what DSH lists before the first coordinator, then each coordinator,
+    // The order the CSS draws a section in: what DSH lists before the first coordinating chat, then each such chat,
     // its threads in DSH's order, and what DSH lists after it, by the orders the plugin's marks give.
     const groups = [{ coordinator: 'b', at: 6, threads: ['bt'] }, { coordinator: 'a', at: 2, threads: ['at1', 'at2'] }];
     const keys = ['x', 'a', 'y', 'at2', 'bt', 'b', 'z', 'at1', ''];
@@ -2038,20 +1609,20 @@ test('browser half: a screen reader meets each project\'s rows in drawn order, a
     assert.equal(nestedOrder([{ coordinator: 'a', at: 1, threads: ['t'] }], ['a', 't', 'x']), null);
     assert.equal(nestedOrder(groups, []), null);
 
-    // DSH's list: a section of wrappers, each holding a row; RowPlace's mark inside each project's row.
+    // DSH's list: a section of wrappers, each holding a row; RowPlace's mark inside each coordinating chat's and thread's row.
     const place = (role, of, words) => new FakeEl('span', { 'data-projects-row': role, 'data-projects-of': of, 'data-projects-words': words });
     const row = (key, mark, attrs = {}) => new FakeEl('div', { 'data-row-key': key, role: 'treeitem', ...attrs }, mark ? [new FakeEl('span', {}, [mark])] : []);
     const wrap = (r, attrs = {}) => new FakeEl('span', attrs, [r]);
     const rows = {
         head: row('workspace:w'), chat: row('session:chat'),
-        t2: row('session:t2', place('thread', 'c', 'Project thread: Failed')), c: row('session:c', place('coordinator', 'c', 'Project')),
-        late: row('session:late'), t1: row('session:t1', place('thread', 'c', 'Project thread')),
-        old: row('session:old', place('thread', 'c', 'Project thread'), { 'aria-description': 'Archived' }),
+        t2: row('session:t2', place('thread', 'c', 'Thread: Failed')), c: row('session:c', place('coordinator', 'c', 'Coordinating')),
+        late: row('session:late'), t1: row('session:t1', place('thread', 'c', 'Thread')),
+        old: row('session:old', place('thread', 'c', 'Thread'), { 'aria-description': 'Archived' }),
     };
     const kids = [wrap(rows.head), wrap(rows.chat), wrap(rows.t2), wrap(rows.c, { id: 'dsh-own' }), wrap(rows.late), wrap(rows.t1), wrap(rows.old)];
     const section = new FakeEl('div', {}, kids);
     const tree = new FakeEl('div', { role: 'tree' }, [section]);
-    // The CSS's marks: the section nests; each child its order (0 for what DSH lists before the coordinator, so only a
+    // The CSS's marks: the section nests; each child its order (0 for what DSH lists before the coordinating chat, so only a
     // child DSH added since the last pass has none); the threads' wrappers nested. The highest order sizes the sheet.
     const marks = () => plain(kids.map((k) => [k.getAttribute('data-projects-order'), k.hasAttribute('data-projects-nested')]));
     assert.equal(markNesting(tree), 3);
@@ -2059,7 +1630,7 @@ test('browser half: a screen reader meets each project\'s rows in drawn order, a
     assert.deepEqual(marks(), [['0', false], ['0', false], ['2', true], ['1', false], ['3', false], ['2', true], ['2', true]]);
     assert.equal(markNesting(tree), 3, 'a second pass changes nothing');
     assert.deepEqual(marks(), [['0', false], ['0', false], ['2', true], ['1', false], ['3', false], ['2', true], ['2', true]]);
-    // A chat DSH adds after the coordinator has no order until the next pass, which puts it after the project.
+    // A chat DSH adds after the coordinating chat has no order until the next pass, which puts it after that chat's threads.
     const fresh = wrap(row('session:fresh'));
     section.children = [...kids, fresh];
     assert.equal(fresh.getAttribute('data-projects-order'), null);
@@ -2069,29 +1640,29 @@ test('browser half: a screen reader meets each project\'s rows in drawn order, a
     markNesting(tree);
     assert.deepEqual(marks(), [['0', false], ['0', false], ['2', true], ['1', false], ['3', false], ['2', true], ['2', true]]);
     readInOrder(tree);
-    // The section owns its children in drawn order: the coordinator, its threads, then the chat DSH lists after it.
+    // The section owns its children in drawn order: the coordinating chat, its threads, then the chat DSH lists after it.
     // A child keeps an id it has; the others get the plugin's.
     const ids = section.getAttribute('aria-owns').split(' ');
     assert.deepEqual(plain(ids.map((id) => kids.findIndex((k) => k.id === id))), [0, 1, 3, 2, 5, 6, 4]);
     assert.equal(kids[3].id, 'dsh-own');
     assert.ok(kids.filter((k, i) => i !== 3).every((k) => k.id.startsWith('dshp-o-')));
     assert.ok(section.hasAttribute('data-projects-owns'));
-    // Each project row says its words as its description; a description DSH gave a row is DSH's and stays.
+    // Each coordinating chat's and thread's row says its words as its description; a description DSH gave a row is DSH's and stays.
     describeRows(tree);
-    assert.equal(rows.t2.getAttribute('aria-description'), 'Project thread: Failed');
-    assert.equal(rows.c.getAttribute('aria-description'), 'Project');
+    assert.equal(rows.t2.getAttribute('aria-description'), 'Thread: Failed');
+    assert.equal(rows.c.getAttribute('aria-description'), 'Coordinating');
     assert.equal(rows.old.getAttribute('aria-description'), 'Archived');
     assert.equal(rows.chat.getAttribute('aria-description'), null);
     // The words change with the row; DSH taking a row's description back keeps its own; words gone, description gone.
-    rows.t2.children[0].children[0].setAttribute('data-projects-words', 'Project thread');
+    rows.t2.children[0].children[0].setAttribute('data-projects-words', 'Thread');
     rows.c.setAttribute('aria-description', 'Archived');
     rows.t1.children[0].children[0].setAttribute('data-projects-words', '');
     describeRows(tree);
-    assert.equal(rows.t2.getAttribute('aria-description'), 'Project thread');
+    assert.equal(rows.t2.getAttribute('aria-description'), 'Thread');
     assert.equal(rows.c.getAttribute('aria-description'), 'Archived');
     assert.equal(rows.c.getAttribute('data-projects-said'), null);
     assert.equal(rows.t1.getAttribute('aria-description'), null);
-    // A coordinator with news the user hasn't seen: its row is marked (the CSS makes it bold), and unmarked when it's read.
+    // A coordinating chat with news the user hasn't seen: its row is marked (the CSS makes it bold), and unmarked when it's read.
     const news = rows.c.children[0].children[0];
     news.setAttribute('data-projects-unread', '2');
     markUnread(tree);
@@ -2101,7 +1672,7 @@ test('browser half: a screen reader meets each project\'s rows in drawn order, a
     assert.equal(rows.c.hasAttribute('data-projects-unread-row'), false);
     news.setAttribute('data-projects-unread', '1');
     markUnread(tree);
-    // A thread that leaves the section (or DSH drawing the project in its own order) ends the plugin's order there.
+    // A thread that leaves the section (or DSH drawing the chat and its threads in its own order) ends the plugin's order there.
     section.children = section.children.filter((k) => k !== kids[2] && k !== kids[5] && k !== kids[6]);
     readInOrder(tree);
     assert.equal(section.getAttribute('aria-owns'), null);
@@ -2112,7 +1683,7 @@ test('browser half: a screen reader meets each project\'s rows in drawn order, a
     assert.equal(section.hasAttribute('data-projects-nests'), false);
     assert.ok(section.children.every((k) => !k.hasAttribute('data-projects-order') && !k.hasAttribute('data-projects-nested')));
     // A list drawn as one flat list (the rows' section is the list itself) is never reordered: the CSS doesn't nest it.
-    const flat = new FakeEl('div', { role: 'tree' }, [wrap(row('session:x')), wrap(row('session:t9', place('thread', 'c9', 'Project thread'))), wrap(row('session:c9', place('coordinator', 'c9', 'Project')))]);
+    const flat = new FakeEl('div', { role: 'tree' }, [wrap(row('session:x')), wrap(row('session:t9', place('thread', 'c9', 'Thread'))), wrap(row('session:c9', place('coordinator', 'c9', 'Coordinating')))]);
     readInOrder(flat);
     assert.equal(flat.getAttribute('aria-owns'), null);
     assert.equal(markNesting(flat), 0);
@@ -2150,9 +1721,9 @@ test('browser half: the session list overlay looks only for DSH\'s own list, and
     assert.equal(mount(react, () => SessionList({ useWorkspaces: (select) => select({ pinnedSessionIds: ['c'] }) }))(), null);
     assert.equal(mount(react, () => SessionList({}))(), null);
     assert.deepEqual([...new Set(asked)], ['[data-slot="sidebar.workspaces"] [role="tree"]']);
-    // What it says when it refuses a drag speaks of projects, threads and chats only.
-    assert.deepEqual(Object.keys(SIDEBAR), ['threadStays', 'chatOut', 'projectIn', 'chatStays', 'projectStays']);
-    for (const text of Object.values(SIDEBAR)) assert.doesNotMatch(text, /categor/i);
+    // What it says when it refuses a drag speaks of threads and chats only.
+    assert.deepEqual(Object.keys(SIDEBAR), ['threadStays', 'chatOut', 'coordinatorIn', 'chatStays', 'coordinatorStays']);
+    for (const text of Object.values(SIDEBAR)) assert.doesNotMatch(text, /categor|project|◆/i);
 });
 
 test('browser half: a thread opens beside its coordinator, and in full view where the window is too narrow or when asked', async () => {
@@ -2200,8 +1771,8 @@ test('browser half: a thread opens beside its coordinator, and in full view wher
         sidebarRight: { mounted: { getSnapshot: () => 'c' }, openResource: (address, options) => beside.push([decodeURIComponent(address.split('/').pop()), options.kind]) },
     };
     client.apply(ctx);
-    const { projects } = registered.find((r) => r.name === 'main').inject();
-    // A thread from a card, a row or the Projects page: its coordinator as the main chat, the thread beside it.
+    const { projects } = registered.find((r) => r.id === 'dsh-plugin-coordinator/threads-menu').inject();
+    // A thread from a card or a row: the chat that started it as the main chat, the thread beside it.
     projects.openThread('t');
     assert.deepEqual(opened, ['c']);
     assert.deepEqual(beside, [['t', 'projectthread']]);
@@ -2259,7 +1830,7 @@ test('browser half: a thread opened beside its coordinator, or from the Threads 
         },
     };
     client.apply(ctx);
-    const { projects } = registered.find((r) => r.name === 'main').inject();
+    const { projects } = registered.find((r) => r.id === 'dsh-plugin-coordinator/threads-menu').inject();
     // The first thread gets a tab; opened again, DSH brings that tab to the front.
     projects.openThread('t1');
     tabs = [{ id: 'a', kind: 'projectthread', contentId: address('t1') }];
@@ -2322,8 +1893,8 @@ test('browser half: with "Open threads beside their coordinator" off, a thread o
         sidebarRight: { mounted: { getSnapshot: () => 'c' }, openResource: (address, options) => beside.push([decodeURIComponent(address.split('/').pop()), options.kind]) },
     };
     client.apply(ctx);
-    const { projects } = registered.find((r) => r.slot.name === 'main').slot.inject();
-    // A thread from a row, a card's name or the Projects page opens as the main chat, as before the setting.
+    const { projects } = registered.find((r) => r.slot.id === 'dsh-plugin-coordinator/threads-menu').slot.inject();
+    // A thread from a row or a card's name opens as the main chat, as before the setting.
     projects.openThread('t');
     assert.deepEqual([opened, beside], [['t'], []]);
     // The card's Open, and "Open beside its coordinator", still pair it.
@@ -2540,34 +2111,43 @@ test('browser half: the plugin\'s messages get a notice that names them, without
         { kind: 'idle', thread: 't3', name: 'Flaky', status: 'failed', body: 'The turn failed (HTTP 500): boom\n\nIt produced no reply text.' });
     assert.equal(noticeOf(data(approvalMessage('t4', 'Deploy', 'Deploy', 'shell', 'rm -rf build'), 'cordis-host-runner')).body,
         'It asked to use shell: rm -rf build\n\nThe user approves or rejects it in the "Deploy" session.');
-    assert.equal(noticeOf(data(welcomeMessage('Recipes', ''), 'cordis-host-runner')).kind, 'welcome');
-    // A message from another project's coordinator, and the answer it brings back.
+    // A welcome an earlier version sent when it made a coordinator keeps DSH's own notice: nothing sends one now.
+    assert.equal(noticeOf(data('[Project created: "Recipes"]\n\nThis is the first message in this coordinator session.', 'cordis-host-runner')), undefined);
+    // A message from another coordinating chat, and the answer it brings back.
     assert.deepEqual(plain(noticeOf(data(outsideMessage('DSH Plugins', 'Tell Fix login.', 'Main is green.')))),
         { kind: 'message', project: 'DSH Plugins', body: 'The user asked: "Tell Fix login."\n\nMain is green.' });
     assert.deepEqual(plain(noticeOf(data(replyMessage('"Fix login"', 'Thanks.')))), { kind: 'reply', name: 'Fix login', status: '', body: 'Thanks.' });
+    // A chat an earlier version named with its "◆ " mark reads by its name alone.
     assert.deepEqual(plain(noticeOf(data(replyMessage('◆ Storefront', '', 'The turn failed (HTTP 500): down')))),
-        { kind: 'reply', name: '◆ Storefront', status: 'failed', body: 'The turn failed (HTTP 500): down\n\nIt answered without text.' });
+        { kind: 'reply', name: 'Storefront', status: 'failed', body: 'The turn failed (HTTP 500): down\n\nIt answered without text.' });
     // The user's own words, and other agents' messages, keep DSH's own notice.
     assert.equal(noticeOf(data(handback, 'user')), undefined);
     assert.equal(noticeOf(data('A message from another agent.')), undefined);
 });
 
-test('browser half: one store of what the plugin says about projects, shared by the views and read while they watch', async () => {
+test('browser half: one store of what the plugin says about each coordinating chat, shared by the views and read while they watch', async () => {
     const { client } = loadClient();
-    const { projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor } = client.internals;
+    const { projectFacts, pausedText, withHeld } = client.internals;
     const calls = [];
     let paused = true;
-    const project = () => ({
-        project: { id: 'p1', name: 'P', coordinator: 'c1' }, settings: {},
-        paused: { value: paused, source: 'project setting', inherited: false, held: paused ? 2 : 0 },
+    let others = [{ id: 'c2', coordinator: 'c2', paused: false }];
+    // A coordinating chat's description: its id is its session's.
+    const chat = () => ({
+        project: { id: 'c1', name: 'P', coordinator: 'c1' }, settings: {},
+        paused: { value: paused, source: 'chat setting', inherited: false, held: paused ? 2 : 0 },
         threads: [{ id: 't1', session: 's1' }],
     });
+    const listed = () => [{ id: 'c1', coordinator: 'c1', paused }, ...others];
     const link = {
         async call(method, args) {
             calls.push(method);
-            if (method === 'describe') return { ok: true, value: project() };
-            if (method === 'list') return { ok: true, value: { projects: [{ id: 'p1', coordinator: 'c1', paused }, { id: 'p2', coordinator: 'c2', paused: false }] } };
-            if (method === 'update' && args.target === 'c1') { paused = args.changes.paused; return { ok: true, value: project() }; }
+            if (method === 'describe') return { ok: true, value: chat() };
+            if (method === 'list') return { ok: true, value: { projects: listed() } };
+            if (method === 'update' && args.target === 'c1') { paused = args.changes.paused; return { ok: true, value: chat() }; }
+            if (method === 'coordinate' && args.target === 'c3') {
+                others = args.on ? [...others, { id: 'c3', coordinator: 'c3', paused: true }] : others.filter((p) => p.id !== 'c3');
+                return { ok: true, value: { coordinating: args.on, session: 'c3', text: '', projects: listed() } };
+            }
             return { ok: false, error: { code: 'coordinator/refused', message: 'no' } };
         },
     };
@@ -2575,23 +2155,32 @@ test('browser half: one store of what the plugin says about projects, shared by 
     let changes = 0;
     facts.subscribe(() => { changes += 1; });
     assert.equal(facts.paused('c1'), undefined, 'unknown until read');
-    // A thread's session reads its project; the coordinator and the other threads share it.
+    // A thread's session reads its chat's description; the chat and its other threads share it.
     await facts.describe('s1');
-    assert.equal(facts.info('s1').project.id, 'p1');
+    assert.equal(facts.info('s1').project.id, 'c1');
     assert.equal(facts.info('c1'), facts.info('s1'));
     assert.equal(facts.paused('c1'), true);
     await facts.describe('s1', 60000);
     assert.deepEqual(calls, ['describe'], 'a fresh read is not repeated');
-    // The list covers every coordinator, the session list's paused marks.
+    // The list covers every coordinating chat, the session list's paused marks.
     await facts.list();
     assert.deepEqual([facts.paused('c1'), facts.paused('c2'), facts.paused('c3')], [true, false, undefined]);
-    // A change answers with the project, and every view shows it at once.
+    // A change answers with the chat's description, and every view shows it at once.
     const before = changes;
     assert.equal((await facts.change('c1', { paused: false })).ok, true);
     assert.equal(facts.paused('c1'), false);
     assert.equal(facts.info('s1').paused.held, 0);
     assert.ok(changes > before);
     assert.equal((await facts.change('c2', { paused: false })).ok, false);
+    // Coordinate answers with every coordinating chat, which the views take at once; a refusal changes nothing.
+    calls.length = 0;
+    assert.equal((await facts.coordinate('c3', true)).ok, true);
+    assert.deepEqual([plain(facts.projects().map((p) => p.id)), facts.paused('c3')], [['c1', 'c2', 'c3'], true]);
+    assert.equal((await facts.coordinate('c9', true)).ok, false);
+    assert.deepEqual(plain(facts.projects().map((p) => p.id)), ['c1', 'c2', 'c3']);
+    await facts.coordinate('c3', false);
+    assert.deepEqual(plain(facts.projects().map((p) => p.id)), ['c1', 'c2']);
+    assert.deepEqual(calls, ['coordinate', 'coordinate', 'coordinate']);
     // A watch reads now (unless just read) and every 15 s; the last unwatch stops the timer, so this test can end.
     const fresh = projectFacts(link);
     const stop = fresh.watch('list');
@@ -2605,13 +2194,7 @@ test('browser half: one store of what the plugin says about projects, shared by 
     assert.equal(pausedText('coordinator', 0), 'New threads and handbacks wait until you resume.');
     assert.equal(pausedText('coordinator', 1), '1 message held until you resume. New threads wait too.');
     assert.equal(pausedText('coordinator', 2, 2), '2 handbacks held until you resume. New threads wait too.');
-    assert.equal(pausedText('thread', 3), 'This thread\'s handbacks wait until the project resumes.');
-    assert.equal(SUGGESTIONS.length, 3);
-    // A project in the user's home folder gets first asks that don't send anyone through all of it; none until describe answers.
-    assert.equal(suggestionsFor(null), null);
-    assert.equal(suggestionsFor(project()), SUGGESTIONS);
-    const home = suggestionsFor({ project: { id: 'p1', homeFolder: true } });
-    assert.ok(home.length >= 2 && home.every((text) => !/look around|this folder|the code/i.test(text)), home.join(' | '));
+    assert.equal(pausedText('thread', 3), 'This thread\'s handbacks wait until you resume.');
     // A thread whose handback the pause holds says so, instead of "No handback yet"; running and resolved rows keep theirs.
     const rows = [{ id: 't1', group: 'idle', line: 'No handback yet' }, { id: 't2', group: 'running', line: 'Working…' }, { id: 't3', group: 'idle', line: 'No handback yet' }];
     assert.equal(withHeld(rows, []), rows);
@@ -2622,7 +2205,7 @@ test('browser half: one store of what the plugin says about projects, shared by 
         [['done', 'done', 'Done'], ['running', null, null], ['waiting', 'warning', 'Needs a decision']]);
 });
 
-test('browser half: news from threads marks the ◆ row and shows one notice for the newest, until the coordinator is opened', async () => {
+test('browser half: news from threads marks their chat\'s row and shows one notice for the newest, until that chat is opened', async () => {
     const { client } = loadClient();
     const { projectFacts, NewsNotice, ThreadMark, RowPlace, newsLine, newsDot, takeKnown } = client.internals;
     takeKnown({});
@@ -2631,8 +2214,8 @@ test('browser half: news from threads marks the ◆ row and shows one notice for
     let items = [{ seq: 1, kind: 'handback', thread: 't1', title: 'Old news', status: 'done', at: '2026-10-11T01:00:00Z' }];
     const calls = [];
     const answer = () => ({ ok: true, value: { news: [
-        { project: 'p1', name: 'Shop', coordinator: 'c1', seq, seen, unread: items.filter((i) => i.seq > seen) },
-        { project: 'p2', name: 'Quiet', coordinator: 'c2', seq: 0, seen: 0, unread: [] },
+        { project: 'c1', name: 'Shop', coordinator: 'c1', seq, seen, unread: items.filter((i) => i.seq > seen) },
+        { project: 'c2', name: 'Quiet', coordinator: 'c2', seq: 0, seen: 0, unread: [] },
     ] } });
     const link = {
         async call(method, args) {
@@ -2644,7 +2227,7 @@ test('browser half: news from threads marks the ◆ row and shows one notice for
     };
     const facts = projectFacts(link);
     const closed = () => false;
-    // The first read only learns where each coordinator is: what was already waiting marks the row, with no notice.
+    // The first read only learns where each coordinating chat is: what was already waiting marks the row, with no notice.
     await facts.news(closed);
     assert.equal(facts.notice(), null);
     assert.deepEqual(plain(facts.newsOf('c1').unread.map((i) => i.seq)), [1]);
@@ -2659,14 +2242,14 @@ test('browser half: news from threads marks the ◆ row and shows one notice for
     facts.dropNotice('c1:3');
     await facts.news(closed);
     assert.equal(facts.notice(), null);
-    // With the coordinator open, news arrives in front of the user: no notice.
+    // With that chat open, news arrives in front of the user: no notice.
     seq = 4;
     items = [...items, { seq: 4, kind: 'failed', thread: 't1', title: 'Deploy', at: '2026-10-11T01:07:00Z' }];
     await facts.news((id) => id === 'c1');
     assert.equal(facts.notice(), null);
 
     // The row: a dot in the leading seat that says what came, and a mark the CSS reads to make the title bold.
-    const state = { byId: { c1: { title: '◆ Shop', projectionValues: { coordinatorSession: { role: 'coordinator', project: { name: 'Shop' }, threads: [] } } } } };
+    const state = { byId: { c1: { title: 'Shop', projectionValues: { coordinatorSession: { role: 'coordinator', project: { id: 'c1', name: 'Shop' }, threads: [] } } } } };
     const useSessions = (select) => select(state);
     const projects = { facts, refresh() {} };
     const mark = ThreadMark({ sessionId: 'c1', useSessions, projects });
@@ -2677,24 +2260,24 @@ test('browser half: news from threads marks the ◆ row and shows one notice for
     assert.equal(mark.props['aria-hidden'], true);
     assert.equal(mark.props['aria-label'], undefined);
     assert.equal(RowPlace({ sessionId: 'c1', useSessions, projects }).props['data-projects-unread'], 4);
-    assert.equal(RowPlace({ sessionId: 'c1', useSessions, projects }).props['data-projects-words'], 'Project, 4 new, latest: “Deploy” failed');
-    // Opening the coordinator sees everything the window knew of, at once, and the plugin keeps it seen.
+    assert.equal(RowPlace({ sessionId: 'c1', useSessions, projects }).props['data-projects-words'], 'Coordinating, 4 new, latest: “Deploy” failed');
+    // Opening the chat sees everything the window knew of, at once, and the plugin keeps it seen.
     await facts.seeNews('c1');
     assert.deepEqual(plain(calls.at(-1)), ['seeNews', { target: 'c1', seq: 4 }]);
     assert.equal(facts.newsOf('c1'), undefined);
     assert.equal(ThreadMark({ sessionId: 'c1', useSessions, projects }), null);
     assert.equal(RowPlace({ sessionId: 'c1', useSessions, projects }).props['data-projects-unread'], undefined);
-    assert.equal(RowPlace({ sessionId: 'c1', useSessions, projects }).props['data-projects-words'], 'Project');
+    assert.equal(RowPlace({ sessionId: 'c1', useSessions, projects }).props['data-projects-words'], 'Coordinating');
     await facts.seeNews('c1');
     assert.equal(calls.filter(([m]) => m === 'seeNews').length, 1, 'nothing unread: no call');
 
-    // The notice is DSH's own banner, with Open; a thread waiting on the user reads as a warning, a result as done.
+    // The notice is DSH's own banner, with Open, and names the chat; a thread waiting on the user reads as a warning, a result as done.
     seq = 5;
     items = [...items, { seq: 5, kind: 'handback', thread: 't2', title: 'Docs', status: 'done', at: '2026-10-11T01:08:00Z' }];
     await facts.news(closed);
     const opened = [];
     const toast = NewsNotice({ projects: { facts, openSession: (id) => opened.push(id) } });
-    assert.equal(toast.props.text, '◆ Shop: “Docs” handed back.');
+    assert.equal(toast.props.text, 'Shop: “Docs” handed back.');
     assert.equal(toast.props.tone, 'success');
     assert.equal(toast.props.actions[0].label, 'Open');
     toast.props.actions[0].onClick();
@@ -2705,66 +2288,6 @@ test('browser half: news from threads marks the ◆ row and shows one notice for
         ['“X” is blocked', '“X” needs a decision', '“X” handed back']);
     assert.deepEqual([[{ kind: 'handback', status: 'done' }], [{ kind: 'finished' }, { kind: 'stopped' }], [{ kind: 'approval' }, { kind: 'failed' }]].map(newsDot),
         ['done', 'warning', 'error']);
-});
-
-test('browser half: a plain chat in a project\'s workspace offers its coordinator, which opens in one click with what the user typed', () => {
-    const storage = new Map();
-    const { client } = loadClient({ storage });
-    const { CoordinatorOffer, workspaceOfSession, projectIn, takeKnown } = client.internals;
-    takeKnown({});
-    const state = {
-        byId: {
-            c1: { title: '◆ Shop', projectionValues: { coordinatorSession: { role: 'coordinator', project: { name: 'Shop' }, threads: [] } } },
-            t1: { title: 'Fix cart', projectionValues: { coordinatorSession: { role: 'thread', coordinator: 'c1', thread: { id: 't1' } } } },
-            chat: { title: 'Smoke test' }, fresh: { title: '', blank: true }, team: { title: 'Teammate', parentId: 'chat' }, far: { title: 'Elsewhere' },
-        },
-    };
-    const workspaces = { items: [
-        { workspaceId: 'w-shop', path: '/u/shop', sessionIds: ['c1', 't1', 'chat', 'fresh', 'team'] },
-        { workspaceId: 'w-notes', path: '/u/notes', sessionIds: ['far'] },
-    ] };
-    const listed = [{ id: 'old', name: 'Old', coordinator: null, home: 'w-notes' }, { id: 'shop', name: 'Shop', coordinator: 'c1', home: 'w-shop' }];
-    assert.equal(workspaceOfSession(workspaces, 'chat'), 'w-shop');
-    assert.equal(workspaceOfSession(workspaces, 'nowhere'), undefined);
-    assert.equal(projectIn(listed, 'w-shop').id, 'shop');
-    assert.equal(projectIn(listed, 'w-notes'), undefined, 'a project with no coordinator offers nothing');
-    const opened = [];
-    const cleared = [];
-    const projects = {
-        facts: { subscribe: () => () => {}, getSnapshot: () => 0, projects: () => listed, list: async () => {} },
-        openWithDraft: (id, text) => opened.push([id, text]),
-    };
-    const offer = (sessionId, draft = '') => CoordinatorOffer({
-        sessionId, projects, useSessions: (select) => select(state), useWorkspaces: (select) => select(workspaces),
-        useInput: (select) => select({ draft }), inputActions: { setDraft: (text) => cleared.push(text) },
-    });
-    // A new chat, or one with messages, in the workspace where ◆ Shop works: the offer, with one button.
-    for (const id of ['fresh', 'chat']) {
-        const bar = offer(id);
-        assert.equal(bar.props['data-projects-offer'], 'shop');
-        assert.match(textIn(bar), /This folder has a project\.Its coordinator runs the work in threads\.Talk to ◆ Shop/);
-    }
-    // What the user typed goes with them, and leaves this chat's box.
-    const button = elementsOf(offer('chat', '  run the smoke test  ')).find((el) => el.props?.['data-projects-offer-open'] === '');
-    assert.match(textIn(offer('chat', 'x')), /What you typed goes with you\./);
-    button.props.onClick();
-    assert.deepEqual(plain(opened), [['c1', 'run the smoke test']]);
-    assert.deepEqual(plain(cleared), ['']);
-    elementsOf(offer('fresh')).find((el) => el.props?.['data-projects-offer-open'] === '').props.onClick();
-    assert.deepEqual(plain(opened.at(-1)), ['c1', '']);
-    assert.equal(cleared.length, 1, 'an empty box is left alone');
-    // Not on the coordinator, its threads, a teammate DSH started under a chat, or a chat in a folder without a project.
-    for (const id of ['c1', 't1', 'team', 'far']) assert.equal(offer(id), null, id);
-    // Nor for an archived project, or one whose ◆ row DSH has archived before the plugin's list says so.
-    assert.equal(projectIn([{ ...listed[1], archived: true }], 'w-shop'), undefined);
-    assert.equal(projectIn(listed, 'w-shop', new Set(['c1'])), undefined);
-    workspaces.archivedSessionIds = ['c1'];
-    assert.equal(offer('chat'), null);
-    delete workspaces.archivedSessionIds;
-    assert.equal(offer('chat').props['data-projects-offer'], 'shop');
-    // Turned off for the folder: gone there, and only there.
-    storage.set('dsh-plugin-coordinator/offer-off', JSON.stringify(['w-shop']));
-    assert.equal(offer('chat'), null);
 });
 
 test('browser half: a thread\'s changes read as DSH\'s card counts them, and its projection says when to read them again', () => {
@@ -2842,7 +2365,7 @@ test('browser half: a file in a Changes tab shows what its edits came to, each e
 
 test('browser half: a thread\'s Changes tab lists its files with their diffs, and its counts open it', async () => {
     const { client, react } = loadClient({ primitives: { DiffBlock: 'DiffBlock', PathLabel: 'PathLabel', FileTypeIcon: 'FileTypeIcon', Tooltip: 'Tooltip' } });
-    const { ThreadChangesTab, ThreadChangesTitle, ChangedFile, editsText, fileAddress, readFailure, changesOpener, CardChanges, changesAddress, changesSessionOf, DIFF_LABELS } = client.internals;
+    const { ThreadChangesTab, ThreadChangesTitle, ChangedFile, editsText, listText, fileAddress, readFailure, changesOpener, CardChanges, changesAddress, changesSessionOf, DIFF_LABELS } = client.internals;
     // The tab's address names the thread's session.
     assert.equal(changesAddress('s/1'), 'dsh-resource://projectchanges/session/s%2F1');
     assert.equal(changesSessionOf(changesAddress('s/1')), 's/1');
@@ -2854,6 +2377,7 @@ test('browser half: a thread\'s Changes tab lists its files with their diffs, an
     assert.equal(editsText([{ turn: 2 }, { turn: 1 }, { turn: 2, by: 'Docs helper' }]), 'Turns 1, 2 · by this thread and Docs helper');
     assert.equal(editsText([{ turn: 3, by: 'A' }, { turn: 3, by: 'B' }]), 'Turn 3 · by A and B');
     assert.equal(editsText([{ turn: 1 }]), 'Turn 1');
+    assert.deepEqual([listText([]), listText(['A']), listText(['A', 'B']), listText(['A', 'B', 'C'])], ['', 'A', 'A and B', 'A, B and C']);
     assert.equal(readFailure({ code: 'coordinator/refused', message: 'couldn\'t read t1\'s records: read timed out' }), 'Couldn\'t read t1\'s records: read timed out.');
     assert.match(readFailure({ code: 'projects/unreachable', message: 'socket closed' }), /didn't answer/);
     assert.equal(readFailure({ code: 'x', message: 'boom' }), 'Couldn\'t read this thread\'s changes. boom');
@@ -2988,108 +2512,4 @@ test('browser half: a thread\'s Changes tab lists its files with their diffs, an
     card = CardChanges({ changes: counts, ...changesOpener(noTab, 's-t1', counts) });
     assert.equal(card.props['data-projects-changes'], 'gone');
     assert.deepEqual(plain(changesOpener(withTab, undefined, counts)), {}, 'a card whose thread has no session opens nothing');
-});
-
-test('browser half: an archived project leaves the Projects page, and its ◆ row\'s menu archives it or brings it back', async () => {
-    const { client, react } = loadClient();
-    const { pageModel, takeKnown, archiveFlow, ArchiveMenuItem, ArchiveConfirm, ArchiveOverlay, ARCHIVE } = client.internals;
-    takeKnown({});
-    const value = (v) => ({ values: { coordinatorSession: v } });
-    const sessions = {
-        byId: { c: { id: 'c', title: '◆ Storefront' }, t1: { id: 't1', title: 'Fix cart' }, d: { id: 'd', title: '◆ Data' }, x: { id: 'x', title: 'A chat' } },
-        projectionsBySession: {
-            c: value({ role: 'coordinator', project: { id: 'storefront', name: 'Storefront' }, threads: [{ id: 't1', session: 't1' }] }),
-            t1: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' } }),
-            d: value({ role: 'coordinator', project: { id: 'data', name: 'Data' }, threads: [] }),
-        },
-    };
-    const items = [{ workspaceId: 'w', title: 'w', path: '/w', sessionIds: ['c', 't1', 'd', 'x'] }];
-    const listed = [{ id: 'storefront', name: 'Storefront', coordinator: 'c', home: 'w' }, { id: 'data', name: 'Data', coordinator: 'd', home: 'w' }];
-    const titles = (tree) => plain(tree.map((n) => n.title));
-    assert.deepEqual(titles(pageModel({ listed, items, sessions, archived: new Set() })), ['Storefront', 'Data']);
-    // Archived by the plugin, or its ◆ row archived in DSH (the plugin follows): off the page, threads and all.
-    assert.deepEqual(titles(pageModel({ listed: [{ ...listed[0], archived: true }, listed[1]], items, sessions, archived: new Set() })), ['Data']);
-    assert.deepEqual(titles(pageModel({ listed, items, sessions, archived: new Set(['d']) })), ['Storefront']);
-
-    const calls = [];
-    let answer = { ok: true, value: { projects: [] } };
-    const facts = {
-        info: () => ({ project: { id: 'storefront', name: 'Storefront' }, threads: [{ id: 't1', title: 'Fix cart', session: 't1' }, { id: 't2', title: 'Old copy', session: 't2' }] }),
-        describe: async () => {}, subscribe: () => () => {}, getSnapshot: () => 0,
-        archive: async (target, restore) => { calls.push([target, restore === true]); return answer; },
-    };
-    const flow = archiveFlow();
-    flow.connect();
-    const closed = [];
-    const item = (sessionId, archived = []) => ArchiveMenuItem({
-        sessionId, useMenuOpenState: () => [true, (open) => closed.push(open)], useSessions: (select) => select(sessions),
-        useWorkspaces: (select) => select({ archivedSessionIds: archived }), flow, facts,
-    });
-    // Only on a ◆ row: a thread or a chat has none.
-    assert.equal(item('t1'), null);
-    assert.equal(item('x'), null);
-    const archiveItem = item('c');
-    assert.equal(textIn(archiveItem), ARCHIVE.item);
-    assert.equal(archiveItem.props.icon.type, 'IconArchiveOutlineRegular');
-    archiveItem.props.onSelect();
-    assert.deepEqual(closed, [false]);
-    assert.equal(flow.getSnapshot().target, 'c');
-
-    // It asks first: what goes, what runs now and stops, and how to bring it back.
-    const statuses = new Map([['t1', { running: true }]]);
-    const draw = mount(react, () => ArchiveConfirm({ target: 'c', flow, facts, useSessionStatus: (select) => select(statuses) }));
-    let modal = draw();
-    assert.equal(modal.props.title, 'Archive ◆ Storefront?');
-    assert.equal(modal.props.description, 'Its coordinator and its 2 threads leave the session list and the Projects page, and whatever runs in them stops first. Nothing is deleted.');
-    assert.match(textIn(modal.children), /^Running now: Fix cart\.To bring them back, show archived chats in the session list and choose Restore project in the ◆ row's menu\.$/);
-    const confirmOf = (m) => elementsOf(m.props.footer).find((e) => e.props?.['data-projects-archive-confirm'] === '');
-    // DSH refuses part of it: the dialog stays, and says so.
-    answer = { ok: false, error: { code: 'coordinator/refused', message: 'DSH didn\'t archive 1 of ◆ Storefront\'s sessions; try again' } };
-    confirmOf(modal).props.onClick();
-    await tick();
-    modal = draw();
-    assert.equal(byClass(modal.children, 'dshp-ar-error')[0].props.role, 'alert');
-    assert.equal(textIn(byClass(modal.children, 'dshp-ar-error')), 'DSH didn\'t archive 1 of ◆ Storefront\'s sessions; try again.');
-    assert.equal(flow.getSnapshot().target, 'c');
-    answer = { ok: true, value: { projects: [] } };
-    confirmOf(modal).props.onClick();
-    await tick();
-    assert.deepEqual(calls, [['c', false], ['c', false]]);
-    // Back, it says how many threads came with it, as the plugin lists them.
-    facts.projects = () => [{ id: 'storefront', coordinator: 'c', threads: { open: 1, resolved: 1 } }];
-    assert.equal(flow.getSnapshot().target, null, 'archived: the dialog closes');
-
-    // The notice says so, with Undo, which brings it all back.
-    let toast = elementsOf(ArchiveOverlay({ flow, facts })).find((e) => e.props?.holdMs);
-    assert.equal(toast.props.text, '◆ Storefront archived with its 2 threads.');
-    assert.equal(toast.props.actions[0].label, 'Undo');
-    toast.props.actions[0].onClick();
-    await tick();
-    assert.deepEqual(calls.at(-1), ['c', true]);
-    toast = elementsOf(ArchiveOverlay({ flow, facts })).find((e) => e.props?.holdMs);
-    assert.equal(toast.props.text, '◆ Storefront is back with its 2 threads.');
-    assert.deepEqual(plain(toast.props.actions), []);
-
-    // Shown with DSH's archived chats, the ◆ row's menu restores it.
-    const restoreItem = item('c', ['c']);
-    assert.equal(textIn(restoreItem), ARCHIVE.restore);
-    assert.equal(restoreItem.props.icon.type, 'IconUnarchiveOutlineRegular');
-    restoreItem.props.onSelect();
-    await tick();
-    assert.deepEqual(calls.at(-1), ['c', true]);
-
-    // A project with no threads: its coordinator alone, in the singular.
-    const lone = { ...facts, info: () => ({ project: { id: 'data', name: 'Data' }, threads: [] }), projects: () => [{ id: 'data', coordinator: 'd', threads: { open: 0, resolved: 0 } }] };
-    const one = mount(react, () => ArchiveConfirm({ target: 'd', flow, facts: lone, useSessionStatus: (select) => select(new Map()) }))();
-    assert.equal(one.props.title, 'Archive ◆ Data?');
-    assert.equal(one.props.description, 'Its coordinator leaves the session list and the Projects page, and whatever runs in it stops first. Nothing is deleted.');
-    assert.equal(textIn(one.children), 'To bring it back, show archived chats in the session list and choose Restore project in the ◆ row\'s menu.');
-    elementsOf(one.props.footer).find((e) => e.props?.['data-projects-archive-confirm'] === '').props.onClick();
-    await tick();
-    toast = elementsOf(ArchiveOverlay({ flow, facts: lone })).find((e) => e.props?.holdMs);
-    assert.equal(toast.props.text, '◆ Data archived.');
-    toast.props.actions[0].onClick();
-    await tick();
-    toast = elementsOf(ArchiveOverlay({ flow, facts: lone })).find((e) => e.props?.holdMs);
-    assert.equal(toast.props.text, '◆ Data is back.');
 });
