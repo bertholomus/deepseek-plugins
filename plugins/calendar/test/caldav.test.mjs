@@ -1,7 +1,8 @@
 // The CalDAV source (lib/sources/caldav.js): its XML reader and hrefs on
 // answers shaped like iCloud's, Fastmail's (Cyrus) and Nextcloud's (Sabre);
-// the source against a stand-in server; and the source against a real
-// Radicale server. The Radicale tests run when one is installed: a
+// the source against a stand-in server; and the source, and the manager's
+// changes through it, against a real Radicale server. The Radicale tests
+// run when one is installed: a
 // virtualenv in RADICALE_VENV, a python in RADICALE_PYTHON, or a python3 on
 // the PATH that has radicale. Otherwise they are skipped.
 //
@@ -14,10 +15,14 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { occurrences } from '../lib/expand.js';
 import { request } from '../lib/http.js';
+import { readIcs } from '../lib/ical.js';
+import { CalendarManager, calendarIdOf } from '../lib/manager.js';
 import { SourceError } from '../lib/sources/index.js';
 import * as caldav from '../lib/sources/caldav.js';
 import { hrefUrl, parseMultistatus, parseXml } from '../lib/sources/caldav.js';
+import { toLocal } from '../lib/zones.js';
 
 const DAV = 'DAV:';
 const CALDAV = 'urn:ietf:params:xml:ns:caldav';
@@ -1011,6 +1016,62 @@ describe('against Radicale', { skip: python === undefined ? 'Radicale not found:
         return res.etag;
     };
 
+    const ZONE = 'Europe/Berlin';
+    const NOW = Date.parse('2026-10-11T10:00:00Z');
+
+    /**
+     * The manager with a new calendar on this server, `name`, as a CalDAV
+     * account's, synced; the user is alice@example.com. opts.fetch: how the
+     * manager reaches the server. opts.scheduling: what the calendar says
+     * about email (Radicale sends none; marked as a server that does, the
+     * manager works out who it would email). → {m, id: the calendar's, done}.
+     */
+    async function managerOn(name, { fetch: reach, scheduling = false } = {}) {
+        const made = await dav('MKCALENDAR', `${user}/${name}/`, {
+            headers: { 'Content-Type': 'application/xml; charset=utf-8' },
+            body: `<?xml version="1.0" encoding="utf-8"?><c:mkcalendar xmlns:d="DAV:" xmlns:c="${CALDAV}"><d:set><d:prop><d:displayname>${name}</d:displayname></d:prop></d:set></c:mkcalendar>`,
+        });
+        assert.equal(made.status, 201, `MKCALENDAR ${name}: ${made.status}`);
+        const folder = mkdtempSync(join(tmpdir(), 'caldav-manager-'));
+        const m = new CalendarManager({
+            config: { storeFile: join(folder, 'calendar.json'), logFile: '', syncMinutes: 15, timeZone: ZONE },
+            secrets: { get: async () => ({ password }), set: async () => {}, clear: async () => {} },
+            now: () => NOW,
+            ...(reach ? { fetch: reach } : {}),
+        });
+        m.store.accounts.rad = { id: 'rad', kind: 'caldav', name: 'Radicale', url: base, username: user, email: 'alice@example.com', createdAt: NOW, calendarsAt: NOW };
+        const remoteId = `${base}${user}/${name}/`;
+        const id = calendarIdOf('rad', remoteId);
+        m.store.calendars[id] = { id, accountId: 'rad', remoteId, name, color: '#4f7cff', readOnly: false, mode: 'masters', scheduling };
+        m.store.itemsOf(id);
+        await m.syncCalendar(id, { throwErrors: true });
+        return {
+            m, id,
+            done: () => {
+                m.dispose();
+                rmSync(folder, { recursive: true, force: true });
+            },
+        };
+    }
+
+    /** An event as the server holds it now: its occurrences in [from, to), as "start title @ place with guests". */
+    async function heldOn(path, from, to) {
+        const { events } = readIcs((await dav('GET', path)).text, { zone: ZONE });
+        return occurrences(events, { from: Date.parse(from), to: Date.parse(to), zone: ZONE }).map(({ record, start }) => `${toLocal(start, ZONE).slice(0, 16)} ${record.title} `
+            + `@ ${record.location ?? '-'} with ${(record.attendees ?? []).map((p) => p.email.split('@')[0]).join(' ')}`);
+    }
+
+    /** The changed occurrences an event has on the server: "start" for each, "and following" on those that reach later ones too. */
+    async function changedOn(path) {
+        const { events } = readIcs((await dav('GET', path)).text, { zone: ZONE });
+        return events.filter((r) => r.recurrenceId).map((r) => `${r.recurrenceId.local}${r.thisAndFuture ? ' and following' : ''}`).sort();
+    }
+
+    /** A meeting alice organizes, as another app writes it: VEVENT lines with these, then the people. */
+    const meetingOf = (uid, lines, people) => ['BEGIN:VEVENT', `UID:${uid}`, 'DTSTAMP:20261001T000000Z', ...lines, 'DURATION:PT1H', 'ORGANIZER:mailto:alice@example.com',
+        ...people.map((p) => `ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:${p}@example.com`), 'END:VEVENT'];
+    const calendarOf = (...events) => ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//DSH calendar tests//EN', ...events.flat(), 'END:VCALENDAR', ''].join('\r\n');
+
     before(async () => {
         dir = mkdtempSync(join(tmpdir(), 'caldav-radicale-'));
         writeFileSync(join(dir, 'users'), `${user}:${password}\n`);
@@ -1225,5 +1286,66 @@ END:VCALENDAR&#13;
             ics('put-1@example.com', 'Fourth'), 'put-1@example.com');
         const next = await fresh().sync(work, synced.state, {});
         assert.deepEqual(next.items.map((i) => [i.remoteId, i.etag]), [[changed.remoteId, changed.etag]]);
+    });
+
+    test('the occurrence a "this and following" change starts at, changed alone: the later ones stay as that change set them', async () => {
+        const { m, id, done } = await managerOn('ranges', { scheduling: true });
+        try {
+            const path = `${user}/ranges/weekly.ics`;
+            await putFile(path, calendarOf(
+                meetingOf('weekly', ['DTSTART:20261020T100000', 'RRULE:FREQ=WEEKLY;COUNT=6', 'SUMMARY:Weekly'], ['ann']),
+                // Another app changed it from Oct 27 on: Room B, and gil too. And Nov 3 on its own: later, with hal.
+                meetingOf('weekly', ['RECURRENCE-ID;RANGE=THISANDFUTURE:20261027T100000', 'DTSTART:20261027T100000', 'SUMMARY:Weekly B', 'LOCATION:Room B'], ['ann', 'gil']),
+                meetingOf('weekly', ['RECURRENCE-ID:20261103T100000', 'DTSTART:20261103T150000', 'SUMMARY:Weekly late'], ['ann', 'hal']),
+            ));
+            await m.syncCalendar(id, { throwErrors: true });
+            const first = m.events({ from: Date.parse('2026-10-27T00:00:00+01:00'), to: Date.parse('2026-10-28T00:00:00+01:00'), calendars: [id] }).occurrences[0];
+            assert.deepEqual([first.title, first.location], ['Weekly B', 'Room B']);
+            // Who it emails is that occurrence's own people (Radicale's calendar is marked as one whose server emails them).
+            assert.deepEqual(m.planChange('update', { id: first.id, input: { location: 'Room C' }, scope: 'one', notify: true }).mail.to, ['ann@example.com', 'gil@example.com']);
+            const changed = await m.updateEvent(first.id, { location: 'Room C', notify: true }, 'one');
+            assert.deepEqual([changed.title, changed.location, changed.emailed], ['Weekly B', 'Room C', { what: 'an update', to: ['ann@example.com', 'gil@example.com'] }]);
+            assert.deepEqual(await heldOn(path, '2026-10-19T00:00:00+02:00', '2026-12-01T00:00:00+01:00'), [
+                '2026-10-20T10:00 Weekly @ - with ann',
+                '2026-10-27T10:00 Weekly B @ Room C with ann gil',
+                '2026-11-03T15:00 Weekly late @ - with ann hal',
+                '2026-11-10T10:00 Weekly B @ Room B with ann gil',
+                '2026-11-17T10:00 Weekly B @ Room B with ann gil',
+                '2026-11-24T10:00 Weekly B @ Room B with ann gil',
+            ]);
+            // The change from Oct 27 on goes on from the next occurrence without a change of its own.
+            assert.deepEqual(await changedOn(path), ['2026-10-27T10:00:00', '2026-11-03T10:00:00', '2026-11-10T10:00:00 and following']);
+        } finally {
+            done();
+        }
+    });
+
+    test('the occurrence a "this and following" change starts at, deleted alone: the later ones stay as that change set them', async () => {
+        const { m, id, done } = await managerOn('ranges-out', { scheduling: true });
+        try {
+            const path = `${user}/ranges-out/other.ics`;
+            await putFile(path, calendarOf(
+                meetingOf('other', ['DTSTART:20261021T100000', 'RRULE:FREQ=WEEKLY;COUNT=4', 'SUMMARY:Other'], ['ann']),
+                meetingOf('other', ['RECURRENCE-ID;RANGE=THISANDFUTURE:20261028T100000', 'DTSTART:20261028T100000', 'SUMMARY:Other B', 'LOCATION:Room B'], ['ann', 'gil']),
+            ));
+            await m.syncCalendar(id, { throwErrors: true });
+            const on = (day) => m.events({ from: Date.parse(`${day}T00:00:00+01:00`), to: Date.parse(`${day}T23:00:00+01:00`), calendars: [id] }).occurrences[0];
+            const held = () => heldOn(path, '2026-10-19T00:00:00+02:00', '2026-12-01T00:00:00+01:00');
+            assert.deepEqual(m.planChange('delete', { id: on('2026-10-28').id, scope: 'one', notify: true }).mail.to, ['ann@example.com', 'gil@example.com']);
+            assert.deepEqual(await m.deleteEvent(on('2026-10-28').id, 'one', 'window', { notify: true }), { emailed: { what: 'a cancellation', to: ['ann@example.com', 'gil@example.com'] } });
+            assert.deepEqual(await held(), [
+                '2026-10-21T10:00 Other @ - with ann',
+                '2026-11-04T10:00 Other B @ Room B with ann gil',
+                '2026-11-11T10:00 Other B @ Room B with ann gil',
+            ]);
+            assert.deepEqual(await changedOn(path), ['2026-11-04T10:00:00 and following']);
+            // With the occurrences after it gone, the one that change starts at has none to hand it on to.
+            await m.deleteEvent(on('2026-11-11').id, 'one', 'window', { notify: true });
+            await m.deleteEvent(on('2026-11-04').id, 'one', 'window', { notify: true });
+            assert.deepEqual(await held(), ['2026-10-21T10:00 Other @ - with ann']);
+            assert.deepEqual(await changedOn(path), []);
+        } finally {
+            done();
+        }
     });
 });

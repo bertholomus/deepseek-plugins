@@ -1486,6 +1486,37 @@ test('one occurrence that a "this and following" change reaches is changed from 
     }
 });
 
+test('a "this and following" change whose own occurrence is changed or deleted alone goes on from the next one, never past a later such change', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        const dav = standIn(m, { id: 'dav', kind: 'caldav', name: 'Work', url: 'https://dav.example.org/', username: 'me', email: 'me@example.org' },
+            { id: 'cal-dav', remoteId: 'https://dav.example.org/cal/', name: 'Work', scheduling: false }, 'ics');
+        const event = (...lines) => ['BEGIN:VEVENT', 'UID:plan', 'DTSTAMP:20261001T000000Z', ...lines, 'DURATION:PT1H', 'END:VEVENT'];
+        await holdIcs(m, 'cal-dav', 'https://dav.example.org/cal/plan.ics', ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//test//EN',
+            ...event('DTSTART;TZID=Europe/Berlin:20261012T100000', 'RRULE:FREQ=WEEKLY;COUNT=6', 'SUMMARY:Plan'),
+            ...event('RECURRENCE-ID;RANGE=THISANDFUTURE;TZID=Europe/Berlin:20261019T100000', 'DTSTART;TZID=Europe/Berlin:20261019T100000', 'SUMMARY:Plan A'),
+            ...event('RECURRENCE-ID;TZID=Europe/Berlin:20261026T100000', 'DTSTART;TZID=Europe/Berlin:20261026T120000', 'SUMMARY:Plan at noon'),
+            ...event('RECURRENCE-ID;RANGE=THISANDFUTURE;TZID=Europe/Berlin:20261102T100000', 'DTSTART;TZID=Europe/Berlin:20261102T100000', 'SUMMARY:Plan B'),
+            'END:VCALENDAR', ''].join('\r\n'));
+        const shown = () => titles(week(m, '2026-10-12T00:00', '2026-11-20T00:00'));
+        const ranges = () => [...unfold(dav.at(-1).raw).matchAll(/RECURRENCE-ID([^:\r\n]*):(\d{8})/g)].map((r) => `${r[2]}${/THISANDFUTURE/.test(r[1]) ? ' and following' : ''}`);
+        // Oct 19 alone: Oct 26 has a change of its own, and from Nov 2 on the later change holds, so Plan A reaches no other occurrence.
+        await m.updateEvent(week(m).find((o) => o.startLocal === '2026-10-19T10:00').id, { title: 'Plan A, once' }, 'one');
+        assert.deepEqual(ranges(), ['20261019', '20261026', '20261102 and following']);
+        assert.deepEqual(shown(), ['2026-10-12T10:00 Plan', '2026-10-19T10:00 Plan A, once', '2026-10-26T12:00 Plan at noon',
+            '2026-11-02T10:00 Plan B', '2026-11-09T10:00 Plan B', '2026-11-16T10:00 Plan B']);
+        // Nov 2 deleted alone: Plan B goes on from Nov 9.
+        await m.deleteEvent(week(m, '2026-11-02T00:00', '2026-11-03T00:00')[0].id, 'one');
+        assert.deepEqual(ranges(), ['20261019', '20261026', '20261109 and following']);
+        assert.deepEqual(shown(), ['2026-10-12T10:00 Plan', '2026-10-19T10:00 Plan A, once', '2026-10-26T12:00 Plan at noon', '2026-11-09T10:00 Plan B', '2026-11-16T10:00 Plan B']);
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
 test('a move whose second step fails says it was copied, and what to do, rather than "nothing was done"', async () => {
     const { make, done } = setup();
     const m = make();

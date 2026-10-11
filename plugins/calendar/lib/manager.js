@@ -1871,7 +1871,12 @@ export class CalendarManager {
                 delete changed.rdates;
                 delete changed.exdates;
                 if (style === 'ics') {
-                    await this.putIcs(calendar, at.item, [{ uid: at.uid, recurrenceId: changed.recurrenceId, record: { ...changed, sequence: (current.sequence ?? 0) + 1 } }], at.uid);
+                    // This occurrence alone: a "this and following" change that starts here goes on from the next one.
+                    const onward = this.rangeFromNext(at);
+                    delete changed.thisAndFuture;
+                    const edits = [{ uid: at.uid, recurrenceId: changed.recurrenceId, record: { ...changed, sequence: (current.sequence ?? 0) + 1 } }];
+                    if (onward) edits.push({ uid: at.uid, recurrenceId: onward.recurrenceId, record: onward });
+                    await this.putIcs(calendar, at.item, edits, at.uid);
                 } else {
                     this.takeItems(calendar, await source.update({ ...calendar }, { item: at.overrideItem ?? at.item, record: at.override ?? at.master, occurrence: at.recurrenceId, planned: now.before }, { ...diffOf(current, changed), ...tell }, 'one'));
                 }
@@ -1970,6 +1975,36 @@ export class CalendarManager {
         }
         record.recurrenceId = at.recurrenceId;
         return record;
+    }
+
+    /**
+     * A "this and following" change that starts at this occurrence
+     * (at.override, with thisAndFuture), moved to the next occurrence it
+     * reaches: the first after it without a change of its own, before a
+     * later such change starts. A change or a delete of this occurrence
+     * alone adds it, so the ones after it stay as that change set them.
+     * Undefined when none starts here, or it reaches no later occurrence.
+     */
+    rangeFromNext(at) {
+        if (at.override?.thisAndFuture !== true || at.master === undefined) return undefined;
+        const zone = this.zone();
+        const from = startOfTime(at.recurrenceId, zone);
+        // A later "this and following" change holds from its own occurrence on; past that, or a hundred years, it reaches none.
+        const later = at.records.filter((r) => r.thisAndFuture && r.recurrenceId && startOfTime(r.recurrenceId, zone) > from).map((r) => startOfTime(r.recurrenceId, zone));
+        const end = Math.min(from + 100 * 366 * DAY, ...later);
+        // The series' own occurrences after this one, a stretch at a time (a cancelled series' too).
+        const series = { ...at.master, status: undefined };
+        for (let start = from, span = 60 * DAY; start < end; start += span, span *= 2) {
+            for (const o of occurrences([series], { from: start, to: Math.min(end, start + span), zone })) {
+                const when = startOfTime(o.recurrenceId, zone);
+                if (when <= from) continue;
+                if (when >= end) return undefined;
+                // An occurrence with a change of its own stays as it is (rangeRecord gives none for it).
+                const record = rangeRecord(at.records, o.recurrenceId, zone);
+                if (record !== undefined) return { ...record, thisAndFuture: true };
+            }
+        }
+        return undefined;
     }
 
     /**
@@ -2182,6 +2217,9 @@ export class CalendarManager {
                     master.sequence = (master.sequence ?? 0) + 1;
                     const edits = [{ uid: at.uid, record: master }];
                     if (at.override) edits.push({ uid: at.uid, recurrenceId: at.override.recurrenceId, record: null });
+                    // A "this and following" change that starts here goes on from the next occurrence.
+                    const onward = this.rangeFromNext(at);
+                    if (onward) edits.push({ uid: at.uid, recurrenceId: onward.recurrenceId, record: onward });
                     await this.putIcs(calendar, at.item, edits, at.uid);
                 } else {
                     const out = await source.remove({ ...calendar }, { item: at.overrideItem ?? at.item, record: at.override ?? at.master, occurrence: at.recurrenceId, planned: now.before, ...tell }, 'one');
