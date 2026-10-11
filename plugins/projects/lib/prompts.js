@@ -324,10 +324,12 @@ export function describeEnding(reason) {
         case 'aborted':
             // DSH shows this one as a failure too.
             if (reason.reason?.kind === 'hook' && reason.reason.reason === 'deepseek-account/signed-out') return 'The turn failed: the user signed out of DeepSeek.';
+            // DSH closed its session under it, as when DSH quits.
+            if (reason.reason?.kind === 'disposed') return 'The turn was cut off because its session closed while it ran.';
             return 'The turn was stopped before it finished.';
         case 'max-tokens': return 'The turn hit the output token limit.';
         case 'blocked': return 'The turn was blocked.';
-        case 'interrupted': return 'The turn was cut off because DSH stopped while it ran.';
+        case 'interrupted': return 'The turn was cut off because DSH closed while it ran.';
         default: return '';
     }
 }

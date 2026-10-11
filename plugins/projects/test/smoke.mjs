@@ -3297,7 +3297,8 @@ test('turn endings: what the coordinator is told, what the thread hears on Retry
         [{ kind: 'blocked' }, 'The turn was blocked.', 'failed'],
         [{ kind: 'aborted', reason: { kind: 'hook', reason: 'deepseek-account/signed-out' } }, 'The turn failed: the user signed out of DeepSeek.', 'failed'],
         [{ kind: 'aborted', reason: { kind: 'user' } }, 'The turn was stopped before it finished.', 'stopped'],
-        [{ kind: 'interrupted' }, 'The turn was cut off because DSH stopped while it ran.', 'stopped'],
+        [{ kind: 'aborted', reason: { kind: 'disposed' } }, 'The turn was cut off because its session closed while it ran.', 'stopped'],
+        [{ kind: 'interrupted' }, 'The turn was cut off because DSH closed while it ran.', 'stopped'],
         [{ kind: 'max-tokens' }, 'The turn hit the output token limit.', 'stopped'],
         [{ kind: 'completed' }, '', undefined],
     ];
@@ -3352,7 +3353,7 @@ test('a stop the coordinator asks for, or a person makes, does not come back as 
     assert.match(coord.ctx.section(), /A thread the user stopped stays stopped/);
     assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /user-stop dsh-plugins\/t1/);
 
-    // Any other stop (a plugin's hook, a closed session) gets the one nudge; when it stops again, the coordinator hears.
+    // Any other stop (a plugin's hook) gets the one nudge; when it stops again, the coordinator hears.
     await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Try again.' });
     stopBy({ kind: 'hook', reason: 'budget' });
     await tick();
@@ -4233,7 +4234,7 @@ test('a coordinator from before the welcome gets it only if it never had a turn'
     assert.equal(JSON.parse(readFileSync(join(flakyDir, 'projects.json'), 'utf8')).projects['dsh-plugins'].welcomedSession, undefined);
 });
 
-test('a thread turn cut off by a DSH stop is reported at the next start, once', async () => {
+test('a thread turn cut off by DSH closing is reported at the next start, once, and the thread waits for the user', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'projects-'));
     const first = setup({}, dir);
     await tick();
@@ -4244,18 +4245,48 @@ test('a thread turn cut off by a DSH stop is reported at the next start, once', 
     turnMarks(first.host, thread.id).start();
     assistantSays(first.host, thread.id, 'Starting the job.');
 
-    // DSH stops mid-turn; the next process reads the open turn as interrupted.
+    // DSH quits (or crashes) mid-turn; the next process reads the open turn as interrupted.
     const second = restart(first.host.sessions, first.config);
     await tick();
-    // The plugin nudges the thread itself; the coordinator hears only if it stops again.
-    assert.equal(second.sessions.get(coord.id).prompts.length, 0);
-    assert.deepEqual(second.sessions.get(thread.id).prompts.map((p) => p.text), ['[From the coordinator]\n\nCarry on from where you left off and finish the task.']);
-    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), / nudge dsh-plugins\/t1 ended=interrupted\n/);
+    // Nothing sends the thread on, as the user quit: the coordinator is told why it stopped, and its card has Resume.
+    assert.deepEqual(second.sessions.get(thread.id).prompts, []);
+    assert.deepEqual(second.sessions.get(coord.id).prompts.map((p) => p.text), ['[Thread idle without a handback: t1 · "Long"]\n\nThe turn was cut off because DSH closed while it ran.\n\nIts last reply:\n\nStarting the job.\n\n(Tell the user in one line, starting with [Long](.dsh-thread/t1), that its turn stopped and why; its card has Resume. Send it nothing more unless the user asks.)']);
+    const log = readFileSync(join(dir, 'projects.log'), 'utf8');
+    assert.match(log, / idle-note dsh-plugins\/t1 chars=17 ended=interrupted\n/);
+    assert.doesNotMatch(log, / nudge dsh-plugins\/t1 /);
+    assert.equal(JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'].threads.t1.lastEnding.text, 'The turn was cut off because DSH closed while it ran.');
 
     const third = restart(first.host.sessions, first.config);
     await tick();
     assert.equal(third.sessions.get(coord.id).prompts.length, 0, 'reported once');
-    assert.equal(third.sessions.get(thread.id).prompts.length, 0, 'nudged once');
+    assert.equal(third.sessions.get(thread.id).prompts.length, 0, 'not sent on');
+});
+
+test('a thread waiting on a permission prompt when DSH quits gets the cut-off note at the next start, not another approval note', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const first = setup({ approvalNoticeSeconds: 0.02 }, dir);
+    await tick();
+    const coord = coordinatorOf(first.host);
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Copy', brief: 'Copy the notes outside the workspace.' });
+    const thread = threadOf(first.host, coord);
+    const ts = first.host.sessions.get(thread.id);
+    thread.ctx.emitStatus(thread, 'running');
+    turnMarks(first.host, thread.id).start();
+    thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'a1', toolName: 'write', reason: 'copies the notes outside the workspace' } });
+    await new Promise((r) => setTimeout(r, 60));
+    assert.match(first.host.sessions.get(coord.id).prompts.at(-1)?.text ?? '', /^\[Thread waiting for approval: t1 · "Copy"\]/);
+
+    // DSH quits with the prompt open, closing the session under the turn.
+    ts.events.push({ seq: ts.events.length + 1, type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'disposed' } } } });
+    const second = restart(first.host.sessions, first.config);
+    await tick();
+    await new Promise((r) => setTimeout(r, 60));
+    // Not sent on, so it asks for nothing again; the coordinator hears once why it stopped.
+    assert.deepEqual(second.sessions.get(thread.id).prompts, []);
+    assert.deepEqual(second.sessions.get(coord.id).prompts.map((p) => p.text.split('\n\n').slice(0, 3).join('\n\n')),
+        ['[Thread idle without a handback: t1 · "Copy"]\n\nThe turn was cut off because its session closed while it ran.\n\nIt produced no reply text.']);
+    assert.match(second.sessions.get(coord.id).prompts[0].text, /its card has Resume\. Send it nothing more unless the user asks\.\)$/);
+    assert.doesNotMatch(readFileSync(join(dir, 'projects.log'), 'utf8'), / nudge dsh-plugins\/t1 /);
 });
 
 test('a long thread title is cut once, after a whole word, with "…", and fits DSH\'s 80-byte session titles', () => {
@@ -5322,7 +5353,7 @@ test('projection: a thread\'s last turn that failed or stopped, until a turn fin
     // The coordinator's idle card says when the thread's turn failed or stopped (the note's first line).
     const idle = (seq, first) => ({ type: 'user/message', seq, time: seq, data: { content: [{ type: 'text', text: `[Thread idle without a handback: t1 · "Flaky"]\n\n${first}\n\nIt produced no reply text.` }], source: { kind: 'cordis-host-runner' } } });
     let c = def.apply(welcome, idle(3, 'The turn failed: 400: {"message":"x"}'));
-    c = def.apply(c, idle(4, 'The turn was cut off because DSH stopped while it ran.'));
+    c = def.apply(c, idle(4, 'The turn was cut off because DSH closed while it ran.'));
     c = def.apply(c, idle(5, 'Its last reply:'));
     assert.deepEqual(plain(c.v.cards.slice(1).map((card) => card.status ?? null)), ['failed', 'stopped', null]);
 });

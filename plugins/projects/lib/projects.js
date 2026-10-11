@@ -1909,10 +1909,14 @@ export class ProjectManager {
         // can fix it, and the coordinator sends nothing more. A failed or stopped turn's nudge the plugin sends itself,
         // since a coordinator turn would only say so; while the project is paused its note waits like any other, and the
         // coordinator nudges it on resume. A handback, the user's words or their Retry start the count again.
+        // A turn cut off because DSH closed while it ran (a quit, or a crash: its log can't tell them apart) gets no
+        // nudge and doesn't count, so nothing starts again on its own after the user quits: the note tells them, and
+        // the thread waits for their Resume.
         const ended = Boolean(endingStateOf(turn.ending));
-        const again = ended ? t.nudged === true : t.stalled === true;
-        const nudge = !again && !(ended && userMustFix(turn.ending));
-        this.store.putThread(projectId, threadId, ended ? { nudged: nudge ? true : undefined } : { nudged: undefined, stalled: true });
+        const cutOff = turn.endKind === 'interrupted' || (turn.endKind === 'aborted' && turn.stopCause === 'disposed');
+        const again = !cutOff && (ended ? t.nudged === true : t.stalled === true);
+        const nudge = !again && !cutOff && !(ended && userMustFix(turn.ending));
+        if (!cutOff) this.store.putThread(projectId, threadId, ended ? { nudged: nudge ? true : undefined } : { nudged: undefined, stalled: true });
         if (nudge && ended && !this.held(projectId) && await this.nudgeThread(projectId, threadId, turn)) return;
         const news = nudge && ended ? undefined : { kind: ended ? endingStateOf(turn.ending) : 'finished', thread: threadId };
         await this.deliver(projectId, idleMessage(threadId, t.title, turn.reply, turn.ending, { nudge: nudge && ended, again }), undefined, news);
