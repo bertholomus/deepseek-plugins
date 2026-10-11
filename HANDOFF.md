@@ -352,3 +352,40 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 - The judge's `harness/shots.mjs` coordinator step waits for "[Handback from thread" in the chat. Since G3 that text sits inside a collapsed notice, so the step times out until the harness opens the notice or waits for the handback card. The harness is the coordinator's; don't edit it.
 - `conversation.input.dock` is a session-scoped list slot above the message box (DSH's goal bar and queue sit there). To fill the message box: `const scope = ctx.sessions.scope(id); const shell = scope.get('conversation').input.for(scope); (shell.actions?.setDraft ?? shell.setDraft)(text); shell.focus()` (DSH 0.2.0-rc.2 and 0.2.1-alpha.2).
 - The browser half (`lib/client.js`) changes with a page reload; host code (`lib/projects.js` and the rest) only with a DSH restart. In the cloud demo, restart the demo for host changes.
+
+## Calendar plugin (plugins/calendar)
+
+_Its own section, kept by the "Calendar plugin" project thread; "Doing now" above stays the projects plugin's._
+
+Updated: 2026-10-11 01:58 PT by B (bertholomus)
+Branch: the PR branch named at the top (PR #1), fast-forwarded from a local branch, never forced.
+
+The user's goal (2026-10-11, relayed from the project chat): "create a sane calendar plugin that agents and user can use - allows syncing apple, google, exchange, other popular calendar syncing.  works with our wallpaper and glass plugin".
+
+### Doing now (calendar)
+- The window, `lib/client.js` (a do-nothing stub until then): a Calendar page (month, week, day, agenda), the event dialog, the account dialog (CalDAV services, Google and Microsoft sign-in, subscriptions), an agenda beside chats in the right sidebar, and chat views for the `calendar_*` tools, drawn by the wallpaper and glass contract (/mnt/project-files/wallpaper-glass.md).
+
+### Done (calendar)
+- Host half: `ical.js` (RFC 5545, keeps lines it doesn't know), `recur.js` (RRULE expansion and its words), `zones.js` (IANA through Intl, Windows names for Graph), `expand.js` (series with moved and cancelled occurrences), `store.js` (`~/.dsh/calendar`, 700/600, follows DSH_HOME), `manager.js` (accounts, sync every `syncMinutes`, every change to the server first, scope one/following/all, moves, import/export, search, free time), `http.js` (Authorization dropped when a redirect leaves the site; no secret or query in an error), `oauth.js` (loopback with PKCE, or a pasted address), `remote.js` (the window's endpoints, `/api/dsh-plugin-calendar/<method>`).
+- Sources: local, subscription (`.ics`/webcal with ETag and Last-Modified), CalDAV (discovery from any address, sync-collection or etags, multiget, conditional writes; iCloud, Fastmail, Nextcloud, Yahoo, mailbox.org, Zoho), Google (Calendar API v3, sync tokens), Microsoft (Graph, device code, calendar view delta).
+- Secrets: one DSH credential record per account, `calendar/<account id>` (a CalDAV password or a sign-in); the Google client secret as the credential `CALENDAR_GOOGLE_CLIENT_SECRET`. Never in the store, the events, the log or an error.
+- Agents: nine `calendar_*` tools (`tools.js`) and the write gate on `tools/pre-execute` (`policy.js`): `agentChanges` preset (Read Only refused, Workspace Write or custom asks with what would change, Full access goes, Auto's reviewer decides), `ask` or `off`.
+- Tests: 96 unit tests (89 without Radicale), in `npm test` through `test/calendar.test.js`; `npm run test:e2e:calendar` 40/40 on DSH 0.2.0-rc.2 and 0.2.1-alpha.2.
+
+### Next steps (calendar)
+1. Finish the window and check it on both DSH versions (screens on and off the wallpaper, light and dark), then push.
+2. Real accounts only when the user wants them, and they give what each needs: Google, their own OAuth client (Desktop app) id and secret; Microsoft, their own Entra app's client id; iCloud, Fastmail and Yahoo, app passwords. Loading it into the live DSH needs their OK.
+3. Suggest `calendar` in the projects plugin's `guardedTools` (live config: the user's call).
+4. Calendars only on the Mac (EventKit) need Mac work, through the split thread.
+5. Microsoft: no If-Match on changes; status, link, conference, extra and skipped dates aren't written; only the first reminder; a series moved to another calendar loses its changed occurrences.
+
+### Open questions (calendar)
+- Which accounts the user wants connected first.
+
+### Gotchas (calendar)
+- DSH checks tool arguments against strict JSON Schema: a `type: 'string'` parameter refuses null. `calendar_update_event` empties fields through `clear`, and an empty string means "not given", because weaker models send every field.
+- The endpoints take `{args}` keyed by the method's parameter names, not positions.
+- An approval's `reason` is only in the session log's `approval/asked` event (the bridge's summaries leave it out); `test/e2e/run.mjs` reads the log with its own zstd frame splitter.
+- A Workspace Write turn that waits on approval never ends in a headless run: wait for `approval/asked`, then cancel it.
+- Microsoft emails guests whenever an event with guests is saved, so the source refuses such a change unless it says to tell them; moves and imports into Google or Microsoft leave guests behind for the same reason.
+- UTC and floating times show on the user's clock; only a named zone keeps its own.

@@ -10,6 +10,7 @@ Each plugin is a normal DSH plugin package. You add it to a DSH profile's bundle
 | [`discord`](plugins/discord) | Connects a Discord bot to DSH sessions. Each Discord thread is one persistent agent session, and the agent answers through Discord tools. Full bot setup steps are in its README. |
 | [`categories`](plugins/categories) | Categories of workspaces in DSH's session list: a header per category over its workspaces, Other workspaces for the rest, made and arranged from the list or the Categories page. |
 | [`projects`](plugins/projects) | Projects. A coordinator session per project starts thread sessions for focused work, threads hand results back to it, and each project has default models and effort levels for the coordinator and for threads. |
+| [`calendar`](plugins/calendar) | Your calendars, for you and your agents: iCloud, Google, Microsoft 365 and Exchange Online, Fastmail, Nextcloud and other CalDAV servers, subscribed `.ics` feeds, and calendars on this computer. Agents read them and, as their permission allows, change them. |
 | [`session-bridge`](plugins/session-bridge) | A local JSON API on a Unix socket that drives the Host's own session controller. Scripts and other agents can create, prompt, steer, cancel and read DSH sessions, and you watch them live in the DSH window. |
 
 These plugins are independent work. They are not made or endorsed by DeepSeek.
@@ -24,6 +25,7 @@ DSH loads a plugin only when the profile lists its package in `dsh.profile.bundl
 | discord | `dsh-plugin-discord` | `discord` |
 | categories | `dsh-plugin-categories` | `categories` |
 | projects | `dsh-plugin-projects` | `projects` |
+| calendar | `dsh-plugin-calendar` | `calendar` |
 | session-bridge | `dsh-plugin-session-bridge` | `session-bridge` |
 
 1. Clone this repository:
@@ -79,7 +81,7 @@ Or restore the backups from step 2 of the install.
 ## Tests
 
 ```bash
-npm test                                  # dsh-site, session-bridge, projects (pure logic), the categories window
+npm test                                  # dsh-site, session-bridge, projects (pure logic), the categories window, calendar
 npm install --no-save @deepseek-ai/schemastery @deepseek-ai/dsh-llm@next @deepseek-ai/dsh-brand@next @deepseek-ai/dsh-tools@next
 node plugins/discord/test/smoke.mjs       # discord (no token needed)
 node plugins/projects/test/smoke.mjs      # projects (fake DSH host)
@@ -91,6 +93,9 @@ DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js npm run test:e2e
 
 # categories + session-bridge on a real DSH
 DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js npm run test:e2e:categories
+
+# calendar + session-bridge on a real DSH (RADICALE_VENV, a virtualenv with radicale, adds a CalDAV account)
+DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js npm run test:e2e:calendar
 ```
 
 ## License
