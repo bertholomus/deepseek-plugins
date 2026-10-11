@@ -367,12 +367,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-card[data-card-tone=error] .dshp-t-card-icon{color:var(--dsw-alias-state-error-primary)}',
             '.dshp-t-card-when{font-variant-numeric:tabular-nums}',
             '.dshp-t-card-why{grid-column:2;grid-row:3;margin-left:10px;display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}',
+            // What a thread is doing (its step, how far along, how long) or what it reported, under its name.
+            '.dshp-t-card-detail{grid-column:2;grid-row:3;min-width:0;margin-left:10px;font-size:12px;line-height:17px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-t-card-detail:not([data-projects-card-detail=running]){display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow-wrap:anywhere}',
+            '.dshp-t-card-detail[data-projects-card-detail=running]{display:flex;align-items:center;gap:5px}',
+            '.dshp-t-card-meter{margin-right:2px}',
+            '.dshp-t-card-meter{flex:none;position:relative;width:36px;height:4px;overflow:hidden;border-radius:2px;background:var(--dsw-alias-bg-layer-3)}',
+            '.dshp-t-card-meter>span{position:absolute;inset:0 auto 0 0;border-radius:2px;background:var(--dsw-alias-label-secondary);transition:width .3s ease}',
+            '.dshp-t-card-count,.dshp-t-card-elapsed,.dshp-t-card-dot{flex:none;font-variant-numeric:tabular-nums;white-space:nowrap}',
+            '.dshp-t-card-step{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             // The actions' box lets clicks through to the row under it; only its buttons take them.
             '.dshp-t-row-acts{position:absolute;top:0;bottom:0;right:6px;display:inline-flex;align-items:center;justify-content:flex-end;gap:2px;pointer-events:none}',
             '.dshp-t-row-acts>*{pointer-events:auto}',
             '.dshp-t-icon:disabled{cursor:default}',
             // A narrow chat gives the name the counts' room: they join the verb line, and drop their file count first.
-            '@container (width<=560px){.dshp-t-card>.dshp-t-changes{grid-row:1;height:16px;margin-left:6px;padding:0 3px}.dshp-t-card>.dshp-t-changes .dshp-t-changes-icon{display:none}.dshp-t-card-title,.dshp-t-card-why{grid-column:2/4}}',
+            '@container (width<=560px){.dshp-t-card>.dshp-t-changes{grid-row:1;height:16px;margin-left:6px;padding:0 3px}.dshp-t-card>.dshp-t-changes .dshp-t-changes-icon{display:none}.dshp-t-card-title,.dshp-t-card-why,.dshp-t-card-detail{grid-column:2/4}}',
             // Narrower still, the state and buttons move to a row of their own under the name, which keeps the card's width.
             '@container (width<=460px){.dshp-t-card .dshp-t-files{display:none}.dshp-t-card-icon{align-self:start}.dshp-t-card-side{grid-column:2/4;grid-row:4;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0 0 10px}.dshp-t-card-side>.dshp-t-card-state,.dshp-t-card-side>.dshp-t-card-actions{margin-left:0}.dshp-t-card-side>.dshp-t-card-actions:only-child{margin-left:auto}}',
             '@container (460px<width<=560px){.dshp-t-full-label{display:none}}',
@@ -1558,6 +1567,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // A thread row's ⋯, in the Threads menu and panel and on the Projects page.
             renameThread: 'Rename…',
             findThread: 'Find a thread',
+            steps: 'Steps done',
             threadSettings: 'Model and permission…',
             stopThread: 'Stop',
             resolveThread: 'Mark resolved',
@@ -2298,6 +2308,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return /question|review/i.test(kind) ? 'Has a question for you' : 'Waiting for your approval';
         }
 
+        /** What a pending request asks, in its asker's words on DSH's prompt: a question, or an approval's reason; '' when it gives none. */
+        function pendingAsk(pending) {
+            if (!isObject(pending)) return '';
+            const one = (text) => (typeof text === 'string' ? text.replace(/\s+/g, ' ').trim() : '');
+            if (Array.isArray(pending.questions)) return one(pending.questions.find((q) => isObject(q) && one(q.question) !== '')?.question);
+            return one(pending.displayReason?.en) || one(pending.reason);
+        }
+
         /** A handback's state and summary, without saying the state twice ("Blocked · Blocked: …"). */
         function toldText(hb) {
             const label = HANDBACK_LABELS[hb.status] ?? String(hb.status ?? '');
@@ -2383,7 +2401,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /** One roster entry with its live state, as the menu, the pane and the cards show it. */
-        function threadRow(entry, statuses, byId, endings) {
+        function threadRow(entry, statuses, byId, endings, live) {
             const session = typeof entry.session === 'string' && entry.session !== '' ? entry.session : undefined;
             const status = session ? statuses?.get?.(session) : undefined;
             const summary = session ? byId?.[session] : undefined;
@@ -2392,14 +2410,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const hb = isObject(entry.handback) ? entry.handback : undefined;
             const state = rowState({ resolved: entry.resolved === true, running, pending, hb, ending: session ? endings?.[session] : undefined });
             const told = hb ? toldText(hb) : undefined;
-            const line = pending ? pendingLine(pending)
+            // A running thread with a to-do list says how far along it is and its step.
+            const progress = running && session ? progressOf(live?.[session]?.todos) : undefined;
+            const line = pending ? [pendingLine(pending), pendingAsk(pending)].filter(Boolean).join(' · ')
+                : progress ? (progress.current ? `${progress.done}/${progress.total} · ${progress.current}` : `${progress.done} of ${progress.total} steps done`)
                 : running ? (hb?.status === 'progress' && hb.summary ? `Working… · ${hb.summary}` : 'Working…')
                     : state.ending ? endingLine(state.ending)
                         : told ?? (entry.resolved ? 'Resolved' : 'No handback yet');
             const at = Number.isFinite(summary?.updatedAt) ? summary.updatedAt : Date.parse(hb?.at ?? entry.created ?? '');
             return {
                 entry, id: entry.id, title: entry.title || entry.id, session, group: state.group, dot: state.dot, line, stateLabel: state.label,
-                running, pending: pending !== undefined, ending: state.ending, at: Number.isFinite(at) ? at : undefined,
+                running, pending: pending !== undefined, pendingInteraction: pending, ending: state.ending, at: Number.isFinite(at) ? at : undefined,
             };
         }
 
@@ -2412,8 +2433,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return out;
         }
 
-        function rowsOf(roster, statuses, byId, endings) {
-            const rows = (roster ?? EMPTY).filter((entry) => isObject(entry) && typeof entry.id === 'string').map((entry) => threadRow(entry, statuses, byId, endings));
+        function rowsOf(roster, statuses, byId, endings, live) {
+            const rows = (roster ?? EMPTY).filter((entry) => isObject(entry) && typeof entry.id === 'string').map((entry) => threadRow(entry, statuses, byId, endings, live));
             // Newest activity first within a group; then the newest thread.
             return rows.sort((a, b) => (b.at ?? 0) - (a.at ?? 0) || threadNumber(b.id) - threadNumber(a.id));
         }
@@ -2438,14 +2459,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /** A clock for relative times that ticks while something shows them. */
-        function useNow(active) {
+        function useNow(active, every = 30000) {
             const [now, setNow] = React.useState(() => Date.now());
             React.useEffect(() => {
                 if (!active) return undefined;
                 setNow(Date.now());
-                const timer = setInterval(() => setNow(Date.now()), 30000);
+                const timer = setInterval(() => setNow(Date.now()), every);
                 return () => clearInterval(timer);
-            }, [active]);
+            }, [active, every]);
             return now;
         }
 
@@ -2888,11 +2909,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const roster = React.useMemo(() => newestRoster(listed, threads, seen.current, scope), [listed, threads, scope]);
             const sessions = React.useMemo(() => openSessions(roster), [roster]);
             const endings = useEndings(useSessions, sessions);
+            const live = useThreadLive(useSessions, sessions);
             const key = sessions.join('\n');
             React.useEffect(() => {
                 for (const id of sessions) projects.refresh(id);
             }, [key, projects]);
-            return React.useMemo(() => withHeld(rowsOf(roster, statuses, byId, endings), held), [roster, statuses, byId, endings, held]);
+            return React.useMemo(() => withHeld(rowsOf(roster, statuses, byId, endings, live), held), [roster, statuses, byId, endings, live, held]);
         }
 
         /** The model labels of a roster's sessions and its coordinator, read live from DSH. */
@@ -3656,6 +3678,88 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 h('span', null, `${TEXT.changes} · ${title}`));
         }
 
+        /**
+         * A thread's to-do list (DSH's `todos` view of its session: what its
+         * turn's todo_write set; a new turn clears it) as {done, total,
+         * current}, or undefined when it has none.
+         */
+        function progressOf(todos) {
+            const items = Array.isArray(todos) ? todos.filter((t) => isObject(t) && typeof t.content === 'string' && t.content.trim() !== '') : EMPTY;
+            if (items.length === 0) return undefined;
+            const current = items.find((t) => t.status === 'in_progress')?.content.replace(/\s+/g, ' ').trim();
+            return { done: items.filter((t) => t.status === 'completed').length, total: items.length, ...(current ? { current } : {}) };
+        }
+
+        /** How long a turn has run: "45s", "3m 12s", "1h 4m". */
+        function elapsedText(ms) {
+            if (!(ms >= 0)) return '';
+            const seconds = Math.floor(ms / 1000);
+            if (seconds < 60) return `${seconds}s`;
+            const minutes = Math.floor(seconds / 60);
+            if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+            return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+        }
+
+        /** A handback's summary on one line, without its state ahead of it ("Blocked: no key" reads "No key"); '' when it has none. */
+        function handbackGist(hb) {
+            const summary = typeof hb?.summary === 'string' ? hb.summary.replace(/\s+/g, ' ').trim() : '';
+            const label = HANDBACK_LABELS[hb?.status] ?? '';
+            if (label === '' || summary.slice(0, label.length).toLowerCase() !== label.toLowerCase()) return summary;
+            const rest = summary.slice(label.length);
+            if (rest !== '' && !/^[\s:.,;—–-]/.test(rest)) return summary;
+            return rest.replace(/^[\s:.,;—–-]+/, '').replace(/^./, (c) => c.toUpperCase());
+        }
+
+        /** What some threads are doing now, by session: their to-do list (DSH's `todos`) and when their turn started (`turnAt`). */
+        function useThreadLive(useSessions, sessionIds) {
+            const key = sessionIds.join('\n');
+            // The ids are read through `key`, so a new array of the same ids keeps the selector.
+            const select = React.useCallback((state) => {
+                const out = {};
+                for (const id of sessionIds) {
+                    const todos = state?.projectionsBySession?.[id]?.values?.todos ?? state?.byId?.[id]?.projectionValues?.todos;
+                    const turnAt = valueIn(state, id)?.turnAt;
+                    if (Array.isArray(todos) || Number.isFinite(turnAt)) {
+                        out[id] = { todos: Array.isArray(todos) ? todos : undefined, turnAt: Number.isFinite(turnAt) ? turnAt : undefined };
+                    }
+                }
+                return out;
+            }, [key]);
+            return useSessions(select, sameLive);
+        }
+        const sameLive = (a, b) => {
+            const keys = Object.keys(a);
+            return keys.length === Object.keys(b).length && keys.every((k) => isObject(b[k]) && a[k].todos === b[k].todos && a[k].turnAt === b[k].turnAt);
+        };
+
+        /**
+         * The line of substance on a thread's newest card: while it runs, its
+         * step, how far along it is and how long its turn has run; once it
+         * reports, what it said; while it waits on you, what it asks (and that
+         * it waits, unless the card says so already). Never its state again: the card says that
+         * beside it. Undefined when there is nothing to add; a failed or
+         * stopped turn has its own line.
+         */
+        function cardDetail(view, live, now) {
+            const row = view?.row;
+            if (!row || row.ending) return undefined;
+            if (row.pending) {
+                const ask = pendingAsk(row.pendingInteraction);
+                // An approval card says it waits on you already: it adds what the thread asks, when DSH's prompt says.
+                if (view.kind === 'approval') return ask ? { kind: 'pending', text: ask } : undefined;
+                return { kind: 'pending', text: [pendingLine(row.pendingInteraction), ask].filter(Boolean).join(' · ') };
+            }
+            const hb = isObject(row.entry?.handback) ? row.entry.handback : undefined;
+            if (row.running) {
+                const progress = progressOf(live?.todos);
+                const step = progress ? progress.current : hb?.status === 'progress' ? handbackGist(hb) || undefined : undefined;
+                const elapsed = Number.isFinite(live?.turnAt) ? elapsedText(now - live.turnAt) : '';
+                return progress || step || elapsed ? { kind: 'running', progress, step, elapsed } : undefined;
+            }
+            const gist = hb && hb.status !== 'progress' ? handbackGist(hb) : '';
+            return gist ? { kind: 'told', text: gist } : undefined;
+        }
+
         /** The cards one turn earned, one per thread, in the order they happened. */
         function cardsOf(value, turn) {
             if (!isObject(value) || !Array.isArray(value.cards) || !Number.isSafeInteger(turn)) return EMPTY;
@@ -3886,6 +3990,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         function ThreadCard({ view, projects }) {
             const enabled = view.session !== undefined;
+            // While its turn runs, the newest card's clock ticks each second.
+            const ticking = view.newest === true && view.row?.running === true && Number.isFinite(view.live?.turnAt);
+            const now = useNow(ticking, 1000);
+            const detail = view.newest === true ? cardDetail(view, view.live, now) : undefined;
             const beside = useBesidePref();
             // A thread's own handback card points at its coordinator, which opens as the main chat.
             const thread = view.threadId !== undefined;
@@ -3909,6 +4017,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         title: !enabled ? undefined : thread ? `${beside ? TEXT.openTip : TEXT.openFull}: ${view.title}` : TEXT.openCoordinator,
                         onClick: () => projects.openThread(view.session),
                     }, view.title),
+                    detail && !(ending && why) ? h(CardDetail, { detail }) : null,
                     ending && why ? h('span', {
                         className: go.error ? 'dshp-t-card-why dshp-t-error' : 'dshp-t-card-why', title: why,
                         role: go.error ? 'alert' : undefined, 'data-projects-ending': ending.state,
@@ -3943,6 +4052,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         }, TEXT.open))) : null) : null);
         }
 
+        /** A card's line of substance (cardDetail): a step with its meter and clock, or what the thread said. */
+        function CardDetail({ detail }) {
+            if (detail.kind !== 'running') {
+                return h('span', { className: 'dshp-t-card-detail', title: detail.text, 'data-projects-card-detail': detail.kind }, detail.text);
+            }
+            const { progress, step, elapsed } = detail;
+            const title = [progress ? `${progress.done} of ${progress.total} steps done` : '', step ?? '', elapsed ? `running ${elapsed}` : ''].filter(Boolean).join(' · ');
+            return h('span', { className: 'dshp-t-card-detail', title, 'data-projects-card-detail': 'running' },
+                progress ? h('span', {
+                    key: 'meter', className: 'dshp-t-card-meter', role: 'progressbar', 'aria-label': TEXT.steps,
+                    'aria-valuemin': 0, 'aria-valuemax': progress.total, 'aria-valuenow': progress.done, 'aria-valuetext': `${progress.done} of ${progress.total}`,
+                }, h('span', { style: { width: `${Math.round((progress.done / progress.total) * 100)}%` } })) : null,
+                ...[
+                    progress ? h('span', { key: 'count', className: 'dshp-t-card-count', 'aria-hidden': true }, `${progress.done}/${progress.total}`) : null,
+                    step ? h('span', { key: 'step', className: 'dshp-t-card-step', 'data-projects-card-step': '' }, step) : null,
+                    elapsed ? h('span', { key: 'elapsed', className: 'dshp-t-card-elapsed', 'data-projects-card-elapsed': '' }, elapsed) : null,
+                ].filter(Boolean).flatMap((part, i) => (i > 0 ? [h('span', { key: `dot${i}`, className: 'dshp-t-card-dot', 'aria-hidden': true }, '·'), part] : [part])));
+        }
+
         function ThreadCardList({ sessionId, cards, useSessions, useSessionStatus, projects }) {
             const info = useSessions((state) => projectContext(state, sessionId), sameContext);
             const statuses = useSessionStatus((value) => value);
@@ -3970,8 +4098,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             React.useEffect(() => {
                 for (const id of threadSessions) projects.refresh(id);
             }, [key, projects]);
-            // And what each changed in the workspace.
+            // And what each changed in the workspace, and what it is doing now.
             const changes = useThreadChanges(projects, useSessions, info?.me.role === 'coordinator' ? sessionId : undefined, threadSessions, true);
+            const live = useThreadLive(useSessions, threadSessions);
             // A new project suggests first asks under its greeting until the user writes or a thread starts.
             const suggest = info !== undefined && info.me.role === 'coordinator' && info.me.asked !== true
                 && Array.isArray(info.roster) && info.roster.length === 0 && cards.some((card) => card.kind === 'welcome');
@@ -3980,7 +4109,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 ...views.map((view) => h(ThreadCard, {
                     key: view.key, projects,
                     view: view.threadId !== undefined && view.session !== undefined
-                        ? { ...view, model: selectionText(cv, selections[view.session]), changes: changes[view.threadId] }
+                        ? { ...view, model: selectionText(cv, selections[view.session]), changes: changes[view.threadId], live: live[view.session] }
                         : view,
                 })));
         }
@@ -6955,6 +7084,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             changesOf, changesText, lastChange, REVIEW_PREFIX,
             CardChanges, changesOpener, ThreadChangesTab, ThreadChangesTitle, ChangedFile, editsText, fileAddress, readFailure, changesAddress, changesSessionOf, DIFF_LABELS,
             threadMenuItems, rowMenuItems, runThreadItem, ThreadMore, ThreadList, inMoreList, newestRoster, arrowKeys, ThreadFind, findRows, FIND_FROM,
+            progressOf, elapsedText, handbackGist, cardDetail, CardDetail, useThreadLive, pendingAsk,
             renameFlow, RenameThread, RenameOverlay, RENAME,
             rowState, endingOf, endingIn, endingReason, endingLine, openSessions, markState, hoverLine, continueError, GROUPS,
             roomFor, besidePref, sectionWorkspace, sectionAt, listText, clockOf, againText, ThreadCard, EndingBar,

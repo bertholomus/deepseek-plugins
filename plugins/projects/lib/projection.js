@@ -29,19 +29,22 @@
  * { role: 'coordinator'|'thread', project: { id?, name }, coordinator?: sessionId,
  *   thread?: { id, title }, threads?: [{ id, session, title, resolved, created?, handback? }],
  *   cards?: [{ turn, seq, kind, thread?, status? }], asked?: true, changes?: [{ turn, seq }],
- *   ending?: { state: 'failed'|'stopped', kind, turn, seq, at, message?, code?, cause?, hook?, times? } }
+ *   ending?: { state: 'failed'|'stopped', kind, turn, seq, at, message?, code?, cause?, hook?, times? },
+ *   turnAt?: ms }
  *
  * Card kinds: start, send, update (tool results), handback, idle, approval
  * (the plugin's messages), and welcome: the turn a new coordinator
  * introduced itself in. An idle card's status says when the thread's turn
  * failed or stopped (from the note's first line). `asked` is set once the
  * user writes in a coordinator. `changes` lists a thread's turns that
- * changed files, oldest first. `ending` is a thread's last turn when it
- * didn't finish: it failed (DSH logged an error, a plugin blocked it, or
- * the user signed out) or it stopped (stopped, cut off by DSH closing, or at
- * the output token limit); a turn that finishes, or hands back a result
- * before it ends, clears it. `times` counts the same ending in a row, from
- * 2 (a thread retried that failed again).
+ * changed files, oldest first. `turnAt` is when a thread's latest turn
+ * started (DSH's event time), so a running thread's card says how long it
+ * has run. `ending` is a thread's last turn when it didn't finish: it
+ * failed (DSH logged an error, a plugin blocked it, or the user signed out)
+ * or it stopped (stopped, cut off by DSH closing, or at the output token
+ * limit); a turn that finishes, or hands back a result before it ends,
+ * clears it. `times` counts the same ending in a row, from 2 (a thread
+ * retried that failed again).
  *
  * @module dsh-plugin-projects/projection
  */
@@ -114,6 +117,15 @@ function withCard(v, card) {
 }
 
 /** The visible value with role and project set, from what an event says. */
+/**
+ * A thread's value with when its latest turn started (the state's
+ * `turnAt`); any other value as it is. A thread's first turn starts before
+ * its brief says it is one, so the brief brings the time along.
+ */
+function withTurnAt(state, v) {
+    return v?.role === 'thread' && Number.isFinite(state.turnAt) && v.turnAt !== state.turnAt ? { ...v, turnAt: state.turnAt } : v;
+}
+
 function identify(v, role, project, extra = {}) {
     const base = v ?? { role, project };
     const next = { ...base, ...extra };
@@ -173,7 +185,7 @@ function applyMessage(state, event) {
             thread: { id: m[2], title: clip(m[3], 120) },
             ...(sender ? { coordinator: sender } : {}),
         });
-        return { ...state, v: state.v?.role === 'coordinator' ? state.v : v };
+        return { ...state, v: state.v?.role === 'coordinator' ? state.v : withTurnAt(state, v) };
     }
     if (text.startsWith(TAGS.coordinator)) {
         // A coordinator made again (the old one was deleted) writes from its new session.
@@ -231,7 +243,7 @@ function applyToolMeta(state, event) {
             ...(typeof action.status === 'string' ? { status: action.status.slice(0, 20) } : {}),
         });
     }
-    return { ...state, v };
+    return { ...state, v: withTurnAt(state, v) };
 }
 
 /**
@@ -305,7 +317,11 @@ export function applyEvent(state, event) {
         switch (event?.type) {
             case 'turn/start': {
                 const turn = event.data?.turn;
-                return Number.isSafeInteger(turn) && turn !== state.turn ? { ...state, turn } : state;
+                let next = Number.isSafeInteger(turn) && turn !== state.turn ? { ...state, turn } : state;
+                // When the turn started: a thread's card says how long it has run.
+                if (Number.isFinite(event.time) && next.turnAt !== event.time) next = { ...next, turnAt: event.time };
+                const v = withTurnAt(next, next.v);
+                return v === next.v ? next : { ...next, v };
             }
             case 'user/message': return applyMessage(state, event);
             case 'tool/result': return applyToolMeta(state, event);
@@ -323,7 +339,11 @@ export function parseState(value) {
     if (!isObject(value)) return INITIAL;
     const turn = Number.isSafeInteger(value.turn) && value.turn >= 0 ? value.turn : 0;
     const v = isObject(value.v) && (value.v.role === 'coordinator' || value.v.role === 'thread') && isObject(value.v.project) ? value.v : null;
-    return { turn, v, ...(Number.isFinite(value.since) && value.since > 0 ? { since: value.since } : {}) };
+    return {
+        turn, v,
+        ...(Number.isFinite(value.since) && value.since > 0 ? { since: value.since } : {}),
+        ...(Number.isFinite(value.turnAt) ? { turnAt: value.turnAt } : {}),
+    };
 }
 
 /**

@@ -3387,6 +3387,84 @@ test('browser half: a thread\'s newest card says when its last turn ended, and h
     assert.deepEqual([byClass(card, 'dshp-t-card-why').length, textIn(byClass(card, 'dshp-t-card-state-text'))], [0, 'Failed']);
 });
 
+test('browser half: a thread\'s newest card says what it is doing (its step, how far along, how long) or what it reported, never its state twice', () => {
+    const { client } = loadClient();
+    const { ThreadCard, CardDetail, progressOf, elapsedText, handbackGist, cardDetail, threadRow, pendingAsk } = client.internals;
+    const todos = [
+        { content: 'Build the fr-FR glossary', status: 'completed' }, { content: 'Translate pages 1–120', status: 'completed' },
+        { content: 'Translate   pages 121–240', status: 'in_progress' }, { content: 'Review size names', status: 'pending' },
+    ];
+    // DSH's to-do list: how many are done, and the step in progress.
+    assert.deepEqual(plain(progressOf(todos)), { done: 2, total: 4, current: 'Translate pages 121–240' });
+    assert.deepEqual(plain(progressOf([{ content: 'A', status: 'completed' }, { content: ' ', status: 'pending' }, null, { status: 'pending' }])), { done: 1, total: 1 });
+    assert.deepEqual([progressOf(null), progressOf([]), progressOf('x')], [undefined, undefined, undefined]);
+    assert.deepEqual([0, 45000, 192000, 3840000, -1, NaN].map(elapsedText), ['0s', '45s', '3m 12s', '1h 4m', '', '']);
+    // A handback's summary without its state ahead of it.
+    assert.deepEqual([
+        handbackGist({ status: 'blocked', summary: 'Blocked: the CDN token\n expired.' }), handbackGist({ status: 'done', summary: 'Done' }),
+        handbackGist({ status: 'done', summary: 'Doneness checks pass.' }), handbackGist({ status: 'needs_decision', summary: 'Fix A or fix B?' }), handbackGist({}),
+    ], ['The CDN token expired.', '', 'Doneness checks pass.', 'Fix A or fix B?', '']);
+
+    const T = Date.parse('2026-10-11T12:00:00Z');
+    const row = (extra) => ({ id: 't10', session: 's10', title: 'Translate product pages', entry: { id: 't10' }, ...extra });
+    const view = (r, extra = {}) => ({ key: 't10', kind: 'start', threadId: 't10', seq: 4, newest: true, title: r.title, session: 's10', verb: 'Started a thread', icon: 'IconBranchOutlineRegular', state: { dot: 'ongoing', label: 'Running' }, row: r, ...extra });
+    // Running: its step, how far along and how long its turn has run.
+    const running = row({ running: true });
+    assert.deepEqual(plain(cardDetail(view(running), { todos, turnAt: T - 192000 }, T)), { kind: 'running', progress: { done: 2, total: 4, current: 'Translate pages 121–240' }, step: 'Translate pages 121–240', elapsed: '3m 12s' });
+    // Without a list: its progress handback, else only the time; with nothing at all, no line.
+    const progressing = row({ running: true, entry: { id: 't10', handback: { status: 'progress', summary: 'Progress update: halfway, 120 of 240.' } } });
+    assert.deepEqual(plain(cardDetail(view(progressing), { turnAt: T - 5000 }, T)), { kind: 'running', step: 'Halfway, 120 of 240.', elapsed: '5s' });
+    assert.deepEqual(plain(cardDetail(view(running), { turnAt: T }, T)), { kind: 'running', elapsed: '0s' });
+    assert.equal(cardDetail(view(running), undefined, T), undefined);
+    // Reported: what it said. Waiting on you: what it asks, and that it waits unless the card says so already. A failed or stopped turn has its own line.
+    const told = row({ entry: { id: 't10', handback: { status: 'blocked', summary: 'Blocked: the CDN token expired.' } } });
+    assert.deepEqual(plain(cardDetail(view(told), undefined, T)), { kind: 'told', text: 'The CDN token expired.' });
+    const waiting = row({ running: true, pending: true, pendingInteraction: { kind: 'approval' } });
+    assert.deepEqual(plain(cardDetail(view(waiting), { todos, turnAt: T }, T)), { kind: 'pending', text: 'Waiting for your approval' });
+    assert.equal(cardDetail(view(waiting, { kind: 'approval' }), undefined, T), undefined);
+    // What it asks is what DSH's prompt says: an approval's reason, a question.
+    const reason = { kind: 'approval', toolName: 'shell', reason: 'escalate sandbox', displayReason: { en: 'Allow this operation with\n full access: npm install stripe', zh: '…' } };
+    const asking = row({ running: true, pending: true, pendingInteraction: reason });
+    assert.deepEqual(plain(cardDetail(view(asking), undefined, T)), { kind: 'pending', text: 'Waiting for your approval · Allow this operation with full access: npm install stripe' });
+    assert.deepEqual(plain(cardDetail(view(asking, { kind: 'approval' }), undefined, T)), { kind: 'pending', text: 'Allow this operation with full access: npm install stripe' });
+    assert.deepEqual([
+        pendingAsk({ kind: 'approval', reason: ' tool "shell" requires approval ' }), pendingAsk({ kind: 'question', questions: [{ id: 'a', question: ' ' }, { id: 'b', question: 'Ship fix A or fix B?' }] }),
+        pendingAsk({ kind: 'question', questions: [] }), pendingAsk({ kind: 'approval' }), pendingAsk(undefined),
+    ], ['tool "shell" requires approval', 'Ship fix A or fix B?', '', '', '']);
+    assert.equal(cardDetail(view(row({ ending: { state: 'failed' }, entry: told.entry })), undefined, T), undefined);
+
+    // Drawn: a meter with how many steps are done, the step, and the clock; the reader hears it as words.
+    const line = CardDetail({ detail: cardDetail(view(running), { todos, turnAt: T - 192000 }, T) });
+    const meter = elementsOf(line).find((e) => e.props?.role === 'progressbar');
+    assert.deepEqual(plain([line.props['data-projects-card-detail'], line.props.title, meter.props['aria-valuenow'], meter.props['aria-valuemax'], meter.props['aria-valuetext'], meter.children[0].props.style.width]),
+        ['running', '2 of 4 steps done · Translate pages 121–240 · running 3m 12s', 2, 4, '2 of 4', '50%']);
+    assert.deepEqual([textIn(byClass(line, 'dshp-t-card-count')), textIn(byClass(line, 'dshp-t-card-step')), textIn(byClass(line, 'dshp-t-card-elapsed'))], ['2/4', 'Translate pages 121–240', '3m 12s']);
+    assert.equal(textIn(line), '2/4·Translate pages 121–240·3m 12s');
+    // On the card: under its name, only on the thread's newest card; no word twice.
+    const projects = { openThread: () => {}, openPaired: () => {}, openFull: () => {}, facts: { continueThread: async () => ({ ok: true }) } };
+    const detailOf = (c) => elementsOf(c).find((e) => e.type === CardDetail);
+    let card = ThreadCard({ view: { ...view(told, { state: { dot: 'blocked', label: 'Blocked' } }) }, projects });
+    const drawn = CardDetail(detailOf(card).props);
+    assert.deepEqual([textIn(drawn), drawn.props['data-projects-card-detail']], ['The CDN token expired.', 'told']);
+    const words = `${textIn(card)} ${textIn(drawn)}`.toLowerCase().match(/[a-z]+/g);
+    assert.equal(new Set(words).size, words.length, `a word twice: ${words.join(' ')}`);
+    card = ThreadCard({ view: { ...view(told), newest: false }, projects });
+    assert.equal(detailOf(card), undefined);
+    // A failed turn's own line wins over it.
+    card = ThreadCard({ view: view(row({ ending: { state: 'failed', kind: 'error', message: 'No key.', at: new Date().toISOString() }, entry: told.entry }), { state: { dot: 'error', label: 'Failed' } }), projects });
+    assert.deepEqual([detailOf(card), byClass(card, 'dshp-t-card-why').length], [undefined, 1]);
+
+    // The Threads menu and panel: a running row with a list says how far along it is.
+    const statuses = new Map([['s10', { running: true }]]);
+    const live = { s10: { todos, turnAt: T } };
+    assert.equal(threadRow({ id: 't10', session: 's10', title: 'Translate' }, statuses, {}, {}, live).line, '2/4 · Translate pages 121–240');
+    assert.equal(threadRow({ id: 't10', session: 's10', title: 'Translate' }, statuses, {}, {}, { s10: { todos: [{ content: 'A', status: 'completed' }] } }).line, '1 of 1 steps done');
+    assert.equal(threadRow({ id: 't10', session: 's10', title: 'Translate' }, statuses, {}, {}, undefined).line, 'Working…');
+    // And a row waiting on you says what it asks.
+    const asked = new Map([['s10', { running: true, pendingInteraction: { kind: 'question', questions: [{ id: 'q', question: 'Which locale first?' }] } }]]);
+    assert.equal(threadRow({ id: 't10', session: 's10', title: 'Translate' }, asked, {}, {}, live).line, 'Has a question for you · Which locale first?');
+});
+
 test('session mode: a failed selection is reported, and the coordinator retries later', async () => {
     const { host, dir } = setup({}, undefined, SELECTING);
     await tick();
@@ -6090,6 +6168,27 @@ test('projection: a thread\'s last turn that failed or stopped, until a turn fin
     c = def.apply(c, idle(4, 'The turn was cut off because DSH stopped while it ran.'));
     c = def.apply(c, idle(5, 'Its last reply:'));
     assert.deepEqual(plain(c.v.cards.slice(1).map((card) => card.status ?? null)), ['failed', 'stopped', null]);
+});
+
+test('projection: a thread\'s value says when its latest turn started, its first turn\'s too', () => {
+    const { host } = setup();
+    const def = host.projections[0];
+    const brief = { type: 'user/message', seq: 2, time: 1005, data: { content: [{ type: 'text', text: '[Brief from the coordinator of "DSH Plugins" · you are thread t1, "Go"]\n\nGo.' }], source: { kind: 'agent-message', form: 'relay', senderSessionId: 'c' } } };
+    // The first turn starts before its brief says the session is a thread: the brief brings the time along.
+    let s = def.apply(def.init({ id: 't' }), { type: 'turn/start', seq: 1, time: 1000, data: { turn: 1 } });
+    assert.equal(def.wire.view(s), null);
+    s = def.apply(s, brief);
+    assert.equal(def.wire.view(s).turnAt, 1000);
+    s = def.apply(s, { type: 'turn/start', seq: 9, time: 9000, data: { turn: 2 } });
+    assert.equal(def.wire.view(s).turnAt, 9000);
+    // Kept when DSH reads the saved state back; the same event again changes nothing.
+    assert.equal(def.stateSchema.parse(JSON.parse(JSON.stringify(s))).turnAt, 9000);
+    assert.equal(def.apply(s, { type: 'turn/start', seq: 9, time: 9000, data: { turn: 2 } }), s);
+    // A coordinator's value has none.
+    const welcome = { type: 'user/message', seq: 1, time: 1, data: { content: [{ type: 'text', text: '[Project created: "DSH Plugins"]\n\nHi.' }], source: { kind: 'cordis-host-runner' } } };
+    let c = def.apply(def.init({ id: 'c' }), welcome);
+    c = def.apply(c, { type: 'turn/start', seq: 5, time: 5000, data: { turn: 1 } });
+    assert.equal(def.wire.view(c).turnAt, undefined);
 });
 
 test('projection: unrelated and malformed events keep the same state; parsing never throws', () => {
