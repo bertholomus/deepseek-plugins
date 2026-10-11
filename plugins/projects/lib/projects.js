@@ -41,7 +41,7 @@
  * @module dsh-plugin-projects/projects
  */
 import { appendFileSync, existsSync, readFileSync, writeFileSync, statSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { ProjectStore, expand, dataPath, ensurePrivateDir } from './store.js';
@@ -55,7 +55,7 @@ import {
 } from './prompts.js';
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
 import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS, diffFiles, subagentsIn, placeIn, MAX_NET_CHARS, MAX_VIEW_CHARS } from './changes.js';
-import { NetTexts, changedPath, canonicalPath } from './net.js';
+import { NetTexts, changedPath, canonicalPath, notKept, expectedAfter, NET_SWEEP_MS } from './net.js';
 import { sendOf, codeSendOf, described, withoutCredentials } from './sends.js';
 import { grantsIn, asksFor as asksToDo, doing } from './grants.js';
 import { deletesOf, codeDeletesOf, deletesWhat, isFree, madeDirsOf } from './deletes.js';
@@ -640,7 +640,9 @@ export class ProjectManager {
         /** How long a thread turn's changes wait for DSH's announcement before they are kept without it. */
         this.announceWaitMs = 3000;
         /** Each file's text before a thread's first edit of it and after its latest, for its Changes tab's net diffs. */
-        this.net = NetTexts.open(join(dirname(this.storeFile), 'net'), (line) => this.log(line));
+        // A store file of another name keeps its own (net-<name>/), so it never sweeps away another store's threads.
+        const storeName = basename(this.storeFile, '.json');
+        this.net = NetTexts.open(join(dirname(this.storeFile), storeName === 'projects' ? 'net' : `net-${storeName}`), (line) => this.log(line));
     }
 
     /** One action line, mode 600. Sizes and ids only, never prompt text. */
@@ -952,8 +954,10 @@ export class ProjectManager {
             const args = argsOf(exec.arguments);
             const project = this.project(who.projectId);
             const folder = (who.role === 'thread' ? this.store.thread(who.projectId, who.threadId)?.folder : undefined) ?? project.workspacePath;
-            const cwd = typeof session?.header?.cwd === 'string' ? session.header.cwd : folder;
-            const roots = [cwd, folder, project.workspacePath].filter((root) => typeof root === 'string' && root !== '').map(expand);
+            const first = typeof session?.header?.cwd === 'string' ? session.header.cwd : folder;
+            const roots = [first, folder, project.workspacePath].filter((root) => typeof root === 'string' && root !== '').map(expand);
+            // Where the command runs: on DSH 0.2.1, the session's working directory.
+            const cwd = this.cwdOf(session) ?? first;
             const here = typeof args.workdir === 'string' && args.workdir.trim() !== '' ? resolve(expand(cwd), expand(args.workdir.trim())) : expand(cwd);
             const found = exec.name === 'run_code'
                 ? codeSendOf(String(args.code ?? ''), { depth: 0, cwd: here, read: (path) => textInside(roots, path) }, 'run_code')
@@ -1021,14 +1025,16 @@ export class ProjectManager {
             const project = this.project(who.projectId);
             const t = who.role === 'thread' ? this.store.thread(who.projectId, who.threadId) : undefined;
             const folder = t?.folder ?? project.workspacePath;
-            const cwd = typeof session?.header?.cwd === 'string' ? session.header.cwd : folder;
-            const work = [cwd, folder, project.workspacePath].filter((root) => typeof root === 'string' && root !== '').map((root) => resolve(expand(root)));
+            const first = typeof session?.header?.cwd === 'string' ? session.header.cwd : folder;
+            const work = [first, folder, project.workspacePath].filter((root) => typeof root === 'string' && root !== '').map((root) => resolve(expand(root)));
+            // Where the command runs: on DSH 0.2.1, the session's working directory, which can be outside them.
+            const cwd = this.cwdOf(session) ?? first;
             const here = typeof args.workdir === 'string' && args.workdir.trim() !== '' ? resolve(expand(cwd), expand(args.workdir.trim())) : expand(cwd);
             // What the thread created: its change records (paths as they keep them, from its folder) and this turn's edits.
             const created = new Set(t ? this.created.get(t.sessionId) ?? [] : []);
             for (const r of Array.isArray(t?.changes) ? t.changes : []) {
                 for (const f of Array.isArray(r?.files) ? r.files : []) {
-                    if (f?.created === true && typeof f.path === 'string') created.add(resolve(expand(cwd), expand(f.path)));
+                    if (f?.created === true && typeof f.path === 'string') created.add(resolve(expand(first), expand(f.path)));
                 }
             }
             const read = (path) => (created.has(path) ? textInside([dirname(path)], path) : undefined);
@@ -1500,8 +1506,12 @@ export class ProjectManager {
      * plugin was not watching (DSH stopped or the plugin reloaded mid-turn).
      */
     async start() {
-        // The Changes tab's kept texts: none for threads the store no longer has, and not past their limit (net.js).
-        void this.net.prune(this.threadSessions());
+        // The Changes tab's kept texts (net.js): none for threads gone from the store or from DSH, none unused for 30
+        // days, and not past their limit; swept again every hour.
+        void this.sweepNet();
+        clearInterval(this.netTimer);
+        this.netTimer = setInterval(() => void this.sweepNet(), NET_SWEEP_MS);
+        this.netTimer.unref?.();
         for (const agent of this.ctx.agents.list?.() ?? []) this.maybeInstall(agent);
         await this.nameNameless();
         if (this.disposed) return;
@@ -1557,6 +1567,8 @@ export class ProjectManager {
         this.roles.clear();
         clearTimeout(this.wallTimer);
         this.wallTimer = undefined;
+        clearInterval(this.netTimer);
+        this.netTimer = undefined;
         for (const sessionId of [...this.approvals.keys()]) this.clearApprovals(sessionId);
         this.pendingSends.clear();
         this.callSteps.clear();
@@ -2465,7 +2477,7 @@ export class ProjectManager {
                 const self = this.store.lookup(id)?.role === 'thread';
                 const thread = self ? id : this.threadAbove(session);
                 if (!thread) return;
-                this.subCalls.set(`${id}\n${event.data.callId}`, { name: event.data.name, args: event.data.arguments, thread, self, cwd: session.header?.cwd });
+                this.subCalls.set(`${id}\n${event.data.callId}`, { name: event.data.name, args: event.data.arguments, thread, self, cwd: this.cwdOf(session) });
                 for (const key of [...this.subCalls.keys()].slice(0, -200)) this.subCalls.delete(key);
                 return;
             }
@@ -2501,10 +2513,67 @@ export class ProjectManager {
     }
 
     /**
+     * The thread sessions whose kept texts stay (net.js prune): every thread
+     * the store has, archived projects' too (Restore project brings their
+     * diffs back), but not one whose chat DSH no longer has. Only threads
+     * with kept texts that DSH's list leaves out are looked up; when the list
+     * or a session can't be read, the thread stays.
+     */
+    async netKeep() {
+        const sessions = this.threadSessions();
+        const unlisted = [...sessions].filter((id) => existsSync(this.net.dir(id)));
+        if (unlisted.length === 0) return sessions;
+        let items;
+        try {
+            ({ items } = await this.sc.list({}, AbortSignal.timeout(20000)));
+        } catch (error) {
+            this.log(`error list ${String(error?.message ?? error).slice(0, 200)}`);
+            return sessions;
+        }
+        const known = new Set((Array.isArray(items) ? items : []).map((item) => item?.sessionId));
+        for (const id of unlisted) {
+            if (this.disposed) break;
+            if (!known.has(id) && await this.exists(id).catch(() => true) === false) sessions.delete(id);
+        }
+        return sessions;
+    }
+
+    /** Sweep the Changes tab's kept texts (net.js prune): at start, then every NET_SWEEP_MS. */
+    async sweepNet() {
+        try {
+            const keep = await this.netKeep();
+            if (!this.disposed) await this.net.prune(keep);
+        } catch (error) {
+            this.log(`error net-sweep ${String(error?.message ?? error).slice(0, 200)}`);
+        }
+    }
+
+    /**
+     * The folder a session's relative paths resolve in, as DSH's tools
+     * resolve them: on DSH 0.2.1 its working directory (working_directory
+     * changes it), else the folder it started in; undefined without one.
+     */
+    cwdOf(session) {
+        const first = session?.header?.cwd;
+        if (typeof first !== 'string' || first === '') return undefined;
+        try {
+            const now = this.ctx.get?.('workingDirectory')?.get?.(session);
+            if (typeof now === 'string' && isAbsolute(now)) return now;
+        } catch {}
+        return first;
+    }
+
+    /** The folders a thread's kept texts may come from (net.js notKept): the folder it started in, its own and its project's workspace. */
+    netRoots(thread, t, projectId, first = this.ctx.agents.get(thread)?.session?.header?.cwd) {
+        return [first, t?.folder, this.projects.get(projectId)?.workspacePath].filter((root) => typeof root === 'string' && root !== '').map((root) => resolve(expand(root)));
+    }
+
+    /**
      * One tool call as DSH runs it (`tools/execute`): a file-tool call of a
-     * thread, or of a subagent working for one, keeps the file's text from
-     * before the thread's first edit of it and after each (net.js), for the
-     * one diff per file its Changes tab shows; their bash or pwsh command
+     * thread, or of a subagent working for one, on a file in its folders
+     * keeps the file's text from before the thread's first edit of it and
+     * after each that succeeds (net.js), for the one diff per file its
+     * Changes tab shows; their bash or pwsh command
      * that makes folders keeps the ones it made as the thread's own, for
      * the delete check (madeTarget). Any other call runs as it is, and
      * keeping either never fails a call.
@@ -2519,7 +2588,7 @@ export class ProjectManager {
             this.log(`error net-target ${String(error?.message ?? error).slice(0, 200)}`);
         }
         if (made) return this.aroundMade(made, next);
-        return target ? this.net.around(target.thread, target.file, next, typeof exec.callId === 'string' ? exec.callId : undefined) : next();
+        return target ? this.net.around(target.thread, target.file, next, typeof exec.callId === 'string' ? exec.callId : undefined, target.expect) : next();
     }
 
     /**
@@ -2539,7 +2608,7 @@ export class ProjectManager {
         if (!thread) return null;
         const who = own ?? this.store.lookup(thread);
         const t = who?.role === 'thread' ? this.store.thread(who.projectId, who.threadId) : null;
-        const cwd = [session?.header?.cwd, t?.folder, this.projects.get(who?.projectId)?.workspacePath].find((p) => typeof p === 'string' && p !== '');
+        const cwd = [this.cwdOf(session), t?.folder, this.projects.get(who?.projectId)?.workspacePath].find((p) => typeof p === 'string' && p !== '');
         if (cwd === undefined) return null;
         const here = typeof args.workdir === 'string' && args.workdir.trim() !== '' ? resolve(expand(cwd), expand(args.workdir.trim())) : resolve(expand(cwd));
         const dirs = madeDirsOf(command, { shell: exec.name, cwd: here }).filter((dir) => !existsSync(dir));
@@ -2562,10 +2631,16 @@ export class ProjectManager {
         return result;
     }
 
-    /** The thread whose net texts a file-tool call changes, and its file as an absolute path: {thread, file}, or null. */
+    /**
+     * The thread whose net texts a file-tool call changes, its file as a
+     * real path (links resolved) and what the call should leave (net.js
+     * expectedAfter): {thread, file, expect}, or null, as for a file whose
+     * texts aren't kept (notKept: outside the thread's folders, or a secret).
+     */
     netTarget(exec) {
         if (this.disposed || !FILE_TOOLS.has(exec?.name) || !exec.agent) return null;
-        const named = changedPath(exec.name, argsOf(exec.arguments));
+        const args = argsOf(exec.arguments);
+        const named = changedPath(exec.name, args);
         if (!named) return null;
         const session = exec.agent.session;
         const id = session?.id ?? exec.agent.id;
@@ -2574,10 +2649,12 @@ export class ProjectManager {
         if (!thread) return null;
         const who = own ?? this.store.lookup(thread);
         const t = who?.role === 'thread' ? this.store.thread(who.projectId, who.threadId) : null;
-        const cwd = [session?.header?.cwd, t?.folder, this.projects.get(who?.projectId)?.workspacePath].find((p) => typeof p === 'string' && p !== '');
+        const cwd = [this.cwdOf(session), t?.folder, this.projects.get(who?.projectId)?.workspacePath].find((p) => typeof p === 'string' && p !== '');
         const path = expand(named);
         if (!isAbsolute(path) && cwd === undefined) return null;
-        return { thread, file: canonicalPath(resolve(expand(cwd ?? '/'), path)) };
+        const file = canonicalPath(resolve(expand(cwd ?? '/'), path));
+        if (notKept(file, this.netRoots(thread, t, who?.projectId))) return null;
+        return { thread, file, expect: expectedAfter(exec.name, args) };
     }
 
     /** A file a thread (or its subagent) created, kept for the delete check: it may delete it without asking. */
@@ -2718,12 +2795,19 @@ export class ProjectManager {
             callsOf.set(path, [...(callsOf.get(path) ?? []), edit.call]);
         }
         let budget = MAX_VIEW_CHARS;
+        const roots = this.netRoots(t.sessionId, t, projectId, inspected?.meta?.cwd);
         for (const file of files) {
             const named = expand(file.path);
-            const at = isAbsolute(named) ? named : resolve(expand(typeof folder === 'string' ? folder : '/'), named);
+            const at = canonicalPath(isAbsolute(named) ? named : resolve(expand(typeof folder === 'string' ? folder : '/'), named));
+            // A file outside the thread's folders, or a secret, has no kept texts (net.js notKept): edit by edit, and why.
+            const not = notKept(at, roots);
+            if (not) {
+                file.netWhy = not;
+                continue;
+            }
             let seen;
             try {
-                seen = await this.net.view(t.sessionId, canonicalPath(at), callsOf.get(file.path) ?? []);
+                seen = await this.net.view(t.sessionId, at, callsOf.get(file.path) ?? []);
             } catch (error) {
                 this.log(`error net-view ${projectId}/${own} ${String(error?.message ?? error).slice(0, 200)}`);
                 seen = { why: 'none' };

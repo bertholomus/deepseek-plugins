@@ -369,8 +369,10 @@ export function diffFiles(edits, folder = '') {
  * A file's net change over a thread's edits, from its text before the
  * thread's first edit (null: the file was new) to its text after the last:
  * lines added and deleted, and hunks in DiffBlock's shape with three lines
- * of context, so one diff shows what the thread's edits came to. Equal
- * texts give no hunks: the edits undid each other.
+ * of context, at most MAX_HUNK_CHANGES changed lines each, so one diff
+ * shows what the thread's edits came to. Texts with the same lines give no
+ * hunks: the edits undid each other, or changed only line endings or a
+ * last newline (net.js view tells these apart).
  * @param {string|null} before
  * @param {string} after
  * @returns {{added: number, deleted: number, created?: true, hunks: Array<{oldText: string|null, newText: string}>}|null}
@@ -414,23 +416,43 @@ export function netHunks(before, after) {
         }
         runs.push({ ...run, i1: i, j1: j });
     }
+    // A run with more changed lines than a hunk takes goes in pieces, one after another (MAX_HUNK_CHANGES).
+    const size = (run) => run.i1 - run.i0 + run.j1 - run.j0;
+    const pieces = [];
+    for (const run of runs) {
+        let { i0, j0 } = run;
+        while (run.i1 - i0 + run.j1 - j0 > MAX_HUNK_CHANGES) {
+            const i = Math.min(run.i1 - i0, Math.max(MAX_HUNK_CHANGES / 2, MAX_HUNK_CHANGES - (run.j1 - j0)));
+            const j = Math.min(MAX_HUNK_CHANGES - i, run.j1 - j0);
+            pieces.push({ i0, j0, i1: i0 + i, j1: j0 + j });
+            i0 += i;
+            j0 += j;
+        }
+        pieces.push({ i0, j0, i1: run.i1, j1: run.j1 });
+    }
+    // Runs close together share a hunk while it has room; each hunk's context is unchanged lines no other hunk shows.
     const hunks = [];
     let added = 0;
     let deleted = 0;
-    for (let r = 0; r < runs.length;) {
+    let shown = 0;
+    for (let r = 0; r < pieces.length;) {
         let last = r;
-        while (last + 1 < runs.length && runs[last + 1].i0 - runs[last].i1 <= 2 * NET_CONTEXT) last++;
-        const first = runs[r];
-        const before0 = Math.min(NET_CONTEXT, first.i0, first.j0);
-        const after0 = Math.min(NET_CONTEXT, a.length - runs[last].i1, b.length - runs[last].j1);
+        let changes = size(pieces[r]);
+        while (last + 1 < pieces.length && pieces[last + 1].i0 - pieces[last].i1 <= 2 * NET_CONTEXT && changes + size(pieces[last + 1]) <= MAX_HUNK_CHANGES) {
+            changes += size(pieces[++last]);
+        }
+        const first = pieces[r];
+        const before0 = Math.min(NET_CONTEXT, first.i0 - shown);
+        const after0 = Math.min(NET_CONTEXT, (last + 1 < pieces.length ? pieces[last + 1].i0 : a.length) - pieces[last].i1);
         hunks.push({
-            oldText: a.slice(first.i0 - before0, runs[last].i1 + after0).join('\n'),
-            newText: b.slice(first.j0 - before0, runs[last].j1 + after0).join('\n'),
+            oldText: a.slice(first.i0 - before0, pieces[last].i1 + after0).join('\n'),
+            newText: b.slice(first.j0 - before0, pieces[last].j1 + after0).join('\n'),
         });
         for (let k = r; k <= last; k++) {
-            deleted += runs[k].i1 - runs[k].i0;
-            added += runs[k].j1 - runs[k].j0;
+            deleted += pieces[k].i1 - pieces[k].i0;
+            added += pieces[k].j1 - pieces[k].j0;
         }
+        shown = pieces[last].i1 + after0;
         r = last + 1;
     }
     return { added, deleted, hunks };
@@ -439,6 +461,12 @@ export function netHunks(before, after) {
 /** Lines of context around each change in a net diff, and the most differing lines matched line by line. */
 const NET_CONTEXT = 3;
 export const MAX_NET_DISTANCE = 1000;
+/**
+ * The most changed lines (added and deleted) in one hunk of a net diff:
+ * DSH's diff view gives up on a hunk with more than 256 changes and draws
+ * it all as replaced.
+ */
+export const MAX_HUNK_CHANGES = 200;
 /** The most text one file's net diff shows in a Changes tab; past it, its counts only. */
 export const MAX_NET_CHARS = 256 * 1024;
 

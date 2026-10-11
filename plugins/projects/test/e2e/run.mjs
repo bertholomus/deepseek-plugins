@@ -906,6 +906,16 @@ try {
     check('a thread\'s Changes tab has one diff of what each file\'s edits came to, kept privately for that thread',
         JSON.stringify(notes?.net) === JSON.stringify({ added: 3, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'one\nTWO\nthree' }] }) && keptPrivate(),
         `${JSON.stringify(notes?.net ?? null)} ${existsSync(netDir) ? readdirSync(netDir).map((name) => `${name}:${octal(modeOf(join(netDir, name)))}`).join(' ') : 'no folder'}`);
+    // An edit DSH refuses (the thread never read the file) keeps nothing of the file (net diffs review: the Mac's check).
+    const unread = join(ws, 'unread.md');
+    writeFileSync(unread, 'left alone\n');
+    const keptBefore = readdirSync(netDir).sort().join();
+    const refusedEdit = await say(lambda, call('edit', { file_path: unread, old_string: 'left', new_string: 'changed' }));
+    const keptIndex = (() => { try { return JSON.parse(readFileSync(join(netDir, 'index.json'), 'utf8')); } catch { return null; } })();
+    check('an edit DSH refuses keeps nothing of the file', refusedEdit.some((r) => /has not been read|requires reading/.test(r.action?.text ?? ''))
+        && readFileSync(unread, 'utf8') === 'left alone\n' && readdirSync(netDir).sort().join() === keptBefore
+        && keptIndex !== null && !Object.keys(keptIndex.files ?? {}).some((path) => path.endsWith('unread.md')),
+        `${refusedEdit.map((r) => r.action?.text ?? r.action?.tool).join(' | ').slice(0, 300)} ${readdirSync(netDir).join(' ')} ${JSON.stringify(Object.keys(keptIndex?.files ?? {}))}`);
     const tabA = await tabOf(web, coord, waitsId);
     const tabB = await tabOf(web, sessionB);
     check('each thread\'s Changes tab shows only its own edits, whatever DSH says of the folder', tabA.ok && tabA.value.files.length === 0
