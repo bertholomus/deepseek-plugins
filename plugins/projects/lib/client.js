@@ -481,6 +481,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-pg-heading .dshp-pg-new{margin-left:auto;align-self:center}',
             '.dshp-pg-note{display:flex;align-items:center;gap:8px;margin:-4px 0 12px;padding:5px 5px 5px 12px;border-radius:12px;background:var(--dsw-alias-interactive-bg-hover);font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
             '.dshp-pg-note>svg{flex:none}',
+            // Find by name, above the tree; a found name's words are marked in its title.
+            '.dshp-pg-find{position:relative;max-width:360px;margin:0 0 10px}',
+            '.dshp-pg-find .dshp-pg-find-box{display:flex;width:100%;box-sizing:border-box}',
+            '.dshp-pg-find .dshp-pg-find-query{padding-right:34px}',
+            '.dshp-pg-state.dshp-pg-find-none{padding:6px 8px}',
+            '.dshp-tree-hit{background:none;color:inherit;font-weight:600}',
             '.dshp-pg-note>span{flex:1;min-width:0}',
             '.dshp-pg-note .dshp-t-icon{margin:0}',
             '.dshp-pg-state{padding:48px 0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
@@ -1399,6 +1405,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          */
         const LINK = /^dsh-resource:\/\/file\/session\/([^/?#]+)\/\.dsh-thread\/(t\d+)\/?(?:[?#].*)?$/i;
         const EMPTY = Object.freeze([]);
+        /** A set with nothing in it, never added to. */
+        const EMPTY_SET = new Set();
         const NO_PROJECT = Object.freeze({});
         const TEXT = {
             // The plugin's messages between sessions, as their notices name them.
@@ -4404,6 +4412,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             cancel: 'Cancel',
             close: 'Close',
             newChat: 'New chat',
+            find: 'Find by name',
+            findClear: 'Clear the find',
+            findNone: (words) => `Nothing matches “${words}”.`,
             imported: (names) => `Imported from your old sidebar: ${listText(names)}, with ${names.length === 1 ? 'its' : 'their'} workspaces. ${names.length === 1 ? 'Its' : 'Their'} old instructions, files and defaults for new sessions weren't carried over.`,
             dismiss: 'Dismiss',
         };
@@ -4640,11 +4651,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * workspaces in none.
          */
         function treeMeta(node) {
-            const n = node.children.length;
+            // All an item holds, though a find shows only part of it.
+            const held = node.whole ?? node.children;
+            const n = held.length;
             if (node.kind === 'category') return node.id === OTHERS ? plural(n, 'workspace') : `${PAGE.category} · ${plural(n, 'workspace')}`;
             if (node.kind === 'project') {
                 // Open threads as the hover card and the plugin's page count them, then the resolved ones drawn with them.
-                const resolved = node.children.filter((child) => child.resolved === true).length;
+                const resolved = held.filter((child) => child.resolved === true).length;
                 const open = n - resolved;
                 const what = node.paused === true ? `${PAGE.project} · ${TEXT.paused}` : PAGE.project;
                 if (n === 0) return `${what} · ${PAGE.noThreads}`;
@@ -4684,8 +4697,20 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * Left closes or goes to the parent, Home and End, Enter opens a
          * session or opens and closes a group.
          */
-        function PageTree({ tree, label, onOpenSession, statuses }) {
-            const [closed, toggleClosed] = useStoredSet(CLOSED_KEY);
+        function PageTree({ tree, label, onOpenSession, statuses, find = '', treeRef }) {
+            const [stored, toggleStored] = useStoredSet(CLOSED_KEY);
+            // While a find is on, everything it keeps starts open, and what is closed then is forgotten when the
+            // find changes (React's way to reset state when a prop changes: set it while drawing).
+            const [found, setFound] = React.useState({ find, closed: EMPTY_SET });
+            if (found.find !== find) setFound({ find, closed: EMPTY_SET });
+            const finding = find.trim() !== '';
+            const closed = !finding ? stored : found.find === find ? found.closed : EMPTY_SET;
+            const toggleClosed = !finding ? toggleStored : (key, on) => setFound((prev) => {
+                const copy = new Set(prev.find === find ? prev.closed : EMPTY_SET);
+                if (on) copy.add(key);
+                else copy.delete(key);
+                return { find, closed: copy };
+            });
             const shown = visibleItems(tree, closed);
             const [current, setCurrent] = React.useState(null);
             const refs = React.useRef(new Map());
@@ -4746,7 +4771,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         onClick: node.children.length > 0 ? (event) => { event.stopPropagation(); setCurrent(x.key); toggleClosed(x.key, x.open); } : undefined,
                     }, node.children.length > 0 ? h(x.open ? ui.IconChevronDownOutlineRegular : ui.IconChevronRightOutlineRegular, { size: 12 }) : null),
                     glyph,
-                    h('span', { className: 'dshp-tree-title', 'data-projects-title': node.title }, node.title),
+                    h('span', { className: 'dshp-tree-title', 'data-projects-title': node.title }, ...(finding ? withHit(node.title, find) : [node.title])),
                     // A paused project's sign, as on its row in the session list; its row says Paused in words.
                     node.paused === true ? h('span', { className: 'dshp-tree-dot dshp-t-paused-mark', 'aria-hidden': true }, h(ui.IconPauseOutlineRegular, { size: 12 })) : null,
                     dot ? h('span', {
@@ -4759,7 +4784,32 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         : meta ? h('span', { className: 'dshp-tree-meta' }, meta) : null),
                 kids.length > 0 ? h('ul', { role: 'group', className: 'dshp-tree-group' }, ...kids.map(item)) : null);
             };
-            return h('ul', { role: 'tree', 'aria-label': label, className: 'dshp-tree', onKeyDown }, ...shown.filter((x) => x.level === 1).map(item));
+            return h('ul', { role: 'tree', 'aria-label': label, className: 'dshp-tree', onKeyDown, ref: treeRef }, ...shown.filter((x) => x.level === 1).map(item));
+        }
+
+        /**
+         * The tree cut down to a find: an item whose name holds the words (in
+         * any case) with everything in it, and the items above each such
+         * item, so a match is shown where it lives. Each kept item keeps what
+         * it holds in `whole`, so its row still counts all of it.
+         */
+        function findInTree(nodes, find) {
+            const words = String(find ?? '').trim().toLowerCase();
+            if (words === '') return nodes;
+            const keep = (node) => {
+                if (String(node.title).toLowerCase().includes(words)) return node;
+                const children = node.children.map(keep).filter(Boolean);
+                return children.length > 0 ? { ...node, children, whole: node.whole ?? node.children } : null;
+            };
+            return nodes.map(keep).filter(Boolean);
+        }
+
+        /** A title with the found words marked, as parts to draw. */
+        function withHit(title, find) {
+            const words = String(find ?? '').trim();
+            const at = words === '' ? -1 : String(title).toLowerCase().indexOf(words.toLowerCase());
+            if (at < 0) return [title];
+            return [title.slice(0, at), h('mark', { key: 'hit', className: 'dshp-tree-hit' }, title.slice(at, at + words.length)), title.slice(at + words.length)].filter((part) => part !== '');
         }
 
         /**
@@ -4781,6 +4831,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const pending = useWorkspaces((state) => state.phase) === 'pending';
             const [naming, setNaming] = React.useState(false);
             const [said, setSaid] = React.useState('');
+            const [find, setFind] = React.useState('');
+            const treeRef = React.useRef(null);
+            const findRef = React.useRef(null);
             const [notes, dismissNote] = useStoredSet(NOTE_KEY);
             const announce = (text) => setSaid((prev) => (prev === text ? `${text} ` : text));
             const all = Array.isArray(listed) ? listed : EMPTY;
@@ -4807,7 +4860,24 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h('h2', null, PAGE.emptyTitle),
                     h('p', null, PAGE.emptyText));
             } else {
-                content = h(PageTree, { tree, label: PAGE.title, statuses, onOpenSession: (id) => projects.openSession(id) });
+                const kept = findInTree(tree, find);
+                content = h(React.Fragment, null,
+                    // Find by name: one box over every category, workspace, project, thread and chat name.
+                    h('div', { className: 'dshp-pg-find' }, h(ui.Input, {
+                        ref: findRef, type: 'text', role: 'searchbox', value: find, placeholder: PAGE.find, 'aria-label': PAGE.find, 'data-projects-find': '',
+                        className: find !== '' ? 'dshp-pg-find-box dshp-pg-find-query' : 'dshp-pg-find-box',
+                        icon: ui.IconSearchOutlineRegular ? h(ui.IconSearchOutlineRegular, { size: 14 }) : undefined,
+                        onChange: (event) => setFind(event.target.value),
+                        onKeyDown: (event) => {
+                            if (event.key === 'Escape' && find !== '') { event.preventDefault(); event.stopPropagation(); setFind(''); }
+                            else if (event.key === 'ArrowDown') { event.preventDefault(); treeRef.current?.querySelector('[role="treeitem"][tabindex="0"]')?.focus(); }
+                        },
+                    }), find !== '' ? h('button', {
+                        type: 'button', className: 'dshp-mp-search-clear', 'aria-label': PAGE.findClear, 'data-projects-find-clear': '',
+                        onClick: () => { setFind(''); findRef.current?.focus(); },
+                    }, h(ui.IconCloseFillRegular, null)) : null),
+                    kept.length > 0 ? h(PageTree, { tree: kept, label: PAGE.title, statuses, find, treeRef, onOpenSession: (id) => projects.openSession(id) })
+                        : h('div', { className: 'dshp-pg-state dshp-pg-find-none', role: 'status', 'data-projects-find-none': '' }, PAGE.findNone(find.trim())));
             }
             // New category, as the sidebar makes one: a refusal shows under the name, and the new category is said.
             const overlay = naming ? h(NameDialog, {
@@ -6269,7 +6339,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the views are built on.
         module.exports.internals = {
-            pageModel, visibleItems, treeMeta, PageTree, ProjectsPage,
+            pageModel, visibleItems, treeMeta, PageTree, ProjectsPage, findInTree, withHit,
             valueIn, takeKnown, coordinatorName, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, nestingRules, sectionGroups, nestingCss,
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,

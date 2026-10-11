@@ -1279,6 +1279,104 @@ test('browser half: the Categories page gives each thread its state, marks a pau
     assert.equal(chevron(row(drawTree(), 'x')), undefined);
 });
 
+test('browser half: Find by name on the Categories page keeps each match where it lives, and its folds are its own', () => {
+    const { client, react } = loadClient();
+    const { ProjectsPage, PageTree, findInTree, withHit, treeMeta } = client.internals;
+    const value = (v) => ({ values: { projectSession: v } });
+    const sessions = {
+        phase: 'ready',
+        byId: { c: { id: 'c', title: '◆ Storefront' }, t1: { id: 't1', title: 'Fix the cart' }, t2: { id: 't2', title: 'Hero images' }, x: { id: 'x', title: 'Fleet power budget' }, n: { id: 'n', title: 'Lane restarts' } },
+        projectionsBySession: {
+            c: value({ role: 'coordinator', project: { id: 'storefront', name: 'Storefront' }, threads: [{ id: 't1', session: 't1' }, { id: 't2', session: 't2', resolved: true }] }),
+            t1: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' } }),
+            t2: value({ role: 'thread', coordinator: 'c', thread: { id: 't2' } }),
+        },
+    };
+    const workspaces = {
+        phase: 'ready', archivedSessionIds: [],
+        items: [
+            { workspaceId: 'w-sf', title: 'storefront', path: '/home/u/storefront', sessionIds: ['c', 't1', 't2', 'x'] },
+            { workspaceId: 'w-ops', title: 'fleet-ops', path: '/home/u/fleet-ops', sessionIds: ['n'] },
+        ],
+    };
+    const facts = {
+        subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {}, list: async () => {}, act: async () => ({ ok: true }),
+        projects: () => [{ id: 'storefront', name: 'Storefront', coordinator: 'c', home: 'w-sf' }],
+        categories: () => [{ id: 'shop', name: 'Shop', workspaces: [{ id: 'w-sf' }] }, { id: 'fleet', name: 'Fleet Services', workspaces: [{ id: 'w-ops' }] }],
+        listFailed: () => false,
+    };
+    const props = {
+        useSessions: (select) => select(sessions), useSessionStatus: (select) => select(new Map()), useWorkspaces: (select) => select(workspaces),
+        projects: { facts, openSession: () => {} },
+    };
+    const draw = mount(react, () => ProjectsPage(props));
+    const find = (page) => elementsOf(page).find((e) => e.props?.['data-projects-find'] !== undefined);
+    const treeOf = (page) => elementsOf(page).find((e) => e.type === PageTree);
+    const titles = (tree) => elementsOf(tree).filter((e) => e.props?.role === 'treeitem').map((li) => textIn(byClass(li.children[0], 'dshp-tree-title')));
+    let page = draw();
+    const clear = (tree) => elementsOf(tree).find((e) => e.props?.['data-projects-find-clear'] !== undefined);
+    assert.deepEqual([find(page).props['aria-label'], find(page).props.role, find(page).props.value, clear(page)], ['Find by name', 'searchbox', '', undefined]);
+    assert.equal(treeOf(page).props.find, '');
+    const whole = treeOf(page).props.tree;
+    // A thread's name: its project, workspace and category stay around it, and nothing else; its project still counts all.
+    find(page).props.onChange({ target: { value: 'cart' } });
+    page = draw();
+    let tree = mount(react, () => PageTree(treeOf(page).props))();
+    assert.deepEqual(titles(tree), ['Shop', 'storefront', 'Storefront', 'Fix the cart']);
+    assert.equal(textIn(byClass(elementsOf(tree).find((e) => e.props?.['data-projects-node'] === 'project').children[0], 'dshp-tree-meta')), 'Project · 1 open thread · 1 resolved');
+    // The words are marked in the title, which keeps its whole name for the review's hooks.
+    const hit = elementsOf(tree).find((e) => e.type === 'mark');
+    assert.deepEqual([textIn(hit), hit.props.className], ['cart', 'dshp-tree-hit']);
+    assert.deepEqual(plain(withHit('Fix the cart', 'CART').map((part) => (typeof part === 'string' ? part : `[${textIn(part)}]`))), ['Fix the ', '[cart]']);
+    assert.deepEqual(plain(withHit('Fix', 'zz')), ['Fix']);
+    // A category's name keeps the whole category; any case matches; a chat's name keeps only it in its workspace.
+    assert.deepEqual(plain(findInTree(whole, 'FLEET').map((n) => [n.title, n.children.map((w) => [w.title, w.children.map((c) => c.title)])])), [
+        ['Shop', [['storefront', ['Fleet power budget']]]],
+        ['Fleet Services', [['fleet-ops', ['Lane restarts']]]],
+    ]);
+    // Closing an item while finding is the find's own: the page's kept folds don't change, and a new find starts open.
+    find(page).props.onChange({ target: { value: 'storefront' } });
+    let treeProps = treeOf(draw()).props;
+    const drawTree = mount(react, () => PageTree(treeProps));
+    const project = (t) => elementsOf(t).find((e) => e.props?.['data-projects-node'] === 'project');
+    const fold = (t) => elementsOf(project(t).children[0]).find((e) => e.props?.['data-projects-chevron'] !== undefined).props.onClick({ stopPropagation: () => {} });
+    fold(drawTree());
+    assert.equal(project(drawTree()).props['aria-expanded'], false);
+    find(page).props.onChange({ target: { value: 'store' } });
+    treeProps = treeOf(draw()).props;
+    assert.equal(project(drawTree()).props['aria-expanded'], true);
+    find(page).props.onChange({ target: { value: '' } });
+    treeProps = treeOf(draw()).props;
+    assert.equal(project(drawTree()).props['aria-expanded'], true);
+    // Without a find, a fold is the page's own again.
+    fold(drawTree());
+    assert.equal(project(drawTree()).props['aria-expanded'], false);
+    find(page).props.onChange({ target: { value: 'storefront' } });
+    treeProps = treeOf(draw()).props;
+    assert.equal(project(drawTree()).props['aria-expanded'], true);
+    find(page).props.onChange({ target: { value: '' } });
+    treeProps = treeOf(draw()).props;
+    assert.equal(project(drawTree()).props['aria-expanded'], false);
+    fold(drawTree());
+    // Nothing found: said in words, and Escape empties the box.
+    find(page).props.onChange({ target: { value: 'zzz' } });
+    page = draw();
+    assert.equal(treeOf(page), undefined);
+    const none = elementsOf(page).find((e) => e.props?.['data-projects-find-none'] !== undefined);
+    assert.deepEqual([none.props.role, textIn(none)], ['status', 'Nothing matches “zzz”.']);
+    // Its × empties the box too.
+    assert.equal(clear(page).props['aria-label'], 'Clear the find');
+    clear(page).props.onClick();
+    assert.equal(find(draw()).props.value, '');
+    find(page).props.onChange({ target: { value: 'zzz' } });
+    page = draw();
+    let prevented = 0;
+    find(page).props.onKeyDown({ key: 'Escape', preventDefault: () => { prevented += 1; }, stopPropagation: () => {} });
+    page = draw();
+    assert.deepEqual([find(page).props.value, prevented, titles(mount(react, () => PageTree(treeOf(page).props))()).length], ['', 1, 9]);
+    assert.equal(treeMeta({ kind: 'category', id: 'c', children: [{}], whole: [{}, {}] }), 'Category · 2 workspaces');
+});
+
 test('browser half: a session DSH lists without the plugin\'s value is placed by what the plugin\'s store knows, not by its title', async () => {
     const { client } = loadClient();
     const { rowPlace, isThreadRow, coordinatorName, takeKnown, projectFacts } = client.internals;
