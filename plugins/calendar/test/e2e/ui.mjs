@@ -20,7 +20,8 @@
  * - one occurrence of the repeating event changed (scope 'one') and another
  *   deleted (scope 'one'), the rest of the series as it was;
  * - Month, Day and Agenda views, the choice kept by the plugin, N and T;
- *   a narrow month's timed events without their times in front;
+ *   a narrow month's timed events without their times in front; where Week
+ *   and Day open their hours, again after Next, Previous and Week to Day;
  * - a calendar hidden and shown again from the side column;
  * - a change the host says would email six guests ('calendar/needs-notify',
  *   played here, as the calendars kept in DSH email no one): the question
@@ -911,6 +912,56 @@ try {
         await page.locator('[data-calendar-view="week"]').click();
         check('a narrow month shows timed events by their titles, without their times in front', month.width < 910 && month.times.length > 0 && month.times.every((d) => d === 'none'),
             JSON.stringify(month));
+    });
+
+    // 4b. Where the hours open, placed again whenever the days shown change: an early event (6:00, before 7:30) whole after Next,
+    // Previous and Week to Day, and in a narrow window, on a grid made anew (Month and back) and not scrolled since.
+    await step('the hours open on the first event again on other days', async () => {
+        const dayE = addDays(today, 21);
+        const early = (await api('createEvent', { input: { title: 'E2E Early', start: `${dayE}T06:00`, end: `${dayE}T06:45`, timeZone: ZONE } })).value?.occurrence;
+        try {
+            await page.locator('[data-calendar-view="month"]').click();
+            await page.locator('[data-calendar-grid="month"]').waitFor({ state: 'visible' });
+            await page.locator('[data-calendar-today]').click();
+            await page.locator('[data-calendar-view="week"]').click();
+            await page.locator(`[data-calendar-day-column="${today}"]`).waitFor({ state: 'visible' });
+            /** Whether the early event shows whole in the hours, once its days are read. */
+            const whole = async () => {
+                const ev = grid.locator(`.dshcal-ev[data-calendar-event="${early?.id}"]`);
+                await ev.waitFor({ state: 'visible', timeout: 10000 });
+                await page.waitForTimeout(400);
+                return ev.evaluate((el) => {
+                    const r = el.getBoundingClientRect();
+                    const box = el.closest('[data-calendar-scroll]').getBoundingClientRect();
+                    return r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+                });
+            };
+            await showDay(dayE);
+            const next = await whole();
+            await page.locator('[data-calendar-next]').click();
+            await page.waitForTimeout(400);
+            await page.locator('[data-calendar-prev]').click();
+            const back = await whole();
+            const columns = await page.locator('[data-calendar-day-column]').evaluateAll((els) => els.map((el) => el.getAttribute('data-calendar-day-column')));
+            await page.locator('.dshcal-wk-dayhead').nth(columns.indexOf(dayE)).click();
+            await page.locator('[data-calendar-grid="day"]').waitFor({ state: 'visible' });
+            const day = await whole();
+            await shot(page, 'day-opening');
+            await page.setViewportSize({ width: 420, height: 820 });
+            await page.waitForTimeout(500);
+            await page.locator('[data-calendar-prev]').click();
+            await page.waitForTimeout(400);
+            await page.locator('[data-calendar-next]').click();
+            const narrow = await whole();
+            await shot(page, 'narrow-day-opening');
+            check('Week and Day open their hours on the first event again when the days shown change: after Next, Previous and Week to Day, and narrow',
+                next && back && day && narrow, JSON.stringify({ next, back, day, narrow }));
+        } finally {
+            await page.setViewportSize({ width: 1280, height: 800 });
+            await api('deleteEvent', { id: early?.id, scope: 'all' }).catch(() => {});
+            await page.locator('[data-calendar-view="week"]').click();
+            await page.locator('[data-calendar-today]').click();
+        }
     });
 
     // 5. A calendar hidden and shown again.

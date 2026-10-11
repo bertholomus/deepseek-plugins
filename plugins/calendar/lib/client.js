@@ -3323,8 +3323,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [moving, setMoving] = React.useState(null);
             // An event moved with the keys, to keep in focus where it lands: {id, until}.
             const refocus = React.useRef(null);
-            // Where the view opens (see openingMinute), then once more when the events are read, unless the user scrolled meanwhile.
-            const opening = React.useRef({ top: -1, settled: false });
+            // Where the view opens (see openingMinute): again whenever the days shown change, and once more when their
+            // events are read; each time only if the user hasn't scrolled since it was last placed.
+            const daysKey = days.join(' ');
+            const opening = React.useRef({ top: -1, key: '', settled: false });
             const placeOpening = (withEvents) => {
                 const el = scrollRef.current;
                 if (!el) return;
@@ -3334,17 +3336,19 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }) : EMPTY;
                 el.scrollTop = Math.max(0, (openingMinute(starts, minutesIn(Date.now(), zone), days.includes(today)) / 60) * HOUR_PX - 10);
                 opening.current.top = el.scrollTop;
+                opening.current.settled = withEvents;
             };
             React.useLayoutEffect(() => {
-                placeOpening(ready);
-                opening.current.settled = ready;
-            }, []);
-            React.useLayoutEffect(() => {
-                if (!ready || opening.current.settled) return;
-                opening.current.settled = true;
+                const was = opening.current;
                 const el = scrollRef.current;
-                if (el && Math.abs(el.scrollTop - opening.current.top) <= 1) placeOpening(true);
-            }, [ready]);
+                const untouched = was.top < 0 || (el !== null && Math.abs(el.scrollTop - was.top) <= 1);
+                if (was.key !== daysKey) {
+                    was.key = daysKey;
+                    if (untouched) placeOpening(ready);
+                } else if (ready && !was.settled && untouched) {
+                    placeOpening(true);
+                }
+            }, [daysKey, ready]);
             React.useEffect(() => {
                 const want = refocus.current;
                 if (!want) return;
@@ -3488,7 +3492,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const el = scrollRef.current;
                 if (!el || !scrollTo) return;
                 const top = (scrollTo.minutes / 60) * HOUR_PX;
-                if (top < el.scrollTop + 8 || top > el.scrollTop + el.clientHeight - 60) el.scrollTop = Math.max(0, top - HOUR_PX);
+                if (top >= el.scrollTop + 8 && top <= el.scrollTop + el.clientHeight - 60) return;
+                el.scrollTop = Math.max(0, top - HOUR_PX);
+                // Moved to what was asked for (now, or an event): kept when the events come, placed again on other days.
+                opening.current.top = el.scrollTop;
+                opening.current.settled = true;
             }, [scrollTo]);
             const n = days.length;
             // How many events fit side by side: a day's column, measured, over the narrowest that still shows a few letters.
