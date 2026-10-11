@@ -442,8 +442,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-menu-swatch{display:inline-block;width:12px;height:12px;border-radius:4px;background:var(--sw)}',
 
             // Toasts.
-            '.dshcal-toast{position:fixed;left:50%;bottom:24px;z-index:1200;transform:translateX(-50%);display:flex;align-items:center;gap:10px;max-width:min(520px,calc(100vw - 32px));padding:10px 14px;border-radius:14px;'
+            '.dshcal-toast{position:fixed;left:0;right:0;bottom:24px;z-index:1200;display:flex;align-items:center;gap:10px;box-sizing:border-box;width:fit-content;max-width:min(520px,calc(100vw - 32px));margin:0 auto;padding:10px 14px;border-radius:14px;'
                 + 'background:var(--cal-pop);-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);border:1px solid var(--cal-line2);box-shadow:0 12px 32px var(--cal-shadow);color:var(--cal-text);font-size:13px;animation:dshcal-in .16s ease-out}',
+            // While one of the plugin's dialogs is open, toasts show at the top, off its buttons.
+            'body:has(.dshcal-dlg) .dshcal-toast{top:max(16px,var(--dsh-frame-overlay-top,16px));bottom:auto}',
             '.dshcal-toast[data-tone=error]>svg{color:var(--cal-danger)}',
             '.dshcal-toast[data-tone=ok]>svg{color:var(--cal-ok)}',
 
@@ -1620,7 +1622,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         let toastHostSeq = 0;
-        /** The store's toast, at the bottom of the window: one at a time, shown by one view. */
+        /** The store's toast, at the bottom of the window (at the top while a dialog is open): one at a time, shown by one view. */
         function ToastHost({ store }) {
             useStore(store);
             const [id] = React.useState(() => ++toastHostSeq);

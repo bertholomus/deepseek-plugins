@@ -15,7 +15,8 @@
  *   email guests without asking (with nothing to change it);
  * - a timed event, an all-day event and a weekly repeating event made
  *   through the event dialog (each checked through the plugin's endpoints);
- *   an event's details, which take the focus and close on Escape;
+ *   a toast shown while the event dialog is open, clear of its buttons; an
+ *   event's details, which take the focus and close on Escape;
  * - one occurrence of the repeating event changed (scope 'one') and another
  *   deleted (scope 'one'), the rest of the series as it was;
  * - Month, Day and Agenda views, the choice kept by the plugin, N and T;
@@ -796,6 +797,35 @@ try {
         weekly = list[0];
         check('a weekly repeating event made in the dialog repeats every week', list.length >= 4 && list.every((o) => o.recurring && /FREQ=WEEKLY/.test(o.repeat ?? ''))
             && list.every((o, i) => o.startLocal === `${addDays(day1, 7 * i)}T15:00`), JSON.stringify(list.map((o) => [o.id, o.startLocal])));
+    });
+
+    await step('a toast while the event dialog is open', async () => {
+        // An event saved, its toast showing: the next event dialog opened under it keeps its buttons clear (the toast goes to the top).
+        await page.locator('[data-calendar-side-new]').click();
+        const form = page.locator('[data-calendar-event-form="new"]');
+        await form.waitFor({ state: 'visible' });
+        await form.locator('[data-calendar-title]').fill('E2E Toast');
+        await page.locator('[data-calendar-save]').click();
+        await dialogGone();
+        await page.locator('.dshcal-toast').waitFor({ state: 'visible', timeout: 10000 });
+        await page.locator('[data-calendar-side-new]').click();
+        await form.waitFor({ state: 'visible' });
+        const geo = await page.evaluate(() => {
+            const box = (el) => {
+                const r = el?.getBoundingClientRect();
+                return r ? { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right) } : null;
+            };
+            const toast = document.querySelector('.dshcal-toast');
+            return { toast: box(toast), text: toast?.textContent ?? '', footer: box(document.querySelector('[data-calendar-save]')?.parentElement) };
+        });
+        await shot(page, 'event-dialog-toast');
+        await page.keyboard.press('Escape');
+        await dialogGone();
+        const made = (await events(today, addDays(today, 2))).find((o) => o.title === 'E2E Toast');
+        if (made) await api('deleteEvent', { id: made.id, scope: 'all' });
+        const apart = (a, b) => a.bottom <= b.top || b.bottom <= a.top || a.right <= b.left || b.right <= a.left;
+        check('a toast shown while the event dialog is open stays off the dialog\'s buttons', Boolean(geo.toast && geo.footer) && /E2E Toast/.test(geo.text) && apart(geo.toast, geo.footer),
+            JSON.stringify(geo));
     });
 
     /** Show the week that has a day (next/previous until its column is there). */
