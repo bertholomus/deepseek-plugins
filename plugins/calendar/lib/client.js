@@ -3013,14 +3013,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** An occurrence at the times a drag gave it, to show until its calendar has it there. */
         const placedAt = (o, t) => ({ ...o, start: t.start, end: t.end, ...(t.allDay ? { startDay: t.startDay, lastDay: t.lastDay } : {}) });
 
-        /** Who a moved event's change emailed, or whose calendars it changed without an email, in words, or ''. */
+        /** Who a moved event's change emailed, and whose calendars it changed without an email, in the other toasts' words, or ''. */
         function movedWords(moved) {
-            const emailed = emailedText(moved?.emailed);
-            if (emailed) return emailed;
-            const reached = moved?.reached;
-            if (!isObject(reached) || !Array.isArray(reached.to) || reached.to.length === 0) return '';
-            const how = { add: 'Put it on', remove: 'Took it off' }[reached.how] ?? 'Changed it on';
-            return `${how} the calendars of ${peopleText(reached.to)}, without an email.`;
+            return isObject(moved) ? contactText(moved) : '';
         }
 
         /**

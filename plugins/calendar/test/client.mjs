@@ -683,7 +683,7 @@ test('a drop\'s change for the host: instants for a timed event, days for an all
     assert.equal(I.canDrag(null, {}), false);
     // Who it reached, for the toast.
     assert.equal(I.movedWords({ emailed: { what: 'an update', to: ['ann@example.com'] } }), 'Emailed an update to ann@example.com.');
-    assert.equal(I.movedWords({ reached: { how: 'change', to: ['ann@example.com', 'bob@example.com'] } }), 'Changed it on the calendars of ann@example.com and bob@example.com, without an email.');
+    assert.equal(I.movedWords({ reached: { how: 'change', to: ['ann@example.com', 'bob@example.com'] } }), 'Changed on the calendars of ann@example.com and bob@example.com, without emailing anyone.');
     assert.equal(I.movedWords({}), '');
     assert.equal(I.movedWords(undefined), '');
 });
