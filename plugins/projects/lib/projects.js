@@ -55,7 +55,7 @@ import {
 } from './prompts.js';
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
 import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS, diffFiles, subagentsIn, placeIn } from './changes.js';
-import { sendOf, codeSendOf } from './sends.js';
+import { sendOf, codeSendOf, described, withoutCredentials } from './sends.js';
 import { grantsIn, asksFor as asksToDo, doing } from './grants.js';
 import { deletesOf, codeDeletesOf, deletesWhat, isFree } from './deletes.js';
 
@@ -139,11 +139,14 @@ const GOAL_REASON = 'A coordinator doesn\'t set DSH goals: your threads hand bac
 const SEND_TOOLS = new Set(['bash', 'pwsh', 'run_code']);
 /** The largest script or package.json the send check reads to see what a command runs. */
 const MAX_SCRIPT_BYTES = 256 * 1024;
+/** What a thread hears of a send held or refused: another route to it is still it (behaviour run S3 r2 copied the script and ran the copy). */
+const SAME_SEND = 'a copy or a wrapper of it (another script, a copied file, a different client) is the same send, and waits for the same answer';
 /** Why a command that sends didn't run, by who tried it; `what` says what it sends ("sends a POST to …"). */
 const SEND_REASONS = {
     coordinator: (what) => `Not run: the command ${what}. You don't send anything yourself: start a thread with the user's words in \`ask\`; it asks the user before each command that sends.`,
     subagent: (what) => `Not run: the command ${what}. A subagent doesn't send anything outside the workspace: say in your result what you would send, and the thread you work for asks the user first.`,
-    never: (what) => `Not run: the command ${what}. A thread asks the user before each command that sends outside the workspace, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would send; the user can put this thread on Workspace Write so it can ask. Don't send it another way.`,
+    never: (what) => `Not run: the command ${what}. A thread asks the user before each command that sends outside the workspace, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would send; the user can put this thread on Workspace Write so it can ask. Don't send it another way: ${SAME_SEND}.`,
+    pending: (what) => `Not run: the command ${what}. Another command of yours that sends, from the same step, went to the user first, and a thread asks them about one send at a time, so nobody was asked about this one. Read their answer in that command's result: if they allowed it, run this one again only if it is still needed; if they rejected it, hand back and don't send another way. Here too, ${SAME_SEND}.`,
 };
 /** Why a command that deletes didn't run, by who tried it; `what` says what it deletes ("deletes build/ (rm)"). */
 const DELETE_REASONS = {
@@ -151,6 +154,19 @@ const DELETE_REASONS = {
     subagent: (what) => `Not run: the command ${what}. A subagent doesn't delete files its thread didn't create: say in your result what you would delete, and the thread you work for asks the user first.`,
     never: (what) => `Not run: the command ${what}. A thread asks the user before each command that deletes files it didn't create, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would delete; the user can put this thread on Workspace Write so it can ask. Don't delete it another way.`,
 };
+
+/**
+ * What the thread says its call is for, for the prompt: its description and,
+ * when it asks for a wider sandbox, its justification, each one line, quoted
+ * and without credentials. The plugin's own line comes before it.
+ */
+function threadWords(args) {
+    const line = (value, max) => (typeof value === 'string' ? cardSummary(withoutCredentials(value).replace(/\s+/g, ' ').trim(), max) : '');
+    const said = line(args?.description, 160);
+    const why = typeof args?.sandbox_permissions === 'string' ? line(args.justification, 200) : '';
+    if (!why) return said && `"${said}"`;
+    return said ? `"${said}" and, for wider access, "${why}"` : `for wider access, "${why}"`;
+}
 
 /** DSH's tools that reach an MCP server named in their `server` argument, not in their own name. */
 const SERVER_TOOLS = new Set(['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource']);
@@ -577,6 +593,10 @@ export class ProjectManager {
         this.turns = new Map();
         /** sessionId → (approval id → timer) for permission prompts not yet answered. */
         this.approvals = new Map();
+        /** Thread sessionId → {callId, turn, step}: the send it asked the user about in its current step (holdSend). */
+        this.pendingSends = new Map();
+        /** Thread sessionId → (callId → {turn, step}), from its tool/call events: the model step each call came in. */
+        this.callSteps = new Map();
         /** projectId → tail of its delivery chain, so messages reach the coordinator in order. */
         this.chains = new Map();
         /** projectId → {timer, attempt} for held messages waiting on a retry. */
@@ -893,13 +913,21 @@ export class ProjectManager {
      * read, a push, a publish, a deploy, a command on another machine, an
      * email, or a script or task that does one) waits for the user. A
      * thread's asks them in DSH's approval prompt, every time, so a retry
-     * or a check asks again; a thread whose approvals never ask, a
-     * coordinator and a subagent are refused. Called for every session's
-     * calls (index.js) once DSH's own checks let one run. Undefined lets it
-     * run: any other call, a session outside the projects, and any error
-     * (a check against a mistake, not a sandbox). Never logs the command.
+     * or a check asks again; the prompt says what it sends, then what the
+     * thread says it is for, as the thread's words. A thread asks about one
+     * send at a time: DSH asks about a step's calls one after another, so a
+     * second send from the step of one already asked is refused, unasked,
+     * and the thread sees the answer before it sends again (settleSend).
+     * A thread whose approvals never ask, a coordinator and a subagent are
+     * refused. Called for every session's calls (index.js) once DSH's own
+     * checks let one run, or ask about it (`asked`: a hook's or a review's
+     * ask): then DSH's words follow the plugin's on the one prompt. DSH asks
+     * to widen a call's sandbox later, in the tool itself, once this prompt
+     * is answered. Undefined leaves DSH's decision: any other call, a
+     * session outside the projects, and any error (a check against a
+     * mistake, not a sandbox). Never logs the command.
      */
-    holdSend(exec) {
+    holdSend(exec, asked) {
         try {
             if (this.disposed || !SEND_TOOLS.has(exec?.name) || !exec.agent) return undefined;
             const session = exec.agent.session;
@@ -929,11 +957,22 @@ export class ProjectManager {
                 this.log(`send-refused ${label} never-asks`);
                 return { kind: 'deny', reason: SEND_REASONS.never(found.what) };
             }
+            const step = this.callSteps.get(exec.agent.id)?.get(exec.callId);
+            const pending = this.pendingSends.get(exec.agent.id);
+            if (step && pending && pending.callId !== exec.callId && pending.turn === step.turn && pending.step === step.step) {
+                this.log(`send-refused ${label} one-at-a-time`);
+                return { kind: 'deny', reason: SEND_REASONS.pending(found.what) };
+            }
+            this.pendingSends.set(exec.agent.id, { callId: exec.callId, ...step });
             this.log(`send-ask ${label}`);
+            const said = described(found);
+            const words = threadWords(args);
+            const theirs = asked?.kind === 'ask' ? asked : undefined;
+            const also = withoutCredentials(theirs?.displayReason?.en ?? theirs?.reason).trim();
             return {
                 kind: 'ask',
-                reason: `the command ${found.what}`,
-                displayReason: { en: `This command ${found.what}. A thread asks you before each command that sends outside the workspace.` },
+                reason: `the command ${said}${words ? `. The thread says: ${words}` : ''}${theirs?.reason ? `; ${withoutCredentials(theirs.reason)}` : ''}`,
+                displayReason: { en: `This command ${said}. A thread asks you before each command that sends outside the workspace.${words ? `\nThe thread says: ${words}` : ''}${also ? `\n${also}` : ''}` },
             };
         } catch (error) {
             this.log(`error send-check ${String(error?.message ?? error).slice(0, 200)}`);
@@ -952,9 +991,10 @@ export class ProjectManager {
      * workspace's .git never is, and what can't be told (a variable, a
      * pattern, a list on the input, a cleaning script) asks. A script the
      * thread created is read for what it deletes. Undefined lets it run, as
-     * in holdSend. Never logs the command or a path.
+     * in holdSend, and an ask DSH's own checks made (`asked`) keeps its words
+     * after the plugin's. Never logs the command or a path.
      */
-    holdDelete(exec) {
+    holdDelete(exec, asked) {
         try {
             if (this.disposed || !SEND_TOOLS.has(exec?.name) || !exec.agent) return undefined;
             const session = exec.agent.session;
@@ -995,14 +1035,36 @@ export class ProjectManager {
                 return { kind: 'deny', reason: DELETE_REASONS.never(what) };
             }
             this.log(`delete-ask ${label}`);
+            const theirs = asked?.kind === 'ask' ? asked : undefined;
+            const also = withoutCredentials(theirs?.displayReason?.en ?? theirs?.reason).trim();
             return {
                 kind: 'ask',
-                reason: `the command ${what}; if the user doesn't allow it, hand back with status needs_decision`,
-                displayReason: { en: `This command ${what}. A thread asks you before each command that deletes files it didn't create.` },
+                reason: `the command ${what}; if the user doesn't allow it, hand back with status needs_decision${theirs?.reason ? `; ${withoutCredentials(theirs.reason)}` : ''}`,
+                displayReason: { en: `This command ${what}. A thread asks you before each command that deletes files it didn't create.${also ? `\n${also}` : ''}` },
             };
         } catch (error) {
             this.log(`error delete-check ${String(error?.message ?? error).slice(0, 200)}`);
             return undefined;
+        }
+    }
+
+    /**
+     * The model step of each of a thread's calls, from its tool/call events,
+     * which DSH logs just before a call's checks. A send asked in one step
+     * holds the rest of that step's sends (holdSend); the next step, which
+     * reads the user's answer, may ask again. The turn's end clears it
+     * (here, and onThreadStatus), so a stopped or failed turn leaves no hold.
+     */
+    settleSend(sessionId, event) {
+        const data = event?.data;
+        if (event?.type === 'tool/call' && typeof data?.callId === 'string' && Number.isSafeInteger(data.step)) {
+            const steps = this.callSteps.get(sessionId) ?? new Map();
+            steps.set(data.callId, { turn: data.turn, step: data.step });
+            for (const key of [...steps.keys()].slice(0, -50)) steps.delete(key);
+            this.callSteps.set(sessionId, steps);
+        } else if (event?.type === 'turn/end') {
+            this.pendingSends.delete(sessionId);
+            this.callSteps.delete(sessionId);
         }
     }
 
@@ -1435,6 +1497,8 @@ export class ProjectManager {
         clearTimeout(this.wallTimer);
         this.wallTimer = undefined;
         for (const sessionId of [...this.approvals.keys()]) this.clearApprovals(sessionId);
+        this.pendingSends.clear();
+        this.callSteps.clear();
         for (const { timer } of this.retries.values()) clearTimeout(timer);
         this.retries.clear();
         // The last manager on the file lets its copy go, so the plugin switched on again reads the file anew.
@@ -1804,6 +1868,7 @@ export class ProjectManager {
                 }));
                 add(scoped.on('session/event', (_session, event) => this.onThreadEvent(projectId, threadId, agent, event)));
                 add(() => this.clearApprovals(agent.id));
+                add(() => { this.pendingSends.delete(agent.id); this.callSteps.delete(agent.id); });
             } else {
                 add(scoped.on('session/event', (_session, event) => {
                     if (event?.type === 'model/selection') this.onSelection(who, agent, event.data);
@@ -2013,7 +2078,11 @@ export class ProjectManager {
             if (t && !t.busy) this.store.putThread(projectId, threadId, { busy: true });
             return;
         }
-        if (status !== 'idle' || !state.running) return;
+        if (status !== 'idle') return;
+        // A turn that ended, however it ended, holds back no send (holdSend).
+        this.pendingSends.delete(agent.id);
+        this.callSteps.delete(agent.id);
+        if (!state.running) return;
         this.turns.set(agent.id, { running: false });
         if (this.store.thread(projectId, threadId)?.busy) this.store.putThread(projectId, threadId, { busy: false });
         await this.reviewTurn(projectId, threadId, agent.id, { stopped: state.stopped });
@@ -2139,6 +2208,7 @@ export class ProjectManager {
      * it started does not sit on a prompt nobody sees.
      */
     onThreadEvent(projectId, threadId, agent, event) {
+        this.settleSend(agent.id, event);
         if (event?.type === 'model/selection') {
             this.onSelection({ projectId, role: 'thread', threadId }, agent, event.data);
             return;
@@ -2522,7 +2592,9 @@ export class ProjectManager {
         // The user is talking to the thread directly, so the prompt is in front of them.
         if (!turn.fromProject || !this.allowHandback(projectId, threadId)) return;
         if (id !== '') this.store.putThread(projectId, threadId, { approvalsNoted: [...(this.store.thread(projectId, threadId)?.approvalsNoted ?? []), id].slice(-20) });
-        await this.deliver(projectId, approvalMessage(threadId, t.title, t.title, String(data.toolName ?? 'a tool'), data.reason), undefined, { kind: 'approval', thread: threadId });
+        // What it waits on goes to the coordinator without a password or token a URL in it carries.
+        const reason = typeof data.reason === 'string' ? withoutCredentials(data.reason) : data.reason;
+        await this.deliver(projectId, approvalMessage(threadId, t.title, t.title, String(data.toolName ?? 'a tool'), reason), undefined, { kind: 'approval', thread: threadId });
         this.log(`approval-note ${projectId}/${threadId} tool=${String(data.toolName ?? '').slice(0, 60)}`);
     }
 

@@ -1179,7 +1179,8 @@ try {
 
     // 25b. Rule 6, held by the plugin: a thread's command that sends outside the workspace waits for the user in DSH's
     // prompt, which says what it sends, and its coordinator hears so; Allow once runs it once, and the same command
-    // again, as a retry, asks again (a Reject sends nothing); a read runs; the coordinator's own send is refused without
+    // again, as a retry, asks again (a Reject sends nothing); a read runs; two sends in one step ask once; a send that
+    // asks for a wider sandbox is asked about before DSH asks to widen it; the coordinator's own send is refused without
     // asking anyone; a thread whose approvals never ask is refused, with what the user can do. The test answers the
     // prompt as the window does.
     const hits = [];
@@ -1195,14 +1196,15 @@ try {
     try {
         const deploy = { command: `curl -sS -X POST --data '{"v":1}' http://${sinkAt}/deploy`, description: 'Deploy the build' };
         const sends = `sends a POST to ${sinkAt}/deploy (curl)`;
-        const ofDeploy = (r) => r.toolName === 'bash' && r.reason === `the command ${sends}`;
+        const ofDeploy = (r) => r.toolName === 'bash' && r.reason === `the command ${sends}. The thread says: "Deploy the build"`;
         mark = model.requests.length;
         await say(coord, call('project_thread_start', { ask: 'Deploy the build to staging.', title: 'Send', brief: call('bash', deploy) }));
         const first = await prompts.next('the Send prompt', ofDeploy);
         saw = await coordinatorSaw(mark, 'SAW-APPROVAL', 'the Send approval note');
         const sendId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Send')?.[0];
         const asks = () => readText(logFile).split('\n').filter((line) => line.endsWith(` send-ask ${PROJECT_ID}/${sendId} request curl`)).length;
-        check('a thread\'s command that sends waits for the user in DSH\'s prompt, which says what it sends', first.request.displayReason?.en === `This command ${sends}. A thread asks you before each command that sends outside the workspace.`
+        check('a thread\'s command that sends waits for the user in DSH\'s prompt, which says what it sends, then the thread\'s own words for it',
+            first.request.displayReason?.en === `This command ${sends}. A thread asks you before each command that sends outside the workspace.\nThe thread says: "Deploy the build"`
             && posted() === 0 && asks() === 1, JSON.stringify(first.request));
         check('its coordinator hears what it waits on', saw.fresh.includes(`[Thread waiting for approval: ${sendId} · "Send"]`)
             && saw.fresh.includes(`It asked to use bash: the command ${sends}`), saw.fresh.slice(0, 400));
@@ -1224,7 +1226,33 @@ try {
         const readId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Read')?.[0];
         const readAsked = (await bridge('GET', `/sessions/${threadSession(readId)}/events?types=approval/asked&limit=20`)).events ?? [];
         check('a read runs without asking', hits.includes('GET /health') && readAsked.length === 0, `${hits.join()} ${readAsked.length}`);
-        const coordAsked = async () => ((await bridge('GET', `/sessions/${coord}/events?types=approval/asked&limit=50`)).events ?? []).length;
+        // Two sends in one step: DSH asks about them one after another, so the plugin puts the first in front of the user
+        // and refuses the second unasked; the thread reads the answer before it sends again.
+        mark = model.requests.length;
+        const both = [call('bash', { command: `curl -sS -X POST http://${sinkAt}/first`, description: 'Send the first' }), call('bash', { command: `curl -sS -X POST http://${sinkAt}/second`, description: 'Send the second' })];
+        await say(coord, call('project_thread_start', { ask: 'Send both.', title: 'Both', brief: both.join('\n') }));
+        const firstOfTwo = await prompts.next('the Both prompt', (r) => r.toolName === 'bash' && r.reason?.startsWith(`the command sends a POST to ${sinkAt}/first (curl)`));
+        await prompts.answer(firstOfTwo, 'rejected');
+        await coordinatorSaw(mark, 'SAW-IDLE', 'the Both idle note');
+        const bothId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Both')?.[0];
+        const bothAsked = (await bridge('GET', `/sessions/${threadSession(bothId)}/events?types=approval/asked&limit=20`)).events ?? [];
+        check('two sends in one step put one prompt in front of the user; the other is refused unasked, with what to do', bothAsked.length === 1 && posted() === 1
+            && resultOf(since(mark, bothId)).includes(`the command sends a POST to ${sinkAt}/second (curl). Another command of yours that sends, from the same step, went to the user first`)
+            && readText(logFile).includes(`send-refused ${PROJECT_ID}/${bothId} request curl one-at-a-time`), `${bothAsked.length} ${hits.join()} ${resultOf(since(mark, bothId))}`);
+        // A send that asks for a wider sandbox: the plugin's prompt comes first, and DSH asks to widen the sandbox only
+        // once that one is allowed, in the tool itself. A Reject there sends nothing.
+        mark = model.requests.length;
+        const wide = { command: `curl -sS -X POST http://${sinkAt}/wide`, description: 'Send it wide', sandbox_permissions: 'danger-full-access', justification: 'E2E escalation check.' };
+        await say(coord, call('project_thread_start', { ask: 'Send it with wider access.', title: 'Wide', brief: call('bash', wide) }));
+        const ours = await prompts.next('the Wide prompt', (r) => r.toolName === 'bash' && r.reason?.startsWith(`the command sends a POST to ${sinkAt}/wide (curl)`));
+        await prompts.answer(ours, 'allowed-once');
+        const widen = await prompts.next('DSH\'s prompt to widen the Wide sandbox', (r) => r.toolName === 'bash' && r.reason === 'escalate sandbox to danger-full-access: E2E escalation check.');
+        await prompts.answer(widen, 'rejected');
+        await coordinatorSaw(mark, 'SAW-IDLE', 'the Wide idle note');
+        check('a send that asks for a wider sandbox shows the plugin\'s prompt first, and DSH asks to widen it only after that Allow once',
+            ours.request.displayReason?.en === `This command sends a POST to ${sinkAt}/wide (curl). A thread asks you before each command that sends outside the workspace.\nThe thread says: "Send it wide" and, for wider access, "E2E escalation check."`
+            && posted() === 1, `${JSON.stringify(ours.request)} ${JSON.stringify(widen.request)} ${hits.join()}`);
+        const coordAsked = async () =>((await bridge('GET', `/sessions/${coord}/events?types=approval/asked&limit=50`)).events ?? []).length;
         const askedBefore = await coordAsked();
         reqs = await say(coord, call('bash', { command: `curl -sS -X POST http://${sinkAt}/deploy`, description: 'Deploy' }));
         check('a coordinator\'s send is refused, and nobody is asked', resultOf(reqs).includes(`Not run: the command ${sends}. You don't send anything yourself`)

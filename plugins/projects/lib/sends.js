@@ -14,7 +14,7 @@
  *
  * @module dsh-plugin-projects/sends
  */
-import { basename, dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 
 /** How deep scripts that run scripts are followed. */
 const MAX_DEPTH = 3;
@@ -23,19 +23,77 @@ const HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 
 
 // ── Reading a command line ────────────────────────────────────────────────
 
-/** The index of the `)` that closes the `(` at `open`, quotes and nesting kept; the end of the text when none does. */
+/**
+ * The index of the `)` that closes the `(` at `open`, quotes and nesting
+ * kept; the end of the text when none does. A here-document's body is text,
+ * so an apostrophe in it opens no quote. A quote that nothing closes is
+ * read as a plain character.
+ */
 function closeParen(s, open) {
     let depth = 0;
+    // In `$((…))`, `<<` shifts.
+    const docs = s[open + 1] === '(' ? null : [];
     for (let i = open; i < s.length; i++) {
         const c = s[i];
         if (c === '\\') { i++; continue; }
-        if (c === "'") { const end = s.indexOf("'", i + 1); i = end < 0 ? s.length : end; continue; }
-        if (c === '"') { i = closeDouble(s, i + 1); continue; }
+        if (c === '\n' && docs?.length > 0) { i = bodiesAt(s, i + 1, docs.splice(0)).end - 1; continue; }
+        if (c === '<' && s[i + 1] === '<' && s[i + 2] !== '<' && docs) {
+            const doc = heredocAt(s, i + 2);
+            if (doc) { docs.push(doc); i = doc.end - 1; continue; }
+        }
+        if (c === '#' && /[\s;(|&]/.test(s[i - 1] ?? ' ')) { const end = s.indexOf('\n', i); i = (end < 0 ? s.length : end) - 1; continue; }
+        if (c === "'") { const end = s.indexOf("'", i + 1); if (end >= 0) i = end; continue; }
+        if (c === '"') { const end = closeDouble(s, i + 1); if (end < s.length) i = end; continue; }
         if (c === '`') { i = closeBacktick(s, i + 1); continue; }
         if (c === '(') depth++;
         else if (c === ')' && --depth === 0) return i;
     }
     return s.length;
+}
+
+/** The here-document `<<WORD` or `<<-WORD` names after `at`: its delimiter with quotes taken off, whether tabs are stripped, and where the word ends. */
+function heredocAt(s, at) {
+    let i = at;
+    const strip = s[i] === '-';
+    if (strip) i++;
+    while (s[i] === ' ' || s[i] === '\t') i++;
+    let delim = '';
+    while (i < s.length && !/[\s;&|<>()]/.test(s[i])) {
+        const c = s[i];
+        if (c === "'" || c === '"') {
+            const end = s.indexOf(c, i + 1);
+            if (end < 0) return null;
+            delim += s.slice(i + 1, end);
+            i = end + 1;
+        } else if (c === '\\') {
+            delim += s[i + 1] ?? '';
+            i += 2;
+        } else {
+            delim += c;
+            i++;
+        }
+    }
+    return delim === '' ? null : { delim, strip, end: i };
+}
+
+/** The bodies of here-documents, which start on the line at `at`: each one's lines up to its delimiter, and where the last one ends. */
+function bodiesAt(s, at, docs) {
+    let i = at;
+    const bodies = [];
+    for (const doc of docs) {
+        const lines = [];
+        while (i < s.length) {
+            const end = s.indexOf('\n', i);
+            const line = s.slice(i, end < 0 ? s.length : end);
+            i = end < 0 ? s.length : end + 1;
+            // `<<-` takes the tabs off each line, the last one's too.
+            const bare = doc.strip ? line.replace(/^\t+/, '') : line;
+            if (bare === doc.delim) break;
+            lines.push(bare);
+        }
+        bodies.push(lines.join('\n'));
+    }
+    return { bodies, end: i };
 }
 
 /** The index of the `"` that closes a double-quoted text starting at `from`. */
@@ -103,22 +161,10 @@ export function splitShell(text) {
     };
     // Here-documents start on the line after the one that names them.
     const readBodies = (at) => {
-        let i = at;
-        for (const doc of pending) {
-            const lines = [];
-            while (i < s.length) {
-                const end = s.indexOf('\n', i);
-                const line = s.slice(i, end < 0 ? s.length : end);
-                i = end < 0 ? s.length : end + 1;
-                // `<<-` takes the tabs off each line, the last one's too.
-                const bare = doc.strip ? line.replace(/^\t+/, '') : line;
-                if (bare === doc.delim) break;
-                lines.push(bare);
-            }
-            doc.into.push(lines.join('\n'));
-        }
+        const { bodies, end } = bodiesAt(s, at, pending);
+        pending.forEach((doc, k) => doc.into.push(bodies[k]));
         pending = [];
-        return i;
+        return end;
     };
     let i = 0;
     while (i < s.length) {
@@ -127,11 +173,11 @@ export function splitShell(text) {
         if (c === '\\') {
             if (next !== '\n' && i + 1 < s.length) add(next);
             i += 2;
-        } else if (c === "'") {
-            const end = s.indexOf("'", i + 1);
-            const stop = end < 0 ? s.length : end;
-            add(s.slice(i + 1, stop));
-            i = stop + 1;
+        } else if (c === "'" || (c === '"' && closeDouble(s, i + 1) >= s.length)) {
+            // A quote that nothing closes is a plain character, so what follows it is still read.
+            const end = c === "'" ? s.indexOf("'", i + 1) : -1;
+            add(end < 0 ? c : s.slice(i + 1, end));
+            i = end < 0 ? i + 1 : end + 1;
         } else if (c === '"') {
             const end = closeDouble(s, i + 1);
             const inner = s.slice(i + 1, end);
@@ -204,9 +250,229 @@ export function splitShell(text) {
     return { commands, nested };
 }
 
-/** A program's name as its path ends: `/usr/bin/curl` and `curl.exe` are `curl`. */
+/** What a backtick stands for in PowerShell text: `` `n `` is a newline, and any other character stands for itself. */
+const PWSH_ESCAPES = { n: '\n', t: '\t', r: '\r', 0: '\0', a: '\x07', b: '\b', e: '\x1b', f: '\f', v: '\v' };
+
+/**
+ * Where PowerShell text that runs nothing itself ends: a quoted string (a
+ * doubled quote inside is a quote, and in `"…"` a backtick escapes), a
+ * here-string (`@"` to a line that starts with `"@`) or a block comment.
+ * `i` is its first character; -1 when none starts there or nothing closes it.
+ */
+function pwshTextEnd(s, i) {
+    const c = s[i];
+    if (c === '@' && (s[i + 1] === '"' || s[i + 1] === "'") && /^[ \t]*\r?\n/.test(s.slice(i + 2, i + 66))) {
+        const close = s.indexOf(`\n${s[i + 1]}@`, i + 2);
+        return close < 0 ? -1 : close + 2;
+    }
+    if (c === "'" || c === '"') {
+        for (let k = i + 1; k < s.length; k++) {
+            if (c === '"' && s[k] === '`') k++;
+            else if (c === '"' && s[k] === '$' && s[k + 1] === '(') k = pwshClose(s, k + 1);
+            else if (s[k] === c && s[k + 1] === c) k++;
+            else if (s[k] === c) return k;
+        }
+        return -1;
+    }
+    if (c === '<' && s[i + 1] === '#') {
+        const close = s.indexOf('#>', i + 2);
+        return close < 0 ? s.length - 1 : close + 1;
+    }
+    return -1;
+}
+
+const PWSH_PAIRS = { '(': ')', '{': '}', '[': ']' };
+
+/** The index of the bracket that closes the `(`, `{` or `[` at `open` in PowerShell text; the end of the text when none does. */
+function pwshClose(s, open) {
+    const want = [];
+    for (let i = open; i < s.length; i++) {
+        const c = s[i];
+        if (c === '`') { i++; continue; }
+        const textEnd = pwshTextEnd(s, i);
+        if (textEnd >= 0) { i = textEnd; continue; }
+        if (c === '#' && /[\s;({|]/.test(s[i - 1] ?? ' ')) {
+            const end = s.indexOf('\n', i);
+            i = (end < 0 ? s.length : end) - 1;
+            continue;
+        }
+        const close = PWSH_PAIRS[c];
+        if (close) want.push(close);
+        else if ((c === ')' || c === '}' || c === ']') && want.length > 0) {
+            want.pop();
+            if (want.length === 0) return i;
+        }
+    }
+    return s.length;
+}
+
+/**
+ * A PowerShell command line in statements, as PowerShell splits it: each
+ * with its words (quotes taken off, and a group `( )`, `$( )` or `@( )`, a
+ * hashtable `@{ }`, a script block `{ }` or a type `[ ]` kept whole as one
+ * word), the character each word starts with in the text (`marks`: a quote
+ * or a `$` makes an expression of a statement), its text with what the
+ * groups hold blanked (`code`), and whether its output goes on to the next
+ * one (`|`). A backtick at a line's end goes on to the next line, `\` is a
+ * path's own, and `$x=1` is `$x = 1`. What a group, a script block or a
+ * string's `$( )` runs is split too, into statements of their own that come
+ * before the one they are in; a hashtable's `Key = value` lines are marked
+ * `table`.
+ * @returns {{words: string[], marks: string[], code: string, pipe: boolean, table: boolean}[]}
+ */
+function splitPwsh(text, out = [], table = false) {
+    const s = String(text ?? '');
+    const blanks = [];
+    const mine = [];
+    let words = [];
+    let marks = [];
+    let word = null;
+    let mark = '';
+    let from = -1;
+    let redirect = false;
+    const add = (part, at) => {
+        if (from < 0) from = at;
+        if (word === null) mark = s[at];
+        word = (word ?? '') + part;
+    };
+    const endWord = () => {
+        if (word === null) return;
+        if (!redirect) {
+            words.push(word);
+            marks.push(mark);
+        }
+        redirect = false;
+        word = null;
+    };
+    const end = (at, pipe) => {
+        endWord();
+        if (words.length > 0) {
+            const statement = { words, marks, code: '', pipe, table, from, to: at };
+            mine.push(statement);
+            out.push(statement);
+        }
+        words = [];
+        marks = [];
+        from = -1;
+        redirect = false;
+    };
+    // What a group runs is split first; the group stays one word of this statement, blanked in its code.
+    const inside = (at, close, isTable = false) => {
+        splitPwsh(s.slice(at, close), out, isTable);
+        blanks.push([at, close]);
+    };
+    let i = 0;
+    while (i < s.length) {
+        const c = s[i];
+        const next = s[i + 1];
+        const textEnd = c === '#' ? -1 : pwshTextEnd(s, i);
+        if (c === '`') {
+            if (next === '\n' || (next === '\r' && s[i + 2] === '\n')) {
+                endWord();
+                i += next === '\r' ? 3 : 2;
+            } else {
+                if (i + 1 < s.length) add(PWSH_ESCAPES[next] ?? next, i);
+                i += 2;
+            }
+        } else if (textEnd >= 0 && c === '<') {
+            i = textEnd + 1;
+        } else if (textEnd >= 0) {
+            // A string: what its `$( )` runs is read, and its quotes and escapes are taken off.
+            const here = c === '@';
+            const quote = here ? next : c;
+            const start = here ? s.indexOf('\n', i) + 1 : i + 1;
+            const stop = here ? textEnd - 2 : textEnd;
+            if (quote === '"') {
+                for (let k = start; k < stop; k++) {
+                    if (s[k] === '`') k++;
+                    else if (s[k] === '$' && s[k + 1] === '(') {
+                        const close = pwshClose(s, k + 1);
+                        inside(k + 2, close);
+                        k = close;
+                    }
+                }
+            }
+            const body = s.slice(start, stop).replace(/\r$/, '');
+            add(quote === "'" ? (here ? body : body.replace(/''/g, "'"))
+                : body.replace(here ? /`(.)/gs : /`(.)|""/gs, (m, x) => (x === undefined ? '"' : PWSH_ESCAPES[x] ?? x)), i);
+            i = textEnd + 1;
+        } else if (((c === '$' || c === '@') && next === '(') || (c === '@' && next === '{')) {
+            const close = pwshClose(s, i + 1);
+            inside(i + 2, close, next === '{');
+            add(s.slice(i, close + 1), i);
+            i = close + 1;
+            if (next === '{') endWord();
+        } else if (c === '$' && next === '{') {
+            // `${env:PATH}`: a variable.
+            const close = s.indexOf('}', i);
+            const stop = close < 0 ? s.length : close + 1;
+            add(s.slice(i, stop), i);
+            i = stop;
+        } else if (c === '(' || c === '{' || c === '[') {
+            // A keyword's or a command's own name ends before its group: `if($x){…}`, `ForEach-Object{…}`.
+            if (c !== '[' && /^[A-Za-z][\w-]*$/.test(word ?? '')) endWord();
+            const close = pwshClose(s, i);
+            if (c !== '[') inside(i + 1, close);
+            add(s.slice(i, close + 1), i);
+            i = close + 1;
+            if (c === '{') endWord();
+        } else if (c === '#' && word === null) {
+            const stop = s.indexOf('\n', i);
+            i = stop < 0 ? s.length : stop;
+        } else if (c === ' ' || c === '\t' || c === '\r' || c === '\u00a0') {
+            endWord();
+            i++;
+        } else if (c === '>' || ((c === '*' || (c >= '0' && c <= '9')) && word === null && next === '>')) {
+            // Where output goes (`> out.txt`, `2>&1`, `*> $null`): no word.
+            endWord();
+            let k = c === '>' ? i + 1 : i + 2;
+            if (s[k] === '>') k++;
+            if (s[k] === '&' && /\d/.test(s[k + 1] ?? '')) k += 2;
+            else redirect = true;
+            i = k;
+        } else if (c === '\n' || c === ';') {
+            end(i, false);
+            i++;
+        } else if (c === '|') {
+            end(i, next !== '|');
+            i += next === '|' ? 2 : 1;
+        } else if (c === '&' && next !== '&' && word === null && words.length === 0) {
+            // The call operator, a word of its own: `& .\build.ps1`.
+            add('&', i);
+            endWord();
+            i++;
+        } else if (c === '&') {
+            // `&&`, or a job's `&`.
+            end(i, false);
+            i += next === '&' ? 2 : 1;
+        } else if (c === '=' && /^(?:\[[^\]]*\])*\$[^\s=]+$/.test(word ?? '')) {
+            // An assignment written without spaces: `$x=1`, `$n+=1`.
+            const [, target, op] = /^(.+?)((?:[-+*/%]|\?\?)?)$/s.exec(word);
+            word = target;
+            endWord();
+            add(`${op}=`, i);
+            endWord();
+            i++;
+        } else {
+            add(c, i);
+            i++;
+        }
+    }
+    end(s.length, false);
+    const bare = s.split('');
+    for (const [at, close] of blanks) for (let k = at; k < close; k++) if (bare[k] !== '\n') bare[k] = ' ';
+    const code = bare.join('');
+    for (const statement of mine) {
+        statement.code = code.slice(statement.from, statement.to);
+        delete statement.from;
+        delete statement.to;
+    }
+    return out;
+}
+
+/** A program's name as its path ends: `/usr/bin/curl`, `C:\tools\curl.exe` and `curl.exe` are `curl`. */
 function programOf(word) {
-    return basename(String(word ?? '')).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+    return String(word ?? '').split(/[\\/]/).pop().replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
 }
 
 /** Its own words, where a scope or a version doesn't name the program: `@vercel/cli@1` is `vercel`. */
@@ -280,6 +546,8 @@ function optionValue(args, names) {
 
 const has = (args, ...names) => args.some((a) => names.includes(a) || names.some((n) => n.startsWith('--') && a.startsWith(`${n}=`)));
 const dryRun = (args) => args.some((a) => a === '--dry-run' || a.startsWith('--dry-run=') || a === '--dryrun');
+/** A one-letter option, alone or with others: `-n`, `-avzn`. */
+const hasShort = (args, letter) => args.some((a) => !a.startsWith('--') && new RegExp(`^-[a-zA-Z]*${letter}[a-zA-Z]*$`).test(a));
 
 // Commands that only run the command after them.
 const WRAP = {
@@ -305,16 +573,20 @@ function afterRunner(name, args) {
     return [];
 }
 
-/** The command a line runs once what only wraps it is taken off: `sudo env X=1 timeout 5 curl …` runs curl. */
-function commandOf(words) {
+/**
+ * The command a line runs once what only wraps it is taken off: `sudo env X=1 timeout 5 curl …` runs curl.
+ * @param {Map<string, string|null>} [assigned] - gets the variables set for it (`X=1 cmd`, `env X=1 cmd`; null: `env -u X`).
+ */
+function commandOf(words, assigned) {
     let w = words;
     for (let guard = 0; guard < 16 && w.length > 0; guard++) {
         const first = w[0];
-        if (/^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/.test(first)) { w = w.slice(1); continue; }
+        if (/^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/.test(first)) { setFrom(assigned, first); w = w.slice(1); continue; }
         if (['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', '{', '}', 'time', 'coproc', 'fi', 'done', 'esac'].includes(first)) { w = w.slice(1); continue; }
         if (['for', 'case', 'select', 'function', 'in'].includes(first)) return [];
         const name = programOf(first);
-        if (name === 'env') {
+        // cross-env sets them the same way, on any system: `cross-env NODE_ENV=production npm publish`.
+        if (name === 'env' || name === 'cross-env') {
             const args = w.slice(1);
             let i = 0;
             while (i < args.length) {
@@ -322,7 +594,9 @@ function commandOf(words) {
                 if (a === '--') { i++; break; }
                 if (a === '-S' || a === '--split-string') return [...splitWords(args[i + 1] ?? ''), ...args.slice(i + 2)];
                 if (a.startsWith('--split-string=')) return [...splitWords(a.slice(15)), ...args.slice(i + 1)];
+                if (a === '-u' || a === '--unset') assigned?.set(args[i + 1], null);
                 if (a === '-u' || a === '-C' || a === '--unset' || a === '--chdir') { i += 2; continue; }
+                if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(a)) setFrom(assigned, a);
                 if (a.startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(a)) { i++; continue; }
                 break;
             }
@@ -361,6 +635,34 @@ function commandOf(words) {
     return w;
 }
 
+/** `NAME=value` (or `NAME+=more`) into a map of variables; a name that holds a secret, or a value that isn't known, is left out. */
+function setFrom(vars, word) {
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)(\+?)=(.*)$/s.exec(word);
+    if (!vars || !m) return;
+    if (m[2] === '' || vars.get(m[1])) vars.set(m[1], m[2] === '' ? m[3] : vars.get(m[1]) + m[3]);
+    else vars.delete(m[1]);
+}
+
+/** A variable whose value is a password, a key or a token: it is never filled in, so its value is shown nowhere. */
+const SECRET_NAME = /TOKEN|SECRET|PASS|PWD|KEY|CRED|AUTH|COOKIE|SESSION|SIGN|PRIVATE|BEARER/i;
+
+/**
+ * A word with the variables it names filled in where their values are known
+ * (`$X`, `${X}`, `${X:-default}`), so the prompt names the place a command
+ * really sends to; the others stay as they are.
+ */
+function expand(word, vars) {
+    if (!word.includes('$') || !vars || vars.size === 0 && !word.includes('${')) return word;
+    return word.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-=])([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (m, braced, op, fallback, bare) => {
+        const name = braced ?? bare;
+        if (SECRET_NAME.test(name)) return m;
+        const value = vars.get(name);
+        if (op === undefined) return typeof value === 'string' ? value : m;
+        // `${X:-default}`: the default when X is unset or (with the colon) empty.
+        return typeof value === 'string' && !(op.startsWith(':') && value === '') ? value : expand(fallback, vars);
+    });
+}
+
 /** A string's words as the shell would split it, quotes taken off. */
 function splitWords(text) {
     return splitShell(text).commands.flatMap((c) => c.words);
@@ -372,6 +674,11 @@ function splitWords(text) {
 export function placeOf(url) {
     const s = String(url ?? '').trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/^[^@/]*@/, '').replace(/[?#].*$/, '');
     return s.length > 60 ? `${s.slice(0, 59)}…` : s;
+}
+
+/** Text with the user and password taken out of each URL in it: `https://bot:TOKEN@host/x` reads `https://host/x`. */
+export function withoutCredentials(text) {
+    return String(text ?? '').replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]+@/gi, '$1');
 }
 
 const looksLikeUrl = (a) => /^(https?|ftps?|sftp|scp|smtps?|wss?|tftp|dict|ldaps?|telnet|mqtt|gopher):\/\//i.test(a) || /^(localhost|\d{1,3}(\.\d{1,3}){3}|\[[0-9a-f:]+\]|[a-z0-9-]+(\.[a-z0-9-]+)+)(:\d+)?(\/|$)/i.test(a);
@@ -490,10 +797,15 @@ function git(args) {
     const at = skipOptions(args, GIT_TAKES);
     const sub = args[at];
     const rest = args.slice(at + 1);
-    if (sub === 'push') {
-        if (dryRun(rest) || rest.includes('-n')) return null;
-        const remote = positionals(rest, new Set(['o', '--push-option', '--repo', '--receive-pack', '--exec', '--signed', '--force-with-lease']))[0];
-        return { kind: 'push', program: 'git', what: `pushes to ${remote ?? 'its remote'} (git push)` };
+    // `git subtree push --prefix dist origin gh-pages` pushes a folder's history.
+    const subtree = sub === 'subtree' && rest[0] === 'push';
+    if (sub === 'push' || subtree) {
+        const words = subtree ? rest.slice(1) : rest;
+        if (dryRun(words) || words.includes('-n')) return null;
+        const remote = positionals(words, subtree ? new Set(['P', '--prefix', 'm', '--message']) : new Set(['o', '--push-option', '--repo', '--receive-pack', '--exec']))[0];
+        // A remote given as a URL is shown as a place, so a token in it isn't.
+        const where = remote === undefined ? 'its remote' : /^[a-z][a-z0-9+.-]*:\/\//i.test(remote) ? placeOf(remote) : remote;
+        return { kind: 'push', program: 'git', what: `pushes to ${where} (git ${subtree ? 'subtree push' : 'push'})` };
     }
     if (sub === 'send-email') return { kind: 'email', program: 'git', what: 'sends patches by email (git send-email)' };
     if ((sub === 'svn' && rest[0] === 'dcommit') || (sub === 'lfs' && rest[0] === 'push')) return { kind: 'push', program: 'git', what: `pushes to its remote (git ${sub} ${rest[0]})` };
@@ -566,6 +878,7 @@ const DEPLOY = {
         image: ['push'], manifest: ['push'], trust: ['sign'],
         build: (rest, args) => imagePush(args), buildx: (rest, args) => ['build', 'bake'].includes(rest[0]) && imagePush(args),
     },
+    'docker-compose': { push: true },
     podman: { push: true, manifest: ['push'], build: (rest, args) => imagePush(args) }, buildah: { push: true, manifest: ['push'] },
     skopeo: { copy: true, delete: true, sync: true },
     crane: { push: true, copy: true, cp: true, delete: true, tag: true, append: true, mutate: true, rebase: true, flatten: true },
@@ -604,6 +917,7 @@ const TAKES = {
     pulumi: new Set(['C', 's', '--cwd', '--stack']),
     docker: new Set(['c', 'H', 'l', 't', 'f', 'o', '--context', '--host', '--config', '--log-level', '--tlscacert', '--tlscert', '--tlskey', '--tag', '--file', '--platform',
         '--build-arg', '--target', '--output', '--cache-from', '--cache-to', '--label', '--secret', '--ssh', '--progress', '--network', '--builder', '--project-name', 'p']),
+    'docker-compose': new Set(['f', 'p', 'H', '--file', '--project-name', '--project-directory', '--env-file', '--profile', '--host', '--context', '--log-level', '--ansi']),
     podman: new Set(['c', '--connection', '--url', '--root', '--runroot', '--log-level']),
     cargo: new Set(['C', 'Z', '--manifest-path', '--config', '--color']),
 };
@@ -619,23 +933,47 @@ function table(entries, args, program, kind) {
     const rest = pos.slice(1);
     const hit = rule === true || (Array.isArray(rule) && rule.includes(rest[0])) || (typeof rule === 'function' && rule(rest, args));
     if (!hit || dryRun(args)) return null;
+    // An image's push says which image: `docker push ghcr.io/acme/web:1.4.2`.
+    if (sub === 'push' && ['docker', 'podman', 'buildah'].includes(program) && rest[0] !== undefined) return { kind, program, what: `pushes ${rest[0]} (${program} push)` };
     const words = [program, sub, Array.isArray(rule) || (typeof rule === 'function' && /^[a-z][a-z0-9:-]*$/.test(rest[0] ?? '')) ? rest[0] : ''].join(' ').trim();
     if (kind === 'publish') return { kind, program, what: `publishes (${words})` };
     return { kind, program, what: `makes a change with ${program} (${words})` };
 }
 
-const CLOUD_VERBS = /^(create|delete|deploy|update|patch|set|add|remove|import|start|stop|restart|reset|resize|rollback|publish|submit|cancel|enable|disable|undelete|restore|attach|detach|apply|upload|ssh|scp|purge|invoke|send|assign|scale|swap|sync|execute|run|move|rename|promote|failover|revoke|grant|rotate|resume|suspend|reboot|terminate|destroy|associate|disassociate|register|deregister|tag|untag)([-_]|$)/;
+const CLOUD_VERBS = /^(create|delete|deploy|update|patch|set|add|remove|import|start|stop|restart|reset|resize|rollback|publish|submit|cancel|enable|disable|undelete|restore|attach|detach|apply|upload|ssh|scp|purge|invoke|send|assign|scale|swap|sync|execute|run|move|rename|promote|failover|revoke|grant|rotate|resume|suspend|reboot|terminate|destroy|associate|disassociate|register|deregister|tag|untag|up)([-_]|$)/;
+/** Commands that only read. */
+const CLOUD_READS = /^(list|describe|get|show|read|tail|wait|browse|check|search|print|explain|diff|validate|download)([-_]|$)/;
 const CLOUD_READ_GROUPS = { gcloud: ['config', 'auth', 'components', 'info', 'help', 'topic', 'version', 'init', 'feedback', 'survey', 'cheat-sheet'], az: ['login', 'logout', 'account', 'config', 'extension', 'version', 'find', 'upgrade', 'interactive', 'init', 'cloud', 'feedback', 'survey'], doctl: ['auth', 'version', 'completion'] };
 
-/** gcloud, az and doctl: a command whose words include a verb that changes something (`gcloud run deploy`, `az group delete`). */
+/**
+ * gcloud, az and doctl: a command whose verb changes something, said with
+ * what it changes (`gcloud run deploy api`, `az webapp up --name acme-web`).
+ * The first word names a group, even one named like a verb, so the command
+ * is the first verb after it: `gcloud run services list` and `gcloud deploy
+ * releases list` read, and so does `gcloud functions describe send-email`.
+ */
 function cloud(args, program) {
-    const pos = positionals(args, new Set(['--project', '--region', '--zone', '--subscription', '--resource-group', 'g', '--output', 'o', '--format', '--query', '--account', '--configuration', '--context', 't', '--access-token']));
+    const all = positionals(args, new Set(['--project', '--region', '--zone', '--subscription', '--resource-group', 'g', '--output', 'o', '--format', '--query', '--account', '--configuration', '--context', 't', '--access-token']));
+    // A release track comes before the group: `gcloud beta run deploy`.
+    const pos = program === 'gcloud' && ['alpha', 'beta', 'preview'].includes(all[0]) ? all.slice(1) : all;
     if (pos.length === 0 || CLOUD_READ_GROUPS[program].includes(pos[0])) return null;
-    const verb = pos.slice(0, 5).find((w) => CLOUD_VERBS.test(w));
-    return verb ? { kind: 'deploy', program, what: `makes a change in the cloud (${program} ${pos.slice(0, pos.indexOf(verb) + 1).join(' ').slice(0, 60)})` } : null;
+    // gcloud storage copies and removes as gsutil does.
+    if (program === 'gcloud' && pos[0] === 'storage' && ['cp', 'mv', 'rsync', 'rm'].includes(pos[1])) {
+        const found = remote('gsutil', args.slice(args.indexOf('storage') + 1), 'gcloud storage');
+        return found && { ...found, program };
+    }
+    const at = pos.findIndex((w, i) => i > 0 && i < 5 && (CLOUD_VERBS.test(w) || CLOUD_READS.test(w)));
+    if (at < 0 || !CLOUD_VERBS.test(pos[at])) return null;
+    // What it changes: a --name, or the word right after the verb (not an option's value).
+    const next = args[args.indexOf(pos[at]) + 1];
+    const target = optionValue(args, ['--name', '-n']) ?? (next !== undefined && !next.startsWith('-') ? next : undefined);
+    return { kind: 'deploy', program, what: `makes a change in the cloud (${[program, ...pos.slice(0, at + 1), target ?? ''].join(' ').trim().slice(0, 60)})` };
 }
 
-const AWS_TAKES = new Set(['--profile', '--region', '--output', '--endpoint-url', '--query', '--cli-input-json', '--cli-input-yaml', '--color', '--ca-bundle', '--cli-read-timeout', '--cli-connect-timeout', '--page-size', '--max-items', '--starting-token', '--cli-binary-format']);
+const AWS_TAKES = new Set(['--profile', '--region', '--output', '--endpoint-url', '--query', '--cli-input-json', '--cli-input-yaml', '--color', '--ca-bundle', '--cli-read-timeout', '--cli-connect-timeout', '--page-size', '--max-items', '--starting-token', '--cli-binary-format',
+    // aws s3's own.
+    '--acl', '--cache-control', '--content-type', '--content-encoding', '--content-disposition', '--content-language', '--exclude', '--include', '--storage-class',
+    '--metadata', '--metadata-directive', '--expires', '--grants', '--website-redirect', '--sse-c', '--sse-c-key', '--sse-kms-key-id', '--source-region', '--expected-size', '--request-payer', '--checksum-algorithm']);
 const AWS_VERBS = /^(create|delete|put|update|modify|start|stop|terminate|run|invoke|publish|send|deploy|register|deregister|attach|detach|associate|disassociate|reboot|restore|tag|untag|enable|disable|import|cancel|reset|set|add|remove|replace|accept|reject|authorize|revoke|copy|upload|execute|apply|batch|transact|purge|complete|abort|change|rotate|restart|promote|failover|initiate|respond|resume|suspend|signal|subscribe|unsubscribe|confirm|allocate|release|assign|unassign|activate|deactivate)(-|$)/;
 
 function aws(args) {
@@ -644,9 +982,15 @@ function aws(args) {
     if (!service || service === 'configure' || service === 'help' || has(args, '--dryrun', '--dry-run')) return null;
     if (service === 's3') {
         if (['rm', 'mb', 'rb'].includes(op)) return { kind: 'deploy', program: 'aws', what: `changes S3 (aws s3 ${op} ${placeOf(pos[2] ?? '')})` };
-        if (['cp', 'mv', 'sync'].includes(op) && (/^s3:\/\//i.test(pos.at(-1)) || (op === 'mv' && /^s3:\/\//i.test(pos[2] ?? '')))) return { kind: 'deploy', program: 'aws', what: `copies to S3 (aws s3 ${op} → ${placeOf(pos.at(-1))})` };
-        return null;
+        if (!['cp', 'mv', 'sync'].includes(op)) return null;
+        // Source, then destination: an option's value after them (an option it doesn't know) is no destination.
+        const s3 = (a) => /^s3:\/\//i.test(a ?? '');
+        const to = pos.slice(3).find(s3);
+        if (to) return { kind: 'deploy', program: 'aws', what: `copies to S3 (aws s3 ${op} → ${placeOf(to)})` };
+        return op === 'mv' && s3(pos[2]) ? { kind: 'deploy', program: 'aws', what: `changes S3 (aws s3 mv ${placeOf(pos[2])})` } : null;
     }
+    // `aws eks update-kubeconfig` writes this machine's kubeconfig only.
+    if (service === 'eks' && op === 'update-kubeconfig') return null;
     return AWS_VERBS.test(op ?? '') ? { kind: 'deploy', program: 'aws', what: `makes a change in AWS (aws ${service} ${op})` } : null;
 }
 
@@ -683,16 +1027,23 @@ const SSH_TAKES = new Set([...'bcDEeFIiJLlmOoPpQRSWw', 'B']);
 /** `[user@]host:path`, `host::module`, `scp://…`: a place on another machine. */
 const remotePath = (a) => /^[a-z][a-z0-9+.-]*:\/\//i.test(a) || (/^[^/\s:]+:/.test(a) && !/^[a-z]:[\\/]/i.test(a));
 
-function remote(name, args) {
+/** ssh and the programs that copy files to another machine or a bucket; `label` names the command (`gcloud storage`). */
+function remote(name, args, label = name) {
     if (name === 'ssh' || name === 'mosh' || name === 'autossh' || name === 'rsh') {
         if (has(args, '-G', '-V', '-Q')) return null;
-        const host = positionals(args, SSH_TAKES)[0];
+        const [host, ...command] = positionals(args, SSH_TAKES);
+        // A git host's shell only greets: `ssh -T git@github.com` checks a key.
+        if (command.length === 0 && /^git@/.test(host ?? '')) return null;
         return { kind: 'remote', program: name, what: `runs commands on ${placeOf(host) || 'another machine'} (${name})` };
     }
     if (name === 'scp' || name === 'rsync') {
-        const pos = positionals(args, name === 'scp' ? new Set([...'cDFiJlPoSX']) : new Set(['e', '--rsh', '--rsync-path', '--exclude-from', '--include-from', '--files-from', '--password-file', '--log-file', '--partial-dir', '--temp-dir', '--backup-dir', '--suffix', '--chmod', '--chown', '--timeout', '--contimeout', '--port', '--bwlimit']));
-        const dest = pos.at(-1);
-        return pos.length > 1 && remotePath(dest) ? { kind: 'remote', program: name, what: `copies files to ${placeOf(dest.replace(/:.*$/, '')) || 'another machine'} (${name})` } : null;
+        // A dry run copies nothing: `rsync -n`, `--dry-run`.
+        if (name === 'rsync' && (dryRun(args) || hasShort(args, 'n'))) return null;
+        const pos = positionals(args, name === 'scp' ? new Set([...'cDFiJlPoSX']) : new Set(['e', 'f', 'T', '--rsh', '--rsync-path', '--exclude', '--include', '--filter', '--exclude-from', '--include-from', '--files-from', '--password-file',
+            '--log-file', '--partial-dir', '--temp-dir', '--backup-dir', '--suffix', '--chmod', '--chown', '--timeout', '--contimeout', '--port', '--bwlimit']));
+        // A place on another machine after the first path is where the files go: an option's value after it is not.
+        const dest = pos.slice(1).find(remotePath);
+        return dest ? { kind: 'remote', program: name, what: `copies files to ${placeOf(dest.replace(/:.*$/, '')) || 'another machine'} (${name})` } : null;
     }
     if (name === 'rclone') {
         const pos = positionals(args, new Set(['--config', '--include', '--exclude', '--filter', '--transfers', '--checkers', '--bwlimit', '--log-file', '--log-level', '--max-age', '--min-age']));
@@ -705,10 +1056,16 @@ function remote(name, args) {
     if (name === 's3cmd' || name === 'gsutil' || name === 'azcopy') {
         const pos = positionals(args, new Set(['-c', '--config', 'o', 'h']));
         const sub = pos[0];
-        const dest = pos.at(-1) ?? '';
         const writes = { s3cmd: ['put', 'del', 'rm', 'mb', 'rb', 'setacl', 'setpolicy', 'delpolicy', 'modify', 'restore'], gsutil: ['rm', 'mb', 'rb', 'setmeta', 'acl', 'iam', 'defacl', 'retention'], azcopy: ['remove', 'make', 'rm'] };
-        const copy = ['cp', 'mv', 'sync', 'rsync', 'copy'].includes(sub) && /^(s3|gs|https?):\/\//i.test(dest);
-        return copy || writes[name].includes(sub) ? { kind: 'remote', program: name, what: `changes files in the cloud (${name} ${sub})` } : null;
+        const bucket = (a) => /^(s3|gs|https?):\/\//i.test(a ?? '');
+        // A bucket keeps its scheme, which says whose it is; any URL loses its query, where a token can be.
+        const where = (url) => `${/^(s3|gs):\/\//i.test(url) ? url.slice(0, 5).toLowerCase() : ''}${placeOf(url)}`;
+        // Sources, then the destination: a bucket after the first source is where the files go.
+        const to = ['cp', 'mv', 'sync', 'rsync', 'copy'].includes(sub) ? pos.slice(2).find(bucket) : undefined;
+        if (to) return { kind: 'remote', program: name, what: `copies files to ${where(to)} (${label} ${sub})` };
+        if (!writes[name].includes(sub)) return null;
+        const at = pos.slice(1).find(bucket);
+        return { kind: 'remote', program: name, what: `changes files in ${at ? where(at) : 'the cloud'} (${label} ${sub})` };
     }
     if (['sftp', 'ftp', 'lftp', 'tftp'].includes(name)) return { kind: 'remote', program: name, what: `opens a file transfer to ${placeOf(positionals(args, new Set([...'bBDFiJlPRSoe'])).at(-1) ?? '') || 'another machine'} (${name})` };
     if (name === 'nc') {
@@ -729,17 +1086,24 @@ function mail(name, args) {
 // ── Code ──────────────────────────────────────────────────────────────────
 
 const CODE_SENDS = [
-    [/\b(?:requests|httpx|urllib3|session|aiohttp|client)\s*\.\s*(post|put|patch|delete)\s*\(/i, (m) => `a ${m[1].toUpperCase()}`],
     [/\.\s*(?:request|open)\s*\(\s*['"](POST|PUT|PATCH|DELETE)['"]/i, (m) => `a ${m[1].toUpperCase()}`],
     [/\bhttp\.(Post|PostForm)\s*\(|\bNet::HTTP\.(post|post_form|put|patch|delete)\b/, (m) => `a ${(m[1] ?? m[2]).replace(/_form$|Form$/, '').toUpperCase()}`],
-    [/\bmethod\s*[:=]\s*['"`](POST|PUT|PATCH|DELETE)['"`]/i, (m) => `a ${m[1].toUpperCase()}`],
-    [/\b(?:axios|got|ky|superagent|needle|ofetch|\$fetch|undici)\s*\.\s*(post|put|patch|delete)\s*\(/i, (m) => `a ${m[1].toUpperCase()}`],
-    [/\burlopen\s*\([^)]*\bdata\s*=/, () => 'a POST'],
+    [/\$fetch\s*\.\s*(post|put|patch|delete)\s*\(/i, (m) => `a ${m[1].toUpperCase()}`],
     [/\bNet::HTTP::(Post|Put|Patch|Delete)\b|\b(?:HTTParty|Faraday|RestClient)\s*\.\s*(post|put|patch|delete)\b/, (m) => `a ${(m[1] ?? m[2]).toUpperCase()}`],
     [/\bHTTP::Request->new\(\s*['"]?(POST|PUT|PATCH|DELETE)/, (m) => `a ${m[1]}`],
     [/\bCURLOPT_(?:POST|POSTFIELDS|UPLOAD|CUSTOMREQUEST)\b/, () => 'a request that changes something'],
     [/\bInvoke-(?:WebRequest|RestMethod)\b[^\n]*-Method\s+['"]?(Post|Put|Patch|Delete)\b/i, (m) => `a ${m[1].toUpperCase()}`],
+    // .NET's WebClient, from PowerShell: `(New-Object System.Net.WebClient).UploadFile(…)`.
+    [/\.\s*Upload(?:File|String|Data|Values)(?:Async|TaskAsync)?\s*\(/i, () => 'a POST'],
 ];
+/** A request's method in code: it counts where the code calls a web client (CALLS_CLIENT), not in a route table or other data. */
+const METHOD_OPTION = /\bmethod\s*[:=]\s*['"`](POST|PUT|PATCH|DELETE)['"`]/i;
+const CALLS_CLIENT = /\b(?:fetch|axios|got|ky|superagent|needle|ofetch|request|urlopen|Request)\s*\(|\$fetch\s*\(|\.ajax\s*\(|\bhttps?\.request\b|\b(?:requests|httpx|urllib3|aiohttp|urllib|undici|XMLHttpRequest|HttpClient|WebClient|WebRequest|HttpURLConnection|HTTParty|Faraday|RestClient|Invoke-WebRequest|Invoke-RestMethod)\b/i;
+/** Python's web clients, and what each makes its sessions or clients with. */
+const PY_CLIENTS = { requests: ['Session', 'session'], httpx: ['Client', 'AsyncClient'], aiohttp: ['ClientSession'], urllib3: ['PoolManager'] };
+/** JavaScript's, and what each makes a client of its own with (`const api = axios.create(…)`). */
+const JS_CLIENTS = { axios: ['create'], got: ['extend'], ky: ['create', 'extend'], superagent: [], needle: [], ofetch: ['create'], undici: [] };
+const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const CODE_MAIL = /\b(?:smtplib|nodemailer|Net::SMTP|Mail::Sendmail|PHPMailer|Send-MailMessage)\b/;
 
 /** Code that runs commands: then its strings and lists of strings are read as command lines. */
@@ -752,11 +1116,18 @@ const SPAWNS = /\b(?:subprocess|os\.system|os\.popen|os\.exec\w*|pexpect|child_p
  * @returns {{kind: string, what: string, program: string}|null}
  */
 export function codeSendOf(code, ctx = { depth: 0 }, program = 'code') {
-    const text = String(code ?? '');
+    return shown(codeFound(String(code ?? ''), ctx, program));
+}
+
+function codeFound(text, ctx, program) {
+    const method = clientMethod(text) ?? urllibMethod(text);
+    if (method) return { kind: 'request', program, what: `runs code that sends a ${method} (${program})` };
     for (const [re, said] of CODE_SENDS) {
         const m = re.exec(text);
         if (m) return { kind: 'request', program, what: `runs code that sends ${said(m)} (${program})` };
     }
+    const option = CALLS_CLIENT.test(text) ? METHOD_OPTION.exec(text) : null;
+    if (option) return { kind: 'request', program, what: `runs code that sends a ${option[1].toUpperCase()} (${program})` };
     if (CODE_MAIL.test(text)) return { kind: 'email', program, what: `runs code that sends email (${program})` };
     // Its strings are read as commands only where it runs commands, so a message that mentions one is no send.
     if ((ctx.depth ?? 0) >= MAX_DEPTH || !SPAWNS.test(text)) return null;
@@ -780,11 +1151,99 @@ export function codeSendOf(code, ctx = { depth: 0 }, program = 'code') {
     return null;
 }
 
+/**
+ * A method that changes something, called on a web client: a client module
+ * (`requests.post(`, `axios.delete(`), a name code imports one as (`import
+ * requests as r`), a session or a client it makes from one (`s =
+ * requests.Session()`, `async with aiohttp.ClientSession() as s`,
+ * `httpx.Client().post(`, `require('axios').post(`), or a function it
+ * imports from one (`from requests import post`). An ORM's session changes a
+ * database, not a web resource: with SQLAlchemy, `db.session.delete(row)` is
+ * none.
+ * @returns the method ("POST"), or undefined.
+ */
+function clientMethod(text) {
+    const receivers = new Set(['client', ...Object.keys(PY_CLIENTS), ...Object.keys(JS_CLIENTS)]);
+    if (!/\b(?:sqlalchemy|flask_sqlalchemy|sqlmodel)\b/.test(text)) receivers.add('session');
+    const makers = [];
+    const functions = new Map();
+    for (const [module, made] of Object.entries(PY_CLIENTS)) {
+        for (const name of [module, ...[...text.matchAll(new RegExp(`\\bimport\\s+${module}\\s+as\\s+(\\w+)`, 'g'))].map((m) => m[1])]) {
+            receivers.add(name);
+            makers.push(...made.map((maker) => `${escaped(name)}\\s*\\.\\s*${maker}`));
+        }
+        for (const m of text.matchAll(new RegExp(`\\bfrom\\s+${module}\\s+import\\s+(?:\\(([^)]*)\\)|([^\\n;#]+))`, 'g'))) {
+            for (const part of (m[1] ?? m[2]).split(',')) {
+                const [name, as = name] = part.trim().split(/\s+as\s+/);
+                if (made.includes(name)) makers.push(escaped(as));
+                if (/^(post|put|patch|delete)$/.test(name)) functions.set(as, name.toUpperCase());
+            }
+        }
+    }
+    for (const [module, made] of Object.entries(JS_CLIENTS)) makers.push(...made.map((maker) => `${module}\\s*\\.\\s*${maker}`));
+    const maker = `(?:${makers.join('|')})`;
+    for (const m of text.matchAll(new RegExp(`(?:^|[^\\w.])((?:self\\.|this\\.)?[A-Za-z_$][\\w$]*)\\s*=\\s*(?:await\\s+)?${maker}\\s*\\(`, 'gm'))) receivers.add(m[1]);
+    for (const m of text.matchAll(new RegExp(`\\bwith\\s+${maker}\\s*\\([^\\n]*?\\)\\s+as\\s+(\\w+)`, 'g'))) receivers.add(m[1]);
+    const call = new RegExp(`(?<![\\w$])(?:${[...receivers].map(escaped).join('|')})\\s*\\.\\s*(post|put|patch|delete)\\s*\\(`
+        + `|${maker}\\s*\\([^\\n]*?\\)\\s*\\.\\s*(post|put|patch|delete)\\s*\\(`
+        + `|\\brequire\\s*\\(\\s*['"](?:${Object.keys(JS_CLIENTS).join('|')})['"]\\s*\\)\\s*\\.\\s*(post|put|patch|delete)\\s*\\(`, 'i').exec(text);
+    if (call) return (call[1] ?? call[2] ?? call[3]).toUpperCase();
+    for (const [name, method] of functions) if (new RegExp(`(?:^|[^\\w.])${escaped(name)}\\s*\\(`, 'm').test(text)) return method;
+    return undefined;
+}
+
+/**
+ * Python's standard library sending a body: `urllib.request.Request(url,
+ * data)` or `urlopen(url, data)`, the data given by position or as `data=`,
+ * unless `method=` names a read.
+ * @returns the method, or undefined.
+ */
+function urllibMethod(text) {
+    if (!/\burllib\b/.test(text)) return undefined;
+    for (const m of text.matchAll(/\b(?:Request|urlopen)\s*\(/g)) {
+        const args = callArgs(text, m.index + m[0].length - 1);
+        const named = (key) => args.find((a) => new RegExp(`^${key}\\s*=`).test(a))?.replace(/^\w+\s*=\s*/, '');
+        const method = /^['"]([A-Za-z]+)['"]$/.exec(named('method') ?? '')?.[1].toUpperCase();
+        const data = named('data') ?? (args[1] !== undefined && !/^\w+\s*=/.test(args[1]) ? args[1] : undefined);
+        if (method ? !READ_METHODS.has(method) : data !== undefined && data !== 'None') return method ?? 'POST';
+    }
+    return undefined;
+}
+
+/** The arguments of the call whose `(` is at `open`, as written: split at its own commas, with quotes and brackets kept. */
+function callArgs(text, open) {
+    const args = [];
+    let depth = 0;
+    let from = open + 1;
+    for (let i = open; i < text.length; i++) {
+        const c = text[i];
+        if (c === '"' || c === "'" || c === '`') {
+            let k = i + 1;
+            while (k < text.length && text[k] !== c) k += text[k] === '\\' ? 2 : 1;
+            i = k;
+        } else if ('([{'.includes(c)) depth++;
+        else if (')]}'.includes(c) && --depth === 0) {
+            args.push(text.slice(from, i).trim());
+            break;
+        } else if (c === ',' && depth === 1) {
+            args.push(text.slice(from, i).trim());
+            from = i + 1;
+        }
+    }
+    return args.filter((a) => a !== '');
+}
+
 // ── Scripts and tasks ─────────────────────────────────────────────────────
 
 /** Words in a name that say it sends: always, or only when what it runs can't be read. */
 const STRONG = new Set(['deploy', 'deploys', 'deployment', 'deployments', 'redeploy', 'undeploy', 'publish', 'upload', 'uploads', 'ship', 'rollout', 'promote', 'notify', 'announce', 'broadcast']);
 const WEAK = new Set(['release', 'releases', 'push', 'send', 'submit']);
+/**
+ * Words that say a name only tries or checks what it names (`deploy:dry`,
+ * `deploy_check`, `release:plan`), and so sends nothing; `test` too, before
+ * the sending word: `test:deploy` tests a deploy, `deploy:test` deploys.
+ */
+const DRY = new Set(['dry', 'dryrun', 'check', 'checks', 'plan', 'diff', 'lint', 'validate']);
 
 /** The words of a name: `scripts/publish-npm.mjs` and `pushImage` give [scripts, publish, npm, mjs] and [push, image]. */
 function nameWords(name) {
@@ -792,7 +1251,8 @@ function nameWords(name) {
 }
 function sendingName(name, known) {
     const words = nameWords(name);
-    return words.some((w) => STRONG.has(w)) || (!known && words.some((w) => WEAK.has(w)));
+    const at = words.findIndex((w) => STRONG.has(w) || (!known && WEAK.has(w)));
+    return at >= 0 && !words.some((w, i) => DRY.has(w) || ((w === 'test' || w === 'tests') && i < at));
 }
 
 /** A test's file: `test/x.mjs`, `x.test.js`, `test_x.py`, `x_test.go`, `spec/x_spec.rb`. */
@@ -801,6 +1261,10 @@ const SCRIPT_EXT = /\.(sh|bash|zsh|ksh|py|js|mjs|cjs|ts|mts|rb|pl|php|ps1|lua|r)
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'ash', 'fish', 'mksh']);
 const INTERPRETERS = new Set(['python', 'python2', 'python3', 'node', 'nodejs', 'deno', 'bun', 'ruby', 'perl', 'php', 'rscript', 'lua', 'ts-node', 'tsx', 'osascript', 'pwsh', 'powershell']);
 const isPython = (name) => /^python(\d+(\.\d+)?)?$/.test(name);
+/** An interpreter's own options that take the next word: a shell's, Python's, and the others' (code, a module, a folder). */
+const SHELL_TAKES = new Set(['o', 'O', '--init-file', '--rcfile']);
+const PYTHON_TAKES = new Set(['W', 'X', 'Q', 'c', 'm']);
+const RUNTIME_TAKES = new Set(['r', 'e', 'p', 'E', 'I', 'C', '--require', '--import', '--loader', '--experimental-loader', '--env-file', '--conditions', '--eval', '--print']);
 
 /** A folder named from another, or null when it can't be told (the other is unknown, the name has a variable or a ~). */
 function within(cwd, dir) {
@@ -810,7 +1274,8 @@ function within(cwd, dir) {
 }
 
 /** A file a command names, read through the caller (only files in the workspace are given). */
-function readScript(ctx, path) {
+function readScript(ctx, named) {
+    const path = ctx.shell === 'pwsh' && typeof named === 'string' ? named.replace(/\\/g, '/') : named;
     if (typeof ctx.read !== 'function' || typeof path !== 'string' || path === '' || path.includes('$') || path.startsWith('~')) return undefined;
     if (!isAbsolute(path) && (ctx.cwd === null || ctx.cwd === undefined)) return undefined;
     const full = isAbsolute(path) ? path : resolve(ctx.cwd, path);
@@ -829,20 +1294,40 @@ function contentSendOf(text, how, ctx, label) {
     const shebang = first.startsWith('#!') ? programOf(first.slice(2).trim().split(/\s+/).find((w, i) => !(i === 0 && /\/env$/.test(w)) && !w.startsWith('-')) ?? '') : undefined;
     const kind = shebang ?? how;
     if (SHELLS.has(kind) || (kind === undefined && /\.(sh|bash|zsh|ksh)$/i.test(label))) return lineSendOf(text, ctx);
+    // A PowerShell script by its statements, and by its code where they find nothing.
+    if (kind === 'pwsh' || kind === 'powershell' || (kind === undefined && /\.ps1$/i.test(label))) return pwshLineSendOf(text, ctx) ?? codeSendOf(text, ctx, 'pwsh');
     return codeSendOf(text, ctx, kind ?? 'code');
 }
 
 /** A script run from a file: by its name, and by what it runs when it can be read. */
 function scriptSendOf(path, how, ctx) {
     const shown = String(path);
-    if (TEST_FILE.test(shown)) return null;
+    const name = shown.split(ctx.shell === 'pwsh' ? /[\\/]/ : '/').pop();
+    if (TEST_FILE.test(ctx.shell === 'pwsh' ? shown.replace(/\\/g, '/') : shown)) return null;
     const file = (ctx.depth ?? 0) < MAX_DEPTH ? readScript(ctx, shown) : undefined;
     if (file) {
         const deeper = { ...ctx, depth: (ctx.depth ?? 0) + 1, cwd: dirname(file.full) };
         const inside = contentSendOf(file.text, how, deeper, shown);
-        if (inside) return { kind: 'script', program: inside.program, what: `runs ${shown}, which ${inside.what}` };
+        if (inside) return runs(shown, inside);
     }
-    return sendingName(basename(shown), file !== undefined) ? { kind: 'script', program: basename(shown), what: `runs ${shown}, whose name says it ${nameVerb(shown)}` } : null;
+    return sendingName(name, file !== undefined) ? byName(shown, name, file !== undefined, name) : null;
+}
+
+/** A send inside what a command runs, said through it: "runs ./deploy.sh, which sends a POST to …". */
+function runs(label, inside) {
+    return { kind: 'script', program: inside.program, what: `runs ${label}, which ${inside.what}`, ...(inside.unread ? { unread: inside.unread } : {}) };
+}
+
+/**
+ * A send known by a name only, the last thing the plugin goes by: a script, a
+ * package script, a make target or a task whose name says it sends. `read`:
+ * the plugin read what it runs and found no send it knows there; else it
+ * couldn't see what it runs, and the prompt says so (described).
+ */
+function byName(label, name, read, program) {
+    return read
+        ? { kind: 'script', program, what: `runs ${label}: the plugin found no send in it, but its name says it ${nameVerb(name)}` }
+        : { kind: 'script', program, what: `runs ${label}, whose name says it ${nameVerb(name)}`, unread: [label] };
 }
 
 /** The sending word a name holds, for the user: "deploys", "publishes". */
@@ -853,23 +1338,21 @@ function nameVerb(name) {
 }
 
 /** `npm run X`, `yarn X`, `pnpm X`, `bun run X`: the script in package.json, and the ones npm runs around it. */
-function packageScript(program, name, ctx, prefix, label = `${program} run ${name}`) {
+function packageScript(program, name, ctx, prefix, label = `${program} run ${name}`, extra = []) {
     const pkg = readScript({ ...ctx, cwd: prefix ? within(ctx.cwd, prefix) : ctx.cwd }, 'package.json');
     let scripts;
     try { scripts = pkg ? JSON.parse(pkg.text)?.scripts : undefined; } catch { scripts = undefined; }
     if (scripts && typeof scripts === 'object' && (ctx.depth ?? 0) < MAX_DEPTH) {
         const deeper = { ...ctx, depth: (ctx.depth ?? 0) + 1, cwd: dirname(pkg.full) };
-        for (const key of [`pre${name}`, name, `post${name}`]) {
-            if (typeof scripts[key] !== 'string') continue;
-            const inside = lineSendOf(scripts[key], deeper);
-            if (inside) return { kind: 'script', program: inside.program, what: `runs ${label}, which ${inside.what}` };
-        }
+        // The script runs with the words given after it: `npm run release -- --dry-run`.
+        const line = (key) => (key === name && extra.length > 0 ? `${scripts[key]} ${extra.map(shellWord).join(' ')}` : scripts[key]);
+        const inside = combined([`pre${name}`, name, `post${name}`].map((key) => (typeof scripts[key] === 'string' ? lineSendOf(line(key), deeper) : null)));
+        if (inside) return runs(label, inside);
     }
     const known = scripts !== undefined && typeof scripts?.[name] === 'string';
-    return sendingName(name, known) ? { kind: 'script', program, what: `runs ${label}, whose name says it ${nameVerb(name)}` } : null;
+    return sendingName(name, known) ? byName(label, name, known, program) : null;
 }
 
-/** A make target's recipe lines, from the Makefile (a rule's own lines, not its prerequisites'). */
 /** A make target's rule: its recipe lines and its prerequisites (all the rules for it, joined). */
 function makeRule(text, target) {
     const recipes = [];
@@ -893,20 +1376,48 @@ function makeRule(text, target) {
     return { recipes, needs };
 }
 
-/** What a make target runs, its prerequisites first (each once). */
-function makeSendOf(makefile, target, ctx, seen = new Set()) {
+/**
+ * A Makefile's own variables (`DOCKER ?= docker`, `IMAGE := …`, `FLAGS += -v`),
+ * then the ones the command line sets (`make image DOCKER=podman`), which win.
+ * One set from a shell command's output (`!=`) is unknown.
+ */
+function makeVars(text, given) {
+    const vars = new Map([['MAKE', 'make']]);
+    for (const line of text.replace(/\\\n/g, ' ').split('\n')) {
+        const m = /^(?:(?:export|override)\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*(\?=|\+=|!=|:{0,3}=)\s*(.*)$/.exec(line);
+        if (!m) continue;
+        const [, name, op] = m;
+        const value = m[3].replace(/(^|[^\\])#.*$/, '$1').trim();
+        if (op === '?=' && vars.has(name)) continue;
+        if (op === '!=') vars.delete(name);
+        else vars.set(name, op === '+=' && vars.has(name) ? `${vars.get(name)} ${value}` : value);
+    }
+    for (const word of given) {
+        const at = word.indexOf('=');
+        vars.set(word.slice(0, at), word.slice(at + 1));
+    }
+    return vars;
+}
+
+/** A recipe line as make hands it to the shell: `$(NAME)` and `${NAME}` filled in where known, `$$` a `$`. */
+function expandMake(text, vars, depth = 0) {
+    return text.replace(/\$(?:\$|\(([^()$\s]+)\)|\{([^{}$\s]+)\})/g, (whole, round, curly) => {
+        if (whole === '$$') return '$';
+        const value = vars.get(round ?? curly);
+        if (value === undefined) return whole;
+        return depth < 5 ? expandMake(value, vars, depth + 1) : value;
+    });
+}
+
+/** What a make target sends, its prerequisites first (each once). */
+function makeSendOf(makefile, target, ctx, vars, seen = new Set()) {
     if (seen.has(target) || seen.size > 40) return null;
     seen.add(target);
     const { recipes, needs } = makeRule(makefile.text, target);
-    for (const need of needs) {
-        const found = makeSendOf(makefile, need, ctx, seen);
-        if (found) return found;
-    }
-    for (const recipe of recipes) {
-        const found = lineSendOf(recipe.replace(/\$\(MAKE\)|\$\{MAKE\}/g, 'make'), ctx);
-        if (found) return found;
-    }
-    return null;
+    return combined([
+        ...needs.map((need) => makeSendOf(makefile, need, ctx, vars, seen)),
+        ...recipes.map((recipe) => lineSendOf(expandMake(recipe, vars), ctx)),
+    ]);
 }
 
 function make(args, ctx) {
@@ -915,21 +1426,22 @@ function make(args, ctx) {
     const dir = optionValue(args, ['-C', '--directory']);
     const file = optionValue(args, ['-f', '--file', '--makefile']);
     const where = { ...ctx, cwd: dir ? within(ctx.cwd, dir) : ctx.cwd };
-    const targets = positionals(args, new Set(['C', 'f', 'I', 'o', 'W', 'j', 'l', '--directory', '--file', '--makefile', '--include-dir', '--old-file', '--what-if', '--jobs', '--load-average'])).filter((t) => !t.includes('='));
+    const words = positionals(args, new Set(['C', 'f', 'I', 'o', 'W', 'j', 'l', '--directory', '--file', '--makefile', '--include-dir', '--old-file', '--what-if', '--jobs', '--load-average']));
+    const targets = words.filter((t) => !t.includes('='));
     const makefile = file ? readScript(where, file) : (readScript(where, 'GNUmakefile') ?? readScript(where, 'makefile') ?? readScript(where, 'Makefile'));
     let wanted = targets;
     if (wanted.length === 0 && makefile) {
         const first = makefile.text.split('\n').map((l) => /^([^.:#=\t\s][^:=\s]*)\s*::?(?!=)/.exec(l)).find(Boolean);
         wanted = first ? [first[1]] : [];
     }
-    for (const target of wanted) {
+    const vars = makefile ? makeVars(makefile.text, words.filter((w) => /^[A-Za-z_][A-Za-z0-9_.-]*=/.test(w))) : undefined;
+    return combined(wanted.map((target) => {
         if (makefile && (ctx.depth ?? 0) < MAX_DEPTH) {
-            const inside = makeSendOf(makefile, target, { ...where, depth: (ctx.depth ?? 0) + 1, cwd: dirname(makefile.full) });
-            if (inside) return { kind: 'script', program: inside.program, what: `runs make ${target}, which ${inside.what}` };
+            const inside = makeSendOf(makefile, target, { ...where, depth: (ctx.depth ?? 0) + 1, cwd: dirname(makefile.full) }, vars);
+            if (inside) return runs(`make ${target}`, inside);
         }
-        if (sendingName(target, makefile !== undefined)) return { kind: 'script', program: 'make', what: `runs make ${target}, whose name says it ${nameVerb(target)}` };
-    }
-    return null;
+        return sendingName(target, makefile !== undefined) ? byName(`make ${target}`, target, makefile !== undefined, 'make') : null;
+    }));
 }
 
 /** Task runners whose tasks the plugin doesn't read: by the task's name. */
@@ -955,41 +1467,55 @@ function packageManager(name, args, ctx) {
     // pnpm's own `deploy` copies a package to a folder: no send.
     if (name === 'pnpm' && sub === 'deploy') return null;
     if (sub === 'run' || sub === 'run-script' || sub === 'rum' || sub === 'urn') {
-        const script = more.find((w) => !w.startsWith('-'));
-        return script ? packageScript(name, script, ctx, prefix) : null;
+        const at = more.findIndex((w) => !w.startsWith('-'));
+        return at >= 0 ? packageScript(name, more[at], ctx, prefix, undefined, scriptArgs(name, more.slice(at + 1))) : null;
     }
     // `npm version` runs preversion, version and postversion (a push, often).
-    if (name === 'npm' && ['start', 'test', 't', 'restart', 'stop', 'version'].includes(sub)) return packageScript(name, sub === 't' ? 'test' : sub, ctx, prefix, `npm ${sub}`);
-    if ((name === 'yarn' && !YARN_OWN.has(sub)) || (name === 'pnpm' && !PNPM_OWN.has(sub))) return packageScript(name, sub, ctx, prefix, `${name} ${sub}`);
+    if (name === 'npm' && ['start', 'test', 't', 'restart', 'stop', 'version'].includes(sub)) return packageScript(name, sub === 't' ? 'test' : sub, ctx, prefix, `npm ${sub}`, scriptArgs(name, more));
+    if ((name === 'yarn' && !YARN_OWN.has(sub)) || (name === 'pnpm' && !PNPM_OWN.has(sub))) return packageScript(name, sub, ctx, prefix, `${name} ${sub}`, scriptArgs(name, more));
     if (name === 'bun' && !['install', 'i', 'add', 'remove', 'rm', 'update', 'upgrade', 'init', 'create', 'link', 'unlink', 'pm', 'build', 'test', 'outdated', 'patch', 'repl', 'exec'].includes(sub)) {
         if (SCRIPT_EXT.test(sub) || sub.includes('/')) return scriptSendOf(sub, 'bun', ctx);
-        return packageScript(name, sub, ctx, prefix, `bun ${sub}`);
+        return packageScript(name, sub, ctx, prefix, `bun ${sub}`, scriptArgs(name, more));
     }
     return null;
 }
 
+/** The words a package manager hands on to a script: npm's after `--`, the others' after the script's name. */
+function scriptArgs(program, words) {
+    const dash = words.indexOf('--');
+    if (program === 'npm') return dash < 0 ? [] : words.slice(dash + 1);
+    return dash === 0 ? words.slice(1) : words;
+}
+
+/** A word as the shell reads it back. */
+const shellWord = (word) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`);
+
 /** Python run as `python -m twine upload` or on a file or on code. */
 function interpreter(name, args, ctx, inputs) {
     const deeper = { ...ctx, depth: (ctx.depth ?? 0) + 1 };
+    const shell = SHELLS.has(name) || name === 'source' || name === '.';
+    // Its own options come before the script's name, and the words after it are the script's: the -n in
+    // `bash deploy.sh -n prod` and the -c in `node publish.mjs -c release.json` are no syntax check.
+    const takes = shell ? SHELL_TAKES : isPython(name) ? PYTHON_TAKES : RUNTIME_TAKES;
+    const own = args.slice(0, skipOptions(args, takes));
     // A syntax check runs nothing: `bash -n`, `node --check`, `ruby -c`, `perl -c`, `php -l`.
-    const short = (letter) => args.some((a) => !a.startsWith('--') && new RegExp(`^-[a-zA-Z]*${letter}[a-zA-Z]*$`).test(a));
-    if ((SHELLS.has(name) && (short('n') || has(args, '--no-execute'))) || ((name === 'node' || name === 'nodejs') && (has(args, '--check') || args.includes('-c')))
-        || ((name === 'ruby' || name === 'perl') && args.includes('-c')) || (name === 'php' && args.includes('-l'))) return null;
-    if (SHELLS.has(name) || name === 'source' || name === '.') {
-        const c = name === 'source' || name === '.' ? undefined : args.findIndex((a) => /^-[a-z]*c[a-z]*$/i.test(a) && !a.startsWith('--'));
+    if ((SHELLS.has(name) && (hasShort(own, 'n') || has(own, '--no-execute'))) || ((name === 'node' || name === 'nodejs') && (has(own, '--check') || own.includes('-c')))
+        || ((name === 'ruby' || name === 'perl') && own.includes('-c')) || (name === 'php' && own.includes('-l'))) return null;
+    if (shell) {
+        const c = name === 'source' || name === '.' ? undefined : own.findIndex((a) => /^-[a-z]*c[a-z]*$/i.test(a) && !a.startsWith('--'));
         if (c !== undefined && c >= 0) return args[c + 1] !== undefined && (ctx.depth ?? 0) < MAX_DEPTH ? lineSendOf(args[c + 1], deeper) : null;
-        const file = positionals(args, new Set(['o', 'O', '--init-file', '--rcfile']))[0];
+        const file = positionals(args, takes)[0];
         if (file !== undefined && file !== '-') return scriptSendOf(file, name === 'source' || name === '.' ? 'bash' : name, ctx);
         for (const input of inputs) { const found = (ctx.depth ?? 0) < MAX_DEPTH ? lineSendOf(input, deeper) : null; if (found) return found; }
         return null;
     }
     if (name === 'pwsh' || name === 'powershell') {
         const command = optionValue(args.map((a) => (/^-(c|command)$/i.test(a) ? '-Command' : a)), ['-Command']);
-        if (command !== undefined) return (ctx.depth ?? 0) < MAX_DEPTH ? lineSendOf(command, { ...deeper, shell: 'pwsh' }) : null;
+        if (command !== undefined) return (ctx.depth ?? 0) < MAX_DEPTH ? pwshLineSendOf(command, deeper) : null;
         const file = optionValue(args.map((a) => (/^-(f|file)$/i.test(a) ? '-File' : a)), ['-File']);
         return file !== undefined ? scriptSendOf(file, 'pwsh', ctx) : null;
     }
-    let code = optionValue(args, isPython(name) ? ['-c'] : name === 'php' ? ['-r'] : name === 'osascript' ? ['-e'] : ['-e', '--eval', '-p', '--print', '-E']);
+    let code = optionValue(own, isPython(name) ? ['-c'] : name === 'php' ? ['-r'] : name === 'osascript' ? ['-e'] : ['-e', '--eval', '-p', '--print', '-E']);
     if (name === 'osascript') {
         const script = args.filter((_, i) => args[i - 1] === '-e').join('\n');
         if (script && /\bsend\b|tell application "(Messages|Mail|Microsoft Outlook|Slack)"/i.test(script)) return { kind: 'message', program: name, what: 'sends a message (osascript)' };
@@ -998,11 +1524,11 @@ function interpreter(name, args, ctx, inputs) {
     }
     if (code !== undefined) return codeSendOf(code, deeper, name);
     if (isPython(name)) {
-        const m = optionValue(args, ['-m']);
+        const m = optionValue(own, ['-m']);
         if (m !== undefined) return wordsSendOf([m, ...args.slice(args.indexOf(m) + 1)], ctx);
     }
     if (name === 'deno' && args[0] === 'eval') return codeSendOf(args[1] ?? '', deeper, name);
-    const pos = positionals(args, isPython(name) ? new Set(['W', 'X', 'Q']) : new Set(['r', '--require', '--import', '--loader', '--experimental-loader', '--env-file', '-C', '--conditions']));
+    const pos = positionals(args, takes);
     const file = name === 'deno' && pos[0] === 'run' ? pos[1] : pos[0];
     if (file !== undefined && file !== '-') return scriptSendOf(file, name, ctx);
     for (const input of inputs) { const found = codeSendOf(input, deeper, name); if (found) return found; }
@@ -1013,14 +1539,25 @@ function interpreter(name, args, ctx, inputs) {
 
 /** What one simple command (its words) sends, or null. */
 function wordsSendOf(rawWords, ctx, inputs = []) {
-    const words = commandOf(rawWords);
+    const assigned = new Map();
+    const words = commandOf(rawWords, assigned);
     if (words.length === 0) return null;
+    // A script it runs sees the variables set for it: `DEPLOY_URL=http://… ./deploy.sh`.
+    if (assigned.size > 0) {
+        const env = new Map(ctx.env ?? []);
+        for (const [name, value] of assigned) {
+            if (value === null) env.delete(name);
+            else env.set(name, value);
+        }
+        ctx = { ...ctx, env };
+    }
     const first = words[0];
     let name = programOf(first);
     name = ALIASES[name] ?? name;
     const args = words.slice(1);
-    // Help and version text only.
-    if (args.includes('--help') || args.includes('--version')) return null;
+    // Help and version text only. `--version` is that alone: after a command's other words it's often an option's
+    // name (`helm upgrade … --version 4.10.1`, `gcloud app deploy --version v2`) or a script's own.
+    if (args.includes('--help') || (args.length === 1 && args[0] === '--version')) return null;
     if (name === 'eval') return (ctx.depth ?? 0) < MAX_DEPTH ? lineSendOf(args.join(' '), { ...ctx, depth: (ctx.depth ?? 0) + 1 }) : null;
     if (['npx', 'bunx', 'pnpx'].includes(name)) {
         const call = optionValue(args, ['-c', '--call']);
@@ -1028,9 +1565,11 @@ function wordsSendOf(rawWords, ctx, inputs = []) {
         const rest = args.slice(skipOptions(args, new Set(['p', '--package'])));
         return rest.length > 0 ? wordsSendOf([packageBin(rest[0]), ...rest.slice(1)], ctx) : null;
     }
-    // Runners of a tool or a project's command: `uvx twine upload`, `poetry run python x.py`, `uv tool run …`.
+    // Runners of a tool or a project's command: `uvx twine upload`, `poetry run python x.py`, `uv tool run …`,
+    // `bundle exec rake release`.
     const from = name === 'uvx' ? 0
         : (name === 'pipx' || ['uv', 'poetry', 'pipenv', 'pdm', 'hatch', 'rye', 'conda', 'mamba', 'micromamba'].includes(name)) && args[0] === 'run' ? 1
+        : name === 'bundle' && args[0] === 'exec' ? 1
         : name === 'uv' && args[0] === 'tool' && args[1] === 'run' ? 2 : -1;
     if (from >= 0) {
         const rest = args.slice(from);
@@ -1061,7 +1600,8 @@ function wordsSendOf(rawWords, ctx, inputs = []) {
         case 'make': case 'gmake': case 'bmake': return make(args, ctx);
         case 'mvn': case 'mvnw': return args.some((a) => /^(deploy|release:perform|site-deploy|deploy:deploy-file|jib:build)$/.test(a)) ? { kind: 'publish', program: name, what: 'publishes (mvn deploy)' } : null;
         case 'gradle': case 'gradlew': {
-            const task = args.find((a) => /^(:[\w-]+)*:?(publish|upload|deploy|release|jib|pushImage|bintrayUpload|artifactoryPublish)\w*$/i.test(a));
+            // publishToMavenLocal publishes to this machine's own repository.
+            const task = args.find((a) => /^(:[\w-]+)*:?(publish|upload|deploy|release|jib|pushImage|bintrayUpload|artifactoryPublish)\w*$/i.test(a) && !/ToMavenLocal$/i.test(a));
             return task ? { kind: 'publish', program: name, what: `publishes (gradle ${task})` } : null;
         }
         case 'twine': case 'poetry': case 'flit': case 'hatch': case 'pdm': case 'uv': case 'gem': case 'cargo': case 'dotnet': case 'pod': case 'vsce': case 'ovsx':
@@ -1079,19 +1619,41 @@ function wordsSendOf(rawWords, ctx, inputs = []) {
     if (Object.hasOwn(DEPLOY, name)) return table(DEPLOY[name], args, name, 'deploy');
     if (RUNNERS.has(name)) {
         const task = positionals(args, new Set(['f', 'd', '--justfile', '--taskfile', '--dir', '-t'])).find((t) => sendingName(t, false));
-        return task ? { kind: 'script', program: name, what: `runs ${name} ${task}, whose name says it ${nameVerb(task)}` } : null;
+        return task ? byName(`${name} ${task}`, task, false, name) : null;
     }
     if (SHELLS.has(name) || INTERPRETERS.has(name) || isPython(name) || name === 'source' || name === '.') return interpreter(name, args, ctx, inputs);
-    if (first.includes('/') || SCRIPT_EXT.test(first)) return scriptSendOf(first, undefined, ctx);
+    if (first.includes('/') || SCRIPT_EXT.test(first) || (ctx.shell === 'pwsh' && first.includes('\\'))) return scriptSendOf(first, undefined, ctx);
     return null;
 }
 
-/** What a command line sends: each of its commands, then the command lines inside it. */
-function lineSendOf(text, ctx) {
+/** What a command line sends: each of its commands, then the command lines inside it, every send named. */
+function lineSendOf(text, outer) {
+    const ctx = { ...outer, shell: 'bash' };
     const { commands, nested } = splitShell(text);
+    const found = [];
     let here = ctx;
+    // The shell's variables as the line sets them, the ones it was given first; the exported ones go on to what it runs.
+    const vars = new Map(ctx.env ?? []);
+    const exported = new Set(vars.keys());
     for (let i = 0; i < commands.length; i++) {
-        const { words, inputs } = commands[i];
+        const words = commands[i].words.map((w) => expand(w, vars));
+        const { inputs } = commands[i];
+        if (words.length > 0 && words.every((w) => /^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(w))) {
+            for (const w of words) setFrom(vars, w);
+            continue;
+        }
+        if (['export', 'declare', 'typeset', 'local', 'readonly'].includes(words[0])) {
+            const exports = words[0] === 'export' || words.some((w) => /^-[a-zA-Z]*x/.test(w));
+            for (const w of words.slice(1)) {
+                setFrom(vars, w);
+                if (exports && /^[A-Za-z_]/.test(w)) exported.add(w.replace(/\+?=.*$/s, ''));
+            }
+            continue;
+        }
+        if (words[0] === 'unset') {
+            for (const w of words.slice(1)) vars.delete(w);
+            continue;
+        }
         // A later command runs where `cd` went: `cd web && npm run deploy`.
         // Somewhere it can't tell (`cd "$DIR"`, `cd ~/x`, `cd -`), no file is read: names alone count.
         if (words[0] === 'cd' || words[0] === 'pushd' || words[0] === 'popd') {
@@ -1102,16 +1664,109 @@ function lineSendOf(text, ctx) {
         // Text piped into an interpreter is its code: `cat <<EOF | python3`, `echo '…' | node`.
         const before = i > 0 && commands[i - 1].pipe ? commands[i - 1] : undefined;
         const fed = before ? [...before.inputs, ...(['echo', 'printf'].includes(before.words[0]) ? [before.words.slice(1).filter((w) => !/^-[neE]+$/.test(w)).join(' ')] : [])] : [];
-        const found = wordsSendOf(words, here, [...inputs, ...fed]);
-        if (found) return found;
+        found.push(wordsSendOf(words, { ...here, env: new Map([...vars].filter(([name]) => exported.has(name))) }, [...inputs, ...fed]));
     }
     if ((ctx.depth ?? 0) < MAX_DEPTH) {
-        for (const inner of nested) {
-            const found = lineSendOf(inner, { ...ctx, depth: (ctx.depth ?? 0) + 1 });
-            if (found) return found;
-        }
+        for (const inner of nested) found.push(lineSendOf(inner, { ...ctx, depth: (ctx.depth ?? 0) + 1 }));
     }
-    return null;
+    return combined(found);
+}
+
+/** PowerShell's words that start a statement but run no command; what their conditions and blocks run was split out. */
+const PWSH_KEYWORDS = new Set(['if', 'elseif', 'else', 'switch', 'foreach', 'for', 'while', 'do', 'until', 'try', 'catch', 'finally', 'trap', 'function', 'filter',
+    'workflow', 'configuration', 'param', 'begin', 'process', 'end', 'clean', 'dynamicparam', 'class', 'enum', 'data', 'using', 'parallel', 'sequence', 'inlinescript']);
+/** An assignment's target and operator in PowerShell: `$resp =`, `[int]$n +=`, `$x.y =`. */
+const PWSH_TARGET = /^(?:\[[^\]]*\])*\$[^\s=]*$/;
+const PWSH_ASSIGN = /^(?:[-+*/%]|\?\?)?=$/;
+
+/**
+ * What a PowerShell command line sends: each statement's command, with what
+ * an assignment runs (`$resp = Invoke-RestMethod …`), a splatted hashtable's
+ * options (`Invoke-RestMethod @params`), and what script blocks and groups
+ * run; then the code of statements that are no command (`(New-Object
+ * System.Net.WebClient).UploadFile(…)`).
+ */
+function pwshLineSendOf(text, outer) {
+    let here = { ...outer, shell: 'pwsh' };
+    const tables = new Map();
+    const found = [];
+    const code = [];
+    for (const { words: all, marks, code: source, table } of splitPwsh(text)) {
+        if (table) continue;
+        let k = 0;
+        let target;
+        while (k + 1 < all.length && PWSH_TARGET.test(all[k]) && PWSH_ASSIGN.test(all[k + 1])) {
+            target = all[k];
+            k += 2;
+        }
+        if (/^\$\w+$/.test(target ?? '') && k === all.length - 1 && all[k].startsWith('@{')) tables.set(target.slice(1).toLowerCase(), splatted(all[k]));
+        while (k < all.length && PWSH_KEYWORDS.has(all[k].toLowerCase())) {
+            k += ['function', 'filter', 'workflow', 'configuration', 'class', 'enum', 'data'].includes(all[k].toLowerCase()) ? 2 : 1;
+            // Its condition, its types, its switches (`switch -Regex`) and its blocks.
+            while (k < all.length && (/^[([{]/.test(marks[k]) || /^-\w+$/.test(all[k]))) k++;
+        }
+        const head = all[k]?.toLowerCase();
+        if (head === undefined || ['throw', 'exit', 'break', 'continue'].includes(head)) continue;
+        // The call and dot-source operators run what follows, even a quoted path.
+        const called = head === '&' || head === '.';
+        if (called || head === 'return') k++;
+        if (k >= all.length) continue;
+        // Not a command but an expression (a string, a variable, a group): read as code once the line is read.
+        if (!called && /^[$@([{'"]/.test(marks[k])) {
+            code.push(source);
+            continue;
+        }
+        let words = all.slice(k);
+        // A later command runs where `cd` went; somewhere it can't tell, no file is read.
+        if (['cd', 'chdir', 'sl', 'set-location', 'pushd', 'push-location', 'popd', 'pop-location'].includes(words[0].toLowerCase())) {
+            const to = words.length === 2 ? words[1] : words.length === 3 && /^-(literal)?path$/i.test(words[1]) ? words[2] : undefined;
+            here = { ...here, cwd: to === undefined || /^[~$-]/.test(to) || to.includes('$') ? null : within(here.cwd, to.replace(/\\/g, '/')) };
+            continue;
+        }
+        words = words.flatMap((w) => (/^@\w+$/.test(w) && tables.has(w.slice(1).toLowerCase()) ? tables.get(w.slice(1).toLowerCase()) : [w]));
+        found.push(wordsSendOf(words, here));
+    }
+    if (code.length > 0) found.push(codeFound(code.join('\n'), here, 'pwsh'));
+    return combined(found);
+}
+
+/** A hashtable's keys and values as the options it splats: `@{ Uri = 'https://…'; Method = 'Post'; UseBasicParsing = $true }`. */
+function splatted(table) {
+    const options = [];
+    for (const { words } of splitPwsh(table.slice(2, -1), [], true).filter((statement) => statement.table)) {
+        const glued = /^([\w-]+)=(.*)$/s.exec(words[0]);
+        const [key, value] = words[1] === '=' ? [words[0], words[2]]
+            : glued ? [glued[1], glued[2] || words[1]]
+                : words[1]?.startsWith('=') ? [words[0], words[1].slice(1) || words[2]] : [];
+        if (key === undefined || /^\$false$/i.test(value ?? '')) continue;
+        options.push(`-${key}`, ...(value === undefined || /^\$true$/i.test(value) ? [] : [value]));
+    }
+    return options;
+}
+
+/**
+ * Sends said as one, in the order they run, each once: the user allows all
+ * of them with one answer, so the prompt names every one.
+ */
+function combined(list) {
+    const seen = new Set();
+    const all = list.filter((f) => f && !seen.has(f.what) && seen.add(f.what));
+    if (all.length < 2) return all[0] ?? null;
+    const whats = all.length > 6 ? [...all.slice(0, 5).map((f) => f.what), `${all.length - 5} more`] : all.map((f) => f.what);
+    const unread = [...new Set(all.flatMap((f) => f.unread ?? []))];
+    return {
+        kind: [...new Set(all.map((f) => f.kind))].join('+'),
+        program: [...new Set(all.map((f) => f.program))].join('+'),
+        what: listOf(whats),
+        ...(unread.length > 0 ? { unread } : {}),
+    };
+}
+
+/** "A and B", "A, B and C"; with semicolons when one already has a comma ("runs x, which …; and B"). */
+function listOf(items) {
+    if (items.length < 2) return items[0] ?? '';
+    const sep = items.some((w) => w.includes(',')) ? ';' : ',';
+    return `${items.slice(0, -1).join(`${sep} `)}${sep === ';' ? ';' : ''} and ${items.at(-1)}`;
 }
 
 /**
@@ -1121,9 +1776,29 @@ function lineSendOf(text, ctx) {
  * @param {'bash'|'pwsh'} [options.shell] - which shell runs it.
  * @param {string} [options.cwd] - the folder it runs in, for the files it names.
  * @param {(path: string) => string|undefined} [options.read] - a file's text by its full path, or undefined (only files the caller lets it read).
- * @returns {{kind: string, what: string, program: string}|null} what it sends, said after "it": "sends a POST to 127.0.0.1:8787/deploy (curl)".
+ * @returns {{kind: string, what: string, program: string, unread?: string[]}|null} what it sends, said after "it": "sends a POST to
+ *   127.0.0.1:8787/deploy (curl)"; `unread` names what it runs that the plugin couldn't see into, when the send rests on a name.
  */
 export function sendOf(command, options = {}) {
     if (typeof command !== 'string' || command.trim() === '') return null;
-    return lineSendOf(command, { depth: 0, shell: options.shell ?? 'bash', cwd: options.cwd, read: options.read });
+    const ctx = { depth: 0, cwd: options.cwd, read: options.read };
+    return shown(options.shell === 'pwsh' ? pwshLineSendOf(command, ctx) : lineSendOf(command, ctx));
+}
+
+/** A send as the user and the coordinator read it: no password or token from a URL. */
+function shown(found) {
+    return found && {
+        ...found, program: withoutCredentials(found.program), what: withoutCredentials(found.what),
+        ...(found.unread ? { unread: found.unread.map(withoutCredentials) } : {}),
+    };
+}
+
+/**
+ * A send as the prompt says it: what it sends, then, when that rests on a
+ * name, that the plugin couldn't see what it runs ("runs ./deploy.sh, whose
+ * name says it deploys. The plugin couldn't see what ./deploy.sh runs").
+ */
+export function described(found) {
+    const unread = found?.unread ?? [];
+    return unread.length === 0 ? found.what : `${found.what}. The plugin couldn't see what ${listOf(unread)} ${unread.length > 1 ? 'run' : 'runs'}`;
 }

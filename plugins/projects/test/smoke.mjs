@@ -271,9 +271,11 @@ function fakePresets(sessions, live) {
  * `sessionController.agents.selectForNextRequest`). `tools` names the
  * Host's tools (DSH's own and the MCP servers'), which a project may keep
  * from a session; `presets: true` adds DSH's permission presets.
+ * `listening` maps an event to listeners of DSH's own, registered before
+ * the plugin's (a hook's `tools/pre-execute`, say).
  */
-function fakeHost({ selection = false, hostListener = selection, gateway = false, workspaces = [], tools = [], marks = {}, presets = false } = {}) {
-    const listeners = new Map();
+function fakeHost({ selection = false, hostListener = selection, gateway = false, workspaces = [], tools = [], marks = {}, presets = false, listening = {} } = {}) {
+    const listeners = new Map(Object.entries(listening).map(([event, list]) => [event, [...list]]));
     const effects = [];
     const sessions = new Map(); // id → {events, prompts, title, cwd}
     const live = new Map(); // id → agent
@@ -311,9 +313,11 @@ function fakeHost({ selection = false, hostListener = selection, gateway = false
             if (!names.every((name) => services[name])) return;
             fn(Object.assign(Object.create(host), Object.fromEntries(names.map((name) => [name, services[name]]))));
         },
-        on(event, fn) {
+        /** Like cordis: a listener goes last, or first with `prepend`. */
+        on(event, fn, options) {
             const list = listeners.get(event) ?? [];
-            list.push(fn);
+            if (options?.prepend) list.unshift(fn);
+            else list.push(fn);
             listeners.set(event, list);
         },
         effect(fn) { effects.push(fn()); },
@@ -543,9 +547,12 @@ test('coordinator is created, titled and gets coordinator tools', async () => {
     assert.match(text, /\n2\. Never use the user's personal or infrastructure tools \(password managers and vaults, note apps, email and messaging, home or household services, control of the user's screen, model lanes and gateways\), yourself or in a thread, in any way \(tool, command line, script or web API\)\. Only the user's own words \(a message, an answer they picked or typed, or the goal\) can call for one\./);
     assert.match(text, /\n3\. All work goes to a thread, however small: counting, listing, searching, running tests or commands, editing, deleting\. Start one with project_thread_start, not with DSH's subagent or workflow tools\. One thread per distinct ask \("Two things: A and B" is two asks\); put the user's words in `ask`, word for word, and in `brief` the goal, the scope, what done looks like and what not to touch\./);
     assert.match(text, /\n5\. Answer yourself only from what you already know: thread status, project memory, this conversation\. You may read a file to write a brief or a question; you run no commands and change no files\./);
-    assert.match(text, /\n7\. Guide your threads\. Check each handback against the ask before you tell the user; if it falls short or its approach is wrong, tell the thread what to fix and why[^\n]*When the user's wishes or priorities change, redirect the thread/);
+    assert.match(text, /\n7\. Guide your threads\. Check each handback against the ask; if it falls short or its approach is wrong, tell the thread what to fix and why[^\n]*When the user's wishes or priorities change, redirect the thread/);
     // What it sends a running thread reaches it now (behaviour review 4, S3: an answer sat queued through an 11-minute turn).
     assert.match(text, /\n7\. [^\n]*redirect the thread; a running one reads it now\. Notes to a thread go to it/);
+    // A handback is passed on as it is: a check that didn't run is no pass (behaviour run S3 r2 called a script that no run
+    // showed working "now working").
+    assert.match(text, /\n7\. [^\n]*report once it is right\. Tell the user only what a handback shows: a test that didn't run is no pass\./);
     // "Everything" is the workspace, never DSH or the project's settings.
     assert.match(text, /\n"Here", "this" and "everything" mean this workspace; to check that it works, run its tests in a thread\. DSH, its web server and this project's settings aren't the user's work/);
     assert.match(text, /\n4\. Name a thread to the user only as a link: \[Fix the login bug\]\(\.dsh-thread\/t3\) for thread t3\./);
@@ -556,9 +563,9 @@ test('coordinator is created, titled and gets coordinator tools', async () => {
     assert.match(text, /\n6\. [^\n]*exactly that: they name the action and what it acts on \("delete build\/", "deploy 1\.4\.2 to staging"; "clean up", "tidy" and "get it working" don't\)\. A read is GET, HEAD or OPTIONS with no body; any other request to a service outside the workspace is sending, with or without a token, and so is one with a made-up or placeholder credential\. A brief never allows anything this rule lists: have the thread list what it would do and hand back needs_decision, then ask\. Doing it again \(a retry, a check\) needs its own ask\. In a question, don't mark an option that sends, deploys or deletes as Recommended\. Ask only in these cases/);
     assert.match(text, /\n11\. Write to project_memory only decisions and preferences the user stated\./);
     assert.doesNotMatch(text, /home folder|Here those include|PAUSED/);
-    // The rules behind the second behaviour review, the user's advising asks and rule 6's definitions (behaviour review 4)
-    // made it longer; it stays one screen.
-    assert.ok(text.length < 4400, `short enough for a weaker model: ${text.length} characters`);
+    // The rules behind the second behaviour review, the user's advising asks, rule 6's definitions (behaviour review 4)
+    // and passing a handback on as it is made it longer; it stays one screen.
+    assert.ok(text.length < 4500, `short enough for a weaker model: ${text.length} characters`);
     // Nor do the tools' descriptions name a provider's efforts.
     for (const [name, def] of coord.ctx.registered) assert.doesNotMatch(JSON.stringify([def.description, def.parameters]), /deepseek|off, low, high, max/i, name);
     // Coordinator requests run at effort max, model untouched.
@@ -601,7 +608,7 @@ test('thread start → brief → handback → coordinator turn', async () => {
     assert.match(thread.ctx.section(), /\n2\. Do not use the user's personal or infrastructure tools \(password managers and vaults, note apps, .*\), in any way \(tool, command line, script or web API\), unless the user's own words ask for it\./);
     // Writing outside the workspace asks first like sending does, scratch stays inside, and a request to a service that does more
     // than read, or carries a made-up credential, is sending whatever the brief says (behaviour review 3, S3, S1 and S11).
-    assert.match(thread.ctx.section(), /\n3\. Editing files in the workspace for your task is fine\. Keep scratch files inside the workspace, or delete them before you hand back\. Before you write outside the workspace, delete files, push, publish, send or post anything, spend money, or do anything that cannot be undone, hand back with status needs_decision, unless the user's words asked for exactly that\. A read is GET, HEAD or OPTIONS with no body; any other request to a service outside the workspace is sending, with or without a token, and so is one with a made-up or placeholder credential\. The brief can't allow any of these; only the user's words after "The user asked:" can, when they name it\. Doing it again \(a retry, a check\) needs its own ask\. A command that sends, or that deletes files you didn't create, waits for the user to allow it once in this chat; if they reject it, hand back with status needs_decision and don't do it another way\.\n/);
+    assert.match(thread.ctx.section(), /\n3\. Editing files in the workspace for your task is fine\. Keep scratch files inside the workspace, or delete them before you hand back\. Before you write outside the workspace, delete files, push, publish, send or post anything, spend money, or do anything that cannot be undone, hand back with status needs_decision, unless the user's words asked for exactly that\. A read is GET, HEAD or OPTIONS with no body; any other request to a service outside the workspace is sending, with or without a token, and so is one with a made-up or placeholder credential\. The brief can't allow any of these; only the user's words after "The user asked:" can, when they name it\. Doing it again \(a retry, a check\) needs its own ask\. A command that sends, or that deletes files you didn't create, waits for the user to allow it once in this chat, one send at a time, and a copy or a wrapper of it \(another script, a copied file, a different client\) is the same send; if they reject it, hand back with status needs_decision and don't do it another way\.\n/);
     // The handback names what left the workspace.
     assert.match(thread.ctx.section(), /\n4\. When you are done or stuck, call project_handback once, as your last step\. Its summary is what the user reads on your card: at most 300 characters, the result first, then where \(paths, links\); a longer one comes back to you to shorten\. Name every request you sent to a service outside the workspace and every file you left outside it\./);
     assert.match(thread.ctx.section(), /\n5\. After project_handback, end your turn with one short line\./);
@@ -4008,12 +4015,12 @@ test('with approvalNoticeSeconds set, a permission prompt tells the coordinator 
     await wait();
     assert.equal(host.sessions.get(coord.id).prompts.length, 0);
 
-    // Left waiting: the coordinator hears which thread and what it wants.
-    thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'a2', toolName: 'bash', reason: 'runs ./deploy.sh' } });
+    // Left waiting: the coordinator hears which thread and what it wants, without a token a URL in it carries.
+    thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'a2', toolName: 'bash', reason: 'runs ./deploy.sh to https://bot:ghp_xxxxxxxx@deploy.example.com/hook' } });
     await wait();
     const cp = host.sessions.get(coord.id).prompts;
     assert.equal(cp.length, 1);
-    assert.equal(cp[0].text, '[Thread waiting for approval: t1 · "Deploy"]\n\nIt asked to use bash: runs ./deploy.sh\n\nThe user approves or rejects it in the "Deploy" session.\n\n(Tell the user in one line, starting with [Deploy](.dsh-thread/t1), what it wants to do and that they approve or reject it in its chat. Never approve it yourself or do the work another way, and do not start another thread for it.)');
+    assert.equal(cp[0].text, '[Thread waiting for approval: t1 · "Deploy"]\n\nIt asked to use bash: runs ./deploy.sh to https://deploy.example.com/hook\n\nThe user approves or rejects it in the "Deploy" session.\n\n(Tell the user in one line, starting with [Deploy](.dsh-thread/t1), what it wants to do and that they approve or reject it in its chat. Never approve it yourself or do the work another way, and do not start another thread for it.)');
 
     // The user is in the thread directly: the prompt is in front of them.
     userSays(host, thread.id, 'Go ahead and deploy.');
@@ -6866,37 +6873,193 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     const work = mkdtempSync(join(tmpdir(), 'projects-work-'));
     writeFileSync(join(work, 'deploy.sh'), '#!/bin/sh\ncurl -fsS -X POST --data @build.json http://127.0.0.1:8787/deploy\n');
     writeFileSync(join(work, 'run.sh'), '#!/bin/sh\necho ok\n');
-    writeFileSync(join(work, 'package.json'), JSON.stringify({ scripts: { build: 'tsc', release: 'npm publish' } }));
+    writeFileSync(join(work, 'deploy-staging.sh'), '#!/usr/bin/env bash\nTARGET="${DEPLOY_URL:-http://127.0.0.1:8787/deploy}"\ncurl -fsS -X POST -H "Authorization: Bearer ${STAGING_TOKEN}" --data @build.json "$TARGET"\n');
+    mkdirSync(join(work, 'billing'));
+    writeFileSync(join(work, 'billing', 'deploy.sh'), '#!/bin/bash\ncurl -fsS -X POST -H "Authorization: Bearer ${STAGING_TOKEN}" -d \'{"service":"billing"}\' "${STAGING_URL}"\n');
+    writeFileSync(join(work, 'package.json'), JSON.stringify({ scripts: {
+        build: 'tsc', release: 'npm publish', ship: 'echo shipped', start: 'node server.js',
+        'sync:assets': 'aws s3 sync ./dist s3://acme-assets --cache-control max-age=31536000', 'sync:prod': 'rsync -avz ./dist/ deploy@web1:/var/www/app --exclude node_modules',
+        'release:ci': 'cross-env CI=true semantic-release', 'deploy:dry': 'wrangler deploy --dry-run', 'test:deploy': 'vitest run tests/deploy',
+        'deploy:test': 'sst deploy --stage test',
+    } }));
+    writeFileSync(join(work, 'Makefile'), 'DOCKER ?= docker\nPYTHON ?= python3 # the one on PATH\nIMAGE ?= ghcr.io/acme/web:latest\n\n'
+        + 'sync:\n\taws s3 sync ./dist s3://acme-site --delete --cache-control max-age=31536000\n'
+        + 'image:\n\t$(DOCKER) build -t $(IMAGE) .\n\t$(DOCKER) push $(IMAGE)\n'
+        + 'pypi:\n\t$(PYTHON) -m build\n\t$(PYTHON) -m twine upload dist/*\n');
+    mkdirSync(join(work, 'scripts'));
+    writeFileSync(join(work, 'scripts', 'release.sh'), '#!/bin/sh\ngh release create "v$2" dist/*.tar.gz --notes-file CHANGELOG.md\n');
+    writeFileSync(join(work, 'scripts', 'publish.mjs'), "import { execSync } from 'node:child_process';\nexecSync('npm publish', { stdio: 'inherit' });\n");
+    writeFileSync(join(work, 'scripts', 'deploy_check.sh'), '#!/bin/sh\nnpx wrangler deploy --dry-run --outdir /tmp/check\n');
+    writeFileSync(join(work, 'scripts', 'report.py'), 'import requests\n\ns = requests.Session()\ns.headers["Authorization"] = "Bearer t"\nr = s.post("https://reports.example.com/api/runs", json={"passed": 12})\nprint(r.status_code)\n');
+    writeFileSync(join(work, 'scripts', 'deploy.ps1'), 'param([string]$Environment = \'staging\')\nInvoke-RestMethod -Uri "https://deploy.example.com/hooks/$Environment" `\n    -Method Post\n');
+    // A local app: a route table and an ORM's delete send nothing.
+    writeFileSync(join(work, 'server.js'), "const fastify = require('fastify')({ logger: true });\nconst routes = [\n  { method: 'GET', url: '/items', handler: async () => [] },\n  { method: 'POST', url: '/items', handler: async (req) => ({ id: 1, ...req.body }) },\n];\nfor (const route of routes) fastify.route(route);\nfastify.listen({ port: 3000 });\n");
+    writeFileSync(join(work, 'app.py'), 'from flask import Flask, jsonify\nfrom flask_sqlalchemy import SQLAlchemy\n\napp = Flask(__name__)\ndb = SQLAlchemy(app)\n\n@app.route("/items/<int:item_id>", methods=["DELETE"])\ndef delete_item(item_id):\n    db.session.delete(Item.query.get_or_404(item_id))\n    db.session.commit()\n    return jsonify(ok=True)\n\nif __name__ == "__main__":\n    app.run(port=5000)\n');
     const outside = mkdtempSync(join(tmpdir(), 'projects-outside-'));
     writeFileSync(join(outside, 'run.sh'), '#!/bin/sh\ngit push\n');
-    const { host, dir } = setup({ projects: [{ name: 'DSH Plugins', goal: 'Ship good DSH plugins', workspacePath: work }] }, undefined, { presets: true });
+    // A stand-in for a DSH hook loaded before the plugin: when it asks about a call, it doesn't pass the call on.
+    let hookAsks = false;
+    const hook = (exec, next) => (hookAsks ? Promise.resolve({ kind: 'ask', reason: 'a hook asks about https://bot:ghp_x@github.com/acme/web.git' }) : next());
+    const { host, dir } = setup({ projects: [{ name: 'DSH Plugins', goal: 'Ship good DSH plugins', workspacePath: work }] }, undefined, { presets: true, listening: { 'tools/pre-execute': [hook] } });
     // DSH's approval service: a session's policy, "ask" unless a test says otherwise.
     const policies = new Map();
     host.services.approval = { effectivePolicy: (session) => policies.get(session.id) ?? 'ask' };
     await tick();
     const coord = coordinatorOf(host);
     const log = () => readFileSync(join(dir, 'projects.log'), 'utf8');
-    // DSH's pre-execute stage for one call, its own checks having decided `own`.
-    const gate = (agent, name, args, own = { kind: 'allow' }) => host.waterfall('tools/pre-execute', { name, arguments: args, agent, callId: `pre-${++toolCalls}` }, () => Promise.resolve(own));
+    // DSH's pre-execute stage for one call, its own checks having decided `own`. Like DSH, the call is logged first, with
+    // its model step: one of its own unless `inStep` names one.
+    let step = 0;
+    const gate = (agent, name, args, own = { kind: 'allow' }, inStep = ++step) => {
+        const callId = `pre-${++toolCalls}`;
+        agent.ctx.sessionEvent({ type: 'tool/call', data: { turn: 1, step: inStep, callId, name, arguments: args } });
+        return host.waterfall('tools/pre-execute', { name, arguments: args, agent, callId }, () => Promise.resolve(own));
+    };
     await coord.ctx.call('project_thread_start', { ask: 'Get the staging deploy working.', title: 'Deploy', brief: 'Fix deploy.sh.' });
     const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Deploy');
 
-    // A thread's send asks the user, saying what it sends; the same send again asks again.
+    // A thread's send asks the user, saying what it sends, then what the thread says it is for, as its words; the same send
+    // again asks again.
     const post = { command: 'curl -sS -X POST --data @build.json http://127.0.0.1:8787/deploy', description: 'Deploy' };
     const asked = {
         kind: 'ask',
-        reason: 'the command sends a POST to 127.0.0.1:8787/deploy (curl)',
-        displayReason: { en: 'This command sends a POST to 127.0.0.1:8787/deploy (curl). A thread asks you before each command that sends outside the workspace.' },
+        reason: 'the command sends a POST to 127.0.0.1:8787/deploy (curl). The thread says: "Deploy"',
+        displayReason: { en: 'This command sends a POST to 127.0.0.1:8787/deploy (curl). A thread asks you before each command that sends outside the workspace.\nThe thread says: "Deploy"' },
     };
     assert.deepEqual(await gate(t1, 'bash', post), asked);
     assert.deepEqual(await gate(t1, 'bash', post), asked);
-    // A script in the workspace by what it runs, a package script, a push.
-    assert.equal((await gate(t1, 'bash', { command: 'STAGING_TOKEN=x ./deploy.sh' })).reason, 'the command runs ./deploy.sh, which sends a POST to 127.0.0.1:8787/deploy (curl)');
-    assert.equal((await gate(t1, 'bash', { command: 'npm run release' })).reason, 'the command runs npm run release, which publishes (npm publish)');
-    assert.equal((await gate(t1, 'bash', { command: 'git push origin main' })).reason, 'the command pushes to origin (git push)');
+    // The thread's words are one line, without a URL's token, and with why it wants a wider sandbox when it asks for one.
+    const wider = await gate(t1, 'bash', { command: 'git push', description: 'Push the fix\n  to https://bot:ghp_secret@github.com/acme/web', sandbox_permissions: 'danger-full-access', justification: 'The sandbox blocks the network.' });
+    assert.equal(wider.displayReason.en, 'This command pushes to its remote (git push). A thread asks you before each command that sends outside the workspace.\nThe thread says: "Push the fix to https://github.com/acme/web" and, for wider access, "The sandbox blocks the network."');
+    // One send at a time: DSH asks about a step's calls one after another, so a second send from the step of one it asked
+    // about is refused without asking anyone; the next step, which reads the answer, asks again, as does the next turn.
+    // A copy or a wrapper of it would be the same send.
+    assert.deepEqual(await gate(t1, 'bash', post), asked);
+    const one = {
+        kind: 'deny',
+        reason: "Not run: the command pushes to origin (git push). Another command of yours that sends, from the same step, went to the user first, and a thread asks them about one send at a time, so nobody was asked about this one. Read their answer in that command's result: if they allowed it, run this one again only if it is still needed; if they rejected it, hand back and don't send another way. Here too, a copy or a wrapper of it (another script, a copied file, a different client) is the same send, and waits for the same answer.",
+    };
+    assert.deepEqual(await gate(t1, 'bash', { command: 'git push origin main' }, undefined, step), one);
+    assert.deepEqual(await gate(t1, 'bash', { command: 'ls' }, undefined, step), { kind: 'allow' });
+    assert.equal((await gate(t1, 'bash', { command: 'git push origin main' })).kind, 'ask');
+    assert.equal((await gate(t1, 'bash', post, undefined, step)).kind, 'deny');
+    t1.ctx.sessionEvent({ type: 'turn/end', data: { turn: 1 } });
+    assert.equal((await gate(t1, 'bash', post, undefined, step)).kind, 'ask');
+    assert.match(log(), / send-refused dsh-plugins\/t1 push git one-at-a-time\n/);
+    // A script in the workspace by what it runs, a package script, a push; and each send that went through
+    // without asking in the send detection review, with what the prompt says about it.
+    const commit = (then) => `git add -A && git commit -m "$(cat <<'EOF'\nFix the login redirect\n\nThe callback didn't keep the next= parameter.\nEOF\n)" && ${then}`;
+    // Known by its name alone: the prompt says the plugin couldn't see what it runs, or found no send in it.
+    const copied = join(work, '.tmp-deploy-test', 'deploy.sh');
+    for (const [command, what, shell = 'bash'] of [
+        ['STAGING_TOKEN=x ./deploy.sh', 'runs ./deploy.sh, which sends a POST to 127.0.0.1:8787/deploy (curl)'],
+        ['npm run release', 'runs npm run release, which publishes (npm publish)'],
+        ['git push origin main', 'pushes to origin (git push)'],
+        // An apostrophe in a commit message's here-document opens no quote, so what comes after the commit counts.
+        [commit('git push origin feature/login-fix'), 'pushes to origin (git push)'],
+        [commit('npm publish'), 'publishes (npm publish)'],
+        [commit('curl -X POST https://api.example.com/x'), 'sends a POST to api.example.com/x (curl)'],
+        ['git commit -m "$(cat <<\'EOF\'\nRename the `--dry flag\n\nEOF\n)" && git push', 'pushes to its remote (git push)'],
+        // A token in a remote's URL is shown nowhere: not in the prompt, nor in the reason its coordinator hears.
+        ['git push https://acme-bot:ghp_xxxxxxxx@github.com/acme/web.git HEAD:main', 'pushes to github.com/acme/web.git (git push)'],
+        ['git push https://ghp_xxxxxxxx@github.com/acme/web.git', 'pushes to github.com/acme/web.git (git push)'],
+        ['git -c credential.helper= push "https://x-access-token:$GH_TOKEN@github.com/acme/web.git" HEAD:main', 'pushes to github.com/acme/web.git (git push)'],
+        // --version after a command's other words is an option's name or a script's own, not a version query.
+        ['helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx --namespace ingress-nginx --create-namespace --version 4.10.1', 'makes a change with helm (helm upgrade)'],
+        ['helm install redis bitnami/redis --version 19.0.2 -n cache', 'makes a change with helm (helm install)'],
+        ['gcloud app deploy app.yaml --version v2 --quiet', 'makes a change in the cloud (gcloud app deploy app.yaml)'],
+        ['./scripts/release.sh --version 1.4.2', 'runs ./scripts/release.sh, which makes a change on GitHub (gh release create)'],
+        ['curl -X POST "$API_URL/deploy" -d @build.json -H "Authorization: Bearer $TOKEN" --version', 'sends a POST to $API_URL/deploy (curl)'],
+        // An option after the destination, or a value it takes, is no destination.
+        ['aws s3 sync ./dist s3://acme-site --delete --cache-control max-age=31536000', 'copies to S3 (aws s3 sync → acme-site)'],
+        ['aws s3 cp ./build s3://acme-site/ --recursive --acl public-read', 'copies to S3 (aws s3 cp → acme-site/)'],
+        ['aws s3 sync build/ s3://acme-site --exclude "*.map"', 'copies to S3 (aws s3 sync → acme-site)'],
+        ['aws s3 cp index.html s3://acme-site/index.html --content-type text/html', 'copies to S3 (aws s3 cp → acme-site/index.html)'],
+        ['rsync -avz ./dist/ deploy@web1:/var/www/app --exclude node_modules', 'copies files to web1 (rsync)'],
+        ['npm run sync:assets', 'runs npm run sync:assets, which copies to S3 (aws s3 sync → acme-assets)'],
+        ['npm run sync:prod', 'runs npm run sync:prod, which copies files to web1 (rsync)'],
+        ['make sync', 'runs make sync, which copies to S3 (aws s3 sync → acme-site)'],
+        // A bucket copy through gcloud storage, a cloud command's verb after its group, and what it changes.
+        ['gcloud storage cp -r ./dist gs://acme-site', 'copies files to gs://acme-site (gcloud storage cp)'],
+        ['gcloud storage rsync -r ./dist gs://acme-site --delete-unmatched-destination-objects', 'copies files to gs://acme-site (gcloud storage rsync)'],
+        ['gcloud storage rm "gs://acme-site/old/**"', 'changes files in gs://acme-site/old/** (gcloud storage rm)'],
+        ['az webapp up --name acme-web --resource-group rg --runtime "NODE:20-lts"', 'makes a change in the cloud (az webapp up acme-web)'],
+        ['gcloud run deploy api --source . --region us-central1', 'makes a change in the cloud (gcloud run deploy api)'],
+        // What cross-env and bundle exec run, and a make recipe with the Makefile's own variables.
+        ['cross-env NODE_ENV=production npm publish', 'publishes (npm publish)'],
+        ['npx cross-env NODE_ENV=production firebase deploy', 'makes a change on Firebase (firebase deploy)'],
+        ['npm run release:ci', 'runs npm run release:ci, which publishes a release (semantic-release)'],
+        ['bundle exec rake release', 'runs rake release, whose name says it releases. The plugin couldn\'t see what rake release runs'],
+        ['make image', 'runs make image, which pushes ghcr.io/acme/web:latest (docker push)'],
+        ['make pypi', 'runs make pypi, which publishes (twine upload)'],
+        // An option after a script's name is the script's, not the interpreter's syntax check.
+        ['bash deploy.sh -n prod', 'runs deploy.sh, which sends a POST to 127.0.0.1:8787/deploy (curl)'],
+        ['node scripts/publish.mjs -c release.config.json', 'runs scripts/publish.mjs, which runs code that publishes (npm publish)'],
+        // A subtree's push, and docker-compose's.
+        ['git subtree push --prefix dist origin gh-pages', 'pushes to origin (git subtree push)'],
+        ['docker-compose push web', 'makes a change with docker-compose (docker-compose push)'],
+        // Every send in a line is named, each with where it goes.
+        ['git push origin main && gh pr create --fill', 'pushes to origin (git push) and makes a change on GitHub (gh pr create)'],
+        ['npm version patch && git push --follow-tags && npm publish', 'pushes to its remote (git push) and publishes (npm publish)'],
+        ['curl -X POST http://localhost:3000/api/reset && curl -X POST https://api.example.com/v1/deploy', 'sends a POST to localhost:3000/api/reset (curl) and sends a POST to api.example.com/v1/deploy (curl)'],
+        ['STAGING_TOKEN= ./deploy.sh; bash -c \'curl -fsS -X POST http://127.0.0.1:9/deploy\'', 'runs ./deploy.sh, which sends a POST to 127.0.0.1:8787/deploy (curl); and sends a POST to 127.0.0.1:9/deploy (curl)'],
+        ['git push --force-with-lease origin feature/login-fix', 'pushes to origin (git push)'],
+        ['git push --signed origin main', 'pushes to origin (git push)'],
+        // A variable the command sets, or a script's default for one, is filled in; one that holds a token never is.
+        ['STAGING_TOKEN=scratch-local-test DEPLOY_URL=http://127.0.0.1:8799/deploy ./deploy-staging.sh', 'runs ./deploy-staging.sh, which sends a POST to 127.0.0.1:8799/deploy (curl)'],
+        ['./deploy-staging.sh', 'runs ./deploy-staging.sh, which sends a POST to 127.0.0.1:8787/deploy (curl)'],
+        ['STAGING_URL=http://127.0.0.1:8799/deploy STAGING_TOKEN=local-mock-only ./billing/deploy.sh', 'runs ./billing/deploy.sh, which sends a POST to 127.0.0.1:8799/deploy (curl)'],
+        ['HOOK=https://hooks.example.com/build; curl -X POST "$HOOK"', 'sends a POST to hooks.example.com/build (curl)'],
+        ['BOT_TOKEN=123:abc; curl -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage"', 'sends a POST to api.telegram.org/bot$BOT_TOKEN/sendMessage (curl)'],
+        [`mkdir -p .tmp-deploy-test && cp deploy.sh .tmp-deploy-test/ && (cd /tmp && STAGING_TOKEN=dummy ${copied})`, `runs ${copied}, whose name says it deploys. The plugin couldn't see what ${copied} runs`],
+        ['npm run ship', 'runs npm run ship: the plugin found no send in it, but its name says it ships'],
+        // A name that tries or checks says no send (below), but one that deploys to a test site does.
+        ['npm run deploy:test', 'runs npm run deploy:test: the plugin found no send in it, but its name says it deploys'],
+        // Code that posts through the standard library's Request, or through a session or a client by any name.
+        [`python3 -c "import urllib.request, json; req = urllib.request.Request('https://hooks.slack.com/services/T000/B000/XXX', data=json.dumps({'text': 'Build done'}).encode(), headers={'Content-Type': 'application/json'}); print(urllib.request.urlopen(req).status)"`, 'runs code that sends a POST (python3)'],
+        ['python3 - <<\'EOF\'\nimport json, urllib.request\npayload = json.dumps({"text": "deploy finished"}).encode()\nreq = urllib.request.Request("https://hooks.slack.com/services/XXX", payload, {"Content-Type": "application/json"})\nprint(urllib.request.urlopen(req).status)\nEOF', 'runs code that sends a POST (python3)'],
+        ['python3 scripts/report.py', 'runs scripts/report.py, which runs code that sends a POST (python3)'],
+        [`python3 -c "from requests import post; print(post('https://api.example.com/x', json={}).status_code)"`, 'runs code that sends a POST (python3)'],
+        ['node -e "require(\'axios\').post(\'https://api.example.com/x\', {a: 1}).then(r => console.log(r.status))"', 'runs code that sends a POST (node)'],
+        // PowerShell read as PowerShell: a backtick goes on to the next line, a hashtable, a group and a script block are
+        // one word each and what they run is read, a splatted hashtable gives its options, `$x =` assigns what runs, and `\`
+        // is a path's own.
+        ['Invoke-RestMethod -Uri "https://api.example.com/v1/items" `\n    -Method Post `\n    -ContentType "application/json" `\n    -Body $json', 'sends a POST to api.example.com/v1/items (invoke-restmethod)', 'pwsh'],
+        ["$params = @{ Uri = 'https://api.example.com/v1/items'; Method = 'Post'; Body = $json; ContentType = 'application/json' }\nInvoke-RestMethod @params", 'sends a POST to api.example.com/v1/items (invoke-restmethod)', 'pwsh'],
+        ['.\\scripts\\deploy.ps1 -Environment prod', 'runs .\\scripts\\deploy.ps1, which sends a POST to deploy.example.com/hooks/$Environment (invoke-restmethod)', 'pwsh'],
+        ['& .\\scripts\\Publish-Release.ps1', 'runs .\\scripts\\Publish-Release.ps1, whose name says it publishes. The plugin couldn\'t see what .\\scripts\\Publish-Release.ps1 runs', 'pwsh'],
+        ['Get-ChildItem dist | ForEach-Object { Invoke-RestMethod -Uri "https://files.example.com/$($_.Name)" -Method Put -InFile $_.FullName }', 'sends a PUT to files.example.com/$($_.Name) (invoke-restmethod)', 'pwsh'],
+        ['Get-ChildItem dist | %{Invoke-RestMethod -Uri "https://files.example.com/$($_.Name)" -Method Put -InFile $_.FullName}', 'sends a PUT to files.example.com/$($_.Name) (invoke-restmethod)', 'pwsh'],
+        ["$resp = Invoke-RestMethod -Uri https://api.example.com/v1/items -Method Post -Body $json -ContentType 'application/json'; $resp.id", 'sends a POST to api.example.com/v1/items (invoke-restmethod)', 'pwsh'],
+        ["Invoke-RestMethod -Uri $uri -Headers @{ Authorization = \"Bearer $token\"; Accept = 'application/json' } -Method Post -Body $json", 'sends a POST to $uri (invoke-restmethod)', 'pwsh'],
+        ['try { Invoke-RestMethod -Uri $uri -Method Delete } catch { Write-Error $_ }', 'sends a DELETE to $uri (invoke-restmethod)', 'pwsh'],
+        ["Invoke-RestMethod -Body (ConvertTo-Json @{ name = 'x'; done = $true }) -Uri https://api.example.com/items -Method Post", 'sends a POST to api.example.com/items (invoke-restmethod)', 'pwsh'],
+        ['(New-Object System.Net.WebClient).UploadFile("https://files.example.com/upload", "dist/app.zip")', 'runs code that sends a POST (pwsh)', 'pwsh'],
+    ]) {
+        const decision = await gate(t1, shell, { command });
+        assert.deepEqual([decision.kind, decision.reason, decision.displayReason?.en], ['ask', `the command ${what}`, `This command ${what}. A thread asks you before each command that sends outside the workspace.`], command);
+    }
     // Reads run: a GET, a syntax check, a dry run, a script that doesn't send, a build.
-    for (const command of ['curl -sS http://127.0.0.1:8787/deploy', 'bash -n deploy.sh', 'git push --dry-run', './run.sh', 'npm run build', 'git status']) {
+    for (const command of ['curl -sS http://127.0.0.1:8787/deploy', 'bash -n deploy.sh', 'git push --dry-run', './run.sh', 'npm run build', 'git status',
+        'git --version', 'curl --version', 'gh pr create --help',
+        // A local app whose code has a route table or an ORM's delete.
+        'node server.js', 'npm start', 'python3 app.py', 'node -e "console.log(JSON.stringify({ method: \'POST\', path: \'/items\' }))"',
+        // A package script given the words after it.
+        'npm run release:ci -- --dry-run',
+        // A dry run or a check, whatever its name.
+        'npm run deploy:dry', 'npm run test:deploy', './scripts/deploy_check.sh --dry-run',
+        'rsync -avzn dist/ deploy@web1:/var/www/app/', 'rsync -avz --dry-run --delete dist/ deploy@web1:/var/www/app/',
+        // A cloud command that reads, though its group or its resource is named like a change.
+        'gcloud run services list', 'gcloud run services describe api --region us-central1', 'gcloud run services logs read api --limit 50',
+        'gcloud deploy releases list --delivery-pipeline web --region us-central1', 'gcloud functions describe send-welcome-email --region us-central1',
+        'az functionapp show --name sync-orders --resource-group rg',
+        // What changes only this machine, or checks a key.
+        'aws eks update-kubeconfig --name prod --region us-east-1', './gradlew publishToMavenLocal', 'ssh -T git@github.com']) {
         assert.deepEqual(await gate(t1, 'bash', { command }), { kind: 'allow' }, command);
+    }
+    for (const command of ['Invoke-RestMethod -Uri https://api.example.com/v1/items', 'Get-Content .\\scripts\\deploy.ps1', "Write-Host 'Invoke-RestMethod -Method Post is what it does'",
+        '$url = "https://hooks.example.com/deploy"; Write-Host $url']) {
+        assert.deepEqual(await gate(t1, 'pwsh', { command }), { kind: 'allow' }, command);
     }
     // Nothing outside the workspace is read: that run.sh pushes, but only its name is seen.
     assert.deepEqual(await gate(t1, 'bash', { command: './run.sh', workdir: outside }), { kind: 'allow' });
@@ -6905,15 +7068,29 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     assert.deepEqual(await gate(t1, 'run_code', { code: "console.log(await (await fetch('https://api.example.com/items')).text());" }), { kind: 'allow' });
     assert.equal((await gate(t1, 'pwsh', { command: 'Invoke-RestMethod -Method Post -Uri https://api.example.com/items' })).kind, 'ask');
     assert.deepEqual(await gate(t1, 'web_fetch', { url: 'https://example.com' }), { kind: 'allow' });
-    // DSH's own refusals and prompts stand.
+    // DSH's own refusals and prompts stand. When DSH asks about a send (a review's ask, or a hook's, which doesn't pass the
+    // call on), its prompt names the send first.
     assert.deepEqual(await gate(t1, 'bash', { command: 'git push' }, { kind: 'deny', reason: 'sandbox' }), { kind: 'deny', reason: 'sandbox' });
-    assert.deepEqual(await gate(t1, 'bash', { command: 'git push' }, { kind: 'ask', reason: 'wider' }), { kind: 'ask', reason: 'wider' });
+    assert.deepEqual(await gate(t1, 'bash', { command: 'ls' }, { kind: 'ask', reason: 'wider' }), { kind: 'ask', reason: 'wider' });
+    assert.deepEqual(await gate(t1, 'bash', { command: 'git push' }, { kind: 'ask', reason: 'Auto review denied tool "bash": it pushes', displayReason: { en: 'Auto review denied this call: it pushes' } }), {
+        kind: 'ask',
+        reason: 'the command pushes to its remote (git push); Auto review denied tool "bash": it pushes',
+        displayReason: { en: 'This command pushes to its remote (git push). A thread asks you before each command that sends outside the workspace.\nAuto review denied this call: it pushes' },
+    });
+    hookAsks = true;
+    assert.deepEqual(await gate(t1, 'bash', { command: 'git push origin main', description: 'Push the fix' }), {
+        kind: 'ask',
+        reason: 'the command pushes to origin (git push). The thread says: "Push the fix"; a hook asks about https://github.com/acme/web.git',
+        displayReason: { en: 'This command pushes to origin (git push). A thread asks you before each command that sends outside the workspace.\nThe thread says: "Push the fix"\na hook asks about https://github.com/acme/web.git' },
+    });
+    assert.deepEqual(await gate(t1, 'bash', { command: 'ls' }), { kind: 'ask', reason: 'a hook asks about https://bot:ghp_x@github.com/acme/web.git' });
+    hookAsks = false;
 
     // A thread whose approvals never ask can't send, and hears how the user can let it ask.
     policies.set(t1.id, 'never');
     assert.deepEqual(await gate(t1, 'bash', { command: 'git push origin main' }), {
         kind: 'deny',
-        reason: "Not run: the command pushes to origin (git push). A thread asks the user before each command that sends outside the workspace, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would send; the user can put this thread on Workspace Write so it can ask. Don't send it another way.",
+        reason: "Not run: the command pushes to origin (git push). A thread asks the user before each command that sends outside the workspace, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would send; the user can put this thread on Workspace Write so it can ask. Don't send it another way: a copy or a wrapper of it (another script, a copied file, a different client) is the same send, and waits for the same answer.",
     });
     policies.delete(t1.id);
     // The coordinator is refused, and nobody is asked.
@@ -7005,9 +7182,13 @@ test('rule 6, held for deletes: a thread\'s command that deletes files it didn\'
     writeFileSync(own, '#!/bin/sh\nrm -rf build\n');
     wrote(t1.session, 'w-2', own);
     assert.equal((await gate(t1, 'bash', { command: 'sh tidy.sh' })).reason, 'the command runs tidy.sh, which deletes build (rm); if the user doesn\'t allow it, hand back with status needs_decision');
-    // DSH's own refusals and prompts stand.
+    // DSH's own refusals stand, and a prompt DSH asks itself (a hook's) names the delete first, then says what DSH said.
     assert.deepEqual(await gate(t1, 'bash', { command: 'rm -rf build' }, { kind: 'deny', reason: 'sandbox' }), { kind: 'deny', reason: 'sandbox' });
-    assert.deepEqual(await gate(t1, 'bash', { command: 'rm -rf build' }, { kind: 'ask', reason: 'wider' }), { kind: 'ask', reason: 'wider' });
+    assert.deepEqual(await gate(t1, 'bash', { command: 'rm -rf build' }, { kind: 'ask', reason: 'wider' }), {
+        kind: 'ask',
+        reason: 'the command deletes build (rm); if the user doesn\'t allow it, hand back with status needs_decision; wider',
+        displayReason: { en: 'This command deletes build (rm). A thread asks you before each command that deletes files it didn\'t create.\nwider' },
+    });
 
     // A thread whose approvals never ask can't delete, and hears how the user can let it ask.
     policies.set(t1.id, 'never');
