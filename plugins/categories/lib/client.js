@@ -427,6 +427,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             find: 'Find by name',
             findClear: 'Clear the find',
             findNone: (words) => `Nothing matches “${words}”.`,
+            // What Alt+↑ and Alt+↓ say on the page's tree.
+            movedUp: (name) => `${name} moved up.`,
+            movedDown: (name) => `${name} moved down.`,
+            firstAlready: (name) => `${name} is first already.`,
+            lastAlready: (name) => `${name} is last already.`,
+            othersLast: 'Other workspaces stays last: it holds the workspaces in no category.',
             imported: (names) => `Imported from your old sidebar: ${listText(names)}, with ${names.length === 1 ? 'its' : 'their'} workspaces. ${names.length === 1 ? 'Its' : 'Their'} old instructions, files and defaults for new sessions weren't carried over.`,
             dismiss: 'Dismiss',
         };
@@ -576,6 +582,52 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return out;
         }
 
+        /**
+         * What Alt+↑ (by -1) or Alt+↓ (by 1) on the page's tree does to an
+         * item: a category moves past its neighbour; a workspace moves past
+         * its neighbour in its category, and from either end into the next
+         * category, where it goes in nearest that end (Other workspaces, past
+         * the last category, puts it in none). Where there is nowhere to go,
+         * `refuse` says so. null for an item that has no place to change (a
+         * session's is DSH's).
+         * @param tree - the page's whole tree (pageModel), not one a find cut down.
+         * @returns {{method: string, args: object, said: string, open?: string}|{refuse: string}|null}
+         *   the categories call to make, what to say once it's done, and the item to open so the moved one shows.
+         */
+        function pageMove(tree, key, by) {
+            const cats = Array.isArray(tree) ? tree : EMPTY;
+            const at = String(key ?? '').indexOf(':');
+            const kind = String(key ?? '').slice(0, Math.max(0, at));
+            const id = String(key ?? '').slice(at + 1);
+            const real = cats.filter((c) => c.id !== OTHERS);
+            if (kind === 'category') {
+                const c = cats.find((x) => x.id === id);
+                if (!c) return null;
+                if (id === OTHERS) return { refuse: PAGE.othersLast };
+                const i = real.indexOf(c);
+                if (by < 0 && i === 0) return { refuse: PAGE.firstAlready(c.title) };
+                if (by > 0 && i === real.length - 1) return { refuse: PAGE.lastAlready(c.title) };
+                const before = by < 0 ? real[i - 1].id : real[i + 2]?.id ?? '';
+                return { method: 'moveCategory', args: { category: id, before }, said: by < 0 ? PAGE.movedUp(c.title) : PAGE.movedDown(c.title) };
+            }
+            if (kind !== 'workspace') return null;
+            const ci = cats.findIndex((c) => c.children.some((w) => w.kind === 'workspace' && w.id === id));
+            if (ci < 0) return null;
+            const list = cats[ci].children;
+            const i = list.findIndex((w) => w.id === id);
+            const ws = list[i];
+            const filed = (c) => (c.id === OTHERS ? '' : c.id);
+            if (by < 0 && i > 0) return { method: 'fileWorkspace', args: { workspace: id, category: filed(cats[ci]), before: list[i - 1].id }, said: PAGE.movedUp(ws.title) };
+            if (by > 0 && i < list.length - 1) return { method: 'fileWorkspace', args: { workspace: id, category: filed(cats[ci]), before: list[i + 2]?.id ?? '' }, said: PAGE.movedDown(ws.title) };
+            // Past the last category is Other workspaces, though no workspace is there yet.
+            const next = cats[ci + by] ?? (by > 0 && cats[ci].id !== OTHERS ? { id: OTHERS, title: SIDEBAR.others, children: EMPTY } : undefined);
+            if (!next) return { refuse: by < 0 ? PAGE.firstAlready(ws.title) : PAGE.lastAlready(ws.title) };
+            return {
+                method: 'fileWorkspace', args: { workspace: id, category: filed(next), before: by < 0 ? '' : next.children[0]?.id ?? '' },
+                said: SIDEBAR.filed(ws.title, next.title), open: `category:${next.id}`,
+            };
+        }
+
         const TREE_GLYPHS = { category: 'IconFolderCloseRegular', workspace: 'IconFolderOpenOutlineRegular' };
 
         /**
@@ -602,9 +654,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * The Categories page's tree, as a screen reader and the keys expect:
          * one tab stop, Up and Down in drawn order, Right opens or goes in,
          * Left closes or goes to the parent, Home and End, Enter opens a
-         * session or opens and closes a category or a workspace.
+         * session or opens and closes a category or a workspace. Alt+↑ and
+         * Alt+↓ move a category or a workspace (onMove, pageMove), and the
+         * moved item keeps the focus.
+         * @param onMove - (key, by) => null for an item that doesn't move, else {open?: the key of an item to open}.
          */
-        function PageTree({ tree, label, onOpenSession, statuses, find = '', treeRef }) {
+        function PageTree({ tree, label, onOpenSession, onMove, statuses, find = '', treeRef }) {
             const [stored, toggleStored] = useStoredSet(CLOSED_KEY);
             // While a find is on, everything it keeps starts open, and what is closed then is forgotten when the
             // find changes (React's way to reset state when a prop changes: set it while drawing).
@@ -621,14 +676,32 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const shown = visibleItems(tree, closed);
             const [current, setCurrent] = React.useState(null);
             const refs = React.useRef(new Map());
+            // A moved item keeps the focus for a while, though React may draw it anew in another part of the tree.
+            const keep = React.useRef(null);
+            React.useLayoutEffect(() => {
+                const k = keep.current;
+                if (k === null || typeof document === 'undefined') return;
+                if (Date.now() > k.until) { keep.current = null; return; }
+                const el = refs.current.get(k.key);
+                const active = document.activeElement;
+                if (el && el !== active && (active === null || active === document.body)) el.focus();
+            });
             const at = Math.max(0, shown.findIndex((x) => x.key === current));
-            const focusKey = (key) => { setCurrent(key); refs.current.get(key)?.focus(); };
+            const focusKey = (key) => { keep.current = null; setCurrent(key); refs.current.get(key)?.focus(); };
             const activate = (x) => {
                 if (x.node.kind === 'category' || x.node.kind === 'workspace') { if (x.node.children.length > 0) toggleClosed(x.key, x.open); }
                 else onOpenSession(x.node.id);
             };
             const onKeyDown = (event) => {
                 const x = shown.find((item) => item.key === current) ?? shown[0];
+                if (x && event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+                    const done = onMove?.(x.key, event.key === 'ArrowUp' ? -1 : 1) ?? null;
+                    if (done === null) return;
+                    event.preventDefault();
+                    if (done.open && closed.has(done.open)) toggleClosed(done.open, false);
+                    keep.current = { key: x.key, until: Date.now() + 4000 };
+                    return;
+                }
                 if (!x || event.altKey || event.metaKey || event.ctrlKey) return;
                 const i = shown.indexOf(x);
                 const go = (y) => { if (y) { event.preventDefault(); focusKey(y.key); } };
@@ -660,6 +733,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 return h('li', {
                     key: x.key, role: 'treeitem', 'aria-level': x.level, 'aria-setsize': x.size, 'aria-posinset': x.pos,
                     'aria-expanded': node.children.length > 0 ? x.open : undefined, tabIndex: x === shown[at] ? 0 : -1,
+                    'aria-keyshortcuts': onMove && (node.kind === 'workspace' || (node.kind === 'category' && node.id !== OTHERS)) ? 'Alt+ArrowUp Alt+ArrowDown' : undefined,
                     className: `dshc-tree-item dshc-tree-${node.kind}`, 'data-categories-node': node.kind, 'data-categories-id': node.id,
                     ref: (el) => { if (el) refs.current.set(x.key, el); else refs.current.delete(x.key); },
                     onFocus: (event) => { if (event.target === event.currentTarget) setCurrent(x.key); },
@@ -735,6 +809,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const count = tree.filter((node) => node.id !== OTHERS).length;
             // The categories the one-time import made from the old sidebar's projects.
             const imported = categories.filter((c) => c.source === 'import').map((c) => (typeof c.name === 'string' && c.name !== '' ? c.name : c.id));
+            // Alt+↑ and Alt+↓ on the tree, worked out on the whole tree (a find shows only part of it); said once done, or why not.
+            const move = (key, by) => {
+                const step = pageMove(tree, key, by);
+                if (step === null) return null;
+                if (step.refuse) {
+                    announce(step.refuse);
+                    return {};
+                }
+                void plugin.facts.act(step.method, step.args).then((result) => announce(result.ok ? step.said : errorText(result.error)));
+                return { open: step.open };
+            };
             let content;
             if (listed === null && failed) {
                 content = h('div', { className: 'dshc-pg-state dshc-pg-error', role: 'alert' }, TEXT.unreachable, ' ',
@@ -764,7 +849,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         type: 'button', className: 'dshc-pg-find-clear', 'aria-label': PAGE.findClear, 'data-categories-find-clear': '',
                         onClick: () => { setFind(''); findRef.current?.focus(); },
                     }, h(ui.IconCloseFillRegular, null)) : null),
-                    kept.length > 0 ? h(PageTree, { tree: kept, label: PAGE.title, statuses, find, treeRef, onOpenSession: (id) => plugin.openSession(id) })
+                    kept.length > 0 ? h(PageTree, { tree: kept, label: PAGE.title, statuses, find, treeRef, onMove: move, onOpenSession: (id) => plugin.openSession(id) })
                         : h('div', { className: 'dshc-pg-state dshc-pg-find-none', role: 'status', 'data-categories-find-none': '' }, PAGE.findNone(find.trim())));
             }
             // New category, as the sidebar makes one: a refusal shows under the name, and the new category is said.
@@ -1747,7 +1832,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.internals = {
             BUNDLE, IDS, OTHERS, CSS, TEXT, PAGE, SIDEBAR, CHIP,
             hostLink, errorText, categoryFacts, listText, plural, shortPath, folderName, workspaceTitle, workspaceOfSession, sameList, chatDot,
-            pageModel, visibleItems, treeMeta, treeDot, findInTree, withHit, PageTree, CategoriesPage, CategoriesIcon, NameDialog, ConfirmDialog,
+            pageModel, visibleItems, pageMove, treeMeta, treeDot, findInTree, withHit, PageTree, CategoriesPage, CategoriesIcon, NameDialog, ConfirmDialog,
             sidebarGroups, sidebarRules, groupDot, sectionWorkspace, sectionAt, placeHeaders, describeWorkspaces, useTreeSync, useCategoryDrags,
             dshAddFlow, workspaceAdder, CategoryMenu, CategoryHeader, SidebarTree,
             chipLine, categoryHolding, pageOpener, CategoryChip, windowApi,

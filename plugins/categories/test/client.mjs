@@ -653,6 +653,96 @@ test('browser half: the Categories page\'s tree is one tab stop that the arrow k
     assert.deepEqual([stops(t), opened], [['n'], ['a', 'n']]);
 });
 
+test('browser half: Alt+↑ and Alt+↓ on the Categories page move a category or a workspace, keep the focus there and say it', async () => {
+    const storage = new Map();
+    const { client, react } = loadClient({ storage });
+    const { pageModel, pageMove, PageTree, CategoriesPage, OTHERS } = client.internals;
+    const sessions = { byId: { a: { id: 'a', title: 'Fix cart' }, n: { id: 'n', title: 'Notes' } } };
+    const items = [
+        { workspaceId: 'w1', title: 'storefront', path: '/w/1', sessionIds: ['a'] }, { workspaceId: 'w2', title: 'assets', path: '/w/2', sessionIds: [] },
+        { workspaceId: 'w3', title: 'fleet', path: '/w/3', sessionIds: [] }, { workspaceId: 'w4', title: 'notes', path: '/w/4', sessionIds: ['n'] },
+    ];
+    const categories = [
+        { id: 'shop', name: 'Shop', workspaces: [{ id: 'w1' }, { id: 'w2' }] },
+        { id: 'ops', name: 'Ops', workspaces: [{ id: 'w3' }] },
+        { id: 'empty', name: 'Empty', workspaces: [] },
+    ];
+    const tree = pageModel({ categories, items, sessions, archived: new Set() });
+    const move = (key, by) => plain(pageMove(tree, key, by));
+    // A category past its neighbour (before the one after it, or to the end); none past the ends, and Other workspaces stays last.
+    assert.deepEqual(move('category:ops', -1), { method: 'moveCategory', args: { category: 'ops', before: 'shop' }, said: 'Ops moved up.' });
+    assert.deepEqual(move('category:shop', 1), { method: 'moveCategory', args: { category: 'shop', before: 'empty' }, said: 'Shop moved down.' });
+    assert.deepEqual(move('category:ops', 1), { method: 'moveCategory', args: { category: 'ops', before: '' }, said: 'Ops moved down.' });
+    assert.deepEqual(move('category:shop', -1), { refuse: 'Shop is first already.' });
+    assert.deepEqual(move('category:empty', 1), { refuse: 'Empty is last already.' });
+    assert.deepEqual(move(`category:${OTHERS}`, -1), { refuse: 'Other workspaces stays last: it holds the workspaces in no category.' });
+    // A workspace past its neighbour in its category; from an end into the next category, nearest that end.
+    assert.deepEqual(move('workspace:w2', -1), { method: 'fileWorkspace', args: { workspace: 'w2', category: 'shop', before: 'w1' }, said: 'assets moved up.' });
+    assert.deepEqual(move('workspace:w1', 1), { method: 'fileWorkspace', args: { workspace: 'w1', category: 'shop', before: '' }, said: 'storefront moved down.' });
+    assert.deepEqual(move('workspace:w2', 1), { method: 'fileWorkspace', args: { workspace: 'w2', category: 'ops', before: 'w3' }, said: 'assets moved to Ops.', open: 'category:ops' });
+    assert.deepEqual(move('workspace:w3', -1), { method: 'fileWorkspace', args: { workspace: 'w3', category: 'shop', before: '' }, said: 'fleet moved to Shop.', open: 'category:shop' });
+    assert.deepEqual(move('workspace:w3', 1), { method: 'fileWorkspace', args: { workspace: 'w3', category: 'empty', before: '' }, said: 'fleet moved to Empty.', open: 'category:empty' });
+    // Into Other workspaces is into no category; out of it, into the last category.
+    assert.deepEqual(move('workspace:w4', -1), { method: 'fileWorkspace', args: { workspace: 'w4', category: 'empty', before: '' }, said: 'notes moved to Empty.', open: 'category:empty' });
+    assert.deepEqual(move('workspace:w4', 1), { refuse: 'notes is last already.' });
+    assert.deepEqual(move('workspace:w1', -1), { refuse: 'storefront is first already.' });
+    const alone = pageModel({ categories: [{ id: 'shop', name: 'Shop', workspaces: [{ id: 'w1' }] }], items: items.slice(0, 1), sessions, archived: new Set() });
+    assert.deepEqual(plain(pageMove(alone, 'workspace:w1', 1)), { method: 'fileWorkspace', args: { workspace: 'w1', category: '', before: '' }, said: 'storefront moved to Other workspaces.', open: `category:${OTHERS}` });
+    // A session's place is DSH's: nothing to do.
+    assert.equal(pageMove(tree, 'session:a', 1), null);
+    assert.equal(pageMove(tree, 'workspace:gone', 1), null);
+
+    // The tree: Alt+↑ and Alt+↓ go to onMove with the item that has the focus; a target that is closed opens.
+    storage.set('dsh-plugin-categories/page-closed', '["category:ops"]');
+    const asked = [];
+    let answer = null;
+    const draw = mount(react, () => PageTree({ tree, label: 'Categories', statuses: new Map(), onOpenSession: () => {}, onMove: (key, by) => { asked.push([key, by]); return answer; } }), { effects: true });
+    const lis = (t) => elementsOf(t).filter((e) => e.props?.role === 'treeitem');
+    let t = draw();
+    assert.deepEqual(plain(lis(t).filter((li) => li.props['aria-keyshortcuts']).map((li) => li.props['data-categories-id'])), ['shop', 'w1', 'w2', 'ops', 'empty', 'w4']);
+    let prevented = 0;
+    const press = (key, extra = {}) => {
+        elementsOf(t).find((e) => e.props?.role === 'tree').props.onKeyDown({ key, preventDefault: () => { prevented += 1; }, ...extra });
+        t = draw();
+    };
+    lis(t).find((li) => li.props['data-categories-id'] === 'w2').props.onFocus({ target: 1, currentTarget: 1 });
+    t = draw();
+    press('ArrowDown', { altKey: true });
+    assert.deepEqual([plain(asked), prevented], [[['workspace:w2', 1]], 0], 'an item that doesn\'t move leaves the key alone');
+    answer = { open: 'category:ops' };
+    press('ArrowDown', { altKey: true });
+    assert.equal(prevented, 1);
+    assert.equal(lis(t).find((li) => li.props['data-categories-id'] === 'ops').props['aria-expanded'], true);
+    assert.equal(storage.get('dsh-plugin-categories/page-closed'), '[]');
+    press('ArrowUp', { altKey: true });
+    assert.deepEqual(plain(asked.at(-1)), ['workspace:w2', -1]);
+    // With Shift, Ctrl or Meta too, the keys are the window's.
+    press('ArrowUp', { altKey: true, shiftKey: true });
+    press('ArrowDown', { altKey: true, ctrlKey: true });
+    assert.equal(asked.length, 3);
+
+    // The page makes the move on the whole tree and says it once it's done; a refusal is said at once.
+    const facts = factsOf(() => categories);
+    const props = { useSessions: (select) => select(sessions), useSessionStatus: (select) => select(new Map()), useWorkspaces: (select) => select(workspacesOf(items)), plugin: { facts, openSession: () => {} } };
+    const drawPage = mount(react, () => CategoriesPage(props));
+    let page = drawPage();
+    const onMove = elementsOf(page).find((e) => e.type === PageTree).props.onMove;
+    assert.deepEqual(plain(onMove('workspace:w2', 1)), { open: 'category:ops' });
+    await tick();
+    page = drawPage();
+    assert.deepEqual(plain(facts.calls.at(-1)), ['fileWorkspace', { workspace: 'w2', category: 'ops', before: 'w3' }]);
+    assert.equal(textIn(byHook(page, 'data-categories-page-said')), 'assets moved to Ops.');
+    assert.deepEqual(plain(onMove('category:shop', -1)), {});
+    page = drawPage();
+    assert.equal(textIn(byHook(page, 'data-categories-page-said')), 'Shop is first already.');
+    assert.equal(onMove('session:a', 1), null);
+    const refused = factsOf(() => categories, { answer: () => ({ ok: false, error: { code: 'categories/refused', message: 'DSH has no such workspace' } }) });
+    const drawRefused = mount(react, () => CategoriesPage({ ...props, plugin: { facts: refused, openSession: () => {} } }));
+    elementsOf(drawRefused()).find((e) => e.type === PageTree).props.onMove('workspace:w1', 1);
+    await tick();
+    assert.match(textIn(byHook(drawRefused(), 'data-categories-page-said')), /no such workspace/i);
+});
+
 test('browser half: Find by name on the Categories page keeps each match where it lives, and its folds are its own', () => {
     const { client, react } = loadClient();
     const { CategoriesPage, PageTree, findInTree, withHit, treeMeta } = client.internals;
