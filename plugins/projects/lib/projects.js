@@ -2443,6 +2443,8 @@ export class ProjectManager {
             const name = this.project(id).name;
             const sessionId = this.store.project(id).coordinatorSessionId;
             if (!sessionId) throw new ProjectError(`◆ ${name} has no coordinator right now`);
+            // A message would wake the coordinator the user retired with its project.
+            if (this.archived(id)) throw new ProjectError(`◆ ${name} is archived; the user can bring it back with Restore project in its ◆ row's menu`);
             return { sessionId, name: `◆ ${name}`, kind: 'project' };
         };
         for (const [id, p] of this.projects) {

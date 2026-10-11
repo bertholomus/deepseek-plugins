@@ -4143,6 +4143,13 @@ test('browser half: a plain chat in a project\'s workspace offers its coordinato
     assert.equal(cleared.length, 1, 'an empty box is left alone');
     // Not on the coordinator, its threads, a teammate DSH started under a chat, or a chat in a folder without a project.
     for (const id of ['c1', 't1', 'team', 'far']) assert.equal(offer(id), null, id);
+    // Nor for an archived project, or one whose ◆ row DSH has archived before the plugin's list says so.
+    assert.equal(projectIn([{ ...listed[1], archived: true }], 'w-shop'), undefined);
+    assert.equal(projectIn(listed, 'w-shop', new Set(['c1'])), undefined);
+    workspaces.archivedSessionIds = ['c1'];
+    assert.equal(offer('chat'), null);
+    delete workspaces.archivedSessionIds;
+    assert.equal(offer('chat').props['data-projects-offer'], 'shop');
     // Turned off for the folder: gone there, and only there.
     storage.set('dsh-plugin-projects/offer-off', JSON.stringify(['w-shop']));
     assert.equal(offer('chat'), null);
@@ -4866,6 +4873,26 @@ test('archiving a project stops and archives its coordinator and threads, and Re
     assert.match(prompts.at(-1).text, /Handback from thread t1[^]*A is done\./);
     assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /restore dsh-plugins via=window sessions=3/);
     assert.match(await coord.ctx.call('project_thread_start', { ask: 'More.', title: 'Gamma', brief: 'Do C.' }), /t3/);
+});
+
+test('another project\'s coordinator can\'t message an archived project: it would wake its coordinator', async () => {
+    const { host } = setup({ projects: [
+        { name: 'DSH Plugins', workspacePath: '/work/dsh' },
+        { name: 'Storefront', workspacePath: '/work/shop' },
+    ] }, undefined, { gateway: true });
+    await tick();
+    const coord = coordinatorOf(host);
+    const shop = [...host.live.values()].find((a) => host.sessions.get(a.id).title === '◆ Storefront');
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    await remote.archive(shop.id);
+    const sent = host.sessions.get(shop.id).prompts.length;
+    const ask = 'Ask Storefront whether the checkout tests pass.';
+    await userTyping(host)(coord, ask);
+    assert.equal(await coord.ctx.call('project_message', { to: 'Storefront', ask, text: 'Do they pass?' }),
+        'Failed: ◆ Storefront is archived; the user can bring it back with Restore project in its ◆ row\'s menu');
+    assert.equal(host.sessions.get(shop.id).prompts.length, sent);
+    await remote.restore(shop.id);
+    assert.match(await coord.ctx.call('project_message', { to: 'Storefront', ask, text: 'Do they pass?' }), /^Sent to ◆ Storefront\./);
 });
 
 test('DSH\'s own Archive on the ◆ row takes the threads with it, and asks first while one runs', async () => {

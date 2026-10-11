@@ -3456,9 +3456,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /** The project whose ◆ coordinator works in a workspace, as the plugin lists them, or undefined. */
-        function projectIn(listed, workspaceId) {
+        function projectIn(listed, workspaceId, archived = EMPTY_SET) {
             if (typeof workspaceId !== 'string' || !Array.isArray(listed)) return undefined;
-            return listed.find((p) => isObject(p) && p.home === workspaceId && typeof p.coordinator === 'string' && p.coordinator !== '');
+            // An archived project, or one whose ◆ row DSH has archived (until the plugin's list says so), offers nothing.
+            return listed.find((p) => isObject(p) && p.home === workspaceId && typeof p.coordinator === 'string' && p.coordinator !== ''
+                && p.archived !== true && !archived.has(p.coordinator));
         }
 
         /**
@@ -3480,8 +3482,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 return isObject(row) && (row.parentId === undefined || row.parentId === null) && rowPlace(state, sessionId) === '' && !isThreadRow(state, sessionId);
             });
             const workspaceId = useWorkspaces((snapshot) => workspaceOfSession(snapshot, sessionId));
+            // The sessions DSH has archived, as one string so an unchanged list draws nothing again.
+            const archivedKey = useWorkspaces((snapshot) => (Array.isArray(snapshot?.archivedSessionIds) ? snapshot.archivedSessionIds.join('\n') : ''));
+            const archived = React.useMemo(() => new Set(archivedKey === '' ? EMPTY : archivedKey.split('\n')), [archivedKey]);
             const draft = typeof useInput === 'function' ? useInput((input) => (typeof input?.draft === 'string' ? input.draft : '')) : '';
-            const project = projectIn(projects.facts.projects(), workspaceId);
+            const project = projectIn(projects.facts.projects(), workspaceId, archived);
             if (!plain || !project || project.coordinator === sessionId || off.has(workspaceId)) return null;
             const name = project.name || project.id;
             const go = () => {
