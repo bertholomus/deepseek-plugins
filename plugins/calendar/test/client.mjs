@@ -628,3 +628,115 @@ test('a call that didn\'t work says what it didn\'t do, and why, without what it
     for (const text of ['Added: Lunch', 'Changed.', '', undefined]) assert.equal(I.saysNotDone(text), false, String(text));
     assert.deepEqual(plain(I.NOT_DONE), { calendar_create_event: 'Not added', calendar_update_event: 'Not changed', calendar_delete_event: 'Not deleted', calendar_respond: 'Not answered' });
 });
+
+test('a dragged event: a quarter hour at a time on the page\'s clock, its length kept', () => {
+    const at = (iso) => Date.parse(iso);
+    assert.equal(I.SNAP, 15);
+    assert.deepEqual([I.snapTo(7), I.snapTo(8), I.snapTo(22), I.snapTo(23), I.snapTo(-8)], [0, 15, 15, 30, -15]);
+    // 9:00–10:00 on Monday in Los Angeles, held at 9:30 and let go on Wednesday at 14:38: 14:15–15:15 (14:08, rounded).
+    const ev = { id: 'e', start: at('2026-10-12T16:00:00Z'), end: at('2026-10-12T17:00:00Z') };
+    const moved = I.movedTo(ev, LA, { day: '2026-10-12', minute: 570 }, { day: '2026-10-14', minute: 14 * 60 + 38 });
+    assert.deepEqual(plain(moved), { start: at('2026-10-14T21:15:00Z'), end: at('2026-10-14T22:15:00Z') });
+    // Over a clock change (Nov 1): the same time of day on the clock, an hour later in UTC.
+    const saturday = { id: 's', start: at('2026-10-31T16:00:00Z'), end: at('2026-10-31T17:00:00Z') };
+    assert.deepEqual(plain(I.movedTo(saturday, LA, { day: '2026-10-31', minute: 540 }, { day: '2026-11-02', minute: 540 })), { start: at('2026-11-02T17:00:00Z'), end: at('2026-11-02T18:00:00Z') });
+    assert.deepEqual(plain(I.shiftedBy(saturday, LA, 2)), { start: at('2026-11-02T17:00:00Z'), end: at('2026-11-02T18:00:00Z') });
+    // Its bottom edge: a new end on a quarter hour, a quarter hour after the start at least, on another day too.
+    assert.deepEqual(plain(I.resizedTo(ev, LA, { day: '2026-10-12', minute: 680 })), { start: ev.start, end: at('2026-10-12T18:15:00Z') });
+    assert.equal(I.resizedTo(ev, LA, { day: '2026-10-12', minute: 545 }).end, at('2026-10-12T16:15:00Z'));
+    assert.equal(I.resizedTo(ev, LA, { day: '2026-10-13', minute: 60 }).end, at('2026-10-13T08:00:00Z'));
+    // An all-day event moves by its days.
+    const trip = { id: 't', allDay: true, startDay: '2026-10-09', lastDay: '2026-10-11', start: at('2026-10-09T07:00:00Z'), end: at('2026-10-12T07:00:00Z') };
+    const later = I.shiftedBy(trip, LA, 3);
+    assert.deepEqual([later.allDay, later.startDay, later.lastDay], [true, '2026-10-12', '2026-10-14']);
+    assert.deepEqual(plain(I.coveredDays(later, LA)), ['2026-10-12', '2026-10-14']);
+    assert.deepEqual(plain(I.coveredDays({ start: at('2026-10-13T06:00:00Z'), end: at('2026-10-13T08:00:00Z') }, LA)), ['2026-10-12', '2026-10-13']);
+    // Shown at once where it went.
+    assert.deepEqual([I.placedAt(ev, moved).start, I.placedAt(ev, moved).id], [moved.start, 'e']);
+    assert.deepEqual([I.placedAt(trip, later).startDay, I.placedAt(trip, later).lastDay], ['2026-10-12', '2026-10-14']);
+});
+
+test('a drop\'s change for the host: instants for a timed event, days for an all-day one, nothing when it didn\'t move', () => {
+    const at = (iso) => Date.parse(iso);
+    const ev = { id: 'e', start: at('2026-10-12T16:00:00Z'), end: at('2026-10-12T17:00:00Z') };
+    assert.equal(I.dropPatch(ev, { start: ev.start, end: ev.end }), undefined);
+    assert.equal(I.dropPatch(ev, undefined), undefined);
+    assert.deepEqual(plain(I.dropPatch(ev, { start: at('2026-10-14T21:15:00Z'), end: at('2026-10-14T22:15:00Z') })),
+        { allDay: false, start: '2026-10-14T21:15:00.000Z', end: '2026-10-14T22:15:00.000Z' });
+    const trip = { id: 't', allDay: true, startDay: '2026-10-09', lastDay: '2026-10-11', start: at('2026-10-09T07:00:00Z'), end: at('2026-10-12T07:00:00Z') };
+    assert.deepEqual(plain(I.dropPatch(trip, I.shiftedBy(trip, LA, 3))), { allDay: true, start: '2026-10-12', end: '2026-10-14' });
+    assert.equal(I.dropPatch(trip, I.shiftedBy(trip, LA, 0)), undefined);
+    // What the consent helper hands back: notify only on the user's Send, approved only as a list.
+    assert.deepEqual(plain(I.consentArgs(false)), {});
+    assert.deepEqual(plain(I.consentArgs(true)), { notify: true });
+    assert.deepEqual(plain(I.consentArgs({ notify: true, approved: ['ann@example.com'] })), { notify: true, approved: ['ann@example.com'] });
+    assert.deepEqual(plain(I.consentArgs({ notify: false, approved: ['ann@example.com'] })), { approved: ['ann@example.com'] });
+    assert.deepEqual(plain(I.consentArgs({ notify: 'yes', approved: 'ann@example.com' })), {});
+    assert.deepEqual(plain(I.consentArgs(undefined)), {});
+    // Only what the user may change drags: not a read-only calendar's, not someone else's invitation.
+    assert.equal(I.canDrag(ev, { readOnly: false }), true);
+    assert.equal(I.canDrag({ ...ev, organizer: { email: 'me@example.com' } }, undefined), true);
+    assert.equal(I.canDrag({ ...ev, readOnly: true }, {}), false);
+    assert.equal(I.canDrag(ev, { readOnly: true }), false);
+    assert.equal(I.canDrag({ ...ev, invitation: true }, {}), false);
+    assert.equal(I.canDrag({ ...ev, canRespond: true }, {}), false);
+    assert.equal(I.canDrag(null, {}), false);
+    // Who it reached, for the toast.
+    assert.equal(I.movedWords({ emailed: { what: 'an update', to: ['ann@example.com'] } }), 'Emailed an update to ann@example.com.');
+    assert.equal(I.movedWords({ reached: { how: 'change', to: ['ann@example.com', 'bob@example.com'] } }), 'Changed it on the calendars of ann@example.com and bob@example.com, without an email.');
+    assert.equal(I.movedWords({}), '');
+    assert.equal(I.movedWords(undefined), '');
+});
+
+test('where Week and Day open: 7:30, or earlier for an earlier event; late in the day, before now', () => {
+    assert.equal(I.openingMinute([]), 450);
+    assert.equal(I.openingMinute(undefined), 450);
+    assert.equal(I.openingMinute([{ minute: 420 }, { minute: 600 }]), 420);
+    assert.equal(I.openingMinute([{ minute: 600 }]), 450);
+    assert.equal(I.openingMinute([{ minute: 0 }]), 0);
+    // After 15:00 on a day on show: four hours before now, unless an event still to come starts earlier.
+    assert.equal(I.openingMinute([], 18 * 60, true), 14 * 60);
+    assert.equal(I.openingMinute([{ minute: 13 * 60, upcoming: true }], 18 * 60, true), 13 * 60);
+    assert.equal(I.openingMinute([{ minute: 9 * 60, upcoming: false }], 18 * 60, true), 14 * 60);
+    assert.equal(I.openingMinute([], 10 * 60, true), 450);
+    assert.equal(I.openingMinute([], 18 * 60, false), 450);
+});
+
+test('a drag\'s times on the user\'s clock, 12- or 24-hour as the locale writes them', () => {
+    const format = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' });
+    const clock = (minutes) => format.format(Date.UTC(2000, 0, 3, 0, minutes));
+    assert.equal(I.clockText(570), clock(570));
+    assert.equal(I.clockRangeText(1380, 1440), `${clock(1380)} – ${clock(0)}`);
+    const range = typeof format.formatRange === 'function' ? format.formatRange(Date.UTC(2000, 0, 3, 9, 30), Date.UTC(2000, 0, 3, 10, 30)) : `${clock(570)} – ${clock(630)}`;
+    assert.equal(I.clockRangeText(570, 630), range);
+});
+
+test('what a search found, by day: still to come first, then the earlier ones, latest first', () => {
+    const at = (iso) => Date.parse(iso);
+    const now = at('2026-10-12T19:00:00Z'); // noon in Los Angeles
+    const found = [
+        { id: 'trip', allDay: true, startDay: '2026-10-11', lastDay: '2026-10-13', start: at('2026-10-11T07:00:00Z'), end: at('2026-10-14T07:00:00Z') },
+        { id: 'a', start: at('2026-10-12T20:00:00Z'), end: at('2026-10-12T21:00:00Z') },
+        { id: 'b', start: at('2026-10-12T22:00:00Z'), end: at('2026-10-12T23:00:00Z') },
+        { id: 'c', start: at('2026-10-14T16:00:00Z'), end: at('2026-10-14T17:00:00Z') },
+        { id: 'd', start: at('2026-10-10T16:00:00Z'), end: at('2026-10-10T17:00:00Z') },
+        { id: 'e', start: at('2026-10-09T18:00:00Z'), end: at('2026-10-09T19:00:00Z') },
+        { id: 'f', start: at('2026-10-09T16:00:00Z'), end: at('2026-10-09T17:00:00Z') },
+        null,
+    ];
+    const groups = I.searchGroups(found, LA, now);
+    const days = (list) => plain(list.map((g) => [g.day, g.list.map((o) => o.id)]));
+    assert.deepEqual(days(groups.upcoming), [['2026-10-11', ['trip']], ['2026-10-12', ['a', 'b']], ['2026-10-14', ['c']]]);
+    assert.deepEqual(days(groups.past), [['2026-10-10', ['d']], ['2026-10-09', ['e', 'f']]]);
+    assert.deepEqual(plain(I.searchGroups(undefined, LA, now)), { upcoming: [], past: [] });
+});
+
+test('motion stops for the loading bar too, the view has its own tint, and one rule per note', () => {
+    const css = I.CSS;
+    assert.match(css, /body\.wp-still :is\([^)]*\) \*::after/);
+    assert.match(css, /prefers-reduced-motion:reduce\)\{[^}]*\*::after/);
+    assert.ok(css.includes('--cal-conv:rgba(10,13,12,calc(var(--wp-tint,.55) + .2))'));
+    assert.ok(css.includes('.dshcal-main.dshcal-glass{background:var(--cal-conv)}'));
+    assert.equal(css.match(/\.dshcal-note\{/g).length, 1);
+    assert.equal(css.match(/\.dshcal-notice\{/g).length, 1);
+});

@@ -91,11 +91,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const CSS = [
             // Tokens: dark by default (the wallpaper plugin's own values), light where DSH is light.
             `:is(${ROOTS}){--cal-text:#ECEAE4;--cal-strong:#DADDD7;--cal-soft:#C9CDC7;--cal-meta:#A9AEA8;--cal-faint:#8E948E;--cal-accent:#7FA7F5;--cal-on-accent:#0B1220;`
-                + '--cal-glass:rgba(14,18,17,var(--wp-tint,.55));--cal-pop:rgba(20,24,23,.95);--cal-modal:rgba(16,20,19,.82);--cal-shadow:rgba(0,0,0,.45);'
+                + '--cal-glass:rgba(14,18,17,var(--wp-tint,.55));--cal-conv:rgba(10,13,12,calc(var(--wp-tint,.55) + .2));--cal-pop:rgba(20,24,23,.95);--cal-modal:rgba(16,20,19,.82);--cal-shadow:rgba(0,0,0,.45);'
                 + '--cal-line:rgba(255,255,255,.09);--cal-line2:rgba(255,255,255,.16);--cal-fill:rgba(255,255,255,.04);--cal-hover:rgba(255,255,255,.07);--cal-press:rgba(255,255,255,.11);'
                 + '--cal-accent-soft:rgba(127,167,245,.16);--cal-danger:#F2ABA2;--cal-warn:#E8C48C;--cal-ok:#93D2A8;--cal-now:#FF7A6E;--cal-chip-ground:#141817;color-scheme:dark}',
             `body:not([data-ds-dark-theme]) :is(${ROOTS}){--cal-text:#191E1B;--cal-strong:#232926;--cal-soft:#38403B;--cal-meta:#55605A;--cal-faint:#68716B;--cal-accent:#3F6FD8;--cal-on-accent:#FFFFFF;`
-                + '--cal-glass:rgba(250,250,246,var(--wp-tint,.55));--cal-pop:rgba(252,252,249,.96);--cal-modal:rgba(250,250,246,.9);--cal-shadow:rgba(20,26,22,.18);'
+                + '--cal-glass:rgba(250,250,246,var(--wp-tint,.55));--cal-conv:rgba(250,250,246,calc(var(--wp-tint,.55) + .2));--cal-pop:rgba(252,252,249,.96);--cal-modal:rgba(250,250,246,.9);--cal-shadow:rgba(20,26,22,.18);'
                 + '--cal-line:rgba(0,0,0,.1);--cal-line2:rgba(0,0,0,.17);--cal-fill:rgba(20,26,22,.035);--cal-hover:rgba(20,26,22,.07);--cal-press:rgba(20,26,22,.11);'
                 + '--cal-accent-soft:rgba(63,111,216,.12);--cal-danger:#B3261E;--cal-warn:#8A5A00;--cal-ok:#1E7B45;--cal-now:#D93025;--cal-chip-ground:#FAFAF7;color-scheme:light}',
             // Keyboard focus on the plugin's own controls (DSH's controls inside keep theirs).
@@ -108,10 +108,28 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '[data-platform=darwin] .dshcal-root{padding-top:calc(12px + var(--dsh-frame-top-clearance,0px))}',
             '.dshcal-side{flex:none;display:flex;flex-direction:column;gap:14px;width:244px;min-height:0;padding:12px 10px 10px;overflow:auto;scrollbar-width:thin}',
             '.dshcal-main{position:relative;flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}',
+            // The view itself: the wallpaper's tint + .2, as the open conversation has, so its small text stays readable.
+            '.dshcal-main.dshcal-glass{background:var(--cal-conv)}',
+            // The page takes the focus of a click on its empty parts (its keys work from there); it shows no ring for it.
+            '.dshcal-root:focus,.dshcal-root[tabindex]:focus-visible{outline:none}',
+            '.dshcal-root[data-calendar-dragging],.dshcal-root[data-calendar-dragging] *{cursor:grabbing!important;user-select:none;-webkit-user-select:none}',
+            '.dshcal-root[data-calendar-dragging=resize],.dshcal-root[data-calendar-dragging=resize] *{cursor:ns-resize!important}',
             '.dshcal-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:10px 12px;border-bottom:1px solid var(--cal-line)}',
             '.dshcal-head-nav{display:flex;align-items:center;gap:4px;min-width:0;flex:1 1 280px}',
-            '.dshcal-head-tools{display:flex;align-items:center;gap:8px;margin-left:auto}',
+            '.dshcal-head-tools{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:8px;min-width:0;margin-left:auto}',
             '.dshcal-title{margin:0 0 0 6px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:18px;font-weight:600;line-height:26px;color:var(--cal-strong)}',
+            // Search, in the header with the views (the two go to a row of their own when the title needs the room): its own row on a narrow page.
+            '.dshcal-search{position:relative;display:flex;align-items:center;flex:0 1 220px;min-width:150px}',
+            '.dshcal-search>svg{position:absolute;left:9px;color:var(--cal-meta);pointer-events:none}',
+            '.dshcal-search>.dshcal-input{height:30px;padding-left:30px;padding-right:28px}',
+            '.dshcal-search>.dshcal-input::-webkit-search-cancel-button{display:none}',
+            '.dshcal-search-clear{position:absolute;right:3px;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:7px;background:none;color:var(--cal-meta);cursor:pointer}',
+            '.dshcal-search-clear:hover{background:var(--cal-hover);color:var(--cal-text)}',
+            // A read again that failed, over the events read before.
+            '.dshcal-stale{display:flex;align-items:center;gap:8px;min-width:0;padding:5px 12px;border-bottom:1px solid var(--cal-line);background:color-mix(in srgb,var(--cal-warn) 10%,transparent);font-size:12px;line-height:1.4;color:var(--cal-text)}',
+            '.dshcal-stale>svg{flex:none;color:var(--cal-warn)}',
+            '.dshcal-stale>span{flex:1;min-width:0;overflow-wrap:anywhere}',
+            '.dshcal-stale>button{flex:none}',
             '.dshcal-body{position:relative;flex:1;display:flex;flex-direction:column;min-height:0}',
             '.dshcal-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;flex:1;padding:40px 20px;text-align:center;color:var(--cal-meta)}',
             '.dshcal-error{color:var(--cal-danger)}',
@@ -166,6 +184,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-alert>svg{flex:none;margin-top:2px;color:var(--cal-danger)}',
             '.dshcal-note{display:flex;gap:8px;align-items:flex-start;padding:9px 11px;border-radius:10px;background:var(--cal-fill);border:1px solid var(--cal-line);font-size:12px;line-height:1.5;color:var(--cal-soft)}',
             '.dshcal-note>svg{flex:none;margin-top:2px}',
+            '.dshcal-note>span{flex:1;min-width:0;overflow-wrap:anywhere}',
 
             // The side column: the small month, the calendars by account.
             '.dshcal-mini{display:flex;flex-direction:column;gap:4px}',
@@ -254,9 +273,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-line-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}',
             '.dshcal-line[data-look=struck] .dshcal-line-title{text-decoration:line-through;color:var(--cal-meta)}',
             '.dshcal-line[data-look=outline]>.dshcal-dot{background:none;box-shadow:inset 0 0 0 1.5px var(--ev)}',
+            // Dragging: an event to another time or day, its bottom edge to another end; where it goes is shown, it stays faint.
+            '.dshcal-ev-grip{position:absolute;left:0;right:0;bottom:0;height:7px;cursor:ns-resize}',
+            ':is(.dshcal-ev,.dshcal-bar,.dshcal-line)[data-moving]{opacity:.35}',
+            '.dshcal-wk-ghost>span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshcal-wk-ghost>span+span{font-weight:500;opacity:.85}',
+            ':is(.dshcal-mo-cell,.dshcal-wk-lanecell)[data-drop]{background:var(--cal-accent-soft);box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--cal-accent) 60%,transparent)}',
 
             // ── Month: weeks of days, bars and lines in lanes.
-            '.dshcal-mo{display:flex;flex-direction:column;flex:1;min-height:0}',
+            '.dshcal-mo{display:flex;flex-direction:column;flex:1;min-height:0;container:dshcal-mo/inline-size}',
+            // Narrow days: a timed event's title alone, without its time in front.
+            '@container dshcal-mo (max-width: 909px){.dshcal-mo .dshcal-line-time{display:none}}',
             '.dshcal-mo-head{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));flex:none;border-bottom:1px solid var(--cal-line)}',
             '.dshcal-mo-wd{padding:8px 8px 6px;font-size:11.5px;font-weight:600;letter-spacing:.03em;color:var(--cal-meta);text-transform:uppercase;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshcal-mo-weeks{flex:1;display:grid;grid-template-rows:repeat(var(--weeks),minmax(0,1fr));min-height:0}',
@@ -291,6 +318,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-ag-sub{font-size:12px;color:var(--cal-meta);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshcal-ag-row[data-look=struck] .dshcal-ag-title{text-decoration:line-through;color:var(--cal-meta)}',
             '.dshcal-ag-foot{display:flex;justify-content:center;padding:14px}',
+            // Search results: how many, and where the earlier ones start.
+            '.dshcal-ag-part{padding:12px 8px 4px;font-size:11.5px;font-weight:600;letter-spacing:.03em;color:var(--cal-meta);text-transform:uppercase}',
+            '.dshcal-ag-part:first-child{padding-top:6px}',
 
             // ── Popovers (an event's details, a day's events): fixed, portaled, glass.
             '.dshcal-pop{position:fixed;z-index:990;box-sizing:border-box;width:min(360px,calc(100vw - 24px));max-height:min(620px,calc(100vh - 24px));overflow:auto;padding:14px 14px 12px;'
@@ -427,13 +457,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-pane-join{position:relative;z-index:1;height:26px;padding:0 9px;border:0;border-radius:8px;background:var(--cal-accent);color:var(--cal-on-accent);font:inherit;font-size:12px;font-weight:600;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}',
             '.dshcal-pane-empty{padding:6px 4px;font-size:12.5px;color:var(--cal-faint)}',
             '.dshcal-notes{display:flex;flex-direction:column;gap:6px;padding:8px 12px 0}',
-            '.dshcal-note{display:flex;align-items:flex-start;gap:8px;padding:7px 6px 7px 10px;border-radius:10px;background:color-mix(in srgb,var(--cal-accent) 10%,transparent);font-size:12px;line-height:1.45;color:var(--cal-text)}',
-            '.dshcal-note>svg{flex:none;margin-top:2px;color:var(--cal-meta)}',
-            '.dshcal-note>span{flex:1;min-width:0;overflow-wrap:anywhere}',
-            '.dshcal-note[data-tone=warn]{background:color-mix(in srgb,var(--cal-warn) 14%,transparent)}',
-            '.dshcal-note[data-tone=warn]>svg{color:var(--cal-warn)}',
+            '.dshcal-notice{display:flex;align-items:flex-start;gap:8px;padding:7px 6px 7px 10px;border-radius:10px;background:color-mix(in srgb,var(--cal-accent) 10%,transparent);font-size:12px;line-height:1.45;color:var(--cal-text)}',
+            '.dshcal-notice>svg{flex:none;margin-top:2px;color:var(--cal-meta)}',
+            '.dshcal-notice>span{flex:1;min-width:0;overflow-wrap:anywhere}',
+            '.dshcal-notice[data-tone=warn]{background:color-mix(in srgb,var(--cal-warn) 14%,transparent)}',
+            '.dshcal-notice[data-tone=warn]>svg{color:var(--cal-warn)}',
             '.dshcal-pane-note{display:flex;align-items:center;gap:6px;margin:0 0 10px;padding:7px 9px;border-radius:10px;background:color-mix(in srgb,var(--cal-warn) 14%,transparent);font-size:12px}',
             '.dshcal-pane-note>span{flex:1;min-width:0}',
+            '.dshcal-pane .dshcal-stale{margin:0 0 10px;padding:6px 9px;border:0;border-radius:10px}',
             '.dshcal-pane-foot{display:flex;justify-content:center;margin-top:16px}',
 
             // ── Chat cards for the calendar tools: a faint fill, no blur.
@@ -472,17 +503,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-chat-row>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshcal-chat-out{margin:2px 0 0 22px;max-height:240px;overflow:auto;padding:8px 10px;border-radius:10px;background:var(--cal-fill);white-space:pre-wrap;font-family:var(--dsh-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:11.5px;color:var(--cal-soft);scrollbar-width:thin}',
 
-            // Narrow: the side column folds away (a button brings it over the page), then the header wraps.
-            '.dshcal-side-toggle{display:none}',
+            // The side column: beside the view on a roomy page, folded behind its button on a narrower one (the page says
+            // which: data-side-folded), and over the page while open on a narrow one (data-side-open). Then the header wraps.
             '.dshcal-head .dshcal-head-new{display:none}',
+            '.dshcal-root[data-side-folded] .dshcal-side{display:none}',
+            '.dshcal-root[data-side-folded] .dshcal-head .dshcal-head-new{display:inline-flex}',
             '.dshcal-scrim{display:none;position:absolute;inset:0;z-index:19;border:0;padding:0;background:rgba(0,0,0,.2);cursor:default}',
-            '@container dshcal (max-width: 799px){'
-                + '.dshcal-side{display:none}'
-                + '.dshcal-side-toggle{display:inline-flex}'
-                + '.dshcal-head .dshcal-head-new{display:inline-flex}'
-                + '.dshcal-root[data-side-open] .dshcal-scrim{display:block}'
-                + '.dshcal-root[data-side-open] .dshcal-side{display:flex;position:absolute;z-index:20;top:12px;bottom:12px;left:12px;width:min(280px,calc(100% - 24px));background:var(--cal-pop);box-shadow:0 18px 48px var(--cal-shadow)}'
-                + '}',
+            '.dshcal-root[data-side-open] .dshcal-scrim{display:block}',
+            '.dshcal-root[data-side-folded][data-side-open] .dshcal-side{display:flex;position:absolute;z-index:20;top:12px;bottom:12px;left:12px;width:min(280px,calc(100% - 24px));background:var(--cal-pop);box-shadow:0 18px 48px var(--cal-shadow)}',
+            '@container dshcal (max-width: 799px){.dshcal-head .dshcal-head-new{display:inline-flex}}',
             '@container dshcal (max-width: 560px){'
                 + '.dshcal-root{padding:8px;gap:8px}'
                 + '.dshcal-head{padding:8px}'
@@ -498,11 +527,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 + '.dshcal-ag-row{grid-template-columns:1fr;gap:2px}'
                 + '.dshcal-mo-wd{padding:6px 4px;text-align:center}'
                 + '.dshcal-line-time{display:none}'
+                + '.dshcal-search{order:3;flex:1 1 100%}'
                 + '}',
             '.dshcal-pane .dshcal-hide-narrow{display:none}',
-            // Motion: none while the wallpaper's Motion is off, or where the user asks for less.
-            `body.wp-still :is(${ROOTS}),body.wp-still :is(${ROOTS}) *{animation:none!important;transition:none!important}`,
-            `@media (prefers-reduced-motion:reduce){:is(${ROOTS}),:is(${ROOTS}) *{animation:none!important;transition:none!important}}`,
+            // Motion: none while the wallpaper's Motion is off, or where the user asks for less (the loading bar is an ::after).
+            `body.wp-still :is(${ROOTS}),body.wp-still :is(${ROOTS})::before,body.wp-still :is(${ROOTS})::after,`
+                + `body.wp-still :is(${ROOTS}) *,body.wp-still :is(${ROOTS}) *::before,body.wp-still :is(${ROOTS}) *::after{animation:none!important;transition:none!important}`,
+            `@media (prefers-reduced-motion:reduce){:is(${ROOTS}),:is(${ROOTS})::before,:is(${ROOTS})::after,`
+                + `:is(${ROOTS}) *,:is(${ROOTS}) *::before,:is(${ROOTS}) *::after{animation:none!important;transition:none!important}}`,
         ].join('');
         const CSS_ID = `${BUNDLE}/client.css`;
         try {
@@ -782,6 +814,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
         /** An hour's label for the time grid ('9 AM', '09'). */
         const hourText = (hour) => dtf({ hour: 'numeric', timeZone: 'UTC' }).format(Date.UTC(2000, 0, 3, hour));
+        /** Minutes into a day on the clock, as the locale writes a time ('9:30 AM', '09:30'). */
+        const clockText = (minutes) => dtf({ hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(Date.UTC(2000, 0, 3, 0, minutes));
+        /** From one clock time to another on a day ('9:00 – 10:30 AM'); the day's end is midnight. */
+        function clockRangeText(from, to) {
+            if (to >= 1440 || to < from) return `${clockText(from)} – ${clockText(to % 1440)}`;
+            return rangeText(dtf({ hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }), Date.UTC(2000, 0, 3, 0, from), Date.UTC(2000, 0, 3, 0, to));
+        }
         function rangeText(format, a, b, fallback) {
             try {
                 if (typeof format.formatRange === 'function') return format.formatRange(a, b);
@@ -2178,6 +2217,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return h(Field, { label: 'Repeat', id: 'dshcal-repeat', error },
                 h('select', {
                     id: 'dshcal-repeat', className: 'dshcal-select', value: d.repeat.mode, 'data-calendar-repeat': '', 'aria-invalid': error ? true : undefined,
+                    'aria-describedby': error ? 'dshcal-repeat-error' : undefined,
                     onChange: (event) => setRepeat({ ...d.repeat, mode: event.target.value }),
                 }, choices.map((choice) => h('option', { key: choice.value, value: choice.value }, choice.label))),
                 d.repeat.mode === 'custom' ? h('div', { className: 'dshcal-custom', 'data-calendar-custom-repeat': '' },
@@ -2283,7 +2323,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 readOnly ? h('div', { className: 'dshcal-hint' }, 'Only the organizer changes who\'s invited.') : h('div', { className: 'dshcal-inline', style: { flexWrap: 'nowrap' } },
                     h('input', {
                         id: 'dshcal-guest', className: 'dshcal-input dshcal-grow', type: 'email', multiple: true, value: text, placeholder: 'name@example.com', autoComplete: 'off', 'data-calendar-guest-input': '',
-                        'aria-invalid': error ? true : undefined,
+                        'aria-invalid': error ? true : undefined, 'aria-describedby': error ? 'dshcal-guest-error' : undefined,
                         onChange: (event) => { setText(event.target.value); setError(''); },
                         onKeyDown: (event) => {
                             if ((event.key === 'Enter' || event.key === ',' || event.key === ';') && !event.nativeEvent.isComposing) {
@@ -2523,7 +2563,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 byAccount.set(c.account, group);
             }
             const calendar = store.calendar(d.calendarId);
-            const errorId = (key) => (errors[key] ? `dshcal-${key}-error` : undefined);
+            // A problem's id, as its Field gives it (`${id}-error`), for the controls it is about.
+            const FIELD_IDS = { start: 'dshcal-start-day', end: 'dshcal-end-day', timeZone: 'dshcal-zone', calendarId: 'dshcal-calendar' };
+            const errorId = (key) => (errors[key] ? `${FIELD_IDS[key] ?? `dshcal-${key}`}-error` : undefined);
             return h(React.Fragment, null,
                 h(Dialog, {
                     title, onClose, busy, wide: true,
@@ -2566,26 +2608,30 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         h('div', { className: 'dshcal-inline dshcal-dt' },
                             h('input', {
                                 id: 'dshcal-start-day', className: 'dshcal-input dshcal-date', type: 'date', value: d.startDay, 'data-calendar-start-day': '', 'aria-invalid': errors.start ? true : undefined,
+                                'aria-describedby': errorId('start'),
                                 onChange: (event) => moveStart(event.target.value, d.startTime),
                             }),
                             timed ? h('input', {
                                 className: 'dshcal-input dshcal-time', type: 'time', step: 300, value: d.startTime, 'aria-label': 'Start time', 'data-calendar-start-time': '',
+                                'aria-describedby': errorId('start'),
                                 onChange: (event) => moveStart(d.startDay, event.target.value),
                             }) : null)),
                     h(Field, { label: 'Ends', id: 'dshcal-end-day', error: errors.end },
                         h('div', { className: 'dshcal-inline dshcal-dt' },
                             h('input', {
                                 id: 'dshcal-end-day', className: 'dshcal-input dshcal-date', type: 'date', value: d.endDay, min: d.startDay, 'data-calendar-end-day': '', 'aria-invalid': errors.end ? true : undefined,
+                                'aria-describedby': errorId('end'),
                                 onChange: (event) => set({ endDay: event.target.value }),
                             }),
                             timed ? h('input', {
                                 className: 'dshcal-input dshcal-time', type: 'time', step: 300, value: d.endTime, 'aria-label': 'End time', 'data-calendar-end-time': '',
+                                'aria-describedby': errorId('end'),
                                 onChange: (event) => set({ endTime: event.target.value }),
                             }) : null))),
                 timed ? h(Field, { label: 'Time zone', id: 'dshcal-zone', error: errors.timeZone, hint: userTime || undefined },
                     h('input', {
                         id: 'dshcal-zone', className: 'dshcal-input', list: 'dshcal-zones', value: d.timeZone, spellCheck: false, autoComplete: 'off', 'data-calendar-zone': '',
-                        'aria-invalid': errors.timeZone ? true : undefined,
+                        'aria-invalid': errors.timeZone ? true : undefined, 'aria-describedby': errorId('timeZone'),
                         onFocus: (event) => event.target.select(),
                         onChange: (event) => set({ timeZone: event.target.value.trim() }),
                     }),
@@ -2601,6 +2647,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         h('span', { className: 'dshcal-dot', 'data-none': calendar ? undefined : '', style: calendar ? { '--dot': colorOf(calendar.color) } : undefined }),
                         h('select', {
                             id: 'dshcal-calendar', className: 'dshcal-select dshcal-grow', value: d.calendarId, disabled: invitation, 'data-calendar-calendar': '', 'aria-invalid': errors.calendarId ? true : undefined,
+                            'aria-describedby': errorId('calendarId'),
                             onChange: (event) => set({ calendarId: event.target.value }),
                         },
                         // No calendar chosen yet (no default): the user picks one before saving.
@@ -2612,6 +2659,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 h(Field, { label: 'Link', id: 'dshcal-url', error: errors.url },
                     h('input', {
                         id: 'dshcal-url', className: 'dshcal-input', type: 'url', value: d.url, placeholder: 'https://', 'data-calendar-url': '', 'aria-invalid': errors.url ? true : undefined,
+                        'aria-describedby': errorId('url'),
                         onChange: (event) => set({ url: event.target.value }),
                     })),
                 h(Field, { label: 'Notes', id: 'dshcal-notes' },
@@ -2757,9 +2805,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * differs), how it repeats, its calendar, place, call, link, notes,
          * guests and their answers, reminders; Accept / Maybe / Decline for an
          * invitation; Edit, Duplicate and Delete where its calendar can be
-         * written.
+         * written; with onOpenPage, a button to see it in the calendar.
          */
-        function EventPopover({ cal, occurrence, anchor, onClose, onEdit, onDuplicate, onDelete }) {
+        function EventPopover({ cal, occurrence, anchor, onClose, onEdit, onDuplicate, onDelete, onOpenPage, openLabel = 'Open in Calendar' }) {
             const store = cal.store;
             useStore(store);
             const zone = store.zone();
@@ -2857,7 +2905,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                 key: status, size: 'sm', 'aria-pressed': o.myStatus === status, disabled: answering !== '', 'data-calendar-answer': status,
                                 onClick: () => pick(status),
                             }, answering === status ? h(Spinner, { size: 12 }) : null, label)))) : null,
-                error ? h('div', { style: { marginTop: 10 } }, h(Alert, { text: error })) : null);
+                error ? h('div', { style: { marginTop: 10 } }, h(Alert, { text: error })) : null,
+                typeof onOpenPage === 'function' ? h('div', { className: 'dshcal-pop-foot' },
+                    h(Btn, { size: 'sm', onClick: () => onOpenPage(o), 'data-calendar-open-page': '' }, h(CalendarIcon, { size: 12 }), openLabel)) : null);
         }
 
         /** An occurrence's times on another zone's clock ('6:00 – 7:00 PM'). */
@@ -2903,6 +2953,187 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         const hhmm = (minutes) => `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
 
+        // ── Dragging events ────────────────────────────────────────────────
+        // An event dragged in Week or Day goes to another time or day (its start on a quarter hour), or by its bottom edge
+        // to another end; in Month, and in the all-day row, to another day, keeping its time of day. The math is on the
+        // clock of the zone the page shows (wall clocks read as UTC, as wallMs does), so a day with a clock change keeps
+        // its hours where the grid draws them; the event keeps its length.
+
+        /** How far apart the times a drag lands on are, in minutes. */
+        const SNAP = 15;
+        /** Minutes to the nearest step. */
+        const snapTo = (minutes, step = SNAP) => Math.round(minutes / step) * step;
+        /** A day and minutes into it as one wall-clock number (ms, read as UTC). */
+        const wallAt = (day, minutes) => wallMs(day) + minutes * MINUTE;
+        /** An event's start on the page's clock, as such a number. */
+        const startWall = (o, zone) => wallMs(toLocal(o.start, zone));
+
+        /** Whether the user can drag an occurrence: a calendar that can be written, and not someone else's invitation. */
+        function canDrag(o, calendar) {
+            if (!isObject(o) || o.readOnly === true || calendar?.readOnly === true) return false;
+            return roleOf(o) !== 'guest';
+        }
+
+        /**
+         * Where a timed event moved by a drag goes: grabbed at `grab` ({day, minute}, where the press was), now at
+         * `at`; its start on the nearest quarter hour, its length kept. → {start, end} (ms).
+         */
+        function movedTo(o, zone, grab, at) {
+            const offset = wallAt(grab.day, grab.minute) - startWall(o, zone);
+            const wall = snapTo((wallAt(at.day, at.minute) - offset) / MINUTE) * MINUTE;
+            const start = toInstant(wallOf(wall), zone);
+            return { start, end: start + Math.max(0, o.end - o.start) };
+        }
+
+        /** Where a timed event's end goes when its bottom edge is dragged to `at`: a quarter hour, a quarter hour after its start at least. */
+        function resizedTo(o, zone, at) {
+            const first = startWall(o, zone);
+            const wall = Math.max(first + SNAP * MINUTE, snapTo(wallAt(at.day, at.minute) / MINUTE) * MINUTE);
+            return { start: o.start, end: toInstant(wallOf(wall), zone) };
+        }
+
+        /**
+         * An event moved by whole days (Month, the all-day row), at the same time of day: {start, end}, and for an
+         * all-day one its days {startDay, lastDay} too.
+         */
+        function shiftedBy(o, zone, days) {
+            if (o.allDay) {
+                const startDay = addDays(o.startDay, days);
+                return { allDay: true, startDay, lastDay: addDays(o.lastDay ?? o.startDay, days), start: o.start + days * DAY, end: o.end + days * DAY };
+            }
+            const start = toInstant(wallOf(startWall(o, zone) + days * DAY), zone);
+            return { start, end: start + Math.max(0, o.end - o.start) };
+        }
+
+        /** Whether a drop changes anything. */
+        const sameTimes = (o, t) => (o.allDay ? t.startDay === o.startDay && t.lastDay === (o.lastDay ?? o.startDay) : t.start === o.start && t.end === o.end);
+
+        /** The days an event dragged to new times would cover: [first, last]. */
+        const coveredDays = (t, zone) => (t.allDay ? [t.startDay, t.lastDay] : [dayIn(t.start, zone), dayIn(Math.max(t.start, t.end - 1), zone)]);
+        /** An occurrence at the times a drag gave it, to show until its calendar has it there. */
+        const placedAt = (o, t) => ({ ...o, start: t.start, end: t.end, ...(t.allDay ? { startDay: t.startDay, lastDay: t.lastDay } : {}) });
+
+        /** Who a moved event's change emailed, or whose calendars it changed without an email, in words, or ''. */
+        function movedWords(moved) {
+            const emailed = emailedText(moved?.emailed);
+            if (emailed) return emailed;
+            const reached = moved?.reached;
+            if (!isObject(reached) || !Array.isArray(reached.to) || reached.to.length === 0) return '';
+            const how = { add: 'Put it on', remove: 'Took it off' }[reached.how] ?? 'Changed it on';
+            return `${how} the calendars of ${peopleText(reached.to)}, without an email.`;
+        }
+
+        /**
+         * The patch updateEvent takes for a drop: an all-day event's days (the end is its last day), or a timed one's
+         * instants (the host puts them on the event's own clock, so its zone stays). Undefined when nothing changes.
+         */
+        function dropPatch(o, t) {
+            if (!t || sameTimes(o, t)) return undefined;
+            if (o.allDay) return { allDay: true, start: t.startDay, end: t.lastDay };
+            return { allDay: false, start: new Date(t.start).toISOString(), end: new Date(t.end).toISOString() };
+        }
+
+        /**
+         * What the consent helper hands a change's maker, as the arguments it adds: notify only when the user said Send,
+         * approved when they were shown who it reaches. Takes the helper's older form (notify: boolean) and its newer
+         * one ({notify, approved}).
+         */
+        function consentArgs(given) {
+            const c = typeof given === 'boolean' ? { notify: given } : isObject(given) ? given : {};
+            return { ...(c.notify === true ? { notify: true } : {}), ...(Array.isArray(c.approved) ? { approved: c.approved } : {}) };
+        }
+
+        /** The words on a dragged event's ghost: its new times ('9:30 – 10:30 AM'). */
+        function ghostWords(t, zone) {
+            if (t.allDay) return dayRangeText(t.startDay, t.lastDay);
+            return dayIn(t.start, zone) === dayIn(Math.max(t.start, t.end - 1), zone) ? timeRangeText(t.start, t.end, zone) : `${timeText(t.start, zone)} – ${timeText(t.end, zone)}`;
+        }
+
+        /**
+         * Where Week and Day open, in minutes into the day: the earlier of 7:30 and the first timed event on show, so no
+         * early one hides above. Late on a day on show (after 15:00), four hours before now instead, unless an event
+         * still to come starts earlier.
+         * @param starts - [{minute, upcoming}]: each timed event on show, minutes into its day, and whether it is still to come.
+         */
+        function openingMinute(starts, nowMinute = 0, todayShown = false) {
+            const late = todayShown && nowMinute > 15 * 60;
+            const base = late ? nowMinute - 240 : 450;
+            const firsts = (starts ?? EMPTY).filter((s) => Number.isFinite(s?.minute) && (!late || s.upcoming)).map((s) => s.minute);
+            return clamp(Math.min(base, ...firsts), 0, 1440);
+        }
+
+        /**
+         * A press on an event that may become a drag: past a few pixels it is one, and onMove follows the pointer
+         * (held by pointer capture); on release onDrop, on Escape or a lost pointer onCancel. A press that doesn't move
+         * is left alone, so its click opens the event as before; the click that ends a drag is swallowed.
+         */
+        function pressToDrag(event, { onStart, onMove, onDrop, onCancel }) {
+            const el = event.currentTarget;
+            const id = event.pointerId;
+            const x0 = event.clientX;
+            const y0 = event.clientY;
+            let dragging = false;
+            let over = false;
+            try { el.setPointerCapture(id); } catch {}
+            const swallowClick = () => {
+                const swallow = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    stop();
+                };
+                const stop = () => {
+                    clearTimeout(timer);
+                    window.removeEventListener('click', swallow, true);
+                };
+                // The release's click comes in the same task, if at all (not when the drop re-drew the event pressed);
+                // the next click is the user's.
+                const timer = setTimeout(stop, 0);
+                window.addEventListener('click', swallow, true);
+            };
+            const leave = () => {
+                window.removeEventListener('pointermove', move, true);
+                window.removeEventListener('pointerup', up, true);
+                window.removeEventListener('pointercancel', lost, true);
+                window.removeEventListener('keydown', key, true);
+                el.removeEventListener('lostpointercapture', lost);
+                try { el.releasePointerCapture(id); } catch {}
+            };
+            const move = (e) => {
+                if (e.pointerId !== id || over) return;
+                if (!dragging) {
+                    if (Math.hypot(e.clientX - x0, e.clientY - y0) < 4) return;
+                    dragging = true;
+                    onStart?.(e);
+                }
+                onMove(e);
+            };
+            const up = (e) => {
+                if (e.pointerId !== id) return;
+                leave();
+                if (!dragging) return;
+                swallowClick();
+                if (!over) onDrop(e);
+            };
+            const lost = (e) => {
+                if (e.pointerId !== id) return;
+                leave();
+                if (dragging && !over) onCancel();
+            };
+            const key = (e) => {
+                if (e.key !== 'Escape' || !dragging || over) return;
+                e.preventDefault();
+                e.stopPropagation();
+                // Cancelled; the release still comes, and its click is swallowed then.
+                over = true;
+                onCancel();
+            };
+            window.addEventListener('pointermove', move, true);
+            window.addEventListener('pointerup', up, true);
+            window.addEventListener('pointercancel', lost, true);
+            window.addEventListener('keydown', key, true);
+            el.addEventListener('lostpointercapture', lost);
+        }
+
         /** A day's timed events as minute spans on its clock: [{o, from, to}]. */
         function daySegments(occurrences, day, zone) {
             const dayStart = startOfDay(day, zone);
@@ -2945,21 +3176,182 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * last a day or more, then the hours with the timed events side by
          * side where they overlap, and a line at the current time. A click on
          * an empty time makes an hour's event there; a drag makes one as long
-         * as the drag.
+         * as the drag. An event dragged goes to another time or day, by its
+         * bottom edge to another end, and Alt with an arrow key moves the one
+         * in focus (a quarter hour, a day): `onDrop(o, times)` saves it.
+         * @param ready - whether the events of these days are read (where the view opens waits for them).
+         * @param movable - (o) → whether it can be dragged.
          */
-        function TimeGrid({ days, zone, occurrences, now, today, onOpen, onCreate, onDay, onMore, scrollTo }) {
+        function TimeGrid({ days, zone, occurrences, now, today, onOpen, onCreate, onDay, onMore, scrollTo, ready = true, movable, onDrop, onDragging }) {
             const scrollRef = React.useRef(null);
+            const laneRef = React.useRef(null);
             const [expanded, setExpanded] = React.useState(false);
             const [drag, setDrag] = React.useState(null);
             const dragRef = React.useRef(null);
             dragRef.current = drag;
-            React.useLayoutEffect(() => {
+            // An event being dragged: {id, mode ('move', 'resize', 'days'), title, t: where it would go}.
+            const [moving, setMoving] = React.useState(null);
+            // An event moved with the keys, to keep in focus where it lands: {id, until}.
+            const refocus = React.useRef(null);
+            // Where the view opens (see openingMinute), then once more when the events are read, unless the user scrolled meanwhile.
+            const opening = React.useRef({ top: -1, settled: false });
+            const placeOpening = (withEvents) => {
                 const el = scrollRef.current;
                 if (!el) return;
-                const nowMinutes = minutesIn(Date.now(), zone);
-                const hour = days.includes(today) && nowMinutes > 15 * 60 ? nowMinutes / 60 - 4 : 7.5;
-                el.scrollTop = Math.max(0, hour * HOUR_PX - 4);
+                const starts = withEvents ? days.flatMap((day) => {
+                    const dayStart = startOfDay(day, zone);
+                    return daySegments(occurrences, day, zone).filter((s) => s.o.start >= dayStart).map((s) => ({ minute: s.from, upcoming: s.o.end > Date.now() }));
+                }) : EMPTY;
+                el.scrollTop = Math.max(0, (openingMinute(starts, minutesIn(Date.now(), zone), days.includes(today)) / 60) * HOUR_PX - 10);
+                opening.current.top = el.scrollTop;
+            };
+            React.useLayoutEffect(() => {
+                placeOpening(ready);
+                opening.current.settled = ready;
             }, []);
+            React.useLayoutEffect(() => {
+                if (!ready || opening.current.settled) return;
+                opening.current.settled = true;
+                const el = scrollRef.current;
+                if (el && Math.abs(el.scrollTop - opening.current.top) <= 1) placeOpening(true);
+            }, [ready]);
+            React.useEffect(() => {
+                const want = refocus.current;
+                if (!want) return;
+                if (Date.now() > want.until) {
+                    refocus.current = null;
+                    return;
+                }
+                const active = document.activeElement;
+                if (active && active !== document.body) return;
+                const el = scrollRef.current?.parentElement?.querySelector(`[data-calendar-event="${cssEscape(want.id)}"]`);
+                if (el) {
+                    refocus.current = null;
+                    el.focus({ preventScroll: false });
+                }
+            });
+
+            /** The day column under a point (the nearest one beside the grid) and how far down it is, in minutes. */
+            const pointAt = (x, y) => {
+                const columns = [...(scrollRef.current?.querySelectorAll('[data-calendar-day-column]') ?? EMPTY)];
+                if (columns.length === 0) return null;
+                const rects = columns.map((c) => c.getBoundingClientRect());
+                let i = rects.findIndex((r) => x >= r.left && x < r.right);
+                if (i < 0) i = x < rects[0].left ? 0 : columns.length - 1;
+                return { day: columns[i].getAttribute('data-calendar-day-column'), minute: clamp(((y - rects[i].top) / HOUR_PX) * 60, 0, 1440) };
+            };
+            /** The day in the all-day row under a point, or ''. */
+            const laneDayAt = (x) => {
+                for (const cell of laneRef.current?.querySelectorAll('[data-calendar-allday-cell]') ?? EMPTY) {
+                    const r = cell.getBoundingClientRect();
+                    if (x >= r.left && x < r.right) return cell.getAttribute('data-calendar-allday-cell');
+                }
+                return '';
+            };
+            const draggable = (event, o) => event.button === 0 && event.pointerType !== 'touch' && typeof movable === 'function' && movable(o);
+            const done = () => {
+                setMoving(null);
+                onDragging?.('');
+            };
+            /** A timed event pressed: dragged to another time or day, or by its bottom edge to another end. */
+            const pressEvent = (event, o) => {
+                if (!draggable(event, o)) return;
+                const mode = event.target?.closest?.('.dshcal-ev-grip') ? 'resize' : 'move';
+                const grab = pointAt(event.clientX, event.clientY);
+                if (!grab) return;
+                const session = { x: event.clientX, y: event.clientY, t: undefined, frame: 0 };
+                const place = () => {
+                    const at = pointAt(session.x, session.y);
+                    if (!at) return;
+                    const t = mode === 'resize' ? resizedTo(o, zone, at) : movedTo(o, zone, grab, at);
+                    if (session.t && t.start === session.t.start && t.end === session.t.end) return;
+                    session.t = t;
+                    setMoving({ id: o.id, mode, title: o.title, t });
+                };
+                // While it's held near the top or the bottom, the hours scroll.
+                const tick = () => {
+                    const el = scrollRef.current;
+                    if (el) {
+                        const r = el.getBoundingClientRect();
+                        const edge = session.y < r.top + 28 ? -1 : session.y > r.bottom - 28 ? 1 : 0;
+                        if (edge !== 0) el.scrollTop += edge * 10;
+                    }
+                    place();
+                    session.frame = requestAnimationFrame(tick);
+                };
+                const end = () => {
+                    cancelAnimationFrame(session.frame);
+                    done();
+                };
+                pressToDrag(event, {
+                    onStart: () => {
+                        onDragging?.(mode);
+                        session.frame = requestAnimationFrame(tick);
+                    },
+                    onMove: (e) => {
+                        session.x = e.clientX;
+                        session.y = e.clientY;
+                        place();
+                    },
+                    onDrop: () => {
+                        end();
+                        if (session.t) onDrop?.(o, session.t);
+                    },
+                    onCancel: end,
+                });
+            };
+            /** An event in the all-day row pressed: dragged to another day. */
+            const pressBar = (event, o) => {
+                if (!draggable(event, o)) return;
+                const grabDay = laneDayAt(event.clientX);
+                if (!grabDay) return;
+                let at = '';
+                let t;
+                pressToDrag(event, {
+                    onStart: () => onDragging?.('move'),
+                    onMove: (e) => {
+                        const day = laneDayAt(e.clientX);
+                        if (day === at) return;
+                        at = day;
+                        t = day ? shiftedBy(o, zone, daysBetween(grabDay, day)) : undefined;
+                        setMoving({ id: o.id, mode: 'days', title: o.title, t });
+                    },
+                    onDrop: () => {
+                        done();
+                        if (t) onDrop?.(o, t);
+                    },
+                    onCancel: done,
+                });
+            };
+            /** Alt with an arrow key: the event in focus a quarter hour earlier or later, or a day back or on. */
+            const nudge = (event, o, byDays) => {
+                if (!event.altKey || event.ctrlKey || event.metaKey || typeof movable !== 'function' || !movable(o)) return;
+                const step = { ArrowUp: [-SNAP, 0], ArrowDown: [SNAP, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[event.key];
+                if (!step || (byDays && step[1] === 0)) return;
+                event.preventDefault();
+                event.stopPropagation();
+                let t;
+                if (step[1] !== 0) t = shiftedBy(o, zone, step[1]);
+                else {
+                    const start = toInstant(wallOf(startWall(o, zone) + step[0] * MINUTE), zone);
+                    t = { start, end: start + Math.max(0, o.end - o.start) };
+                }
+                refocus.current = { id: o.id, until: Date.now() + 20_000 };
+                onDrop?.(o, t);
+            };
+            /** Where the dragged event would go on a day: its piece of that day, in minutes, or null. */
+            const ghostOn = (day) => {
+                const t = moving?.t;
+                if (!t || moving.mode === 'days') return null;
+                const dayStart = startOfDay(day, zone);
+                const dayEnd = startOfDay(addDays(day, 1), zone);
+                if (t.end <= dayStart || t.start >= dayEnd) return null;
+                const from = t.start <= dayStart ? 0 : minutesIn(t.start, zone);
+                const to = t.end >= dayEnd ? 1440 : minutesIn(t.end, zone);
+                return { from, to: Math.max(to, Math.min(1440, from + SNAP)), first: t.start >= dayStart };
+            };
+            // The days an event dragged in the all-day row would cover.
+            const dropDays = moving?.mode === 'days' && moving.t ? coveredDays(moving.t, zone) : null;
             React.useEffect(() => {
                 const el = scrollRef.current;
                 if (!el || !scrollTo) return;
@@ -3040,10 +3432,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             glyph: icon(expanded ? 'IconChevronUpOutlineRegular' : 'IconChevronDownOutlineRegular', { size: 12 }),
                             onClick: () => setExpanded(!expanded), 'aria-expanded': expanded,
                         }) : null),
-                    h('div', { className: 'dshcal-wk-lanes', style: { '--lanes': lanesShown } },
+                    h('div', { ref: laneRef, className: 'dshcal-wk-lanes', style: { '--lanes': lanesShown } },
                         days.map((day, i) => h('button', {
                             key: `cell-${day}`, type: 'button', className: 'dshcal-wk-lanecell', style: { gridColumn: `${i + 1}`, gridRow: '1 / -1' }, tabIndex: -1,
                             'aria-label': `New all-day event on ${longDay(day, zone)}`, 'data-calendar-allday-cell': day,
+                            'data-drop': dropDays && day >= dropDays[0] && day <= dropDays[1] ? '' : undefined,
                             onClick: () => onCreate({ day, allDay: true }),
                         })),
                         fitted.pieces.map((piece) => {
@@ -3051,8 +3444,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             return h('button', {
                                 key: `${piece.key}:${piece.a}`, type: 'button', className: 'dshcal-bar', style: { ...evStyle(o.color), gridColumn: `${piece.a + 1} / ${piece.b + 2}`, gridRow: `${piece.lane + 1}` },
                                 'data-look': lookOf(o), 'data-past': o.end <= now ? '' : undefined, 'data-cont-start': piece.contStart ? '' : undefined, 'data-cont-end': piece.contEnd ? '' : undefined,
-                                'aria-label': `${o.title}, ${shortWhen(o, zone)}, ${o.calendar}`, 'data-calendar-event': o.id,
+                                'aria-label': `${o.title}, ${shortWhen(o, zone)}, ${o.calendar}`, 'data-calendar-event': o.id, 'data-moving': moving?.id === o.id ? '' : undefined,
                                 onClick: (event) => onOpen(o, event.currentTarget),
+                                onPointerDown: (event) => pressBar(event, o),
+                                onKeyDown: (event) => nudge(event, o, true),
                             }, h('span', { className: 'dshcal-bar-title' }, o.title));
                         }),
                         fitted.more.map((m) => h('button', {
@@ -3066,6 +3461,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         days.map((day) => {
                             const segments = daySegments(occurrences, day, zone);
                             const cols = columnsOf(segments, 20, 30, maxCols);
+                            const dayEnd = startOfDay(addDays(day, 1), zone);
+                            const ghost = ghostOn(day);
                             return h('div', { key: day, className: 'dshcal-wk-col', 'data-today': day === today ? '' : undefined, 'data-calendar-day-column': day, ...columnHandlers(day) },
                                 segments.map(({ o, from, to }) => {
                                     const place = cols.places.get(o.id);
@@ -3074,19 +3471,24 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                     const short = height < 34;
                                     const lines = clamp(Math.floor((height - 20) / 15), 1, 8);
                                     const when = timeRangeText(o.start, o.end, zone);
+                                    const can = typeof movable === 'function' && movable(o);
                                     return h('button', {
                                         key: o.id, type: 'button', className: 'dshcal-ev', 'data-calendar-event': o.id, 'data-look': lookOf(o), 'data-past': o.end <= now ? '' : undefined,
-                                        'data-short': short ? '' : undefined, 'data-nested': place.level > 0 ? '' : undefined,
+                                        'data-short': short ? '' : undefined, 'data-nested': place.level > 0 ? '' : undefined, 'data-moving': moving?.id === o.id ? '' : undefined,
                                         style: {
                                             ...evStyle(o.color), '--lines': lines, top: (from / 60) * HOUR_PX + 1, height, zIndex: 2 + place.level,
                                             left: `calc(${place.left * 100}% + 2px)`, width: `calc(${place.width * 100}% - ${place.left + place.width > 0.999 ? 8 : 3}px)`,
                                         },
                                         'aria-label': `${o.title}, ${shortWhen(o, zone, day)}, ${o.calendar}`,
                                         onClick: (event) => onOpen(o, event.currentTarget),
+                                        onPointerDown: (event) => pressEvent(event, o),
+                                        onKeyDown: (event) => nudge(event, o, false),
                                     },
                                     h('span', { className: 'dshcal-ev-title' }, o.title),
                                     h('span', { className: 'dshcal-ev-sub' }, short ? timeText(o.start, zone) : when),
-                                    !short && height > 66 && o.location ? h('span', { className: 'dshcal-ev-sub' }, o.location) : null);
+                                    !short && height > 66 && o.location ? h('span', { className: 'dshcal-ev-sub' }, o.location) : null,
+                                    // Its bottom edge, where it ends on this day: dragged, a new end.
+                                    can && o.end <= dayEnd ? h('span', { className: 'dshcal-ev-grip', 'aria-hidden': true, 'data-calendar-resize': o.id }) : null);
                                 }),
                                 cols.more.map((m) => h('button', {
                                     key: m.key, type: 'button', className: 'dshcal-ev-more', 'data-calendar-more': day,
@@ -3094,12 +3496,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                         top: (m.from / 60) * HOUR_PX + 1, height: Math.max(18, ((m.to - m.from) / 60) * HOUR_PX - 2), zIndex: 2 + m.level,
                                         left: `calc(${m.left * 100}% + 2px)`, width: `calc(${m.width * 100}% - ${m.left + m.width > 0.999 ? 8 : 3}px)`,
                                     },
-                                    'aria-label': `${plural(m.count, 'more event')} at ${hhmm(m.from)}. Show the day's events.`,
+                                    'aria-label': `${plural(m.count, 'more event')} at ${clockText(m.from)}. Show the day's events.`,
                                     onClick: (event) => onMore(day, event.currentTarget),
                                 }, `+${m.count}`)),
                                 drag && drag.day === day ? h('div', {
                                     className: 'dshcal-wk-ghost', style: { top: (drag.from / 60) * HOUR_PX, height: Math.max(12, ((drag.to - drag.from) / 60) * HOUR_PX) },
-                                }, `${hhmm(drag.from)} – ${hhmm(Math.min(1440, drag.to))}`) : null,
+                                }, clockRangeText(drag.from, Math.min(1440, drag.to))) : null,
+                                ghost ? h('div', {
+                                    className: 'dshcal-wk-ghost', 'data-calendar-ghost': moving.mode,
+                                    style: { top: (ghost.from / 60) * HOUR_PX, height: Math.max(12, ((ghost.to - ghost.from) / 60) * HOUR_PX) },
+                                }, ghost.first ? h('span', null, moving.title) : null, ghost.first ? h('span', null, ghostWords(moving.t, zone)) : null) : null,
                                 day === today ? h('div', { className: 'dshcal-now', style: { top: (nowMinutes / 60) * HOUR_PX }, 'aria-hidden': true }) : null);
                         }))));
         }
@@ -3111,11 +3517,54 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * longer) and lines (timed), as many as a day has room for, then
          * "+N more". Arrow keys move between days (Page Up and Page Down by
          * month), Enter shows a day's events, a click on a day's empty space
-         * makes an all-day event there, its number opens the day.
+         * makes an all-day event there, its number opens the day. An event
+         * dragged to another day goes there at the same time of day:
+         * `onDrop(o, times)` saves it.
+         * @param movable - (o) → whether it can be dragged.
          */
-        function MonthView({ days, month, zone, occurrences, today, now, onOpen, onCreateDay, onDay, onMore, onMove, focusDay }) {
+        function MonthView({ days, month, zone, occurrences, today, now, onOpen, onCreateDay, onDay, onMore, onMove, focusDay, movable, onDrop, onDragging }) {
             const weeksRef = React.useRef(null);
             const [cap, setCap] = React.useState(3);
+            // An event being dragged to another day: {id, t: where it would go}.
+            const [moving, setMoving] = React.useState(null);
+            /** The day under a point, or ''. */
+            const cellDayAt = (x, y) => {
+                for (const cell of weeksRef.current?.querySelectorAll('[data-calendar-cell]') ?? EMPTY) {
+                    const r = cell.getBoundingClientRect();
+                    if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) return cell.getAttribute('data-calendar-cell');
+                }
+                return '';
+            };
+            const pressPiece = (event, o) => {
+                if (event.button !== 0 || event.pointerType === 'touch' || typeof movable !== 'function' || !movable(o)) return;
+                const grabDay = cellDayAt(event.clientX, event.clientY);
+                if (!grabDay) return;
+                let at = grabDay;
+                let t;
+                const done = () => {
+                    setMoving(null);
+                    onDragging?.('');
+                };
+                pressToDrag(event, {
+                    onStart: () => {
+                        onDragging?.('move');
+                        setMoving({ id: o.id, t: undefined });
+                    },
+                    onMove: (e) => {
+                        const day = cellDayAt(e.clientX, e.clientY);
+                        if (day === at && t) return;
+                        at = day;
+                        t = day ? shiftedBy(o, zone, daysBetween(grabDay, day)) : undefined;
+                        setMoving({ id: o.id, t });
+                    },
+                    onDrop: () => {
+                        done();
+                        if (t) onDrop?.(o, t);
+                    },
+                    onCancel: done,
+                });
+            };
+            const dropDays = moving?.t ? coveredDays(moving.t, zone) : null;
             const weeks = [];
             for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7));
             React.useLayoutEffect(() => {
@@ -3179,6 +3628,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                 return h('div', {
                                     key: day, className: 'dshcal-mo-cell', role: 'gridcell', tabIndex: day === tabStop ? 0 : -1, style: { gridColumn: `${i + 1}` },
                                     'data-out': day.slice(0, 7) !== month ? '' : undefined, 'data-calendar-cell': day,
+                                    'data-drop': dropDays && day >= dropDays[0] && day <= dropDays[1] ? '' : undefined,
                                     'aria-label': `${longDay(day, zone)}${day === today ? ', today' : ''}, ${count ? `${plural(count, 'event')}: ${names.join(', ')}${count > 3 ? '…' : ''}` : 'no events'}`,
                                     onFocus: () => setFocused(day),
                                     onKeyDown: (event) => onKey(event, day),
@@ -3196,6 +3646,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                 const common = {
                                     key: `${piece.key}:${piece.a}`, type: 'button', tabIndex: -1, 'aria-hidden': true, 'data-calendar-event': o.id, 'data-look': lookOf(o),
                                     'data-past': o.end <= now ? '' : undefined, onClick: (event) => onOpen(o, event.currentTarget), title: `${o.title} · ${shortWhen(o, zone)}`,
+                                    'data-moving': moving?.id === o.id ? '' : undefined, onPointerDown: (event) => pressPiece(event, o),
                                 };
                                 if (spansDays(o)) {
                                     return h('button', { ...common, className: 'dshcal-bar', style, 'data-cont-start': piece.contStart ? '' : undefined, 'data-cont-end': piece.contEnd ? '' : undefined },
@@ -3234,43 +3685,134 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }));
         }
 
+        /** A day in the Agenda layout: its date, then its events, each opening on a click. */
+        function agendaDay({ day, list }, { zone, today, now, onOpen }) {
+            const year = day.slice(0, 4) !== today.slice(0, 4);
+            return h('section', { key: day, className: 'dshcal-ag-day', 'aria-label': longDay(day, zone) },
+                h('div', { className: 'dshcal-ag-date', 'data-today': day === today ? '' : undefined },
+                    h('b', null, Number(day.slice(8, 10))),
+                    h('span', null, day === today ? TEXT.today : dayText(day, { weekday: 'short', month: 'short', ...(year ? { year: 'numeric' } : {}) }))),
+                h('div', { className: 'dshcal-ag-list' }, list.map((o) => h('button', {
+                    key: o.id, type: 'button', className: 'dshcal-ag-row', style: evStyle(o.color), 'data-look': lookOf(o), 'data-calendar-event': o.id,
+                    'data-past': o.end <= now ? '' : undefined, onClick: (event) => onOpen(o, event.currentTarget),
+                },
+                h('span', { className: 'dshcal-ag-time' }, h('span', { className: 'dshcal-dot' }), shortWhen(o, zone, day)),
+                h('span', { className: 'dshcal-ag-what' },
+                    h('span', { className: 'dshcal-ag-title' }, o.title),
+                    h('span', { className: 'dshcal-ag-sub' }, [o.location, o.calendar].filter(Boolean).join(' · ')))))));
+        }
+
         function AgendaList({ firstDay, lastDay, zone, occurrences, today, now, onOpen, onLater, loading }) {
             const groups = agendaDays(occurrences, firstDay, lastDay, zone);
             return h('div', { className: 'dshcal-ag', 'data-calendar-grid': 'agenda' },
                 groups.length === 0 && !loading ? h('div', { className: 'dshcal-state' }, `Nothing from ${dayText(firstDay, { month: 'short', day: 'numeric' })} to ${dayText(lastDay, { month: 'short', day: 'numeric', year: 'numeric' })}.`) : null,
-                groups.map(({ day, list }) => h('section', { key: day, className: 'dshcal-ag-day', 'aria-label': longDay(day, zone) },
-                    h('div', { className: 'dshcal-ag-date', 'data-today': day === today ? '' : undefined },
-                        h('b', null, Number(day.slice(8, 10))),
-                        h('span', null, day === today ? TEXT.today : dayText(day, { weekday: 'short', month: 'short' }))),
-                    h('div', { className: 'dshcal-ag-list' }, list.map((o) => h('button', {
-                        key: o.id, type: 'button', className: 'dshcal-ag-row', style: evStyle(o.color), 'data-look': lookOf(o), 'data-calendar-event': o.id,
-                        'data-past': o.end <= now ? '' : undefined, onClick: (event) => onOpen(o, event.currentTarget),
-                    },
-                    h('span', { className: 'dshcal-ag-time' }, h('span', { className: 'dshcal-dot' }), shortWhen(o, zone, day)),
-                    h('span', { className: 'dshcal-ag-what' },
-                        h('span', { className: 'dshcal-ag-title' }, o.title),
-                        h('span', { className: 'dshcal-ag-sub' }, [o.location, o.calendar].filter(Boolean).join(' · ')))))))),
+                groups.map((group) => agendaDay(group, { zone, today, now, onOpen })),
                 groups.length ? h('div', { className: 'dshcal-ag-foot' }, h(Btn, { onClick: onLater, 'data-calendar-later': '' }, 'Show later events')) : null);
+        }
+
+        // ── Search ─────────────────────────────────────────────────────────
+
+        /**
+         * What a search found, by the day each event starts, in the plugin's
+         * order: those still to come (soonest first), then the earlier ones
+         * (latest first). → {upcoming: [{day, list}], past: [{day, list}]}.
+         */
+        function searchGroups(occurrences, zone, now) {
+            const upcoming = [];
+            const past = [];
+            for (const o of occurrences ?? EMPTY) {
+                if (!isObject(o) || !Number.isFinite(o.start) || !Number.isFinite(o.end)) continue;
+                const into = o.end >= now ? upcoming : past;
+                const day = daysOf(o, zone)[0];
+                const last = into[into.length - 1];
+                if (last?.day === day) last.list.push(o);
+                else into.push({ day, list: [o] });
+            }
+            return { upcoming, past };
+        }
+
+        /**
+         * The events a search found, in the Agenda layout.
+         * @param found - {words, loading, data?: {occurrences, more}, dataWords, error}.
+         */
+        function SearchList({ found, zone, today, now, onOpen, onRetry }) {
+            const data = found?.data;
+            const list = data?.occurrences ?? EMPTY;
+            const { upcoming, past } = searchGroups(list, zone, now);
+            const options = { zone, today, now, onOpen };
+            let content;
+            if (found?.error) {
+                content = h('div', { className: 'dshcal-state', 'data-calendar-state': 'error' }, h('span', { className: 'dshcal-error' }, found.error), h(Btn, { onClick: onRetry }, TEXT.retry));
+            } else if (!data) {
+                content = h('div', { className: 'dshcal-state', role: 'status' }, h(Spinner), h('span', null, 'Searching…'));
+            } else if (list.length === 0) {
+                content = h('div', { className: 'dshcal-state', role: 'status' },
+                    h('span', null, `Nothing matches “${found.dataWords}”.`),
+                    h('span', { className: 'dshcal-hint' }, 'Search looks through the calendars shown, a year back and a year ahead.'));
+            } else {
+                content = h(React.Fragment, null,
+                    h('div', { className: 'dshcal-ag-part', role: 'status' }, data.more ? `The first ${list.length} found` : `${plural(list.length, 'event')} found`),
+                    upcoming.map((group) => agendaDay(group, options)),
+                    past.length ? h('div', { className: 'dshcal-ag-part' }, 'Earlier') : null,
+                    past.map((group) => agendaDay(group, options)),
+                    data.more ? h('div', { className: 'dshcal-ag-foot dshcal-hint' }, 'More match than are shown here: add a word to narrow it.') : null);
+            }
+            return h('div', { className: 'dshcal-ag', 'data-calendar-grid': 'search', role: 'region', 'aria-label': `Search for “${found?.words ?? ''}”` }, content);
         }
 
         // ── The side column ────────────────────────────────────────────────
 
-        /** A small month to jump to a day; the days on show are marked. */
+        /**
+         * A small month to jump to a day; the days on show are marked. One
+         * tab stop: arrow keys move between days (Home and End to the week's
+         * ends, Page Up and Page Down by month), Enter picks one.
+         */
         function MiniMonth({ anchor, today, weekStart, shown, onPick }) {
             const [month, setMonth] = React.useState(monthStart(anchor));
-            React.useEffect(() => setMonth(monthStart(anchor)), [anchor]);
+            const [focused, setFocused] = React.useState(anchor);
+            const gridRef = React.useRef(null);
+            const wantFocus = React.useRef(false);
+            React.useEffect(() => {
+                setMonth(monthStart(anchor));
+                setFocused(anchor);
+            }, [anchor]);
+            React.useEffect(() => {
+                if (!wantFocus.current) return;
+                wantFocus.current = false;
+                gridRef.current?.querySelector(`[data-calendar-mini-day="${focused}"]`)?.focus();
+            });
             const first = weekStartOf(month, weekStart);
             const days = Array.from({ length: 42 }, (_, i) => addDays(first, i));
+            const inMonth = (day) => day.slice(0, 7) === month.slice(0, 7);
+            const tabStop = inMonth(focused) ? focused : inMonth(today) ? today : month;
+            const onKey = (event, day) => {
+                if (event.altKey || event.ctrlKey || event.metaKey) return;
+                const into = (weekdayOf(day) - weekStart + 7) % 7;
+                const keys = {
+                    ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7, Home: -into, End: 6 - into,
+                };
+                let next;
+                if (event.key in keys) next = addDays(day, keys[event.key]);
+                else if (event.key === 'PageUp' || event.key === 'PageDown') next = addMonths(day, event.key === 'PageUp' ? -1 : 1);
+                if (!next) return;
+                event.preventDefault();
+                wantFocus.current = true;
+                setFocused(next);
+                if (!inMonth(next)) setMonth(monthStart(next));
+            };
             return h('div', { className: 'dshcal-mini', 'data-calendar-mini': '' },
                 h('div', { className: 'dshcal-mini-head' },
                     h('span', { className: 'dshcal-mini-title' }, dayText(month, { month: 'long', year: 'numeric' })),
                     h(IconBtn, { label: 'Previous month', glyph: icon('IconChevronLeftOutlineRegular'), size: 'sm', tip: false, onClick: () => setMonth(addMonths(month, -1)) }),
                     h(IconBtn, { label: 'Next month', glyph: icon('IconChevronRightOutlineRegular'), size: 'sm', tip: false, onClick: () => setMonth(addMonths(month, 1)) })),
-                h('div', { className: 'dshcal-mini-grid' },
+                h('div', { ref: gridRef, className: 'dshcal-mini-grid' },
                     days.slice(0, 7).map((day) => h('span', { key: `wd-${day}`, className: 'dshcal-mini-wd', 'aria-hidden': true }, dayText(day, { weekday: 'narrow' }))),
                     days.map((day) => h('button', {
                         key: day, type: 'button', className: 'dshcal-mini-day', 'aria-label': longDay(day, 'UTC'), 'aria-current': day === today ? 'date' : undefined,
-                        'data-out': day.slice(0, 7) !== month.slice(0, 7) ? '' : undefined, 'data-today': day === today ? '' : undefined, 'data-in-range': shown.has(day) && day !== today ? '' : undefined,
+                        tabIndex: day === tabStop ? 0 : -1, 'data-calendar-mini-day': day,
+                        'data-out': inMonth(day) ? undefined : '', 'data-today': day === today ? '' : undefined, 'data-in-range': shown.has(day) && day !== today ? '' : undefined,
+                        onFocus: () => setFocused(day),
+                        onKeyDown: (event) => onKey(event, day),
                         onClick: () => onPick(day),
                     }, Number(day.slice(8, 10))))));
         }
@@ -3974,7 +4516,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 body = h('div', { className: 'dshcal-state' }, store.stateError() ? h('span', { className: 'dshcal-error' }, store.stateError()) : h(Spinner));
             } else if (page.page === 'list') {
                 body = h('div', { className: 'dshcal-form' },
-                    removed ? h('div', { key: removed.key, className: 'dshcal-note', role: 'status', 'data-calendar-removed': '' },
+                    removed ? h('div', { key: removed.key, className: 'dshcal-notice', role: 'status', 'data-calendar-removed': '' },
                         icon('IconInfoOutlineRegular'),
                         h('span', null, removed.text, ' ', outLink(removed.manageUrl, linkLabel(removed.manageUrl)), '.'),
                         h(IconBtn, { label: 'Close this notice', glyph: icon('IconCloseOutlineRegular', { size: 12 }), size: 'sm', onClick: () => setRemoved(null) })) : null,
@@ -4155,8 +4697,43 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 sending.dialog);
         }
 
+        /**
+         * Before an event dragged to new times is saved, when there's
+         * something to ask: which occurrences of a repeating event move, and
+         * whether its guests are told, where their server tells them only when
+         * asked (Google).
+         * @param onSubmit - (scope, tell) → '' once saved (or kept as it was), else what went wrong.
+         */
+        function MoveEventDialog({ cal, occurrence, times, scopes, onSubmit, onClose }) {
+            const store = cal.store;
+            const o = occurrence;
+            const [told, setTell] = React.useState(false);
+            const calendar = store.calendar(o.calendarId);
+            const guests = othersOf(o.attendees);
+            const title = `Move “${o.title}”?`;
+            const to = `To ${whenText(placedAt(o, times), store.zone())}.`;
+            const tellFor = (scope) => {
+                if (mailMode({ kind: 'update', calendar, occurrence: o, guests: guests.length, scope }).mode !== 'ask') return null;
+                const invites = calendar?.kind === 'caldav' && roleOf(o) === 'own';
+                return {
+                    label: invites ? 'Send invitations by email' : `Tell ${peopleText(guests.map((g) => g.name || g.email))} by email`,
+                    hint: calendar?.kind === 'google' ? 'Unticked, Google still shows the new time on their Google calendars, without an email.' : undefined,
+                };
+            };
+            if (scopes.length > 1) return h(ScopeDialog, { title, scopes, note: to, action: 'Move', tellFor, onSubmit, onClose });
+            const box = tellFor(scopes[0]);
+            const tell = box !== null && told;
+            return h(ConfirmDialog, { title, text: to, action: 'Move', danger: false, onSubmit: () => onSubmit(scopes[0], tell), onClose },
+                box ? h('div', { className: 'dshcal-tell' },
+                    h('label', { className: 'dshcal-check' },
+                        h('input', { type: 'checkbox', checked: tell, onChange: (event) => setTell(event.target.checked), 'data-calendar-notify': '' }), box.label),
+                    box.hint ? h('div', { className: 'dshcal-hint' }, box.hint) : null) : null);
+        }
+
         /** Notices about files set aside that the user closed, for as long as this window is open. */
         const closedIssues = new Set();
+        /** The user's choice for the side column beside a page wide enough for it ('shown', 'folded'), for as long as this window is open. */
+        let sideChoice = '';
 
         /**
          * Files the plugin couldn't read when DSH started (state().storeIssue,
@@ -4205,11 +4782,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * The Calendar page: the header (Today, back and on, the range, the
-         * views, New event), the side column (a small month, the calendars,
-         * Accounts) and the view, with an event's details over it and the
-         * dialogs. Keys where nothing else takes them: T today, J/N on, K/P
-         * back, M/W/D/A the views, C a new event.
+         * The Calendar page: the header (the side column's button, Today, back
+         * and on, the range, search, the views, New event), the side column (a
+         * small month, the calendars, Accounts; beside the view on a roomy
+         * page, folded behind its button on a narrower one) and the view, with
+         * an event's details over it and the dialogs. Keys while the focus is
+         * in the page and nothing else takes them: T today, J/N on, K/P back,
+         * M/W/D/A the views, C a new event, / search.
          */
         function CalendarPage({ cal }) {
             const store = cal.store;
@@ -4218,6 +4797,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const state = store.state();
             const zone = store.zone();
             const rootRef = React.useRef(null);
+            const sideRef = React.useRef(null);
+            const searchRef = React.useRef(null);
             const width = useWidth(rootRef);
             const compact = width > 0 && width < 560;
             const now = useNow(30_000);
@@ -4228,10 +4809,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [pop, setPop] = React.useState(null);
             const [dialog, setDialog] = React.useState(null);
             const [sideOpen, setSideOpen] = React.useState(false);
+            const [sideWanted, setSideWanted] = React.useState(sideChoice);
             const [settings, setSettings] = React.useState(false);
             const [syncBusy, setSyncBusy] = React.useState(false);
             const [scrollTo, setScrollTo] = React.useState(null);
             const [focusDay, setFocusDay] = React.useState('');
+            const [query, setQuery] = React.useState('');
+            const [found, setFound] = React.useState(null);
+            const [searchTry, setSearchTry] = React.useState(0);
+            // An event dragged to new times: {key, id, t, saved, data}, shown there until the events read after it was saved arrive.
+            const [pending, setPending] = React.useState(null);
+            const [dragging, setDragging] = React.useState('');
+            const drops = useSendQuestion();
             const shown = React.useRef(EMPTY);
             const pressClosed = React.useRef(-Infinity);
             const zoneRef = React.useRef(zone);
@@ -4251,8 +4840,53 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const entry = state ? store.events(range.from, range.to) : null;
             // While another span loads, the last one read stays (each view shows only its own days of it).
             if (entry?.data) shown.current = entry.data.occurrences;
-            const occurrences = entry?.data ? entry.data.occurrences : shown.current;
+            const read = entry?.data ? entry.data.occurrences : shown.current;
+            const occurrences = React.useMemo(() => (pending ? read.map((o) => (o.id === pending.id ? placedAt(o, pending.t) : o)) : read), [read, pending]);
             const loading = state !== undefined && entry !== null && (entry.loading || !entry.data);
+            // A read again that failed, over what was read before: the events', or state's.
+            const stale = state ? (entry?.data && entry.error ? entry.error : store.stateError()) : '';
+            const dataNow = entry?.data;
+            const dataRef = React.useRef(dataNow);
+            dataRef.current = dataNow;
+            React.useEffect(() => {
+                if (!pending?.saved) return undefined;
+                if (dataNow !== pending.data) {
+                    setPending(null);
+                    return undefined;
+                }
+                const timer = setTimeout(() => setPending((p) => (p === pending ? null : p)), 8000);
+                return () => clearTimeout(timer);
+            }, [pending, dataNow]);
+            // The side column: beside the view where the page is roomy (or the user asked for it), folded behind its
+            // button where it isn't (or the user folded it), and over the view while open on a narrow page.
+            const narrow = width > 0 && width < 800;
+            const folded = narrow || (sideWanted ? sideWanted === 'folded' : width < 1100);
+            const overlay = narrow && sideOpen;
+            const sideShows = !folded || overlay;
+            // Where the focus goes once the side column opens ('in') or closes ('out').
+            const sideFocus = React.useRef('');
+            React.useEffect(() => {
+                const want = sideFocus.current;
+                if (!want) return;
+                sideFocus.current = '';
+                const active = document.activeElement;
+                if (want === 'in') sideRef.current?.querySelector('button:not([disabled]),[href],input,[tabindex="0"]')?.focus();
+                else if (!active || active === document.body || sideRef.current?.contains(active)) rootRef.current?.querySelector('[data-calendar-side-toggle]')?.focus();
+            });
+            const toggleSide = () => {
+                sideFocus.current = sideShows ? 'out' : 'in';
+                if (narrow) {
+                    setSideOpen(!sideOpen);
+                    return;
+                }
+                sideChoice = folded ? 'shown' : 'folded';
+                setSideWanted(sideChoice);
+            };
+            const closeOverlay = () => {
+                if (!overlay) return;
+                sideFocus.current = 'out';
+                setSideOpen(false);
+            };
             const accounts = state?.accounts ?? EMPTY;
             const attention = accounts.filter((a) => a.status === 'signin' || a.status === 'error');
             const remote = accounts.some((a) => a.kind !== 'local');
@@ -4268,14 +4902,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 setPop(null);
             };
             const justClosed = () => performance.now() - pressClosed.current < 700;
+            // Going to a day or a view ends a search.
             const go = (day) => {
                 setPop(null);
+                setQuery('');
                 setAnchor(day);
                 setFocusDay(day);
             };
             const setView = (next) => {
                 if (!VIEWS.includes(next)) return;
                 setPop(null);
+                setQuery('');
                 setViewChoice(next);
                 setAgendaSpan(AGENDA_DAYS);
                 if (next !== prefsView) {
@@ -4331,6 +4968,67 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (!result.ok) store.toast(errorText(result.error), 'error');
             };
 
+            // An event dragged (or moved with Alt and an arrow key) to new times: it shows there at once; a repeating
+            // one asks which occurrences move, a meeting whose guests are told only when asked asks whether to tell
+            // them, and one the host says would email people asks first (withConsent).
+            const movable = (o) => canDrag(o, store.calendar(o.calendarId));
+            const saveDrop = async ({ o, t, patch, key }, scope, tell) => {
+                const result = await withConsent(drops.ask, 'Don\'t move it', (given) => store.act('updateEvent', {
+                    id: o.id, patch: { ...patch, ...(tell ? { notify: true } : {}), ...consentArgs(given) }, scope,
+                }));
+                if (!result.ok) {
+                    setPending((p) => (p?.key === key ? null : p));
+                    return result.kept ? '' : errorText(result.error);
+                }
+                setPending((p) => (p?.key === key ? { ...p, saved: true, data: dataRef.current } : p));
+                const words = movedWords(result.value?.occurrence);
+                store.toast(`Moved “${o.title}” to ${whenText(placedAt(o, t), zoneRef.current)}.${words ? ` ${words}` : ''}`);
+                return '';
+            };
+            const dropTo = (o, t) => {
+                const patch = dropPatch(o, t);
+                if (!patch) return;
+                setPop(null);
+                const drop = { o, t, patch, key: `${o.id}@${Date.now()}` };
+                setPending({ key: drop.key, id: o.id, t, saved: false });
+                const scopes = o.recurring ? (Array.isArray(o.scopes) && o.scopes.length ? o.scopes : ['one', 'following', 'all']) : ['all'];
+                const mail = mailMode({ kind: 'update', calendar: store.calendar(o.calendarId), occurrence: o, guests: othersOf(o.attendees).length, scope: scopes[0] });
+                if (scopes.length > 1 || mail.mode === 'ask') {
+                    setDialog({ kind: 'move', drop, scopes });
+                    return;
+                }
+                void saveDrop(drop, scopes[0], false).then((problem) => {
+                    if (problem) store.toast(problem, 'error');
+                });
+            };
+
+            // Search: what's typed, and what the plugin found for it, read again whenever the calendars change.
+            const words = query.trim();
+            const searchSeq = React.useRef(0);
+            React.useEffect(() => {
+                const seq = ++searchSeq.current;
+                if (!words) {
+                    setFound(null);
+                    return undefined;
+                }
+                setFound((was) => ({ words, loading: true, data: was?.data, dataWords: was?.dataWords, error: '' }));
+                const timer = setTimeout(() => {
+                    void store.link.call('search', { query: words }).then((result) => {
+                        if (!alive.current || seq !== searchSeq.current) return;
+                        if (result.ok && isObject(result.value) && Array.isArray(result.value.occurrences)) {
+                            setFound({ words, loading: false, data: result.value, dataWords: words, error: '' });
+                        } else {
+                            setFound({ words, loading: false, data: undefined, dataWords: words, error: errorText(result.error) });
+                        }
+                    });
+                }, 250);
+                return () => clearTimeout(timer);
+            }, [words, searchTry, state?.version]);
+            const focusSearch = () => {
+                searchRef.current?.focus();
+                searchRef.current?.select();
+            };
+
             // An event asked for from elsewhere (the Agenda pane, a chat card): its day, then its details.
             const target = store.target();
             React.useEffect(() => {
@@ -4361,12 +5059,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }
             }, [target?.seq, state !== undefined, range.from, range.to, entry?.data, entry?.loading]);
 
-            // Keys, while the page shows and nothing else takes them.
+            // Keys, while the focus is in the page and nothing else takes them (one letter alone does nothing elsewhere).
             const keys = React.useRef({});
             keys.current = {
                 t: goToday, j: () => step(1), n: () => step(1), k: () => step(-1), p: () => step(-1),
                 m: () => setView('month'), w: () => setView('week'), d: () => setView('day'), a: () => setView('agenda'),
-                c: () => newEvent(),
+                c: () => newEvent(), '/': focusSearch,
             };
             React.useEffect(() => {
                 const onKey = (event) => {
@@ -4374,7 +5072,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     const root = rootRef.current;
                     if (!root || root.getClientRects().length === 0) return;
                     const active = document.activeElement;
-                    if (active && active !== document.body && !root.contains(active)) return;
+                    if (!active || !root.contains(active)) return;
                     if (active?.closest?.('input,textarea,select,[contenteditable]:not([contenteditable=false]),[role=menu],[role=listbox]')) return;
                     if (document.querySelector('[role=dialog][aria-modal=true]')) return;
                     const run = keys.current[String(event.key).toLowerCase()];
@@ -4387,18 +5085,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, []);
 
             const labels = { ...TEXT.views, week: compact ? '3 days' : TEXT.views.week };
+            const drags = { movable, onDrop: dropTo, onDragging: setDragging };
             let body;
             if (!state) {
                 body = h('div', { className: 'dshcal-state', 'data-calendar-state': store.stateError() ? 'error' : 'loading' },
                     store.stateError()
                         ? h(React.Fragment, null, h('span', { className: 'dshcal-error' }, store.stateError()), h(Btn, { onClick: () => void store.refresh() }, TEXT.retry))
                         : h(React.Fragment, null, h(Spinner), h('span', null, 'Loading your calendars…')));
+            } else if (words) {
+                body = h(SearchList, { found, zone, today, now, onOpen: openEvent, onRetry: () => setSearchTry((n) => n + 1) });
             } else if (entry?.error && !entry.data) {
                 body = h('div', { className: 'dshcal-state', 'data-calendar-state': 'error' },
                     h('span', { className: 'dshcal-error' }, entry.error), h(Btn, { onClick: () => void store.refresh() }, TEXT.retry));
             } else if (view === 'month') {
                 body = h(MonthView, {
-                    days: range.days, month: anchor.slice(0, 7), zone, occurrences, today, now, focusDay,
+                    days: range.days, month: anchor.slice(0, 7), zone, occurrences, today, now, focusDay, ...drags,
                     onOpen: openEvent, onMore: openDay,
                     onCreateDay: (day) => { if (!justClosed()) newEvent({ startDay: day, endDay: day, allDay: true }); },
                     onDay: (day) => { go(day); setView('day'); },
@@ -4411,16 +5112,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 });
             } else {
                 body = h(TimeGrid, {
-                    days: range.days, zone, occurrences, now, today, scrollTo,
+                    days: range.days, zone, occurrences, now, today, scrollTo, ready: Boolean(entry?.data), ...drags,
                     onOpen: openEvent, onCreate: createAt, onMore: openDay,
                     onDay: (day) => { go(day); setView('day'); },
                 });
             }
 
             const weekChoice = Number.isInteger(state?.prefs?.weekStart) ? `ws:${state.prefs.weekStart}` : 'ws:auto';
-            const side = h('aside', { className: 'dshcal-side dshcal-glass', 'aria-label': 'Calendars', 'data-calendar-side': '' },
+            const side = h('aside', { ref: sideRef, id: 'dshcal-side', className: 'dshcal-side dshcal-glass', 'aria-label': 'Calendars', 'data-calendar-side': '' },
                 h(Btn, { kind: 'primary', onClick: () => newEvent(), 'data-calendar-side-new': '', style: { alignSelf: 'stretch' } }, icon('IconPlusOutlineRegular'), 'New event'),
-                h(MiniMonth, { anchor, today, weekStart, shown: shownDays, onPick: (day) => { go(day); setSideOpen(false); } }),
+                h(MiniMonth, { anchor, today, weekStart, shown: shownDays, onPick: (day) => { go(day); closeOverlay(); } }),
                 state && !remote ? h('div', { className: 'dshcal-note', 'data-calendar-onboarding': '' },
                     h('span', null, 'Add iCloud, Google, Microsoft 365, Fastmail or any CalDAV account to see its calendars here.',
                         h('br'), h('button', { type: 'button', className: 'dshcal-link', onClick: () => setDialog({ kind: 'accounts', start: { page: 'add' } }) }, 'Add an account'))) : null,
@@ -4452,14 +5153,36 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             anchor: h(Btn, { kind: 'ghost', iconOnly: true, 'aria-label': 'Calendar settings', 'aria-haspopup': 'menu', 'aria-expanded': settings, 'data-calendar-settings': '', onClick: () => setSettings(!settings) }, icon('IconSettingsOutlineRegular')),
                         }))));
 
+            const search = h('div', { className: 'dshcal-search', role: 'search' },
+                icon('IconSearchOutlineRegular'),
+                h('input', {
+                    ref: searchRef, type: 'search', className: 'dshcal-input', value: query, placeholder: 'Search', 'aria-label': 'Search events', title: 'Search events (/)',
+                    autoComplete: 'off', spellCheck: false, enterKeyHint: 'search', 'data-calendar-search': '',
+                    onChange: (event) => setQuery(event.target.value),
+                    onKeyDown: (event) => {
+                        if (event.key !== 'Escape' || query === '' || pop) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setQuery('');
+                    },
+                }),
+                query ? h('button', {
+                    type: 'button', className: 'dshcal-search-clear', 'aria-label': 'Clear the search', 'data-calendar-search-clear': '',
+                    onClick: () => { setQuery(''); searchRef.current?.focus(); },
+                }, icon('IconCloseOutlineRegular', { size: 12 })) : null);
+
             const header = h('div', { className: 'dshcal-head' },
                 h('div', { className: 'dshcal-head-nav' },
-                    h(IconBtn, { label: 'Show the calendars', className: 'dshcal-side-toggle', glyph: icon('IconPanelLeftOutlineRegular'), 'aria-expanded': sideOpen, onClick: () => setSideOpen(!sideOpen), 'data-calendar-side-toggle': '' }),
+                    h(IconBtn, {
+                        label: sideShows ? 'Hide the calendars' : 'Show the calendars', className: 'dshcal-side-toggle', glyph: icon('IconPanelLeftOutlineRegular'),
+                        'aria-expanded': sideShows, 'aria-controls': 'dshcal-side', onClick: toggleSide, 'data-calendar-side-toggle': '',
+                    }),
                     h(Btn, { onClick: goToday, 'data-calendar-today': '', title: 'Today (T)' }, TEXT.today),
                     h(IconBtn, { label: TEXT.previous[view], glyph: icon('IconChevronLeftOutlineRegular'), onClick: () => step(-1), 'data-calendar-prev': '' }),
                     h(IconBtn, { label: TEXT.next[view], glyph: icon('IconChevronRightOutlineRegular'), onClick: () => step(1), 'data-calendar-next': '' }),
                     h('h1', { className: 'dshcal-title', 'aria-live': 'polite', 'data-calendar-range': '' }, range.title)),
                 h('div', { className: 'dshcal-head-tools' },
+                    search,
                     attention.length ? h(IconBtn, {
                         label: attention.length === 1 ? `${attention[0].name}: ${attention[0].problem || (attention[0].status === 'signin' ? 'sign-in needed' : 'the last sync failed')}` : `${plural(attention.length, 'account')} need attention`,
                         className: 'dshcal-warn', glyph: icon('IconWarningOutlineRegular'), onClick: () => setDialog({ kind: 'accounts' }), 'data-calendar-attention': '',
@@ -4472,35 +5195,53 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h(Btn, { kind: 'primary', className: 'dshcal-head-new', onClick: () => newEvent(), 'aria-label': 'New event', title: 'New event (C)', 'data-calendar-new': '' },
                         icon('IconPlusOutlineRegular'), h('span', { className: 'dshcal-hide-narrow' }, 'New event'))));
 
+            const busy = words ? found?.loading === true : loading;
             return h('div', {
-                ref: rootRef, className: 'dshcal-root', 'data-calendar-page': '', 'data-calendar-view-now': view, 'data-side-open': sideOpen ? '' : undefined,
-                onKeyDown: (event) => { if (event.key === 'Escape' && sideOpen) { event.stopPropagation(); setSideOpen(false); } },
+                ref: rootRef, className: 'dshcal-root', tabIndex: -1, 'data-calendar-page': '', 'data-calendar-view-now': view,
+                'data-side-folded': folded ? '' : undefined, 'data-side-open': overlay ? '' : undefined, 'data-calendar-dragging': dragging || undefined,
+                onKeyDown: (event) => {
+                    // An event's or a day's details open take Escape first (they close on it).
+                    if (event.key !== 'Escape' || event.defaultPrevented || pop || !rootRef.current?.contains(event.target)) return;
+                    if (overlay) {
+                        event.stopPropagation();
+                        closeOverlay();
+                    } else if (words) {
+                        event.stopPropagation();
+                        setQuery('');
+                    }
+                },
             },
             side,
-            sideOpen ? h('button', { type: 'button', className: 'dshcal-scrim', tabIndex: -1, 'aria-label': 'Hide the calendars', onClick: () => setSideOpen(false) }) : null,
-            h('section', { className: 'dshcal-main dshcal-glass', 'aria-label': range.title, 'data-calendar-main': '' },
+            overlay ? h('button', { type: 'button', className: 'dshcal-scrim', tabIndex: -1, 'aria-label': 'Hide the calendars', onClick: closeOverlay }) : null,
+            h('section', { className: 'dshcal-main dshcal-glass', 'aria-label': words ? 'Search' : range.title, 'data-calendar-main': '' },
                 header,
+                stale ? h('div', { className: 'dshcal-stale', role: 'status', 'data-calendar-stale': '' },
+                    icon('IconWarningOutlineRegular'),
+                    h('span', null, `Couldn't refresh: ${stale}`),
+                    h(Btn, { size: 'sm', kind: 'ghost', onClick: () => void store.refresh() }, TEXT.retry)) : null,
                 issues.length || kept.length ? h('div', { className: 'dshcal-notes' },
-                    kept.map((n) => h('div', { key: `kept:${n.id}`, className: 'dshcal-note', role: 'alert', 'data-tone': 'warn', 'data-calendar-kept-notice': '' },
+                    kept.map((n) => h('div', { key: `kept:${n.id}`, className: 'dshcal-notice', role: 'alert', 'data-tone': 'warn', 'data-calendar-kept-notice': '' },
                         icon('IconWarningOutlineRegular'),
                         h('span', null, n.text),
                         h(IconBtn, { label: 'Close this notice', glyph: icon('IconCloseOutlineRegular', { size: 12 }), size: 'sm', onClick: () => store.closeNotice(n.id) }))),
-                    issues.map((i) => h('div', { key: i.key, className: 'dshcal-note', role: 'status', 'data-calendar-store-issue': '' },
+                    issues.map((i) => h('div', { key: i.key, className: 'dshcal-notice', role: 'status', 'data-calendar-store-issue': '' },
                         icon('IconInfoOutlineRegular'),
                         h('span', null, i.text),
                         h(IconBtn, {
                             label: 'Close this notice', glyph: icon('IconCloseOutlineRegular', { size: 12 }), size: 'sm',
                             onClick: () => { closedIssues.add(i.key); setClosed((n) => n + 1); },
                         })))) : null,
-                h('div', { className: 'dshcal-body', 'aria-busy': loading ? true : undefined },
-                    loading ? h('div', { className: 'dshcal-busy', role: 'progressbar', 'aria-label': 'Loading events' }) : null,
-                    entry?.data?.more ? h('div', { className: 'dshcal-hint', style: { padding: '4px 12px' } }, 'More events than the page can show at once here; some are left out.') : null,
+                h('div', { className: 'dshcal-body', 'aria-busy': busy ? true : undefined },
+                    busy ? h('div', { className: 'dshcal-busy', role: 'progressbar', 'aria-label': words ? 'Searching' : 'Loading events' }) : null,
+                    !words && entry?.data?.more ? h('div', { className: 'dshcal-hint', style: { padding: '4px 12px' } }, 'More events than the page can show at once here; some are left out.') : null,
                     body)),
             pop?.kind === 'event' ? h(EventPopover, {
                 key: `e:${pop.occurrence.id}`, cal, occurrence: pop.occurrence, anchor: pop.anchor, onClose: closePop,
                 onEdit: (o) => { setPop(null); setDialog({ kind: 'event', mode: 'edit', occurrence: o }); },
                 onDuplicate: (o) => { setPop(null); setDialog({ kind: 'event', mode: 'duplicate', occurrence: o }); },
                 onDelete: (o) => { setPop(null); setDialog({ kind: 'delete', occurrence: o }); },
+                // A search's event: to its day in the view.
+                ...(words ? { openLabel: 'Show in calendar', onOpenPage: (o) => { setPop(null); setQuery(''); store.openAt(o); } } : {}),
             }) : null,
             pop?.kind === 'day' ? h(DayPopover, {
                 key: `d:${pop.day}`, day: pop.day, occurrences: dayList(occurrences, pop.day, zone), zone, anchor: pop.anchor, now, onClose: closePop,
@@ -4535,6 +5276,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 },
             }) : null,
             dialog?.kind === 'accounts' ? h(AccountsDialog, { cal, start: dialog.start, onClose: closeDialog }) : null,
+            dialog?.kind === 'move' ? h(MoveEventDialog, {
+                cal, occurrence: dialog.drop.o, times: dialog.drop.t, scopes: dialog.scopes,
+                onSubmit: (scope, tell) => saveDrop(dialog.drop, scope, tell),
+                onClose: () => {
+                    const { key } = dialog.drop;
+                    closeDialog();
+                    setPending((p) => (p?.key === key && !p.saved ? null : p));
+                },
+            }) : null,
+            drops.dialog,
             h(ToastHost, { store }));
         }
 
@@ -4546,8 +5297,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /**
          * The Agenda pane in DSH's right sidebar: today and the next days, the
          * event on now and the next one marked, Join for a call about to
-         * start. An event opens on the Calendar page; New event opens the
-         * event dialog right here.
+         * start. An event's details open beside the pane, the chat staying
+         * where it is, with Open in Calendar; New event, Edit and Delete open
+         * their dialogs right here.
          */
         function AgendaPane({ cal, useTabInfo }) {
             const info = typeof useTabInfo === 'function' ? useTabInfo() : undefined;
@@ -4557,12 +5309,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             useWatch(store, visible, false);
             const now = useNow(30_000, visible);
             const [dialog, setDialog] = React.useState(null);
+            const [pop, setPop] = React.useState(null);
             const state = store.state();
             const zone = store.zone();
             const today = dayIn(now, zone);
             const last = addDays(today, PANE_DAYS - 1);
             const entry = state && visible ? store.events(startOfDay(today, zone), startOfDay(addDays(last, 1), zone)) : null;
             const occurrences = entry?.data?.occurrences ?? EMPTY;
+            const stale = state ? (entry?.data && entry.error ? entry.error : store.stateError()) : '';
+            const saved = (o, words) => {
+                const told = isObject(o) ? contactText(o) : '';
+                if (!placed(o)) {
+                    store.toast(`${words === 'Added' ? 'Added.' : 'Saved.'}${told ? ` ${told}` : ''}`);
+                    return;
+                }
+                const day = o.allDay ? o.startDay : dayIn(o.start, zone);
+                store.toast(`${words === 'Added'
+                    ? `Added “${o.title}” on ${dayText(day)}${o.allDay ? '' : ` at ${timeText(o.start, zone)}`}.`
+                    : 'Saved.'}${told ? ` ${told}` : ''}`);
+            };
             const live = (o) => o.status !== 'cancelled' && o.myStatus !== 'declined';
             const timed = occurrences.filter((o) => !spansDays(o) && live(o));
             const current = new Set(timed.filter((o) => o.start <= now && o.end > now).map((o) => o.id));
@@ -4589,8 +5354,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 },
                 h('span', { className: 'dshcal-pane-bar', 'aria-hidden': true }),
                 h('button', {
-                    type: 'button', className: 'dshcal-pane-what', onClick: () => cal.openAt(o),
-                    'aria-label': `${o.title}, ${when}${isNow ? ', on now' : ''}. Open it in the calendar.`,
+                    type: 'button', className: 'dshcal-pane-what', 'aria-haspopup': 'dialog',
+                    onClick: (event) => setPop({ occurrence: o, anchor: rectOf(event.currentTarget.closest('.dshcal-pane-ev') ?? event.currentTarget) }),
+                    'aria-label': `${o.title}, ${when}${isNow ? ', on now' : ''}`,
                 },
                 h('span', { className: 'dshcal-pane-title' },
                     isNow ? h('span', { className: 'dshcal-pane-badge' }, 'Now') : soon ? h('span', { className: 'dshcal-pane-badge' }, untilWords(o.start, now)) : null,
@@ -4623,20 +5389,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     icon('IconWarningOutlineRegular', { size: 12 }),
                     h('span', null, attention.length === 1 ? `${attention[0].name}: ${attention[0].problem || (attention[0].status === 'signin' ? 'sign-in needed' : 'the last sync failed')}.` : `${plural(attention.length, 'account')} need attention.`),
                     h('button', { type: 'button', className: 'dshcal-link', onClick: () => setDialog({ kind: 'accounts' }) }, 'Fix')) : null,
+                stale ? h('div', { className: 'dshcal-stale', role: 'status', 'data-calendar-stale': '' },
+                    icon('IconWarningOutlineRegular', { size: 12 }),
+                    h('span', null, `Couldn't refresh: ${stale}`),
+                    h(Btn, { size: 'sm', kind: 'ghost', onClick: () => void store.refresh() }, TEXT.retry)) : null,
                 body,
                 h('div', { className: 'dshcal-pane-foot' }, h(Btn, { size: 'sm', onClick: () => cal.openPage() }, h(CalendarIcon, { size: 14 }), 'Open calendar')),
-                dialog?.kind === 'event' ? h(EventDialog, {
-                    cal, mode: 'new', onClose: () => setDialog(null),
-                    onSaved: (o) => {
-                        const told = isObject(o) ? contactText(o) : '';
-                        if (!placed(o)) {
-                            store.toast(`Added.${told ? ` ${told}` : ''}`);
-                            return;
-                        }
-                        const day = o.allDay ? o.startDay : dayIn(o.start, zone);
-                        store.toast(`Added “${o.title}” on ${dayText(day)}${o.allDay ? '' : ` at ${timeText(o.start, zone)}`}.${told ? ` ${told}` : ''}`);
-                    },
+                pop ? h(EventPopover, {
+                    key: `e:${pop.occurrence.id}`, cal, occurrence: pop.occurrence, anchor: pop.anchor, onClose: () => setPop(null),
+                    onEdit: (o) => { setPop(null); setDialog({ kind: 'event', mode: 'edit', occurrence: o }); },
+                    onDuplicate: (o) => { setPop(null); setDialog({ kind: 'event', mode: 'duplicate', occurrence: o }); },
+                    onDelete: (o) => { setPop(null); setDialog({ kind: 'delete', occurrence: o }); },
+                    onOpenPage: (o) => { setPop(null); cal.openAt(o); },
                 }) : null,
+                dialog?.kind === 'event' ? h(EventDialog, { cal, mode: dialog.mode ?? 'new', occurrence: dialog.occurrence, onClose: () => setDialog(null), onSaved: saved }) : null,
+                dialog?.kind === 'delete' ? h(DeleteEventDialog, { cal, occurrence: dialog.occurrence, onClose: () => setDialog(null) }) : null,
                 dialog?.kind === 'accounts' ? h(AccountsDialog, { cal, onClose: () => setDialog(null) }) : null,
                 h(ToastHost, { store }));
         }
@@ -5025,6 +5792,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             rgbOf, textOn, colorOf, contrast, luminance,
             parseRule, untilValue, untilDay, repeatChoices, repeatFromRule, ruleFromRepeat, repeatProblem,
             columnsOf, lanesOf, fitLanes, daySegments, barItems, agendaDays, rangeOf, stepFrom, dayList,
+            SNAP, snapTo, canDrag, movedTo, resizedTo, shiftedBy, coveredDays, placedAt, dropPatch, consentArgs, movedWords, ghostWords, openingMinute, clockText, clockRangeText, searchGroups,
             draftFrom, draftProblems, createInput, changePatch, writableCalendars,
             roleOf, othersOf, mailMode, peopleText, sameOccurrence, placed, emailedText, contactText, CHOOSE_CALENDAR, withConsent, consentQuestion, consentWords, asked, removalNotice, returnAddress,
             callArgs, argWhen, runningTitle, doneTitle, resultText, failureText, saysNotDone, saysPartly, NOT_DONE,
