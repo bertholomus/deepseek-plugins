@@ -5814,7 +5814,7 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         // --version after a command's other words is an option's name or a script's own, not a version query.
         ['helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx --namespace ingress-nginx --create-namespace --version 4.10.1', 'makes a change with helm (helm upgrade)'],
         ['helm install redis bitnami/redis --version 19.0.2 -n cache', 'makes a change with helm (helm install)'],
-        ['gcloud app deploy app.yaml --version v2 --quiet', 'makes a change in the cloud (gcloud app deploy)'],
+        ['gcloud app deploy app.yaml --version v2 --quiet', 'makes a change in the cloud (gcloud app deploy app.yaml)'],
         ['./scripts/release.sh --version 1.4.2', 'runs ./scripts/release.sh, which makes a change on GitHub (gh release create)'],
         ['curl -X POST "$API_URL/deploy" -d @build.json -H "Authorization: Bearer $TOKEN" --version', 'sends a POST to $API_URL/deploy (curl)'],
         // An option after the destination, or a value it takes, is no destination.
@@ -5826,6 +5826,12 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         ['npm run sync:assets', 'runs npm run sync:assets, which copies to S3 (aws s3 sync → acme-assets)'],
         ['npm run sync:prod', 'runs npm run sync:prod, which copies files to web1 (rsync)'],
         ['make sync', 'runs make sync, which copies to S3 (aws s3 sync → acme-site)'],
+        // A bucket copy through gcloud storage, a cloud command's verb after its group, and what it changes.
+        ['gcloud storage cp -r ./dist gs://acme-site', 'copies files to gs://acme-site (gcloud storage cp)'],
+        ['gcloud storage rsync -r ./dist gs://acme-site --delete-unmatched-destination-objects', 'copies files to gs://acme-site (gcloud storage rsync)'],
+        ['gcloud storage rm "gs://acme-site/old/**"', 'changes files in gs://acme-site/old/** (gcloud storage rm)'],
+        ['az webapp up --name acme-web --resource-group rg --runtime "NODE:20-lts"', 'makes a change in the cloud (az webapp up acme-web)'],
+        ['gcloud run deploy api --source . --region us-central1', 'makes a change in the cloud (gcloud run deploy api)'],
         // Every send in a line is named, each with where it goes.
         ['git push origin main && gh pr create --fill', 'pushes to origin (git push) and makes a change on GitHub (gh pr create)'],
         ['npm version patch && git push --follow-tags && npm publish', 'pushes to its remote (git push) and publishes (npm publish)'],
@@ -5869,7 +5875,11 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     for (const command of ['curl -sS http://127.0.0.1:8787/deploy', 'bash -n deploy.sh', 'git push --dry-run', './run.sh', 'npm run build', 'git status',
         'git --version', 'curl --version', 'gh pr create --help',
         // A local app whose code has a route table or an ORM's delete.
-        'node server.js', 'npm start', 'python3 app.py', 'node -e "console.log(JSON.stringify({ method: \'POST\', path: \'/items\' }))"']) {
+        'node server.js', 'npm start', 'python3 app.py', 'node -e "console.log(JSON.stringify({ method: \'POST\', path: \'/items\' }))"',
+        // A cloud command that reads, though its group or its resource is named like a change.
+        'gcloud run services list', 'gcloud run services describe api --region us-central1', 'gcloud run services logs read api --limit 50',
+        'gcloud deploy releases list --delivery-pipeline web --region us-central1', 'gcloud functions describe send-welcome-email --region us-central1',
+        'az functionapp show --name sync-orders --resource-group rg']) {
         assert.deepEqual(await gate(t1, 'bash', { command }), { kind: 'allow' }, command);
     }
     for (const command of ['Invoke-RestMethod -Uri https://api.example.com/v1/items', 'Get-Content .\\scripts\\deploy.ps1', "Write-Host 'Invoke-RestMethod -Method Post is what it does'",

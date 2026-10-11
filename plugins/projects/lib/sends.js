@@ -930,15 +930,34 @@ function table(entries, args, program, kind) {
     return { kind, program, what: `makes a change with ${program} (${words})` };
 }
 
-const CLOUD_VERBS = /^(create|delete|deploy|update|patch|set|add|remove|import|start|stop|restart|reset|resize|rollback|publish|submit|cancel|enable|disable|undelete|restore|attach|detach|apply|upload|ssh|scp|purge|invoke|send|assign|scale|swap|sync|execute|run|move|rename|promote|failover|revoke|grant|rotate|resume|suspend|reboot|terminate|destroy|associate|disassociate|register|deregister|tag|untag)([-_]|$)/;
+const CLOUD_VERBS = /^(create|delete|deploy|update|patch|set|add|remove|import|start|stop|restart|reset|resize|rollback|publish|submit|cancel|enable|disable|undelete|restore|attach|detach|apply|upload|ssh|scp|purge|invoke|send|assign|scale|swap|sync|execute|run|move|rename|promote|failover|revoke|grant|rotate|resume|suspend|reboot|terminate|destroy|associate|disassociate|register|deregister|tag|untag|up)([-_]|$)/;
+/** Commands that only read. */
+const CLOUD_READS = /^(list|describe|get|show|read|tail|wait|browse|check|search|print|explain|diff|validate|download)([-_]|$)/;
 const CLOUD_READ_GROUPS = { gcloud: ['config', 'auth', 'components', 'info', 'help', 'topic', 'version', 'init', 'feedback', 'survey', 'cheat-sheet'], az: ['login', 'logout', 'account', 'config', 'extension', 'version', 'find', 'upgrade', 'interactive', 'init', 'cloud', 'feedback', 'survey'], doctl: ['auth', 'version', 'completion'] };
 
-/** gcloud, az and doctl: a command whose words include a verb that changes something (`gcloud run deploy`, `az group delete`). */
+/**
+ * gcloud, az and doctl: a command whose verb changes something, said with
+ * what it changes (`gcloud run deploy api`, `az webapp up --name acme-web`).
+ * The first word names a group, even one named like a verb, so the command
+ * is the first verb after it: `gcloud run services list` and `gcloud deploy
+ * releases list` read, and so does `gcloud functions describe send-email`.
+ */
 function cloud(args, program) {
-    const pos = positionals(args, new Set(['--project', '--region', '--zone', '--subscription', '--resource-group', 'g', '--output', 'o', '--format', '--query', '--account', '--configuration', '--context', 't', '--access-token']));
+    const all = positionals(args, new Set(['--project', '--region', '--zone', '--subscription', '--resource-group', 'g', '--output', 'o', '--format', '--query', '--account', '--configuration', '--context', 't', '--access-token']));
+    // A release track comes before the group: `gcloud beta run deploy`.
+    const pos = program === 'gcloud' && ['alpha', 'beta', 'preview'].includes(all[0]) ? all.slice(1) : all;
     if (pos.length === 0 || CLOUD_READ_GROUPS[program].includes(pos[0])) return null;
-    const verb = pos.slice(0, 5).find((w) => CLOUD_VERBS.test(w));
-    return verb ? { kind: 'deploy', program, what: `makes a change in the cloud (${program} ${pos.slice(0, pos.indexOf(verb) + 1).join(' ').slice(0, 60)})` } : null;
+    // gcloud storage copies and removes as gsutil does.
+    if (program === 'gcloud' && pos[0] === 'storage' && ['cp', 'mv', 'rsync', 'rm'].includes(pos[1])) {
+        const found = remote('gsutil', args.slice(args.indexOf('storage') + 1), 'gcloud storage');
+        return found && { ...found, program };
+    }
+    const at = pos.findIndex((w, i) => i > 0 && i < 5 && (CLOUD_VERBS.test(w) || CLOUD_READS.test(w)));
+    if (at < 0 || !CLOUD_VERBS.test(pos[at])) return null;
+    // What it changes: a --name, or the word right after the verb (not an option's value).
+    const next = args[args.indexOf(pos[at]) + 1];
+    const target = optionValue(args, ['--name', '-n']) ?? (next !== undefined && !next.startsWith('-') ? next : undefined);
+    return { kind: 'deploy', program, what: `makes a change in the cloud (${[program, ...pos.slice(0, at + 1), target ?? ''].join(' ').trim().slice(0, 60)})` };
 }
 
 const AWS_TAKES = new Set(['--profile', '--region', '--output', '--endpoint-url', '--query', '--cli-input-json', '--cli-input-yaml', '--color', '--ca-bundle', '--cli-read-timeout', '--cli-connect-timeout', '--page-size', '--max-items', '--starting-token', '--cli-binary-format',
@@ -996,7 +1015,8 @@ const SSH_TAKES = new Set([...'bcDEeFIiJLlmOoPpQRSWw', 'B']);
 /** `[user@]host:path`, `host::module`, `scp://…`: a place on another machine. */
 const remotePath = (a) => /^[a-z][a-z0-9+.-]*:\/\//i.test(a) || (/^[^/\s:]+:/.test(a) && !/^[a-z]:[\\/]/i.test(a));
 
-function remote(name, args) {
+/** ssh and the programs that copy files to another machine or a bucket; `label` names the command (`gcloud storage`). */
+function remote(name, args, label = name) {
     if (name === 'ssh' || name === 'mosh' || name === 'autossh' || name === 'rsh') {
         if (has(args, '-G', '-V', '-Q')) return null;
         const host = positionals(args, SSH_TAKES)[0];
@@ -1020,10 +1040,16 @@ function remote(name, args) {
     if (name === 's3cmd' || name === 'gsutil' || name === 'azcopy') {
         const pos = positionals(args, new Set(['-c', '--config', 'o', 'h']));
         const sub = pos[0];
-        const dest = pos.at(-1) ?? '';
         const writes = { s3cmd: ['put', 'del', 'rm', 'mb', 'rb', 'setacl', 'setpolicy', 'delpolicy', 'modify', 'restore'], gsutil: ['rm', 'mb', 'rb', 'setmeta', 'acl', 'iam', 'defacl', 'retention'], azcopy: ['remove', 'make', 'rm'] };
-        const copy = ['cp', 'mv', 'sync', 'rsync', 'copy'].includes(sub) && /^(s3|gs|https?):\/\//i.test(dest);
-        return copy || writes[name].includes(sub) ? { kind: 'remote', program: name, what: `changes files in the cloud (${name} ${sub})` } : null;
+        const bucket = (a) => /^(s3|gs|https?):\/\//i.test(a ?? '');
+        // A bucket keeps its scheme, which says whose it is; any URL loses its query, where a token can be.
+        const where = (url) => `${/^(s3|gs):\/\//i.test(url) ? url.slice(0, 5).toLowerCase() : ''}${placeOf(url)}`;
+        // Sources, then the destination: a bucket after the first source is where the files go.
+        const to = ['cp', 'mv', 'sync', 'rsync', 'copy'].includes(sub) ? pos.slice(2).find(bucket) : undefined;
+        if (to) return { kind: 'remote', program: name, what: `copies files to ${where(to)} (${label} ${sub})` };
+        if (!writes[name].includes(sub)) return null;
+        const at = pos.slice(1).find(bucket);
+        return { kind: 'remote', program: name, what: `changes files in ${at ? where(at) : 'the cloud'} (${label} ${sub})` };
     }
     if (['sftp', 'ftp', 'lftp', 'tftp'].includes(name)) return { kind: 'remote', program: name, what: `opens a file transfer to ${placeOf(positionals(args, new Set([...'bBDFiJlPRSoe'])).at(-1) ?? '') || 'another machine'} (${name})` };
     if (name === 'nc') {
