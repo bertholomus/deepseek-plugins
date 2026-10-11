@@ -3589,6 +3589,38 @@ test('projection: /coordinate makes a chat coordinate under its title, /coordina
     }
 });
 
+test('projection: a chat forked from a coordinating chat or a thread is a plain chat until /coordinate there', () => {
+    const { host } = setup();
+    const def = host.projections[0];
+    const through = (state, events) => events.reduce((s, event) => def.apply(s, event), state);
+    const msg = (seq, text) => ({ type: 'user/message', seq, time: seq, data: { content: [{ type: 'text', text }], source: { kind: 'agent-message', form: 'relay', senderSessionId: 'c' } } });
+    const meta = { dshCoordinator: 1, role: 'coordinator', project: { id: 'c', name: 'DSH Plugins' }, threads: [{ id: 't1', session: 't', title: 'Go', resolved: false }], action: { kind: 'start', thread: 't1' } };
+    // DSH seeds a fork with its source's events through a finished turn (seq 0 to 5 here) and says how many.
+    const source = [
+        { type: 'session/title', seq: 0, time: 0, data: { title: 'DSH Plugins' } },
+        ...coordinateEvents(1),
+        { type: 'turn/start', seq: 3, time: 3, data: { turn: 1 } },
+        { type: 'tool/result', seq: 4, time: 4, data: { turn: 1, meta } },
+        { type: 'turn/end', seq: 5, time: 5, data: { turn: 1, reason: { kind: 'completed' } } },
+    ];
+    const end = { type: 'session/end-seed', seq: 6, time: 5, data: { inherited: true } };
+    assert.equal(def.wire.view(through(def.init({ id: 'c' }), source)).role, 'coordinator', 'the source coordinates');
+    const fork = through(def.init({ id: 'f' }, 6), [...source, end]);
+    assert.equal(def.wire.view(fork), null);
+    // DSH may save the state and fold on from it.
+    const saved = def.stateSchema.parse(JSON.parse(JSON.stringify(fork)));
+    assert.equal(saved.inherited, 6);
+    // Its own /coordinate makes it coordinate, under its own id and the title it inherited, with no threads yet.
+    const own = through(saved, [{ type: 'turn/start', seq: 7, time: 7, data: { turn: 2 } }, ...coordinateEvents(8)]);
+    assert.deepEqual(plain(def.wire.view(own)), { role: 'coordinator', project: { id: 'f', name: 'DSH Plugins' } });
+    assert.equal(own.turn, 2);
+    // A fork of a thread isn't a thread: the brief is its source's.
+    const brief = msg(0, '[Brief from the chat "DSH Plugins" · you are thread t1, "Go"]\n\nGo.');
+    const failed = { type: 'turn/end', seq: 1, time: 1, data: { turn: 1, reason: { kind: 'error', error: { message: 'x' } } } };
+    assert.equal(def.wire.view(through(def.init({ id: 'g' }, 2), [brief, failed])), null);
+    assert.equal(def.wire.view(through(def.init({ id: 'g' }), [brief])).role, 'thread', 'the thread itself is one');
+});
+
 test('projection: a thread notes each turn that changed files, a newer announcement replacing its turn', () => {
     const { host } = setup();
     const def = host.projections[0];

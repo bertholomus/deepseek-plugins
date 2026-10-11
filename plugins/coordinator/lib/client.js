@@ -2858,16 +2858,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * Whether a session is a plain chat of the user's own, not coordinating
-         * now: not a thread, nor a subagent's or teammate's session DSH started
-         * under another, and either no value of the plugin's or a coordinating
-         * one the user stopped. Not while DSH is still reading its value, so a
-         * coordinating chat never shows Coordinate for a moment.
+         * now: not a thread, nor a subagent's or teammate's session (DSH marks
+         * both as a subagent's), and either no value of the plugin's or a
+         * coordinating one the user stopped. A chat the user forked from
+         * another is their own, though DSH lists it under its source. Not
+         * while DSH is still reading its value, so a coordinating chat never
+         * shows Coordinate for a moment.
          */
         function canCoordinate(state, sessionId) {
             const row = state?.byId?.[sessionId];
             if (!isObject(row)) return false;
-            const named = (id) => typeof id === 'string' && id !== '';
-            if (named(row.parentId) || named(row.parentSessionId) || row.origin === 'subagent' || row.origin === 'teammate') return false;
+            if (row.origin === 'subagent' || row.origin === 'teammate') return false;
             const value = valueIn(state, sessionId);
             if (value) return value.role === 'coordinator' && value.off === true;
             if (state.projectionsBySession?.[sessionId]?.state === 'loading') return false;

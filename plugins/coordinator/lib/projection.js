@@ -22,7 +22,10 @@
  * projects plugin's sessions stay plain chats. A session the store already
  * knows is seeded from the store the first time DSH folds it, so one whose
  * value DSH dropped shows its threads at once; replayed events older than
- * the seed then add cards but never overwrite the roster.
+ * the seed then add cards but never overwrite the roster. A forked chat's
+ * log starts with its source's events (DSH says how many): they give it
+ * its title and turn numbers, never a role, so a fork of a coordinating
+ * chat or of a thread is a plain chat of the user's until /coordinate there.
  *
  * DSH runs `apply` inside its event commit and parses persisted state
  * without catching, so `apply` and both parsers never throw.
@@ -341,6 +344,8 @@ function applyTitle(state, event) {
 /** One event folded into the state; the same reference when the event says nothing about coordinating. */
 export function applyEvent(state, event) {
     try {
+        // A fork's inherited events are its source's: the chat it forked from coordinated or was a thread, not it.
+        if (state.inherited > 0 && Number.isSafeInteger(event?.seq) && event.seq < state.inherited && event.type !== 'session/title' && event.type !== 'turn/start') return state;
         switch (event?.type) {
             case 'command/run':
             case 'command/done': return applyCommand(state, event);
@@ -374,6 +379,8 @@ export function parseState(value) {
         turn, v,
         ...(Number.isFinite(value.since) && value.since > 0 ? { since: value.since } : {}),
         ...(Number.isFinite(value.turnAt) ? { turnAt: value.turnAt } : {}),
+        // How many of a fork's first events are its source's.
+        ...(Number.isSafeInteger(value.inherited) && value.inherited > 0 ? { inherited: value.inherited } : {}),
         // The session's own id and title, for a chat that starts coordinating; and the command it waits on the result of.
         ...(typeof value.id === 'string' ? { id: value.id.slice(0, 120) } : {}),
         ...(typeof value.title === 'string' ? { title: value.title.slice(0, 120) } : {}),
@@ -390,12 +397,13 @@ export function coordinatorSessionProjection(seed) {
         key: PROJECTION_KEY,
         stateVersion: STATE_VERSION,
         stateSchema: { parse: parseState },
-        init(header) {
+        init(header, inheritedEventCount) {
             const id = typeof header?.id === 'string' && header.id !== '' ? header.id.slice(0, 120) : undefined;
+            const inherited = Number.isSafeInteger(inheritedEventCount) && inheritedEventCount > 0 ? { inherited: inheritedEventCount } : {};
             let v = null;
             try { v = id ? seed(id) : null; } catch { v = null; }
-            if (v) return { turn: 0, v, since: Date.now(), id };
-            return id ? { ...INITIAL, id } : INITIAL;
+            if (v) return { turn: 0, v, since: Date.now(), id, ...inherited };
+            return id || inherited.inherited ? { ...INITIAL, ...(id ? { id } : {}), ...inherited } : INITIAL;
         },
         apply: applyEvent,
         wire: {

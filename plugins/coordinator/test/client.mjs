@@ -1008,6 +1008,7 @@ test('browser half: Coordinate shows in the header of a plain top-level chat tha
             t: { id: 't', title: 'Fix login', projectionValues: { coordinatorSession: thread } },
             sa: { id: 'sa', title: 'Explore the code', parentId: 'p', origin: 'subagent' },
             sb: { id: 'sb', title: 'Review', origin: 'subagent' },
+            f: { id: 'f', title: 'Pricing, another way', parentSessionId: 'p' },
             old: { id: 'old', title: 'Storefront' },
             cold: { id: 'cold', title: 'Not read yet' },
         },
@@ -1016,8 +1017,9 @@ test('browser half: Coordinate shows in the header of a plain top-level chat tha
     takeKnown({ old: { role: 'coordinator', project: 'old', name: 'Storefront' } });
     // A plain chat of the user's own, or one that stopped coordinating; not a thread, a subagent's session, a chat that
     // coordinates, one the plugin's store knows as either, or one whose value DSH is still reading.
-    assert.deepEqual(['p', 'n', 'c', 't', 'sa', 'sb', 'old', 'cold', 'missing'].map((id) => canCoordinate(state, id)),
-        [true, true, false, false, false, false, false, false, false]);
+    // A chat the user forked (DSH lists it under its source, with no origin) is theirs, so it can coordinate.
+    assert.deepEqual(['p', 'n', 'c', 't', 'sa', 'sb', 'f', 'old', 'cold', 'missing'].map((id) => canCoordinate(state, id)),
+        [true, true, false, false, false, false, true, false, false, false]);
 
     const calls = [];
     const refreshed = [];
