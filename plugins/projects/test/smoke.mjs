@@ -5723,7 +5723,7 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     mkdirSync(join(work, 'billing'));
     writeFileSync(join(work, 'billing', 'deploy.sh'), '#!/bin/bash\ncurl -fsS -X POST -H "Authorization: Bearer ${STAGING_TOKEN}" -d \'{"service":"billing"}\' "${STAGING_URL}"\n');
     writeFileSync(join(work, 'package.json'), JSON.stringify({ scripts: {
-        build: 'tsc', release: 'npm publish',
+        build: 'tsc', release: 'npm publish', ship: 'echo shipped',
         'sync:assets': 'aws s3 sync ./dist s3://acme-assets --cache-control max-age=31536000', 'sync:prod': 'rsync -avz ./dist/ deploy@web1:/var/www/app --exclude node_modules',
     } }));
     writeFileSync(join(work, 'Makefile'), 'sync:\n\taws s3 sync ./dist s3://acme-site --delete --cache-control max-age=31536000\n');
@@ -5755,6 +5755,8 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     // A script in the workspace by what it runs, a package script, a push; and each send that went through
     // without asking in the send detection review, with what the prompt says about it.
     const commit = (then) => `git add -A && git commit -m "$(cat <<'EOF'\nFix the login redirect\n\nThe callback didn't keep the next= parameter.\nEOF\n)" && ${then}`;
+    // Known by its name alone: the prompt says the plugin couldn't see what it runs, or found no send in it.
+    const copied = join(work, '.tmp-deploy-test', 'deploy.sh');
     for (const [command, what, shell = 'bash'] of [
         ['STAGING_TOKEN=x ./deploy.sh', 'runs ./deploy.sh, which sends a POST to 127.0.0.1:8787/deploy (curl)'],
         ['npm run release', 'runs npm run release, which publishes (npm publish)'],
@@ -5796,6 +5798,8 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         ['STAGING_URL=http://127.0.0.1:8799/deploy STAGING_TOKEN=local-mock-only ./billing/deploy.sh', 'runs ./billing/deploy.sh, which sends a POST to 127.0.0.1:8799/deploy (curl)'],
         ['HOOK=https://hooks.example.com/build; curl -X POST "$HOOK"', 'sends a POST to hooks.example.com/build (curl)'],
         ['BOT_TOKEN=123:abc; curl -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage"', 'sends a POST to api.telegram.org/bot$BOT_TOKEN/sendMessage (curl)'],
+        [`mkdir -p .tmp-deploy-test && cp deploy.sh .tmp-deploy-test/ && (cd /tmp && STAGING_TOKEN=dummy ${copied})`, `runs ${copied}, whose name says it deploys. The plugin couldn't see what ${copied} runs`],
+        ['npm run ship', 'runs npm run ship: the plugin found no send in it, but its name says it ships'],
     ]) {
         const decision = await gate(t1, shell, { command });
         assert.deepEqual([decision.kind, decision.reason, decision.displayReason?.en], ['ask', `the command ${what}`, `This command ${what}. A thread asks you before each command that sends outside the workspace.`], command);

@@ -55,7 +55,7 @@ import {
 } from './prompts.js';
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
 import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS } from './changes.js';
-import { sendOf, codeSendOf, withoutCredentials } from './sends.js';
+import { sendOf, codeSendOf, described, withoutCredentials } from './sends.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
 const SECTION_ORDER = 9500;
@@ -822,10 +822,11 @@ export class ProjectManager {
                 return { kind: 'deny', reason: SEND_REASONS.never(found.what) };
             }
             this.log(`send-ask ${label}`);
+            const said = described(found);
             return {
                 kind: 'ask',
-                reason: `the command ${found.what}`,
-                displayReason: { en: `This command ${found.what}. A thread asks you before each command that sends outside the workspace.` },
+                reason: `the command ${said}`,
+                displayReason: { en: `This command ${said}. A thread asks you before each command that sends outside the workspace.` },
             };
         } catch (error) {
             this.log(`error send-check ${String(error?.message ?? error).slice(0, 200)}`);

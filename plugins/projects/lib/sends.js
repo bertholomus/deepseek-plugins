@@ -938,9 +938,26 @@ function scriptSendOf(path, how, ctx) {
     if (file) {
         const deeper = { ...ctx, depth: (ctx.depth ?? 0) + 1, cwd: dirname(file.full) };
         const inside = contentSendOf(file.text, how, deeper, shown);
-        if (inside) return { kind: 'script', program: inside.program, what: `runs ${shown}, which ${inside.what}` };
+        if (inside) return runs(shown, inside);
     }
-    return sendingName(basename(shown), file !== undefined) ? { kind: 'script', program: basename(shown), what: `runs ${shown}, whose name says it ${nameVerb(shown)}` } : null;
+    return sendingName(basename(shown), file !== undefined) ? byName(shown, basename(shown), file !== undefined, basename(shown)) : null;
+}
+
+/** A send inside what a command runs, said through it: "runs ./deploy.sh, which sends a POST to …". */
+function runs(label, inside) {
+    return { kind: 'script', program: inside.program, what: `runs ${label}, which ${inside.what}`, ...(inside.unread ? { unread: inside.unread } : {}) };
+}
+
+/**
+ * A send known by a name only, the last thing the plugin goes by: a script, a
+ * package script, a make target or a task whose name says it sends. `read`:
+ * the plugin read what it runs and found no send it knows there; else it
+ * couldn't see what it runs, and the prompt says so (described).
+ */
+function byName(label, name, read, program) {
+    return read
+        ? { kind: 'script', program, what: `runs ${label}: the plugin found no send in it, but its name says it ${nameVerb(name)}` }
+        : { kind: 'script', program, what: `runs ${label}, whose name says it ${nameVerb(name)}`, unread: [label] };
 }
 
 /** The sending word a name holds, for the user: "deploys", "publishes". */
@@ -957,14 +974,11 @@ function packageScript(program, name, ctx, prefix, label = `${program} run ${nam
     try { scripts = pkg ? JSON.parse(pkg.text)?.scripts : undefined; } catch { scripts = undefined; }
     if (scripts && typeof scripts === 'object' && (ctx.depth ?? 0) < MAX_DEPTH) {
         const deeper = { ...ctx, depth: (ctx.depth ?? 0) + 1, cwd: dirname(pkg.full) };
-        for (const key of [`pre${name}`, name, `post${name}`]) {
-            if (typeof scripts[key] !== 'string') continue;
-            const inside = lineSendOf(scripts[key], deeper);
-            if (inside) return { kind: 'script', program: inside.program, what: `runs ${label}, which ${inside.what}` };
-        }
+        const inside = combined([`pre${name}`, name, `post${name}`].map((key) => (typeof scripts[key] === 'string' ? lineSendOf(scripts[key], deeper) : null)));
+        if (inside) return runs(label, inside);
     }
     const known = scripts !== undefined && typeof scripts?.[name] === 'string';
-    return sendingName(name, known) ? { kind: 'script', program, what: `runs ${label}, whose name says it ${nameVerb(name)}` } : null;
+    return sendingName(name, known) ? byName(label, name, known, program) : null;
 }
 
 /** A make target's recipe lines, from the Makefile (a rule's own lines, not its prerequisites'). */
@@ -991,20 +1005,15 @@ function makeRule(text, target) {
     return { recipes, needs };
 }
 
-/** What a make target runs, its prerequisites first (each once). */
+/** What a make target sends, its prerequisites first (each once). */
 function makeSendOf(makefile, target, ctx, seen = new Set()) {
     if (seen.has(target) || seen.size > 40) return null;
     seen.add(target);
     const { recipes, needs } = makeRule(makefile.text, target);
-    for (const need of needs) {
-        const found = makeSendOf(makefile, need, ctx, seen);
-        if (found) return found;
-    }
-    for (const recipe of recipes) {
-        const found = lineSendOf(recipe.replace(/\$\(MAKE\)|\$\{MAKE\}/g, 'make'), ctx);
-        if (found) return found;
-    }
-    return null;
+    return combined([
+        ...needs.map((need) => makeSendOf(makefile, need, ctx, seen)),
+        ...recipes.map((recipe) => lineSendOf(recipe.replace(/\$\(MAKE\)|\$\{MAKE\}/g, 'make'), ctx)),
+    ]);
 }
 
 function make(args, ctx) {
@@ -1020,14 +1029,13 @@ function make(args, ctx) {
         const first = makefile.text.split('\n').map((l) => /^([^.:#=\t\s][^:=\s]*)\s*::?(?!=)/.exec(l)).find(Boolean);
         wanted = first ? [first[1]] : [];
     }
-    for (const target of wanted) {
+    return combined(wanted.map((target) => {
         if (makefile && (ctx.depth ?? 0) < MAX_DEPTH) {
             const inside = makeSendOf(makefile, target, { ...where, depth: (ctx.depth ?? 0) + 1, cwd: dirname(makefile.full) });
-            if (inside) return { kind: 'script', program: inside.program, what: `runs make ${target}, which ${inside.what}` };
+            if (inside) return runs(`make ${target}`, inside);
         }
-        if (sendingName(target, makefile !== undefined)) return { kind: 'script', program: 'make', what: `runs make ${target}, whose name says it ${nameVerb(target)}` };
-    }
-    return null;
+        return sendingName(target, makefile !== undefined) ? byName(`make ${target}`, target, makefile !== undefined, 'make') : null;
+    }));
 }
 
 /** Task runners whose tasks the plugin doesn't read: by the task's name. */
@@ -1188,7 +1196,7 @@ function wordsSendOf(rawWords, ctx, inputs = []) {
     if (Object.hasOwn(DEPLOY, name)) return table(DEPLOY[name], args, name, 'deploy');
     if (RUNNERS.has(name)) {
         const task = positionals(args, new Set(['f', 'd', '--justfile', '--taskfile', '--dir', '-t'])).find((t) => sendingName(t, false));
-        return task ? { kind: 'script', program: name, what: `runs ${name} ${task}, whose name says it ${nameVerb(task)}` } : null;
+        return task ? byName(`${name} ${task}`, task, false, name) : null;
     }
     if (SHELLS.has(name) || INTERPRETERS.has(name) || isPython(name) || name === 'source' || name === '.') return interpreter(name, args, ctx, inputs);
     if (first.includes('/') || SCRIPT_EXT.test(first)) return scriptSendOf(first, undefined, ctx);
@@ -1272,7 +1280,8 @@ function listOf(items) {
  * @param {'bash'|'pwsh'} [options.shell] - which shell runs it.
  * @param {string} [options.cwd] - the folder it runs in, for the files it names.
  * @param {(path: string) => string|undefined} [options.read] - a file's text by its full path, or undefined (only files the caller lets it read).
- * @returns {{kind: string, what: string, program: string}|null} what it sends, said after "it": "sends a POST to 127.0.0.1:8787/deploy (curl)".
+ * @returns {{kind: string, what: string, program: string, unread?: string[]}|null} what it sends, said after "it": "sends a POST to
+ *   127.0.0.1:8787/deploy (curl)"; `unread` names what it runs that the plugin couldn't see into, when the send rests on a name.
  */
 export function sendOf(command, options = {}) {
     if (typeof command !== 'string' || command.trim() === '') return null;
@@ -1281,5 +1290,18 @@ export function sendOf(command, options = {}) {
 
 /** A send as the user and the coordinator read it: no password or token from a URL. */
 function shown(found) {
-    return found && { ...found, program: withoutCredentials(found.program), what: withoutCredentials(found.what) };
+    return found && {
+        ...found, program: withoutCredentials(found.program), what: withoutCredentials(found.what),
+        ...(found.unread ? { unread: found.unread.map(withoutCredentials) } : {}),
+    };
+}
+
+/**
+ * A send as the prompt says it: what it sends, then, when that rests on a
+ * name, that the plugin couldn't see what it runs ("runs ./deploy.sh, whose
+ * name says it deploys. The plugin couldn't see what ./deploy.sh runs").
+ */
+export function described(found) {
+    const unread = found?.unread ?? [];
+    return unread.length === 0 ? found.what : `${found.what}. The plugin couldn't see what ${listOf(unread)} ${unread.length > 1 ? 'run' : 'runs'}`;
 }
