@@ -68,8 +68,15 @@
  *   a guest added on Microsoft's side meanwhile, which DSH doesn't read, its
  *   yes makes nothing (Graph refuses the change sent with the meeting's old
  *   etag: 412; 'calendar/changed') and the question comes again naming
- *   both, the new one marked; Don't save keeps it with Look at it again;
- *   saved again, it goes to both;
+ *   both, the new one marked; Don't save says so at the top of the dialog,
+ *   in view and with the focus, with Look at it again; saved again, it goes
+ *   to both; changed there so that it reaches nobody new, its yes makes
+ *   nothing and Look at it again shows it as it is now;
+ * - a save Microsoft answers with 500, said at the top of the dialog, in
+ *   view and with the focus, at 1280 px and at 420 px;
+ * - a change whose every yes comes back naming someone new (played): four
+ *   questions, then it stops, saying it keeps changing, with Look at it
+ *   again;
  * - the Microsoft account removed, with the page to withdraw DSH's access
  *   there; "Sign in with a code instead", showing the code; the Google
  *   account removed, its access withdrawn at Google;
@@ -100,12 +107,13 @@
  * screenshots (week and month, light and dark, with and without a stand-in
  * wallpaper; the event dialog, with no calendar chosen too, the question
  * before an email, the one before a move that drops part of a series, a
- * change stopped because the event changed, Accounts, Microsoft's and
- * Google's sign-ins, a removal's notice, the Agenda pane and an event's
- * details beside it, chat cards, the side column folded, a drag, search
- * results, a narrow window; Week and Month with weekends hidden and week
- * numbers, light, dark and narrow, and the settings menu; and the window
- * whenever a step fails). KEEP=1 keeps the temporary folder.
+ * change stopped because the event changed, a save refused at the top of
+ * the dialog (changed, nobody new, failed, narrow, stopped), Accounts,
+ * Microsoft's and Google's sign-ins, a removal's notice, the Agenda pane
+ * and an event's details beside it, chat cards, the side column folded, a
+ * drag, search results, a narrow window; Week and Month with weekends
+ * hidden and week numbers, light, dark and narrow, and the settings menu;
+ * and the window whenever a step fails). KEEP=1 keeps the temporary folder.
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -1642,6 +1650,35 @@ try {
             JSON.stringify({ changedOne: changedOne.ok, question, kept, after: after.map((o) => [o.title, o.calendarId]), posted: posted.length, patches }));
     });
 
+    /** The event form's end in view, as after changing something there: its dialog's content scrolled to the bottom. → how far it scrolled. */
+    const toFormEnd = (form) => form.evaluate((el) => {
+        let box = el.parentElement;
+        while (box && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement;
+        if (box) box.scrollTop = box.scrollHeight;
+        return box ? box.scrollTop : 0;
+    });
+    /**
+     * The event dialog's refusal, once it has the focus: its words, and whether it and its Look at it again are whole inside
+     * the window and inside the dialog's scrolling box (Playwright counts an element scrolled out of its box as visible).
+     */
+    const refusalShown = async () => {
+        const focused = await page.waitForFunction(() => document.querySelector('[data-calendar-refusal]')?.contains(document.activeElement), null, { timeout: 15000 })
+            .then(() => true, () => false);
+        return page.locator('[data-calendar-refusal]').evaluate((el, focus) => {
+            let box = el.parentElement;
+            while (box && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement;
+            const frame = box ? box.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+            const whole = (node) => {
+                const r = node.getBoundingClientRect();
+                return r.height > 0 && r.top >= Math.max(0, frame.top) - 1 && r.bottom <= Math.min(window.innerHeight, frame.bottom) + 1;
+            };
+            const look = el.querySelector('[data-calendar-look-again]');
+            return {
+                text: el.querySelector('.dshcal-alert')?.textContent ?? '', note: whole(el), look: look ? whole(look) : null, lookText: look?.textContent ?? '',
+                focus, scrolled: box ? box.scrollTop : null, viewport: [window.innerWidth, window.innerHeight],
+            };
+        }, focused);
+    };
     /** Graph's reads of its calendar view (the delta query): DSH syncing it. */
     const graphSyncs = () => providers.graph.store.requests.filter((r) => r.method === 'GET' && r.path.includes('/delta')).length;
 
@@ -1665,8 +1702,8 @@ try {
         let again = {};
         let third = {};
         let refused = {};
-        let note = '';
-        let look = false;
+        let place = {};
+        let endScroll = 0;
         let still = '';
         let toast = '';
         const calls = await callsTo('updateEvent', async () => {
@@ -1677,6 +1714,8 @@ try {
             const form = page.locator('[data-calendar-event-form="edit"]');
             await form.waitFor({ state: 'visible' });
             await form.locator('[data-calendar-title]').fill('E2E Review (agenda)');
+            // Saved from the end of the form, its top out of view.
+            endScroll = await toFormEnd(form);
             await page.locator('[data-calendar-save]').click();
             first = await consent();
             // Meanwhile Bob is added on Microsoft's side, which DSH doesn't read.
@@ -1690,10 +1729,9 @@ try {
             const sent = patches().slice(before);
             refused = { count: sent.length, status: sent[0]?.status, stale: sent[0]?.ifMatch !== undefined && sent[0].ifMatch === held, title: graph.store.json(graphId)?.subject };
             await again.answer(false);
-            const alert = form.locator('.dshcal-alert', { hasText: 'it changed meanwhile' });
-            await alert.waitFor({ state: 'visible', timeout: 10000 });
-            note = (await alert.textContent()) ?? '';
-            look = await page.locator('[data-calendar-look-again]').isVisible();
+            // Not saved, said at the top of the dialog, in view and with the focus, and the way to look at it again with it.
+            place = await refusalShown();
+            await shot(page, 'event-dialog-changed-top');
             still = (await events(day, day)).find((o) => o.title.startsWith('E2E Review'))?.title ?? '';
             // Saved again: asked about both, and made, held to both.
             await page.locator('[data-calendar-save]').click();
@@ -1704,11 +1742,12 @@ try {
         });
         const now = (await events(day, day)).find((o) => o.title.startsWith('E2E Review'));
         const names = (q) => JSON.stringify(q.people);
-        check('a Microsoft meeting that gained a guest while the question waited, unread by DSH: its yes makes nothing (Microsoft refuses the change sent with the meeting\'s old etag) and asks again, naming both with the new one marked; Don\'t save keeps it with a way to look again; saved again, it goes to both',
+        check('a Microsoft meeting that gained a guest while the question waited, unread by DSH: its yes makes nothing (Microsoft refuses the change sent with the meeting\'s old etag) and asks again, naming both with the new one marked; Don\'t save says so at the top of the dialog, in view with the focus, with a way to look again; saved again, it goes to both',
             made.ok && first.title === 'Email an update to ann@example.com?' && names(first) === '["ann@example.com"]' && first.yes === 'Save and email'
             && again.title === 'Email an update to 2 guests?' && names(again) === '["ann@example.com","bob@example.com"]' && JSON.stringify(again.fresh) === '["bob@example.com"]'
             && again.text.includes('It changed meanwhile') && refused.count === 1 && refused.status === 412 && refused.stale && refused.title === 'E2E Review'
-            && /^Not saved: it changed meanwhile/.test(note) && look && still === 'E2E Review'
+            && /^Not saved: it changed meanwhile/.test(place.text) && place.lookText === 'Look at it again' && endScroll > 0 && place.note && place.look && place.focus
+            && still === 'E2E Review'
             && names(third) === '["ann@example.com","bob@example.com"]' && third.fresh.length === 0
             && calls.length === 4 && calls[0]?.patch?.notify === undefined && calls[0]?.patch?.approved === undefined
             && calls[1]?.patch?.notify === true && JSON.stringify(calls[1]?.patch?.approved) === '["ann@example.com"]'
@@ -1716,7 +1755,170 @@ try {
             && calls[3]?.patch?.notify === true && JSON.stringify(calls[3]?.patch?.approved) === '["ann@example.com","bob@example.com"]'
             && now?.title === 'E2E Review (agenda)' && /Emailed an update to ann@example\.com and bob@example\.com\./.test(toast),
             JSON.stringify({ made: made.ok, first: first.title, again: { title: again.title, people: again.people, fresh: again.fresh }, third: third.people, refused,
-                calls: calls.map((c) => c?.patch), note, look, still, now: now?.title, toast }));
+                calls: calls.map((c) => c?.patch), endScroll, place, still, now: now?.title, toast }));
+    });
+
+    // 14b. The meeting changed on Microsoft's side meanwhile in a way that reaches nobody new: nothing is made, the dialog says
+    // so at its top, and Look at it again shows the event as it is now.
+    await step('a change stopped because the meeting changed meanwhile, with nobody new to ask about', async () => {
+        const graph = providers.graph;
+        const day = addDays(today, 4);
+        const synced = graphSyncs();
+        const made = await createAsked({
+            calendarId: msCalendar.id, title: 'E2E Retro', start: `${day}T14:00`, end: `${day}T14:30`, timeZone: ZONE,
+            attendees: [{ email: 'ann@example.com', name: 'Ann Example' }], notify: true,
+        });
+        const graphId = [...graph.store.events.values()].find((e) => e.subject === 'E2E Retro')?.id;
+        await waitFor(() => graphSyncs() > synced, 'the read after it was made', 15000);
+        const patches = () => graph.store.requestsTo(`/v1.0/me/events/${graphId}`, 'PATCH');
+        let question = {};
+        let sent = [];
+        let place = {};
+        let endScroll = 0;
+        let details = '';
+        const calls = await callsTo('updateEvent', async () => {
+            await showDay(day);
+            await eventOnPage('E2E Retro').click();
+            await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+            await page.locator('[data-calendar-edit]').click();
+            const form = page.locator('[data-calendar-event-form="edit"]');
+            await form.waitFor({ state: 'visible' });
+            await form.locator('[data-calendar-location]').fill('Room 4');
+            endScroll = await toFormEnd(form);
+            await page.locator('[data-calendar-save]').click();
+            question = await consent();
+            // Meanwhile its notes change on Microsoft's side: the same guest, nobody new.
+            graph.store.updateEvent(graphId, { body: { contentType: 'text', content: 'Bring the plans.' } });
+            const before = patches().length;
+            await question.answer(true);
+            place = await refusalShown();
+            sent = patches().slice(before).map((r) => r.status);
+            await shot(page, 'event-dialog-nobody-new');
+            await page.locator('[data-calendar-look-again]').click();
+            await dialogGone();
+            const shown = page.locator('[data-calendar-details]');
+            await shown.waitFor({ state: 'visible', timeout: 10000 });
+            await waitFor(async () => /Bring the plans/.test((await shown.textContent()) ?? ''), 'the event as it is now', 10000).catch(() => {});
+            details = (await shown.textContent()) ?? '';
+            await page.keyboard.press('Escape');
+            await shown.waitFor({ state: 'detached' });
+        });
+        const now = (await events(day, day)).find((o) => o.title === 'E2E Retro');
+        check('a Microsoft meeting changed meanwhile so that its change reaches nobody new: its yes makes nothing, the dialog says so at its top, in view with the focus, with Look at it again, which shows the event as it is now',
+            made.ok && question.title === 'Email an update to ann@example.com?' && JSON.stringify(sent) === '[412]'
+            && place.text === 'The event changed on its server meanwhile (in another app, or by someone else), so nothing was done. Look at it again first.'
+            && place.lookText === 'Look at it again' && endScroll > 0 && place.note && place.look && place.focus
+            && calls.length === 2 && calls[1]?.patch?.notify === true && JSON.stringify(calls[1]?.patch?.approved) === '["ann@example.com"]'
+            && /Bring the plans/.test(details) && !details.includes('Room 4') && now?.location !== 'Room 4' && (now?.description ?? '').includes('Bring the plans'),
+            JSON.stringify({ made: made.ok, question: question.title, sent, endScroll, place, calls: calls.map((c) => c?.patch), details: details.slice(0, 300),
+                now: now && { location: now.location, description: now.description } }));
+    });
+
+    // 14c. A save that fails for another reason (Microsoft answers 500): said at the top of the dialog, in view and with the
+    // focus, at 1280 px and at 420 px.
+    await step('a save that didn\'t work, said at the top of the dialog', async () => {
+        const graph = providers.graph;
+        const day = addDays(today, 4);
+        await api('createEvent', { input: { calendarId: msCalendar.id, title: 'E2E Dentist', start: `${day}T16:00`, end: `${day}T16:30`, timeZone: ZONE } });
+        const graphId = [...graph.store.events.values()].find((e) => e.subject === 'E2E Dentist')?.id;
+        const path = `/v1.0/me/events/${graphId}`;
+        const form = page.locator('[data-calendar-event-form="edit"]');
+        await showDay(day);
+        await eventOnPage('E2E Dentist').click();
+        await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+        await page.locator('[data-calendar-edit]').click();
+        await form.waitFor({ state: 'visible' });
+        // Show me as changed at the end of the form, and Microsoft answers 500.
+        await form.locator('[data-calendar-busy]').selectOption('free');
+        const endScroll = await toFormEnd(form);
+        graph.store.failNext({ method: 'PATCH', path, status: 500 });
+        await page.locator('[data-calendar-save]').click();
+        const wide = await refusalShown();
+        await shot(page, 'event-dialog-failed');
+        // At 420 px, from the end of the form again.
+        let narrow = {};
+        let narrowEnd = 0;
+        await page.setViewportSize({ width: 420, height: 820 });
+        try {
+            await page.waitForTimeout(600);
+            narrowEnd = await toFormEnd(form);
+            graph.store.failNext({ method: 'PATCH', path, status: 500 });
+            await page.locator('[data-calendar-save]').click();
+            narrow = await refusalShown();
+            await shot(page, 'narrow-event-dialog-failed');
+        } finally {
+            await page.setViewportSize({ width: 1280, height: 800 });
+            await page.waitForTimeout(600);
+        }
+        const tries = graph.store.requestsTo(path, 'PATCH').map((r) => r.status);
+        await page.keyboard.press('Escape');
+        await dialogGone();
+        check('a save that didn\'t work says why at the top of the dialog, in view with the focus, at 1280 px and at 420 px',
+            /^Saving the event on Microsoft: the server answered HTTP 500\b/.test(wide.text) && endScroll > 0 && wide.note && wide.focus && wide.look === null
+            && narrow.text === wide.text && narrowEnd > 0 && narrow.note && narrow.focus && JSON.stringify(narrow.viewport) === '[420,820]'
+            && JSON.stringify(tries) === '[500,500]', JSON.stringify({ endScroll, wide, narrowEnd, narrow, tries }));
+    });
+
+    // 14d. A host whose every yes comes back naming someone new (the event keeps changing): asked four times, then it stops,
+    // saying why at the top of the dialog with Look at it again. The host's answers are played here.
+    await step('a change that comes back naming someone new after every yes stops after five calls, saying why', async () => {
+        const day = addDays(today, 3);
+        const made = (await api('createEvent', { input: { calendarId: defaultCalendar, title: 'E2E Busy room', start: `${day}T13:00`, end: `${day}T13:30`, timeZone: ZONE } })).value?.occurrence;
+        const people = ['p1@example.com', 'p2@example.com', 'p3@example.com', 'p4@example.com', 'p5@example.com', 'p6@example.com'];
+        const sent = [];
+        await page.route(updateCalls, async (route) => {
+            const body = JSON.parse(route.request().postData() ?? '{}');
+            sent.push(body.payload?.args ?? {});
+            const named = people.slice(0, sent.length);
+            const mail = { emailed: { what: 'an update', to: named } };
+            const error = sent.length === 1
+                ? { code: 'calendar/needs-approval', message: `This would email an update to ${named[0]}, so it's made only once you've seen who.`, details: { people: named, mail } }
+                : { code: 'calendar/changed', message: `The event changed since this change was looked at (on its server, or in another app): it would now also email an update to ${named.at(-1)}, so nothing was done. Look at it again first.`, details: { people: named, mail } };
+            // A host takes a moment: each question goes before the next one comes.
+            await sleep(300);
+            return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ type: 'server-response', rpcId: body.rpcId, result: { ok: false, error } }) });
+        });
+        const asked = [];
+        let place = {};
+        let open = -1;
+        let details = '';
+        try {
+            await showDay(day);
+            await eventOnPage('E2E Busy room').click();
+            await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+            await page.locator('[data-calendar-edit]').click();
+            const form = page.locator('[data-calendar-event-form="edit"]');
+            await form.waitFor({ state: 'visible' });
+            await form.locator('[data-calendar-title]').fill('E2E Busy room (moved)');
+            await toFormEnd(form);
+            await page.locator('[data-calendar-save]').click();
+            for (let i = 0; i < 4; i++) {
+                const question = await consent();
+                asked.push([question.people.length, question.fresh.length]);
+                await question.answer(true);
+            }
+            place = await refusalShown();
+            open = await page.locator('[data-calendar-send]').count();
+            await shot(page, 'event-dialog-cap');
+            await page.locator('[data-calendar-look-again]').click();
+            await dialogGone();
+            const shown = page.locator('[data-calendar-details]');
+            await shown.waitFor({ state: 'visible', timeout: 10000 });
+            details = (await shown.textContent()) ?? '';
+            await page.keyboard.press('Escape');
+            await shown.waitFor({ state: 'detached' });
+        } finally {
+            await page.unroute(updateCalls);
+        }
+        const now = (await events(day, day)).find((o) => o.title.startsWith('E2E Busy room'));
+        check('a change whose every yes comes back naming someone new is asked about four times, then stops after the fifth call, saying it keeps changing at the top of the dialog, in view with the focus, with Look at it again',
+            sent.length === 5 && JSON.stringify(asked) === '[[1,0],[2,1],[3,1],[4,1]]' && open === 0
+            && JSON.stringify(sent.map((a) => a.patch?.approved ?? null)) === JSON.stringify([null, ...[1, 2, 3, 4].map((n) => people.slice(0, n))])
+            && place.text === 'Not saved: it keeps changing on its server or in another app. Look at it again to see it as it is now.'
+            && place.lookText === 'Look at it again' && place.note && place.look && place.focus
+            && /E2E Busy room/.test(details) && now?.title === 'E2E Busy room',
+            JSON.stringify({ sent: sent.map((a) => a.patch), asked, open, place, details: details.slice(0, 120), now: now?.title }));
+        if (made) await api('deleteEvent', { id: made.id, scope: 'all' });
     });
 
     // 15. The Microsoft account removed, with the page to withdraw DSH's access there; then a sign-in with a code instead.

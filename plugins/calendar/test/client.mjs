@@ -434,10 +434,21 @@ test('a change that reaches anyone waits for the user to see who: approved on ev
     const nobody = { ok: false, error: { code: 'calendar/needs-approval', message: 'This would …', details: {} } };
     r = await run([nobody], []);
     assert.deepEqual([r.result, r.questions.length], [nobody, 0]);
-    // A host that keeps refusing is asked a few times at most.
+    // It changed with nobody new to ask about ('changed' naming no one): not asked again, the refusal as it is, for the user to look at it again.
+    const nobodyNew = { ok: false, error: { code: 'calendar/changed', message: 'The event changed on its server meanwhile …', details: { people: [] } } };
+    r = await run([reach([ann]), nobodyNew], [true]);
+    assert.deepEqual([r.result, r.calls.length, r.questions.length], [nobodyNew, 2, 1]);
+    // A host that names someone new each time is asked four times at most: the fifth call stops it, saying why in the window's words.
     r = await run([reach([ann]), changed([bob]), changed([ann]), changed([bob]), changed([ann]), changed([bob])], [true, true, true, true, true, true]);
     assert.equal(r.calls.length, 5);
-    assert.equal(r.result.error.code, 'calendar/changed');
+    assert.equal(r.questions.length, 4);
+    const keepsChanging = 'It keeps changing on its server or in another app, so nothing was done. Look at it again first.';
+    assert.deepEqual(plain(r.result), { ok: false, stopped: true, error: { code: 'calendar/changed', message: keepsChanging } });
+    assert.equal(I.errorText(r.result.error), keepsChanging);
+    // A fifth answer that asks nothing more is the result as it is.
+    const refused = { ok: false, error: { code: 'calendar/refused', message: 'read-only' } };
+    r = await run([reach([ann]), changed([bob]), changed([ann]), changed([bob]), refused], [true, true, true, true]);
+    assert.deepEqual([r.result, r.calls.length], [refused, 5]);
     // What the answers add to a call: notify when ticked or said yes to, approved and dropChanges as given.
     assert.deepEqual(plain(I.asked(true, { approved: [ann] })), { notify: true, approved: [ann] });
     assert.deepEqual(plain(I.asked(false, { approved: [] })), { approved: [] });
@@ -699,6 +710,9 @@ test('a call\'s arguments for its card, as far as they have streamed', () => {
 
 test('a call that didn\'t work says what it didn\'t do, and why, without what it tells the agent', () => {
     assert.equal(I.failureText('Error: Not done: No event ev-1. Read the event again (calendar_get_event) and tell the user what changed before trying again.'), 'No event ev-1.');
+    // The event changed meanwhile with nobody new ('changed', naming no one): the host's words for the user, the hint for the agent left out.
+    const changedMeanwhile = 'The event changed on its server meanwhile (in another app, or by someone else), so nothing was done. Look at it again first.';
+    assert.equal(I.failureText(`Error: Not done: ${changedMeanwhile} Read the event again (calendar_get_event) and tell the user what changed before trying again.`), changedMeanwhile);
     assert.equal(I.failureText('Error: Failed: Microsoft answered 503 (Service Unavailable)'), 'Microsoft answered 503 (Service Unavailable)');
     assert.equal(I.failureText('Not done: This would email an update to ann@example.com (Microsoft emails a meeting\'s guests about each change to it), so it\'s made only when they are to be told. '
         + 'If the user asked for them to be told, call again with notify_guests: true; otherwise ask the user first.'),

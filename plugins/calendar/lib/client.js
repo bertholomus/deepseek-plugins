@@ -380,6 +380,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-switch-text{cursor:pointer;user-select:none}',
             '.dshcal-dlg-content{flex:1 1 auto;min-height:0;overflow:auto;scrollbar-width:thin}',
             '.dshcal-form{display:flex;flex-direction:column;gap:14px;font-size:13px}',
+            // A save that didn't go through, at the top of the event form with Look at it again: it takes the focus without a ring, as DSH's own automatic focus.
+            '.dshcal-refusal{display:flex;flex-direction:column;align-items:flex-start;gap:8px;scroll-margin:12px}',
+            '.dshcal-refusal>.dshcal-alert{align-self:stretch}',
+            '.dshcal-refusal:focus,.dshcal-refusal[tabindex]:focus-visible{outline:none}',
             '.dshcal-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}',
             '.dshcal-row>.dshcal-field{flex:1 1 140px}',
             '.dshcal-when{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:8px 8px;align-items:end}',
@@ -1855,6 +1859,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
         }
 
+        /** Why a change stopped asking: each yes came back naming someone new. */
+        const KEEPS_CHANGING = 'It keeps changing on its server or in another app, so nothing was done. Look at it again first.';
+
         /**
          * A change the user asked for, made by make(how) only as they say:
          * `how` ({notify?, approved?, dropChanges?}) is what their answers add
@@ -1866,10 +1873,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          *   approved: those people, and notify for needs-notify (otherwise
          *   notify stays as it was).
          * - 'calendar/changed' naming people (it would now reach someone else):
-         *   asked again, naming them all.
+         *   asked again, naming them all. Naming no one (nobody new), it is
+         *   the result, for the user to look at the event again.
          * - 'calendar/drops-changes': a series move that would drop part of it
          *   asks with the host's words first (drop); Move anyway adds dropChanges.
-         * → the result; {ok: false, kept: true, error} when the user said no.
+         * Five calls at most: a host that would still ask after them (someone
+         * new each time, as the event keeps changing) stops it there.
+         * → the result; {ok: false, kept: true, error} when the user said no;
+         * {ok: false, stopped: true, error} when it stopped, error being
+         * 'calendar/changed' in the window's words (KEEPS_CHANGING).
          * @param ask - (question) → Promise<boolean>: useSendQuestion's.
          * @param action - 'add', 'save', 'move' or 'delete': the question's words.
          * @param make - ({notify?, approved?, dropChanges?}) → the call's result.
@@ -1880,18 +1892,20 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             let shown;
             for (let round = 0; ; round += 1) {
                 const result = await make(how);
-                if (result.ok || round >= 4) return result;
+                if (result.ok) return result;
                 const error = result.error;
                 const code = error?.code;
-                if (code === 'calendar/drops-changes' && typeof drop === 'function' && how.dropChanges !== true) {
+                const drops = code === 'calendar/drops-changes' && typeof drop === 'function' && how.dropChanges !== true;
+                const people = Array.isArray(error?.details?.people) ? addressList(error.details.people) : undefined;
+                // Approval is for people named: a refusal that names no one is shown as it is.
+                const asks = code === 'calendar/needs-notify' || (people?.length > 0 && (code === 'calendar/needs-approval' || code === 'calendar/changed'));
+                if (!drops && !asks) return result;
+                if (round >= 4) return { ok: false, stopped: true, error: { code: 'calendar/changed', message: KEEPS_CHANGING } };
+                if (drops) {
                     if (!(await drop(errorText(error)))) return { ok: false, kept: true, error };
                     how = { ...how, dropChanges: true };
                     continue;
                 }
-                const people = Array.isArray(error?.details?.people) ? addressList(error.details.people) : undefined;
-                // Approval is for people named: a refusal that names no one is shown as it is.
-                const asks = code === 'calendar/needs-notify' || (people?.length > 0 && (code === 'calendar/needs-approval' || code === 'calendar/changed'));
-                if (!asks) return result;
                 if (!(await ask(consentQuestion(error, action, shown)))) return { ok: false, kept: true, error };
                 how = { ...how, ...(code === 'calendar/needs-notify' ? { notify: true } : {}), ...(people !== undefined ? { approved: people } : {}) };
                 shown = people;
@@ -2404,7 +2418,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * the page: `preset`), 'edit' (an occurrence), or 'duplicate' (a new
          * event from an occurrence). A change to a repeating event asks which
          * occurrences it reaches; a change that would email people asks
-         * first; the host's refusal shows in the dialog.
+         * first; the host's refusal shows at the top of the form, where the
+         * focus goes.
          */
         function EventDialog({ cal, mode, occurrence, preset, onClose, onSaved }) {
             const store = cal.store;
@@ -2429,6 +2444,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const movedRef = React.useRef(null);
             const alive = useAlive();
             const formRef = React.useRef(null);
+            const refusalRef = React.useRef(null);
+            // A refusal just set: into view, with the focus, once no question is open over the dialog.
+            const showRefusal = React.useRef(false);
             const weekStart = weekStartFrom(state?.prefs);
             const { list: calendars } = writableCalendars(state, editing ? [initial.calendarId] : EMPTY);
             const homeId = movedRef.current?.calendarId ?? (editing ? initial.calendarId : d.calendarId);
@@ -2466,6 +2484,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (Object.keys(errors).length === 0) return;
                 formRef.current?.querySelector('[aria-invalid=true]')?.focus?.();
             }, [errors]);
+            React.useEffect(() => {
+                const el = refusalRef.current;
+                if (!showRefusal.current || !el || ask || sending.dialog) return;
+                showRefusal.current = false;
+                // The dialog's top: its title (which scrolls with the form), then the refusal.
+                const box = el.closest('.dshcal-dlg-content');
+                if (box) box.scrollTop = 0;
+                el.scrollIntoView?.({ block: 'nearest' });
+                el.focus({ preventScroll: true });
+            });
 
             /** A new start keeps the event's length. */
             const moveStart = (startDay, startTime) => {
@@ -2506,15 +2534,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         onClose();
                         return;
                     }
-                    // The event changed on its server meanwhile and nothing was done: the page reads it again, for the user to look at.
+                    // The event changed on its server meanwhile and nothing was done (with someone new each time, it kept changing
+                    // and the questions stopped): the page reads it again, for the user to look at.
                     if (code === 'calendar/changed') {
-                        setRefusal(result.kept ? 'Not saved: it changed meanwhile, on its server or in another app. Look at it again to see it as it is now.' : errorText(result.error));
+                        setRefusal(result.kept ? 'Not saved: it changed meanwhile, on its server or in another app. Look at it again to see it as it is now.'
+                            : result.stopped ? 'Not saved: it keeps changing on its server or in another app. Look at it again to see it as it is now.' : errorText(result.error));
                         setChanged(true);
+                        showRefusal.current = true;
                         void store.refresh();
                         return;
                     }
                     // Not made, as the user chose: the dialog stays, to change what would email or reach them.
-                    if (!result.kept) setRefusal(errorText(result.error));
+                    if (!result.kept) {
+                        setRefusal(errorText(result.error));
+                        showRefusal.current = true;
+                    }
                     return;
                 }
                 onSaved?.(result.value?.occurrence, words);
@@ -2638,6 +2672,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         }
                     },
                 },
+                // Why a save didn't go through, where the user is looking (the end of the form is out of view in a tall dialog).
+                refusal ? h('div', { ref: refusalRef, className: 'dshcal-refusal', tabIndex: -1, 'data-calendar-refusal': '' },
+                    h(Alert, { text: refusal }),
+                    changed && editing ? h(Btn, {
+                        size: 'sm', 'data-calendar-look-again': '',
+                        onClick: () => {
+                            onClose();
+                            cal.openAt?.(movedRef.current?.occurrence ?? occurrence);
+                        },
+                    }, 'Look at it again') : null) : null,
                 invitation ? h('p', { className: 'dshcal-hint', style: { margin: 0 }, 'data-calendar-invitation-note': '' },
                     'Someone else\'s invitation: its organizer sets its title, time, place, link and notes. Your reminders, Show me as and Private are yours to change.') : null,
                 h('fieldset', { className: 'dshcal-fields', disabled: invitation, 'data-calendar-organizer-fields': '' },
@@ -2733,15 +2777,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h('div', { className: 'dshcal-field', style: { justifyContent: 'flex-end' } },
                         h('label', { className: 'dshcal-check', style: { minHeight: 34 }, title: 'Others who can see this calendar see only that the time is taken.' },
                             h('input', { type: 'checkbox', checked: d.private, onChange: (event) => set({ private: event.target.checked }), 'data-calendar-private': '' }),
-                            'Private'))),
-                h(Alert, { text: refusal }),
-                changed && editing ? h(Btn, {
-                    size: 'sm', style: { alignSelf: 'flex-start' }, 'data-calendar-look-again': '',
-                    onClick: () => {
-                        onClose();
-                        cal.openAt?.(movedRef.current?.occurrence ?? occurrence);
-                    },
-                }, 'Look at it again') : null)),
+                            'Private'))))),
                 ask ? h(ScopeDialog, {
                     title: 'Change repeating event', scopes: ask.scopes, action: TEXT.save,
                     onSubmit: (scope) => ask.run(scope), onClose: () => setAsk(null),
