@@ -21,7 +21,8 @@
       "inject": [
         "@deepseek-ai/dsh-api-remotes", "@deepseek-ai/dsh-api-session-controller", "@deepseek-ai/dsh-client-resources",
         "@deepseek-ai/dsh-client-ui-primitives", "@deepseek-ai/dsh-client-ui-conversation", "@deepseek-ai/dsh-client-ui-chat",
-        "@deepseek-ai/dsh-client-ui-sidebar-right", "@deepseek-ai/dsh-client-ui-workspace", "@deepseek-ai/dsh-client-connection"
+        "@deepseek-ai/dsh-client-ui-tool", "@deepseek-ai/dsh-client-ui-sidebar-right", "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-client-connection"
       ]
     }
   },

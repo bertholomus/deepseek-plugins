@@ -1,0 +1,850 @@
+#!/usr/bin/env node
+/**
+ * Real-host browser test for the calendar plugin's window (lib/client.js).
+ *
+ * Boots a real DSH (the shipped web profile, in a temporary DSH_HOME) with
+ * this repo's calendar and session-bridge plugins and a scripted model
+ * (fake-model.mjs), checks that DSH serves the calendar's browser half and
+ * that it parses, then drives the window with Playwright's Chromium:
+ *
+ * - the Calendar page from its entry in DSH's sidebar, in Week view, and
+ *   its quiet notice that a settings file it couldn't read was set aside;
+ * - a timed event, an all-day event and a weekly repeating event made
+ *   through the event dialog (each checked through the plugin's endpoints);
+ * - one occurrence of the repeating event changed (scope 'one') and another
+ *   deleted (scope 'one'), the rest of the series as it was;
+ * - Month, Day and Agenda views, the choice kept by the plugin, N and T;
+ * - a calendar hidden and shown again from the side column;
+ * - a change the host says would email people ('calendar/needs-notify',
+ *   played here, as the calendars on this computer email no one): asked
+ *   first with the host's words, nothing sent on Don't change it, notify
+ *   only after Send, and who was emailed in the toast;
+ * - an event moved to another calendar with other changes: the move on its
+ *   own first, the rest on the moved event; no email offered for a guest on
+ *   a calendar that can't send it;
+ * - Accounts: the account list and every Add account choice up to its form
+ *   (no real sign-ins), and a new calendar on this computer;
+ * - chat cards for an agent's calendar_events and calendar_create_event
+ *   calls, and the card's button that opens the event on the page;
+ * - the Agenda pane in DSH's right sidebar, and an event opened from it;
+ * - a narrow window (420 px): the side column folds, Week shows 3 days.
+ *
+ *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js \
+ *   PLAYWRIGHT_MODULE=/path/to/node_modules/playwright/index.mjs \
+ *   node plugins/calendar/test/e2e/ui.mjs
+ *
+ * DSH_BIN: a DSH bin.js (else `dsh` from PATH; skipped without either).
+ * PLAYWRIGHT_MODULE: Playwright's module (else the playwright or
+ * playwright-core package; skipped without). CHROMIUM: a Chromium to launch
+ * (else Playwright's own). SHOTS: a folder outside this repository for
+ * screenshots (week and month, light and dark, with and without a stand-in
+ * wallpaper; the event dialog, the question before an email, Accounts, the
+ * Agenda pane, chat cards, a narrow window; and the window whenever a step
+ * fails). KEEP=1 keeps the temporary folder.
+ */
+import { execFileSync, spawn } from 'node:child_process';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { request } from 'node:http';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { Script } from 'node:vm';
+import { startFakeModel } from './fake-model.mjs';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const pluginsDir = resolve(here, '../../..');
+const repoDir = resolve(pluginsDir, '..');
+const ZONE = 'America/Los_Angeles';
+
+function findDsh() {
+    const bin = process.env.DSH_BIN;
+    if (bin) return bin.endsWith('.js') ? [process.execPath, bin] : [bin];
+    try {
+        const found = execFileSync('which', ['dsh'], { encoding: 'utf8' }).trim();
+        if (found) return [found];
+    } catch {}
+    return null;
+}
+
+async function findPlaywright() {
+    const tries = process.env.PLAYWRIGHT_MODULE ? [process.env.PLAYWRIGHT_MODULE] : ['playwright', 'playwright-core'];
+    for (const name of tries) {
+        try {
+            const spec = name.startsWith('/') || name.startsWith('.') ? pathToFileURL(resolve(name)).href : name;
+            const mod = await import(spec);
+            const pw = mod.chromium ? mod : mod.default;
+            if (pw?.chromium) return pw;
+        } catch {}
+    }
+    return null;
+}
+
+/** A Chromium Playwright can launch: CHROMIUM, else its own, else one under PLAYWRIGHT_BROWSERS_PATH. */
+async function launch(pw) {
+    const args = ['--enable-unsafe-swiftshader', '--use-angle=swiftshader', '--enable-gpu-rasterization'];
+    if (process.env.CHROMIUM) return pw.chromium.launch({ executablePath: process.env.CHROMIUM, args });
+    try {
+        return await pw.chromium.launch({ args });
+    } catch (error) {
+        const base = process.env.PLAYWRIGHT_BROWSERS_PATH;
+        const found = base && existsSync(base) ? readdirSync(base).filter((n) => /^chromium-\d+$/.test(n)).sort().reverse()
+            .map((n) => join(base, n, 'chrome-linux', 'chrome')).find((p) => existsSync(p)) : undefined;
+        if (!found) throw error;
+        return pw.chromium.launch({ executablePath: found, args });
+    }
+}
+
+let passed = 0;
+let failed = 0;
+function check(name, ok, detail = '') {
+    if (ok) {
+        passed += 1;
+        console.log(`ok - ${name}`);
+    } else {
+        failed += 1;
+        console.log(`not ok - ${name}${detail ? `\n    ${String(detail).slice(0, 1500)}` : ''}`);
+    }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function waitFor(fn, what, timeout = 30000) {
+    const end = Date.now() + timeout;
+    let last;
+    while (Date.now() < end) {
+        try {
+            const value = await fn();
+            if (value) return value;
+        } catch (error) {
+            last = error;
+        }
+        await sleep(100);
+    }
+    throw new Error(`timed out waiting for ${what}${last ? ` (last error: ${last.message})` : ''}`);
+}
+
+/** Run a step; a failure is a failed check, and the test goes on. */
+let failedShots = 0;
+async function step(name, run) {
+    try {
+        await run();
+    } catch (error) {
+        check(name, false, error?.stack ?? error);
+        // What the window showed when the step failed.
+        if (shots && page) await page.screenshot({ path: join(shots, `failed-${++failedShots}.png`) }).catch(() => {});
+    }
+}
+
+// Days in the plugin's zone.
+const dayIn = (ms, zone) => new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+const addDays = (day, n) => {
+    const d = new Date(`${day}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+};
+const compact = (day, time) => `${day.replaceAll('-', '')}T${time.replace(':', '')}00`;
+
+const root = mkdtempSync(join(tmpdir(), 'dsh-calendar-ui-'));
+const home = join(root, 'home');
+const ws = join(root, 'ws');
+// A Unix socket's path must be short (about 100 bytes): under a long temporary folder, the socket gets a short folder of its own.
+const sockDir = Buffer.byteLength(join(root, 'bridge.sock')) <= 100 ? root : mkdtempSync('/tmp/dcal-');
+const sock = join(sockDir, 'bridge.sock');
+const dshLog = join(root, 'dsh.log');
+const calendarLog = join(home, 'calendar', 'calendar.log');
+const shots = process.env.SHOTS ? resolve(process.env.SHOTS) : '';
+if (shots && (shots === repoDir || shots.startsWith(`${repoDir}${sep}`))) {
+    console.log('SHOTS must be a folder outside the repository: screenshots never go into it.');
+    process.exit(1);
+}
+
+function bridge(method, path, body) {
+    return new Promise((resolvePromise, reject) => {
+        const data = body === undefined ? undefined : JSON.stringify(body);
+        const req = request({
+            socketPath: sock, path, method,
+            headers: data ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } : {},
+        }, (res) => {
+            let text = '';
+            res.setEncoding('utf8');
+            res.on('data', (c) => { text += c; });
+            res.on('end', () => {
+                if (res.statusCode >= 400) reject(new Error(`${method} ${path}: ${res.statusCode} ${text.slice(0, 300)}`));
+                else resolvePromise(text ? JSON.parse(text) : null);
+            });
+        });
+        req.on('error', reject);
+        if (data) req.write(data);
+        req.end();
+    });
+}
+
+function httpGet(url, headers = {}) {
+    return new Promise((resolvePromise, reject) => {
+        const req = request(url, { headers }, (res) => {
+            let text = '';
+            res.setEncoding('utf8');
+            res.on('data', (c) => { text += c; });
+            res.on('end', () => resolvePromise({ status: res.statusCode, headers: res.headers, text }));
+        });
+        req.on('error', reject);
+        req.end();
+    });
+}
+
+const readText = (file) => { try { return readFileSync(file, 'utf8'); } catch { return ''; } };
+const signInLink = () => [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].at(-1)?.[1] ?? '';
+
+async function signInWeb() {
+    const signIn = signInLink();
+    const cookie = String((await httpGet(signIn)).headers['set-cookie']?.[0] ?? '').split(';')[0];
+    return { base: new URL('./', signIn), cookie };
+}
+
+/** Call a Remote endpoint the way the window does. */
+function webApi(web, endpoint, args) {
+    return new Promise((resolvePromise, reject) => {
+        const body = JSON.stringify({ type: 'client-request', rpcId: randomUUID(), method: endpoint, payload: { args } });
+        const req = request(new URL(`api/${endpoint}`, web.base), {
+            method: 'POST',
+            headers: { cookie: web.cookie, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+        }, (res) => {
+            let text = '';
+            res.setEncoding('utf8');
+            res.on('data', (c) => { text += c; });
+            res.on('end', () => {
+                let result;
+                try { result = JSON.parse(text).result; } catch {}
+                resolvePromise(result ?? { ok: false, error: { code: `http/${res.statusCode}`, message: text.slice(0, 300) } });
+            });
+        });
+        req.on('error', reject);
+        req.end(body);
+    });
+}
+
+const profile = join(home, 'profiles', 'web');
+
+function writeProfile(modelPort) {
+    rmSync(join(profile, 'node_modules'), { recursive: true, force: true });
+    mkdirSync(join(profile, 'node_modules'), { recursive: true });
+    const plugins = { 'dsh-plugin-calendar': join(pluginsDir, 'calendar'), 'dsh-plugin-session-bridge': join(pluginsDir, 'session-bridge') };
+    writeFileSync(join(profile, 'package.json'), `${JSON.stringify({
+        name: 'dsh-profile-web',
+        private: true,
+        dependencies: Object.fromEntries(Object.entries(plugins).map(([name, dir]) => [name, `link:${dir}`])),
+        dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', ...Object.keys(plugins)] } },
+    }, null, 2)}\n`);
+    for (const [name, dir] of Object.entries(plugins)) symlinkSync(dir, join(profile, 'node_modules', name), 'dir');
+    const q = JSON.stringify;
+    writeFileSync(join(profile, 'cordis.patch.yml'), `- id: agent-default-model
+  config:
+    provider: fake
+    model: fake-model
+- id: llm-pi-ai
+  config:
+    providers:
+      fake:
+        displayName: Fake
+        api: openai-completions
+        baseURL: http://127.0.0.1:${modelPort}/v1
+        apiKeyEnv: FAKE_LLM_KEY
+        models:
+          - id: fake-model
+            name: Fake Model
+            contextWindow: 131072
+            reasoningEfforts: false
+- id: session-bridge
+  config:
+    socketPath: ${q(sock)}
+    logFile: ${q(join(root, 'bridge.log'))}
+- id: calendar
+  config:
+    timeZone: ${q(ZONE)}
+`);
+}
+
+function startDsh(dsh) {
+    const out = openSync(dshLog, 'a');
+    const local = '127.0.0.1,localhost';
+    const child = spawn(dsh[0], [...dsh.slice(1), '--profile', 'web', '--no-open', '--port', '0'], {
+        cwd: ws,
+        env: {
+            ...process.env, DSH_HOME: home, FAKE_LLM_KEY: 'sk-fake', DSH_TELEMETRY_DISABLED: '1', NO_PROXY: local, no_proxy: local,
+            DSH_PERMISSION_MODE: 'danger-full-access',
+        },
+        stdio: ['ignore', out, out],
+    });
+    closeSync(out);
+    return child;
+}
+
+async function stopDsh(child) {
+    if (!child || child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise((r) => child.once('exit', r));
+    child.kill('SIGTERM');
+    const timer = setTimeout(() => child.kill('SIGKILL'), 15000);
+    await exited;
+    clearTimeout(timer);
+}
+
+const dsh = findDsh();
+if (!dsh) {
+    console.log('skipped: set DSH_BIN to a DSH bin.js (or put dsh on PATH) to run the browser test');
+    process.exit(0);
+}
+const pw = await findPlaywright();
+if (!pw) {
+    console.log('skipped: set PLAYWRIGHT_MODULE to Playwright\'s module (or install playwright) to run the browser test');
+    process.exit(0);
+}
+
+mkdirSync(ws, { recursive: true });
+if (shots) mkdirSync(shots, { recursive: true });
+const model = await startFakeModel();
+let child;
+let browser;
+let page;
+const pageErrors = [];
+
+/** Prompt a new session as the user, to have an agent call a tool: {sessionId}. */
+async function agentCall(tool, args, words) {
+    const { sessionId } = await bridge('POST', '/sessions', { workspacePath: ws, text: `${words}\nE2E:call ${tool} ${JSON.stringify(args)}` });
+    await waitFor(async () => {
+        const s = await bridge('GET', `/sessions/${sessionId}`);
+        return s.turns?.started > 0 && s.turns.started === s.turns.ended && s.status !== 'running';
+    }, `the ${tool} turn`, 60000);
+    return { sessionId };
+}
+
+/** DSH's first-run notices, out of the way. */
+async function dismissNotices(page) {
+    for (const label of ['Continue', 'Got it', 'OK']) {
+        const button = page.getByRole('button', { name: label, exact: true });
+        if (await button.count()) {
+            await button.first().click().catch(() => {});
+            await page.waitForTimeout(300);
+        }
+    }
+}
+
+/** The stand-in for the wallpaper plugin, on this test page only: its public contract on <body>, a picture behind DSH. */
+async function wallpaperOn(page) {
+    await page.evaluate(() => {
+        const b = document.body;
+        b.classList.add('wp-on');
+        b.style.setProperty('--wp-blur', '22px');
+        b.style.setProperty('--wp-tint', '0.55');
+        if (!document.getElementById('test-wall')) {
+            const wall = document.createElement('div');
+            wall.id = 'test-wall';
+            wall.style.cssText = 'position:fixed;inset:0;z-index:0;background:radial-gradient(circle at 20% 25%,#f59e0b 0,transparent 38%),'
+                + 'radial-gradient(circle at 75% 30%,#06b6d4 0,transparent 40%),radial-gradient(circle at 55% 85%,#db2777 0,transparent 45%),linear-gradient(135deg,#1e3a8a,#065f46)';
+            document.body.prepend(wall);
+            const style = document.createElement('style');
+            style.id = 'test-wall-style';
+            // What the wallpaper plugin does to DSH's frame: transparent, so the picture shows through.
+            style.textContent = 'body.wp-on #root{position:relative;z-index:1}'
+                + 'body.wp-on [class*="_frame"],body.wp-on [class*="_centerCol"],body.wp-on [class*="_sidebarCol"],body.wp-on [class*="_rightbarCol"],'
+                + 'body.wp-on [data-slot="main"],body.wp-on [data-slot="main.conversation"]>div{background:transparent!important;border:0!important;box-shadow:none!important}';
+            document.head.append(style);
+        }
+    });
+    await page.waitForTimeout(300);
+}
+
+async function wallpaperOff(page) {
+    await page.evaluate(() => {
+        document.body.classList.remove('wp-on');
+        document.getElementById('test-wall')?.remove();
+        document.getElementById('test-wall-style')?.remove();
+    });
+}
+
+async function shot(page, name) {
+    if (!shots) return;
+    await page.waitForTimeout(250);
+    await page.screenshot({ path: join(shots, `${name}.png`) });
+}
+
+async function setDark(page, dark) {
+    await page.emulateMedia({ colorScheme: dark ? 'dark' : 'light' });
+    await waitFor(() => page.evaluate((want) => document.body.hasAttribute('data-ds-dark-theme') === want, dark), `DSH's ${dark ? 'dark' : 'light'} theme`, 10000).catch(() => {});
+}
+
+try {
+    // A settings file the plugin can't read: it sets the file aside, starts without it, and the page says so.
+    mkdirSync(join(home, 'calendar'), { recursive: true, mode: 0o700 });
+    writeFileSync(join(home, 'calendar', 'calendar.json'), '{"version": 1, "accounts": ', { mode: 0o600 });
+    writeProfile(model.port);
+    child = startDsh(dsh);
+    await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge', 90000);
+    await waitFor(() => signInLink(), 'the web sign-in link', 30000);
+    await waitFor(() => readText(calendarLog).includes('account added local'), 'the calendar plugin to start', 30000);
+    const web = await signInWeb();
+    const api = (method, args = {}) => webApi(web, `dsh-plugin-calendar/${method}`, args);
+    const state = await waitFor(async () => { const r = await api('state'); return r.ok ? r.value : null; }, 'the calendar endpoints', 30000);
+    const defaultCalendar = state.defaultCalendar ?? state.calendars.find((c) => c.accountId === 'local')?.id;
+    const today = dayIn(Date.now(), ZONE);
+    const events = async (from, toDay) => {
+        const r = await api('events', { from: Date.parse(`${addDays(from, -1)}T00:00:00Z`), to: Date.parse(`${addDays(toDay, 2)}T00:00:00Z`) });
+        return r.ok ? r.value.occurrences : [];
+    };
+
+    // The browser half: DSH serves it, and it parses (DSH sends browser halves together: one that doesn't parse breaks the others).
+    const app = await httpGet(web.base.href, { cookie: web.cookie });
+    const clientUrl = /"id":"dsh-plugin-calendar","url":"([^"]+)"/.exec(app.text)?.[1];
+    const client = clientUrl ? await httpGet(new URL(clientUrl, web.base).href, { cookie: web.cookie }) : { status: 0, text: '' };
+    let parses = false;
+    try {
+        new Script(client.text);
+        parses = true;
+    } catch {}
+    check('DSH serves the calendar\'s browser half and it parses', client.status === 200 && parses && client.text.includes('dsh-plugin-calendar'),
+        `${clientUrl ?? 'not in the boot graph'}: ${client.status}`);
+
+    // A second calendar with an event, to hide; agents' calls for the chat cards (and a session for the Agenda pane).
+    const side = (await api('createCalendar', { name: 'E2E Side', color: '#12a594' })).value?.calendar;
+    await api('createEvent', { input: { calendarId: side?.id, title: 'E2E Side event', start: `${addDays(today, 1)}T07:00`, end: `${addDays(today, 1)}T07:30`, timeZone: ZONE } });
+    const listCall = await agentCall('calendar_events', { from: today, to: addDays(today, 6) }, 'What is on my calendar?');
+    const createCall = await agentCall('calendar_create_event', { title: 'E2E From agent', start: `${addDays(today, 2)}T13:00`, end: `${addDays(today, 2)}T13:45` }, 'Add it please');
+
+    browser = await launch(pw);
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, timezoneId: ZONE, locale: 'en-US', colorScheme: 'light' });
+    page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    page.on('console', (m) => { if (m.type() === 'error' && /calendar/i.test(m.text())) pageErrors.push(m.text()); });
+    await page.goto(signInLink(), { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2500);
+    await dismissNotices(page);
+
+    const calendarEntry = page.getByRole('button', { name: 'Calendar', exact: true }).first();
+    const openPage = async () => {
+        await calendarEntry.click();
+        await page.locator('[data-calendar-page]').waitFor({ state: 'visible', timeout: 15000 });
+    };
+    const grid = page.locator('[data-calendar-main]');
+    const eventOnPage = (title) => grid.locator('[data-calendar-event]', { hasText: title }).first();
+    const dialogGone = () => page.locator('[data-calendar-event-form]').waitFor({ state: 'detached', timeout: 15000 });
+
+    // 1. The page.
+    await step('the Calendar page opens from DSH\'s sidebar, in Week view', async () => {
+        await openPage();
+        const view = await page.locator('[data-calendar-page]').getAttribute('data-calendar-view-now');
+        await page.locator('[data-calendar-day-column]').first().waitFor({ state: 'visible' });
+        const columns = await page.locator('[data-calendar-day-column]').count();
+        check('the Calendar page opens from DSH\'s sidebar, in Week view', view === 'week' && columns === 7, `${view} ${columns}`);
+    });
+    await step('the settings file that couldn\'t be read', async () => {
+        const note = page.locator('[data-calendar-store-issue]');
+        await note.waitFor({ state: 'visible' });
+        const text = await note.textContent();
+        const aside = readdirSync(join(home, 'calendar')).filter((n) => n.startsWith('calendar.json.unreadable-'));
+        await shot(page, 'store-notice');
+        await note.getByRole('button', { name: 'Close this notice' }).click();
+        await note.waitFor({ state: 'detached' });
+        check('a settings file the plugin couldn\'t read: the page says quietly that it was set aside and nothing was deleted, until closed',
+            aside.length === 1 && text.includes(`“${aside[0]}”`) && /Nothing was deleted/.test(text), JSON.stringify({ aside, text }));
+    });
+    await shot(page, 'week-light');
+
+    // 2. Events through the dialog.
+    const day1 = addDays(today, 1);
+    const day2 = addDays(today, 2);
+    await step('a timed event made in the dialog', async () => {
+        await page.locator('[data-calendar-side-new]').click();
+        const form = page.locator('[data-calendar-event-form="new"]');
+        await form.waitFor({ state: 'visible' });
+        await form.locator('[data-calendar-title]').fill('E2E Planning');
+        await form.locator('[data-calendar-start-day]').fill(day1);
+        await form.locator('[data-calendar-start-time]').fill('10:00');
+        await form.locator('[data-calendar-end-time]').fill('10:30');
+        await shot(page, 'event-dialog');
+        await page.locator('[data-calendar-save]').click();
+        await dialogGone();
+        await eventOnPage('E2E Planning').waitFor({ state: 'visible', timeout: 10000 });
+        const made = (await events(day1, day1)).find((o) => o.title === 'E2E Planning');
+        check('a timed event made in the dialog is in the calendar at its time, and on the page', made && made.startLocal === `${day1}T10:00` && made.endLocal === `${day1}T10:30`
+            && made.timeZone === ZONE && made.calendarId === defaultCalendar, JSON.stringify(made));
+    });
+    await step('an all-day event made in the dialog', async () => {
+        await page.locator('[data-calendar-side-new]').click();
+        const form = page.locator('[data-calendar-event-form="new"]');
+        await form.waitFor({ state: 'visible' });
+        await form.locator('[data-calendar-title]').fill('E2E Offsite');
+        await form.locator('[data-calendar-allday] .dshcal-switch-text, label:has([data-calendar-allday])').first().click();
+        await form.locator('[data-calendar-start-day]').fill(day2);
+        await form.locator('[data-calendar-end-day]').fill(addDays(day2, 1));
+        await page.locator('[data-calendar-save]').click();
+        await dialogGone();
+        await grid.locator('.dshcal-bar', { hasText: 'E2E Offsite' }).first().waitFor({ state: 'visible', timeout: 10000 });
+        const made = (await events(day2, addDays(day2, 1))).find((o) => o.title === 'E2E Offsite');
+        check('an all-day event made in the dialog spans its days, in the all-day row', made?.allDay === true && made.startDay === day2 && made.lastDay === addDays(day2, 1),
+            JSON.stringify(made));
+    });
+    let weekly;
+    await step('a weekly repeating event made in the dialog', async () => {
+        await page.locator('[data-calendar-side-new]').click();
+        const form = page.locator('[data-calendar-event-form="new"]');
+        await form.waitFor({ state: 'visible' });
+        await form.locator('[data-calendar-title]').fill('E2E Weekly sync');
+        await form.locator('[data-calendar-start-day]').fill(day1);
+        await form.locator('[data-calendar-start-time]').fill('15:00');
+        await form.locator('[data-calendar-end-time]').fill('16:00');
+        await form.locator('[data-calendar-repeat]').selectOption('weekly');
+        await page.locator('[data-calendar-save]').click();
+        await dialogGone();
+        const list = (await events(day1, addDays(day1, 28))).filter((o) => o.title === 'E2E Weekly sync');
+        weekly = list[0];
+        check('a weekly repeating event made in the dialog repeats every week', list.length >= 4 && list.every((o) => o.recurring && /FREQ=WEEKLY/.test(o.repeat ?? ''))
+            && list.every((o, i) => o.startLocal === `${addDays(day1, 7 * i)}T15:00`), JSON.stringify(list.map((o) => [o.id, o.startLocal])));
+    });
+
+    /** Show the week that has a day (next/previous until its column is there). */
+    const showDay = async (day) => {
+        for (let i = 0; i < 8 && !(await page.locator(`[data-calendar-day-column="${day}"]`).count()); i++) {
+            const first = await page.locator('[data-calendar-day-column]').first().getAttribute('data-calendar-day-column');
+            await page.locator(first < day ? '[data-calendar-next]' : '[data-calendar-prev]').click();
+            await page.waitForTimeout(400);
+        }
+    };
+    const occurrenceOn = (day) => page.locator(`[data-calendar-main] [data-calendar-event="${weekly?.eventId}.${compact(day, '15:00')}"]`);
+
+    // 3. One occurrence changed, another deleted.
+    await step('one occurrence of a repeating event changed', async () => {
+        const day = addDays(day1, 7);
+        await showDay(day);
+        await occurrenceOn(day).click();
+        await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+        await page.locator('[data-calendar-edit]').click();
+        const form = page.locator('[data-calendar-event-form="edit"]');
+        await form.waitFor({ state: 'visible' });
+        await form.locator('[data-calendar-title]').fill('E2E Weekly sync (moved)');
+        await form.locator('[data-calendar-start-time]').fill('16:00');
+        await page.locator('[data-calendar-save]').click();
+        await page.locator('[data-calendar-scope="one"]').click();
+        await page.locator('[data-calendar-submit]').click();
+        await dialogGone();
+        const list = await events(day1, addDays(day1, 21));
+        const moved = list.find((o) => o.title === 'E2E Weekly sync (moved)');
+        const rest = list.filter((o) => o.title === 'E2E Weekly sync').map((o) => o.startLocal);
+        check('one occurrence of a repeating event changed (scope one), the others as they were', moved?.startLocal === `${day}T16:00` && moved.changed === true
+            && rest.includes(`${day1}T15:00`) && rest.includes(`${addDays(day1, 14)}T15:00`) && !rest.includes(`${day}T15:00`), JSON.stringify({ moved, rest }));
+    });
+    await step('one occurrence of a repeating event deleted', async () => {
+        const day = addDays(day1, 14);
+        await showDay(day);
+        await occurrenceOn(day).click();
+        await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+        await page.locator('[data-calendar-delete]').click();
+        await page.locator('[data-calendar-scope="one"]').click();
+        await page.locator('[data-calendar-submit]').click();
+        await occurrenceOn(day).waitFor({ state: 'detached', timeout: 10000 });
+        const rest = (await events(day1, addDays(day1, 28))).filter((o) => o.title === 'E2E Weekly sync').map((o) => o.startLocal);
+        check('one occurrence of a repeating event deleted (scope one), the series goes on', !rest.includes(`${day}T15:00`) && rest.includes(`${day1}T15:00`)
+            && rest.includes(`${addDays(day1, 21)}T15:00`), JSON.stringify(rest));
+    });
+
+    // 4. Views.
+    await step('Month, Day and Agenda views', async () => {
+        await page.keyboard.press('Escape');
+        await page.locator('[data-calendar-today]').click();
+        await page.locator(`[data-calendar-day-column="${today}"]`).waitFor({ state: 'visible', timeout: 5000 });
+        await page.locator('[data-calendar-view="month"]').click();
+        await page.locator('[data-calendar-grid="month"]').waitFor({ state: 'visible' });
+        const kept = await waitFor(async () => (await api('state')).value?.prefs?.view === 'month', 'the view kept', 5000).catch(() => false);
+        await page.locator('[data-calendar-view="day"]').click();
+        await page.locator('[data-calendar-grid="day"]').waitFor({ state: 'visible' });
+        const dayColumns = await page.locator('[data-calendar-day-column]').count();
+        await page.locator('[data-calendar-view="agenda"]').click();
+        await page.locator('[data-calendar-grid="agenda"]').waitFor({ state: 'visible' });
+        const agendaHas = await page.locator('[data-calendar-grid="agenda"] [data-calendar-event]', { hasText: 'E2E Planning' }).first()
+            .waitFor({ state: 'visible', timeout: 10000 }).then(() => true, () => false);
+        await page.locator('[data-calendar-view="week"]').click();
+        await page.locator('[data-calendar-grid="week"]').waitFor({ state: 'visible' });
+        // Keys: N twice (two weeks on), then T (today).
+        await page.keyboard.press('n');
+        await page.keyboard.press('n');
+        await page.locator(`[data-calendar-day-column="${addDays(today, 14)}"]`).waitFor({ state: 'visible', timeout: 5000 });
+        await page.keyboard.press('t');
+        await page.locator(`[data-calendar-day-column="${today}"]`).waitFor({ state: 'visible', timeout: 5000 });
+        check('Month, Day and Agenda views show, the choice is kept, and the keys N and T move the page', kept && dayColumns === 1 && agendaHas,
+            JSON.stringify({ kept, dayColumns, agendaHas }));
+    });
+    await step('month view screenshot', async () => {
+        await page.locator('[data-calendar-view="month"]').click();
+        await page.locator('[data-calendar-grid="month"]').waitFor({ state: 'visible' });
+        await shot(page, 'month-light');
+        await page.locator('[data-calendar-view="week"]').click();
+    });
+
+    // 5. A calendar hidden and shown again.
+    await step('a calendar hidden from the side column', async () => {
+        await showDay(day1);
+        const toggle = page.locator(`[data-calendar-cal="${side?.id}"] .dshcal-cal-toggle`);
+        await eventOnPage('E2E Side event').waitFor({ state: 'visible', timeout: 10000 });
+        await toggle.click();
+        await eventOnPage('E2E Side event').waitFor({ state: 'detached', timeout: 10000 });
+        const hidden = (await api('state')).value?.calendars?.find((c) => c.id === side?.id)?.hidden;
+        const checked = await toggle.getAttribute('aria-checked');
+        await toggle.click();
+        await eventOnPage('E2E Side event').waitFor({ state: 'visible', timeout: 10000 });
+        check('a calendar hidden from the side column takes its events off the page, and comes back', hidden === true && checked === 'false', `${hidden} ${checked}`);
+    });
+
+    // 6. Email: asked first, with the host's words; sent only after Send.
+    const updateCalls = '**/api/dsh-plugin-calendar/updateEvent';
+    await step('a change that would email people', async () => {
+        await page.locator('[data-calendar-today]').click();
+        await showDay(day1);
+        const sent = [];
+        let refusals = 2;
+        // The calendars here email no one, so the host's answer is played: it would email ann@example.com (twice), then
+        // the change sent with notify is made for real (without it) and answered as if it had emailed her.
+        await page.route(updateCalls, async (route) => {
+            const body = JSON.parse(route.request().postData() ?? '{}');
+            const args = body.payload?.args ?? {};
+            sent.push(args);
+            if (args.patch?.notify !== true && refusals > 0) {
+                refusals -= 1;
+                return route.fulfill({
+                    status: 200, contentType: 'application/json',
+                    body: JSON.stringify({ type: 'server-response', rpcId: body.rpcId, result: { ok: false, error: { code: 'calendar/needs-notify', message: 'Saving this emails an update to ann@example.com', details: {} } } }),
+                });
+            }
+            const patch = { ...args.patch };
+            delete patch.notify;
+            const response = await route.fetch({ postData: JSON.stringify({ ...body, payload: { args: { ...args, patch } } }) });
+            const real = await response.json();
+            if (real.result?.ok && real.result.value?.occurrence) real.result.value.occurrence.emailed = { what: 'an update', to: ['ann@example.com'] };
+            return route.fulfill({ response, body: JSON.stringify(real) });
+        });
+        try {
+            await eventOnPage('E2E Planning').click();
+            await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+            await page.locator('[data-calendar-edit]').click();
+            const form = page.locator('[data-calendar-event-form="edit"]');
+            await form.waitFor({ state: 'visible' });
+            await form.locator('[data-calendar-title]').fill('E2E Planning review');
+            await page.locator('[data-calendar-save]').click();
+            const send = page.locator('[data-calendar-send]');
+            await send.waitFor({ state: 'visible' });
+            const question = await send.locator('xpath=ancestor::*[@role="dialog"][1]').textContent();
+            await shot(page, 'send-question');
+            await page.locator('[data-calendar-keep]').click();
+            await send.waitFor({ state: 'detached' });
+            const stillOpen = await form.isVisible();
+            const unchanged = (await events(day1, day1)).some((o) => o.title === 'E2E Planning');
+            await page.locator('[data-calendar-save]').click();
+            await send.waitFor({ state: 'visible' });
+            await send.click();
+            await dialogGone();
+            const toast = await page.locator('.dshcal-toast').first().textContent();
+            const saved = (await events(day1, day1)).find((o) => o.title === 'E2E Planning review');
+            check('a change that would email people asks first with the host\'s words; Don\'t change it sends nothing, Send repeats it with notify, and the toast says who was emailed',
+                /Saving this emails an update to ann@example\.com/.test(question ?? '') && stillOpen && unchanged && saved !== undefined
+                && sent.length === 3 && sent[0].patch?.notify === undefined && sent[1].patch?.notify === undefined && sent[2].patch?.notify === true
+                && /Emailed an update to ann@example\.com/.test(toast ?? ''), JSON.stringify({ question, stillOpen, unchanged, sent, toast, saved: saved?.title }));
+        } finally {
+            await page.unroute(updateCalls);
+        }
+    });
+
+    // 7. A move to another calendar: on its own first, then the other changes on the moved event; a guest the calendar can't email.
+    await step('an event moved to another calendar with other changes', async () => {
+        const calls = [];
+        const onRequest = (request) => {
+            if (request.url().endsWith('/api/dsh-plugin-calendar/updateEvent')) calls.push(JSON.parse(request.postData() ?? '{}').payload?.args);
+        };
+        page.on('request', onRequest);
+        try {
+            await eventOnPage('E2E Planning review').click();
+            await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+            await page.locator('[data-calendar-edit]').click();
+            const form = page.locator('[data-calendar-event-form="edit"]');
+            await form.waitFor({ state: 'visible' });
+            await form.locator('[data-calendar-calendar]').selectOption(side.id);
+            await form.locator('[data-calendar-title]').fill('E2E Planning moved');
+            await form.locator('[data-calendar-guest-input]').fill('ann@example.com');
+            await form.locator('[data-calendar-guest-input]').press('Enter');
+            await form.locator('[data-calendar-guests]').waitFor({ state: 'visible' });
+            const never = await form.locator('[data-calendar-mail="never"]').isVisible();
+            const box = await form.locator('[data-calendar-notify]').count();
+            await page.locator('[data-calendar-save]').click();
+            await dialogGone();
+            const moved = (await events(day1, day1)).find((o) => o.title === 'E2E Planning moved');
+            const [first, second] = calls;
+            check('a move goes first on its own (the whole event), the other changes then go to the moved event; no email offered where the calendar can\'t send it',
+                never && box === 0 && moved?.calendarId === side.id && (moved.attendees ?? []).some((a) => a.email === 'ann@example.com')
+                && calls.length === 2 && JSON.stringify(Object.keys(first?.patch ?? {})) === '["calendarId"]' && first.scope === 'all'
+                && !('calendarId' in (second?.patch ?? {})) && second?.patch?.title === 'E2E Planning moved' && second.patch.notify === undefined
+                && String(second.id).startsWith(moved.eventId), JSON.stringify({ never, box, calls, moved: moved && { id: moved.id, calendarId: moved.calendarId } }));
+        } finally {
+            page.off('request', onRequest);
+        }
+    });
+
+    // 8. Accounts.
+    await step('Accounts and the Add account choices', async () => {
+        await page.locator('[data-calendar-accounts-open]').click();
+        await page.locator('[data-calendar-accounts]').waitFor({ state: 'visible' });
+        const local = await page.locator('[data-calendar-account="local"]').count();
+        await shot(page, 'accounts');
+        await page.locator('[data-calendar-add-account]').click();
+        await page.locator('[data-calendar-providers]').waitFor({ state: 'visible' });
+        const ids = await page.locator('[data-calendar-provider]').evaluateAll((els) => els.map((e) => e.getAttribute('data-calendar-provider')));
+        const forms = {};
+        const open = async (id, selector) => {
+            await page.locator(`[data-calendar-provider="${id}"]`).click();
+            forms[id] = await page.locator(selector).first().waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false);
+            await page.locator('.dshcal-dlg .dshcal-back').click();
+            await page.locator('[data-calendar-providers]').waitFor({ state: 'visible' });
+        };
+        await open('google', '[data-calendar-google-setup] [data-calendar-google-id]');
+        await open('microsoft', '[data-calendar-microsoft-setup] [data-calendar-microsoft-id]');
+        await open('icloud', '[data-calendar-caldav] [data-calendar-dav-pass][type="password"]');
+        await open('nextcloud', '[data-calendar-caldav] [data-calendar-dav-url]');
+        await open('other', '[data-calendar-caldav] [data-calendar-dav-url]');
+        await open('subscribe', '[data-calendar-subscribe] [data-calendar-sub-url]');
+        await page.locator('[data-calendar-provider="local"]').click();
+        await page.locator('[data-calendar-local-name]').fill('E2E Trips');
+        await page.locator('[data-calendar-local-add]').click();
+        const trips = await waitFor(async () => (await api('state')).value?.calendars?.find((c) => c.name === 'E2E Trips'), 'the new calendar', 10000).catch(() => undefined);
+        await page.keyboard.press('Escape');
+        await page.locator('[data-calendar-accounts-page]').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+        const want = ['icloud', 'google', 'microsoft', 'fastmail', 'nextcloud', 'yahoo', 'other', 'subscribe', 'local'];
+        check('Accounts lists the accounts, and Add account offers each kind with its form (no sign-in tried)', local === 1 && want.every((id) => ids.includes(id))
+            && Object.values(forms).every(Boolean) && Object.keys(forms).length === 6 && trips?.kind === 'local',
+        JSON.stringify({ local, ids, forms, trips: trips?.name }));
+    });
+
+    // 9. Chat cards, and the page opened at an event from one.
+    /** A session's title in DSH's list (DSH names a session once its first turn is done). */
+    const titleOf = (sessionId) => waitFor(async () => (await bridge('GET', '/sessions')).find((s) => s.sessionId === sessionId)?.projections?.values?.title,
+        'the session\'s title', 30000);
+    const openSession = async (title) => {
+        await page.getByText(title, { exact: false }).first().click();
+        await page.waitForTimeout(1500);
+        for (const words of [/^Completed in/, /^Called tools?$/]) {
+            const group = page.getByText(words);
+            if (await group.count()) {
+                await group.first().click().catch(() => {});
+                await page.waitForTimeout(400);
+            }
+        }
+    };
+    await step('chat cards for the calendar tools', async () => {
+        const listTitle = await titleOf(listCall.sessionId);
+        const createTitle = await titleOf(createCall.sessionId);
+        await openSession(listTitle);
+        const listCard = page.locator('.dshcal-chat[data-calendar-chat="calendar_events"][data-phase="result"]').first();
+        await listCard.waitFor({ state: 'attached', timeout: 10000 });
+        const listText = await listCard.textContent();
+        const hasDays = await listCard.locator('[data-calendar-chat-card="events"] .dshcal-chat-day').count();
+        if (shots) await listCard.screenshot({ path: join(shots, 'chat-events.png') }).catch(() => {});
+        await openSession(createTitle);
+        const createCard = page.locator('.dshcal-chat[data-calendar-chat="calendar_create_event"][data-phase="result"]').first();
+        await createCard.waitFor({ state: 'attached', timeout: 10000 });
+        const createText = await createCard.textContent();
+        if (shots) await createCard.screenshot({ path: join(shots, 'chat-created.png') }).catch(() => {});
+        await createCard.locator('[data-calendar-open-event]').click();
+        const details = page.locator('[data-calendar-details]');
+        await details.waitFor({ state: 'visible', timeout: 10000 });
+        const detailsText = await details.textContent();
+        check('chat cards: events by day for calendar_events, a confirmation for calendar_create_event whose button opens it on the page',
+            /E2E Side event/.test(listText ?? '') && hasDays >= 1 && /Added “E2E From agent”/.test(createText ?? '') && /E2E From agent/.test(detailsText ?? ''),
+            JSON.stringify({ listText: listText?.slice(0, 200), hasDays, createText: createText?.slice(0, 200), detailsText: detailsText?.slice(0, 120) }));
+        await page.keyboard.press('Escape');
+    });
+
+    // 10. The Agenda pane.
+    await step('the Agenda pane in the right sidebar', async () => {
+        await page.getByText(await titleOf(listCall.sessionId), { exact: false }).first().click();
+        await page.waitForTimeout(1200);
+        const opener = page.getByRole('button', { name: 'Open right sidebar' });
+        if (await opener.count()) await opener.first().click();
+        await page.waitForTimeout(800);
+        if (!(await page.locator('[data-calendar-pane]').count())) await page.locator('button', { hasText: 'Today and the next days' }).first().click();
+        const pane = page.locator('[data-calendar-pane]');
+        await pane.waitFor({ state: 'visible', timeout: 10000 });
+        await pane.locator('[data-calendar-event]', { hasText: 'E2E Planning' }).first().waitFor({ state: 'visible', timeout: 10000 });
+        const text = await pane.textContent();
+        await shot(page, 'agenda-pane');
+        await pane.locator('[data-calendar-event]', { hasText: 'E2E Planning' }).locator('.dshcal-pane-what').click();
+        const details = page.locator('[data-calendar-details]');
+        await details.waitFor({ state: 'visible', timeout: 10000 });
+        const detailsText = await details.textContent();
+        check('the Agenda pane lists today and the next days, and opens an event on the page', /Today/.test(text ?? '') && /E2E Offsite/.test(text ?? '')
+            && /E2E Planning/.test(detailsText ?? '') && (await page.locator('[data-calendar-page]').count()) === 1, (text ?? '').slice(0, 300));
+        await page.keyboard.press('Escape');
+    });
+
+    // 11. Light and dark, with and without a wallpaper.
+    await step('light and dark, with and without a wallpaper', async () => {
+        await openPage();
+        await page.locator('[data-calendar-view="week"]').click();
+        await showDay(day1);
+        const glass = async () => page.evaluate(() => {
+            const main = document.querySelector('[data-calendar-main]');
+            const root = document.querySelector('[data-calendar-page]');
+            const css = getComputedStyle(main);
+            return { blur: css.backdropFilter, background: css.backgroundColor, root: getComputedStyle(root).backgroundColor, dark: document.body.hasAttribute('data-ds-dark-theme') };
+        });
+        await wallpaperOn(page);
+        const light = await glass();
+        await shot(page, 'week-light-wallpaper');
+        await page.locator('[data-calendar-view="month"]').click();
+        await shot(page, 'month-light-wallpaper');
+        await setDark(page, true);
+        const dark = await glass();
+        await shot(page, 'month-dark-wallpaper');
+        await page.locator('[data-calendar-view="week"]').click();
+        await shot(page, 'week-dark-wallpaper');
+        await wallpaperOff(page);
+        await shot(page, 'week-dark');
+        await page.locator('[data-calendar-view="month"]').click();
+        await shot(page, 'month-dark');
+        await page.locator('[data-calendar-view="week"]').click();
+        await setDark(page, false);
+        const clear = (c) => c === 'rgba(0, 0, 0, 0)' || c === 'transparent';
+        check('the page keeps no background of its own and its cards are glass, in light and dark', clear(light.root) && clear(dark.root)
+            && /blur/.test(light.blur) && /blur/.test(dark.blur) && light.background !== dark.background && dark.dark === true, JSON.stringify({ light, dark }));
+    });
+
+    // 12. A narrow window.
+    await step('a narrow window', async () => {
+        await page.setViewportSize({ width: 420, height: 820 });
+        await page.waitForTimeout(600);
+        const toggle = await page.locator('[data-calendar-side-toggle]').isVisible();
+        const sideShown = await page.locator('[data-calendar-side]').isVisible().catch(() => false);
+        const columns = await page.locator('[data-calendar-day-column]').count();
+        const overflow = await page.evaluate(() => {
+            const root = document.querySelector('[data-calendar-page]');
+            return root.scrollWidth - root.clientWidth;
+        });
+        await shot(page, 'narrow-week');
+        await page.locator('[data-calendar-side-toggle]').click();
+        await page.locator('[data-calendar-side]').waitFor({ state: 'visible', timeout: 5000 });
+        await shot(page, 'narrow-side');
+        await page.keyboard.press('Escape');
+        check('in a narrow window the side column folds behind a button and Week shows three days, nothing sticking out', toggle && !sideShown && columns === 3 && overflow <= 1,
+            JSON.stringify({ toggle, sideShown, columns, overflow }));
+        await page.setViewportSize({ width: 1280, height: 800 });
+    });
+
+    check('the window threw nothing', pageErrors.length === 0, pageErrors.join('\n'));
+} catch (error) {
+    check('the browser test ran to its end', false, error?.stack ?? error);
+} finally {
+    await browser?.close().catch(() => {});
+    await stopDsh(child);
+    await model.close?.();
+    if (process.env.KEEP === '1') console.log(`kept ${root}`);
+    else rmSync(root, { recursive: true, force: true });
+    if (sockDir !== root) rmSync(sockDir, { recursive: true, force: true });
+}
+
+console.log(`\n${passed} passed, ${failed} failed`);
+process.exit(failed ? 1 : 0);
