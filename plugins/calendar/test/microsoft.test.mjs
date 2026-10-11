@@ -1,7 +1,7 @@
 // The Microsoft source (lib/sources/microsoft.js) against the Graph and
 // sign-in stand-in (test/standins/microsoft.mjs), with what it leaves out
 // in front of it here: Microsoft's sign-in page for the browser sign-in,
-// If-Match and transactionId. Run with:
+// and transactionId. Run with:
 //   node --test plugins/calendar/test/microsoft.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -45,7 +45,8 @@ function memorySecret(value) {
 /**
  * A stand-in, an env signed in to it, and a source for the account.
  * `sent` holds each request's method, path and headers; with `rules`,
- * Graph's If-Match and transactionId rules apply too (graphRules).
+ * Graph's transactionId rule applies too (graphRules). The stand-in keeps
+ * Graph's If-Match rule itself.
  */
 async function setup(t, { signedIn = true, rules = false } = {}) {
     const graph = await start();
@@ -72,12 +73,10 @@ function answer(url, status, body) {
 }
 
 /**
- * Graph's rules the stand-in leaves out, in front of it when `enforce`: a
- * PATCH or DELETE of an event with If-Match goes through only while the
- * event still has that etag (else 412, as Graph answers), and a POST of an
- * event whose transactionId made one before gets that event back (201), or
- * a 400 when its details differ. `sent` keeps every request's method, path
- * and headers, enforced or not.
+ * Graph's rule the stand-in leaves out, in front of it when `enforce`: a
+ * POST of an event whose transactionId made one before gets that event
+ * back (201), or a 400 when its details differ. `sent` keeps every
+ * request's method, path and headers, enforced or not.
  */
 function graphRules(store, enforce) {
     const sent = [];
@@ -87,14 +86,6 @@ function graphRules(store, enforce) {
         const { pathname } = new URL(url);
         sent.push({ method, path: decodeURIComponent(pathname), url: String(url), headers: { ...init.headers } });
         if (!enforce) return request(url, init);
-        const event = /^\/v1\.0\/me\/events\/([^/]+)$/.exec(pathname);
-        const ifMatch = init.headers?.['If-Match'];
-        if (event !== null && (method === 'PATCH' || method === 'DELETE') && ifMatch !== undefined) {
-            const now = store.json(decodeURIComponent(event[1]));
-            if (now !== undefined && now['@odata.etag'] !== ifMatch) {
-                return answer(url, 412, { error: { code: 'ErrorIrresolvableConflict', message: 'The send or update operation could not be performed because the change key passed in the request does not match the current change key for the item.' } });
-            }
-        }
         if (method === 'POST' && /^\/v1\.0\/me\/calendars\/[^/]+\/events$/.test(pathname)) {
             const { transactionId } = JSON.parse(init.body);
             const before = typeof transactionId === 'string' ? made.get(transactionId) : undefined;
@@ -1016,19 +1007,25 @@ test('guests: Microsoft invites them as soon as they are saved, so only with not
     assert.equal('notify' in posts()[1].body, false);
 
     // A change that adds someone needs it too; one that keeps or drops guests, or changes something else, doesn't.
+    // Each goes with the etag the change before it brought back (If-Match), as the plugin keeps it.
     const target = { item: meeting, record: meeting.events[0] };
+    let item = meeting;
+    const update = async (to, patch) => {
+        [item] = await source.update({ remoteId: cal }, { ...to, item }, patch, 'all');
+        return item;
+    };
     await assert.rejects(source.update({ remoteId: cal }, target, { attendees: [sam, kim] }, 'all'), isSourceError('config'));
     assert.equal(patches().length, 0);
-    await source.update({ remoteId: cal }, target, { attendees: [{ ...sam, role: 'optional' }] }, 'all');
-    await source.update({ remoteId: cal }, target, { title: 'Planning (room 4)' }, 'all');
-    const [both] = await source.update({ remoteId: cal }, target, { attendees: [sam, kim], notify: true }, 'all');
+    await update(target, { attendees: [{ ...sam, role: 'optional' }] });
+    await update(target, { title: 'Planning (room 4)' });
+    const both = await update(target, { attendees: [sam, kim], notify: true });
     assert.deepEqual(both.events[0].attendees.map((p) => p.email), ['sam@example.com', 'kim@example.com']);
     assert.equal('notify' in patches()[2].body, false);
     // notify on the target or its record counts as well.
     const lee = { email: 'lee@example.com' };
-    await source.update({ remoteId: cal }, { ...target, notify: true }, { attendees: [sam, kim, lee] }, 'all');
-    await source.update({ remoteId: cal }, { item: both, record: { ...both.events[0], notify: true } }, { attendees: [sam, kim, lee] }, 'all');
-    await source.update({ remoteId: cal }, { item: both, record: both.events[0] }, { attendees: null }, 'all');
+    await update({ ...target, notify: true }, { attendees: [sam, kim, lee] });
+    await update({ record: { ...both.events[0], notify: true } }, { attendees: [sam, kim, lee] });
+    await update({ record: both.events[0] }, { attendees: null });
     assert.equal(patches().length, 6);
     assert.deepEqual(patches()[5].body, { attendees: [] });
 });
@@ -1306,7 +1303,10 @@ test('a change made elsewhere meanwhile: Graph answers 412, a conflict, and noth
     // Someone moves the appointment in Outlook: a change and a delete made here on the old one are turned down.
     store.updateEvent(single, { subject: 'Dentist (moved in Outlook)', start: pst('2026-10-16T10:00:00'), end: pst('2026-10-16T11:00:00') });
     await assert.rejects(source.update({ remoteId: cal }, target(single), { title: 'Dentist (here)' }, 'all'), (e) => isSourceError('conflict')(e) && e.status === 412);
+    const refused = store.requestsTo(`/v1.0/me/events/${single}`, 'PATCH').at(-1);
+    assert.deepEqual([refused.ifMatch, refused.status], [target(single).item.etag, 412]);
     await assert.rejects(source.remove({ remoteId: cal }, target(single), 'all'), isSourceError('conflict'));
+    assert.equal(store.requestsTo(`/v1.0/me/events/${single}`, 'DELETE').at(-1).status, 412);
     assert.equal(store.json(single).subject, 'Dentist (moved in Outlook)');
 
     // One occurrence changed there: the same.

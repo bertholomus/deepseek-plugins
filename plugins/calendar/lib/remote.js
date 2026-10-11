@@ -32,8 +32,10 @@ export const SERVICE = 'dshPluginCalendarRemote';
  *   to tell them: again with notify and approved.
  * - 'needs-approval': the change didn't say who the user saw (approved),
  *   and it would email or reach someone: again with approved.
- * - 'changed': it would now email or reach someone outside approved (the
- *   event changed meanwhile): ask again, naming them all.
+ * - 'changed': the event changed meanwhile, and nothing was done. With
+ *   people, it would now email or reach someone outside approved: ask
+ *   again, naming them all. With none (people empty), nobody new is
+ *   reached: the user looks at it again first.
  * And 'drops-changes' (move a series anyway: dropChanges), 'choose-calendar'
  * (no default calendar), and 'half-moved': a move made the copy (and sent
  * its invitations) but couldn't take the event out of its old calendar; the

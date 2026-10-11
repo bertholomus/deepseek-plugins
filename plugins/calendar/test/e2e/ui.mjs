@@ -15,11 +15,13 @@
  *   email guests without asking (with nothing to change it);
  * - a timed event, an all-day event and a weekly repeating event made
  *   through the event dialog (each checked through the plugin's endpoints);
- *   an event's details, which take the focus and close on Escape;
+ *   a toast shown while the event dialog is open, clear of its buttons; an
+ *   event's details, which take the focus and close on Escape;
  * - one occurrence of the repeating event changed (scope 'one') and another
  *   deleted (scope 'one'), the rest of the series as it was;
  * - Month, Day and Agenda views, the choice kept by the plugin, N and T;
- *   a narrow month's timed events without their times in front;
+ *   a narrow month's timed events without their times in front; where Week
+ *   and Day open their hours, again after Next, Previous and Week to Day;
  * - a calendar hidden and shown again from the side column;
  * - a change the host says would email six guests ('calendar/needs-notify',
  *   played here, as the calendars kept in DSH email no one): the question
@@ -27,6 +29,9 @@
  *   Don't save; notify only after Save and email, with approved: the six,
  *   and the same change otherwise (the host holds a yes to it); who was
  *   emailed in the toast;
+ * - a delete the host says would email twelve: the list in the question
+ *   takes the focus with Shift+Tab from No, End and Home show its ends, and
+ *   Escape is Don't delete;
  * - an event moved to another calendar with other changes: the move on its
  *   own first, the rest on the moved event; no email offered for a guest on
  *   a calendar that can't send it;
@@ -35,7 +40,9 @@
  * - dragging: an event in Week to another time and day (Escape first,
  *   leaving it), by its bottom edge to another end, and on with Alt and an
  *   arrow key; in Month to another day at the same time; a repeating one,
- *   asked which occurrences move;
+ *   asked which occurrences move; Alt and an arrow key twice on a meeting:
+ *   shown where it goes, then one question naming it and one save (Escape
+ *   dropping a move, Enter saving it at once);
  * - search: / to the field, the events found by day, one opened with its
  *   way to the calendar, Escape to clear it;
  * - Accounts: the account list and every Add account choice up to its form,
@@ -49,6 +56,8 @@
  * - Google, against its stand-in (standins/google.mjs): its sign-in page in
  *   a new tab, the wait with the address to paste, then the browser back to
  *   DSH on this computer, which the dialog notices by itself;
+ * - the title never cut, at 1280 px (side column folded and shown) and 420
+ *   px, in every view, with week numbers on and the sync button there;
  * - a Google meeting made, changed and deleted without emailing its guest:
  *   the dialog says it still reaches their calendars, each is made only
  *   once the user has seen whose calendar it reaches (the host refuses it
@@ -65,10 +74,20 @@
  *   host refuses ('calendar/drops-changes'), Don't move it keeps it, Move
  *   anyway moves it without that occurrence;
  * - a Microsoft meeting changed while the question before its email waits:
- *   a guest added on Microsoft's side meanwhile, its yes makes nothing
- *   ('calendar/changed') and the question comes again naming both, the new
- *   one marked; Don't save keeps it with Look at it again; saved again, it
- *   goes to both;
+ *   a guest added on Microsoft's side meanwhile, which DSH doesn't read, its
+ *   yes makes nothing (Graph refuses the change sent with the meeting's old
+ *   etag: 412; 'calendar/changed') and the question comes again naming
+ *   both, the new one marked; Don't save says so at the top of the dialog,
+ *   in view and with the focus, with Look at it again; saved again, it goes
+ *   to both; changed there so that it reaches nobody new, its yes makes
+ *   nothing and Look at it again shows it as it is now;
+ * - a save Microsoft answers with 500, said at the top of the dialog, in
+ *   view and with the focus, at 1280 px and at 420 px; an edited event
+ *   asks before Escape, Cancel or the close button drops it (Keep editing,
+ *   or Discard), an unchanged one closes at once;
+ * - a change whose every yes comes back naming someone new (played): four
+ *   questions, then it stops, saying it keeps changing, with Look at it
+ *   again;
  * - the Microsoft account removed, with the page to withdraw DSH's access
  *   there; "Sign in with a code instead", showing the code; the Google
  *   account removed, its access withdrawn at Google;
@@ -76,12 +95,19 @@
  *   delete that reached a guest's calendar (calendar_delete_event) and a
  *   move (calendar_update_event), and the button that opens an event on the
  *   page; a read and an answer that didn't work, each in the plugin's own
- *   row saying what wasn't done and why;
+ *   row saying what wasn't done and why; an agent's change to a Microsoft
+ *   meeting that didn't say to tell its guests, refused, in the window's
+ *   words (whom it would email, why, and what to do); the cards' faint fill
+ *   and no blur, light and dark;
  * - the Agenda pane in DSH's right sidebar: an event's details beside it,
- *   the chat staying, and Open in Calendar to the event on the page;
- * - light and dark, with and without a stand-in wallpaper;
+ *   the chat staying, and Open in Calendar to the event on the page; at the
+ *   sidebar's narrowest (300 px) nothing cut or scrolled sideways; no fill
+ *   or blur of its own, light and dark;
+ * - light and dark, with and without a stand-in wallpaper: the side column
+ *   at the wallpaper's tint, the view at tint + .2, both blurred by its
+ *   blur, and the same fallbacks without them;
  * - a narrow window (420 px): the side column folds, Week shows 3 days,
- *   search fits;
+ *   search fits; the event dialog's dates and times in full;
  * - the settings menu's Show weekends and Show week numbers, each checked
  *   as it is: Week from Monday to Friday with its ISO week number by the
  *   title, Month in five columns with each week's number, the small month's
@@ -99,12 +125,18 @@
  * screenshots (week and month, light and dark, with and without a stand-in
  * wallpaper; the event dialog, with no calendar chosen too, the question
  * before an email, the one before a move that drops part of a series, a
- * change stopped because the event changed, Accounts, Microsoft's and
- * Google's sign-ins, a removal's notice, the Agenda pane and an event's
- * details beside it, chat cards, the side column folded, a drag, search
+ * change stopped because the event changed, a save refused at the top of
+ * the dialog (changed, nobody new, failed, narrow, stopped), the question
+ * before changes are discarded, the long list at its end, Accounts,
+ * Microsoft's and Google's sign-ins, a removal's notice, the Agenda pane
+ * (at its narrowest too) and an event's details beside it, chat cards (a
+ * refused one, one in dark), the side column folded, a drag, search
  * results, a narrow window; Week and Month with weekends hidden and week
- * numbers, light, dark and narrow, and the settings menu; and the window
- * whenever a step fails). KEEP=1 keeps the temporary folder.
+ * numbers, light, dark and narrow, and the settings menu; a toast over the
+ * event dialog, Day opened at an early event (narrow too), a move by the
+ * keys and its question, the title in Day and Agenda, and the narrow event
+ * dialog; and the window whenever a step fails). KEEP=1 keeps the temporary
+ * folder.
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -199,9 +231,11 @@ async function step(name, run) {
         check(name, false, error?.stack ?? error);
         // What the window showed when the step failed.
         if (shots && page) await page.screenshot({ path: join(shots, `failed-${++failedShots}.png`) }).catch(() => {});
-        // A dialog left open would cover the page for the steps after this one.
-        for (let i = 0; page && i < 3 && (await page.locator('[role="dialog"]').count().catch(() => 0)) > 0; i++) {
-            await page.keyboard.press('Escape').catch(() => {});
+        // A dialog left open would cover the page for the steps after this one (an edited event's asks first: Discard).
+        for (let i = 0; page && i < 4 && (await page.locator('[role="dialog"]').count().catch(() => 0)) > 0; i++) {
+            const discard = page.locator('[data-calendar-discard]');
+            if (await discard.count().catch(() => 0)) await discard.click().catch(() => {});
+            else await page.keyboard.press('Escape').catch(() => {});
             await sleep(400);
         }
     }
@@ -504,14 +538,32 @@ async function agentCall(tool, args, words) {
     return { sessionId };
 }
 
-/** DSH's first-run notices, out of the way. */
+/** DSH's first-run notices, out of the way: whether there was one. */
 async function dismissNotices(page) {
+    let found = false;
     for (const label of ['Continue', 'Got it', 'OK']) {
         const button = page.getByRole('button', { name: label, exact: true });
         if (await button.count()) {
+            found = true;
             await button.first().click().catch(() => {});
             await page.waitForTimeout(300);
         }
+    }
+    return found;
+}
+
+/**
+ * DSH's window up (its Calendar entry showing), and its first-run notices out
+ * of the way: they can come seconds late on a busy machine, so they're looked
+ * for until none has come for a few seconds.
+ */
+async function settleWindow(page) {
+    await page.getByRole('button', { name: 'Calendar', exact: true }).first().waitFor({ state: 'visible', timeout: 60000 });
+    const end = Date.now() + 30000;
+    let calm = Date.now();
+    while (Date.now() < end && Date.now() - calm < 4000) {
+        if (await dismissNotices(page)) calm = Date.now();
+        await page.waitForTimeout(400);
     }
 }
 
@@ -620,8 +672,7 @@ try {
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('console', (m) => { if (m.type() === 'error' && /calendar/i.test(m.text())) pageErrors.push(m.text()); });
     await page.goto(signInLink(), { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(2500);
-    await dismissNotices(page);
+    await settleWindow(page);
 
     const calendarEntry = page.getByRole('button', { name: 'Calendar', exact: true }).first();
     const openPage = async () => {
@@ -756,6 +807,35 @@ try {
             && list.every((o, i) => o.startLocal === `${addDays(day1, 7 * i)}T15:00`), JSON.stringify(list.map((o) => [o.id, o.startLocal])));
     });
 
+    await step('a toast while the event dialog is open', async () => {
+        // An event saved, its toast showing: the next event dialog opened under it keeps its buttons clear (the toast goes to the top).
+        await page.locator('[data-calendar-side-new]').click();
+        const form = page.locator('[data-calendar-event-form="new"]');
+        await form.waitFor({ state: 'visible' });
+        await form.locator('[data-calendar-title]').fill('E2E Toast');
+        await page.locator('[data-calendar-save]').click();
+        await dialogGone();
+        await page.locator('.dshcal-toast').waitFor({ state: 'visible', timeout: 10000 });
+        await page.locator('[data-calendar-side-new]').click();
+        await form.waitFor({ state: 'visible' });
+        const geo = await page.evaluate(() => {
+            const box = (el) => {
+                const r = el?.getBoundingClientRect();
+                return r ? { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right) } : null;
+            };
+            const toast = document.querySelector('.dshcal-toast');
+            return { toast: box(toast), text: toast?.textContent ?? '', footer: box(document.querySelector('[data-calendar-save]')?.parentElement) };
+        });
+        await shot(page, 'event-dialog-toast');
+        await page.keyboard.press('Escape');
+        await dialogGone();
+        const made = (await events(today, addDays(today, 2))).find((o) => o.title === 'E2E Toast');
+        if (made) await api('deleteEvent', { id: made.id, scope: 'all' });
+        const apart = (a, b) => a.bottom <= b.top || b.bottom <= a.top || a.right <= b.left || b.right <= a.left;
+        check('a toast shown while the event dialog is open stays off the dialog\'s buttons', Boolean(geo.toast && geo.footer) && /E2E Toast/.test(geo.text) && apart(geo.toast, geo.footer),
+            JSON.stringify(geo));
+    });
+
     /** Show the week that has a day (next/previous until its column is there). */
     const showDay = async (day) => {
         for (let i = 0; i < 8 && !(await page.locator(`[data-calendar-day-column="${day}"]`).count()); i++) {
@@ -839,6 +919,56 @@ try {
         await page.locator('[data-calendar-view="week"]').click();
         check('a narrow month shows timed events by their titles, without their times in front', month.width < 910 && month.times.length > 0 && month.times.every((d) => d === 'none'),
             JSON.stringify(month));
+    });
+
+    // 4b. Where the hours open, placed again whenever the days shown change: an early event (6:00, before 7:30) whole after Next,
+    // Previous and Week to Day, and in a narrow window, on a grid made anew (Month and back) and not scrolled since.
+    await step('the hours open on the first event again on other days', async () => {
+        const dayE = addDays(today, 21);
+        const early = (await api('createEvent', { input: { title: 'E2E Early', start: `${dayE}T06:00`, end: `${dayE}T06:45`, timeZone: ZONE } })).value?.occurrence;
+        try {
+            await page.locator('[data-calendar-view="month"]').click();
+            await page.locator('[data-calendar-grid="month"]').waitFor({ state: 'visible' });
+            await page.locator('[data-calendar-today]').click();
+            await page.locator('[data-calendar-view="week"]').click();
+            await page.locator(`[data-calendar-day-column="${today}"]`).waitFor({ state: 'visible' });
+            /** Whether the early event shows whole in the hours, once its days are read. */
+            const whole = async () => {
+                const ev = grid.locator(`.dshcal-ev[data-calendar-event="${early?.id}"]`);
+                await ev.waitFor({ state: 'visible', timeout: 10000 });
+                await page.waitForTimeout(400);
+                return ev.evaluate((el) => {
+                    const r = el.getBoundingClientRect();
+                    const box = el.closest('[data-calendar-scroll]').getBoundingClientRect();
+                    return r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+                });
+            };
+            await showDay(dayE);
+            const next = await whole();
+            await page.locator('[data-calendar-next]').click();
+            await page.waitForTimeout(400);
+            await page.locator('[data-calendar-prev]').click();
+            const back = await whole();
+            const columns = await page.locator('[data-calendar-day-column]').evaluateAll((els) => els.map((el) => el.getAttribute('data-calendar-day-column')));
+            await page.locator('.dshcal-wk-dayhead').nth(columns.indexOf(dayE)).click();
+            await page.locator('[data-calendar-grid="day"]').waitFor({ state: 'visible' });
+            const day = await whole();
+            await shot(page, 'day-opening');
+            await page.setViewportSize({ width: 420, height: 820 });
+            await page.waitForTimeout(500);
+            await page.locator('[data-calendar-prev]').click();
+            await page.waitForTimeout(400);
+            await page.locator('[data-calendar-next]').click();
+            const narrow = await whole();
+            await shot(page, 'narrow-day-opening');
+            check('Week and Day open their hours on the first event again when the days shown change: after Next, Previous and Week to Day, and narrow',
+                next && back && day && narrow, JSON.stringify({ next, back, day, narrow }));
+        } finally {
+            await page.setViewportSize({ width: 1280, height: 800 });
+            await api('deleteEvent', { id: early?.id, scope: 'all' }).catch(() => {});
+            await page.locator('[data-calendar-view="week"]').click();
+            await page.locator('[data-calendar-today]').click();
+        }
     });
 
     // 5. A calendar hidden and shown again.
@@ -966,6 +1096,70 @@ try {
                 JSON.stringify({ question: { ...question, answer: undefined }, stillOpen, unchanged, sent, toast, saved: saved?.title }));
         } finally {
             await page.unroute(updateCalls);
+        }
+    });
+
+    // A question naming twelve: its list scrolls, and takes the keys. Played as above (the host's answer), for a delete
+    // answered No, so nothing is deleted.
+    const deleteCalls = '**/api/dsh-plugin-calendar/deleteEvent';
+    await step('the long list in the question, by keyboard', async () => {
+        const twelve = Array.from({ length: 12 }, (_, i) => `guest${i + 1}@example.com`);
+        const why = 'Microsoft emails a meeting\'s guests when it is cancelled';
+        const sent = [];
+        await page.route(deleteCalls, async (route) => {
+            const body = JSON.parse(route.request().postData() ?? '{}');
+            sent.push(body.payload?.args ?? {});
+            return route.fulfill({
+                status: 200, contentType: 'application/json',
+                body: JSON.stringify({
+                    type: 'server-response', rpcId: body.rpcId,
+                    result: {
+                        ok: false,
+                        error: {
+                            code: 'calendar/needs-notify', message: `This would email a cancellation to ${twelve.slice(0, 5).join(', ')} and 7 more (${why}), so it's made only when they are to be told.`,
+                            details: { people: twelve, mail: { emailed: { what: 'a cancellation', to: twelve }, why } },
+                        },
+                    },
+                }),
+            });
+        });
+        try {
+            await eventOnPage('E2E Planning review').click();
+            await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+            await page.locator('[data-calendar-delete]').click();
+            await page.locator('[data-calendar-submit]').click();
+            const question = await consent();
+            const list = page.locator('[data-calendar-people]');
+            await waitFor(() => page.evaluate(() => document.activeElement?.hasAttribute('data-calendar-keep') === true), 'the focus on Don\'t delete', 5000).catch(() => {});
+            // Which of its people are whole in view, inside the list's box.
+            const inView = () => list.evaluate((ul) => {
+                const box = ul.getBoundingClientRect();
+                return [...ul.querySelectorAll('[data-calendar-person]')].filter((li) => {
+                    const r = li.getBoundingClientRect();
+                    return r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+                }).map((li) => li.getAttribute('data-calendar-person'));
+            });
+            await page.keyboard.press('Shift+Tab');
+            const listFocused = await list.evaluate((ul) => ul.ownerDocument.activeElement === ul);
+            const top = await inView();
+            await page.keyboard.press('End');
+            await page.waitForTimeout(300);
+            const end = await inView();
+            await shot(page, 'question-12-end');
+            await page.keyboard.press('Home');
+            await page.waitForTimeout(300);
+            const home = await inView();
+            await page.keyboard.press('Escape');
+            await page.locator('[data-calendar-send]').waitFor({ state: 'detached' });
+            await page.locator('[data-calendar-submit]').waitFor({ state: 'detached', timeout: 10000 }).catch(() => {});
+            const still = (await events(day1, day1)).some((o) => o.title === 'E2E Planning review');
+            check('a question naming twelve: the list takes the focus from No with Shift+Tab, End shows its last people and Home its first; Escape is Don\'t delete',
+                question.title === 'Email a cancellation to 12 guests?' && question.people.length === 12 && listFocused
+                && top.includes(twelve[0]) && !top.includes(twelve[11]) && end.includes(twelve[11]) && !end.includes(twelve[0])
+                && home.includes(twelve[0]) && !home.includes(twelve[11]) && sent.length === 1 && still,
+                JSON.stringify({ title: question.title, listFocused, top, end, home, sent: sent.length, still }));
+        } finally {
+            await page.unroute(deleteCalls);
         }
     });
 
@@ -1178,6 +1372,81 @@ try {
         await api('deleteEvent', { id: series?.id, scope: 'all' }).catch(() => {});
     });
 
+    // 8b'. Alt and an arrow key on a meeting: the presses gathered, shown where they take it, then one question naming where, and
+    // one save (the host's answer played as in 6); Escape drops a move, Enter saves it at once.
+    await step('Alt and an arrow key twice on a meeting: one question, naming where it goes, and one save', async () => {
+        const made = (await api('createEvent', { input: { title: 'E2E Key meeting', start: `${day1}T09:00`, end: `${day1}T09:30`, timeZone: ZONE } })).value?.occurrence;
+        await page.locator('[data-calendar-view="week"]').click();
+        await showDay(day1);
+        const ev = grid.locator(`.dshcal-ev[data-calendar-event="${made?.id}"]`);
+        await ev.waitFor({ state: 'visible', timeout: 10000 });
+        const guests = ['ann@example.com', 'bob@example.com'];
+        const why = 'Microsoft emails a meeting\'s guests about each change to it';
+        const sent = [];
+        await page.route(updateCalls, async (route) => {
+            const body = JSON.parse(route.request().postData() ?? '{}');
+            const args = body.payload?.args ?? {};
+            sent.push(args);
+            if (args.patch?.notify !== true) {
+                return route.fulfill({
+                    status: 200, contentType: 'application/json',
+                    body: JSON.stringify({
+                        type: 'server-response', rpcId: body.rpcId,
+                        result: { ok: false, error: { code: 'calendar/needs-notify', message: 'It would email its guests.', details: { people: guests, mail: { emailed: { what: 'an update', to: guests }, why } } } },
+                    }),
+                });
+            }
+            const patch = { ...args.patch };
+            delete patch.notify;
+            return route.fulfill({ response: await route.fetch({ postData: JSON.stringify({ ...body, payload: { args: { ...args, patch } } }) }) });
+        });
+        try {
+            const tip = (await ev.getAttribute('title')) ?? '';
+            // Escape drops a move before it's saved.
+            await ev.focus();
+            await page.keyboard.press('Alt+ArrowDown');
+            const first = (await page.locator('[data-calendar-ghost]').textContent().catch(() => '')) ?? '';
+            await page.keyboard.press('Escape');
+            await page.waitForTimeout(2500);
+            const dropped = sent.length === 0 && (await page.locator('[data-calendar-ghost]').count()) === 0;
+            // Twice, quickly: shown at 9:30, then one question naming it, one save there.
+            await ev.focus();
+            await page.keyboard.press('Alt+ArrowDown');
+            await page.keyboard.press('Alt+ArrowDown');
+            const ghost = (await page.locator('[data-calendar-ghost]').textContent().catch(() => '')) ?? '';
+            const live = (await page.locator('[data-calendar-keys]').textContent()) ?? '';
+            await shot(page, 'keys-move');
+            const question = await consent();
+            await shot(page, 'keys-move-question');
+            await question.answer(true);
+            const moved = await waitFor(async () => (await events(day1, day1)).find((o) => o.id === made?.id && o.startLocal === `${day1}T09:30`), 'the meeting at 9:30', 10000);
+            // The page has its answer once it says so: the played call is done before the next one (and before the route goes).
+            const saidMoved = (at) => page.locator('.dshcal-toast', { hasText: new RegExp(`Moved “E2E Key meeting” to .*${at}`) }).first().waitFor({ state: 'visible', timeout: 10000 });
+            await saidMoved('9:30');
+            const twice = sent.splice(0);
+            // Enter saves at once, without opening the event.
+            await ev.focus();
+            await page.keyboard.press('Alt+ArrowUp');
+            await page.keyboard.press('Enter');
+            const ghostAfterEnter = await page.locator('[data-calendar-ghost]').count();
+            const again = await consent();
+            const opened = await page.locator('[data-calendar-details]').count();
+            await again.answer(true);
+            const back = await waitFor(async () => (await events(day1, day1)).find((o) => o.id === made?.id && o.startLocal === `${day1}T09:15`), 'the meeting at 9:15', 10000);
+            await saidMoved('9:15');
+            const at = (o) => new Date(o.start).toISOString();
+            check('Alt and an arrow key pressed twice on a meeting: shown where it goes, then one question naming it and one save there; Escape drops a move, Enter saves at once; the keys in its tooltip',
+                /Alt/.test(tip) && /9:15/.test(first) && dropped && /E2E Key meeting/.test(ghost) && /9:30/.test(ghost) && /9:30/.test(live)
+                && question.title === 'Email an update to 2 guests?' && /Moving “E2E Key meeting” to .*9:30/.test(question.text)
+                && twice.length === 2 && twice.every((u) => u.id === made?.id && u.patch?.start === at(moved)) && twice[0].patch.notify === undefined && twice[1].patch.notify === true
+                && ghostAfterEnter === 0 && opened === 0 && /9:15/.test(again.text) && sent.length === 2 && sent.every((u) => u.patch?.start === at(back)),
+                JSON.stringify({ tip, first, dropped, ghost, live, question: { title: question.title, text: question.text }, twice, ghostAfterEnter, opened, again: again.text, sent }));
+        } finally {
+            await page.unroute(updateCalls);
+            await api('deleteEvent', { id: made?.id, scope: 'all' }).catch(() => {});
+        }
+    });
+
     // 8c. Search.
     await step('search', async () => {
         await page.locator('[data-calendar-range]').click();
@@ -1379,6 +1648,57 @@ try {
         } finally {
             await page.context().unroute(isAuthorize);
             await closeAccounts();
+        }
+    });
+
+    // 11b. The title in its room, never cut: at 1280 px with the side column folded and shown, and at 420 px; every view (Day for a
+    // week of days); with week numbers on and, as accounts elsewhere are added now, the sync button in the header.
+    await step('the title has its room in every view', async () => {
+        const side = page.locator('[data-calendar-side]');
+        const toggle = page.locator('[data-calendar-side-toggle]');
+        const cut = [];
+        let measured = 0;
+        try {
+            await api('setPrefs', { patch: { weekNumbers: true } });
+            await page.locator('[data-calendar-view="week"]').click();
+            await page.locator('[data-calendar-week-tag]').waitFor({ state: 'visible', timeout: 10000 });
+            const sync = await page.locator('[data-calendar-sync]').isVisible();
+            for (const [width, folded] of [[1280, true], [1280, false], [420, true]]) {
+                await page.setViewportSize({ width, height: width === 420 ? 820 : 800 });
+                await page.waitForTimeout(500);
+                if (width === 1280 && (await side.isVisible()) === folded) {
+                    await toggle.click();
+                    await page.waitForTimeout(400);
+                }
+                for (const view of ['month', 'week', 'day', 'agenda']) {
+                    await page.locator(`[data-calendar-view="${view}"]`).click();
+                    await page.locator(`[data-calendar-grid="${view}"]`).waitFor({ state: 'visible' });
+                    for (let i = 0; i < (view === 'day' ? 7 : 1); i++) {
+                        if (i > 0) await page.locator('[data-calendar-next]').click();
+                        await page.waitForTimeout(300);
+                        const now = await page.evaluate(() => {
+                            const title = document.querySelector('[data-calendar-range]');
+                            const root = document.querySelector('[data-calendar-page]');
+                            return {
+                                shown: title.firstElementChild?.textContent ?? '', full: title.querySelector('.dshcal-sr')?.textContent ?? '', tip: title.getAttribute('title'),
+                                sw: title.scrollWidth, cw: title.clientWidth, overflow: root.scrollWidth - root.clientWidth,
+                            };
+                        });
+                        measured += 1;
+                        if (now.shown === '' || now.sw > now.cw || now.overflow > 1 || (now.shown !== now.full && now.tip !== now.full)) cut.push({ width, folded, view, ...now });
+                    }
+                    if (view === 'day' || view === 'agenda') await shot(page, `${width === 420 ? 'narrow-' : ''}title-${view}${width === 1280 && !folded ? '-side' : ''}`);
+                    if (view === 'day') await page.locator('[data-calendar-today]').click();
+                }
+            }
+            check('the title is never cut, a shorter form where the long one doesn\'t fit (all of it in its tooltip): at 1280 px with the side column folded and shown and at 420 px, in every view, with week numbers on and the sync button there',
+                sync && measured === 30 && cut.length === 0, JSON.stringify({ sync, measured, cut }));
+        } finally {
+            await api('setPrefs', { patch: { weekNumbers: false } });
+            await page.setViewportSize({ width: 1280, height: 800 });
+            await page.waitForTimeout(400);
+            if (!(await side.isVisible())) await toggle.click();
+            await page.locator('[data-calendar-view="week"]').click();
         }
     });
 
@@ -1641,24 +1961,60 @@ try {
             JSON.stringify({ changedOne: changedOne.ok, question, kept, after: after.map((o) => [o.title, o.calendarId]), posted: posted.length, patches }));
     });
 
-    // 14. A Microsoft meeting that changes on Microsoft's side while the question before its email waits: its yes makes
-    // nothing, and the question comes again naming everyone it reaches now.
+    /** The event form's end in view, as after changing something there: its dialog's content scrolled to the bottom. → how far it scrolled. */
+    const toFormEnd = (form) => form.evaluate((el) => {
+        let box = el.parentElement;
+        while (box && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement;
+        if (box) box.scrollTop = box.scrollHeight;
+        return box ? box.scrollTop : 0;
+    });
+    /**
+     * The event dialog's refusal, once it has the focus: its words, and whether it and its Look at it again are whole inside
+     * the window and inside the dialog's scrolling box (Playwright counts an element scrolled out of its box as visible).
+     */
+    const refusalShown = async () => {
+        const focused = await page.waitForFunction(() => document.querySelector('[data-calendar-refusal]')?.contains(document.activeElement), null, { timeout: 15000 })
+            .then(() => true, () => false);
+        return page.locator('[data-calendar-refusal]').evaluate((el, focus) => {
+            let box = el.parentElement;
+            while (box && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement;
+            const frame = box ? box.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+            const whole = (node) => {
+                const r = node.getBoundingClientRect();
+                return r.height > 0 && r.top >= Math.max(0, frame.top) - 1 && r.bottom <= Math.min(window.innerHeight, frame.bottom) + 1;
+            };
+            const look = el.querySelector('[data-calendar-look-again]');
+            return {
+                text: el.querySelector('.dshcal-alert')?.textContent ?? '', note: whole(el), look: look ? whole(look) : null, lookText: look?.textContent ?? '',
+                focus, scrolled: box ? box.scrollTop : null, viewport: [window.innerWidth, window.innerHeight],
+            };
+        }, focused);
+    };
+    /** Graph's reads of its calendar view (the delta query): DSH syncing it. */
+    const graphSyncs = () => providers.graph.store.requests.filter((r) => r.method === 'GET' && r.path.includes('/delta')).length;
+
+    // 14. A Microsoft meeting that changes on Microsoft's side while the question before its email waits, without DSH
+    // reading it: its yes makes nothing (Graph refuses the change made on the meeting as DSH had it, 412), and the question
+    // comes again naming everyone it reaches now.
     await step('a change held to the people it named: the meeting changed meanwhile, so it asks again', async () => {
         const graph = providers.graph;
         const day = addDays(today, 4);
         const person = (address, name) => ({ emailAddress: { address, name }, type: 'required' });
+        const synced = graphSyncs();
         const made = await createAsked({
             calendarId: msCalendar.id, title: 'E2E Review', start: `${day}T11:00`, end: `${day}T11:30`, timeZone: ZONE,
             attendees: [{ email: 'ann@example.com', name: 'Ann Example' }], notify: true,
         });
         const graphId = [...graph.store.events.values()].find((e) => e.subject === 'E2E Review')?.id;
-        const patches = () => graph.store.requestsTo(`/v1.0/me/events/${graphId}`, 'PATCH').length;
+        // DSH reads the calendar once soon after making it; nothing tells it of what changes there after that.
+        await waitFor(() => graphSyncs() > synced, 'the read after it was made', 15000);
+        const patches = () => graph.store.requestsTo(`/v1.0/me/events/${graphId}`, 'PATCH');
         let first = {};
         let again = {};
         let third = {};
-        let note = '';
-        let look = false;
-        let sentNothing = false;
+        let refused = {};
+        let place = {};
+        let endScroll = 0;
         let still = '';
         let toast = '';
         const calls = await callsTo('updateEvent', async () => {
@@ -1669,23 +2025,24 @@ try {
             const form = page.locator('[data-calendar-event-form="edit"]');
             await form.waitFor({ state: 'visible' });
             await form.locator('[data-calendar-title]').fill('E2E Review (agenda)');
+            // Saved from the end of the form, its top out of view.
+            endScroll = await toFormEnd(form);
             await page.locator('[data-calendar-save]').click();
             first = await consent();
-            // Meanwhile Bob is added on Microsoft's side, and DSH reads it.
+            // Meanwhile Bob is added on Microsoft's side, which DSH doesn't read.
+            const held = graph.store.json(graphId)?.['@odata.etag'];
             graph.store.updateEvent(graphId, { attendees: [person('ann@example.com', 'Ann Example'), person('bob@example.com', 'Bob Example')] });
-            await api('syncNow', { accountId: msAccount.id });
-            await waitFor(async () => (await events(day, day)).find((o) => o.title === 'E2E Review')?.attendees?.some((a) => a.email === 'bob@example.com'), 'Bob on the meeting', 15000);
-            const before = patches();
+            const before = patches().length;
             await first.answer(true);
-            // Asked again, naming both, Bob as new: nothing went to Microsoft.
+            // Asked again, naming both, Bob as new: the one change sent went with the meeting's old etag, and Microsoft refused it.
             again = await consent();
             await shot(page, 'changed-meanwhile');
-            sentNothing = patches() === before;
+            const sent = patches().slice(before);
+            refused = { count: sent.length, status: sent[0]?.status, stale: sent[0]?.ifMatch !== undefined && sent[0].ifMatch === held, title: graph.store.json(graphId)?.subject };
             await again.answer(false);
-            const alert = form.locator('.dshcal-alert', { hasText: 'it changed meanwhile' });
-            await alert.waitFor({ state: 'visible', timeout: 10000 });
-            note = (await alert.textContent()) ?? '';
-            look = await page.locator('[data-calendar-look-again]').isVisible();
+            // Not saved, said at the top of the dialog, in view and with the focus, and the way to look at it again with it.
+            place = await refusalShown();
+            await shot(page, 'event-dialog-changed-top');
             still = (await events(day, day)).find((o) => o.title.startsWith('E2E Review'))?.title ?? '';
             // Saved again: asked about both, and made, held to both.
             await page.locator('[data-calendar-save]').click();
@@ -1696,19 +2053,240 @@ try {
         });
         const now = (await events(day, day)).find((o) => o.title.startsWith('E2E Review'));
         const names = (q) => JSON.stringify(q.people);
-        check('a Microsoft meeting that gained a guest while the question waited: its yes makes nothing and asks again, naming both with the new one marked; Don\'t save keeps it with a way to look again; saved again, it goes to both',
+        check('a Microsoft meeting that gained a guest while the question waited, unread by DSH: its yes makes nothing (Microsoft refuses the change sent with the meeting\'s old etag) and asks again, naming both with the new one marked; Don\'t save says so at the top of the dialog, in view with the focus, with a way to look again; saved again, it goes to both',
             made.ok && first.title === 'Email an update to ann@example.com?' && names(first) === '["ann@example.com"]' && first.yes === 'Save and email'
             && again.title === 'Email an update to 2 guests?' && names(again) === '["ann@example.com","bob@example.com"]' && JSON.stringify(again.fresh) === '["bob@example.com"]'
-            && again.text.includes('It changed meanwhile') && sentNothing
-            && /^Not saved: it changed meanwhile/.test(note) && look && still === 'E2E Review'
+            && again.text.includes('It changed meanwhile') && refused.count === 1 && refused.status === 412 && refused.stale && refused.title === 'E2E Review'
+            && /^Not saved: it changed meanwhile/.test(place.text) && place.lookText === 'Look at it again' && endScroll > 0 && place.note && place.look && place.focus
+            && still === 'E2E Review'
             && names(third) === '["ann@example.com","bob@example.com"]' && third.fresh.length === 0
             && calls.length === 4 && calls[0]?.patch?.notify === undefined && calls[0]?.patch?.approved === undefined
             && calls[1]?.patch?.notify === true && JSON.stringify(calls[1]?.patch?.approved) === '["ann@example.com"]'
             && calls[2]?.patch?.notify === undefined && calls[2]?.patch?.approved === undefined
             && calls[3]?.patch?.notify === true && JSON.stringify(calls[3]?.patch?.approved) === '["ann@example.com","bob@example.com"]'
             && now?.title === 'E2E Review (agenda)' && /Emailed an update to ann@example\.com and bob@example\.com\./.test(toast),
-            JSON.stringify({ made: made.ok, first: first.title, again: { title: again.title, people: again.people, fresh: again.fresh }, third: third.people,
-                calls: calls.map((c) => c?.patch), note, look, sentNothing, still, now: now?.title, toast }));
+            JSON.stringify({ made: made.ok, first: first.title, again: { title: again.title, people: again.people, fresh: again.fresh }, third: third.people, refused,
+                calls: calls.map((c) => c?.patch), endScroll, place, still, now: now?.title, toast }));
+    });
+
+    // 14b. The meeting changed on Microsoft's side meanwhile in a way that reaches nobody new: nothing is made, the dialog says
+    // so at its top, and Look at it again shows the event as it is now.
+    await step('a change stopped because the meeting changed meanwhile, with nobody new to ask about', async () => {
+        const graph = providers.graph;
+        const day = addDays(today, 4);
+        const synced = graphSyncs();
+        const made = await createAsked({
+            calendarId: msCalendar.id, title: 'E2E Retro', start: `${day}T14:00`, end: `${day}T14:30`, timeZone: ZONE,
+            attendees: [{ email: 'ann@example.com', name: 'Ann Example' }], notify: true,
+        });
+        const graphId = [...graph.store.events.values()].find((e) => e.subject === 'E2E Retro')?.id;
+        await waitFor(() => graphSyncs() > synced, 'the read after it was made', 15000);
+        const patches = () => graph.store.requestsTo(`/v1.0/me/events/${graphId}`, 'PATCH');
+        let question = {};
+        let sent = [];
+        let place = {};
+        let endScroll = 0;
+        let details = '';
+        const calls = await callsTo('updateEvent', async () => {
+            await showDay(day);
+            await eventOnPage('E2E Retro').click();
+            await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+            await page.locator('[data-calendar-edit]').click();
+            const form = page.locator('[data-calendar-event-form="edit"]');
+            await form.waitFor({ state: 'visible' });
+            await form.locator('[data-calendar-location]').fill('Room 4');
+            endScroll = await toFormEnd(form);
+            await page.locator('[data-calendar-save]').click();
+            question = await consent();
+            // Meanwhile its notes change on Microsoft's side: the same guest, nobody new.
+            graph.store.updateEvent(graphId, { body: { contentType: 'text', content: 'Bring the plans.' } });
+            const before = patches().length;
+            await question.answer(true);
+            place = await refusalShown();
+            sent = patches().slice(before).map((r) => r.status);
+            await shot(page, 'event-dialog-nobody-new');
+            await page.locator('[data-calendar-look-again]').click();
+            await dialogGone();
+            const shown = page.locator('[data-calendar-details]');
+            await shown.waitFor({ state: 'visible', timeout: 10000 });
+            await waitFor(async () => /Bring the plans/.test((await shown.textContent()) ?? ''), 'the event as it is now', 10000).catch(() => {});
+            details = (await shown.textContent()) ?? '';
+            await page.keyboard.press('Escape');
+            await shown.waitFor({ state: 'detached' });
+        });
+        const now = (await events(day, day)).find((o) => o.title === 'E2E Retro');
+        check('a Microsoft meeting changed meanwhile so that its change reaches nobody new: its yes makes nothing, the dialog says so at its top, in view with the focus, with Look at it again, which shows the event as it is now',
+            made.ok && question.title === 'Email an update to ann@example.com?' && JSON.stringify(sent) === '[412]'
+            && place.text === 'The event changed on its server meanwhile (in another app, or by someone else), so nothing was done. Look at it again first.'
+            && place.lookText === 'Look at it again' && endScroll > 0 && place.note && place.look && place.focus
+            && calls.length === 2 && calls[1]?.patch?.notify === true && JSON.stringify(calls[1]?.patch?.approved) === '["ann@example.com"]'
+            && /Bring the plans/.test(details) && !details.includes('Room 4') && now?.location !== 'Room 4' && (now?.description ?? '').includes('Bring the plans'),
+            JSON.stringify({ made: made.ok, question: question.title, sent, endScroll, place, calls: calls.map((c) => c?.patch), details: details.slice(0, 300),
+                now: now && { location: now.location, description: now.description } }));
+    });
+
+    // 14c. A save that fails for another reason (Microsoft answers 500): said at the top of the dialog, in view and with the
+    // focus, at 1280 px and at 420 px. Then the edited dialog asks before it drops the changes; unchanged, it closes at once.
+    await step('a save that didn\'t work, and an edited event that asks before it is dropped', async () => {
+        const graph = providers.graph;
+        const day = addDays(today, 4);
+        await api('createEvent', { input: { calendarId: msCalendar.id, title: 'E2E Dentist', start: `${day}T16:00`, end: `${day}T16:30`, timeZone: ZONE } });
+        const graphId = [...graph.store.events.values()].find((e) => e.subject === 'E2E Dentist')?.id;
+        const path = `/v1.0/me/events/${graphId}`;
+        const form = page.locator('[data-calendar-event-form="edit"]');
+        const discard = page.locator('[data-calendar-discard]');
+        const open = async () => {
+            await showDay(day);
+            await eventOnPage('E2E Dentist').click();
+            await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+            await page.locator('[data-calendar-edit]').click();
+            await form.waitFor({ state: 'visible' });
+        };
+        // Unchanged: Escape closes it at once.
+        await open();
+        await page.keyboard.press('Escape');
+        await dialogGone();
+        const askedUnchanged = await discard.count();
+        // Show me as changed at the end of the form, and Microsoft answers 500.
+        await open();
+        await form.locator('[data-calendar-busy]').selectOption('free');
+        const endScroll = await toFormEnd(form);
+        graph.store.failNext({ method: 'PATCH', path, status: 500 });
+        await page.locator('[data-calendar-save]').click();
+        const wide = await refusalShown();
+        await shot(page, 'event-dialog-failed');
+        // At 420 px, from the end of the form again.
+        let narrow = {};
+        let narrowEnd = 0;
+        await page.setViewportSize({ width: 420, height: 820 });
+        try {
+            await page.waitForTimeout(600);
+            narrowEnd = await toFormEnd(form);
+            graph.store.failNext({ method: 'PATCH', path, status: 500 });
+            await page.locator('[data-calendar-save]').click();
+            narrow = await refusalShown();
+            await shot(page, 'narrow-event-dialog-failed');
+        } finally {
+            await page.setViewportSize({ width: 1280, height: 800 });
+            await page.waitForTimeout(600);
+        }
+        const tries = graph.store.requestsTo(path, 'PATCH').map((r) => r.status);
+        // Escape asks first, Keep editing has the focus; Escape there keeps editing.
+        await page.keyboard.press('Escape');
+        await discard.waitFor({ state: 'visible', timeout: 5000 });
+        const question = await discard.locator('xpath=ancestor::*[@role="dialog"][1]').evaluate((el) => ({
+            title: el.getAttribute('aria-label'),
+            buttons: [...el.querySelectorAll('button')].map((b) => b.textContent.trim()).filter(Boolean),
+            focus: el.ownerDocument.activeElement?.hasAttribute('data-calendar-keep-editing') === true,
+        }));
+        await shot(page, 'discard-question');
+        await page.keyboard.press('Escape');
+        await discard.waitFor({ state: 'detached' });
+        const keptByEscape = { open: await form.isVisible(), busy: await form.locator('[data-calendar-busy]').inputValue() };
+        // Cancel asks too; Enter on Keep editing keeps it.
+        await page.locator('[data-calendar-cancel]').click();
+        await discard.waitFor({ state: 'visible', timeout: 5000 });
+        await page.keyboard.press('Enter');
+        await discard.waitFor({ state: 'detached' });
+        const keptByEnter = { open: await form.isVisible(), busy: await form.locator('[data-calendar-busy]').inputValue() };
+        // So does the close button; Discard closes the dialog, nothing saved.
+        await form.locator('xpath=ancestor::*[@role="dialog"][1]').getByRole('button', { name: 'Close', exact: true }).click();
+        await discard.waitFor({ state: 'visible', timeout: 5000 });
+        await discard.click();
+        await dialogGone();
+        const now = (await events(day, day)).find((o) => o.title === 'E2E Dentist');
+        check('a save that didn\'t work says why at the top of the dialog, in view with the focus, at 1280 px and at 420 px',
+            /^Saving the event on Microsoft: the server answered HTTP 500\b/.test(wide.text) && endScroll > 0 && wide.note && wide.focus && wide.look === null
+            && narrow.text === wide.text && narrowEnd > 0 && narrow.note && narrow.focus && JSON.stringify(narrow.viewport) === '[420,820]'
+            && JSON.stringify(tries) === '[500,500]', JSON.stringify({ endScroll, wide, narrowEnd, narrow, tries }));
+        check('an edited event asks before Escape, Cancel or the close button drops it: Keep editing first, keeping the edits; Discard closes it unsaved; unchanged, it closes at once',
+            askedUnchanged === 0 && question.title === 'Discard your changes?' && JSON.stringify(question.buttons) === '["Keep editing","Discard"]' && question.focus
+            && keptByEscape.open && keptByEscape.busy === 'free' && keptByEnter.open && keptByEnter.busy === 'free'
+            && now?.busy !== false && graph.store.json(graphId)?.showAs !== 'free' && graph.store.requestsTo(path, 'PATCH').length === 2,
+            JSON.stringify({ askedUnchanged, question, keptByEscape, keptByEnter, busy: now?.busy, showAs: graph.store.json(graphId)?.showAs }));
+    });
+
+    // 14d. A host whose every yes comes back naming someone new (the event keeps changing): asked four times, then it stops,
+    // saying why at the top of the dialog with Look at it again. The host's answers are played here.
+    await step('a change that comes back naming someone new after every yes stops after five calls, saying why', async () => {
+        const day = addDays(today, 3);
+        const made = (await api('createEvent', { input: { calendarId: defaultCalendar, title: 'E2E Busy room', start: `${day}T13:00`, end: `${day}T13:30`, timeZone: ZONE } })).value?.occurrence;
+        const people = ['p1@example.com', 'p2@example.com', 'p3@example.com', 'p4@example.com', 'p5@example.com', 'p6@example.com'];
+        const sent = [];
+        await page.route(updateCalls, async (route) => {
+            const body = JSON.parse(route.request().postData() ?? '{}');
+            sent.push(body.payload?.args ?? {});
+            const named = people.slice(0, sent.length);
+            const mail = { emailed: { what: 'an update', to: named } };
+            const error = sent.length === 1
+                ? { code: 'calendar/needs-approval', message: `This would email an update to ${named[0]}, so it's made only once you've seen who.`, details: { people: named, mail } }
+                : { code: 'calendar/changed', message: `The event changed since this change was looked at (on its server, or in another app): it would now also email an update to ${named.at(-1)}, so nothing was done. Look at it again first.`, details: { people: named, mail } };
+            // A host takes a moment: each question goes before the next one comes.
+            await sleep(300);
+            return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ type: 'server-response', rpcId: body.rpcId, result: { ok: false, error } }) });
+        });
+        const asked = [];
+        let place = {};
+        let open = -1;
+        let details = '';
+        try {
+            await showDay(day);
+            await eventOnPage('E2E Busy room').click();
+            await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+            await page.locator('[data-calendar-edit]').click();
+            const form = page.locator('[data-calendar-event-form="edit"]');
+            await form.waitFor({ state: 'visible' });
+            await form.locator('[data-calendar-title]').fill('E2E Busy room (moved)');
+            await toFormEnd(form);
+            await page.locator('[data-calendar-save]').click();
+            for (let i = 0; i < 4; i++) {
+                const question = await consent();
+                asked.push([question.people.length, question.fresh.length]);
+                await question.answer(true);
+            }
+            place = await refusalShown();
+            open = await page.locator('[data-calendar-send]').count();
+            await shot(page, 'event-dialog-cap');
+            await page.locator('[data-calendar-look-again]').click();
+            await dialogGone();
+            const shown = page.locator('[data-calendar-details]');
+            await shown.waitFor({ state: 'visible', timeout: 10000 });
+            details = (await shown.textContent()) ?? '';
+            await page.keyboard.press('Escape');
+            await shown.waitFor({ state: 'detached' });
+        } finally {
+            await page.unroute(updateCalls);
+        }
+        const now = (await events(day, day)).find((o) => o.title.startsWith('E2E Busy room'));
+        check('a change whose every yes comes back naming someone new is asked about four times, then stops after the fifth call, saying it keeps changing at the top of the dialog, in view with the focus, with Look at it again',
+            sent.length === 5 && JSON.stringify(asked) === '[[1,0],[2,1],[3,1],[4,1]]' && open === 0
+            && JSON.stringify(sent.map((a) => a.patch?.approved ?? null)) === JSON.stringify([null, ...[1, 2, 3, 4].map((n) => people.slice(0, n))])
+            && place.text === 'Not saved: it keeps changing on its server or in another app. Look at it again to see it as it is now.'
+            && place.lookText === 'Look at it again' && place.note && place.look && place.focus
+            && /E2E Busy room/.test(details) && now?.title === 'E2E Busy room',
+            JSON.stringify({ sent: sent.map((a) => a.patch), asked, open, place, details: details.slice(0, 120), now: now?.title }));
+        if (made) await api('deleteEvent', { id: made.id, scope: 'all' });
+    });
+
+    // 14e. The meeting from 14, changed by an agent that didn't say to tell its guests: Microsoft would email them, so it
+    // isn't changed (its row is read with the other chat rows, below).
+    let emailRefused;
+    await step('an agent\'s change that would email a meeting\'s guests, not told to', async () => {
+        const day = addDays(today, 4);
+        const review = (await events(day, day)).find((o) => o.title.startsWith('E2E Review'));
+        emailRefused = await agentCall('calendar_update_event', { id: review?.id, location: 'Room 4' }, 'Put the review in room 4');
+        // The fake model names every session after its tool, so this one gets its own name to be found by (once DSH
+        // has named it).
+        const titled = async (want) => {
+            const title = (await bridge('GET', '/sessions')).find((s) => s.sessionId === emailRefused.sessionId)?.projections?.values?.title;
+            return want === undefined ? title : title === want;
+        };
+        await waitFor(() => titled(), 'the session\'s title', 30000);
+        await bridge('POST', `/sessions/${emailRefused.sessionId}/rename`, { title: 'E2E room 4 refused' });
+        await waitFor(() => titled('E2E room 4 refused'), 'the session\'s new title', 15000);
+        const after = (await events(day, day)).find((o) => o.title.startsWith('E2E Review'));
+        check('an agent\'s change to a Microsoft meeting that didn\'t say to tell its guests isn\'t made', review !== undefined && after !== undefined && after.location !== 'Room 4',
+            JSON.stringify({ review: review?.title, location: after?.location }));
     });
 
     // 15. The Microsoft account removed, with the page to withdraw DSH's access there; then a sign-in with a code instead.
@@ -1811,6 +2389,34 @@ try {
             JSON.stringify({ listText: listText?.slice(0, 200), hasDays, createText: createText?.slice(0, 200), detailsText: detailsText?.slice(0, 120) }));
         await page.keyboard.press('Escape');
     });
+    // The glass contract for what the plugin draws in a chat: a faint fill of its own, no blur (the conversation behind
+    // it is DSH's or the wallpaper's to blur), in light and dark.
+    /** A computed colour's alpha: 1 for rgb(), 0 for transparent. */
+    const alphaOf = (color) => {
+        if (color === 'transparent') return 0;
+        const m = /^rgba?\(([^)]*)\)$/.exec(String(color));
+        const parts = m ? m[1].split(/[,\s/]+/).filter(Boolean) : [];
+        return parts.length >= 4 ? Number(parts[3]) : parts.length === 3 ? 1 : NaN;
+    };
+    await step('chat cards on glass: a faint fill and no blur, in light and dark', async () => {
+        await openSession(await titleOf(listCall.sessionId));
+        const card = page.locator('.dshcal-chat[data-calendar-chat="calendar_events"][data-phase="result"] .dshcal-chat-card').first();
+        await card.waitFor({ state: 'attached', timeout: 10000 });
+        const look = () => card.evaluate((el) => {
+            const css = getComputedStyle(el);
+            const row = getComputedStyle(el.closest('.dshcal-chat'));
+            return { fill: css.backgroundColor, blur: css.backdropFilter, row: row.backgroundColor, rowBlur: row.backdropFilter };
+        });
+        const light = await look();
+        await setDark(page, true);
+        const dark = await look();
+        if (shots) await card.screenshot({ path: join(shots, 'chat-events-dark.png') }).catch(() => {});
+        await setDark(page, false);
+        const faint = (c) => alphaOf(c.fill) > 0 && alphaOf(c.fill) <= 0.06 && c.blur === 'none' && alphaOf(c.row) === 0 && c.rowBlur === 'none';
+        check('a chat card has a faint fill of its own (4 % in dark) and no blur, its row no background, in light and dark',
+            faint(light) && faint(dark) && Math.abs(alphaOf(dark.fill) - 0.04) < 0.005 && light.fill !== dark.fill, JSON.stringify({ light, dark }));
+    });
+
     await step('chat cards for a meeting that reached a guest, and for a move', async () => {
         // The meeting an agent deleted on Google (step 12): its card says whose calendars it was taken off.
         await openSession(await titleOf(reachCall.sessionId));
@@ -1851,6 +2457,13 @@ try {
         check('a call that didn\'t work shows as not done in the plugin\'s own row, with why in view: "Didn\'t work: …" for a read, "Not answered: …" for an answer',
             /Didn't work: \S/.test(readText) && /^Not answered: \S/.test(answerWhy.trim()) && !/Error:|Not done:|calendar_[a-z_]+|notify_guests/.test(`${readText} ${answerText}`),
             JSON.stringify({ readText, answerText }));
+        // The change refused for its email (above): who it would email, why, and what the user can do, in the window's words.
+        const emailRow = emailRefused ? await rowOf(emailRefused, 'calendar_update_event') : null;
+        const emailWhy = emailRow ? ((await emailRow.locator('[data-calendar-chat-card="failed"]').textContent()) ?? '').trim() : '(the call before didn\'t run)';
+        if (shots && emailRow) await emailRow.screenshot({ path: join(shots, 'chat-refused.png') }).catch(() => {});
+        check('a change refused for its email says, in the window\'s words, whom it would email, why, and what to do',
+            emailWhy === 'Not changed: It would email an update to ann@example.com and bob@example.com (Microsoft emails a meeting\'s guests about each change to it). Ask again to send it, or change it in Calendar.',
+            emailWhy);
     });
 
     // 18. The Agenda pane.
@@ -1888,6 +2501,62 @@ try {
         await page.keyboard.press('Escape');
     });
 
+    // 18b. The pane at its narrowest (DSH's right sidebar dragged as far as it goes, 300 px), and on DSH's panel: no fill
+    // or blur of its own, in light and dark.
+    await step('the Agenda pane at its narrowest, and its glass', async () => {
+        await openSession(await titleOf(listCall.sessionId));
+        const opener = page.getByRole('button', { name: 'Open right sidebar' });
+        if (await opener.count()) await opener.first().click();
+        await page.waitForTimeout(800);
+        if (!(await page.locator('[data-calendar-pane]').count())) await page.locator('button', { hasText: 'Today and the next days' }).first().click();
+        const pane = page.locator('[data-calendar-pane]');
+        await pane.waitFor({ state: 'visible', timeout: 10000 });
+        const look = () => pane.evaluate((el) => {
+            const css = getComputedStyle(el);
+            const box = el.getBoundingClientRect();
+            // Anything inside wider than the pane, or a row whose content runs past it.
+            const over = [...el.querySelectorAll('[data-calendar-event], .dshcal-pane *')].filter((child) => {
+                const r = child.getBoundingClientRect();
+                return r.width > 0 && (r.right > box.right + 1 || r.left < box.left - 1);
+            }).length;
+            return { width: Math.round(box.width), fill: css.backgroundColor, blur: css.backdropFilter, sideways: el.scrollWidth > el.clientWidth + 1, over };
+        });
+        const before = await look();
+        await setDark(page, true);
+        const dark = await look();
+        await setDark(page, false);
+        const handle = page.locator('[data-side="rightbar"]').first();
+        const box = await handle.boundingBox();
+        let narrow = null;
+        if (box) {
+            const at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+            await page.mouse.move(at.x, at.y);
+            await page.mouse.down();
+            // As far right as the window goes: DSH stops the sidebar at its narrowest.
+            const right = (page.viewportSize()?.width ?? 1280) - 8;
+            await page.mouse.move(Math.min(at.x + 200, right), at.y, { steps: 6 });
+            await page.mouse.move(right, at.y, { steps: 6 });
+            await page.mouse.up();
+            await page.waitForTimeout(600);
+            narrow = await look();
+            await pane.locator('[data-calendar-event]', { hasText: 'E2E Planning' }).first().scrollIntoViewIfNeeded().catch(() => {});
+            await shot(page, 'agenda-pane-narrowest');
+            // Back to the width it had.
+            const back = await handle.boundingBox();
+            if (back) {
+                await page.mouse.move(back.x + back.width / 2, back.y + back.height / 2);
+                await page.mouse.down();
+                await page.mouse.move(at.x, at.y, { steps: 8 });
+                await page.mouse.up();
+                await page.waitForTimeout(400);
+            }
+        }
+        const glass = (c) => alphaOf(c.fill) === 0 && c.blur === 'none';
+        check('the Agenda pane on DSH\'s narrowest right sidebar fits, with nothing cut or scrolled sideways; it has no fill or blur of its own, in light and dark',
+            box !== null && narrow !== null && narrow.width <= 300 && narrow.width < before.width && !narrow.sideways && narrow.over === 0 && !before.sideways
+            && glass(before) && glass(dark), JSON.stringify({ before, dark, narrow }));
+    });
+
     // 19. Light and dark, with and without a wallpaper.
     await step('light and dark, with and without a wallpaper', async () => {
         await openPage();
@@ -1895,12 +2564,30 @@ try {
         await showDay(day1);
         const glass = async () => page.evaluate(() => {
             const main = document.querySelector('[data-calendar-main]');
+            const side = document.querySelector('[data-calendar-side]');
             const root = document.querySelector('[data-calendar-page]');
             const css = getComputedStyle(main);
-            return { blur: css.backdropFilter, background: css.backgroundColor, root: getComputedStyle(root).backgroundColor, dark: document.body.hasAttribute('data-ds-dark-theme') };
+            const sideCss = getComputedStyle(side);
+            return {
+                blur: css.backdropFilter, background: css.backgroundColor, sideBlur: sideCss.backdropFilter, side: sideCss.backgroundColor,
+                root: getComputedStyle(root).backgroundColor, dark: document.body.hasAttribute('data-ds-dark-theme'),
+            };
         });
+        // The wallpaper's numbers: the side column at its tint, the view at tint + .2, both blurred by its blur; DSH's
+        // own fallbacks (22px, .55) without them.
+        const follows = (g, tint, blur) => Math.abs(alphaOf(g.side) - tint) < 0.005 && Math.abs(alphaOf(g.background) - Math.min(1, tint + 0.2)) < 0.005
+            && g.blur === `blur(${blur}) saturate(1.4)` && g.sideBlur === g.blur;
         await wallpaperOn(page);
         const light = await glass();
+        const other = await page.evaluate(() => {
+            document.body.style.setProperty('--wp-blur', '10px');
+            document.body.style.setProperty('--wp-tint', '0.3');
+        }).then(glass);
+        const none = await page.evaluate(() => {
+            document.body.style.removeProperty('--wp-blur');
+            document.body.style.removeProperty('--wp-tint');
+        }).then(glass);
+        await wallpaperOn(page);
         await shot(page, 'week-light-wallpaper');
         await page.locator('[data-calendar-view="month"]').click();
         await shot(page, 'month-light-wallpaper');
@@ -1916,8 +2603,9 @@ try {
         await page.locator('[data-calendar-view="week"]').click();
         await setDark(page, false);
         const clear = (c) => c === 'rgba(0, 0, 0, 0)' || c === 'transparent';
-        check('the page keeps no background of its own and its cards are glass, in light and dark', clear(light.root) && clear(dark.root)
-            && /blur/.test(light.blur) && /blur/.test(dark.blur) && light.background !== dark.background && dark.dark === true, JSON.stringify({ light, dark }));
+        check('the page keeps no background of its own and its cards are glass, in light and dark: the side column at the wallpaper\'s tint, the view at tint + .2, both blurred by its blur, with the same fallbacks without it',
+            clear(light.root) && clear(dark.root) && follows(light, 0.55, '22px') && follows(dark, 0.55, '22px') && follows(other, 0.3, '10px') && follows(none, 0.55, '22px')
+            && light.background !== dark.background && dark.dark === true, JSON.stringify({ light, dark, other, none }));
     });
 
     // 20. A narrow window.
@@ -1945,6 +2633,38 @@ try {
             toggle && !sideShown && columns === 3 && overflow <= 1 && searchFits && focusIn && focusBack,
             JSON.stringify({ toggle, sideShown, columns, overflow, search, focusIn, focusBack }));
         await page.setViewportSize({ width: 1280, height: 800 });
+    });
+
+    // 20b. The event dialog in a narrow window: Ends under Starts, each date and time as wide as its whole text needs.
+    await step('the event dialog in a narrow window', async () => {
+        await page.setViewportSize({ width: 420, height: 820 });
+        await page.waitForTimeout(600);
+        try {
+            await page.locator('[data-calendar-new]').click();
+            const form = page.locator('[data-calendar-event-form="new"]');
+            await form.waitFor({ state: 'visible' });
+            await page.waitForTimeout(300);
+            const fields = await form.evaluate((el) => [...el.querySelectorAll('[data-calendar-start-day],[data-calendar-start-time],[data-calendar-end-day],[data-calendar-end-time]')].map((input) => {
+                // The same field at its own width, out of the row: what it needs to show all of its text.
+                const free = input.cloneNode();
+                free.style.cssText = 'position:absolute;visibility:hidden;width:auto;min-width:0;flex:none';
+                input.parentElement.append(free);
+                const need = free.getBoundingClientRect().width;
+                free.remove();
+                const r = input.getBoundingClientRect();
+                return { width: Math.round(r.width * 10) / 10, need: Math.round(need * 10) / 10, top: Math.round(r.top) };
+            }));
+            const overflow = await page.evaluate(() => { const c = document.querySelector('.dshcal-dlg-content'); return c.scrollWidth - c.clientWidth; });
+            await shot(page, 'narrow-event-dialog');
+            await page.keyboard.press('Escape');
+            await dialogGone();
+            const [startDay, startTime, endDay, endTime] = fields;
+            check('in a narrow window the event dialog shows its dates and times in full, Ends under Starts',
+                fields.length === 4 && fields.every((f) => f.width + 0.5 >= f.need) && endDay.top > startDay.top && startTime.top === startDay.top && endTime.top === endDay.top && overflow <= 1,
+                JSON.stringify({ fields, overflow }));
+        } finally {
+            await page.setViewportSize({ width: 1280, height: 800 });
+        }
     });
 
     // 21. Weekends hidden and week numbers shown, from the settings menu at the foot of the side column; kept after a
@@ -2088,8 +2808,7 @@ try {
 
             // Kept: after a reload (the page as the steps before had it: its side column shown, the notice closed).
             await page.reload({ waitUntil: 'domcontentloaded' });
-            await page.waitForTimeout(2500);
-            await dismissNotices(page);
+            await settleWindow(page);
             await openPage();
             await sideShown();
             const notice = page.locator('[data-calendar-store-issue]');
