@@ -27,6 +27,9 @@
  *   Don't save; notify only after Save and email, with approved: the six,
  *   and the same change otherwise (the host holds a yes to it); who was
  *   emailed in the toast;
+ * - a delete the host says would email twelve: the list in the question
+ *   takes the focus with Shift+Tab from No, End and Home show its ends, and
+ *   Escape is Don't delete;
  * - an event moved to another calendar with other changes: the move on its
  *   own first, the rest on the moved event; no email offered for a guest on
  *   a calendar that can't send it;
@@ -86,10 +89,17 @@
  *   delete that reached a guest's calendar (calendar_delete_event) and a
  *   move (calendar_update_event), and the button that opens an event on the
  *   page; a read and an answer that didn't work, each in the plugin's own
- *   row saying what wasn't done and why;
+ *   row saying what wasn't done and why; an agent's change to a Microsoft
+ *   meeting that didn't say to tell its guests, refused, in the window's
+ *   words (whom it would email, why, and what to do); the cards' faint fill
+ *   and no blur, light and dark;
  * - the Agenda pane in DSH's right sidebar: an event's details beside it,
- *   the chat staying, and Open in Calendar to the event on the page;
- * - light and dark, with and without a stand-in wallpaper;
+ *   the chat staying, and Open in Calendar to the event on the page; at the
+ *   sidebar's narrowest (300 px) nothing cut or scrolled sideways; no fill
+ *   or blur of its own, light and dark;
+ * - light and dark, with and without a stand-in wallpaper: the side column
+ *   at the wallpaper's tint, the view at tint + .2, both blurred by its
+ *   blur, and the same fallbacks without them;
  * - a narrow window (420 px): the side column folds, Week shows 3 days,
  *   search fits;
  * - the settings menu's Show weekends and Show week numbers, each checked
@@ -111,12 +121,13 @@
  * before an email, the one before a move that drops part of a series, a
  * change stopped because the event changed, a save refused at the top of
  * the dialog (changed, nobody new, failed, narrow, stopped), the question
- * before changes are discarded, Accounts, Microsoft's and Google's
- * sign-ins, a removal's notice, the Agenda pane and an event's details
- * beside it, chat cards, the side column folded, a drag, search results, a
- * narrow window; Week and Month with weekends hidden and week numbers,
- * light, dark and narrow, and the settings menu; and the window whenever a
- * step fails). KEEP=1 keeps the temporary folder.
+ * before changes are discarded, the long list at its end, Accounts,
+ * Microsoft's and Google's sign-ins, a removal's notice, the Agenda pane
+ * (at its narrowest too) and an event's details beside it, chat cards (a
+ * refused one, one in dark), the side column folded, a drag, search
+ * results, a narrow window; Week and Month with weekends hidden and week
+ * numbers, light, dark and narrow, and the settings menu; and the window
+ * whenever a step fails). KEEP=1 keeps the temporary folder.
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -518,14 +529,32 @@ async function agentCall(tool, args, words) {
     return { sessionId };
 }
 
-/** DSH's first-run notices, out of the way. */
+/** DSH's first-run notices, out of the way: whether there was one. */
 async function dismissNotices(page) {
+    let found = false;
     for (const label of ['Continue', 'Got it', 'OK']) {
         const button = page.getByRole('button', { name: label, exact: true });
         if (await button.count()) {
+            found = true;
             await button.first().click().catch(() => {});
             await page.waitForTimeout(300);
         }
+    }
+    return found;
+}
+
+/**
+ * DSH's window up (its Calendar entry showing), and its first-run notices out
+ * of the way: they can come seconds late on a busy machine, so they're looked
+ * for until none has come for a few seconds.
+ */
+async function settleWindow(page) {
+    await page.getByRole('button', { name: 'Calendar', exact: true }).first().waitFor({ state: 'visible', timeout: 60000 });
+    const end = Date.now() + 30000;
+    let calm = Date.now();
+    while (Date.now() < end && Date.now() - calm < 4000) {
+        if (await dismissNotices(page)) calm = Date.now();
+        await page.waitForTimeout(400);
     }
 }
 
@@ -634,8 +663,7 @@ try {
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('console', (m) => { if (m.type() === 'error' && /calendar/i.test(m.text())) pageErrors.push(m.text()); });
     await page.goto(signInLink(), { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(2500);
-    await dismissNotices(page);
+    await settleWindow(page);
 
     const calendarEntry = page.getByRole('button', { name: 'Calendar', exact: true }).first();
     const openPage = async () => {
@@ -980,6 +1008,70 @@ try {
                 JSON.stringify({ question: { ...question, answer: undefined }, stillOpen, unchanged, sent, toast, saved: saved?.title }));
         } finally {
             await page.unroute(updateCalls);
+        }
+    });
+
+    // A question naming twelve: its list scrolls, and takes the keys. Played as above (the host's answer), for a delete
+    // answered No, so nothing is deleted.
+    const deleteCalls = '**/api/dsh-plugin-calendar/deleteEvent';
+    await step('the long list in the question, by keyboard', async () => {
+        const twelve = Array.from({ length: 12 }, (_, i) => `guest${i + 1}@example.com`);
+        const why = 'Microsoft emails a meeting\'s guests when it is cancelled';
+        const sent = [];
+        await page.route(deleteCalls, async (route) => {
+            const body = JSON.parse(route.request().postData() ?? '{}');
+            sent.push(body.payload?.args ?? {});
+            return route.fulfill({
+                status: 200, contentType: 'application/json',
+                body: JSON.stringify({
+                    type: 'server-response', rpcId: body.rpcId,
+                    result: {
+                        ok: false,
+                        error: {
+                            code: 'calendar/needs-notify', message: `This would email a cancellation to ${twelve.slice(0, 5).join(', ')} and 7 more (${why}), so it's made only when they are to be told.`,
+                            details: { people: twelve, mail: { emailed: { what: 'a cancellation', to: twelve }, why } },
+                        },
+                    },
+                }),
+            });
+        });
+        try {
+            await eventOnPage('E2E Planning review').click();
+            await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+            await page.locator('[data-calendar-delete]').click();
+            await page.locator('[data-calendar-submit]').click();
+            const question = await consent();
+            const list = page.locator('[data-calendar-people]');
+            await waitFor(() => page.evaluate(() => document.activeElement?.hasAttribute('data-calendar-keep') === true), 'the focus on Don\'t delete', 5000).catch(() => {});
+            // Which of its people are whole in view, inside the list's box.
+            const inView = () => list.evaluate((ul) => {
+                const box = ul.getBoundingClientRect();
+                return [...ul.querySelectorAll('[data-calendar-person]')].filter((li) => {
+                    const r = li.getBoundingClientRect();
+                    return r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+                }).map((li) => li.getAttribute('data-calendar-person'));
+            });
+            await page.keyboard.press('Shift+Tab');
+            const listFocused = await list.evaluate((ul) => ul.ownerDocument.activeElement === ul);
+            const top = await inView();
+            await page.keyboard.press('End');
+            await page.waitForTimeout(300);
+            const end = await inView();
+            await shot(page, 'question-12-end');
+            await page.keyboard.press('Home');
+            await page.waitForTimeout(300);
+            const home = await inView();
+            await page.keyboard.press('Escape');
+            await page.locator('[data-calendar-send]').waitFor({ state: 'detached' });
+            await page.locator('[data-calendar-submit]').waitFor({ state: 'detached', timeout: 10000 }).catch(() => {});
+            const still = (await events(day1, day1)).some((o) => o.title === 'E2E Planning review');
+            check('a question naming twelve: the list takes the focus from No with Shift+Tab, End shows its last people and Home its first; Escape is Don\'t delete',
+                question.title === 'Email a cancellation to 12 guests?' && question.people.length === 12 && listFocused
+                && top.includes(twelve[0]) && !top.includes(twelve[11]) && end.includes(twelve[11]) && !end.includes(twelve[0])
+                && home.includes(twelve[0]) && !home.includes(twelve[11]) && sent.length === 1 && still,
+                JSON.stringify({ title: question.title, listFocused, top, end, home, sent: sent.length, still }));
+        } finally {
+            await page.unroute(deleteCalls);
         }
     });
 
@@ -1962,6 +2054,27 @@ try {
         if (made) await api('deleteEvent', { id: made.id, scope: 'all' });
     });
 
+    // 14e. The meeting from 14, changed by an agent that didn't say to tell its guests: Microsoft would email them, so it
+    // isn't changed (its row is read with the other chat rows, below).
+    let emailRefused;
+    await step('an agent\'s change that would email a meeting\'s guests, not told to', async () => {
+        const day = addDays(today, 4);
+        const review = (await events(day, day)).find((o) => o.title.startsWith('E2E Review'));
+        emailRefused = await agentCall('calendar_update_event', { id: review?.id, location: 'Room 4' }, 'Put the review in room 4');
+        // The fake model names every session after its tool, so this one gets its own name to be found by (once DSH
+        // has named it).
+        const titled = async (want) => {
+            const title = (await bridge('GET', '/sessions')).find((s) => s.sessionId === emailRefused.sessionId)?.projections?.values?.title;
+            return want === undefined ? title : title === want;
+        };
+        await waitFor(() => titled(), 'the session\'s title', 30000);
+        await bridge('POST', `/sessions/${emailRefused.sessionId}/rename`, { title: 'E2E room 4 refused' });
+        await waitFor(() => titled('E2E room 4 refused'), 'the session\'s new title', 15000);
+        const after = (await events(day, day)).find((o) => o.title.startsWith('E2E Review'));
+        check('an agent\'s change to a Microsoft meeting that didn\'t say to tell its guests isn\'t made', review !== undefined && after !== undefined && after.location !== 'Room 4',
+            JSON.stringify({ review: review?.title, location: after?.location }));
+    });
+
     // 15. The Microsoft account removed, with the page to withdraw DSH's access there; then a sign-in with a code instead.
     await step('Microsoft: the account removed, and a code instead', async () => {
         await openAccounts();
@@ -2062,6 +2175,34 @@ try {
             JSON.stringify({ listText: listText?.slice(0, 200), hasDays, createText: createText?.slice(0, 200), detailsText: detailsText?.slice(0, 120) }));
         await page.keyboard.press('Escape');
     });
+    // The glass contract for what the plugin draws in a chat: a faint fill of its own, no blur (the conversation behind
+    // it is DSH's or the wallpaper's to blur), in light and dark.
+    /** A computed colour's alpha: 1 for rgb(), 0 for transparent. */
+    const alphaOf = (color) => {
+        if (color === 'transparent') return 0;
+        const m = /^rgba?\(([^)]*)\)$/.exec(String(color));
+        const parts = m ? m[1].split(/[,\s/]+/).filter(Boolean) : [];
+        return parts.length >= 4 ? Number(parts[3]) : parts.length === 3 ? 1 : NaN;
+    };
+    await step('chat cards on glass: a faint fill and no blur, in light and dark', async () => {
+        await openSession(await titleOf(listCall.sessionId));
+        const card = page.locator('.dshcal-chat[data-calendar-chat="calendar_events"][data-phase="result"] .dshcal-chat-card').first();
+        await card.waitFor({ state: 'attached', timeout: 10000 });
+        const look = () => card.evaluate((el) => {
+            const css = getComputedStyle(el);
+            const row = getComputedStyle(el.closest('.dshcal-chat'));
+            return { fill: css.backgroundColor, blur: css.backdropFilter, row: row.backgroundColor, rowBlur: row.backdropFilter };
+        });
+        const light = await look();
+        await setDark(page, true);
+        const dark = await look();
+        if (shots) await card.screenshot({ path: join(shots, 'chat-events-dark.png') }).catch(() => {});
+        await setDark(page, false);
+        const faint = (c) => alphaOf(c.fill) > 0 && alphaOf(c.fill) <= 0.06 && c.blur === 'none' && alphaOf(c.row) === 0 && c.rowBlur === 'none';
+        check('a chat card has a faint fill of its own (4 % in dark) and no blur, its row no background, in light and dark',
+            faint(light) && faint(dark) && Math.abs(alphaOf(dark.fill) - 0.04) < 0.005 && light.fill !== dark.fill, JSON.stringify({ light, dark }));
+    });
+
     await step('chat cards for a meeting that reached a guest, and for a move', async () => {
         // The meeting an agent deleted on Google (step 12): its card says whose calendars it was taken off.
         await openSession(await titleOf(reachCall.sessionId));
@@ -2102,6 +2243,13 @@ try {
         check('a call that didn\'t work shows as not done in the plugin\'s own row, with why in view: "Didn\'t work: …" for a read, "Not answered: …" for an answer',
             /Didn't work: \S/.test(readText) && /^Not answered: \S/.test(answerWhy.trim()) && !/Error:|Not done:|calendar_[a-z_]+|notify_guests/.test(`${readText} ${answerText}`),
             JSON.stringify({ readText, answerText }));
+        // The change refused for its email (above): who it would email, why, and what the user can do, in the window's words.
+        const emailRow = emailRefused ? await rowOf(emailRefused, 'calendar_update_event') : null;
+        const emailWhy = emailRow ? ((await emailRow.locator('[data-calendar-chat-card="failed"]').textContent()) ?? '').trim() : '(the call before didn\'t run)';
+        if (shots && emailRow) await emailRow.screenshot({ path: join(shots, 'chat-refused.png') }).catch(() => {});
+        check('a change refused for its email says, in the window\'s words, whom it would email, why, and what to do',
+            emailWhy === 'Not changed: It would email an update to ann@example.com and bob@example.com (Microsoft emails a meeting\'s guests about each change to it). Ask again to send it, or change it in Calendar.',
+            emailWhy);
     });
 
     // 18. The Agenda pane.
@@ -2139,6 +2287,62 @@ try {
         await page.keyboard.press('Escape');
     });
 
+    // 18b. The pane at its narrowest (DSH's right sidebar dragged as far as it goes, 300 px), and on DSH's panel: no fill
+    // or blur of its own, in light and dark.
+    await step('the Agenda pane at its narrowest, and its glass', async () => {
+        await openSession(await titleOf(listCall.sessionId));
+        const opener = page.getByRole('button', { name: 'Open right sidebar' });
+        if (await opener.count()) await opener.first().click();
+        await page.waitForTimeout(800);
+        if (!(await page.locator('[data-calendar-pane]').count())) await page.locator('button', { hasText: 'Today and the next days' }).first().click();
+        const pane = page.locator('[data-calendar-pane]');
+        await pane.waitFor({ state: 'visible', timeout: 10000 });
+        const look = () => pane.evaluate((el) => {
+            const css = getComputedStyle(el);
+            const box = el.getBoundingClientRect();
+            // Anything inside wider than the pane, or a row whose content runs past it.
+            const over = [...el.querySelectorAll('[data-calendar-event], .dshcal-pane *')].filter((child) => {
+                const r = child.getBoundingClientRect();
+                return r.width > 0 && (r.right > box.right + 1 || r.left < box.left - 1);
+            }).length;
+            return { width: Math.round(box.width), fill: css.backgroundColor, blur: css.backdropFilter, sideways: el.scrollWidth > el.clientWidth + 1, over };
+        });
+        const before = await look();
+        await setDark(page, true);
+        const dark = await look();
+        await setDark(page, false);
+        const handle = page.locator('[data-side="rightbar"]').first();
+        const box = await handle.boundingBox();
+        let narrow = null;
+        if (box) {
+            const at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+            await page.mouse.move(at.x, at.y);
+            await page.mouse.down();
+            // As far right as the window goes: DSH stops the sidebar at its narrowest.
+            const right = (page.viewportSize()?.width ?? 1280) - 8;
+            await page.mouse.move(Math.min(at.x + 200, right), at.y, { steps: 6 });
+            await page.mouse.move(right, at.y, { steps: 6 });
+            await page.mouse.up();
+            await page.waitForTimeout(600);
+            narrow = await look();
+            await pane.locator('[data-calendar-event]', { hasText: 'E2E Planning' }).first().scrollIntoViewIfNeeded().catch(() => {});
+            await shot(page, 'agenda-pane-narrowest');
+            // Back to the width it had.
+            const back = await handle.boundingBox();
+            if (back) {
+                await page.mouse.move(back.x + back.width / 2, back.y + back.height / 2);
+                await page.mouse.down();
+                await page.mouse.move(at.x, at.y, { steps: 8 });
+                await page.mouse.up();
+                await page.waitForTimeout(400);
+            }
+        }
+        const glass = (c) => alphaOf(c.fill) === 0 && c.blur === 'none';
+        check('the Agenda pane on DSH\'s narrowest right sidebar fits, with nothing cut or scrolled sideways; it has no fill or blur of its own, in light and dark',
+            box !== null && narrow !== null && narrow.width <= 300 && narrow.width < before.width && !narrow.sideways && narrow.over === 0 && !before.sideways
+            && glass(before) && glass(dark), JSON.stringify({ before, dark, narrow }));
+    });
+
     // 19. Light and dark, with and without a wallpaper.
     await step('light and dark, with and without a wallpaper', async () => {
         await openPage();
@@ -2146,12 +2350,30 @@ try {
         await showDay(day1);
         const glass = async () => page.evaluate(() => {
             const main = document.querySelector('[data-calendar-main]');
+            const side = document.querySelector('[data-calendar-side]');
             const root = document.querySelector('[data-calendar-page]');
             const css = getComputedStyle(main);
-            return { blur: css.backdropFilter, background: css.backgroundColor, root: getComputedStyle(root).backgroundColor, dark: document.body.hasAttribute('data-ds-dark-theme') };
+            const sideCss = getComputedStyle(side);
+            return {
+                blur: css.backdropFilter, background: css.backgroundColor, sideBlur: sideCss.backdropFilter, side: sideCss.backgroundColor,
+                root: getComputedStyle(root).backgroundColor, dark: document.body.hasAttribute('data-ds-dark-theme'),
+            };
         });
+        // The wallpaper's numbers: the side column at its tint, the view at tint + .2, both blurred by its blur; DSH's
+        // own fallbacks (22px, .55) without them.
+        const follows = (g, tint, blur) => Math.abs(alphaOf(g.side) - tint) < 0.005 && Math.abs(alphaOf(g.background) - Math.min(1, tint + 0.2)) < 0.005
+            && g.blur === `blur(${blur}) saturate(1.4)` && g.sideBlur === g.blur;
         await wallpaperOn(page);
         const light = await glass();
+        const other = await page.evaluate(() => {
+            document.body.style.setProperty('--wp-blur', '10px');
+            document.body.style.setProperty('--wp-tint', '0.3');
+        }).then(glass);
+        const none = await page.evaluate(() => {
+            document.body.style.removeProperty('--wp-blur');
+            document.body.style.removeProperty('--wp-tint');
+        }).then(glass);
+        await wallpaperOn(page);
         await shot(page, 'week-light-wallpaper');
         await page.locator('[data-calendar-view="month"]').click();
         await shot(page, 'month-light-wallpaper');
@@ -2167,8 +2389,9 @@ try {
         await page.locator('[data-calendar-view="week"]').click();
         await setDark(page, false);
         const clear = (c) => c === 'rgba(0, 0, 0, 0)' || c === 'transparent';
-        check('the page keeps no background of its own and its cards are glass, in light and dark', clear(light.root) && clear(dark.root)
-            && /blur/.test(light.blur) && /blur/.test(dark.blur) && light.background !== dark.background && dark.dark === true, JSON.stringify({ light, dark }));
+        check('the page keeps no background of its own and its cards are glass, in light and dark: the side column at the wallpaper\'s tint, the view at tint + .2, both blurred by its blur, with the same fallbacks without it',
+            clear(light.root) && clear(dark.root) && follows(light, 0.55, '22px') && follows(dark, 0.55, '22px') && follows(other, 0.3, '10px') && follows(none, 0.55, '22px')
+            && light.background !== dark.background && dark.dark === true, JSON.stringify({ light, dark, other, none }));
     });
 
     // 20. A narrow window.
@@ -2339,8 +2562,7 @@ try {
 
             // Kept: after a reload (the page as the steps before had it: its side column shown, the notice closed).
             await page.reload({ waitUntil: 'domcontentloaded' });
-            await page.waitForTimeout(2500);
-            await dismissNotices(page);
+            await settleWindow(page);
             await openPage();
             await sideShown();
             const notice = page.locator('[data-calendar-store-issue]');
