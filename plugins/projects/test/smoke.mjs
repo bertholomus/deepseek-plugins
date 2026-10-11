@@ -2352,6 +2352,14 @@ test('browser half: a failed or stopped thread reads Failed or Stopped everywher
         { id: 't11', session: 's-t11', title: 'CDN', resolved: false, handback: { status: 'blocked', summary: 'Token expired.', at: at(9) } }] } } } };
     assert.deepEqual(plain(['s-t7', 's-t6', 's-t8', 's-t11', 's-t10', 's-c', 'nope'].map((id) => markState(marked, id))),
         ['error:Failed', '', '', 'warning:Blocked', '', '', '']);
+    // What a screen reader hears after each row's title (DSH's own status can take the mark's seat, never these words).
+    const { RowPlace, rowWords } = client.internals;
+    const useMarked = (select) => select(marked);
+    assert.deepEqual(plain(['s-t7', 's-t11', 's-t8', 's-c', 'nope'].map((id) => RowPlace({ sessionId: id, useSessions: useMarked })?.props['data-projects-words'] ?? null)),
+        ['Project thread: Failed', 'Project thread: Blocked', 'Project thread', 'Project', null]);
+    assert.equal(rowWords({ role: 'coordinator', paused: true }), 'Project paused');
+    assert.equal(rowWords({ role: 'coordinator', paused: true, news: { unread: [{ kind: 'failed', title: 'Deploy' }] } }), 'Project paused, New: “Deploy” failed');
+    assert.equal(rowWords({ role: '' }), '');
 
     // The hover card says what the thread last did; DSH ends it with the session's own status.
     assert.deepEqual(plain(['t7', 't6', 't8', 't9'].map((id) => hoverLine(byId[id]))), [
@@ -2464,6 +2472,123 @@ test('browser half: each session list row says its place in a project, and the C
     const kept = nestingRules([{ coordinator: 'c', at: 2, threads: ['t1', 'x"] *{display:none} [y="'] }]);
     assert.match(kept, /:has\(>\[data-row-key="session:t1"\]\)/);
     assert.doesNotMatch(kept, /x"\]/);
+});
+
+/** Just enough of the DOM for the session list's passes: attributes, children, and the selectors they use. */
+class FakeEl {
+    constructor(tag, attrs = {}, children = []) {
+        this.tagName = tag.toUpperCase();
+        this.attrs = new Map(Object.entries(attrs).map(([k, v]) => [k, String(v)]));
+        this.children = children;
+        this.parentElement = null;
+        for (const child of children) child.parentElement = this;
+    }
+    get id() { return this.attrs.get('id') ?? ''; }
+    set id(value) { this.attrs.set('id', String(value)); }
+    getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; }
+    setAttribute(name, value) { this.attrs.set(name, String(value)); }
+    hasAttribute(name) { return this.attrs.has(name); }
+    removeAttribute(name) { this.attrs.delete(name); }
+    /** `[a]`, `[a="v"]`, `[a^="v"]`, and the one compound selector the passes use, `[role="tree"] div`. */
+    matches(selector) {
+        if (selector === '[role="tree"] div') {
+            if (this.tagName !== 'DIV') return false;
+            for (let e = this.parentElement; e; e = e.parentElement) if (e.getAttribute('role') === 'tree') return true;
+            return false;
+        }
+        const m = /^\[([\w-]+)(?:(\^?=)"([^"]*)")?\]$/.exec(selector);
+        if (!m) throw new Error(`selector not faked: ${selector}`);
+        const value = this.getAttribute(m[1]);
+        return value !== null && (!m[2] || (m[2] === '=' ? value === m[3] : value.startsWith(m[3])));
+    }
+    querySelectorAll(selector) {
+        const out = [];
+        const walk = (el) => { for (const child of el.children) { if (child.matches(selector)) out.push(child); walk(child); } };
+        walk(this);
+        return out;
+    }
+    querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
+    closest(selector) {
+        for (let e = this; e; e = e.parentElement) if (e.matches(selector)) return e;
+        return null;
+    }
+}
+
+test('browser half: a screen reader meets each project\'s rows in drawn order, and hears the plugin\'s words after each title', () => {
+    const { client } = loadClient();
+    const { nestingRules, nestedOrder, readInOrder, describeRows, undoRows } = client.internals;
+    // The order the CSS draws a section in: what DSH lists before the first coordinator, then each coordinator,
+    // its threads in DSH's order, and what DSH lists after it. The same two projects as the CSS above.
+    const groups = [{ coordinator: 'b', at: 6, threads: ['bt'] }, { coordinator: 'a', at: 2, threads: ['at1', 'at2'] }];
+    const keys = ['x', 'a', 'y', 'at2', 'bt', 'b', 'z', 'at1', ''];
+    assert.deepEqual(plain(nestedOrder(groups, keys)), [1, 2, 4, 8, 3, 6, 5, 7, 9]);
+    const css = nestingRules(groups);
+    for (const [order, rule] of [[3, ':nth-child(n+3)'], [6, ':nth-child(n+7)'], [1, 'session:a"]'], [2, 'session:at1"]'], [4, 'session:b"]'], [5, 'session:bt"]']]) {
+        assert.ok(css.split('\n').some((line) => line.includes(rule) && line.endsWith(`{order:${order}}`)), rule);
+    }
+    // Nothing to nest, or DSH's own order already: nothing to reorder.
+    assert.equal(nestedOrder([], keys), null);
+    assert.equal(nestedOrder([{ coordinator: 'a', at: 1, threads: ['t'] }], ['a', 't', 'x']), null);
+    assert.equal(nestedOrder(groups, []), null);
+
+    // DSH's list: a section of wrappers, each holding a row; RowPlace's mark inside each project's row.
+    const place = (role, of, words) => new FakeEl('span', { 'data-projects-row': role, 'data-projects-of': of, 'data-projects-words': words });
+    const row = (key, mark, attrs = {}) => new FakeEl('div', { 'data-row-key': key, role: 'treeitem', ...attrs }, mark ? [new FakeEl('span', {}, [mark])] : []);
+    const wrap = (r, attrs = {}) => new FakeEl('span', attrs, [r]);
+    const rows = {
+        head: row('workspace:w'), chat: row('session:chat'),
+        t2: row('session:t2', place('thread', 'c', 'Project thread: Failed')), c: row('session:c', place('coordinator', 'c', 'Project')),
+        late: row('session:late'), t1: row('session:t1', place('thread', 'c', 'Project thread')),
+        old: row('session:old', place('thread', 'c', 'Project thread'), { 'aria-description': 'Archived' }),
+    };
+    const kids = [wrap(rows.head), wrap(rows.chat), wrap(rows.t2), wrap(rows.c, { id: 'dsh-own' }), wrap(rows.late), wrap(rows.t1), wrap(rows.old)];
+    const section = new FakeEl('div', {}, kids);
+    const tree = new FakeEl('div', { role: 'tree' }, [section]);
+    readInOrder(tree);
+    // The section owns its children in drawn order: the coordinator, its threads, then the chat DSH lists after it.
+    // A child keeps an id it has; the others get the plugin's.
+    const ids = section.getAttribute('aria-owns').split(' ');
+    assert.deepEqual(plain(ids.map((id) => kids.findIndex((k) => k.id === id))), [0, 1, 3, 2, 5, 6, 4]);
+    assert.equal(kids[3].id, 'dsh-own');
+    assert.ok(kids.filter((k, i) => i !== 3).every((k) => k.id.startsWith('dshp-o-')));
+    assert.ok(section.hasAttribute('data-projects-owns'));
+    // Each project row says its words as its description; a description DSH gave a row is DSH's and stays.
+    describeRows(tree);
+    assert.equal(rows.t2.getAttribute('aria-description'), 'Project thread: Failed');
+    assert.equal(rows.c.getAttribute('aria-description'), 'Project');
+    assert.equal(rows.old.getAttribute('aria-description'), 'Archived');
+    assert.equal(rows.chat.getAttribute('aria-description'), null);
+    // The words change with the row; DSH taking a row's description back keeps its own; words gone, description gone.
+    rows.t2.children[0].children[0].setAttribute('data-projects-words', 'Project thread');
+    rows.c.setAttribute('aria-description', 'Archived');
+    rows.t1.children[0].children[0].setAttribute('data-projects-words', '');
+    describeRows(tree);
+    assert.equal(rows.t2.getAttribute('aria-description'), 'Project thread');
+    assert.equal(rows.c.getAttribute('aria-description'), 'Archived');
+    assert.equal(rows.c.getAttribute('data-projects-said'), null);
+    assert.equal(rows.t1.getAttribute('aria-description'), null);
+    // A thread that leaves the section (or DSH drawing the project in its own order) ends the plugin's order there.
+    section.children = section.children.filter((k) => k !== kids[2] && k !== kids[5] && k !== kids[6]);
+    readInOrder(tree);
+    assert.equal(section.getAttribute('aria-owns'), null);
+    assert.equal(section.hasAttribute('data-projects-owns'), false);
+    assert.equal(kids[3].id, 'dsh-own');
+    assert.equal(kids[1].id, '');
+    // A list drawn as one flat list (the rows' section is the list itself) is never reordered: the CSS doesn't nest it.
+    const flat = new FakeEl('div', { role: 'tree' }, [wrap(row('session:x')), wrap(row('session:t9', place('thread', 'c9', 'Project thread'))), wrap(row('session:c9', place('coordinator', 'c9', 'Project')))]);
+    readInOrder(flat);
+    assert.equal(flat.getAttribute('aria-owns'), null);
+    // Switched off: the list as DSH draws it, DSH's own descriptions kept.
+    section.children = kids;
+    readInOrder(tree);
+    describeRows(tree);
+    assert.ok(section.hasAttribute('aria-owns'));
+    undoRows(tree);
+    assert.equal(section.getAttribute('aria-owns'), null);
+    assert.ok(kids.every((k, i) => i === 3 || k.id === ''));
+    assert.equal(rows.t2.getAttribute('aria-description'), null);
+    assert.equal(rows.old.getAttribute('aria-description'), 'Archived');
+    assert.equal(rows.c.getAttribute('aria-description'), 'Archived');
 });
 
 test('browser half: the session list overlay looks only for DSH\'s own list, and draws nothing but a refusal\'s toast', () => {
@@ -4321,15 +4446,20 @@ test('browser half: news from threads marks the ◆ row and shows one notice for
     const projects = { facts, refresh() {} };
     const mark = ThreadMark({ sessionId: 'c1', useSessions, projects });
     assert.equal(mark.props['data-projects-news-mark'], 4);
-    assert.equal(mark.props['aria-label'], '4 new, latest: “Deploy” failed');
+    assert.equal(mark.props.title, '4 new, latest: “Deploy” failed');
     assert.equal(mark.children[0].props.state, 'error');
+    // The dot is drawn only; a screen reader hears the news after the title, from the row's words.
+    assert.equal(mark.props['aria-hidden'], true);
+    assert.equal(mark.props['aria-label'], undefined);
     assert.equal(RowPlace({ sessionId: 'c1', useSessions, projects }).props['data-projects-unread'], 4);
+    assert.equal(RowPlace({ sessionId: 'c1', useSessions, projects }).props['data-projects-words'], 'Project, 4 new, latest: “Deploy” failed');
     // Opening the coordinator sees everything the window knew of, at once, and the plugin keeps it seen.
     await facts.seeNews('c1');
     assert.deepEqual(plain(calls.at(-1)), ['seeNews', { target: 'c1', seq: 4 }]);
     assert.equal(facts.newsOf('c1'), undefined);
     assert.equal(ThreadMark({ sessionId: 'c1', useSessions, projects }), null);
     assert.equal(RowPlace({ sessionId: 'c1', useSessions, projects }).props['data-projects-unread'], undefined);
+    assert.equal(RowPlace({ sessionId: 'c1', useSessions, projects }).props['data-projects-words'], 'Project');
     await facts.seeNews('c1');
     assert.equal(calls.filter(([m]) => m === 'seeNews').length, 1, 'nothing unread: no call');
 

@@ -1460,6 +1460,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             linkNotProject: 'This chat isn\'t part of a project, so it has no threads.',
             paused: 'Paused',
             projectPaused: 'Project paused',
+            // What a project's rows in the session list say after their titles, to a screen reader.
+            rowProject: 'Project',
+            rowThread: 'Project thread',
             pausedCoordinator: 'New threads and handbacks wait until you resume.',
             pausedNewThreads: 'New threads wait too.',
             pausedThread: 'This thread\'s handbacks wait until the project resumes.',
@@ -2105,7 +2108,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** Re-render when anything the plugin says about projects changes. */
         const useFacts = (facts) => React.useSyncExternalStore(facts.subscribe, facts.getSnapshot);
         /** Facts that never change, for a view drawn without the plugin's (a test's). */
-        const NO_FACTS = Object.freeze({ subscribe: () => () => {}, getSnapshot: () => 0 });
+        const NO_FACTS = Object.freeze({ subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {}, paused: () => undefined, newsOf: () => undefined });
         /** Watch a facts key (`d:<session>` or `list`) while `on`. */
         function useWatch(facts, key, on = true) {
             React.useEffect(() => (on && key ? facts.watch(key) : undefined), [facts, key, on]);
@@ -3686,7 +3689,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * indent instead), or the thread's state dot when it failed or waits
          * on the user; a pause sign on a paused project's coordinator, and a
          * dot on a coordinator with news the user hasn't seen (DSH's own dot
-         * takes the seat while the coordinator runs or waits).
+         * takes the seat while the coordinator runs or waits). It is drawn
+         * only: the seat comes before the title, so what it shows is read
+         * after the title, from the row's description (RowPlace, rowWords).
          */
         function ThreadMark({ sessionId, useSessions, projects }) {
             useKnown();
@@ -3704,23 +3709,42 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             React.useEffect(() => { if (thread || stale) projects.refresh(sessionId); }, [thread, stale, sessionId, projects]);
             React.useEffect(() => { if (typeof parent === 'string' && parent !== '') projects.refresh(parent); }, [parent, projects]);
             if (paused) {
-                return h('span', { className: 'dshp-t-mark dshp-t-paused-mark', role: 'img', 'aria-label': TEXT.projectPaused, title: TEXT.projectPaused, 'data-projects-paused-mark': '' },
+                return h('span', { className: 'dshp-t-mark dshp-t-paused-mark', 'aria-hidden': true, title: TEXT.projectPaused, 'data-projects-paused-mark': '' },
                     h(ui.IconPauseOutlineRegular, { size: 12 }));
             }
             const news = coordinator ? projects.facts.newsOf?.(sessionId) : undefined;
             if (news) {
-                const label = TEXT.newsMark(news.unread.length, newsLine(news.unread[news.unread.length - 1]));
-                return h('span', { className: 'dshp-t-mark', role: 'img', 'aria-label': label, title: label, 'data-projects-news-mark': news.unread.length },
+                const label = newsWords(news);
+                return h('span', { className: 'dshp-t-mark', 'aria-hidden': true, title: label, 'data-projects-news-mark': news.unread.length },
                     h(ui.StateDot, { state: newsDot(news.unread) }));
             }
             if (!thread) return null;
             if (mark !== '') {
                 const [dot, label] = [mark.slice(0, mark.indexOf(':')), mark.slice(mark.indexOf(':') + 1)];
-                return h('span', { className: 'dshp-t-mark', role: 'img', 'aria-label': `Project thread: ${label}`, title: label, 'data-projects-thread-mark': dot },
+                return h('span', { className: 'dshp-t-mark', 'aria-hidden': true, title: label, 'data-projects-thread-mark': dot },
                     h(ui.StateDot, { state: dot }));
             }
-            return h('span', { className: 'dshp-t-mark', role: 'img', 'aria-label': 'Project thread', 'data-projects-thread-mark': '' },
+            return h('span', { className: 'dshp-t-mark', 'aria-hidden': true, 'data-projects-thread-mark': '' },
                 h(ui.IconBranchOutlineRegular, { size: 12 }));
+        }
+
+        /** What a coordinator's news says: “4 new, latest: “Deploy” failed”. */
+        function newsWords(news) {
+            return TEXT.newsMark(news.unread.length, newsLine(news.unread[news.unread.length - 1]));
+        }
+
+        /**
+         * What a project's row in the session list says to a screen reader
+         * after its title: what the row is, then what its mark shows (a
+         * pause, news from its threads, a thread that failed or waits on the
+         * user). '' for a row of no project.
+         * @param role - 'coordinator', 'thread' or ''.
+         * @param mark - a thread's markState: '' for none.
+         */
+        function rowWords({ role, paused = false, news, mark = '' }) {
+            if (role === 'coordinator') return [paused ? TEXT.projectPaused : TEXT.rowProject, news ? newsWords(news) : ''].filter((part) => part !== '').join(', ');
+            if (role === 'thread') return mark === '' ? TEXT.rowThread : `${TEXT.rowThread}: ${mark.slice(mark.indexOf(':') + 1)}`;
+            return '';
         }
 
         /** The project name a coordinator session stands for, or undefined. */
@@ -3785,10 +3809,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const threads = new Map();
             const wrappers = section?.children ?? EMPTY;
             for (let i = 0; i < wrappers.length; i += 1) {
-                let row = null;
-                for (const child of wrappers[i].children ?? EMPTY) {
-                    if (String(child.getAttribute?.('data-row-key') ?? '').startsWith('session:')) { row = child; break; }
-                }
+                const row = sessionRowIn(wrappers[i]);
                 const mark = row?.querySelector?.('[data-projects-row]');
                 if (!mark) continue;
                 const id = row.getAttribute('data-row-key').slice('session:'.length);
@@ -3801,6 +3822,24 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }
             }
             return coordinators.filter((g) => threads.has(g.coordinator)).map((g) => ({ ...g, threads: threads.get(g.coordinator) }));
+        }
+
+        /** The session row a wrapper in one of DSH's sections holds (its child with a `session:` row key), or null. */
+        function sessionRowIn(wrapper) {
+            for (const child of wrapper?.children ?? EMPTY) {
+                if (String(child.getAttribute?.('data-row-key') ?? '').startsWith('session:')) return child;
+            }
+            return null;
+        }
+
+        /** The groups nestingRules nests, by their places: each with a coordinator id and threads' ids that are safe in a selector. */
+        function nestedGroups(groups) {
+            const safe = (id) => typeof id === 'string' && /^[\w.:-]+$/.test(id);
+            return (Array.isArray(groups) ? groups : EMPTY)
+                .filter((g) => safe(g?.coordinator) && Number.isInteger(g.at) && g.at >= 1 && Array.isArray(g.threads))
+                .map((g) => ({ ...g, threads: g.threads.filter(safe) }))
+                .filter((g) => g.threads.length > 0)
+                .sort((a, b) => a.at - b.at);
         }
 
         /**
@@ -3823,12 +3862,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * @param groups - sectionGroups' answer for one section.
          */
         function nestingRules(groups) {
-            const safe = (id) => typeof id === 'string' && /^[\w.:-]+$/.test(id);
-            const list = (Array.isArray(groups) ? groups : EMPTY)
-                .filter((g) => safe(g?.coordinator) && Number.isInteger(g.at) && g.at >= 1 && Array.isArray(g.threads))
-                .map((g) => ({ ...g, threads: g.threads.filter(safe) }))
-                .filter((g) => g.threads.length > 0)
-                .sort((a, b) => a.at - b.at);
+            const list = nestedGroups(groups);
             if (list.length === 0) return '';
             const row = (id) => `[data-row-key="session:${id}"]`;
             const holding = (ids) => `:has(${ids.map((id) => `>${row(id)}`).join(',')})`;
@@ -3847,20 +3881,127 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 // A thread's title 16 px in from its project's: enough to show the tree, and the thread keeps room for its title.
                 `${T}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,24px) + var(--dsh-workspace-indent,0px))}`,
                 `${T}::before{${NEST_CORNER}}`,
-                // The branch mark gives way to the corner; screen readers still hear "Project thread".
+                // The branch mark gives way to the corner; the row's description still says "Project thread".
                 `${T} .dshp-t-mark[data-projects-thread-mark=""]{${HIDDEN}}`,
             );
             return rules.join('\n');
         }
 
-        /** The nesting CSS for every section of DSH's list that holds a project with threads. */
-        function nestingCss(tree) {
+        /**
+         * The order nestingRules draws a section's children in: their places
+         * in DSH's order (from 1), by the CSS order each gets there, then by
+         * DSH's order between equals. null when that is DSH's own order.
+         * @param groups - sectionGroups' answer for the section.
+         * @param keys - the session each child holds, in DSH's order ('' for none).
+         */
+        function nestedOrder(groups, keys) {
+            const list = nestedGroups(groups);
+            const count = Array.isArray(keys) ? keys.length : 0;
+            if (list.length === 0 || count === 0) return null;
+            const order = new Array(count + 1).fill(0);
+            list.forEach((g, k) => { for (let at = g.at + 1; at <= count; at += 1) order[at] = 3 * k + 3; });
+            list.forEach((g, k) => {
+                const threads = new Set(g.threads);
+                keys.forEach((key, i) => {
+                    if (key === g.coordinator) order[i + 1] = 3 * k + 1;
+                    else if (threads.has(key)) order[i + 1] = 3 * k + 2;
+                });
+            });
+            const drawn = keys.map((key, i) => i + 1).sort((a, b) => order[a] - order[b] || a - b);
+            return drawn.some((at, i) => at !== i + 1) ? drawn : null;
+        }
+
+        /** The sections of DSH's list that hold a coordinator's row: where nestingRules may nest a project. */
+        function projectSections(tree) {
             const sections = new Set();
             for (const mark of tree?.querySelectorAll?.('[data-projects-row="coordinator"]') ?? EMPTY) {
                 const section = mark.closest('[data-row-key^="session:"]')?.parentElement?.parentElement;
                 if (section) sections.add(section);
             }
-            return [...sections].map((section) => nestingRules(sectionGroups(section))).filter(Boolean).join('\n');
+            return sections;
+        }
+
+        /** The nesting CSS for every section of DSH's list that holds a project with threads. */
+        function nestingCss(tree) {
+            return [...projectSections(tree)].map((section) => nestingRules(sectionGroups(section))).filter(Boolean).join('\n');
+        }
+
+        const OWNS = 'data-projects-owns';
+        const OWN_ID = 'dshp-o-';
+        let ownCount = 0;
+        /** An element's id for aria-owns: its own, else one the plugin gives it. */
+        function ownId(el) {
+            if (!el.id) el.id = `${OWN_ID}${(ownCount += 1).toString(36)}`;
+            return el.id;
+        }
+        /** A section the plugin no longer reorders: its own order again, and none of the plugin's ids. */
+        function unown(section) {
+            section.removeAttribute('aria-owns');
+            section.removeAttribute(OWNS);
+            for (const kid of section.children ?? EMPTY) if (String(kid.id ?? '').startsWith(OWN_ID)) kid.removeAttribute('id');
+        }
+
+        /**
+         * A screen reader meets each project's rows in the order nestingRules
+         * draws them, the threads after their coordinator: the section owns
+         * its children in that order (aria-owns, which gives each child that
+         * has no id one of the plugin's). Only a section the CSS nests (a div
+         * inside the list) is reordered, and one it no longer nests gets its
+         * own order back. DSH's elements stay where DSH put them.
+         */
+        function readInOrder(tree) {
+            const kept = new Set();
+            for (const section of projectSections(tree)) {
+                if (typeof section.matches !== 'function' || !section.matches('[role="tree"] div')) continue;
+                const kids = [...section.children];
+                const drawn = nestedOrder(sectionGroups(section), kids.map((kid) => String(sessionRowIn(kid)?.getAttribute('data-row-key') ?? '').slice('session:'.length)));
+                if (drawn === null) continue;
+                kept.add(section);
+                const owns = drawn.map((at) => ownId(kids[at - 1])).join(' ');
+                if (section.getAttribute('aria-owns') !== owns) section.setAttribute('aria-owns', owns);
+                if (!section.hasAttribute(OWNS)) section.setAttribute(OWNS, '');
+            }
+            for (const section of tree?.querySelectorAll?.(`[${OWNS}]`) ?? EMPTY) if (!kept.has(section)) unown(section);
+        }
+
+        const SAID = 'data-projects-said';
+        /**
+         * Each project's row in the list says the plugin's words for it
+         * (rowWords, which RowPlace carries) after its title: they are the
+         * row's description, since the plugin's only seat before the title
+         * would be read first. A description DSH gives a row (an archived
+         * one's) is DSH's, and stays.
+         */
+        function describeRows(tree) {
+            const rows = new Set();
+            for (const mark of tree?.querySelectorAll?.('[data-projects-words]') ?? EMPTY) {
+                const row = mark.closest('[data-row-key^="session:"]');
+                if (row) rows.add(row);
+            }
+            for (const row of tree?.querySelectorAll?.(`[${SAID}]`) ?? EMPTY) rows.add(row);
+            for (const row of rows) {
+                const words = row.querySelector('[data-projects-words]')?.getAttribute('data-projects-words') ?? '';
+                const said = row.getAttribute(SAID);
+                const now = row.getAttribute('aria-description');
+                if (said !== null && now !== said) row.removeAttribute(SAID);
+                else if (said === null && now !== null) continue;
+                else if (words === '') {
+                    row.removeAttribute('aria-description');
+                    row.removeAttribute(SAID);
+                } else if (now !== words) {
+                    row.setAttribute('aria-description', words);
+                    row.setAttribute(SAID, words);
+                }
+            }
+        }
+
+        /** The list as DSH draws it: no description and no order of the plugin's. */
+        function undoRows(tree) {
+            for (const row of tree?.querySelectorAll?.(`[${SAID}]`) ?? EMPTY) {
+                if (row.getAttribute('aria-description') === row.getAttribute(SAID)) row.removeAttribute('aria-description');
+                row.removeAttribute(SAID);
+            }
+            for (const section of tree?.querySelectorAll?.(`[${OWNS}]`) ?? EMPTY) unown(section);
         }
 
         /**
@@ -3869,20 +4010,28 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * idle or busy. The sidebar reads the marks to nest each project's
          * threads under its coordinator (nestingCss) and to keep DSH's own
          * drags from taking a thread out of its project or a chat into one
-         * (useSessionDragGuard). Nothing of DSH's own is changed.
+         * (useSessionDragGuard). It also carries what the row says to a
+         * screen reader after its title (rowWords, describeRows): DSH's own
+         * status can take the leading seat from ThreadMark, never this one.
+         * Nothing of DSH's own is changed.
          */
         function RowPlace({ sessionId, useSessions, projects }) {
             useKnown();
-            useFacts(projects?.facts ?? NO_FACTS);
+            const facts = projects?.facts ?? NO_FACTS;
+            useFacts(facts);
             const place = useSessions((state) => rowPlace(state, sessionId));
-            if (place === '') return null;
             const at = place.indexOf(':');
-            const role = place.slice(0, at);
+            const role = place.slice(0, Math.max(0, at));
+            const paused = usePaused(facts, role === 'coordinator' ? sessionId : undefined, role === 'coordinator' ? 'list' : null) === true;
+            const mark = useSessions((state) => (role === 'thread' ? markState(state, sessionId) : ''));
+            if (place === '') return null;
+            const news = role === 'coordinator' ? facts.newsOf?.(sessionId) : undefined;
             // A coordinator with news the user hasn't seen: its row's title reads bold (CSS), like unread mail.
-            const unread = role === 'coordinator' ? projects?.facts.newsOf?.(sessionId)?.unread.length ?? 0 : 0;
+            const unread = news?.unread.length ?? 0;
             return h('span', {
                 hidden: true, 'data-projects-row': role, 'data-projects-of': place.slice(at + 1),
                 'data-projects-node': role === 'coordinator' ? 'project' : 'thread', 'data-projects-id': sessionId,
+                'data-projects-words': rowWords({ role, paused, news: unread > 0 ? news : undefined, mark }),
                 ...(unread > 0 ? { 'data-projects-unread': unread } : {}),
             });
         }
@@ -4885,11 +5034,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * Keep the nesting CSS (nestingCss) in step with DSH's list. DSH
+         * Keep the nesting CSS (nestingCss) in step with DSH's list, with what
+         * a screen reader gets from it: the rows in drawn order (readInOrder)
+         * and each project row's words after its title (describeRows). DSH
          * redraws rows on its own (a fold, Show more, a session moving up), so
          * this runs again on every change to the list and to the rows' marks,
-         * before it is painted, and after every render here. The sheet changes
-         * only when the CSS does.
+         * before it is painted, and after every render here. The sheet and
+         * the attributes change only when they differ.
          */
         function useNesting(tree) {
             const sheet = React.useRef(null);
@@ -4898,6 +5049,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (!tree?.isConnected || !sheet.current) return;
                 const css = nestingCss(tree);
                 if (sheet.current.textContent !== css) sheet.current.textContent = css;
+                readInOrder(tree);
+                describeRows(tree);
             };
             React.useLayoutEffect(() => {
                 if (!tree || typeof document === 'undefined') return undefined;
@@ -4913,11 +5066,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 };
                 run();
                 const observer = typeof MutationObserver === 'undefined' ? null : new MutationObserver(run);
-                observer?.observe(tree, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-projects-row', 'data-projects-of'] });
+                observer?.observe(tree, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-projects-row', 'data-projects-of', 'data-projects-words'] });
                 return () => {
                     observer?.disconnect();
                     style.remove();
                     sheet.current = null;
+                    undoRows(tree);
                 };
             }, [tree]);
             React.useLayoutEffect(() => { pass.current(); });
@@ -5915,7 +6069,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         // For the plugin's own tests: the pure helpers the views are built on.
         module.exports.internals = {
             pageModel, visibleItems, treeMeta, PageTree, ProjectsPage, findInTree, withHit,
-            valueIn, takeKnown, coordinatorName, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, nestingRules, sectionGroups, nestingCss,
+            valueIn, takeKnown, coordinatorName, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, nestingRules, sectionGroups, nestingCss, nestedOrder, readInOrder, describeRows, undoRows, rowWords,
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
