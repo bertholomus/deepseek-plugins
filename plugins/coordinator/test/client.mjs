@@ -235,7 +235,7 @@ test('browser half: the defaults form registers on the plugin page, read-only wh
     assert.equal(form.getSnapshot().insertedTwice, false);
 });
 
-test('browser half: threads add a header menu and Coordinate, turn cards, sidebar marks and right-sidebar tabs', () => {
+test('browser half: threads add a header menu and Coordinate (in the composer\'s row on DSH\'s new-chat screen), turn cards, sidebar marks and right-sidebar tabs', () => {
     const { client } = loadClient();
     const registered = [];
     const types = [];
@@ -257,6 +257,7 @@ test('browser half: threads add a header menu and Coordinate, turn cards, sideba
         ['shell.overlay', 'dsh-plugin-coordinator/rename', null],
         ['conversation.session.header.actions', 'dsh-plugin-coordinator/threads-menu', -25],
         ['conversation.session.header.actions', 'dsh-plugin-coordinator/coordinate', -24],
+        ['conversation.input.left', 'dsh-plugin-coordinator/start-coordinating', 30],
         ['conversation.chat.turnTail', 'dsh-plugin-coordinator/thread-cards', 30],
         ['conversation.chat.node', 'turn-trigger', null],
         ['sidebar.session.row.leading', 'dsh-plugin-coordinator/thread-mark', 20],
@@ -1071,6 +1072,133 @@ test('browser half: Coordinate shows in the header of a plain top-level chat tha
     // The banner goes when DSH is done with it.
     toastOf(tree).props.onDone();
     assert.equal(toastOf(stopped()), undefined);
+});
+
+test('browser half: on DSH\'s new-chat screen Coordinate sits in the composer\'s row, and what /coordinate typed there said shows as a banner', async () => {
+    const Toast = () => null;
+    const { client, react } = loadClient({ primitives: { Tooltip: 'Tooltip', Toast } });
+    const { StartCoordinating, startState, isNewChat, commandSaid, projectFacts } = client.internals;
+    const coordinating = (id, more) => ({ role: 'coordinator', project: { id, name: '' }, threads: [], ...more });
+    const thread = { role: 'thread', project: { id: 'c', name: 'Shop' }, coordinator: 'c', thread: { id: 't1' } };
+    const state = {
+        byId: {
+            n: { id: 'n', cwd: '/w', blank: true },
+            on: { id: 'on', cwd: '/w', blank: true, projectionValues: { coordinatorSession: coordinating('on') } },
+            off: { id: 'off', cwd: '/w', blank: true, projectionValues: { coordinatorSession: coordinating('off', { off: true }) } },
+            t: { id: 't', cwd: '/w', projectionValues: { coordinatorSession: thread } },
+            sa: { id: 'sa', cwd: '/w', origin: 'subagent' },
+            bare: { id: 'bare', blank: true },
+            cold: { id: 'cold', cwd: '/w', blank: true },
+        },
+        projectionsBySession: { cold: { state: 'loading', values: {} } },
+    };
+    // On while the chat coordinates, off while it can start; no switch on a thread, a subagent's session, a chat
+    // with no folder for threads, or one whose value DSH is still reading.
+    assert.deepEqual(['n', 'on', 'off', 't', 'sa', 'bare', 'cold', 'missing'].map((id) => startState(state, id) ?? null),
+        ['off', 'on', 'off', null, null, null, null, null]);
+    // DSH's new-chat screen: nothing sent in the chat and nothing running there.
+    assert.deepEqual([{ blank: true }, { blank: true, running: true }, { blank: true, promptAttempted: true }, { blank: true, awaitingFirstTurn: true }, { blank: false }, undefined]
+        .map(isNewChat), [true, false, false, false, false, false]);
+
+    const calls = [];
+    const refreshed = [];
+    let answer;
+    const link = {
+        async call(method, args) {
+            calls.push([method, plain(args)]);
+            await null;
+            // As the plugin does: once it answers, the chat's value says whether it coordinates.
+            if (answer.ok) state.byId[args.target] = { ...state.byId[args.target], projectionValues: { coordinatorSession: coordinating(args.target, args.on ? {} : { off: true }) } };
+            return answer;
+        },
+    };
+    const said = commandSaid();
+    const projects = { facts: projectFacts(link), refresh: (id, now) => refreshed.push([id, now]), said };
+    let session = { blank: true };
+    let shown = { activeTargets: new Set() };
+    const draw = (sessionId) => mount(react, () => StartCoordinating({
+        sessionId, useSession: (select) => select(session), useSessions: (select) => select(state), useConversation: (select) => select(shown), projects,
+    }));
+    const buttonOf = (tree) => elementsOf(tree).find((e) => e.props?.['data-coordinator-start-button'] !== undefined);
+    const toastOf = (tree) => elementsOf(tree).find((e) => e.type === Toast);
+    for (const id of ['t', 'sa', 'bare', 'cold']) assert.equal(draw(id)(), null, id);
+
+    // Off: named as in the header, and its tooltip says why.
+    const chat = draw('n');
+    let tree = chat();
+    const tip = () => elementsOf(chat()).find((e) => e.type === 'Tooltip').props.label;
+    assert.deepEqual(plain([tree.props['data-coordinator-start'], textIn(tree), buttonOf(tree).props['aria-label'], buttonOf(tree).props.className, tip()]),
+        ['off', 'Coordinate', 'Coordinate', 'dshp-start-btn', 'Run work from this chat in threads that report back here']);
+    // A click makes the chat coordinate before its first message; what the plugin said shows as DSH's banner.
+    answer = { ok: true, value: { coordinating: true, session: 'n', text: 'Coordinating. Ask for work here as usual.', projects: [{ id: 'n', coordinator: 'n', paused: false }] } };
+    buttonOf(tree).props.onClick();
+    assert.equal(buttonOf(chat()).props.disabled, true);
+    await tick();
+    assert.deepEqual(calls, [['coordinate', { target: 'n', on: true }]]);
+    assert.deepEqual(refreshed, [['n', true]]);
+    tree = chat();
+    assert.deepEqual(plain([tree.props['data-coordinator-start'], textIn(tree), buttonOf(tree).props['aria-label'], buttonOf(tree).props.className, tip()]),
+        ['on', 'Coordinating', 'Coordinating, press to stop', 'dshp-start-btn dshp-start-on', 'This chat runs work in threads that report back here. Click to stop (/coordinate off)']);
+    assert.deepEqual(plain([toastOf(tree).props.text, toastOf(tree).props.tone]), ['Coordinating. Ask for work here as usual.', 'success']);
+    // On, a click stops it again, with nothing more to say.
+    answer = { ok: true, value: { coordinating: false, session: 'n', text: 'Stopped coordinating.', projects: [] } };
+    buttonOf(tree).props.onClick();
+    await tick();
+    assert.deepEqual(calls.at(-1), ['coordinate', { target: 'n', on: false }]);
+    assert.equal(chat().props['data-coordinator-start'], 'off');
+
+    // Past the new-chat screen (something sent, running, or shown besides a command), DSH's header has it instead.
+    for (const [now, showing] of [[{ blank: false }, new Set()], [{ blank: true, running: true }, new Set()], [{ blank: true }, new Set(['chat'])]]) {
+        session = now;
+        shown = { activeTargets: showing };
+        assert.equal(buttonOf(draw('n')()), undefined, JSON.stringify(now));
+    }
+    session = { blank: true };
+    shown = { activeTargets: new Set() };
+
+    // /coordinate typed there: DSH draws its answer only once the chat has a message, so the banner says it.
+    said.put('on', { kind: 'success', text: ' Coordinating. Ask for work here as usual. ' });
+    const typed = draw('on');
+    tree = typed();
+    assert.deepEqual(plain([tree.props['data-coordinator-start'], toastOf(tree).props.text, toastOf(tree).props.tone, toastOf(tree).props.holdMs]),
+        ['on', 'Coordinating. Ask for work here as usual.', 'success', 5000]);
+    toastOf(tree).props.onDone();
+    assert.equal(said.get('on'), undefined);
+    assert.equal(toastOf(typed()), undefined);
+    // A refusal shows as a warning, and stays longer.
+    said.put('n', { kind: 'error', text: 'This chat has no folder for threads to work in.' });
+    tree = draw('n')();
+    assert.deepEqual(plain([toastOf(tree).props.text, toastOf(tree).props.tone ?? null, toastOf(tree).props.icon.type, toastOf(tree).props.holdMs]),
+        ['This chat has no folder for threads to work in.', null, 'IconWarningOutlineRegular', 8000]);
+    // A banner already replaced by a newer answer is not the one taken away.
+    const first = said.get('n').seq;
+    said.put('n', { kind: 'success', text: 'Coordinating.' });
+    said.take('n', first);
+    assert.equal(said.get('n')?.text, 'Coordinating.');
+    said.put('n', { kind: 'success', text: '   ' });
+    assert.equal(said.get('n')?.text, 'Coordinating.', 'nothing said, nothing to show');
+
+    // DSH's note that this window ran a command: /coordinate's answer is kept for a chat still on the new-chat screen.
+    const listeners = {};
+    const registered = [];
+    const list = { ids: ['b', 'x'], byId: { b: { id: 'b', blank: true }, x: { id: 'x', blank: false } }, phase: 'ready', projectionsBySession: {} };
+    const ctx = {
+        effect: (fn) => fn(),
+        inject: (names, fn) => { if (!names.includes('configForms')) fn(ctx); },
+        on: (name, fn) => { listeners[name] = fn; return () => { delete listeners[name]; }; },
+        slots: { inject: (_name, fn) => fn(), register: (slot) => { registered.push(slot); return () => {}; } },
+        resources: { register: () => () => {} },
+        sidebarRightTabs: { register: () => () => {} },
+        sessions: { list: { getSnapshot: () => list, subscribe: () => () => {} } },
+        uiWorkspace: {},
+        sidebarRight: {},
+    };
+    client.apply(ctx);
+    const api = registered.find((slot) => slot.name === 'conversation.input.left').inject().projects;
+    listeners['command/executed']('b', 'coordinate', { kind: 'success', text: 'Coordinating.' });
+    listeners['command/executed']('x', 'coordinate', { kind: 'success', text: 'Coordinating.' });
+    listeners['command/executed']('b', 'plan', { kind: 'success', text: 'Plan mode on.' });
+    assert.deepEqual(plain([api.said.get('b'), api.said.get('x') ?? null]), [{ text: 'Coordinating.', failed: false, seq: 1 }, null]);
 });
 
 test('browser half: while a chat coordinates, its Threads menu ends with Stop coordinating; one that stopped keeps the menu while it has threads, beside Coordinate', async () => {

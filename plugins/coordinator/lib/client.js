@@ -174,6 +174,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-chev-open{transform:rotate(180deg)}',
             // In a narrow header the link back to a thread's chat and Coordinate keep only their icons (and their names for screen readers).
             '@container (width<=480px){.dshp-t-parent .dshp-t-label,.dshp-t-coordinate .dshp-t-label{display:none}}',
+            // Coordinate on DSH's new-chat screen, in the composer's row: shaped like DSH's controls there, and while
+            // on, like its Plan chip (its stop glyph on hover). A narrow row keeps only the icon.
+            '.dshp-start{display:inline-flex;align-items:center;min-width:0}',
+            '.dshp-start-btn{display:inline-flex;align-items:center;gap:4px;min-width:0;height:28px;padding:0 8px;border:0;border-radius:var(--dsw-radius-sm);background:none;font:inherit;font-size:13px;font-weight:500;line-height:20px;color:var(--dsw-alias-label-secondary);white-space:nowrap;cursor:pointer}',
+            '.dshp-start-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
+            `.dshp-start-btn:focus-visible{outline:none;box-shadow:inset 0 0 0 2px ${RING}}`,
+            '.dshp-start-btn:disabled{opacity:.6;cursor:default}',
+            '.dshp-start-btn.dshp-start-on{background:var(--dsw-alias-state-business-tertiary);color:var(--dsw-alias-state-business-primary)}',
+            '.dshp-start-btn.dshp-start-on:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-state-business-tertiary),var(--dsw-alias-state-business-primary) 6%);color:var(--dsw-alias-state-business-primary)}',
+            '.dshp-start-glyph{flex:none;display:inline-flex;width:14px;height:14px}',
+            '.dshp-start-glyph>svg{display:block}',
+            '.dshp-start-label{min-width:0;overflow:hidden;text-overflow:ellipsis}',
+            '.dshp-start-glyph>.dshp-start-stop,.dshp-start-on:hover:not(:disabled) .dshp-start-rest,.dshp-start-on:focus-visible .dshp-start-rest{display:none}',
+            '.dshp-start-on:hover:not(:disabled) .dshp-start-stop,.dshp-start-on:focus-visible .dshp-start-stop{display:block}',
+            '@container (width<=520px){.dshp-start-label{display:none}}',
             '.dshp-t-menu{position:fixed;z-index:100;box-sizing:border-box;display:flex;flex-direction:column;width:400px;max-width:calc(100vw - 32px);max-height:min(560px,calc(100vh - 120px));padding:4px;box-shadow:var(--dsw-elevation-prominent);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);color:var(--dsw-alias-label-primary);outline:none}',
             '.dshp-t-menu-head{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:6px 9px 4px}',
             '.dshp-t-menu-head .dshp-t-project{max-width:100%}',
@@ -1229,6 +1244,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             sessionList: `${BUNDLE}/session-list`,
             news: `${BUNDLE}/news-notice`,
             coordinate: `${BUNDLE}/coordinate`,
+            start: `${BUNDLE}/start-coordinating`,
         };
         /** The conversation inside a thread's sidebar chat; its tab body declares it. */
         const CONVERSATION_SLOT = 'projects.thread.conversation';
@@ -1278,6 +1294,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             coordinate: 'Coordinate',
             coordinateTip: 'Run work from this chat in threads that report back here',
             stopCoordinating: 'Stop coordinating',
+            // On DSH's new-chat screen, while the chat coordinates.
+            coordinating: 'Coordinating',
+            coordinatingLabel: 'Coordinating, press to stop',
+            coordinatingTip: 'This chat runs work in threads that report back here. Click to stop (/coordinate off)',
             threads: 'Threads',
             thread: 'Thread',
             coordinator: 'Coordinator',
@@ -2898,6 +2918,111 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h(ui.IconBranchOutlineRegular, { size: 14 }),
                     h('span', { className: 'dshp-t-label' }, TEXT.coordinate))),
                 banner);
+        }
+
+        /**
+         * Whether DSH shows a chat as its new-chat screen: nothing sent in it
+         * and nothing running (DSH's own test). A command run there, such as
+         * /coordinate, leaves it on that screen.
+         */
+        const isNewChat = (session) => isObject(session) && session.blank === true && session.running !== true
+            && session.promptAttempted !== true && session.awaitingFirstTurn !== true;
+
+        /**
+         * The Coordinate switch on a chat's new-chat screen: 'on' while the
+         * chat coordinates, 'off' while it can start (canCoordinate), and
+         * undefined for no switch: a thread, a subagent's session, a chat with
+         * no folder for threads to work in, or one whose value DSH is still
+         * reading.
+         */
+        function startState(state, sessionId) {
+            const row = state?.byId?.[sessionId];
+            if (!isObject(row) || typeof row.cwd !== 'string' || row.cwd === '') return undefined;
+            const value = valueIn(state, sessionId);
+            if (value?.role === 'coordinator' && value.off !== true) return 'on';
+            return canCoordinate(state, sessionId) ? 'off' : undefined;
+        }
+
+        /**
+         * What /coordinate said in each chat where this window ran it while
+         * the chat was still DSH's new-chat screen, which shows a command's
+         * answer only once the chat has a message. Kept until the switch there
+         * has shown it.
+         */
+        function commandSaid() {
+            const by = new Map();
+            const listeners = new Set();
+            let seq = 0;
+            const changed = () => { for (const listener of [...listeners]) listener(); };
+            return {
+                subscribe(listener) {
+                    listeners.add(listener);
+                    return () => listeners.delete(listener);
+                },
+                get: (sessionId) => by.get(sessionId),
+                /** DSH's answer to the command: {kind, text}. */
+                put(sessionId, result) {
+                    const text = typeof result?.text === 'string' ? result.text.trim() : '';
+                    if (typeof sessionId !== 'string' || text === '') return;
+                    seq += 1;
+                    by.set(sessionId, { text, failed: result.kind === 'error', seq });
+                    changed();
+                },
+                /** Shown: gone, unless the command ran again meanwhile. */
+                take(sessionId, shown) {
+                    if (by.get(sessionId)?.seq !== shown) return;
+                    by.delete(sessionId);
+                    changed();
+                },
+            };
+        }
+
+        /**
+         * Coordinate on DSH's new-chat screen. Until a chat has a message,
+         * DSH shows it as that screen, without the header that holds the
+         * Coordinate button and without what a command run there said, so
+         * the switch sits in the composer's row there. A click makes the chat
+         * coordinate before its first message, so what the user asks for
+         * first already runs in threads that report back to it; a click while
+         * it's on stops it. /coordinate typed there lights it too, and what
+         * the plugin said shows as DSH's banner. Not on a thread, a
+         * subagent's session, or a chat with no folder for threads.
+         */
+        function StartCoordinating({ sessionId, useSession, useSessions, useConversation, projects }) {
+            useKnown();
+            React.useEffect(() => { void projects.facts.sessions?.(); }, [projects]);
+            const fresh = useSession((session) => isNewChat(session));
+            // DSH counts what its chat view shows besides commands: a chat showing any is past that screen.
+            const quiet = typeof useConversation === 'function' ? useConversation((c) => !(c?.activeTargets?.size > 0)) : true;
+            const state = useSessions((s) => startState(s, sessionId));
+            const said = React.useSyncExternalStore(projects.said.subscribe, () => projects.said.get(sessionId));
+            const { busy, run, banner } = useCoordinate(projects, sessionId);
+            const shown = fresh && quiet;
+            // The chat started before the banner could show: nothing left to say there.
+            React.useEffect(() => {
+                if (!shown && said !== undefined) projects.said.take(sessionId, said.seq);
+            }, [shown, said, sessionId, projects]);
+            if (!shown) return banner;
+            const typed = said === undefined || typeof ui.Toast !== 'function' ? null : h(ui.Toast, {
+                key: `said:${said.seq}`, text: said.text, holdMs: said.failed ? 8000 : 5000,
+                ...(said.failed ? { icon: h(ui.IconWarningOutlineRegular, { size: 16 }) } : { tone: 'success' }),
+                onDone: () => projects.said.take(sessionId, said.seq),
+            });
+            if (state === undefined) return banner || typed ? h(React.Fragment, null, banner, typed) : null;
+            const on = state === 'on';
+            const tip = on ? TEXT.coordinatingTip : TEXT.coordinateTip;
+            return h('span', { className: 'dshp-start', 'data-coordinator-start': state },
+                h(ui.Tooltip, { label: tip, side: 'top', delayMs: 500 },
+                    h('button', {
+                        type: 'button', className: on ? 'dshp-start-btn dshp-start-on' : 'dshp-start-btn',
+                        'aria-label': on ? TEXT.coordinatingLabel : TEXT.coordinate, 'aria-description': tip,
+                        disabled: busy, 'aria-busy': busy || undefined, 'data-coordinator-start-button': '', onClick: () => { void run(!on); },
+                    },
+                    h('span', { className: 'dshp-start-glyph', 'aria-hidden': true },
+                        h(ui.IconBranchOutlineRegular, { size: 14, className: 'dshp-start-rest' }),
+                        on ? h(ui.IconCloseCircleFillRegular, { size: 14, className: 'dshp-start-stop' }) : null),
+                    h('span', { className: 'dshp-start-label' }, on ? TEXT.coordinating : TEXT.coordinate))),
+                banner, typed);
         }
 
         /**
@@ -4737,6 +4862,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const failed = new Set();
             const catalog = shared.catalog ?? catalogSource(() => undefined);
             const link = shared.link ?? hostLink(() => undefined, catalog);
+            const said = shared.said ?? commandSaid();
             /** Open a thread as the main chat, where it stays until another chat is opened. */
             const openFull = (sessionId) => {
                 if (typeof sessionId !== 'string' || sessionId === '') return;
@@ -4930,6 +5056,22 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         clearTimeout(timer);
                     };
                 },
+                /** What /coordinate said where DSH's new-chat screen hides it, for the switch there to show (StartCoordinating). */
+                said,
+                /**
+                 * Hear DSH's note that this window ran a command: what
+                 * /coordinate said in a chat that is still DSH's new-chat
+                 * screen goes to `said`.
+                 * @returns the unsubscribe.
+                 */
+                followCommands() {
+                    if (typeof ctx.on !== 'function') return () => {};
+                    const off = ctx.on('command/executed', (sessionId, name, result) => {
+                        if (name !== 'coordinate' || list()?.byId?.[sessionId]?.blank !== true) return;
+                        said.put(sessionId, result);
+                    });
+                    return typeof off === 'function' ? off : () => {};
+                },
                 /** The Thread settings dialog, for the entry points. */
                 settings: dialog,
                 /** The Rename dialog, for a thread's ⋯. */
@@ -5040,6 +5182,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
                 name: 'conversation.session.header.actions', id: IDS.coordinate, order: -24, inject: withApi,
             }, CoordinateAction));
+            // DSH's new-chat screen hides that header: there, Coordinate sits in the composer's row, and what
+            // /coordinate typed there said shows as DSH's banner.
+            ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
+                name: 'conversation.input.left', id: IDS.start, order: 30, inject: withApi,
+            }, StartCoordinating));
+            ctx.effect(() => projects.followCommands(), 'coordinator: /coordinate on the new-chat screen');
             ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
                 name: 'conversation.chat.turnTail', id: IDS.cards, order: 30, inject: withApi,
             }, ThreadCards));
@@ -6161,6 +6309,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             permissionName, permissionShown, permissionIn, toolsText, accessOf, accessSummary, PermissionPicker, ToolsControl, ModelsSummary,
             NewsNotice, newsLine, newsDot, ThreadMark, RowPlace, SettingsMenuItem,
             CoordinateAction, canCoordinate, stoppedEmpty, ThreadSettings, Section, SettingRow, SETTINGS,
+            StartCoordinating, startState, isNewChat, commandSaid,
         };
         return module.exports;
     },

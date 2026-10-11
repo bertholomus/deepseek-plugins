@@ -17,7 +17,8 @@
  * in DSH's own model picker, a thread's code changes as DSH records them and
  * its Changes tab reads them (a subagent's too), failed and stopped threads
  * as the window shows them, with Retry and Resume, a second chat that
- * coordinates from its Coordinate button with threads of its own, a chat's
+ * coordinates from its Coordinate button with threads of its own, chats that
+ * coordinate before their first message, from DSH's new-chat screen, a chat's
  * message to a chat that doesn't coordinate and to one that does, archive,
  * and the user's tools and permissions: an MCP server named as one of the
  * user's tools that a coordinating chat has, as any chat does, and a thread
@@ -1146,6 +1147,39 @@ try {
     check('its threads are its own, numbered from t1, and work in its folder', elsewhere?.title === 'Elsewhere' && elsewhereView?.cwd === realpathSync(secondDir)
         && since(mark, `${SECOND}/t1`)[0]?.fresh.includes(`[Brief from the chat "${SECOND}" · you are thread t1, "Elsewhere"]`)
         && !Object.values(project().threads ?? {}).some((t) => t.title === 'Elsewhere'), `${JSON.stringify(elsewhereView).slice(0, 200)} | ${describe(since(mark))}`);
+
+    // 24b. A chat that coordinates before its first message. DSH's new-chat screen is a chat DSH makes when the user
+    // picks a folder there, shown as that screen until it has a message; a command run there gives it none. /coordinate
+    // typed there, or the switch there (the coordinate endpoint), makes it coordinate, and the user's first message
+    // starts its first turn as a coordinating chat's.
+    const startDir = join(root, 'start');
+    mkdirSync(startDir);
+    const newChat = async () => {
+        const made = await webApi(web, 'session/create', { request: { cwd: startDir } });
+        if (!made.ok) throw new Error(`session/create: ${JSON.stringify(made.error).slice(0, 200)}`);
+        return made.value.sessionId;
+    };
+    /** Whether DSH shows a chat as its new-chat screen: its list record says the chat has no turn yet. */
+    const isNew = async (sessionId) => (await webApi(web, 'session/projections', { request: { sessionId } })).value?.values?.sessionListMetadata?.blank;
+    const typedIn = await newChat();
+    answer = await command(typedIn, '/coordinate');
+    check('/coordinate as a new chat\'s first input makes it coordinate', answer.ok && answer.value?.result?.kind === 'success' && answer.value.result.text === COORDINATING
+        && (await viewOf(typedIn))?.role === 'coordinator' && store().projects?.[typedIn]?.coordinatorSessionId === typedIn, JSON.stringify(answer).slice(0, 300));
+    check('and DSH still shows that chat as its new-chat screen, where the switch shows it', await isNew(typedIn) === true, String(await isNew(typedIn)));
+    const switched = await newChat();
+    check('a chat on the new-chat screen can coordinate', await isNew(switched) === true && (await viewOf(switched)) == null, JSON.stringify(await viewOf(switched)));
+    answer = await api('coordinate', { target: switched, on: true });
+    check('the switch there makes it coordinate before its first message', answer.ok && answer.value.coordinating === true && answer.value.session === switched
+        && answer.value.text === COORDINATING && (await viewOf(switched))?.role === 'coordinator', JSON.stringify(answer).slice(0, 300));
+    mark = model.requests.length;
+    const opening = 'Hello from a chat that started coordinating.';
+    await say(switched, opening);
+    const firstTurn = since(mark).find((r) => r.fresh.includes(opening));
+    const startFolder = store().projects?.[switched]?.folder;
+    check('the user\'s first message there starts its first turn with the coordinating chat\'s rules and tools', typeof startFolder === 'string'
+        && firstTurn?.system.includes('# Coordinating threads') === true && firstTurn.system.includes(`\nThreads work in: ${startFolder}\n`) && firstTurn.tools.includes('thread_start'),
+    `${startFolder} | ${firstTurn?.tools.join(',')} | ${firstTurn?.system.slice(0, 200)}`);
+    check('and from then on DSH shows it as a chat', await isNew(switched) === false, String(await isNew(switched)));
 
     // 25. The user's tools and permissions. lane-catalog, one of the user's own tools in this profile
     // (guardedTools), runs as an MCP server for every session. A coordinating chat has it, as any chat does;
