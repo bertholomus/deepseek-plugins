@@ -9,17 +9,22 @@
  * - the plugin starts with its calendar on this computer, its folder 700
  *   and its files 600;
  * - the window's endpoints add, read, change and delete events, subscribe
- *   to a feed served here, and refuse what they should, with messages for
- *   the user;
+ *   to a private feed served here (its address goes to DSH's credential
+ *   store, never into the plugin's files or log), and refuse what they
+ *   should, with messages for the user;
  * - with a CalDAV server (Radicale, when RADICALE_VENV points at a
  *   virtualenv that has it), a CalDAV account is added: its password goes
  *   to DSH's credential store, never into the plugin's files or log, and
  *   removing the account removes it there too;
  * - agents' calendar tools, under each of DSH's permissions: Full access
  *   changes calendars without asking, Read Only reads but can't change
- *   them, Workspace Write asks the user first (here nobody can answer, so
- *   the change doesn't happen), and the plugin's agentChanges: off refuses
- *   every change;
+ *   them, Workspace Write asks the user first (allowed, the change is made;
+ *   rejected or unanswered, it isn't), and the plugin's agentChanges: off
+ *   refuses every change; one occurrence isn't moved to another calendar,
+ *   and a change that says to tell guests where they can't be told is
+ *   refused before anyone is asked;
+ * - with the CalDAV server, a delete decided on an event that changed on
+ *   the server meanwhile stops and says so;
  * - a restart keeps the calendars and their events.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/calendar/test/e2e/run.mjs
@@ -50,6 +55,12 @@ function findDsh() {
     return null;
 }
 
+// The subscribed feed's address is a private one, like Google's secret address: its key is in the path.
+const feedKey = `private-${randomUUID().replaceAll('-', '')}`;
+const feedPath = `/calendar/ical/me%40example.com/${feedKey}/basic.ics`;
+/** What this test prints never holds the feed's key. */
+const redact = (text) => String(text).replaceAll(feedKey, '(the feed\'s key)');
+
 let passed = 0;
 let failed = 0;
 function check(name, ok, detail = '') {
@@ -58,7 +69,7 @@ function check(name, ok, detail = '') {
         console.log(`ok - ${name}`);
     } else {
         failed += 1;
-        console.log(`not ok - ${name}${detail ? `\n    ${String(detail).slice(0, 1500)}` : ''}`);
+        console.log(`not ok - ${name}${detail ? `\n    ${redact(detail).slice(0, 1500)}` : ''}`);
     }
 }
 
@@ -127,6 +138,16 @@ const readText = (file) => { try { return readFileSync(file, 'utf8'); } catch { 
 const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return {}; } };
 const modeOf = (file) => statSync(file).mode & 0o777;
 
+/** One record in DSH's credentials file (YAML): its key's line and the lines under it. */
+function recordIn(text, key) {
+    const lines = text.split('\n');
+    const at = lines.findIndex((line) => [`${key}:`, `"${key}":`, `'${key}':`].includes(line.trim()));
+    if (at < 0) return '';
+    const depth = (line) => line.length - line.trimStart().length;
+    const end = lines.findIndex((line, i) => i > at && line.trim() !== '' && depth(line) <= depth(lines[at]));
+    return lines.slice(at, end < 0 ? lines.length : end).join('\n');
+}
+
 async function signInWeb() {
     const signIn = [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].at(-1)?.[1] ?? '';
     const cookie = String((await httpGet(signIn)).headers['set-cookie']?.[0] ?? '').split(';')[0];
@@ -153,6 +174,45 @@ function webApi(web, endpoint, args) {
         req.on('error', reject);
         req.end(body);
     });
+}
+
+/**
+ * DSH's approval prompts as the window gets them: its events stream on /api/remote.mux brings each request, and
+ * $events/result answers one, as the prompt's Allow once and Reject do.
+ */
+async function approvalsOf(web) {
+    const url = new URL('api/remote.mux', web.base);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(url, { headers: { cookie: web.cookie, origin: web.base.origin } });
+    const asked = [];
+    const taken = new Set();
+    let clientId;
+    let failure;
+    socket.addEventListener('open', () => socket.send(JSON.stringify({ type: 'open', streamId: 'events', endpoint: '$events', payload: { args: {} } })));
+    socket.addEventListener('error', (event) => { failure = event.message ?? 'socket error'; });
+    socket.addEventListener('message', ({ data }) => {
+        let frame;
+        try { frame = JSON.parse(String(data)); } catch { return; }
+        if (frame.streamId !== 'events') return;
+        if (frame.type === 'error') failure = JSON.stringify(frame.error);
+        const value = frame.type === 'item' ? frame.value : undefined;
+        if (value?.type === 'ready') clientId = value.clientId;
+        else if (value?.type === 'waterfall' && value.event === 'approval/request') asked.push(value);
+    });
+    await waitFor(() => {
+        if (failure) throw new Error(failure);
+        return clientId;
+    }, 'the window\'s events stream');
+    return {
+        /** The next prompt whose request matches, not taken before. */
+        next: (what, match) => waitFor(() => {
+            const found = asked.find((a) => !taken.has(a.eventId) && match(a.request ?? {}));
+            if (found) taken.add(found.eventId);
+            return found;
+        }, what, 60000),
+        answer: (prompt, outcome) => webApi(web, '$events/result', { clientId, eventId: prompt.eventId, outcome: { kind: 'result', value: outcome } }),
+        close: () => socket.close(),
+    };
 }
 
 const profile = join(home, 'profiles', 'web');
@@ -331,7 +391,7 @@ const model = await startFakeModel();
 let child;
 let radicale;
 const feed = createServer((req, res) => {
-    if (req.url !== '/team.ics') {
+    if (req.url !== feedPath) {
         res.writeHead(404);
         return res.end();
     }
@@ -388,12 +448,17 @@ try {
     r = await api('search', { query: 'dentist' });
     check('search finds it', r.ok && r.value?.occurrences?.[0]?.id === dentist.id, JSON.stringify(r).slice(0, 300));
 
-    r = await api('addAccount', { input: { kind: 'ics', url: `http://127.0.0.1:${feed.address().port}/team.ics` } });
+    r = await api('addAccount', { input: { kind: 'ics', url: `http://127.0.0.1:${feed.address().port}${feedPath}` } });
     const feedAccount = r.value?.account;
-    check('a subscribed feed is added and named by the feed', r.ok && feedAccount?.name === 'Team' && feedAccount.kind === 'ics', JSON.stringify(r));
+    check('a subscribed feed is added and named by the feed, its account showing the host only', r.ok && feedAccount?.name === 'Team' && feedAccount.kind === 'ics'
+        && feedAccount.host === `127.0.0.1:${feed.address().port}` && !('url' in feedAccount), JSON.stringify(r));
     r = await api('events', { from: Date.parse('2026-11-01T00:00:00+01:00'), to: Date.parse('2026-11-10T00:00:00+01:00') });
     const offsite = r.value?.occurrences?.find((o) => o.title === 'Team offsite');
     check('its events show, read only', offsite?.allDay === true && offsite.startDay === '2026-11-05' && offsite.lastDay === '2026-11-06' && offsite.readOnly === true, JSON.stringify(offsite));
+    const feedRecord = recordIn(readText(credentialsFile), `calendar/${feedAccount?.id}`);
+    const feedLeaks = [storeFile, logFile].filter((f) => readText(f).includes(feedPath) || readText(f).includes(feedKey));
+    check('the feed\'s address is in DSH\'s credential store under its account\'s record, and not in the plugin\'s files or log',
+        feedAccount !== undefined && feedRecord.includes(feedPath) && feedLeaks.length === 0, `in the record: ${feedRecord.includes(feedPath)}; in ${feedLeaks.join(', ') || 'no file'}`);
     r = await api('deleteEvent', { id: offsite?.id, scope: 'all' });
     check('and can\'t be deleted here', !r.ok && /read only/.test(r.error?.message ?? ''), JSON.stringify(r));
     r = await api('addAccount', { input: { kind: 'ics', url: 'https://' } });
@@ -421,15 +486,27 @@ try {
             return s?.calendars?.find((c) => c.accountId === caldavAccount?.id && c.name === 'Home');
         }, 'the CalDAV calendar', 20000).catch(() => undefined);
         r = await api('createEvent', { input: { calendarId: homeCal?.id, title: 'Plumber', start: '2026-10-15T08:00' } });
-        check('an event is written to the CalDAV server', r.ok && r.value?.occurrence?.calendarId === homeCal?.id, JSON.stringify(r));
-        const listing = await fetch(new URL('alice/home/', radicale.base), { method: 'PROPFIND', headers: { Depth: '1', Authorization: `Basic ${Buffer.from(`alice:${password}`).toString('base64')}` } });
-        check('the server has it', (await listing.text()).includes('.ics'));
+        const plumber = r.value?.occurrence;
+        check('an event is written to the CalDAV server', r.ok && plumber?.calendarId === homeCal?.id, JSON.stringify(r));
+        const davAuth = { Authorization: `Basic ${Buffer.from(`alice:${password}`).toString('base64')}` };
+        const listed = await (await fetch(new URL('alice/home/', radicale.base), { method: 'PROPFIND', headers: { Depth: '1', ...davAuth } })).text();
+        check('the server has it', listed.includes('.ics'));
+        // Someone moves it in another app meanwhile: a delete decided on the event as it was stops, and says so.
+        const resource = new URL([...listed.matchAll(/<(?:[\w-]+:)?href>([^<]+\.ics)<\/(?:[\w-]+:)?href>/g)][0]?.[1] ?? 'missing.ics', radicale.base);
+        const elsewhere = (await (await fetch(resource, { headers: davAuth })).text()).replace('SUMMARY:Plumber', 'SUMMARY:Plumber (now at 9)');
+        const moved = await fetch(resource, { method: 'PUT', headers: { ...davAuth, 'Content-Type': 'text/calendar; charset=utf-8' }, body: elsewhere });
+        r = await api('deleteEvent', { id: plumber?.id, scope: 'all' });
+        const kept = await fetch(resource, { headers: davAuth });
+        check('a delete stops when the event changed on its server meanwhile, and says so', moved.ok && !r.ok && /changed on its server meanwhile/.test(r.error?.message ?? '')
+            && kept.status === 200 && (await kept.text()).includes('Plumber (now at 9)'), `${moved.status} ${JSON.stringify(r)} ${kept.status}`);
+        r = await api('deleteEvent', { id: plumber?.id, scope: 'all' });
+        check('looked at again, it is deleted', r.ok && (await fetch(resource, { headers: davAuth })).status === 404, JSON.stringify(r));
         const creds = readText(credentialsFile);
         check('the password is in DSH\'s credential store under the plugin\'s record', creds.includes(`calendar/${caldavAccount?.id}`) && creds.includes(password));
         const leaks = [storeFile, logFile, join(calendarDir, 'events', `${homeCal?.id}.json`)].filter((f) => readText(f).includes(password));
         check('and nowhere in the plugin\'s files or log', leaks.length === 0, leaks.join(', '));
         r = await api('removeAccount', { id: caldavAccount?.id });
-        check('removing the account removes its password', r.ok && !readText(credentialsFile).includes(password), readText(credentialsFile).slice(0, 300));
+        check('removing the account removes its password', r.ok && !readText(credentialsFile).includes(password), JSON.stringify(r));
     } else {
         console.log('# skipped the CalDAV account: set RADICALE_VENV to a virtualenv with radicale installed');
     }
@@ -450,6 +527,14 @@ try {
     check('and empties a field with clear (an empty string changes nothing)', /^TOOL-RESULT: Changed:/.test(call.result) && /Haircut/.test(call.result) && !/Main Street/.test(call.result), call.result);
     call = await agentCall('calendar_update_event', { id: wednesday.id, title: 'Standup (moved)' });
     check('a change to a repeating event without a scope is sent back to ask the user', /scope "one"/.test(call.result) && /Ask the user/.test(call.result), call.result);
+    const feedCalendar = (await api('state')).value?.calendars?.find((c) => c.accountId === feedAccount?.id);
+    call = await agentCall('calendar_update_event', { id: wednesday.id, scope: 'one', calendar_id: feedCalendar?.id ?? 'missing', start: '2026-10-14T11:00' });
+    const standups = (await api('events', { from: Date.parse('2026-10-12T00:00:00+02:00'), to: Date.parse('2026-10-19T00:00:00+02:00') })).value?.occurrences?.filter((o) => o.title.startsWith('Standup')) ?? [];
+    check('one occurrence isn\'t moved to another calendar, and the series stays whole where it is', /Only a whole event or series moves to another calendar/.test(call.result)
+        && standups.length === 3 && standups.every((o) => o.calendarId === personal.id), `${call.result} ${JSON.stringify(standups.map((o) => o.calendarId))}`);
+    call = await agentCall('calendar_create_event', { title: 'Party', start: '2026-10-17T19:00', guests: ['ann@example.com'], notify_guests: true });
+    check('telling guests from a calendar that can\'t email is refused before anything is made', /Calendars on this computer can't email anyone/.test(call.result)
+        && (await api('search', { query: 'party' })).value?.occurrences?.length === 0, call.result);
     call = await agentCall('calendar_free_time', { from: '2026-10-13', to: '2026-10-13', minutes: 60 });
     check('free time leaves out busy times', /Free slots:/.test(call.result) && /10:15–17:00/.test(call.result), call.result);
     await stopDsh(child);
@@ -473,6 +558,27 @@ try {
     await bridge('POST', `/sessions/${askingSession}/cancel`, {});
     await waitFor(async () => (await bridge('GET', `/sessions/${askingSession}`)).status !== 'running', 'the stopped turn', 30000).catch(() => {});
     check('unanswered, the change doesn\'t happen', (await webApi(await signInWeb(), 'dsh-plugin-calendar/search', { query: 'haircut' })).value?.occurrences?.length === 1);
+    // Answered as the prompt's Allow once and Reject do.
+    const asking = await signInWeb();
+    const prompts = await approvalsOf(asking);
+    const titleNow = async () => (await webApi(asking, 'dsh-plugin-calendar/search', { query: 'haircut' })).value?.occurrences?.[0]?.title;
+    try {
+        const ofRename = (from) => (q) => q.toolName === 'calendar_update_event' && String(q.reason ?? '').includes(`Change “${from}” (2026-10-16 17:00, Personal): title?`);
+        let pending = agentCall('calendar_update_event', { id: haircut?.id ?? 'missing', title: 'Haircut at 5' });
+        let prompt = await prompts.next('the rename prompt', ofRename('Haircut')).catch(() => undefined);
+        const allowed = prompt ? await prompts.answer(prompt, 'allowed-once') : undefined;
+        call = await pending;
+        check('allowed, the change is made', allowed?.ok === true && /^TOOL-RESULT: Changed:/.test(call.result) && await titleNow() === 'Haircut at 5',
+            `${JSON.stringify(prompt?.request)} ${JSON.stringify(allowed)} ${call.result}`);
+        pending = agentCall('calendar_update_event', { id: haircut?.id ?? 'missing', title: 'Haircut, cancelled' });
+        prompt = await prompts.next('the second rename prompt', ofRename('Haircut at 5')).catch(() => undefined);
+        const rejected = prompt ? await prompts.answer(prompt, 'rejected') : undefined;
+        call = await pending;
+        check('rejected, it isn\'t, and the model hears so', rejected?.ok === true && !/^TOOL-RESULT: Changed:/.test(call.result) && await titleNow() === 'Haircut at 5',
+            `${JSON.stringify(rejected)} ${call.result}`);
+    } finally {
+        prompts.close();
+    }
     await stopDsh(child);
     const reason = sessionEvents(askingSession).find((e) => e.type === 'approval/asked')?.data?.reason ?? '';
     check('the question says what would change', reason === 'Calendar: Delete “Haircut” (2026-10-16 17:00, Personal)?', reason);
@@ -488,16 +594,16 @@ try {
         JSON.stringify(r.value?.occurrences?.map((o) => `${o.startLocal} ${o.title}`)));
     r = await webApi(web2, 'dsh-plugin-calendar/state', {});
     check('with the subscription', r.ok && r.value?.accounts?.some((a) => a.id === feedAccount?.id), JSON.stringify(r.value?.accounts));
-    check('no event text in the log', !/Dentist|Standup|Haircut|Main Street|Plumber|Team offsite/.test(readText(logFile)), readText(logFile).slice(-800));
+    check('no event text in the log', !/Dentist|Standup|Haircut|Main Street|Plumber|Team offsite|Party|ann@example/.test(readText(logFile)), readText(logFile).slice(-800));
 } catch (error) {
     failed += 1;
-    console.log(`not ok - the run stopped: ${error?.stack ?? error}`);
+    console.log(`not ok - the run stopped: ${redact(error?.stack ?? error)}`);
 } finally {
     await stopDsh(child);
     radicale?.server.kill();
     feed.close();
     await model.close();
-    if (failed > 0) console.log(`# DSH log tail:\n${readText(dshLog).split('\n').slice(-40).join('\n')}\n# calendar log tail:\n${readText(logFile).split('\n').slice(-20).join('\n')}`);
+    if (failed > 0) console.log(redact(`# DSH log tail:\n${readText(dshLog).split('\n').slice(-40).join('\n')}\n# calendar log tail:\n${readText(logFile).split('\n').slice(-20).join('\n')}`));
     if (process.env.KEEP === '1') console.log(`# kept ${root}`);
     else rmSync(root, { recursive: true, force: true });
 }

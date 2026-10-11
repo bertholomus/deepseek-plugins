@@ -19,7 +19,7 @@ Your calendars in DSH, for you and for your agents: iCloud, Google, Microsoft 36
 | A subscribed calendar | An `https://` or `webcal://` address of an `.ics` file (holidays, a team's published calendar, sports fixtures, a booking site) | Nothing else. It is read only, and fetched again only when the server says it changed. |
 | On this computer | The plugin's own store | Nothing. **Personal** is made at the first start; you can add more. |
 
-Passwords and sign-ins are kept in DSH's credential store, never in the plugin's files or its log, and a password goes only to the site its account names (iCloud's own `pNN-caldav.icloud.com` hosts included). Removing an account removes its password or sign-in and its copies of the events; nothing on the server changes.
+Passwords and sign-ins are kept in DSH's credential store, never in the plugin's files or its log, and a password goes only to the site its account names (iCloud's own `pNN-caldav.icloud.com` hosts included). A subscription's address is kept there too, since a private feed's address is its password (Google's secret address, a published iCloud or Outlook calendar): the plugin's files, its messages and what agents see name only the feed's site. Removing an account removes its password, sign-in or address and its copies of the events; nothing on the server changes.
 
 Not reached yet: calendars that live only in the Mac's Calendar app (*On My Mac*, which needs Apple's EventKit on the Mac), and an Exchange server of your own outside Exchange Online (its published `.ics` address can be subscribed).
 
@@ -43,7 +43,7 @@ Microsoft's sign-in needs an app registration of your own:
 3. The plugin asks for `Calendars.ReadWrite`, `User.Read` and `offline_access`; a work tenant may need an admin to consent to them.
 4. Give the plugin its **Application (client) ID** (or `microsoftClientId` in its config) and the tenant (`common` by default).
 
-Signing in shows a short code and Microsoft's page (`microsoft.com/devicelogin`): type the code there, on any device. Microsoft emails guests as soon as an event with guests is saved, and you can't hold that back, so a change that would invite or tell guests is made only when it says to tell them, and is otherwise refused with the reason.
+Signing in shows a short code and Microsoft's page (`microsoft.com/devicelogin`): type the code there, on any device. Microsoft emails a meeting's guests itself, and that can't be held back: when an event with guests is saved, and whenever the meeting you organize changes or is cancelled. So those changes are made only when they say to tell the guests (see [Guests and email](#guests-and-email)).
 
 ## For agents
 
@@ -57,34 +57,43 @@ Chats get these tools (`tools: false` hides them all):
 | `calendar_get_event` | Everything about one event: time and zone, repeat rule, guests and their answers, reminders, notes, links. |
 | `calendar_free_time` | Free slots of a given length within working hours (Monday to Friday, 09:00 to 17:00 unless told). |
 | `calendar_create_event` | Adds an event, to the default calendar unless told. |
-| `calendar_update_event` | Changes an event: its title, time, place, notes, repeat rule, reminders, guests, or calendar (a move). `clear` empties a field; an empty string changes nothing. |
+| `calendar_update_event` | Changes an event: its title, time, place, notes, repeat rule, reminders or guests. `clear` empties a field; an empty string changes nothing. `calendar_id` alone moves the whole event or series to another calendar. |
 | `calendar_delete_event` | Deletes an event. |
-| `calendar_respond` | Answers an invitation: accepted, declined or tentative. The organizer is told. |
+| `calendar_respond` | Answers an invitation: accepted, declined or tentative, for one occurrence or the whole series. Where the calendar's server tells organizers, the answer is emailed to the organizer. |
 
-Times go in and come out in your time zone (`timeZone`, else this computer's), and an event kept in another zone shows its own clock too. A change to a repeating event needs to say which: this occurrence, this and the following ones, or the whole series; without it the tool tells the model to ask you. Guests get an email only when the call says to tell them, which the tools say only your words should ask for.
+New events go to the calendar you chose as the default. Until you choose one, they go to the main calendar of your first account that names one (Google's primary, Microsoft's default, a CalDAV server's default), else to an account's only calendar, else to **Personal** on this computer: never to one of an account's several calendars picked at random, which could be shared with a team or a family. Times go in and come out in your time zone (`timeZone`, else this computer's), and an event kept in another zone shows its own clock too. A change to a repeating event needs to say which: this occurrence, this and the following ones, or the whole series; without it the tool tells the model to ask you. What the tools show of an event (its title, place, notes, guests) is marked for the model as information, never instructions, since anyone can send you an invitation.
+
+### Guests and email
+
+Before a change is made, the plugin works out who it would email, the same way the calendar's server will:
+
+- **Google** emails guests only when the change says to tell them.
+- **Microsoft**, and **iCloud, Fastmail, Nextcloud and other CalDAV servers that schedule** (the plugin asks the server whether it does), email a meeting's guests themselves whenever the meeting you organize is saved, changed or cancelled. Someone else's invitation that you delete tells its organizer you declined, unless the plugin asks the server not to, which it does unless you say to tell them.
+- **Calendars on this computer, subscriptions and CalDAV servers that don't schedule** email no one. A change that says to tell the guests there is refused, so nobody thinks they were told.
+
+A change that would email someone without saying to tell them is refused, and the refusal names who would get what (*This would email an update to ann@example.com and bob@example.com …*). The model is told to ask you first; in the window, you're asked whether to send. Your own reminders tell no one anything. Telling the guests of a CalDAV event names you as its organizer, so the server sends the invitations. Events imported into a server's calendar leave their guests and organizer out.
+
+Someone else's invitation stays theirs: you can answer it or delete it, but not move it or change who is invited. A move to another calendar takes the whole event or series, given on its own (change it in its new calendar afterwards); one occurrence moves by deleting it here and adding it there. For a meeting's guests, a moved meeting is a new one (a cancellation from here, an invitation from there), so a move that would email them says to tell them as well.
 
 ### Which chats may change your calendars
 
 Reading is always allowed while the tools are on. Changes (adding, changing, deleting and answering) follow `agentChanges`:
 
 - **`preset`** (the default) goes by the chat's DSH permission. On **Read Only** a change is refused, and the model is told why and that you can make it yourself. On **Workspace Write**, or a custom mix, DSH's approval prompt asks you first and says what would change: *Delete “Haircut” (2026-10-16 17:00, Personal)?* On **Full access** changes go through without asking, and on **Auto** its reviewer decides.
-- **`ask`**: every change asks you first. A chat that never asks (Full access) is refused instead.
+- **`ask`**: every change asks you first.
 - **`off`**: no chat changes your calendars.
 
-The log notes each decision (`policy calendar_delete_event access=workspace-write ask`), never the event.
+Whatever the setting, a change that emails someone asks you first, and the prompt says who gets what: *Change “Team sync” (2026-10-16 10:00, Work): start, and email an update to ann@example.com, bob@example.com and cy@example.com?* That covers invitations, updates, cancellations and answers to invitations (*The answer is sent to the organizer, boss@example.com.*), and it holds on **Auto** too. A chat that can't ask, because its approval prompts are off (**Full access**), is refused such a change, and the model is told why, so it can tell you what it would have sent; you can make the change on the Calendar page. `askBeforeEmails: false` lets emailing changes follow `agentChanges` like any other. A change the tool would refuse anyway (a repeating event without its scope, guests who'd be emailed without the call saying to tell them) is refused before anyone is asked.
 
-A calendar is personal. With the projects plugin, a project's threads get your personal tools only when your words ask for them, and coordinators never do: list `calendar` in its `guardedTools` (the name covers every `calendar_*` tool) to hold your calendar back from projects the same way. A thread then gets it when your words for it say *calendar* (or a word you list for it).
+The log notes each decision and how many people a change would email (`policy calendar_update_event access=workspace-write mail=3 ask`), never the event or an address.
 
-```yaml
-- id: projects
-  config:
-    guardedTools:
-      calendar: [agenda, my schedule]
-```
+### In projects
+
+A calendar is personal, so each calendar tool carries the mark that says it is yours (the group `calendar`). With the projects plugin, a project's threads get the calendar only when your own words for them ask for it, in words like *my calendar*, *my calendars*, *my schedule* or *my agenda*. A coordinator never has it, whatever the project's settings. If the project's **Your tools** is **Always**, every thread has the calendar without being asked first. Nothing needs listing in `guardedTools` for this.
 
 ## Sync
 
-Each account syncs at the start and then every `syncMinutes` (15 by default). CalDAV accounts ask for what changed (sync-collection) where the server has it, and otherwise compare each event's tag; Google uses its sync tokens; Microsoft keeps three months back and thirteen ahead and asks only for what changed; a subscription is fetched again when its server says it changed. A change goes to the server first, and only if the server took it is it kept here; if the event changed there meanwhile, the plugin syncs and tries once more. Events repeat by their rules (every week, the last Friday of the month, until a date or a count), with the occurrences someone moved or cancelled.
+Each account syncs at the start and then every `syncMinutes` (15 by default). CalDAV accounts ask for what changed (sync-collection) where the server has it, and otherwise compare each event's tag; Google uses its sync tokens; Microsoft keeps three months back and thirteen ahead and asks only for what changed; a subscription is fetched again when its server says it changed. A change goes to the server first, and only while the event is as the plugin last read it; only if the server took it is it kept here. If the event changed there meanwhile, the plugin syncs, and tries once more only when the change doesn't depend on what changed: a delete, a new time or a change that emails someone stops instead, and says so. A new event whose server didn't answer in time may have been made anyway, and the plugin says so; asked again with the same details within half an hour, it goes with the same identity, so the server makes it only once. Events repeat by their rules (every week, the last Friday of the month, until a date or a count), with the occurrences someone moved or cancelled.
 
 ## Settings
 
@@ -103,6 +112,7 @@ The plugin needs no config. Its row in `cordis.patch.yml`:
 | `syncMinutes` | `15` | How often accounts sync, in minutes (at least 5). |
 | `tools` | `true` | The agents' tools. Off: chats can't see or change your calendars. |
 | `agentChanges` | `preset` | Which chats may change calendars: `preset`, `ask` or `off` (above). |
+| `askBeforeEmails` | `true` | A chat's change that emails someone asks you first, naming who gets what, and is refused where the chat can't ask (above). |
 | `googleClientId` | `''` | Your Google OAuth client's id (the window can set it too). |
 | `googleClientSecretRef` | `CALENDAR_GOOGLE_CLIENT_SECRET` | The DSH credential that holds that client's secret. |
 | `microsoftClientId` | `''` | Your Microsoft app registration's client id (the window can set it too). |
@@ -112,8 +122,9 @@ The plugin needs no config. Its row in `cordis.patch.yml`:
 
 ## Where things are kept
 
-- `~/.dsh/calendar/` (in `$DSH_HOME` when DSH runs with one), mode 700: `calendar.json` with the accounts, calendars, your choices and the sync state; `events/<calendar>.json` with each calendar's events (for CalDAV and local calendars, the iCalendar text too); and `calendar.log` with ids, kinds and counts, never event text, passwords, tokens or addresses with their queries. Each file is mode 600.
-- DSH's credential store: one record per account, `calendar/<account id>`, with its password or its sign-in, and your Google client's secret.
+- `~/.dsh/calendar/` (in `$DSH_HOME` when DSH runs with one), mode 700: `calendar.json` with the accounts, calendars and your choices; `events/<calendar>.json` with each calendar's events (for CalDAV and local calendars, the iCalendar text too) and how far they are synced, written together; and `calendar.log` with ids, kinds and counts, never event text, passwords, tokens or addresses. Each file is mode 600.
+- Every write keeps the file's previous version beside it as `<file>.bak`. A file that is there but can't be read at a start is renamed to `<file>.unreadable-<time>` and kept, never deleted or written over: the plugin starts without it (a calendar on a server is read again from the server), and the window says so. To bring one back, quit DSH and rename it, or its `.bak`, to the file's name.
+- DSH's credential store: one record per account, `calendar/<account id>`, with its password, its sign-in or a subscription's address, and your Google client's secret.
 
 ## Setup
 
@@ -130,13 +141,13 @@ The plugin needs no config. Its row in `cordis.patch.yml`:
 ## Known limits
 
 - Microsoft: a change made here and one made elsewhere at the same time aren't caught (the last one wins); an event's status, link, conference, extra dates and skipped dates aren't written to Microsoft, and only the first reminder is.
-- Moving or importing an event into a Google or Microsoft calendar leaves its guests behind unless the move says to tell them, so no one is emailed by surprise.
-- Moving a repeating event to another calendar moves the series as it is defined, without the occurrences that were moved or changed on their own.
+- A move is a new event in the other calendar, even within one account (Google's and CalDAV's own moves aren't used yet), so a meeting's guests get a cancellation and a new invitation where the servers email them.
+- Moving a repeating event into a Google or Microsoft calendar moves the series as it is defined, without the occurrences that were moved or changed on their own.
 
 ## Tests
 
 ```bash
-node --test plugins/calendar/test/*.test.mjs      # store, repeats, zones, CalDAV, Google and Microsoft (stand-ins), write rules
+node --test plugins/calendar/test/*.test.mjs      # store, repeats, zones, CalDAV, Google and Microsoft (stand-ins), guests and email, write rules
 
 # also against a real CalDAV server: a Python virtualenv with radicale installed
 RADICALE_VENV=/path/to/venv node --test plugins/calendar/test/*.test.mjs

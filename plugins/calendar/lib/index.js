@@ -12,12 +12,14 @@
  * (lib/tools.js), and whether a chat may change calendars is decided per
  * call by its permission (lib/policy.js).
  *
- * Passwords and sign-ins are kept in DSH's credential store, never in the
- * plugin's files or log.
+ * Passwords, sign-ins and subscriptions' addresses (a private feed's key is
+ * in its path) are kept in DSH's credential store, never in the plugin's
+ * files or log.
  *
  * @module dsh-plugin-calendar
  */
 import z from '@deepseek-ai/schemastery';
+import { isLoopback } from './http.js';
 import { CalendarManager } from './manager.js';
 import { MODES, changeGate } from './policy.js';
 import { CalendarRemote, SERVICE } from './remote.js';
@@ -47,6 +49,14 @@ export const Config = z.object({
      * first, 'off' never.
      */
     agentChanges: z.union(MODES).default('preset'),
+    /**
+     * Whether a chat's change that emails someone (an invitation, an update,
+     * a cancellation, an answer) asks the user first, naming who gets what,
+     * whatever agentChanges says. A chat that can't ask (Full access) is
+     * refused such changes instead. Off: emailing changes follow
+     * agentChanges like any other.
+     */
+    askBeforeEmails: z.boolean().default(true),
     /** Google sign-in: the client id of the user's own OAuth client (Desktop app). The window can set it too. */
     googleClientId: z.string().default(''),
     /** The credential (DSH's store or the environment) that holds that client's secret. */
@@ -55,16 +65,17 @@ export const Config = z.object({
     microsoftClientId: z.string().default(''),
     /** Microsoft tenant: 'common' for work, school and personal accounts, or a tenant id. */
     microsoftTenant: z.string().default('common'),
-    /** Test servers in place of Google's and Microsoft's (tests only). */
+    /** Test servers in place of Google's and Microsoft's: tests only, and only on this computer. */
     googleApiBase: z.string(),
     googleAuthorizeUrl: z.string(),
     googleTokenUrl: z.string(),
     googleUserinfoUrl: z.string(),
+    googleRevokeUrl: z.string(),
     microsoftGraphBase: z.string(),
     microsoftLoginBase: z.string(),
 });
 
-const TEST_ENDPOINTS = ['googleApiBase', 'googleAuthorizeUrl', 'googleTokenUrl', 'googleUserinfoUrl', 'microsoftGraphBase', 'microsoftLoginBase'];
+const TEST_ENDPOINTS = ['googleApiBase', 'googleAuthorizeUrl', 'googleTokenUrl', 'googleUserinfoUrl', 'googleRevokeUrl', 'microsoftGraphBase', 'microsoftLoginBase'];
 
 /** The credential record that holds one account's password or sign-in. */
 const recordOf = (accountId) => `calendar/${accountId}`;
@@ -87,6 +98,8 @@ export function apply(ctx, config) {
     };
 
     let manager;
+    /** Test server settings that point elsewhere, warned about once. */
+    const ignored = new Set();
     /** What Google's and Microsoft's sign-ins need, read each time one starts or a token refreshes. */
     const clientSettings = async () => {
         const prefs = manager?.store.prefs ?? {};
@@ -102,7 +115,16 @@ export function apply(ctx, config) {
             microsoftClientId: String(prefs.microsoftClientId || config.microsoftClientId || '').trim(),
             microsoftTenant: String(prefs.microsoftTenant || config.microsoftTenant || 'common').trim(),
         };
-        for (const key of TEST_ENDPOINTS) if (typeof config[key] === 'string' && config[key].trim() !== '') out[key] = config[key].trim();
+        // A test server stands in only on this computer: no setting sends the client secret or a sign-in anywhere else.
+        for (const key of TEST_ENDPOINTS) {
+            const value = typeof config[key] === 'string' ? config[key].trim() : '';
+            if (value === '') continue;
+            if (isLoopback(value)) out[key] = value;
+            else if (!ignored.has(key)) {
+                ignored.add(key);
+                ctx.logger?.warn?.('calendar: %s is ignored: a test server must be on this computer', key);
+            }
+        }
         return out;
     };
 
@@ -129,14 +151,18 @@ export function apply(ctx, config) {
     });
 
     if (config.tools) {
+        // Each tool is marked as the user's own (tools.js PERSONAL), so project sessions get it only as the user allows.
         for (const tool of calendarTools(manager)) ctx.tools.register(tool);
         // Changes go through the chat's permission first (policy.js).
+        const service = (key) => {
+            try { return ctx.get?.(key); } catch { return undefined; }
+        };
         ctx.on('tools/pre-execute', changeGate({
-            presets: () => {
-                try { return ctx.get?.('permissionPresets'); } catch { return undefined; }
-            },
+            presets: () => service('permissionPresets'),
+            approval: () => service('approval'),
             manager,
             mode: () => config.agentChanges,
+            askEmails: () => config.askBeforeEmails !== false,
             log: (line) => manager.log(line),
         }));
     }

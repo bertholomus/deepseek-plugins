@@ -9,8 +9,9 @@
  *   the caller's `keepAuth` says the new host is the same service (iCloud
  *   sends CalDAV clients from caldav.icloud.com to a pNN-caldav.icloud.com);
  * - stops after `timeoutMs` and after `maxBytes` of body;
- * - never puts a header value, a URL's query or a body in an error message,
- *   so a password or token can't reach a log or a model.
+ * - never puts a header value, a URL's path or query or a body in an error
+ *   message, only its host, so a password, a token or a private feed's
+ *   address (its key is in the path) can't reach a log or a model.
  *
  * @module dsh-plugin-calendar/http
  */
@@ -36,11 +37,20 @@ export function isLoopback(url) {
     }
 }
 
-/** A URL for messages: scheme, host and path only (no user, password or query). */
+/** A URL for messages: scheme, host and path only (no user, password or query). Never a feed's: its path can be its key (safeHost). */
 export function safeUrl(url) {
     try {
         const u = new URL(url);
         return `${u.protocol}//${u.host}${u.pathname}`;
+    } catch {
+        return '(not a URL)';
+    }
+}
+
+/** A URL's host (with its port) for messages: a path or a query can be a secret, like a private feed's address. */
+export function safeHost(url) {
+    try {
+        return new URL(url).host;
     } catch {
         return '(not a URL)';
     }
@@ -98,21 +108,21 @@ export async function request(url, init = {}) {
         }
         if (target.protocol !== 'https:' && target.protocol !== 'http:') throw new HttpError('insecure', `Only https addresses work here, not ${target.protocol}`);
         if (target.protocol === 'http:' && !allowHttp && !isLoopback(current)) {
-            throw new HttpError('insecure', `${safeUrl(current)} is plain http; calendars on another computer need https.`);
+            throw new HttpError('insecure', `${safeHost(current)} is plain http; calendars on another computer need https.`);
         }
         let response;
         try {
             response = await fetchImpl(current, { method: verb, headers: sent, body: payload, redirect: 'manual', signal: abort });
         } catch (error) {
-            if (timer.aborted) throw new HttpError('timeout', `${safeUrl(current)} didn't answer within ${Math.round(timeoutMs / 1000)} s.`);
+            if (timer.aborted) throw new HttpError('timeout', `${safeHost(current)} didn't answer within ${Math.round(timeoutMs / 1000)} s.`);
             if (signal?.aborted) throw new HttpError('aborted', 'Stopped.');
-            throw new HttpError('network', `Couldn't reach ${safeUrl(current)}: ${networkReason(error)}`);
+            throw new HttpError('network', `Couldn't reach ${safeHost(current)}: ${networkReason(error)}`);
         }
         if (response.status >= 300 && response.status < 400 && response.headers.has('location')) {
-            if (hop >= 5) throw new HttpError('redirects', `${safeUrl(url)} redirected too many times.`);
+            if (hop >= 5) throw new HttpError('redirects', `${safeHost(url)} redirected too many times.`);
             const next = new URL(response.headers.get('location'), current).toString();
             if (target.protocol === 'https:' && next.startsWith('http:') && !isLoopback(next)) {
-                throw new HttpError('insecure', `${safeUrl(current)} redirected to plain http.`);
+                throw new HttpError('insecure', `${safeHost(current)} redirected to plain http.`);
             }
             try { await response.body?.cancel(); } catch {}
             if (!keepAuth(current, next)) {
@@ -137,7 +147,7 @@ export async function request(url, init = {}) {
                 try {
                     return JSON.parse(text);
                 } catch {
-                    throw new HttpError('network', `${safeUrl(current)} sent something that isn't JSON (HTTP ${response.status}).`, response.status);
+                    throw new HttpError('network', `${safeHost(current)} sent something that isn't JSON (HTTP ${response.status}).`, response.status);
                 }
             },
         };
@@ -149,7 +159,7 @@ async function readText(response, maxBytes, url) {
     const length = Number(response.headers.get('content-length'));
     if (Number.isFinite(length) && length > maxBytes) {
         try { await response.body?.cancel(); } catch {}
-        throw new HttpError('too-large', `${safeUrl(url)} sent more than ${Math.round(maxBytes / 1048576)} MB.`, response.status);
+        throw new HttpError('too-large', `${safeHost(url)} sent more than ${Math.round(maxBytes / 1048576)} MB.`, response.status);
     }
     if (!response.body) return '';
     const reader = response.body.getReader();
@@ -161,7 +171,7 @@ async function readText(response, maxBytes, url) {
         size += value.byteLength;
         if (size > maxBytes) {
             try { await reader.cancel(); } catch {}
-            throw new HttpError('too-large', `${safeUrl(url)} sent more than ${Math.round(maxBytes / 1048576)} MB.`, response.status);
+            throw new HttpError('too-large', `${safeHost(url)} sent more than ${Math.round(maxBytes / 1048576)} MB.`, response.status);
         }
         chunks.push(value);
     }

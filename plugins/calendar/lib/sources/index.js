@@ -11,9 +11,16 @@
  *            source only stores and fetches it. 'events': it maps events
  *            to and from the server's own JSON (Google, Microsoft, EventKit).
  *   create(account, env) → a source for one account (below).
+ *   revoke(env, secret) → {revoked, manageUrl?}   (optional)
+ *            Withdraw the plugin's access when the user removes the
+ *            account, before its secret is cleared. revoked: the provider
+ *            took it back; otherwise manageUrl is the page where the user
+ *            does it. MANAGE_URL (optional): that page, for when revoke
+ *            fails.
  *
  * `account` is what the plugin stores about an account, never a secret:
- *   {id, kind, name, url?, username?, email?, preset?, allowHttp?}.
+ *   {id, kind, name, url?, host?, username?, email?, preset?, allowHttp?}.
+ *   A subscription has its host only: its address is its secret.
  *
  * `env` is what a source may use:
  *   request(url, init) - lib/http.js `request`, with the account's allowHttp
@@ -21,8 +28,10 @@
  *                        through it.
  *   secret             - the account's secret in DSH's credential store:
  *                        `get()` → payload or undefined, `set(payload)`, `clear()`.
- *                        A password, or an OAuth grant {refreshToken, accessToken,
- *                        expiresAt, scope}. Never logged, never returned.
+ *                        A password, an OAuth grant {refreshToken, accessToken,
+ *                        expiresAt, scope}, or a subscription's address {url}
+ *                        (a private feed's key is in its path). Never logged,
+ *                        never returned.
  *   log(line)          - the plugin's log: ids and counts, never secrets,
  *                        event text or URLs with queries.
  *   now()              - epoch ms (tests move it).
@@ -32,9 +41,11 @@
  * Every source has:
  *
  *   calendars() → [{remoteId, name, color?, readOnly?, timeZone?, description?,
- *                   mode?: 'masters' | 'instances'}]
+ *                   mode?: 'masters' | 'instances', primary?}]
  *       The account's calendars that hold events. 'instances': the source
  *       hands each occurrence of a series over on its own (see model.js).
+ *       primary: the account's main calendar, as its server says (new
+ *       events go there unless the user chose another).
  *
  *   sync(calendar, state, {from, to, signal}) → {reset, items, removed, state}
  *       What changed in one calendar since `state` (opaque JSON this source
@@ -48,13 +59,16 @@
  *
  *   put(calendar, item | null, raw, uid) → {remoteId, etag}
  *       Store iCalendar text: a new resource (item null; it must not exist
- *       yet), or a changed one (only if its etag is still item.etag).
+ *       yet, and one already there with this uid is this create made
+ *       before), or a changed one (only if its etag is still item.etag).
  *   remove(calendar, item) → undefined
  *       Delete a resource (only if its etag is still item.etag).
  *
  * An 'events' source also has:
  *
  *   create(calendar, record) → Item[]
+ *       record.uid is new, and the same when the manager asks again after
+ *       an answer was lost: the server must make the event once.
  *   update(calendar, target, patch, scope) → Item[]
  *       target: {item, record, occurrence?}: the item and record changed, and
  *       for one occurrence of a series its original start (a Time). patch:
@@ -68,7 +82,8 @@
  * (sign in again), 'conflict' (changed on the server meanwhile: the manager
  * syncs and tries once more), 'not-found', 'forbidden' (read-only),
  * 'rate' (with retryAfter in seconds), 'server', 'network', 'config'.
- * Messages are for the user: plain, without secrets.
+ * Messages are for the user: plain, without secrets. Agents get a fixed
+ * category by the code instead (PROBLEMS), never a message.
  *
  * @module dsh-plugin-calendar/sources
  */
@@ -101,6 +116,19 @@ export function statusError(status, what, headers) {
     }
     return new SourceError('server', `${what}: the server answered HTTP ${status}.`, { status });
 }
+
+/**
+ * A calendar's or an account's problem as agents see it: a fixed category
+ * by its code. The message stays for the window: it can hold a server's
+ * own words.
+ */
+export const PROBLEMS = {
+    auth: 'sign-in needed', network: 'can\'t reach the server', forbidden: 'the server refused', 'not-found': 'not found',
+    rate: 'rate limited', server: 'server error', config: 'setup problem',
+};
+
+/** The category for an error's code; any other code is a server error. */
+export const problemOf = (code) => (Object.hasOwn(PROBLEMS, code) ? PROBLEMS[code] : PROBLEMS.server);
 
 /** The source modules by account kind, loaded when first needed. */
 const LOADERS = {

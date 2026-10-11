@@ -450,27 +450,36 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 
 _Its own section, kept by the "Calendar plugin" project thread; "Doing now" above stays the projects plugin's._
 
-Updated: 2026-10-11 01:58 PT by B (bertholomus)
+Updated: 2026-10-11 03:00 PT by B (bertholomus)
 Branch: the PR branch named at the top (PR #1), fast-forwarded from a local branch, never forced.
 
 The user's goal (2026-10-11, relayed from the project chat): "create a sane calendar plugin that agents and user can use - allows syncing apple, google, exchange, other popular calendar syncing.  works with our wallpaper and glass plugin".
 
 ### Doing now (calendar)
-- The window, `lib/client.js` (a do-nothing stub until then): a Calendar page (month, week, day, agenda), the event dialog, the account dialog (CalDAV services, Google and Microsoft sign-in, subscriptions), an agenda beside chats in the right sidebar, and chat views for the `calendar_*` tools, drawn by the wallpaper and glass contract (/mnt/project-files/wallpaper-glass.md).
+- The window, `lib/client.js` (a do-nothing stub on the branch until then): a Calendar page (month, week, day, agenda), the event dialog, the account dialog (CalDAV services, Google and Microsoft sign-in, subscriptions), an agenda beside chats in the right sidebar, and chat views for the `calendar_*` tools, drawn by the wallpaper and glass contract (/mnt/project-files/wallpaper-glass.md). It must follow the round-1 host changes: `calendar/needs-notify` refusals (confirm, then the same call with notify), `emailed` in results, `canEmail` and `invitation` in views, moves given alone, answers for `one`/`all` only, a feed's `host` instead of its address, `storeIssue`.
+- Round 2 of the review (the coordinator's), on this push.
 
 ### Done (calendar)
 - Host half: `ical.js` (RFC 5545, keeps lines it doesn't know), `recur.js` (RRULE expansion and its words), `zones.js` (IANA through Intl, Windows names for Graph), `expand.js` (series with moved and cancelled occurrences), `store.js` (`~/.dsh/calendar`, 700/600, follows DSH_HOME), `manager.js` (accounts, sync every `syncMinutes`, every change to the server first, scope one/following/all, moves, import/export, search, free time), `http.js` (Authorization dropped when a redirect leaves the site; no secret or query in an error), `oauth.js` (loopback with PKCE, or a pasted address), `remote.js` (the window's endpoints, `/api/dsh-plugin-calendar/<method>`).
 - Sources: local, subscription (`.ics`/webcal with ETag and Last-Modified), CalDAV (discovery from any address, sync-collection or etags, multiget, conditional writes; iCloud, Fastmail, Nextcloud, Yahoo, mailbox.org, Zoho), Google (Calendar API v3, sync tokens), Microsoft (Graph, device code, calendar view delta).
 - Secrets: one DSH credential record per account, `calendar/<account id>` (a CalDAV password or a sign-in); the Google client secret as the credential `CALENDAR_GOOGLE_CLIENT_SECRET`. Never in the store, the events, the log or an error.
 - Agents: nine `calendar_*` tools (`tools.js`) and the write gate on `tools/pre-execute` (`policy.js`): `agentChanges` preset (Read Only refused, Workspace Write or custom asks with what would change, Full access goes, Auto's reviewer decides), `ask` or `off`.
-- Tests: 96 unit tests (89 without Radicale), in `npm test` through `test/calendar.test.js`; `npm run test:e2e:calendar` 40/40 on DSH 0.2.0-rc.2 and 0.2.1-alpha.2.
+- Round-1 review fixes (/mnt/project-files/calendar/review/round-1.md):
+  - B1, guests and email: `manager.mailOf()` works out who a change emails as the server will (Google only when told; Microsoft, and CalDAV servers that schedule, found by the principal's `schedule-outbox-URL`, for every change to a meeting the user organizes; nobody for local, subscriptions and CalDAV without scheduling). A change that would email people without notify is refused (`needs-notify`, naming who gets what); telling a CalDAV event's guests names the user as ORGANIZER; deleting someone else's CalDAV invitation sends `Schedule-Reply: F` unless the organizer is to be told; imports carry no guests or organizer to a server. The approval prompt names recipients (five, then "and N more"), added and removed guests, and an answer's scope and organizer. An emailing change asks even on Auto, and is refused on Full access (`approval.effectivePolicy` 'never') with why; `askBeforeEmails: false` turns that off. What the tool would refuse anyway is refused at the gate.
+  - B2, moves: `calendar_id` moves only a whole event or series, given alone; a meeting moved is a new one for its guests (new uid; needs notify where it emails); invitations can't be moved or have their guests changed.
+  - B3: every tool carries `personal: {name: 'calendar', words: [my calendar, my calendars, my schedule, my agenda]}` (set after defineTool); README's project section rewritten.
+  - M1 (worker): an unreadable calendar.json or events file is set aside as `*.unreadable-<stamp>`, never swept; sync state lives in each events file with its items; `.bak` per write; `state().storeIssue`.
+  - M2 (worker): a feed's address lives only in its credential record (`{url}`); calendar.json keeps `host`; every HTTP error names the host only; agents see a problem's category.
+  - M3, in part: after a conflict, a delete, a new time or an emailing change is reported, not retried; a CalDAV write without a stored etag reads the server's first.
+- Tests: 117 unit tests with Radicale (110 without), in `npm test` through `test/calendar.test.js`; `npm run test:e2e:calendar` 43/43 on DSH 0.2.0-rc.2 and 0.2.1-alpha.2.
 
 ### Next steps (calendar)
 1. Finish the window and check it on both DSH versions (screens on and off the wallpaper, light and dark), then push.
-2. Real accounts only when the user wants them, and they give what each needs: Google, their own OAuth client (Desktop app) id and secret; Microsoft, their own Entra app's client id; iCloud, Fastmail and Yahoo, app passwords. Loading it into the live DSH needs their OK.
-3. Suggest `calendar` in the projects plugin's `guardedTools` (live config: the user's call).
-4. Calendars only on the Mac (EventKit) need Mac work, through the split thread.
-5. Microsoft: no If-Match on changes; status, link, conference, extra and skipped dates aren't written; only the first reminder; a series moved to another calendar loses its changed occurrences.
+2. Round-2 findings, then the rest of round 1: M3 (If-Match on Graph PATCH and DELETE; Google's fallback instance id and `masterOf()` carry no etag); M4 (Microsoft sign-in by authorization code with PKCE on a loopback, device code as the fallback; Google scopes `calendar.events` plus `calendar.calendarlist.readonly`; revoke a Google grant on removal); m1 (no duplicate on a retried create), m2 (default calendar: the account's primary), m3 (a password goes to the same host only, plus `*.icloud.com`), m4 (no redirect from a remote host to a local one), m5 (test endpoints only under a test flag), m7 (name "On this computer" "Kept in DSH", with the window), m8 (`RANGE=THISANDFUTURE`; a VTIMEZONE with no IANA match).
+3. Native moves within one account (Google `events.move`, WebDAV MOVE), so a moved meeting isn't a new one for its guests.
+4. Real accounts only when the user wants them, and they give what each needs: Google, their own OAuth client (Desktop app) id and secret; Microsoft, their own Entra app's client id; iCloud, Fastmail and Yahoo, app passwords. Loading it into the live DSH needs their OK.
+5. Calendars only on the Mac (EventKit) need Mac work, through the split thread.
+6. Microsoft: status, link, conference, extra and skipped dates aren't written; only the first reminder; a series moved to another calendar loses its changed occurrences.
 
 ### Open questions (calendar)
 - Which accounts the user wants connected first.
@@ -480,5 +489,7 @@ The user's goal (2026-10-11, relayed from the project chat): "create a sane cale
 - The endpoints take `{args}` keyed by the method's parameter names, not positions.
 - An approval's `reason` is only in the session log's `approval/asked` event (the bridge's summaries leave it out); `test/e2e/run.mjs` reads the log with its own zstd frame splitter.
 - A Workspace Write turn that waits on approval never ends in a headless run: wait for `approval/asked`, then cancel it.
-- Microsoft emails guests whenever an event with guests is saved, so the source refuses such a change unless it says to tell them; moves and imports into Google or Microsoft leave guests behind for the same reason.
+- Microsoft, and CalDAV servers that schedule (iCloud, Fastmail, Nextcloud), email a meeting's guests on every change its organizer saves, so such a change needs notify; Google emails only with `sendUpdates`. `SCHEDULE-AGENT=CLIENT` would hold a CalDAV server back, but it stays on the event and silently stops the server's scheduling from the user's other apps, so it isn't used.
+- With approval policy 'never' (Full access), DSH turns a gate's `ask` into "the user rejected tool …", which misleads the model: the gate reads `approval.effectivePolicy(session)` and refuses with its own reason instead.
+- `defineTool` keeps only the keys it knows: the `personal` mark goes on after it. The manager tests stand in for `@deepseek-ai/dsh-tools` with a `module.register` resolve hook to run the real tools.
 - UTC and floating times show on the user's clock; only a named zone keeps its own.

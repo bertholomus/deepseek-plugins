@@ -9,12 +9,22 @@
  *            leaves each change to its reviewer; anything else (Workspace
  *            Write, a custom mix) asks the user first, in DSH's approval
  *            prompt, saying what would change.
- *   'ask'    - every change asks the user first. A session whose approval
- *            policy never asks gets a refusal instead.
+ *   'ask'    - every change asks the user first.
  *   'off'    - agents can't change calendars; the window still can.
+ *
+ * A change that emails someone (an invitation, an update, a cancellation,
+ * an answer) asks the user first whatever the setting, naming who gets
+ * what, unless `askBeforeEmails` is off. A chat whose approval prompts are
+ * off (Full access) can't ask, so it gets a refusal that says why, as it
+ * does for any change that would ask. So does a change the tool would
+ * refuse anyway (a missing scope, guests who'd be emailed without the call
+ * saying to tell them): nobody is asked about something that won't happen.
  *
  * @module dsh-plugin-calendar/policy
  */
+import { CalendarError, peopleWords } from './manager.js';
+import { changeInput, refusalText, scopeArg } from './args.js';
+
 export const MODES = ['preset', 'ask', 'off'];
 
 /** The tools that change calendars (tools.js); the rest only read. */
@@ -54,6 +64,19 @@ export function decide(mode, access) {
     return 'ask';
 }
 
+/**
+ * Whether DSH's approval prompt can ask the user in this session: not when
+ * its approval policy is 'never' (Full access), where an ask is turned
+ * down as if the user said no.
+ */
+export function canAsk(approval, session) {
+    try {
+        return approval?.effectivePolicy?.(session) !== 'never';
+    } catch {
+        return true;
+    }
+}
+
 const clip = (text, n = 80) => {
     const t = String(text ?? '').replace(/\s+/g, ' ').trim();
     return t.length > n ? `${t.slice(0, n - 1)}…` : t;
@@ -64,16 +87,57 @@ const SCOPE_WORDS = { one: 'only this occurrence of ', following: 'this and the 
 /** calendar_update_event's `clear`, in words. */
 const CLEAR_WORDS = { location: 'no place', description: 'no notes', url: 'no link', repeat: 'stop repeating' };
 
-/** A change in words for the approval prompt: what, which event, where. Never throws. */
-export function describeChange(manager, name, args = {}) {
+const KINDS = { calendar_create_event: 'create', calendar_update_event: 'update', calendar_delete_event: 'delete', calendar_respond: 'respond' };
+
+/**
+ * What a call would do as far as other people go, worked out as the tool
+ * will: {mail} (who it emails: manager.mailOf), or {refusal} when the tool
+ * would refuse it before changing anything. {} when that can't be told
+ * here (the tool then decides). Never throws.
+ */
+export function planOf(manager, name, args) {
+    const kind = KINDS[name];
+    if (kind === undefined || typeof manager?.previewMail !== 'function') return {};
     const a = args !== null && typeof args === 'object' ? args : {};
+    const notify = a.notify_guests === true;
+    try {
+        const id = String(a.id ?? '');
+        const change = kind === 'create' ? { input: changeInput(a, manager.zone()), notify }
+            : kind === 'update' ? { id, input: changeInput(a, manager.zone()), scope: scopeArg(manager, id, a.scope), notify }
+            : kind === 'delete' ? { id, scope: scopeArg(manager, id, a.scope), notify }
+            : { id, scope: scopeArg(manager, id, a.scope, { answer: true }) };
+        const mail = manager.previewMail(kind, change);
+        // An answer goes to its organizer by itself: asking the user is all it takes.
+        const problem = kind === 'respond' ? undefined : manager.mailProblem?.(mail, notify);
+        return problem ? { refusal: refusalText(problem), mail } : { mail };
+    } catch (error) {
+        return error instanceof CalendarError ? { refusal: refusalText(error) } : {};
+    }
+}
+
+/** ", and email an update to a, b and c" for a change that emails people. */
+const emailWords = (mail) => (mail?.to?.length > 0 ? `, and email ${mail.what} to ${peopleWords(mail.to)}` : '');
+
+/**
+ * A change in words for the approval prompt: what, which event, where, and
+ * who it emails. `mail` is planOf's; without it the words go by the call
+ * alone. Never throws.
+ */
+export function describeChange(manager, name, args = {}, mail = planOf(manager, name, args).mail) {
+    const a = args !== null && typeof args === 'object' ? args : {};
+    let event;
+    try {
+        event = manager.event(String(a.id ?? ''));
+    } catch {
+        event = undefined;
+    }
     const eventWords = () => {
+        if (event === undefined) return 'an event';
         try {
-            const o = manager.event(String(a.id ?? ''));
             const zone = manager.zone();
-            const day = o.allDay ? o.startDay : o.startLocal?.slice(0, 10);
-            const time = o.allDay ? 'all day' : `${o.startLocal?.slice(11, 16)}${o.timeZone && o.timeZone !== zone ? ` ${o.timeZone}` : ''}`;
-            return `“${clip(o.title)}” (${day} ${time}, ${o.calendar})`;
+            const day = event.allDay ? event.startDay : event.startLocal?.slice(0, 10);
+            const time = event.allDay ? 'all day' : `${event.startLocal?.slice(11, 16)}${event.timeZone && event.timeZone !== zone ? ` ${event.timeZone}` : ''}`;
+            return `“${clip(event.title)}” (${day} ${time}, ${event.calendar})`;
         } catch {
             return 'an event';
         }
@@ -86,47 +150,86 @@ export function describeChange(manager, name, args = {}) {
             return 'a calendar';
         }
     };
-    const guests = Array.isArray(a.guests) ? a.guests.length : 0;
-    const invite = a.notify_guests === true && guests > 0 ? `, and email ${guests === 1 ? 'an invitation' : `${guests} invitations`}` : '';
+    const guests = Array.isArray(a.guests) ? a.guests.map((g) => String(g).trim()).filter(Boolean) : [];
+    // Without the manager's word on it, the call's own: it says to tell them.
+    const told = mail !== undefined ? emailWords(mail) : '';
     switch (name) {
         case 'calendar_create_event': {
             const when = [a.start, a.end].filter((t) => typeof t === 'string' && t.trim() !== '').map((t) => clip(t, 30)).join(' to ');
+            const invite = mail === undefined && a.notify_guests === true && guests.length > 0 ? `, and email invitations to ${peopleWords(guests)}` : told;
             return `Add “${clip(a.title)}” (${when}${a.repeat ? ', repeating' : ''}) to ${calendarWords()}${invite}?`;
         }
         case 'calendar_update_event': {
             const fields = ['title', 'start', 'end', 'all_day', 'time_zone', 'location', 'description', 'url', 'repeat', 'reminders', 'guests', 'busy', 'private']
                 .filter((k) => a[k] !== undefined && a[k] !== null && !(typeof a[k] === 'string' && a[k].trim() === ''))
-                .map((k) => k.replace('_', ' '));
+                .map((k) => (k === 'guests' ? guestChange(event, guests) : k.replace('_', ' ')));
             const cleared = Array.isArray(a.clear) ? [...new Set(a.clear)].filter((k) => Object.hasOwn(CLEAR_WORDS, k)).map((k) => CLEAR_WORDS[k]) : [];
             const moving = typeof a.calendar_id === 'string' && a.calendar_id.trim() !== '' ? ` and move it to ${calendarWords()}` : '';
             const what = fields.length + cleared.length ? `: ${[...fields, ...cleared].join(', ')}` : '';
-            return `Change ${SCOPE_WORDS[a.scope] ?? ''}${eventWords()}${what}${moving}${invite}?`;
+            const tell = mail === undefined && a.notify_guests === true ? ', and email its guests' : told;
+            return `Change ${SCOPE_WORDS[a.scope] ?? ''}${eventWords()}${what}${moving}${tell}?`;
         }
-        case 'calendar_delete_event':
-            return `Delete ${SCOPE_WORDS[a.scope] ?? ''}${eventWords()}${a.notify_guests === true ? ', and tell its guests' : ''}?`;
-        case 'calendar_respond':
-            return `Answer ${eventWords()}: ${clip(a.answer, 20)}? The organizer is told.`;
+        case 'calendar_delete_event': {
+            const tell = mail === undefined && a.notify_guests === true ? ', and tell its guests' : told;
+            return `Delete ${SCOPE_WORDS[a.scope] ?? ''}${eventWords()}${tell}?`;
+        }
+        case 'calendar_respond': {
+            const which = a.scope === 'one' ? 'only this occurrence of ' : event?.recurring ? 'every occurrence of ' : '';
+            const organizer = event?.organizer?.email;
+            const heard = mail === undefined ? '' : mail.to.length > 0 ? ` The answer is sent to the organizer, ${mail.to[0]}.` : ` This calendar doesn't send it to the organizer${organizer ? ` (${organizer})` : ''}.`;
+            return `Answer ${which}${eventWords()}: ${clip(a.answer, 20)}?${heard}`;
+        }
         default:
             return `Change the calendar (${name})?`;
     }
 }
 
+/** A new guest list in words: who it adds and who it takes off. */
+function guestChange(event, guests) {
+    const had = (event?.attendees ?? []).filter((p) => p.self !== true).map((p) => String(p.email));
+    const hadLower = new Set(had.map((e) => e.toLowerCase()));
+    const nowLower = new Set(guests.map((e) => e.toLowerCase()));
+    const added = guests.filter((e) => !hadLower.has(e.toLowerCase()));
+    const removed = had.filter((e) => !nowLower.has(e.toLowerCase()));
+    const parts = [...(added.length ? [`adding ${peopleWords(added)}`] : []), ...(removed.length ? [`removing ${peopleWords(removed)}`] : [])];
+    return parts.length ? `guests (${parts.join('; ')})` : 'guests';
+}
+
+/** The refusal for a change that would ask in a chat that can't. */
+function cantAsk(mail) {
+    if (mail?.to?.length > 0) {
+        return `This would email ${mail.what} to ${peopleWords(mail.to)}, and the user is asked before anything is emailed from their calendars. `
+            + 'This chat can\'t ask (its approval prompts are off), so nothing was done. Tell the user what would be sent and to whom; they can do it on the Calendar page or in their calendar app.';
+    }
+    return 'The calendar plugin asks the user before each change, and this chat can\'t ask (its approval prompts are off), so nothing was done. Tell the user what you would change; they can do it on the Calendar page.';
+}
+
 /**
  * The `tools/pre-execute` gate for the calendar's change tools. Other gates
  * run first; a refusal or a question from them stands.
- * @param {{presets: () => object|undefined, manager: object, mode: () => string, log: (line: string) => void}} deps
+ * @param {{presets: () => object|undefined, approval?: () => object|undefined, manager: object, mode: () => string,
+ *          askEmails?: () => boolean, log: (line: string) => void}} deps
  */
-export function changeGate({ presets, manager, mode, log }) {
+export function changeGate({ presets, approval = () => undefined, manager, mode, askEmails = () => true, log }) {
     return async (exec, next) => {
         if (!CHANGE_TOOLS.has(exec?.name)) return next();
         const downstream = await next();
         if (downstream?.kind !== 'allow') return downstream;
-        const access = accessOf(presets(), exec.agent?.session);
-        const decision = decide(mode(), access);
-        log(`policy ${exec.name} access=${access} ${typeof decision === 'string' ? decision : 'deny'}`);
+        const session = exec.agent?.session;
+        const access = accessOf(presets(), session);
+        let decision = decide(mode(), access);
+        let mail;
+        if (typeof decision === 'string') {
+            const plan = planOf(manager, exec.name, exec.arguments);
+            mail = plan.mail;
+            if (plan.refusal !== undefined) decision = { deny: plan.refusal };
+            else if (mail?.to?.length > 0 && askEmails()) decision = 'ask';
+        }
+        if (decision === 'ask' && !canAsk(approval(), session)) decision = { deny: cantAsk(mail) };
+        log(`policy ${exec.name} access=${access}${mail?.to?.length > 0 ? ` mail=${mail.to.length}` : ''} ${typeof decision === 'string' ? decision : 'deny'}`);
         if (decision === 'allow') return { kind: 'allow' };
         if (decision === 'ask') {
-            const text = describeChange(manager, exec.name, exec.arguments);
+            const text = describeChange(manager, exec.name, exec.arguments, mail);
             return { kind: 'ask', reason: `Calendar: ${text}`, displayReason: { en: text } };
         }
         return { kind: 'deny', reason: decision.deny };
