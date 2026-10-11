@@ -81,6 +81,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshc-tree-meta{margin-left:auto;padding-left:12px;flex:0 100 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12px;opacity:.65;white-space:nowrap}',
             '.dshc-tree-dot{display:inline-flex;flex:none}',
             '.dshc-tree-glyph{display:inline-flex;width:14px;flex:none;opacity:.75}',
+            // A category's or a workspace's ⋯ at the end of its row, as on DSH's own rows: shown while the row is
+            // pointed at, has the focus or has its menu open, its place kept meanwhile so the row doesn't shift.
+            // DSH's menu wraps its button in a box of its own: that box is what sits in the row.
+            '.dshc-tree-row>:has(>.dshc-tree-more){flex:none;display:inline-flex;margin-left:auto;margin-right:-6px}',
+            '.dshc-tree-meta+:has(>.dshc-tree-more){margin-left:4px}',
+            '.dshc-tree-more{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:var(--dsw-radius-sm,4px);background:none;color:var(--dsw-alias-label-secondary);cursor:pointer;visibility:hidden}',
+            '.dshc-tree-more:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
+            '.dshc-tree-row:hover .dshc-tree-more,.dshc-tree-item:focus-visible>.dshc-tree-row .dshc-tree-more,.dshc-tree-more:focus,.dshc-tree-more[aria-expanded="true"]{visibility:visible}',
             '.dshc-pg-count{font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
             '.dshc-pg-heading .dshc-pg-new{margin-left:auto;align-self:center}',
             '.dshc-pg-note{display:flex;align-items:center;gap:8px;margin:-4px 0 12px;padding:5px 5px 5px 12px;border-radius:12px;background:var(--dsw-alias-interactive-bg-hover);font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
@@ -131,7 +139,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // A header's ⋯ takes the count's place while the header is pointed at, focused or its menu is open, as DSH's rows show theirs.
             '.dshc-sb-more{flex:none;display:none;align-items:center;justify-content:center;width:20px;height:20px;margin-right:-2px;padding:0;border:0;border-radius:var(--dsw-radius-sm,4px);background:none;color:var(--dsw-alias-label-secondary);cursor:pointer}',
             '.dshc-sb-more:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
-            '.dshc-sb-head:is(:hover,:focus-visible,[data-categories-menu-open]) .dshc-sb-more{display:inline-flex}',
+            // Shown while it has the keyboard too (DSH's menu hands it back there when it closes), or the focus would drop.
+            '.dshc-sb-head:is(:hover,:focus-visible,:focus-within,[data-categories-menu-open]) .dshc-sb-more{display:inline-flex}',
             '.dshc-sb-head:is(:hover,:focus-visible,[data-categories-menu-open]) .dshc-sb-count{display:none}',
             '@media (prefers-reduced-motion:reduce){.dshc-sb-chev{transition:none}}',
             // Dragging a category or a workspace: what moves is dimmed, the category it goes into is lit, and DSH's line shows where.
@@ -418,7 +427,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             emptyTitle: 'No workspaces yet',
             emptyText: 'Add a workspace in DSH\'s sidebar and it shows up here. Categories group workspaces, and each workspace holds its chats.',
             // New category on the page takes the sidebar's words (SIDEBAR) but this text: workspaces are filed in DSH's sidebar.
-            newText: 'It starts empty and goes last. In DSH\'s sidebar, drag workspaces onto it or add them from its ⋯ menu.',
+            newText: 'It starts empty and goes last. Add workspaces from its ⋯ menu, here or in DSH\'s sidebar, or drag them onto it there.',
             // What a category's row says it is, so it never reads as the workspace it holds.
             category: 'Category',
             cancel: 'Cancel',
@@ -433,6 +442,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             firstAlready: (name) => `${name} is first already.`,
             lastAlready: (name) => `${name} is last already.`,
             othersLast: 'Other workspaces stays last: it holds the workspaces in no category.',
+            // A workspace's ⋯ on the page (DSH's own workspace menu has no seat for the plugin).
+            workspaceActions: (name) => `Workspace actions: ${name}`,
+            moveTo: 'Move to',
+            noCategories: 'No categories yet',
+            newWithIt: 'New category with it…',
             imported: (names) => `Imported from your old sidebar: ${listText(names)}, with ${names.length === 1 ? 'its' : 'their'} workspaces. ${names.length === 1 ? 'Its' : 'Their'} old instructions, files and defaults for new sessions weren't carried over.`,
             dismiss: 'Dismiss',
         };
@@ -656,10 +670,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * Left closes or goes to the parent, Home and End, Enter opens a
          * session or opens and closes a category or a workspace. Alt+↑ and
          * Alt+↓ move a category or a workspace (onMove, pageMove), and the
-         * moved item keeps the focus.
+         * moved item keeps the focus. An item with a menu has ⋯ at the end
+         * of its row, and a right-click, Shift+F10 or the context-menu key
+         * opens it too.
          * @param onMove - (key, by) => null for an item that doesn't move, else {open?: the key of an item to open}.
+         * @param menu - {has(node), draw({node, open, setOpen, reveal(key), keep()})}: which items have a menu, and
+         *   each one's (an element), told how to open an item and to keep the focus on this one while it moves.
          */
-        function PageTree({ tree, label, onOpenSession, onMove, statuses, find = '', treeRef }) {
+        function PageTree({ tree, label, onOpenSession, onMove, menu, statuses, find = '', treeRef }) {
             const [stored, toggleStored] = useStoredSet(CLOSED_KEY);
             // While a find is on, everything it keeps starts open, and what is closed then is forgotten when the
             // find changes (React's way to reset state when a prop changes: set it while drawing).
@@ -688,12 +706,33 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             });
             const at = Math.max(0, shown.findIndex((x) => x.key === current));
             const focusKey = (key) => { keep.current = null; setCurrent(key); refs.current.get(key)?.focus(); };
+            // The item whose menu is open. One opened by Shift+F10 or the context-menu key hands the keyboard to the row's
+            // ⋯ once it shows, as DSH's menu walks its items (↓, ↑, Home, End) from its own button, and gives it back there.
+            const [menuKey, setMenuKey] = React.useState(null);
+            const byKey = React.useRef(false);
+            React.useLayoutEffect(() => {
+                if (menuKey === null || !byKey.current) return;
+                byKey.current = false;
+                refs.current.get(menuKey)?.querySelector(':scope>.dshc-tree-row .dshc-tree-more')?.focus();
+            }, [menuKey]);
             const activate = (x) => {
                 if (x.node.kind === 'category' || x.node.kind === 'workspace') { if (x.node.children.length > 0) toggleClosed(x.key, x.open); }
                 else onOpenSession(x.node.id);
             };
+            // Clicks and keys in a menu (drawn elsewhere in the page) reach the tree through React, not the page.
+            const inside = (event) => !event.target || typeof event.currentTarget?.contains !== 'function' || event.currentTarget.contains(event.target);
             const onKeyDown = (event) => {
+                if (!inside(event)) return;
+                // A row's ⋯ has its own keys while its menu is open, and Enter and Space always; else the tree's keys work from it.
+                const onItem = typeof event.target?.matches !== 'function' || event.target.matches('[role="treeitem"]');
+                if (!onItem && (menuKey !== null || event.key === 'Enter' || event.key === ' ')) return;
                 const x = shown.find((item) => item.key === current) ?? shown[0];
+                if (x && menu?.has(x.node) && !event.altKey && !event.ctrlKey && !event.metaKey && ((event.key === 'F10' && event.shiftKey) || event.key === 'ContextMenu')) {
+                    event.preventDefault();
+                    byKey.current = true;
+                    setMenuKey(x.key);
+                    return;
+                }
                 if (x && event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
                     const done = onMove?.(x.key, event.key === 'ArrowUp' ? -1 : 1) ?? null;
                     if (done === null) return;
@@ -730,14 +769,32 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const Icon = ui[TREE_GLYPHS[node.kind]];
                 const dot = treeDot(node, statuses);
                 const meta = treeMeta(node);
+                const menuOn = menu?.has(node) === true;
+                const keys = [
+                    onMove && (node.kind === 'workspace' || (node.kind === 'category' && node.id !== OTHERS)) ? 'Alt+ArrowUp Alt+ArrowDown' : '',
+                    menuOn ? 'Shift+F10' : '',
+                ].filter(Boolean).join(' ');
                 return h('li', {
                     key: x.key, role: 'treeitem', 'aria-level': x.level, 'aria-setsize': x.size, 'aria-posinset': x.pos,
                     'aria-expanded': node.children.length > 0 ? x.open : undefined, tabIndex: x === shown[at] ? 0 : -1,
-                    'aria-keyshortcuts': onMove && (node.kind === 'workspace' || (node.kind === 'category' && node.id !== OTHERS)) ? 'Alt+ArrowUp Alt+ArrowDown' : undefined,
+                    'aria-keyshortcuts': keys || undefined,
                     className: `dshc-tree-item dshc-tree-${node.kind}`, 'data-categories-node': node.kind, 'data-categories-id': node.id,
                     ref: (el) => { if (el) refs.current.set(x.key, el); else refs.current.delete(x.key); },
                     onFocus: (event) => { if (event.target === event.currentTarget) setCurrent(x.key); },
-                    onClick: (event) => { event.stopPropagation(); setCurrent(x.key); activate(x); },
+                    onClick: (event) => {
+                        if (!inside(event)) return;
+                        event.stopPropagation();
+                        setCurrent(x.key);
+                        activate(x);
+                    },
+                    // A right-click on the row itself (not an item inside it) opens its menu.
+                    onContextMenu: menuOn ? (event) => {
+                        if (!inside(event) || (event.target?.closest && event.target.closest('[role="treeitem"]') !== event.currentTarget)) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setCurrent(x.key);
+                        setMenuKey(x.key);
+                    } : undefined,
                 },
                 h('div', { className: 'dshc-tree-row', style: { paddingInlineStart: `${8 + (x.level - 1) * 20}px` } },
                     // The chevron opens and closes what the item holds.
@@ -748,7 +805,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h('span', { className: 'dshc-tree-glyph', 'aria-hidden': true }, Icon ? h(Icon, { size: 14 }) : null),
                     h('span', { className: 'dshc-tree-title', 'data-categories-title': node.title }, ...(finding ? withHit(node.title, find) : [node.title])),
                     dot ? h('span', { className: 'dshc-tree-dot', role: 'img', 'aria-label': dot.label, title: dot.label }, ui.StateDot ? h(ui.StateDot, { state: dot.dot }) : null) : null,
-                    meta ? h('span', { className: 'dshc-tree-meta' }, meta) : null),
+                    meta ? h('span', { className: 'dshc-tree-meta' }, meta) : null,
+                    menuOn ? menu.draw({
+                        node, open: menuKey === x.key,
+                        setOpen: (on) => { if (on) setCurrent(x.key); setMenuKey(on ? x.key : null); },
+                        reveal: (key) => { if (closed.has(key)) toggleClosed(key, false); },
+                        keep: () => { keep.current = { key: x.key, until: Date.now() + 4000 }; },
+                    }) : null),
                 kids.length > 0 ? h('ul', { role: 'group', className: 'dshc-tree-group' }, ...kids.map(item)) : null);
             };
             return h('ul', { role: 'tree', 'aria-label': label, className: 'dshc-tree', onKeyDown, ref: treeRef }, ...shown.filter((x) => x.level === 1).map(item));
@@ -783,6 +846,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * The page the Categories entry in DSH's sidebar opens: the whole
          * tree, with Find by name and New category. Each row says what it is
          * (treeMeta), so a category never reads as the workspace inside it.
+         * A category's row has the sidebar's ⋯ menu, and a workspace's has
+         * its own (WorkspaceMenu), so everything a drag does in the sidebar
+         * can be done here too.
          */
         function CategoriesPage({ useSessions = noSessions, useSessionStatus = noStatuses, useWorkspaces = noWorkspaces, plugin }) {
             useFacts(plugin.facts);
@@ -795,7 +861,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const archivedIds = useWorkspaces((state) => state.archivedSessionIds);
             // Until DSH's own list has its workspaces, an empty tree means nothing yet.
             const pending = useWorkspaces((state) => state.phase) === 'pending';
-            const [naming, setNaming] = React.useState(false);
+            // The dialog open: {kind: 'new', ws?}, {kind: 'rename', group} or {kind: 'delete', group}.
+            const [dialog, setDialog] = React.useState(null);
             const [said, setSaid] = React.useState('');
             const [find, setFind] = React.useState('');
             const treeRef = React.useRef(null);
@@ -819,6 +886,60 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }
                 void plugin.facts.act(step.method, step.args).then((result) => announce(result.ok ? step.said : errorText(result.error)));
                 return { open: step.open };
+            };
+            // The menus: each category with the workspaces it holds, every workspace with its category (or none).
+            const groups = tree.map((c) => ({ id: c.id, name: c.title, category: c.id !== OTHERS, workspaces: c.children.map((w) => w.id) }));
+            const real = groups.filter((g) => g.category);
+            const where = new Map();
+            for (const g of real) for (const id of g.workspaces) where.set(id, g);
+            const workspaces = tree.flatMap((c) => c.children).map((w) => ({ id: w.id, title: w.title, group: where.get(w.id) ?? null }));
+            const titleOf = (id) => workspaces.find((w) => w.id === id)?.title ?? id;
+            const nameOf = (id) => (id === '' || id === OTHERS ? SIDEBAR.others : groups.find((g) => g.id === id)?.name ?? id);
+            const act = (method, args, success, then) => plugin.facts.act(method, args).then((result) => {
+                announce(result.ok ? success : errorText(result.error));
+                if (result.ok) then?.();
+                return result;
+            });
+            const file = (workspace, category, reveal) => act('fileWorkspace', { workspace, category, before: '' }, SIDEBAR.filed(titleOf(workspace), nameOf(category)),
+                () => reveal(`category:${category === '' ? OTHERS : category}`));
+            const menu = {
+                has: (node) => node.kind === 'workspace' || (node.kind === 'category' && groups.some((g) => g.id === node.id)),
+                draw: ({ node, open, setOpen, reveal, keep }) => {
+                    if (node.kind === 'category') {
+                        const group = groups.find((g) => g.id === node.id);
+                        const at = real.indexOf(group);
+                        return h(CategoryMenu, {
+                            page: true, group, open, setOpen, workspaces, first: at === 0, last: at === real.length - 1,
+                            actions: {
+                                move: (g, by) => { keep(); move(`category:${g.id}`, by); },
+                                rename: (g) => setDialog({ kind: 'rename', group: g }),
+                                remove: (g) => setDialog({ kind: 'delete', group: g }),
+                                create: () => setDialog({ kind: 'new' }),
+                                // DSH's own Add workspace, as from the sidebar; what it makes goes into this category.
+                                newWorkspace: (g) => {
+                                    plugin.addWorkspace?.start((ws) => {
+                                        const title = workspaceTitle(ws);
+                                        if (g.category) void act('fileWorkspace', { workspace: ws.workspaceId, category: g.id, before: '' }, SIDEBAR.added(title, g.name), () => reveal(`category:${g.id}`));
+                                        else { announce(SIDEBAR.added(title, SIDEBAR.others)); void plugin.facts.list(); }
+                                    });
+                                },
+                                adding: () => plugin.addWorkspace?.state() ?? null,
+                                file: (id, g) => file(id, g.id, reveal),
+                            },
+                        });
+                    }
+                    const group = where.get(node.id) ?? null;
+                    const list = (group ?? groups.find((g) => g.id === OTHERS))?.workspaces ?? EMPTY;
+                    const at = list.indexOf(node.id);
+                    return h(WorkspaceMenu, {
+                        ws: { id: node.id, title: node.title }, group, categories: real, first: at <= 0, last: at === list.length - 1, open, setOpen,
+                        actions: {
+                            step: (by) => { keep(); move(`workspace:${node.id}`, by); },
+                            fileTo: (category) => { keep(); void file(node.id, category, reveal); },
+                            create: () => setDialog({ kind: 'new', ws: node.id }),
+                        },
+                    });
+                },
             };
             let content;
             if (listed === null && failed) {
@@ -849,21 +970,44 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         type: 'button', className: 'dshc-pg-find-clear', 'aria-label': PAGE.findClear, 'data-categories-find-clear': '',
                         onClick: () => { setFind(''); findRef.current?.focus(); },
                     }, h(ui.IconCloseFillRegular, null)) : null),
-                    kept.length > 0 ? h(PageTree, { tree: kept, label: PAGE.title, statuses, find, treeRef, onMove: move, onOpenSession: (id) => plugin.openSession(id) })
+                    kept.length > 0 ? h(PageTree, { tree: kept, label: PAGE.title, statuses, find, treeRef, onMove: move, menu, onOpenSession: (id) => plugin.openSession(id) })
                         : h('div', { className: 'dshc-pg-state dshc-pg-find-none', role: 'status', 'data-categories-find-none': '' }, PAGE.findNone(find.trim())));
             }
-            // New category, as the sidebar makes one: a refusal shows under the name, and the new category is said.
-            const overlay = naming ? h(NameDialog, {
-                title: SIDEBAR.newTitle, description: PAGE.newText, label: SIDEBAR.nameLabel, action: SIDEBAR.create, busyLabel: SIDEBAR.creating,
-                onClose: () => setNaming(false),
-                onSubmit: async (name) => {
-                    const result = await plugin.facts.act('createCategory', { name, workspace: '' });
-                    if (!result.ok) return errorText(result.error);
-                    announce(SIDEBAR.created(name));
-                    setNaming(false);
-                    return null;
-                },
-            }) : null;
+            // New category, Rename and Delete, as the sidebar asks: a refusal shows in the dialog, and what was done is said.
+            let overlay = null;
+            if (dialog?.kind === 'delete') {
+                overlay = h(ConfirmDialog, {
+                    title: SIDEBAR.deleteTitle, text: SIDEBAR.deleteText(dialog.group.name, dialog.group.workspaces.length), action: SIDEBAR.deleteTitle, busyLabel: SIDEBAR.deleting,
+                    onClose: () => setDialog(null),
+                    onSubmit: async () => {
+                        const result = await plugin.facts.act('removeCategory', { category: dialog.group.id });
+                        if (!result.ok) return errorText(result.error);
+                        announce(SIDEBAR.deleted(dialog.group.name));
+                        setDialog(null);
+                        return null;
+                    },
+                });
+            } else if (dialog) {
+                const naming = dialog.kind === 'new';
+                overlay = h(NameDialog, {
+                    title: naming ? SIDEBAR.newTitle : SIDEBAR.renameTitle,
+                    description: naming ? (dialog.ws ? SIDEBAR.newWith(titleOf(dialog.ws)) : PAGE.newText) : undefined,
+                    label: SIDEBAR.nameLabel,
+                    initial: naming ? '' : dialog.group.name,
+                    action: naming ? SIDEBAR.create : SIDEBAR.renameAction,
+                    busyLabel: naming ? SIDEBAR.creating : SIDEBAR.renaming,
+                    onClose: () => setDialog(null),
+                    onSubmit: async (name) => {
+                        const result = naming
+                            ? await plugin.facts.act('createCategory', { name, workspace: dialog.ws ?? '' })
+                            : await plugin.facts.act('renameCategory', { category: dialog.group.id, name });
+                        if (!result.ok) return errorText(result.error);
+                        announce(naming ? SIDEBAR.created(name) : SIDEBAR.renamed(name));
+                        setDialog(null);
+                        return null;
+                    },
+                });
+            }
             return h('div', { className: 'dshc-pg', 'data-categories-page': '' },
                 h('div', { className: 'dshc-pg-scroll' },
                     h('div', { className: 'dshc-pg-content' },
@@ -872,7 +1016,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             count > 0 ? h('span', { className: 'dshc-pg-count' }, plural(count, 'category', 'categories')) : null,
                             listed !== null ? h(ui.Button, {
                                 variant: 'outline', size: 'sm', className: 'dshc-pg-new', icon: h(ui.IconPlusOutlineRegular, { size: 14 }),
-                                onClick: () => setNaming(true), 'data-categories-new': '',
+                                onClick: () => setDialog({ kind: 'new' }), 'data-categories-new': '',
                             }, SIDEBAR.newTitle) : null),
                         // What came from the old sidebar, and what didn't, said once, until dismissed.
                         imported.length > 0 && !notes.has('imported') ? h('div', { className: 'dshc-pg-note', 'data-categories-imported': '' },
@@ -1438,9 +1582,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * first), New workspace (DSH's own Add workspace, filed there), Move
          * up and down, Rename, New category and Delete. Other workspaces' (no
          * category): New workspace and New category. A right-click, Shift+F10
-         * or the context-menu key opens it from the header too.
+         * or the context-menu key opens it from the header too. On the
+         * Categories page (`page`), the same menu at the end of the row.
          */
-        function CategoryMenu({ group, first, last, open, setOpen, workspaces, actions }) {
+        function CategoryMenu({ group, first, last, open, setOpen, workspaces, actions, page = false }) {
             // DSH's own Add workspace, where this DSH has it; greyed while it runs.
             const adding = actions.adding?.() ?? null;
             const made = adding === null ? EMPTY : [{ id: 'newWorkspace', label: SIDEBAR.newWorkspace, icon: h(ui.IconFolderOpenOutlineRegular, {}), disabled: adding.busy }];
@@ -1466,7 +1611,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 { id: 'delete', label: SIDEBAR.remove, icon: h(ui.IconTrashOutlineRegular, {}), danger: true },
             ];
             return h(ui.Menu, {
-                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end',
+                // autoFocus: its first item takes the keyboard, so a menu opened by Shift+F10 can be walked with the arrows.
+                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end', autoFocus: true,
                 onSelect: (id) => {
                     setOpen(false);
                     if (id === 'up') actions.move(group, -1);
@@ -1478,10 +1624,54 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     else if (id.startsWith('w:')) void actions.file(id.slice(2), group, null);
                 },
                 anchor: h('button', {
-                    type: 'button', className: 'dshc-sb-more', tabIndex: -1, 'aria-label': group.category ? SIDEBAR.actions(group.name) : SIDEBAR.othersActions,
+                    type: 'button', className: page ? 'dshc-tree-more' : 'dshc-sb-more', tabIndex: -1, 'aria-label': group.category ? SIDEBAR.actions(group.name) : SIDEBAR.othersActions,
                     'aria-haspopup': 'menu', 'aria-expanded': open,
-                    'data-categories-menu': group.category ? group.id : undefined,
-                    'data-categories-others-menu': group.category ? undefined : '',
+                    ...(page ? { 'data-categories-page-menu': group.id } : {
+                        'data-categories-menu': group.category ? group.id : undefined,
+                        'data-categories-others-menu': group.category ? undefined : '',
+                    }),
+                    onClick: (event) => {
+                        event.stopPropagation();
+                        setOpen(!open);
+                    },
+                }, h(ui.IconEllipsisOutlineRegular, { size: 14 })),
+            });
+        }
+
+        /**
+         * ⋯ on a workspace's row on the Categories page, as DSH's own
+         * workspace menu has no seat for the plugin: Move to another category
+         * or to Other workspaces, New category with it, and Move up and Move
+         * down in its category. A right-click, Shift+F10 or the context-menu
+         * key on the row opens it too.
+         * @param group - the category it is in, or null for none.
+         * @param categories - every category, in order.
+         */
+        function WorkspaceMenu({ ws, group, categories, first, last, open, setOpen, actions }) {
+            const folder = h(ui.IconFolderCloseRegular, {});
+            const to = [
+                ...categories.filter((c) => c.id !== group?.id).map((c) => ({ id: `c:${c.id}`, label: c.name, icon: folder })),
+                ...(group ? [{ id: 'c:', label: SIDEBAR.others, icon: folder }] : []),
+            ];
+            const items = [
+                { id: 'to', label: PAGE.moveTo, icon: h(ui.IconFolderOpenOutlineRegular, {}), submenu: to.length > 0 ? to : [{ id: 'none', label: PAGE.noCategories, disabled: true }] },
+                { id: 'new', label: PAGE.newWithIt, icon: h(ui.IconProjectAddOutlineRegular, {}) },
+                { type: 'separator', id: 's1' },
+                { id: 'up', label: SIDEBAR.moveUp, icon: h(ui.IconChevronUpOutlineRegular, {}), disabled: first },
+                { id: 'down', label: SIDEBAR.moveDown, icon: h(ui.IconChevronDownOutlineRegular, {}), disabled: last },
+            ];
+            return h(ui.Menu, {
+                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end', autoFocus: true,
+                onSelect: (id) => {
+                    setOpen(false);
+                    if (id === 'up') actions.step(-1);
+                    else if (id === 'down') actions.step(1);
+                    else if (id === 'new') actions.create();
+                    else if (id.startsWith('c:')) actions.fileTo(id.slice(2));
+                },
+                anchor: h('button', {
+                    type: 'button', className: 'dshc-tree-more', tabIndex: -1, 'aria-label': PAGE.workspaceActions(ws.title),
+                    'aria-haspopup': 'menu', 'aria-expanded': open, 'data-categories-page-menu': ws.id,
                     onClick: (event) => {
                         event.stopPropagation();
                         setOpen(!open);
@@ -1500,8 +1690,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          */
         function CategoryHeader({ group, index, count, folded, dot, onToggle, onMove, menu }) {
             // Clicks and keys from the menu (drawn elsewhere in the page) reach here through React, not the page.
-            const own = (event) => event.currentTarget.contains(event.target);
+            const own = (event) => typeof event.currentTarget?.contains !== 'function' || event.currentTarget.contains(event.target);
             const [open, setOpen] = React.useState(false);
+            // Opened by its keys, the menu gets the keyboard on the header's ⋯ once it shows (see PageTree).
+            const head = React.useRef(null);
+            const byKey = React.useRef(false);
+            React.useLayoutEffect(() => {
+                if (!open || !byKey.current) return;
+                byKey.current = false;
+                head.current?.querySelector('.dshc-sb-more')?.focus();
+            }, [open]);
             const n = group.workspaces.length;
             const status = dot === 'warning' ? ', a chat is waiting on you' : dot === 'ongoing' ? ', running' : '';
             const step = (event, by) => {
@@ -1509,7 +1707,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 heads[heads.indexOf(event.currentTarget) + by]?.focus();
             };
             return h('div', {
-                role: 'treeitem', tabIndex: 0, 'aria-level': 1, 'aria-expanded': !folded,
+                ref: head, role: 'treeitem', tabIndex: 0, 'aria-level': 1, 'aria-expanded': !folded,
                 'aria-label': `${group.name}, ${plural(n, 'workspace')}${status}`,
                 'aria-keyshortcuts': group.category ? 'Alt+ArrowUp Alt+ArrowDown Shift+F10' : 'Shift+F10',
                 className: 'dshc-sb-head', 'data-categories-sb': group.id,
@@ -1525,10 +1723,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     setOpen(true);
                 },
                 onKeyDown: (event) => {
-                    if (event.target !== event.currentTarget) return;
+                    // The header's own keys; from its ⋯ too once its menu is closed (DSH's menu hands the keyboard back
+                    // there), except Enter and Space, the button's own.
+                    const more = !open && event.target !== event.currentTarget && own(event) && event.target.closest?.('.dshc-sb-more') != null;
+                    if (event.target !== event.currentTarget && !more) return;
+                    if (more && (event.key === 'Enter' || event.key === ' ')) return;
                     if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
                         if (group.category) onMove(event.key === 'ArrowUp' ? -1 : 1);
-                    } else if ((event.key === 'F10' && event.shiftKey) || event.key === 'ContextMenu') setOpen(true);
+                    } else if ((event.key === 'F10' && event.shiftKey) || event.key === 'ContextMenu') {
+                        byKey.current = true;
+                        setOpen(true);
+                    }
                     else if (event.key === 'Enter' || event.key === ' ') onToggle();
                     else if (event.key === 'ArrowRight') onToggle(true);
                     else if (event.key === 'ArrowLeft') onToggle(false);
@@ -1832,7 +2037,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.internals = {
             BUNDLE, IDS, OTHERS, CSS, TEXT, PAGE, SIDEBAR, CHIP,
             hostLink, errorText, categoryFacts, listText, plural, shortPath, folderName, workspaceTitle, workspaceOfSession, sameList, chatDot,
-            pageModel, visibleItems, pageMove, treeMeta, treeDot, findInTree, withHit, PageTree, CategoriesPage, CategoriesIcon, NameDialog, ConfirmDialog,
+            pageModel, visibleItems, pageMove, treeMeta, treeDot, findInTree, withHit, PageTree, WorkspaceMenu, CategoriesPage, CategoriesIcon, NameDialog, ConfirmDialog,
             sidebarGroups, sidebarRules, groupDot, sectionWorkspace, sectionAt, placeHeaders, describeWorkspaces, useTreeSync, useCategoryDrags,
             dshAddFlow, workspaceAdder, CategoryMenu, CategoryHeader, SidebarTree,
             chipLine, categoryHolding, pageOpener, CategoryChip, windowApi,

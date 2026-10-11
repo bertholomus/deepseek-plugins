@@ -453,7 +453,7 @@ test('browser half: the Categories page is headed Categories, each row says what
     page = draw();
     const dialog = elementsOf(page).find((e) => typeof e.props?.onSubmit === 'function');
     assert.deepEqual([dialog.props.title, dialog.props.label, dialog.props.action], ['New category', 'Category name', 'Create']);
-    assert.match(dialog.props.description, /In DSH's sidebar, drag workspaces onto it/);
+    assert.match(dialog.props.description, /Add workspaces from its ⋯ menu, here or in DSH's sidebar/);
     answer = { ok: false, error: { code: 'categories/refused', message: 'a category needs a name' } };
     assert.equal(await dialog.props.onSubmit('Work'), 'A category needs a name.');
     assert.ok(elementsOf(draw()).some((e) => typeof e.props?.onSubmit === 'function'));
@@ -741,6 +741,159 @@ test('browser half: Alt+↑ and Alt+↓ on the Categories page move a category o
     elementsOf(drawRefused()).find((e) => e.type === PageTree).props.onMove('workspace:w1', 1);
     await tick();
     assert.match(textIn(byHook(drawRefused(), 'data-categories-page-said')), /no such workspace/i);
+});
+
+test('browser half: on the Categories page a category\'s row has the sidebar\'s ⋯ menu and a workspace\'s has its own', async () => {
+    const storage = new Map();
+    const { client, react } = loadClient({ storage });
+    const { PageTree, CategoriesPage, CategoryMenu, WorkspaceMenu, OTHERS } = client.internals;
+    const sessions = { byId: { a: { id: 'a', title: 'Fix cart' } } };
+    const items = [
+        { workspaceId: 'w1', title: 'storefront', path: '/w/1', sessionIds: ['a'] }, { workspaceId: 'w2', title: 'assets', path: '/w/2', sessionIds: [] },
+        { workspaceId: 'w3', title: 'fleet', path: '/w/3', sessionIds: [] }, { workspaceId: 'w4', title: 'notes', path: '/w/4', sessionIds: [] },
+    ];
+    const categories = [{ id: 'shop', name: 'Shop', workspaces: [{ id: 'w1' }, { id: 'w2' }] }, { id: 'ops', name: 'Ops', workspaces: [{ id: 'w3' }] }];
+    let answer = { ok: true, value: {} };
+    const facts = factsOf(() => categories, { answer: () => answer });
+    const started = [];
+    const addWorkspace = { state: () => ({ busy: false }), start: (made) => { started.push(made); return true; } };
+    const props = {
+        useSessions: (select) => select(sessions), useSessionStatus: (select) => select(new Map()), useWorkspaces: (select) => select(workspacesOf(items)),
+        plugin: { facts, openSession: () => {}, addWorkspace },
+    };
+    const drawPage = mount(react, () => CategoriesPage(props));
+    const said = () => textIn(byHook(drawPage(), 'data-categories-page-said'));
+    const treeProps = () => elementsOf(drawPage()).find((e) => e.type === PageTree).props;
+    const { menu } = treeProps();
+    // Categories, Other workspaces and workspaces have a menu; a session has DSH's own.
+    assert.deepEqual(plain([['category', 'shop'], ['category', OTHERS], ['workspace', 'w4'], ['session', 'a']].map(([kind, id]) => menu.has({ kind, id }))), [true, true, true, false]);
+    const reveals = [];
+    let keeps = 0;
+    const open = (kind, id, title) => menu.draw({ node: { kind, id, title, children: [] }, open: true, setOpen: () => {}, reveal: (key) => reveals.push(key), keep: () => { keeps += 1; } });
+    // A category's: the sidebar's own menu, at the end of its row on the page.
+    const shopEl = open('category', 'shop', 'Shop');
+    assert.equal(shopEl.type, CategoryMenu);
+    assert.deepEqual(plain([shopEl.props.page, shopEl.props.first, shopEl.props.last]), [true, true, false]);
+    const shop = CategoryMenu(shopEl.props);
+    assert.deepEqual(plain([shop.props.anchor.props.className, shop.props.anchor.props['data-categories-page-menu'], shop.props.anchor.props['data-categories-menu'], shop.props.anchor.props['aria-label']]),
+        ['dshc-tree-more', 'shop', null, 'Category actions: Shop']);
+    assert.deepEqual(plain(shop.props.items.map((i) => i.id ?? i.type)), ['add', 'newWorkspace', 's1', 'up', 'down', 's2', 'rename', 'new', 'delete']);
+    assert.deepEqual(plain(shop.props.items.find((i) => i.id === 'add').submenu.map((i) => i.id ?? i.text)), ['free', 'w:w4', 'taken', 'w:w3']);
+    assert.deepEqual(plain(shop.props.items.filter((i) => i.disabled).map((i) => i.id)), ['up']);
+    // Move down: said once done, and the category keeps the focus.
+    shop.props.onSelect('down');
+    await tick();
+    assert.deepEqual(plain(facts.calls.at(-1)), ['moveCategory', { category: 'shop', before: '' }]);
+    assert.equal(said(), 'Shop moved down.');
+    assert.equal(keeps, 1);
+    // Add a workspace files it last there, said; the category opens.
+    shop.props.onSelect('w:w4');
+    await tick();
+    assert.deepEqual(plain(facts.calls.at(-1)), ['fileWorkspace', { workspace: 'w4', category: 'shop', before: '' }]);
+    assert.equal(said(), 'notes moved to Shop.');
+    assert.deepEqual(reveals, ['category:shop']);
+    // New workspace… runs DSH's own Add workspace and files what it makes.
+    shop.props.onSelect('newWorkspace');
+    assert.equal(started.length, 1);
+    started[0]({ workspaceId: 'w5', title: 'fresh' });
+    await tick();
+    assert.deepEqual(plain(facts.calls.at(-1)), ['fileWorkspace', { workspace: 'w5', category: 'shop', before: '' }]);
+    assert.equal(said(), 'fresh added to Shop.');
+    // Rename and Delete ask first, in the sidebar's dialogs.
+    shop.props.onSelect('rename');
+    let dialog = elementsOf(drawPage()).find((e) => typeof e.props?.onSubmit === 'function');
+    assert.deepEqual(plain([dialog.props.title, dialog.props.initial]), ['Rename category', 'Shop']);
+    assert.equal(await dialog.props.onSubmit('Store'), null);
+    assert.deepEqual(plain(facts.calls.at(-1)), ['renameCategory', { category: 'shop', name: 'Store' }]);
+    assert.equal(said(), 'Renamed to Store.');
+    shop.props.onSelect('delete');
+    dialog = elementsOf(drawPage()).find((e) => typeof e.props?.onSubmit === 'function');
+    assert.match(dialog.props.text, /This deletes “Shop”\. Its 2 workspaces move to Other workspaces\./);
+    answer = { ok: false, error: { code: 'categories/refused', message: 'no such category' } };
+    assert.equal(await dialog.props.onSubmit(), 'No such category.');
+    answer = { ok: true, value: {} };
+    assert.equal(await dialog.props.onSubmit(), null);
+    assert.deepEqual(plain(facts.calls.at(-1)), ['removeCategory', { category: 'shop' }]);
+    assert.equal(said(), 'Shop deleted.');
+    // Other workspaces': New workspace… and New category….
+    const others = CategoryMenu(open('category', OTHERS, 'Other workspaces').props);
+    assert.deepEqual(plain([others.props.items.map((i) => i.id), others.props.anchor.props['data-categories-page-menu']]), [['newWorkspace', 'new'], OTHERS]);
+
+    // A workspace's: Move to another category or none, New category with it, Move up and down in its category.
+    const assetsEl = open('workspace', 'w2', 'assets');
+    assert.equal(assetsEl.type, WorkspaceMenu);
+    const assets = WorkspaceMenu(assetsEl.props);
+    assert.deepEqual(plain([assets.props.anchor.props.className, assets.props.anchor.props['data-categories-page-menu'], assets.props.anchor.props['aria-label']]),
+        ['dshc-tree-more', 'w2', 'Workspace actions: assets']);
+    assert.deepEqual(plain(assets.props.items.map((i) => [i.id ?? i.type, i.label ?? null, i.disabled === true])), [
+        ['to', 'Move to', false], ['new', 'New category with it…', false], ['s1', null, false], ['up', 'Move up', false], ['down', 'Move down', true],
+    ]);
+    assert.deepEqual(plain(assets.props.items[0].submenu.map((i) => [i.id, i.label])), [['c:ops', 'Ops'], ['c:', 'Other workspaces']]);
+    assets.props.onSelect('c:ops');
+    await tick();
+    assert.deepEqual(plain(facts.calls.at(-1)), ['fileWorkspace', { workspace: 'w2', category: 'ops', before: '' }]);
+    assert.equal(said(), 'assets moved to Ops.');
+    assets.props.onSelect('c:');
+    await tick();
+    assert.deepEqual(plain(facts.calls.at(-1)), ['fileWorkspace', { workspace: 'w2', category: '', before: '' }]);
+    assert.equal(said(), 'assets moved to Other workspaces.');
+    assert.deepEqual(reveals.slice(-2), ['category:ops', `category:${OTHERS}`]);
+    assets.props.onSelect('up');
+    await tick();
+    assert.deepEqual(plain(facts.calls.at(-1)), ['fileWorkspace', { workspace: 'w2', category: 'shop', before: 'w1' }]);
+    assets.props.onSelect('new');
+    dialog = elementsOf(drawPage()).find((e) => typeof e.props?.onSubmit === 'function');
+    assert.deepEqual(plain([dialog.props.title, dialog.props.description]), ['New category', 'assets moves into it.']);
+    assert.equal(await dialog.props.onSubmit('Media'), null);
+    assert.deepEqual(plain(facts.calls.at(-1)), ['createCategory', { name: 'Media', workspace: 'w2' }]);
+    // In none, with no categories: nowhere to move it yet.
+    const loose = WorkspaceMenu({ ...open('workspace', 'w4', 'notes').props, group: null, categories: [] });
+    assert.deepEqual(plain(loose.props.items[0].submenu), [{ id: 'none', label: 'No categories yet', disabled: true }]);
+
+    // The tree: ⋯ at the end of each row that has a menu; Shift+F10, the context-menu key or a right-click opens it.
+    const drawTree = mount(react, () => PageTree(treeProps()), { effects: true });
+    const lis = (t) => elementsOf(t).filter((e) => e.props?.role === 'treeitem');
+    const li = (t, id) => lis(t).find((e) => e.props['data-categories-id'] === id);
+    const opened = (t) => lis(t).filter((e) => elementsOf(e.children[0]).some((m) => m.props?.open === true)).map((e) => e.props['data-categories-id']);
+    let t = drawTree();
+    assert.deepEqual(plain(lis(t).map((e) => [e.props['data-categories-id'], e.props['aria-keyshortcuts'] ?? null, elementsOf(e.children[0]).some((m) => m.type === CategoryMenu || m.type === WorkspaceMenu)])), [
+        ['shop', 'Alt+ArrowUp Alt+ArrowDown Shift+F10', true], ['w1', 'Alt+ArrowUp Alt+ArrowDown Shift+F10', true], ['a', null, false],
+        ['w2', 'Alt+ArrowUp Alt+ArrowDown Shift+F10', true], ['ops', 'Alt+ArrowUp Alt+ArrowDown Shift+F10', true], ['w3', 'Alt+ArrowUp Alt+ArrowDown Shift+F10', true],
+        [OTHERS, 'Shift+F10', true], ['w4', 'Alt+ArrowUp Alt+ArrowDown Shift+F10', true],
+    ]);
+    const keyOn = (id, key, extra = {}) => {
+        li(t, id).props.onFocus({ target: 1, currentTarget: 1 });
+        t = drawTree();
+        let prevented = 0;
+        elementsOf(t).find((e) => e.props?.role === 'tree').props.onKeyDown({ key, preventDefault: () => { prevented += 1; }, ...extra });
+        t = drawTree();
+        return prevented;
+    };
+    assert.equal(keyOn('ops', 'F10', { shiftKey: true }), 1);
+    assert.deepEqual(opened(t), ['ops']);
+    elementsOf(li(t, 'ops').children[0]).find((m) => m.type === CategoryMenu).props.setOpen(false);
+    t = drawTree();
+    assert.deepEqual(opened(t), []);
+    assert.equal(keyOn('w4', 'ContextMenu'), 1);
+    assert.deepEqual(opened(t), ['w4']);
+    assert.equal(keyOn('a', 'ContextMenu'), 0, 'a session has no menu here');
+    // A right-click on a workspace's row opens its menu; on a session inside it, nothing (the browser's own).
+    let stopped = 0;
+    const row = { closest: () => null };
+    const right = (id, target) => li(drawTree(), id).props.onContextMenu?.({ target, currentTarget: { contains: () => true }, preventDefault: () => { stopped += 1; }, stopPropagation: () => {} });
+    const w1 = li(t, 'w1');
+    row.closest = () => w1;
+    w1.props.onContextMenu({ target: row, currentTarget: w1, preventDefault: () => { stopped += 1; }, stopPropagation: () => {} });
+    t = drawTree();
+    assert.deepEqual([opened(t), stopped], [['w1'], 1]);
+    assert.equal(right('a', row), undefined, 'no handler on a session');
+    // Keys and clicks from an open menu (drawn elsewhere) don't move or open anything in the tree.
+    const outside = { currentTarget: { contains: () => false }, target: {} };
+    let moved = 0;
+    elementsOf(t).find((e) => e.props?.role === 'tree').props.onKeyDown({ key: 'ArrowDown', preventDefault: () => { moved += 1; }, ...outside });
+    li(t, 'w1').props.onClick({ stopPropagation: () => { moved += 1; }, ...outside });
+    assert.equal(moved, 0);
+    assert.equal(li(drawTree(), 'w1').props['aria-expanded'], true);
 });
 
 test('browser half: Find by name on the Categories page keeps each match where it lives, and its folds are its own', () => {
@@ -1045,6 +1198,26 @@ test('browser half: with no categories, Other workspaces heads DSH\'s list, and 
     assert.equal(prevented, 2);
     await tick();
     assert.deepEqual(calls, []);
+    // From its ⋯, where DSH's menu gives the keyboard back when it closes: the header's keys while the menu is
+    // closed, but for Enter and Space (the button's own); none while it is open, as the menu walks its items.
+    const more = { closest: (sel) => (sel === '.dshc-sb-more' ? more : null) };
+    const fromMore = (name, extra = {}) => ({ key: name, target: more, currentTarget: { contains: () => true }, preventDefault() { prevented += 1; }, stopPropagation() {}, ...extra });
+    others.menu().props.onClose();
+    head = others.again();
+    prevented = 0;
+    head.props.onKeyDown(fromMore('Enter'));
+    head.props.onKeyDown(fromMore(' '));
+    assert.equal(prevented, 0);
+    head.props.onKeyDown(fromMore('ArrowDown', { altKey: true }));
+    assert.equal(prevented, 1);
+    head.props.onKeyDown(fromMore('F10', { shiftKey: true }));
+    assert.equal(others.menu().props.open, true);
+    head = others.again();
+    head.props.onKeyDown(fromMore('ArrowDown'));
+    assert.equal(prevented, 2, 'the open menu walks its own items');
+    // A key from somewhere else inside the header (not its ⋯) is not the header's.
+    head.props.onKeyDown({ key: 'ArrowDown', target: { closest: () => null }, currentTarget: { contains: () => true }, preventDefault() { prevented += 1; } });
+    assert.equal(prevented, 2);
 
     // New workspace… (DSH's own Add workspace) and New category…; no Add a workspace, Move, Rename or Delete.
     menu = others.menu();
