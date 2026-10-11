@@ -765,6 +765,49 @@ try {
     lc = await changesOf(web);
     check('changes add up over the thread\'s turns, and Review opens the newest', lc?.added === 4 && lc.deleted === 1 && lc.files === 1 && lc.turns === 2
         && lc.reviewable === true && lc.last.seq > firstSeq && lc.last.seq === project().threads[lambdaId].changes[1].seq, JSON.stringify(lc));
+    // 22b. Two threads of the project in one folder (the changes study's P1): A only waits while B
+    // edits, so DSH's summary of each of A's turns lists B's edits. The plugin counts each thread's
+    // own: A changed nothing, B the file it wrote (its shell edit isn't counted until shell edits are).
+    const quietThread = async (title) => {
+        const at = model.requests.length;
+        await say(coord, call('project_thread_start', { ask: 'Please do this.', title, brief: 'Wait for the next message.' }));
+        await coordinatorSaw(at, 'SAW-IDLE', `the ${title} idle note`);
+        return Object.entries(project().threads ?? {}).find(([, t]) => t.title === title)?.[0];
+    };
+    const waitsId = await quietThread('Waits');
+    const writesId = await quietThread('Writes');
+    const sessionA = threadSession(waitsId);
+    const sessionB = threadSession(writesId);
+    const wait6 = call('bash', { command: 'sleep 6; echo A-done', description: 'wait' });
+    const overlap = async (aText, bText) => {
+        const at = model.requests.length;
+        await bridge('POST', `/sessions/${sessionA}/prompt`, { text: aText });
+        await waitFor(() => since(at).some((r) => r.fresh.includes(aText)), 'A to start waiting');
+        await say(sessionB, bText);
+        await waitIdle(sessionA);
+    };
+    await overlap(wait6, call('write', { file_path: join(ws, 'b-new.txt'), content: 'from B\n' }));
+    await overlap(wait6, call('bash', { command: "printf 'from B shell\\n' >> README.md", description: 'append' }));
+    const marksOf = async (sessionId) => {
+        const got = await webApi(web, 'session/projections', { request: { sessionId } });
+        const value = got.ok ? got.value?.values?.projectSession : undefined;
+        return (value?.role ? value : value?.v)?.changes ?? [];
+    };
+    const filesIn = async (sessionId, seq) => {
+        const res = await httpGet(new URL(`api/changes.summary?${new URLSearchParams({ sessionId, seq: String(seq) })}`, web.base).href, { cookie: web.cookie });
+        try { return (JSON.parse(res.text)?.files ?? []).map((f) => f.display ?? f.path); } catch { return []; }
+    };
+    const dshForA = async () => (await Promise.all((await marksOf(sessionA)).map((m) => filesIn(sessionA, m.seq)))).flat();
+    const seenByDsh = await waitFor(async () => { const files = await dshForA(); return files.some((f) => f.endsWith('b-new.txt')) ? files : null; }, 'DSH announcing A\'s turn with B\'s file', 20000).catch(() => null);
+    check('DSH credits a thread that only waited with what another thread changed in its folder', seenByDsh !== null, JSON.stringify(await dshForA()));
+    await waitFor(() => (project().threads?.[writesId]?.changes?.length === 1 ? true : null), 'B\'s write in the store', 15000).catch(() => false);
+    const readThreads = await webApi(web, 'dsh-plugin-projects/describe', { target: coord });
+    const changesFor = (id) => (readThreads.ok ? readThreads.value.threads.find((t) => t.id === id)?.changes : undefined);
+    const filesOfB = (project().threads?.[writesId]?.changes ?? []).flatMap((r) => r.files.map((f) => f.path));
+    check('each thread counts only its own edits: none for the one that waited, its file for the one that wrote', changesFor(waitsId) === null
+        && (project().threads?.[waitsId]?.changes ?? []).length === 0 && changesFor(writesId)?.files === 1 && changesFor(writesId).added === 1 && changesFor(writesId).deleted === 0
+        && filesOfB.join() === 'b-new.txt', `A ${JSON.stringify(changesFor(waitsId))} B ${JSON.stringify(changesFor(writesId))} ${filesOfB.join()}`);
+
     // DSH restarts: the totals stay with the plugin, and Review is no longer offered.
     const lastSeq = lc?.last.seq;
     const signIns = () => [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].length;

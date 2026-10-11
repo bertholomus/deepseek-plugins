@@ -143,6 +143,10 @@ export function apply(ctx, config) {
     ctx.on('agent/status', ({ agent, status }) => {
         manager.onAgentStatus(agent, status);
     });
+    // Every session's events, as DSH's own change recorder hears them: a subagent's file edit counts for its thread.
+    ctx.on('session/event', (session, event) => {
+        manager.onSessionEvent(session, event);
+    });
     // The defaults form saved: only the live fields changed, so the plugin keeps running.
     ctx.on('loader/volatile-update', () => {
         void manager.onDefaultsChanged();

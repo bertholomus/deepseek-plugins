@@ -1468,7 +1468,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             suggestCopied: 'Copied. Paste it in the message box below.',
             reviewChanges: 'Review changes',
             reviewLatest: 'Review the latest changes',
-            diffGone: 'DSH no longer has this diff. It keeps diffs until it restarts.',
+            diffGone: 'DSH has no diff of this to show. It keeps diffs only until it restarts.',
             retryThread: 'Retry',
             resumeThread: 'Resume',
             retrying: 'Retrying…',
@@ -2643,10 +2643,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * Each thread's code changes, by thread id, as the plugin keeps them
-         * from DSH's per-turn summaries (describe's `threads[].changes`). A
-         * thread's own projection marks each turn that changes files, and the
-         * project is read again then, so a card updates as the turn ends.
+         * Each thread's code changes, by thread id, as the plugin counts them
+         * from the thread's own edits (describe's `threads[].changes`). A
+         * thread's own projection marks each turn DSH announces changes for,
+         * and the project is read again then, so a card updates as the turn
+         * ends.
          * @param {string[]} sessions - the shown threads' sessions.
          */
         function useThreadChanges(projects, useSessions, coordinator, sessions, active) {

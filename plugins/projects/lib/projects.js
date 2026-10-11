@@ -54,7 +54,7 @@ import {
     outsideMessage, replyMessage,
 } from './prompts.js';
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
-import { changeRecord, changeTotals, withChange } from './changes.js';
+import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS } from './changes.js';
 import { planFleetShellImport } from './fleet-shell.js';
 import { planCategories } from './categories.js';
 
@@ -290,6 +290,13 @@ function argsOf(value) {
     try { return JSON.parse(value); } catch { return {}; }
 }
 
+/** A session's own events from DSH's inspect: a forked session's log starts with its parent's, which aren't its own. */
+function ownEvents(inspected) {
+    const events = Array.isArray(inspected?.events) ? inspected.events : [];
+    const inherited = Number.isSafeInteger(inspected?.inheritedEventCount) ? inspected.inheritedEventCount : 0;
+    return inherited > 0 ? events.slice(inherited) : events;
+}
+
 /** Text of one message-like session event, or ''. */
 function textOf(event) {
     const content = (event?.data?.message ?? event?.data)?.content;
@@ -454,6 +461,18 @@ export class ProjectManager {
         this.awaited = new Set();
         /** sessionId → the check of its replies running now, so one reply is never delivered twice. */
         this.replyChecks = new Map();
+        /** Thread sessionId → (turn → the seq of DSH's announcement of that turn's changes), so its Review tab opens the turn. */
+        this.announced = new Map();
+        /** Thread sessionId → its turn now (the last `turn/start`), for what its subagents change meanwhile. */
+        this.threadTurns = new Map();
+        /** Thread sessionId → its subagents' edits, newest last: [{turn, path, added, deleted}]. */
+        this.subEdits = new Map();
+        /** `${sessionId}\n${callId}` → a subagent's file-tool call waiting for its result: {name, args, thread}. */
+        this.subCalls = new Map();
+        /** A subagent's sessionId → the thread session it works for, or null when none. */
+        this.subThreads = new Map();
+        /** How long a thread turn's changes wait for DSH's announcement before they are kept without it. */
+        this.announceWaitMs = 3000;
     }
 
     /** One action line, mode 600. Sizes and ids only, never prompt text. */
@@ -1201,6 +1220,7 @@ export class ProjectManager {
         }
         if (!this.disposed) await this.catchUpReplies();
         if (!this.disposed) await this.plainThreadTitles();
+        if (!this.disposed) await this.recountChanges();
     }
 
     async dispose() {
@@ -1850,6 +1870,14 @@ export class ProjectManager {
      */
     async reviewTurn(projectId, threadId, sessionId, { stopped, catchUp = false } = {}) {
         const turn = await this.readTurn(sessionId);
+        // What the turn changed, from the thread's own edits, whatever happens below.
+        if (turn.ended) {
+            try {
+                await this.recordOwnChanges(projectId, threadId, sessionId, turn.number, { ...turn.read, waitForDsh: true });
+            } catch (error) {
+                this.log(`error changes ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
+            }
+        }
         const t = this.store.thread(projectId, threadId);
         if (!t || t.resolved || (catchUp && !turn.ended)) return;
         // The coordinator stopped this turn itself, so a note would only echo that back.
@@ -1925,8 +1953,12 @@ export class ProjectManager {
             this.onPermission({ projectId, role: 'thread', threadId }, agent, event.data);
             return;
         }
+        if (event?.type === 'turn/start') {
+            if (Number.isSafeInteger(event.data?.turn)) this.threadTurns.set(agent.id, event.data.turn);
+            return;
+        }
         if (event?.type === 'workspace/changes') {
-            this.noteChanges(projectId, threadId, agent.id, event.seq);
+            this.noteChanges(projectId, threadId, agent.id, event.seq, event.data?.turn);
             return;
         }
         // DSH queues a message (agent/inbox/spliced) before the turn that reads it gathers its
@@ -1973,32 +2005,173 @@ export class ProjectManager {
     }
 
     /**
-     * A thread turn changed files, as DSH announced it: keep its summary
-     * with the thread, so the window can show the thread's changes after DSH
-     * restarts too (DSH keeps its own copy only while the session lives).
-     * DSH stores the summary right after the event, so read it a moment later.
+     * DSH announced a thread turn's changes. Its summary diffs the whole
+     * folder, so it would credit the thread with what other threads and
+     * chats there changed meanwhile: the plugin counts the turn from the
+     * thread's own edits instead, and keeps DSH's announcement only so its
+     * Review tab opens that turn.
      */
-    noteChanges(projectId, threadId, sessionId, seq, attempt = 0) {
-        const timer = setTimeout(() => {
-            let summary;
-            try { summary = this.ctx.get?.('workspaceChanges')?.summary?.(sessionId, seq); } catch {}
-            if (summary === undefined) {
-                if (attempt < 3) this.noteChanges(projectId, threadId, sessionId, seq, attempt + 1);
+    noteChanges(projectId, threadId, sessionId, seq, turn) {
+        if (!Number.isSafeInteger(seq) || !Number.isSafeInteger(turn)) return;
+        const turns = this.announced.get(sessionId) ?? new Map();
+        turns.set(turn, seq);
+        // The newest few turns are enough: a turn is announced at its end.
+        for (const key of [...turns.keys()].slice(0, -8)) turns.delete(key);
+        this.announced.set(sessionId, turns);
+        void this.recordOwnChanges(projectId, threadId, sessionId, turn).catch((error) => {
+            this.log(`error changes ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
+        });
+    }
+
+    /**
+     * Keep one turn's changes with the thread, counted from its own
+     * file-tool records (write, edit, str_replace_editor) and its
+     * subagents': lines added and deleted per file, so the totals outlive a
+     * DSH restart. A turn that changed nothing of its own keeps no record.
+     * @param {{events: object[], folder?: string, endSeq?: number, waitForDsh?: boolean}} [read] - the thread's log, when the caller
+     *   already read it; `waitForDsh` at the turn's end, when DSH may still announce the turn.
+     */
+    async recordOwnChanges(projectId, threadId, sessionId, turn, read = undefined) {
+        if (!Number.isSafeInteger(turn) || !this.store.thread(projectId, threadId)) return;
+        let { events, folder, endSeq } = read ?? {};
+        if (!Array.isArray(events)) {
+            const inspected = await this.sc.inspect(sessionId, AbortSignal.timeout(20000));
+            events = ownEvents(inspected);
+            folder = inspected?.meta?.cwd;
+        }
+        // From here on nothing waits, so what was announced meanwhile and the stored records are read as they are now.
+        const t = this.store.thread(projectId, threadId);
+        if (!t) return;
+        const own = editsIn(events).filter((e) => e.turn === turn);
+        const sub = (this.subEdits.get(sessionId) ?? []).filter((e) => e.turn === turn);
+        // Subagent edits of turns long over are no longer needed.
+        if (this.subEdits.has(sessionId)) this.subEdits.set(sessionId, this.subEdits.get(sessionId).filter((e) => Number.isSafeInteger(e.turn) && e.turn >= turn - 2));
+        const was = (Array.isArray(t.changes) ? t.changes : []).find((r) => r?.turn === turn);
+        const summary = editSummary(turn, [...own, ...sub], folder ?? this.ctx.agents.get(sessionId)?.session?.header?.cwd);
+        if (!summary && !was) return;
+        const announced = this.announced.get(sessionId)?.get(turn);
+        // DSH announces a turn's changes a moment after the turn ends: wait for that, so the record
+        // carries its seq and Review opens the turn. Without one (nothing changed in the folder as
+        // DSH sees it, or no DSH service), the turn's end stands in.
+        if (announced === undefined && read?.waitForDsh && summary && this.ctx.get?.('workspaceChanges')) {
+            const timer = setTimeout(() => {
+                if (this.disposed || this.announced.get(sessionId)?.has(turn)) return;
+                void this.recordOwnChanges(projectId, threadId, sessionId, turn, { ...read, waitForDsh: false }).catch((error) => {
+                    this.log(`error changes ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
+                });
+            }, this.announceWaitMs);
+            timer.unref?.();
+            return;
+        }
+        const seq = announced ?? (Number.isSafeInteger(endSeq) ? endSeq : undefined) ?? own.at(-1)?.seq ?? was?.seq ?? 0;
+        const record = summary ? changeRecord(seq, summary) : { turn, seq, added: 0, deleted: 0, total: 0, files: [] };
+        if (!record) return;
+        const changes = withChange(t.changes, record);
+        if (JSON.stringify(changes) === JSON.stringify(t.changes ?? [])) return;
+        try {
+            this.store.putThread(projectId, threadId, { changes });
+        } catch (error) {
+            this.log(`error changes ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
+            return;
+        }
+        this.log(`changes ${projectId}/${threadId} turn=${turn} files=${record.total} +${record.added} -${record.deleted}${sub.length > 0 ? ` subagents=${sub.length}` : ''}`);
+    }
+
+    /**
+     * Every session's events, as DSH's own change recorder hears them: a
+     * file edit by a subagent (or a teammate) that works for a thread counts
+     * for that thread's turn. The thread's own edits are read from its log.
+     * Never throws: this runs inside DSH's event delivery.
+     */
+    onSessionEvent(session, event) {
+        const type = event?.type;
+        if (type !== 'tool/call' && type !== 'tool/result') return;
+        try {
+            const id = session?.id;
+            if (typeof id !== 'string') return;
+            if (type === 'tool/call') {
+                if (!FILE_TOOLS.has(event.data?.name) || typeof event.data.callId !== 'string') return;
+                const thread = this.threadAbove(session);
+                if (!thread) return;
+                this.subCalls.set(`${id}\n${event.data.callId}`, { name: event.data.name, args: event.data.arguments, thread });
+                for (const key of [...this.subCalls.keys()].slice(0, -200)) this.subCalls.delete(key);
                 return;
             }
-            const record = changeRecord(seq, summary);
-            try {
-                const t = this.store.thread(projectId, threadId);
-                if (!record || !t) return;
-                this.store.putThread(projectId, threadId, { changes: withChange(t.changes, record) });
-            } catch (error) {
-                // A throw in a timer would end DSH's Host.
-                this.log(`error changes ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
-                return;
+            const message = event.data?.message;
+            const key = `${id}\n${message?.toolCallId ?? message?.source?.callId}`;
+            const call = this.subCalls.get(key);
+            if (!call) return;
+            this.subCalls.delete(key);
+            if (message?.isError === true || event.data?.error !== undefined) return;
+            let args = call.args;
+            if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
+            const edit = editOf(call.name, args, event.data?.meta);
+            if (!edit || !(edit.added + edit.deleted > 0 || edit.created)) return;
+            const list = this.subEdits.get(call.thread) ?? [];
+            list.push({ turn: this.threadTurns.get(call.thread) ?? null, seq: event.seq, ...edit });
+            this.subEdits.set(call.thread, list.slice(-500));
+        } catch (error) {
+            this.log(`error subagent-edit ${String(error?.message ?? error).slice(0, 200)}`);
+        }
+    }
+
+    /** The thread session a subagent's session works for: its nearest ancestor that is a thread, or null. */
+    threadAbove(session) {
+        const id = session?.id;
+        if (this.subThreads.has(id)) return this.subThreads.get(id);
+        let parent = session?.header?.parentSession;
+        let found = null;
+        for (let depth = 0; depth < 8 && typeof parent === 'string' && parent !== ''; depth++) {
+            const who = this.store.lookup(parent);
+            if (who) {
+                if (who.role === 'thread') found = parent;
+                break;
             }
-            this.log(`changes ${projectId}/${threadId} turn=${record.turn} files=${record.total} +${record.added} -${record.deleted}`);
-        }, attempt === 0 ? 0 : 200 * 2 ** attempt);
-        timer.unref?.();
+            parent = this.ctx.agents.get(parent)?.session?.header?.parentSession;
+        }
+        this.subThreads.set(id, found);
+        for (const key of [...this.subThreads.keys()].slice(0, -500)) this.subThreads.delete(key);
+        return found;
+    }
+
+    /**
+     * Threads from before the plugin counted their own edits kept DSH's
+     * whole-folder numbers: count each one again from its log, once. A
+     * subagent's edits in those turns aren't in the thread's log, so they
+     * drop out.
+     */
+    async recountChanges() {
+        for (const projectId of [...this.projects.keys()]) {
+            for (const [threadId, t] of Object.entries(this.store.project(projectId)?.threads ?? {})) {
+                if (this.disposed) return;
+                if (t?.ownCounts === true || typeof t?.sessionId !== 'string') continue;
+                if (!Array.isArray(t.changes) || t.changes.length === 0) {
+                    this.store.putThread(projectId, threadId, { ownCounts: true });
+                    continue;
+                }
+                let inspected;
+                try {
+                    inspected = await this.sc.inspect(t.sessionId, AbortSignal.timeout(20000));
+                } catch (error) {
+                    // Tried again at the next start.
+                    this.log(`error recount ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
+                    continue;
+                }
+                if (this.disposed) return;
+                const fresh = this.store.thread(projectId, threadId);
+                if (!fresh) continue;
+                const byTurn = new Map();
+                for (const edit of editsIn(ownEvents(inspected))) byTurn.set(edit.turn, [...(byTurn.get(edit.turn) ?? []), edit]);
+                let changes = [];
+                for (const [turn, edits] of byTurn) {
+                    const summary = editSummary(turn, edits, inspected?.meta?.cwd);
+                    const record = summary && changeRecord((Array.isArray(fresh.changes) ? fresh.changes : []).find((r) => r?.turn === turn)?.seq ?? edits.at(-1).seq, summary);
+                    if (record) changes = withChange(changes, record);
+                }
+                this.store.putThread(projectId, threadId, { changes, ownCounts: true });
+                this.log(`changes recounted ${projectId}/${threadId} turns=${changes.length} was=${Array.isArray(fresh.changes) ? fresh.changes.length : 0}`);
+            }
+        }
     }
 
     /**
@@ -2022,6 +2195,9 @@ export class ProjectManager {
     async rearmApprovals(projectId, threadId, agent) {
         const events = (await this.sc.inspect(agent.id, AbortSignal.timeout(20000))).events ?? [];
         const { start } = turnRange(events, true);
+        // The turn it is in, for what its subagents change before it ends.
+        const turnNow = events[start]?.type === 'turn/start' ? events[start].data?.turn : undefined;
+        if (Number.isSafeInteger(turnNow) && !this.threadTurns.has(agent.id)) this.threadTurns.set(agent.id, turnNow);
         const open = new Map();
         for (const event of events.slice(start)) {
             if (event?.type === 'approval/asked' && event.data?.id) open.set(event.data.id, event);
@@ -2059,7 +2235,8 @@ export class ProjectManager {
      * coordinator) rather than from the user directly.
      */
     async readTurn(sessionId, { current = false } = {}) {
-        const events = (await this.sc.inspect(sessionId, AbortSignal.timeout(20000))).events ?? [];
+        const inspected = await this.sc.inspect(sessionId, AbortSignal.timeout(20000));
+        const events = inspected?.events ?? [];
         const { start, end, reason, ended } = turnRange(events, current);
         let reply = '';
         let prompt = null;
@@ -2089,6 +2266,9 @@ export class ProjectManager {
             reply,
             handedBack,
             fromProject: prompt ? prompt.fromProject : true,
+            // The turn's number, and the log as recordOwnChanges reads it.
+            number: events.slice(start, end).find((e) => Number.isSafeInteger(e?.data?.turn))?.data.turn,
+            read: { events: ownEvents(inspected), folder: inspected?.meta?.cwd, endSeq: ended ? events[end - 1]?.seq : undefined },
         };
     }
 
@@ -2343,7 +2523,7 @@ export class ProjectManager {
         const sessionId = await this.createSession(project, where);
         this.store.putThread(projectId, threadId, {
             sessionId, title: cleanTitle, model: check.model, effort: check.effort,
-            resolved: false, createdAt: new Date().toISOString(), handbackTimes: [], seenTurn: null,
+            resolved: false, createdAt: new Date().toISOString(), handbackTimes: [], seenTurn: null, ownCounts: true,
             ...(userWords ? { ask: userWords } : {}),
             tools,
         });

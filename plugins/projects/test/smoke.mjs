@@ -19,7 +19,7 @@ import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol';
 import * as plugin from '../lib/index.js';
 import { effectiveSettings, effectiveAccess, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
 import { slugify, timing, clipTitle, guardList, guardedIn } from '../lib/projects.js';
-import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS } from '../lib/changes.js';
+import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS, lineDelta, editOf, editsIn, editSummary } from '../lib/changes.js';
 import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, cardSummary, threadMarkdown, outsideMessage, replyMessage } from '../lib/prompts.js';
 import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
 import { planFleetShellImport } from '../lib/fleet-shell.js';
@@ -275,7 +275,7 @@ function fakeHost({ selection = false, hostListener = selection, gateway = false
             listeners.set(event, list);
         },
         effect(fn) { effects.push(fn()); },
-        emit(event, payload) { for (const fn of listeners.get(event) ?? []) fn(payload); },
+        emit(event, ...args) { for (const fn of listeners.get(event) ?? []) fn(...args); },
         agents: { get: (id) => live.get(id), list: () => [...live.values()] },
         workspaceRegistry: fakeWorkspaces(workspaces),
         /**
@@ -320,10 +320,12 @@ function fakeHost({ selection = false, hostListener = selection, gateway = false
                 if (host.inspectError) throw host.inspectError;
                 if (!sessions.has(id)) throw new Error('session/not-found');
                 const events = sessions.get(id).events;
-                if (live.has(id)) return { meta: {}, events };
+                // The session's folder, when a test gives it one.
+                const meta = typeof sessions.get(id).folder === 'string' ? { cwd: sessions.get(id).folder } : {};
+                if (live.has(id)) return { meta, events };
                 // Like DSH's cold read: a turn left open by a crash reads as ended, "interrupted".
                 const open = events.findLastIndex((e) => e.type === 'turn/start') > events.findLastIndex((e) => e.type === 'turn/end');
-                return { meta: {}, events: open ? [...events, { seq: events.length + 1, type: 'turn/end', data: { reason: { kind: 'interrupted' } } }] : events };
+                return { meta, events: open ? [...events, { seq: events.length + 1, type: 'turn/end', data: { reason: { kind: 'interrupted' } } }] : events };
             },
             /** What the window sends when the user types: logged as the user's, with its request id. */
             async prompt(req) {
@@ -4277,9 +4279,9 @@ test('changes: each turn\'s newest summary is kept, and the totals count a file 
     assert.deepEqual(many[0].files.find((f) => f.path === 'f.md'), { path: 'f.md', added: 6, deleted: 0 });
 });
 
-test('changes: a thread\'s file changes reach the window and its coordinator, and outlive DSH\'s own copy', async () => {
+test('changes: a thread counts its own edits (and its subagents\'), never what others changed in its folder', async () => {
     const { host, dir } = setup({}, undefined, { ...SELECTING, gateway: true });
-    // DSH's workspace-changes service: it serves a summary while it holds the session.
+    // DSH's workspace-changes service: a summary per turn of everything that changed in the folder, while it holds the session.
     const summaries = new Map();
     host.services.workspaceChanges = { summary: (sessionId, seq) => summaries.get(`${sessionId}/${seq}`) };
     await tick();
@@ -4287,37 +4289,129 @@ test('changes: a thread\'s file changes reach the window and its coordinator, an
     const remote = host.provided.get('dshPluginProjectsRemote');
     await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Edit', brief: 'Go.' });
     const t1 = threadOf(host, coord);
-    const announce = (seq, turn, files) => {
-        // Like DSH: the event first, its summary right after.
-        t1.ctx.sessionEvent({ type: 'workspace/changes', seq, data: { turn } });
-        summaries.set(`${t1.id}/${seq}`, {
-            turn, cwd: '/work/dsh', files, total: files.length,
-            added: files.reduce((n, f) => n + f.added, 0), deleted: files.reduce((n, f) => n + f.deleted, 0),
-        });
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Wait', brief: 'Go.' });
+    const t2 = [...host.live.values()].find((a) => a.id !== coord.id && a.id !== t1.id);
+    for (const t of [t1, t2]) host.sessions.get(t.id).folder = '/work/dsh';
+    const log = (t) => host.sessions.get(t.id).events;
+    const push = (t, type, data) => { const e = { seq: log(t).length + 1, type, data }; log(t).push(e); t.ctx.sessionEvent(e); return e; };
+    let calls = 0;
+    /** A file-tool call and its result, as DSH logs them. */
+    const tool = (t, turn, name, args, meta, isError = false) => {
+        const callId = `fc-${++calls}`;
+        push(t, 'tool/call', { turn, callId, name, arguments: JSON.stringify(args) });
+        push(t, 'tool/result', { turn, message: { role: 'tool', toolCallId: callId, isError, content: [] }, ...(meta ? { meta } : {}) });
+    };
+    const turn = async (t, n, body) => {
+        t.ctx.emitStatus(t, 'running');
+        push(t, 'turn/start', { turn: n });
+        body();
+        push(t, 'turn/end', { turn: n, reason: { kind: 'completed' } });
+        t.ctx.emitStatus(t, 'idle');
+        await tick();
+    };
+    // Like DSH: the announcement at the turn's end, its summary of the whole folder right after.
+    const announce = (t, turn, files) => {
+        const e = push(t, 'workspace/changes', { turn });
+        summaries.set(`${t.id}/${e.seq}`, { turn, cwd: '/work/dsh', files, total: files.length, added: files.reduce((n, f) => n + f.added, 0), deleted: files.reduce((n, f) => n + f.deleted, 0) });
+        return e.seq;
     };
     assert.equal((await remote.describe(coord.id)).threads[0].changes, null, 'nothing changed yet');
-    announce(7, 1, [{ path: '/work/dsh/a.md', display: 'a.md', added: 3, deleted: 0 }, { path: '/work/dsh/b.js', display: 'b.js', added: 10, deleted: 2 }]);
+    // t1 writes a new file and edits another; meanwhile t2 only waits, and DSH credits both turns with every file.
+    const whole = [{ path: '/work/dsh/a.md', display: 'a.md', added: 3, deleted: 0 }, { path: '/work/dsh/b.js', display: 'b.js', added: 1, deleted: 1 }, { path: '/work/dsh/c.txt', display: 'c.txt', added: 5, deleted: 0 }];
+    await turn(t1, 1, () => {
+        tool(t1, 1, 'write', { file_path: '/work/dsh/a.md', content: 'one\ntwo\nthree\n' }, { operation: 'create', path: '/work/dsh/a.md', diffs: [] });
+        tool(t1, 1, 'edit', { file_path: 'b.js', old_string: 'x = 1', new_string: 'x = 2' }, { path: 'b.js', diffs: [{ path: 'b.js', oldText: 'a\nx = 1\nb', newText: 'a\nx = 2\nb' }] });
+        // A failed call changed nothing.
+        tool(t1, 1, 'edit', { file_path: 'missing.js', old_string: 'q', new_string: 'r' }, undefined, true);
+    });
+    const seq1 = announce(t1, 1, whole);
+    await turn(t2, 1, () => tool(t2, 1, 'bash', { command: 'sleep 6' }, { cwd: '/work/dsh' }));
+    announce(t2, 1, whole);
     await tick();
     let read = await remote.describe(coord.id);
-    assert.deepEqual(plain(read.threads[0].changes), { added: 13, deleted: 2, files: 2, turns: 1, last: { seq: 7, turn: 1 }, reviewable: true });
-    // Another turn edits one of the same files: lines add up, the file counts once, and Review opens the newest turn.
-    announce(12, 2, [{ path: '/work/dsh/a.md', display: 'a.md', added: 1, deleted: 1 }]);
+    const of = (t) => read.threads.find((x) => x.session === t.id)?.changes ?? null;
+    assert.deepEqual(plain(of(t1)), { added: 4, deleted: 1, files: 2, turns: 1, last: { seq: seq1, turn: 1 }, reviewable: true });
+    assert.equal(of(t2), null, 'the thread that only waited changed nothing, whatever DSH says of its folder');
+    assert.deepEqual(plain(host.store?.thread?.('dsh-plugins', 't1')?.changes ?? JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'].threads.t1.changes), [
+        { turn: 1, seq: seq1, added: 4, deleted: 1, total: 2, files: [{ path: 'a.md', added: 3, deleted: 0 }, { path: 'b.js', added: 1, deleted: 1 }] },
+    ]);
+    // Another turn edits a.md again (str_replace_editor), and t1's subagent creates c.txt: lines add up, a.md counts once.
+    await turn(t1, 2, () => {
+        tool(t1, 2, 'str_replace_editor', { command: 'str_replace', path: 'a.md', old_str: 'two', new_str: 'TWO\nand a half' }, undefined);
+        const sub = { id: 'sub-1', header: { parentSession: t1.id, origin: 'subagent' } };
+        host.emit('session/event', sub, { seq: 3, type: 'tool/call', data: { turn: 1, callId: 'sc-1', name: 'write', arguments: { file_path: '/work/dsh/c.txt', content: 'c\n' } } });
+        host.emit('session/event', sub, { seq: 4, type: 'tool/result', data: { turn: 1, message: { toolCallId: 'sc-1' }, meta: { operation: 'create', path: '/work/dsh/c.txt', diffs: [] } } });
+        // A chat's own edit, in no thread, is nobody's here.
+        host.emit('session/event', { id: 'chat-1', header: {} }, { seq: 5, type: 'tool/call', data: { turn: 1, callId: 'cc-1', name: 'write', arguments: { file_path: '/work/dsh/d.txt', content: 'd\n' } } });
+        host.emit('session/event', { id: 'chat-1', header: {} }, { seq: 6, type: 'tool/result', data: { turn: 1, message: { toolCallId: 'cc-1' }, meta: { operation: 'create', diffs: [] } } });
+    });
+    const seq2 = announce(t1, 2, whole);
     await tick();
     read = await remote.describe(t1.id);
-    assert.deepEqual(plain(read.threads[0].changes), { added: 14, deleted: 3, files: 2, turns: 2, last: { seq: 12, turn: 2 }, reviewable: true });
-    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /changes dsh-plugins\/t1 turn=2 files=1 \+1 -1/);
+    assert.deepEqual(plain(of(t1)), { added: 7, deleted: 2, files: 3, turns: 2, last: { seq: seq2, turn: 2 }, reviewable: true });
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /changes dsh-plugins\/t1 turn=2 files=2 \+3 -1 subagents=1/);
     // The coordinator hears it in its roster and in project_thread_list.
-    assert.match(coord.ctx.section(), /- t1 · "Edit" · idle · no handback yet · changed 2 files \(\+14 -3\)/);
-    assert.match(await coord.ctx.call('project_thread_list', {}), /changed 2 files \(\+14 -3\)/);
+    assert.match(coord.ctx.section(), /- t1 · "Edit" · idle · no handback yet · changed 3 files \(\+7 -2\)/);
+    assert.match(await coord.ctx.call('project_thread_list', {}), /changed 3 files \(\+7 -2\)/);
     // DSH drops its copy when it restarts: the totals stay, and Review is no longer offered.
     summaries.clear();
     read = await remote.describe(coord.id);
-    assert.deepEqual(plain(read.threads[0].changes), { added: 14, deleted: 3, files: 2, turns: 2, last: { seq: 12, turn: 2 }, reviewable: false });
-    // A DSH without the service: an announcement it never serves changes nothing and throws nothing.
+    assert.deepEqual(plain(of(t1)), { added: 7, deleted: 2, files: 3, turns: 2, last: { seq: seq2, turn: 2 }, reviewable: false });
+    // A turn DSH never announces (it saw nothing change in the folder) keeps its own edits after a wait, under its end.
+    remote.manager.announceWaitMs = 20;
+    await turn(t1, 3, () => tool(t1, 3, 'write', { file_path: '/elsewhere/notes.md', content: 'n\n' }, { operation: 'create', path: '/elsewhere/notes.md', diffs: [] }));
+    assert.equal((await remote.describe(coord.id)).threads.find((x) => x.session === t1.id).changes.turns, 2, 'waiting for DSH');
+    await new Promise((r) => setTimeout(r, 60));
+    read = await remote.describe(coord.id);
+    const endOf3 = log(t1).findLast((e) => e.type === 'turn/end').seq;
+    assert.deepEqual(plain(of(t1)), { added: 8, deleted: 2, files: 4, turns: 3, last: { seq: endOf3, turn: 3 }, reviewable: false });
+    // A DSH without the service: an announcement changes nothing and throws nothing.
     delete host.services.workspaceChanges;
-    t1.ctx.sessionEvent({ type: 'workspace/changes', seq: 20, data: { turn: 3 } });
+    push(t1, 'workspace/changes', { turn: 2 });
     await tick();
-    assert.equal((await remote.describe(coord.id)).threads[0].changes.turns, 2);
+    assert.equal((await remote.describe(coord.id)).threads.find((x) => x.session === t1.id).changes.turns, 3);
+    // A thread from before the plugin counted its own edits kept DSH's folder-wide numbers: counted again from its log, once.
+    const manager = remote.manager;
+    manager.store.putThread('dsh-plugins', 't2', { changes: [{ turn: 1, seq: 9, added: 9, deleted: 1, total: 3, files: [{ path: 'a.md', added: 3, deleted: 0 }] }], ownCounts: undefined });
+    manager.store.putThread('dsh-plugins', 't1', { ownCounts: undefined });
+    await manager.recountChanges();
+    assert.equal(manager.store.thread('dsh-plugins', 't2').changes.length, 0);
+    assert.equal(manager.store.thread('dsh-plugins', 't2').ownCounts, true);
+    // Its own log has t1's edits but not its subagent's, which drop out.
+    assert.deepEqual(plain(manager.store.thread('dsh-plugins', 't1').changes.map((r) => [r.turn, r.added, r.deleted, r.files.map((f) => f.path).join(',')]).sort((a, b) => a[0] - b[0])),
+        [[1, 4, 1, 'a.md,b.js'], [2, 2, 1, 'a.md'], [3, 1, 0, '/elsewhere/notes.md']]);
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /changes recounted dsh-plugins\/t2 turns=0 was=1/);
+    await manager.recountChanges();
+    assert.equal((readFileSync(join(dir, 'projects.log'), 'utf8').match(/changes recounted/g) ?? []).length, 2, 'once per thread');
+});
+
+test('changes: own edits count lines as a diff does', () => {
+    const L = (text) => text.split('\n');
+    assert.deepEqual(lineDelta(L('one\ntwo\nthree'), L('one\nTWO\nthree')), { added: 1, deleted: 1 });
+    // Two changes in one hunk keep the lines between them.
+    assert.deepEqual(lineDelta(L('a\nb\nc\nd\ne\nf\ng'), L('a\nB\nc\nd\ne\nF\ng')), { added: 2, deleted: 2 });
+    assert.deepEqual(lineDelta([], L('x\ny')), { added: 2, deleted: 0 });
+    assert.deepEqual(lineDelta(L('x\ny'), []), { added: 0, deleted: 2 });
+    assert.deepEqual(editOf('write', { file_path: 'n.md', content: 'one\ntwo\n' }, { operation: 'create', diffs: [] }), { path: 'n.md', added: 2, deleted: 0, created: true });
+    assert.deepEqual(editOf('write', { file_path: 'e.md', content: '' }, { operation: 'create', diffs: [] }), { path: 'e.md', added: 0, deleted: 0, created: true });
+    assert.deepEqual(editOf('write', { file_path: 'n.md', content: 'x' }, { operation: 'update', diffs: [{ path: 'n.md', oldText: 'one\ntwo', newText: 'x' }] }), { path: 'n.md', added: 1, deleted: 2 });
+    // A pure insertion's hunk has no old side.
+    assert.deepEqual(editOf('edit', { file_path: 'i.md' }, { diffs: [{ path: 'i.md', oldText: null, newText: 'new line' }] }), { path: 'i.md', added: 1, deleted: 0 });
+    assert.deepEqual(editOf('str_replace_editor', { command: 'insert', path: 's.md', insert_line: 2, new_str: 'p\nq\n' }), { path: 's.md', added: 2, deleted: 0 });
+    assert.deepEqual(editOf('str_replace_editor', { command: 'create', path: 's.md', file_text: 'p\n' }), { path: 's.md', added: 1, deleted: 0, created: true });
+    assert.equal(editOf('str_replace_editor', { command: 'view', path: 's.md' }), null);
+    assert.equal(editOf('read', { file_path: 'r.md' }, {}), null);
+    assert.equal(editOf('edit', {}, { diffs: [] }), null, 'no path');
+    // A summary names each file once, inside the folder relative to it.
+    assert.deepEqual(plain(editSummary(4, [{ path: '/w/a.md', added: 2, deleted: 0 }, { path: './a.md', added: 1, deleted: 1 }, { path: '/elsewhere/b.md', added: 1, deleted: 0 }], '/w/')),
+        { turn: 4, files: [{ path: 'a.md', added: 3, deleted: 1 }, { path: '/elsewhere/b.md', added: 1, deleted: 0 }], total: 2, added: 4, deleted: 1 });
+    assert.equal(editSummary(1, []), null);
+    // Records in order: a result counts only after its call, and a forked log's inherited part is skipped by the caller.
+    assert.deepEqual(plain(editsIn([
+        { seq: 1, type: 'tool/result', data: { turn: 1, message: { toolCallId: 'early' }, meta: { operation: 'create', diffs: [] } } },
+        { seq: 2, type: 'tool/call', data: { turn: 1, callId: 'w', name: 'write', arguments: { file_path: 'w.md', content: 'w\n' } } },
+        { seq: 3, type: 'tool/result', data: { turn: 1, message: { toolCallId: 'w' }, meta: { operation: 'create', diffs: [] } } },
+    ])), [{ turn: 1, seq: 3, path: 'w.md', added: 1, deleted: 0, created: true }]);
 });
 
 test('browser half: a thread\'s changes read as DSH\'s card counts them, and its projection says when to read them again', () => {
