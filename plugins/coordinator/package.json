@@ -1,7 +1,7 @@
 {
-  "name": "dsh-plugin-projects",
+  "name": "dsh-plugin-coordinator",
   "version": "0.1.0",
-  "description": "Each project gets a coordinator that runs your asks in threads and reports back.",
+  "description": "Any chat can run its work in threads that report back to it.",
   "icon": "./icon.svg",
   "license": "MIT",
   "type": "module",

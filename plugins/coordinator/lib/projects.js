@@ -38,7 +38,7 @@
  * DSH draws each as a collapsed notice ("Task message received", "Plugin
  * status updated") instead of a user bubble; the model reads the same text.
  *
- * @module dsh-plugin-projects/projects
+ * @module dsh-plugin-coordinator/projects
  */
 import { appendFileSync, existsSync, readFileSync, writeFileSync, statSync, lstatSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
@@ -587,7 +587,7 @@ export class ProjectManager {
             const id = slugify(row.id || row.name);
             if (this.projects.has(id)) {
                 this.log(`config duplicate project id ${id}; keeping the first row`);
-                ctx.logger?.warn?.('projects: two projects have the id "%s"; only the first runs. Give the other an id.', id);
+                ctx.logger?.warn?.('coordinator: two projects have the id "%s"; only the first runs. Give the other an id.', id);
                 continue;
             }
             this.projects.set(id, { ...row, id, source: 'profile', workspacePath: expand(row.workspacePath) });
@@ -650,7 +650,7 @@ export class ProjectManager {
         /** Each file's text before a thread's first edit of it and after its latest, for its Changes tab's net diffs. */
         // A store file of another name keeps its own (net-<name>/), so it never sweeps away another store's threads.
         const storeName = basename(this.storeFile, '.json');
-        this.net = NetTexts.open(join(dirname(this.storeFile), storeName === 'projects' ? 'net' : `net-${storeName}`), (line) => this.log(line));
+        this.net = NetTexts.open(join(dirname(this.storeFile), storeName === 'coordinator' ? 'net' : `net-${storeName}`), (line) => this.log(line));
     }
 
     /** One action line, mode 600. Sizes and ids only, never prompt text. */
@@ -1630,7 +1630,7 @@ export class ProjectManager {
             await this.noteHome(id);
         } catch (error) {
             this.log(`error coordinator ${id} ${String(error?.message ?? error).slice(0, 300)}`);
-            this.ctx.logger?.warn?.('projects: could not start coordinator for %s: %s', id, error?.message ?? error);
+            this.ctx.logger?.warn?.('coordinator: could not start coordinator for %s: %s', id, error?.message ?? error);
             return;
         }
         // Reloaded meanwhile: the new manager delivers and reviews.
@@ -1969,7 +1969,7 @@ export class ProjectManager {
             this.installed.set(agent, this.install(agent, who));
         } catch (error) {
             this.log(`error attach ${agent.id} ${String(error?.message ?? error).slice(0, 300)}`);
-            this.ctx.logger?.warn?.('projects: could not attach to session %s: %s', agent.id, error?.message ?? error);
+            this.ctx.logger?.warn?.('coordinator: could not attach to session %s: %s', agent.id, error?.message ?? error);
             return;
         }
         this.roles.set(agent, who);
@@ -2117,7 +2117,7 @@ export class ProjectManager {
         } catch (error) {
             this.ownSelections.delete(agent.id);
             this.log(`error select ${label} ${String(error?.message ?? error).slice(0, 200)}`);
-            this.ctx.logger?.warn?.('projects: could not set the model for %s: %s', label, error?.message ?? error);
+            this.ctx.logger?.warn?.('coordinator: could not set the model for %s: %s', label, error?.message ?? error);
             return false;
         }
     }
@@ -3258,7 +3258,7 @@ export class ProjectManager {
 
     /**
      * What a project tool result records for the DSH window: its presentation
-     * meta, which the `projectSession` projection folds (projection.js). It
+     * meta, which the `coordinatorSession` projection folds (projection.js). It
      * names the project and the session's role; for a coordinator it carries
      * the roster entries the call touched (all of them with `full`), and
      * `action` is the card the call's turn shows. Never throws: a tool's

@@ -3,7 +3,7 @@
  * prompt sections, rebuilt on every request so the roster stays live) and the
  * framing of messages that cross between sessions. Pure functions.
  *
- * @module dsh-plugin-projects/prompts
+ * @module dsh-plugin-coordinator/prompts
  */
 import { changeTotals, changesLine } from './changes.js';
 

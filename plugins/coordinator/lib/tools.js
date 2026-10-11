@@ -4,7 +4,7 @@
  * and both get project_memory. Each tool is bound to its project (and thread) when it
  * is registered, so a call can never reach another project.
  *
- * @module dsh-plugin-projects/tools
+ * @module dsh-plugin-coordinator/tools
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { HANDBACK_STATUSES, threadMarkdown } from './prompts.js';
@@ -12,7 +12,7 @@ import { HANDBACK_STATUSES, threadMarkdown } from './prompts.js';
 /**
  * Every project tool returns its text for the model and a view for the DSH
  * window. The view becomes the result's presentation meta, which the
- * `projectSession` projection folds into thread cards and rosters
+ * `coordinatorSession` projection folds into thread cards and rosters
  * (projection.js); the model sees only the text.
  */
 const OUTPUT = {

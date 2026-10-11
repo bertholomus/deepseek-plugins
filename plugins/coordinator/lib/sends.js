@@ -12,7 +12,7 @@
  * a sandbox: a program it doesn't know, or a send inside a library the
  * command runs, goes through.
  *
- * @module dsh-plugin-projects/sends
+ * @module dsh-plugin-coordinator/sends
  */
 import { dirname, isAbsolute, resolve } from 'node:path';
 

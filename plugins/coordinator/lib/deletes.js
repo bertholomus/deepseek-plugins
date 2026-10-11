@@ -14,7 +14,7 @@
  * closely enough for the commands a model writes. Like the send check, it
  * is a check against a well-meant mistake, not a sandbox.
  *
- * @module dsh-plugin-projects/deletes
+ * @module dsh-plugin-coordinator/deletes
  */
 import { lstatSync, readdirSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';

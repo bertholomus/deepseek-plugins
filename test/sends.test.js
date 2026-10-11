@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sendOf, codeSendOf, splitShell, placeOf } from '../plugins/projects/lib/sends.js';
+import { sendOf, codeSendOf, splitShell, placeOf } from '../plugins/coordinator/lib/sends.js';
 
-// What a project thread's command sends outside the workspace (plugins/projects/lib/sends.js): the plugin asks the
+// What a project thread's command sends outside the workspace (plugins/coordinator/lib/sends.js): the plugin asks the
 // user before each one. The files a command names are read through `read`, here from this table.
 const files = {
   '/w/deploy.sh': '#!/bin/bash\ncurl -X POST http://127.0.0.1:8787/deploy -d "{}"\n',

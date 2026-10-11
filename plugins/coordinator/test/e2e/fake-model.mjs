@@ -24,7 +24,7 @@
  * text since the last assistant message, action, arrival time) for the test
  * to check.
  *
- * @module dsh-plugin-projects/test/e2e/fake-model
+ * @module dsh-plugin-coordinator/test/e2e/fake-model
  */
 import { createServer } from 'node:http';
 

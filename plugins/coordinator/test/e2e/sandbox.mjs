@@ -14,7 +14,7 @@
  * default writes outside as a control. It prints which approval policy the
  * thread runs on and what DSH did with each write.
  *
- *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/projects/test/e2e/sandbox.mjs
+ *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/coordinator/test/e2e/sandbox.mjs
  *
  * Without DSH_BIN it runs `dsh` from PATH; DSH_BIN may also be a program
  * that runs DSH (a script around an app's own runtime, say). It runs on
@@ -83,8 +83,8 @@ const ws = join(root, 'ws');
 const plain = join(root, 'plain');
 const tmp = join(root, 'tmp');
 const stateDir = join(root, 'state');
-const storeFile = join(stateDir, 'projects.json');
-const logFile = join(stateDir, 'projects.log');
+const storeFile = join(stateDir, 'coordinator.json');
+const logFile = join(stateDir, 'coordinator.log');
 const sock = join(root, 'bridge.sock');
 const dshLog = join(root, 'dsh.log');
 const inside = join(ws, 'inside.txt');
@@ -137,7 +137,7 @@ function permissionsOf(sessionId) {
 function writeProfile(modelPort) {
     const profile = join(home, 'profiles', 'web');
     mkdirSync(join(profile, 'node_modules'), { recursive: true });
-    const plugins = { 'dsh-plugin-projects': join(pluginsDir, 'projects'), 'dsh-plugin-session-bridge': join(pluginsDir, 'session-bridge') };
+    const plugins = { 'dsh-plugin-coordinator': join(pluginsDir, 'coordinator'), 'dsh-plugin-session-bridge': join(pluginsDir, 'session-bridge') };
     writeFileSync(join(profile, 'package.json'), `${JSON.stringify({
         name: 'dsh-profile-web',
         private: true,
@@ -177,7 +177,7 @@ function writeProfile(modelPort) {
             name: Fake Model
             contextWindow: 131072
             reasoningEfforts: false
-- id: projects
+- id: coordinator
   config:
     approvalNoticeSeconds: 1
     storeFile: ${q(storeFile)}

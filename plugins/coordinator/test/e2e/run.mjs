@@ -25,7 +25,7 @@
  * user's Allow once each time, answered as the window does, while a
  * coordinator's is refused.
  *
- *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/projects/test/e2e/run.mjs
+ *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/coordinator/test/e2e/run.mjs
  *
  * Without DSH_BIN it runs `dsh` from PATH. KEEP=1 keeps the temp folder.
  * A DSH to test against: npm install --prefix /tmp/dsh @deepseek-ai/dsh
@@ -92,8 +92,8 @@ const root = mkdtempSync(join(tmpdir(), 'dsh-projects-e2e-'));
 const home = join(root, 'home');
 const ws = join(root, 'ws');
 const stateDir = join(root, 'state');
-const storeFile = join(stateDir, 'projects.json');
-const logFile = join(stateDir, 'projects.log');
+const storeFile = join(stateDir, 'coordinator.json');
+const logFile = join(stateDir, 'coordinator.log');
 const memoryDir = join(stateDir, 'memory');
 const sock = join(root, 'bridge.sock');
 const dshLog = join(root, 'dsh.log');
@@ -218,7 +218,7 @@ const profile = join(home, 'profiles', 'web');
 function writeProfile(modelPort) {
     mkdirSync(join(profile, 'node_modules'), { recursive: true });
     const plugins = {
-        'dsh-plugin-projects': join(pluginsDir, 'projects'), 'dsh-plugin-session-bridge': join(pluginsDir, 'session-bridge'),
+        'dsh-plugin-coordinator': join(pluginsDir, 'coordinator'), 'dsh-plugin-session-bridge': join(pluginsDir, 'session-bridge'),
         // A tool another plugin marks as the user's own, which no guardedTools entry names.
         'dsh-e2e-personal-tool': join(here, 'personal-tool'),
     };
@@ -295,7 +295,7 @@ function writePatch(modelPort, defaults) {
             reasoningEfforts:
               off:
               high: high
-- id: projects
+- id: coordinator
   config:
 ${Object.entries(defaults).map(([key, value]) => `    ${key}: ${q(value)}\n`).join('')}    storeFile: ${q(storeFile)}
     memoryDir: ${q(memoryDir)}
@@ -371,36 +371,36 @@ async function say(sessionId, text) {
 }
 
 /**
- * A session's `projectSession` value (what the DSH window draws, projection.js)
+ * A session's `coordinatorSession` value (what the DSH window draws, projection.js)
  * as DSH last saved it in its projection cache, which it writes at every turn end.
  */
 function windowView(sessionId) {
     try {
         const doc = JSON.parse(readFileSync(join(home, 'storages', 'session_projcache', 'sessions', `${sessionId}.json`), 'utf8'));
-        return doc?.record?.rows?.projectSession?.val?.v ?? null;
+        return doc?.record?.rows?.coordinatorSession?.val?.v ?? null;
     } catch {
         return null;
     }
 }
 
-/** A session's saved `projectSession` row's state version, or null. */
+/** A session's saved `coordinatorSession` row's state version, or null. */
 function savedVersion(sessionId) {
     try {
-        return JSON.parse(readFileSync(join(home, 'storages', 'session_projcache', 'sessions', `${sessionId}.json`), 'utf8'))?.record?.rows?.projectSession?.ver ?? null;
+        return JSON.parse(readFileSync(join(home, 'storages', 'session_projcache', 'sessions', `${sessionId}.json`), 'utf8'))?.record?.rows?.coordinatorSession?.ver ?? null;
     } catch {
         return null;
     }
 }
 
-/** Give sessions' saved `projectSession` rows an older state version, as an older version of the plugin left them (DSH stopped). */
+/** Give sessions' saved `coordinatorSession` rows an older state version, as an older version of the plugin left them (DSH stopped). */
 function ageViews(ids, ver) {
     const aged = [];
     for (const id of ids) {
         const file = join(home, 'storages', 'session_projcache', 'sessions', `${id}.json`);
         try {
             const doc = JSON.parse(readFileSync(file, 'utf8'));
-            if (!doc?.record?.rows?.projectSession) continue;
-            doc.record.rows.projectSession.ver = ver;
+            if (!doc?.record?.rows?.coordinatorSession) continue;
+            doc.record.rows.coordinatorSession.ver = ver;
             writeFileSync(file, JSON.stringify(doc));
             aged.push(id);
         } catch {}
@@ -452,7 +452,7 @@ try {
     const signIn = /dsh web: (\S+)/.exec(readText(dshLog))?.[1] ?? '';
     const cookie = String((await httpGet(signIn)).headers['set-cookie']?.[0] ?? '').split(';')[0];
     const app = await httpGet(new URL('./', signIn).href, { cookie });
-    const clientUrl = /"id":"dsh-plugin-projects","url":"([^"]+)"/.exec(app.text)?.[1];
+    const clientUrl = /"id":"dsh-plugin-coordinator","url":"([^"]+)"/.exec(app.text)?.[1];
     const client = clientUrl ? await httpGet(new URL(clientUrl, new URL('./', signIn)).href, { cookie }) : { status: 0, text: '' };
     let parses = false;
     try { new Script(client.text); parses = true; } catch {}
@@ -711,18 +711,18 @@ try {
 
     // 18. The Project settings dialog's endpoints, called as the window calls them.
     const web = await signInWeb();
-    let answer = await webApi(web, 'dsh-plugin-projects/describe', { target: threadSession('t1') });
+    let answer = await webApi(web, 'dsh-plugin-coordinator/describe', { target: threadSession('t1') });
     check('the window reads a project through one of its threads', answer.ok && answer.value.project.id === PROJECT_ID && answer.value.project.coordinator === coord
         && answer.value.settings.coordinatorEffort.value === 'low' && answer.value.settings.coordinatorEffort.inherited.value === 'high'
         && answer.value.threads.some((t) => t.id === 't5' && t.model === 'fake:fake-flash'), JSON.stringify(answer).slice(0, 500));
-    answer = await webApi(web, 'dsh-plugin-projects/update', { target: coord, changes: { coordinatorEffort: null } });
+    answer = await webApi(web, 'dsh-plugin-coordinator/update', { target: coord, changes: { coordinatorEffort: null } });
     await waitFor(() => readText(logFile).includes(`select ${PROJECT_ID}/coordinator fake:fake-model effort=high`), 'the coordinator to follow the default again');
     check('"Use default" in the window hands the coordinator back to the saved default', answer.ok && answer.value.settings.coordinatorEffort.source === 'plugin default'
         && answer.value.settings.coordinatorEffort.value === 'high', JSON.stringify(answer).slice(0, 300));
-    answer = await webApi(web, 'dsh-plugin-projects/update', { target: coord, changes: { threadEffort: 'ultra' } });
-    check('the window gets the plugin\'s refusal', answer.ok === false && answer.error?.code === 'projects/refused' && /ultra/.test(answer.error.message), JSON.stringify(answer));
+    answer = await webApi(web, 'dsh-plugin-coordinator/update', { target: coord, changes: { threadEffort: 'ultra' } });
+    check('the window gets the plugin\'s refusal', answer.ok === false && answer.error?.code === 'coordinator/refused' && /ultra/.test(answer.error.message), JSON.stringify(answer));
     // The goal: set in the window, over the profile row's, and read by the coordinator and threads from their next request.
-    answer = await webApi(web, 'dsh-plugin-projects/update', { target: coord, changes: { goal: 'Prove the plugin on a real host.\nKeep each check small.' } });
+    answer = await webApi(web, 'dsh-plugin-coordinator/update', { target: coord, changes: { goal: 'Prove the plugin on a real host.\nKeep each check small.' } });
     check('the window sets the project\'s goal over its profile row\'s', answer.ok && answer.value.goal.value === 'Prove the plugin on a real host.\nKeep each check small.'
         && answer.value.goal.source === 'project setting' && answer.value.goal.inherited === 'Prove the plugin on a real host' && project().settings?.goal === answer.value.goal.value,
         JSON.stringify(answer.value?.goal ?? answer).slice(0, 300));
@@ -741,7 +741,7 @@ try {
     check('the coordinator and a new thread read the goal set in the window', iota.every((r) => policyOf(r).includes('\nGoal: Prove the plugin on a real host.\n  Keep each check small.\nWorkspace: '))
         && t9Reqs.every((r) => r.system.includes('\nProject goal: Prove the plugin on a real host.\n  Keep each check small.\n')),
         `${iota.map((r) => policyOf(r).split('\n').slice(3, 6).join(' | ')).join(' ;; ')} || ${t9Reqs.map((r) => (r.system.match(/Project goal:[^]{0,80}/) ?? [''])[0]).join(' ;; ')}`);
-    answer = await webApi(web, 'dsh-plugin-projects/update', { target: coord, changes: { goal: null } });
+    answer = await webApi(web, 'dsh-plugin-coordinator/update', { target: coord, changes: { goal: null } });
     check('"Use your profile\'s" gives the project its row\'s goal back', answer.ok && answer.value.goal.value === 'Prove the plugin on a real host' && answer.value.goal.source === 'project config'
         && project().settings?.goal === undefined, JSON.stringify(answer.value?.goal ?? answer).slice(0, 300));
 
@@ -770,7 +770,7 @@ try {
     check('a thread keeps the model it started with', t5After.length > 0 && t5After.every((r) => r.model === 'fake-flash' && r.effort === undefined), describe(t5After));
 
     // 20. An effort the thread model lacks never stops a start: the thread runs at the nearest level it offers.
-    answer = await webApi(web, 'dsh-plugin-projects/update', { target: coord, changes: { threadModel: 'fake:fake-mini' } });
+    answer = await webApi(web, 'dsh-plugin-coordinator/update', { target: coord, changes: { threadModel: 'fake:fake-mini' } });
     check('the window says the inherited effort is fitted', answer.ok && (answer.value?.notes ?? []).some((n) => /fake:fake-mini doesn't offer effort "max", so it runs at "high"/.test(n)),
         JSON.stringify(answer).slice(0, 400));
     mark = model.requests.length;
@@ -780,7 +780,7 @@ try {
     check('a thread whose model lacks the default effort starts at the nearest one', kappa.length > 0 && kappa.every((r) => r.model === 'fake-mini' && r.effort === 'high'), describe(kappa));
 
     // 21. The plugin's page lists every project with what it runs and where each setting comes from.
-    answer = await webApi(web, 'dsh-plugin-projects/list', {});
+    answer = await webApi(web, 'dsh-plugin-coordinator/list', {});
     const row = answer.ok ? answer.value.projects.find((p) => p.id === PROJECT_ID) : undefined;
     check('the plugin page lists the project, its settings and where each comes from', row?.coordinator === coord && row.paused === false
         && row.settings.coordinatorModel.value === 'fake:fake-model' && row.settings.coordinatorModel.source === 'project setting'
@@ -788,12 +788,12 @@ try {
         && row.live?.model === 'fake-model' && row.live?.reasoningEffort === 'max' && row.threads.open > 0, JSON.stringify(answer).slice(0, 600));
 
     // 21b. News: what threads hand back or finish waits for the user, from anywhere in the window, until they open the coordinator.
-    answer = await webApi(web, 'dsh-plugin-projects/news', {});
+    answer = await webApi(web, 'dsh-plugin-coordinator/news', {});
     const newsHere = answer.ok ? answer.value.news.find((n) => n.coordinator === coord) : undefined;
     check('the window hears what threads finished, newest last, until the user opens the coordinator', newsHere?.project === PROJECT_ID && newsHere.unread.length > 0
         && newsHere.unread.at(-1).thread === 't10' && newsHere.unread.at(-1).kind === 'finished' && newsHere.unread.at(-1).title === 'Kappa'
         && readText(logFile).includes(`news ${PROJECT_ID}/t10 finished`), JSON.stringify(answer).slice(-600));
-    answer = await webApi(web, 'dsh-plugin-projects/seeNews', { target: coord, seq: newsHere?.seq });
+    answer = await webApi(web, 'dsh-plugin-coordinator/seeNews', { target: coord, seq: newsHere?.seq });
     check('opening the coordinator sees its news', answer.ok && answer.value.news.find((n) => n.coordinator === coord)?.unread.length === 0, JSON.stringify(answer).slice(0, 300));
 
     // 22. Code changes: a thread's edits show as +a -d · N files, as DSH's own
@@ -818,7 +818,7 @@ try {
     const turnsKept = (n) => waitFor(() => (project().threads?.[lambdaId]?.changes?.length === n ? true : null), `${n} Lambda turn(s) with changes in the store`, 15000).catch(() => false);
     await turnsKept(1);
     const changesOf = async (web) => {
-        const read = await webApi(web, 'dsh-plugin-projects/describe', { target: coord });
+        const read = await webApi(web, 'dsh-plugin-coordinator/describe', { target: coord });
         return read.ok ? read.value.threads.find((t) => t.id === lambdaId)?.changes : undefined;
     };
     const dshCard = async (web, seq) => {
@@ -836,7 +836,7 @@ try {
     // The window's live copy: DSH writes its projection cache at the turn's
     // end, before it announces the turn's changes, so ask the running Host.
     const projected = await webApi(web, 'session/projections', { request: { sessionId: lambda } });
-    const pv = projected.ok ? projected.value?.values?.projectSession : undefined;
+    const pv = projected.ok ? projected.value?.values?.coordinatorSession : undefined;
     const lambdaView = pv?.role ? pv : pv?.v;
     check('the thread\'s own view marks the turn, so the window reads its changes again', lambdaView?.role === 'thread'
         && lambdaView.changes?.some((c) => c.seq === lc?.last.seq && c.turn === lc?.last.turn), projected.ok ? JSON.stringify(lambdaView) : JSON.stringify(projected).slice(0, 400));
@@ -871,7 +871,7 @@ try {
     await overlap(wait6, call('bash', { command: "printf 'from B shell\\n' >> README.md", description: 'append' }));
     const marksOf = async (sessionId) => {
         const got = await webApi(web, 'session/projections', { request: { sessionId } });
-        const value = got.ok ? got.value?.values?.projectSession : undefined;
+        const value = got.ok ? got.value?.values?.coordinatorSession : undefined;
         return (value?.role ? value : value?.v)?.changes ?? [];
     };
     const filesIn = async (sessionId, seq) => {
@@ -882,7 +882,7 @@ try {
     const seenByDsh = await waitFor(async () => { const files = await dshForA(); return files.some((f) => f.endsWith('b-new.txt')) ? files : null; }, 'DSH announcing A\'s turn with B\'s file', 20000).catch(() => null);
     check('DSH credits a thread that only waited with what another thread changed in its folder', seenByDsh !== null, JSON.stringify(await dshForA()));
     await waitFor(() => (project().threads?.[writesId]?.changes?.length === 1 ? true : null), 'B\'s write in the store', 15000).catch(() => false);
-    const readThreads = await webApi(web, 'dsh-plugin-projects/describe', { target: coord });
+    const readThreads = await webApi(web, 'dsh-plugin-coordinator/describe', { target: coord });
     const changesFor = (id) => (readThreads.ok ? readThreads.value.threads.find((t) => t.id === id)?.changes : undefined);
     const filesOfB = (project().threads?.[writesId]?.changes ?? []).flatMap((r) => r.files.map((f) => f.path));
     check('each thread counts only its own edits: none for the one that waited, its file for the one that wrote', changesFor(waitsId) === null
@@ -890,7 +890,7 @@ try {
         && filesOfB.join() === 'b-new.txt', `A ${JSON.stringify(changesFor(waitsId))} B ${JSON.stringify(changesFor(writesId))} ${filesOfB.join()}`);
     // 22c. A thread's Changes tab (remote.js `changes`): its own edits with each one's hunks, read from its
     // log and its subagents' logs, and the turns DSH can still review; another thread in the folder shows only its own.
-    const tabOf = (web, target, thread) => webApi(web, 'dsh-plugin-projects/changes', thread ? { target, thread } : { target });
+    const tabOf = (web, target, thread) => webApi(web, 'dsh-plugin-coordinator/changes', thread ? { target, thread } : { target });
     let tab = await tabOf(web, lambda);
     const notesIn = (read) => (read.ok ? read.value.files.find((f) => f.path === 'notes.md') : undefined);
     let notes = notesIn(tab);
@@ -1013,7 +1013,7 @@ try {
     // send the thread on.
     const viewOf = async (sessionId) => {
         const read = await webApi(webAgain, 'session/projections', { request: { sessionId } });
-        const value = read.ok ? read.value?.values?.projectSession : undefined;
+        const value = read.ok ? read.value?.values?.coordinatorSession : undefined;
         return value?.role ? value : value?.v;
     };
     const endings = {};
@@ -1033,12 +1033,12 @@ try {
     check('the coordinator is told to leave a thread the user stopped stopped', since(mark, 'coordinator')[0]?.system.includes('A thread the user stopped stays stopped: when you mention it, say the user stopped it and it can be resumed.'));
     // Retry: the thread hears it from its coordinator, runs, and its failure clears.
     const refusedWhy = (answer) => (answer.ok ? 'ok' : `${answer.error?.code}: ${answer.error?.message}`);
-    let answer2 = await webApi(webAgain, 'dsh-plugin-projects/continueThread', { target: coord, thread: 't1' });
-    check('a thread whose last turn finished has nothing to retry', !answer2.ok && answer2.error?.code === 'projects/refused' && /nothing to retry/.test(answer2.error.message), refusedWhy(answer2));
-    answer2 = await webApi(webAgain, 'dsh-plugin-projects/continueThread', { target: coord, thread: 't2' });
+    let answer2 = await webApi(webAgain, 'dsh-plugin-coordinator/continueThread', { target: coord, thread: 't1' });
+    check('a thread whose last turn finished has nothing to retry', !answer2.ok && answer2.error?.code === 'coordinator/refused' && /nothing to retry/.test(answer2.error.message), refusedWhy(answer2));
+    answer2 = await webApi(webAgain, 'dsh-plugin-coordinator/continueThread', { target: coord, thread: 't2' });
     check('a resolved thread is not retried', !answer2.ok && /is resolved/.test(answer2.error?.message ?? ''), refusedWhy(answer2));
     mark = model.requests.length;
-    answer2 = await webApi(webAgain, 'dsh-plugin-projects/continueThread', { target: threadSession('t3'), thread: 't3' });
+    answer2 = await webApi(webAgain, 'dsh-plugin-coordinator/continueThread', { target: threadSession('t3'), thread: 't3' });
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Gamma retry\'s idle note');
     const retried = since(mark, 't3')[0];
     check('Retry sends the thread on from its coordinator', answer2.ok && answer2.value?.project?.id === PROJECT_ID
@@ -1050,7 +1050,7 @@ try {
     check('a turn that finishes clears the failure', (await viewOf(threadSession('t3')))?.ending === undefined, JSON.stringify(await viewOf(threadSession('t3'))));
     // Resume: the same for a stopped thread.
     mark = model.requests.length;
-    answer2 = await webApi(webAgain, 'dsh-plugin-projects/continueThread', { target: coord, thread: 't4' });
+    answer2 = await webApi(webAgain, 'dsh-plugin-coordinator/continueThread', { target: coord, thread: 't4' });
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Delta resume\'s idle note');
     check('Resume continues a stopped thread', answer2.ok && since(mark, 't4')[0]?.fresh.includes('The user asked you to continue. Your last turn was stopped by the user before it finished.')
         && (await viewOf(threadSession('t4')))?.ending === undefined, `${refusedWhy(answer2)} ${since(mark, 't4')[0]?.fresh.slice(0, 300)}`);
@@ -1067,7 +1067,7 @@ try {
     mkdirSync(dirB);
     const wsA = (await bridge('POST', '/sessions', { workspacePath: dirA })).workspace.id;
     await bridge('POST', '/sessions', { workspacePath: dirB });
-    const api = (method, args) => webApi(webAgain, `dsh-plugin-projects/${method}`, args);
+    const api = (method, args) => webApi(webAgain, `dsh-plugin-coordinator/${method}`, args);
     mark = model.requests.length;
     let lists = await api('create', { name: 'Made Here', workspace: wsA });
     const madeId = lists.value?.project;
@@ -1152,7 +1152,7 @@ try {
     check('the user\'s own words in a thread give it that tool for the same turn', direct[0]?.tools.includes(LANES) && resultOf(direct).includes('alpha up, beta up')
         && readText(logFile).includes(`tools ${PROJECT_ID}/t2 +lane-catalog from the user in the thread`), `${direct[0]?.tools.filter((t) => t.startsWith('mcp__')).join(',')} | ${resultOf(direct)}`);
     // Permissions, as DSH itself holds them.
-    let described = await webApi(webAgain, 'dsh-plugin-projects/describe', { target: madeCoord });
+    let described = await webApi(webAgain, 'dsh-plugin-coordinator/describe', { target: madeCoord });
     const lanesRow = described.value?.threads?.find((t) => t.title === 'Lanes up');
     check('a thread runs on Workspace Write, its coordinator on Read Only, and the window shows both', described.ok && lanesRow?.permission === 'workspace-write'
         && described.value.project.permission === 'read-only' && lanesRow.tools?.join() === 'lane-catalog' && described.value.project.tools?.length === 0
@@ -1161,14 +1161,14 @@ try {
     const lanesEvents = (await bridge('GET', `/sessions/${lanesThread?.sessionId}/events?types=permission/preset,user/message&limit=50`)).events;
     const presetAt = lanesEvents.findLastIndex((e) => e.type === 'permission/preset');
     check('it is on Workspace Write before it reads its brief', presetAt > 0 && lanesEvents.findIndex((e) => e.type === 'user/message') > presetAt, JSON.stringify(lanesEvents.map((e) => e.type)));
-    described = await webApi(webAgain, 'dsh-plugin-projects/describe', { target: coord });
+    described = await webApi(webAgain, 'dsh-plugin-coordinator/describe', { target: coord });
     check('every thread the plugin started ran on Workspace Write', described.ok && described.value.threads.length > 3 && described.value.threads.every((t) => t.permission === 'workspace-write'),
         JSON.stringify(described.value?.threads?.map((t) => [t.id, t.permission])));
     // Project settings moves the coordinator at once, and new threads start on what it says.
-    let changed = await webApi(webAgain, 'dsh-plugin-projects/update', { target: madeCoord, changes: { coordinatorPermission: 'workspace-write' } });
+    let changed = await webApi(webAgain, 'dsh-plugin-coordinator/update', { target: madeCoord, changes: { coordinatorPermission: 'workspace-write' } });
     check('Project settings moves a coordinator to another permission', changed.ok && changed.value.project.permission === 'workspace-write'
         && changed.value.access.coordinatorPermission.source === 'project setting', JSON.stringify(changed).slice(0, 400));
-    changed = await webApi(webAgain, 'dsh-plugin-projects/update', { target: madeCoord, changes: { coordinatorPermission: null, threadPermission: 'read-only' } });
+    changed = await webApi(webAgain, 'dsh-plugin-coordinator/update', { target: madeCoord, changes: { coordinatorPermission: null, threadPermission: 'read-only' } });
     check('and back to Read Only, the plugin\'s default', changed.ok && changed.value.project.permission === 'read-only' && changed.value.access.threadPermission.value === 'read-only', JSON.stringify(changed).slice(0, 400));
     // On Read Only a coordinator changes no files, and what would need approval is refused without asking the user.
     const coordinatorFile = join(dirA, 'coordinator-probe.txt');
@@ -1194,7 +1194,7 @@ try {
     await say(madeCoord, call('project_thread_start', { ask: 'Please do this.', title: 'Read only', brief: call('write', { file_path: readOnlyFile, content: 'x' }) }));
     // DSH's sandbox refuses the write, or asks the user; either way nothing is written.
     await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Made Here"') && whoOf(r) === 'coordinator' && /^SAW-(IDLE|APPROVAL)$/.test(r.action.text ?? '')), 'the Read only note');
-    described = await webApi(webAgain, 'dsh-plugin-projects/describe', { target: madeCoord });
+    described = await webApi(webAgain, 'dsh-plugin-coordinator/describe', { target: madeCoord });
     check('a thread on Read Only can\'t write even in its own folder', described.value?.threads?.find((t) => t.title === 'Read only')?.permission === 'read-only' && !existsSync(readOnlyFile),
         resultOf(since(mark).filter((r) => /You are thread t\d+, "Read only", in the DSH project/.test(r.system))));
 
@@ -1287,7 +1287,7 @@ try {
         reqs = await say(coord, call('bash', { command: `curl -sS -X POST http://${sinkAt}/deploy`, description: 'Deploy' }));
         check('a coordinator\'s send is refused, and nobody is asked', resultOf(reqs).includes(`Not run: the command ${sends}. You don't send anything yourself`)
             && posted() === 1 && (await coordAsked()) === askedBefore && readText(logFile).includes(`send-refused ${PROJECT_ID}/coordinator request curl`), resultOf(reqs));
-        changed = await webApi(webAgain, 'dsh-plugin-projects/update', { target: madeCoord, changes: { threadPermission: 'danger-full-access' } });
+        changed = await webApi(webAgain, 'dsh-plugin-coordinator/update', { target: madeCoord, changes: { threadPermission: 'danger-full-access' } });
         mark = model.requests.length;
         await say(madeCoord, call('project_thread_start', { ask: 'Please do this.', title: 'Never asks', brief: call('bash', { command: `curl -sS -X POST http://${sinkAt}/deploy`, description: 'Deploy' }) }));
         await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Made Here"') && whoOf(r) === 'coordinator' && r.action.text === 'SAW-IDLE'), 'the Never asks idle note');
@@ -1295,7 +1295,7 @@ try {
         const neverReqs = since(mark).filter((r) => /You are thread t\d+, "Never asks", in the DSH project "Made Here"/.test(r.system));
         check('a thread whose approvals never ask can\'t send, and hears what the user can do', changed.ok && resultOf(neverReqs).includes('this thread\'s permission never asks')
             && resultOf(neverReqs).includes('the user can put this thread on Workspace Write') && posted() === 1 && new RegExp(` send-refused ${madeId}/t\\d+ request curl never-asks`).test(readText(logFile)), resultOf(neverReqs));
-        await webApi(webAgain, 'dsh-plugin-projects/update', { target: madeCoord, changes: { threadPermission: 'read-only' } });
+        await webApi(webAgain, 'dsh-plugin-coordinator/update', { target: madeCoord, changes: { threadPermission: 'read-only' } });
 
         // 25c. Deletes (batch 5 review M1, M2): a folder a thread's command made is its own with what it put there, but
         // not with the user's folder moved into it (B1); on DSH 0.2.1 a relative path is from the thread's working
@@ -1382,7 +1382,7 @@ try {
     // DSH's archive set, read through its own endpoint: unarchiving an id it doesn't hold changes nothing and answers with the set.
     const archivedNow = async () => (await webApi(webArchive, 'workspace/unarchiveSession', { request: { sessionId: 'e2e-none' } })).value?.archivedSessionIds ?? [];
     const projectSessions = [coord, ...Object.values(project().threads ?? {}).map((t) => t.sessionId).filter(Boolean)];
-    let archiveAnswer = await webApi(webArchive, 'dsh-plugin-projects/archive', { project: coord });
+    let archiveAnswer = await webApi(webArchive, 'dsh-plugin-coordinator/archive', { project: coord });
     let inArchive = await archivedNow();
     check('Archive project archives the coordinator and every thread in DSH', archiveAnswer.ok && archiveAnswer.value.archived === projectSessions.length
         && projectSessions.every((id) => inArchive.includes(id)), `${JSON.stringify(archiveAnswer).slice(0, 200)} ${projectSessions.length} ${inArchive.length}`);
@@ -1401,7 +1401,7 @@ try {
     check('a new start keeps it archived, wakes nothing of it and makes no coordinator', project().coordinatorSessionId === coord && project().archived
         && projectSessions.every((id) => heldAfter.includes(id)) && !readText(logFile).slice(logBefore).includes(`coordinator ${PROJECT_ID} `)
         && since(mark).every((r) => !r.system.includes(`You are the coordinator of the DSH project "${PROJECT}"`)), readText(logFile).slice(logBefore).slice(0, 600));
-    archiveAnswer = await webApi(webAfter, 'dsh-plugin-projects/restore', { project: PROJECT_ID });
+    archiveAnswer = await webApi(webAfter, 'dsh-plugin-coordinator/restore', { project: PROJECT_ID });
     inArchive = (await webApi(webAfter, 'workspace/unarchiveSession', { request: { sessionId: 'e2e-none' } })).value?.archivedSessionIds ?? [];
     check('Restore project brings the coordinator and every thread back', archiveAnswer.ok && archiveAnswer.value.restored === projectSessions.length
         && projectSessions.every((id) => !inArchive.includes(id)) && project().archived === undefined

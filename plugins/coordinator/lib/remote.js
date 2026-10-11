@@ -2,7 +2,7 @@
  * The plugin's endpoints for its browser half. DSH's own panels reach the
  * Host through Remote namespaces its gateway serves on the window's
  * connection (`/api/<namespace>/<method>`, the same carrier in the desktop
- * app and in a browser). This module adds one more, `dsh-plugin-projects`,
+ * app and in a browser). This module adds one more, `dsh-plugin-coordinator`,
  * so the Project settings dialog in lib/client.js reads and changes a
  * project's models, effort and pause the way the coordinator's
  * project_settings tool does, through the same manager methods, and its
@@ -20,21 +20,21 @@
  * TypeScript decorators, applied here by hand. Parameters are plain names,
  * since the gateway reads them from the method source.
  *
- * @module dsh-plugin-projects/remote
+ * @module dsh-plugin-coordinator/remote
  */
 import { Remote, RemoteError, bindTypertRemote } from '@deepseek-ai/dsh-typert-protocol';
 import { ProjectError } from './projects.js';
 
-/** Wire namespace: the client calls `/api/dsh-plugin-projects/<method>`. */
-export const NAMESPACE = 'dsh-plugin-projects';
+/** Wire namespace: the client calls `/api/dsh-plugin-coordinator/<method>`. */
+export const NAMESPACE = 'dsh-plugin-coordinator';
 /** Cordis service key the gateway looks the service up by. */
-export const SERVICE = 'dshPluginProjectsRemote';
+export const SERVICE = 'dshPluginCoordinatorRemote';
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 /** A plugin error the user can act on, as a Remote failure the dialog shows. */
 function failure(error) {
-    if (error instanceof ProjectError) return new RemoteError('projects/refused', error.message, {});
+    if (error instanceof ProjectError) return new RemoteError('coordinator/refused', error.message, {});
     return error;
 }
 

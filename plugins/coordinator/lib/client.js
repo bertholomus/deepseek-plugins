@@ -1,5 +1,5 @@
 /**
- * dsh-plugin-projects, browser half. Three parts:
+ * dsh-plugin-coordinator, browser half. Three parts:
  *
  * - The "Default models" form on the plugin's page in DSH (Plugins →
  *   Projects). It edits the four plugin-wide defaults through
@@ -17,7 +17,7 @@
  *   opened beside the current one, thread names in replies that open the
  *   thread, thread rows in the session list marked and nested under their
  *   coordinator, and the Projects page: every project with its threads. It
- *   reads the `projectSession` projection the host half folds (projection.js)
+ *   reads the `coordinatorSession` projection the host half folds (projection.js)
  *   and never reads session logs itself.
  *
  * Hand-written in the module format DSH serves to the browser, so the plugin
@@ -25,11 +25,11 @@
  * the client plugin (inject + apply). Each part waits for the DSH services it
  * uses, so a DSH without some of them still runs the rest.
  *
- * @module dsh-plugin-projects/client
+ * @module dsh-plugin-coordinator/client
  */
 // DSH serves browser halves in one script; never throw here, or the others stop loading too.
 if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoader__.load({
-    id: 'dsh-plugin-projects',
+    id: 'dsh-plugin-coordinator',
     factory: (require) => {
         const module = { exports: {} };
         Object.defineProperty(module.exports, Symbol.toStringTag, { value: 'Module' });
@@ -39,9 +39,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const h = React.createElement;
 
         /** The plugin's row id in the profile; DSH serves its settings under it. */
-        const ENTRY = 'projects';
+        const ENTRY = 'coordinator';
         /** The package whose page shows the form. */
-        const BUNDLE = 'dsh-plugin-projects';
+        const BUNDLE = 'dsh-plugin-coordinator';
         const ROUTES = [
             { id: 'coordinator', title: 'Coordinator', hint: 'The ◆ session you talk to in each project.', model: 'coordinatorModel', effort: 'coordinatorEffort' },
             { id: 'thread', title: 'New threads', hint: 'A running thread keeps the model it started with.', model: 'threadModel', effort: 'threadEffort' },
@@ -59,7 +59,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             save: 'Save',
             saving: 'Saving…',
         };
-        const INSERTED_TWICE = 'DSH can\'t save here because your profile adds this plugin with "insert:" (the older setup). In cordis.patch.yml, change that row to "- id: projects" with its "config:", as in the plugin README. Below is what the plugin runs with now.';
+        const INSERTED_TWICE = 'DSH can\'t save here because your profile adds this plugin with "insert:" (the older setup). In cordis.patch.yml, change that row to "- id: coordinator" with its "config:", as in the plugin README. Below is what the plugin runs with now.';
         const NOTE = 'These apply to every project that doesn\'t set its own. A project\'s own choice, made in its Project settings, in its coordinator\'s model menu or by asking the coordinator, comes first. Default follows DSH\'s default model, which is the one last picked in any DSH chat.';
 
         /** DSH's branch glyph, as a mask for links drawn by DSH's markdown. */
@@ -1419,7 +1419,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 getSnapshot: () => store.getSnapshot(),
                 actions: model.actions(),
             };
-            ctx.effect(() => () => model.dispose(), 'projects: defaults form');
+            ctx.effect(() => () => model.dispose(), 'coordinator: defaults form');
             const Page = (props) => (props.view === 'summary'
                 ? 'Default models, effort and access for coordinators and threads.'
                 : h('div', { className: 'dshp-page' },
@@ -1429,13 +1429,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.effect(() => ctx.configForms.whileServed([ENTRY], () => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
                 name: 'plugins.bundle.config',
                 key: BUNDLE,
-            }, Page))), 'projects: defaults page');
+            }, Page))), 'coordinator: defaults page');
         }
 
         // ── Threads in the chat window ─────────────────────────────────────
 
         /** The projection the host half folds for every session (projection.js). */
-        const KEY = 'projectSession';
+        const KEY = 'coordinatorSession';
         /** A thread's chat in the right sidebar: `dsh-resource://projectthread/session/<session id>`. */
         const CHAT_PROTOCOL = 'projectthread';
         const CHAT_PREFIX = `dsh-resource://${CHAT_PROTOCOL}/session/`;
@@ -1639,7 +1639,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
         const threadNumber = (id) => Number(String(id).slice(1)) || 0;
 
-        /** A session's `projectSession` value from DSH's shared session store, or undefined. */
+        /** A session's `coordinatorSession` value from DSH's shared session store, or undefined. */
         function valueIn(state, sessionId) {
             if (typeof sessionId !== 'string' || sessionId === '' || !state) return undefined;
             const value = state.projectionsBySession?.[sessionId]?.values?.[KEY] ?? state.byId?.[sessionId]?.projectionValues?.[KEY];
@@ -2524,7 +2524,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** A refusal from the plugin as a sentence, or that the thread couldn't be reached. */
         function continueError(error) {
             const message = String(error?.message ?? '').trim();
-            if (error?.code === 'projects/refused' && message) return `${message.replace(/^./, (c) => c.toUpperCase())}${/[.!?]$/.test(message) ? '' : '.'}`;
+            if (error?.code === 'coordinator/refused' && message) return `${message.replace(/^./, (c) => c.toUpperCase())}${/[.!?]$/.test(message) ? '' : '.'}`;
             return TEXT.continueFailed;
         }
 
@@ -3568,7 +3568,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function readFailure(error) {
             const code = String(error?.code ?? '');
             const message = String(error?.message ?? '').trim();
-            if (code === 'projects/refused' && message) return `${message.replace(/^./, (c) => c.toUpperCase())}${/[.!?]$/.test(message) ? '' : '.'}`;
+            if (code === 'coordinator/refused' && message) return `${message.replace(/^./, (c) => c.toUpperCase())}${/[.!?]$/.test(message) ? '' : '.'}`;
             if (code === 'projects/unreachable' || code.startsWith('gateway/not') || code.startsWith('rpc/') || !message) return SETTINGS.unreachable;
             return `${TEXT.changesFailed} ${message}`;
         }
@@ -3728,7 +3728,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 return next;
             });
             const openFile = (path) => {
-                try { tab.actions.openResource(fileAddress(thread, path)); } catch (error) { console.warn(`[projects] could not open ${path}: ${error?.message ?? error}`); }
+                try { tab.actions.openResource(fileAddress(thread, path)); } catch (error) { console.warn(`[coordinator] could not open ${path}: ${error?.message ?? error}`); }
             };
             const reviewable = (Array.isArray(value?.turns) ? value.turns : EMPTY)
                 .filter((t) => isObject(t) && t.reviewable === true && Number.isSafeInteger(t.turn) && Number.isSafeInteger(t.seq));
@@ -4981,7 +4981,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /** Navigation the thread views share, with the model catalog and the plugin's endpoints; nothing here throws into React. */
         function threadsApi(ctx, dialog = settingsDialog(), shared = {}) {
-            const warn = (what, error) => { console.warn(`[projects] ${what}: ${error?.message ?? error}`); };
+            const warn = (what, error) => { console.warn(`[coordinator] ${what}: ${error?.message ?? error}`); };
             const openSession = (sessionId) => {
                 if (typeof sessionId !== 'string' || sessionId === '') return;
                 try { ctx.uiWorkspace.openSession(sessionId); } catch (error) { warn('could not open the session', error); }
@@ -5416,10 +5416,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 name: 'sidebar.workspaces.session.menu.item', id: IDS.fullItem, order: 50, inject: withApi,
             }, FullViewMenuItem));
             // A thread opened anywhere lands beside its coordinator; from DSH's session list, straight there.
-            ctx.effect(() => projects.followRowClicks(), 'projects: thread rows open beside their coordinator');
-            ctx.effect(() => projects.followOpens(), 'projects: threads beside their coordinator');
+            ctx.effect(() => projects.followRowClicks(), 'coordinator: thread rows open beside their coordinator');
+            ctx.effect(() => projects.followOpens(), 'coordinator: threads beside their coordinator');
             // What threads hand back, or need the user for: a mark on the ◆ row and a notice wherever the user is.
-            ctx.effect(() => projects.followNews(), 'projects: news from threads');
+            ctx.effect(() => projects.followNews(), 'coordinator: news from threads');
             ctx.slots.inject('shell.overlay', () => ctx.slots.register({
                 name: 'shell.overlay', id: IDS.news, inject: withApi,
             }, NewsNotice));
@@ -5436,7 +5436,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, ProjectsIcon));
             // The right-sidebar parts: a thread's chat, the Threads pane, thread links from replies, and a thread's Changes.
             ctx.inject(['resources', 'sidebarRightTabs'], (scope) => {
-                scope.effect(() => scope.resources.register(threadChatResources(scope.sessions)), 'projects: thread chat resources');
+                scope.effect(() => scope.resources.register(threadChatResources(scope.sessions)), 'coordinator: thread chat resources');
                 scope.effect(() => scope.sidebarRightTabs.register({
                     id: IDS.chat,
                     kind: KINDS.chat,
@@ -5448,12 +5448,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         const value = valueIn(state, sessionId);
                         return (value?.role === 'thread' ? value.thread?.title : undefined) ?? state.byId[sessionId]?.displayTitle ?? TEXT.thread;
                     },
-                }), 'projects: thread chat tab');
+                }), 'coordinator: thread chat tab');
                 scope.effect(() => scope.sidebarRightTabs.register({
                     id: IDS.pane,
                     kind: KINDS.pane,
                     title: () => TEXT.threads,
-                }), 'projects: threads pane');
+                }), 'coordinator: threads pane');
                 scope.effect(() => scope.sidebarRightTabs.register({
                     id: IDS.link,
                     kind: KINDS.link,
@@ -5461,14 +5461,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     patterns: ['dsh-resource://file/session/**/.dsh-thread/*', 'dsh-resource://file/session/*/.t*'],
                     canOpen: (address) => linkTarget(address) !== undefined,
                     title: (address) => `${TEXT.thread} ${linkTarget(address)?.threadId ?? ''}`.trim(),
-                }), 'projects: thread links');
+                }), 'coordinator: thread links');
                 scope.effect(() => scope.sidebarRightTabs.register({
                     id: IDS.changes,
                     kind: KINDS.changes,
                     patterns: [`${CHANGES_PREFIX}**`],
                     canOpen: (address) => changesSessionOf(address) !== undefined,
                     title: (address) => `${TEXT.changes} · ${threadTitleIn(scope.sessions.list.getSnapshot(), changesSessionOf(address))}`,
-                }), 'projects: thread changes');
+                }), 'coordinator: thread changes');
                 scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
                     name: 'sidebar.right.pane.tab', key: IDS.chat, inject: withApi,
                     children: { [CONVERSATION_SLOT]: { kind: 'single', scope: 'session' } },
@@ -6511,7 +6511,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function errorText(error) {
             const code = String(error?.code ?? '');
             const message = String(error?.message ?? '').trim();
-            if (code === 'projects/refused' && message) return `${message.replace(/^./, (c) => c.toUpperCase())}${/[.!?]$/.test(message) ? '' : '.'}`;
+            if (code === 'coordinator/refused' && message) return `${message.replace(/^./, (c) => c.toUpperCase())}${/[.!?]$/.test(message) ? '' : '.'}`;
             if (code === 'projects/unreachable' || code.startsWith('gateway/not') || code.startsWith('rpc/')) return SETTINGS.unreachable;
             return message ? `The change didn't go through: ${message}` : SETTINGS.unreachable;
         }
@@ -7253,19 +7253,19 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.slots.inject('sidebar.workspaces.session.menu.item', () => ctx.slots.register({
                 name: 'sidebar.workspaces.session.menu.item', id: IDS.settingsItem, order: 250, inject: () => ({ dialog }),
             }, SettingsMenuItem));
-            ctx.effect(() => dialog.connect(), 'projects: project settings');
+            ctx.effect(() => dialog.connect(), 'coordinator: project settings');
             ctx.slots.inject('shell.overlay', () => ctx.slots.register({
                 name: 'shell.overlay', id: IDS.archive, inject: () => ({ flow, facts }),
             }, ArchiveOverlay));
             ctx.slots.inject('sidebar.workspaces.session.menu.item', () => ctx.slots.register({
                 name: 'sidebar.workspaces.session.menu.item', id: IDS.archiveItem, order: 260, inject: () => ({ flow, facts }),
             }, ArchiveMenuItem));
-            ctx.effect(() => flow.connect(), 'projects: archive');
+            ctx.effect(() => flow.connect(), 'coordinator: archive');
             if (renames) {
                 ctx.slots.inject('shell.overlay', () => ctx.slots.register({
                     name: 'shell.overlay', id: IDS.rename, inject: () => ({ flow: renames, facts }),
                 }, RenameOverlay));
-                ctx.effect(() => renames.connect(), 'projects: rename');
+                ctx.effect(() => renames.connect(), 'coordinator: rename');
             }
         }
 
@@ -7283,7 +7283,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 bound[name] = service;
                 then?.();
                 return () => { if (bound[name] === service) bound[name] = undefined; };
-            }, `projects: ${name}`);
+            }, `coordinator: ${name}`);
             const catalog = catalogSource(() => bound.remote);
             const link = hostLink(() => bound.connection, catalog);
             const facts = projectFacts(link);
@@ -7293,7 +7293,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.inject(['sessions'], (scope) => {
                 bind('sessions')(scope);
                 // New threads on DSH's default name what the next one runs, after a pick anywhere changes it.
-                scope.effect(() => followDefault(scope.sessions, catalog), 'projects: DSH default model');
+                scope.effect(() => followDefault(scope.sessions, catalog), 'coordinator: DSH default model');
             });
             ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => applyDefaultsForm(scope, { catalog, link, dialog, sessionsOf }));
             ctx.inject(['connection', 'remote', 'remote.session'], (scope) => applySettings(scope, dialog, link, facts, flow, renames));

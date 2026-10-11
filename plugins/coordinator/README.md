@@ -1,4 +1,4 @@
-# dsh-plugin-projects
+# dsh-plugin-coordinator
 
 Projects for DSH Desktop. A project works in one DSH workspace: you talk to its **coordinator** session, it starts **threads** (separate sessions) for focused work, and threads **hand back** their results to it. Each project has default models and effort levels for the coordinator and for threads, and says which of your own tools its sessions get and where they can write. **Projects** in DSH's sidebar opens a page with every project and its threads.
 
@@ -204,10 +204,10 @@ The plugin sets a project session's model and effort the same way the DSH model 
 1. Install the plugin as in the [root README](../../README.md#install-a-plugin):
 
    ```bash
-   dsh plugin --profile desktop add ~/.dsh-plugins/deepseek-plugins/plugins/projects
+   dsh plugin --profile desktop add ~/.dsh-plugins/deepseek-plugins/plugins/coordinator
    ```
 
-2. Configure it in your profile's `cordis.patch.yml`. The plugin's bundle already adds its row (`id: projects`), so address that row by id:
+2. Configure it in your profile's `cordis.patch.yml`. The plugin's bundle already adds its row (`id: coordinator`), so address that row by id:
 
    ```yaml
    - id: projects
@@ -329,7 +329,7 @@ Thread:
 
 ```bash
 npm install --no-save @deepseek-ai/schemastery @deepseek-ai/dsh-tools@next
-node plugins/projects/test/smoke.mjs
+node plugins/coordinator/test/smoke.mjs
 ```
 
 The smoke tests run against a fake Host built from the published `@deepseek-ai/*` packages, including a Host with DSH's per-session model selection.
@@ -338,7 +338,7 @@ The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`
 
 ```bash
 npm install --prefix /tmp/dsh @deepseek-ai/dsh
-DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/projects/test/e2e/run.mjs
+DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/coordinator/test/e2e/run.mjs
 ```
 
 It passes on DSH 0.2.0-rc.2 and 0.2.1-alpha.2, as root and as a normal user.
@@ -346,5 +346,5 @@ It passes on DSH 0.2.0-rc.2 and 0.2.1-alpha.2, as root and as a normal user.
 A second real-host test checks where a thread on Workspace Write can write, in a DSH whose default is Full access with approvals "never", as yours may be: the thread runs with approvals set to ask and its coordinator on Read Only, a write inside its folder goes through, a plain write just outside is refused with DSH's note that it may retry, the retry raises DSH's approval prompt and writes nothing while it waits or after a stop, the coordinator is told, the same for the thread's shell (which also shows whether DSH has a sandbox to run it in on that machine), and a plain chat on DSH's default writes outside without asking, with either. It makes its folder in your home folder, since DSH lets Workspace Write chats write its temp folders, and runs on Linux and macOS in under a minute:
 
 ```bash
-DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/projects/test/e2e/sandbox.mjs
+DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/coordinator/test/e2e/sandbox.mjs
 ```

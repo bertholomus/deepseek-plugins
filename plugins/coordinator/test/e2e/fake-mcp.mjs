@@ -4,7 +4,7 @@
  * lanes_status. Every call is appended to the file named by argv[2], so the
  * test sees whether a call reached the server.
  *
- * @module dsh-plugin-projects/test/e2e/fake-mcp
+ * @module dsh-plugin-coordinator/test/e2e/fake-mcp
  */
 import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';

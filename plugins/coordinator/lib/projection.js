@@ -1,5 +1,5 @@
 /**
- * The `projectSession` session projection: what the DSH window needs to draw
+ * The `coordinatorSession` session projection: what the DSH window needs to draw
  * a project session. It says whether a session is a coordinator or a thread
  * and of which project, holds a coordinator's thread roster and a thread's
  * coordinator, and lists the cards each turn earned (a thread started, a
@@ -46,12 +46,12 @@
  * clears it. `times` counts the same ending in a row, from 2 (a thread
  * retried that failed again).
  *
- * @module dsh-plugin-projects/projection
+ * @module dsh-plugin-coordinator/projection
  */
 import { TAGS, endingStateOf, readableError, handbackSummary, cardSummary } from './prompts.js';
 
 /** The projection key; the browser half reads the same name. */
-export const PROJECTION_KEY = 'projectSession';
+export const PROJECTION_KEY = 'coordinatorSession';
 /** Bump when the state shape or fold changes; DSH then refolds from the log. */
 export const STATE_VERSION = 6;
 /** Most recent cards kept per session; older turns rarely scroll into view. */
@@ -61,7 +61,7 @@ export const MAX_THREADS = 60;
 /** A thread's turns with file changes kept in its value (the newest). */
 export const MAX_CHANGES = 40;
 /** Marks the presentation meta of project tool results. */
-export const META_MARK = 'dshProjects';
+export const META_MARK = 'dshCoordinator';
 
 const INITIAL = Object.freeze({ turn: 0, v: null });
 /** Request ids of plugin prompts sent as the user's (earlier versions): `projects-<uuid>`, then `@<coordinator session>`. */
@@ -350,7 +350,7 @@ export function parseState(value) {
  * The projection definition for DSH's `ctx.sessionProjections`.
  * @param {(sessionId: string) => object|null} seed - the store's view of a session it knows, or null.
  */
-export function projectSessionProjection(seed) {
+export function coordinatorSessionProjection(seed) {
     return {
         key: PROJECTION_KEY,
         stateVersion: STATE_VERSION,

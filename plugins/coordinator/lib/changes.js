@@ -7,7 +7,7 @@
  * summary, which Review opens, only while the session lives in the
  * running Host. Pure functions.
  *
- * @module dsh-plugin-projects/changes
+ * @module dsh-plugin-coordinator/changes
  */
 
 /** Records kept per thread (older turns fold into one) and files kept per record. */

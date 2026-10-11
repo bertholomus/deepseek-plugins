@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { netHunks, lineDelta, MAX_NET_DISTANCE, MAX_HUNK_CHANGES } from '../plugins/projects/lib/changes.js';
-import { NetTexts, canonicalPath, changedPath, expectedAfter, notKept, readSide, MAX_NET_BYTES, NET_KEEP_MS } from '../plugins/projects/lib/net.js';
+import { netHunks, lineDelta, MAX_NET_DISTANCE, MAX_HUNK_CHANGES } from '../plugins/coordinator/lib/changes.js';
+import { NetTexts, canonicalPath, changedPath, expectedAfter, notKept, readSide, MAX_NET_BYTES, NET_KEEP_MS } from '../plugins/coordinator/lib/net.js';
 
-// A thread's net diff per file (plugins/projects/lib/changes.js netHunks, net.js): what its edits came to, from the
+// A thread's net diff per file (plugins/coordinator/lib/changes.js netHunks, net.js): what its edits came to, from the
 // file's text before its first edit to its text after its last. The manager's hook and the Changes tab are in
-// plugins/projects/test/smoke.mjs.
+// plugins/coordinator/test/smoke.mjs.
 
 /** A file's lines, as a diff counts them: a last newline ends the last line. */
 const lines = (text) => (text === '' ? [] : text.replace(/\n$/, '').split('\n'));

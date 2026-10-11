@@ -12,7 +12,7 @@
  * project_thread_update, the dialog or its own model picker. Pure
  * functions, no host imports.
  *
- * @module dsh-plugin-projects/settings
+ * @module dsh-plugin-coordinator/settings
  */
 
 export const SETTING_KEYS = ['coordinatorModel', 'coordinatorEffort', 'threadModel', 'threadEffort'];

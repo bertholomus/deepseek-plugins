@@ -1,5 +1,5 @@
 /**
- * dsh-plugin-projects — projects for DSH Desktop.
+ * dsh-plugin-coordinator — projects for DSH Desktop.
  *
  * Each project in the plugin config gets one coordinator session in its
  * workspace. The coordinator starts thread sessions for focused work with
@@ -18,15 +18,15 @@
  * them: whether project sessions have the user's own tools, and the DSH
  * permission preset of the coordinator and of new threads.
  *
- * @module dsh-plugin-projects
+ * @module dsh-plugin-coordinator
  */
 import z from '@deepseek-ai/schemastery';
 import { ProjectManager } from './projects.js';
 import { projectTools } from './tools.js';
-import { projectSessionProjection } from './projection.js';
+import { coordinatorSessionProjection } from './projection.js';
 import { ProjectsRemote, SERVICE } from './remote.js';
 
-export const name = 'projects';
+export const name = 'coordinator';
 
 /** Host services the plugin drives. */
 export const inject = ['sessionController', 'workspaceRegistry', 'agents', 'tools', 'systemPrompt'];
@@ -106,9 +106,9 @@ export const Config = z.object({
     /** A new coordinator introduces itself in a first turn. DSH lists a session only after its first turn, so without it the coordinator stays out of the sidebar until someone messages it. */
     welcome: z.boolean().default(true),
     /** Durable project state. */
-    storeFile: z.string().default('~/.dsh/projects/projects.json'),
+    storeFile: z.string().default('~/.dsh/coordinator/coordinator.json'),
     /** Folder for project memory files. */
-    memoryDir: z.string().default('~/.dsh/projects/memory'),
+    memoryDir: z.string().default('~/.dsh/coordinator/memory'),
     /** Largest memory file the tools will write. */
     maxMemoryBytes: z.number().default(65536),
     /**
@@ -125,15 +125,15 @@ export const Config = z.object({
      */
     guardedTools: live(z.union([z.array(z.string()), z.dict(z.array(z.string()))]).default([])),
     /** Action log, mode 600, never prompt text. Empty turns it off. */
-    logFile: z.string().default('~/.dsh/projects/projects.log'),
+    logFile: z.string().default('~/.dsh/coordinator/coordinator.log'),
 });
 
 export function apply(ctx, config) {
     if (!config.enabled) return;
     for (const key of ['maxHandbacksPerHour', 'maxThreadsPerHour', 'maxMemoryBytes']) {
-        if (!Number.isInteger(config[key]) || config[key] < 1) throw new Error(`projects: ${key} must be a positive integer`);
+        if (!Number.isInteger(config[key]) || config[key] < 1) throw new Error(`coordinator: ${key} must be a positive integer`);
     }
-    if (!(config.approvalNoticeSeconds >= 0)) throw new Error('projects: approvalNoticeSeconds must be 0 or more');
+    if (!(config.approvalNoticeSeconds >= 0)) throw new Error('coordinator: approvalNoticeSeconds must be 0 or more');
     const manager = new ProjectManager({ ctx, config, buildTools: projectTools });
 
     ctx.on('agent/created', ({ agent }) => {
@@ -191,11 +191,11 @@ export function apply(ctx, config) {
         const own = manager.archiveActivity(sessionId);
         return own ? [own, ...rest] : rest;
     });
-    ctx.effect(() => () => manager.dispose(), 'projects.scopes()');
+    ctx.effect(() => () => manager.dispose(), 'coordinator.scopes()');
     // What the DSH window draws for project sessions: roles, rosters and thread
     // cards (lib/projection.js). Optional, so a Host without projections still runs projects.
     ctx.inject(['sessionProjections'], (scope) => {
-        scope.sessionProjections.register(projectSessionProjection((sessionId) => manager.seedView(sessionId)));
+        scope.sessionProjections.register(coordinatorSessionProjection((sessionId) => manager.seedView(sessionId)));
     });
 
     // The Project settings dialog's endpoints (remote.js), served by DSH's own
@@ -206,8 +206,8 @@ export function apply(ctx, config) {
 
     // Coordinators are created after composition settles; failures are logged, never thrown.
     manager.start().then(() => {
-        ctx.logger.info('projects: %d project(s) ready', manager.projects.size);
+        ctx.logger.info('coordinator: %d project(s) ready', manager.projects.size);
     }, (error) => {
-        ctx.logger.warn('projects: startup failed: %s', error?.message ?? error);
+        ctx.logger.warn('coordinator: startup failed: %s', error?.message ?? error);
     });
 }

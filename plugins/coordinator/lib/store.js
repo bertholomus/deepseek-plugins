@@ -55,7 +55,7 @@
  * is switched off), the copy is let go (ProjectStore.release), so the next
  * start reads the file again.
  *
- * @module dsh-plugin-projects/store
+ * @module dsh-plugin-coordinator/store
  */
 import { readFileSync, renameSync, writeFileSync, mkdirSync, chmodSync, statSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

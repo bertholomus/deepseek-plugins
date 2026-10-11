@@ -10,7 +10,7 @@
  * 4 and 5 found, and the send and delete checks hold what it misses. Pure
  * functions.
  *
- * @module dsh-plugin-projects/grants
+ * @module dsh-plugin-coordinator/grants
  */
 
 /** Each action, by the words that name it (verbs and nouns); the first is how a refusal says it. */

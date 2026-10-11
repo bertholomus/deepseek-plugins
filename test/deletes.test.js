@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { lstatSync, mkdtempSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { deletesOf, codeDeletesOf, deletesWhat, isFree, madeDirsOf, identityOf } from '../plugins/projects/lib/deletes.js';
+import { deletesOf, codeDeletesOf, deletesWhat, isFree, madeDirsOf, identityOf } from '../plugins/coordinator/lib/deletes.js';
 
-// What a project thread's command deletes (plugins/projects/lib/deletes.js): the plugin asks the user before one that
+// What a project thread's command deletes (plugins/coordinator/lib/deletes.js): the plugin asks the user before one that
 // deletes files the thread didn't create. Scripts the thread created are read through `read`, here from this table.
 const files = {
   '/w/tidy.sh': '#!/bin/sh\nrm -rf build\n',

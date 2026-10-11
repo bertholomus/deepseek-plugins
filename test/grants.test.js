@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { grantsIn, asksFor, doing } from '../plugins/projects/lib/grants.js';
+import { grantsIn, asksFor, doing } from '../plugins/coordinator/lib/grants.js';
 
-// Leave a coordinator's brief or message gives a thread for what rule 6 holds back (plugins/projects/lib/grants.js):
+// Leave a coordinator's brief or message gives a thread for what rule 6 holds back (plugins/coordinator/lib/grants.js):
 // the plugin refuses it unless the user's own words name the action. The first ones are behaviour review 4's;
 // the ones marked are review 5's (S3 r1, S3 r2, S10 r1).
 const GRANTS = [
