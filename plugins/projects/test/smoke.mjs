@@ -3462,7 +3462,32 @@ test('a stop the coordinator asks for, or a person makes, does not come back as 
     assert.match(cp[0].text, /^\[Thread idle without a handback: t1 · "Long"\]\n\nThe turn was stopped before it finished\./);
 });
 
-test('a permission prompt left unanswered tells the coordinator', async () => {
+test('a permission prompt tells the coordinator at once', async () => {
+    const { host } = setup();
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Deploy', brief: 'Deploy the site.' });
+    const thread = threadOf(host, coord);
+    const cp = host.sessions.get(coord.id).prompts;
+
+    // Every send a thread makes waits on a prompt, so the user hears of each through the coordinator then, not a minute later.
+    thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'a1', toolName: 'bash', reason: 'runs ./deploy.sh' } });
+    await tick();
+    assert.equal(cp.length, 1);
+    assert.match(cp[0].text, /^\[Thread waiting for approval: t1 · "Deploy"\]\n\nIt asked to use bash: runs \.\/deploy\.sh\n\n/);
+    // An answer that comes soon after changes nothing: the coordinator heard once.
+    thread.ctx.sessionEvent({ type: 'approval/decided', data: { id: 'a1', outcome: 'allowed-once' } });
+    await tick();
+    assert.equal(cp.length, 1);
+
+    // The user is in the thread directly: the prompt is in front of them.
+    userSays(host, thread.id, 'Go ahead and deploy.');
+    thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'a2', toolName: 'bash' } });
+    await tick();
+    assert.equal(cp.length, 1);
+});
+
+test('with approvalNoticeSeconds set, a permission prompt tells the coordinator once left unanswered that long', async () => {
     const { host } = setup({ approvalNoticeSeconds: 0.02 });
     await tick();
     const coord = coordinatorOf(host);
@@ -3554,18 +3579,18 @@ test('news: what threads hand back or need the user for waits per project until 
     assert.equal(JSON.parse(readFileSync(host.provided.get('dshPluginProjectsRemote').manager.store.file, 'utf8')).projects['dsh-plugins'].news.seq, 5);
 });
 
-test('permission prompt notices stop with the plugin and can be turned off', async () => {
-    for (const [seconds, unload] of [[0.02, true], [0, false]]) {
-        const { host } = setup({ approvalNoticeSeconds: seconds });
-        await tick();
-        const coord = coordinatorOf(host);
-        await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Quiet', brief: 'Work.' });
-        const thread = [...host.live.values()].find((a) => a.id !== coord.id);
-        thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'b1', toolName: 'bash' } });
-        if (unload) for (const dispose of host.effects) await dispose();
-        await new Promise((r) => setTimeout(r, 60));
-        assert.equal(host.sessions.get(coord.id).prompts.length, 0);
-    }
+test('a permission prompt notice still waiting out approvalNoticeSeconds stops with the plugin', async () => {
+    const { host } = setup({ approvalNoticeSeconds: 0.02 });
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Quiet', brief: 'Work.' });
+    const thread = [...host.live.values()].find((a) => a.id !== coord.id);
+    thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'b1', toolName: 'bash' } });
+    for (const dispose of host.effects) await dispose();
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(host.sessions.get(coord.id).prompts.length, 0);
+    // At once is the default; a wait can't be less than none.
+    assert.equal(plugin.Config({}).approvalNoticeSeconds, 0);
     assert.throws(() => setup({ approvalNoticeSeconds: -1 }), /approvalNoticeSeconds/);
 });
 

@@ -292,8 +292,7 @@ function writePatch(modelPort, defaults) {
               high: high
 - id: projects
   config:
-${Object.entries(defaults).map(([key, value]) => `    ${key}: ${q(value)}\n`).join('')}    approvalNoticeSeconds: 1
-    storeFile: ${q(storeFile)}
+${Object.entries(defaults).map(([key, value]) => `    ${key}: ${q(value)}\n`).join('')}    storeFile: ${q(storeFile)}
     memoryDir: ${q(memoryDir)}
     logFile: ${q(logFile)}
     guardedTools:
@@ -546,6 +545,9 @@ try {
     saw = await coordinatorSaw(mark, 'SAW-APPROVAL', 'the Delta approval note');
     check('approval note names the tool and the session', saw.fresh.includes('[Thread waiting for approval: t4 · "Delta"]')
         && saw.fresh.includes('It asked to use write: ') && saw.fresh.includes('E2E approval check.') && saw.fresh.includes('in the "Delta" session'), saw.fresh.slice(0, 400));
+    // At once, as the plugin's default has it: the thread asked for the write in its first request.
+    const deltaAsked = since(mark, 't4')[0];
+    check('the approval note comes at once', deltaAsked !== undefined && saw.at - deltaAsked.at < 5000, `${deltaAsked ? saw.at - deltaAsked.at : '?'} ms after the thread's request`);
     // A person's stop stays a stop: no note goes to the coordinator (so it can't send the thread on by
     // itself), and its roster says the user stopped it.
     mark = model.requests.length;
@@ -917,7 +919,7 @@ try {
     child = startDsh(dsh);
     await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge after the second restart', 90000);
     const nuNote = await coordinatorSaw(quitMark, 'SAW-IDLE', 'the Nu note after the quit');
-    // Past the plugin's approval timer, so a prompt asked again would have been told by now.
+    // A prompt asked again would have been told by now (the plugin tells the coordinator at once).
     await sleep(3000);
     check('a thread waiting on a prompt when DSH quits is told once at the next start, is not sent on, and its prompt is not told again',
         nuNote.fresh.includes(`[Thread idle without a handback: ${nuId} · "Nu"]`) && nuNote.fresh.includes('The turn was cut off because DSH closed while it ran.')

@@ -1958,9 +1958,9 @@ export class ProjectManager {
     }
 
     /**
-     * Watch a thread's permission prompts. One still unanswered after
-     * approvalNoticeSeconds tells the coordinator, so a thread it started
-     * does not sit on a prompt nobody sees.
+     * Watch a thread's permission prompts. Each tells the coordinator, at
+     * once or when still unanswered after approvalNoticeSeconds, so a thread
+     * it started does not sit on a prompt nobody sees.
      */
     onThreadEvent(projectId, threadId, agent, event) {
         if (event?.type === 'model/selection') {
@@ -1998,14 +1998,22 @@ export class ProjectManager {
             this.approvals.get(agent.id)?.delete(id);
             return;
         }
-        if (event.type !== 'approval/asked' || !(this.config.approvalNoticeSeconds > 0)) return;
+        if (event.type !== 'approval/asked') return;
+        const notice = () => {
+            void this.noticeApproval(projectId, threadId, agent, event.data).catch((error) => {
+                this.log(`error approval ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
+            });
+        };
+        // At once by default: each send a thread makes waits on a prompt, and the user should hear of it then.
+        if (!(this.config.approvalNoticeSeconds > 0)) {
+            notice();
+            return;
+        }
         const pending = this.approvals.get(agent.id) ?? new Map();
         this.approvals.set(agent.id, pending);
         const timer = setTimeout(() => {
             pending.delete(id);
-            void this.noticeApproval(projectId, threadId, agent, event.data).catch((error) => {
-                this.log(`error approval ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
-            });
+            notice();
         }, this.config.approvalNoticeSeconds * 1000);
         timer.unref?.();
         pending.set(id, timer);

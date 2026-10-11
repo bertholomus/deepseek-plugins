@@ -100,8 +100,8 @@ export const Config = z.object({
     maxHandbacksPerHour: z.number().default(30),
     /** New threads one project may start per hour; stops a coordinator stuck starting threads in a loop. */
     maxThreadsPerHour: z.number().default(20),
-    /** Seconds a thread started by the coordinator may wait on a permission prompt before the coordinator is told. 0 turns it off. */
-    approvalNoticeSeconds: z.number().default(60),
+    /** Seconds a thread started by the coordinator may wait on a permission prompt before the coordinator is told. 0 (the default) tells it at once. */
+    approvalNoticeSeconds: z.number().default(0),
     /** A new coordinator introduces itself in a first turn. DSH lists a session only after its first turn, so without it the coordinator stays out of the sidebar until someone messages it. */
     welcome: z.boolean().default(true),
     /** Durable project state. */
