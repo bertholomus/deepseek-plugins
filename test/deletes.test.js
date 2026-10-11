@@ -49,6 +49,10 @@ const DELETES = [
   'npm run clean',
   'yarn clean:all',
   'make distclean',
+  'cargo clean',
+  'mvn -q clean install',
+  './gradlew :app:clean',
+  'cmake --build out --target clean',
   './scripts/cleanup.sh',
 ];
 
@@ -68,6 +72,10 @@ const NO_DELETES = [
   'npm run build',
   'npm ci',
   'make',
+  'cargo build --release',
+  'cargo remove serde',
+  'mvn install',
+  'dotnet test --filter CleanupTests',
   './build.sh',
   'python3 -m pytest',
   "python3 -c \"print('use os.remove to delete')\"",
@@ -99,6 +107,7 @@ test('deletes: what a delete says, after "the command"', () => {
     assert.equal(said('ls | xargs rm'), 'deletes the files named on its input (xargs rm)');
     assert.equal(said('sh tidy.sh'), 'runs tidy.sh, which deletes build (rm)');
     assert.equal(said('npm run clean'), 'runs npm run clean, whose name says it deletes files');
+    assert.equal(said('cargo clean'), 'runs cargo clean, whose name says it deletes files');
     assert.equal(said("python3 -c \"import shutil; shutil.rmtree('build')\""), 'runs code that deletes build (python3)');
     assert.equal(said("python3 -c \"import os; os.system('rm -rf build')\""), 'runs code that deletes build (rm)');
 });

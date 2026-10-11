@@ -271,6 +271,9 @@ const CLEANS = new Set(['clean', 'cleanup', 'clear', 'purge', 'wipe', 'nuke', 'c
 const nameWords = (name) => String(name).replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z]+/).filter(Boolean);
 const cleaning = (name) => nameWords(name).some((w) => CLEANS.has(w));
 const byName = (label, program) => ({ program, path: label, full: null, said: `runs ${label}, whose name says it deletes files` });
+/** Build tools, and the goal or subcommand that deletes their output: `cargo clean`, `mvn clean install`, `./gradlew :app:clean`, `mix deps.clean`. */
+const BUILDERS = new Set(['cargo', 'go', 'dotnet', 'mvn', 'mvnw', 'gradle', 'gradlew', 'ant', 'sbt', 'lein', 'mix', 'cabal', 'stack', 'swift', 'flutter', 'bazel', 'bazelisk', 'xcodebuild', 'ninja', 'cmake', 'scons']);
+const BUILD_CLEAN = /(^|[:.])(clean|distclean|realclean|clobber|mrproper)([A-Z]\w*)?$/;
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'ash', 'fish', 'mksh']);
 const isPython = (name) => /^python(\d+(\.\d+)?)?$/.test(name);
@@ -380,6 +383,10 @@ function wordsDeletes(rawWords, ctx, inputs = []) {
         return named(name, args);
     }
     if (['make', 'gmake', 'bmake'].includes(name) || RUNNERS.has(name)) return named(name, args);
+    if (BUILDERS.has(name)) {
+        const goal = args.find((a) => !a.startsWith('-') && BUILD_CLEAN.test(a));
+        return goal !== undefined ? [byName(`${name} ${goal}`, name)] : [];
+    }
     if (SHELLS.has(name) || CODE_RUNNERS.has(name) || isPython(name) || name === 'source' || name === '.' || name === 'pwsh' || name === 'powershell') return interpreter(name, args, ctx, inputs);
     if (first.includes('/') || SCRIPT_EXT.test(first)) return script(first, undefined, ctx);
     return [];
