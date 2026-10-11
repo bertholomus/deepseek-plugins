@@ -4536,7 +4536,7 @@ test('projects page: a project whose coordinator was deleted in DSH gets no new 
     assert.equal(again.sessions.get(second).cwd, 'ws:/work/a');
 });
 
-test('store: what an older version wrote about categories and its groups is loaded and saved as found, and nothing acts on it', async () => {
+test('store: what an older version wrote about categories and its groups is saved exactly as the file has it, and nothing acts on it', async () => {
     const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
     // The old sidebar's file, which an older version imported once: nothing reads it now.
     mkdirSync(join(home, 'fleet-shell'));
@@ -4549,6 +4549,8 @@ test('store: what an older version wrote about categories and its groups is load
         categories: {
             work: { name: 'Work', order: 0, createdAt: 2, source: 'group' },
             home: { name: 'Home', order: 1, createdAt: 3, source: 'import', importedFrom: 'h1' },
+            // Even one an older version would have passed over.
+            blank: { name: '  ', order: 2 },
         },
         categoryOf: { 'ws:/work/a': 'work', 'ws:/work/b': 'home' },
         imports: {
@@ -4586,8 +4588,73 @@ test('store: what an older version wrote about categories and its groups is load
         const dir2 = mkdtempSync(join(tmpdir(), 'projects-'));
         writeFileSync(join(dir2, 'projects.json'), JSON.stringify(before));
         const saved2 = await kept(dir2, before);
-        assert.deepEqual([saved2.workspaceOf, 'categories' in saved2, 'categoryOf' in saved2, saved2.imports], [old.workspaceOf, false, false, {}]);
+        assert.deepEqual(Object.keys(saved2), ['version', 'projects', 'workspaceOf']);
+        assert.deepEqual(saved2.workspaceOf, old.workspaceOf);
     });
+});
+
+test('store: switched off and on again, the plugin reads its file anew and keeps what changed there meanwhile', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const file = join(dir, 'projects.json');
+    writeFileSync(file, JSON.stringify({
+        version: 1, projects: {}, workspaceOf: {},
+        categories: { work: { name: 'Work', order: 0, createdAt: 1, source: 'page' }, home: { name: 'Home', order: 1, createdAt: 2, source: 'page' } },
+        categoryOf: { 'ws:/work/a': 'work', 'ws:/work/b': 'home' },
+        imports: { categories: { at: 1, categories: 0, workspaces: 0 } },
+    }));
+    const options = { gateway: true, workspaces: ['/work/a', '/work/b'] };
+    const { host, raw } = setup({}, dir, options);
+    await tick();
+    assert.ok(JSON.parse(readFileSync(file, 'utf8')).projects['dsh-plugins'].coordinatorSessionId, 'the first start saved');
+    // Switched off: DSH runs the plugin's disposers.
+    for (const dispose of host.effects.splice(0)) await dispose();
+    // Meanwhile the file changes: a category goes, and a project setting changes.
+    const onDisk = JSON.parse(readFileSync(file, 'utf8'));
+    delete onDisk.categories.home;
+    delete onDisk.categoryOf['ws:/work/b'];
+    onDisk.projects['dsh-plugins'].settings.threadEffort = 'low';
+    writeFileSync(file, JSON.stringify(onDisk));
+    // Switched on again, in the same DSH.
+    const again = fakeHost(options);
+    for (const [id, session] of host.sessions) again.sessions.set(id, session);
+    again.workspaceRegistry = host.workspaceRegistry;
+    plugin.apply(again, plugin.Config(raw));
+    await tick();
+    const remote = again.provided.get('dshPluginProjectsRemote');
+    const row = (await remote.list()).projects.find((p) => p.id === 'dsh-plugins');
+    assert.deepEqual(row.settings.threadEffort, { value: 'low', source: 'project setting' }, 'the file as it is now');
+    // Its next save keeps the change, and the categories exactly as the file has them.
+    await remote.update('dsh-plugins', { paused: true });
+    const saved = JSON.parse(readFileSync(file, 'utf8'));
+    assert.deepEqual([saved.projects['dsh-plugins'].settings.threadEffort, saved.projects['dsh-plugins'].settings.paused], ['low', true]);
+    for (const key of ['workspaceOf', 'categories', 'categoryOf', 'imports']) assert.deepEqual(saved[key], onDisk[key], key);
+    // While it runs, a save writes them as the file has them just then, never the copy it read at start.
+    const now = JSON.parse(readFileSync(file, 'utf8'));
+    now.categories.later = { name: 'Later', order: 1, createdAt: 3, source: 'page' };
+    writeFileSync(file, JSON.stringify(now));
+    await remote.update('dsh-plugins', { paused: false });
+    assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).categories, now.categories);
+});
+
+test('store: a reload keeps one copy, so a tool call that outlives the old instance and the new one\'s writes both stay', async () => {
+    const { host, config, dir } = setup();
+    await tick();
+    const coord = coordinatorOf(host);
+    // Hold session creation, so the tool call outlives the instance that took it.
+    const create = host.sessionController.create;
+    let release;
+    host.sessionController.create = (req) => new Promise((r) => { release = () => r(create(req)); });
+    const started = coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Late', brief: 'x' });
+    await tick();
+    host.sessionController.create = create;
+    await reload(host, config);
+    await tick();
+    // The new instance writes first, then the old one's call finishes.
+    await coord.ctx.call('project_settings', { thread_effort: 'max' });
+    release();
+    assert.match(await started, /^Started t1 "Late"/);
+    const saved = JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'];
+    assert.deepEqual([saved.settings.threadEffort, saved.threads.t1?.title], ['max', 'Late']);
 });
 
 // ── code changes (changes.js) ──────────────────────────────────────────────

@@ -134,6 +134,8 @@ export function slugify(name) {
 
 /** The newest manager per store file. One left over from a config reload hands late work to it. */
 const managers = new Map();
+/** Every manager not yet disposed. */
+const liveManagers = new Set();
 /** Coordinator checks in flight, by store file and project, so two managers never make two coordinators. */
 const ensuring = new Map();
 
@@ -385,8 +387,13 @@ export class ProjectManager {
         this.ctx = ctx;
         this.config = config;
         this.buildTools = buildTools;
-        this.store = ProjectStore.open(config.storeFile);
-        managers.set(this.store.file, this);
+        /** The store's file; its copy is `store`. */
+        this.storeFile = dataPath(config.storeFile);
+        // With no other manager running on the file (the plugin was switched off, or this is the first), read it
+        // again: it may have changed while the plugin was off. One still running (a config reload) shares its copy.
+        if (![...liveManagers].some((m) => m.storeFile === this.storeFile)) ProjectStore.release(this.storeFile);
+        liveManagers.add(this);
+        managers.set(this.storeFile, this);
         this.disposed = false;
         this.logFile = config.logFile ? dataPath(config.logFile) : '';
         if (this.logFile) {
@@ -459,6 +466,15 @@ export class ProjectManager {
 
     get sc() {
         return this.ctx.sessionController;
+    }
+
+    /**
+     * The file's shared copy, looked up on each use: a tool call that
+     * outlives this manager (a config reload, the plugin switched off) writes
+     * into the copy the newest manager reads, never over it.
+     */
+    get store() {
+        return ProjectStore.open(this.storeFile);
     }
 
     project(projectId) {
@@ -1022,7 +1038,8 @@ export class ProjectManager {
 
     async dispose() {
         this.disposed = true;
-        if (managers.get(this.store.file) === this) managers.delete(this.store.file);
+        liveManagers.delete(this);
+        if (managers.get(this.storeFile) === this) managers.delete(this.storeFile);
         for (const dispose of this.installed.values()) {
             try { dispose(); } catch {}
         }
@@ -1033,6 +1050,8 @@ export class ProjectManager {
         for (const sessionId of [...this.approvals.keys()]) this.clearApprovals(sessionId);
         for (const { timer } of this.retries.values()) clearTimeout(timer);
         this.retries.clear();
+        // The last manager on the file lets its copy go, so the plugin switched on again reads the file anew.
+        if (![...liveManagers].some((m) => m.storeFile === this.storeFile)) ProjectStore.release(this.storeFile);
     }
 
     /** DSH's session list: [{sessionId, projections: {values}}, …]; [] when it can't be read. */
@@ -1216,7 +1235,7 @@ export class ProjectManager {
 
     /** One coordinator check per project at a time, across managers. */
     async ensureCoordinator(projectId, { create = this.fromProfile(projectId) } = {}) {
-        const key = `${this.store.file}#${projectId}`;
+        const key = `${this.storeFile}#${projectId}`;
         while (ensuring.has(key)) await ensuring.get(key).catch(() => {});
         const run = this.ensureCoordinatorOnce(projectId, create);
         ensuring.set(key, run);
@@ -1329,7 +1348,7 @@ export class ProjectManager {
     maybeInstall(agent) {
         // A tool call that outlived a config reload hands its new session to the new manager.
         if (this.disposed) {
-            managers.get(this.store.file)?.maybeInstall(agent);
+            managers.get(this.storeFile)?.maybeInstall(agent);
             return;
         }
         if (!agent || this.installed.has(agent)) return;
