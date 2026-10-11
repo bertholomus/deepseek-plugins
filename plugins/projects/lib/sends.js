@@ -583,7 +583,8 @@ function commandOf(words, assigned) {
         if (['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', '{', '}', 'time', 'coproc', 'fi', 'done', 'esac'].includes(first)) { w = w.slice(1); continue; }
         if (['for', 'case', 'select', 'function', 'in'].includes(first)) return [];
         const name = programOf(first);
-        if (name === 'env') {
+        // cross-env sets them the same way, on any system: `cross-env NODE_ENV=production npm publish`.
+        if (name === 'env' || name === 'cross-env') {
             const args = w.slice(1);
             let i = 0;
             while (i < args.length) {
@@ -925,6 +926,8 @@ function table(entries, args, program, kind) {
     const rest = pos.slice(1);
     const hit = rule === true || (Array.isArray(rule) && rule.includes(rest[0])) || (typeof rule === 'function' && rule(rest, args));
     if (!hit || dryRun(args)) return null;
+    // An image's push says which image: `docker push ghcr.io/acme/web:1.4.2`.
+    if (sub === 'push' && ['docker', 'podman', 'buildah'].includes(program) && rest[0] !== undefined) return { kind, program, what: `pushes ${rest[0]} (${program} push)` };
     const words = [program, sub, Array.isArray(rule) || (typeof rule === 'function' && /^[a-z][a-z0-9:-]*$/.test(rest[0] ?? '')) ? rest[0] : ''].join(' ').trim();
     if (kind === 'publish') return { kind, program, what: `publishes (${words})` };
     return { kind, program, what: `makes a change with ${program} (${words})` };
@@ -1311,20 +1314,21 @@ function nameVerb(name) {
 }
 
 /** `npm run X`, `yarn X`, `pnpm X`, `bun run X`: the script in package.json, and the ones npm runs around it. */
-function packageScript(program, name, ctx, prefix, label = `${program} run ${name}`) {
+function packageScript(program, name, ctx, prefix, label = `${program} run ${name}`, extra = []) {
     const pkg = readScript({ ...ctx, cwd: prefix ? within(ctx.cwd, prefix) : ctx.cwd }, 'package.json');
     let scripts;
     try { scripts = pkg ? JSON.parse(pkg.text)?.scripts : undefined; } catch { scripts = undefined; }
     if (scripts && typeof scripts === 'object' && (ctx.depth ?? 0) < MAX_DEPTH) {
         const deeper = { ...ctx, depth: (ctx.depth ?? 0) + 1, cwd: dirname(pkg.full) };
-        const inside = combined([`pre${name}`, name, `post${name}`].map((key) => (typeof scripts[key] === 'string' ? lineSendOf(scripts[key], deeper) : null)));
+        // The script runs with the words given after it: `npm run release -- --dry-run`.
+        const line = (key) => (key === name && extra.length > 0 ? `${scripts[key]} ${extra.map(shellWord).join(' ')}` : scripts[key]);
+        const inside = combined([`pre${name}`, name, `post${name}`].map((key) => (typeof scripts[key] === 'string' ? lineSendOf(line(key), deeper) : null)));
         if (inside) return runs(label, inside);
     }
     const known = scripts !== undefined && typeof scripts?.[name] === 'string';
     return sendingName(name, known) ? byName(label, name, known, program) : null;
 }
 
-/** A make target's recipe lines, from the Makefile (a rule's own lines, not its prerequisites'). */
 /** A make target's rule: its recipe lines and its prerequisites (all the rules for it, joined). */
 function makeRule(text, target) {
     const recipes = [];
@@ -1348,14 +1352,47 @@ function makeRule(text, target) {
     return { recipes, needs };
 }
 
+/**
+ * A Makefile's own variables (`DOCKER ?= docker`, `IMAGE := …`, `FLAGS += -v`),
+ * then the ones the command line sets (`make image DOCKER=podman`), which win.
+ * One set from a shell command's output (`!=`) is unknown.
+ */
+function makeVars(text, given) {
+    const vars = new Map([['MAKE', 'make']]);
+    for (const line of text.replace(/\\\n/g, ' ').split('\n')) {
+        const m = /^(?:(?:export|override)\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*(\?=|\+=|!=|:{0,3}=)\s*(.*)$/.exec(line);
+        if (!m) continue;
+        const [, name, op] = m;
+        const value = m[3].replace(/(^|[^\\])#.*$/, '$1').trim();
+        if (op === '?=' && vars.has(name)) continue;
+        if (op === '!=') vars.delete(name);
+        else vars.set(name, op === '+=' && vars.has(name) ? `${vars.get(name)} ${value}` : value);
+    }
+    for (const word of given) {
+        const at = word.indexOf('=');
+        vars.set(word.slice(0, at), word.slice(at + 1));
+    }
+    return vars;
+}
+
+/** A recipe line as make hands it to the shell: `$(NAME)` and `${NAME}` filled in where known, `$$` a `$`. */
+function expandMake(text, vars, depth = 0) {
+    return text.replace(/\$(?:\$|\(([^()$\s]+)\)|\{([^{}$\s]+)\})/g, (whole, round, curly) => {
+        if (whole === '$$') return '$';
+        const value = vars.get(round ?? curly);
+        if (value === undefined) return whole;
+        return depth < 5 ? expandMake(value, vars, depth + 1) : value;
+    });
+}
+
 /** What a make target sends, its prerequisites first (each once). */
-function makeSendOf(makefile, target, ctx, seen = new Set()) {
+function makeSendOf(makefile, target, ctx, vars, seen = new Set()) {
     if (seen.has(target) || seen.size > 40) return null;
     seen.add(target);
     const { recipes, needs } = makeRule(makefile.text, target);
     return combined([
-        ...needs.map((need) => makeSendOf(makefile, need, ctx, seen)),
-        ...recipes.map((recipe) => lineSendOf(recipe.replace(/\$\(MAKE\)|\$\{MAKE\}/g, 'make'), ctx)),
+        ...needs.map((need) => makeSendOf(makefile, need, ctx, vars, seen)),
+        ...recipes.map((recipe) => lineSendOf(expandMake(recipe, vars), ctx)),
     ]);
 }
 
@@ -1365,16 +1402,18 @@ function make(args, ctx) {
     const dir = optionValue(args, ['-C', '--directory']);
     const file = optionValue(args, ['-f', '--file', '--makefile']);
     const where = { ...ctx, cwd: dir ? within(ctx.cwd, dir) : ctx.cwd };
-    const targets = positionals(args, new Set(['C', 'f', 'I', 'o', 'W', 'j', 'l', '--directory', '--file', '--makefile', '--include-dir', '--old-file', '--what-if', '--jobs', '--load-average'])).filter((t) => !t.includes('='));
+    const words = positionals(args, new Set(['C', 'f', 'I', 'o', 'W', 'j', 'l', '--directory', '--file', '--makefile', '--include-dir', '--old-file', '--what-if', '--jobs', '--load-average']));
+    const targets = words.filter((t) => !t.includes('='));
     const makefile = file ? readScript(where, file) : (readScript(where, 'GNUmakefile') ?? readScript(where, 'makefile') ?? readScript(where, 'Makefile'));
     let wanted = targets;
     if (wanted.length === 0 && makefile) {
         const first = makefile.text.split('\n').map((l) => /^([^.:#=\t\s][^:=\s]*)\s*::?(?!=)/.exec(l)).find(Boolean);
         wanted = first ? [first[1]] : [];
     }
+    const vars = makefile ? makeVars(makefile.text, words.filter((w) => /^[A-Za-z_][A-Za-z0-9_.-]*=/.test(w))) : undefined;
     return combined(wanted.map((target) => {
         if (makefile && (ctx.depth ?? 0) < MAX_DEPTH) {
-            const inside = makeSendOf(makefile, target, { ...where, depth: (ctx.depth ?? 0) + 1, cwd: dirname(makefile.full) });
+            const inside = makeSendOf(makefile, target, { ...where, depth: (ctx.depth ?? 0) + 1, cwd: dirname(makefile.full) }, vars);
             if (inside) return runs(`make ${target}`, inside);
         }
         return sendingName(target, makefile !== undefined) ? byName(`make ${target}`, target, makefile !== undefined, 'make') : null;
@@ -1404,18 +1443,28 @@ function packageManager(name, args, ctx) {
     // pnpm's own `deploy` copies a package to a folder: no send.
     if (name === 'pnpm' && sub === 'deploy') return null;
     if (sub === 'run' || sub === 'run-script' || sub === 'rum' || sub === 'urn') {
-        const script = more.find((w) => !w.startsWith('-'));
-        return script ? packageScript(name, script, ctx, prefix) : null;
+        const at = more.findIndex((w) => !w.startsWith('-'));
+        return at >= 0 ? packageScript(name, more[at], ctx, prefix, undefined, scriptArgs(name, more.slice(at + 1))) : null;
     }
     // `npm version` runs preversion, version and postversion (a push, often).
-    if (name === 'npm' && ['start', 'test', 't', 'restart', 'stop', 'version'].includes(sub)) return packageScript(name, sub === 't' ? 'test' : sub, ctx, prefix, `npm ${sub}`);
-    if ((name === 'yarn' && !YARN_OWN.has(sub)) || (name === 'pnpm' && !PNPM_OWN.has(sub))) return packageScript(name, sub, ctx, prefix, `${name} ${sub}`);
+    if (name === 'npm' && ['start', 'test', 't', 'restart', 'stop', 'version'].includes(sub)) return packageScript(name, sub === 't' ? 'test' : sub, ctx, prefix, `npm ${sub}`, scriptArgs(name, more));
+    if ((name === 'yarn' && !YARN_OWN.has(sub)) || (name === 'pnpm' && !PNPM_OWN.has(sub))) return packageScript(name, sub, ctx, prefix, `${name} ${sub}`, scriptArgs(name, more));
     if (name === 'bun' && !['install', 'i', 'add', 'remove', 'rm', 'update', 'upgrade', 'init', 'create', 'link', 'unlink', 'pm', 'build', 'test', 'outdated', 'patch', 'repl', 'exec'].includes(sub)) {
         if (SCRIPT_EXT.test(sub) || sub.includes('/')) return scriptSendOf(sub, 'bun', ctx);
-        return packageScript(name, sub, ctx, prefix, `bun ${sub}`);
+        return packageScript(name, sub, ctx, prefix, `bun ${sub}`, scriptArgs(name, more));
     }
     return null;
 }
+
+/** The words a package manager hands on to a script: npm's after `--`, the others' after the script's name. */
+function scriptArgs(program, words) {
+    const dash = words.indexOf('--');
+    if (program === 'npm') return dash < 0 ? [] : words.slice(dash + 1);
+    return dash === 0 ? words.slice(1) : words;
+}
+
+/** A word as the shell reads it back. */
+const shellWord = (word) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`);
 
 /** Python run as `python -m twine upload` or on a file or on code. */
 function interpreter(name, args, ctx, inputs) {
@@ -1488,9 +1537,11 @@ function wordsSendOf(rawWords, ctx, inputs = []) {
         const rest = args.slice(skipOptions(args, new Set(['p', '--package'])));
         return rest.length > 0 ? wordsSendOf([packageBin(rest[0]), ...rest.slice(1)], ctx) : null;
     }
-    // Runners of a tool or a project's command: `uvx twine upload`, `poetry run python x.py`, `uv tool run …`.
+    // Runners of a tool or a project's command: `uvx twine upload`, `poetry run python x.py`, `uv tool run …`,
+    // `bundle exec rake release`.
     const from = name === 'uvx' ? 0
         : (name === 'pipx' || ['uv', 'poetry', 'pipenv', 'pdm', 'hatch', 'rye', 'conda', 'mamba', 'micromamba'].includes(name)) && args[0] === 'run' ? 1
+        : name === 'bundle' && args[0] === 'exec' ? 1
         : name === 'uv' && args[0] === 'tool' && args[1] === 'run' ? 2 : -1;
     if (from >= 0) {
         const rest = args.slice(from);

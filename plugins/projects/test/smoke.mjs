@@ -5733,8 +5733,12 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     writeFileSync(join(work, 'package.json'), JSON.stringify({ scripts: {
         build: 'tsc', release: 'npm publish', ship: 'echo shipped', start: 'node server.js',
         'sync:assets': 'aws s3 sync ./dist s3://acme-assets --cache-control max-age=31536000', 'sync:prod': 'rsync -avz ./dist/ deploy@web1:/var/www/app --exclude node_modules',
+        'release:ci': 'cross-env CI=true semantic-release',
     } }));
-    writeFileSync(join(work, 'Makefile'), 'sync:\n\taws s3 sync ./dist s3://acme-site --delete --cache-control max-age=31536000\n');
+    writeFileSync(join(work, 'Makefile'), 'DOCKER ?= docker\nPYTHON ?= python3 # the one on PATH\nIMAGE ?= ghcr.io/acme/web:latest\n\n'
+        + 'sync:\n\taws s3 sync ./dist s3://acme-site --delete --cache-control max-age=31536000\n'
+        + 'image:\n\t$(DOCKER) build -t $(IMAGE) .\n\t$(DOCKER) push $(IMAGE)\n'
+        + 'pypi:\n\t$(PYTHON) -m build\n\t$(PYTHON) -m twine upload dist/*\n');
     mkdirSync(join(work, 'scripts'));
     writeFileSync(join(work, 'scripts', 'release.sh'), '#!/bin/sh\ngh release create "v$2" dist/*.tar.gz --notes-file CHANGELOG.md\n');
     writeFileSync(join(work, 'scripts', 'report.py'), 'import requests\n\ns = requests.Session()\ns.headers["Authorization"] = "Bearer t"\nr = s.post("https://reports.example.com/api/runs", json={"passed": 12})\nprint(r.status_code)\n');
@@ -5832,6 +5836,13 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         ['gcloud storage rm "gs://acme-site/old/**"', 'changes files in gs://acme-site/old/** (gcloud storage rm)'],
         ['az webapp up --name acme-web --resource-group rg --runtime "NODE:20-lts"', 'makes a change in the cloud (az webapp up acme-web)'],
         ['gcloud run deploy api --source . --region us-central1', 'makes a change in the cloud (gcloud run deploy api)'],
+        // What cross-env and bundle exec run, and a make recipe with the Makefile's own variables.
+        ['cross-env NODE_ENV=production npm publish', 'publishes (npm publish)'],
+        ['npx cross-env NODE_ENV=production firebase deploy', 'makes a change on Firebase (firebase deploy)'],
+        ['npm run release:ci', 'runs npm run release:ci, which publishes a release (semantic-release)'],
+        ['bundle exec rake release', 'runs rake release, whose name says it releases. The plugin couldn\'t see what rake release runs'],
+        ['make image', 'runs make image, which pushes ghcr.io/acme/web:latest (docker push)'],
+        ['make pypi', 'runs make pypi, which publishes (twine upload)'],
         // Every send in a line is named, each with where it goes.
         ['git push origin main && gh pr create --fill', 'pushes to origin (git push) and makes a change on GitHub (gh pr create)'],
         ['npm version patch && git push --follow-tags && npm publish', 'pushes to its remote (git push) and publishes (npm publish)'],
@@ -5876,6 +5887,8 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         'git --version', 'curl --version', 'gh pr create --help',
         // A local app whose code has a route table or an ORM's delete.
         'node server.js', 'npm start', 'python3 app.py', 'node -e "console.log(JSON.stringify({ method: \'POST\', path: \'/items\' }))"',
+        // A package script given the words after it.
+        'npm run release:ci -- --dry-run',
         // A cloud command that reads, though its group or its resource is named like a change.
         'gcloud run services list', 'gcloud run services describe api --region us-central1', 'gcloud run services logs read api --limit 50',
         'gcloud deploy releases list --delivery-pipeline web --region us-central1', 'gcloud functions describe send-welcome-email --region us-central1',
