@@ -11,6 +11,7 @@
  * @module dsh-plugin-calendar/remote
  */
 import { Remote, RemoteError, bindTypertRemote } from '@deepseek-ai/dsh-typert-protocol';
+import { WindowChanges } from './asked.js';
 import { CalendarError } from './manager.js';
 import { PRESETS } from './sources/caldav.js';
 
@@ -20,20 +21,33 @@ export const NAMESPACE = 'dsh-plugin-calendar';
 export const SERVICE = 'dshPluginCalendarRemote';
 
 /**
- * The refusals the window answers in its own way, as `calendar/<code>`:
- * 'needs-notify' (the change would email people; its message says who and
- * what, and details.people lists them: made again with notify, and with
- * approved: those people, it goes ahead and emails them), 'drops-changes'
- * (move a series anyway), 'choose-calendar' (no default calendar),
- * 'changed' (the event changed so that the change would now email or reach
- * someone the user wasn't told of: look at it again). Any other refusal is
- * 'calendar/refused'.
+ * The refusals the window answers in its own way, as `calendar/<code>`.
+ * Three are about who a change emails or reaches, and carry details
+ * {people, mail}: people, every one of them; mail, what they get
+ * ({emailed?: {what, to}, reached?: {how, to}, why?}). The window names
+ * them all, and makes the same change again with approved: people once the
+ * user says yes; approved counts only for the change that was refused
+ * (asked.js), once.
+ * - 'needs-notify': the server would email them, and the change didn't say
+ *   to tell them: again with notify and approved.
+ * - 'needs-approval': the change didn't say who the user saw (approved),
+ *   and it would email or reach someone: again with approved.
+ * - 'changed': it would now email or reach someone outside approved (the
+ *   event changed meanwhile): ask again, naming them all.
+ * And 'drops-changes' (move a series anyway: dropChanges), 'choose-calendar'
+ * (no default calendar), and 'half-moved': a move made the copy (and sent
+ * its invitations) but couldn't take the event out of its old calendar; the
+ * message says what to do, and moving it again would make a second copy.
+ * Any other refusal is 'calendar/refused'.
  */
-const WINDOW_CODES = new Set(['needs-notify', 'drops-changes', 'choose-calendar', 'changed']);
+const WINDOW_CODES = new Set(['needs-notify', 'needs-approval', 'changed', 'drops-changes', 'choose-calendar', 'half-moved']);
 
 function failure(error) {
     if (error instanceof CalendarError) {
-        const details = Array.isArray(error.people) ? { people: error.people } : {};
+        const details = {
+            ...(Array.isArray(error.people) ? { people: error.people } : {}),
+            ...(error.mail !== undefined ? { mail: error.mail } : {}),
+        };
         return new RemoteError(WINDOW_CODES.has(error.code) ? `calendar/${error.code}` : 'calendar/refused', error.message, details);
     }
     return new RemoteError('calendar/failed', String(error?.message ?? error).slice(0, 300), {});
@@ -53,6 +67,8 @@ export class CalendarRemote {
         this.ctx = ctx;
         this.manager = manager;
         this.setup = setup;
+        // The window's changes, held to what the user was asked about each.
+        this.changes = new WindowChanges(manager);
         this.typertRemote = bindTypertRemote(this, SERVICE, { namespace: NAMESPACE });
     }
 
@@ -87,6 +103,14 @@ export class CalendarRemote {
         }));
     }
 
+    /**
+     * {version, syncing}: what state() would say moved, cheaply. The window
+     * asks this every few seconds and reads state() only when it changes.
+     */
+    async version() {
+        return this.run(async () => ({ version: this.manager.version, syncing: this.manager.syncing.size > 0 }));
+    }
+
     /** {occurrences, more}: the events in [from, to) (epoch ms), of the given calendars or the shown ones. */
     async events(from, to, calendars) {
         return this.run(async () => this.manager.events({ from: Number(from), to: Number(to), calendars: list(calendars) }));
@@ -107,15 +131,13 @@ export class CalendarRemote {
      * title, start, end?, allDay?, timeZone?, location?, description?, url?, repeat?, alarms?, attendees?, busy?,
      * privacy?, notify?, approved?}. notify: invite the guests now. Where the server would email them anyway
      * (Microsoft, a CalDAV server that schedules), guests without notify are refused with 'calendar/needs-notify'.
-     * approved: who the user was told it emails (that refusal's details.people); if it would now email or reach
-     * anyone else, it is refused with 'calendar/changed'. With occurrence.reached {how, to} when Google put it on
-     * guests' calendars without emailing them.
+     * approved: everyone the user was shown it emails or reaches (a refusal's details.people), for the very change
+     * that was refused (asked.js). Without it, a new event that would email or reach anyone is refused
+     * ('calendar/needs-approval'); with it, one that would reach anyone else is ('calendar/changed'). With
+     * occurrence.reached {how, to} when Google put it on guests' calendars without emailing them.
      */
     async createEvent(input) {
-        return this.run(async () => {
-            const { approved, ...rest } = object(input);
-            return { occurrence: await this.manager.createEvent(rest, 'window', { approved: list(approved) }) };
-        });
+        return this.run(async () => ({ occurrence: await this.changes.create(object(input)) }));
     }
 
     /**
@@ -128,10 +150,7 @@ export class CalendarRemote {
      * 'calendar/drops-changes', saying what; patch.dropChanges moves it anyway. patch.approved as createEvent's.
      */
     async updateEvent(id, patch, scope) {
-        return this.run(async () => {
-            const { approved, ...rest } = object(patch);
-            return { occurrence: await this.manager.updateEvent(text(id), rest, text(scope) || 'all', 'window', { approved: list(approved) }) };
-        });
+        return this.run(async () => ({ occurrence: await this.changes.update(text(id), object(patch), text(scope) || 'all') }));
     }
 
     /**
@@ -140,7 +159,7 @@ export class CalendarRemote {
      * email them about anyway is refused without it ('calendar/needs-notify'). approved as createEvent's.
      */
     async deleteEvent(id, scope, notify, approved) {
-        return this.run(async () => this.manager.deleteEvent(text(id), text(scope) || 'all', 'window', { notify: notify === true, approved: list(approved) }));
+        return this.run(async () => this.changes.delete(text(id), text(scope) || 'all', notify === true, list(approved)));
     }
 
     /** Answer an invitation ('accepted', 'declined', 'tentative') for scope 'one' or 'all': {occurrence}, with emailed when the organizer was sent it. */
@@ -280,7 +299,7 @@ function markRemote(Class, names) {
     }
 }
 markRemote(CalendarRemote, [
-    'state', 'events', 'search', 'event', 'createEvent', 'updateEvent', 'deleteEvent', 'respond',
+    'state', 'version', 'events', 'search', 'event', 'createEvent', 'updateEvent', 'deleteEvent', 'respond',
     'addAccount', 'updateAccount', 'removeAccount', 'syncNow', 'startSignIn', 'signInStatus', 'finishSignIn', 'cancelSignIn',
     'setGoogleClient', 'setMicrosoftClient', 'createCalendar', 'deleteCalendar', 'updateCalendar', 'setDefaultCalendar', 'setPrefs',
     'exportCalendar', 'importIcs',

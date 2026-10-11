@@ -7,39 +7,81 @@
  * (fake-model.mjs), checks that DSH serves the calendar's browser half and
  * that it parses, then drives the window with Playwright's Chromium:
  *
- * - the Calendar page from its entry in DSH's sidebar, in Week view, and
- *   its quiet notice that a settings file it couldn't read was set aside;
+ * - the Calendar page from its entry in DSH's sidebar, in Week view; its
+ *   quiet notice that a settings file it couldn't read was set aside;
+ * - at 1280 px, the side column folded behind its button, which shows it
+ *   beside the view (the focus going into it, and back on folding it);
+ *   and, as the profile has askBeforeEmails off, its note that chats can
+ *   email guests without asking (with nothing to change it);
  * - a timed event, an all-day event and a weekly repeating event made
  *   through the event dialog (each checked through the plugin's endpoints);
+ *   an event's details, which take the focus and close on Escape;
  * - one occurrence of the repeating event changed (scope 'one') and another
  *   deleted (scope 'one'), the rest of the series as it was;
  * - Month, Day and Agenda views, the choice kept by the plugin, N and T;
+ *   a narrow month's timed events without their times in front;
  * - a calendar hidden and shown again from the side column;
- * - a change the host says would email people ('calendar/needs-notify',
- *   played here, as the calendars kept in DSH email no one): asked
- *   first with the host's words, nothing sent on Don't change it, notify
- *   only after Send, and who was emailed in the toast;
+ * - a change the host says would email six guests ('calendar/needs-notify',
+ *   played here, as the calendars kept in DSH email no one): the question
+ *   names all six on screen, with what they get and why; nothing sent on
+ *   Don't save; notify only after Save and email, with approved: the six,
+ *   and the same change otherwise (the host holds a yes to it); who was
+ *   emailed in the toast;
  * - an event moved to another calendar with other changes: the move on its
  *   own first, the rest on the moved event; no email offered for a guest on
  *   a calendar that can't send it;
- * - no default calendar (the host's state played without one): the event
- *   dialog shows none chosen and asks for one before it saves;
- * - Accounts: the account list and every Add account choice up to its form
- *   (no real sign-ins), and a new calendar kept in DSH;
- * - Microsoft, against a stand-in for its sign-in service and Graph on this
- *   computer (the plugin's microsoftLoginBase and microsoftGraphBase): the
- *   app registration's steps, its sign-in page opened in a new tab, the
- *   wait with the page to open again, the sign-in finished by the address
- *   the page ended on, pasted (as when DSH runs on another computer); the
- *   account removed, with the page to withdraw DSH's access there; and
- *   "Sign in with a code instead", showing the code;
- * - Google, against a stand-in for its sign-in page (googleAuthorizeUrl):
- *   its page opened in a new tab too, the wait with the page to open again
- *   and the address to paste (not finished: no stand-in for its API here);
- * - chat cards for an agent's calendar_events and calendar_create_event
- *   calls, and the card's button that opens the event on the page;
- * - the Agenda pane in DSH's right sidebar, and an event opened from it;
- * - a narrow window (420 px): the side column folds, Week shows 3 days.
+ * - no default calendar (the host's own state: every calendar hidden, none
+ *   chosen): the event dialog shows none chosen and asks for one;
+ * - dragging: an event in Week to another time and day (Escape first,
+ *   leaving it), by its bottom edge to another end, and on with Alt and an
+ *   arrow key; in Month to another day at the same time; a repeating one,
+ *   asked which occurrences move;
+ * - search: / to the field, the events found by day, one opened with its
+ *   way to the calendar, Escape to clear it;
+ * - Accounts: the account list and every Add account choice up to its form,
+ *   and a new calendar kept in DSH;
+ * - Microsoft, against stand-ins on this computer for its sign-in page and
+ *   Graph (standins/microsoft.mjs; the plugin's microsoftLoginBase and
+ *   microsoftGraphBase): the app registration's steps, its sign-in page in a
+ *   new tab, the wait with the page to open again, and the sign-in finished
+ *   by the address the page ended on, pasted (as when DSH runs on another
+ *   computer);
+ * - Google, against its stand-in (standins/google.mjs): its sign-in page in
+ *   a new tab, the wait with the address to paste, then the browser back to
+ *   DSH on this computer, which the dialog notices by itself;
+ * - a Google meeting made, changed and deleted without emailing its guest:
+ *   the dialog says it still reaches their calendars, each is made only
+ *   once the user has seen whose calendar it reaches (the host refuses it
+ *   until then: 'calendar/needs-approval'), and each toast says whose
+ *   calendars it was put on, changed on or taken off (Google told
+ *   sendUpdates=none); and a meeting there an agent deletes without asking
+ *   (askBeforeEmails off); someone else's invitation there, whose
+ *   organizer's fields the dialog keeps as they are, and Show me as saved;
+ *   one whose guests may change it, where Show me as asks first, naming its
+ *   organizer and the other guest; a move that made its copy but couldn't
+ *   take the meeting out of Google ('calendar/half-moved'): a notice that
+ *   stays until closed, and the move not made again;
+ * - a series with an occurrence changed on its own moved to Microsoft: the
+ *   host refuses ('calendar/drops-changes'), Don't move it keeps it, Move
+ *   anyway moves it without that occurrence;
+ * - a Microsoft meeting changed while the question before its email waits:
+ *   a guest added on Microsoft's side meanwhile, its yes makes nothing
+ *   ('calendar/changed') and the question comes again naming both, the new
+ *   one marked; Don't save keeps it with Look at it again; saved again, it
+ *   goes to both;
+ * - the Microsoft account removed, with the page to withdraw DSH's access
+ *   there; "Sign in with a code instead", showing the code; the Google
+ *   account removed, its access withdrawn at Google;
+ * - chat cards for an agent's calendar_events, calendar_create_event, a
+ *   delete that reached a guest's calendar (calendar_delete_event) and a
+ *   move (calendar_update_event), and the button that opens an event on the
+ *   page; a read and an answer that didn't work, each in the plugin's own
+ *   row saying what wasn't done and why;
+ * - the Agenda pane in DSH's right sidebar: an event's details beside it,
+ *   the chat staying, and Open in Calendar to the event on the page;
+ * - light and dark, with and without a stand-in wallpaper;
+ * - a narrow window (420 px): the side column folds, Week shows 3 days,
+ *   search fits.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js \
  *   PLAYWRIGHT_MODULE=/path/to/node_modules/playwright/index.mjs \
@@ -51,9 +93,12 @@
  * (else Playwright's own). SHOTS: a folder outside this repository for
  * screenshots (week and month, light and dark, with and without a stand-in
  * wallpaper; the event dialog, with no calendar chosen too, the question
- * before an email, Accounts, Microsoft's and Google's sign-ins, a removal's
- * notice, the Agenda pane, chat cards, a narrow window; and the window
- * whenever a step fails). KEEP=1 keeps the temporary folder.
+ * before an email, the one before a move that drops part of a series, a
+ * change stopped because the event changed, Accounts, Microsoft's and
+ * Google's sign-ins, a removal's notice, the Agenda pane and an event's
+ * details beside it, chat cards, the side column folded, a drag, search
+ * results, a narrow window; and the window whenever a step fails). KEEP=1
+ * keeps the temporary folder.
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -63,6 +108,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Script } from 'node:vm';
+import { start as startGoogle } from '../standins/google.mjs';
+import { start as startGraph } from '../standins/microsoft.mjs';
 import { startFakeModel } from './fake-model.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -146,6 +193,11 @@ async function step(name, run) {
         check(name, false, error?.stack ?? error);
         // What the window showed when the step failed.
         if (shots && page) await page.screenshot({ path: join(shots, `failed-${++failedShots}.png`) }).catch(() => {});
+        // A dialog left open would cover the page for the steps after this one.
+        for (let i = 0; page && i < 3 && (await page.locator('[role="dialog"]').count().catch(() => 0)) > 0; i++) {
+            await page.keyboard.press('Escape').catch(() => {});
+            await sleep(400);
+        }
     }
 }
 
@@ -208,20 +260,39 @@ function httpGet(url, headers = {}) {
 
 /** The application (client) id the Microsoft stand-in knows. */
 const MS_CLIENT = '0e2e0000-0000-4000-8000-00000000c1d5';
+/** The Google scopes the plugin asks for, and the broad one Google's stand-in checks for. */
+const GOOGLE_EVENTS = 'https://www.googleapis.com/auth/calendar.events';
+const GOOGLE_LIST = 'https://www.googleapis.com/auth/calendar.calendarlist.readonly';
+const GOOGLE_BROAD = 'https://www.googleapis.com/auth/calendar';
 
 /**
- * Stand-ins on 127.0.0.1 for Microsoft's sign-in service and Graph, and for
- * Google's sign-in page. A sign-in page doesn't send the browser back: it
- * shows the address it would go to, as the browser does when DSH runs on
- * another computer. Microsoft's code is traded once, with PKCE; a sign-in
- * with a code stays pending; Graph has one account with one calendar and
- * no events.
+ * Stand-ins on 127.0.0.1: Google's sign-in and Calendar API
+ * (standins/google.mjs), Microsoft Graph and its sign-in service
+ * (standins/microsoft.mjs), and in front of them what those don't have:
+ * Microsoft's sign-in page and its code trade, and Google's revoke
+ * endpoint. Microsoft's sign-in page doesn't send the browser back: it shows
+ * the address it would go to, as the browser does when DSH runs on another
+ * computer. Its code is traded once, with PKCE, for a token Graph's
+ * stand-in takes; a sign-in with a code stays pending. Graph has one
+ * calendar, its default, and no events; Google, the user's own calendar.
  */
 async function startProviders() {
-    const seen = { authorize: [], grants: [], devicecodes: 0 };
+    const graph = await startGraph();
+    graph.store.clientId = MS_CLIENT;
+    graph.store.devicePlan = ['authorization_pending'];
+    graph.store.deviceInterval = 5;
+    graph.store.addCalendar({ id: 'e2e-ms-cal', name: 'Calendar', hexColor: '#2f6fd6', isDefaultCalendar: true });
+    const google = await startGoogle({ user: { email: 'sam@example.com', name: 'Sam Example' } });
+    // The stand-in knows only Google's broad calendar scope: a token with both narrow ones passes as if it had it.
+    google.store.accessTokens = new (class extends Map {
+        set(token, record) {
+            const scopes = String(record?.scope ?? '').split(' ');
+            return super.set(token, scopes.includes(GOOGLE_EVENTS) && scopes.includes(GOOGLE_LIST) ? { ...record, scope: `${record.scope} ${GOOGLE_BROAD}` } : record);
+        }
+    })();
+    const seen = { authorize: [], grants: [], devicecodes: 0, revoked: 0 };
     const codes = new Map();
     let origin = '';
-    const tokens = { token_type: 'Bearer', access_token: 'e2e-access', refresh_token: 'e2e-refresh', expires_in: 3600, scope: 'Calendars.ReadWrite User.Read' };
     const server = createServer((req, res) => {
         let raw = '';
         req.setEncoding('utf8');
@@ -234,7 +305,7 @@ async function startProviders() {
                 res.end(JSON.stringify(body));
             };
             const login = '/login/common/oauth2/v2.0';
-            if (req.method === 'GET' && (url.pathname === `${login}/authorize` || url.pathname === '/google/authorize')) {
+            if (req.method === 'GET' && url.pathname === `${login}/authorize`) {
                 const asked = Object.fromEntries(url.searchParams);
                 seen.authorize.push(asked);
                 const code = `e2e-code-${seen.authorize.length}`;
@@ -246,45 +317,50 @@ async function startProviders() {
                 res.end(`<!doctype html><meta charset="utf-8"><title>Sign in</title><p>Signed in. The browser goes back to:</p><p id="back">${back.href.replaceAll('&', '&amp;').replaceAll('<', '&lt;')}</p>`);
                 return;
             }
-            if (req.method === 'POST' && url.pathname === `${login}/token`) {
-                const grant = form.get('grant_type');
-                seen.grants.push(grant);
-                if (grant === 'authorization_code') {
-                    const known = codes.get(form.get('code') ?? '');
-                    codes.delete(form.get('code') ?? '');
-                    const verifier = createHash('sha256').update(form.get('code_verifier') ?? '', 'ascii').digest('base64url');
-                    if (!known || verifier !== known.challenge || form.get('redirect_uri') !== known.redirect || form.get('client_id') !== MS_CLIENT) {
-                        return json(400, { error: 'invalid_grant', error_description: 'AADSTS70000: The code is not valid.' });
-                    }
-                    return json(200, tokens);
+            if (req.method === 'POST' && url.pathname === `${login}/token` && form.get('grant_type') === 'authorization_code') {
+                seen.grants.push('authorization_code');
+                const known = codes.get(form.get('code') ?? '');
+                codes.delete(form.get('code') ?? '');
+                const verifier = createHash('sha256').update(form.get('code_verifier') ?? '', 'ascii').digest('base64url');
+                if (!known || verifier !== known.challenge || form.get('redirect_uri') !== known.redirect || form.get('client_id') !== MS_CLIENT) {
+                    return json(400, { error: 'invalid_grant', error_description: 'AADSTS70000: The code is not valid.' });
                 }
-                if (grant === 'refresh_token') return json(200, tokens);
-                return json(400, { error: 'authorization_pending', error_description: 'AADSTS70016: Authorization is pending.' });
+                return json(200, graph.store.tokens(true));
             }
-            if (req.method === 'POST' && url.pathname === `${login}/devicecode`) {
-                seen.devicecodes += 1;
-                return json(200, {
-                    device_code: 'e2e-device', user_code: 'E2ECODE42', verification_uri: 'https://microsoft.com/devicelogin', expires_in: 900, interval: 5,
-                    message: 'To sign in, open https://microsoft.com/devicelogin and enter the code E2ECODE42.',
+            if (req.method === 'POST' && url.pathname === '/google/revoke') {
+                seen.revoked += 1;
+                return json(200, {});
+            }
+            if (url.pathname.startsWith('/login/')) {
+                // The rest of the sign-in service (a code to enter, refreshes): Graph's stand-in.
+                if (url.pathname === `${login}/devicecode`) seen.devicecodes += 1;
+                else seen.grants.push(form.get('grant_type'));
+                const ahead = request(`${graph.origin}${req.url}`, {
+                    method: req.method,
+                    headers: { 'content-type': req.headers['content-type'] ?? 'application/x-www-form-urlencoded', 'content-length': Buffer.byteLength(raw) },
+                }, (answer) => {
+                    res.writeHead(answer.statusCode ?? 502, { 'content-type': answer.headers['content-type'] ?? 'application/json' });
+                    answer.pipe(res);
                 });
+                ahead.on('error', () => json(502, { error: 'temporarily_unavailable' }));
+                ahead.end(raw);
+                return;
             }
-            if (req.headers.authorization !== `Bearer ${tokens.access_token}`) return json(401, { error: { code: 'InvalidAuthenticationToken', message: 'No token.' } });
-            if (url.pathname === '/v1.0/me') return json(200, { displayName: 'Pat Example', mail: 'pat@example.com', userPrincipalName: 'pat@example.com' });
-            if (url.pathname === '/v1.0/me/calendars') return json(200, { value: [{ id: 'e2e-ms-cal', name: 'Calendar', color: 'auto', hexColor: '#2f6fd6', canEdit: true, isDefaultCalendar: true }] });
-            if (url.pathname === '/v1.0/me/calendars/e2e-ms-cal/calendarView/delta') {
-                return json(200, { value: [], '@odata.deltaLink': `${origin}/v1.0/me/calendars/e2e-ms-cal/calendarView/delta?$deltatoken=e2e` });
-            }
-            return json(404, { error: { code: 'NotFound', message: 'Nothing here.' } });
+            return json(404, { error: 'not_found' });
         });
     });
     await new Promise((done) => server.listen(0, '127.0.0.1', done));
     origin = `http://127.0.0.1:${server.address().port}`;
     return {
-        seen, loginBase: `${origin}/login`, graphBase: `${origin}/v1.0`, googleAuthorizeUrl: `${origin}/google/authorize`,
-        close: () => new Promise((done) => {
-            server.closeAllConnections?.();
-            server.close(() => done());
-        }),
+        seen, graph, google, loginBase: `${origin}/login`, revokeUrl: `${origin}/google/revoke`,
+        close: async () => {
+            await new Promise((done) => {
+                server.closeAllConnections?.();
+                server.close(() => done());
+            });
+            await graph.close();
+            await google.close();
+        },
     };
 }
 
@@ -357,9 +433,14 @@ function writeProfile(modelPort, providers) {
 - id: calendar
   config:
     timeZone: ${q(ZONE)}
+    askBeforeEmails: false
     microsoftLoginBase: ${q(providers.loginBase)}
-    microsoftGraphBase: ${q(providers.graphBase)}
-    googleAuthorizeUrl: ${q(providers.googleAuthorizeUrl)}
+    microsoftGraphBase: ${q(providers.graph.graphBase)}
+    googleApiBase: ${q(providers.google.apiBase)}
+    googleAuthorizeUrl: ${q(providers.google.authorizeUrl)}
+    googleTokenUrl: ${q(providers.google.tokenUrl)}
+    googleUserinfoUrl: ${q(providers.google.userinfoUrl)}
+    googleRevokeUrl: ${q(providers.revokeUrl)}
 `);
 }
 
@@ -464,6 +545,13 @@ async function wallpaperOff(page) {
 async function shot(page, name) {
     if (!shots) return;
     await page.waitForTimeout(250);
+    // Dialogs and toasts as they settle: their opening animations done (not a spinner's, which goes on).
+    await Promise.race([
+        page.evaluate(() => Promise.all(document.getAnimations()
+            .filter((a) => a.effect?.getComputedTiming?.().iterations !== Infinity)
+            .map((a) => a.finished.catch(() => {})))),
+        page.waitForTimeout(2000),
+    ]).catch(() => {});
     await page.screenshot({ path: join(shots, `${name}.png`) });
 }
 
@@ -483,6 +571,16 @@ try {
     await waitFor(() => readText(calendarLog).includes('account added local'), 'the calendar plugin to start', 30000);
     const web = await signInWeb();
     const api = (method, args = {}) => webApi(web, `dsh-plugin-calendar/${method}`, args);
+    /**
+     * A new event made as the window makes one that emails or reaches people: refused first, naming them all
+     * ('calendar/needs-approval'), then the same input again with approved: them (the host holds a yes to that
+     * very change, once).
+     */
+    const createAsked = async (input) => {
+        const first = await api('createEvent', { input });
+        const people = first.error?.details?.people;
+        return first.ok || !Array.isArray(people) ? first : api('createEvent', { input: { ...input, approved: people } });
+    };
     const state = await waitFor(async () => { const r = await api('state'); return r.ok ? r.value : null; }, 'the calendar endpoints', 30000);
     const defaultCalendar = state.defaultCalendar ?? state.calendars.find((c) => c.accountId === 'local')?.id;
     const today = dayIn(Date.now(), ZONE);
@@ -547,6 +645,44 @@ try {
         check('a settings file the plugin couldn\'t read: the page says quietly that it was set aside and nothing was deleted, until closed',
             aside.length === 1 && text.includes(`“${aside[0]}”`) && /Nothing was deleted/.test(text), JSON.stringify({ aside, text }));
     });
+    // The side column at 1280 px: beside DSH's sidebar the page is narrower than 1100 px, so it starts folded; its
+    // button shows it beside the view (and it stays shown for the steps below).
+    await step('the side column at 1280 px', async () => {
+        const side = page.locator('[data-calendar-side]');
+        const toggle = page.locator('[data-calendar-side-toggle]');
+        const width = await page.locator('[data-calendar-page]').evaluate((el) => el.clientWidth);
+        const foldedFirst = !(await side.isVisible());
+        const newInHeader = await page.locator('[data-calendar-new]').isVisible();
+        await shot(page, 'side-folded');
+        await toggle.click();
+        await side.waitFor({ state: 'visible' });
+        const shown = await page.evaluate(() => {
+            const s = document.querySelector('[data-calendar-side]').getBoundingClientRect();
+            const m = document.querySelector('[data-calendar-main]').getBoundingClientRect();
+            const root = document.querySelector('[data-calendar-page]');
+            return { beside: s.right <= m.left, over: root.hasAttribute('data-side-open'), focusIn: Boolean(document.activeElement?.closest('[data-calendar-side]')) };
+        });
+        const expanded = await toggle.getAttribute('aria-expanded');
+        await toggle.click();
+        await side.waitFor({ state: 'hidden' });
+        const focusBack = await page.evaluate(() => document.activeElement?.hasAttribute('data-calendar-side-toggle') === true);
+        await toggle.click();
+        await side.waitFor({ state: 'visible' });
+        check('at 1280 px the side column starts folded behind its button, which shows it beside the view, the focus going into it and back to the button on folding it',
+            width < 1100 && foldedFirst && newInHeader && shown.beside && !shown.over && shown.focusIn && expanded === 'true' && focusBack,
+            JSON.stringify({ width, foldedFirst, newInHeader, shown, expanded, focusBack }));
+    });
+    await step('chats may email guests without asking', async () => {
+        // askBeforeEmails is off in this profile: said quietly in the side column, with nothing there to change it.
+        const note = page.locator('[data-calendar-side] [data-calendar-ask-off]');
+        await note.waitFor({ state: 'visible' });
+        const text = (await note.textContent()) ?? '';
+        const controls = await note.locator('button, a, input').count();
+        const off = (await api('state')).value?.askBeforeEmails;
+        check('with askBeforeEmails off, the side column says that chats can email guests without asking, and where it is set, with no control for it',
+            off === false && /^Chats can email your guests without asking you first/.test(text) && text.includes('“Ask before emails” is off')
+            && text.includes('cordis.patch.yml') && controls === 0, JSON.stringify({ off, text, controls }));
+    });
     await shot(page, 'week-light');
 
     // 2. Events through the dialog.
@@ -567,6 +703,19 @@ try {
         const made = (await events(day1, day1)).find((o) => o.title === 'E2E Planning');
         check('a timed event made in the dialog is in the calendar at its time, and on the page', made && made.startLocal === `${day1}T10:00` && made.endLocal === `${day1}T10:30`
             && made.timeZone === ZONE && made.calendarId === defaultCalendar, JSON.stringify(made));
+    });
+    await step('an event\'s details and the keyboard', async () => {
+        // Opened, the details take the focus; Escape closes them (not the page under them), and the focus goes back.
+        await eventOnPage('E2E Planning').click();
+        const details = page.locator('[data-calendar-details]');
+        await details.waitFor({ state: 'visible' });
+        const inside = await page.waitForFunction(() => document.querySelector('[data-calendar-details]')?.contains(document.activeElement), null, { timeout: 5000 })
+            .then(() => true, () => false);
+        await page.keyboard.press('Escape');
+        await details.waitFor({ state: 'detached', timeout: 5000 });
+        const back = await page.evaluate(() => document.activeElement?.closest?.('[data-calendar-event]')?.textContent ?? '');
+        check('an event\'s details take the focus when they open; Escape closes them and the focus goes back to the event', inside && /E2E Planning/.test(back),
+            JSON.stringify({ inside, back }));
     });
     await step('an all-day event made in the dialog', async () => {
         await page.locator('[data-calendar-side-new]').click();
@@ -676,7 +825,14 @@ try {
         await page.locator('[data-calendar-view="month"]').click();
         await page.locator('[data-calendar-grid="month"]').waitFor({ state: 'visible' });
         await shot(page, 'month-light');
+        // Beside the side column the month is narrow: a timed event's title alone, without its time in front.
+        const month = await page.locator('[data-calendar-grid="month"]').evaluate((el) => ({
+            width: el.clientWidth,
+            times: [...el.querySelectorAll('.dshcal-line-time')].map((t) => getComputedStyle(t).display),
+        }));
         await page.locator('[data-calendar-view="week"]').click();
+        check('a narrow month shows timed events by their titles, without their times in front', month.width < 910 && month.times.length > 0 && month.times.every((d) => d === 'none'),
+            JSON.stringify(month));
     });
 
     // 5. A calendar hidden and shown again.
@@ -693,15 +849,59 @@ try {
         check('a calendar hidden from the side column takes its events off the page, and comes back', hidden === true && checked === 'false', `${hidden} ${checked}`);
     });
 
-    // 6. Email: asked first, with the host's words; sent only after Send.
+    /**
+     * The question before a change that emails or reaches people, as it shows: its title and words, everyone it
+     * names (with what each gets, the new ones, and those on screen), its buttons, and the way to answer it.
+     */
+    const consent = async () => {
+        const send = page.locator('[data-calendar-send]');
+        await send.waitFor({ state: 'visible', timeout: 10000 });
+        const dialog = send.locator('xpath=ancestor::*[@role="dialog"][1]');
+        const rows = dialog.locator('[data-calendar-person]');
+        const names = (els) => els.map((el) => el.getAttribute('data-calendar-person'));
+        return {
+            title: await dialog.evaluate((el) => {
+                const id = (el.closest('[aria-labelledby]') ?? el.querySelector('[aria-labelledby]'))?.getAttribute('aria-labelledby');
+                return ((id && el.ownerDocument.getElementById(id)) || el.querySelector('h1, h2, h3, [role=heading]'))?.textContent ?? '';
+            }),
+            text: (await dialog.textContent()) ?? '',
+            people: await rows.evaluateAll(names),
+            gets: await dialog.locator('.dshcal-gets').allTextContents(),
+            fresh: await rows.evaluateAll((els) => els.filter((el) => el.querySelector('[data-calendar-person-new]')).map((el) => el.getAttribute('data-calendar-person'))),
+            // Whole on screen: inside the list's box (it scrolls past about eight) and the window.
+            onScreen: await dialog.locator('[data-calendar-people]').evaluate((ul) => {
+                const box = ul.getBoundingClientRect();
+                return [...ul.querySelectorAll('[data-calendar-person]')].filter((li) => {
+                    const r = li.getBoundingClientRect();
+                    return r.height > 0 && r.top >= box.top - 1 && r.bottom <= box.bottom + 1 && r.top >= 0 && r.bottom <= ul.ownerDocument.documentElement.clientHeight;
+                }).map((li) => li.getAttribute('data-calendar-person'));
+            }).catch(() => []),
+            no: (await dialog.locator('[data-calendar-keep]').textContent()) ?? '',
+            yes: (await send.textContent()) ?? '',
+            answer: async (yes) => {
+                await dialog.locator(yes ? '[data-calendar-send]' : '[data-calendar-keep]').click();
+                await send.waitFor({ state: 'detached' });
+            },
+        };
+    };
+
+    // 6. Email: the question names everyone the change emails, with what they get and why; made only on its yes,
+    // held to them.
+    /** Whether two calls make the same change: the same event, scope and fields, notify and approved aside. */
+    const sameChange = (a, b) => {
+        const fields = (call) => JSON.stringify(Object.entries(call?.patch ?? call?.input ?? {}).filter(([k]) => k !== 'notify' && k !== 'approved').sort());
+        return a?.id === b?.id && a?.scope === b?.scope && fields(a) === fields(b);
+    };
     const updateCalls = '**/api/dsh-plugin-calendar/updateEvent';
     await step('a change that would email people', async () => {
         await page.locator('[data-calendar-today]').click();
         await showDay(day1);
         const sent = [];
         let refusals = 2;
-        // The calendars here email no one, so the host's answer is played: it would email ann@example.com (twice), then
-        // the change sent with notify is made for real (without it) and answered as if it had emailed her.
+        const six = ['ann@example.com', 'bob@example.com', 'cy@example.com', 'dee@example.com', 'eve@example.com', 'fay@example.com'];
+        const why = 'Microsoft emails a meeting\'s guests about each change to it';
+        // The calendars here email no one, so the host's answer is played: it would email six guests an update (twice), then
+        // the change sent with notify is made for real (without it) and answered as if it had emailed them.
         await page.route(updateCalls, async (route) => {
             const body = JSON.parse(route.request().postData() ?? '{}');
             const args = body.payload?.args ?? {};
@@ -710,14 +910,24 @@ try {
                 refusals -= 1;
                 return route.fulfill({
                     status: 200, contentType: 'application/json',
-                    body: JSON.stringify({ type: 'server-response', rpcId: body.rpcId, result: { ok: false, error: { code: 'calendar/needs-notify', message: 'Saving this emails an update to ann@example.com', details: {} } } }),
+                    body: JSON.stringify({
+                        type: 'server-response', rpcId: body.rpcId,
+                        result: {
+                            ok: false,
+                            error: {
+                                code: 'calendar/needs-notify', message: `This would email an update to ${six.slice(0, 5).join(', ')} and 1 more (${why}), so it's made only when they are to be told.`,
+                                details: { people: six, mail: { emailed: { what: 'an update', to: six }, why } },
+                            },
+                        },
+                    }),
                 });
             }
+            // Made for real without notify; approved goes to the host as sent (the event names nobody, so it holds).
             const patch = { ...args.patch };
             delete patch.notify;
             const response = await route.fetch({ postData: JSON.stringify({ ...body, payload: { args: { ...args, patch } } }) });
             const real = await response.json();
-            if (real.result?.ok && real.result.value?.occurrence) real.result.value.occurrence.emailed = { what: 'an update', to: ['ann@example.com'] };
+            if (real.result?.ok && real.result.value?.occurrence) real.result.value.occurrence.emailed = { what: 'an update', to: six };
             return route.fulfill({ response, body: JSON.stringify(real) });
         });
         try {
@@ -728,24 +938,26 @@ try {
             await form.waitFor({ state: 'visible' });
             await form.locator('[data-calendar-title]').fill('E2E Planning review');
             await page.locator('[data-calendar-save]').click();
-            const send = page.locator('[data-calendar-send]');
-            await send.waitFor({ state: 'visible' });
-            const question = await send.locator('xpath=ancestor::*[@role="dialog"][1]').textContent();
+            const question = await consent();
             await shot(page, 'send-question');
-            await page.locator('[data-calendar-keep]').click();
-            await send.waitFor({ state: 'detached' });
+            await question.answer(false);
             const stillOpen = await form.isVisible();
             const unchanged = (await events(day1, day1)).some((o) => o.title === 'E2E Planning');
             await page.locator('[data-calendar-save]').click();
-            await send.waitFor({ state: 'visible' });
-            await send.click();
+            await (await consent()).answer(true);
             await dialogGone();
             const toast = await page.locator('.dshcal-toast').first().textContent();
             const saved = (await events(day1, day1)).find((o) => o.title === 'E2E Planning review');
-            check('a change that would email people asks first with the host\'s words; Don\'t change it sends nothing, Send repeats it with notify, and the toast says who was emailed',
-                /Saving this emails an update to ann@example\.com/.test(question ?? '') && stillOpen && unchanged && saved !== undefined
-                && sent.length === 3 && sent[0].patch?.notify === undefined && sent[1].patch?.notify === undefined && sent[2].patch?.notify === true
-                && /Emailed an update to ann@example\.com/.test(toast ?? ''), JSON.stringify({ question, stillOpen, unchanged, sent, toast, saved: saved?.title }));
+            check('a change that would email six guests asks first, naming all six on screen with what they get and why; Don\'t save sends nothing, Save and email repeats it with notify and approved: the six, and the toast says who was emailed',
+                question.title === 'Email an update to 6 guests?' && question.text.includes(`${why}.`) && !question.text.includes('so it\'s made only when')
+                && JSON.stringify(question.people) === JSON.stringify(six) && JSON.stringify(question.onScreen) === JSON.stringify(six)
+                && question.gets.length === 6 && question.gets.every((g) => g === 'An update') && question.no === 'Don\'t save' && question.yes === 'Save and email'
+                && stillOpen && unchanged && saved !== undefined
+                && sent.length === 3 && sent[0].patch?.notify === undefined && sent[1].patch?.notify === undefined && sent[0].patch?.approved === undefined
+                && sent[2].patch?.notify === true && JSON.stringify(sent[2].patch?.approved) === JSON.stringify(six)
+                && sameChange(sent[0], sent[2]) && sameChange(sent[0], sent[1])
+                && /Emailed an update to ann@example\.com, bob@example\.com, cy@example\.com and 3 others\./.test(toast ?? ''),
+                JSON.stringify({ question: { ...question, answer: undefined }, stillOpen, unchanged, sent, toast, saved: saved?.title }));
         } finally {
             await page.unroute(updateCalls);
         }
@@ -785,26 +997,19 @@ try {
         }
     });
 
-    // 8. No default calendar: nothing chosen, and no main calendar stands out (the host's state played without one).
+    // 8. No default calendar: the host's own state, with none chosen and every calendar hidden (a hidden one is never the default).
     await step('with no default calendar, the event dialog asks for one', async () => {
-        const stateCalls = '**/api/dsh-plugin-calendar/state';
         const creates = [];
         const onRequest = (request) => {
             if (request.url().endsWith('/api/dsh-plugin-calendar/createEvent')) creates.push(JSON.parse(request.postData() ?? '{}').payload?.args?.input);
         };
         const tagged = () => page.locator('[data-calendar-side] .dshcal-tag', { hasText: 'default' }).count();
-        await page.route(stateCalls, async (route) => {
-            const response = await route.fetch();
-            const real = await response.json();
-            if (real.result?.ok) {
-                real.result.value.defaultCalendar = null;
-                for (const c of real.result.value.calendars ?? []) c.isDefault = false;
-            }
-            return route.fulfill({ response, body: JSON.stringify(real) });
-        });
+        const shown = ((await api('state')).value?.calendars ?? []).filter((c) => !c.readOnly && !c.hidden);
+        for (const c of shown) await api('updateCalendar', { id: c.id, patch: { hidden: true } });
         page.on('request', onRequest);
         let made;
         try {
+            const none = (await api('state')).value?.defaultCalendar;
             await waitFor(async () => (await tagged()) === 0, 'the page to read state without a default', 15000);
             await page.locator('[data-calendar-side-new]').click();
             const form = page.locator('[data-calendar-event-form="new"]');
@@ -822,19 +1027,178 @@ try {
             await page.locator('[data-calendar-save]').click();
             await dialogGone();
             made = await waitFor(async () => {
-                const list = await events(today, addDays(today, 1));
-                return list.find((o) => o.title === 'E2E No default');
+                const r = await api('events', { from: Date.parse(`${addDays(today, -1)}T00:00:00Z`), to: Date.parse(`${addDays(today, 3)}T00:00:00Z`), calendars: [defaultCalendar] });
+                return r.value?.occurrences?.find((o) => o.title === 'E2E No default');
             }, 'the event', 10000);
-            check('with no default calendar the event dialog shows none chosen, asks for one before saving, and saves to the one picked',
-                before.value === '' && before.shown === 'Choose a calendar' && before.dot === 1 && invalid === 'true' && refusedLocally
+            check('with no default calendar (none chosen, none shown) the event dialog shows none chosen, asks for one before saving, and saves to the one picked',
+                none === null && shown.length >= 2 && before.value === '' && before.shown === 'Choose a calendar' && before.dot === 1 && invalid === 'true' && refusedLocally
                 && after.dot === 0 && after.placeholder === 0 && creates.length === 1 && creates[0]?.calendarId === defaultCalendar && made?.calendarId === defaultCalendar,
-                JSON.stringify({ before, invalid, after, creates: creates.map((c) => c?.calendarId), made: made?.calendarId }));
+                JSON.stringify({ none, shown: shown.length, before, invalid, after, creates: creates.map((c) => c?.calendarId), made: made?.calendarId }));
         } finally {
             page.off('request', onRequest);
-            await page.unroute(stateCalls);
+            for (const c of shown) await api('updateCalendar', { id: c.id, patch: { hidden: false } });
             if (made) await api('deleteEvent', { id: made.id, scope: 'all' });
             await waitFor(async () => (await tagged()) === 1, 'the default calendar back', 15000).catch(() => {});
         }
+    });
+
+    // 8b. Dragging, with the mouse as a person drags (a few steps on the way); updateEvent's calls counted.
+    /** Press at one point, move to another in steps (Escape on the way when asked), let go. */
+    const dragMouse = async (from, to, { escape = false, steps = 12 } = {}) => {
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(from.x + (to.x - from.x) / 4, from.y + (to.y - from.y) / 4, { steps: 3 });
+        await page.mouse.move(to.x, to.y, { steps });
+        if (escape) await page.keyboard.press('Escape');
+        await page.mouse.up();
+    };
+    /** A point in a day's column of the week, minutes into the day (and dy pixels on). */
+    const pointIn = async (day, minutes, dy = 0) => {
+        const box = await page.locator(`[data-calendar-day-column="${day}"]`).boundingBox();
+        return { x: box.x + box.width / 2, y: box.y + (minutes / 60) * 48 + dy };
+    };
+    const updates = [];
+    const onUpdate = (request) => {
+        if (request.url().endsWith('/api/dsh-plugin-calendar/updateEvent')) updates.push(JSON.parse(request.postData() ?? '{}').payload?.args);
+    };
+    let dragged;
+    let draggedTo;
+    await step('an event dragged in Week', async () => {
+        dragged = (await api('createEvent', { input: { title: 'E2E Drag me', start: `${day1}T11:00`, end: `${day1}T12:00`, timeZone: ZONE } })).value?.occurrence;
+        await page.locator('[data-calendar-view="week"]').click();
+        await showDay(day1);
+        const columns = await page.locator('[data-calendar-day-column]').evaluateAll((els) => els.map((e) => e.getAttribute('data-calendar-day-column')));
+        const target = columns[columns.indexOf(day1) + 1] ?? columns[columns.indexOf(day1) - 1];
+        draggedTo = target;
+        await page.locator('[data-calendar-scroll]').evaluate((el) => { el.scrollTop = 9 * 48; });
+        const ev = () => grid.locator(`.dshcal-ev[data-calendar-event="${dragged?.id}"]`);
+        await ev().waitFor({ state: 'visible', timeout: 10000 });
+        updates.length = 0;
+        page.on('request', onUpdate);
+        try {
+            // Escape on the way: it stays where it was, nothing is saved, nothing opens.
+            const box = await ev().boundingBox();
+            const grab = { x: box.x + box.width / 2, y: box.y + 10 };
+            const to = await pointIn(target, 13.5 * 60, 11);
+            await dragMouse(grab, to, { escape: true });
+            await page.waitForTimeout(500);
+            const cancelled = updates.length === 0 && (await page.locator('[data-calendar-ghost]').count()) === 0 && (await page.locator('[data-calendar-details]').count()) === 0;
+            // Held over the next day at 13:30: the ghost says where; let go, it's there, an hour long.
+            await page.mouse.move(grab.x, grab.y);
+            await page.mouse.down();
+            await page.mouse.move(grab.x, grab.y + 20, { steps: 3 });
+            await page.mouse.move(to.x, to.y, { steps: 12 });
+            const ghost = (await page.locator('[data-calendar-ghost="move"]').textContent().catch(() => '')) ?? '';
+            await shot(page, 'drag-week');
+            await page.mouse.up();
+            const moved = await waitFor(async () => (await events(target, target)).find((o) => o.id === dragged.id && o.startLocal === `${target}T13:30`), 'the moved event', 10000);
+            const toast = (await page.locator('.dshcal-toast').first().textContent().catch(() => '')) ?? '';
+            const opened = await page.locator('[data-calendar-details]').count();
+            // Its bottom edge an hour lower: it ends at 15:30.
+            await page.waitForTimeout(400);
+            const after = await ev().boundingBox();
+            const edge = { x: after.x + after.width / 2, y: after.y + after.height - 3 };
+            await dragMouse(edge, { x: edge.x, y: edge.y + 48 });
+            const longer = await waitFor(async () => (await events(target, target)).find((o) => o.id === dragged.id && o.endLocal === `${target}T15:30`), 'the longer event', 10000);
+            // Alt with the down arrow: a quarter hour later, still in focus.
+            await page.waitForTimeout(400);
+            await ev().focus();
+            await page.keyboard.press('Alt+ArrowDown');
+            const nudged = await waitFor(async () => (await events(target, target)).find((o) => o.id === dragged.id && o.startLocal === `${target}T13:45`), 'the nudged event', 10000);
+            const focused = await waitFor(() => page.evaluate((id) => document.activeElement?.getAttribute('data-calendar-event') === id, dragged.id), 'the focus on it', 5000).catch(() => false);
+            check('an event dragged in Week goes to another time and day, by its bottom edge to another end, and on a quarter hour with Alt and an arrow; Escape on the way leaves it',
+                cancelled && /1:30|13:30/.test(ghost) && /E2E Drag me/.test(ghost) && moved.endLocal === `${target}T14:30` && /^Moved “E2E Drag me” to /.test(toast) && opened === 0
+                && longer.startLocal === `${target}T13:30` && nudged.endLocal === `${target}T15:45` && focused
+                && updates.length === 3 && updates.every((u) => u.id === dragged.id && u.scope === 'all' && u.patch?.notify === undefined),
+                JSON.stringify({ cancelled, ghost, moved: moved?.startLocal, toast, opened, longer: longer?.endLocal, nudged: nudged?.startLocal, focused, updates }));
+        } finally {
+            page.off('request', onUpdate);
+        }
+    });
+    await step('an event dragged in Month', async () => {
+        await page.locator('[data-calendar-view="month"]').click();
+        await page.locator('[data-calendar-grid="month"]').waitFor({ state: 'visible' });
+        for (let i = 0; i < 3 && !(await page.locator(`[data-calendar-cell="${draggedTo}"]`).count()); i++) {
+            const first = await page.locator('[data-calendar-cell]').first().getAttribute('data-calendar-cell');
+            await page.locator(first < draggedTo ? '[data-calendar-next]' : '[data-calendar-prev]').click();
+            await page.waitForTimeout(400);
+        }
+        const cells = await page.locator('[data-calendar-cell]').evaluateAll((els) => els.map((e) => e.getAttribute('data-calendar-cell')));
+        const toDay = cells.includes(addDays(draggedTo, 2)) ? addDays(draggedTo, 2) : addDays(draggedTo, -2);
+        const piece = grid.locator(`.dshcal-line[data-calendar-event="${dragged?.id}"]`);
+        await piece.waitFor({ state: 'visible', timeout: 10000 });
+        const box = await piece.boundingBox();
+        const cell = await page.locator(`[data-calendar-cell="${toDay}"]`).boundingBox();
+        await page.mouse.move(box.x + 12, box.y + box.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box.x + 30, box.y + box.height / 2, { steps: 3 });
+        await page.mouse.move(cell.x + cell.width / 2, cell.y + cell.height - 10, { steps: 12 });
+        const marked = await page.locator('[data-calendar-cell][data-drop]').evaluateAll((els) => els.map((e) => e.getAttribute('data-calendar-cell')));
+        await shot(page, 'drag-month');
+        await page.mouse.up();
+        const moved = await waitFor(async () => (await events(toDay, toDay)).find((o) => o.id === dragged?.id && o.startLocal === `${toDay}T13:45`), 'the event on its new day', 10000);
+        await page.locator('[data-calendar-view="week"]').click();
+        check('an event dragged in Month goes to another day at the same time of day, the day it would go to marked on the way',
+            moved.endLocal === `${toDay}T15:45` && JSON.stringify(marked) === JSON.stringify([toDay]), JSON.stringify({ toDay, marked, moved: moved && [moved.startLocal, moved.endLocal] }));
+    });
+    await step('a repeating event dragged asks which occurrences move', async () => {
+        const series = (await api('createEvent', { input: { title: 'E2E Drag series', start: `${day1}T08:00`, end: `${day1}T08:30`, timeZone: ZONE, repeat: 'FREQ=WEEKLY' } })).value?.occurrence;
+        await showDay(day1);
+        await page.locator('[data-calendar-scroll]').evaluate((el) => { el.scrollTop = 6 * 48; });
+        const ev = grid.locator(`.dshcal-ev[data-calendar-event="${series?.eventId}.${compact(day1, '08:00')}"]`);
+        await ev.waitFor({ state: 'visible', timeout: 10000 });
+        const box = await ev.boundingBox();
+        await dragMouse({ x: box.x + box.width / 2, y: box.y + 8 }, { x: box.x + box.width / 2, y: box.y + 8 + 48 });
+        const one = page.locator('[data-calendar-scope="one"]');
+        await one.waitFor({ state: 'visible' });
+        const question = (await one.locator('xpath=ancestor::*[@role="dialog"][1]').textContent()) ?? '';
+        const shownThere = await page.evaluate((id) => {
+            const el = document.querySelector(`[data-calendar-main] .dshcal-ev[data-calendar-event="${id}"]`);
+            return el ? Math.round(el.getBoundingClientRect().top - el.parentElement.getBoundingClientRect().top) : -1;
+        }, `${series?.eventId}.${compact(day1, '08:00')}`);
+        await shot(page, 'drag-series');
+        await one.click();
+        await page.locator('[data-calendar-submit]').click();
+        await one.waitFor({ state: 'detached' });
+        const list = await waitFor(async () => {
+            const found = (await events(day1, addDays(day1, 14))).filter((o) => o.title === 'E2E Drag series');
+            return found.some((o) => o.startLocal === `${day1}T09:00`) ? found : null;
+        }, 'the occurrence moved', 10000);
+        const starts = list.map((o) => o.startLocal);
+        check('a repeating event dragged asks which occurrences move, shows it where it goes meanwhile, and moves the one chosen',
+            /Move “E2E Drag series”\?/.test(question) && /This event/.test(question) && shownThere === 9 * 48 + 1
+            && starts.includes(`${day1}T09:00`) && starts.includes(`${addDays(day1, 7)}T08:00`) && !starts.includes(`${day1}T08:00`),
+            JSON.stringify({ question, shownThere, starts }));
+        await api('deleteEvent', { id: series?.id, scope: 'all' }).catch(() => {});
+    });
+
+    // 8c. Search.
+    await step('search', async () => {
+        await page.locator('[data-calendar-range]').click();
+        await page.keyboard.press('/');
+        const focused = await page.evaluate(() => document.activeElement?.hasAttribute('data-calendar-search') === true);
+        await page.keyboard.type('offsite');
+        const results = page.locator('[data-calendar-grid="search"]');
+        const hit = results.locator('[data-calendar-event]', { hasText: 'E2E Offsite' }).first();
+        await hit.waitFor({ state: 'visible', timeout: 10000 });
+        const text = (await results.textContent()) ?? '';
+        await shot(page, 'search');
+        await hit.click();
+        const details = page.locator('[data-calendar-details]');
+        await details.waitFor({ state: 'visible' });
+        const detailsText = (await details.textContent()) ?? '';
+        const show = (await details.locator('[data-calendar-open-page]').textContent()) ?? '';
+        await page.keyboard.press('Escape');
+        await details.waitFor({ state: 'detached' });
+        // Nothing found, said so; Escape in the field clears it, and the week is back.
+        await page.locator('[data-calendar-search]').fill('nothing-is-called-this');
+        await results.getByText('Nothing matches').waitFor({ state: 'visible', timeout: 10000 });
+        await page.locator('[data-calendar-search]').press('Escape');
+        await results.waitFor({ state: 'detached' });
+        const cleared = (await page.locator('[data-calendar-search]').inputValue()) === '' && (await page.locator('[data-calendar-grid="week"]').count()) === 1;
+        check('search: / goes to the field, the events found show by day, one opens with a way to it in the calendar, and Escape clears it',
+            focused && /1 event found/.test(text) && /E2E Offsite/.test(detailsText) && /Show in calendar/.test(show) && cleared,
+            JSON.stringify({ focused, text: text.slice(0, 200), detailsText: detailsText.slice(0, 100), show, cleared }));
     });
 
     // 9. Accounts.
@@ -871,10 +1235,40 @@ try {
         JSON.stringify({ local, ids, forms, trips: trips?.name }));
     });
 
-    // 10. Microsoft, against the stand-in: its page in a new tab, finished by the pasted address; removed; a code instead.
-    await step('Microsoft: sign in on its page, finish by the address, remove, and a code instead', async () => {
+    /** The toast that says these words, as it shows. */
+    const toastWith = async (words) => {
+        const toast = page.locator('.dshcal-toast', { hasText: words }).first();
+        await toast.waitFor({ state: 'visible', timeout: 10000 });
+        return (await toast.textContent()) ?? '';
+    };
+    /** The window's calls to an endpoint while `run` runs: their arguments. */
+    const callsTo = async (endpoint, run) => {
+        const calls = [];
+        const onRequest = (request) => {
+            if (request.url().endsWith(`/api/dsh-plugin-calendar/${endpoint}`)) calls.push(JSON.parse(request.postData() ?? '{}').payload?.args);
+        };
+        page.on('request', onRequest);
+        try {
+            await run(calls);
+        } finally {
+            page.off('request', onRequest);
+        }
+        return calls;
+    };
+    const openAccounts = async () => {
         await page.locator('[data-calendar-accounts-open]').click();
         await page.locator('[data-calendar-accounts]').waitFor({ state: 'visible' });
+    };
+    const closeAccounts = async () => {
+        await page.keyboard.press('Escape');
+        await page.locator('[data-calendar-accounts-page]').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    };
+
+    // 10. Microsoft, against its stand-in: its page in a new tab, finished by the pasted address.
+    let msAccount;
+    let msCalendar;
+    await step('Microsoft: sign in on its page, finished by the address', async () => {
+        await openAccounts();
         await page.locator('[data-calendar-add-account]').click();
         await page.locator('[data-calendar-provider="microsoft"]').click();
         const setup = page.locator('[data-calendar-microsoft-setup]');
@@ -913,17 +1307,408 @@ try {
             && (await page.locator('[data-calendar-microsoft-code]').isVisible());
         await paste.fill(back);
         await page.locator('[data-calendar-microsoft-finish]').click();
-        const account = await waitFor(async () => (await api('state')).value?.accounts?.find((a) => a.kind === 'microsoft'), 'the Microsoft account', 20000).catch(() => undefined);
-        const row = page.locator(`[data-calendar-account="${account?.id}"]`);
-        await row.waitFor({ state: 'visible', timeout: 10000 });
+        msAccount = await waitFor(async () => (await api('state')).value?.accounts?.find((a) => a.kind === 'microsoft'), 'the Microsoft account', 20000).catch(() => undefined);
+        await page.locator(`[data-calendar-account="${msAccount?.id}"]`).waitFor({ state: 'visible', timeout: 10000 });
+        msCalendar = await waitFor(async () => (await api('state')).value?.calendars?.find((c) => c.accountId === msAccount?.id), 'its calendar', 20000).catch(() => undefined);
         const traded = providers.seen.grants.includes('authorization_code');
         check('Microsoft signs in on its page in a new tab, with PKCE and http://localhost to come back to; the wait offers the page again and the address to paste, which finishes it',
-            startedRight && waitShown && traded && account?.email === 'pat@example.com' && steps.includes('Mobile and desktop applications') && steps.includes('http://localhost')
+            startedRight && waitShown && traded && msAccount?.email === providers.graph.store.user.mail && msCalendar?.name === 'Calendar'
+            && steps.includes('Mobile and desktop applications') && steps.includes('http://localhost')
             && !steps.includes('Allow public client flows') && /Only to sign in with a code/.test(codeNote) && codeNote.includes('Allow public client flows'),
-            JSON.stringify({ method, label, asked: asked.href, again, waiting, placeholder, back, traded, account: account?.email, steps, codeNote }));
+            JSON.stringify({ method, label, asked: asked.href, again, waiting, placeholder, back, traded, account: msAccount?.email, calendar: msCalendar?.name, steps, codeNote }));
+        await closeAccounts();
+    });
 
-        // Removed: Microsoft doesn't let an app withdraw its own access, so the notice links the page to withdraw it.
-        await page.locator(`[data-calendar-account-menu="${account?.id}"]`).click();
+    // 11. Google, against its stand-in: its page in a new tab, the wait with the address to paste, then the browser back to DSH here.
+    let googleAccount;
+    let googleCalendar;
+    await step('Google: sign in on its page, and the dialog notices by itself', async () => {
+        const google = providers.google;
+        // Google's page sends the browser straight back: held here first, to see the wait, then let go.
+        let back = '';
+        const isAuthorize = (url) => url.href.startsWith(google.authorizeUrl);
+        await page.context().route(isAuthorize, async (route) => {
+            const response = await route.fetch({ maxRedirects: 0 });
+            back = response.headers().location ?? '';
+            await route.fulfill({
+                status: 200, contentType: 'text/html; charset=utf-8',
+                body: `<!doctype html><meta charset="utf-8"><title>Sign in</title><p>Signed in. The browser goes back to:</p><p id="back">${back.replaceAll('&', '&amp;').replaceAll('<', '&lt;')}</p>`,
+            });
+        });
+        try {
+            await openAccounts();
+            await page.locator('[data-calendar-add-account]').click();
+            await page.locator('[data-calendar-provider="google"]').click();
+            await page.locator('[data-calendar-google-id]').fill(google.clientId);
+            await page.locator('[data-calendar-google-secret]').fill(google.clientSecret);
+            await page.locator('[data-calendar-google-save]').click();
+            const start = page.locator('[data-calendar-google-start]');
+            await start.waitFor({ state: 'visible' });
+            const [tab] = await Promise.all([page.context().waitForEvent('page', { timeout: 15000 }), start.click()]);
+            await tab.waitForLoadState('domcontentloaded');
+            const tabUrl = tab.url();
+            const paste = page.locator('[data-calendar-google-paste]');
+            await paste.waitFor({ state: 'visible' });
+            const redirect = new URL(tabUrl).searchParams.get('redirect_uri') ?? '';
+            const home = redirect.replace(/\/$/, '');
+            const again = await page.locator('[data-calendar-google-open]').getAttribute('href');
+            const text = (await page.locator('[data-calendar-google-signin]').textContent()) ?? '';
+            const placeholder = await paste.getAttribute('placeholder');
+            const secretShown = (await page.content()).includes(google.clientSecret);
+            await shot(page, 'google-waiting');
+            // The browser goes back to DSH on this computer: the dialog notices by itself.
+            await tab.goto(back);
+            googleAccount = await waitFor(async () => (await api('state')).value?.accounts?.find((a) => a.kind === 'google'), 'the Google account', 20000).catch(() => undefined);
+            await tab.close();
+            await page.locator(`[data-calendar-account="${googleAccount?.id}"]`).waitFor({ state: 'visible', timeout: 15000 });
+            googleCalendar = await waitFor(async () => (await api('state')).value?.calendars?.find((c) => c.accountId === googleAccount?.id && !c.readOnly), 'its calendar', 20000)
+                .catch(() => undefined);
+            const traded = google.store.tokenRequests.some((r) => r.grantType === 'authorization_code');
+            await shot(page, 'google-added');
+            check('Google signs in on its page in a new tab; the wait offers the page again and the address to paste; back on this computer the dialog notices by itself, and the client secret is nowhere on the page',
+                tabUrl.startsWith(google.authorizeUrl) && /^http:\/\/127\.0\.0\.1:\d+\/$/.test(redirect) && back.startsWith(`${home}/?`) && again === tabUrl
+                && placeholder === `${home}/?code=…` && /Waiting for you to finish on Google's page/.test(text) && /Open Google's page again/.test(text)
+                && text.includes(`it starts with ${home}`) && !secretShown && traded && googleAccount?.email === 'sam@example.com' && googleCalendar !== undefined,
+                JSON.stringify({ tabUrl, back, again, text, placeholder, secretShown, traded, account: googleAccount?.email, calendar: googleCalendar?.name }));
+        } finally {
+            await page.context().unroute(isAuthorize);
+            await closeAccounts();
+        }
+    });
+
+    // 12. A Google meeting made, changed and deleted without emailing its guest: Google still shows it on the guest's calendar.
+    let reachCall;
+    await step('a Google meeting reaches its guest\'s calendar without email, and the toasts say so', async () => {
+        const google = providers.google;
+        const day = day2;
+        await showDay(day);
+        const tick = () => page.locator('[data-calendar-event-form] [data-calendar-notify]');
+        const hint = () => page.locator('[data-calendar-event-form] [data-calendar-mail="reach"]');
+
+        // Made with the box unticked: the dialog says it still goes on their calendar.
+        await page.locator('[data-calendar-side-new]').click();
+        let form = page.locator('[data-calendar-event-form="new"]');
+        await form.waitFor({ state: 'visible' });
+        await form.locator('[data-calendar-title]').fill('E2E Lunch with Ann');
+        await form.locator('[data-calendar-start-day]').fill(day);
+        await form.locator('[data-calendar-start-time]').fill('12:00');
+        await form.locator('[data-calendar-end-time]').fill('12:30');
+        await form.locator('[data-calendar-calendar]').selectOption(googleCalendar.id);
+        await form.locator('[data-calendar-guest-input]').fill('ann@example.com');
+        await form.locator('[data-calendar-guest-input]').press('Enter');
+        await hint().waitFor({ state: 'visible' });
+        const addHint = (await hint().textContent()) ?? '';
+        const unticked = !(await tick().isChecked());
+        await tick().check();
+        const hiddenWhenTicked = (await hint().count()) === 0;
+        await tick().uncheck();
+        await hint().waitFor({ state: 'visible' });
+        await shot(page, 'google-reach-hint');
+        await page.locator('[data-calendar-save]').click();
+        // Saved only once the user has seen whose calendars it goes on.
+        const addQuestion = await consent();
+        await shot(page, 'google-reach-question');
+        await addQuestion.answer(true);
+        await dialogGone();
+        const added = await toastWith('Put on the calendars of');
+        const made = (await events(day, day)).find((o) => o.title === 'E2E Lunch with Ann');
+
+        // Changed: once something changes, the dialog says it changes on their calendar too.
+        await eventOnPage('E2E Lunch with Ann').click();
+        await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+        await page.locator('[data-calendar-edit]').click();
+        form = page.locator('[data-calendar-event-form="edit"]');
+        await form.waitFor({ state: 'visible' });
+        const hintBefore = await hint().count();
+        await form.locator('[data-calendar-title]').fill('E2E Lunch with Ann and Bo');
+        await hint().waitFor({ state: 'visible' });
+        const changeHint = (await hint().textContent()) ?? '';
+        await page.locator('[data-calendar-save]').click();
+        const changeQuestion = await consent();
+        await changeQuestion.answer(true);
+        await dialogGone();
+        const changed = await toastWith('Changed on the calendars of');
+
+        // Deleted, the box unticked: the dialog says it still goes off their calendar.
+        await eventOnPage('E2E Lunch with Ann and Bo').click();
+        await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+        await page.locator('[data-calendar-delete]').click();
+        const confirm = page.locator('[data-calendar-submit]');
+        await confirm.waitFor({ state: 'visible' });
+        const deleteDialog = confirm.locator('xpath=ancestor::*[@role="dialog"][1]');
+        const deleteHint = (await deleteDialog.locator('[data-calendar-mail="reach"]').textContent()) ?? '';
+        const deleteBox = (await deleteDialog.locator('label:has([data-calendar-notify])').textContent()) ?? '';
+        await shot(page, 'google-delete-hint');
+        await confirm.click();
+        const deleteQuestion = await consent();
+        await deleteQuestion.answer(true);
+        const deleted = await toastWith('Taken off the calendars of');
+        const gone = !(await events(day, day)).some((o) => o.title.startsWith('E2E Lunch with Ann'));
+        // What Google was told: not to email anyone, each time.
+        const writes = google.store.requests.filter((r) => ['POST', 'PATCH', 'DELETE'].includes(r.method) && /^\/calendar\/v3\/calendars\/[^/]+\/events/.test(r.path));
+        const quiet = writes.map((r) => r.method).join(' ') === 'POST PATCH DELETE' && writes.every((r) => r.query.sendUpdates === 'none');
+        const asked = [addQuestion, changeQuestion, deleteQuestion].map((q) => [q.title, q.no, q.yes, q.people.join(), q.gets.join()]);
+        const want = [
+            ['Also put it on ann@example.com\'s Google calendar?', 'Don\'t add', 'Add', 'ann@example.com', 'Added to their calendar, no email'],
+            ['Also change it on ann@example.com\'s Google calendar?', 'Don\'t save', 'Save', 'ann@example.com', 'Changed on their calendar, no email'],
+            ['Also take it off ann@example.com\'s Google calendar?', 'Don\'t delete', 'Delete', 'ann@example.com', 'Taken off their calendar, no email'],
+        ];
+        check('a Google meeting made, changed and deleted without email: the dialogs say it still reaches the guest\'s calendar (not when the box is ticked), each is made once the user has seen whose calendar it reaches, and each toast says whose calendars it was put on, changed on and taken off',
+            JSON.stringify(asked) === JSON.stringify(want)
+            && unticked && addHint === 'Unticked, Google still puts it on the guests\' Google calendars, without an email.' && hiddenWhenTicked
+            && made?.calendarId === googleCalendar.id && (made.attendees ?? []).some((a) => a.email === 'ann@example.com')
+            && /^Added “E2E Lunch with Ann” on .+\. Put on the calendars of ann@example\.com, without emailing anyone\.$/.test(added)
+            && hintBefore === 0 && changeHint === 'Unticked, Google still changes it on the guests\' Google calendars, without an email.'
+            && changed === 'Saved. Changed on the calendars of ann@example.com, without emailing anyone.'
+            && deleteBox === 'Tell ann@example.com by email' && deleteHint === 'Unticked, Google still removes it from the guests\' Google calendars, without an email.'
+            && deleted === 'Deleted “E2E Lunch with Ann and Bo”. Taken off the calendars of ann@example.com, without emailing anyone.' && gone && quiet,
+            JSON.stringify({ asked, unticked, addHint, hiddenWhenTicked, made: made && { calendarId: made.calendarId, attendees: made.attendees }, added, hintBefore, changeHint, changed,
+                deleteBox, deleteHint, deleted, gone, writes: writes.map((r) => `${r.method} ${r.path} ${r.query.sendUpdates}`) }));
+
+        // An agent deletes a meeting there: askBeforeEmails is off, so a chat takes it off the guest's calendar without asking.
+        const lunch = (await createAsked({
+            calendarId: googleCalendar.id, title: 'E2E Agent lunch', start: `${day}T14:00`, end: `${day}T14:30`, timeZone: ZONE, attendees: ['ann@example.com'],
+        })).value?.occurrence;
+        reachCall = await agentCall('calendar_delete_event', { id: lunch?.id }, 'Cancel my lunch with Ann');
+        const left = (await events(day, day)).some((o) => o.title === 'E2E Agent lunch');
+        const last = google.store.requests.filter((r) => r.method === 'DELETE').at(-1);
+        check('with askBeforeEmails off, an agent deletes a meeting on a Google calendar, taking it off its guest\'s, without asking first',
+            lunch?.calendarId === googleCalendar.id && !left && last?.query?.sendUpdates === 'none', JSON.stringify({ lunch: lunch?.calendarId, left, last }));
+    });
+
+    // 12b. Someone else's invitation: its organizer's fields can't be changed in the dialog; the user's own can.
+    await step('someone else\'s invitation: the organizer\'s fields read-only, Show me as the user\'s own', async () => {
+        const google = providers.google;
+        const day = addDays(today, 2);
+        google.store.insert('sam@example.com', {
+            summary: 'E2E Vendor review', description: 'Bring the plans.', location: 'Room 4', iCalUID: 'e2e-vendor-review@example.com',
+            start: { dateTime: `${day}T15:00:00`, timeZone: ZONE }, end: { dateTime: `${day}T16:00:00`, timeZone: ZONE },
+            organizer: { email: 'olga@example.com', displayName: 'Olga Example' },
+            attendees: [{ email: 'olga@example.com', organizer: true, responseStatus: 'accepted' }, { email: 'sam@example.com', responseStatus: 'needsAction' }],
+        });
+        await api('syncNow', { accountId: googleAccount?.id });
+        await waitFor(async () => (await events(day, day)).find((o) => o.title === 'E2E Vendor review'), 'the invitation', 15000);
+        await showDay(day);
+        await eventOnPage('E2E Vendor review').click();
+        await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+        await page.locator('[data-calendar-edit]').click();
+        const form = page.locator('[data-calendar-event-form="edit"]');
+        await form.waitFor({ state: 'visible' });
+        const locked = {};
+        for (const key of ['title', 'start-day', 'start-time', 'location', 'url', 'notes']) locked[key] = await form.locator(`[data-calendar-${key}]`).isDisabled();
+        const own = { busy: await form.locator('[data-calendar-busy]').isEnabled(), private: await form.locator('[data-calendar-private]').isEnabled() };
+        const note = (await form.locator('[data-calendar-invitation-note]').textContent()) ?? '';
+        await shot(page, 'invitation-dialog');
+        const patches = () => google.store.requests.filter((r) => r.method === 'PATCH').length;
+        const before = patches();
+        await form.locator('[data-calendar-busy]').selectOption('free');
+        await page.locator('[data-calendar-save]').click();
+        await dialogGone();
+        const now = (await events(day, day)).find((o) => o.title === 'E2E Vendor review');
+        check('someone else\'s invitation: title, time, place, link and notes can\'t be changed in the dialog, which says why; Show me as and Private can, and saving Free goes to Google',
+            Object.values(locked).every(Boolean) && own.busy && own.private && /its organizer sets its title, time, place, link and notes/.test(note)
+            && patches() === before + 1 && now?.busy === false && now.title === 'E2E Vendor review' && now.location === 'Room 4',
+            JSON.stringify({ locked, own, note, patches: patches() - before, now: now && { busy: now.busy, title: now.title, location: now.location } }));
+
+        // One whose organizer lets guests change it: Google makes a change to it for everyone on it, so Show me as asks first.
+        google.store.insert('sam@example.com', {
+            summary: 'E2E Design review', iCalUID: 'e2e-design-review@example.com', guestsCanModify: true,
+            start: { dateTime: `${day}T17:00:00`, timeZone: ZONE }, end: { dateTime: `${day}T17:30:00`, timeZone: ZONE },
+            organizer: { email: 'olga@example.com', displayName: 'Olga Example' },
+            attendees: [
+                { email: 'olga@example.com', organizer: true, responseStatus: 'accepted' }, { email: 'sam@example.com', responseStatus: 'accepted' },
+                { email: 'pat@example.com', responseStatus: 'accepted' },
+            ],
+        });
+        await api('syncNow', { accountId: googleAccount?.id });
+        await waitFor(async () => (await events(day, day)).find((o) => o.title === 'E2E Design review'), 'the invitation its guests may change', 15000);
+        await showDay(day);
+        await eventOnPage('E2E Design review').click();
+        await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+        await page.locator('[data-calendar-edit]').click();
+        await form.waitFor({ state: 'visible' });
+        const first = patches();
+        let asked = {};
+        const calls = await callsTo('updateEvent', async () => {
+            await form.locator('[data-calendar-busy]').selectOption('free');
+            await page.locator('[data-calendar-save]').click();
+            const question = await consent();
+            await shot(page, 'invitation-question');
+            asked = { ...question, answer: undefined, sentBefore: patches() - first };
+            await question.answer(true);
+            await dialogGone();
+        });
+        const design = (await events(day, day)).find((o) => o.title === 'E2E Design review');
+        check('someone else\'s meeting whose guests may change it: Show me as asks first, naming its organizer and the other guest, and is saved on yes as the same change',
+            asked.title === 'Also change it on 2 people\'s Google calendars?' && asked.text?.includes('Its organizer lets guests change it')
+            && JSON.stringify([...(asked.people ?? [])].sort()) === JSON.stringify(['olga@example.com', 'pat@example.com'])
+            && asked.gets?.length === 2 && asked.gets.every((g) => g === 'Changed on their calendar, no email') && asked.no === 'Don\'t save' && asked.yes === 'Save'
+            && asked.sentBefore === 0 && patches() === first + 1 && design?.busy === false
+            && calls.length === 2 && sameChange(calls[0], calls[1]) && JSON.stringify([...(calls[1]?.patch?.approved ?? [])].sort()) === JSON.stringify(['olga@example.com', 'pat@example.com']),
+            JSON.stringify({ asked, patches: patches() - first, busy: design?.busy, calls }));
+    });
+
+    // 12c. A move that made its copy but couldn't take the event out of its old calendar: said until closed, never made again.
+    await step('a move that stopped halfway', async () => {
+        const google = providers.google;
+        const day = addDays(today, 5);
+        const made = (await api('createEvent', { input: { calendarId: googleCalendar.id, title: 'E2E Halfway', start: `${day}T10:00`, end: `${day}T10:30`, timeZone: ZONE } })).value?.occurrence;
+        // Google won't take it out: the copy is made in the side calendar, and the event stays where it was too.
+        google.store.failNext({ method: 'DELETE', status: 403, reason: 'forbidden', message: 'The stand-in keeps this one.' });
+        let notice = '';
+        let buttons = [];
+        let stays = 0;
+        const calls = await callsTo('updateEvent', async () => {
+            await showDay(day);
+            await eventOnPage('E2E Halfway').click();
+            await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+            await page.locator('[data-calendar-edit]').click();
+            const form = page.locator('[data-calendar-event-form="edit"]');
+            await form.waitFor({ state: 'visible' });
+            await form.locator('[data-calendar-calendar]').selectOption(side.id);
+            await page.locator('[data-calendar-save]').click();
+            await dialogGone();
+            const kept = page.locator('[data-calendar-kept-notice]');
+            await kept.waitFor({ state: 'visible', timeout: 10000 });
+            notice = (await kept.textContent()) ?? '';
+            buttons = await kept.locator('button').evaluateAll((els) => els.map((el) => el.getAttribute('aria-label') || el.textContent));
+            await shot(page, 'half-moved');
+            // Still there after a toast would have gone, and nothing tried again.
+            await sleep(8000);
+            stays = await kept.count();
+        });
+        const copies = (await events(day, day)).filter((o) => o.title === 'E2E Halfway').map((o) => o.calendarId).sort();
+        await page.locator('[data-calendar-kept-notice] button').click();
+        await page.locator('[data-calendar-kept-notice]').waitFor({ state: 'detached' });
+        check('a move that made its copy but couldn\'t take the event out of its old calendar: the dialog closes, a notice says what was done and what is left to do until it is closed, and the move isn\'t made again',
+            made?.calendarId === googleCalendar.id && calls.length === 1 && stays === 1
+            && notice.includes(`It was copied to E2E Side, but not taken out of ${googleCalendar.name}`) && notice.includes('moving it again would make a second copy')
+            && JSON.stringify(buttons) === JSON.stringify(['Close this notice']) && JSON.stringify(copies) === JSON.stringify([googleCalendar.id, side.id].sort()),
+            JSON.stringify({ made: made?.calendarId, calls: calls.length, notice, buttons, stays, copies }));
+        // The one left in Google goes, for the steps after this one.
+        const left = (await events(day, day)).find((o) => o.title === 'E2E Halfway' && o.calendarId === googleCalendar.id);
+        if (left) await api('deleteEvent', { id: left.id, scope: 'all' });
+    });
+
+    // 13. A series with an occurrence changed on its own, moved to Microsoft, which would drop that occurrence: asked first.
+    await step('a series that would lose part of itself on a move asks first', async () => {
+        const day = addDays(today, 3);
+        const byDay = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'][new Date(`${day}T12:00:00Z`).getUTCDay()];
+        const series = (await api('createEvent', {
+            input: { calendarId: defaultCalendar, title: 'E2E Standup', start: `${day}T08:00`, end: `${day}T08:15`, timeZone: ZONE, repeat: `FREQ=WEEKLY;BYDAY=${byDay};COUNT=4` },
+        })).value?.occurrence;
+        const changedOne = await api('updateEvent', { id: `${series?.eventId}.${compact(addDays(day, 7), '08:00')}`, patch: { title: 'E2E Standup (longer)' }, scope: 'one' });
+        let question = '';
+        let kept = {};
+        const calls = await callsTo('updateEvent', async () => {
+            await showDay(day);
+            await page.locator(`[data-calendar-main] [data-calendar-event="${series?.eventId}.${compact(day, '08:00')}"]`).click();
+            await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+            await page.locator('[data-calendar-edit]').click();
+            const form = page.locator('[data-calendar-event-form="edit"]');
+            await form.waitFor({ state: 'visible' });
+            await form.locator('[data-calendar-calendar]').selectOption(msCalendar.id);
+            await page.locator('[data-calendar-save]').click();
+            const anyway = page.locator('[data-calendar-move-anyway]');
+            await anyway.waitFor({ state: 'visible' });
+            question = (await anyway.locator('xpath=ancestor::*[@role="dialog"][1]').textContent()) ?? '';
+            await shot(page, 'drops-question');
+            // Don't move it: nothing moves, and the dialog stays.
+            await page.locator('[data-calendar-dont-move]').click();
+            await anyway.waitFor({ state: 'detached' });
+            kept = { open: await form.isVisible(), calendarId: (await events(day, day)).find((o) => o.title === 'E2E Standup')?.calendarId };
+            // Move anyway: the same move, told to drop what can't go.
+            await page.locator('[data-calendar-save]').click();
+            await anyway.waitFor({ state: 'visible' });
+            await anyway.click();
+            await dialogGone();
+        });
+        const after = (await events(day, addDays(day, 21))).filter((o) => o.title.startsWith('E2E Standup'));
+        const posted = providers.graph.store.requestsTo('/v1.0/me/calendars/e2e-ms-cal/events', 'POST').map((r) => r.body);
+        const patches = calls.map((c) => JSON.stringify(c?.patch));
+        const to = JSON.stringify(msCalendar.id);
+        check('a series with an occurrence changed on its own, moved to Microsoft: asked first in the host\'s words; Don\'t move it keeps it; Move anyway moves it without that occurrence',
+            changedOne.ok && question.includes('Moving this series to Calendar would drop 1 occurrence changed on its own') && /Move anyway/.test(question)
+            && kept.open && kept.calendarId === defaultCalendar && after.length === 4 && after.every((o) => o.calendarId === msCalendar.id && o.title === 'E2E Standup')
+            && posted.some((b) => b?.subject === 'E2E Standup' && b.recurrence?.pattern?.type === 'weekly')
+            && patches.length === 3 && patches[0] === `{"calendarId":${to}}` && patches[1] === patches[0] && patches[2] === `{"calendarId":${to},"dropChanges":true}`,
+            JSON.stringify({ changedOne: changedOne.ok, question, kept, after: after.map((o) => [o.title, o.calendarId]), posted: posted.length, patches }));
+    });
+
+    // 14. A Microsoft meeting that changes on Microsoft's side while the question before its email waits: its yes makes
+    // nothing, and the question comes again naming everyone it reaches now.
+    await step('a change held to the people it named: the meeting changed meanwhile, so it asks again', async () => {
+        const graph = providers.graph;
+        const day = addDays(today, 4);
+        const person = (address, name) => ({ emailAddress: { address, name }, type: 'required' });
+        const made = await createAsked({
+            calendarId: msCalendar.id, title: 'E2E Review', start: `${day}T11:00`, end: `${day}T11:30`, timeZone: ZONE,
+            attendees: [{ email: 'ann@example.com', name: 'Ann Example' }], notify: true,
+        });
+        const graphId = [...graph.store.events.values()].find((e) => e.subject === 'E2E Review')?.id;
+        const patches = () => graph.store.requestsTo(`/v1.0/me/events/${graphId}`, 'PATCH').length;
+        let first = {};
+        let again = {};
+        let third = {};
+        let note = '';
+        let look = false;
+        let sentNothing = false;
+        let still = '';
+        let toast = '';
+        const calls = await callsTo('updateEvent', async () => {
+            await showDay(day);
+            await eventOnPage('E2E Review').click();
+            await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+            await page.locator('[data-calendar-edit]').click();
+            const form = page.locator('[data-calendar-event-form="edit"]');
+            await form.waitFor({ state: 'visible' });
+            await form.locator('[data-calendar-title]').fill('E2E Review (agenda)');
+            await page.locator('[data-calendar-save]').click();
+            first = await consent();
+            // Meanwhile Bob is added on Microsoft's side, and DSH reads it.
+            graph.store.updateEvent(graphId, { attendees: [person('ann@example.com', 'Ann Example'), person('bob@example.com', 'Bob Example')] });
+            await api('syncNow', { accountId: msAccount.id });
+            await waitFor(async () => (await events(day, day)).find((o) => o.title === 'E2E Review')?.attendees?.some((a) => a.email === 'bob@example.com'), 'Bob on the meeting', 15000);
+            const before = patches();
+            await first.answer(true);
+            // Asked again, naming both, Bob as new: nothing went to Microsoft.
+            again = await consent();
+            await shot(page, 'changed-meanwhile');
+            sentNothing = patches() === before;
+            await again.answer(false);
+            const alert = form.locator('.dshcal-alert', { hasText: 'it changed meanwhile' });
+            await alert.waitFor({ state: 'visible', timeout: 10000 });
+            note = (await alert.textContent()) ?? '';
+            look = await page.locator('[data-calendar-look-again]').isVisible();
+            still = (await events(day, day)).find((o) => o.title.startsWith('E2E Review'))?.title ?? '';
+            // Saved again: asked about both, and made, held to both.
+            await page.locator('[data-calendar-save]').click();
+            third = await consent();
+            await third.answer(true);
+            await dialogGone();
+            toast = await toastWith('Emailed');
+        });
+        const now = (await events(day, day)).find((o) => o.title.startsWith('E2E Review'));
+        const names = (q) => JSON.stringify(q.people);
+        check('a Microsoft meeting that gained a guest while the question waited: its yes makes nothing and asks again, naming both with the new one marked; Don\'t save keeps it with a way to look again; saved again, it goes to both',
+            made.ok && first.title === 'Email an update to ann@example.com?' && names(first) === '["ann@example.com"]' && first.yes === 'Save and email'
+            && again.title === 'Email an update to 2 guests?' && names(again) === '["ann@example.com","bob@example.com"]' && JSON.stringify(again.fresh) === '["bob@example.com"]'
+            && again.text.includes('It changed meanwhile') && sentNothing
+            && /^Not saved: it changed meanwhile/.test(note) && look && still === 'E2E Review'
+            && names(third) === '["ann@example.com","bob@example.com"]' && third.fresh.length === 0
+            && calls.length === 4 && calls[0]?.patch?.notify === undefined && calls[0]?.patch?.approved === undefined
+            && calls[1]?.patch?.notify === true && JSON.stringify(calls[1]?.patch?.approved) === '["ann@example.com"]'
+            && calls[2]?.patch?.notify === undefined && calls[2]?.patch?.approved === undefined
+            && calls[3]?.patch?.notify === true && JSON.stringify(calls[3]?.patch?.approved) === '["ann@example.com","bob@example.com"]'
+            && now?.title === 'E2E Review (agenda)' && /Emailed an update to ann@example\.com and bob@example\.com\./.test(toast),
+            JSON.stringify({ made: made.ok, first: first.title, again: { title: again.title, people: again.people, fresh: again.fresh }, third: third.people,
+                calls: calls.map((c) => c?.patch), note, look, sentNothing, still, now: now?.title, toast }));
+    });
+
+    // 15. The Microsoft account removed, with the page to withdraw DSH's access there; then a sign-in with a code instead.
+    await step('Microsoft: the account removed, and a code instead', async () => {
+        await openAccounts();
+        await page.locator(`[data-calendar-account-menu="${msAccount?.id}"]`).click();
         await page.locator('.dshcal-menu').getByText('Remove…', { exact: true }).click();
         const confirm = page.locator('[data-calendar-submit]');
         await confirm.waitFor({ state: 'visible' });
@@ -948,56 +1733,46 @@ try {
         await page.locator('[data-calendar-microsoft-code]').click();
         const code = page.locator('[data-calendar-user-code]');
         await code.waitFor({ state: 'visible', timeout: 10000 });
-        const codeText = await code.textContent();
+        const codeText = (await code.textContent()) ?? '';
         const enterAt = await page.locator('[data-calendar-verification]').getAttribute('href');
         const browserWay = await page.locator('[data-calendar-microsoft-browser]').isVisible();
-        const codeMethod = await signIn.getAttribute('data-calendar-microsoft-signin');
+        const codeMethod = await page.locator('[data-calendar-microsoft-signin]').getAttribute('data-calendar-microsoft-signin');
         await shot(page, 'microsoft-code');
         check('"Sign in with a code instead" starts a sign-in with a code: the code, where to enter it, and the way back to the page in the browser',
-            codeText === 'E2ECODE42' && enterAt === 'https://microsoft.com/devicelogin' && browserWay && codeMethod === 'code' && providers.seen.devicecodes === 1
+            /^[0-9A-F]{9}$/.test(codeText) && enterAt === 'https://microsoft.com/devicelogin' && browserWay && codeMethod === 'code' && providers.seen.devicecodes === 1
             && page.context().pages().length === tabs, JSON.stringify({ codeText, enterAt, browserWay, codeMethod, devicecodes: providers.seen.devicecodes }));
-        await page.keyboard.press('Escape');
-        await page.locator('[data-calendar-accounts-page]').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+        await closeAccounts();
     });
 
-    // 11. Google, against a stand-in for its sign-in page: its page in a new tab too, and the address to paste (not finished here).
-    await step('Google: sign in on its page, with the address to paste', async () => {
-        await page.locator('[data-calendar-accounts-open]').click();
-        await page.locator('[data-calendar-accounts]').waitFor({ state: 'visible' });
-        await page.locator('[data-calendar-add-account]').click();
-        await page.locator('[data-calendar-provider="google"]').click();
-        await page.locator('[data-calendar-google-id]').fill('e2e-client.apps.googleusercontent.com');
-        await page.locator('[data-calendar-google-secret]').fill('e2e-client-secret');
-        await page.locator('[data-calendar-google-save]').click();
-        const start = page.locator('[data-calendar-google-start]');
-        await start.waitFor({ state: 'visible' });
-        const [tab] = await Promise.all([page.context().waitForEvent('page', { timeout: 15000 }), start.click()]);
-        await tab.waitForLoadState('domcontentloaded');
-        const tabUrl = tab.url();
-        await tab.close();
-        const paste = page.locator('[data-calendar-google-paste]');
-        await paste.waitFor({ state: 'visible' });
-        const redirect = new URL(tabUrl).searchParams.get('redirect_uri') ?? '';
-        const back = redirect.replace(/\/$/, '');
-        const again = await page.locator('[data-calendar-google-open]').getAttribute('href');
-        const text = (await page.locator('[data-calendar-google-signin]').textContent()) ?? '';
-        const placeholder = await paste.getAttribute('placeholder');
-        const secretShown = (await page.content()).includes('e2e-client-secret');
-        await shot(page, 'google-waiting');
-        await page.keyboard.press('Escape');
-        await page.locator('[data-calendar-accounts-page]').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
-        check('Google signs in on its page in a new tab too; the wait offers the page again and the address to paste, and the client secret is nowhere on the page',
-            tabUrl.startsWith(providers.googleAuthorizeUrl) && /^http:\/\/127\.0\.0\.1:\d+\/$/.test(redirect) && again === tabUrl && placeholder === `${back}/?code=…`
-            && /Waiting for you to finish on Google's page/.test(text) && /Open Google's page again/.test(text) && text.includes(`it starts with ${back}`) && !secretShown,
-            JSON.stringify({ tabUrl, again, text, placeholder, secretShown }));
+    // 16. The Google account removed: DSH's access withdrawn at Google.
+    await step('Google: the account removed, its access withdrawn there', async () => {
+        await openAccounts();
+        await page.locator(`[data-calendar-account-menu="${googleAccount?.id}"]`).click();
+        await page.locator('.dshcal-menu').getByText('Remove…', { exact: true }).click();
+        const confirm = page.locator('[data-calendar-submit]');
+        await confirm.waitFor({ state: 'visible' });
+        await confirm.click();
+        const toast = await toastWith('withdrawn at Google');
+        const gone = await waitFor(async () => !((await api('state')).value?.accounts ?? []).some((a) => a.kind === 'google'), 'the Google account to leave', 10000).catch(() => false);
+        const notice = await page.locator('[data-calendar-removed]').count();
+        check('a removed Google account leaves, and the toast says DSH\'s access was withdrawn at Google (no page to go to)',
+            gone && toast === `Removed ${googleAccount?.name}. DSH's access was withdrawn at Google.` && providers.seen.revoked === 1 && notice === 0,
+            JSON.stringify({ gone, toast, revoked: providers.seen.revoked, notice }));
+        await closeAccounts();
     });
 
-    // 12. Chat cards, and the page opened at an event from one.
+    // 17. Chat cards, and the page opened at an event from one.
     /** A session's title in DSH's list (DSH names a session once its first turn is done). */
     const titleOf = (sessionId) => waitFor(async () => (await bridge('GET', '/sessions')).find((s) => s.sessionId === sessionId)?.projections?.values?.title,
         'the session\'s title', 30000);
     const openSession = async (title) => {
-        await page.getByText(title, { exact: false }).first().click();
+        const row = page.getByText(title, { exact: false }).first();
+        // An older session can be folded under "Show N more sessions" in DSH's sidebar.
+        if (!(await row.isVisible().catch(() => false))) {
+            const more = page.getByText(/^Show \d+ more sessions?$/).first();
+            if (await more.count()) await more.click().catch(() => {});
+        }
+        await row.click();
         await page.waitForTimeout(1500);
         for (const words of [/^Completed in/, /^Called tools?$/]) {
             const group = page.getByText(words);
@@ -1030,11 +1805,51 @@ try {
             JSON.stringify({ listText: listText?.slice(0, 200), hasDays, createText: createText?.slice(0, 200), detailsText: detailsText?.slice(0, 120) }));
         await page.keyboard.press('Escape');
     });
+    await step('chat cards for a meeting that reached a guest, and for a move', async () => {
+        // The meeting an agent deleted on Google (step 12): its card says whose calendars it was taken off.
+        await openSession(await titleOf(reachCall.sessionId));
+        const reachCard = page.locator('.dshcal-chat[data-calendar-chat="calendar_delete_event"][data-phase="result"]', { hasText: 'E2E Agent lunch' }).first();
+        await reachCard.waitFor({ state: 'attached', timeout: 10000 });
+        const told = (await reachCard.locator('[data-calendar-told]').textContent()) ?? '';
+        if (shots) await reachCard.screenshot({ path: join(shots, 'chat-reached.png') }).catch(() => {});
+        // An agent moves an event to another calendar: its card says where to.
+        const fromAgent = (await events(day2, day2)).find((o) => o.title === 'E2E From agent');
+        const moveCall = await agentCall('calendar_update_event', { id: fromAgent?.id, calendar_id: side?.id }, 'Move the agent event to the side calendar');
+        await openSession(await titleOf(moveCall.sessionId));
+        const moveCard = page.locator('.dshcal-chat[data-calendar-chat="calendar_update_event"][data-phase="result"]').first();
+        await moveCard.waitFor({ state: 'attached', timeout: 10000 });
+        const moveText = (await moveCard.textContent()) ?? '';
+        const moveKind = await moveCard.locator('[data-calendar-chat-card]').getAttribute('data-calendar-chat-card');
+        const moved = (await events(day2, day2)).find((o) => o.title === 'E2E From agent');
+        if (shots) await moveCard.screenshot({ path: join(shots, 'chat-moved.png') }).catch(() => {});
+        check('chat cards: a meeting an agent deleted on a Google calendar says whose calendars it was taken off; a move says where the event went',
+            told === 'Taken off the calendars of ann@example.com, without emailing anyone.' && moveKind === 'moved' && moveText.includes('Moved “E2E From agent” to E2E Side')
+            && moved?.calendarId === side?.id, JSON.stringify({ told, moveKind, moveText: moveText.slice(0, 200), moved: moved?.calendarId }));
+    });
 
-    // 13. The Agenda pane.
+    await step('chat rows for calls that didn\'t work', async () => {
+        // An agent reads an event that isn't there, and answers an invitation that isn't there: each says, in the
+        // plugin's own row, what it didn't do and why, without what the error tells the agent to do next.
+        const rowOf = async (call, tool) => {
+            await openSession(await titleOf(call.sessionId));
+            const row = page.locator(`.dshcal-chat[data-calendar-chat="${tool}"][data-calendar-failed]`).first();
+            await row.waitFor({ state: 'attached', timeout: 10000 });
+            return row;
+        };
+        const readRow = await rowOf(await agentCall('calendar_get_event', { id: 'ev-not-there' }, 'What is the offsite about?'), 'calendar_get_event');
+        const readText = (await readRow.textContent()) ?? '';
+        const answerRow = await rowOf(await agentCall('calendar_respond', { id: 'ev-not-there', answer: 'accepted' }, 'Say yes to the offsite'), 'calendar_respond');
+        const answerText = (await answerRow.textContent()) ?? '';
+        const answerWhy = (await answerRow.locator('[data-calendar-chat-card="failed"]').textContent()) ?? '';
+        if (shots) await answerRow.screenshot({ path: join(shots, 'chat-not-done.png') }).catch(() => {});
+        check('a call that didn\'t work shows as not done in the plugin\'s own row, with why in view: "Didn\'t work: …" for a read, "Not answered: …" for an answer',
+            /Didn't work: \S/.test(readText) && /^Not answered: \S/.test(answerWhy.trim()) && !/Error:|Not done:|calendar_[a-z_]+|notify_guests/.test(`${readText} ${answerText}`),
+            JSON.stringify({ readText, answerText }));
+    });
+
+    // 18. The Agenda pane.
     await step('the Agenda pane in the right sidebar', async () => {
-        await page.getByText(await titleOf(listCall.sessionId), { exact: false }).first().click();
-        await page.waitForTimeout(1200);
+        await openSession(await titleOf(listCall.sessionId));
         const opener = page.getByRole('button', { name: 'Open right sidebar' });
         if (await opener.count()) await opener.first().click();
         await page.waitForTimeout(800);
@@ -1044,16 +1859,30 @@ try {
         await pane.locator('[data-calendar-event]', { hasText: 'E2E Planning' }).first().waitFor({ state: 'visible', timeout: 10000 });
         const text = await pane.textContent();
         await shot(page, 'agenda-pane');
-        await pane.locator('[data-calendar-event]', { hasText: 'E2E Planning' }).locator('.dshcal-pane-what').click();
+        // An event's details open beside the pane; the chat stays. Open in Calendar shows it on the page.
+        const row = pane.locator('[data-calendar-event]', { hasText: 'E2E Planning' }).first();
+        await row.locator('.dshcal-pane-what').click();
         const details = page.locator('[data-calendar-details]');
         await details.waitFor({ state: 'visible', timeout: 10000 });
         const detailsText = await details.textContent();
-        check('the Agenda pane lists today and the next days, and opens an event on the page', /Today/.test(text ?? '') && /E2E Offsite/.test(text ?? '')
-            && /E2E Planning/.test(detailsText ?? '') && (await page.locator('[data-calendar-page]').count()) === 1, (text ?? '').slice(0, 300));
+        const beside = await page.evaluate(() => {
+            const pop = document.querySelector('[data-calendar-details]').getBoundingClientRect();
+            const pane = document.querySelector('[data-calendar-pane]').getBoundingClientRect();
+            return pop.right <= pane.left + 12 && pop.left < pane.left;
+        });
+        const stayed = (await page.locator('[data-calendar-page]').count()) === 0;
+        await shot(page, 'agenda-pane-details');
+        await details.locator('[data-calendar-open-page]').click();
+        await page.locator('[data-calendar-page]').waitFor({ state: 'visible', timeout: 10000 });
+        await details.waitFor({ state: 'visible', timeout: 10000 });
+        const pageText = await details.textContent();
+        check('the Agenda pane lists today and the next days; an event\'s details open beside it, the chat staying, and Open in Calendar shows it on the page',
+            /Today/.test(text ?? '') && /E2E Offsite/.test(text ?? '') && /E2E Planning/.test(detailsText ?? '') && beside && stayed && /E2E Planning/.test(pageText ?? ''),
+            JSON.stringify({ text: (text ?? '').slice(0, 300), beside, stayed, pageText: (pageText ?? '').slice(0, 100) }));
         await page.keyboard.press('Escape');
     });
 
-    // 14. Light and dark, with and without a wallpaper.
+    // 19. Light and dark, with and without a wallpaper.
     await step('light and dark, with and without a wallpaper', async () => {
         await openPage();
         await page.locator('[data-calendar-view="week"]').click();
@@ -1085,7 +1914,7 @@ try {
             && /blur/.test(light.blur) && /blur/.test(dark.blur) && light.background !== dark.background && dark.dark === true, JSON.stringify({ light, dark }));
     });
 
-    // 15. A narrow window.
+    // 20. A narrow window.
     await step('a narrow window', async () => {
         await page.setViewportSize({ width: 420, height: 820 });
         await page.waitForTimeout(600);
@@ -1096,13 +1925,19 @@ try {
             const root = document.querySelector('[data-calendar-page]');
             return root.scrollWidth - root.clientWidth;
         });
+        const search = await page.locator('[data-calendar-search]').boundingBox();
+        const searchFits = search !== null && search.x >= 0 && search.x + search.width <= 420 && search.width >= 200;
         await shot(page, 'narrow-week');
         await page.locator('[data-calendar-side-toggle]').click();
         await page.locator('[data-calendar-side]').waitFor({ state: 'visible', timeout: 5000 });
+        const focusIn = await page.evaluate(() => Boolean(document.activeElement?.closest('[data-calendar-side]')));
         await shot(page, 'narrow-side');
         await page.keyboard.press('Escape');
-        check('in a narrow window the side column folds behind a button and Week shows three days, nothing sticking out', toggle && !sideShown && columns === 3 && overflow <= 1,
-            JSON.stringify({ toggle, sideShown, columns, overflow }));
+        await page.locator('[data-calendar-side]').waitFor({ state: 'hidden', timeout: 5000 });
+        const focusBack = await page.evaluate(() => document.activeElement?.hasAttribute('data-calendar-side-toggle') === true);
+        check('in a narrow window the side column folds behind a button (the focus going in and back), Week shows three days, search fits, nothing sticking out',
+            toggle && !sideShown && columns === 3 && overflow <= 1 && searchFits && focusIn && focusBack,
+            JSON.stringify({ toggle, sideShown, columns, overflow, search, focusIn, focusBack }));
         await page.setViewportSize({ width: 1280, height: 800 });
     });
 

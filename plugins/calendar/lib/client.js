@@ -21,6 +21,12 @@
  *   read, one event, free time, or what a change did, with a way to the
  *   event on the page.
  *
+ * Who a change emails is the host's to say. One it says would email people
+ * asks the user first, in its words, and Send holds it to the people named;
+ * afterwards the window says who was emailed, and whose calendars a change
+ * reached without email (Google). A move that would drop part of a series
+ * asks first too.
+ *
  * Styled to sit on the wallpaper plugin's glass when it is on: the page has
  * no background of its own, its cards follow the wallpaper's public
  * `--wp-blur`, `--wp-tint` and `body.wp-still`, and light or dark follows
@@ -85,11 +91,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const CSS = [
             // Tokens: dark by default (the wallpaper plugin's own values), light where DSH is light.
             `:is(${ROOTS}){--cal-text:#ECEAE4;--cal-strong:#DADDD7;--cal-soft:#C9CDC7;--cal-meta:#A9AEA8;--cal-faint:#8E948E;--cal-accent:#7FA7F5;--cal-on-accent:#0B1220;`
-                + '--cal-glass:rgba(14,18,17,var(--wp-tint,.55));--cal-pop:rgba(20,24,23,.95);--cal-modal:rgba(16,20,19,.82);--cal-shadow:rgba(0,0,0,.45);'
+                + '--cal-glass:rgba(14,18,17,var(--wp-tint,.55));--cal-conv:rgba(10,13,12,calc(var(--wp-tint,.55) + .2));--cal-pop:rgba(20,24,23,.95);--cal-modal:rgba(16,20,19,.82);--cal-shadow:rgba(0,0,0,.45);'
                 + '--cal-line:rgba(255,255,255,.09);--cal-line2:rgba(255,255,255,.16);--cal-fill:rgba(255,255,255,.04);--cal-hover:rgba(255,255,255,.07);--cal-press:rgba(255,255,255,.11);'
                 + '--cal-accent-soft:rgba(127,167,245,.16);--cal-danger:#F2ABA2;--cal-warn:#E8C48C;--cal-ok:#93D2A8;--cal-now:#FF7A6E;--cal-chip-ground:#141817;color-scheme:dark}',
             `body:not([data-ds-dark-theme]) :is(${ROOTS}){--cal-text:#191E1B;--cal-strong:#232926;--cal-soft:#38403B;--cal-meta:#55605A;--cal-faint:#68716B;--cal-accent:#3F6FD8;--cal-on-accent:#FFFFFF;`
-                + '--cal-glass:rgba(250,250,246,var(--wp-tint,.55));--cal-pop:rgba(252,252,249,.96);--cal-modal:rgba(250,250,246,.9);--cal-shadow:rgba(20,26,22,.18);'
+                + '--cal-glass:rgba(250,250,246,var(--wp-tint,.55));--cal-conv:rgba(250,250,246,calc(var(--wp-tint,.55) + .2));--cal-pop:rgba(252,252,249,.96);--cal-modal:rgba(250,250,246,.9);--cal-shadow:rgba(20,26,22,.18);'
                 + '--cal-line:rgba(0,0,0,.1);--cal-line2:rgba(0,0,0,.17);--cal-fill:rgba(20,26,22,.035);--cal-hover:rgba(20,26,22,.07);--cal-press:rgba(20,26,22,.11);'
                 + '--cal-accent-soft:rgba(63,111,216,.12);--cal-danger:#B3261E;--cal-warn:#8A5A00;--cal-ok:#1E7B45;--cal-now:#D93025;--cal-chip-ground:#FAFAF7;color-scheme:light}',
             // Keyboard focus on the plugin's own controls (DSH's controls inside keep theirs).
@@ -102,10 +108,28 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '[data-platform=darwin] .dshcal-root{padding-top:calc(12px + var(--dsh-frame-top-clearance,0px))}',
             '.dshcal-side{flex:none;display:flex;flex-direction:column;gap:14px;width:244px;min-height:0;padding:12px 10px 10px;overflow:auto;scrollbar-width:thin}',
             '.dshcal-main{position:relative;flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}',
+            // The view itself: the wallpaper's tint + .2, as the open conversation has, so its small text stays readable.
+            '.dshcal-main.dshcal-glass{background:var(--cal-conv)}',
+            // The page takes the focus of a click on its empty parts (its keys work from there); it shows no ring for it.
+            '.dshcal-root:focus,.dshcal-root[tabindex]:focus-visible{outline:none}',
+            '.dshcal-root[data-calendar-dragging],.dshcal-root[data-calendar-dragging] *{cursor:grabbing!important;user-select:none;-webkit-user-select:none}',
+            '.dshcal-root[data-calendar-dragging=resize],.dshcal-root[data-calendar-dragging=resize] *{cursor:ns-resize!important}',
             '.dshcal-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:10px 12px;border-bottom:1px solid var(--cal-line)}',
             '.dshcal-head-nav{display:flex;align-items:center;gap:4px;min-width:0;flex:1 1 280px}',
-            '.dshcal-head-tools{display:flex;align-items:center;gap:8px;margin-left:auto}',
+            '.dshcal-head-tools{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:8px;min-width:0;margin-left:auto}',
             '.dshcal-title{margin:0 0 0 6px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:18px;font-weight:600;line-height:26px;color:var(--cal-strong)}',
+            // Search, in the header with the views (the two go to a row of their own when the title needs the room): its own row on a narrow page.
+            '.dshcal-search{position:relative;display:flex;align-items:center;flex:0 1 220px;min-width:150px}',
+            '.dshcal-search>svg{position:absolute;left:9px;color:var(--cal-meta);pointer-events:none}',
+            '.dshcal-search>.dshcal-input{height:30px;padding-left:30px;padding-right:28px}',
+            '.dshcal-search>.dshcal-input::-webkit-search-cancel-button{display:none}',
+            '.dshcal-search-clear{position:absolute;right:3px;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:7px;background:none;color:var(--cal-meta);cursor:pointer}',
+            '.dshcal-search-clear:hover{background:var(--cal-hover);color:var(--cal-text)}',
+            // A read again that failed, over the events read before.
+            '.dshcal-stale{display:flex;align-items:center;gap:8px;min-width:0;padding:5px 12px;border-bottom:1px solid var(--cal-line);background:color-mix(in srgb,var(--cal-warn) 10%,transparent);font-size:12px;line-height:1.4;color:var(--cal-text)}',
+            '.dshcal-stale>svg{flex:none;color:var(--cal-warn)}',
+            '.dshcal-stale>span{flex:1;min-width:0;overflow-wrap:anywhere}',
+            '.dshcal-stale>button{flex:none}',
             '.dshcal-body{position:relative;flex:1;display:flex;flex-direction:column;min-height:0}',
             '.dshcal-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;flex:1;padding:40px 20px;text-align:center;color:var(--cal-meta)}',
             '.dshcal-error{color:var(--cal-danger)}',
@@ -160,6 +184,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-alert>svg{flex:none;margin-top:2px;color:var(--cal-danger)}',
             '.dshcal-note{display:flex;gap:8px;align-items:flex-start;padding:9px 11px;border-radius:10px;background:var(--cal-fill);border:1px solid var(--cal-line);font-size:12px;line-height:1.5;color:var(--cal-soft)}',
             '.dshcal-note>svg{flex:none;margin-top:2px}',
+            '.dshcal-note>span{flex:1;min-width:0;overflow-wrap:anywhere}',
 
             // The side column: the small month, the calendars by account.
             '.dshcal-mini{display:flex;flex-direction:column;gap:4px}',
@@ -248,9 +273,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-line-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}',
             '.dshcal-line[data-look=struck] .dshcal-line-title{text-decoration:line-through;color:var(--cal-meta)}',
             '.dshcal-line[data-look=outline]>.dshcal-dot{background:none;box-shadow:inset 0 0 0 1.5px var(--ev)}',
+            // Dragging: an event to another time or day, its bottom edge to another end; where it goes is shown, it stays faint.
+            '.dshcal-ev-grip{position:absolute;left:0;right:0;bottom:0;height:7px;cursor:ns-resize}',
+            ':is(.dshcal-ev,.dshcal-bar,.dshcal-line)[data-moving]{opacity:.35}',
+            '.dshcal-wk-ghost>span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshcal-wk-ghost>span+span{font-weight:500;opacity:.85}',
+            ':is(.dshcal-mo-cell,.dshcal-wk-lanecell)[data-drop]{background:var(--cal-accent-soft);box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--cal-accent) 60%,transparent)}',
 
             // ── Month: weeks of days, bars and lines in lanes.
-            '.dshcal-mo{display:flex;flex-direction:column;flex:1;min-height:0}',
+            '.dshcal-mo{display:flex;flex-direction:column;flex:1;min-height:0;container:dshcal-mo/inline-size}',
+            // Narrow days: a timed event's title alone, without its time in front.
+            '@container dshcal-mo (max-width: 909px){.dshcal-mo .dshcal-line-time{display:none}}',
             '.dshcal-mo-head{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));flex:none;border-bottom:1px solid var(--cal-line)}',
             '.dshcal-mo-wd{padding:8px 8px 6px;font-size:11.5px;font-weight:600;letter-spacing:.03em;color:var(--cal-meta);text-transform:uppercase;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshcal-mo-weeks{flex:1;display:grid;grid-template-rows:repeat(var(--weeks),minmax(0,1fr));min-height:0}',
@@ -285,6 +318,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-ag-sub{font-size:12px;color:var(--cal-meta);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshcal-ag-row[data-look=struck] .dshcal-ag-title{text-decoration:line-through;color:var(--cal-meta)}',
             '.dshcal-ag-foot{display:flex;justify-content:center;padding:14px}',
+            // Search results: how many, and where the earlier ones start.
+            '.dshcal-ag-part{padding:12px 8px 4px;font-size:11.5px;font-weight:600;letter-spacing:.03em;color:var(--cal-meta);text-transform:uppercase}',
+            '.dshcal-ag-part:first-child{padding-top:6px}',
 
             // ── Popovers (an event's details, a day's events): fixed, portaled, glass.
             '.dshcal-pop{position:fixed;z-index:990;box-sizing:border-box;width:min(360px,calc(100vw - 24px));max-height:min(620px,calc(100vh - 24px));overflow:auto;padding:14px 14px 12px;'
@@ -305,6 +341,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-pop-guests{display:flex;flex-direction:column;gap:3px;margin-top:4px}',
             '.dshcal-guest{display:flex;align-items:center;gap:7px;min-width:0;font-size:12.5px}',
             '.dshcal-guest>span:nth-child(2){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshcal-fields{display:contents;margin:0;padding:0;border:0;min-width:0}',
+            '.dshcal-people{list-style:none;margin:0;padding:4px;display:flex;flex-direction:column;gap:1px;max-height:244px;overflow-y:auto;border:1px solid var(--cal-line);border-radius:10px;background:var(--cal-fill);scrollbar-width:thin}',
+            '.dshcal-people:focus-visible{outline:2px solid var(--cal-accent);outline-offset:2px}',
+            '.dshcal-people>li{display:flex;align-items:center;flex-wrap:wrap;gap:2px 8px;box-sizing:border-box;min-height:28px;padding:3px 6px;font-size:12.5px}',
+            '.dshcal-person{flex:1 1 160px;min-width:0;overflow-wrap:anywhere;color:var(--cal-text)}',
+            '.dshcal-gets{margin-left:auto;font-size:12px;color:var(--cal-meta);text-align:right}',
             '.dshcal-ans{flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;font-size:9px;font-weight:700;line-height:1}',
             '.dshcal-ans[data-ans=accepted]{background:var(--cal-ok);color:var(--cal-chip-ground)}',
             '.dshcal-ans[data-ans=declined]{background:var(--cal-danger);color:var(--cal-chip-ground)}',
@@ -415,11 +457,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-pane-join{position:relative;z-index:1;height:26px;padding:0 9px;border:0;border-radius:8px;background:var(--cal-accent);color:var(--cal-on-accent);font:inherit;font-size:12px;font-weight:600;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}',
             '.dshcal-pane-empty{padding:6px 4px;font-size:12.5px;color:var(--cal-faint)}',
             '.dshcal-notes{display:flex;flex-direction:column;gap:6px;padding:8px 12px 0}',
-            '.dshcal-note{display:flex;align-items:flex-start;gap:8px;padding:7px 6px 7px 10px;border-radius:10px;background:color-mix(in srgb,var(--cal-accent) 10%,transparent);font-size:12px;line-height:1.45;color:var(--cal-text)}',
-            '.dshcal-note>svg{flex:none;margin-top:2px;color:var(--cal-meta)}',
-            '.dshcal-note>span{flex:1;min-width:0;overflow-wrap:anywhere}',
+            '.dshcal-notice{display:flex;align-items:flex-start;gap:8px;padding:7px 6px 7px 10px;border-radius:10px;background:color-mix(in srgb,var(--cal-accent) 10%,transparent);font-size:12px;line-height:1.45;color:var(--cal-text)}',
+            '.dshcal-notice>svg{flex:none;margin-top:2px;color:var(--cal-meta)}',
+            '.dshcal-notice>span{flex:1;min-width:0;overflow-wrap:anywhere}',
+            '.dshcal-notice[data-tone=warn]{background:color-mix(in srgb,var(--cal-warn) 14%,transparent)}',
+            '.dshcal-notice[data-tone=warn]>svg{color:var(--cal-warn)}',
             '.dshcal-pane-note{display:flex;align-items:center;gap:6px;margin:0 0 10px;padding:7px 9px;border-radius:10px;background:color-mix(in srgb,var(--cal-warn) 14%,transparent);font-size:12px}',
             '.dshcal-pane-note>span{flex:1;min-width:0}',
+            '.dshcal-pane .dshcal-stale{margin:0 0 10px;padding:6px 9px;border:0;border-radius:10px}',
             '.dshcal-pane-foot{display:flex;justify-content:center;margin-top:16px}',
 
             // ── Chat cards for the calendar tools: a faint fill, no blur.
@@ -440,30 +485,33 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-chat-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;padding:8px 10px;border:1px solid var(--cal-line);border-radius:12px;background:var(--cal-fill)}',
             '.dshcal-chat-line>svg{flex:none;color:var(--cal-ok)}',
             '.dshcal-chat-line[data-kind=deleted]>svg{color:var(--cal-meta)}',
+            '.dshcal-chat-line[data-kind=failed]{align-items:flex-start;border-color:color-mix(in srgb,var(--cal-warn) 45%,var(--cal-line))}',
+            '.dshcal-chat-line[data-kind=failed]>svg{margin-top:2px;color:var(--cal-warn)}',
+            '.dshcal-chat-line[data-kind=failed] .dshcal-chat-text{color:var(--cal-text);overflow-wrap:anywhere}',
+            '.dshcal-chat-cal>.dshcal-warn{flex:1 1 100%;padding-left:16px;font-size:12px}',
             '.dshcal-chat-line>.dshcal-chat-text{flex:1 1 220px;min-width:0}',
             '.dshcal-chat-text b{font-weight:600}',
             '.dshcal-chat-text span{color:var(--cal-meta)}',
+            '.dshcal-chat-told{flex:1 1 100%;min-width:0;padding-left:22px;font-size:12px;line-height:1.45;color:var(--cal-meta);overflow-wrap:anywhere}',
             '.dshcal-chat-slots{display:flex;flex-direction:column;gap:4px;padding:2px 4px}',
             '.dshcal-chat-slot{display:grid;grid-template-columns:minmax(110px,auto) minmax(0,1fr);gap:10px;font-size:12.5px}',
             '.dshcal-chat-slot>span:first-child{font-weight:600}',
             '.dshcal-chat-slot>span:last-child{color:var(--cal-soft);font-variant-numeric:tabular-nums}',
-            '.dshcal-chat-cal{display:flex;align-items:center;gap:8px;padding:3px 6px;font-size:12.5px;min-width:0}',
+            '.dshcal-chat-cal{display:flex;align-items:center;flex-wrap:wrap;gap:0 8px;padding:3px 6px;font-size:12.5px;min-width:0}',
             '.dshcal-chat-cal>span:nth-child(2){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshcal-chat-row{display:flex;align-items:center;gap:6px;min-width:0;height:24px;color:var(--cal-meta);font-size:13px}',
             '.dshcal-chat-row>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshcal-chat-out{margin:2px 0 0 22px;max-height:240px;overflow:auto;padding:8px 10px;border-radius:10px;background:var(--cal-fill);white-space:pre-wrap;font-family:var(--dsh-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:11.5px;color:var(--cal-soft);scrollbar-width:thin}',
 
-            // Narrow: the side column folds away (a button brings it over the page), then the header wraps.
-            '.dshcal-side-toggle{display:none}',
+            // The side column: beside the view on a roomy page, folded behind its button on a narrower one (the page says
+            // which: data-side-folded), and over the page while open on a narrow one (data-side-open). Then the header wraps.
             '.dshcal-head .dshcal-head-new{display:none}',
+            '.dshcal-root[data-side-folded] .dshcal-side{display:none}',
+            '.dshcal-root[data-side-folded] .dshcal-head .dshcal-head-new{display:inline-flex}',
             '.dshcal-scrim{display:none;position:absolute;inset:0;z-index:19;border:0;padding:0;background:rgba(0,0,0,.2);cursor:default}',
-            '@container dshcal (max-width: 799px){'
-                + '.dshcal-side{display:none}'
-                + '.dshcal-side-toggle{display:inline-flex}'
-                + '.dshcal-head .dshcal-head-new{display:inline-flex}'
-                + '.dshcal-root[data-side-open] .dshcal-scrim{display:block}'
-                + '.dshcal-root[data-side-open] .dshcal-side{display:flex;position:absolute;z-index:20;top:12px;bottom:12px;left:12px;width:min(280px,calc(100% - 24px));background:var(--cal-pop);box-shadow:0 18px 48px var(--cal-shadow)}'
-                + '}',
+            '.dshcal-root[data-side-open] .dshcal-scrim{display:block}',
+            '.dshcal-root[data-side-folded][data-side-open] .dshcal-side{display:flex;position:absolute;z-index:20;top:12px;bottom:12px;left:12px;width:min(280px,calc(100% - 24px));background:var(--cal-pop);box-shadow:0 18px 48px var(--cal-shadow)}',
+            '@container dshcal (max-width: 799px){.dshcal-head .dshcal-head-new{display:inline-flex}}',
             '@container dshcal (max-width: 560px){'
                 + '.dshcal-root{padding:8px;gap:8px}'
                 + '.dshcal-head{padding:8px}'
@@ -479,11 +527,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 + '.dshcal-ag-row{grid-template-columns:1fr;gap:2px}'
                 + '.dshcal-mo-wd{padding:6px 4px;text-align:center}'
                 + '.dshcal-line-time{display:none}'
+                + '.dshcal-search{order:3;flex:1 1 100%}'
                 + '}',
             '.dshcal-pane .dshcal-hide-narrow{display:none}',
-            // Motion: none while the wallpaper's Motion is off, or where the user asks for less.
-            `body.wp-still :is(${ROOTS}),body.wp-still :is(${ROOTS}) *{animation:none!important;transition:none!important}`,
-            `@media (prefers-reduced-motion:reduce){:is(${ROOTS}),:is(${ROOTS}) *{animation:none!important;transition:none!important}}`,
+            // Motion: none while the wallpaper's Motion is off, or where the user asks for less (the loading bar is an ::after).
+            `body.wp-still :is(${ROOTS}),body.wp-still :is(${ROOTS})::before,body.wp-still :is(${ROOTS})::after,`
+                + `body.wp-still :is(${ROOTS}) *,body.wp-still :is(${ROOTS}) *::before,body.wp-still :is(${ROOTS}) *::after{animation:none!important;transition:none!important}`,
+            `@media (prefers-reduced-motion:reduce){:is(${ROOTS}),:is(${ROOTS})::before,:is(${ROOTS})::after,`
+                + `:is(${ROOTS}) *,:is(${ROOTS}) *::before,:is(${ROOTS}) *::after{animation:none!important;transition:none!important}}`,
         ].join('');
         const CSS_ID = `${BUNDLE}/client.css`;
         try {
@@ -555,12 +606,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
         }
 
+        /** The refusals whose message is the plugin's own words to the user, shown as they are. */
+        const OWN_WORDS = new Set(['calendar/refused', 'calendar/needs-notify', 'calendar/needs-approval', 'calendar/changed', 'calendar/drops-changes', 'calendar/choose-calendar', 'calendar/half-moved']);
+
         /** A failed call as one sentence: the plugin's own refusal as it is, or that it failed or can't be reached. */
         function errorText(error) {
             const code = String(error?.code ?? '');
             const message = String(error?.message ?? '').trim();
             const sentence = (text) => `${text.replace(/^./, (c) => c.toUpperCase())}${/[.!?…)]$/.test(text) ? '' : '.'}`;
-            if ((code === 'calendar/refused' || code === 'calendar/needs-notify') && message) return sentence(message);
+            if (OWN_WORDS.has(code) && message) return sentence(message);
             if (code === 'calendar/unreachable' || code.startsWith('gateway/') || code.startsWith('rpc/')) return TEXT.unreachable;
             if (code === 'calendar/unreadable') return TEXT.unreadable;
             return message ? `That didn't work: ${sentence(message.slice(0, 240))}` : TEXT.unreachable;
@@ -760,6 +814,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
         /** An hour's label for the time grid ('9 AM', '09'). */
         const hourText = (hour) => dtf({ hour: 'numeric', timeZone: 'UTC' }).format(Date.UTC(2000, 0, 3, hour));
+        /** Minutes into a day on the clock, as the locale writes a time ('9:30 AM', '09:30'). */
+        const clockText = (minutes) => dtf({ hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(Date.UTC(2000, 0, 3, 0, minutes));
+        /** From one clock time to another on a day ('9:00 – 10:30 AM'); the day's end is midnight. */
+        function clockRangeText(from, to) {
+            if (to >= 1440 || to < from) return `${clockText(from)} – ${clockText(to % 1440)}`;
+            return rangeText(dtf({ hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }), Date.UTC(2000, 0, 3, 0, from), Date.UTC(2000, 0, 3, 0, to));
+        }
         function rangeText(format, a, b, fallback) {
             try {
                 if (typeof format.formatRange === 'function') return format.formatRange(a, b);
@@ -1171,11 +1232,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * What every view shows, read from the host half: state() (accounts,
-         * calendars, the user's zone and choices) at start and every 4 s while
-         * a view watches and the window is visible, and the events of each span
-         * a view asks for, read again whenever state's version moves (a sync,
-         * a change here or by an agent). Changes go through act(), which reads
-         * both again. Also the page's way to an event (openAt) and its toasts.
+         * calendars, the user's zone and choices), and the events of each span
+         * a view asks for. While a view watches and the window is visible, the
+         * host's version() is asked every 4 s (every 12 s when only the Agenda
+         * pane shows); state() is read again when it moves (a sync, a change
+         * here or by an agent), and every minute all the same, and the events
+         * with it. Changes go through act(), which reads both again. Also the
+         * page's way to an event (openAt), its toasts, notices that stay until
+         * the user closes them, and events' titles by id.
          * @param link - the plugin's endpoints (hostLink).
          */
         function calendarStore(link) {
@@ -1185,8 +1249,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             let stateJson = '';
             let stateError = '';
             let loading;
+            /** When state() was last read, for the read every minute whatever version() says. */
+            let stateAt = 0;
             let watchers = 0;
+            /** Watchers that want the 4 s step (the page); the Agenda pane alone is asked after every 12 s. */
+            let fastWatchers = 0;
             let timer;
+            let polling = false;
             /** Spans of events: `${from}:${to}` → {from, to, data?, error, loading, stale}, the most recently used last. */
             const spans = new Map();
             let target = null;
@@ -1196,6 +1265,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             let toastTimer;
             /** The views showing toasts now (the page, the pane): the first one shows them, so each shows once. */
             const toastHosts = new Set();
+            /** Titles of events the chat cards name by id, asked of the host: id → title ('' while asked, or unknown). */
+            const titles = new Map();
+            /** Notices that stay until the user closes them (a move that stopped halfway): [{id, text}], the newest last. */
+            let notices = [];
+            let noticeSeq = 0;
             const emit = () => {
                 version++;
                 for (const listener of [...listeners]) {
@@ -1203,13 +1277,37 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }
             };
             const visible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden';
-            const onVisible = () => { if (visible()) void loadState(); };
+            const onVisible = () => { if (visible()) void poll(); };
+
+            /** What moved on the host, cheaply (version()); state() read again when it did, or after a minute. */
+            async function poll() {
+                if (polling || !visible()) return;
+                polling = true;
+                try {
+                    if (state === undefined || Date.now() - stateAt >= 60_000) {
+                        await loadState();
+                        return;
+                    }
+                    const result = await link.call('version', {});
+                    // A host without version() (or a failed ask): state() itself, as before.
+                    if (!result.ok || !isObject(result.value)) await loadState();
+                    else if (result.value.version !== state.version || Boolean(result.value.syncing) !== Boolean(state.syncing)) await loadState();
+                } finally {
+                    polling = false;
+                }
+            }
+            const schedule = () => {
+                clearTimeout(timer);
+                if (watchers === 0 || typeof window === 'undefined') return;
+                timer = setTimeout(() => { void poll().finally(schedule); }, fastWatchers > 0 ? 4000 : 12000);
+            };
 
             function loadState() {
                 if (loading) return loading;
                 loading = (async () => {
                     const result = await link.call('state', {});
                     loading = undefined;
+                    if (result.ok) stateAt = Date.now();
                     if (result.ok && isObject(result.value)) {
                         const json = JSON.stringify(result.value);
                         const moved = state !== undefined && state.version !== result.value.version;
@@ -1226,6 +1324,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     emit();
                 })();
                 return loading;
+            }
+
+            /** state() read after now: a read already on its way may have left before a change. */
+            async function freshState() {
+                if (loading) await loading;
+                stateJson = '';
+                return loadState();
             }
 
             async function fetchSpan(entry) {
@@ -1256,23 +1361,48 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 /** The user's zone: the plugin's (its setting, else the computer's), else this browser's. */
                 zone: () => (state && isZone(state.zone) ? state.zone : browserZone()),
                 calendar: (id) => (state?.calendars ?? EMPTY).find((c) => c.id === id),
+                /** An event's title by its id (or an occurrence's): from the events read, else asked of the host once; '' until known. */
+                titleOf(id) {
+                    if (typeof id !== 'string' || id === '') return '';
+                    for (const entry of spans.values()) {
+                        const o = entry.data?.occurrences?.find((x) => x?.id === id || x?.eventId === id);
+                        if (o) return String(o.title || TEXT.noTitle);
+                    }
+                    if (!titles.has(id)) {
+                        titles.set(id, '');
+                        while (titles.size > 100) titles.delete(titles.keys().next().value);
+                        void link.call('event', { id }).then((result) => {
+                            const title = result.ok && isObject(result.value?.occurrence) ? String(result.value.occurrence.title || TEXT.noTitle) : '';
+                            if (title === '') return;
+                            titles.set(id, title);
+                            emit();
+                        });
+                    }
+                    return titles.get(id) ?? '';
+                },
                 account: (id) => (state?.accounts ?? EMPTY).find((a) => a.id === id),
                 loadState,
-                /** Keep state fresh while a view shows; returns the stop. */
-                watch() {
+                /** Ask the host now what moved, as watch() does on its step. */
+                poll,
+                /** Keep state fresh while a view shows (fast: every 4 s, else every 12 s); returns the stop. */
+                watch(fast = true) {
                     watchers++;
+                    if (fast) fastWatchers++;
                     if (watchers === 1 && typeof window !== 'undefined') {
-                        timer = setInterval(() => { if (visible()) void loadState(); }, 4000);
                         document.addEventListener('visibilitychange', onVisible);
                         window.addEventListener('focus', onVisible);
                     }
                     void loadState();
+                    schedule();
                     return () => {
                         watchers--;
+                        if (fast) fastWatchers--;
                         if (watchers === 0 && typeof window !== 'undefined') {
-                            clearInterval(timer);
+                            clearTimeout(timer);
                             document.removeEventListener('visibilitychange', onVisible);
                             window.removeEventListener('focus', onVisible);
+                        } else {
+                            schedule();
                         }
                     };
                 },
@@ -1295,18 +1425,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     return entry;
                 },
                 /** Read everything again (a Retry). */
-                refresh() {
+                async refresh() {
                     for (const entry of spans.values()) entry.stale = true;
-                    stateJson = '';
-                    return loadState().then(emit);
+                    await freshState();
+                    emit();
                 },
                 /** Call an endpoint that changes something, then read state and events again: its answer. */
                 async act(method, args) {
                     const result = await link.call(method, args);
                     if (result.ok) {
                         for (const entry of spans.values()) entry.stale = true;
-                        stateJson = '';
-                        await loadState();
+                        await freshState();
                         emit();
                     }
                     return result;
@@ -1331,6 +1460,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     emit();
                 },
                 currentToast: () => toast,
+                /** A notice that stays on the page until the user closes it: what a change did in part, and what is left to do. */
+                keepNotice(text) {
+                    notices = [...notices, { id: ++noticeSeq, text: String(text) }].slice(-5);
+                    emit();
+                },
+                notices: () => notices,
+                closeNotice(id) {
+                    notices = notices.filter((n) => n.id !== id);
+                    emit();
+                },
                 /** A view that shows toasts, while it's there; returns the leave. */
                 hostToasts(id) {
                     toastHosts.add(id);
@@ -1347,9 +1486,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /** Re-render with the store. */
         const useStore = (store) => React.useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
-        /** Keep state fresh while this view shows. */
-        function useWatch(store, on = true) {
-            React.useEffect(() => (on ? store.watch() : undefined), [store, on]);
+        /** Keep state fresh while this view shows; fast: the page's 4 s step, else the pane's slower one. */
+        function useWatch(store, on = true, fast = true) {
+            React.useEffect(() => (on ? store.watch(fast) : undefined), [store, on, fast]);
         }
         /** Now, on a step (the current-time line, the agenda's "now"). */
         function useNow(stepMs = 30_000, on = true) {
@@ -1511,45 +1650,197 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, children || error ? h('div', { className: 'dshcal-form' }, children, h(Alert, { text: error })) : undefined);
         }
 
+        /** A question's words by what the change does: its buttons, and what guests get when the host doesn't say. */
+        const CONSENT_WORDS = {
+            add: { no: 'Don\'t add', yes: 'Add', email: 'Add and email', what: 'invitations' },
+            save: { no: 'Don\'t save', yes: 'Save', email: 'Save and email', what: 'an update' },
+            move: { no: 'Don\'t move', yes: 'Move', email: 'Move and email', what: 'an update' },
+            delete: { no: 'Don\'t delete', yes: 'Delete', email: 'Delete and email', what: 'a cancellation' },
+            // Someone else's invitation whose organizer lets guests change it: Google makes a change to it for everyone on it.
+            invitation: {
+                no: 'Don\'t save', yes: 'Save', email: 'Save and email', what: 'an update', many: 'people', manyOwn: 'people\'s',
+                why: { change: 'Its organizer lets guests change it, so Google makes your change for everyone on it, without an email.' },
+            },
+        };
+
         /**
-         * Before a change emails people: the host's words (who gets what, and
-         * why), then Send or keep it as it is.
+         * The words for a change: 'add', 'save', 'move' or 'delete', or 'invitation' (a change to someone else's
+         * invitation). A "Don't …" button label reads the same.
          */
-        function SendDialog({ text, keep, onSend, onClose }) {
+        function consentWords(action) {
+            if (Object.hasOwn(CONSENT_WORDS, action)) return CONSENT_WORDS[action];
+            const words = String(action ?? '').toLowerCase();
+            return words.includes('delete') ? CONSENT_WORDS.delete : words.includes('add') ? CONSENT_WORDS.add
+                : words.includes('move') ? CONSENT_WORDS.move : CONSENT_WORDS.save;
+        }
+
+        /** What a guest's Google calendar gets without an email, by how: the question, and each person's line. */
+        const REACH_ASK = { add: 'put it on', remove: 'take it off', change: 'change it on' };
+        const REACH_WHY = {
+            add: 'Google puts a meeting on its guests\' calendars by itself, without an email.',
+            remove: 'Google takes a meeting off its guests\' calendars by itself, without an email.',
+            change: 'Google changes a meeting on its guests\' calendars by itself, without an email.',
+        };
+        const REACH_GETS = { add: 'Added to their calendar, no email', remove: 'Taken off their calendar, no email', change: 'Changed on their calendar, no email' };
+
+        /** Addresses in a list from the host, once each. */
+        function addressList(list) {
+            const out = new Map();
+            for (const p of Array.isArray(list) ? list : EMPTY) if (typeof p === 'string' && p.trim() !== '' && !out.has(p.toLowerCase())) out.set(p.toLowerCase(), p);
+            return [...out.values()];
+        }
+
+        /**
+         * The question before a change that emails or reaches people, from the
+         * host's refusal ('calendar/needs-approval', 'needs-notify', 'changed'):
+         * everyone it names, each with what they get, and why.
+         * → {code, title, why, changed, people: [{email, gets, emailed, fresh}], no, yes}.
+         * @param error - the refusal: details {people, mail: {emailed?: {what, to}, reached?: {how, to}, why?}}.
+         * @param action - 'add', 'save', 'move', 'delete' or 'invitation' (consentWords).
+         * @param [before] - who the last question named: anyone else is marked new.
+         */
+        function consentQuestion(error, action, before) {
+            const words = consentWords(action);
+            const details = isObject(error?.details) ? error.details : {};
+            const mail = isObject(details.mail) ? details.mail : null;
+            const emailedTo = new Set(addressList(mail?.emailed?.to).map((p) => p.toLowerCase()));
+            const reachedTo = new Set(addressList(mail?.reached?.to).map((p) => p.toLowerCase()));
+            const what = typeof mail?.emailed?.what === 'string' && mail.emailed.what.trim() ? mail.emailed.what.trim() : words.what;
+            const how = Object.hasOwn(REACH_ASK, mail?.reached?.how) ? mail.reached.how : 'change';
+            const seen = Array.isArray(before) ? new Set(before.map((p) => String(p).toLowerCase())) : null;
+            const gets = what === 'invitations' ? 'An invitation' : what.replace(/^./, (c) => c.toUpperCase());
+            const people = addressList([...(Array.isArray(details.people) ? details.people : EMPTY), ...(mail?.emailed?.to ?? EMPTY), ...(mail?.reached?.to ?? EMPTY)]).map((email) => {
+                const key = email.toLowerCase();
+                // Reached only when the host says so; anyone else it names (an older host names them alone) is emailed.
+                const emailed = emailedTo.has(key) || !reachedTo.has(key);
+                return { email, emailed, gets: emailed ? gets : REACH_GETS[how], fresh: seen !== null && !seen.has(key) };
+            });
+            const mailed = people.filter((p) => p.emailed);
+            const whom = (list, one, many) => (list.length === 1 ? one(list[0].email) : many(list.length));
+            const title = mailed.length > 0
+                ? `Email ${what} to ${whom(mailed, (e) => e, (n) => `${n} ${words.many ?? 'guests'}`)}?`
+                : `Also ${REACH_ASK[how]} ${whom(people, (e) => `${e}'s Google calendar`, (n) => `${n} ${words.manyOwn ?? 'guests\''} Google calendars`)}?`;
+            const reason = typeof mail?.why === 'string' && mail.why.trim() ? mail.why.trim() : '';
+            const why = mailed.length > 0
+                ? (reason ? `${reason.replace(/^./, (c) => c.toUpperCase())}${/[.!?]$/.test(reason) ? '' : '.'}` : mail ? 'You chose to tell them by email.' : '')
+                : words.why?.[how] ?? REACH_WHY[how];
+            return {
+                code: String(error?.code ?? '').replace(/^calendar\//, ''),
+                title, why, people,
+                changed: error?.code === 'calendar/changed',
+                no: words.no,
+                yes: mailed.length > 0 ? words.email : words.yes,
+            };
+        }
+
+        /**
+         * Before a change emails or reaches people: everyone it names, with
+         * what each gets, and why; then the change or not. Not making it has
+         * the first focus.
+         */
+        function ConsentDialog({ question, onYes, onClose }) {
+            const q = question;
+            const long = q.people.length > 8;
             return h(Dialog, {
-                title: 'Send the email?', description: text, narrow: true, onClose,
+                title: q.title, description: q.why || undefined, narrow: true, onClose,
                 footer: h(React.Fragment, null,
-                    h(ui.Button, { variant: 'outline', onClick: onClose, 'data-modal-autofocus': true, 'data-calendar-keep': '' }, keep),
-                    h(ui.Button, { variant: 'primary', onClick: onSend, 'data-calendar-send': '' }, 'Send')),
+                    h(ui.Button, { variant: 'outline', onClick: onClose, 'data-modal-autofocus': true, 'data-calendar-keep': '' }, q.no),
+                    h(ui.Button, { variant: 'primary', onClick: onYes, 'data-calendar-send': '' }, q.yes)),
+            },
+            h('div', { className: 'dshcal-form', 'data-calendar-consent': q.code },
+                q.changed ? h('div', { className: 'dshcal-hint dshcal-warn', 'data-calendar-consent-changed': '' },
+                    'It changed meanwhile, on its server or in another app, so nothing was done yet. This is everyone it reaches now.') : null,
+                q.people.length ? h('ul', {
+                    className: 'dshcal-people', 'data-calendar-people': '', 'aria-label': 'Who it reaches', tabIndex: long ? 0 : undefined,
+                }, q.people.map((p) => h('li', { key: p.email, 'data-calendar-person': p.email },
+                    h('span', { className: 'dshcal-person' }, p.email),
+                    p.fresh ? h('span', { className: 'dshcal-tag', 'data-calendar-person-new': '' }, 'New') : null,
+                    h('span', { className: 'dshcal-gets' }, p.gets)))) : null));
+        }
+
+        /** Before a series moves to a calendar that would drop some of it: the host's words (what it drops), then Move anyway or not. */
+        function DropDialog({ text, onYes, onClose }) {
+            return h(Dialog, {
+                title: 'Move it anyway?', description: text, narrow: true, onClose,
+                footer: h(React.Fragment, null,
+                    h(ui.Button, { variant: 'outline', onClick: onClose, 'data-modal-autofocus': true, 'data-calendar-dont-move': '' }, 'Don\'t move it'),
+                    h(ui.Button, { variant: 'primary', onClick: onYes, 'data-calendar-move-anyway': '' }, 'Move anyway')),
             });
         }
 
-        /** The question SendDialog asks, for a view to show: {ask(text, keep) → Promise<boolean: Send>, dialog}. */
+        /**
+         * The questions a change can need before it's made, for a view to
+         * show: {ask(question) → Promise<boolean: yes>, drop(text) →
+         * Promise<boolean: Move anyway>, dialog}. question: consentQuestion's.
+         */
         function useSendQuestion() {
             const [question, setQuestion] = React.useState(null);
-            const ask = React.useCallback((text, keep) => new Promise((resolve) => setQuestion({ text, keep, resolve })), []);
-            const answer = (send) => {
-                question?.resolve(send);
+            const ask = React.useCallback((q) => new Promise((resolve) => setQuestion({ kind: 'send', q, resolve })), []);
+            const drop = React.useCallback((text) => new Promise((resolve) => setQuestion({ kind: 'drop', text, resolve })), []);
+            const answer = (yes) => {
+                question?.resolve(yes);
                 setQuestion(null);
             };
+            const q = question?.kind === 'send' && !isObject(question.q) ? { title: 'Send the email?', why: String(question.q ?? ''), people: EMPTY, no: TEXT.cancel, yes: 'Send', code: '' } : question?.q;
             return {
                 ask,
-                dialog: question ? h(SendDialog, { text: question.text, keep: question.keep, onSend: () => answer(true), onClose: () => answer(false) }) : null,
+                drop,
+                dialog: question === null ? null
+                    : question.kind === 'drop' ? h(DropDialog, { text: question.text, onYes: () => answer(true), onClose: () => answer(false) })
+                        : h(ConsentDialog, { question: q, onYes: () => answer(true), onClose: () => answer(false) }),
+            };
+        }
+
+        /** What the user's answers add to a change's call: notify when it tells people (ticked, or said yes to), approved and dropChanges when given. */
+        function asked(tell, { notify, approved, dropChanges } = {}) {
+            return {
+                ...(notify === true || tell === true ? { notify: true } : {}),
+                ...(Array.isArray(approved) ? { approved } : {}),
+                ...(dropChanges === true ? { dropChanges: true } : {}),
             };
         }
 
         /**
-         * A change the user asked for. When the host says it would email
-         * people ('calendar/needs-notify'), they're asked with its words, and
-         * only their Send makes it again with notify. → its result; {ok: false,
-         * kept: true} when they kept it as it was.
-         * @param make - (notify: boolean) → the call's result.
+         * A change the user asked for, made by make(how) only as they say:
+         * `how` ({notify?, approved?, dropChanges?}) is what their answers add
+         * to its call.
+         * - 'calendar/needs-approval' (it would email or reach people, and
+         *   doesn't say who the user saw) or 'calendar/needs-notify' (the
+         *   server would email them anyway): the question names every one of
+         *   them, with what they get (ask), and only yes makes it again, with
+         *   approved: those people, and notify for needs-notify (otherwise
+         *   notify stays as it was).
+         * - 'calendar/changed' naming people (it would now reach someone else):
+         *   asked again, naming them all.
+         * - 'calendar/drops-changes': a series move that would drop part of it
+         *   asks with the host's words first (drop); Move anyway adds dropChanges.
+         * → the result; {ok: false, kept: true, error} when the user said no.
+         * @param ask - (question) → Promise<boolean>: useSendQuestion's.
+         * @param action - 'add', 'save', 'move' or 'delete': the question's words.
+         * @param make - ({notify?, approved?, dropChanges?}) → the call's result.
+         * @param [drop] - (text) → Promise<boolean>: whether to move a series anyway.
          */
-        async function withConsent(ask, keep, make) {
-            const first = await make(false);
-            if (first.ok || first.error?.code !== 'calendar/needs-notify') return first;
-            if (!(await ask(errorText(first.error), keep))) return { ok: false, kept: true, error: first.error };
-            return make(true);
+        async function withConsent(ask, action, make, drop) {
+            let how = {};
+            let shown;
+            for (let round = 0; ; round += 1) {
+                const result = await make(how);
+                if (result.ok || round >= 4) return result;
+                const error = result.error;
+                const code = error?.code;
+                if (code === 'calendar/drops-changes' && typeof drop === 'function' && how.dropChanges !== true) {
+                    if (!(await drop(errorText(error)))) return { ok: false, kept: true, error };
+                    how = { ...how, dropChanges: true };
+                    continue;
+                }
+                const people = Array.isArray(error?.details?.people) ? addressList(error.details.people) : undefined;
+                // Approval is for people named: a refusal that names no one is shown as it is.
+                const asks = code === 'calendar/needs-notify' || (people?.length > 0 && (code === 'calendar/needs-approval' || code === 'calendar/changed'));
+                if (!asks) return result;
+                if (!(await ask(consentQuestion(error, action, shown)))) return { ok: false, kept: true, error };
+                how = { ...how, ...(code === 'calendar/needs-notify' ? { notify: true } : {}), ...(people !== undefined ? { approved: people } : {}) };
+                shown = people;
+            }
         }
 
         const SCOPE_TEXT = {
@@ -1562,7 +1853,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * Which occurrences of a repeating event a change, a delete or an
          * answer reaches, among those it can (the occurrence's `scopes`).
          * tellFor(scope): the box to tick to tell people by email for that
-         * choice {label, hint?}, or null for none.
+         * choice {label, hint?, quiet?}, or null for none. quiet: what
+         * happens all the same while the box is unticked.
          */
         function ScopeDialog({ title, scopes, note, action, danger, tellFor, onSubmit, onClose }) {
             const [scope, setScope] = React.useState(scopes[0]);
@@ -1596,7 +1888,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 note ? h('div', { className: 'dshcal-hint' }, note) : null,
                 box ? h('div', { className: 'dshcal-tell' },
                     h('label', { className: 'dshcal-check' }, h('input', { type: 'checkbox', checked: tell, onChange: (e) => setTell(e.target.checked), 'data-calendar-notify': '' }), box.label),
-                    box.hint ? h('div', { className: 'dshcal-hint' }, box.hint) : null) : null,
+                    box.hint ? h('div', { className: 'dshcal-hint' }, box.hint) : null,
+                    box.quiet && !tell ? h('div', { className: 'dshcal-hint', 'data-calendar-mail': 'reach' }, box.quiet) : null) : null,
                 h(Alert, { text: error })));
         }
 
@@ -1645,8 +1938,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * none (nothing chosen, and no main calendar stands out), and the user
          * picks one.
          */
-        function writableCalendars(state) {
-            const list = (state?.calendars ?? EMPTY).filter((c) => !c.readOnly);
+        function writableCalendars(state, keep = EMPTY) {
+            const writable = (state?.calendars ?? EMPTY).filter((c) => !c.readOnly);
+            // A hidden calendar would hide what's saved to it: offered only as the event's own or the default,
+            // or when no shown calendar can be written.
+            const shown = writable.filter((c) => !c.hidden || keep.includes(c.id) || c.id === state?.defaultCalendar);
+            const list = shown.length > 0 ? shown : writable;
             const chosen = list.find((c) => c.id === state?.defaultCalendar);
             return { list, defaultId: chosen?.id ?? '' };
         }
@@ -1655,7 +1952,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         // The host decides. Where a calendar's server emails guests only when asked (Google), the dialogs offer a box
         // to tick; where it emails them anyway (Microsoft, a CalDAV server for a meeting the user organizes), the host
         // refuses the change ('calendar/needs-notify') and the user is asked, with its words, before it is made again
-        // with notify. notify: true is sent only after the user's own click: the box, or Send.
+        // with notify. notify: true is sent only after the user's own click: the box, or Send. Send holds the change to
+        // the people the refusal named (approved): if the event changed meanwhile so that it would reach anyone else,
+        // the host makes nothing ('calendar/changed') and the user looks at it again. Google puts a meeting on its
+        // guests' calendars by itself (reached), which the toasts say.
 
         /** The user's part in an event: 'guest' (someone else's invitation), 'organizer', or 'own' (nobody named as organizer). */
         function roleOf(o) {
@@ -1718,11 +2018,36 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return dot < 0 ? moved : { ...moved, id: `${eventId}.${before.id.slice(dot + 1)}` };
         }
 
+        /** What the user may change on someone else's invitation: their reminders, whether it shows them as busy, whether it's private (and the box to tell). */
+        const OWN_FIELDS = ['alarms', 'busy', 'private', 'notify'];
+
+        /** Whether a change's answer is an occurrence the page can show and follow (one the host lost sight of is its id alone). */
+        const placed = (o) => isObject(o) && typeof o.id === 'string' && (o.allDay === true ? isDay(o.startDay) : Number.isFinite(o.start));
+
         /** Who a change emailed, as a sentence ('Emailed an update to ann@example.com.'), or ''. */
         function emailedText(emailed) {
             if (!isObject(emailed) || !Array.isArray(emailed.to) || emailed.to.length === 0) return '';
             return `Emailed ${String(emailed.what || 'them')} to ${peopleText(emailed.to)}.`;
         }
+
+        const REACHED_WORDS = { add: 'Put on', remove: 'Taken off', change: 'Changed on' };
+
+        /**
+         * Who a change emailed, and whose calendars it reached without email
+         * (Google puts a meeting on its guests' calendars, changes it there and
+         * takes it off them by itself), as sentences, or ''.
+         * @param result - a change's result: {emailed?: {what, to}, reached?: {how: 'add'|'remove'|'change', to}}.
+         */
+        function contactText(result) {
+            const emailed = emailedText(result?.emailed);
+            const r = result?.reached;
+            const to = isObject(r) && Array.isArray(r.to) ? r.to.filter((p) => typeof p === 'string' && p !== '') : EMPTY;
+            const reached = to.length ? `${REACHED_WORDS[r.how] ?? 'Changed on'} the calendars of ${peopleText(to)}${emailed ? '' : ', without emailing anyone'}.` : '';
+            return [emailed, reached].filter(Boolean).join(' ');
+        }
+
+        /** What the event dialog says on its calendar select when the host wants the calendar named ('calendar/choose-calendar'). */
+        const CHOOSE_CALENDAR = 'Choose the calendar it goes to.';
 
         /** A guest as the dialog keeps one: {email, name?, self?}. */
         const guestOf = (p) => ({ email: String(p.email ?? ''), ...(p.name ? { name: p.name } : {}), ...(p.self ? { self: true } : {}) });
@@ -1733,7 +2058,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * are wall clocks in the event's own zone.
          */
         function draftFrom({ occurrence, preset, state, zone, duplicate = false }) {
-            const { list, defaultId } = writableCalendars(state);
+            const { list, defaultId } = writableCalendars(state, occurrence && !duplicate ? [occurrence.calendarId] : EMPTY);
             if (occurrence) {
                 const o = occurrence;
                 const tz = o.allDay ? zone : (isZone(o.timeZone) || o.timeZone === 'UTC' ? o.timeZone : zone);
@@ -1818,7 +2143,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             if (d.url.trim() !== '' && !isUrl(d.url.trim())) out.url = 'A link starts with https:// or http://.';
             const repeat = repeatProblem(d.repeat, d.startDay);
             if (repeat) out.repeat = repeat;
-            if (!d.calendarId) out.calendarId = writable === 0 ? 'There is no calendar that can be written. Add an account or a calendar first.' : 'Choose the calendar it goes to.';
+            if (!d.calendarId) out.calendarId = writable === 0 ? 'There is no calendar that can be written. Add an account or a calendar first.' : CHOOSE_CALENDAR;
             return out;
         }
 
@@ -1892,6 +2217,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return h(Field, { label: 'Repeat', id: 'dshcal-repeat', error },
                 h('select', {
                     id: 'dshcal-repeat', className: 'dshcal-select', value: d.repeat.mode, 'data-calendar-repeat': '', 'aria-invalid': error ? true : undefined,
+                    'aria-describedby': error ? 'dshcal-repeat-error' : undefined,
                     onChange: (event) => setRepeat({ ...d.repeat, mode: event.target.value }),
                 }, choices.map((choice) => h('option', { key: choice.value, value: choice.value }, choice.label))),
                 d.repeat.mode === 'custom' ? h('div', { className: 'dshcal-custom', 'data-calendar-custom-repeat': '' },
@@ -1974,8 +2300,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /**
          * Guests: their addresses and a way to add more (not on someone else's
          * invitation), and whether to email them.
-         * @param mail - {mode: 'ask', label, checked, onChange}: the box to tick; {mode: 'always', hint}: their server
-         *   emails them anyway; {cannot: true}: the calendar can't email them.
+         * @param mail - {mode: 'ask', label, checked, onChange, quiet?}: the box to tick (quiet: what saving does
+         *   without it); {mode: 'always', hint}: their server emails them anyway; {cannot: true}: the calendar can't
+         *   email them.
          */
         function GuestsField({ guests, onChange, readOnly, mail, error, setError }) {
             const [text, setText] = React.useState('');
@@ -1996,7 +2323,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 readOnly ? h('div', { className: 'dshcal-hint' }, 'Only the organizer changes who\'s invited.') : h('div', { className: 'dshcal-inline', style: { flexWrap: 'nowrap' } },
                     h('input', {
                         id: 'dshcal-guest', className: 'dshcal-input dshcal-grow', type: 'email', multiple: true, value: text, placeholder: 'name@example.com', autoComplete: 'off', 'data-calendar-guest-input': '',
-                        'aria-invalid': error ? true : undefined,
+                        'aria-invalid': error ? true : undefined, 'aria-describedby': error ? 'dshcal-guest-error' : undefined,
                         onChange: (event) => { setText(event.target.value); setError(''); },
                         onKeyDown: (event) => {
                             if ((event.key === 'Enter' || event.key === ',' || event.key === ';') && !event.nativeEvent.isComposing) {
@@ -2011,7 +2338,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 mail?.mode === 'ask' ? h('div', { className: 'dshcal-tell' },
                     h('label', { className: 'dshcal-check' },
                         h('input', { type: 'checkbox', checked: mail.checked, onChange: (event) => mail.onChange(event.target.checked), 'data-calendar-notify': '' }),
-                        mail.label))
+                        mail.label),
+                    mail.quiet ? h('div', { className: 'dshcal-hint', 'data-calendar-mail': 'reach' }, mail.quiet) : null)
                     : mail?.mode === 'always' ? h('div', { className: 'dshcal-hint', 'data-calendar-mail': 'always' }, mail.hint)
                     : mail?.cannot && guests.length ? h('div', { className: 'dshcal-hint', 'data-calendar-mail': 'never' }, 'This calendar can\'t email guests: tell them another way.') : null);
         }
@@ -2035,6 +2363,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [errors, setErrors] = React.useState({});
             const [guestError, setGuestError] = React.useState('');
             const [refusal, setRefusal] = React.useState('');
+            // The host stopped a change because the event changed meanwhile ('calendar/changed'): the way to look at it again.
+            const [changed, setChanged] = React.useState(false);
+            // It moved, but the host couldn't say where it is now: the other changes can't follow it, so Save stops.
+            const [lost, setLost] = React.useState(false);
             const [busy, setBusy] = React.useState(false);
             const [ask, setAsk] = React.useState(null);
             const sending = useSendQuestion();
@@ -2043,7 +2375,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const alive = useAlive();
             const formRef = React.useRef(null);
             const weekStart = weekStartFrom(state?.prefs);
-            const { list: calendars } = writableCalendars(state);
+            const { list: calendars } = writableCalendars(state, editing ? [initial.calendarId] : EMPTY);
             const homeId = movedRef.current?.calendarId ?? (editing ? initial.calendarId : d.calendarId);
             // Who saving emails: a change is made in the calendar the event is in (a move to another one goes first, on its own).
             const home = store.calendar(homeId) ?? store.calendar(d.calendarId);
@@ -2055,7 +2387,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // Ticked only by the user: unticked, nobody is told (or, where the server emails anyway, the user is asked).
             const tell = mail.mode === 'ask' && d.notify === true;
             const tellLabel = !editing || (home?.kind === 'caldav' && roleOf(occurrence) === 'own') ? 'Send invitations by email' : 'Send updates to guests by email';
-            const set = (patch) => {
+            // Google shows a meeting on its guests' calendars by itself: unticked, saving still puts it on theirs, changes it
+            // there, or takes it off (a move out of Google, or every guest taken off), without an email.
+            const reaches = home?.kind === 'google' && mail.mode === 'ask' && !tell && others > 0
+                && (!editing || d.calendarId !== homeId || Object.keys(changePatch(initial, d, { repeatTouched, originalRule: occurrence.repeat })).some((k) => k !== 'alarms' && k !== 'notify'));
+            const reachHow = !editing || othersOf(initial.guests).length === 0 ? 'puts it on'
+                : (d.calendarId !== homeId && store.calendar(d.calendarId)?.kind !== 'google') || othersOf(d.guests).length === 0 ? 'removes it from' : 'changes it on';
+            const reachHint = reaches ? `Unticked, Google still ${reachHow} the guests' Google calendars, without an email.` : '';
+            const set = (given) => {
+                // Someone else's invitation: its organizer's fields stay as they are; the user's own reminders, busy or free and privacy change.
+                const patch = invitation ? Object.fromEntries(Object.entries(given).filter(([k]) => OWN_FIELDS.includes(k))) : given;
+                if (Object.keys(patch).length === 0) return;
                 setD((current) => ({ ...current, ...patch }));
                 setErrors((current) => {
                     const next = { ...current };
@@ -2063,6 +2405,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     return next;
                 });
                 setRefusal('');
+                setChanged(false);
             };
             React.useEffect(() => {
                 if (Object.keys(errors).length === 0) return;
@@ -2093,7 +2436,29 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (!alive.current) return;
                 setBusy(false);
                 if (!result.ok) {
-                    // Not sent, as the user chose: the dialog stays, to change what would email them.
+                    const code = result.error?.code;
+                    // No default calendar: said on the select, where it's chosen.
+                    if (code === 'calendar/choose-calendar') {
+                        setErrors((current) => ({ ...current, calendarId: CHOOSE_CALENDAR }));
+                        return;
+                    }
+                    // The move made its copy (and sent its invitations) but couldn't take the event out of its old calendar:
+                    // said on the page until the user closes it, with what is left to do. Never tried again from here, which
+                    // would make a second copy.
+                    if (code === 'calendar/half-moved') {
+                        store.keepNotice(errorText(result.error));
+                        void store.refresh();
+                        onClose();
+                        return;
+                    }
+                    // The event changed on its server meanwhile and nothing was done: the page reads it again, for the user to look at.
+                    if (code === 'calendar/changed') {
+                        setRefusal(result.kept ? 'Not saved: it changed meanwhile, on its server or in another app. Look at it again to see it as it is now.' : errorText(result.error));
+                        setChanged(true);
+                        void store.refresh();
+                        return;
+                    }
+                    // Not made, as the user chose: the dialog stays, to change what would email or reach them.
                     if (!result.kept) setRefusal(errorText(result.error));
                     return;
                 }
@@ -2109,33 +2474,43 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const commitChange = async (patch, moveTo, scope) => {
                 setBusy(true);
                 setRefusal('');
+                setChanged(false);
                 let target = movedRef.current?.occurrence ?? occurrence;
                 let result = { ok: true, value: { occurrence: target } };
                 if (moveTo) {
-                    const moved = await withConsent(sending.ask, 'Don\'t move it', (notify) => store.act('updateEvent', {
-                        id: target.id, patch: { calendarId: moveTo, ...(notify ? { notify: true } : {}) }, scope: 'all',
-                    }));
+                    // A series that would lose part of itself on the way asks first (drop), as does one that would email people.
+                    // The box, ticked, tells the guests of the move too.
+                    const moved = await withConsent(sending.ask, 'move', (how) => store.act('updateEvent', {
+                        id: target.id, patch: { calendarId: moveTo, ...asked(tell, how) }, scope: 'all',
+                    }), sending.drop);
                     if (!moved.ok) return finish(moved);
+                    if (!placed(moved.value?.occurrence) && Object.keys(patch).length > 0) {
+                        movedRef.current = { calendarId: moveTo, occurrence: null };
+                        setLost(true);
+                        const where = store.calendar(moveTo)?.name ?? 'the other calendar';
+                        return finish({ ok: false, error: { code: 'calendar/refused', message: `It moved to “${where}”, but the other changes weren't saved: open it there and make them again` } });
+                    }
                     target = sameOccurrence(moved.value?.occurrence, target);
                     movedRef.current = { calendarId: moveTo, occurrence: target };
                     result = moved;
                 }
                 if (Object.keys(patch).length > 0) {
-                    const changed = await withConsent(sending.ask, 'Don\'t change it', (notify) => store.act('updateEvent', {
-                        id: target.id, patch: notify ? { ...patch, notify: true } : patch, scope,
+                    // The same patch on every round: the host holds a yes to the very change it asked about.
+                    const made = await withConsent(sending.ask, invitation ? 'invitation' : 'save', (how) => store.act('updateEvent', {
+                        id: target.id, patch: { ...patch, ...asked(patch.notify, how) }, scope,
                     }));
-                    if (!changed.ok && movedRef.current) {
+                    if (!made.ok && movedRef.current) {
                         const where = store.calendar(movedRef.current.calendarId)?.name ?? 'the other calendar';
-                        const why = changed.kept ? 'they would email people.' : errorText(changed.error);
-                        return finish({ ok: false, error: { code: 'calendar/refused', message: `It moved to “${where}”, but the other changes weren't saved: ${why}` } });
+                        const why = made.kept ? 'you chose not to.' : errorText(made.error);
+                        return finish({ ok: false, error: { code: made.error?.code === 'calendar/changed' ? made.error.code : 'calendar/refused', message: `It moved to “${where}”, but the other changes weren't saved: ${why}` } });
                     }
-                    result = changed;
+                    result = made;
                 }
                 return finish(result, 'Saved');
             };
 
             const save = async () => {
-                if (busy) return;
+                if (busy || lost) return;
                 const problems = draftProblems(d, calendars.length);
                 if (guestError) problems.guests = guestError;
                 if (Object.keys(problems).length) {
@@ -2145,8 +2520,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (!editing) {
                     setBusy(true);
                     setRefusal('');
+                    setChanged(false);
                     const input = createInput({ ...d, notify: tell });
-                    const result = await withConsent(sending.ask, 'Don\'t add it', (notify) => store.act('createEvent', { input: notify ? { ...input, notify: true } : input }));
+                    const result = await withConsent(sending.ask, 'add', (how) => store.act('createEvent', { input: { ...input, ...asked(input.notify, how) } }));
                     return finish(result, 'Added');
                 }
                 const patch = changePatch(initial, { ...d, notify: tell }, { repeatTouched, originalRule: occurrence.repeat });
@@ -2187,13 +2563,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 byAccount.set(c.account, group);
             }
             const calendar = store.calendar(d.calendarId);
-            const errorId = (key) => (errors[key] ? `dshcal-${key}-error` : undefined);
+            // A problem's id, as its Field gives it (`${id}-error`), for the controls it is about.
+            const FIELD_IDS = { start: 'dshcal-start-day', end: 'dshcal-end-day', timeZone: 'dshcal-zone', calendarId: 'dshcal-calendar' };
+            const errorId = (key) => (errors[key] ? `${FIELD_IDS[key] ?? `dshcal-${key}`}-error` : undefined);
             return h(React.Fragment, null,
                 h(Dialog, {
                     title, onClose, busy, wide: true,
                     footer: h(React.Fragment, null,
                         h(ui.Button, { variant: 'outline', disabled: busy, onClick: onClose }, TEXT.cancel),
-                        h(ui.Button, { variant: 'primary', disabled: busy, onClick: () => void save(), 'data-calendar-save': '' }, busy ? h(Spinner) : null, editing ? TEXT.save : 'Add event')),
+                        h(ui.Button, { variant: 'primary', disabled: busy || lost, onClick: () => void save(), 'data-calendar-save': '' }, busy ? h(Spinner) : null, editing ? TEXT.save : 'Add event')),
                 },
                 h('form', {
                     ref: formRef, className: 'dshcal-form', 'data-calendar-event-form': mode, noValidate: true,
@@ -2205,6 +2583,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         }
                     },
                 },
+                invitation ? h('p', { className: 'dshcal-hint', style: { margin: 0 }, 'data-calendar-invitation-note': '' },
+                    'Someone else\'s invitation: its organizer sets its title, time, place, link and notes. Your reminders, Show me as and Private are yours to change.') : null,
+                h('fieldset', { className: 'dshcal-fields', disabled: invitation, 'data-calendar-organizer-fields': '' },
                 h(Field, { id: 'dshcal-title', error: errors.title },
                     h('input', {
                         id: 'dshcal-title', className: 'dshcal-input dshcal-title-input', value: d.title, placeholder: 'Add a title', 'aria-label': 'Title', maxLength: 500,
@@ -2227,26 +2608,30 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         h('div', { className: 'dshcal-inline dshcal-dt' },
                             h('input', {
                                 id: 'dshcal-start-day', className: 'dshcal-input dshcal-date', type: 'date', value: d.startDay, 'data-calendar-start-day': '', 'aria-invalid': errors.start ? true : undefined,
+                                'aria-describedby': errorId('start'),
                                 onChange: (event) => moveStart(event.target.value, d.startTime),
                             }),
                             timed ? h('input', {
                                 className: 'dshcal-input dshcal-time', type: 'time', step: 300, value: d.startTime, 'aria-label': 'Start time', 'data-calendar-start-time': '',
+                                'aria-describedby': errorId('start'),
                                 onChange: (event) => moveStart(d.startDay, event.target.value),
                             }) : null)),
                     h(Field, { label: 'Ends', id: 'dshcal-end-day', error: errors.end },
                         h('div', { className: 'dshcal-inline dshcal-dt' },
                             h('input', {
                                 id: 'dshcal-end-day', className: 'dshcal-input dshcal-date', type: 'date', value: d.endDay, min: d.startDay, 'data-calendar-end-day': '', 'aria-invalid': errors.end ? true : undefined,
+                                'aria-describedby': errorId('end'),
                                 onChange: (event) => set({ endDay: event.target.value }),
                             }),
                             timed ? h('input', {
                                 className: 'dshcal-input dshcal-time', type: 'time', step: 300, value: d.endTime, 'aria-label': 'End time', 'data-calendar-end-time': '',
+                                'aria-describedby': errorId('end'),
                                 onChange: (event) => set({ endTime: event.target.value }),
                             }) : null))),
                 timed ? h(Field, { label: 'Time zone', id: 'dshcal-zone', error: errors.timeZone, hint: userTime || undefined },
                     h('input', {
                         id: 'dshcal-zone', className: 'dshcal-input', list: 'dshcal-zones', value: d.timeZone, spellCheck: false, autoComplete: 'off', 'data-calendar-zone': '',
-                        'aria-invalid': errors.timeZone ? true : undefined,
+                        'aria-invalid': errors.timeZone ? true : undefined, 'aria-describedby': errorId('timeZone'),
                         onFocus: (event) => event.target.select(),
                         onChange: (event) => set({ timeZone: event.target.value.trim() }),
                     }),
@@ -2262,6 +2647,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         h('span', { className: 'dshcal-dot', 'data-none': calendar ? undefined : '', style: calendar ? { '--dot': colorOf(calendar.color) } : undefined }),
                         h('select', {
                             id: 'dshcal-calendar', className: 'dshcal-select dshcal-grow', value: d.calendarId, disabled: invitation, 'data-calendar-calendar': '', 'aria-invalid': errors.calendarId ? true : undefined,
+                            'aria-describedby': errorId('calendarId'),
                             onChange: (event) => set({ calendarId: event.target.value }),
                         },
                         // No calendar chosen yet (no default): the user picks one before saving.
@@ -2273,14 +2659,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 h(Field, { label: 'Link', id: 'dshcal-url', error: errors.url },
                     h('input', {
                         id: 'dshcal-url', className: 'dshcal-input', type: 'url', value: d.url, placeholder: 'https://', 'data-calendar-url': '', 'aria-invalid': errors.url ? true : undefined,
+                        'aria-describedby': errorId('url'),
                         onChange: (event) => set({ url: event.target.value }),
                     })),
                 h(Field, { label: 'Notes', id: 'dshcal-notes' },
-                    h('textarea', { id: 'dshcal-notes', className: 'dshcal-textarea', value: d.description, rows: 3, 'data-calendar-notes': '', onChange: (event) => set({ description: event.target.value }) })),
+                    h('textarea', { id: 'dshcal-notes', className: 'dshcal-textarea', value: d.description, rows: 3, 'data-calendar-notes': '', onChange: (event) => set({ description: event.target.value }) }))),
                 h(RemindersField, { alarms: d.alarms, onChange: (alarms) => set({ alarms }) }),
                 h(GuestsField, {
                     guests: d.guests, onChange: (guests) => set({ guests }), readOnly: invitation,
-                    mail: mail.mode === 'ask' ? { mode: 'ask', label: tellLabel, checked: tell, onChange: (notify) => set({ notify }) }
+                    mail: mail.mode === 'ask' ? { mode: 'ask', label: tellLabel, checked: tell, onChange: (notify) => set({ notify }), quiet: reachHint }
                         : mail.mode === 'always' ? { mode: 'always', hint: alwaysWords(mailKind, home) } : { cannot: mail.cannot === true },
                     error: errors.guests || guestError, setError: (text) => { setGuestError(text); setErrors((e) => ({ ...e, guests: undefined })); },
                 }),
@@ -2292,7 +2679,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         h('label', { className: 'dshcal-check', style: { minHeight: 34 }, title: 'Others who can see this calendar see only that the time is taken.' },
                             h('input', { type: 'checkbox', checked: d.private, onChange: (event) => set({ private: event.target.checked }), 'data-calendar-private': '' }),
                             'Private'))),
-                h(Alert, { text: refusal }))),
+                h(Alert, { text: refusal }),
+                changed && editing ? h(Btn, {
+                    size: 'sm', style: { alignSelf: 'flex-start' }, 'data-calendar-look-again': '',
+                    onClick: () => {
+                        onClose();
+                        cal.openAt?.(movedRef.current?.occurrence ?? occurrence);
+                    },
+                }, 'Look at it again') : null)),
                 ask ? h(ScopeDialog, {
                     title: 'Change repeating event', scopes: ask.scopes, action: TEXT.save,
                     onSubmit: (scope) => ask.run(scope), onClose: () => setAsk(null),
@@ -2311,9 +2705,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /**
          * A card beside what opened it (to its right, else its left, else
          * below or above it; in the middle without one), or a sheet at the
-         * bottom of a narrow window. Escape or a press outside closes it
-         * (onClose says which: 'escape', 'outside'), and the focus goes back
-         * where it was.
+         * bottom of a narrow window. It takes the focus once it is placed;
+         * Escape or a press outside closes it (onClose says which: 'escape',
+         * 'outside'), and the focus goes back where it was.
          */
         function Popover({ anchor, onClose, label, children, ...rest }) {
             const ref = React.useRef(null);
@@ -2349,10 +2743,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }
                 setPlace({ left, top: clamp(top, 12, Math.max(12, vh - hgt - 12)) });
             }, [anchor]);
+            // The focus moves in once it is placed: hidden while it is measured, it can't take the focus.
+            const focused = React.useRef(false);
+            React.useEffect(() => {
+                if (place === null || focused.current) return;
+                focused.current = true;
+                const el = ref.current;
+                (el?.querySelector('[data-pop-autofocus]') ?? el)?.focus?.({ preventScroll: true });
+            }, [place]);
             React.useEffect(() => {
                 const before = document.activeElement;
                 const el = ref.current;
-                (el?.querySelector('[data-pop-autofocus]') ?? el)?.focus?.({ preventScroll: true });
                 const onKey = (event) => {
                     if (event.key !== 'Escape' || event.defaultPrevented) return;
                     if (document.querySelector('[role=dialog][aria-modal=true]')) return;
@@ -2373,8 +2774,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 };
             }, []);
             const style = place === null ? { left: -9999, top: 0, visibility: 'hidden' } : place.sheet ? {} : { left: place.left, top: place.top };
+            // Escape inside it is its own: the page under it doesn't see it too.
+            const onKeyDown = (event) => {
+                if (event.key !== 'Escape' || document.querySelector('[role=dialog][aria-modal=true]')) return;
+                event.preventDefault();
+                event.stopPropagation();
+                close.current('escape');
+            };
             return ReactDOM.createPortal(h('div', {
-                ref, className: 'dshcal-pop', role: 'dialog', 'aria-label': label, tabIndex: -1, style, 'data-sheet': place?.sheet ? '' : undefined, ...rest,
+                ref, className: 'dshcal-pop', role: 'dialog', 'aria-label': label, tabIndex: -1, style, 'data-sheet': place?.sheet ? '' : undefined, onKeyDown, ...rest,
             }, children), document.body);
         }
 
@@ -2397,9 +2805,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * differs), how it repeats, its calendar, place, call, link, notes,
          * guests and their answers, reminders; Accept / Maybe / Decline for an
          * invitation; Edit, Duplicate and Delete where its calendar can be
-         * written.
+         * written; with onOpenPage, a button to see it in the calendar.
          */
-        function EventPopover({ cal, occurrence, anchor, onClose, onEdit, onDuplicate, onDelete }) {
+        function EventPopover({ cal, occurrence, anchor, onClose, onEdit, onDuplicate, onDelete, onOpenPage, openLabel = 'Open in Calendar' }) {
             const store = cal.store;
             useStore(store);
             const zone = store.zone();
@@ -2421,10 +2829,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 setAnswering('');
                 if (result.ok && isObject(result.value?.occurrence)) {
                     setO(result.value.occurrence);
-                    const emailed = emailedText(result.value.occurrence.emailed);
-                    store.toast(`Answered: ${ANSWER_WORDS[status]}.${emailed ? ` ${emailed}` : ''}`);
+                    const told = contactText(result.value.occurrence);
+                    store.toast(`Answered: ${ANSWER_WORDS[status]}.${told ? ` ${told}` : ''}`);
                 } else if (!result.ok) {
                     setError(errorText(result.error));
+                    if (result.error?.code === 'calendar/changed') void store.refresh();
                 }
             };
             const pick = (status) => {
@@ -2463,7 +2872,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         h('div', { className: 'dshcal-inline' },
                             isUrl(o.conference) ? h('a', { className: 'dshcal-btn dshcal-btn-primary dshcal-btn-sm', href: o.conference, target: '_blank', rel: 'noopener noreferrer', 'data-calendar-join': '' }, 'Join call') : null,
                             h('span', { className: 'dshcal-pop-sub', style: { overflowWrap: 'anywhere' } }, linkLabel(o.conference)))) : null,
-                    o.url ? h(DetailRow, { glyph: icon('IconLinkOutlineRegular') }, h('a', { className: 'dshcal-link', href: o.url, target: '_blank', rel: 'noopener noreferrer' }, linkLabel(o.url))) : null,
+                    o.url ? h(DetailRow, { glyph: icon('IconLinkOutlineRegular') }, isUrl(o.url)
+                        ? h('a', { className: 'dshcal-link', href: o.url.trim(), target: '_blank', rel: 'noopener noreferrer', 'data-calendar-url-link': '' }, linkLabel(o.url))
+                        : h('span', { style: { overflowWrap: 'anywhere' }, 'data-calendar-url-text': '' }, String(o.url))) : null,
                     o.description ? h(DetailRow, { glyph: h(NotesGlyph) }, h('div', { className: 'dshcal-pop-notes' }, h(Linked, { text: o.description }))) : null,
                     guests.length || o.organizer ? h(DetailRow, { glyph: icon('IconUsersOutlineRegular') },
                         guests.length ? h('div', null, plural(guests.length, 'guest'),
@@ -2494,7 +2905,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                 key: status, size: 'sm', 'aria-pressed': o.myStatus === status, disabled: answering !== '', 'data-calendar-answer': status,
                                 onClick: () => pick(status),
                             }, answering === status ? h(Spinner, { size: 12 }) : null, label)))) : null,
-                error ? h('div', { style: { marginTop: 10 } }, h(Alert, { text: error })) : null);
+                error ? h('div', { style: { marginTop: 10 } }, h(Alert, { text: error })) : null,
+                typeof onOpenPage === 'function' ? h('div', { className: 'dshcal-pop-foot' },
+                    h(Btn, { size: 'sm', onClick: () => onOpenPage(o), 'data-calendar-open-page': '' }, h(CalendarIcon, { size: 12 }), openLabel)) : null);
         }
 
         /** An occurrence's times on another zone's clock ('6:00 – 7:00 PM'). */
@@ -2540,6 +2953,182 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         const hhmm = (minutes) => `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
 
+        // ── Dragging events ────────────────────────────────────────────────
+        // An event dragged in Week or Day goes to another time or day (its start on a quarter hour), or by its bottom edge
+        // to another end; in Month, and in the all-day row, to another day, keeping its time of day. The math is on the
+        // clock of the zone the page shows (wall clocks read as UTC, as wallMs does), so a day with a clock change keeps
+        // its hours where the grid draws them; the event keeps its length.
+
+        /** How far apart the times a drag lands on are, in minutes. */
+        const SNAP = 15;
+        /** Minutes to the nearest step. */
+        const snapTo = (minutes, step = SNAP) => Math.round(minutes / step) * step;
+        /** A day and minutes into it as one wall-clock number (ms, read as UTC). */
+        const wallAt = (day, minutes) => wallMs(day) + minutes * MINUTE;
+        /** An event's start on the page's clock, as such a number. */
+        const startWall = (o, zone) => wallMs(toLocal(o.start, zone));
+
+        /** Whether the user can drag an occurrence: a calendar that can be written, and not someone else's invitation. */
+        function canDrag(o, calendar) {
+            if (!isObject(o) || o.readOnly === true || calendar?.readOnly === true) return false;
+            return roleOf(o) !== 'guest';
+        }
+
+        /**
+         * Where a timed event moved by a drag goes: grabbed at `grab` ({day, minute}, where the press was), now at
+         * `at`; its start on the nearest quarter hour, its length kept. → {start, end} (ms).
+         */
+        function movedTo(o, zone, grab, at) {
+            const offset = wallAt(grab.day, grab.minute) - startWall(o, zone);
+            const wall = snapTo((wallAt(at.day, at.minute) - offset) / MINUTE) * MINUTE;
+            const start = toInstant(wallOf(wall), zone);
+            return { start, end: start + Math.max(0, o.end - o.start) };
+        }
+
+        /** Where a timed event's end goes when its bottom edge is dragged to `at`: a quarter hour, a quarter hour after its start at least. */
+        function resizedTo(o, zone, at) {
+            const first = startWall(o, zone);
+            const wall = Math.max(first + SNAP * MINUTE, snapTo(wallAt(at.day, at.minute) / MINUTE) * MINUTE);
+            return { start: o.start, end: toInstant(wallOf(wall), zone) };
+        }
+
+        /**
+         * An event moved by whole days (Month, the all-day row), at the same time of day: {start, end}, and for an
+         * all-day one its days {startDay, lastDay} too.
+         */
+        function shiftedBy(o, zone, days) {
+            if (o.allDay) {
+                const startDay = addDays(o.startDay, days);
+                return { allDay: true, startDay, lastDay: addDays(o.lastDay ?? o.startDay, days), start: o.start + days * DAY, end: o.end + days * DAY };
+            }
+            const start = toInstant(wallOf(startWall(o, zone) + days * DAY), zone);
+            return { start, end: start + Math.max(0, o.end - o.start) };
+        }
+
+        /** Whether a drop changes anything. */
+        const sameTimes = (o, t) => (o.allDay ? t.startDay === o.startDay && t.lastDay === (o.lastDay ?? o.startDay) : t.start === o.start && t.end === o.end);
+
+        /** The days an event dragged to new times would cover: [first, last]. */
+        const coveredDays = (t, zone) => (t.allDay ? [t.startDay, t.lastDay] : [dayIn(t.start, zone), dayIn(Math.max(t.start, t.end - 1), zone)]);
+        /** An occurrence at the times a drag gave it, to show until its calendar has it there. */
+        const placedAt = (o, t) => ({ ...o, start: t.start, end: t.end, ...(t.allDay ? { startDay: t.startDay, lastDay: t.lastDay } : {}) });
+
+        /** Who a moved event's change emailed, and whose calendars it changed without an email, in the other toasts' words, or ''. */
+        function movedWords(moved) {
+            return isObject(moved) ? contactText(moved) : '';
+        }
+
+        /**
+         * The patch updateEvent takes for a drop: an all-day event's days (the end is its last day), or a timed one's
+         * instants (the host puts them on the event's own clock, so its zone stays). Undefined when nothing changes.
+         */
+        function dropPatch(o, t) {
+            if (!t || sameTimes(o, t)) return undefined;
+            if (o.allDay) return { allDay: true, start: t.startDay, end: t.lastDay };
+            return { allDay: false, start: new Date(t.start).toISOString(), end: new Date(t.end).toISOString() };
+        }
+
+        /**
+         * What the consent helper hands a change's maker, as the arguments it adds: notify only when the user said Send,
+         * approved when they were shown who it reaches. Takes the helper's older form (notify: boolean) and its newer
+         * one ({notify, approved}).
+         */
+        function consentArgs(given) {
+            const c = typeof given === 'boolean' ? { notify: given } : isObject(given) ? given : {};
+            return { ...(c.notify === true ? { notify: true } : {}), ...(Array.isArray(c.approved) ? { approved: c.approved } : {}) };
+        }
+
+        /** The words on a dragged event's ghost: its new times ('9:30 – 10:30 AM'). */
+        function ghostWords(t, zone) {
+            if (t.allDay) return dayRangeText(t.startDay, t.lastDay);
+            return dayIn(t.start, zone) === dayIn(Math.max(t.start, t.end - 1), zone) ? timeRangeText(t.start, t.end, zone) : `${timeText(t.start, zone)} – ${timeText(t.end, zone)}`;
+        }
+
+        /**
+         * Where Week and Day open, in minutes into the day: the earlier of 7:30 and the first timed event on show, so no
+         * early one hides above. Late on a day on show (after 15:00), four hours before now instead, unless an event
+         * still to come starts earlier.
+         * @param starts - [{minute, upcoming}]: each timed event on show, minutes into its day, and whether it is still to come.
+         */
+        function openingMinute(starts, nowMinute = 0, todayShown = false) {
+            const late = todayShown && nowMinute > 15 * 60;
+            const base = late ? nowMinute - 240 : 450;
+            const firsts = (starts ?? EMPTY).filter((s) => Number.isFinite(s?.minute) && (!late || s.upcoming)).map((s) => s.minute);
+            return clamp(Math.min(base, ...firsts), 0, 1440);
+        }
+
+        /**
+         * A press on an event that may become a drag: past a few pixels it is one, and onMove follows the pointer
+         * (held by pointer capture); on release onDrop, on Escape or a lost pointer onCancel. A press that doesn't move
+         * is left alone, so its click opens the event as before; the click that ends a drag is swallowed.
+         */
+        function pressToDrag(event, { onStart, onMove, onDrop, onCancel }) {
+            const el = event.currentTarget;
+            const id = event.pointerId;
+            const x0 = event.clientX;
+            const y0 = event.clientY;
+            let dragging = false;
+            let over = false;
+            try { el.setPointerCapture(id); } catch {}
+            const swallowClick = () => {
+                const swallow = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    stop();
+                };
+                const stop = () => {
+                    clearTimeout(timer);
+                    window.removeEventListener('click', swallow, true);
+                };
+                // The release's click comes in the same task, if at all (not when the drop re-drew the event pressed);
+                // the next click is the user's.
+                const timer = setTimeout(stop, 0);
+                window.addEventListener('click', swallow, true);
+            };
+            const leave = () => {
+                window.removeEventListener('pointermove', move, true);
+                window.removeEventListener('pointerup', up, true);
+                window.removeEventListener('pointercancel', lost, true);
+                window.removeEventListener('keydown', key, true);
+                el.removeEventListener('lostpointercapture', lost);
+                try { el.releasePointerCapture(id); } catch {}
+            };
+            const move = (e) => {
+                if (e.pointerId !== id || over) return;
+                if (!dragging) {
+                    if (Math.hypot(e.clientX - x0, e.clientY - y0) < 4) return;
+                    dragging = true;
+                    onStart?.(e);
+                }
+                onMove(e);
+            };
+            const up = (e) => {
+                if (e.pointerId !== id) return;
+                leave();
+                if (!dragging) return;
+                swallowClick();
+                if (!over) onDrop(e);
+            };
+            const lost = (e) => {
+                if (e.pointerId !== id) return;
+                leave();
+                if (dragging && !over) onCancel();
+            };
+            const key = (e) => {
+                if (e.key !== 'Escape' || !dragging || over) return;
+                e.preventDefault();
+                e.stopPropagation();
+                // Cancelled; the release still comes, and its click is swallowed then.
+                over = true;
+                onCancel();
+            };
+            window.addEventListener('pointermove', move, true);
+            window.addEventListener('pointerup', up, true);
+            window.addEventListener('pointercancel', lost, true);
+            window.addEventListener('keydown', key, true);
+            el.addEventListener('lostpointercapture', lost);
+        }
+
         /** A day's timed events as minute spans on its clock: [{o, from, to}]. */
         function daySegments(occurrences, day, zone) {
             const dayStart = startOfDay(day, zone);
@@ -2582,21 +3171,182 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * last a day or more, then the hours with the timed events side by
          * side where they overlap, and a line at the current time. A click on
          * an empty time makes an hour's event there; a drag makes one as long
-         * as the drag.
+         * as the drag. An event dragged goes to another time or day, by its
+         * bottom edge to another end, and Alt with an arrow key moves the one
+         * in focus (a quarter hour, a day): `onDrop(o, times)` saves it.
+         * @param ready - whether the events of these days are read (where the view opens waits for them).
+         * @param movable - (o) → whether it can be dragged.
          */
-        function TimeGrid({ days, zone, occurrences, now, today, onOpen, onCreate, onDay, onMore, scrollTo }) {
+        function TimeGrid({ days, zone, occurrences, now, today, onOpen, onCreate, onDay, onMore, scrollTo, ready = true, movable, onDrop, onDragging }) {
             const scrollRef = React.useRef(null);
+            const laneRef = React.useRef(null);
             const [expanded, setExpanded] = React.useState(false);
             const [drag, setDrag] = React.useState(null);
             const dragRef = React.useRef(null);
             dragRef.current = drag;
-            React.useLayoutEffect(() => {
+            // An event being dragged: {id, mode ('move', 'resize', 'days'), title, t: where it would go}.
+            const [moving, setMoving] = React.useState(null);
+            // An event moved with the keys, to keep in focus where it lands: {id, until}.
+            const refocus = React.useRef(null);
+            // Where the view opens (see openingMinute), then once more when the events are read, unless the user scrolled meanwhile.
+            const opening = React.useRef({ top: -1, settled: false });
+            const placeOpening = (withEvents) => {
                 const el = scrollRef.current;
                 if (!el) return;
-                const nowMinutes = minutesIn(Date.now(), zone);
-                const hour = days.includes(today) && nowMinutes > 15 * 60 ? nowMinutes / 60 - 4 : 7.5;
-                el.scrollTop = Math.max(0, hour * HOUR_PX - 4);
+                const starts = withEvents ? days.flatMap((day) => {
+                    const dayStart = startOfDay(day, zone);
+                    return daySegments(occurrences, day, zone).filter((s) => s.o.start >= dayStart).map((s) => ({ minute: s.from, upcoming: s.o.end > Date.now() }));
+                }) : EMPTY;
+                el.scrollTop = Math.max(0, (openingMinute(starts, minutesIn(Date.now(), zone), days.includes(today)) / 60) * HOUR_PX - 10);
+                opening.current.top = el.scrollTop;
+            };
+            React.useLayoutEffect(() => {
+                placeOpening(ready);
+                opening.current.settled = ready;
             }, []);
+            React.useLayoutEffect(() => {
+                if (!ready || opening.current.settled) return;
+                opening.current.settled = true;
+                const el = scrollRef.current;
+                if (el && Math.abs(el.scrollTop - opening.current.top) <= 1) placeOpening(true);
+            }, [ready]);
+            React.useEffect(() => {
+                const want = refocus.current;
+                if (!want) return;
+                if (Date.now() > want.until) {
+                    refocus.current = null;
+                    return;
+                }
+                const active = document.activeElement;
+                if (active && active !== document.body) return;
+                const el = scrollRef.current?.parentElement?.querySelector(`[data-calendar-event="${cssEscape(want.id)}"]`);
+                if (el) {
+                    refocus.current = null;
+                    el.focus({ preventScroll: false });
+                }
+            });
+
+            /** The day column under a point (the nearest one beside the grid) and how far down it is, in minutes. */
+            const pointAt = (x, y) => {
+                const columns = [...(scrollRef.current?.querySelectorAll('[data-calendar-day-column]') ?? EMPTY)];
+                if (columns.length === 0) return null;
+                const rects = columns.map((c) => c.getBoundingClientRect());
+                let i = rects.findIndex((r) => x >= r.left && x < r.right);
+                if (i < 0) i = x < rects[0].left ? 0 : columns.length - 1;
+                return { day: columns[i].getAttribute('data-calendar-day-column'), minute: clamp(((y - rects[i].top) / HOUR_PX) * 60, 0, 1440) };
+            };
+            /** The day in the all-day row under a point, or ''. */
+            const laneDayAt = (x) => {
+                for (const cell of laneRef.current?.querySelectorAll('[data-calendar-allday-cell]') ?? EMPTY) {
+                    const r = cell.getBoundingClientRect();
+                    if (x >= r.left && x < r.right) return cell.getAttribute('data-calendar-allday-cell');
+                }
+                return '';
+            };
+            const draggable = (event, o) => event.button === 0 && event.pointerType !== 'touch' && typeof movable === 'function' && movable(o);
+            const done = () => {
+                setMoving(null);
+                onDragging?.('');
+            };
+            /** A timed event pressed: dragged to another time or day, or by its bottom edge to another end. */
+            const pressEvent = (event, o) => {
+                if (!draggable(event, o)) return;
+                const mode = event.target?.closest?.('.dshcal-ev-grip') ? 'resize' : 'move';
+                const grab = pointAt(event.clientX, event.clientY);
+                if (!grab) return;
+                const session = { x: event.clientX, y: event.clientY, t: undefined, frame: 0 };
+                const place = () => {
+                    const at = pointAt(session.x, session.y);
+                    if (!at) return;
+                    const t = mode === 'resize' ? resizedTo(o, zone, at) : movedTo(o, zone, grab, at);
+                    if (session.t && t.start === session.t.start && t.end === session.t.end) return;
+                    session.t = t;
+                    setMoving({ id: o.id, mode, title: o.title, t });
+                };
+                // While it's held near the top or the bottom, the hours scroll.
+                const tick = () => {
+                    const el = scrollRef.current;
+                    if (el) {
+                        const r = el.getBoundingClientRect();
+                        const edge = session.y < r.top + 28 ? -1 : session.y > r.bottom - 28 ? 1 : 0;
+                        if (edge !== 0) el.scrollTop += edge * 10;
+                    }
+                    place();
+                    session.frame = requestAnimationFrame(tick);
+                };
+                const end = () => {
+                    cancelAnimationFrame(session.frame);
+                    done();
+                };
+                pressToDrag(event, {
+                    onStart: () => {
+                        onDragging?.(mode);
+                        session.frame = requestAnimationFrame(tick);
+                    },
+                    onMove: (e) => {
+                        session.x = e.clientX;
+                        session.y = e.clientY;
+                        place();
+                    },
+                    onDrop: () => {
+                        end();
+                        if (session.t) onDrop?.(o, session.t);
+                    },
+                    onCancel: end,
+                });
+            };
+            /** An event in the all-day row pressed: dragged to another day. */
+            const pressBar = (event, o) => {
+                if (!draggable(event, o)) return;
+                const grabDay = laneDayAt(event.clientX);
+                if (!grabDay) return;
+                let at = '';
+                let t;
+                pressToDrag(event, {
+                    onStart: () => onDragging?.('move'),
+                    onMove: (e) => {
+                        const day = laneDayAt(e.clientX);
+                        if (day === at) return;
+                        at = day;
+                        t = day ? shiftedBy(o, zone, daysBetween(grabDay, day)) : undefined;
+                        setMoving({ id: o.id, mode: 'days', title: o.title, t });
+                    },
+                    onDrop: () => {
+                        done();
+                        if (t) onDrop?.(o, t);
+                    },
+                    onCancel: done,
+                });
+            };
+            /** Alt with an arrow key: the event in focus a quarter hour earlier or later, or a day back or on. */
+            const nudge = (event, o, byDays) => {
+                if (!event.altKey || event.ctrlKey || event.metaKey || typeof movable !== 'function' || !movable(o)) return;
+                const step = { ArrowUp: [-SNAP, 0], ArrowDown: [SNAP, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[event.key];
+                if (!step || (byDays && step[1] === 0)) return;
+                event.preventDefault();
+                event.stopPropagation();
+                let t;
+                if (step[1] !== 0) t = shiftedBy(o, zone, step[1]);
+                else {
+                    const start = toInstant(wallOf(startWall(o, zone) + step[0] * MINUTE), zone);
+                    t = { start, end: start + Math.max(0, o.end - o.start) };
+                }
+                refocus.current = { id: o.id, until: Date.now() + 20_000 };
+                onDrop?.(o, t);
+            };
+            /** Where the dragged event would go on a day: its piece of that day, in minutes, or null. */
+            const ghostOn = (day) => {
+                const t = moving?.t;
+                if (!t || moving.mode === 'days') return null;
+                const dayStart = startOfDay(day, zone);
+                const dayEnd = startOfDay(addDays(day, 1), zone);
+                if (t.end <= dayStart || t.start >= dayEnd) return null;
+                const from = t.start <= dayStart ? 0 : minutesIn(t.start, zone);
+                const to = t.end >= dayEnd ? 1440 : minutesIn(t.end, zone);
+                return { from, to: Math.max(to, Math.min(1440, from + SNAP)), first: t.start >= dayStart };
+            };
+            // The days an event dragged in the all-day row would cover.
+            const dropDays = moving?.mode === 'days' && moving.t ? coveredDays(moving.t, zone) : null;
             React.useEffect(() => {
                 const el = scrollRef.current;
                 if (!el || !scrollTo) return;
@@ -2677,10 +3427,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             glyph: icon(expanded ? 'IconChevronUpOutlineRegular' : 'IconChevronDownOutlineRegular', { size: 12 }),
                             onClick: () => setExpanded(!expanded), 'aria-expanded': expanded,
                         }) : null),
-                    h('div', { className: 'dshcal-wk-lanes', style: { '--lanes': lanesShown } },
+                    h('div', { ref: laneRef, className: 'dshcal-wk-lanes', style: { '--lanes': lanesShown } },
                         days.map((day, i) => h('button', {
                             key: `cell-${day}`, type: 'button', className: 'dshcal-wk-lanecell', style: { gridColumn: `${i + 1}`, gridRow: '1 / -1' }, tabIndex: -1,
                             'aria-label': `New all-day event on ${longDay(day, zone)}`, 'data-calendar-allday-cell': day,
+                            'data-drop': dropDays && day >= dropDays[0] && day <= dropDays[1] ? '' : undefined,
                             onClick: () => onCreate({ day, allDay: true }),
                         })),
                         fitted.pieces.map((piece) => {
@@ -2688,8 +3439,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             return h('button', {
                                 key: `${piece.key}:${piece.a}`, type: 'button', className: 'dshcal-bar', style: { ...evStyle(o.color), gridColumn: `${piece.a + 1} / ${piece.b + 2}`, gridRow: `${piece.lane + 1}` },
                                 'data-look': lookOf(o), 'data-past': o.end <= now ? '' : undefined, 'data-cont-start': piece.contStart ? '' : undefined, 'data-cont-end': piece.contEnd ? '' : undefined,
-                                'aria-label': `${o.title}, ${shortWhen(o, zone)}, ${o.calendar}`, 'data-calendar-event': o.id,
+                                'aria-label': `${o.title}, ${shortWhen(o, zone)}, ${o.calendar}`, 'data-calendar-event': o.id, 'data-moving': moving?.id === o.id ? '' : undefined,
                                 onClick: (event) => onOpen(o, event.currentTarget),
+                                onPointerDown: (event) => pressBar(event, o),
+                                onKeyDown: (event) => nudge(event, o, true),
                             }, h('span', { className: 'dshcal-bar-title' }, o.title));
                         }),
                         fitted.more.map((m) => h('button', {
@@ -2703,6 +3456,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         days.map((day) => {
                             const segments = daySegments(occurrences, day, zone);
                             const cols = columnsOf(segments, 20, 30, maxCols);
+                            const dayEnd = startOfDay(addDays(day, 1), zone);
+                            const ghost = ghostOn(day);
                             return h('div', { key: day, className: 'dshcal-wk-col', 'data-today': day === today ? '' : undefined, 'data-calendar-day-column': day, ...columnHandlers(day) },
                                 segments.map(({ o, from, to }) => {
                                     const place = cols.places.get(o.id);
@@ -2711,19 +3466,24 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                     const short = height < 34;
                                     const lines = clamp(Math.floor((height - 20) / 15), 1, 8);
                                     const when = timeRangeText(o.start, o.end, zone);
+                                    const can = typeof movable === 'function' && movable(o);
                                     return h('button', {
                                         key: o.id, type: 'button', className: 'dshcal-ev', 'data-calendar-event': o.id, 'data-look': lookOf(o), 'data-past': o.end <= now ? '' : undefined,
-                                        'data-short': short ? '' : undefined, 'data-nested': place.level > 0 ? '' : undefined,
+                                        'data-short': short ? '' : undefined, 'data-nested': place.level > 0 ? '' : undefined, 'data-moving': moving?.id === o.id ? '' : undefined,
                                         style: {
                                             ...evStyle(o.color), '--lines': lines, top: (from / 60) * HOUR_PX + 1, height, zIndex: 2 + place.level,
                                             left: `calc(${place.left * 100}% + 2px)`, width: `calc(${place.width * 100}% - ${place.left + place.width > 0.999 ? 8 : 3}px)`,
                                         },
                                         'aria-label': `${o.title}, ${shortWhen(o, zone, day)}, ${o.calendar}`,
                                         onClick: (event) => onOpen(o, event.currentTarget),
+                                        onPointerDown: (event) => pressEvent(event, o),
+                                        onKeyDown: (event) => nudge(event, o, false),
                                     },
                                     h('span', { className: 'dshcal-ev-title' }, o.title),
                                     h('span', { className: 'dshcal-ev-sub' }, short ? timeText(o.start, zone) : when),
-                                    !short && height > 66 && o.location ? h('span', { className: 'dshcal-ev-sub' }, o.location) : null);
+                                    !short && height > 66 && o.location ? h('span', { className: 'dshcal-ev-sub' }, o.location) : null,
+                                    // Its bottom edge, where it ends on this day: dragged, a new end.
+                                    can && o.end <= dayEnd ? h('span', { className: 'dshcal-ev-grip', 'aria-hidden': true, 'data-calendar-resize': o.id }) : null);
                                 }),
                                 cols.more.map((m) => h('button', {
                                     key: m.key, type: 'button', className: 'dshcal-ev-more', 'data-calendar-more': day,
@@ -2731,12 +3491,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                         top: (m.from / 60) * HOUR_PX + 1, height: Math.max(18, ((m.to - m.from) / 60) * HOUR_PX - 2), zIndex: 2 + m.level,
                                         left: `calc(${m.left * 100}% + 2px)`, width: `calc(${m.width * 100}% - ${m.left + m.width > 0.999 ? 8 : 3}px)`,
                                     },
-                                    'aria-label': `${plural(m.count, 'more event')} at ${hhmm(m.from)}. Show the day's events.`,
+                                    'aria-label': `${plural(m.count, 'more event')} at ${clockText(m.from)}. Show the day's events.`,
                                     onClick: (event) => onMore(day, event.currentTarget),
                                 }, `+${m.count}`)),
                                 drag && drag.day === day ? h('div', {
                                     className: 'dshcal-wk-ghost', style: { top: (drag.from / 60) * HOUR_PX, height: Math.max(12, ((drag.to - drag.from) / 60) * HOUR_PX) },
-                                }, `${hhmm(drag.from)} – ${hhmm(Math.min(1440, drag.to))}`) : null,
+                                }, clockRangeText(drag.from, Math.min(1440, drag.to))) : null,
+                                ghost ? h('div', {
+                                    className: 'dshcal-wk-ghost', 'data-calendar-ghost': moving.mode,
+                                    style: { top: (ghost.from / 60) * HOUR_PX, height: Math.max(12, ((ghost.to - ghost.from) / 60) * HOUR_PX) },
+                                }, ghost.first ? h('span', null, moving.title) : null, ghost.first ? h('span', null, ghostWords(moving.t, zone)) : null) : null,
                                 day === today ? h('div', { className: 'dshcal-now', style: { top: (nowMinutes / 60) * HOUR_PX }, 'aria-hidden': true }) : null);
                         }))));
         }
@@ -2748,11 +3512,54 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * longer) and lines (timed), as many as a day has room for, then
          * "+N more". Arrow keys move between days (Page Up and Page Down by
          * month), Enter shows a day's events, a click on a day's empty space
-         * makes an all-day event there, its number opens the day.
+         * makes an all-day event there, its number opens the day. An event
+         * dragged to another day goes there at the same time of day:
+         * `onDrop(o, times)` saves it.
+         * @param movable - (o) → whether it can be dragged.
          */
-        function MonthView({ days, month, zone, occurrences, today, now, onOpen, onCreateDay, onDay, onMore, onMove, focusDay }) {
+        function MonthView({ days, month, zone, occurrences, today, now, onOpen, onCreateDay, onDay, onMore, onMove, focusDay, movable, onDrop, onDragging }) {
             const weeksRef = React.useRef(null);
             const [cap, setCap] = React.useState(3);
+            // An event being dragged to another day: {id, t: where it would go}.
+            const [moving, setMoving] = React.useState(null);
+            /** The day under a point, or ''. */
+            const cellDayAt = (x, y) => {
+                for (const cell of weeksRef.current?.querySelectorAll('[data-calendar-cell]') ?? EMPTY) {
+                    const r = cell.getBoundingClientRect();
+                    if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) return cell.getAttribute('data-calendar-cell');
+                }
+                return '';
+            };
+            const pressPiece = (event, o) => {
+                if (event.button !== 0 || event.pointerType === 'touch' || typeof movable !== 'function' || !movable(o)) return;
+                const grabDay = cellDayAt(event.clientX, event.clientY);
+                if (!grabDay) return;
+                let at = grabDay;
+                let t;
+                const done = () => {
+                    setMoving(null);
+                    onDragging?.('');
+                };
+                pressToDrag(event, {
+                    onStart: () => {
+                        onDragging?.('move');
+                        setMoving({ id: o.id, t: undefined });
+                    },
+                    onMove: (e) => {
+                        const day = cellDayAt(e.clientX, e.clientY);
+                        if (day === at && t) return;
+                        at = day;
+                        t = day ? shiftedBy(o, zone, daysBetween(grabDay, day)) : undefined;
+                        setMoving({ id: o.id, t });
+                    },
+                    onDrop: () => {
+                        done();
+                        if (t) onDrop?.(o, t);
+                    },
+                    onCancel: done,
+                });
+            };
+            const dropDays = moving?.t ? coveredDays(moving.t, zone) : null;
             const weeks = [];
             for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7));
             React.useLayoutEffect(() => {
@@ -2816,6 +3623,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                 return h('div', {
                                     key: day, className: 'dshcal-mo-cell', role: 'gridcell', tabIndex: day === tabStop ? 0 : -1, style: { gridColumn: `${i + 1}` },
                                     'data-out': day.slice(0, 7) !== month ? '' : undefined, 'data-calendar-cell': day,
+                                    'data-drop': dropDays && day >= dropDays[0] && day <= dropDays[1] ? '' : undefined,
                                     'aria-label': `${longDay(day, zone)}${day === today ? ', today' : ''}, ${count ? `${plural(count, 'event')}: ${names.join(', ')}${count > 3 ? '…' : ''}` : 'no events'}`,
                                     onFocus: () => setFocused(day),
                                     onKeyDown: (event) => onKey(event, day),
@@ -2833,6 +3641,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                 const common = {
                                     key: `${piece.key}:${piece.a}`, type: 'button', tabIndex: -1, 'aria-hidden': true, 'data-calendar-event': o.id, 'data-look': lookOf(o),
                                     'data-past': o.end <= now ? '' : undefined, onClick: (event) => onOpen(o, event.currentTarget), title: `${o.title} · ${shortWhen(o, zone)}`,
+                                    'data-moving': moving?.id === o.id ? '' : undefined, onPointerDown: (event) => pressPiece(event, o),
                                 };
                                 if (spansDays(o)) {
                                     return h('button', { ...common, className: 'dshcal-bar', style, 'data-cont-start': piece.contStart ? '' : undefined, 'data-cont-end': piece.contEnd ? '' : undefined },
@@ -2871,43 +3680,134 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }));
         }
 
+        /** A day in the Agenda layout: its date, then its events, each opening on a click. */
+        function agendaDay({ day, list }, { zone, today, now, onOpen }) {
+            const year = day.slice(0, 4) !== today.slice(0, 4);
+            return h('section', { key: day, className: 'dshcal-ag-day', 'aria-label': longDay(day, zone) },
+                h('div', { className: 'dshcal-ag-date', 'data-today': day === today ? '' : undefined },
+                    h('b', null, Number(day.slice(8, 10))),
+                    h('span', null, day === today ? TEXT.today : dayText(day, { weekday: 'short', month: 'short', ...(year ? { year: 'numeric' } : {}) }))),
+                h('div', { className: 'dshcal-ag-list' }, list.map((o) => h('button', {
+                    key: o.id, type: 'button', className: 'dshcal-ag-row', style: evStyle(o.color), 'data-look': lookOf(o), 'data-calendar-event': o.id,
+                    'data-past': o.end <= now ? '' : undefined, onClick: (event) => onOpen(o, event.currentTarget),
+                },
+                h('span', { className: 'dshcal-ag-time' }, h('span', { className: 'dshcal-dot' }), shortWhen(o, zone, day)),
+                h('span', { className: 'dshcal-ag-what' },
+                    h('span', { className: 'dshcal-ag-title' }, o.title),
+                    h('span', { className: 'dshcal-ag-sub' }, [o.location, o.calendar].filter(Boolean).join(' · ')))))));
+        }
+
         function AgendaList({ firstDay, lastDay, zone, occurrences, today, now, onOpen, onLater, loading }) {
             const groups = agendaDays(occurrences, firstDay, lastDay, zone);
             return h('div', { className: 'dshcal-ag', 'data-calendar-grid': 'agenda' },
                 groups.length === 0 && !loading ? h('div', { className: 'dshcal-state' }, `Nothing from ${dayText(firstDay, { month: 'short', day: 'numeric' })} to ${dayText(lastDay, { month: 'short', day: 'numeric', year: 'numeric' })}.`) : null,
-                groups.map(({ day, list }) => h('section', { key: day, className: 'dshcal-ag-day', 'aria-label': longDay(day, zone) },
-                    h('div', { className: 'dshcal-ag-date', 'data-today': day === today ? '' : undefined },
-                        h('b', null, Number(day.slice(8, 10))),
-                        h('span', null, day === today ? TEXT.today : dayText(day, { weekday: 'short', month: 'short' }))),
-                    h('div', { className: 'dshcal-ag-list' }, list.map((o) => h('button', {
-                        key: o.id, type: 'button', className: 'dshcal-ag-row', style: evStyle(o.color), 'data-look': lookOf(o), 'data-calendar-event': o.id,
-                        'data-past': o.end <= now ? '' : undefined, onClick: (event) => onOpen(o, event.currentTarget),
-                    },
-                    h('span', { className: 'dshcal-ag-time' }, h('span', { className: 'dshcal-dot' }), shortWhen(o, zone, day)),
-                    h('span', { className: 'dshcal-ag-what' },
-                        h('span', { className: 'dshcal-ag-title' }, o.title),
-                        h('span', { className: 'dshcal-ag-sub' }, [o.location, o.calendar].filter(Boolean).join(' · ')))))))),
+                groups.map((group) => agendaDay(group, { zone, today, now, onOpen })),
                 groups.length ? h('div', { className: 'dshcal-ag-foot' }, h(Btn, { onClick: onLater, 'data-calendar-later': '' }, 'Show later events')) : null);
+        }
+
+        // ── Search ─────────────────────────────────────────────────────────
+
+        /**
+         * What a search found, by the day each event starts, in the plugin's
+         * order: those still to come (soonest first), then the earlier ones
+         * (latest first). → {upcoming: [{day, list}], past: [{day, list}]}.
+         */
+        function searchGroups(occurrences, zone, now) {
+            const upcoming = [];
+            const past = [];
+            for (const o of occurrences ?? EMPTY) {
+                if (!isObject(o) || !Number.isFinite(o.start) || !Number.isFinite(o.end)) continue;
+                const into = o.end >= now ? upcoming : past;
+                const day = daysOf(o, zone)[0];
+                const last = into[into.length - 1];
+                if (last?.day === day) last.list.push(o);
+                else into.push({ day, list: [o] });
+            }
+            return { upcoming, past };
+        }
+
+        /**
+         * The events a search found, in the Agenda layout.
+         * @param found - {words, loading, data?: {occurrences, more}, dataWords, error}.
+         */
+        function SearchList({ found, zone, today, now, onOpen, onRetry }) {
+            const data = found?.data;
+            const list = data?.occurrences ?? EMPTY;
+            const { upcoming, past } = searchGroups(list, zone, now);
+            const options = { zone, today, now, onOpen };
+            let content;
+            if (found?.error) {
+                content = h('div', { className: 'dshcal-state', 'data-calendar-state': 'error' }, h('span', { className: 'dshcal-error' }, found.error), h(Btn, { onClick: onRetry }, TEXT.retry));
+            } else if (!data) {
+                content = h('div', { className: 'dshcal-state', role: 'status' }, h(Spinner), h('span', null, 'Searching…'));
+            } else if (list.length === 0) {
+                content = h('div', { className: 'dshcal-state', role: 'status' },
+                    h('span', null, `Nothing matches “${found.dataWords}”.`),
+                    h('span', { className: 'dshcal-hint' }, 'Search looks through the calendars shown, a year back and a year ahead.'));
+            } else {
+                content = h(React.Fragment, null,
+                    h('div', { className: 'dshcal-ag-part', role: 'status' }, data.more ? `The first ${list.length} found` : `${plural(list.length, 'event')} found`),
+                    upcoming.map((group) => agendaDay(group, options)),
+                    past.length ? h('div', { className: 'dshcal-ag-part' }, 'Earlier') : null,
+                    past.map((group) => agendaDay(group, options)),
+                    data.more ? h('div', { className: 'dshcal-ag-foot dshcal-hint' }, 'More match than are shown here: add a word to narrow it.') : null);
+            }
+            return h('div', { className: 'dshcal-ag', 'data-calendar-grid': 'search', role: 'region', 'aria-label': `Search for “${found?.words ?? ''}”` }, content);
         }
 
         // ── The side column ────────────────────────────────────────────────
 
-        /** A small month to jump to a day; the days on show are marked. */
+        /**
+         * A small month to jump to a day; the days on show are marked. One
+         * tab stop: arrow keys move between days (Home and End to the week's
+         * ends, Page Up and Page Down by month), Enter picks one.
+         */
         function MiniMonth({ anchor, today, weekStart, shown, onPick }) {
             const [month, setMonth] = React.useState(monthStart(anchor));
-            React.useEffect(() => setMonth(monthStart(anchor)), [anchor]);
+            const [focused, setFocused] = React.useState(anchor);
+            const gridRef = React.useRef(null);
+            const wantFocus = React.useRef(false);
+            React.useEffect(() => {
+                setMonth(monthStart(anchor));
+                setFocused(anchor);
+            }, [anchor]);
+            React.useEffect(() => {
+                if (!wantFocus.current) return;
+                wantFocus.current = false;
+                gridRef.current?.querySelector(`[data-calendar-mini-day="${focused}"]`)?.focus();
+            });
             const first = weekStartOf(month, weekStart);
             const days = Array.from({ length: 42 }, (_, i) => addDays(first, i));
+            const inMonth = (day) => day.slice(0, 7) === month.slice(0, 7);
+            const tabStop = inMonth(focused) ? focused : inMonth(today) ? today : month;
+            const onKey = (event, day) => {
+                if (event.altKey || event.ctrlKey || event.metaKey) return;
+                const into = (weekdayOf(day) - weekStart + 7) % 7;
+                const keys = {
+                    ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7, Home: -into, End: 6 - into,
+                };
+                let next;
+                if (event.key in keys) next = addDays(day, keys[event.key]);
+                else if (event.key === 'PageUp' || event.key === 'PageDown') next = addMonths(day, event.key === 'PageUp' ? -1 : 1);
+                if (!next) return;
+                event.preventDefault();
+                wantFocus.current = true;
+                setFocused(next);
+                if (!inMonth(next)) setMonth(monthStart(next));
+            };
             return h('div', { className: 'dshcal-mini', 'data-calendar-mini': '' },
                 h('div', { className: 'dshcal-mini-head' },
                     h('span', { className: 'dshcal-mini-title' }, dayText(month, { month: 'long', year: 'numeric' })),
                     h(IconBtn, { label: 'Previous month', glyph: icon('IconChevronLeftOutlineRegular'), size: 'sm', tip: false, onClick: () => setMonth(addMonths(month, -1)) }),
                     h(IconBtn, { label: 'Next month', glyph: icon('IconChevronRightOutlineRegular'), size: 'sm', tip: false, onClick: () => setMonth(addMonths(month, 1)) })),
-                h('div', { className: 'dshcal-mini-grid' },
+                h('div', { ref: gridRef, className: 'dshcal-mini-grid' },
                     days.slice(0, 7).map((day) => h('span', { key: `wd-${day}`, className: 'dshcal-mini-wd', 'aria-hidden': true }, dayText(day, { weekday: 'narrow' }))),
                     days.map((day) => h('button', {
                         key: day, type: 'button', className: 'dshcal-mini-day', 'aria-label': longDay(day, 'UTC'), 'aria-current': day === today ? 'date' : undefined,
-                        'data-out': day.slice(0, 7) !== month.slice(0, 7) ? '' : undefined, 'data-today': day === today ? '' : undefined, 'data-in-range': shown.has(day) && day !== today ? '' : undefined,
+                        tabIndex: day === tabStop ? 0 : -1, 'data-calendar-mini-day': day,
+                        'data-out': inMonth(day) ? undefined : '', 'data-today': day === today ? '' : undefined, 'data-in-range': shown.has(day) && day !== today ? '' : undefined,
+                        onFocus: () => setFocused(day),
+                        onKeyDown: (event) => onKey(event, day),
                         onClick: () => onPick(day),
                     }, Number(day.slice(8, 10))))));
         }
@@ -2954,7 +3854,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     store.toast('That file is too big for a calendar (over 20 MB).', 'error');
                     return;
                 }
-                const text = await file.text();
+                let text;
+                try {
+                    text = await file.text();
+                } catch (error) {
+                    store.toast(`The file couldn't be read: ${error?.message ?? error}`, 'error');
+                    return;
+                }
                 const result = await store.act('importIcs', { calendarId: id, ics: text });
                 if (result.ok) store.toast(`Added ${plural(result.value.added ?? 0, 'event')}${result.value.skipped ? `, ${result.value.skipped} already there` : ''}.`);
                 else store.toast(errorText(result.error), 'error');
@@ -3109,7 +4015,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 setBusy(true);
                 setError('');
                 const result = await store.link.call('startSignIn', { kind, accountId: accountId ?? '', ...(method ? { method } : {}) });
-                if (!alive.current) return;
+                if (!alive.current) {
+                    // The dialog closed while it started: nobody waits for it now.
+                    if (result.ok && result.value?.status === 'waiting' && typeof result.value.flow === 'string') void store.link.call('cancelSignIn', { flow: result.value.flow });
+                    return;
+                }
                 setBusy(false);
                 if (!result.ok) {
                     setError(errorText(result.error));
@@ -3214,8 +4124,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 h('ol', { className: 'dshcal-steps' },
                     h('li', null, 'In ', outLink('https://console.cloud.google.com/projectcreate', 'Google Cloud Console'), ', create a project, or pick one.'),
                     h('li', null, 'Turn on the ', outLink('https://console.cloud.google.com/apis/library/calendar-json.googleapis.com', 'Google Calendar API'), ' for it.'),
-                    h('li', null, 'Set up its ', outLink('https://console.cloud.google.com/apis/credentials/consent', 'OAuth consent screen'), ': External, with your Google address as a test user.'),
+                    h('li', null, 'Set up its ', outLink('https://console.cloud.google.com/apis/credentials/consent', 'OAuth consent screen'), ': ', h('b', null, 'External'),
+                        '. With a Google Workspace account you can pick ', h('b', null, 'Internal'), ' instead, for your organization only, and skip the next step.'),
+                    h('li', null, 'Under Audience, ', h('b', null, 'Publish app'), ', so it is In production. An app left in Testing has Google end its sign-ins after 7 days.'),
                     h('li', null, 'Under ', outLink('https://console.cloud.google.com/apis/credentials', 'Credentials'), ', Create credentials → OAuth client ID, of type ', h('b', null, 'Desktop app'), '. Copy its client ID and client secret here.')),
+                h('p', { className: 'dshcal-hint', style: { margin: 0 }, 'data-calendar-google-unverified': '' },
+                    'Signing in, Google first says it hasn\'t verified the app. It\'s your own: choose ', h('b', null, 'Advanced'), ', then ', h('b', null, 'Go to'), ' your app\'s name.'),
                 h(Field, { label: 'Client ID', id: 'dshcal-google-id' },
                     h('input', { id: 'dshcal-google-id', className: 'dshcal-input', value: clientId, placeholder: '….apps.googleusercontent.com', spellCheck: false, autoComplete: 'off', 'data-modal-autofocus': true, 'data-calendar-google-id': '', onChange: (e) => setClientId(e.target.value) })),
                 h(Field, { label: 'Client secret', id: 'dshcal-google-secret', hint: 'Kept in DSH\'s credential store, not in the plugin\'s files.' },
@@ -3256,6 +4170,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         '. Exactly that, with no port: Microsoft lets the sign-in come back to any port on localhost.'),
                     h('li', null, 'Under API permissions, add the Microsoft Graph delegated permissions ', code('Calendars.ReadWrite'), ', ', code('User.Read'), ' and ', code('offline_access'), '.'),
                     h('li', null, 'Copy its Application (client) ID here.')),
+                h('p', { className: 'dshcal-hint', style: { margin: 0 }, 'data-calendar-microsoft-admin-note': '' },
+                    'A work or school account whose organization has an admin approve apps: the admin grants these permissions once, with ', h('b', null, 'Grant admin consent'), ' under API permissions.'),
                 h('p', { className: 'dshcal-hint', style: { margin: 0 }, 'data-calendar-microsoft-code-note': '' },
                     'Only to sign in with a code (from another device), also turn on ', h('b', null, 'Allow public client flows'), ' under Authentication. The sign-in in the browser doesn\'t need it.'),
                 h(Field, { label: 'Application (client) ID', id: 'dshcal-ms-id' },
@@ -3292,22 +4208,28 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function MicrosoftSignIn({ store, accountId, onDone, onSetup, slot }) {
             const signIn = useSignIn(store, 'microsoft', accountId);
             const [method, setMethod] = React.useState('browser');
-            const [copied, setCopied] = React.useState(false);
+            // 'done' after the code is copied, 'failed' when the browser wouldn't copy it.
+            const [copied, setCopied] = React.useState('');
             const flow = signIn.flow;
+            const failedText = flow?.status === 'failed' ? String(flow.error || '') : '';
+            // Microsoft's words when an organization has its admin approve apps (AADSTS65001, 90094 and the like).
+            const needsAdmin = /AADSTS(65001|90094|900941|90099)|admin(istrator)?('s)? (consent|approval)|approval required/i.test(`${failedText} ${signIn.error}`);
             const withCode = method === 'code';
             const waiting = flow?.status === 'waiting';
             React.useEffect(() => { if (flow?.status === 'done') onDone(flow.account); }, [flow?.status]);
             const begin = (next) => {
                 setMethod(next);
-                setCopied(false);
+                setCopied('');
                 void signIn.start(next === 'code' ? 'code' : '');
             };
             const copy = async () => {
                 try {
                     await navigator.clipboard.writeText(flow.userCode);
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 2000);
-                } catch {}
+                    setCopied('done');
+                    setTimeout(() => setCopied((c) => (c === 'done' ? '' : c)), 2000);
+                } catch {
+                    setCopied('failed');
+                }
             };
             return h('div', { className: 'dshcal-form', 'data-calendar-microsoft-signin': method },
                 !flow ? h('p', { className: 'dshcal-hint', style: { margin: 0 } }, withCode
@@ -3316,7 +4238,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 waiting && flow.userCode ? h(React.Fragment, null,
                     h('div', { className: 'dshcal-usercode' },
                         h('b', { 'data-calendar-user-code': '' }, flow.userCode),
-                        h(Btn, { size: 'sm', onClick: () => void copy() }, icon(copied ? 'IconCheckOutlineRegular' : 'IconCopyOutlineRegular'), copied ? 'Copied' : 'Copy')),
+                        h(Btn, { size: 'sm', onClick: () => void copy() }, icon(copied === 'done' ? 'IconCheckOutlineRegular' : 'IconCopyOutlineRegular'), copied === 'done' ? 'Copied' : 'Copy')),
+                    copied === 'failed' ? h('p', { className: 'dshcal-hint', role: 'status', style: { margin: 0 }, 'data-calendar-copy-failed': '' }, 'This browser wouldn\'t copy it: select the code and copy it yourself.') : null,
                     isUrl(flow.verificationUri) ? h('div', { className: 'dshcal-inline' },
                         h('span', null, 'Enter it at'),
                         h('a', { className: 'dshcal-btn dshcal-btn-primary dshcal-btn-sm', href: flow.verificationUri, target: '_blank', rel: 'noopener noreferrer', 'data-calendar-verification': '' }, linkLabel(flow.verificationUri), icon('IconRightUpOutlineRegular', { size: 12 }))) : null,
@@ -3324,6 +4247,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 waiting && !flow.userCode ? h(SignInWait, { key: flow.flow, who: 'Microsoft', prefix: 'microsoft', flow, busy: signIn.busy, onFinish: signIn.finish, fallback: 'http://localhost' }) : null,
                 flow?.status === 'failed' ? h(Alert, { text: flow.error || 'The sign-in didn\'t finish.' }) : null,
                 h(Alert, { text: signIn.error }),
+                needsAdmin ? h('p', { className: 'dshcal-hint', style: { margin: 0 }, 'data-calendar-microsoft-admin': '' },
+                    'Your organization has an admin approve apps. Ask them to grant this app\'s permissions (Grant admin consent, under API permissions in its app registration), then sign in again.') : null,
                 h('div', { className: 'dshcal-inline', style: { gap: 16 } },
                     withCode
                         ? h('button', { type: 'button', className: 'dshcal-link', style: smallLink, disabled: signIn.busy, onClick: () => begin('browser'), 'data-calendar-microsoft-browser': '' }, 'Sign in on Microsoft\'s page instead')
@@ -3586,7 +4511,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 body = h('div', { className: 'dshcal-state' }, store.stateError() ? h('span', { className: 'dshcal-error' }, store.stateError()) : h(Spinner));
             } else if (page.page === 'list') {
                 body = h('div', { className: 'dshcal-form' },
-                    removed ? h('div', { key: removed.key, className: 'dshcal-note', role: 'status', 'data-calendar-removed': '' },
+                    removed ? h('div', { key: removed.key, className: 'dshcal-notice', role: 'status', 'data-calendar-removed': '' },
                         icon('IconInfoOutlineRegular'),
                         h('span', null, removed.text, ' ', outLink(removed.manageUrl, linkLabel(removed.manageUrl)), '.'),
                         h(IconBtn, { label: 'Close this notice', glyph: icon('IconCloseOutlineRegular', { size: 12 }), size: 'sm', onClick: () => setRemoved(null) })) : null,
@@ -3731,18 +4656,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const tellFor = (scope) => {
                 const mail = mailMode({ kind: 'delete', calendar, occurrence: o, guests: guests.length, scope });
                 if (mail.mode !== 'ask') return null;
-                const label = mail.to === 'organizer' ? `Tell ${organizer} you won't be there`
-                    : guests.length === 1 ? `Tell ${guests[0].name || guests[0].email} by email` : `Tell the ${guests.length} guests by email`;
-                return { label };
+                const label = mail.to === 'organizer' ? `Tell ${organizer} you won't be there` : `Tell ${peopleText(guests.map((g) => g.name || g.email))} by email`;
+                // Google takes a meeting off its guests' calendars by itself: unticked, deleting it still reaches them.
+                const quiet = calendar?.kind === 'google' && mail.to === 'guests' ? 'Unticked, Google still removes it from the guests\' Google calendars, without an email.' : '';
+                return { label, quiet };
             };
             const run = async (scope, tellThem) => {
-                const result = await withConsent(sending.ask, 'Don\'t delete it', (notify) => store.act('deleteEvent', { id: o.id, scope, notify: notify || tellThem === true }));
+                const result = await withConsent(sending.ask, 'delete', (how) => store.act('deleteEvent', { id: o.id, scope, ...asked(tellThem, how) }));
+                // The event changed on its server meanwhile and nothing was done: the page reads it again.
+                if (!result.ok && result.error?.code === 'calendar/changed') void store.refresh();
                 if (result.kept) return '';
                 if (!result.ok) return errorText(result.error);
                 const day = o.allDay ? o.startDay : dayIn(o.start, store.zone());
                 const done = scope === 'one' ? `Deleted “${o.title}” on ${dayText(day)}.` : scope === 'following' ? `Deleted “${o.title}” from ${dayText(day)} on.` : `Deleted “${o.title}”.`;
-                const emailed = emailedText(result.value?.emailed);
-                store.toast(emailed ? `${done} ${emailed}` : done);
+                const told = contactText(result.value);
+                store.toast(told ? `${done} ${told}` : done);
                 return '';
             };
             if (o.recurring) {
@@ -3759,12 +4687,48 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     onSubmit: () => run('all', tell), onClose,
                 }, box ? h('div', { className: 'dshcal-tell' },
                     h('label', { className: 'dshcal-check' },
-                        h('input', { type: 'checkbox', checked: tell, onChange: (event) => setTell(event.target.checked), 'data-calendar-notify': '' }), box.label)) : null),
+                        h('input', { type: 'checkbox', checked: tell, onChange: (event) => setTell(event.target.checked), 'data-calendar-notify': '' }), box.label),
+                    box.quiet && !tell ? h('div', { className: 'dshcal-hint', 'data-calendar-mail': 'reach' }, box.quiet) : null) : null),
                 sending.dialog);
+        }
+
+        /**
+         * Before an event dragged to new times is saved, when there's
+         * something to ask: which occurrences of a repeating event move, and
+         * whether its guests are told, where their server tells them only when
+         * asked (Google).
+         * @param onSubmit - (scope, tell) → '' once saved (or kept as it was), else what went wrong.
+         */
+        function MoveEventDialog({ cal, occurrence, times, scopes, onSubmit, onClose }) {
+            const store = cal.store;
+            const o = occurrence;
+            const [told, setTell] = React.useState(false);
+            const calendar = store.calendar(o.calendarId);
+            const guests = othersOf(o.attendees);
+            const title = `Move “${o.title}”?`;
+            const to = `To ${whenText(placedAt(o, times), store.zone())}.`;
+            const tellFor = (scope) => {
+                if (mailMode({ kind: 'update', calendar, occurrence: o, guests: guests.length, scope }).mode !== 'ask') return null;
+                const invites = calendar?.kind === 'caldav' && roleOf(o) === 'own';
+                return {
+                    label: invites ? 'Send invitations by email' : `Tell ${peopleText(guests.map((g) => g.name || g.email))} by email`,
+                    hint: calendar?.kind === 'google' ? 'Unticked, Google still shows the new time on their Google calendars, without an email.' : undefined,
+                };
+            };
+            if (scopes.length > 1) return h(ScopeDialog, { title, scopes, note: to, action: 'Move', tellFor, onSubmit, onClose });
+            const box = tellFor(scopes[0]);
+            const tell = box !== null && told;
+            return h(ConfirmDialog, { title, text: to, action: 'Move', danger: false, onSubmit: () => onSubmit(scopes[0], tell), onClose },
+                box ? h('div', { className: 'dshcal-tell' },
+                    h('label', { className: 'dshcal-check' },
+                        h('input', { type: 'checkbox', checked: tell, onChange: (event) => setTell(event.target.checked), 'data-calendar-notify': '' }), box.label),
+                    box.hint ? h('div', { className: 'dshcal-hint' }, box.hint) : null) : null);
         }
 
         /** Notices about files set aside that the user closed, for as long as this window is open. */
         const closedIssues = new Set();
+        /** The user's choice for the side column beside a page wide enough for it ('shown', 'folded'), for as long as this window is open. */
+        let sideChoice = '';
 
         /**
          * Files the plugin couldn't read when DSH started (state().storeIssue,
@@ -3813,11 +4777,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * The Calendar page: the header (Today, back and on, the range, the
-         * views, New event), the side column (a small month, the calendars,
-         * Accounts) and the view, with an event's details over it and the
-         * dialogs. Keys where nothing else takes them: T today, J/N on, K/P
-         * back, M/W/D/A the views, C a new event.
+         * The Calendar page: the header (the side column's button, Today, back
+         * and on, the range, search, the views, New event), the side column (a
+         * small month, the calendars, Accounts; beside the view on a roomy
+         * page, folded behind its button on a narrower one) and the view, with
+         * an event's details over it and the dialogs. Keys while the focus is
+         * in the page and nothing else takes them: T today, J/N on, K/P back,
+         * M/W/D/A the views, C a new event, / search.
          */
         function CalendarPage({ cal }) {
             const store = cal.store;
@@ -3826,6 +4792,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const state = store.state();
             const zone = store.zone();
             const rootRef = React.useRef(null);
+            const sideRef = React.useRef(null);
+            const searchRef = React.useRef(null);
             const width = useWidth(rootRef);
             const compact = width > 0 && width < 560;
             const now = useNow(30_000);
@@ -3836,10 +4804,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [pop, setPop] = React.useState(null);
             const [dialog, setDialog] = React.useState(null);
             const [sideOpen, setSideOpen] = React.useState(false);
+            const [sideWanted, setSideWanted] = React.useState(sideChoice);
             const [settings, setSettings] = React.useState(false);
             const [syncBusy, setSyncBusy] = React.useState(false);
             const [scrollTo, setScrollTo] = React.useState(null);
             const [focusDay, setFocusDay] = React.useState('');
+            const [query, setQuery] = React.useState('');
+            const [found, setFound] = React.useState(null);
+            const [searchTry, setSearchTry] = React.useState(0);
+            // An event dragged to new times: {key, id, t, saved, data}, shown there until the events read after it was saved arrive.
+            const [pending, setPending] = React.useState(null);
+            const [dragging, setDragging] = React.useState('');
+            const drops = useSendQuestion();
             const shown = React.useRef(EMPTY);
             const pressClosed = React.useRef(-Infinity);
             const zoneRef = React.useRef(zone);
@@ -3859,13 +4835,60 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const entry = state ? store.events(range.from, range.to) : null;
             // While another span loads, the last one read stays (each view shows only its own days of it).
             if (entry?.data) shown.current = entry.data.occurrences;
-            const occurrences = entry?.data ? entry.data.occurrences : shown.current;
+            const read = entry?.data ? entry.data.occurrences : shown.current;
+            const occurrences = React.useMemo(() => (pending ? read.map((o) => (o.id === pending.id ? placedAt(o, pending.t) : o)) : read), [read, pending]);
             const loading = state !== undefined && entry !== null && (entry.loading || !entry.data);
+            // A read again that failed, over what was read before: the events', or state's.
+            const stale = state ? (entry?.data && entry.error ? entry.error : store.stateError()) : '';
+            const dataNow = entry?.data;
+            const dataRef = React.useRef(dataNow);
+            dataRef.current = dataNow;
+            React.useEffect(() => {
+                if (!pending?.saved) return undefined;
+                if (dataNow !== pending.data) {
+                    setPending(null);
+                    return undefined;
+                }
+                const timer = setTimeout(() => setPending((p) => (p === pending ? null : p)), 8000);
+                return () => clearTimeout(timer);
+            }, [pending, dataNow]);
+            // The side column: beside the view where the page is roomy (or the user asked for it), folded behind its
+            // button where it isn't (or the user folded it), and over the view while open on a narrow page.
+            const narrow = width > 0 && width < 800;
+            const folded = narrow || (sideWanted ? sideWanted === 'folded' : width < 1100);
+            const overlay = narrow && sideOpen;
+            const sideShows = !folded || overlay;
+            // Where the focus goes once the side column opens ('in') or closes ('out').
+            const sideFocus = React.useRef('');
+            React.useEffect(() => {
+                const want = sideFocus.current;
+                if (!want) return;
+                sideFocus.current = '';
+                const active = document.activeElement;
+                if (want === 'in') sideRef.current?.querySelector('button:not([disabled]),[href],input,[tabindex="0"]')?.focus();
+                else if (!active || active === document.body || sideRef.current?.contains(active)) rootRef.current?.querySelector('[data-calendar-side-toggle]')?.focus();
+            });
+            const toggleSide = () => {
+                sideFocus.current = sideShows ? 'out' : 'in';
+                if (narrow) {
+                    setSideOpen(!sideOpen);
+                    return;
+                }
+                sideChoice = folded ? 'shown' : 'folded';
+                setSideWanted(sideChoice);
+            };
+            const closeOverlay = () => {
+                if (!overlay) return;
+                sideFocus.current = 'out';
+                setSideOpen(false);
+            };
             const accounts = state?.accounts ?? EMPTY;
             const attention = accounts.filter((a) => a.status === 'signin' || a.status === 'error');
             const remote = accounts.some((a) => a.kind !== 'local');
             const [, setClosed] = React.useState(0);
             const issues = storeIssues(state).filter((i) => !closedIssues.has(i.key));
+            // What a change did in part, and what is left to do (a move that stopped halfway): until the user closes it.
+            const kept = store.notices();
             const shownDays = React.useMemo(() => new Set(range.days), [range.first, range.last]);
 
             const closePop = (reason) => {
@@ -3874,17 +4897,24 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 setPop(null);
             };
             const justClosed = () => performance.now() - pressClosed.current < 700;
+            // Going to a day or a view ends a search.
             const go = (day) => {
                 setPop(null);
+                setQuery('');
                 setAnchor(day);
                 setFocusDay(day);
             };
             const setView = (next) => {
                 if (!VIEWS.includes(next)) return;
                 setPop(null);
+                setQuery('');
                 setViewChoice(next);
                 setAgendaSpan(AGENDA_DAYS);
-                if (next !== prefsView) void store.link.call('setPrefs', { patch: { view: next } });
+                if (next !== prefsView) {
+                    void store.link.call('setPrefs', { patch: { view: next } }).then((r) => {
+                        if (!r.ok) store.toast(`The view couldn't be kept for next time: ${errorText(r.error)}`, 'error');
+                    });
+                }
             };
             const step = (by) => {
                 setAgendaSpan(AGENDA_DAYS);
@@ -3913,15 +4943,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const openDay = (day, el) => setPop({ kind: 'day', day, anchor: rectOf(el) });
             const closeDialog = () => setDialog(null);
             const saved = (o, words) => {
-                if (!isObject(o)) {
-                    store.toast(words === 'Added' ? 'Added.' : 'Saved.');
+                const told = isObject(o) ? contactText(o) : '';
+                // The host's answer without the event itself (a move it lost sight of): what it did, without going there.
+                if (!placed(o)) {
+                    store.toast(`${words === 'Added' ? 'Added.' : 'Saved.'}${told ? ` ${told}` : ''}`);
                     return;
                 }
                 const day = o.allDay ? o.startDay : dayIn(o.start, zone);
-                const emailed = emailedText(o.emailed);
                 store.toast(`${words === 'Added'
                     ? `Added “${o.title}” on ${dayText(day)}${o.allDay ? '' : ` at ${timeText(o.start, zone)}`}.`
-                    : 'Saved.'}${emailed ? ` ${emailed}` : ''}`);
+                    : 'Saved.'}${told ? ` ${told}` : ''}`);
                 if (isDay(day) && !range.days.includes(day)) go(day);
             };
             const syncNow = async () => {
@@ -3930,6 +4961,67 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (!alive.current) return;
                 setSyncBusy(false);
                 if (!result.ok) store.toast(errorText(result.error), 'error');
+            };
+
+            // An event dragged (or moved with Alt and an arrow key) to new times: it shows there at once; a repeating
+            // one asks which occurrences move, a meeting whose guests are told only when asked asks whether to tell
+            // them, and one the host says would email people asks first (withConsent).
+            const movable = (o) => canDrag(o, store.calendar(o.calendarId));
+            const saveDrop = async ({ o, t, patch, key }, scope, tell) => {
+                const result = await withConsent(drops.ask, 'Don\'t move it', (given) => store.act('updateEvent', {
+                    id: o.id, patch: { ...patch, ...(tell ? { notify: true } : {}), ...consentArgs(given) }, scope,
+                }));
+                if (!result.ok) {
+                    setPending((p) => (p?.key === key ? null : p));
+                    return result.kept ? '' : errorText(result.error);
+                }
+                setPending((p) => (p?.key === key ? { ...p, saved: true, data: dataRef.current } : p));
+                const words = movedWords(result.value?.occurrence);
+                store.toast(`Moved “${o.title}” to ${whenText(placedAt(o, t), zoneRef.current)}.${words ? ` ${words}` : ''}`);
+                return '';
+            };
+            const dropTo = (o, t) => {
+                const patch = dropPatch(o, t);
+                if (!patch) return;
+                setPop(null);
+                const drop = { o, t, patch, key: `${o.id}@${Date.now()}` };
+                setPending({ key: drop.key, id: o.id, t, saved: false });
+                const scopes = o.recurring ? (Array.isArray(o.scopes) && o.scopes.length ? o.scopes : ['one', 'following', 'all']) : ['all'];
+                const mail = mailMode({ kind: 'update', calendar: store.calendar(o.calendarId), occurrence: o, guests: othersOf(o.attendees).length, scope: scopes[0] });
+                if (scopes.length > 1 || mail.mode === 'ask') {
+                    setDialog({ kind: 'move', drop, scopes });
+                    return;
+                }
+                void saveDrop(drop, scopes[0], false).then((problem) => {
+                    if (problem) store.toast(problem, 'error');
+                });
+            };
+
+            // Search: what's typed, and what the plugin found for it, read again whenever the calendars change.
+            const words = query.trim();
+            const searchSeq = React.useRef(0);
+            React.useEffect(() => {
+                const seq = ++searchSeq.current;
+                if (!words) {
+                    setFound(null);
+                    return undefined;
+                }
+                setFound((was) => ({ words, loading: true, data: was?.data, dataWords: was?.dataWords, error: '' }));
+                const timer = setTimeout(() => {
+                    void store.link.call('search', { query: words }).then((result) => {
+                        if (!alive.current || seq !== searchSeq.current) return;
+                        if (result.ok && isObject(result.value) && Array.isArray(result.value.occurrences)) {
+                            setFound({ words, loading: false, data: result.value, dataWords: words, error: '' });
+                        } else {
+                            setFound({ words, loading: false, data: undefined, dataWords: words, error: errorText(result.error) });
+                        }
+                    });
+                }, 250);
+                return () => clearTimeout(timer);
+            }, [words, searchTry, state?.version]);
+            const focusSearch = () => {
+                searchRef.current?.focus();
+                searchRef.current?.select();
             };
 
             // An event asked for from elsewhere (the Agenda pane, a chat card): its day, then its details.
@@ -3943,9 +5035,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     setFocusDay(day);
                     return;
                 }
-                if (!entry?.data) return;
+                // As it is now: after the events are read again (a change elsewhere, or one the host stopped).
+                if (!entry?.data || entry.loading || entry.stale) return;
                 const found = entry.data.occurrences.find((o) => o.id === target.id);
-                if (!found && (entry.loading || entry.stale)) return;
                 store.clearTarget(target.seq);
                 if (!target.allDay && Number.isFinite(target.start)) setScrollTo({ minutes: minutesIn(target.start, zone) });
                 const show = (o) => requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -3962,12 +5054,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }
             }, [target?.seq, state !== undefined, range.from, range.to, entry?.data, entry?.loading]);
 
-            // Keys, while the page shows and nothing else takes them.
+            // Keys, while the focus is in the page and nothing else takes them (one letter alone does nothing elsewhere).
             const keys = React.useRef({});
             keys.current = {
                 t: goToday, j: () => step(1), n: () => step(1), k: () => step(-1), p: () => step(-1),
                 m: () => setView('month'), w: () => setView('week'), d: () => setView('day'), a: () => setView('agenda'),
-                c: () => newEvent(),
+                c: () => newEvent(), '/': focusSearch,
             };
             React.useEffect(() => {
                 const onKey = (event) => {
@@ -3975,7 +5067,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     const root = rootRef.current;
                     if (!root || root.getClientRects().length === 0) return;
                     const active = document.activeElement;
-                    if (active && active !== document.body && !root.contains(active)) return;
+                    if (!active || !root.contains(active)) return;
                     if (active?.closest?.('input,textarea,select,[contenteditable]:not([contenteditable=false]),[role=menu],[role=listbox]')) return;
                     if (document.querySelector('[role=dialog][aria-modal=true]')) return;
                     const run = keys.current[String(event.key).toLowerCase()];
@@ -3988,18 +5080,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, []);
 
             const labels = { ...TEXT.views, week: compact ? '3 days' : TEXT.views.week };
+            const drags = { movable, onDrop: dropTo, onDragging: setDragging };
             let body;
             if (!state) {
                 body = h('div', { className: 'dshcal-state', 'data-calendar-state': store.stateError() ? 'error' : 'loading' },
                     store.stateError()
                         ? h(React.Fragment, null, h('span', { className: 'dshcal-error' }, store.stateError()), h(Btn, { onClick: () => void store.refresh() }, TEXT.retry))
                         : h(React.Fragment, null, h(Spinner), h('span', null, 'Loading your calendars…')));
+            } else if (words) {
+                body = h(SearchList, { found, zone, today, now, onOpen: openEvent, onRetry: () => setSearchTry((n) => n + 1) });
             } else if (entry?.error && !entry.data) {
                 body = h('div', { className: 'dshcal-state', 'data-calendar-state': 'error' },
                     h('span', { className: 'dshcal-error' }, entry.error), h(Btn, { onClick: () => void store.refresh() }, TEXT.retry));
             } else if (view === 'month') {
                 body = h(MonthView, {
-                    days: range.days, month: anchor.slice(0, 7), zone, occurrences, today, now, focusDay,
+                    days: range.days, month: anchor.slice(0, 7), zone, occurrences, today, now, focusDay, ...drags,
                     onOpen: openEvent, onMore: openDay,
                     onCreateDay: (day) => { if (!justClosed()) newEvent({ startDay: day, endDay: day, allDay: true }); },
                     onDay: (day) => { go(day); setView('day'); },
@@ -4012,20 +5107,24 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 });
             } else {
                 body = h(TimeGrid, {
-                    days: range.days, zone, occurrences, now, today, scrollTo,
+                    days: range.days, zone, occurrences, now, today, scrollTo, ready: Boolean(entry?.data), ...drags,
                     onOpen: openEvent, onCreate: createAt, onMore: openDay,
                     onDay: (day) => { go(day); setView('day'); },
                 });
             }
 
             const weekChoice = Number.isInteger(state?.prefs?.weekStart) ? `ws:${state.prefs.weekStart}` : 'ws:auto';
-            const side = h('aside', { className: 'dshcal-side dshcal-glass', 'aria-label': 'Calendars', 'data-calendar-side': '' },
+            const side = h('aside', { ref: sideRef, id: 'dshcal-side', className: 'dshcal-side dshcal-glass', 'aria-label': 'Calendars', 'data-calendar-side': '' },
                 h(Btn, { kind: 'primary', onClick: () => newEvent(), 'data-calendar-side-new': '', style: { alignSelf: 'stretch' } }, icon('IconPlusOutlineRegular'), 'New event'),
-                h(MiniMonth, { anchor, today, weekStart, shown: shownDays, onPick: (day) => { go(day); setSideOpen(false); } }),
+                h(MiniMonth, { anchor, today, weekStart, shown: shownDays, onPick: (day) => { go(day); closeOverlay(); } }),
                 state && !remote ? h('div', { className: 'dshcal-note', 'data-calendar-onboarding': '' },
                     h('span', null, 'Add iCloud, Google, Microsoft 365, Fastmail or any CalDAV account to see its calendars here.',
                         h('br'), h('button', { type: 'button', className: 'dshcal-link', onClick: () => setDialog({ kind: 'accounts', start: { page: 'add' } }) }, 'Add an account'))) : null,
                 h(CalendarList, { cal, onDialog: (next) => { setSideOpen(false); setDialog(next); } }),
+                // Set in the profile's settings file only, so it is said here, with no button to change it.
+                state?.askBeforeEmails === false ? h('div', { className: 'dshcal-note', 'data-calendar-ask-off': '' },
+                    icon('IconInfoOutlineRegular', { size: 12 }),
+                    h('span', null, 'Chats can email your guests without asking you first: “Ask before emails” is off in the calendar plugin\'s settings (askBeforeEmails, in this profile\'s cordis.patch.yml).')) : null,
                 h('div', { className: 'dshcal-side-foot' },
                     h('div', { className: 'dshcal-inline', style: { flexWrap: 'nowrap', gap: 4 } },
                         h(Btn, { kind: 'ghost', style: { flex: 1, justifyContent: 'flex-start' }, onClick: () => setDialog({ kind: 'accounts' }), 'data-calendar-accounts-open': '' },
@@ -4049,14 +5148,36 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             anchor: h(Btn, { kind: 'ghost', iconOnly: true, 'aria-label': 'Calendar settings', 'aria-haspopup': 'menu', 'aria-expanded': settings, 'data-calendar-settings': '', onClick: () => setSettings(!settings) }, icon('IconSettingsOutlineRegular')),
                         }))));
 
+            const search = h('div', { className: 'dshcal-search', role: 'search' },
+                icon('IconSearchOutlineRegular'),
+                h('input', {
+                    ref: searchRef, type: 'search', className: 'dshcal-input', value: query, placeholder: 'Search', 'aria-label': 'Search events', title: 'Search events (/)',
+                    autoComplete: 'off', spellCheck: false, enterKeyHint: 'search', 'data-calendar-search': '',
+                    onChange: (event) => setQuery(event.target.value),
+                    onKeyDown: (event) => {
+                        if (event.key !== 'Escape' || query === '' || pop) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setQuery('');
+                    },
+                }),
+                query ? h('button', {
+                    type: 'button', className: 'dshcal-search-clear', 'aria-label': 'Clear the search', 'data-calendar-search-clear': '',
+                    onClick: () => { setQuery(''); searchRef.current?.focus(); },
+                }, icon('IconCloseOutlineRegular', { size: 12 })) : null);
+
             const header = h('div', { className: 'dshcal-head' },
                 h('div', { className: 'dshcal-head-nav' },
-                    h(IconBtn, { label: 'Show the calendars', className: 'dshcal-side-toggle', glyph: icon('IconPanelLeftOutlineRegular'), 'aria-expanded': sideOpen, onClick: () => setSideOpen(!sideOpen), 'data-calendar-side-toggle': '' }),
+                    h(IconBtn, {
+                        label: sideShows ? 'Hide the calendars' : 'Show the calendars', className: 'dshcal-side-toggle', glyph: icon('IconPanelLeftOutlineRegular'),
+                        'aria-expanded': sideShows, 'aria-controls': 'dshcal-side', onClick: toggleSide, 'data-calendar-side-toggle': '',
+                    }),
                     h(Btn, { onClick: goToday, 'data-calendar-today': '', title: 'Today (T)' }, TEXT.today),
                     h(IconBtn, { label: TEXT.previous[view], glyph: icon('IconChevronLeftOutlineRegular'), onClick: () => step(-1), 'data-calendar-prev': '' }),
                     h(IconBtn, { label: TEXT.next[view], glyph: icon('IconChevronRightOutlineRegular'), onClick: () => step(1), 'data-calendar-next': '' }),
                     h('h1', { className: 'dshcal-title', 'aria-live': 'polite', 'data-calendar-range': '' }, range.title)),
                 h('div', { className: 'dshcal-head-tools' },
+                    search,
                     attention.length ? h(IconBtn, {
                         label: attention.length === 1 ? `${attention[0].name}: ${attention[0].problem || (attention[0].status === 'signin' ? 'sign-in needed' : 'the last sync failed')}` : `${plural(attention.length, 'account')} need attention`,
                         className: 'dshcal-warn', glyph: icon('IconWarningOutlineRegular'), onClick: () => setDialog({ kind: 'accounts' }), 'data-calendar-attention': '',
@@ -4069,30 +5190,53 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h(Btn, { kind: 'primary', className: 'dshcal-head-new', onClick: () => newEvent(), 'aria-label': 'New event', title: 'New event (C)', 'data-calendar-new': '' },
                         icon('IconPlusOutlineRegular'), h('span', { className: 'dshcal-hide-narrow' }, 'New event'))));
 
+            const busy = words ? found?.loading === true : loading;
             return h('div', {
-                ref: rootRef, className: 'dshcal-root', 'data-calendar-page': '', 'data-calendar-view-now': view, 'data-side-open': sideOpen ? '' : undefined,
-                onKeyDown: (event) => { if (event.key === 'Escape' && sideOpen) { event.stopPropagation(); setSideOpen(false); } },
+                ref: rootRef, className: 'dshcal-root', tabIndex: -1, 'data-calendar-page': '', 'data-calendar-view-now': view,
+                'data-side-folded': folded ? '' : undefined, 'data-side-open': overlay ? '' : undefined, 'data-calendar-dragging': dragging || undefined,
+                onKeyDown: (event) => {
+                    // An event's or a day's details open take Escape first (they close on it).
+                    if (event.key !== 'Escape' || event.defaultPrevented || pop || !rootRef.current?.contains(event.target)) return;
+                    if (overlay) {
+                        event.stopPropagation();
+                        closeOverlay();
+                    } else if (words) {
+                        event.stopPropagation();
+                        setQuery('');
+                    }
+                },
             },
             side,
-            sideOpen ? h('button', { type: 'button', className: 'dshcal-scrim', tabIndex: -1, 'aria-label': 'Hide the calendars', onClick: () => setSideOpen(false) }) : null,
-            h('section', { className: 'dshcal-main dshcal-glass', 'aria-label': range.title, 'data-calendar-main': '' },
+            overlay ? h('button', { type: 'button', className: 'dshcal-scrim', tabIndex: -1, 'aria-label': 'Hide the calendars', onClick: closeOverlay }) : null,
+            h('section', { className: 'dshcal-main dshcal-glass', 'aria-label': words ? 'Search' : range.title, 'data-calendar-main': '' },
                 header,
-                issues.length ? h('div', { className: 'dshcal-notes' }, issues.map((i) => h('div', { key: i.key, className: 'dshcal-note', role: 'status', 'data-calendar-store-issue': '' },
-                    icon('IconInfoOutlineRegular'),
-                    h('span', null, i.text),
-                    h(IconBtn, {
-                        label: 'Close this notice', glyph: icon('IconCloseOutlineRegular', { size: 12 }), size: 'sm',
-                        onClick: () => { closedIssues.add(i.key); setClosed((n) => n + 1); },
-                    })))) : null,
-                h('div', { className: 'dshcal-body', 'aria-busy': loading ? true : undefined },
-                    loading ? h('div', { className: 'dshcal-busy', role: 'progressbar', 'aria-label': 'Loading events' }) : null,
-                    entry?.data?.more ? h('div', { className: 'dshcal-hint', style: { padding: '4px 12px' } }, 'More events than the page can show at once here; some are left out.') : null,
+                stale ? h('div', { className: 'dshcal-stale', role: 'status', 'data-calendar-stale': '' },
+                    icon('IconWarningOutlineRegular'),
+                    h('span', null, `Couldn't refresh: ${stale}`),
+                    h(Btn, { size: 'sm', kind: 'ghost', onClick: () => void store.refresh() }, TEXT.retry)) : null,
+                issues.length || kept.length ? h('div', { className: 'dshcal-notes' },
+                    kept.map((n) => h('div', { key: `kept:${n.id}`, className: 'dshcal-notice', role: 'alert', 'data-tone': 'warn', 'data-calendar-kept-notice': '' },
+                        icon('IconWarningOutlineRegular'),
+                        h('span', null, n.text),
+                        h(IconBtn, { label: 'Close this notice', glyph: icon('IconCloseOutlineRegular', { size: 12 }), size: 'sm', onClick: () => store.closeNotice(n.id) }))),
+                    issues.map((i) => h('div', { key: i.key, className: 'dshcal-notice', role: 'status', 'data-calendar-store-issue': '' },
+                        icon('IconInfoOutlineRegular'),
+                        h('span', null, i.text),
+                        h(IconBtn, {
+                            label: 'Close this notice', glyph: icon('IconCloseOutlineRegular', { size: 12 }), size: 'sm',
+                            onClick: () => { closedIssues.add(i.key); setClosed((n) => n + 1); },
+                        })))) : null,
+                h('div', { className: 'dshcal-body', 'aria-busy': busy ? true : undefined },
+                    busy ? h('div', { className: 'dshcal-busy', role: 'progressbar', 'aria-label': words ? 'Searching' : 'Loading events' }) : null,
+                    !words && entry?.data?.more ? h('div', { className: 'dshcal-hint', style: { padding: '4px 12px' } }, 'More events than the page can show at once here; some are left out.') : null,
                     body)),
             pop?.kind === 'event' ? h(EventPopover, {
                 key: `e:${pop.occurrence.id}`, cal, occurrence: pop.occurrence, anchor: pop.anchor, onClose: closePop,
                 onEdit: (o) => { setPop(null); setDialog({ kind: 'event', mode: 'edit', occurrence: o }); },
                 onDuplicate: (o) => { setPop(null); setDialog({ kind: 'event', mode: 'duplicate', occurrence: o }); },
                 onDelete: (o) => { setPop(null); setDialog({ kind: 'delete', occurrence: o }); },
+                // A search's event: to its day in the view.
+                ...(words ? { openLabel: 'Show in calendar', onOpenPage: (o) => { setPop(null); setQuery(''); store.openAt(o); } } : {}),
             }) : null,
             pop?.kind === 'day' ? h(DayPopover, {
                 key: `d:${pop.day}`, day: pop.day, occurrences: dayList(occurrences, pop.day, zone), zone, anchor: pop.anchor, now, onClose: closePop,
@@ -4127,6 +5271,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 },
             }) : null,
             dialog?.kind === 'accounts' ? h(AccountsDialog, { cal, start: dialog.start, onClose: closeDialog }) : null,
+            dialog?.kind === 'move' ? h(MoveEventDialog, {
+                cal, occurrence: dialog.drop.o, times: dialog.drop.t, scopes: dialog.scopes,
+                onSubmit: (scope, tell) => saveDrop(dialog.drop, scope, tell),
+                onClose: () => {
+                    const { key } = dialog.drop;
+                    closeDialog();
+                    setPending((p) => (p?.key === key && !p.saved ? null : p));
+                },
+            }) : null,
+            drops.dialog,
             h(ToastHost, { store }));
         }
 
@@ -4138,23 +5292,37 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /**
          * The Agenda pane in DSH's right sidebar: today and the next days, the
          * event on now and the next one marked, Join for a call about to
-         * start. An event opens on the Calendar page; New event opens the
-         * event dialog right here.
+         * start. An event's details open beside the pane, the chat staying
+         * where it is, with Open in Calendar; New event, Edit and Delete open
+         * their dialogs right here.
          */
         function AgendaPane({ cal, useTabInfo }) {
             const info = typeof useTabInfo === 'function' ? useTabInfo() : undefined;
             const visible = info?.tab?.visible !== false;
             const store = cal.store;
             useStore(store);
-            useWatch(store, visible);
+            useWatch(store, visible, false);
             const now = useNow(30_000, visible);
             const [dialog, setDialog] = React.useState(null);
+            const [pop, setPop] = React.useState(null);
             const state = store.state();
             const zone = store.zone();
             const today = dayIn(now, zone);
             const last = addDays(today, PANE_DAYS - 1);
             const entry = state && visible ? store.events(startOfDay(today, zone), startOfDay(addDays(last, 1), zone)) : null;
             const occurrences = entry?.data?.occurrences ?? EMPTY;
+            const stale = state ? (entry?.data && entry.error ? entry.error : store.stateError()) : '';
+            const saved = (o, words) => {
+                const told = isObject(o) ? contactText(o) : '';
+                if (!placed(o)) {
+                    store.toast(`${words === 'Added' ? 'Added.' : 'Saved.'}${told ? ` ${told}` : ''}`);
+                    return;
+                }
+                const day = o.allDay ? o.startDay : dayIn(o.start, zone);
+                store.toast(`${words === 'Added'
+                    ? `Added “${o.title}” on ${dayText(day)}${o.allDay ? '' : ` at ${timeText(o.start, zone)}`}.`
+                    : 'Saved.'}${told ? ` ${told}` : ''}`);
+            };
             const live = (o) => o.status !== 'cancelled' && o.myStatus !== 'declined';
             const timed = occurrences.filter((o) => !spansDays(o) && live(o));
             const current = new Set(timed.filter((o) => o.start <= now && o.end > now).map((o) => o.id));
@@ -4181,8 +5349,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 },
                 h('span', { className: 'dshcal-pane-bar', 'aria-hidden': true }),
                 h('button', {
-                    type: 'button', className: 'dshcal-pane-what', onClick: () => cal.openAt(o),
-                    'aria-label': `${o.title}, ${when}${isNow ? ', on now' : ''}. Open it in the calendar.`,
+                    type: 'button', className: 'dshcal-pane-what', 'aria-haspopup': 'dialog',
+                    onClick: (event) => setPop({ occurrence: o, anchor: rectOf(event.currentTarget.closest('.dshcal-pane-ev') ?? event.currentTarget) }),
+                    'aria-label': `${o.title}, ${when}${isNow ? ', on now' : ''}`,
                 },
                 h('span', { className: 'dshcal-pane-title' },
                     isNow ? h('span', { className: 'dshcal-pane-badge' }, 'Now') : soon ? h('span', { className: 'dshcal-pane-badge' }, untilWords(o.start, now)) : null,
@@ -4215,17 +5384,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     icon('IconWarningOutlineRegular', { size: 12 }),
                     h('span', null, attention.length === 1 ? `${attention[0].name}: ${attention[0].problem || (attention[0].status === 'signin' ? 'sign-in needed' : 'the last sync failed')}.` : `${plural(attention.length, 'account')} need attention.`),
                     h('button', { type: 'button', className: 'dshcal-link', onClick: () => setDialog({ kind: 'accounts' }) }, 'Fix')) : null,
+                stale ? h('div', { className: 'dshcal-stale', role: 'status', 'data-calendar-stale': '' },
+                    icon('IconWarningOutlineRegular', { size: 12 }),
+                    h('span', null, `Couldn't refresh: ${stale}`),
+                    h(Btn, { size: 'sm', kind: 'ghost', onClick: () => void store.refresh() }, TEXT.retry)) : null,
                 body,
                 h('div', { className: 'dshcal-pane-foot' }, h(Btn, { size: 'sm', onClick: () => cal.openPage() }, h(CalendarIcon, { size: 14 }), 'Open calendar')),
-                dialog?.kind === 'event' ? h(EventDialog, {
-                    cal, mode: 'new', onClose: () => setDialog(null),
-                    onSaved: (o) => {
-                        if (!isObject(o)) return;
-                        const day = o.allDay ? o.startDay : dayIn(o.start, zone);
-                        const emailed = emailedText(o.emailed);
-                        store.toast(`Added “${o.title}” on ${dayText(day)}${o.allDay ? '' : ` at ${timeText(o.start, zone)}`}.${emailed ? ` ${emailed}` : ''}`);
-                    },
+                pop ? h(EventPopover, {
+                    key: `e:${pop.occurrence.id}`, cal, occurrence: pop.occurrence, anchor: pop.anchor, onClose: () => setPop(null),
+                    onEdit: (o) => { setPop(null); setDialog({ kind: 'event', mode: 'edit', occurrence: o }); },
+                    onDuplicate: (o) => { setPop(null); setDialog({ kind: 'event', mode: 'duplicate', occurrence: o }); },
+                    onDelete: (o) => { setPop(null); setDialog({ kind: 'delete', occurrence: o }); },
+                    onOpenPage: (o) => { setPop(null); cal.openAt(o); },
                 }) : null,
+                dialog?.kind === 'event' ? h(EventDialog, { cal, mode: dialog.mode ?? 'new', occurrence: dialog.occurrence, onClose: () => setDialog(null), onSaved: saved }) : null,
+                dialog?.kind === 'delete' ? h(DeleteEventDialog, { cal, occurrence: dialog.occurrence, onClose: () => setDialog(null) }) : null,
                 dialog?.kind === 'accounts' ? h(AccountsDialog, { cal, onClose: () => setDialog(null) }) : null,
                 h(ToastHost, { store }));
         }
@@ -4233,7 +5406,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         // ── Cards in chats for the calendar tools ──────────────────────────
 
         /** The arguments the cards read. */
-        const ARG_KEYS = ['title', 'start', 'from', 'to', 'query', 'answer', 'scope'];
+        const ARG_KEYS = ['id', 'title', 'start', 'from', 'to', 'query', 'answer', 'scope', 'calendar_id'];
         const quote = (text, n = 60) => {
             const t = String(text ?? '').replace(/\s+/g, ' ').trim();
             return t.length > n ? `“${t.slice(0, n - 1)}…”` : `“${t}”`;
@@ -4285,21 +5458,54 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return m[2] ? `${dayText(m[1])}, ${m[2]}` : dayText(m[1]);
         }
 
-        /** What a call does, while it runs (and for a call whose result has no card). */
-        function runningTitle(toolName, a) {
+        /**
+         * What a call does, while it runs or waits for the user (and over a
+         * call that didn't work or has no card). name: the event's title,
+         * found by the call's id; where: the name of the calendar a move goes to.
+         */
+        function runningTitle(toolName, a, name = '', where = '') {
+            const event = name ? quote(name, 50) : '';
             switch (toolName) {
                 case 'calendar_list_calendars': return 'List calendars';
                 case 'calendar_events': return a.from ? `Calendar from ${argWhen(a.from)}${a.to ? ` to ${argWhen(a.to)}` : ''}` : 'Calendar for the week';
                 case 'calendar_search': return a.query ? `Search calendar for ${quote(a.query, 40)}` : 'Search calendar';
-                case 'calendar_get_event': return 'Read event';
+                case 'calendar_get_event': return event ? `Read ${event}` : 'Read event';
                 case 'calendar_free_time': return 'Find free time';
                 case 'calendar_create_event': return a.title ? `Add ${quote(a.title)}${a.start ? ` at ${argWhen(a.start)}` : ''}` : 'Add event';
-                case 'calendar_update_event': return a.title ? `Change event to ${quote(a.title)}` : 'Change event';
-                case 'calendar_delete_event': return 'Delete event';
-                case 'calendar_respond': return a.answer ? `Answer invitation: ${(ANSWER_WORDS[a.answer] ?? a.answer).toLowerCase()}` : 'Answer invitation';
+                case 'calendar_update_event':
+                    if (a.calendar_id) return `Move ${event || 'event'}${where ? ` to ${where}` : ''}`;
+                    if (event) return a.title && a.title !== name ? `Change ${quote(name, 40)} to ${quote(a.title, 40)}` : `Change ${event}`;
+                    return a.title ? `Change event to ${quote(a.title)}` : 'Change event';
+                case 'calendar_delete_event': return event ? `Delete ${event}` : 'Delete event';
+                case 'calendar_respond': return `Answer ${event || 'invitation'}${a.answer ? `: ${(ANSWER_WORDS[a.answer] ?? a.answer).toLowerCase()}` : ''}`;
                 default: return TEXT.entry;
             }
         }
+
+        /** What a change that didn't work didn't do, by tool; a read that didn't work "didn't work". */
+        const NOT_DONE = { calendar_create_event: 'Not added', calendar_update_event: 'Not changed', calendar_delete_event: 'Not deleted', calendar_respond: 'Not answered' };
+
+        /**
+         * Why a call didn't work, for the user: the tool's error without its
+         * leading words ("Error:", "Not done:", "Failed:", "Done in part:") and
+         * without what it tells the agent to do next (a sentence naming a tool
+         * or an argument, or telling it to tell or ask the user).
+         */
+        function failureText(text) {
+            const plainText = String(text ?? '').replace(/\s+/g, ' ').trim().replace(/^error:\s*/i, '').replace(/^(not done|failed|done in part):\s*/i, '');
+            const sentences = plainText.split(/(?<=[.!?])\s+(?=[A-Z])/);
+            const forUser = sentences.filter((s) => {
+                const bare = s.replace(/“[^”]*”|"[^"]*"/g, '');
+                return !/\b[a-z]+_[a-z_]+\b/.test(bare) && !/\b(tell|ask) the user\b/i.test(bare);
+            });
+            const out = (forUser.length ? forUser : sentences).join(' ').trim();
+            return out.length > 400 ? `${out.slice(0, 399)}…` : out;
+        }
+
+        /** Whether a call's text says it wasn't done (a host that answers a failure as text rather than as the call's error). */
+        const saysNotDone = (text) => /^(error:\s*)?(not done|failed|done in part):/i.test(String(text ?? '').trim());
+        /** Whether it says a move stopped halfway ("Done in part: …"): copied to its new calendar, still in its old one. */
+        const saysPartly = (text) => /^(error:\s*)?done in part:/i.test(String(text ?? '').trim());
 
         const SCOPE_WORDS = { one: 'this occurrence', following: 'this and the following ones', all: '' };
 
@@ -4318,13 +5524,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 case 'free': return `Free time · ${plural(Array.isArray(view.slots) ? view.slots.length : 0, 'slot')}`;
                 case 'created': return `Added ${quote(o.title, 50)}`;
                 case 'updated': return `Changed ${quote(o.title, 50)}${SCOPE_WORDS[view.scope] ? `, ${SCOPE_WORDS[view.scope]}` : ''}`;
+                case 'moved': return `Moved ${quote(o.title, 50)}${o.calendar ? ` to ${o.calendar}` : ''}`;
                 case 'deleted': return `Deleted ${quote(o.title, 50)}${SCOPE_WORDS[view.scope] ? `, ${SCOPE_WORDS[view.scope]}` : ''}`;
                 case 'responded': return `Answered ${(ANSWER_WORDS[view.answer] ?? view.answer ?? '').toLowerCase()}: ${quote(o.title, 50)}`;
                 default: return runningTitle('', a);
             }
         }
 
-        const CARD_KINDS = new Set(['calendars', 'events', 'event', 'free', 'created', 'updated', 'deleted', 'responded']);
+        const CARD_KINDS = new Set(['calendars', 'events', 'event', 'free', 'created', 'updated', 'moved', 'deleted', 'responded']);
         const noop = () => {};
 
         /** The text a call gave the agent. */
@@ -4334,8 +5541,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /** A call's one-line head, as DSH draws its tool rows. */
-        function ToolHead({ title, running = false, open = false, expandable = false, onToggle = noop, children }) {
-            const glyph = h(CalendarIcon, { size: 14 });
+        function ToolHead({ title, running = false, open = false, expandable = false, onToggle = noop, glyph = h(CalendarIcon, { size: 14 }), children }) {
             if (ui.DisclosureRow) {
                 return h(ui.DisclosureRow, { icon: glyph, title, open, expandable, onToggle, running, expandOnRowClick: expandable, previewChevron: expandable }, children);
             }
@@ -4403,33 +5609,45 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     list.map((c) => h('div', { key: c.id, className: 'dshcal-chat-cal' },
                         h('span', { className: 'dshcal-dot', style: { '--dot': colorOf(c.color) } }),
                         h('span', null, c.name),
-                        h('span', { className: 'dshcal-faint' }, [c.account, c.readOnly ? 'read only' : '', c.isDefault ? 'new events go here' : '', c.hidden ? 'hidden' : ''].filter(Boolean).join(' · ')))));
+                        h('span', { className: 'dshcal-faint' }, [c.account, c.readOnly ? 'read only' : '', c.isDefault ? 'new events go here' : '', c.hidden ? 'hidden' : ''].filter(Boolean).join(' · ')),
+                        // What's wrong with it (its kind, never a server's words).
+                        typeof c.problem === 'string' && c.problem ? h('span', { className: 'dshcal-warn', 'data-calendar-problem': '' }, c.problem) : null)));
             }
             const o = isObject(view.occurrence) ? view.occurrence : null;
             if (!o) return null;
             const deleted = view.kind === 'deleted';
             const when = Number.isFinite(o.start) || isDay(o.startDay) ? whenText(o, zone) : '';
+            // A change: who it emailed, and whose calendars it reached without email.
+            const told = view.kind === 'event' ? '' : contactText(view);
             return h('div', { className: 'dshcal-chat-line', 'data-kind': view.kind, 'data-calendar-chat-card': view.kind, style: evStyle(o.color) },
                 deleted ? icon('IconTrashOutlineRegular') : view.kind === 'event' ? h('span', { className: 'dshcal-dot', style: { '--dot': colorOf(o.color) } }) : icon('IconCheckCircleOutlineRegular'),
                 h('span', { className: 'dshcal-chat-text' },
                     h('b', { style: deleted ? { textDecoration: 'line-through' } : undefined }, o.title || TEXT.noTitle),
                     h('span', null, [when, o.calendar, o.location, o.repeats].filter(Boolean).map((part) => ` · ${part}`).join(''))),
-                deleted ? null : h(Btn, { size: 'sm', onClick: () => cal.openAt(o), 'data-calendar-open-event': o.id }, 'Show in Calendar'));
+                deleted ? null : h(Btn, { size: 'sm', onClick: () => cal.openAt(o), 'data-calendar-open-event': o.id }, 'Show in Calendar'),
+                told ? h('div', { className: 'dshcal-chat-told', 'data-calendar-told': '' }, told) : null);
         }
 
-        /** DSH's own row for a call (a refusal, a failure, a call with no card), or the plugin's plain one. */
-        function FallbackRow(props) {
-            const Row = props.cal?.genericRow?.();
-            return Row ? h(Row, props) : h(PlainRow, props);
+        /**
+         * A call that didn't work: what it tried, and, in view, what it didn't
+         * do and why ("Not added: …"). A move that stopped halfway says so
+         * ("Moved in part: …"), with what is left to do.
+         */
+        function FailedRow({ toolName, title, text }) {
+            const why = failureText(text);
+            const partly = saysPartly(text);
+            return h('div', { className: 'dshcal-chat', 'data-calendar-chat': toolName, 'data-phase': 'result', 'data-calendar-failed': partly ? 'partly' : '' },
+                h(ToolHead, { title, glyph: icon('IconWarningOutlineRegular') }),
+                h('div', { className: 'dshcal-chat-line', 'data-kind': 'failed', 'data-calendar-chat-card': 'failed' },
+                    icon('IconWarningOutlineRegular'),
+                    h('span', { className: 'dshcal-chat-text' }, h('b', null, `${partly ? 'Moved in part' : NOT_DONE[toolName] ?? 'Didn\'t work'}:`), ` ${why || 'the calendar didn\'t say why.'}`)));
         }
 
-        function PlainRow({ toolName, block, useDisclosure }) {
+        /** A call with no card: its line, and what it gave the agent folded under it. */
+        function PlainRow({ toolName, title, text, useDisclosure }) {
             const disclosure = typeof useDisclosure === 'function' ? useDisclosure() : { expanded: false, toggle: noop };
-            const text = block?.error?.reason || resultText(block);
-            const failed = block?.isError === true;
-            const title = runningTitle(toolName, callArgs(block));
-            return h('div', { className: 'dshcal-chat', 'data-calendar-chat': toolName },
-                h(ToolHead, { title: failed ? `${title} · didn't work` : title, open: disclosure.expanded, expandable: text !== '', onToggle: disclosure.toggle },
+            return h('div', { className: 'dshcal-chat', 'data-calendar-chat': toolName, 'data-phase': 'result' },
+                h(ToolHead, { title, open: disclosure.expanded, expandable: text !== '', onToggle: disclosure.toggle },
                     text ? h('div', { className: 'dshcal-chat-out' }, text) : null));
         }
 
@@ -4450,14 +5668,19 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (store.state() === undefined) void store.loadState();
             }, [store]);
             const a = callArgs(block);
+            // The event and the calendar the call names, by their ids, for its line.
+            const title = runningTitle(toolName, a, store.titleOf(a.id), a.calendar_id ? store.calendar(a.calendar_id)?.name ?? '' : '');
             if (phase !== 'result') {
                 return h('div', { className: 'dshcal-chat', 'data-calendar-chat': toolName, 'data-phase': 'start' },
-                    h(ToolHead, { title: runningTitle(toolName, a), running: true }));
+                    h(ToolHead, { title, running: true }));
             }
+            const text = block?.isError ? String(block?.error?.reason || resultText(block)) : resultText(block);
+            // Stopped by the user while it ran: whether it was made isn't known.
+            if (block?.isError && block.error?.code === 'interrupted') return h(FailedRow, { toolName, title, text: 'Stopped before it finished: the calendar shows whether it was made.' });
+            if (block?.isError || saysNotDone(text)) return h(FailedRow, { toolName, title, text });
             const view = isObject(block?.meta) && CARD_KINDS.has(block.meta.kind) ? block.meta : null;
-            if (block?.isError || view === null) return h(FallbackRow, props);
+            if (view === null) return h(PlainRow, { toolName, title, text, useDisclosure: props.useDisclosure });
             const zone = isZone(view.zone) ? view.zone : store.zone();
-            const text = resultText(block);
             return h('div', { className: 'dshcal-chat', 'data-calendar-chat': toolName, 'data-phase': 'result' },
                 h(ToolHead, { title: doneTitle(view, a, zone), open: disclosure.expanded, expandable: text !== '', onToggle: disclosure.toggle },
                     text ? h('div', { className: 'dshcal-chat-out', 'aria-label': 'What the agent read' }, text) : null),
@@ -4467,8 +5690,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /**
          * The view DSH draws for a calendar tool's call in a chat (keyed by
          * the tool's name): a running line while it prepares and runs, then
-         * a card of what it read or did. A call without a card (a refusal, a
-         * failure) gets DSH's own row.
+         * a card of what it read or did. A call that didn't work says what it
+         * didn't do, and why; one without a card gets the plugin's plain row.
          */
         function ToolView(props) {
             return props.phase === 'preparing' ? h(PreparingToolView, props) : h(SettledToolView, props);
@@ -4476,10 +5699,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         // ── In DSH's window ────────────────────────────────────────────────
 
-        /**
-         * What the views share: the store, the way to the Calendar page and to
-         * an event on it, and DSH's own tool row for calls without a card.
-         */
+        /** What the views share: the store, and the way to the Calendar page and to an event on it. */
         function windowApi(ctx, store) {
             const openPage = () => {
                 let layout;
@@ -4490,7 +5710,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     warn('could not open the Calendar page', error);
                 }
             };
-            let generic;
             return {
                 store,
                 openPage,
@@ -4498,21 +5717,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 openAt(occurrence) {
                     store.openAt(occurrence);
                     openPage();
-                },
-                /** DSH's own row for a tool call (its details row, which reads any tool), found among the tool views. */
-                genericRow() {
-                    if (generic !== undefined) return generic || undefined;
-                    try {
-                        for (const entry of ctx.slots.entries('tool.call.toolview')) {
-                            const component = entry?.component;
-                            const name = component?.displayName ?? component?.name ?? component?.type?.name;
-                            if ((name === 'DetailsRow' || name === 'GenericToolCard') && entry.locale === 'conversation') {
-                                generic = component;
-                                return generic;
-                            }
-                        }
-                    } catch {}
-                    return undefined;
                 },
             };
         }
@@ -4583,9 +5787,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             rgbOf, textOn, colorOf, contrast, luminance,
             parseRule, untilValue, untilDay, repeatChoices, repeatFromRule, ruleFromRepeat, repeatProblem,
             columnsOf, lanesOf, fitLanes, daySegments, barItems, agendaDays, rangeOf, stepFrom, dayList,
+            SNAP, snapTo, canDrag, movedTo, resizedTo, shiftedBy, coveredDays, placedAt, dropPatch, consentArgs, movedWords, ghostWords, openingMinute, clockText, clockRangeText, searchGroups,
             draftFrom, draftProblems, createInput, changePatch, writableCalendars,
-            roleOf, othersOf, mailMode, peopleText, sameOccurrence, emailedText, withConsent, removalNotice, returnAddress,
-            callArgs, argWhen, runningTitle, doneTitle, resultText,
+            roleOf, othersOf, mailMode, peopleText, sameOccurrence, placed, emailedText, contactText, CHOOSE_CALENDAR, withConsent, consentQuestion, consentWords, asked, removalNotice, returnAddress,
+            callArgs, argWhen, runningTitle, doneTitle, resultText, failureText, saysNotDone, saysPartly, NOT_DONE,
             CalendarPage, AgendaPane, ToolView, EventDialog, EventPopover, AccountsDialog,
         };
         return module.exports;

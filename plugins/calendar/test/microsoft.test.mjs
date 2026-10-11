@@ -1328,6 +1328,39 @@ test('a change made elsewhere meanwhile: Graph answers 412, a conflict, and noth
     await assert.rejects(source.update({ remoteId: cal }, { item: changed, record: changed.events[0] }, { title: 'x' }, 'all'), isSourceError('conflict'));
 });
 
+test('a series changed or deleted from one of its occurrences: someone added at Microsoft since the change was worked out stops it, as no 412 would', async (t) => {
+    const { store, source, sent } = await setup(t, { rules: true });
+    const cal = store.addCalendar({ name: 'Work' });
+    const guest = (address) => ({ type: 'required', status: { response: 'none', time: NO_TIME }, emailAddress: { name: address, address } });
+    const me = { organizer: { emailAddress: { name: 'Robin Park', address: 'robin@example.com' } }, isOrganizer: true };
+    const series = weeklySeries(store, cal, { ...me, attendees: [guest('ann@example.com')] });
+    const { items } = await source.sync({ remoteId: cal }, undefined, { from: FROM, to: TO });
+    const writes = () => sent.filter((r) => r.method === 'PATCH' || r.method === 'DELETE');
+    const target = (item, planned) => ({ item, record: item.events[0], occurrence: item.events[0].recurrenceId, ...(planned ? { planned } : {}) });
+    const monday = byId(items, store.occurrenceId(series, '2026-10-12'));
+    assert.deepEqual(monday.events[0].attendees.map((p) => p.email), ['ann@example.com']);
+
+    // Bob is added to the series in Outlook. The plugin holds no etag of the series' own, so it reads the series just
+    // before: that names Bob, whom the change wasn't worked out with and Microsoft would email. Nothing is written.
+    store.updateEvent(series, { attendees: [guest('ann@example.com'), guest('bob@example.com')] });
+    await assert.rejects(source.update({ remoteId: cal }, target(monday), { title: 'Weekly sync', notify: true }, 'all'), isSourceError('conflict'));
+    await assert.rejects(source.remove({ remoteId: cal }, target(monday), 'all'), isSourceError('conflict'));
+    assert.equal(writes().length, 0);
+    assert.equal(store.json(series).subject, 'Team sync');
+
+    // Worked out on everyone on any of its occurrences (one of them has Bob): it goes, on the etag read.
+    const again = (await source.sync({ remoteId: cal }, undefined, { from: FROM, to: TO })).items;
+    const wednesday = byId(again, store.occurrenceId(series, '2026-10-14'));
+    assert.deepEqual(await source.update({ remoteId: cal }, target(monday, [monday.events[0], wednesday.events[0]]), { title: 'Weekly sync', notify: true }, 'all'), []);
+    assert.deepEqual(writes().map((r) => [r.method, r.path]), [['PATCH', `/v1.0/me/events/${series}`]]);
+    assert.equal(store.json(series).subject, 'Weekly sync');
+
+    // A guest taken off the series meanwhile is no one new: the series goes.
+    store.updateEvent(series, { attendees: [guest('bob@example.com')] });
+    await source.remove({ remoteId: cal }, target(wednesday), 'all');
+    assert.equal(store.events.has(series), false);
+});
+
 test('create: the record\'s uid is Graph\'s transactionId, so a create repeated after a lost answer makes no second event', async (t) => {
     const { store, source, sent } = await setup(t, { rules: true });
     const cal = store.addCalendar({ name: 'Work' });

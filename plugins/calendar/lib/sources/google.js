@@ -24,8 +24,10 @@
  *   original start, else by Google's id convention: <master id>_<UTC
  *   start, YYYYMMDDTHHMMSSZ>, or <master id>_<YYYYMMDD> for all-day series.
  * - Every change to an event is conditional (If-Match): on the etag held
- *   here, else on the one read just before (an occurrence by Google's id
- *   convention, a series found from its occurrence). 412 is a conflict.
+ *   here, else on the one read just before (an occurrence found with
+ *   events.instances or by Google's id convention, a series found from its
+ *   occurrence), and then only while the event names nobody the change
+ *   wasn't worked out with (newPeople). 412 is a conflict.
  * - A new event asks for an id made from its uid, so a create sent again
  *   (its answer never came) finds the event the first one made.
  *
@@ -37,9 +39,9 @@
 import { createHash } from 'node:crypto';
 import { HttpError, formBody } from '../http.js';
 import { cleanRecord, instantOf } from '../model.js';
-import { accessToken, idTokenClaims, loopbackSignIn, retryAfter } from '../oauth.js';
+import { SIGN_IN_ENDED, accessToken, idTokenClaims, loopbackSignIn, retryAfter } from '../oauth.js';
 import { addDays, daysBetween, ianaZone, isDay, normalLocal, offsetAt, toInstant, toLocal } from '../zones.js';
-import { SourceError, statusError } from './index.js';
+import { SourceError, newPeople, peopleConflict, statusError } from './index.js';
 
 export const kind = 'google';
 export const style = 'events';
@@ -312,9 +314,14 @@ class GoogleCalendar {
         }
         let rejected;
         for (let attempt = 0; ; attempt++) {
-            const token = await accessToken(this.env.secret, {
-                tokenUrl: urls.token, clientId, clientSecret, request: this.env.request, now: this.now, rejected,
-            });
+            let token;
+            try {
+                token = await accessToken(this.env.secret, {
+                    tokenUrl: urls.token, clientId, clientSecret, request: this.env.request, now: this.now, rejected,
+                });
+            } catch (error) {
+                throw endedSignIn(error);
+            }
             const headers = { Authorization: `Bearer ${token}`, Accept: 'application/json' };
             if (body !== undefined) headers['Content-Type'] = 'application/json; charset=utf-8';
             if (etag) headers['If-Match'] = etag;
@@ -530,6 +537,7 @@ class GoogleCalendar {
      */
     async update(calendar, target, patch, scope) {
         const { item, record, occurrence } = unpack(target);
+        const planned = target.planned ?? record;
         const zone = this.zoneOf(calendar);
         const what = 'Changing the event in Google Calendar';
         const notify = (patch?.notify === true || record?.notify === true) && hasGuests(record, patch);
@@ -538,13 +546,13 @@ class GoogleCalendar {
             const one = isOccurrence(record)
                 ? { id: item.remoteId, etag: item.etag }
                 : await this.findInstance(calendar, item.remoteId, occurrence, zone, what);
-            const event = await this.patchEvent(calendar, one.id, patchBody(patch, record, zone, false), one.etag, sendUpdates, what);
+            const event = await this.patchEvent(calendar, one, patchBody(patch, record, zone, false), sendUpdates, what, planned);
             this.log(`changed one occurrence ${event.id}`);
             const changed = itemOf(event, zone);
             return changed ? [changed] : [];
         }
         const master = isOccurrence(record) ? await this.masterOf(calendar, item, what) : { id: item.remoteId, etag: item.etag };
-        const event = await this.patchEvent(calendar, master.id, patchBody(patch, record, zone, !isOccurrence(record)), master.etag, sendUpdates, what);
+        const event = await this.patchEvent(calendar, master, patchBody(patch, record, zone, !isOccurrence(record)), sendUpdates, what, planned);
         this.log(`changed ${event.id}`);
         if (isMaster(event)) return this.seriesItems(calendar, event, zone);
         const changed = itemOf(event, zone);
@@ -557,6 +565,7 @@ class GoogleCalendar {
      */
     async remove(calendar, target, scope) {
         const { item, record, occurrence } = unpack(target);
+        const planned = target.planned ?? record;
         const zone = this.zoneOf(calendar);
         const what = 'Deleting the event from Google Calendar';
         const sendUpdates = target?.notify === true || record?.notify === true ? 'all' : 'none';
@@ -564,7 +573,7 @@ class GoogleCalendar {
             const one = isOccurrence(record)
                 ? { id: item.remoteId, etag: item.etag }
                 : await this.findInstance(calendar, item.remoteId, occurrence, zone, what);
-            await this.deleteEvent(calendar, one.id, one.etag, sendUpdates, what);
+            await this.deleteEvent(calendar, one, sendUpdates, what, planned);
             this.log(`deleted one occurrence ${one.id}`);
             let event;
             try {
@@ -577,7 +586,7 @@ class GoogleCalendar {
             return { removed: [], items: [gone ?? cancelledFallback(one.id, record.uid, recurrenceId)] };
         }
         const master = isOccurrence(record) ? await this.masterOf(calendar, item, what) : { id: item.remoteId, etag: item.etag };
-        await this.deleteEvent(calendar, master.id, master.etag, sendUpdates, what);
+        await this.deleteEvent(calendar, master, sendUpdates, what, planned);
         this.log(`deleted ${master.id}`);
         const removed = new Set([master.id, item.remoteId]);
         if ((isSeriesRecord(record) || isOccurrence(record)) && text(record?.uid)) {
@@ -613,28 +622,28 @@ class GoogleCalendar {
             const { self, organizer, ...rest } = guest;
             return i === mine ? { ...rest, responseStatus: answer } : rest;
         });
-        // The organizer hears the answer, as with Google's own buttons.
-        const saved = await this.patchEvent(calendar, event.id ?? ref.id, { attendees }, event.etag, 'all', what);
+        // The organizer hears the answer, as with Google's own buttons. The list sent is the one just read.
+        const saved = await this.patchEvent(calendar, { id: event.id ?? ref.id, etag: event.etag, event }, { attendees }, 'all', what, recordOf(event, zone));
         this.log(`answered ${saved.id}`);
         if (!one && isMaster(saved)) return this.seriesItems(calendar, saved, zone);
         const changed = itemOf(saved, zone);
         return changed ? [changed] : [];
     }
 
-    /** events.patch, only while the event is as `etag` says (none held: as Google has it now, see etagNow). */
-    async patchEvent(calendar, id, body, etag, sendUpdates, what) {
-        const condition = etag || await this.etagNow(calendar, id, what);
-        const res = await this.call('PATCH', `${calendarPath(calendar)}/events/${encodeURIComponent(id)}`, {
+    /** events.patch of `ref` ({id, etag?, event?}), only on the condition versionOf() gives. */
+    async patchEvent(calendar, ref, body, sendUpdates, what, planned) {
+        const condition = await this.versionOf(calendar, ref, planned, what);
+        const res = await this.call('PATCH', `${calendarPath(calendar)}/events/${encodeURIComponent(ref.id)}`, {
             query: { sendUpdates }, body, etag: condition, what,
         });
         return json(res, what);
     }
 
     /** events.delete, on the same condition; an event already gone (404, 410) counts as deleted. */
-    async deleteEvent(calendar, id, etag, sendUpdates, what) {
+    async deleteEvent(calendar, ref, sendUpdates, what, planned) {
         try {
-            const condition = etag || await this.etagNow(calendar, id, what);
-            await this.call('DELETE', `${calendarPath(calendar)}/events/${encodeURIComponent(id)}`, { query: { sendUpdates }, etag: condition, what });
+            const condition = await this.versionOf(calendar, ref, planned, what);
+            await this.call('DELETE', `${calendarPath(calendar)}/events/${encodeURIComponent(ref.id)}`, { query: { sendUpdates }, etag: condition, what });
         } catch (error) {
             if (error instanceof SourceError && (error.status === 404 || error.status === 410)) return;
             throw error;
@@ -642,19 +651,30 @@ class GoogleCalendar {
     }
 
     /**
-     * The etag an event has at Google now, for a change with none held here
-     * (an occurrence found by Google's id convention, a series found from its
-     * occurrence): read just before, so the change still goes out only if
-     * nothing changed the event in between, never unconditionally.
+     * The etag a change to `ref` ({id, etag?, event?}) goes with: the one
+     * held here, else the one Google has now, of the event just read with
+     * it (`event`: an occurrence found with events.instances) or read here
+     * (an occurrence by Google's id convention, a series found from its
+     * occurrence), so a change never goes unconditionally. An event read
+     * now must name nobody the change wasn't worked out with (`planned`,
+     * newPeople): Google would put the change on their calendars, and no
+     * 412 would say the event changed since the plugin read it.
      */
-    async etagNow(calendar, id, what) {
-        return text((await this.getEvent(calendar, id, undefined, what))?.etag);
+    async versionOf(calendar, ref, planned, what) {
+        if (text(ref.etag)) return ref.etag;
+        const event = ref.event ?? await this.getEvent(calendar, ref.id, undefined, what);
+        const added = newPeople(planned, recordOf(event ?? {}, this.zoneOf(calendar)) ?? {});
+        if (added.length > 0) {
+            this.log(`the event names ${added.length} more since the change was worked out`);
+            throw peopleConflict(what);
+        }
+        return text(event?.etag);
     }
 
     /** The series a changed occurrence (an exception item) belongs to. No etag of the series is held: a change reads it first. */
     async masterOf(calendar, item, what) {
         const event = await this.getEvent(calendar, item.remoteId);
-        if (typeof event?.recurringEventId !== 'string') return { id: item.remoteId, etag: item.etag ?? text(event?.etag) };
+        if (typeof event?.recurringEventId !== 'string') return { id: item.remoteId, ...(text(item.etag) ? { etag: item.etag } : { event }) };
         if (event.recurringEventId === item.remoteId) throw new SourceError('server', `${what}: Google's answer names the event as its own series.`);
         return { id: event.recurringEventId };
     }
@@ -679,7 +699,7 @@ class GoogleCalendar {
                 if (found === undefined && sameStart(event?.originalStartTime, occurrence, at, zone)) found = event;
             }
         });
-        if (found !== undefined && typeof found.id === 'string') return { id: found.id, etag: found.etag, event: found };
+        if (found !== undefined && typeof found.id === 'string') return { id: found.id, event: found };
         // No etag of it is held: a change reads it first.
         return { id: instanceId(masterId, occurrence, at) };
     }
@@ -827,6 +847,7 @@ function recordOf(event, calendarZone) {
         attendees: Array.isArray(event.attendees) ? event.attendees.map(attendeeOf).filter(Boolean) : undefined,
         alarms: alarmsOf(event.reminders),
         conference: conferenceOf(event),
+        guestsMayChange: event.guestsCanModify === true ? true : undefined,
         created: text(event.created),
         updated: text(event.updated),
         sequence: Number.isInteger(event.sequence) ? event.sequence : undefined,
@@ -895,6 +916,15 @@ function timeOf(value, zone) {
 /** An end for an event that has none: the same instant, or the next day. */
 function defaultEnd(start) {
     return 'date' in start ? { date: addDays(start.date, 1) } : { ...start };
+}
+
+/**
+ * Google ended the sign-in. It does that every 7 days for an OAuth app left
+ * in Testing, so the user is told how to stop it.
+ */
+function endedSignIn(error) {
+    if (!(error instanceof SourceError) || error.message !== SIGN_IN_ENDED) return error;
+    return new SourceError('auth', `${SIGN_IN_ENDED} If Google asks every week, your Google app is still in Testing, where Google ends sign-ins after 7 days: publish it (Google Auth Platform, Audience, Publish app).`, { status: error.status });
 }
 
 function personOf(value) {

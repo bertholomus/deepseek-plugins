@@ -60,9 +60,12 @@
  *   put(calendar, item | null, raw, uid) → {remoteId, etag}
  *       Store iCalendar text: a new resource (item null; it must not exist
  *       yet, and one already there with this uid is this create made
- *       before), or a changed one (only if its etag is still item.etag).
+ *       before), or a changed one (only if its etag is still item.etag;
+ *       without one, only while the server's copy names the same people as
+ *       item.raw: see newPeople).
  *   remove(calendar, item) → undefined
- *       Delete a resource (only if its etag is still item.etag).
+ *       Delete a resource (only if its etag is still item.etag; without
+ *       one, only while the server's copy names nobody item.raw doesn't).
  *
  * An 'events' source also has:
  *
@@ -70,23 +73,32 @@
  *       record.uid is new, and the same when the manager asks again after
  *       an answer was lost: the server must make the event once.
  *   update(calendar, target, patch, scope) → Item[]
- *       target: {item, record, occurrence?}: the item and record changed, and
- *       for one occurrence of a series its original start (a Time). patch:
- *       the record fields to change. scope: 'all' (the series or a single
- *       event) or 'one' (that occurrence only).
+ *       target: {item, record, occurrence?, planned?}: the item and record
+ *       changed, and for one occurrence of a series its original start (a
+ *       Time). planned: the record (or records) the change was worked out
+ *       on, record when not given: who it was told it reaches. patch: the
+ *       record fields to change. scope: 'all' (the series or a single
+ *       event) or 'one' (that occurrence only). A change goes with the etag
+ *       the plugin holds; where it holds none (a series kept as its
+ *       occurrences, an occurrence found by its start), the source reads
+ *       the event just before writing, and goes on only while the event
+ *       names nobody `planned` doesn't (newPeople): no 412 would say it
+ *       changed meanwhile.
  *   remove(calendar, target, scope) → {removed: string[], items: Item[]}
  *   respond(calendar, target, status, scope) → Item[]   (optional)
  *       Answer an invitation: 'accepted', 'declined' or 'tentative'.
  *
  * Errors: throw a SourceError with a code the manager acts on: 'auth'
  * (sign in again), 'conflict' (changed on the server meanwhile: the manager
- * syncs and tries once more), 'not-found', 'forbidden' (read-only),
- * 'rate' (with retryAfter in seconds), 'server', 'network', 'config'.
+ * syncs and tries once more, or works the change out again and says who it
+ * would now reach), 'not-found', 'forbidden' (read-only), 'rate' (with
+ * retryAfter in seconds), 'server', 'network', 'config'.
  * Messages are for the user: plain, without secrets. Agents get a fixed
  * category by the code instead (PROBLEMS), never a message.
  *
  * @module dsh-plugin-calendar/sources
  */
+import { addressKey } from '../model.js';
 
 export class SourceError extends Error {
     /**
@@ -115,6 +127,39 @@ export function statusError(status, what, headers) {
         return new SourceError('rate', `${what}: the server asked to wait.`, { status, retryAfter: Number.isFinite(after) && after >= 0 ? after : 60 });
     }
     return new SourceError('server', `${what}: the server answered HTTP ${status}.`, { status });
+}
+
+/** The people on a record: its organizer and its guests. */
+const peopleOn = (record) => [record?.organizer, ...(Array.isArray(record?.attendees) ? record.attendees : [])]
+    .filter((p) => p !== null && typeof p === 'object');
+
+/**
+ * The people an event names now that the record a change was worked out on
+ * didn't: its organizer and guests as the server has them (`now`) against
+ * `planned`, by addressKey(). Either is a record or several (a series and
+ * its changed occurrences): anyone on any of them counts. The account
+ * itself (self) isn't one.
+ * @returns {string[]} their addresses, as the server names them.
+ */
+export function newPeople(planned, now) {
+    const named = new Set();
+    for (const person of [planned].flat().flatMap(peopleOn)) named.add(addressKey(person.address ?? person.email));
+    const out = new Map();
+    for (const person of [now].flat().flatMap(peopleOn)) {
+        const key = addressKey(person.address ?? person.email);
+        if (person.self === true || key === '' || named.has(key) || out.has(key)) continue;
+        out.set(key, String(person.email ?? person.address));
+    }
+    return [...out.values()];
+}
+
+/**
+ * The 'conflict' a change stops with when the event, read just before it,
+ * names people it wasn't worked out with (newPeople): nothing is written,
+ * and the manager syncs and works the change out again, naming them.
+ */
+export function peopleConflict(what) {
+    return new SourceError('conflict', `${what}: on the server it names people it didn't when the change was worked out, so nothing was changed.`);
 }
 
 /**

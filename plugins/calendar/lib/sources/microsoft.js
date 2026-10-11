@@ -33,9 +33,12 @@
  * series comes back from create() as its occurrences in the window.
  *
  * A change is made only to the event as the plugin last read it: every
- * PATCH and DELETE sends If-Match with the event's etag (read just before
- * when the plugin has none, as for a series it holds only the occurrences
- * of), and Graph answers 412 if the event changed meanwhile. A new event
+ * PATCH and DELETE sends If-Match with the event's etag, and Graph answers
+ * 412 if the event changed meanwhile. Where the plugin holds none (a series
+ * it holds only the occurrences of), the event is read just before, and
+ * the change goes on only while it names nobody the change wasn't worked
+ * out with (newPeople): Graph would email them, and no 412 would say the
+ * event changed since the plugin read it. A new event
  * carries the record's uid as Graph's transactionId, so a create repeated
  * after a lost answer gets back the event the first one made, not a second.
  *
@@ -52,7 +55,7 @@
  *
  * @module dsh-plugin-calendar/sources/microsoft
  */
-import { SourceError, statusError } from './index.js';
+import { SourceError, newPeople, peopleConflict, statusError } from './index.js';
 import { formBody } from '../http.js';
 import { cleanRecord } from '../model.js';
 import { idTokenClaims, loopbackSignIn } from '../oauth.js';
@@ -574,14 +577,23 @@ export function create(account, env) {
     }
 
     /**
-     * The etag a change to an event ({id, etag?}) goes with: the one the
-     * plugin read, else the one Graph has now (never '*'). null when the
-     * event is gone; undefined only if Graph sends none.
+     * The etag a change to an event ({id, etag?, event?}) goes with: the one
+     * the plugin holds, else the one Graph has now (never '*'), of the event
+     * just read (`event`) or read here. An event read now must name nobody
+     * the change wasn't worked out with (`planned`, newPeople), else the
+     * change is a conflict. null when the event is gone; undefined only if
+     * Graph sends none.
      */
-    async function etagFor(ref) {
+    async function etagFor(ref, planned, what) {
         if (typeof ref.etag === 'string' && ref.etag !== '') return ref.etag;
-        const event = await getEvent(ref.id);
-        return event === null ? null : etagOf(event);
+        const event = ref.event !== undefined ? ref.event : await getEvent(ref.id);
+        if (event === null) return null;
+        const added = newPeople(planned, recordOf(event, ctx) ?? {});
+        if (added.length > 0) {
+            env.log?.(`microsoft: the event names ${added.length} more since the change was worked out`);
+            throw peopleConflict(what);
+        }
+        return etagOf(event);
     }
 
     async function calendars() {
@@ -713,8 +725,8 @@ export function create(account, env) {
     }
 
     /**
-     * The occurrence a target means, {id, etag}: its item, or one looked up
-     * in the series by its original start (with the etag Graph has for it).
+     * The occurrence a target means: its item {id, etag}, or one looked up
+     * in the series by its original start {id, event} (as Graph has it now).
      */
     async function occurrenceOf(target, seriesId) {
         const { item, record } = partsOf(target);
@@ -724,22 +736,23 @@ export function create(account, env) {
         const at = instantOfTime(when, ctx.zone);
         for await (const event of instances(seriesId, isoSeconds(at - 2 * DAY), isoSeconds(at + 2 * DAY), 'Finding the occurrence on Microsoft')) {
             const found = recordOf(event, ctx);
-            if (found?.recurrenceId !== undefined && sameTime(found.recurrenceId, when, ctx.zone)) return { id: event.id, etag: etagOf(event) };
+            if (found?.recurrenceId !== undefined && sameTime(found.recurrenceId, when, ctx.zone)) return { id: event.id, event };
         }
         throw new SourceError('not-found', 'That occurrence isn\'t in the series on Microsoft any more.');
     }
 
     /**
-     * The series a change to all of it goes to, {id, etag, master?}: with
-     * the series' own etag (the item's when the item is the series; an
-     * occurrence's isn't the series'), and its event when `withEvent`.
+     * The series a change to all of it goes to, {id, etag?, event?, master?}:
+     * with the series' own etag when the plugin holds it (the item's when
+     * the item is the series; an occurrence's isn't the series'), else as
+     * Graph has it now (event); its event (master) when `withEvent`.
      */
     async function seriesRef(item, seriesId, withEvent) {
         const own = item.remoteId === seriesId && typeof item.etag === 'string' && item.etag !== '' ? item.etag : undefined;
         if (own !== undefined && !withEvent) return { id: seriesId, etag: own };
         const master = await getEvent(seriesId);
         if (master === null) throw new SourceError('not-found', 'The series isn\'t on Microsoft any more.');
-        return { id: seriesId, etag: own ?? etagOf(master), master };
+        return own !== undefined ? { id: seriesId, etag: own, master } : { id: seriesId, event: master, master };
     }
 
     /** Graph's start, end and repeat pattern for the whole series (`master`) when one of its occurrences moves (or its rule changes). */
@@ -795,11 +808,13 @@ export function create(account, env) {
      * [] then, as its occurrences come with the next sync). New guests only
      * when the patch, the target or its record says `notify: true`. Only
      * while the event is as the plugin read it (If-Match): a 412 is a
-     * 'conflict'.
+     * 'conflict', and so is an event read just before that names people
+     * target.planned doesn't (etagFor).
      */
     async function update(calendar, target, patch = {}, scope = 'all') {
         const what = 'Saving the event on Microsoft';
         const { item, record } = partsOf(target);
+        const planned = target.planned ?? record;
         if (addsGuests(record, patch, ctx) && ![patch, target, record].some((x) => x?.notify === true)) throw new SourceError('config', NEW_GUESTS);
         const seriesId = seriesOf(item, record);
         let ref;
@@ -823,7 +838,7 @@ export function create(account, env) {
             if (typeof patch.rrule === 'string' && patch.rrule !== '' && start) body.recurrence = patternFromRrule(patch.rrule, start);
             if (Object.keys(body).length === 0) return [];
         }
-        const etag = await etagFor(ref);
+        const etag = await etagFor(ref, planned, what);
         if (etag === null) throw new SourceError('not-found', `${what}: the event isn't on Microsoft any more.`);
         const response = await graph('PATCH', `/me/events/${encodeURIComponent(ref.id)}`, { body, etag });
         if (!response.ok) throw fail(response, what);
@@ -837,16 +852,21 @@ export function create(account, env) {
         return changed === null ? [] : [changed];
     }
 
-    /** Delete an event, one occurrence ('one') or a whole series ('all'); only while it is as the plugin read it (If-Match). */
+    /**
+     * Delete an event, one occurrence ('one') or a whole series ('all');
+     * only while it is as the plugin read it (If-Match), or, read just
+     * before, names nobody target.planned doesn't (etagFor).
+     */
     async function remove(calendar, target, scope = 'all') {
         const { item, record } = partsOf(target);
+        const planned = target.planned ?? record;
         const seriesId = seriesOf(item, record);
         // A whole series goes with its own etag: the item's only when the item is the series (an occurrence's isn't the series').
         let ref = { id: item.remoteId, etag: item.etag };
         if (seriesId !== undefined && scope === 'one') ref = await occurrenceOf(target, seriesId);
         else if (seriesId !== undefined) ref = { id: seriesId, etag: item.remoteId === seriesId ? item.etag : undefined };
         const removed = scope === 'one' ? [ref.id] : [...new Set([ref.id, item.remoteId])];
-        const etag = await etagFor(ref);
+        const etag = await etagFor(ref, planned, 'Deleting the event on Microsoft');
         // Gone already is what was asked for.
         if (etag === null) return { removed, items: [] };
         const response = await graph('DELETE', `/me/events/${encodeURIComponent(ref.id)}`, { etag });

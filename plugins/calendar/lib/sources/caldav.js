@@ -14,9 +14,11 @@
  *   compares them with the last sync's. New and changed resources come in
  *   calendar-multiget batches, or one GET each where multiget fails.
  * - Writes are conditional: If-None-Match: * for a new resource, If-Match
- *   with the last etag for a change or a delete (read from the server when
- *   the plugin has none; a change whose etag can't be read isn't made); a
- *   412 is a conflict. A new resource is named after its UID, so a create
+ *   with the last etag for a change or a delete; a 412 is a conflict. When
+ *   the plugin holds none, the event is read from the server first, and
+ *   the change goes on only while it names the same people as the plugin's
+ *   copy (a change whose version can't be read isn't made). A new resource
+ *   is named after its UID, so a create
  *   repeated after a timeout finds the one the first try made instead of
  *   adding a second.
  * - The password goes only to the host the account names (sameService;
@@ -34,10 +36,10 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { HttpError, basicAuth, request as httpRequest, isLocal, safeUrl, sameService } from '../http.js';
-import { parseIcs, unescapeText } from '../ical.js';
+import { parseIcs, readIcs, unescapeText } from '../ical.js';
 import { isEmailAddress } from '../model.js';
 import { ianaZone } from '../zones.js';
-import { SourceError, statusError } from './index.js';
+import { SourceError, newPeople, peopleConflict, statusError } from './index.js';
 
 export const kind = 'caldav';
 export const style = 'ics';
@@ -1192,18 +1194,41 @@ class CalDavSource {
 
     /**
      * The etag a change to `item` (at `target`) goes under: the one stored,
-     * else the server's own, read now; null when the server keeps none for
-     * it. A read that fails stops the change, since a write without one
-     * would go over whatever is there; 'not-found' when it is gone.
+     * else the server's own, read now with the event; null when the server
+     * keeps none for it. Read now, the event must name the same people as
+     * the plugin's copy (item.raw), or for a delete (`deleting`) nobody
+     * more: the server emails them, and a change worked out on the copy
+     * would otherwise go over theirs with no 412 to say so ('conflict').
+     * A read that fails stops the change, since a write without one would
+     * go over whatever is there; 'not-found' when it is gone.
      */
-    async versionOf(item, target) {
+    async versionOf(item, target, { deleting = false } = {}) {
         if (item.etag) return item.etag;
+        const unread = (error) => {
+            if (error instanceof SourceError && ['auth', 'not-found', 'rate'].includes(error.code)) return error;
+            const code = error instanceof SourceError && error.code === 'network' ? 'network' : 'server';
+            return new SourceError(code, 'The event\'s version on the server couldn\'t be read, so nothing was changed. Try again.');
+        };
+        let now;
+        try {
+            now = await this.getOne(target);
+        } catch (error) {
+            throw unread(error);
+        }
+        if (now === null) throw new SourceError('not-found', 'The event isn\'t on the server any more.');
+        if (now.raw === undefined) throw unread(undefined);
+        const zone = this.env.zone;
+        const mine = readIcs(item.raw ?? '', { zone }).events;
+        const theirs = readIcs(now.raw, { zone }).events;
+        if (newPeople(mine, theirs).length > 0 || (!deleting && newPeople(theirs, mine).length > 0)) {
+            this.env.log?.(`caldav ${this.account.id}: the event names other people since the change was worked out`);
+            throw peopleConflict(deleting ? 'Deleting the event' : 'Saving the event');
+        }
+        if (now.etag !== undefined) return now.etag;
         try {
             return (await this.etagOf(target)) ?? null;
         } catch (error) {
-            if (error instanceof SourceError && ['auth', 'not-found', 'rate'].includes(error.code)) throw error;
-            const code = error instanceof SourceError && error.code === 'network' ? 'network' : 'server';
-            throw new SourceError(code, 'The event\'s version on the server couldn\'t be read, so nothing was changed. Try again.');
+            throw unread(error);
         }
     }
 
@@ -1220,7 +1245,7 @@ class CalDavSource {
         if (target === undefined) throw new SourceError('config', 'This event has no address on the server.');
         let etag;
         try {
-            etag = await this.versionOf(item, target);
+            etag = await this.versionOf(item, target, { deleting: true });
         } catch (error) {
             if (error instanceof SourceError && error.code === 'not-found') return;
             throw error;

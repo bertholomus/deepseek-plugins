@@ -104,14 +104,19 @@ export function apply(ctx, config) {
     let manager;
     /** Test server settings that point elsewhere, warned about once. */
     const ignored = new Set();
-    /** What Google's and Microsoft's sign-ins need, read each time one starts or a token refreshes. */
-    const clientSettings = async () => {
+    /**
+     * What Google's and Microsoft's sign-ins need, read each time one starts or a token refreshes. secret: false
+     * leaves the Google client secret out (undefined), unread.
+     */
+    const clientSettings = async ({ secret = true } = {}) => {
         const prefs = manager?.store.prefs ?? {};
-        let googleClientSecret = '';
-        try {
-            googleClientSecret = (await ctx.credentials.resolve(config.googleClientSecretRef))?.value ?? '';
-        } catch {
-            // An unusable reference reads as not set: the window says what's missing.
+        let googleClientSecret = secret ? '' : undefined;
+        if (secret) {
+            try {
+                googleClientSecret = (await ctx.credentials.resolve(config.googleClientSecretRef))?.value ?? '';
+            } catch {
+                // An unusable reference reads as not set: the window says what's missing.
+            }
         }
         const out = {
             googleClientId: String(prefs.googleClientId || config.googleClientId || '').trim(),
@@ -137,18 +142,25 @@ export function apply(ctx, config) {
     ctx.effect(() => () => manager.dispose(), 'calendar.manager()');
 
     const askEmails = config.askBeforeEmails !== false;
+    /** Whether the Google client secret is set, as last read: the window asks for the state every few seconds. */
+    let secretSeen;
     const setup = {
         /** Whether chats' emailing changes ask the user first (askBeforeEmails), for the window to say when they don't. */
         askBeforeEmails: () => askEmails,
+        /** What each sign-in still needs; the credential store is read for the Google secret at most every half minute. */
         async signInReady() {
-            const s = await clientSettings();
+            const stale = secretSeen === undefined || Date.now() - secretSeen.at > 30_000;
+            const s = await clientSettings({ secret: stale });
+            if (stale) secretSeen = { set: s.googleClientSecret !== '', at: Date.now() };
+            const secretSet = secretSeen.set;
             return {
-                google: { ready: s.googleClientId !== '' && s.googleClientSecret !== '', secretSet: s.googleClientSecret !== '', ...(s.googleClientId ? { clientId: s.googleClientId } : {}) },
+                google: { ready: s.googleClientId !== '' && secretSet, secretSet, ...(s.googleClientId ? { clientId: s.googleClientId } : {}) },
                 microsoft: { ready: s.microsoftClientId !== '', ...(s.microsoftClientId ? { clientId: s.microsoftClientId, tenant: s.microsoftTenant } : {}) },
             };
         },
         async setGoogleSecret(secret) {
             await ctx.credentials.set(config.googleClientSecretRef, secret);
+            secretSeen = undefined;
         },
     };
 
