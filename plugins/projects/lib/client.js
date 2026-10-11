@@ -377,6 +377,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // A failed thread's reason may run long: two lines, then the bar's tooltip.
             '.dshp-dock-wrap .dshp-dock-text{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal}',
             '.dshp-dock-glyph[data-state=stopped]{color:var(--dsw-alias-label-secondary)}',
+            '.dshp-offer-glyph{font-size:12px;line-height:20px;color:var(--dsw-alias-label-primary)}',
             '.dshp-dock-time{flex:none;font-size:12px;line-height:20px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
             // In a narrow chat the text takes its own line under the label, so the held count and what it means stay whole.
             '@container dshp-dock (max-width:600px){.dshp-dock-bar{flex-wrap:wrap;row-gap:0;padding-bottom:7px}.dshp-dock-label{flex:1 1 auto}.dshp-dock-text{order:1;box-sizing:border-box;flex:1 1 100%;padding-inline:24px 7px;white-space:normal}}',
@@ -1472,6 +1473,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             page: `${BUNDLE}/projects`,
             sidebar: `${BUNDLE}/sidebar-groups`,
             news: `${BUNDLE}/news-notice`,
+            offer: `${BUNDLE}/coordinator-offer`,
         };
         /** The conversation inside a thread's sidebar chat; its tab body declares it. */
         const CONVERSATION_SLOT = 'projects.thread.conversation';
@@ -1516,6 +1518,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             newsMore: (n) => (n === 1 ? ', and one more' : `, and ${n} more`),
             newsOpen: 'Open',
             newsMark: (n, line) => (n === 1 ? `New: ${line}` : `${n} new, latest: ${line}`),
+            // Above the message box of a plain chat in a workspace where a project works.
+            offerLabel: 'This folder has a project.',
+            offerText: 'Its coordinator runs the work in threads.',
+            offerTextDraft: 'What you typed goes with you.',
+            offerOpen: (name) => `Talk to ◆ ${name}`,
+            offerOff: (name) => `Don't offer ◆ ${name} in this folder`,
             threads: 'Threads',
             thread: 'Thread',
             coordinator: 'Coordinator',
@@ -3544,6 +3552,65 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }, busy ? TEXT.resuming : TEXT.resume));
         }
 
+        /** Workspaces where the user turned the coordinator offer off (the window's own storage). */
+        const OFFER_OFF_KEY = `${BUNDLE}/offer-off`;
+
+        /** The workspace in DSH's list that holds a session, or undefined. */
+        function workspaceOfSession(snapshot, sessionId) {
+            for (const ws of Array.isArray(snapshot?.items) ? snapshot.items : EMPTY) {
+                if (typeof ws?.workspaceId === 'string' && Array.isArray(ws.sessionIds) && ws.sessionIds.includes(sessionId)) return ws.workspaceId;
+            }
+            return undefined;
+        }
+
+        /** The project whose ◆ coordinator works in a workspace, as the plugin lists them, or undefined. */
+        function projectIn(listed, workspaceId) {
+            if (typeof workspaceId !== 'string' || !Array.isArray(listed)) return undefined;
+            return listed.find((p) => isObject(p) && p.home === workspaceId && typeof p.coordinator === 'string' && p.coordinator !== '');
+        }
+
+        /**
+         * Above the message box of a plain chat in a workspace where a ◆
+         * project works, a new one (DSH's hero) included: an offer to talk to
+         * its coordinator instead, which opens it in one click and takes along
+         * what the user typed. A plugin can't make DSH's own New Session open
+         * the coordinator, so the offer meets each new chat there; the user
+         * can turn it off for the folder.
+         */
+        function CoordinatorOffer({ sessionId, useSessions, useWorkspaces = noWorkspaces, useInput, inputActions, projects }) {
+            useKnown();
+            useFacts(projects.facts);
+            const [off, toggleOff] = useStoredSet(OFFER_OFF_KEY);
+            React.useEffect(() => { void projects.facts.list(60000); }, [projects]);
+            // A chat of the user's own: not a coordinator or a thread, nor a subagent or teammate DSH started under one.
+            const plain = useSessions((state) => {
+                const row = state?.byId?.[sessionId];
+                return isObject(row) && (row.parentId === undefined || row.parentId === null) && rowPlace(state, sessionId) === '' && !isThreadRow(state, sessionId);
+            });
+            const workspaceId = useWorkspaces((snapshot) => workspaceOfSession(snapshot, sessionId));
+            const draft = typeof useInput === 'function' ? useInput((input) => (typeof input?.draft === 'string' ? input.draft : '')) : '';
+            const project = projectIn(projects.facts.projects(), workspaceId);
+            if (!plain || !project || project.coordinator === sessionId || off.has(workspaceId)) return null;
+            const name = project.name || project.id;
+            const go = () => {
+                const text = draft.trim();
+                if (text !== '') {
+                    try { inputActions?.setDraft?.(''); } catch { /* the chat keeps its draft */ }
+                }
+                projects.openWithDraft(project.coordinator, text);
+            };
+            return h('div', { className: 'dshp-dock', 'data-projects-offer': project.id },
+                h('div', { className: 'dshp-dock-bar' },
+                    h('span', { className: 'dshp-dock-glyph dshp-offer-glyph', 'aria-hidden': true }, '◆'),
+                    h('span', { className: 'dshp-dock-label' }, TEXT.offerLabel),
+                    h('span', { className: 'dshp-dock-text', title: draft.trim() ? TEXT.offerTextDraft : TEXT.offerText }, draft.trim() ? TEXT.offerTextDraft : TEXT.offerText),
+                    h(ui.Button, { variant: 'outline', size: 'sm', 'data-projects-offer-open': '', onClick: go }, TEXT.offerOpen(name)),
+                    h('button', {
+                        type: 'button', className: 'dshp-t-icon', 'aria-label': TEXT.offerOff(name), title: TEXT.offerOff(name), 'data-projects-offer-off': '',
+                        onClick: () => toggleOff(workspaceId, true),
+                    }, h(ui.IconCloseOutlineRegular, { size: 14 }))));
+        }
+
         /**
          * Above the message box of every session of a paused project, the way
          * DSH shows a goal: what the pause means here, and Resume.
@@ -4193,6 +4260,20 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 /** What the plugin says about projects, shared by the window's views. */
                 facts: shared.facts ?? projectFacts(link),
                 /**
+                 * Open a session as the main chat and, once DSH has drawn its
+                 * message box (within 3 s), put text there, ready to send.
+                 */
+                openWithDraft(sessionId, text) {
+                    openSession(sessionId);
+                    if (typeof text !== 'string' || text.trim() === '') return;
+                    let tries = 0;
+                    const put = () => {
+                        if (this.draft(sessionId, text) || ++tries >= 30) return;
+                        setTimeout(put, 100);
+                    };
+                    setTimeout(put, 50);
+                },
+                /**
                  * Put text in a session's message box and move the keyboard
                  * there, ready to send or change. @returns whether it could.
                  */
@@ -4318,6 +4399,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.slots.inject('sidebar.workspaces.session.row.action', () => ctx.slots.register({
                 name: 'sidebar.workspaces.session.row.action', id: IDS.place, order: 900, inject: withApi,
             }, RowPlace));
+            ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+                name: 'conversation.input.dock', id: IDS.offer, order: 14, inject: withApi,
+            }, CoordinatorOffer));
             ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
                 name: 'conversation.input.dock', id: IDS.paused, order: 15, inject: withApi,
             }, PausedBar));
@@ -6862,7 +6946,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             roomFor, besidePref, sidebarGroups, sidebarRules, placeHeaders, describeWorkspaces, sectionWorkspace, sectionAt, placeWorkspaces, chatsIn, pulseOf, pulseText, listText, OTHERS, clockOf, againText, ThreadCard, EndingBar,
             noticeOf, noticeView, TriggerNotice, ProjectNotice,
             permissionName, permissionShown, permissionIn, toolsText, accessOf, accessSummary, PermissionPicker, ToolsControl, ModelsSummary,
-            NewsNotice, newsLine, newsDot, ThreadMark, RowPlace,
+            NewsNotice, newsLine, newsDot, ThreadMark, RowPlace, CoordinatorOffer, workspaceOfSession, projectIn,
         };
         return module.exports;
     },

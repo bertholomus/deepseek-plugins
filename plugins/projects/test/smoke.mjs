@@ -1270,6 +1270,7 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
         ['conversation.chat.node', 'turn-trigger', null],
         ['sidebar.session.row.leading', 'dsh-plugin-projects/thread-mark', 20],
         ['sidebar.workspaces.session.row.action', 'dsh-plugin-projects/row-place', 900],
+        ['conversation.input.dock', 'dsh-plugin-projects/coordinator-offer', 14],
         ['conversation.input.dock', 'dsh-plugin-projects/paused-bar', 15],
         ['conversation.input.dock', 'dsh-plugin-projects/ending-bar', 16],
         ['sidebar.session.row.hover', 'dsh-plugin-projects/thread-hover', 20],
@@ -3670,6 +3671,59 @@ test('browser half: news from threads marks the ◆ row and shows one notice for
         ['“X” is blocked', '“X” needs a decision', '“X” handed back']);
     assert.deepEqual([[{ kind: 'handback', status: 'done' }], [{ kind: 'finished' }, { kind: 'stopped' }], [{ kind: 'approval' }, { kind: 'failed' }]].map(newsDot),
         ['done', 'warning', 'error']);
+});
+
+test('browser half: a plain chat in a project\'s workspace offers its coordinator, which opens in one click with what the user typed', () => {
+    const storage = new Map();
+    const { client } = loadClient({ storage });
+    const { CoordinatorOffer, workspaceOfSession, projectIn, takeKnown } = client.internals;
+    takeKnown({});
+    const state = {
+        byId: {
+            c1: { title: '◆ Shop', projectionValues: { projectSession: { role: 'coordinator', project: { name: 'Shop' }, threads: [] } } },
+            t1: { title: 'Fix cart', projectionValues: { projectSession: { role: 'thread', coordinator: 'c1', thread: { id: 't1' } } } },
+            chat: { title: 'Smoke test' }, fresh: { title: '', blank: true }, team: { title: 'Teammate', parentId: 'chat' }, far: { title: 'Elsewhere' },
+        },
+    };
+    const workspaces = { items: [
+        { workspaceId: 'w-shop', path: '/u/shop', sessionIds: ['c1', 't1', 'chat', 'fresh', 'team'] },
+        { workspaceId: 'w-notes', path: '/u/notes', sessionIds: ['far'] },
+    ] };
+    const listed = [{ id: 'old', name: 'Old', coordinator: null, home: 'w-notes' }, { id: 'shop', name: 'Shop', coordinator: 'c1', home: 'w-shop' }];
+    assert.equal(workspaceOfSession(workspaces, 'chat'), 'w-shop');
+    assert.equal(workspaceOfSession(workspaces, 'nowhere'), undefined);
+    assert.equal(projectIn(listed, 'w-shop').id, 'shop');
+    assert.equal(projectIn(listed, 'w-notes'), undefined, 'a project with no coordinator offers nothing');
+    const opened = [];
+    const cleared = [];
+    const projects = {
+        facts: { subscribe: () => () => {}, getSnapshot: () => 0, projects: () => listed, list: async () => {} },
+        openWithDraft: (id, text) => opened.push([id, text]),
+    };
+    const offer = (sessionId, draft = '') => CoordinatorOffer({
+        sessionId, projects, useSessions: (select) => select(state), useWorkspaces: (select) => select(workspaces),
+        useInput: (select) => select({ draft }), inputActions: { setDraft: (text) => cleared.push(text) },
+    });
+    // A new chat, or one with messages, in the workspace where ◆ Shop works: the offer, with one button.
+    for (const id of ['fresh', 'chat']) {
+        const bar = offer(id);
+        assert.equal(bar.props['data-projects-offer'], 'shop');
+        assert.match(textIn(bar), /This folder has a project\.Its coordinator runs the work in threads\.Talk to ◆ Shop/);
+    }
+    // What the user typed goes with them, and leaves this chat's box.
+    const button = elementsOf(offer('chat', '  run the smoke test  ')).find((el) => el.props?.['data-projects-offer-open'] === '');
+    assert.match(textIn(offer('chat', 'x')), /What you typed goes with you\./);
+    button.props.onClick();
+    assert.deepEqual(plain(opened), [['c1', 'run the smoke test']]);
+    assert.deepEqual(plain(cleared), ['']);
+    elementsOf(offer('fresh')).find((el) => el.props?.['data-projects-offer-open'] === '').props.onClick();
+    assert.deepEqual(plain(opened.at(-1)), ['c1', '']);
+    assert.equal(cleared.length, 1, 'an empty box is left alone');
+    // Not on the coordinator, its threads, a teammate DSH started under a chat, or a chat in a folder without a project.
+    for (const id of ['c1', 't1', 'team', 'far']) assert.equal(offer(id), null, id);
+    // Turned off for the folder: gone there, and only there.
+    storage.set('dsh-plugin-projects/offer-off', JSON.stringify(['w-shop']));
+    assert.equal(offer('chat'), null);
 });
 
 // ── projects as groups of workspaces (the Projects page and the import) ───
