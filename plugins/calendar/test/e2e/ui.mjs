@@ -17,11 +17,11 @@
  *   deleted (scope 'one'), the rest of the series as it was;
  * - Month, Day and Agenda views, the choice kept by the plugin, N and T;
  * - a calendar hidden and shown again from the side column;
- * - a change the host says would email people ('calendar/needs-notify',
- *   played here, as the calendars kept in DSH email no one): asked
- *   first with the host's words, nothing sent on Don't change it, notify
- *   only after Send, with the people the refusal named (approved), and who
- *   was emailed in the toast;
+ * - a change the host says would email six guests ('calendar/needs-notify',
+ *   played here, as the calendars kept in DSH email no one): the question
+ *   names all six on screen, with what they get and why; nothing sent on
+ *   Don't save; notify only after Save and email, with approved: the six;
+ *   who was emailed in the toast;
  * - an event moved to another calendar with other changes: the move on its
  *   own first, the rest on the moved event; no email offered for a guest on
  *   a calendar that can't send it;
@@ -39,17 +39,20 @@
  *   a new tab, the wait with the address to paste, then the browser back to
  *   DSH on this computer, which the dialog notices by itself;
  * - a Google meeting made, changed and deleted without emailing its guest:
- *   the dialog says it still reaches their calendars, and each toast says
- *   whose calendars it was put on, changed on or taken off (Google told
+ *   the dialog says it still reaches their calendars, each is made only
+ *   once the user has seen whose calendar it reaches (the host refuses it
+ *   until then: 'calendar/needs-approval'), and each toast says whose
+ *   calendars it was put on, changed on or taken off (Google told
  *   sendUpdates=none); and a meeting there an agent deletes without asking
  *   (askBeforeEmails off);
  * - a series with an occurrence changed on its own moved to Microsoft: the
  *   host refuses ('calendar/drops-changes'), Don't move it keeps it, Move
  *   anyway moves it without that occurrence;
  * - a Microsoft meeting changed while the question before its email waits:
- *   a guest added on Microsoft's side meanwhile, Send is refused
- *   ('calendar/changed') with nothing sent to Microsoft, and Look at it
- *   again shows the meeting as it is now;
+ *   a guest added on Microsoft's side meanwhile, its yes makes nothing
+ *   ('calendar/changed') and the question comes again naming both, the new
+ *   one marked; Don't save keeps it with Look at it again; saved again, it
+ *   goes to both;
  * - the Microsoft account removed, with the page to withdraw DSH's access
  *   there; "Sign in with a code instead", showing the code; the Google
  *   account removed, its access withdrawn at Google;
@@ -757,15 +760,51 @@ try {
         check('a calendar hidden from the side column takes its events off the page, and comes back', hidden === true && checked === 'false', `${hidden} ${checked}`);
     });
 
-    // 6. Email: asked first, with the host's words; sent only after Send.
+    /**
+     * The question before a change that emails or reaches people, as it shows: its title and words, everyone it
+     * names (with what each gets, the new ones, and those on screen), its buttons, and the way to answer it.
+     */
+    const consent = async () => {
+        const send = page.locator('[data-calendar-send]');
+        await send.waitFor({ state: 'visible', timeout: 10000 });
+        const dialog = send.locator('xpath=ancestor::*[@role="dialog"][1]');
+        const rows = dialog.locator('[data-calendar-person]');
+        const names = (els) => els.map((el) => el.getAttribute('data-calendar-person'));
+        return {
+            title: await dialog.evaluate((el) => document.getElementById(el.getAttribute('aria-labelledby') ?? '')?.textContent ?? ''),
+            text: (await dialog.textContent()) ?? '',
+            people: await rows.evaluateAll(names),
+            gets: await dialog.locator('.dshcal-gets').allTextContents(),
+            fresh: await rows.evaluateAll((els) => els.filter((el) => el.querySelector('[data-calendar-person-new]')).map((el) => el.getAttribute('data-calendar-person'))),
+            // Whole on screen: inside the list's box (it scrolls past about eight) and the window.
+            onScreen: await dialog.locator('[data-calendar-people]').evaluate((ul) => {
+                const box = ul.getBoundingClientRect();
+                return [...ul.querySelectorAll('[data-calendar-person]')].filter((li) => {
+                    const r = li.getBoundingClientRect();
+                    return r.height > 0 && r.top >= box.top - 1 && r.bottom <= box.bottom + 1 && r.top >= 0 && r.bottom <= ul.ownerDocument.documentElement.clientHeight;
+                }).map((li) => li.getAttribute('data-calendar-person'));
+            }).catch(() => []),
+            no: (await dialog.locator('[data-calendar-keep]').textContent()) ?? '',
+            yes: (await send.textContent()) ?? '',
+            answer: async (yes) => {
+                await dialog.locator(yes ? '[data-calendar-send]' : '[data-calendar-keep]').click();
+                await send.waitFor({ state: 'detached' });
+            },
+        };
+    };
+
+    // 6. Email: the question names everyone the change emails, with what they get and why; made only on its yes,
+    // held to them.
     const updateCalls = '**/api/dsh-plugin-calendar/updateEvent';
     await step('a change that would email people', async () => {
         await page.locator('[data-calendar-today]').click();
         await showDay(day1);
         const sent = [];
         let refusals = 2;
-        // The calendars here email no one, so the host's answer is played: it would email ann@example.com (twice), then
-        // the change sent with notify is made for real (without it) and answered as if it had emailed her.
+        const six = ['ann@example.com', 'bob@example.com', 'cy@example.com', 'dee@example.com', 'eve@example.com', 'fay@example.com'];
+        const why = 'Microsoft emails a meeting\'s guests about each change to it';
+        // The calendars here email no one, so the host's answer is played: it would email six guests an update (twice), then
+        // the change sent with notify is made for real (without it) and answered as if it had emailed them.
         await page.route(updateCalls, async (route) => {
             const body = JSON.parse(route.request().postData() ?? '{}');
             const args = body.payload?.args ?? {};
@@ -776,16 +815,22 @@ try {
                     status: 200, contentType: 'application/json',
                     body: JSON.stringify({
                         type: 'server-response', rpcId: body.rpcId,
-                        result: { ok: false, error: { code: 'calendar/needs-notify', message: 'Saving this emails an update to ann@example.com', details: { people: ['ann@example.com'] } } },
+                        result: {
+                            ok: false,
+                            error: {
+                                code: 'calendar/needs-notify', message: `This would email an update to ${six.slice(0, 5).join(', ')} and 1 more (${why}), so it's made only when they are to be told.`,
+                                details: { people: six, mail: { emailed: { what: 'an update', to: six }, why } },
+                            },
+                        },
                     }),
                 });
             }
-            // Made for real without notify; approved goes to the host as sent (the event names nobody else).
+            // Made for real without notify; approved goes to the host as sent (the event names nobody, so it holds).
             const patch = { ...args.patch };
             delete patch.notify;
             const response = await route.fetch({ postData: JSON.stringify({ ...body, payload: { args: { ...args, patch } } }) });
             const real = await response.json();
-            if (real.result?.ok && real.result.value?.occurrence) real.result.value.occurrence.emailed = { what: 'an update', to: ['ann@example.com'] };
+            if (real.result?.ok && real.result.value?.occurrence) real.result.value.occurrence.emailed = { what: 'an update', to: six };
             return route.fulfill({ response, body: JSON.stringify(real) });
         });
         try {
@@ -796,25 +841,25 @@ try {
             await form.waitFor({ state: 'visible' });
             await form.locator('[data-calendar-title]').fill('E2E Planning review');
             await page.locator('[data-calendar-save]').click();
-            const send = page.locator('[data-calendar-send]');
-            await send.waitFor({ state: 'visible' });
-            const question = await send.locator('xpath=ancestor::*[@role="dialog"][1]').textContent();
+            const question = await consent();
             await shot(page, 'send-question');
-            await page.locator('[data-calendar-keep]').click();
-            await send.waitFor({ state: 'detached' });
+            await question.answer(false);
             const stillOpen = await form.isVisible();
             const unchanged = (await events(day1, day1)).some((o) => o.title === 'E2E Planning');
             await page.locator('[data-calendar-save]').click();
-            await send.waitFor({ state: 'visible' });
-            await send.click();
+            await (await consent()).answer(true);
             await dialogGone();
             const toast = await page.locator('.dshcal-toast').first().textContent();
             const saved = (await events(day1, day1)).find((o) => o.title === 'E2E Planning review');
-            check('a change that would email people asks first with the host\'s words; Don\'t change it sends nothing, Send repeats it with notify and the people it named, and the toast says who was emailed',
-                /Saving this emails an update to ann@example\.com/.test(question ?? '') && stillOpen && unchanged && saved !== undefined
+            check('a change that would email six guests asks first, naming all six on screen with what they get and why; Don\'t save sends nothing, Save and email repeats it with notify and approved: the six, and the toast says who was emailed',
+                question.title === 'Email an update to 6 guests?' && question.text.includes(`${why}.`) && !question.text.includes('so it\'s made only when')
+                && JSON.stringify(question.people) === JSON.stringify(six) && JSON.stringify(question.onScreen) === JSON.stringify(six)
+                && question.gets.length === 6 && question.gets.every((g) => g === 'An update') && question.no === 'Don\'t save' && question.yes === 'Save and email'
+                && stillOpen && unchanged && saved !== undefined
                 && sent.length === 3 && sent[0].patch?.notify === undefined && sent[1].patch?.notify === undefined && sent[0].patch?.approved === undefined
-                && sent[2].patch?.notify === true && JSON.stringify(sent[2].patch?.approved) === '["ann@example.com"]'
-                && /Emailed an update to ann@example\.com/.test(toast ?? ''), JSON.stringify({ question, stillOpen, unchanged, sent, toast, saved: saved?.title }));
+                && sent[2].patch?.notify === true && JSON.stringify(sent[2].patch?.approved) === JSON.stringify(six)
+                && /Emailed an update to ann@example\.com, bob@example\.com, cy@example\.com and 3 others\./.test(toast ?? ''),
+                JSON.stringify({ question: { ...question, answer: undefined }, stillOpen, unchanged, sent, toast, saved: saved?.title }));
         } finally {
             await page.unroute(updateCalls);
         }
@@ -1103,6 +1148,10 @@ try {
         await hint().waitFor({ state: 'visible' });
         await shot(page, 'google-reach-hint');
         await page.locator('[data-calendar-save]').click();
+        // Saved only once the user has seen whose calendars it goes on.
+        const addQuestion = await consent();
+        await shot(page, 'google-reach-question');
+        await addQuestion.answer(true);
         await dialogGone();
         const added = await toastWith('Put on the calendars of');
         const made = (await events(day, day)).find((o) => o.title === 'E2E Lunch with Ann');
@@ -1118,6 +1167,8 @@ try {
         await hint().waitFor({ state: 'visible' });
         const changeHint = (await hint().textContent()) ?? '';
         await page.locator('[data-calendar-save]').click();
+        const changeQuestion = await consent();
+        await changeQuestion.answer(true);
         await dialogGone();
         const changed = await toastWith('Changed on the calendars of');
 
@@ -1132,25 +1183,34 @@ try {
         const deleteBox = (await deleteDialog.locator('label:has([data-calendar-notify])').textContent()) ?? '';
         await shot(page, 'google-delete-hint');
         await confirm.click();
+        const deleteQuestion = await consent();
+        await deleteQuestion.answer(true);
         const deleted = await toastWith('Taken off the calendars of');
         const gone = !(await events(day, day)).some((o) => o.title.startsWith('E2E Lunch with Ann'));
         // What Google was told: not to email anyone, each time.
         const writes = google.store.requests.filter((r) => ['POST', 'PATCH', 'DELETE'].includes(r.method) && /^\/calendar\/v3\/calendars\/[^/]+\/events/.test(r.path));
         const quiet = writes.map((r) => r.method).join(' ') === 'POST PATCH DELETE' && writes.every((r) => r.query.sendUpdates === 'none');
-        check('a Google meeting made, changed and deleted without email: the dialogs say it still reaches the guest\'s calendar (not when the box is ticked), and each toast says whose calendars it was put on, changed on and taken off',
-            unticked && addHint === 'Saving still puts it on their Google calendars, without email.' && hiddenWhenTicked
+        const asked = [addQuestion, changeQuestion, deleteQuestion].map((q) => [q.title, q.no, q.yes, q.people.join(), q.gets.join()]);
+        const want = [
+            ['Also put it on ann@example.com\'s Google calendar?', 'Don\'t add', 'Add', 'ann@example.com', 'Put on their Google calendar, no email'],
+            ['Also change it on ann@example.com\'s Google calendar?', 'Don\'t save', 'Save', 'ann@example.com', 'Changed on their Google calendar, no email'],
+            ['Also take it off ann@example.com\'s Google calendar?', 'Don\'t delete', 'Delete', 'ann@example.com', 'Taken off their Google calendar, no email'],
+        ];
+        check('a Google meeting made, changed and deleted without email: the dialogs say it still reaches the guest\'s calendar (not when the box is ticked), each is made once the user has seen whose calendar it reaches, and each toast says whose calendars it was put on, changed on and taken off',
+            JSON.stringify(asked) === JSON.stringify(want)
+            && unticked && addHint === 'Saving still puts it on their Google calendars, without email.' && hiddenWhenTicked
             && made?.calendarId === googleCalendar.id && (made.attendees ?? []).some((a) => a.email === 'ann@example.com')
             && /^Added “E2E Lunch with Ann” on .+\. Put on the calendars of ann@example\.com, without emailing anyone\.$/.test(added)
             && hintBefore === 0 && changeHint === 'Saving still changes it on their Google calendars, without email.'
             && changed === 'Saved. Changed on the calendars of ann@example.com, without emailing anyone.'
             && deleteBox === 'Tell ann@example.com by email' && deleteHint === 'Deleting it still takes it off their Google calendars, without email.'
             && deleted === 'Deleted “E2E Lunch with Ann and Bo”. Taken off the calendars of ann@example.com, without emailing anyone.' && gone && quiet,
-            JSON.stringify({ unticked, addHint, hiddenWhenTicked, made: made && { calendarId: made.calendarId, attendees: made.attendees }, added, hintBefore, changeHint, changed,
+            JSON.stringify({ asked, unticked, addHint, hiddenWhenTicked, made: made && { calendarId: made.calendarId, attendees: made.attendees }, added, hintBefore, changeHint, changed,
                 deleteBox, deleteHint, deleted, gone, writes: writes.map((r) => `${r.method} ${r.path} ${r.query.sendUpdates}`) }));
 
         // An agent deletes a meeting there: askBeforeEmails is off, so a chat takes it off the guest's calendar without asking.
         const lunch = (await api('createEvent', {
-            input: { calendarId: googleCalendar.id, title: 'E2E Agent lunch', start: `${day}T14:00`, end: `${day}T14:30`, timeZone: ZONE, attendees: ['ann@example.com'] },
+            input: { calendarId: googleCalendar.id, title: 'E2E Agent lunch', start: `${day}T14:00`, end: `${day}T14:30`, timeZone: ZONE, attendees: ['ann@example.com'], approved: ['ann@example.com'] },
         })).value?.occurrence;
         reachCall = await agentCall('calendar_delete_event', { id: lunch?.id }, 'Cancel my lunch with Ann');
         const left = (await events(day, day)).some((o) => o.title === 'E2E Agent lunch');
@@ -1204,22 +1264,28 @@ try {
             JSON.stringify({ changedOne: changedOne.ok, question, kept, after: after.map((o) => [o.title, o.calendarId]), posted: posted.length, patches }));
     });
 
-    // 14. A Microsoft meeting that changes on Microsoft's side while the question before its email waits: Send makes nothing.
-    await step('a change held to the people it named: the meeting changed meanwhile, so nothing is sent', async () => {
+    // 14. A Microsoft meeting that changes on Microsoft's side while the question before its email waits: its yes makes
+    // nothing, and the question comes again naming everyone it reaches now.
+    await step('a change held to the people it named: the meeting changed meanwhile, so it asks again', async () => {
         const graph = providers.graph;
         const day = addDays(today, 4);
         const person = (address, name) => ({ emailAddress: { address, name }, type: 'required' });
         const made = await api('createEvent', {
-            input: { calendarId: msCalendar.id, title: 'E2E Review', start: `${day}T11:00`, end: `${day}T11:30`, timeZone: ZONE, attendees: [{ email: 'ann@example.com', name: 'Ann Example' }], notify: true },
+            input: {
+                calendarId: msCalendar.id, title: 'E2E Review', start: `${day}T11:00`, end: `${day}T11:30`, timeZone: ZONE,
+                attendees: [{ email: 'ann@example.com', name: 'Ann Example' }], notify: true, approved: ['ann@example.com'],
+            },
         });
         const graphId = [...graph.store.events.values()].find((e) => e.subject === 'E2E Review')?.id;
         const patches = () => graph.store.requestsTo(`/v1.0/me/events/${graphId}`, 'PATCH').length;
-        let question = '';
-        let refusal = '';
+        let first = {};
+        let again = {};
+        let third = {};
+        let note = '';
         let look = false;
         let sentNothing = false;
         let still = '';
-        let detailsText = '';
+        let toast = '';
         const calls = await callsTo('updateEvent', async () => {
             await showDay(day);
             await eventOnPage('E2E Review').click();
@@ -1229,37 +1295,45 @@ try {
             await form.waitFor({ state: 'visible' });
             await form.locator('[data-calendar-title]').fill('E2E Review (agenda)');
             await page.locator('[data-calendar-save]').click();
-            const send = page.locator('[data-calendar-send]');
-            await send.waitFor({ state: 'visible' });
-            question = (await send.locator('xpath=ancestor::*[@role="dialog"][1]').textContent()) ?? '';
+            first = await consent();
             // Meanwhile Bob is added on Microsoft's side, and DSH reads it.
             graph.store.updateEvent(graphId, { attendees: [person('ann@example.com', 'Ann Example'), person('bob@example.com', 'Bob Example')] });
             await api('syncNow', { accountId: msAccount.id });
             await waitFor(async () => (await events(day, day)).find((o) => o.title === 'E2E Review')?.attendees?.some((a) => a.email === 'bob@example.com'), 'Bob on the meeting', 15000);
             const before = patches();
-            await send.click();
-            const alert = form.locator('.dshcal-alert', { hasText: 'The event changed' });
-            await alert.waitFor({ state: 'visible', timeout: 10000 });
-            refusal = (await alert.textContent()) ?? '';
-            look = await page.locator('[data-calendar-look-again]').isVisible();
+            await first.answer(true);
+            // Asked again, naming both, Bob as new: nothing went to Microsoft.
+            again = await consent();
             await shot(page, 'changed-meanwhile');
             sentNothing = patches() === before;
+            await again.answer(false);
+            const alert = form.locator('.dshcal-alert', { hasText: 'it changed meanwhile' });
+            await alert.waitFor({ state: 'visible', timeout: 10000 });
+            note = (await alert.textContent()) ?? '';
+            look = await page.locator('[data-calendar-look-again]').isVisible();
             still = (await events(day, day)).find((o) => o.title.startsWith('E2E Review'))?.title ?? '';
-            // Look at it again: the meeting as it is now.
-            await page.locator('[data-calendar-look-again]').click();
+            // Saved again: asked about both, and made, held to both.
+            await page.locator('[data-calendar-save]').click();
+            third = await consent();
+            await third.answer(true);
             await dialogGone();
-            const details = page.locator('[data-calendar-details]');
-            await details.waitFor({ state: 'visible', timeout: 10000 });
-            await details.getByText('Bob Example').first().waitFor({ state: 'visible', timeout: 10000 });
-            detailsText = (await details.textContent()) ?? '';
-            await page.keyboard.press('Escape');
+            toast = await toastWith('Emailed');
         });
-        check('a Microsoft meeting that gained a guest while the question waited: Send, held to the people it named, is refused with nothing sent to Microsoft, and Look at it again shows it as it is now',
-            made.ok && /would email an update to ann@example\.com/.test(question) && !question.includes('bob@')
-            && calls.length === 2 && calls[0]?.patch?.notify === undefined && calls[1]?.patch?.notify === true && JSON.stringify(calls[1]?.patch?.approved) === '["ann@example.com"]'
-            && /^The event changed since this change was looked at/.test(refusal) && refusal.includes('bob@example.com') && look && sentNothing && still === 'E2E Review'
-            && detailsText.includes('Ann Example') && detailsText.includes('Bob Example'),
-            JSON.stringify({ made: made.ok, question, calls: calls.map((c) => c?.patch), refusal, look, sentNothing, still, detailsText: detailsText.slice(0, 300) }));
+        const now = (await events(day, day)).find((o) => o.title.startsWith('E2E Review'));
+        const names = (q) => JSON.stringify(q.people);
+        check('a Microsoft meeting that gained a guest while the question waited: its yes makes nothing and asks again, naming both with the new one marked; Don\'t save keeps it with a way to look again; saved again, it goes to both',
+            made.ok && first.title === 'Email an update to ann@example.com?' && names(first) === '["ann@example.com"]' && first.yes === 'Save and email'
+            && again.title === 'Email an update to 2 guests?' && names(again) === '["ann@example.com","bob@example.com"]' && JSON.stringify(again.fresh) === '["bob@example.com"]'
+            && again.text.includes('It changed meanwhile') && sentNothing
+            && /^Not saved: it changed meanwhile/.test(note) && look && still === 'E2E Review'
+            && names(third) === '["ann@example.com","bob@example.com"]' && third.fresh.length === 0
+            && calls.length === 4 && calls[0]?.patch?.notify === undefined && calls[0]?.patch?.approved === undefined
+            && calls[1]?.patch?.notify === true && JSON.stringify(calls[1]?.patch?.approved) === '["ann@example.com"]'
+            && calls[2]?.patch?.notify === undefined && calls[2]?.patch?.approved === undefined
+            && calls[3]?.patch?.notify === true && JSON.stringify(calls[3]?.patch?.approved) === '["ann@example.com","bob@example.com"]'
+            && now?.title === 'E2E Review (agenda)' && /Emailed an update to ann@example\.com and bob@example\.com\./.test(toast),
+            JSON.stringify({ made: made.ok, first: first.title, again: { title: again.title, people: again.people, fresh: again.fresh }, third: third.people,
+                calls: calls.map((c) => c?.patch), note, look, sentNothing, still, now: now?.title, toast }));
     });
 
     // 15. The Microsoft account removed, with the page to withdraw DSH's access there; then a sign-in with a code instead.

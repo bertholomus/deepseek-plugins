@@ -311,6 +311,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-pop-guests{display:flex;flex-direction:column;gap:3px;margin-top:4px}',
             '.dshcal-guest{display:flex;align-items:center;gap:7px;min-width:0;font-size:12.5px}',
             '.dshcal-guest>span:nth-child(2){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshcal-people{list-style:none;margin:0;padding:4px;display:flex;flex-direction:column;gap:1px;max-height:244px;overflow-y:auto;border:1px solid var(--cal-line);border-radius:10px;background:var(--cal-fill);scrollbar-width:thin}',
+            '.dshcal-people:focus-visible{outline:2px solid var(--cal-accent);outline-offset:2px}',
+            '.dshcal-people>li{display:flex;align-items:center;flex-wrap:wrap;gap:2px 8px;box-sizing:border-box;min-height:28px;padding:3px 6px;font-size:12.5px}',
+            '.dshcal-person{flex:1 1 160px;min-width:0;overflow-wrap:anywhere;color:var(--cal-text)}',
+            '.dshcal-gets{margin-left:auto;font-size:12px;color:var(--cal-meta);text-align:right}',
             '.dshcal-ans{flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;font-size:9px;font-weight:700;line-height:1}',
             '.dshcal-ans[data-ans=accepted]{background:var(--cal-ok);color:var(--cal-chip-ground)}',
             '.dshcal-ans[data-ans=declined]{background:var(--cal-danger);color:var(--cal-chip-ground)}',
@@ -563,7 +568,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /** The refusals whose message is the plugin's own words to the user, shown as they are. */
-        const OWN_WORDS = new Set(['calendar/refused', 'calendar/needs-notify', 'calendar/changed', 'calendar/drops-changes', 'calendar/choose-calendar']);
+        const OWN_WORDS = new Set(['calendar/refused', 'calendar/needs-notify', 'calendar/needs-approval', 'calendar/changed', 'calendar/drops-changes', 'calendar/choose-calendar']);
 
         /** A failed call as one sentence: the plugin's own refusal as it is, or that it failed or can't be reached. */
         function errorText(error) {
@@ -1521,17 +1526,104 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, children || error ? h('div', { className: 'dshcal-form' }, children, h(Alert, { text: error })) : undefined);
         }
 
+        /** A question's words by what the change does: its buttons, and what guests get when the host doesn't say. */
+        const CONSENT_WORDS = {
+            add: { no: 'Don\'t add', yes: 'Add', email: 'Add and email', what: 'invitations' },
+            save: { no: 'Don\'t save', yes: 'Save', email: 'Save and email', what: 'an update' },
+            move: { no: 'Don\'t move', yes: 'Move', email: 'Move and email', what: 'an update' },
+            delete: { no: 'Don\'t delete', yes: 'Delete', email: 'Delete and email', what: 'a cancellation' },
+        };
+
+        /** The words for a change: 'add', 'save', 'move' or 'delete' (a "Don't …" button label reads the same). */
+        function consentWords(action) {
+            if (Object.hasOwn(CONSENT_WORDS, action)) return CONSENT_WORDS[action];
+            const words = String(action ?? '').toLowerCase();
+            return words.includes('delete') ? CONSENT_WORDS.delete : words.includes('add') ? CONSENT_WORDS.add
+                : words.includes('move') ? CONSENT_WORDS.move : CONSENT_WORDS.save;
+        }
+
+        /** What a guest's Google calendar gets without an email, by how: the question, and each person's line. */
+        const REACH_ASK = { add: 'put it on', remove: 'take it off', change: 'change it on' };
+        const REACH_WHY = {
+            add: 'Google puts a meeting on its guests\' calendars by itself, without an email.',
+            remove: 'Google takes a meeting off its guests\' calendars by itself, without an email.',
+            change: 'Google changes a meeting on its guests\' calendars by itself, without an email.',
+        };
+        const REACH_GETS = { add: 'Put on their Google calendar, no email', remove: 'Taken off their Google calendar, no email', change: 'Changed on their Google calendar, no email' };
+
+        /** Addresses in a list from the host, once each. */
+        function addressList(list) {
+            const out = new Map();
+            for (const p of Array.isArray(list) ? list : EMPTY) if (typeof p === 'string' && p.trim() !== '' && !out.has(p.toLowerCase())) out.set(p.toLowerCase(), p);
+            return [...out.values()];
+        }
+
         /**
-         * Before a change emails people: the host's words (who gets what, and
-         * why), then Send or keep it as it is.
+         * The question before a change that emails or reaches people, from the
+         * host's refusal ('calendar/needs-approval', 'needs-notify', 'changed'):
+         * everyone it names, each with what they get, and why.
+         * → {code, title, why, changed, people: [{email, gets, emailed, fresh}], no, yes}.
+         * @param error - the refusal: details {people, mail: {emailed?: {what, to}, reached?: {how, to}, why?}}.
+         * @param action - 'add', 'save', 'move' or 'delete'.
+         * @param [before] - who the last question named: anyone else is marked new.
          */
-        function SendDialog({ text, keep, onYes, onClose }) {
-            return h(Dialog, {
-                title: 'Send the email?', description: text, narrow: true, onClose,
-                footer: h(React.Fragment, null,
-                    h(ui.Button, { variant: 'outline', onClick: onClose, 'data-modal-autofocus': true, 'data-calendar-keep': '' }, keep),
-                    h(ui.Button, { variant: 'primary', onClick: onYes, 'data-calendar-send': '' }, 'Send')),
+        function consentQuestion(error, action, before) {
+            const words = consentWords(action);
+            const details = isObject(error?.details) ? error.details : {};
+            const mail = isObject(details.mail) ? details.mail : null;
+            const emailedTo = new Set(addressList(mail?.emailed?.to).map((p) => p.toLowerCase()));
+            const reachedTo = new Set(addressList(mail?.reached?.to).map((p) => p.toLowerCase()));
+            const what = typeof mail?.emailed?.what === 'string' && mail.emailed.what.trim() ? mail.emailed.what.trim() : words.what;
+            const how = Object.hasOwn(REACH_ASK, mail?.reached?.how) ? mail.reached.how : 'change';
+            const seen = Array.isArray(before) ? new Set(before.map((p) => String(p).toLowerCase())) : null;
+            const gets = what === 'invitations' ? 'An invitation' : what.replace(/^./, (c) => c.toUpperCase());
+            const people = addressList([...(Array.isArray(details.people) ? details.people : EMPTY), ...(mail?.emailed?.to ?? EMPTY), ...(mail?.reached?.to ?? EMPTY)]).map((email) => {
+                const key = email.toLowerCase();
+                // Reached only when the host says so; anyone else it names (an older host names them alone) is emailed.
+                const emailed = emailedTo.has(key) || !reachedTo.has(key);
+                return { email, emailed, gets: emailed ? gets : REACH_GETS[how], fresh: seen !== null && !seen.has(key) };
             });
+            const mailed = people.filter((p) => p.emailed);
+            const whom = (list, one, many) => (list.length === 1 ? one(list[0].email) : many(list.length));
+            const title = mailed.length > 0
+                ? `Email ${what} to ${whom(mailed, (e) => e, (n) => `${n} guests`)}?`
+                : `Also ${REACH_ASK[how]} ${whom(people, (e) => `${e}'s Google calendar`, (n) => `${n} guests' Google calendars`)}?`;
+            const reason = typeof mail?.why === 'string' && mail.why.trim() ? mail.why.trim() : '';
+            const why = mailed.length > 0
+                ? (reason ? `${reason.replace(/^./, (c) => c.toUpperCase())}${/[.!?]$/.test(reason) ? '' : '.'}` : mail ? 'You chose to tell them by email.' : '')
+                : REACH_WHY[how];
+            return {
+                code: String(error?.code ?? '').replace(/^calendar\//, ''),
+                title, why, people,
+                changed: error?.code === 'calendar/changed',
+                no: words.no,
+                yes: mailed.length > 0 ? words.email : words.yes,
+            };
+        }
+
+        /**
+         * Before a change emails or reaches people: everyone it names, with
+         * what each gets, and why; then the change or not. Not making it has
+         * the first focus.
+         */
+        function ConsentDialog({ question, onYes, onClose }) {
+            const q = question;
+            const long = q.people.length > 8;
+            return h(Dialog, {
+                title: q.title, description: q.why || undefined, narrow: true, onClose,
+                footer: h(React.Fragment, null,
+                    h(ui.Button, { variant: 'outline', onClick: onClose, 'data-modal-autofocus': true, 'data-calendar-keep': '' }, q.no),
+                    h(ui.Button, { variant: 'primary', onClick: onYes, 'data-calendar-send': '' }, q.yes)),
+            },
+            h('div', { className: 'dshcal-form', 'data-calendar-consent': q.code },
+                q.changed ? h('div', { className: 'dshcal-hint dshcal-warn', 'data-calendar-consent-changed': '' },
+                    'It changed meanwhile, on its server or in another app, so nothing was done yet. This is everyone it reaches now.') : null,
+                q.people.length ? h('ul', {
+                    className: 'dshcal-people', 'data-calendar-people': '', 'aria-label': 'Who it reaches', tabIndex: long ? 0 : undefined,
+                }, q.people.map((p) => h('li', { key: p.email, 'data-calendar-person': p.email },
+                    h('span', { className: 'dshcal-person' }, p.email),
+                    p.fresh ? h('span', { className: 'dshcal-tag', 'data-calendar-person-new': '' }, 'New') : null,
+                    h('span', { className: 'dshcal-gets' }, p.gets)))) : null));
         }
 
         /** Before a series moves to a calendar that would drop some of it: the host's words (what it drops), then Move anyway or not. */
@@ -1546,50 +1638,77 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * The questions a change can need before it's made, for a view to
-         * show: {ask(text, keep) → Promise<boolean: Send>, drop(text) →
-         * Promise<boolean: Move anyway>, dialog}.
+         * show: {ask(question) → Promise<boolean: yes>, drop(text) →
+         * Promise<boolean: Move anyway>, dialog}. question: consentQuestion's.
          */
         function useSendQuestion() {
             const [question, setQuestion] = React.useState(null);
-            const ask = React.useCallback((text, keep) => new Promise((resolve) => setQuestion({ kind: 'send', text, keep, resolve })), []);
+            const ask = React.useCallback((q) => new Promise((resolve) => setQuestion({ kind: 'send', q, resolve })), []);
             const drop = React.useCallback((text) => new Promise((resolve) => setQuestion({ kind: 'drop', text, resolve })), []);
             const answer = (yes) => {
                 question?.resolve(yes);
                 setQuestion(null);
             };
+            const q = question?.kind === 'send' && !isObject(question.q) ? { title: 'Send the email?', why: String(question.q ?? ''), people: EMPTY, no: TEXT.cancel, yes: 'Send', code: '' } : question?.q;
             return {
                 ask,
                 drop,
-                dialog: question ? h(question.kind === 'drop' ? DropDialog : SendDialog, { text: question.text, keep: question.keep, onYes: () => answer(true), onClose: () => answer(false) }) : null,
+                dialog: question === null ? null
+                    : question.kind === 'drop' ? h(DropDialog, { text: question.text, onYes: () => answer(true), onClose: () => answer(false) })
+                        : h(ConsentDialog, { question: q, onYes: () => answer(true), onClose: () => answer(false) }),
+            };
+        }
+
+        /** What the user's answers add to a change's call: notify when it tells people (ticked, or said yes to), approved and dropChanges when given. */
+        function asked(tell, { notify, approved, dropChanges } = {}) {
+            return {
+                ...(notify === true || tell === true ? { notify: true } : {}),
+                ...(Array.isArray(approved) ? { approved } : {}),
+                ...(dropChanges === true ? { dropChanges: true } : {}),
             };
         }
 
         /**
-         * A change the user asked for, made by make(how): `how` holds what
-         * their answers add to it. When the host says a move would drop part
-         * of a series ('calendar/drops-changes'), they're asked with its words
-         * (drop), and Move anyway makes it again with dropChanges. When it says
-         * the change would email people ('calendar/needs-notify'), they're
-         * asked with its words (ask), and only their Send makes it again, with
-         * notify and with the people that refusal named as approved: should
-         * the change now reach anyone else, the host stops it
-         * ('calendar/changed'). → its result; {ok: false, kept: true} when they
-         * kept it as it was.
-         * @param make - (how: {dropChanges?: true, notify?: true, approved?: string[]}) → the call's result.
+         * A change the user asked for, made by make(how) only as they say:
+         * `how` ({notify?, approved?, dropChanges?}) is what their answers add
+         * to its call.
+         * - 'calendar/needs-approval' (it would email or reach people, and
+         *   doesn't say who the user saw) or 'calendar/needs-notify' (the
+         *   server would email them anyway): the question names every one of
+         *   them, with what they get (ask), and only yes makes it again, with
+         *   approved: those people, and notify for needs-notify (otherwise
+         *   notify stays as it was).
+         * - 'calendar/changed' naming people (it would now reach someone else):
+         *   asked again, naming them all.
+         * - 'calendar/drops-changes': a series move that would drop part of it
+         *   asks with the host's words first (drop); Move anyway adds dropChanges.
+         * → the result; {ok: false, kept: true, error} when the user said no.
+         * @param ask - (question) → Promise<boolean>: useSendQuestion's.
+         * @param action - 'add', 'save', 'move' or 'delete': the question's words.
+         * @param make - ({notify?, approved?, dropChanges?}) → the call's result.
          * @param [drop] - (text) → Promise<boolean>: whether to move a series anyway.
          */
-        async function withConsent(ask, keep, make, drop) {
+        async function withConsent(ask, action, make, drop) {
             let how = {};
-            let result = await make(how);
-            if (!result.ok && result.error?.code === 'calendar/drops-changes' && typeof drop === 'function') {
-                if (!(await drop(errorText(result.error)))) return { ok: false, kept: true, error: result.error };
-                how = { dropChanges: true };
-                result = await make(how);
+            let shown;
+            for (let round = 0; ; round += 1) {
+                const result = await make(how);
+                if (result.ok || round >= 4) return result;
+                const error = result.error;
+                const code = error?.code;
+                if (code === 'calendar/drops-changes' && typeof drop === 'function' && how.dropChanges !== true) {
+                    if (!(await drop(errorText(error)))) return { ok: false, kept: true, error };
+                    how = { ...how, dropChanges: true };
+                    continue;
+                }
+                const people = Array.isArray(error?.details?.people) ? addressList(error.details.people) : undefined;
+                // Approval is for people named: a refusal that names no one is shown as it is.
+                const asks = code === 'calendar/needs-notify' || (people?.length > 0 && (code === 'calendar/needs-approval' || code === 'calendar/changed'));
+                if (!asks) return result;
+                if (!(await ask(consentQuestion(error, action, shown)))) return { ok: false, kept: true, error };
+                how = { ...how, ...(code === 'calendar/needs-notify' ? { notify: true } : {}), ...(people !== undefined ? { approved: people } : {}) };
+                shown = people;
             }
-            if (result.ok || result.error?.code !== 'calendar/needs-notify') return result;
-            if (!(await ask(errorText(result.error), keep))) return { ok: false, kept: true, error: result.error };
-            const people = result.error.details?.people;
-            return make({ ...how, notify: true, ...(Array.isArray(people) ? { approved: people.filter((p) => typeof p === 'string') } : {}) });
         }
 
         const SCOPE_TEXT = {
@@ -2178,13 +2297,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         setErrors((current) => ({ ...current, calendarId: CHOOSE_CALENDAR }));
                         return;
                     }
-                    // Not sent, as the user chose: the dialog stays, to change what would email them.
-                    if (!result.kept) setRefusal(errorText(result.error));
                     // The event changed on its server meanwhile and nothing was done: the page reads it again, for the user to look at.
                     if (code === 'calendar/changed') {
+                        setRefusal(result.kept ? 'Not saved: it changed meanwhile, on its server or in another app. Look at it again to see it as it is now.' : errorText(result.error));
                         setChanged(true);
                         void store.refresh();
+                        return;
                     }
+                    // Not made, as the user chose: the dialog stays, to change what would email or reach them.
+                    if (!result.kept) setRefusal(errorText(result.error));
                     return;
                 }
                 onSaved?.(result.value?.occurrence, words);
@@ -2205,8 +2326,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (moveTo) {
                     // A series that would lose part of itself on the way asks first (drop), as does one that would email people.
                     // The box, ticked, tells the guests of the move too.
-                    const moved = await withConsent(sending.ask, 'Don\'t move it', (how) => store.act('updateEvent', {
-                        id: target.id, patch: { calendarId: moveTo, ...(tell ? { notify: true } : {}), ...how }, scope: 'all',
+                    const moved = await withConsent(sending.ask, 'move', (how) => store.act('updateEvent', {
+                        id: target.id, patch: { calendarId: moveTo, ...asked(tell, how) }, scope: 'all',
                     }), sending.drop);
                     if (!moved.ok) return finish(moved);
                     if (!placed(moved.value?.occurrence) && Object.keys(patch).length > 0) {
@@ -2220,12 +2341,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     result = moved;
                 }
                 if (Object.keys(patch).length > 0) {
-                    const made = await withConsent(sending.ask, 'Don\'t change it', (how) => store.act('updateEvent', {
-                        id: target.id, patch: { ...patch, ...how }, scope,
+                    const made = await withConsent(sending.ask, 'save', (how) => store.act('updateEvent', {
+                        id: target.id, patch: { ...patch, ...asked(patch.notify, how) }, scope,
                     }));
                     if (!made.ok && movedRef.current) {
                         const where = store.calendar(movedRef.current.calendarId)?.name ?? 'the other calendar';
-                        const why = made.kept ? 'they would email people.' : errorText(made.error);
+                        const why = made.kept ? 'you chose not to.' : errorText(made.error);
                         return finish({ ok: false, error: { code: made.error?.code === 'calendar/changed' ? made.error.code : 'calendar/refused', message: `It moved to “${where}”, but the other changes weren't saved: ${why}` } });
                     }
                     result = made;
@@ -2246,7 +2367,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     setRefusal('');
                     setChanged(false);
                     const input = createInput({ ...d, notify: tell });
-                    const result = await withConsent(sending.ask, 'Don\'t add it', (how) => store.act('createEvent', { input: { ...input, ...how } }));
+                    const result = await withConsent(sending.ask, 'add', (how) => store.act('createEvent', { input: { ...input, ...asked(input.notify, how) } }));
                     return finish(result, 'Added');
                 }
                 const patch = changePatch(initial, { ...d, notify: tell }, { repeatTouched, originalRule: occurrence.repeat });
@@ -3846,15 +3967,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 return { label, quiet };
             };
             const run = async (scope, tellThem) => {
-                const result = await withConsent(sending.ask, 'Don\'t delete it', (how) => store.act('deleteEvent', {
-                    id: o.id, scope, ...how, notify: how.notify === true || tellThem === true,
-                }));
+                const result = await withConsent(sending.ask, 'delete', (how) => store.act('deleteEvent', { id: o.id, scope, ...asked(tellThem, how) }));
+                // The event changed on its server meanwhile and nothing was done: the page reads it again.
+                if (!result.ok && result.error?.code === 'calendar/changed') void store.refresh();
                 if (result.kept) return '';
-                if (!result.ok) {
-                    // The event changed on its server meanwhile and nothing was done: the page reads it again.
-                    if (result.error?.code === 'calendar/changed') void store.refresh();
-                    return errorText(result.error);
-                }
+                if (!result.ok) return errorText(result.error);
                 const day = o.allDay ? o.startDay : dayIn(o.start, store.zone());
                 const done = scope === 'one' ? `Deleted “${o.title}” on ${dayText(day)}.` : scope === 'following' ? `Deleted “${o.title}” from ${dayText(day)} on.` : `Deleted “${o.title}”.`;
                 const told = contactText(result.value);
@@ -4713,7 +4830,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             parseRule, untilValue, untilDay, repeatChoices, repeatFromRule, ruleFromRepeat, repeatProblem,
             columnsOf, lanesOf, fitLanes, daySegments, barItems, agendaDays, rangeOf, stepFrom, dayList,
             draftFrom, draftProblems, createInput, changePatch, writableCalendars,
-            roleOf, othersOf, mailMode, peopleText, sameOccurrence, placed, emailedText, contactText, CHOOSE_CALENDAR, withConsent, removalNotice, returnAddress,
+            roleOf, othersOf, mailMode, peopleText, sameOccurrence, placed, emailedText, contactText, CHOOSE_CALENDAR, withConsent, consentQuestion, consentWords, asked, removalNotice, returnAddress,
             callArgs, argWhen, runningTitle, doneTitle, resultText,
             CalendarPage, AgendaPane, ToolView, EventDialog, EventPopover, AccountsDialog,
         };

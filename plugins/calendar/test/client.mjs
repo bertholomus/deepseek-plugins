@@ -276,37 +276,108 @@ test('notify goes to the host only after the user\'s own click', async () => {
     // Nothing changed: no patch, so nobody is told anything.
     assert.deepEqual({ ...I.changePatch(before, draft({ notify: true }), { repeatTouched: false, originalRule: '' }) }, {});
 
-    // The host says the change would email people: the user is asked with its words; only Send makes it again,
+    // The host says the change would email people: the user is asked, naming them; only yes makes it again,
     // with notify, held to the people the user was shown (approved).
     const refusal = { ok: false, error: { code: 'calendar/needs-notify', message: 'Saving this emails an update to ann@example.com', details: { people: ['ann@example.com', 7] } } };
     const calls = [];
     const make = (answer, first = refusal) => async (how) => { calls.push(plain(how)); return how.notify ? answer : first; };
     const asked = [];
-    const ask = (send) => async (text, keep) => { asked.push([text, keep]); return send; };
+    const ask = (send) => async (question) => { asked.push(question); return send; };
     const done = { ok: true, value: { occurrence: { id: 'ev-1', emailed: { what: 'an update', to: ['ann@example.com'] } } } };
-    assert.deepEqual(await I.withConsent(ask(true), 'Don\'t change it', make(done)), done);
+    assert.deepEqual(await I.withConsent(ask(true), 'save', make(done)), done);
     assert.deepEqual(calls, [{}, { notify: true, approved: ['ann@example.com'] }]);
-    assert.deepEqual(asked, [['Saving this emails an update to ann@example.com.', 'Don\'t change it']]);
+    assert.deepEqual(plain(asked.map((q) => [q.title, q.no, q.yes, q.people.map((p) => p.email)])), [['Email an update to ann@example.com?', 'Don\'t save', 'Save and email', ['ann@example.com']]]);
     calls.length = 0;
-    const kept = await I.withConsent(ask(false), 'Don\'t change it', make(done));
+    const kept = await I.withConsent(ask(false), 'save', make(done));
     assert.equal(kept.kept, true);
     assert.deepEqual(calls, [{}]);
-    // A refusal that names nobody: Send says notify alone, and the host holds the change to its own first look.
+    // A refusal that names nobody: yes says notify alone, and the host holds the change to its own first look.
     calls.length = 0;
     const unnamed = { ok: false, error: { code: 'calendar/needs-notify', message: 'Saving this emails invitations' } };
-    assert.deepEqual(await I.withConsent(ask(true), 'Don\'t add it', make(done, unnamed)), done);
+    assert.deepEqual(await I.withConsent(ask(true), 'add', make(done, unnamed)), done);
     assert.deepEqual(calls, [{}, { notify: true }]);
-    // The event changed between the question and Send: the host's refusal comes back as it is, not tried again.
+    // The event changed between the question and yes, and the host doesn't say who it reaches now: its refusal as it is.
     calls.length = 0;
     const changed = { ok: false, error: { code: 'calendar/changed', message: 'The event changed since this change was looked at' } };
-    assert.deepEqual(await I.withConsent(ask(true), 'Don\'t change it', make(changed)), changed);
+    assert.deepEqual(await I.withConsent(ask(true), 'save', make(changed)), changed);
     assert.equal(calls.length, 2);
     // Any other answer is the result as it is, asked nothing.
     calls.length = 0;
     asked.length = 0;
     const refused = { ok: false, error: { code: 'calendar/refused', message: 'read-only' } };
-    assert.deepEqual(await I.withConsent(ask(true), 'x', async (how) => { calls.push(plain(how)); return refused; }), refused);
+    assert.deepEqual(await I.withConsent(ask(true), 'save', async (how) => { calls.push(plain(how)); return refused; }), refused);
     assert.deepEqual([calls, asked], [[{}], []]);
+});
+
+test('a change that reaches anyone waits for the user to see who: approved on every repeat, asked again when it changed', async () => {
+    const ann = 'ann@example.com';
+    const bob = 'bob@example.com';
+    const reach = (people) => ({ ok: false, error: { code: 'calendar/needs-approval', message: 'This would change it on the calendars of …', details: { people, mail: { reached: { how: 'change', to: people } } } } });
+    const changed = (people) => ({ ok: false, error: { code: 'calendar/changed', message: 'The event changed since …', details: { people, mail: { reached: { how: 'change', to: people } } } } });
+    const done = { ok: true, value: { occurrence: { id: 'ev-1' } } };
+    const run = async (answers, replies) => {
+        const calls = [];
+        const questions = [];
+        const make = async (how) => { calls.push(plain(how)); return answers[calls.length - 1]; };
+        const ask = async (q) => { questions.push(q); return replies[questions.length - 1]; };
+        return { result: await I.withConsent(ask, 'save', make), calls, questions };
+    };
+    // Reached without email (Google, the box unticked): yes makes it again with approved, and without notify.
+    let r = await run([reach([ann]), done], [true]);
+    assert.deepEqual(r.result, done);
+    assert.deepEqual(r.calls, [{}, { approved: [ann] }]);
+    assert.deepEqual(plain([r.questions[0].title, r.questions[0].yes, r.questions[0].no]), ['Also change it on ann@example.com\'s Google calendar?', 'Save', 'Don\'t save']);
+    // It changed meanwhile: asked again with everyone it reaches now, the new one marked; yes holds it to them.
+    r = await run([reach([ann]), changed([ann, bob]), done], [true, true]);
+    assert.deepEqual(r.result, done);
+    assert.deepEqual(r.calls, [{}, { approved: [ann] }, { approved: [ann, bob] }]);
+    assert.equal(r.questions[1].changed, true);
+    assert.deepEqual(plain(r.questions[1].people.map((p) => [p.email, p.fresh])), [[ann, false], [bob, true]]);
+    // Not made after all: the change is kept, as 'changed', for the dialog to say so.
+    r = await run([reach([ann]), changed([ann, bob])], [true, false]);
+    assert.deepEqual(plain([r.result.kept, r.result.error.code, r.calls.length]), [true, 'calendar/changed', 2]);
+    // A refusal that names no one isn't asked about: it's shown as it is.
+    const nobody = { ok: false, error: { code: 'calendar/needs-approval', message: 'This would …', details: {} } };
+    r = await run([nobody], []);
+    assert.deepEqual([r.result, r.questions.length], [nobody, 0]);
+    // A host that keeps refusing is asked a few times at most.
+    r = await run([reach([ann]), changed([bob]), changed([ann]), changed([bob]), changed([ann]), changed([bob])], [true, true, true, true, true, true]);
+    assert.equal(r.calls.length, 5);
+    assert.equal(r.result.error.code, 'calendar/changed');
+    // What the answers add to a call: notify when ticked or said yes to, approved and dropChanges as given.
+    assert.deepEqual(plain(I.asked(true, { approved: [ann] })), { notify: true, approved: [ann] });
+    assert.deepEqual(plain(I.asked(false, { approved: [] })), { approved: [] });
+    assert.deepEqual(plain(I.asked(undefined, { notify: true, dropChanges: true })), { notify: true, dropChanges: true });
+    assert.deepEqual(plain(I.asked(false, {})), {});
+});
+
+test('the question before an email names everyone, with what they get and why, in the user\'s words', () => {
+    const six = ['a@example.com', 'b@example.com', 'c@example.com', 'd@example.com', 'e@example.com', 'f@example.com'];
+    const why = 'Microsoft emails a meeting\'s guests about each change to it';
+    let q = I.consentQuestion({ code: 'calendar/needs-notify', details: { people: six, mail: { emailed: { what: 'an update', to: six }, why } } }, 'save');
+    assert.deepEqual(plain([q.title, q.why, q.no, q.yes, q.code, q.changed]), ['Email an update to 6 guests?', `${why}.`, 'Don\'t save', 'Save and email', 'needs-notify', false]);
+    assert.deepEqual(plain(q.people.map((p) => p.email)), six);
+    assert.ok(q.people.every((p) => p.gets === 'An update' && p.emailed && !p.fresh));
+    // A delete to one person; invitations each read as one.
+    q = I.consentQuestion({ code: 'calendar/needs-approval', details: { people: ['ann@example.com'], mail: { emailed: { what: 'a cancellation', to: ['ann@example.com'] } } } }, 'delete');
+    assert.deepEqual(plain([q.title, q.why, q.yes, q.no]), ['Email a cancellation to ann@example.com?', 'You chose to tell them by email.', 'Delete and email', 'Don\'t delete']);
+    q = I.consentQuestion({ code: 'calendar/needs-approval', details: { people: six.slice(0, 2), mail: { emailed: { what: 'invitations', to: six.slice(0, 2) } } } }, 'add');
+    assert.deepEqual(plain([q.title, q.people[0].gets, q.yes]), ['Email invitations to 2 guests?', 'An invitation', 'Add and email']);
+    // Reached without an email: on, off, or changed on their Google calendars.
+    q = I.consentQuestion({ code: 'calendar/needs-approval', details: { people: six.slice(0, 3), mail: { reached: { how: 'add', to: six.slice(0, 3) } } } }, 'add');
+    assert.deepEqual(plain([q.title, q.why, q.yes, q.people[2].gets]), ['Also put it on 3 guests\' Google calendars?', 'Google puts a meeting on its guests\' calendars by itself, without an email.', 'Add', 'Put on their Google calendar, no email']);
+    q = I.consentQuestion({ code: 'calendar/needs-approval', details: { people: ['ann@example.com'], mail: { reached: { how: 'remove', to: ['ann@example.com'] } } } }, 'Don\'t move it');
+    assert.deepEqual(plain([q.title, q.yes, q.no]), ['Also take it off ann@example.com\'s Google calendar?', 'Move', 'Don\'t move']);
+    // Emailed some and reached others: the title counts those emailed, the list says what each gets.
+    q = I.consentQuestion({ code: 'calendar/needs-approval', details: { people: six.slice(0, 2), mail: { emailed: { what: 'an update', to: [six[0]] }, reached: { how: 'change', to: [six[1]] } } } }, 'save');
+    assert.deepEqual(plain([q.title, q.people.map((p) => p.gets)]), ['Email an update to a@example.com?', ['An update', 'Changed on their Google calendar, no email']]);
+    // An older host's refusal names its people alone: they're emailed what the change sends, and nothing says why.
+    q = I.consentQuestion({ code: 'calendar/needs-notify', details: { people: ['ann@example.com'] } }, 'add');
+    assert.deepEqual(plain([q.title, q.why, q.people[0].gets]), ['Email invitations to ann@example.com?', '', 'An invitation']);
+    // Asked again after it changed: everyone now, the ones the last question didn't name marked new.
+    q = I.consentQuestion({ code: 'calendar/changed', details: { people: six.slice(0, 2), mail: { emailed: { what: 'an update', to: six.slice(0, 2) } } } }, 'save', [six[0]]);
+    assert.deepEqual(plain([q.changed, q.people.map((p) => p.fresh)]), [true, [false, true]]);
+    assert.deepEqual(plain([I.consentWords('Don\'t delete it').yes, I.consentWords('anything').yes]), ['Delete', 'Save']);
 });
 
 test('a series that would lose part of itself on a move asks first, then may ask about emails too', async () => {
@@ -318,9 +389,9 @@ test('a series that would lose part of itself on a move asks first, then may ask
         const calls = [];
         const questions = [];
         const make = async (how) => { calls.push(plain(how)); return answers[calls.length - 1]; };
-        const ask = async (text) => { questions.push(['send', text]); return sendAnswer; };
+        const ask = async (q) => { questions.push(['send', q.title]); return sendAnswer; };
         const dropAsk = async (text) => { questions.push(['drop', text]); return dropAnswer; };
-        const result = await I.withConsent(ask, 'Don\'t move it', make, drop ? dropAsk : undefined);
+        const result = await I.withConsent(ask, 'move', make, drop ? dropAsk : undefined);
         return { result, calls, questions };
     };
     // Move anyway: made again with dropChanges.
@@ -345,7 +416,7 @@ test('a series that would lose part of itself on a move asks first, then may ask
 });
 
 test('the window\'s own refusals keep the host\'s words', () => {
-    for (const code of ['calendar/changed', 'calendar/drops-changes', 'calendar/choose-calendar']) {
+    for (const code of ['calendar/changed', 'calendar/drops-changes', 'calendar/choose-calendar', 'calendar/needs-approval']) {
         assert.equal(I.errorText({ code, message: 'the host says why' }), 'The host says why.');
     }
     assert.equal(I.CHOOSE_CALENDAR, 'Choose the calendar it goes to.');
