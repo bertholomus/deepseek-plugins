@@ -79,7 +79,7 @@ Or restore the backups from step 2 of the install.
 ## Tests
 
 ```bash
-npm test                                  # dsh-site, session-bridge, projects (pure logic)
+npm test                                  # dsh-site, session-bridge, projects (pure logic), the categories window
 npm install --no-save @deepseek-ai/schemastery @deepseek-ai/dsh-llm@next @deepseek-ai/dsh-brand@next @deepseek-ai/dsh-tools@next
 node plugins/discord/test/smoke.mjs       # discord (no token needed)
 node plugins/projects/test/smoke.mjs      # projects (fake DSH host)

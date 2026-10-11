@@ -80,9 +80,12 @@ A path under `~/.dsh` follows `$DSH_HOME`.
 
 ```bash
 node plugins/categories/test/smoke.mjs
+node plugins/categories/test/client.mjs
 ```
 
 The smoke tests run the host half against a fake Host: categories and their workspaces in DSH's order, the refusals, the one-time move from the projects store (its categories exactly as they are with the old sidebar left unread, groups from before them without a project that has a coordinator in its own workspace, nothing to move, a store that can't be read yet), a switch-off and on that reads the file again, the old sidebar's import and the preview script.
+
+The browser half's tests load `lib/client.js` the way DSH does, with stand-ins for React and DSH's own parts, and draw its views: the session list by category with its headers' menus, keys and drags, New workspace… through DSH's own Add workspace, the Categories page with its tree, keys and find, the endpoints over DSH's connection, and that the projects plugin's data changes nothing here. They need no DSH, and `npm test` runs them too.
 
 The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin and session-bridge. A first start makes DSH's workspaces; then a projects store shaped like the user's (four categories, one with a ◆ project's id, a placement of a workspace that's gone) and an old sidebar file still naming deleted categories are put where the user's are, and the next start moves the categories over once, exactly as they are, without reading the old file (the projects store and the old file untouched, a copy kept, the files private). It checks DSH's own workspace order, that DSH serves the browser half and it parses, the endpoints as the window calls them (make, file before another, move, rename, delete, the refusals) and a restart that changes nothing. With `PROJECTS=1` the projects plugin runs beside it: each answers only for its own, and the projects store keeps its categories as they were.
 
