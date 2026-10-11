@@ -73,17 +73,23 @@
  *       record.uid is new, and the same when the manager asks again after
  *       an answer was lost: the server must make the event once.
  *   update(calendar, target, patch, scope) → Item[]
- *       target: {item, record, occurrence?, planned?}: the item and record
- *       changed, and for one occurrence of a series its original start (a
- *       Time). planned: the record (or records) the change was worked out
- *       on, record when not given: who it was told it reaches. patch: the
- *       record fields to change. scope: 'all' (the series or a single
- *       event) or 'one' (that occurrence only). A change goes with the etag
- *       the plugin holds; where it holds none (a series kept as its
+ *       target: {item, record, occurrence?, planned?, from?, synced?}: the
+ *       item and record changed, and for one occurrence of a series its
+ *       original start (a Time). planned: the record (or records) the
+ *       change was worked out on, record when not given: who it was told it
+ *       reaches. from: for a series ended before an occurrence ("this and
+ *       following"), that occurrence's original start. synced: the
+ *       calendar's sync state as kept with its events. patch: the record
+ *       fields to change. scope: 'all' (the series or a single event) or
+ *       'one' (that occurrence only). A change goes with the etag the
+ *       plugin holds; where it holds none (a series kept as its
  *       occurrences, an occurrence found by its start), the source reads
  *       the event just before writing, and goes on only while the event
- *       names nobody `planned` doesn't (newPeople): no 412 would say it
- *       changed meanwhile.
+ *       names the people `planned` does, no one more and no one less
+ *       (otherPeople): no 412 would say it changed meanwhile. A change to a
+ *       whole series reads its occurrences changed on their own too (from
+ *       `from` on), etag held or not: a change to one of them doesn't
+ *       change the series' etag.
  *   remove(calendar, target, scope) → {removed: string[], items: Item[]}
  *   respond(calendar, target, status, scope) → Item[]   (optional)
  *       Answer an invitation: 'accepted', 'declined' or 'tentative'.

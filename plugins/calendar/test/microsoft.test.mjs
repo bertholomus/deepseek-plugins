@@ -85,7 +85,7 @@ function graphRules(store, enforce) {
     async function rules(url, init = {}) {
         const method = init.method ?? 'GET';
         const { pathname } = new URL(url);
-        sent.push({ method, path: decodeURIComponent(pathname), headers: { ...init.headers } });
+        sent.push({ method, path: decodeURIComponent(pathname), url: String(url), headers: { ...init.headers } });
         if (!enforce) return request(url, init);
         const event = /^\/v1\.0\/me\/events\/([^/]+)$/.exec(pathname);
         const ifMatch = init.headers?.['If-Match'];
@@ -1402,6 +1402,31 @@ test('a whole series changed or deleted after someone was added at Microsoft to 
     const last = (await source.sync({ remoteId: cal }, undefined, { from: FROM, to: TO })).items;
     await source.remove({ remoteId: cal }, target(last), 'all');
     assert.equal(store.events.has(series), false);
+});
+
+test('after a start, before the first sync: a whole series is compared over the window its events were synced over', async (t) => {
+    const { store, source, sent, env } = await setup(t, { rules: true });
+    const cal = store.addCalendar({ name: 'Work' });
+    const guest = (address) => ({ type: 'required', status: { response: 'none', time: NO_TIME }, emailAddress: { name: address, address } });
+    const me = { organizer: { emailAddress: { name: 'Robin Park', address: 'robin@example.com' } }, isOrganizer: true };
+    const series = weeklySeries(store, cal, { ...me, attendees: [guest('ann@example.com')] });
+    // Pat is on the 12th alone, a day the default window (31 days back) leaves out on Nov 20.
+    store.updateEvent(store.occurrenceId(series, '2026-10-12'), { attendees: [guest('ann@example.com'), guest('pat@example.com')] });
+    const { items, state } = await source.sync({ remoteId: cal }, undefined, { from: FROM, to: TO });
+    const item = byId(items, store.occurrenceId(series, '2026-10-14'));
+    const planned = items.filter((i) => i.events[0].seriesRemoteId === series).map((i) => i.events[0]);
+    // Restarted a while later: a new source, which hasn't synced yet.
+    const later = { ...env, now: () => Date.parse('2026-11-20T00:00:00Z') };
+    const restarted = create(ACCOUNT, later);
+    sent.length = 0;
+    await restarted.update({ remoteId: cal }, { item, record: item.events[0], planned, synced: state }, { title: 'Weekly sync', notify: true }, 'all');
+    const read = sent.find((r) => r.method === 'GET' && r.path === `/v1.0/me/events/${series}/instances`);
+    assert.equal(new URL(read.url).searchParams.get('startDateTime'), state.from);
+    assert.equal(new URL(read.url).searchParams.get('endDateTime'), state.to);
+    assert.equal(store.json(series).subject, 'Weekly sync');
+    // Without that state, it falls back to the default window, misses Pat, and stops: safe, never a wrong write.
+    const bare = create(ACCOUNT, later);
+    await assert.rejects(bare.update({ remoteId: cal }, { item, record: item.events[0], planned }, { title: 'Team sync', notify: true }, 'all'), isSourceError('conflict'));
 });
 
 test('create: the record\'s uid is Graph\'s transactionId, so a create repeated after a lost answer makes no second event', async (t) => {

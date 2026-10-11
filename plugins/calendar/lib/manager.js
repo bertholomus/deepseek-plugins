@@ -1909,7 +1909,8 @@ export class CalendarManager {
                 }
                 await this.putIcs(calendar, at.item, edits, at.uid);
             } else {
-                this.takeItems(calendar, await source.update({ ...calendar }, { item: at.item, record: master, planned: now.before }, { ...diffOf(master, changed), ...tell }, 'all'));
+                const synced = this.store.syncOf(calendar.id)?.state;
+                this.takeItems(calendar, await source.update({ ...calendar }, { item: at.item, record: master, planned: now.before, synced }, { ...diffOf(master, changed), ...tell }, 'all'));
             }
             // The occurrence that was asked about, where it is now.
             after = { uid: at.uid, near: at.series ? at.originalStart + delta : startOfTime(changed.start, zone) };
@@ -2164,7 +2165,8 @@ export class CalendarManager {
                 if (style === 'ics') {
                     await this.putIcs(calendar, at.item, at.records.map((r) => ({ uid: at.uid, recurrenceId: r.recurrenceId, record: null })), at.uid, quiet);
                 } else {
-                    const out = await source.remove({ ...calendar }, { item: at.item, record: at.master ?? at.override, occurrence: at.recurrenceId, planned: now.before, ...tell }, 'all');
+                    const synced = this.store.syncOf(calendar.id)?.state;
+                    const out = await source.remove({ ...calendar }, { item: at.item, record: at.master ?? at.override, occurrence: at.recurrenceId, planned: now.before, synced, ...tell }, 'all');
                     this.takeItems(calendar, out?.items, out?.removed ?? [at.item.remoteId]);
                 }
                 return;

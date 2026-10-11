@@ -607,13 +607,16 @@ export function create(account, env) {
 
     /**
      * A series' occurrences as Graph has them now (changed and cancelled
-     * ones too), as records, in the window the calendar syncs: the window a
-     * change to the whole series is worked out on, from what the calendar
-     * view brought of them. undefined when the series is gone (a delete is
-     * done already, and a change is answered 404).
+     * ones too), as records, in the window the calendar was synced over:
+     * the window a change to the whole series is worked out on, from what
+     * the calendar view brought of them. That window is in the sync state
+     * kept with the events (`synced`, as sync() returned it), so it holds
+     * from a start on, before the first sync. undefined when the series is
+     * gone (a delete is done already, and a change is answered 404).
      */
-    async function occurrencesNow(calendar, seriesId, what) {
-        const window = windows.get(calendar.remoteId) ?? windowOf(undefined, undefined, env.now());
+    async function occurrencesNow(calendar, seriesId, synced, what) {
+        const kept = typeof synced?.from === 'string' && typeof synced?.to === 'string' ? { from: synced.from, to: synced.to } : undefined;
+        const window = kept ?? windows.get(calendar.remoteId) ?? windowOf(undefined, undefined, env.now());
         const out = [];
         try {
             for await (const event of instances(seriesId, window.from, window.to, what)) {
@@ -862,7 +865,7 @@ export function create(account, env) {
             ref = await seriesRef(item, seriesId, times);
             body = { ...fields, ...(times ? seriesTimes(ref.master, record, patch) : {}) };
             // It reaches every occurrence: who they name is read too.
-            ref.occurrences = await occurrencesNow(calendar, seriesId, what);
+            ref.occurrences = await occurrencesNow(calendar, seriesId, target.synced, what);
             if (item.remoteId === seriesId) ref.copy = record;
         } else {
             ref = { id: item.remoteId, etag: item.etag };
@@ -901,7 +904,7 @@ export function create(account, env) {
         else if (seriesId !== undefined) {
             // It takes out every occurrence: who they name is read too.
             const own = item.remoteId === seriesId;
-            ref = { id: seriesId, etag: own ? item.etag : undefined, occurrences: await occurrencesNow(calendar, seriesId, 'Deleting the event on Microsoft'), ...(own ? { copy: record } : {}) };
+            ref = { id: seriesId, etag: own ? item.etag : undefined, occurrences: await occurrencesNow(calendar, seriesId, target.synced, 'Deleting the event on Microsoft'), ...(own ? { copy: record } : {}) };
         }
         const removed = scope === 'one' ? [ref.id] : [...new Set([ref.id, item.remoteId])];
         const etag = await etagFor(ref, planned, 'Deleting the event on Microsoft');
