@@ -4,6 +4,12 @@
  * 9:30 meeting in Berlin stays 9:30 in Berlin through daylight saving; its
  * RDATEs add times, its EXDATEs take them out, and its changed occurrences
  * (records with the same uid and a recurrenceId) replace the ones they name.
+ * A changed occurrence made for "this and the following ones"
+ * (`thisAndFuture`, iCalendar's RANGE=THISANDFUTURE) also stands for every
+ * later one, as RFC 5545 has it: each moves by as much as it moved its own
+ * start (on the series' wall clock), lasts as long as it does and shows its
+ * fields; a later changed occurrence still stands for its own, and the
+ * nearest such change before an occurrence is the one that holds.
  *
  * @module dsh-plugin-calendar/expand
  */
@@ -46,6 +52,56 @@ function spanOf(record, zone) {
 function keyOf(time, zone) {
     if ('date' in time) return `D${time.date}`;
     return `T${instantOf(time, zone)}`;
+}
+
+/**
+ * Where an occurrence of a series falls, to order it against a "this and
+ * following" change: the day (as wall-clock ms) in an all-day series, else
+ * the instant.
+ */
+function orderOf(time, allDay, zone) {
+    if (allDay) return wallMs(`${'date' in time ? time.date : time.local.slice(0, 10)}T00:00:00`);
+    return 'date' in time ? toInstant(`${time.date}T00:00:00`, zone, zone) : instantOf(time, zone);
+}
+
+/** A time on the series' wall clock (zone `tz`), as wall-clock ms; a day is its midnight. */
+function wallIn(time, tz, zone) {
+    return 'date' in time ? wallMs(`${time.date}T00:00:00`) : wallMs(toLocal(instantOf(time, zone), tz));
+}
+
+/**
+ * A "this and following" change as it reaches later occurrences: from
+ * which one on, how far it moved its own start on the series' wall clock,
+ * and how long it lasts.
+ */
+function rangeOf(record, allDay, tz, zone) {
+    const own = spanOf(record, zone);
+    return {
+        record,
+        from: orderOf(record.recurrenceId, allDay, zone),
+        shift: wallIn(record.start, tz, zone) - wallIn(record.recurrenceId, tz, zone),
+        allDay: own.allDay,
+        days: own.allDay ? Math.max(1, daysBetween(own.startDay, own.endDay)) : 0,
+        length: own.end - own.start,
+    };
+}
+
+/** The "this and following" change that holds at an occurrence (ranges sorted by `from`), or undefined. */
+function rangeAt(ranges, order) {
+    for (let i = ranges.length - 1; i >= 0; i--) if (ranges[i].from < order) return ranges[i];
+    return undefined;
+}
+
+/** An occurrence that starts at `wall` (on the series' wall clock) moved as a "this and following" change says. */
+function movedBy(range, wall, tz, zone) {
+    const at = wall + range.shift;
+    if (range.allDay) {
+        const startDay = wallOf(at).slice(0, 10);
+        const endDay = addDays(startDay, range.days);
+        return { allDay: true, startDay, endDay, start: toInstant(`${startDay}T00:00:00`, zone, zone), end: toInstant(`${endDay}T00:00:00`, zone, zone) };
+    }
+    const start = toInstant(wallOf(at), tz, zone);
+    return { allDay: false, start, end: start + range.length };
 }
 
 /**
@@ -118,6 +174,16 @@ function expandSeries(master, changed, { from, to, zone, limit, warnings, out, s
         if (allDay && !('date' in record.recurrenceId)) replaced.add(`D${record.recurrenceId.local.slice(0, 10)}`);
         single(record, { series: master, recurrenceId: record.recurrenceId });
     }
+    // "This and following" changes reach the occurrences after theirs, which may move into the window from outside it.
+    const ranges = changed.filter((r) => r.thisAndFuture).map((r) => rangeOf(r, allDay, tz, zone)).sort((a, b) => a.from - b.from);
+    let longest = Math.max(length, days * DAY);
+    let ahead = 0;
+    let behind = 0;
+    for (const range of ranges) {
+        longest = Math.max(longest, range.allDay ? range.days * DAY : range.length);
+        ahead = Math.max(ahead, range.shift);
+        behind = Math.max(behind, -range.shift);
+    }
     const excluded = new Set();
     const excludedDays = new Set();
     for (const time of master.exdates ?? []) {
@@ -131,8 +197,11 @@ function expandSeries(master, changed, { from, to, zone, limit, warnings, out, s
     const emit = (recurrenceId, key, startMs) => {
         if (seen.has(key) || skip(key, startMs)) return;
         seen.add(key);
+        const range = ranges.length > 0 ? rangeAt(ranges, allDay ? orderOf(recurrenceId, true, zone) : startMs) : undefined;
         let occurrence;
-        if (allDay) {
+        if (range !== undefined) {
+            occurrence = movedBy(range, allDay ? orderOf(recurrenceId, true, zone) : wallMs(toLocal(startMs, tz)), tz, zone);
+        } else if (allDay) {
             const startDay = recurrenceId.date;
             const endDay = addDays(startDay, days);
             occurrence = {
@@ -142,8 +211,9 @@ function expandSeries(master, changed, { from, to, zone, limit, warnings, out, s
         } else {
             occurrence = { start: startMs, end: startMs + length, allDay: false };
         }
-        if (master.status !== 'cancelled' && overlaps(occurrence.start, occurrence.end, from, to)) {
-            out.push({ record: master, series: master, recurrenceId, ...occurrence });
+        const record = range?.record ?? master;
+        if (record.status !== 'cancelled' && overlaps(occurrence.start, occurrence.end, from, to)) {
+            out.push({ record, series: master, recurrenceId, ...occurrence });
             count++;
         }
     };
@@ -158,9 +228,9 @@ function expandSeries(master, changed, { from, to, zone, limit, warnings, out, s
         if (rule !== undefined) {
             const until = rule.until === undefined ? undefined : untilWall(rule.until, allDay, tz);
             // Start early enough to catch an occurrence that began before the window and runs into it.
-            const reach = Math.max(length, days * DAY) + DAY;
+            const reach = longest + ahead + DAY;
             const skipTo = wallMs(toLocal(from - reach, tz));
-            const stop = wallMs(toLocal(to, tz)) + DAY;
+            const stop = wallMs(toLocal(to, tz)) + DAY + behind;
             try {
                 for (const wall of expandWall(rule, startWall, { until, stop, skipTo })) {
                     if (wall > stop || count >= limit) break;
@@ -209,6 +279,44 @@ export function hasOccurrence(master, recurrenceId, zone) {
     const at = 'date' in recurrenceId ? toInstant(`${recurrenceId.date}T00:00:00`, zone, zone) : instantOf(recurrenceId, zone);
     const found = occurrences([{ ...master, recurrenceId: undefined }], { from: at - DAY, to: at + 2 * DAY, zone, limit: 500 });
     return found.some((o) => (allDay ? o.startDay === (recurrenceId.date ?? recurrenceId.local.slice(0, 10)) : keyOf(o.recurrenceId, tz) === keyOf(recurrenceId, tz)));
+}
+
+/**
+ * The record an occurrence of a series stands for when a "this and
+ * following" change reaches it (and no change of its own does): a copy of
+ * that change at the occurrence's own place (its start moved by as much as
+ * the change moved its own, its length the change's), naming the
+ * occurrence, without `thisAndFuture`. Undefined when no such change reaches
+ * it. For a change to that occurrence alone.
+ * @param {import('./model.js').Record[]} records - the series and its changed occurrences.
+ * @param {import('./model.js').Time} recurrenceId - the occurrence: its original start.
+ * @param {string} zone - the user's zone.
+ * @returns {import('./model.js').Record|undefined}
+ */
+export function rangeRecord(records, recurrenceId, zone) {
+    const master = records.find((r) => r.recurrenceId === undefined);
+    if (master === undefined) return undefined;
+    const allDay = master.allDay || 'date' in master.start;
+    const tz = allDay ? zone : (master.start.tz ?? zone);
+    const changed = records.filter((r) => r.recurrenceId !== undefined);
+    if (changed.some((r) => keyOf(r.recurrenceId, tz) === keyOf(recurrenceId, tz))) return undefined;
+    const ranges = changed.filter((r) => r.thisAndFuture).map((r) => rangeOf(r, allDay, tz, zone)).sort((a, b) => a.from - b.from);
+    const range = rangeAt(ranges, orderOf(recurrenceId, allDay, zone));
+    if (range === undefined) return undefined;
+    const moved = movedBy(range, allDay ? orderOf(recurrenceId, true, zone) : wallIn(recurrenceId, tz, zone), tz, zone);
+    const record = structuredClone(range.record);
+    delete record.thisAndFuture;
+    record.recurrenceId = recurrenceId;
+    record.allDay = moved.allDay;
+    if (moved.allDay) {
+        record.start = { date: moved.startDay };
+        record.end = { date: moved.endDay };
+    } else {
+        const own = range.record.start.tz ?? null;
+        record.start = { local: toLocal(moved.start, own ?? zone), tz: own };
+        record.end = { local: toLocal(moved.end, own ?? zone), tz: own };
+    }
+    return record;
 }
 
 export { keyOf as occurrenceKey };

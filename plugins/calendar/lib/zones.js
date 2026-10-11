@@ -4,9 +4,10 @@
  * iCalendar writes them, so a weekly meeting stays at 9:30 across daylight
  * saving. This module turns those into instants and back through the
  * runtime's own zone data (Intl), and maps the zone names other systems use
- * (Windows names from Exchange, prefixed ids from older clients) to IANA ids.
- * A zone an iCalendar file defines itself (VTIMEZONE) and that has no IANA
- * name is a rule object (`ruleZone`, built in ical.js) with `offsetAt(ms)`.
+ * (Windows names from Exchange, Outlook's and Lotus Notes' names, prefixed
+ * ids from older clients, bare offsets) to IANA ids. A zone an iCalendar
+ * file defines itself (VTIMEZONE) and that has no IANA name is a rule object
+ * (`ruleZone`, built in ical.js) with `offsetAt(ms)`.
  *
  * @module dsh-plugin-calendar/zones
  */
@@ -330,11 +331,13 @@ export function ianaToWindows(tz) {
  * The IANA id a TZID from a calendar file or service stands for, or
  * undefined when it names none: an IANA id as is; one behind a vendor
  * prefix ("/mozilla.org/20050126_1/America/New_York",
- * "/softwarestudio.org/Olson_20011030_5/America/New_York"); a Windows
- * name; "GMT"/"UTC"/"Z".
+ * "/citadel.org/20190914_1/Europe/Berlin"); a Windows name, or its
+ * daylight form; "GMT"/"UTC"/"Z"; and the names older clients write (see
+ * aliasZone): Outlook's display names, Lotus Notes' names, a bare offset.
  */
 export function ianaZone(tzid) {
-    const raw = String(tzid ?? '').trim().replace(/^"|"$/g, '');
+    // A TZID property's value is TEXT, so Outlook escapes the commas in its display names.
+    const raw = String(tzid ?? '').trim().replace(/^"|"$/g, '').replace(/\\(.)/g, '$1');
     if (raw === '') return undefined;
     if (/^(?:Z|UTC|GMT|Etc\/UTC|Etc\/GMT|Coordinated Universal Time)$/i.test(raw)) return 'UTC';
     if (isZone(raw) && raw.includes('/')) return raw;
@@ -346,5 +349,113 @@ export function ianaZone(tzid) {
         const tail = parts.slice(i).join('/');
         if (isZone(tail) && tail.includes('/')) return tail;
     }
+    return aliasZone(raw);
+}
+
+/**
+ * Outlook's display names that name no city: what follows "(UTC-05:00) "
+ * (or the older "(GMT-05.00) "), lowercased. Names with a city
+ * ("(UTC+01:00) Amsterdam, Berlin, Bern, Rome, Stockholm, Vienna") are
+ * found by the city.
+ */
+const DISPLAY_NAMES = {
+    'eastern time (us & canada)': 'America/New_York',
+    'central time (us & canada)': 'America/Chicago',
+    'mountain time (us & canada)': 'America/Denver',
+    'pacific time (us & canada)': 'America/Los_Angeles',
+    'pacific time (us & canada); tijuana': 'America/Los_Angeles',
+    'alaska': 'America/Anchorage',
+    'hawaii': 'Pacific/Honolulu',
+    'arizona': 'America/Phoenix',
+    'indiana (east)': 'America/Indiana/Indianapolis',
+    'saskatchewan': 'America/Regina',
+    'atlantic time (canada)': 'America/Halifax',
+    'newfoundland': 'America/St_Johns',
+    'newfoundland and labrador': 'America/St_Johns',
+    'central america': 'America/Guatemala',
+    'brasilia': 'America/Sao_Paulo',
+    'mid-atlantic': 'Etc/GMT+2',
+    'international date line west': 'Etc/GMT+12',
+    'coordinated universal time': 'UTC',
+    'west central africa': 'Africa/Lagos',
+    'ekaterinburg': 'Asia/Yekaterinburg',
+};
+
+/** The regions an IANA id starts with, to find a city's zone. */
+const REGIONS = ['Europe', 'America', 'Asia', 'Africa', 'Australia', 'Pacific', 'Atlantic', 'Indian', 'America/Argentina', 'America/Indiana', 'Antarctica'];
+
+/** The IANA zone of a city as a display name writes it ("Mexico City", "Yangon (Rangoon)"), or undefined. */
+function cityZone(place) {
+    for (const name of [place.replace(/\(.*\)/, ''), /\(([^)]*)\)/.exec(place)?.[1] ?? '']) {
+        const city = name.trim().replace(/\s+(?:Is\.|Islands?)$/i, '').replace(/\s+/g, '_');
+        if (!/^[A-Za-z][A-Za-z_'.-]*$/.test(city)) continue;
+        for (const region of REGIONS) if (isZone(`${region}/${city}`)) return `${region}/${city}`;
+    }
     return undefined;
+}
+
+/** A zone's offsets this year, in winter and in summer. */
+function offsetsNow(zone) {
+    const year = new Date().getUTCFullYear();
+    return [offsetAt(zone, Date.UTC(year, 0, 15, 12)), offsetAt(zone, Date.UTC(year, 6, 15, 12))];
+}
+
+/**
+ * The names older clients give zones, as an IANA id or undefined: Lotus
+ * Notes' Windows names without "Standard Time" ("W. Europe", "Eastern"), and
+ * its own zone text ("Z=-1$DO=1$DL=3 -1 1 10 -1 1$ZX=21$ZN=W. Europe"); a
+ * Windows name's daylight form ("W. Europe Daylight Time"); a bare offset
+ * ("GMT+01.00", "UTC-05:00"), as a fixed zone; and Outlook's display names
+ * ("(UTC+01:00) Amsterdam, Berlin, Bern, Rome, Stockholm, Vienna", Outlook
+ * 2003's "(GMT+01.00) Amsterdam / Berlin / Bern / Rome / Stockholm /
+ * Vienna"), by their city when its zone has the offset the name gives.
+ */
+function aliasZone(raw) {
+    const name = (/\$ZN=([^$]+)/.exec(raw)?.[1] ?? raw).trim();
+    const windows = windowsToIana(name.replace(/\s+Daylight Time$/i, ' Standard Time')) ?? windowsToIana(`${name} Standard Time`);
+    if (windows !== undefined) return windows;
+    const offsets = nameOffsets(name);
+    if (offsets?.length === 1) return fixedZone(offsets[0]);
+    const display = /^\(\s*(?:UTC|GMT)\s*(?:([+-])\s*(\d{1,2})(?:[.:]?(\d{2}))?)?\s*\)\s*(.+)$/i.exec(name);
+    if (display === null) return undefined;
+    const offset = display[1] === undefined ? 0 : (display[1] === '-' ? -1 : 1) * (Number(display[2]) * 60 + Number(display[3] ?? 0));
+    const rest = display[4].trim();
+    for (const place of [rest, ...rest.split(/\s*[,/:;]\s*/)]) {
+        if (place === '') continue;
+        const zone = DISPLAY_NAMES[place.toLowerCase()] ?? cityZone(place);
+        if (zone !== undefined && isZone(zone) && offsetsNow(zone).includes(offset)) return zone;
+    }
+    return undefined;
+}
+
+/**
+ * The offsets a zone name gives when it is nothing but offsets, in minutes
+ * east: "GMT+01.00", "GMT+0100", "UTC-05:00", "(GMT+01.00)" give one;
+ * Outlook 2000's "GMT +0100 (Standard) / GMT +0200 (Daylight)" gives the
+ * standard one and the daylight one. Undefined for any other name.
+ * @returns {number[]|undefined}
+ */
+export function nameOffsets(tzid) {
+    const raw = String(tzid ?? '').trim().replace(/^"|"$/g, '').replace(/\((?:Standard|Daylight)\)/gi, '');
+    const out = [];
+    for (const [i, part] of raw.split('/').entries()) {
+        const m = /^\(?\s*(GMT|UTC)?\s*([+-])\s*(\d{1,2})(?:[.:]?(\d{2}))?\s*\)?$/i.exec(part.trim());
+        if (m === null || (i === 0 && m[1] === undefined)) return undefined;
+        const minutes = Number(m[3]) * 60 + Number(m[4] ?? 0);
+        if (Number(m[3]) > 14 || Number(m[4] ?? 0) > 59) return undefined;
+        out.push(m[2] === '-' ? -minutes : minutes);
+    }
+    return out.length > 0 && out.length <= 2 ? out : undefined;
+}
+
+/**
+ * The IANA id of a fixed offset (minutes east): 'UTC', or Etc/GMT-1 for
+ * +01:00 (the Etc ids count the other way). Undefined for an offset that
+ * isn't whole hours, which has none.
+ */
+export function fixedZone(minutes) {
+    if (minutes === 0) return 'UTC';
+    if (!Number.isInteger(minutes) || minutes % 60 !== 0 || minutes < -12 * 60 || minutes > 14 * 60) return undefined;
+    const id = `Etc/GMT${minutes > 0 ? '-' : '+'}${Math.abs(minutes) / 60}`;
+    return isZone(id) ? id : undefined;
 }

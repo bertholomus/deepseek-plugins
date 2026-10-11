@@ -12,8 +12,8 @@ import { isDay, isZone, normalLocal, toInstant, toLocal } from './zones.js';
 /**
  * A time. All-day: `{date: 'YYYY-MM-DD'}`. Timed: a wall-clock time and
  * its zone, `{local: 'YYYY-MM-DDTHH:MM:SS', tz}`, where `tz` is an IANA id,
- * 'UTC', the TZID of a zone the event's own file defines, or null for a
- * floating time (read in the user's zone).
+ * 'UTC', or null for a floating time (read in the user's zone). ical.js
+ * reads a zone a file defines itself as the IANA zone it matches.
  * @typedef {{date: string} | {local: string, tz: string|null}} Time
  */
 
@@ -31,9 +31,14 @@ import { isDay, isZone, normalLocal, toInstant, toLocal } from './zones.js';
  * An event as the plugin keeps it. A recurring series is one record with
  * `rrule` (and `rdates`, `exdates`); a changed occurrence of it is another
  * record with the same `uid` and `recurrenceId` set to the start it
- * replaces. A source that hands over occurrences one by one (Microsoft's
- * calendar view, Apple's EventKit) gives each one `recurrenceId` and
- * `seriesRemoteId`, and the calendar is in 'instances' mode.
+ * replaces. One with `thisAndFuture` (iCalendar's
+ * RECURRENCE-ID;RANGE=THISANDFUTURE) stands for every later occurrence too:
+ * each moves by as much as it moved its own start, lasts as long as it does
+ * and takes its fields, unless a changed occurrence of its own (or a later
+ * `thisAndFuture` one) stands in for it. A source that hands over
+ * occurrences one by one (Microsoft's calendar view, Apple's EventKit) gives
+ * each one `recurrenceId` and `seriesRemoteId`, and the calendar is in
+ * 'instances' mode.
  * @typedef {object} Record
  * @property {string} uid - iCalendar UID (Google's iCalUID, Microsoft's iCalUId).
  * @property {string} [remoteId] - the server's own id for this event, if it has one apart from its item.
@@ -54,6 +59,7 @@ import { isDay, isZone, normalLocal, toInstant, toLocal } from './zones.js';
  * @property {Time[]} [rdates]
  * @property {Time[]} [exdates]
  * @property {Time} [recurrenceId] - on a changed occurrence: the start it replaces.
+ * @property {boolean} [thisAndFuture] - on a changed occurrence: it changes the later occurrences too (above).
  * @property {string} [seriesRemoteId] - instances mode: the series' remote id.
  * @property {string} [conference] - a meeting link.
  * @property {string[]} [categories]
@@ -130,7 +136,7 @@ export function timeText(time) {
 /** The fields a record may carry, for copying and comparing. */
 export const RECORD_FIELDS = [
     'uid', 'remoteId', 'title', 'description', 'location', 'url', 'start', 'end', 'allDay', 'status', 'busy', 'privacy',
-    'organizer', 'attendees', 'alarms', 'rrule', 'rdates', 'exdates', 'recurrenceId', 'seriesRemoteId', 'conference',
+    'organizer', 'attendees', 'alarms', 'rrule', 'rdates', 'exdates', 'recurrenceId', 'thisAndFuture', 'seriesRemoteId', 'conference',
     'categories', 'created', 'updated', 'sequence',
 ];
 
@@ -145,6 +151,8 @@ export function cleanRecord(record) {
     }
     out.title = typeof out.title === 'string' ? out.title : '';
     out.allDay = 'date' in (out.start ?? {});
+    // Only a changed occurrence reaches the ones after it.
+    if (out.thisAndFuture !== true || out.recurrenceId === undefined) delete out.thisAndFuture;
     return out;
 }
 
