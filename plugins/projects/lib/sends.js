@@ -546,6 +546,8 @@ function optionValue(args, names) {
 
 const has = (args, ...names) => args.some((a) => names.includes(a) || names.some((n) => n.startsWith('--') && a.startsWith(`${n}=`)));
 const dryRun = (args) => args.some((a) => a === '--dry-run' || a.startsWith('--dry-run=') || a === '--dryrun');
+/** A one-letter option, alone or with others: `-n`, `-avzn`. */
+const hasShort = (args, letter) => args.some((a) => !a.startsWith('--') && new RegExp(`^-[a-zA-Z]*${letter}[a-zA-Z]*$`).test(a));
 
 // Commands that only run the command after them.
 const WRAP = {
@@ -1241,6 +1243,10 @@ const SCRIPT_EXT = /\.(sh|bash|zsh|ksh|py|js|mjs|cjs|ts|mts|rb|pl|php|ps1|lua|r)
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'ash', 'fish', 'mksh']);
 const INTERPRETERS = new Set(['python', 'python2', 'python3', 'node', 'nodejs', 'deno', 'bun', 'ruby', 'perl', 'php', 'rscript', 'lua', 'ts-node', 'tsx', 'osascript', 'pwsh', 'powershell']);
 const isPython = (name) => /^python(\d+(\.\d+)?)?$/.test(name);
+/** An interpreter's own options that take the next word: a shell's, Python's, and the others' (code, a module, a folder). */
+const SHELL_TAKES = new Set(['o', 'O', '--init-file', '--rcfile']);
+const PYTHON_TAKES = new Set(['W', 'X', 'Q', 'c', 'm']);
+const RUNTIME_TAKES = new Set(['r', 'e', 'p', 'E', 'I', 'C', '--require', '--import', '--loader', '--experimental-loader', '--env-file', '--conditions', '--eval', '--print']);
 
 /** A folder named from another, or null when it can't be told (the other is unknown, the name has a variable or a ~). */
 function within(cwd, dir) {
@@ -1469,14 +1475,18 @@ const shellWord = (word) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.rep
 /** Python run as `python -m twine upload` or on a file or on code. */
 function interpreter(name, args, ctx, inputs) {
     const deeper = { ...ctx, depth: (ctx.depth ?? 0) + 1 };
+    const shell = SHELLS.has(name) || name === 'source' || name === '.';
+    // Its own options come before the script's name, and the words after it are the script's: the -n in
+    // `bash deploy.sh -n prod` and the -c in `node publish.mjs -c release.json` are no syntax check.
+    const takes = shell ? SHELL_TAKES : isPython(name) ? PYTHON_TAKES : RUNTIME_TAKES;
+    const own = args.slice(0, skipOptions(args, takes));
     // A syntax check runs nothing: `bash -n`, `node --check`, `ruby -c`, `perl -c`, `php -l`.
-    const short = (letter) => args.some((a) => !a.startsWith('--') && new RegExp(`^-[a-zA-Z]*${letter}[a-zA-Z]*$`).test(a));
-    if ((SHELLS.has(name) && (short('n') || has(args, '--no-execute'))) || ((name === 'node' || name === 'nodejs') && (has(args, '--check') || args.includes('-c')))
-        || ((name === 'ruby' || name === 'perl') && args.includes('-c')) || (name === 'php' && args.includes('-l'))) return null;
-    if (SHELLS.has(name) || name === 'source' || name === '.') {
-        const c = name === 'source' || name === '.' ? undefined : args.findIndex((a) => /^-[a-z]*c[a-z]*$/i.test(a) && !a.startsWith('--'));
+    if ((SHELLS.has(name) && (hasShort(own, 'n') || has(own, '--no-execute'))) || ((name === 'node' || name === 'nodejs') && (has(own, '--check') || own.includes('-c')))
+        || ((name === 'ruby' || name === 'perl') && own.includes('-c')) || (name === 'php' && own.includes('-l'))) return null;
+    if (shell) {
+        const c = name === 'source' || name === '.' ? undefined : own.findIndex((a) => /^-[a-z]*c[a-z]*$/i.test(a) && !a.startsWith('--'));
         if (c !== undefined && c >= 0) return args[c + 1] !== undefined && (ctx.depth ?? 0) < MAX_DEPTH ? lineSendOf(args[c + 1], deeper) : null;
-        const file = positionals(args, new Set(['o', 'O', '--init-file', '--rcfile']))[0];
+        const file = positionals(args, takes)[0];
         if (file !== undefined && file !== '-') return scriptSendOf(file, name === 'source' || name === '.' ? 'bash' : name, ctx);
         for (const input of inputs) { const found = (ctx.depth ?? 0) < MAX_DEPTH ? lineSendOf(input, deeper) : null; if (found) return found; }
         return null;
@@ -1487,7 +1497,7 @@ function interpreter(name, args, ctx, inputs) {
         const file = optionValue(args.map((a) => (/^-(f|file)$/i.test(a) ? '-File' : a)), ['-File']);
         return file !== undefined ? scriptSendOf(file, 'pwsh', ctx) : null;
     }
-    let code = optionValue(args, isPython(name) ? ['-c'] : name === 'php' ? ['-r'] : name === 'osascript' ? ['-e'] : ['-e', '--eval', '-p', '--print', '-E']);
+    let code = optionValue(own, isPython(name) ? ['-c'] : name === 'php' ? ['-r'] : name === 'osascript' ? ['-e'] : ['-e', '--eval', '-p', '--print', '-E']);
     if (name === 'osascript') {
         const script = args.filter((_, i) => args[i - 1] === '-e').join('\n');
         if (script && /\bsend\b|tell application "(Messages|Mail|Microsoft Outlook|Slack)"/i.test(script)) return { kind: 'message', program: name, what: 'sends a message (osascript)' };
@@ -1496,11 +1506,11 @@ function interpreter(name, args, ctx, inputs) {
     }
     if (code !== undefined) return codeSendOf(code, deeper, name);
     if (isPython(name)) {
-        const m = optionValue(args, ['-m']);
+        const m = optionValue(own, ['-m']);
         if (m !== undefined) return wordsSendOf([m, ...args.slice(args.indexOf(m) + 1)], ctx);
     }
     if (name === 'deno' && args[0] === 'eval') return codeSendOf(args[1] ?? '', deeper, name);
-    const pos = positionals(args, isPython(name) ? new Set(['W', 'X', 'Q']) : new Set(['r', '--require', '--import', '--loader', '--experimental-loader', '--env-file', '-C', '--conditions']));
+    const pos = positionals(args, takes);
     const file = name === 'deno' && pos[0] === 'run' ? pos[1] : pos[0];
     if (file !== undefined && file !== '-') return scriptSendOf(file, name, ctx);
     for (const input of inputs) { const found = codeSendOf(input, deeper, name); if (found) return found; }

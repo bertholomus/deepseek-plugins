@@ -5741,6 +5741,7 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         + 'pypi:\n\t$(PYTHON) -m build\n\t$(PYTHON) -m twine upload dist/*\n');
     mkdirSync(join(work, 'scripts'));
     writeFileSync(join(work, 'scripts', 'release.sh'), '#!/bin/sh\ngh release create "v$2" dist/*.tar.gz --notes-file CHANGELOG.md\n');
+    writeFileSync(join(work, 'scripts', 'publish.mjs'), "import { execSync } from 'node:child_process';\nexecSync('npm publish', { stdio: 'inherit' });\n");
     writeFileSync(join(work, 'scripts', 'report.py'), 'import requests\n\ns = requests.Session()\ns.headers["Authorization"] = "Bearer t"\nr = s.post("https://reports.example.com/api/runs", json={"passed": 12})\nprint(r.status_code)\n');
     writeFileSync(join(work, 'scripts', 'deploy.ps1'), 'param([string]$Environment = \'staging\')\nInvoke-RestMethod -Uri "https://deploy.example.com/hooks/$Environment" `\n    -Method Post\n');
     // A local app: a route table and an ORM's delete send nothing.
@@ -5843,6 +5844,9 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         ['bundle exec rake release', 'runs rake release, whose name says it releases. The plugin couldn\'t see what rake release runs'],
         ['make image', 'runs make image, which pushes ghcr.io/acme/web:latest (docker push)'],
         ['make pypi', 'runs make pypi, which publishes (twine upload)'],
+        // An option after a script's name is the script's, not the interpreter's syntax check.
+        ['bash deploy.sh -n prod', 'runs deploy.sh, which sends a POST to 127.0.0.1:8787/deploy (curl)'],
+        ['node scripts/publish.mjs -c release.config.json', 'runs scripts/publish.mjs, which runs code that publishes (npm publish)'],
         // Every send in a line is named, each with where it goes.
         ['git push origin main && gh pr create --fill', 'pushes to origin (git push) and makes a change on GitHub (gh pr create)'],
         ['npm version patch && git push --follow-tags && npm publish', 'pushes to its remote (git push) and publishes (npm publish)'],
