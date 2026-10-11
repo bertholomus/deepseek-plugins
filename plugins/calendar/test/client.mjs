@@ -365,12 +365,12 @@ test('the question before an email names everyone, with what they get and why, i
     assert.deepEqual(plain([q.title, q.people[0].gets, q.yes]), ['Email invitations to 2 guests?', 'An invitation', 'Add and email']);
     // Reached without an email: on, off, or changed on their Google calendars.
     q = I.consentQuestion({ code: 'calendar/needs-approval', details: { people: six.slice(0, 3), mail: { reached: { how: 'add', to: six.slice(0, 3) } } } }, 'add');
-    assert.deepEqual(plain([q.title, q.why, q.yes, q.people[2].gets]), ['Also put it on 3 guests\' Google calendars?', 'Google puts a meeting on its guests\' calendars by itself, without an email.', 'Add', 'Put on their Google calendar, no email']);
+    assert.deepEqual(plain([q.title, q.why, q.yes, q.people[2].gets]), ['Also put it on 3 guests\' Google calendars?', 'Google puts a meeting on its guests\' calendars by itself, without an email.', 'Add', 'Added to their calendar, no email']);
     q = I.consentQuestion({ code: 'calendar/needs-approval', details: { people: ['ann@example.com'], mail: { reached: { how: 'remove', to: ['ann@example.com'] } } } }, 'Don\'t move it');
     assert.deepEqual(plain([q.title, q.yes, q.no]), ['Also take it off ann@example.com\'s Google calendar?', 'Move', 'Don\'t move']);
     // Emailed some and reached others: the title counts those emailed, the list says what each gets.
     q = I.consentQuestion({ code: 'calendar/needs-approval', details: { people: six.slice(0, 2), mail: { emailed: { what: 'an update', to: [six[0]] }, reached: { how: 'change', to: [six[1]] } } } }, 'save');
-    assert.deepEqual(plain([q.title, q.people.map((p) => p.gets)]), ['Email an update to a@example.com?', ['An update', 'Changed on their Google calendar, no email']]);
+    assert.deepEqual(plain([q.title, q.people.map((p) => p.gets)]), ['Email an update to a@example.com?', ['An update', 'Changed on their calendar, no email']]);
     // An older host's refusal names its people alone: they're emailed what the change sends, and nothing says why.
     q = I.consentQuestion({ code: 'calendar/needs-notify', details: { people: ['ann@example.com'] } }, 'add');
     assert.deepEqual(plain([q.title, q.why, q.people[0].gets]), ['Email invitations to ann@example.com?', '', 'An invitation']);
@@ -516,4 +516,29 @@ test('a call\'s arguments for its card, as far as they have streamed', () => {
     assert.equal(I.runningTitle('calendar_events', {}), 'Calendar for the week');
     // A move's card says where it went.
     assert.equal(I.doneTitle({ kind: 'moved', occurrence: { title: 'Team sync', calendar: 'Calendar' } }, {}, LA), 'Moved “Team sync” to Calendar');
+    // Running or waiting for the user, a change names its event, found by the call's id.
+    assert.deepEqual({ ...I.callArgs({ argsRaw: '{"id":"ev-1.20261013T093000","calendar_id":"c-2"}' }) }, { id: 'ev-1.20261013T093000', calendar_id: 'c-2' });
+    assert.equal(I.runningTitle('calendar_update_event', {}, 'Lunch'), 'Change “Lunch”');
+    assert.equal(I.runningTitle('calendar_update_event', { title: 'Brunch' }, 'Lunch'), 'Change “Lunch” to “Brunch”');
+    assert.equal(I.runningTitle('calendar_update_event', { title: 'Brunch' }), 'Change event to “Brunch”');
+    assert.equal(I.runningTitle('calendar_update_event', { calendar_id: 'c-2' }, 'Lunch', 'Work'), 'Move “Lunch” to Work');
+    assert.equal(I.runningTitle('calendar_delete_event', {}, 'Lunch'), 'Delete “Lunch”');
+    assert.equal(I.runningTitle('calendar_delete_event', {}), 'Delete event');
+    assert.equal(I.runningTitle('calendar_respond', { answer: 'accepted' }, 'Offsite'), 'Answer “Offsite”: going');
+    assert.equal(I.runningTitle('calendar_get_event', {}, 'Offsite'), 'Read “Offsite”');
+});
+
+test('a call that didn\'t work says what it didn\'t do, and why, without what it tells the agent', () => {
+    assert.equal(I.failureText('Error: Not done: No event ev-1. Read the event again (calendar_get_event) and tell the user what changed before trying again.'), 'No event ev-1.');
+    assert.equal(I.failureText('Error: Failed: Microsoft answered 503 (Service Unavailable)'), 'Microsoft answered 503 (Service Unavailable)');
+    assert.equal(I.failureText('Not done: This would email an update to ann@example.com (Microsoft emails a meeting\'s guests about each change to it), so it\'s made only when they are to be told. '
+        + 'If the user asked for them to be told, call again with notify_guests: true; otherwise ask the user first.'),
+    'This would email an update to ann@example.com (Microsoft emails a meeting\'s guests about each change to it), so it\'s made only when they are to be told.');
+    // A title in quotes is the user's, whatever it looks like.
+    assert.equal(I.failureText('Not done: “team_sync” is in a calendar that can\'t be written.'), '“team_sync” is in a calendar that can\'t be written.');
+    assert.equal(I.failureText(''), '');
+    assert.equal(I.failureText('x'.repeat(500)).length, 400);
+    for (const text of ['Not done: no', 'Failed: timeout', 'Error: Failed: timeout', '  not done: x']) assert.equal(I.saysNotDone(text), true, text);
+    for (const text of ['Added: Lunch', 'Changed.', '', undefined]) assert.equal(I.saysNotDone(text), false, String(text));
+    assert.deepEqual(plain(I.NOT_DONE), { calendar_create_event: 'Not added', calendar_update_event: 'Not changed', calendar_delete_event: 'Not deleted', calendar_respond: 'Not answered' });
 });

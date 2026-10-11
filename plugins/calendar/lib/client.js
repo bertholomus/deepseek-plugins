@@ -451,6 +451,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-chat-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;padding:8px 10px;border:1px solid var(--cal-line);border-radius:12px;background:var(--cal-fill)}',
             '.dshcal-chat-line>svg{flex:none;color:var(--cal-ok)}',
             '.dshcal-chat-line[data-kind=deleted]>svg{color:var(--cal-meta)}',
+            '.dshcal-chat-line[data-kind=failed]{align-items:flex-start;border-color:color-mix(in srgb,var(--cal-warn) 45%,var(--cal-line))}',
+            '.dshcal-chat-line[data-kind=failed]>svg{margin-top:2px;color:var(--cal-warn)}',
+            '.dshcal-chat-line[data-kind=failed] .dshcal-chat-text{color:var(--cal-text);overflow-wrap:anywhere}',
+            '.dshcal-chat-cal>.dshcal-warn{flex:1 1 100%;padding-left:16px;font-size:12px}',
             '.dshcal-chat-line>.dshcal-chat-text{flex:1 1 220px;min-width:0}',
             '.dshcal-chat-text b{font-weight:600}',
             '.dshcal-chat-text span{color:var(--cal-meta)}',
@@ -459,7 +463,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-chat-slot{display:grid;grid-template-columns:minmax(110px,auto) minmax(0,1fr);gap:10px;font-size:12.5px}',
             '.dshcal-chat-slot>span:first-child{font-weight:600}',
             '.dshcal-chat-slot>span:last-child{color:var(--cal-soft);font-variant-numeric:tabular-nums}',
-            '.dshcal-chat-cal{display:flex;align-items:center;gap:8px;padding:3px 6px;font-size:12.5px;min-width:0}',
+            '.dshcal-chat-cal{display:flex;align-items:center;flex-wrap:wrap;gap:0 8px;padding:3px 6px;font-size:12.5px;min-width:0}',
             '.dshcal-chat-cal>span:nth-child(2){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshcal-chat-row{display:flex;align-items:center;gap:6px;min-width:0;height:24px;color:var(--cal-meta);font-size:13px}',
             '.dshcal-chat-row>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -1211,6 +1215,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             let toastTimer;
             /** The views showing toasts now (the page, the pane): the first one shows them, so each shows once. */
             const toastHosts = new Set();
+            /** Titles of events the chat cards name by id, asked of the host: id → title ('' while asked, or unknown). */
+            const titles = new Map();
             const emit = () => {
                 version++;
                 for (const listener of [...listeners]) {
@@ -1271,6 +1277,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 /** The user's zone: the plugin's (its setting, else the computer's), else this browser's. */
                 zone: () => (state && isZone(state.zone) ? state.zone : browserZone()),
                 calendar: (id) => (state?.calendars ?? EMPTY).find((c) => c.id === id),
+                /** An event's title by its id (or an occurrence's): from the events read, else asked of the host once; '' until known. */
+                titleOf(id) {
+                    if (typeof id !== 'string' || id === '') return '';
+                    for (const entry of spans.values()) {
+                        const o = entry.data?.occurrences?.find((x) => x?.id === id || x?.eventId === id);
+                        if (o) return String(o.title || TEXT.noTitle);
+                    }
+                    if (!titles.has(id)) {
+                        titles.set(id, '');
+                        while (titles.size > 100) titles.delete(titles.keys().next().value);
+                        void link.call('event', { id }).then((result) => {
+                            const title = result.ok && isObject(result.value?.occurrence) ? String(result.value.occurrence.title || TEXT.noTitle) : '';
+                            if (title === '') return;
+                            titles.set(id, title);
+                            emit();
+                        });
+                    }
+                    return titles.get(id) ?? '';
+                },
                 account: (id) => (state?.accounts ?? EMPTY).find((a) => a.id === id),
                 loadState,
                 /** Keep state fresh while a view shows; returns the stop. */
@@ -1549,7 +1574,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             remove: 'Google takes a meeting off its guests\' calendars by itself, without an email.',
             change: 'Google changes a meeting on its guests\' calendars by itself, without an email.',
         };
-        const REACH_GETS = { add: 'Put on their Google calendar, no email', remove: 'Taken off their Google calendar, no email', change: 'Changed on their Google calendar, no email' };
+        const REACH_GETS = { add: 'Added to their calendar, no email', remove: 'Taken off their calendar, no email', change: 'Changed on their calendar, no email' };
 
         /** Addresses in a list from the host, once each. */
         function addressList(list) {
@@ -4475,7 +4500,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         // ── Cards in chats for the calendar tools ──────────────────────────
 
         /** The arguments the cards read. */
-        const ARG_KEYS = ['title', 'start', 'from', 'to', 'query', 'answer', 'scope'];
+        const ARG_KEYS = ['id', 'title', 'start', 'from', 'to', 'query', 'answer', 'scope', 'calendar_id'];
         const quote = (text, n = 60) => {
             const t = String(text ?? '').replace(/\s+/g, ' ').trim();
             return t.length > n ? `“${t.slice(0, n - 1)}…”` : `“${t}”`;
@@ -4527,21 +4552,48 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return m[2] ? `${dayText(m[1])}, ${m[2]}` : dayText(m[1]);
         }
 
-        /** What a call does, while it runs (and for a call whose result has no card). */
-        function runningTitle(toolName, a) {
+        /**
+         * What a call does, while it runs or waits for the user (and over a
+         * call that didn't work or has no card). name: the event's title,
+         * found by the call's id; where: the name of the calendar a move goes to.
+         */
+        function runningTitle(toolName, a, name = '', where = '') {
+            const event = name ? quote(name, 50) : '';
             switch (toolName) {
                 case 'calendar_list_calendars': return 'List calendars';
                 case 'calendar_events': return a.from ? `Calendar from ${argWhen(a.from)}${a.to ? ` to ${argWhen(a.to)}` : ''}` : 'Calendar for the week';
                 case 'calendar_search': return a.query ? `Search calendar for ${quote(a.query, 40)}` : 'Search calendar';
-                case 'calendar_get_event': return 'Read event';
+                case 'calendar_get_event': return event ? `Read ${event}` : 'Read event';
                 case 'calendar_free_time': return 'Find free time';
                 case 'calendar_create_event': return a.title ? `Add ${quote(a.title)}${a.start ? ` at ${argWhen(a.start)}` : ''}` : 'Add event';
-                case 'calendar_update_event': return a.title ? `Change event to ${quote(a.title)}` : 'Change event';
-                case 'calendar_delete_event': return 'Delete event';
-                case 'calendar_respond': return a.answer ? `Answer invitation: ${(ANSWER_WORDS[a.answer] ?? a.answer).toLowerCase()}` : 'Answer invitation';
+                case 'calendar_update_event':
+                    if (a.calendar_id) return `Move ${event || 'event'}${where ? ` to ${where}` : ''}`;
+                    if (event) return a.title && a.title !== name ? `Change ${quote(name, 40)} to ${quote(a.title, 40)}` : `Change ${event}`;
+                    return a.title ? `Change event to ${quote(a.title)}` : 'Change event';
+                case 'calendar_delete_event': return event ? `Delete ${event}` : 'Delete event';
+                case 'calendar_respond': return `Answer ${event || 'invitation'}${a.answer ? `: ${(ANSWER_WORDS[a.answer] ?? a.answer).toLowerCase()}` : ''}`;
                 default: return TEXT.entry;
             }
         }
+
+        /** What a change that didn't work didn't do, by tool; a read that didn't work "didn't work". */
+        const NOT_DONE = { calendar_create_event: 'Not added', calendar_update_event: 'Not changed', calendar_delete_event: 'Not deleted', calendar_respond: 'Not answered' };
+
+        /**
+         * Why a call didn't work, for the user: the tool's error without its
+         * leading words ("Error:", "Not done:", "Failed:") and without what it
+         * tells the agent to do next (a sentence naming a tool or an argument).
+         */
+        function failureText(text) {
+            const plainText = String(text ?? '').replace(/\s+/g, ' ').trim().replace(/^error:\s*/i, '').replace(/^(not done|failed):\s*/i, '');
+            const sentences = plainText.split(/(?<=[.!?])\s+(?=[A-Z])/);
+            const forUser = sentences.filter((s) => !/\b[a-z]+_[a-z_]+\b/.test(s.replace(/“[^”]*”|"[^"]*"/g, '')));
+            const out = (forUser.length ? forUser : sentences).join(' ').trim();
+            return out.length > 400 ? `${out.slice(0, 399)}…` : out;
+        }
+
+        /** Whether a call's text says it wasn't done (a host that answers a failure as text rather than as the call's error). */
+        const saysNotDone = (text) => /^(error:\s*)?(not done|failed):/i.test(String(text ?? '').trim());
 
         const SCOPE_WORDS = { one: 'this occurrence', following: 'this and the following ones', all: '' };
 
@@ -4577,8 +4629,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /** A call's one-line head, as DSH draws its tool rows. */
-        function ToolHead({ title, running = false, open = false, expandable = false, onToggle = noop, children }) {
-            const glyph = h(CalendarIcon, { size: 14 });
+        function ToolHead({ title, running = false, open = false, expandable = false, onToggle = noop, glyph = h(CalendarIcon, { size: 14 }), children }) {
             if (ui.DisclosureRow) {
                 return h(ui.DisclosureRow, { icon: glyph, title, open, expandable, onToggle, running, expandOnRowClick: expandable, previewChevron: expandable }, children);
             }
@@ -4646,7 +4697,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     list.map((c) => h('div', { key: c.id, className: 'dshcal-chat-cal' },
                         h('span', { className: 'dshcal-dot', style: { '--dot': colorOf(c.color) } }),
                         h('span', null, c.name),
-                        h('span', { className: 'dshcal-faint' }, [c.account, c.readOnly ? 'read only' : '', c.isDefault ? 'new events go here' : '', c.hidden ? 'hidden' : ''].filter(Boolean).join(' · ')))));
+                        h('span', { className: 'dshcal-faint' }, [c.account, c.readOnly ? 'read only' : '', c.isDefault ? 'new events go here' : '', c.hidden ? 'hidden' : ''].filter(Boolean).join(' · ')),
+                        // What's wrong with it (its kind, never a server's words).
+                        typeof c.problem === 'string' && c.problem ? h('span', { className: 'dshcal-warn', 'data-calendar-problem': '' }, c.problem) : null)));
             }
             const o = isObject(view.occurrence) ? view.occurrence : null;
             if (!o) return null;
@@ -4663,19 +4716,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 told ? h('div', { className: 'dshcal-chat-told', 'data-calendar-told': '' }, told) : null);
         }
 
-        /** DSH's own row for a call (a refusal, a failure, a call with no card), or the plugin's plain one. */
-        function FallbackRow(props) {
-            const Row = props.cal?.genericRow?.();
-            return Row ? h(Row, props) : h(PlainRow, props);
+        /** A call that didn't work: what it tried, and, in view, what it didn't do and why ("Not added: …"). */
+        function FailedRow({ toolName, title, text }) {
+            const why = failureText(text);
+            return h('div', { className: 'dshcal-chat', 'data-calendar-chat': toolName, 'data-phase': 'result', 'data-calendar-failed': '' },
+                h(ToolHead, { title, glyph: icon('IconWarningOutlineRegular') }),
+                h('div', { className: 'dshcal-chat-line', 'data-kind': 'failed', 'data-calendar-chat-card': 'failed' },
+                    icon('IconWarningOutlineRegular'),
+                    h('span', { className: 'dshcal-chat-text' }, h('b', null, `${NOT_DONE[toolName] ?? 'Didn\'t work'}:`), ` ${why || 'the calendar didn\'t say why.'}`)));
         }
 
-        function PlainRow({ toolName, block, useDisclosure }) {
+        /** A call with no card: its line, and what it gave the agent folded under it. */
+        function PlainRow({ toolName, title, text, useDisclosure }) {
             const disclosure = typeof useDisclosure === 'function' ? useDisclosure() : { expanded: false, toggle: noop };
-            const text = block?.error?.reason || resultText(block);
-            const failed = block?.isError === true;
-            const title = runningTitle(toolName, callArgs(block));
-            return h('div', { className: 'dshcal-chat', 'data-calendar-chat': toolName },
-                h(ToolHead, { title: failed ? `${title} · didn't work` : title, open: disclosure.expanded, expandable: text !== '', onToggle: disclosure.toggle },
+            return h('div', { className: 'dshcal-chat', 'data-calendar-chat': toolName, 'data-phase': 'result' },
+                h(ToolHead, { title, open: disclosure.expanded, expandable: text !== '', onToggle: disclosure.toggle },
                     text ? h('div', { className: 'dshcal-chat-out' }, text) : null));
         }
 
@@ -4696,14 +4751,19 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (store.state() === undefined) void store.loadState();
             }, [store]);
             const a = callArgs(block);
+            // The event and the calendar the call names, by their ids, for its line.
+            const title = runningTitle(toolName, a, store.titleOf(a.id), a.calendar_id ? store.calendar(a.calendar_id)?.name ?? '' : '');
             if (phase !== 'result') {
                 return h('div', { className: 'dshcal-chat', 'data-calendar-chat': toolName, 'data-phase': 'start' },
-                    h(ToolHead, { title: runningTitle(toolName, a), running: true }));
+                    h(ToolHead, { title, running: true }));
             }
+            const text = block?.isError ? String(block?.error?.reason || resultText(block)) : resultText(block);
+            // Stopped by the user while it ran: whether it was made isn't known.
+            if (block?.isError && block.error?.code === 'interrupted') return h(FailedRow, { toolName, title, text: 'Stopped before it finished: the calendar shows whether it was made.' });
+            if (block?.isError || saysNotDone(text)) return h(FailedRow, { toolName, title, text });
             const view = isObject(block?.meta) && CARD_KINDS.has(block.meta.kind) ? block.meta : null;
-            if (block?.isError || view === null) return h(FallbackRow, props);
+            if (view === null) return h(PlainRow, { toolName, title, text, useDisclosure: props.useDisclosure });
             const zone = isZone(view.zone) ? view.zone : store.zone();
-            const text = resultText(block);
             return h('div', { className: 'dshcal-chat', 'data-calendar-chat': toolName, 'data-phase': 'result' },
                 h(ToolHead, { title: doneTitle(view, a, zone), open: disclosure.expanded, expandable: text !== '', onToggle: disclosure.toggle },
                     text ? h('div', { className: 'dshcal-chat-out', 'aria-label': 'What the agent read' }, text) : null),
@@ -4713,8 +4773,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /**
          * The view DSH draws for a calendar tool's call in a chat (keyed by
          * the tool's name): a running line while it prepares and runs, then
-         * a card of what it read or did. A call without a card (a refusal, a
-         * failure) gets DSH's own row.
+         * a card of what it read or did. A call that didn't work says what it
+         * didn't do, and why; one without a card gets the plugin's plain row.
          */
         function ToolView(props) {
             return props.phase === 'preparing' ? h(PreparingToolView, props) : h(SettledToolView, props);
@@ -4722,10 +4782,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         // ── In DSH's window ────────────────────────────────────────────────
 
-        /**
-         * What the views share: the store, the way to the Calendar page and to
-         * an event on it, and DSH's own tool row for calls without a card.
-         */
+        /** What the views share: the store, and the way to the Calendar page and to an event on it. */
         function windowApi(ctx, store) {
             const openPage = () => {
                 let layout;
@@ -4736,7 +4793,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     warn('could not open the Calendar page', error);
                 }
             };
-            let generic;
             return {
                 store,
                 openPage,
@@ -4744,21 +4800,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 openAt(occurrence) {
                     store.openAt(occurrence);
                     openPage();
-                },
-                /** DSH's own row for a tool call (its details row, which reads any tool), found among the tool views. */
-                genericRow() {
-                    if (generic !== undefined) return generic || undefined;
-                    try {
-                        for (const entry of ctx.slots.entries('tool.call.toolview')) {
-                            const component = entry?.component;
-                            const name = component?.displayName ?? component?.name ?? component?.type?.name;
-                            if ((name === 'DetailsRow' || name === 'GenericToolCard') && entry.locale === 'conversation') {
-                                generic = component;
-                                return generic;
-                            }
-                        }
-                    } catch {}
-                    return undefined;
                 },
             };
         }
@@ -4831,7 +4872,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             columnsOf, lanesOf, fitLanes, daySegments, barItems, agendaDays, rangeOf, stepFrom, dayList,
             draftFrom, draftProblems, createInput, changePatch, writableCalendars,
             roleOf, othersOf, mailMode, peopleText, sameOccurrence, placed, emailedText, contactText, CHOOSE_CALENDAR, withConsent, consentQuestion, consentWords, asked, removalNotice, returnAddress,
-            callArgs, argWhen, runningTitle, doneTitle, resultText,
+            callArgs, argWhen, runningTitle, doneTitle, resultText, failureText, saysNotDone, NOT_DONE,
             CalendarPage, AgendaPane, ToolView, EventDialog, EventPopover, AccountsDialog,
         };
         return module.exports;

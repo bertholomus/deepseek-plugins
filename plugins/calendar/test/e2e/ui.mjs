@@ -59,7 +59,8 @@
  * - chat cards for an agent's calendar_events, calendar_create_event, a
  *   delete that reached a guest's calendar (calendar_delete_event) and a
  *   move (calendar_update_event), and the button that opens an event on the
- *   page;
+ *   page; a read and an answer that didn't work, each in the plugin's own
+ *   row saying what wasn't done and why;
  * - the Agenda pane in DSH's right sidebar, and an event opened from it;
  * - light and dark, with and without a stand-in wallpaper;
  * - a narrow window (420 px): the side column folds, Week shows 3 days.
@@ -520,6 +521,13 @@ async function wallpaperOff(page) {
 async function shot(page, name) {
     if (!shots) return;
     await page.waitForTimeout(250);
+    // Dialogs and toasts as they settle: their opening animations done (not a spinner's, which goes on).
+    await Promise.race([
+        page.evaluate(() => Promise.all(document.getAnimations()
+            .filter((a) => a.effect?.getComputedTiming?.().iterations !== Infinity)
+            .map((a) => a.finished.catch(() => {})))),
+        page.waitForTimeout(2000),
+    ]).catch(() => {});
     await page.screenshot({ path: join(shots, `${name}.png`) });
 }
 
@@ -771,7 +779,10 @@ try {
         const rows = dialog.locator('[data-calendar-person]');
         const names = (els) => els.map((el) => el.getAttribute('data-calendar-person'));
         return {
-            title: await dialog.evaluate((el) => document.getElementById(el.getAttribute('aria-labelledby') ?? '')?.textContent ?? ''),
+            title: await dialog.evaluate((el) => {
+                const id = (el.closest('[aria-labelledby]') ?? el.querySelector('[aria-labelledby]'))?.getAttribute('aria-labelledby');
+                return ((id && el.ownerDocument.getElementById(id)) || el.querySelector('h1, h2, h3, [role=heading]'))?.textContent ?? '';
+            }),
             text: (await dialog.textContent()) ?? '',
             people: await rows.evaluateAll(names),
             gets: await dialog.locator('.dshcal-gets').allTextContents(),
@@ -1192,9 +1203,9 @@ try {
         const quiet = writes.map((r) => r.method).join(' ') === 'POST PATCH DELETE' && writes.every((r) => r.query.sendUpdates === 'none');
         const asked = [addQuestion, changeQuestion, deleteQuestion].map((q) => [q.title, q.no, q.yes, q.people.join(), q.gets.join()]);
         const want = [
-            ['Also put it on ann@example.com\'s Google calendar?', 'Don\'t add', 'Add', 'ann@example.com', 'Put on their Google calendar, no email'],
-            ['Also change it on ann@example.com\'s Google calendar?', 'Don\'t save', 'Save', 'ann@example.com', 'Changed on their Google calendar, no email'],
-            ['Also take it off ann@example.com\'s Google calendar?', 'Don\'t delete', 'Delete', 'ann@example.com', 'Taken off their Google calendar, no email'],
+            ['Also put it on ann@example.com\'s Google calendar?', 'Don\'t add', 'Add', 'ann@example.com', 'Added to their calendar, no email'],
+            ['Also change it on ann@example.com\'s Google calendar?', 'Don\'t save', 'Save', 'ann@example.com', 'Changed on their calendar, no email'],
+            ['Also take it off ann@example.com\'s Google calendar?', 'Don\'t delete', 'Delete', 'ann@example.com', 'Taken off their calendar, no email'],
         ];
         check('a Google meeting made, changed and deleted without email: the dialogs say it still reaches the guest\'s calendar (not when the box is ticked), each is made once the user has seen whose calendar it reaches, and each toast says whose calendars it was put on, changed on and taken off',
             JSON.stringify(asked) === JSON.stringify(want)
@@ -1397,7 +1408,13 @@ try {
     const titleOf = (sessionId) => waitFor(async () => (await bridge('GET', '/sessions')).find((s) => s.sessionId === sessionId)?.projections?.values?.title,
         'the session\'s title', 30000);
     const openSession = async (title) => {
-        await page.getByText(title, { exact: false }).first().click();
+        const row = page.getByText(title, { exact: false }).first();
+        // An older session can be folded under "Show N more sessions" in DSH's sidebar.
+        if (!(await row.isVisible().catch(() => false))) {
+            const more = page.getByText(/^Show \d+ more sessions?$/).first();
+            if (await more.count()) await more.click().catch(() => {});
+        }
+        await row.click();
         await page.waitForTimeout(1500);
         for (const words of [/^Completed in/, /^Called tools?$/]) {
             const group = page.getByText(words);
@@ -1452,10 +1469,29 @@ try {
             && moved?.calendarId === side?.id, JSON.stringify({ told, moveKind, moveText: moveText.slice(0, 200), moved: moved?.calendarId }));
     });
 
+    await step('chat rows for calls that didn\'t work', async () => {
+        // An agent reads an event that isn't there, and answers an invitation that isn't there: each says, in the
+        // plugin's own row, what it didn't do and why, without what the error tells the agent to do next.
+        const rowOf = async (call, tool) => {
+            await openSession(await titleOf(call.sessionId));
+            const row = page.locator(`.dshcal-chat[data-calendar-chat="${tool}"][data-calendar-failed]`).first();
+            await row.waitFor({ state: 'attached', timeout: 10000 });
+            return row;
+        };
+        const readRow = await rowOf(await agentCall('calendar_get_event', { id: 'ev-not-there' }, 'What is the offsite about?'), 'calendar_get_event');
+        const readText = (await readRow.textContent()) ?? '';
+        const answerRow = await rowOf(await agentCall('calendar_respond', { id: 'ev-not-there', answer: 'accepted' }, 'Say yes to the offsite'), 'calendar_respond');
+        const answerText = (await answerRow.textContent()) ?? '';
+        const answerWhy = (await answerRow.locator('[data-calendar-chat-card="failed"]').textContent()) ?? '';
+        if (shots) await answerRow.screenshot({ path: join(shots, 'chat-not-done.png') }).catch(() => {});
+        check('a call that didn\'t work shows as not done in the plugin\'s own row, with why in view: "Didn\'t work: …" for a read, "Not answered: …" for an answer',
+            /Didn't work: \S/.test(readText) && /^Not answered: \S/.test(answerWhy.trim()) && !/Error:|Not done:|calendar_[a-z_]+|notify_guests/.test(`${readText} ${answerText}`),
+            JSON.stringify({ readText, answerText }));
+    });
+
     // 18. The Agenda pane.
     await step('the Agenda pane in the right sidebar', async () => {
-        await page.getByText(await titleOf(listCall.sessionId), { exact: false }).first().click();
-        await page.waitForTimeout(1200);
+        await openSession(await titleOf(listCall.sessionId));
         const opener = page.getByRole('button', { name: 'Open right sidebar' });
         if (await opener.count()) await opener.first().click();
         await page.waitForTimeout(800);
