@@ -8,7 +8,8 @@
  * - Graph: /me, /me/calendars (paged), the calendar view's delta query
  *   (pages, sync links, @removed entries, sparse entries on request),
  *   events (GET, POST, PATCH, DELETE), /instances, and accept, decline and
- *   tentativelyAccept;
+ *   tentativelyAccept; a PATCH or DELETE with If-Match goes through only
+ *   while the event still has that etag, else 412 ErrorIrresolvableConflict;
  * - series (every pattern type) expanded into occurrences and exceptions
  *   with seriesMasterId, originalStart and originalStartTimeZone, as the
  *   calendar view hands them over.
@@ -176,7 +177,7 @@ export class Store {
         this.refusal = { status: 410, code: 'syncStateNotFound' };
         this.calendars = new Map();
         this.events = new Map();
-        /** Every request: {method, path, query, prefer, body} (secrets in sign-in forms left out). */
+        /** Every request: {method, path, query, prefer, ifMatch, body, status} (secrets in sign-in forms left out); status: what it was answered. */
         this.requests = [];
         /** Invitation answers: {id, action, sendResponse}. */
         this.responses = [];
@@ -703,6 +704,20 @@ export class Store {
         return this.occurrence(master, day);
     }
 
+    /**
+     * Graph's If-Match: a PATCH or DELETE that names an etag goes through
+     * only while the event (or occurrence) still has it ('*': any), else
+     * 412. Weak and strong forms of a tag are the same tag.
+     */
+    precondition(id, ifMatch) {
+        if (ifMatch === undefined) return;
+        const found = this.find(id);
+        if (found === undefined) throw graphError(404, 'ErrorItemNotFound', 'The specified object was not found in the store.');
+        const tags = String(ifMatch).split(',').map((tag) => tag.trim().replace(/^W\//, ''));
+        if (tags.includes('*') || tags.includes(`"${this.resolve(found).changeKey}"`)) return;
+        throw graphError(412, 'ErrorIrresolvableConflict', 'The send or update operation could not be performed because the change key passed in the request does not match the current change key for the item.');
+    }
+
     /** DELETE: an event or a series goes; an occurrence is cancelled. */
     remove(id, check = false) {
         const found = this.find(id);
@@ -773,7 +788,7 @@ function login(store, method, segments, form) {
 }
 
 /** Graph's routes. */
-function graph(store, method, segments, query, input, prefer) {
+function graph(store, method, segments, query, input, prefer, ifMatch) {
     const zoneName = prefer['outlook.timezone'] ?? 'UTC';
     if (zoneOf(zoneName) === null) throw graphError(400, 'TimeZoneNotSupportedException', 'The time zone in the Prefer header is not supported.');
     const size = Math.max(1, Math.min(Number(prefer['odata.maxpagesize']) || 10, store.pageSize));
@@ -830,8 +845,12 @@ function graph(store, method, segments, query, input, prefer) {
             if (found === undefined) throw graphError(404, 'ErrorItemNotFound', 'The specified object was not found in the store.');
             return [200, store.render(found, zoneName)];
         }
-        if (method === 'PATCH') return [200, store.render(store.patch(id, input), zoneName)];
+        if (method === 'PATCH') {
+            store.precondition(id, ifMatch);
+            return [200, store.render(store.patch(id, input), zoneName)];
+        }
         if (method === 'DELETE') {
+            store.precondition(id, ifMatch);
             store.remove(id, true);
             return [204, undefined];
         }
@@ -882,7 +901,13 @@ async function handle(store, req, res) {
     const logged = input !== null && typeof input === 'object' && !Array.isArray(input) ? { ...input } : input;
     for (const secret of ['refresh_token', 'device_code', 'client_secret']) if (logged?.[secret] !== undefined) logged[secret] = '(left out)';
     const path = decodeURIComponent(url.pathname);
-    store.requests.push({ method: req.method, path, search: url.search, query, prefer: String(req.headers.prefer ?? ''), body: logged });
+    const ifMatch = req.headers['if-match'];
+    const entry = { method: req.method, path, search: url.search, query, prefer: String(req.headers.prefer ?? ''), ifMatch, body: logged };
+    store.requests.push(entry);
+    const answer = (status, body, headers) => {
+        entry.status = status;
+        return reply(res, status, body, headers);
+    };
 
     const failure = store.failures.find((f) => (f.method === undefined || f.method === req.method) && matches(f.path, `${path}${url.search}`));
     if (failure !== undefined) {
@@ -893,26 +918,26 @@ async function handle(store, req, res) {
             return undefined;
         }
         const body = failure.body ?? errorBody(graphError(failure.status, failure.code ?? 'ErrorStandInFailure', 'A failure the test asked for.'));
-        return reply(res, failure.status, body, failure.headers);
+        return answer(failure.status, body, failure.headers);
     }
 
     const segments = url.pathname.split('/').filter(Boolean).map((s) => decodeURIComponent(s));
     try {
-        let answer;
+        let routed;
         if (segments[0] === 'login') {
-            answer = login(store, req.method, segments.slice(1), input ?? {});
+            routed = login(store, req.method, segments.slice(1), input ?? {});
         } else if (segments[0] === 'v1.0') {
             const token = /^Bearer (.+)$/.exec(String(req.headers.authorization ?? ''))?.[1];
             if (token === undefined || !store.accessTokens.has(token)) {
                 throw graphError(401, 'InvalidAuthenticationToken', 'Access token has expired or is not yet valid.');
             }
-            answer = graph(store, req.method, segments.slice(1), query, input, preferences(req.headers.prefer));
+            routed = graph(store, req.method, segments.slice(1), query, input, preferences(req.headers.prefer), ifMatch);
         }
-        if (answer === undefined) throw graphError(400, 'BadRequest', `Resource not found for the segment '${segments.at(-1) ?? ''}'.`);
-        return reply(res, answer[0], answer[1]);
+        if (routed === undefined) throw graphError(400, 'BadRequest', `Resource not found for the segment '${segments.at(-1) ?? ''}'.`);
+        return answer(routed[0], routed[1]);
     } catch (error) {
-        if (error instanceof StandInError) return reply(res, error.status, errorBody(error), error.headers);
-        return reply(res, 500, errorBody(graphError(500, 'InternalServerError', String(error?.message ?? error))));
+        if (error instanceof StandInError) return answer(error.status, errorBody(error), error.headers);
+        return answer(500, errorBody(graphError(500, 'InternalServerError', String(error?.message ?? error))));
     }
 }
 
