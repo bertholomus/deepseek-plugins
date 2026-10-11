@@ -21,6 +21,12 @@
  *   read, one event, free time, or what a change did, with a way to the
  *   event on the page.
  *
+ * Who a change emails is the host's to say. One it says would email people
+ * asks the user first, in its words, and Send holds it to the people named;
+ * afterwards the window says who was emailed, and whose calendars a change
+ * reached without email (Google). A move that would drop part of a series
+ * asks first too.
+ *
  * Styled to sit on the wallpaper plugin's glass when it is on: the page has
  * no background of its own, its cards follow the wallpaper's public
  * `--wp-blur`, `--wp-tint` and `body.wp-still`, and light or dark follows
@@ -443,6 +449,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-chat-line>.dshcal-chat-text{flex:1 1 220px;min-width:0}',
             '.dshcal-chat-text b{font-weight:600}',
             '.dshcal-chat-text span{color:var(--cal-meta)}',
+            '.dshcal-chat-told{flex:1 1 100%;min-width:0;padding-left:22px;font-size:12px;line-height:1.45;color:var(--cal-meta);overflow-wrap:anywhere}',
             '.dshcal-chat-slots{display:flex;flex-direction:column;gap:4px;padding:2px 4px}',
             '.dshcal-chat-slot{display:grid;grid-template-columns:minmax(110px,auto) minmax(0,1fr);gap:10px;font-size:12.5px}',
             '.dshcal-chat-slot>span:first-child{font-weight:600}',
@@ -555,12 +562,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
         }
 
+        /** The refusals whose message is the plugin's own words to the user, shown as they are. */
+        const OWN_WORDS = new Set(['calendar/refused', 'calendar/needs-notify', 'calendar/changed', 'calendar/drops-changes', 'calendar/choose-calendar']);
+
         /** A failed call as one sentence: the plugin's own refusal as it is, or that it failed or can't be reached. */
         function errorText(error) {
             const code = String(error?.code ?? '');
             const message = String(error?.message ?? '').trim();
             const sentence = (text) => `${text.replace(/^./, (c) => c.toUpperCase())}${/[.!?…)]$/.test(text) ? '' : '.'}`;
-            if ((code === 'calendar/refused' || code === 'calendar/needs-notify') && message) return sentence(message);
+            if (OWN_WORDS.has(code) && message) return sentence(message);
             if (code === 'calendar/unreachable' || code.startsWith('gateway/') || code.startsWith('rpc/')) return TEXT.unreachable;
             if (code === 'calendar/unreadable') return TEXT.unreadable;
             return message ? `That didn't work: ${sentence(message.slice(0, 240))}` : TEXT.unreachable;
@@ -1515,41 +1525,71 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * Before a change emails people: the host's words (who gets what, and
          * why), then Send or keep it as it is.
          */
-        function SendDialog({ text, keep, onSend, onClose }) {
+        function SendDialog({ text, keep, onYes, onClose }) {
             return h(Dialog, {
                 title: 'Send the email?', description: text, narrow: true, onClose,
                 footer: h(React.Fragment, null,
                     h(ui.Button, { variant: 'outline', onClick: onClose, 'data-modal-autofocus': true, 'data-calendar-keep': '' }, keep),
-                    h(ui.Button, { variant: 'primary', onClick: onSend, 'data-calendar-send': '' }, 'Send')),
+                    h(ui.Button, { variant: 'primary', onClick: onYes, 'data-calendar-send': '' }, 'Send')),
             });
         }
 
-        /** The question SendDialog asks, for a view to show: {ask(text, keep) → Promise<boolean: Send>, dialog}. */
+        /** Before a series moves to a calendar that would drop some of it: the host's words (what it drops), then Move anyway or not. */
+        function DropDialog({ text, onYes, onClose }) {
+            return h(Dialog, {
+                title: 'Move it anyway?', description: text, narrow: true, onClose,
+                footer: h(React.Fragment, null,
+                    h(ui.Button, { variant: 'outline', onClick: onClose, 'data-modal-autofocus': true, 'data-calendar-dont-move': '' }, 'Don\'t move it'),
+                    h(ui.Button, { variant: 'primary', onClick: onYes, 'data-calendar-move-anyway': '' }, 'Move anyway')),
+            });
+        }
+
+        /**
+         * The questions a change can need before it's made, for a view to
+         * show: {ask(text, keep) → Promise<boolean: Send>, drop(text) →
+         * Promise<boolean: Move anyway>, dialog}.
+         */
         function useSendQuestion() {
             const [question, setQuestion] = React.useState(null);
-            const ask = React.useCallback((text, keep) => new Promise((resolve) => setQuestion({ text, keep, resolve })), []);
-            const answer = (send) => {
-                question?.resolve(send);
+            const ask = React.useCallback((text, keep) => new Promise((resolve) => setQuestion({ kind: 'send', text, keep, resolve })), []);
+            const drop = React.useCallback((text) => new Promise((resolve) => setQuestion({ kind: 'drop', text, resolve })), []);
+            const answer = (yes) => {
+                question?.resolve(yes);
                 setQuestion(null);
             };
             return {
                 ask,
-                dialog: question ? h(SendDialog, { text: question.text, keep: question.keep, onSend: () => answer(true), onClose: () => answer(false) }) : null,
+                drop,
+                dialog: question ? h(question.kind === 'drop' ? DropDialog : SendDialog, { text: question.text, keep: question.keep, onYes: () => answer(true), onClose: () => answer(false) }) : null,
             };
         }
 
         /**
-         * A change the user asked for. When the host says it would email
-         * people ('calendar/needs-notify'), they're asked with its words, and
-         * only their Send makes it again with notify. → its result; {ok: false,
-         * kept: true} when they kept it as it was.
-         * @param make - (notify: boolean) → the call's result.
+         * A change the user asked for, made by make(how): `how` holds what
+         * their answers add to it. When the host says a move would drop part
+         * of a series ('calendar/drops-changes'), they're asked with its words
+         * (drop), and Move anyway makes it again with dropChanges. When it says
+         * the change would email people ('calendar/needs-notify'), they're
+         * asked with its words (ask), and only their Send makes it again, with
+         * notify and with the people that refusal named as approved: should
+         * the change now reach anyone else, the host stops it
+         * ('calendar/changed'). → its result; {ok: false, kept: true} when they
+         * kept it as it was.
+         * @param make - (how: {dropChanges?: true, notify?: true, approved?: string[]}) → the call's result.
+         * @param [drop] - (text) → Promise<boolean>: whether to move a series anyway.
          */
-        async function withConsent(ask, keep, make) {
-            const first = await make(false);
-            if (first.ok || first.error?.code !== 'calendar/needs-notify') return first;
-            if (!(await ask(errorText(first.error), keep))) return { ok: false, kept: true, error: first.error };
-            return make(true);
+        async function withConsent(ask, keep, make, drop) {
+            let how = {};
+            let result = await make(how);
+            if (!result.ok && result.error?.code === 'calendar/drops-changes' && typeof drop === 'function') {
+                if (!(await drop(errorText(result.error)))) return { ok: false, kept: true, error: result.error };
+                how = { dropChanges: true };
+                result = await make(how);
+            }
+            if (result.ok || result.error?.code !== 'calendar/needs-notify') return result;
+            if (!(await ask(errorText(result.error), keep))) return { ok: false, kept: true, error: result.error };
+            const people = result.error.details?.people;
+            return make({ ...how, notify: true, ...(Array.isArray(people) ? { approved: people.filter((p) => typeof p === 'string') } : {}) });
         }
 
         const SCOPE_TEXT = {
@@ -1562,7 +1602,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * Which occurrences of a repeating event a change, a delete or an
          * answer reaches, among those it can (the occurrence's `scopes`).
          * tellFor(scope): the box to tick to tell people by email for that
-         * choice {label, hint?}, or null for none.
+         * choice {label, hint?, quiet?}, or null for none. quiet: what
+         * happens all the same while the box is unticked.
          */
         function ScopeDialog({ title, scopes, note, action, danger, tellFor, onSubmit, onClose }) {
             const [scope, setScope] = React.useState(scopes[0]);
@@ -1596,7 +1637,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 note ? h('div', { className: 'dshcal-hint' }, note) : null,
                 box ? h('div', { className: 'dshcal-tell' },
                     h('label', { className: 'dshcal-check' }, h('input', { type: 'checkbox', checked: tell, onChange: (e) => setTell(e.target.checked), 'data-calendar-notify': '' }), box.label),
-                    box.hint ? h('div', { className: 'dshcal-hint' }, box.hint) : null) : null,
+                    box.hint ? h('div', { className: 'dshcal-hint' }, box.hint) : null,
+                    box.quiet && !tell ? h('div', { className: 'dshcal-hint', 'data-calendar-mail': 'reach' }, box.quiet) : null) : null,
                 h(Alert, { text: error })));
         }
 
@@ -1655,7 +1697,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         // The host decides. Where a calendar's server emails guests only when asked (Google), the dialogs offer a box
         // to tick; where it emails them anyway (Microsoft, a CalDAV server for a meeting the user organizes), the host
         // refuses the change ('calendar/needs-notify') and the user is asked, with its words, before it is made again
-        // with notify. notify: true is sent only after the user's own click: the box, or Send.
+        // with notify. notify: true is sent only after the user's own click: the box, or Send. Send holds the change to
+        // the people the refusal named (approved): if the event changed meanwhile so that it would reach anyone else,
+        // the host makes nothing ('calendar/changed') and the user looks at it again. Google puts a meeting on its
+        // guests' calendars by itself (reached), which the toasts say.
 
         /** The user's part in an event: 'guest' (someone else's invitation), 'organizer', or 'own' (nobody named as organizer). */
         function roleOf(o) {
@@ -1718,11 +1763,33 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return dot < 0 ? moved : { ...moved, id: `${eventId}.${before.id.slice(dot + 1)}` };
         }
 
+        /** Whether a change's answer is an occurrence the page can show and follow (one the host lost sight of is its id alone). */
+        const placed = (o) => isObject(o) && typeof o.id === 'string' && (o.allDay === true ? isDay(o.startDay) : Number.isFinite(o.start));
+
         /** Who a change emailed, as a sentence ('Emailed an update to ann@example.com.'), or ''. */
         function emailedText(emailed) {
             if (!isObject(emailed) || !Array.isArray(emailed.to) || emailed.to.length === 0) return '';
             return `Emailed ${String(emailed.what || 'them')} to ${peopleText(emailed.to)}.`;
         }
+
+        const REACHED_WORDS = { add: 'Put on', remove: 'Taken off', change: 'Changed on' };
+
+        /**
+         * Who a change emailed, and whose calendars it reached without email
+         * (Google puts a meeting on its guests' calendars, changes it there and
+         * takes it off them by itself), as sentences, or ''.
+         * @param result - a change's result: {emailed?: {what, to}, reached?: {how: 'add'|'remove'|'change', to}}.
+         */
+        function contactText(result) {
+            const emailed = emailedText(result?.emailed);
+            const r = result?.reached;
+            const to = isObject(r) && Array.isArray(r.to) ? r.to.filter((p) => typeof p === 'string' && p !== '') : EMPTY;
+            const reached = to.length ? `${REACHED_WORDS[r.how] ?? 'Changed on'} the calendars of ${peopleText(to)}${emailed ? '' : ', without emailing anyone'}.` : '';
+            return [emailed, reached].filter(Boolean).join(' ');
+        }
+
+        /** What the event dialog says on its calendar select when the host wants the calendar named ('calendar/choose-calendar'). */
+        const CHOOSE_CALENDAR = 'Choose the calendar it goes to.';
 
         /** A guest as the dialog keeps one: {email, name?, self?}. */
         const guestOf = (p) => ({ email: String(p.email ?? ''), ...(p.name ? { name: p.name } : {}), ...(p.self ? { self: true } : {}) });
@@ -1818,7 +1885,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             if (d.url.trim() !== '' && !isUrl(d.url.trim())) out.url = 'A link starts with https:// or http://.';
             const repeat = repeatProblem(d.repeat, d.startDay);
             if (repeat) out.repeat = repeat;
-            if (!d.calendarId) out.calendarId = writable === 0 ? 'There is no calendar that can be written. Add an account or a calendar first.' : 'Choose the calendar it goes to.';
+            if (!d.calendarId) out.calendarId = writable === 0 ? 'There is no calendar that can be written. Add an account or a calendar first.' : CHOOSE_CALENDAR;
             return out;
         }
 
@@ -1974,8 +2041,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /**
          * Guests: their addresses and a way to add more (not on someone else's
          * invitation), and whether to email them.
-         * @param mail - {mode: 'ask', label, checked, onChange}: the box to tick; {mode: 'always', hint}: their server
-         *   emails them anyway; {cannot: true}: the calendar can't email them.
+         * @param mail - {mode: 'ask', label, checked, onChange, quiet?}: the box to tick (quiet: what saving does
+         *   without it); {mode: 'always', hint}: their server emails them anyway; {cannot: true}: the calendar can't
+         *   email them.
          */
         function GuestsField({ guests, onChange, readOnly, mail, error, setError }) {
             const [text, setText] = React.useState('');
@@ -2011,7 +2079,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 mail?.mode === 'ask' ? h('div', { className: 'dshcal-tell' },
                     h('label', { className: 'dshcal-check' },
                         h('input', { type: 'checkbox', checked: mail.checked, onChange: (event) => mail.onChange(event.target.checked), 'data-calendar-notify': '' }),
-                        mail.label))
+                        mail.label),
+                    mail.quiet ? h('div', { className: 'dshcal-hint', 'data-calendar-mail': 'reach' }, mail.quiet) : null)
                     : mail?.mode === 'always' ? h('div', { className: 'dshcal-hint', 'data-calendar-mail': 'always' }, mail.hint)
                     : mail?.cannot && guests.length ? h('div', { className: 'dshcal-hint', 'data-calendar-mail': 'never' }, 'This calendar can\'t email guests: tell them another way.') : null);
         }
@@ -2035,6 +2104,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [errors, setErrors] = React.useState({});
             const [guestError, setGuestError] = React.useState('');
             const [refusal, setRefusal] = React.useState('');
+            // The host stopped a change because the event changed meanwhile ('calendar/changed'): the way to look at it again.
+            const [changed, setChanged] = React.useState(false);
+            // It moved, but the host couldn't say where it is now: the other changes can't follow it, so Save stops.
+            const [lost, setLost] = React.useState(false);
             const [busy, setBusy] = React.useState(false);
             const [ask, setAsk] = React.useState(null);
             const sending = useSendQuestion();
@@ -2055,6 +2128,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // Ticked only by the user: unticked, nobody is told (or, where the server emails anyway, the user is asked).
             const tell = mail.mode === 'ask' && d.notify === true;
             const tellLabel = !editing || (home?.kind === 'caldav' && roleOf(occurrence) === 'own') ? 'Send invitations by email' : 'Send updates to guests by email';
+            // Google shows a meeting on its guests' calendars by itself: unticked, saving still reaches them, without email.
+            const reaches = home?.kind === 'google' && mail.mode === 'ask' && !tell && others > 0
+                && (!editing || d.calendarId !== homeId || Object.keys(changePatch(initial, d, { repeatTouched, originalRule: occurrence.repeat })).some((k) => k !== 'alarms' && k !== 'notify'));
+            const reachHint = !reaches ? ''
+                : `Saving still ${!editing ? 'puts it on' : d.calendarId !== homeId && store.calendar(d.calendarId)?.kind !== 'google' ? 'takes it off' : 'changes it on'} their Google calendars, without email.`;
             const set = (patch) => {
                 setD((current) => ({ ...current, ...patch }));
                 setErrors((current) => {
@@ -2063,6 +2141,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     return next;
                 });
                 setRefusal('');
+                setChanged(false);
             };
             React.useEffect(() => {
                 if (Object.keys(errors).length === 0) return;
@@ -2093,8 +2172,19 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (!alive.current) return;
                 setBusy(false);
                 if (!result.ok) {
+                    const code = result.error?.code;
+                    // No default calendar: said on the select, where it's chosen.
+                    if (code === 'calendar/choose-calendar') {
+                        setErrors((current) => ({ ...current, calendarId: CHOOSE_CALENDAR }));
+                        return;
+                    }
                     // Not sent, as the user chose: the dialog stays, to change what would email them.
                     if (!result.kept) setRefusal(errorText(result.error));
+                    // The event changed on its server meanwhile and nothing was done: the page reads it again, for the user to look at.
+                    if (code === 'calendar/changed') {
+                        setChanged(true);
+                        void store.refresh();
+                    }
                     return;
                 }
                 onSaved?.(result.value?.occurrence, words);
@@ -2109,33 +2199,42 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const commitChange = async (patch, moveTo, scope) => {
                 setBusy(true);
                 setRefusal('');
+                setChanged(false);
                 let target = movedRef.current?.occurrence ?? occurrence;
                 let result = { ok: true, value: { occurrence: target } };
                 if (moveTo) {
-                    const moved = await withConsent(sending.ask, 'Don\'t move it', (notify) => store.act('updateEvent', {
-                        id: target.id, patch: { calendarId: moveTo, ...(notify ? { notify: true } : {}) }, scope: 'all',
-                    }));
+                    // A series that would lose part of itself on the way asks first (drop), as does one that would email people.
+                    // The box, ticked, tells the guests of the move too.
+                    const moved = await withConsent(sending.ask, 'Don\'t move it', (how) => store.act('updateEvent', {
+                        id: target.id, patch: { calendarId: moveTo, ...(tell ? { notify: true } : {}), ...how }, scope: 'all',
+                    }), sending.drop);
                     if (!moved.ok) return finish(moved);
+                    if (!placed(moved.value?.occurrence) && Object.keys(patch).length > 0) {
+                        movedRef.current = { calendarId: moveTo, occurrence: null };
+                        setLost(true);
+                        const where = store.calendar(moveTo)?.name ?? 'the other calendar';
+                        return finish({ ok: false, error: { code: 'calendar/refused', message: `It moved to “${where}”, but the other changes weren't saved: open it there and make them again` } });
+                    }
                     target = sameOccurrence(moved.value?.occurrence, target);
                     movedRef.current = { calendarId: moveTo, occurrence: target };
                     result = moved;
                 }
                 if (Object.keys(patch).length > 0) {
-                    const changed = await withConsent(sending.ask, 'Don\'t change it', (notify) => store.act('updateEvent', {
-                        id: target.id, patch: notify ? { ...patch, notify: true } : patch, scope,
+                    const made = await withConsent(sending.ask, 'Don\'t change it', (how) => store.act('updateEvent', {
+                        id: target.id, patch: { ...patch, ...how }, scope,
                     }));
-                    if (!changed.ok && movedRef.current) {
+                    if (!made.ok && movedRef.current) {
                         const where = store.calendar(movedRef.current.calendarId)?.name ?? 'the other calendar';
-                        const why = changed.kept ? 'they would email people.' : errorText(changed.error);
-                        return finish({ ok: false, error: { code: 'calendar/refused', message: `It moved to “${where}”, but the other changes weren't saved: ${why}` } });
+                        const why = made.kept ? 'they would email people.' : errorText(made.error);
+                        return finish({ ok: false, error: { code: made.error?.code === 'calendar/changed' ? made.error.code : 'calendar/refused', message: `It moved to “${where}”, but the other changes weren't saved: ${why}` } });
                     }
-                    result = changed;
+                    result = made;
                 }
                 return finish(result, 'Saved');
             };
 
             const save = async () => {
-                if (busy) return;
+                if (busy || lost) return;
                 const problems = draftProblems(d, calendars.length);
                 if (guestError) problems.guests = guestError;
                 if (Object.keys(problems).length) {
@@ -2145,8 +2244,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (!editing) {
                     setBusy(true);
                     setRefusal('');
+                    setChanged(false);
                     const input = createInput({ ...d, notify: tell });
-                    const result = await withConsent(sending.ask, 'Don\'t add it', (notify) => store.act('createEvent', { input: notify ? { ...input, notify: true } : input }));
+                    const result = await withConsent(sending.ask, 'Don\'t add it', (how) => store.act('createEvent', { input: { ...input, ...how } }));
                     return finish(result, 'Added');
                 }
                 const patch = changePatch(initial, { ...d, notify: tell }, { repeatTouched, originalRule: occurrence.repeat });
@@ -2193,7 +2293,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     title, onClose, busy, wide: true,
                     footer: h(React.Fragment, null,
                         h(ui.Button, { variant: 'outline', disabled: busy, onClick: onClose }, TEXT.cancel),
-                        h(ui.Button, { variant: 'primary', disabled: busy, onClick: () => void save(), 'data-calendar-save': '' }, busy ? h(Spinner) : null, editing ? TEXT.save : 'Add event')),
+                        h(ui.Button, { variant: 'primary', disabled: busy || lost, onClick: () => void save(), 'data-calendar-save': '' }, busy ? h(Spinner) : null, editing ? TEXT.save : 'Add event')),
                 },
                 h('form', {
                     ref: formRef, className: 'dshcal-form', 'data-calendar-event-form': mode, noValidate: true,
@@ -2280,7 +2380,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 h(RemindersField, { alarms: d.alarms, onChange: (alarms) => set({ alarms }) }),
                 h(GuestsField, {
                     guests: d.guests, onChange: (guests) => set({ guests }), readOnly: invitation,
-                    mail: mail.mode === 'ask' ? { mode: 'ask', label: tellLabel, checked: tell, onChange: (notify) => set({ notify }) }
+                    mail: mail.mode === 'ask' ? { mode: 'ask', label: tellLabel, checked: tell, onChange: (notify) => set({ notify }), quiet: reachHint }
                         : mail.mode === 'always' ? { mode: 'always', hint: alwaysWords(mailKind, home) } : { cannot: mail.cannot === true },
                     error: errors.guests || guestError, setError: (text) => { setGuestError(text); setErrors((e) => ({ ...e, guests: undefined })); },
                 }),
@@ -2292,7 +2392,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         h('label', { className: 'dshcal-check', style: { minHeight: 34 }, title: 'Others who can see this calendar see only that the time is taken.' },
                             h('input', { type: 'checkbox', checked: d.private, onChange: (event) => set({ private: event.target.checked }), 'data-calendar-private': '' }),
                             'Private'))),
-                h(Alert, { text: refusal }))),
+                h(Alert, { text: refusal }),
+                changed && editing ? h(Btn, {
+                    size: 'sm', style: { alignSelf: 'flex-start' }, 'data-calendar-look-again': '',
+                    onClick: () => {
+                        onClose();
+                        cal.openAt?.(movedRef.current?.occurrence ?? occurrence);
+                    },
+                }, 'Look at it again') : null)),
                 ask ? h(ScopeDialog, {
                     title: 'Change repeating event', scopes: ask.scopes, action: TEXT.save,
                     onSubmit: (scope) => ask.run(scope), onClose: () => setAsk(null),
@@ -2421,10 +2528,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 setAnswering('');
                 if (result.ok && isObject(result.value?.occurrence)) {
                     setO(result.value.occurrence);
-                    const emailed = emailedText(result.value.occurrence.emailed);
-                    store.toast(`Answered: ${ANSWER_WORDS[status]}.${emailed ? ` ${emailed}` : ''}`);
+                    const told = contactText(result.value.occurrence);
+                    store.toast(`Answered: ${ANSWER_WORDS[status]}.${told ? ` ${told}` : ''}`);
                 } else if (!result.ok) {
                     setError(errorText(result.error));
+                    if (result.error?.code === 'calendar/changed') void store.refresh();
                 }
             };
             const pick = (status) => {
@@ -3733,16 +3841,24 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (mail.mode !== 'ask') return null;
                 const label = mail.to === 'organizer' ? `Tell ${organizer} you won't be there`
                     : guests.length === 1 ? `Tell ${guests[0].name || guests[0].email} by email` : `Tell the ${guests.length} guests by email`;
-                return { label };
+                // Google takes a meeting off its guests' calendars by itself: unticked, deleting it still reaches them.
+                const quiet = calendar?.kind === 'google' && mail.to === 'guests' ? 'Deleting it still takes it off their Google calendars, without email.' : '';
+                return { label, quiet };
             };
             const run = async (scope, tellThem) => {
-                const result = await withConsent(sending.ask, 'Don\'t delete it', (notify) => store.act('deleteEvent', { id: o.id, scope, notify: notify || tellThem === true }));
+                const result = await withConsent(sending.ask, 'Don\'t delete it', (how) => store.act('deleteEvent', {
+                    id: o.id, scope, ...how, notify: how.notify === true || tellThem === true,
+                }));
                 if (result.kept) return '';
-                if (!result.ok) return errorText(result.error);
+                if (!result.ok) {
+                    // The event changed on its server meanwhile and nothing was done: the page reads it again.
+                    if (result.error?.code === 'calendar/changed') void store.refresh();
+                    return errorText(result.error);
+                }
                 const day = o.allDay ? o.startDay : dayIn(o.start, store.zone());
                 const done = scope === 'one' ? `Deleted “${o.title}” on ${dayText(day)}.` : scope === 'following' ? `Deleted “${o.title}” from ${dayText(day)} on.` : `Deleted “${o.title}”.`;
-                const emailed = emailedText(result.value?.emailed);
-                store.toast(emailed ? `${done} ${emailed}` : done);
+                const told = contactText(result.value);
+                store.toast(told ? `${done} ${told}` : done);
                 return '';
             };
             if (o.recurring) {
@@ -3759,7 +3875,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     onSubmit: () => run('all', tell), onClose,
                 }, box ? h('div', { className: 'dshcal-tell' },
                     h('label', { className: 'dshcal-check' },
-                        h('input', { type: 'checkbox', checked: tell, onChange: (event) => setTell(event.target.checked), 'data-calendar-notify': '' }), box.label)) : null),
+                        h('input', { type: 'checkbox', checked: tell, onChange: (event) => setTell(event.target.checked), 'data-calendar-notify': '' }), box.label),
+                    box.quiet && !tell ? h('div', { className: 'dshcal-hint', 'data-calendar-mail': 'reach' }, box.quiet) : null) : null),
                 sending.dialog);
         }
 
@@ -3913,15 +4030,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const openDay = (day, el) => setPop({ kind: 'day', day, anchor: rectOf(el) });
             const closeDialog = () => setDialog(null);
             const saved = (o, words) => {
-                if (!isObject(o)) {
-                    store.toast(words === 'Added' ? 'Added.' : 'Saved.');
+                const told = isObject(o) ? contactText(o) : '';
+                // The host's answer without the event itself (a move it lost sight of): what it did, without going there.
+                if (!placed(o)) {
+                    store.toast(`${words === 'Added' ? 'Added.' : 'Saved.'}${told ? ` ${told}` : ''}`);
                     return;
                 }
                 const day = o.allDay ? o.startDay : dayIn(o.start, zone);
-                const emailed = emailedText(o.emailed);
                 store.toast(`${words === 'Added'
                     ? `Added “${o.title}” on ${dayText(day)}${o.allDay ? '' : ` at ${timeText(o.start, zone)}`}.`
-                    : 'Saved.'}${emailed ? ` ${emailed}` : ''}`);
+                    : 'Saved.'}${told ? ` ${told}` : ''}`);
                 if (isDay(day) && !range.days.includes(day)) go(day);
             };
             const syncNow = async () => {
@@ -3943,9 +4061,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     setFocusDay(day);
                     return;
                 }
-                if (!entry?.data) return;
+                // As it is now: after the events are read again (a change elsewhere, or one the host stopped).
+                if (!entry?.data || entry.loading || entry.stale) return;
                 const found = entry.data.occurrences.find((o) => o.id === target.id);
-                if (!found && (entry.loading || entry.stale)) return;
                 store.clearTarget(target.seq);
                 if (!target.allDay && Number.isFinite(target.start)) setScrollTo({ minutes: minutesIn(target.start, zone) });
                 const show = (o) => requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -4026,6 +4144,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h('span', null, 'Add iCloud, Google, Microsoft 365, Fastmail or any CalDAV account to see its calendars here.',
                         h('br'), h('button', { type: 'button', className: 'dshcal-link', onClick: () => setDialog({ kind: 'accounts', start: { page: 'add' } }) }, 'Add an account'))) : null,
                 h(CalendarList, { cal, onDialog: (next) => { setSideOpen(false); setDialog(next); } }),
+                // Set in the profile's settings file only, so it is said here, with no button to change it.
+                state?.askBeforeEmails === false ? h('div', { className: 'dshcal-note', 'data-calendar-ask-off': '' },
+                    icon('IconInfoOutlineRegular', { size: 12 }),
+                    h('span', null, 'Chats can email your guests without asking you first: “Ask before emails” is off in the calendar plugin\'s settings (askBeforeEmails, in this profile\'s cordis.patch.yml).')) : null,
                 h('div', { className: 'dshcal-side-foot' },
                     h('div', { className: 'dshcal-inline', style: { flexWrap: 'nowrap', gap: 4 } },
                         h(Btn, { kind: 'ghost', style: { flex: 1, justifyContent: 'flex-start' }, onClick: () => setDialog({ kind: 'accounts' }), 'data-calendar-accounts-open': '' },
@@ -4220,10 +4342,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 dialog?.kind === 'event' ? h(EventDialog, {
                     cal, mode: 'new', onClose: () => setDialog(null),
                     onSaved: (o) => {
-                        if (!isObject(o)) return;
+                        const told = isObject(o) ? contactText(o) : '';
+                        if (!placed(o)) {
+                            store.toast(`Added.${told ? ` ${told}` : ''}`);
+                            return;
+                        }
                         const day = o.allDay ? o.startDay : dayIn(o.start, zone);
-                        const emailed = emailedText(o.emailed);
-                        store.toast(`Added “${o.title}” on ${dayText(day)}${o.allDay ? '' : ` at ${timeText(o.start, zone)}`}.${emailed ? ` ${emailed}` : ''}`);
+                        store.toast(`Added “${o.title}” on ${dayText(day)}${o.allDay ? '' : ` at ${timeText(o.start, zone)}`}.${told ? ` ${told}` : ''}`);
                     },
                 }) : null,
                 dialog?.kind === 'accounts' ? h(AccountsDialog, { cal, onClose: () => setDialog(null) }) : null,
@@ -4318,13 +4443,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 case 'free': return `Free time · ${plural(Array.isArray(view.slots) ? view.slots.length : 0, 'slot')}`;
                 case 'created': return `Added ${quote(o.title, 50)}`;
                 case 'updated': return `Changed ${quote(o.title, 50)}${SCOPE_WORDS[view.scope] ? `, ${SCOPE_WORDS[view.scope]}` : ''}`;
+                case 'moved': return `Moved ${quote(o.title, 50)}${o.calendar ? ` to ${o.calendar}` : ''}`;
                 case 'deleted': return `Deleted ${quote(o.title, 50)}${SCOPE_WORDS[view.scope] ? `, ${SCOPE_WORDS[view.scope]}` : ''}`;
                 case 'responded': return `Answered ${(ANSWER_WORDS[view.answer] ?? view.answer ?? '').toLowerCase()}: ${quote(o.title, 50)}`;
                 default: return runningTitle('', a);
             }
         }
 
-        const CARD_KINDS = new Set(['calendars', 'events', 'event', 'free', 'created', 'updated', 'deleted', 'responded']);
+        const CARD_KINDS = new Set(['calendars', 'events', 'event', 'free', 'created', 'updated', 'moved', 'deleted', 'responded']);
         const noop = () => {};
 
         /** The text a call gave the agent. */
@@ -4409,12 +4535,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             if (!o) return null;
             const deleted = view.kind === 'deleted';
             const when = Number.isFinite(o.start) || isDay(o.startDay) ? whenText(o, zone) : '';
+            // A change: who it emailed, and whose calendars it reached without email.
+            const told = view.kind === 'event' ? '' : contactText(view);
             return h('div', { className: 'dshcal-chat-line', 'data-kind': view.kind, 'data-calendar-chat-card': view.kind, style: evStyle(o.color) },
                 deleted ? icon('IconTrashOutlineRegular') : view.kind === 'event' ? h('span', { className: 'dshcal-dot', style: { '--dot': colorOf(o.color) } }) : icon('IconCheckCircleOutlineRegular'),
                 h('span', { className: 'dshcal-chat-text' },
                     h('b', { style: deleted ? { textDecoration: 'line-through' } : undefined }, o.title || TEXT.noTitle),
                     h('span', null, [when, o.calendar, o.location, o.repeats].filter(Boolean).map((part) => ` · ${part}`).join(''))),
-                deleted ? null : h(Btn, { size: 'sm', onClick: () => cal.openAt(o), 'data-calendar-open-event': o.id }, 'Show in Calendar'));
+                deleted ? null : h(Btn, { size: 'sm', onClick: () => cal.openAt(o), 'data-calendar-open-event': o.id }, 'Show in Calendar'),
+                told ? h('div', { className: 'dshcal-chat-told', 'data-calendar-told': '' }, told) : null);
         }
 
         /** DSH's own row for a call (a refusal, a failure, a call with no card), or the plugin's plain one. */
@@ -4584,7 +4713,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             parseRule, untilValue, untilDay, repeatChoices, repeatFromRule, ruleFromRepeat, repeatProblem,
             columnsOf, lanesOf, fitLanes, daySegments, barItems, agendaDays, rangeOf, stepFrom, dayList,
             draftFrom, draftProblems, createInput, changePatch, writableCalendars,
-            roleOf, othersOf, mailMode, peopleText, sameOccurrence, emailedText, withConsent, removalNotice, returnAddress,
+            roleOf, othersOf, mailMode, peopleText, sameOccurrence, placed, emailedText, contactText, CHOOSE_CALENDAR, withConsent, removalNotice, returnAddress,
             callArgs, argWhen, runningTitle, doneTitle, resultText,
             CalendarPage, AgendaPane, ToolView, EventDialog, EventPopover, AccountsDialog,
         };
