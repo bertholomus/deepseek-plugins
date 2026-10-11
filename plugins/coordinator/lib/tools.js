@@ -1,8 +1,9 @@
 /**
- * Model-facing project tools, registered in one agent's scope. The coordinator
- * gets the thread, message and settings tools, a thread gets thread_handback,
- * and both get shared_notes. Each tool is bound to its project (and thread) when it
- * is registered, so a call can never reach another project.
+ * Model-facing tools, registered in one agent's scope. A coordinating chat
+ * gets the thread, message and settings tools, a thread gets
+ * thread_handback and thread_ask, and both get shared_notes. Each tool is
+ * bound to its chat (and thread) when it is registered, so a call can never
+ * reach another chat's threads.
  *
  * @module dsh-plugin-coordinator/tools
  */
@@ -10,7 +11,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import { HANDBACK_STATUSES, threadMarkdown } from './prompts.js';
 
 /**
- * Every project tool returns its text for the model and a view for the DSH
+ * Every tool returns its text for the model and a view for the DSH
  * window. The view becomes the result's presentation meta, which the
  * `coordinatorSession` projection folds into thread cards and rosters
  * (projection.js); the model sees only the text.
@@ -50,7 +51,7 @@ const EFFORT_HELP = 'A reasoning effort the model offers; a wrong one fails with
 const ONLY_ASKED = 'Only when the user asks for one.';
 
 /**
- * Build the tools for one project session.
+ * Build the tools for one coordinating chat or thread.
  * @param {import('./projects.js').ProjectManager} manager
  * @param {{projectId: string, role: 'coordinator'|'thread', threadId?: string}} who
  */
@@ -63,7 +64,7 @@ export function projectTools(manager, who) {
     const shared = [
         tool({
             name: 'shared_notes',
-            description: 'Read or write the project\'s shared memory file, which every coordinator and thread reads. Write only facts the user stated or you checked: decisions, conventions, how the user wants to work. Never plans or guesses.',
+            description: 'Read or write the shared notes of this chat and its threads, which all of them read. Write only facts the user stated or you checked: decisions, conventions, how the user wants to work. Never plans or guesses.',
             parameters: {
                 action: { type: 'string', required: true, enum: ['read', 'append', 'replace'], description: 'read, append (add lines at the end), or replace (rewrite the whole file)' },
                 text: { type: 'string', description: 'Text to append, or the full new content for replace' },
@@ -107,11 +108,11 @@ export function projectTools(manager, who) {
         ...shared,
         tool({
             name: 'thread_start',
-            description: 'Start a thread: a separate DSH session in the project that does one task and reports back to you with a handback. One thread per distinct ask.',
+            description: 'Start a thread: a separate DSH session in this folder that does one task and reports back to you with a handback. For work that runs long, splits into parts or runs in parallel, or when the user asks for a thread. One thread per distinct ask.',
             parameters: {
                 title: { type: 'string', required: true, description: 'A few plain words naming the task, in the user\'s words' },
                 ask: { type: 'string', required: true, description: 'The user\'s request, copied word for word from their message. The thread reads it as "The user asked: …".' },
-                brief: { type: 'string', required: true, description: 'What the thread needs beyond the ask: the goal, the scope, what done looks like and what not to touch; facts from project memory; and the default you picked where the ask is unclear. No deliverables the user did not ask for.' },
+                brief: { type: 'string', required: true, description: 'What the thread needs beyond the ask: the goal, the scope, what done looks like and what not to touch; facts from this chat and the shared notes; and the default you picked where the ask is unclear. No deliverables the user did not ask for.' },
                 model: { type: 'string', description: `A model for this thread only, as "provider:model" or a bare model id. ${ONLY_ASKED} Leave it out otherwise.` },
                 effort: { type: 'string', description: `An effort for this thread only, one the model offers. ${ONLY_ASKED} Leave it out otherwise.` },
             },
@@ -143,9 +144,9 @@ export function projectTools(manager, who) {
         }),
         tool({
             name: 'chat_message',
-            description: 'Send a message to a chat outside this project, or to another project\'s coordinator, when the user asks you to. That chat stays outside this project: it gets no thread, card or tools. Its reply comes back to you once, as a note. For this project\'s threads, use thread_send.',
+            description: 'Send a message to another chat when the user asks you to. That chat stays as it is: it gets no thread, card or tools. Its reply comes back to you once, as a note. For your own threads, use thread_send.',
             parameters: {
-                to: { type: 'string', required: true, description: 'Another project\'s name, or the chat\'s title as DSH lists it (or its session id)' },
+                to: { type: 'string', required: true, description: 'The chat\'s title as DSH lists it, or its session id' },
                 ask: { type: 'string', required: true, description: 'The user\'s request to send it, copied word for word from their message' },
                 text: { type: 'string', required: true, description: 'The message' },
             },
@@ -156,7 +157,7 @@ export function projectTools(manager, who) {
         }),
         tool({
             name: 'thread_list',
-            description: 'List the project\'s threads with live status and last handback.',
+            description: 'List this chat\'s threads with live status and last handback.',
             parameters: {
                 include_resolved: { type: 'boolean', description: 'Also list resolved threads' },
             },
@@ -181,8 +182,8 @@ export function projectTools(manager, who) {
             parameters: {
                 thread: { type: 'string', required: true, description: 'Thread id, e.g. "t3"' },
                 title: { type: 'string', description: 'New title' },
-                model: { type: 'string', description: `${MODEL_HELP} "default" returns to the project's thread default. ${ONLY_ASKED}` },
-                effort: { type: 'string', description: `${EFFORT_HELP} "default" returns to the project's thread default. ${ONLY_ASKED}` },
+                model: { type: 'string', description: `${MODEL_HELP} "default" returns to the thread default. ${ONLY_ASKED}` },
+                effort: { type: 'string', description: `${EFFORT_HELP} "default" returns to the thread default. ${ONLY_ASKED}` },
                 resolved: { type: 'boolean', description: 'true to resolve, false to reopen' },
                 stop: { type: 'boolean', description: 'Stop the running turn; queued messages are kept' },
             },
@@ -197,18 +198,14 @@ export function projectTools(manager, who) {
         }),
         tool({
             name: 'thread_settings',
-            description: 'Show or change which model and effort the coordinator and new threads use, or pause the project. With no arguments it shows them, and the user\'s tools and permission settings, which only the user changes. Only when the user asks.',
+            description: 'Show or change which model and effort new threads use, or pause threads. With no arguments it shows them, and the user\'s tools and permission settings, which only the user changes. Only when the user asks.',
             parameters: {
-                coordinator_model: { type: 'string', description: `Coordinator model. ${MODEL_HELP}` },
-                coordinator_effort: { type: 'string', description: `Coordinator effort. ${EFFORT_HELP}` },
                 thread_model: { type: 'string', description: `Default model for new threads. ${MODEL_HELP}` },
                 thread_effort: { type: 'string', description: `Default effort for new threads. ${EFFORT_HELP}` },
                 paused: { type: 'boolean', description: 'true pauses new threads and holds handbacks; false resumes and delivers held handbacks' },
             },
             async execute(args) {
                 return result(await manager.updateSettings(projectId, {
-                    coordinatorModel: given(args.coordinator_model),
-                    coordinatorEffort: given(args.coordinator_effort),
                     threadModel: given(args.thread_model),
                     threadEffort: given(args.thread_effort),
                     paused: args.paused,

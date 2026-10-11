@@ -3,17 +3,15 @@
  * Host through Remote namespaces its gateway serves on the window's
  * connection (`/api/<namespace>/<method>`, the same carrier in the desktop
  * app and in a browser). This module adds one more, `dsh-plugin-coordinator`,
- * so the Project settings dialog in lib/client.js reads and changes a
- * project's models, effort and pause the way the coordinator's
- * thread_settings tool does, through the same manager methods, and its
- * access settings (the user's tools, permissions), which only it does, the
- * plugin's page and the Projects page list every project, a failed or
+ * so a chat starts or stops coordinating from its header (coordinate), the
+ * Thread settings dialog in lib/client.js reads and changes a coordinating
+ * chat's thread model, effort and pause the way its thread_settings tool
+ * does, through the same manager methods, and its access settings (the
+ * user's tools, the thread permission), which only it does, a failed or
  * stopped thread runs again from its card (Retry, Resume), a thread's
- * Changes tab reads its diffs (changes), a project is made
- * in a workspace, renamed or removed (create, rename, remove,
- * addCoordinator), archived with its coordinator and threads or brought
- * back (archive, restore), and the window hears what the user hasn't seen
- * yet (news, seeNews).
+ * Changes tab reads its diffs (changes), a coordinating chat is archived
+ * with its threads or brought back (archive, restore), and the window hears
+ * what the user hasn't seen yet (news, seeNews).
  *
  * The gateway finds a Remote service by its `typertRemote` binding and the
  * method markers on its prototype; DSH's own services get both from
@@ -50,8 +48,8 @@ export class ProjectsRemote {
     }
 
     /**
-     * A project's settings and threads, as the dialog shows them.
-     * @param target - a project id, or the id of its coordinator or one of its threads.
+     * A coordinating chat's thread settings and threads, as the dialog shows them.
+     * @param target - the chat's session id, or the id of one of its threads.
      */
     async describe(target) {
         try {
@@ -62,10 +60,9 @@ export class ProjectsRemote {
     }
 
     /**
-     * Every project with its models and access settings and their sources,
-     * for the plugin's page and the Projects page, in the Projects page's
-     * order, with the user's tools (guardedTools) and the permissions DSH
-     * offers.
+     * Every coordinating chat with its thread settings and access settings
+     * and their sources, with the user's tools (guardedTools) and the
+     * permissions DSH offers.
      */
     async list() {
         try {
@@ -75,13 +72,13 @@ export class ProjectsRemote {
         }
     }
 
-    /** What every change answers with: the projects as they are now. */
+    /** What every change answers with: the coordinating chats as they are now. */
     lists() {
         return { projects: this.manager.listProjects() };
     }
 
     /**
-     * Every coordinator and thread session the plugin knows, by session id,
+     * Every coordinating chat and thread the plugin knows, by session id,
      * for the session list while DSH has no value of the plugin's
      * projection for one (a session from before an update, not opened since).
      */
@@ -94,9 +91,9 @@ export class ProjectsRemote {
     }
 
     /**
-     * What the user hasn't seen yet, per project with a coordinator: threads
-     * that handed back, finished, wait on the user's approval, or failed or
-     * stopped (the ◆ row's mark and the window's notice).
+     * What the user hasn't seen yet, per coordinating chat: threads that
+     * handed back, finished, wait on the user's approval, or failed or
+     * stopped (the chat row's mark and the window's notice).
      * @returns {news: [{project, name, coordinator, seq, seen, unread}]}
      */
     async news() {
@@ -108,8 +105,8 @@ export class ProjectsRemote {
     }
 
     /**
-     * The user opened a coordinator: its project's news up to `seq` is seen.
-     * @param target - a project id, or the id of its coordinator or one of its threads.
+     * The user opened a coordinating chat: its news up to `seq` is seen.
+     * @param target - the chat's session id, or the id of one of its threads.
      * @param seq - the newest news the window showed them; omitted, all of it.
      * @returns as news.
      */
@@ -123,45 +120,26 @@ export class ProjectsRemote {
     }
 
     /**
-     * A new project made in the window: its ◆ coordinator starts in the
-     * workspace, and its threads work there.
-     * @param name - its name.
-     * @param workspace - the DSH workspace id it works in.
-     * @returns {project: the new id, coordinator: its session id, projects}.
+     * Start or stop coordinating in a chat: its header's Coordinate button,
+     * or Stop coordinating in its Threads menu. It runs as /coordinate (or
+     * /coordinate off) in that chat, so DSH shows it there.
+     * @param target - the chat's session id.
+     * @param on - true to start, false to stop.
+     * @returns {coordinating, session, text: the line DSH shows under the command, projects}.
      */
-    async create(name, workspace) {
+    async coordinate(target, on) {
         try {
-            const made = await this.manager.createProject(name, typeof workspace === 'string' ? workspace : '');
-            return { project: made.id, coordinator: made.coordinator, ...this.lists() };
-        } catch (error) {
-            throw failure(error);
-        }
-    }
-
-    /** Rename a project made in the window. @returns the projects. */
-    async rename(project, name) {
-        try {
-            await this.manager.renameProject(this.manager.projectFor(project), name);
-            return this.lists();
-        } catch (error) {
-            throw failure(error);
-        }
-    }
-
-    /** Delete a project made in the window whose coordinator never started. @returns the projects. */
-    async remove(project) {
-        try {
-            this.manager.deleteProject(this.manager.projectFor(project));
-            return this.lists();
+            const done = await this.manager.coordinateFromWindow(typeof target === 'string' ? target : '', on !== false);
+            return { ...done, ...this.lists() };
         } catch (error) {
             throw failure(error);
         }
     }
 
     /**
-     * Archive a project with its coordinator and threads: what runs in them
-     * stops, and DSH archives each one. Nothing is deleted.
-     * @param project - a project id, or the id of its coordinator or one of its threads.
+     * Archive a coordinating chat with its threads: what runs in them stops,
+     * and DSH archives each one. Nothing is deleted.
+     * @param project - the chat's session id, or the id of one of its threads.
      * @returns {archived: how many sessions DSH archived now, projects}.
      */
     async archive(project) {
@@ -174,7 +152,7 @@ export class ProjectsRemote {
     }
 
     /**
-     * Bring an archived project back with its coordinator and threads.
+     * Bring an archived coordinating chat back with its threads.
      * @param project - as for archive.
      * @returns {restored: how many sessions DSH unarchived now, projects}.
      */
@@ -188,24 +166,10 @@ export class ProjectsRemote {
     }
 
     /**
-     * Start the coordinator of a project made in the window that has none
-     * (it never started, or it was deleted in DSH).
-     * @returns {coordinator: its session id, projects}.
-     */
-    async addCoordinator(project) {
-        try {
-            const sessionId = await this.manager.startCoordinator(this.manager.projectFor(project));
-            return { coordinator: sessionId, ...this.lists() };
-        } catch (error) {
-            throw failure(error);
-        }
-    }
-
-    /**
      * A thread's own changes for its Changes tab: each file with lines added
      * and deleted and each edit's hunks, the project's other threads that
      * changed the same files, and the turns DSH's Review can still show.
-     * @param target - the thread's session id, or a session or id of its project with `thread`.
+     * @param target - the thread's session id, or its chat's with `thread`.
      * @param thread - the thread's id (t3), when target isn't its session.
      */
     async changes(target, thread) {
@@ -232,16 +196,15 @@ export class ProjectsRemote {
     }
 
     /**
-     * Change a project's settings, or one thread's model, effort or
-     * permission, or rename, stop, resolve or reopen a thread. Values are strings;
-     * null goes back to the default.
-     * `paused` is a boolean. Access settings change only here (and in the
-     * profile): yourTools "asked" or "always", a permission DSH offers or
+     * Change a coordinating chat's thread settings, or one thread's model,
+     * effort or permission, or rename, stop, resolve or reopen a thread.
+     * Values are strings; null goes back to the default. `paused` is a
+     * boolean. Access settings change only here (and in the plugin's
+     * defaults): yourTools "asked" or "always", a permission DSH offers or
      * "default".
      * @param target - as for describe.
-     * @param changes - {coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?,
-     *   yourTools?, coordinatorPermission?, threadPermission?} or {thread, model?, effort?, permission?},
-     *   or from a thread row's ⋯ {thread, title?, resolved?, stop?}.
+     * @param changes - {threadModel?, threadEffort?, paused?, yourTools?, threadPermission?}
+     *   or {thread, model?, effort?, permission?}, or from a thread row's ⋯ {thread, title?, resolved?, stop?}.
      * @returns the project as describe returns it, with `notes` from the change.
      */
     async update(target, changes) {
@@ -264,5 +227,5 @@ function markRemote(Class, names) {
     }
 }
 markRemote(ProjectsRemote, [
-    'describe', 'list', 'sessions', 'news', 'seeNews', 'update', 'continueThread', 'changes', 'create', 'rename', 'remove', 'addCoordinator', 'archive', 'restore',
+    'describe', 'list', 'sessions', 'news', 'seeNews', 'update', 'continueThread', 'changes', 'coordinate', 'archive', 'restore',
 ]);

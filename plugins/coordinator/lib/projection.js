@@ -1,43 +1,47 @@
 /**
- * The `coordinatorSession` session projection: what the DSH window needs to draw
- * a project session. It says whether a session is a coordinator or a thread
- * and of which project, holds a coordinator's thread roster and a thread's
- * coordinator, and lists the cards each turn earned (a thread started, a
- * handback arrived). DSH folds it on the Host over every committed event of
- * every session and sends the value to the browser half (lib/client.js),
- * which never reads session logs itself.
+ * The `coordinatorSession` session projection: what the DSH window needs to
+ * draw a coordinating chat or a thread. It says whether a session
+ * coordinates threads or is one, holds a coordinating chat's thread roster
+ * and a thread's coordinating chat, and lists the cards each turn earned (a
+ * thread started, a handback arrived). DSH folds it on the Host over every
+ * committed event of every session and sends the value to the browser half
+ * (lib/client.js), which never reads session logs itself.
  *
- * The fold reads only what project sessions already record: the
- * presentation meta of project tool results (tools.js), the tagged
- * messages the plugin sends (prompts.js), which DSH logs as an agent's or a
- * plugin's message (earlier versions sent them as the user's, with a
- * request id that marks them), whether the user has written in a
- * coordinator yet (a new project suggests first asks until then), the
- * turns in which a thread changed files (DSH's `workspace/changes` events;
- * the window then reads the numbers from the plugin), and how a thread's
- * last turn ended (DSH's `turn/end`), so a failed or stopped thread says so.
- * A session the store already knows
- * is seeded from the store the first time DSH folds it, so sessions from
- * before this version show their project and threads at once; replayed
- * events older than the seed then add cards but never overwrite the roster.
+ * The fold reads only what these sessions already record: the user's
+ * /coordinate and /coordinate off (DSH's `command/run` and `command/done`:
+ * a chat coordinates from the command's success on, under its own session
+ * id, and keeps its value when it stops, marked `off`), the chat's title,
+ * the presentation meta of the plugin's tool results (tools.js), the
+ * tagged messages the plugin sends (prompts.js), which DSH logs as an
+ * agent's or a plugin's message (earlier versions sent them as the user's,
+ * with a request id that marks them), the turns in which a thread changed files (DSH's
+ * `workspace/changes` events; the window then reads the numbers from the
+ * plugin), and how a thread's last turn ended (DSH's `turn/end`), so a
+ * failed or stopped thread says so. A thread is known by its brief; the
+ * notes threads send count only in a chat that coordinates, so the old
+ * projects plugin's sessions stay plain chats. A session the store already
+ * knows is seeded from the store the first time DSH folds it, so one whose
+ * value DSH dropped shows its threads at once; replayed events older than
+ * the seed then add cards but never overwrite the roster.
  *
  * DSH runs `apply` inside its event commit and parses persisted state
  * without catching, so `apply` and both parsers never throw.
  *
- * Value shape (`null` for sessions outside any project):
+ * Value shape (`null` for sessions that neither coordinate nor are threads):
  *
  * { role: 'coordinator'|'thread', project: { id?, name }, coordinator?: sessionId,
  *   thread?: { id, title }, threads?: [{ id, session, title, resolved, created?, handback? }],
- *   cards?: [{ turn, seq, kind, thread?, status? }], asked?: true, changes?: [{ turn, seq }],
+ *   cards?: [{ turn, seq, kind, thread?, status? }], off?: true, changes?: [{ turn, seq }],
  *   ending?: { state: 'failed'|'stopped', kind, turn, seq, at, message?, code?, cause?, hook?, times? },
  *   turnAt?: ms }
  *
- * Card kinds: start, send, update (tool results), handback, idle, approval
- * (the plugin's messages), and welcome: the turn a new coordinator
- * introduced itself in. An idle card's status says when the thread's turn
- * failed or stopped (from the note's first line). `asked` is set once the
- * user writes in a coordinator. `changes` lists a thread's turns that
- * changed files, oldest first. `turnAt` is when a thread's latest turn
+ * `project` names the coordinating chat: its session id and its title (for
+ * a thread, its coordinator's). Card kinds: start, send, update (tool
+ * results), handback, idle, approval and question (the plugin's messages).
+ * An idle card's status says when the thread's turn failed or stopped (from
+ * the note's first line). `off` is set while a chat has stopped
+ * coordinating. `changes` lists a thread's turns that changed files,
+ * oldest first. `turnAt` is when a thread's latest turn
  * started (DSH's event time), so a running thread's card says how long it
  * has run. `ending` is a thread's last turn when it didn't finish: it
  * failed (DSH logged an error, a plugin blocked it, or the user signed out)
@@ -53,7 +57,7 @@ import { TAGS, endingStateOf, readableError, handbackSummary, cardSummary } from
 /** The projection key; the browser half reads the same name. */
 export const PROJECTION_KEY = 'coordinatorSession';
 /** Bump when the state shape or fold changes; DSH then refolds from the log. */
-export const STATE_VERSION = 6;
+export const STATE_VERSION = 7;
 /** Most recent cards kept per session; older turns rarely scroll into view. */
 export const MAX_CARDS = 60;
 /** Threads kept in a roster: every open one, then the newest resolved ones. */
@@ -69,12 +73,16 @@ const RPC = /^projects-[^@]*(?:@(.+))?$/;
 /** Source kinds of the plugin's messages now: an agent's (from the coordinator or a thread) or a plugin's. */
 const AGENT_MESSAGE = 'agent-message';
 const PLUGIN_MESSAGE = 'cordis-host-runner';
-const BRIEF = /^\[Brief from the coordinator of "(.*)" · you are thread (t\d+), "(.*)"\]$/;
+const BRIEF = /^\[Brief from the chat "(.*)" · you are thread (t\d+), "(.*)"\]$/;
 const HANDBACK = /^\[Handback from thread (t\d+) · "(.*)" · status: ([a-z_]+)\]$/;
 const IDLE = /^\[Thread idle without a handback: (t\d+) · "(.*)"\]$/;
 const APPROVAL = /^\[Thread waiting for approval: (t\d+) · "(.*)"\]$/;
 const QUESTION = /^\[Question from thread (t\d+) · "(.*)"\]$/;
-const WELCOME = /^\[Project created: "(.*)"\]$/;
+/** The command a chat coordinates with (projects.js COMMAND), and what after it stops. */
+const COMMAND = 'coordinate';
+const STOP_WORDS = new Set(['off', 'stop']);
+/** What a coordinating chat goes by before DSH has given it a title (prompts.js UNTITLED_CHAT). */
+const UNTITLED = 'Untitled chat';
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const str = (value, max = 200) => (typeof value === 'string' ? value.slice(0, max) : undefined);
@@ -116,7 +124,6 @@ function withCard(v, card) {
     return { ...v, cards: cards.length > MAX_CARDS ? cards.slice(-MAX_CARDS) : cards };
 }
 
-/** The visible value with role and project set, from what an event says. */
 /**
  * A thread's value with when its latest turn started (the state's
  * `turnAt`); any other value as it is. A thread's first turn starts before
@@ -126,6 +133,7 @@ function withTurnAt(state, v) {
     return v?.role === 'thread' && Number.isFinite(state.turnAt) && v.turnAt !== state.turnAt ? { ...v, turnAt: state.turnAt } : v;
 }
 
+/** The visible value with role and project set, from what an event says. */
 function identify(v, role, project, extra = {}) {
     const base = v ?? { role, project };
     const next = { ...base, ...extra };
@@ -161,20 +169,10 @@ function messageOf(event) {
     return text.startsWith('[') ? { text, sender } : null;
 }
 
-/** The user's own words in a coordinator: from now on it has been asked something. */
-function applyUserMessage(state, event) {
-    if (state.v?.role !== 'coordinator' || state.v.asked === true) return state;
-    const data = event?.data;
-    const message = isObject(data?.message) ? data.message : data;
-    const kind = isObject(message?.source) ? message.source.kind : undefined;
-    if (kind !== undefined && kind !== 'user') return state;
-    return { ...state, v: { ...state.v, asked: true } };
-}
-
-/** Fold one plugin message (or the user's) into the state, or return the same state. */
+/** Fold one of the plugin's messages into the state, or return the same state. */
 function applyMessage(state, event) {
     const message = messageOf(event);
-    if (!message) return applyUserMessage(state, event);
+    if (!message) return state;
     const { text, sender } = message;
     const newline = text.indexOf('\n');
     const head = newline < 0 ? text : text.slice(0, newline);
@@ -192,13 +190,9 @@ function applyMessage(state, event) {
         if (state.v?.role !== 'thread' || !sender || state.v.coordinator === sender) return state;
         return { ...state, v: { ...state.v, coordinator: sender } };
     }
-    if (text.startsWith(TAGS.welcome) && (m = WELCOME.exec(head))) {
-        if (state.v?.role === 'thread') return state;
-        return { ...state, v: withCard(identify(state.v, 'coordinator', { name: m[1] }), { turn: state.turn, seq: event.seq, kind: 'welcome' }) };
-    }
     if (text.startsWith(TAGS.handback) && (m = HANDBACK.exec(head))) {
-        if (state.v?.role === 'thread') return state;
-        let v = identify(state.v, 'coordinator', {});
+        if (state.v?.role !== 'coordinator') return state;
+        let v = state.v;
         if (fresh) {
             const body = handbackSummary(text);
             const known = (v.threads ?? []).find((t) => t.id === m[1]);
@@ -209,16 +203,16 @@ function applyMessage(state, event) {
     }
     for (const [tag, pattern, kind] of [[TAGS.idle, IDLE, 'idle'], [TAGS.approval, APPROVAL, 'approval'], [TAGS.question, QUESTION, 'question']]) {
         if (text.startsWith(tag) && (m = pattern.exec(head))) {
-            if (state.v?.role === 'thread') return state;
+            if (state.v?.role !== 'coordinator') return state;
             // An idle note says first when the turn failed or stopped (prompts.js idleMessage).
             const ended = kind === 'idle' && newline >= 0 ? endingStateOf(text.slice(newline).trim()) : undefined;
-            return { ...state, v: withCard(identify(state.v, 'coordinator', {}), { turn: state.turn, seq: event.seq, kind, thread: m[1], ...(ended ? { status: ended } : {}) }) };
+            return { ...state, v: withCard(state.v, { turn: state.turn, seq: event.seq, kind, thread: m[1], ...(ended ? { status: ended } : {}) }) };
         }
     }
     return state;
 }
 
-/** Fold the presentation meta of one project tool result, or return the same state. */
+/** Fold the presentation meta of one of the plugin's tool results, or return the same state. */
 function applyToolMeta(state, event) {
     const meta = event?.data?.meta;
     if (!isObject(meta) || meta[META_MARK] !== 1) return state;
@@ -311,10 +305,46 @@ function applyTurnEnd(state, event) {
     return { ...state, v };
 }
 
-/** One event folded into the state; the same reference when the event says nothing about projects. */
+/**
+ * /coordinate or /coordinate off as DSH logs it: `command/run` names the
+ * command (kept until its result), and `command/done` with success makes
+ * the chat a coordinating one under its own session id, or marks it `off`.
+ * A thread never coordinates, and a failed command changes nothing.
+ */
+function applyCommand(state, event) {
+    const data = event?.data;
+    if (event.type === 'command/run') {
+        if (data?.name !== COMMAND || typeof data.commandId !== 'string') return state;
+        const arg = typeof data.args === 'string' ? data.args.trim().toLowerCase() : '';
+        return { ...state, command: { id: data.commandId.slice(0, 120), off: STOP_WORDS.has(arg) } };
+    }
+    if (!state.command || data?.commandId !== state.command.id) return state;
+    const { command, ...rest } = state;
+    if (data.kind !== 'success' || state.v?.role === 'thread') return rest;
+    if (command.off) {
+        if (state.v?.role !== 'coordinator' || state.v.off === true) return rest;
+        return { ...rest, v: { ...state.v, off: true } };
+    }
+    if (typeof state.id !== 'string') return rest;
+    const { off: _stopped, ...v } = identify(state.v, 'coordinator', { id: state.id, name: state.title ?? state.v?.project?.name ?? UNTITLED });
+    return { ...rest, v };
+}
+
+/** The chat's title, which a coordinating chat goes by. */
+function applyTitle(state, event) {
+    const title = str(event?.data?.title, 120)?.trim();
+    if (!title || title === state.title) return state;
+    const v = state.v?.role === 'coordinator' ? { ...state.v, project: { ...state.v.project, name: title } } : state.v;
+    return { ...state, title, v };
+}
+
+/** One event folded into the state; the same reference when the event says nothing about coordinating. */
 export function applyEvent(state, event) {
     try {
         switch (event?.type) {
+            case 'command/run':
+            case 'command/done': return applyCommand(state, event);
+            case 'session/title': return applyTitle(state, event);
             case 'turn/start': {
                 const turn = event.data?.turn;
                 let next = Number.isSafeInteger(turn) && turn !== state.turn ? { ...state, turn } : state;
@@ -339,10 +369,15 @@ export function parseState(value) {
     if (!isObject(value)) return INITIAL;
     const turn = Number.isSafeInteger(value.turn) && value.turn >= 0 ? value.turn : 0;
     const v = isObject(value.v) && (value.v.role === 'coordinator' || value.v.role === 'thread') && isObject(value.v.project) ? value.v : null;
+    const command = isObject(value.command) && typeof value.command.id === 'string' ? { id: value.command.id.slice(0, 120), off: value.command.off === true } : undefined;
     return {
         turn, v,
         ...(Number.isFinite(value.since) && value.since > 0 ? { since: value.since } : {}),
         ...(Number.isFinite(value.turnAt) ? { turnAt: value.turnAt } : {}),
+        // The session's own id and title, for a chat that starts coordinating; and the command it waits on the result of.
+        ...(typeof value.id === 'string' ? { id: value.id.slice(0, 120) } : {}),
+        ...(typeof value.title === 'string' ? { title: value.title.slice(0, 120) } : {}),
+        ...(command ? { command } : {}),
     };
 }
 
@@ -356,9 +391,11 @@ export function coordinatorSessionProjection(seed) {
         stateVersion: STATE_VERSION,
         stateSchema: { parse: parseState },
         init(header) {
+            const id = typeof header?.id === 'string' && header.id !== '' ? header.id.slice(0, 120) : undefined;
             let v = null;
-            try { v = header?.id ? seed(header.id) : null; } catch { v = null; }
-            return v ? { turn: 0, v, since: Date.now() } : INITIAL;
+            try { v = id ? seed(id) : null; } catch { v = null; }
+            if (v) return { turn: 0, v, since: Date.now(), id };
+            return id ? { ...INITIAL, id } : INITIAL;
         },
         apply: applyEvent,
         wire: {

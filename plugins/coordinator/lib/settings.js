@@ -1,43 +1,41 @@
 /**
- * Model and effort settings, and access settings. Four model settings per
- * project: coordinator model, coordinator effort, thread model, thread
+ * Model and effort settings, and access settings, for the threads a
+ * coordinating chat starts. Two model settings: thread model and thread
  * effort. Each resolves from the first layer that sets it:
  *
- *   the project's own setting (its Project settings dialog, its coordinator's
- *   DSH model picker, or the thread_settings tool) → project row in the
- *   profile → plugin row → DSH default
+ *   the chat's own setting (its Thread settings dialog, or the
+ *   thread_settings tool) → plugin row → DSH default
  *
  * A thread fixes its model and effort when it starts (start arguments win
  * over the thread defaults), and keeps them until changed with
- * thread_update, the dialog or its own model picker. Pure
+ * thread_update, the dialog or its own model picker. The coordinating chat
+ * itself runs on whatever the user picks in it, as any chat does. Pure
  * functions, no host imports.
  *
  * @module dsh-plugin-coordinator/settings
  */
 
-export const SETTING_KEYS = ['coordinatorModel', 'coordinatorEffort', 'threadModel', 'threadEffort'];
+export const SETTING_KEYS = ['threadModel', 'threadEffort'];
 
 /**
- * Access settings, layered the same way: who may use the user's own tools
- * (config.guardedTools), and the DSH permission preset the coordinator and
- * new threads run with.
+ * Access settings, layered the same way: which threads may use the user's
+ * own tools (config.guardedTools), and the DSH permission preset new threads
+ * start on.
  *
- *   yourTools: "asked" keeps the user's tools from every coordinator, and
- *     from a thread unless the user's own words for it name one; "always"
- *     lets every project session use them.
- *   coordinatorPermission, threadPermission: one of DSH's permission
- *     presets (read-only, workspace-write, danger-full-access), or "default"
- *     for DSH's default for new sessions.
+ *   yourTools: "asked" gives a thread only the user's tools their own words
+ *     for it name; "always" gives every thread all of them.
+ *   threadPermission: one of DSH's permission presets (read-only,
+ *     workspace-write, danger-full-access), or "default" for DSH's default
+ *     for new sessions.
  *
  * Without any setting they are the plugin's own defaults below, not DSH's:
- * the coordinator is on Read Only (it reads, and its threads do the
- * changing; what would need approval is refused without asking), and
- * threads start on Workspace Write. Only the user changes them (Project
- * settings, the plugin's page, the profile); no project tool does.
+ * threads start on Workspace Write. Only the user changes them (Thread
+ * settings, the plugin's page, the profile); no tool does. The coordinating
+ * chat keeps the user's tools and its own permission.
  */
-export const ACCESS_KEYS = ['yourTools', 'coordinatorPermission', 'threadPermission'];
+export const ACCESS_KEYS = ['yourTools', 'threadPermission'];
 export const TOOL_MODES = ['asked', 'always'];
-export const ACCESS_DEFAULTS = Object.freeze({ yourTools: 'asked', coordinatorPermission: 'read-only', threadPermission: 'workspace-write' });
+export const ACCESS_DEFAULTS = Object.freeze({ yourTools: 'asked', threadPermission: 'workspace-write' });
 
 const set = (v) => typeof v === 'string' && v.trim() !== '';
 
@@ -64,35 +62,31 @@ function accessValue(key, v) {
 }
 
 /**
- * Resolve the three access settings and where each came from: the
- * project's own setting, its profile row, the plugin's defaults (set on its
- * page, or the built-in ACCESS_DEFAULTS).
+ * Resolve the access settings and where each came from: the chat's own
+ * setting, the plugin's defaults (set on its page, or the built-in
+ * ACCESS_DEFAULTS).
  * @returns {Record<string, {value: string, source: string}>}
  */
-export function effectiveAccess(plugin = {}, project = {}, overrides = {}) {
+export function effectiveAccess(plugin = {}, overrides = {}) {
     const out = {};
     for (const key of ACCESS_KEYS) {
         const own = accessValue(key, overrides[key]);
-        const row = accessValue(key, project[key]);
-        if (own !== undefined) out[key] = { value: own, source: 'project setting' };
-        else if (row !== undefined) out[key] = { value: row, source: 'project config' };
+        if (own !== undefined) out[key] = { value: own, source: 'chat setting' };
         else out[key] = { value: accessValue(key, plugin[key]) ?? ACCESS_DEFAULTS[key], source: 'plugin default' };
     }
     return out;
 }
 
 /**
- * Resolve the four settings and where each came from.
+ * Resolve the model settings and where each came from.
  * @param {object} plugin - plugin config (top-level defaults).
- * @param {object} project - the project's profile row.
- * @param {object} overrides - runtime overrides from the store.
+ * @param {object} overrides - the chat's own settings, from the store.
  * @returns {Record<string, {value: string|undefined, source: string}>}
  */
-export function effectiveSettings(plugin = {}, project = {}, overrides = {}) {
+export function effectiveSettings(plugin = {}, overrides = {}) {
     const out = {};
     for (const key of SETTING_KEYS) {
-        if (set(overrides[key])) out[key] = { value: overrides[key].trim(), source: 'project setting' };
-        else if (set(project[key])) out[key] = { value: project[key].trim(), source: 'project config' };
+        if (set(overrides[key])) out[key] = { value: overrides[key].trim(), source: 'chat setting' };
         else if (set(plugin[key])) out[key] = { value: plugin[key].trim(), source: 'plugin default' };
         else out[key] = { value: undefined, source: 'DSH default' };
     }
@@ -114,7 +108,7 @@ export function parseModelSpec(spec, fallbackProvider) {
 }
 
 /**
- * Rewrite one resolved model request config with a project route. An unset
+ * Rewrite one resolved model request config with a thread's route. An unset
  * model leaves the request's model alone. A set model without an effort runs
  * at that model's own default effort, as a DSH model selection does.
  * @param {object} resolved - config proposed by the `agent/request` waterfall.
@@ -167,7 +161,7 @@ function nearestEffort(offered, effort, known) {
  * Check a model spec and effort against the host model catalog, and return
  * the canonical "provider:model". With no catalog, accept as given. A model
  * with no effort levels drops the effort and says so in `note`, so a
- * project-wide effort default does not break threads on such a model.
+ * chat-wide effort default does not break threads on such a model.
  *
  * `fit` says what to do with an effort the model doesn't offer. Strict
  * (false) refuses it, for a value someone is setting now. 'known' runs the

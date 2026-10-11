@@ -10,9 +10,10 @@ import { join } from 'node:path';
 // Full end-to-end coverage lives in plugins/coordinator/test/smoke.mjs (needs the DSH peers).
 
 test('coordinator: settings layers', () => {
-    const s = effectiveSettings({ threadEffort: 'low' }, { threadEffort: 'high' }, {});
-    assert.deepEqual(s.threadEffort, { value: 'high', source: 'project config' });
+    const s = effectiveSettings({ threadEffort: 'low' }, {});
+    assert.deepEqual(s.threadEffort, { value: 'low', source: 'plugin default' });
     assert.equal(s.threadModel.source, 'DSH default');
+    assert.deepEqual(effectiveSettings({ threadEffort: 'low' }, { threadEffort: 'high' }).threadEffort, { value: 'high', source: 'chat setting' });
 });
 
 test('coordinator: route override keeps the model when unset; a new model gets its default effort', () => {

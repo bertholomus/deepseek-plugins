@@ -1,12 +1,13 @@
 /**
- * Durable project state. One JSON file, atomic writes, mode 600. Shape:
+ * Durable state of the coordinating chats. One JSON file, atomic writes,
+ * mode 600. Each chat that ran /coordinate is kept under its own session id
+ * (still called a project here) with its threads. Shape:
  *
- * { version: 1, projects: { [projectId]: {
- *     coordinatorSessionId, settings: { coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?, goal?: the user's, from
- *       Project settings only, yourTools?, coordinatorPermission?, threadPermission? },
- *     nextThread, pendingHandbacks: [text | {text, from: thread session}], threadStarts: [ms], rowSeen?: { the project row's models, efforts and access last seen },
- *     welcomedSession?: the coordinator session that got (or never needed) its first-turn welcome,
- *     coordinatorRoute?, coordinatorAccess?: the model route and permission setting the coordinator last got,
+ * { version: 1, projects: { [the chat's session id]: {
+ *     coordinatorSessionId: the same id, name: the chat's title, folder: where its threads work (the chat's folder),
+ *     createdAt, off?: true once the user ran /coordinate off, gone?: true while DSH no longer has the chat,
+ *     settings: { threadModel?, threadEffort?, paused?, yourTools?, threadPermission? },
+ *     nextThread, pendingHandbacks: [text | {text, from: thread session}], threadStarts: [ms],
  *     threads: { [threadId]: { sessionId, title, model?, effort?, resolved, createdAt,
  *       ask?: the user's words it started with, tools?: the user's tools (guardedTools names) the user's words gave it,
  *       permission?: the DSH permission preset it started on or was moved to,
@@ -14,41 +15,23 @@
  *       busy?: true while a turn runs, seenTurn?: key of the last turn reviewed,
  *       lastEnding?: { text, kind, at }: that turn, when it failed or stopped without a handback (prompts.js describeEnding),
  *       changes?: [{ turn, seq, added, deleted, total, files: [{ path, added, deleted, binary?, oversized? }], turns? }] (changes.js) } },
- *     home?: id of the DSH workspace its coordinator and threads work in,
- *     archived?: { at, via: 'window' | 'dsh' | 'start' | 'hand', sessions?: the project's sessions the archive saw to, archived
- *       in DSH or gone from it }: the project is archived with its coordinator and threads (projects.js archiveProject),
+ *     home?: id of the DSH workspace the chat and its threads work in,
+ *     archived?: { at, via: 'window' | 'dsh' | 'start' | 'hand', sessions?: the chat's and its threads' sessions the archive
+ *       saw to, archived in DSH or gone from it }: the chat is archived with its threads (projects.js archiveProject),
+ *     dshArchive?: { coordinator, archived }: whether DSH had the chat archived when the plugin last looked,
+ *     news?: { seq, seen, items }: what the user hears about from anywhere in the window (projects.js noteNews),
  *     awaiting?: [{ to: a chat's session id, name: as the coordinator named it, from: the coordinator's session id,
- *       after: the chat's last event seq before the message, at }]: messages to chats outside the project (chat_message)
- *       whose reply hasn't come back yet,
- *     A project made in the window also keeps its definition here (a profile row has its own):
- *     name, source: 'page' | 'import', createdAt, order: its place among them, importedFrom?: the old project's id } },
- *   workspaceOf?, categories?, categoryOf?, imports?: categories and the groups before them, from when they were part of this plugin (below) }
+ *       after: the chat's last event seq before the message, at }]: messages to other chats (chat_message)
+ *       whose reply hasn't come back yet } } }
  *
- * Categories moved to the categories plugin (plugins/categories). This
- * plugin only keeps what an older version of it wrote about them, because
- * that older version needs it if the user goes back to it, and the
- * categories plugin reads it once to bring the user's categories over.
- * Nothing here uses or changes `workspaceOf`, `categories`, `categoryOf` or
- * `imports`: each save reads them from the file again and writes them back
- * exactly as it has them just then (a file without them is saved without
- * them), so a change made there by another hand is never written over:
- *   categories: { [categoryId]: { name, order: its place in the list, createdAt, source: 'group' | 'page' | 'import',
- *     importedFrom?: the old sidebar project's id } }: named sets of DSH workspaces,
- *   categoryOf: { [DSH workspace id]: categoryId }: the category each workspace was in, one at most,
- *   workspaceOf: { [DSH workspace id]: projectId }: before categories, the group each workspace was in,
- *   imports: { fleetShell?: { at, file, categories, joined, workspaces, skipped }, categories?: { at, categories, workspaces, backup? } }:
- *     the one-time imports and moves that older version made.
+ * The file is this plugin's own (~/.dsh/coordinator): the projects plugin
+ * it grew from kept its own file, which stays as it was, so going back to
+ * that plugin finds its projects and the categories it held.
  *
- * Before categories, a project made on the Projects page or imported was a
- * group of workspaces (◇) that got a coordinator only when the user added
- * one. Their entries stay under `projects`, and only the ones with a
- * coordinator are projects.
- *
- * Settings here are the project's own: set in its Project settings dialog,
- * by picking a model in its coordinator's DSH model picker, or by the
- * coordinator with thread_settings (never the goal or access, which only
- * the user sets). They sit above the profile config; deleting a key means
- * "use default".
+ * Settings here are the chat's own for its threads: set in its Thread
+ * settings dialog, or by the chat with thread_settings (never access,
+ * which only the user sets). They sit above the plugin's defaults;
+ * deleting a key means "use default".
  *
  * The plugin's managers in one process share one copy of the file while
  * any of them runs (ProjectStore.open). When the last one stops (the plugin
@@ -114,20 +97,6 @@ export function ensurePrivateDir(dir) {
 /** Open stores by file, so every manager in this process shares one copy. */
 const opened = new Map();
 
-/**
- * What an older version of this plugin wrote about categories and the
- * groups before them (see the module doc), passed through as the file has it.
- */
-const KEPT = ['workspaceOf', 'categories', 'categoryOf', 'imports'];
-
-const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
-
-/** The KEPT keys a parsed file has, each exactly as it has it; none from a file that isn't version 1. */
-function keptIn(parsed) {
-    if (!isObject(parsed) || parsed.version !== 1) return {};
-    return Object.fromEntries(KEPT.filter((key) => Object.hasOwn(parsed, key)).map((key) => [key, parsed[key]]));
-}
-
 export class ProjectStore {
     /**
      * The store for a file, shared within the process. A manager left over
@@ -160,8 +129,6 @@ export class ProjectStore {
         this.file = dataPath(file);
         /** @type {Record<string, object>} */
         this.projects = {};
-        /** The KEPT keys as the file had them when last read: written back when it can't be read just then. */
-        this.kept = {};
         this.load();
     }
 
@@ -169,27 +136,10 @@ export class ProjectStore {
         try {
             const parsed = JSON.parse(readFileSync(this.file, 'utf8'));
             if (parsed?.version === 1 && parsed.projects && typeof parsed.projects === 'object') this.projects = parsed.projects;
-            this.kept = keptIn(parsed);
         } catch {
             // Missing or corrupt store: start clean, never crash.
             this.projects = {};
-            this.kept = {};
         }
-    }
-
-    /**
-     * The KEPT keys exactly as the file has them now, read again for every
-     * save, so what another hand changed there is never written over. None
-     * when the file is gone; the copy last read when it is there but can't
-     * be read just then, so a passing read error never drops them.
-     */
-    keptOnDisk() {
-        try {
-            this.kept = keptIn(JSON.parse(readFileSync(this.file, 'utf8')));
-        } catch (error) {
-            if (error?.code === 'ENOENT') this.kept = {};
-        }
-        return this.kept;
     }
 
     /** Persist atomically; the store must survive crashes mid-write. */
@@ -197,8 +147,7 @@ export class ProjectStore {
         try {
             ensurePrivateDir(dirname(this.file));
             const tmp = `${this.file}.tmp`;
-            // Still version 1: an older version of the plugin reads the file as it did and keeps its groups.
-            const state = { version: 1, projects: this.projects, ...this.keptOnDisk() };
+            const state = { version: 1, projects: this.projects };
             writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
             chmodSync(tmp, 0o600);
             renameSync(tmp, this.file);
@@ -253,11 +202,7 @@ export class ProjectStore {
         return threads[threadId];
     }
 
-    /**
-     * Forget a project and its state. The groups of workspaces from before
-     * categories (`workspaceOf`) stay as they are: a project made since
-     * never held one.
-     */
+    /** Forget a coordinating chat and its threads' state. */
     removeProject(projectId) {
         delete this.projects[projectId];
         this.save();

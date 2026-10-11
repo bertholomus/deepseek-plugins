@@ -1,42 +1,42 @@
 /**
- * The project runtime. Each configured project has one coordinator session;
- * the coordinator starts thread sessions with project tools, threads report
- * back with handbacks, and both kinds of session are ordinary DSH sessions
- * created through the Host's own sessionController, so they show live in the
- * DSH window.
+ * The coordinator runtime. Any chat coordinates once the user runs
+ * /coordinate in it (or clicks Coordinate in its header): from then on it
+ * starts thread sessions with the plugin's tools, threads report back to it
+ * with handbacks, and both are ordinary DSH sessions, so they show live in
+ * the DSH window. The store keeps each coordinating chat under its own
+ * session id, as a "project" of its threads, and /coordinate off stops it
+ * (its threads keep running; their reports wait until it coordinates again).
  *
- * Project behaviour is attached to the live Agent, not to the session file:
- * on every `agent/created` (fresh, resumed, cleared) the manager looks the
+ * The behaviour is attached to the live Agent, not to the session file: on
+ * every `agent/created` (fresh, resumed, cleared) the manager looks the
  * session up in the store and installs agent-scoped tools, a system prompt
- * section and, for threads, the idle watcher. Other sessions never see any
- * of it.
+ * section and, for threads, the idle watcher and the guards. Other sessions
+ * never see any of it.
  *
- * Models and effort are set the way the DSH model picker sets them: a durable
- * `model/selection` on the one session, so the DSH window shows the right
- * model. The picker's public path (`sessionController.selectModel`) also
- * overwrites the global default model, so the manager calls the controller's
- * per-session step directly. When a Host does not have that step, it falls
- * back to rewriting every model request of project sessions.
- *
- * The binding runs both ways: a model the user picks in DSH's own picker for
- * a coordinator becomes the project's coordinator setting, and one picked
- * for a thread becomes that thread's, so the project's settings always say
- * what its sessions run on. Permission presets are set and followed the
- * same way, through DSH's own permission presets.
+ * The coordinating chat keeps the user's own access: its model, permission
+ * and tools stay whatever the user gives it, as in any chat. Threads are
+ * held to more. Their models and effort are set the way the DSH model
+ * picker sets them: a durable `model/selection` on the one session, so the
+ * DSH window shows the right model. The picker's public path
+ * (`sessionController.selectModel`) also overwrites the global default
+ * model, so the manager calls the controller's per-session step directly.
+ * When a Host does not have that step, it falls back to rewriting every
+ * model request of thread sessions. A model or permission the user picks in
+ * DSH's own menus for a thread becomes that thread's.
  *
  * The user's own tools (config.guardedTools: their MCP servers for
- * passwords, notes, lanes and the like) stay out of project sessions under
- * yourTools "asked": the manager leaves them out of what each session's
- * model is offered (DSH's per-agent tools.restrict) and refuses a call to
- * one anyway (tools.guard). A thread gets the ones the user's own words for
- * it name, checked against what the user wrote to the coordinator.
+ * passwords, notes, lanes and the like) stay out of threads under yourTools
+ * "asked": the manager leaves them out of what a thread's model is offered
+ * (DSH's per-agent tools.restrict) and refuses a call to one anyway
+ * (tools.guard). A thread gets the ones the user's own words for it name,
+ * checked against what the user wrote in the coordinating chat.
  *
  * The plugin's messages go into a session the way DSH's own agents and
  * plugins send theirs, not as the user's: a brief or a coordinator's message
- * is an agent's message from the coordinator, a handback one from the
- * thread, and the automatic notes and the welcome are a plugin's message.
- * DSH draws each as a collapsed notice ("Task message received", "Plugin
- * status updated") instead of a user bubble; the model reads the same text.
+ * is an agent's message from the coordinating chat, a handback one from the
+ * thread, and the automatic notes are a plugin's message. DSH draws each as
+ * a collapsed notice ("Task message received", "Plugin status updated")
+ * instead of a user bubble; the model reads the same text.
  *
  * @module dsh-plugin-coordinator/projects
  */
@@ -50,8 +50,8 @@ import {
 } from './settings.js';
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage, cardSummary,
-    handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, welcomeMessage, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS, STOPPED_BY_USER, NUDGE,
-    IDLE_NUDGE, outsideMessage, replyMessage, declinedResult,
+    handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS, STOPPED_BY_USER, NUDGE,
+    IDLE_NUDGE, outsideMessage, replyMessage, declinedResult, UNTITLED_CHAT,
 } from './prompts.js';
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
 import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS, diffFiles, subagentsIn, placeIn, MAX_NET_CHARS, MAX_VIEW_CHARS } from './changes.js';
@@ -65,8 +65,8 @@ const SECTION_ORDER = 9500;
 const HOUR = 60 * 60 * 1000;
 /** DSH keeps a session title to 80 bytes of UTF-8 (`maxTitleBytes` in its base profile) and cuts anything longer. */
 const TITLE_BYTES = 80;
-/** The longest goal the user can set in Project settings: it goes into every request of the project's sessions. */
-const GOAL_CHARS = 2000;
+/** The command that makes a chat coordinate: `/coordinate`, and `/coordinate off` to stop. */
+export const COMMAND = 'coordinate';
 
 /**
  * A thread's one title, used for its session and everywhere the plugin names it. It fits DSH's session-title
@@ -93,70 +93,34 @@ export function clipTitle(value, { cut = false } = {}) {
     return `${end === '' ? fit : end}…`;
 }
 
-/** A title as DSH keeps it: one line, cut at its byte limit wherever that falls. */
-function dshTitle(value) {
-    let out = '';
-    let bytes = 0;
-    for (const char of String(value ?? '').replace(/\s+/g, ' ').trim()) {
-        bytes += Buffer.byteLength(char);
-        if (bytes > TITLE_BYTES) break;
-        out += char;
-    }
-    return out.trimEnd();
-}
-
 /** Delivery retry delays for a coordinator that cannot take a message; tests shorten them. */
 export const timing = { retryMs: 60000, maxRetryMs: 15 * 60000 };
 
 /** What thread_handback returns. The idle review counts a turn as handed back by these texts. */
 const HANDBACK_SENT = 'Handback delivered to the coordinator.';
-const HANDBACK_HELD = 'Handback saved; the coordinator gets it when the project resumes.';
+const HANDBACK_HELD = 'Handback saved; the coordinator gets it when it takes reports again.';
 const HANDBACK_RETRY = 'Handback saved; the coordinator could not take it just now, and it is sent again automatically.';
 const QUESTION_SENT = 'Asked. Carry on with what doesn\'t depend on the answer; it arrives here as a message from the coordinator. If nothing can go on without it, end your turn with one short line.';
-const QUESTION_HELD = 'Saved; the coordinator gets it when the project resumes. Pick a sensible default, say which, and carry on.';
+const QUESTION_HELD = 'Saved; the coordinator gets it when it takes reports again. Pick a sensible default, say which, and carry on.';
 const QUESTION_RETRY = 'Saved; the coordinator could not take it just now, and it is sent again automatically. Carry on with what doesn\'t depend on the answer.';
-/** Why work for an archived project is refused, by its tools and in the window. */
-const ARCHIVED = 'the project is archived; restore it first';
-/** DSH's tools that change files, which a coordinator on Read Only is refused (str_replace_editor's view only reads). */
-const WRITE_TOOLS = new Set(['write', 'edit', 'str_replace_editor']);
-const READ_ONLY_REASON = 'You are on Read Only, so you don\'t change files. Start a thread for this change with thread_start, or send it to the thread already doing that work.';
-/**
- * A coordinator on Read Only asking for a wider sandbox (DSH's shell, file and code tools take `sandbox_permissions`):
- * refused before DSH asks anyone, so it never reads as the user's refusal and isn't taken for a reason to widen its access.
- */
-const READ_ONLY_WIDER = 'You are on Read Only, so this didn\'t run and nobody was asked: a step that needs more than reading belongs in a thread. Start one for it with thread_start, or send it to the thread already doing that work. Don\'t suggest widening your access.';
-/**
- * A coordinator on Read Only running a command while DSH offers no Read Only preset to hold it (the plugin's
- * fallback keeps it on DSH's default): refused, as a write is (behaviour review 5, S3 r2's coordinator ran ls).
- */
-const READ_ONLY_COMMAND = 'You are on Read Only, so you don\'t run commands: this didn\'t run and nobody was asked. Read files with your read tools; anything that needs a command goes to a thread: start one with thread_start, or send it to the thread already doing that work.';
-/** Whether a call asks for a sandbox wider than reading. */
-const asksWider = (exec) => {
-    const mode = isObject(exec?.arguments) ? exec.arguments.sandbox_permissions : undefined;
-    return typeof mode === 'string' && mode.trim() !== '' && mode.trim() !== 'read-only';
-};
-/**
- * DSH's tools a coordinator is kept off: a DSH goal's rounds had it read and steer its threads again and again
- * (behaviour review 3), while their handbacks come on their own. A goal the user sets with /goal still runs.
- */
-const COORDINATOR_HIDDEN = new Set(['create_goal']);
-const GOAL_REASON = 'A coordinator doesn\'t set DSH goals: your threads hand back when they finish, so nothing needs to continue in rounds. The project\'s goal is the user\'s, in Project settings.';
+/** Why work for an archived chat is refused, by its tools and in the window. */
+const ARCHIVED = 'this chat is archived; unarchive it first';
+/** Why work for a chat that stopped coordinating is refused in the window. */
+const STOPPED = 'this chat stopped coordinating; run /coordinate in it first';
 /** DSH's tools that run a command or code: what they send outside the workspace waits for the user (holdSend). */
 const SEND_TOOLS = new Set(['bash', 'pwsh', 'run_code']);
 /** The largest script or package.json the send check reads to see what a command runs. */
 const MAX_SCRIPT_BYTES = 256 * 1024;
 /** What a thread hears of a send held or refused: another route to it is still it (behaviour run S3 r2 copied the script and ran the copy). */
 const SAME_SEND = 'a copy or a wrapper of it (another script, a copied file, a different client) is the same send, and waits for the same answer';
-/** Why a command that sends didn't run, by who tried it; `what` says what it sends ("sends a POST to …"). */
+/** Why a thread's command that sends didn't run, by who tried it; `what` says what it sends ("sends a POST to …"). */
 const SEND_REASONS = {
-    coordinator: (what) => `Not run: the command ${what}. You don't send anything yourself: start a thread with the user's words in \`ask\`; it asks the user before each command that sends.`,
     subagent: (what) => `Not run: the command ${what}. A subagent doesn't send anything outside the workspace: say in your result what you would send, and the thread you work for asks the user first.`,
     never: (what) => `Not run: the command ${what}. A thread asks the user before each command that sends outside the workspace, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would send; the user can put this thread on Workspace Write so it can ask. Don't send it another way: ${SAME_SEND}.`,
     pending: (what) => `Not run: the command ${what}. Another command of yours that sends, from the same step, went to the user first, and a thread asks them about one send at a time, so nobody was asked about this one. Read their answer in that command's result: if they allowed it, run this one again only if it is still needed; if they rejected it, hand back and don't send another way. Here too, ${SAME_SEND}.`,
 };
-/** Why a command that deletes didn't run, by who tried it; `what` says what it deletes ("deletes build/ (rm)"). */
+/** Why a thread's command that deletes didn't run, by who tried it; `what` says what it deletes ("deletes build/ (rm)"). */
 const DELETE_REASONS = {
-    coordinator: (what) => `Not run: the command ${what}. You don't delete files yourself: start a thread with the user's words in \`ask\`; it asks the user before each command that deletes files it didn't create.`,
     subagent: (what) => `Not run: the command ${what}. A subagent doesn't delete files its thread didn't create: say in your result what you would delete, and the thread you work for asks the user first.`,
     never: (what) => `Not run: the command ${what}. A thread asks the user before each command that deletes files it didn't create, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would delete; the user can put this thread on Workspace Write so it can ask. Don't delete it another way.`,
 };
@@ -179,25 +143,13 @@ const SERVER_TOOLS = new Set(['list_mcp_resources', 'list_mcp_resource_templates
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
-/** A stored project's name, trimmed; '' when the store holds none. */
+/** A coordinating chat's name as the store keeps it (its title), trimmed; '' when the store holds none. */
 const storedName = (stored) => (typeof stored?.name === 'string' ? stored.name.trim() : '');
-
-/**
- * Lower-kebab id from a project name. Letters in any script are kept
- * (前端 and 后端 stay apart); accents are dropped.
- */
-export function slugify(name) {
-    const slug = String(name ?? '').normalize('NFKD').replace(/\p{M}+/gu, '').toLowerCase()
-        .replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '');
-    return [...slug].slice(0, 48).join('').replace(/-+$/, '') || 'project';
-}
 
 /** The newest manager per store file. One left over from a config reload hands late work to it. */
 const managers = new Map();
 /** Every manager not yet disposed. */
 const liveManagers = new Set();
-/** Coordinator checks in flight, by store file and project, so two managers never make two coordinators. */
-const ensuring = new Map();
 /** Archives and restores in flight, by store file and project: one at a time, and DSH's own archive set changing meanwhile is theirs. */
 const archiving = new Map();
 
@@ -356,7 +308,7 @@ function changedFiles(records, max = 12) {
     return list.length === 0 ? '' : `${list.join(', ')}${byPath.size > max ? `, and ${byPath.size - max} more` : ''}`;
 }
 
-/** Whether a folder is the user's home folder, where a project must not scatter files. */
+/** Whether a folder is the user's home folder, where threads must not scatter files. */
 const isHome = (folder) => typeof folder === 'string' && expand(folder).replace(/\/+$/, '') === homedir().replace(/\/+$/, '');
 
 /** The plugin's own tools, never taken for one of the user's even when a guarded name is a word in them. */
@@ -383,13 +335,13 @@ export function unsaidPart(ask, said) {
 /** What a handback's card shows of its summary, in characters. */
 const CARD_CHARS = 300;
 
-/** Messages to chats outside a project that wait for their reply: at most this many per project, for this long. */
+/** Messages to other chats that wait for their reply: at most this many per coordinating chat, for this long. */
 const MAX_AWAITING = 20;
 /**
- * What the user hears about from anywhere in the window (the ◆ row's mark
- * and a notice): a thread handed back, finished its turn without one, waits
- * on the user's approval, or failed or stopped after its nudge. The newest
- * are kept per project.
+ * What the user hears about from anywhere in the window (the coordinating
+ * chat's row mark and a notice): a thread handed back, finished its turn
+ * without one, waits on the user's approval, or failed or stopped after its
+ * nudge. The newest are kept per coordinating chat.
  */
 export const NEWS_KINDS = ['handback', 'finished', 'approval', 'failed', 'stopped'];
 const MAX_NEWS = 20;
@@ -404,11 +356,8 @@ const guardsOfTool = (name, guard) => (typeof name === 'string' && !OWN_TOOLS.ha
     ? guard.filter(([g, , mark]) => mark?.tools.has(name) || ((!mark || mark.listed) && holds(wordsOf(name), g))).map(([g]) => g)
     : []);
 
-/** What a session's call to one of the user's tools it may not use returns, before the call reaches the tool. */
-const WALL_REASONS = {
-    coordinator: 'This is one of the user\'s own tools, which this project keeps out of the coordinator. When the user asks for work that needs it, start a thread with their words in ask: the thread gets the tools their words name.',
-    thread: 'This is one of the user\'s own tools, and the user\'s words for this thread don\'t name it. If the task needs it, hand back with status blocked and say so.',
-};
+/** What a thread's call to one of the user's tools it may not use returns, before the call reaches the tool. */
+const WALL_REASON = 'This is one of the user\'s own tools, and the user\'s words for this thread don\'t name it. If the task needs it, hand back with status blocked and say so.';
 
 /** One thread as the DSH window shows it in a roster (see projection.js). */
 function rosterEntry(id, t) {
@@ -537,11 +486,6 @@ function turnRange(events, current) {
     return { start, end: lastEnd + 1, reason: events[lastEnd].data?.reason ?? null, ended: true };
 }
 
-/** What the manager stored as a coordinator's applied route, to tell when its settings changed. */
-function routeKey(model, effort) {
-    return JSON.stringify([model ?? null, effort ?? null]);
-}
-
 /** A model selection as one comparable string. */
 function selectionKey(selection) {
     return `${selection?.provider}\u0000${selection?.model}\u0000${selection?.reasoningEffort ?? ''}`;
@@ -573,25 +517,12 @@ export class ProjectManager {
             try { ensurePrivateDir(dirname(this.logFile)); } catch {}
         }
         /**
-         * 'session': set models with the controller's per-session selection.
-         * 'override': this Host lacks it; rewrite each project model request.
+         * 'session': set thread models with the controller's per-session selection.
+         * 'override': this Host lacks it; rewrite each thread model request.
          */
         this.selectionMode = typeof ctx.sessionController?.agents?.selectForNextRequest === 'function' ? 'session' : 'override';
-        /**
-         * projectId → the project: a row in the profile, which always has a
-         * coordinator, or one made on the Projects page or imported, which
-         * gets one when the user adds it.
-         */
+        /** The coordinating chat's session id → the chat and its threads, as the store keeps them (addStored). */
         this.projects = new Map();
-        for (const row of config.projects ?? []) {
-            const id = slugify(row.id || row.name);
-            if (this.projects.has(id)) {
-                this.log(`config duplicate project id ${id}; keeping the first row`);
-                ctx.logger?.warn?.('coordinator: two projects have the id "%s"; only the first runs. Give the other an id.', id);
-                continue;
-            }
-            this.projects.set(id, { ...row, id, source: 'profile', workspacePath: expand(row.workspacePath) });
-        }
         for (const id of Object.keys(this.store.projects)) this.addStored(id);
         /** Agent → disposer for its installed project scope. */
         this.installed = new Map();
@@ -674,36 +605,33 @@ export class ProjectManager {
 
     project(projectId) {
         const p = this.projects.get(projectId);
-        if (!p) throw new ProjectError(`project "${projectId}" is not configured`);
+        if (!p) throw new ProjectError(`"${String(projectId).slice(0, 80)}" doesn't coordinate threads`);
         return p;
     }
 
     /**
-     * Add a project the store defines (made in the window) to the running
-     * set. A profile row with the same id wins. Its folder is its
-     * coordinator's workspace. A group of workspaces from an older version
-     * of the plugin that never got a coordinator is not a project.
+     * Add a coordinating chat the store keeps to the running set: its name
+     * is its title, and its threads work in its folder. One that stopped
+     * coordinating stays, so its threads keep their guards and their place.
      */
     addStored(projectId) {
         const stored = this.store.projects[projectId];
-        if (stored === null || typeof stored !== 'object' || this.projects.has(projectId)) return;
-        if (typeof stored.home !== 'string' && typeof stored.coordinatorSessionId !== 'string') return;
-        // One with no name in the store (a profile row since removed) still has its coordinator and threads to keep
-        // together; its coordinator's title names it (nameNameless).
-        if (storedName(stored) === '' && typeof stored.coordinatorSessionId !== 'string') return;
+        if (!isObject(stored) || this.projects.has(projectId)) return;
+        if (typeof stored.coordinatorSessionId !== 'string' || stored.coordinatorSessionId === '') return;
         const manager = this;
         this.projects.set(projectId, {
             id: projectId,
-            goal: '',
-            source: stored.source === 'import' ? 'import' : 'page',
-            get name() { return storedName(manager.store.projects[projectId]) || projectId; },
-            get workspacePath() { return manager.homeOf(projectId)?.path; },
+            get name() { return storedName(manager.store.projects[projectId]) || UNTITLED_CHAT; },
+            get workspacePath() {
+                const folder = manager.store.projects[projectId]?.folder;
+                return typeof folder === 'string' && folder !== '' ? folder : manager.homeOf(projectId)?.path;
+            },
         });
     }
 
-    /** Whether the project is a row in the profile (its name, folder and coordinator are set there). */
-    fromProfile(projectId) {
-        return this.projects.get(projectId)?.source === 'profile';
+    /** Whether a chat in the store coordinates now: not stopped with /coordinate off. */
+    coordinating(projectId) {
+        return this.projects.has(projectId) && this.store.projects[projectId]?.off !== true;
     }
 
     /** DSH's workspace with this id, or undefined. */
@@ -725,28 +653,31 @@ export class ProjectManager {
         }
     }
 
-    /** The DSH workspace a project's coordinator and threads work in, once DSH has it. */
+    /** The DSH workspace a coordinating chat and its threads work in, once DSH has it. */
     homeOf(projectId) {
         return this.workspace(this.store.projects[projectId]?.home);
     }
 
-    /** Note which DSH workspace a profile project's folder is, once DSH has one there. */
+    /** Note which DSH workspace a coordinating chat's folder is, once DSH has one there. */
     async noteHome(projectId) {
-        if (!this.fromProfile(projectId)) return;
+        const folder = this.store.projects[projectId]?.folder;
+        if (typeof folder !== 'string' || folder === '') return;
         let ws;
-        try { ws = await this.ctx.workspaceRegistry.resolveByPath(this.project(projectId).workspacePath); } catch { ws = undefined; }
+        try { ws = await this.ctx.workspaceRegistry.resolveByPath(folder); } catch { ws = undefined; }
         if (!ws?.id) return;
-        const stored = this.store.project(projectId);
-        if (stored.home !== ws.id) this.store.putProject(projectId, { home: ws.id });
+        if (this.store.projects[projectId]?.home !== ws.id) this.store.putProject(projectId, { home: ws.id });
     }
 
+    /** The thread model and effort a coordinating chat's new threads start on, each with its source. */
     settings(projectId) {
-        return effectiveSettings(pluginDefaults(this.config), this.project(projectId), this.store.project(projectId).settings);
+        this.project(projectId);
+        return effectiveSettings(pluginDefaults(this.config), this.store.project(projectId).settings);
     }
 
-    /** The project's access settings: the user's tools, coordinator and thread permissions, each with its source. */
+    /** A coordinating chat's access settings for its threads: the user's tools and the thread permission, each with its source. */
     access(projectId) {
-        return effectiveAccess(pluginDefaults(this.config), this.project(projectId), this.store.project(projectId).settings);
+        this.project(projectId);
+        return effectiveAccess(pluginDefaults(this.config), this.store.project(projectId).settings);
     }
 
     /**
@@ -775,29 +706,24 @@ export class ProjectManager {
         return out;
     }
 
-    /** The user's tools a project's goal names, which every thread has: never a group another plugin marks, which only the user's own words give. */
-    goalTools(projectId, guard = this.guards()) {
-        return guardedIn(this.goalOf(projectId), guard.filter(([, , mark]) => !mark), { aliases: true });
-    }
-
     // ── the user's own tools ──────────────────────────────────────────────
 
     /**
-     * The user's tools (guarded names) one project session may use. A
-     * coordinator never has one. Under "always" a thread has every one;
-     * under "asked" the ones the user's own words for it named (its
+     * The user's tools (guarded names) one session may use. The coordinating
+     * chat has them all, as any chat does. Under "always" a thread has every
+     * one; under "asked" the ones the user's own words for it named (its
      * `tools`: checked against what the user wrote when it started or got a
-     * message, or typed in the thread itself) and the ones the project's
-     * goal names.
+     * message, or typed in the thread itself).
      * @param {{projectId: string, role: string, threadId?: string}} who
      * @returns {Set<string>|'all'}
      */
     toolsFor(who) {
+        if (who.role === 'coordinator') return 'all';
         if (!this.projects.has(who.projectId) || who.role !== 'thread') return new Set();
         if (this.access(who.projectId).yourTools.value === 'always') return 'all';
         const guard = this.guards();
         const known = new Set(guard.map(([name]) => name));
-        const names = new Set(this.goalTools(who.projectId, guard));
+        const names = new Set();
         const t = this.store.thread(who.projectId, who.threadId);
         for (const name of Array.isArray(t?.tools) ? t.tools : []) if (known.has(name)) names.add(name);
         return names;
@@ -820,7 +746,7 @@ export class ProjectManager {
         }
     }
 
-    /** The tools of the user's that a session may not use, by tool name. */
+    /** The tools of the user's that a thread may not use, by tool name. */
     walledTools(agent, who) {
         const guard = this.guards();
         if (guard.length === 0) return [];
@@ -833,17 +759,16 @@ export class ProjectManager {
     }
 
     /**
-     * Keep the user's tools a session may not use out of what its model is
+     * Keep the user's tools a thread may not use out of what its model is
      * offered (DSH's per-agent tools.restrict). Done again whenever the
      * answer can change: settings, the thread's tools, DSH's tool list.
      */
     applyWall(agent, who) {
-        if (this.disposed || typeof agent?.ctx?.tools?.restrict !== 'function') return;
-        const label = `${who.projectId}/${who.threadId ?? 'coordinator'}`;
+        if (this.disposed || who.role !== 'thread' || typeof agent?.ctx?.tools?.restrict !== 'function') return;
+        const label = `${who.projectId}/${who.threadId}`;
         let deny;
         try {
-            const own = who.role === 'coordinator' ? this.toolNames(agent).filter((name) => COORDINATOR_HIDDEN.has(name)) : [];
-            deny = [...this.walledTools(agent, who), ...own].sort();
+            deny = this.walledTools(agent, who).sort();
         } catch (error) {
             this.log(`error wall ${label} ${String(error?.message ?? error).slice(0, 200)}`);
             return;
@@ -877,51 +802,33 @@ export class ProjectManager {
     }
 
     /**
-     * Why a call to one of the user's tools is refused, or undefined. DSH
-     * asks before every call of the session, so this holds even in the
-     * moment before a wall is updated.
+     * Why a thread's call to one of the user's tools is refused, or
+     * undefined. DSH asks before every call of the session, so this holds
+     * even in the moment before a wall is updated.
      */
     wallReason(who, name) {
         try {
+            if (who.role !== 'thread') return undefined;
             const guard = this.guards();
             if (guard.length === 0) return undefined;
             const hits = guardsOfTool(name, guard);
             if (hits.length === 0) return undefined;
             const allowed = this.toolsFor(who);
             if (allowed === 'all' || hits.some((g) => allowed.has(g))) return undefined;
-            this.log(`wall-refused ${who.projectId}/${who.threadId ?? 'coordinator'} ${String(name).slice(0, 80)}`);
-            return who.role === 'thread' ? WALL_REASONS.thread : WALL_REASONS.coordinator;
+            this.log(`wall-refused ${who.projectId}/${who.threadId} ${String(name).slice(0, 80)}`);
+            return WALL_REASON;
         } catch {
             return undefined;
         }
     }
 
     /**
-     * Why a call is refused, or undefined: a file change by a coordinator
-     * on Read Only, and a command too while DSH's own Read Only preset
-     * doesn't hold it; wallReason by the tool's name; and for DSH's MCP
-     * resource tools by the server their `server` argument names, so the
-     * user's servers can't be read around the wall.
+     * Why a thread's call is refused, or undefined: wallReason by the tool's
+     * name, and for DSH's MCP resource tools by the server their `server`
+     * argument names, so the user's servers can't be read around the wall.
      */
-    callReason(who, exec, agent = undefined) {
+    callReason(who, exec) {
         const name = exec?.name;
-        if (who.role === 'coordinator' && WRITE_TOOLS.has(name) && !(name === 'str_replace_editor' && exec.arguments?.command === 'view')
-            && this.readOnlyCoordinator(who.projectId)) {
-            this.log(`read-only-refused ${who.projectId}/coordinator ${name}`);
-            return READ_ONLY_REASON;
-        }
-        if (who.role === 'coordinator' && SEND_TOOLS.has(name) && this.readOnlyCoordinator(who.projectId) && this.permissionOf(agent?.id ?? exec?.agent?.id) !== 'read-only') {
-            this.log(`read-only-refused ${who.projectId}/coordinator ${name} command`);
-            return READ_ONLY_COMMAND;
-        }
-        if (who.role === 'coordinator' && asksWider(exec) && this.readOnlyCoordinator(who.projectId)) {
-            this.log(`read-only-refused ${who.projectId}/coordinator ${name} wider`);
-            return READ_ONLY_WIDER;
-        }
-        if (who.role === 'coordinator' && COORDINATOR_HIDDEN.has(name)) {
-            this.log(`goal-refused ${who.projectId}/coordinator ${name}`);
-            return GOAL_REASON;
-        }
         const byName = this.wallReason(who, name);
         if (byName !== undefined || !SERVER_TOOLS.has(name)) return byName;
         try {
@@ -943,13 +850,14 @@ export class ProjectManager {
      * send at a time: DSH asks about a step's calls one after another, so a
      * second send from the step of one already asked is refused, unasked,
      * and the thread sees the answer before it sends again (settleSend).
-     * A thread whose approvals never ask, a coordinator and a subagent are
+     * A thread whose approvals never ask and a thread's subagent are
      * refused. Called for every session's calls (index.js) once DSH's own
      * checks let one run, or ask about it (`asked`: a hook's or a review's
      * ask): then DSH's words follow the plugin's on the one prompt. DSH asks
      * to widen a call's sandbox later, in the tool itself, once this prompt
      * is answered. Undefined leaves DSH's decision: any other call, a
-     * session outside the projects, and any error (a check against a
+     * coordinating chat and its subagents (they keep the user's own
+     * access), any session outside them, and any error (a check against a
      * mistake, not a sandbox). `out`, when given, gets what it sends
      * (holdCommand). Never logs the command.
      */
@@ -959,7 +867,7 @@ export class ProjectManager {
             const session = exec.agent.session;
             const own = this.store.lookup(exec.agent.id);
             const who = own ?? this.projectAbove(session);
-            if (!who || !this.projects.has(who.projectId)) return undefined;
+            if (who?.role !== 'thread' || !this.projects.has(who.projectId)) return undefined;
             const args = argsOf(exec.arguments);
             const project = this.project(who.projectId);
             const folder = (who.role === 'thread' ? this.store.thread(who.projectId, who.threadId)?.folder : undefined) ?? project.workspacePath;
@@ -972,14 +880,10 @@ export class ProjectManager {
                 ? codeSendOf(String(args.code ?? ''), { depth: 0, cwd: here, read: (path) => textInside(roots, path) }, 'run_code')
                 : sendOf(String(args.command ?? ''), { shell: exec.name, cwd: here, read: (path) => textInside(roots, path) });
             if (!found) return undefined;
-            const label = `${who.projectId}/${who.threadId ?? 'coordinator'}${own ? '' : ' subagent'} ${found.kind} ${String(found.program).slice(0, 40)}`;
+            const label = `${who.projectId}/${who.threadId}${own ? '' : ' subagent'} ${found.kind} ${String(found.program).slice(0, 40)}`;
             if (!own) {
                 this.log(`send-refused ${label}`);
                 return { kind: 'deny', reason: SEND_REASONS.subagent(found.what) };
-            }
-            if (who.role !== 'thread') {
-                this.log(`send-refused ${label}`);
-                return { kind: 'deny', reason: SEND_REASONS.coordinator(found.what) };
             }
             if (this.approvalPolicyOf(session) !== 'ask') {
                 this.log(`send-refused ${label} never-asks`);
@@ -1014,7 +918,7 @@ export class ProjectManager {
      * Rule 6 for deletes, held the way holdSend holds sends: a command that
      * deletes files (lib/deletes.js) its thread didn't create waits for the
      * user in DSH's approval prompt, every time; a thread whose approvals
-     * never ask, a coordinator and a subagent are refused. Free to delete:
+     * never ask and a thread's subagent are refused. Free to delete:
      * what the thread (or its subagents) can be shown to have made (mineOf):
      * a file it created, a folder its command made with what was born there
      * while it ran, a folder of only those; and what is in the OS temp
@@ -1033,7 +937,8 @@ export class ProjectManager {
             const session = exec.agent.session;
             const own = this.store.lookup(exec.agent.id);
             const who = own ?? this.projectAbove(session);
-            if (!who || !this.projects.has(who.projectId)) return undefined;
+            // The coordinating chat and its subagents keep the user's own access, as in holdSend.
+            if (who?.role !== 'thread' || !this.projects.has(who.projectId)) return undefined;
             const args = argsOf(exec.arguments);
             const project = this.project(who.projectId);
             const t = who.role === 'thread' ? this.store.thread(who.projectId, who.threadId) : undefined;
@@ -1053,14 +958,10 @@ export class ProjectManager {
             const what = deletesWhat(held);
             if (out) out.what = what;
             const programs = [...new Set(held.map((d) => String(d.program).replace(/\s+/g, '-')))].join(',').slice(0, 40);
-            const label = `${who.projectId}/${who.threadId ?? 'coordinator'}${own ? '' : ' subagent'} ${programs}`;
+            const label = `${who.projectId}/${who.threadId}${own ? '' : ' subagent'} ${programs}`;
             if (!own) {
                 this.log(`delete-refused ${label}`);
                 return { kind: 'deny', reason: DELETE_REASONS.subagent(what) };
-            }
-            if (who.role !== 'thread') {
-                this.log(`delete-refused ${label}`);
-                return { kind: 'deny', reason: DELETE_REASONS.coordinator(what) };
             }
             if (this.approvalPolicyOf(session) !== 'ask') {
                 this.log(`delete-refused ${label} never-asks`);
@@ -1270,9 +1171,9 @@ export class ProjectManager {
     }
 
     /**
-     * What the user wrote to the coordinator: their own messages in its
-     * chat and their answers in DSH's question box, not the plugin's or the
-     * threads'. '' when there is no coordinator or its log can't be read.
+     * What the user wrote in the coordinating chat: their own messages and
+     * their answers in DSH's question box, not the plugin's or the threads'.
+     * '' when its log can't be read.
      */
     async userText(projectId) {
         const sessionId = this.store.project(projectId).coordinatorSessionId;
@@ -1288,9 +1189,8 @@ export class ProjectManager {
 
     /**
      * The user's tools an `ask` names, checked against what the user wrote:
-     * each must also be named in the user's own messages to the coordinator
-     * or in the project's goal (never a group another plugin marks, for the
-     * goal). An ask that names one the user never wrote is not the user's
+     * each must also be named in the user's own messages in the coordinating
+     * chat. An ask that names one the user never wrote is not the user's
      * words, so it is refused.
      * @returns {Promise<string[]>} the guarded names the ask gives its thread.
      */
@@ -1299,7 +1199,7 @@ export class ProjectManager {
         if (guard.length === 0 || !ask) return [];
         const named = guardedIn(ask, guard, { aliases: true });
         if (named.length === 0) return [];
-        const said = new Set([...this.goalTools(projectId, guard), ...guardedIn(await this.userText(projectId), guard, { aliases: true })]);
+        const said = new Set(guardedIn(await this.userText(projectId), guard, { aliases: true }));
         const unsaid = named.filter((name) => !said.has(name));
         if (unsaid.length > 0) {
             this.log(`guard ${projectId} ask-unsaid ${unsaid.join(',')}`);
@@ -1310,16 +1210,16 @@ export class ProjectManager {
 
     /**
      * An `ask` holds only the user's words: each of its sentences copied
-     * from what they wrote to the coordinator (their messages, their
-     * answers in DSH's question box) or from the project's goal, so a
-     * thread never reads the coordinator's own words after "The user
-     * asked:". Before the user has written anything (or when the log can't
-     * be read) there is nothing to check against, and it passes.
+     * from what they wrote in the coordinating chat (their messages, their
+     * answers in DSH's question box), so a thread never reads the
+     * coordinator's own words after "The user asked:". Before the user has
+     * written anything (or when the log can't be read) there is nothing to
+     * check against, and it passes.
      */
     async requireUserWords(projectId, ask, kind) {
         const wrote = await this.userText(projectId);
         if (wrote.trim() === '') return;
-        const part = unsaidPart(ask, `${this.goalOf(projectId)}\n${wrote}`);
+        const part = unsaidPart(ask, wrote);
         if (part === '') return;
         this.log(`guard ${projectId} ask-not-theirs ${kind}`);
         const shown = part.length > 80 ? `${part.slice(0, 79)}…` : part;
@@ -1413,149 +1313,57 @@ export class ProjectManager {
         }
     }
 
-    /** Whether the project's coordinator is set to Read Only (the plugin's default), whatever DSH offers. */
-    readOnlyCoordinator(projectId) {
-        try {
-            return this.access(projectId).coordinatorPermission.value === 'read-only';
-        } catch {
-            return false;
-        }
-    }
-
     /**
-     * Put the coordinator on its permission setting when the setting
-     * differs from the one it last got. A coordinator on DSH's default needs
-     * nothing (DSH gave it that one); an unloaded coordinator gets it when
-     * it loads.
-     * @returns false only when a needed change failed.
-     */
-    applyCoordinatorPermission(projectId, agent = undefined) {
-        const stored = this.store.project(projectId);
-        if (!stored.coordinatorSessionId || !this.presets()) return true;
-        const want = this.access(projectId).coordinatorPermission.value;
-        if (stored.coordinatorAccess === want) return true;
-        if (stored.coordinatorAccess === undefined && want === 'default') {
-            this.store.putProject(projectId, { coordinatorAccess: want });
-            return true;
-        }
-        const live = agent ?? this.ctx.agents.get(stored.coordinatorSessionId);
-        if (!live) return true;
-        let preset = this.presetOf(want);
-        if (!preset && want === 'read-only') {
-            // A DSH without a Read Only preset keeps it on its default; the refusals above still keep it from writing.
-            preset = this.presetOf('default');
-            this.log(`permission ${projectId}/coordinator read-only not offered, on ${preset ?? 'unknown'}`);
-        }
-        if (!preset) {
-            this.log(`permission ${projectId}/coordinator unknown preset ${want}`);
-            return false;
-        }
-        if (!this.setPermission(live, preset, `${projectId}/coordinator`)) return false;
-        this.store.putProject(projectId, { coordinatorAccess: want });
-        return true;
-    }
-
-    /**
-     * A `permission/preset` on a project session that the manager didn't
-     * make: the user's pick in DSH's own permission menu. On a coordinator
-     * it becomes the project's coordinator setting, on a thread that
-     * thread's, so the settings say what the sessions run with.
+     * A `permission/preset` on a thread that the manager didn't make: the
+     * user's pick in DSH's own permission menu becomes that thread's, so
+     * Thread settings say what it runs with.
      */
     onPermission(who, agent, data) {
         try {
             const preset = data?.preset;
-            if (typeof preset !== 'string' || preset === 'custom' || !this.projects.has(who.projectId)) return;
+            if (who.role !== 'thread' || typeof preset !== 'string' || preset === 'custom' || !this.projects.has(who.projectId)) return;
             if (this.ownPermissions.get(agent.id) === preset) {
                 this.ownPermissions.delete(agent.id);
                 return;
             }
-            if (who.role === 'coordinator') {
-                this.store.putSettings(who.projectId, { coordinatorPermission: preset });
-                this.store.putProject(who.projectId, { coordinatorAccess: preset });
-            } else {
-                if (!this.store.thread(who.projectId, who.threadId)) return;
-                this.store.putThread(who.projectId, who.threadId, { permission: preset });
-            }
-            this.log(`picked-permission ${who.projectId}/${who.threadId ?? 'coordinator'} ${preset}`);
+            if (!this.store.thread(who.projectId, who.threadId)) return;
+            this.store.putThread(who.projectId, who.threadId, { permission: preset });
+            this.log(`picked-permission ${who.projectId}/${who.threadId} ${preset}`);
         } catch (error) {
             this.log(`error picked-permission ${who.projectId} ${String(error?.message ?? error).slice(0, 200)}`);
         }
     }
 
     /**
-     * Compare the project's row in the profile with the one this project
-     * last saw. A model, effort or access setting the row changed since (an
-     * edit by hand) replaces the project's own setting of it, made in its
-     * Project settings, in its coordinator's model or permission menu or
-     * through the coordinator: all of them are this project's, so the newest
-     * wins. The plugin defaults never replace a project's own setting. The
-     * first look only records.
-     * @returns {string[]} the settings whose project setting was replaced.
-     */
-    noteProjectRow(projectId) {
-        // Empty means "use the default", however it is written.
-        const plain = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
-        const row = this.project(projectId);
-        const p = this.store.project(projectId);
-        const seen = p.rowSeen;
-        const keys = [...SETTING_KEYS, ...ACCESS_KEYS];
-        const changed = keys.filter((key) => plain(row[key]) !== plain(seen?.[key]));
-        if (seen && changed.length === 0) return [];
-        const replaced = seen ? changed.filter((key) => p.settings[key] !== undefined) : [];
-        if (replaced.length) this.store.putSettings(projectId, Object.fromEntries(replaced.map((key) => [key, undefined])));
-        this.store.putProject(projectId, { rowSeen: Object.fromEntries(keys.map((key) => [key, plain(row[key])])), defaultsSeen: undefined });
-        if (seen) this.log(`row ${projectId} ${changed.join(',')}${replaced.length ? ` replaced ${replaced.join(',')}` : ''}`);
-        return replaced;
-    }
-
-    /**
      * The plugin defaults changed while the plugin runs (DSH's settings page
-     * saved them, or the profile's live fields were edited). A coordinator
-     * that runs on a default switches from its next request, and to its
-     * permission now; new threads start with the new defaults, and running
-     * threads keep theirs. A project's own settings stay. Every session's
-     * wall follows the user's tools as they are now.
+     * saved them, or the profile's live fields were edited). New threads
+     * start with the new defaults, and running threads keep theirs; a
+     * chat's own settings stay. Every thread's wall follows the user's tools
+     * as they are now.
      */
     async onDefaultsChanged() {
         this.log('defaults saved');
         // Your tools, or the list of them, may have changed.
         try { this.rewall(); } catch (error) { this.log(`error wall ${String(error?.message ?? error).slice(0, 200)}`); }
-        for (const projectId of this.projects.keys()) {
-            if (this.disposed) return;
-            try {
-                this.applyCoordinatorPermission(projectId);
-                await this.applyCoordinatorRoute(projectId);
-            } catch (error) {
-                this.log(`error defaults ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
-            }
-        }
     }
 
+    /** Whether the user paused a coordinating chat's threads: no new ones start, and their reports wait. */
     paused(projectId) {
-        const override = this.store.project(projectId).settings.paused;
-        return typeof override === 'boolean' ? override : this.project(projectId).paused === true;
+        return this.store.project(projectId).settings.paused === true;
     }
 
-    /** Whether the project is archived: its coordinator and threads are archived in DSH (archiveProject). */
+    /** Whether a coordinating chat is archived with its threads in DSH (archiveProject). */
     archived(projectId) {
         return isObject(this.store.projects[projectId]?.archived);
     }
 
-    /** Paused or archived: what is sent to the coordinator waits, and no thread starts. */
-    held(projectId) {
-        return this.archived(projectId) || this.paused(projectId);
-    }
-
     /**
-     * What the project is for, as the coordinator's and threads' prompts
-     * read it: the goal the user set in Project settings, else the profile
-     * row's, else none (''). It counts as the user's own words.
+     * Paused, archived, stopped coordinating, or gone from DSH: what is sent
+     * to the chat waits, and no thread starts.
      */
-    goalOf(projectId) {
-        const own = this.store.project(projectId).settings.goal;
-        if (typeof own === 'string') return own;
-        const goal = this.project(projectId).goal;
-        return typeof goal === 'string' ? goal.trim() : '';
+    held(projectId) {
+        const stored = this.store.projects[projectId];
+        return this.archived(projectId) || this.paused(projectId) || stored?.off === true || stored?.gone === true;
     }
 
     liveStatus(sessionId) {
@@ -1584,9 +1392,9 @@ export class ProjectManager {
     // ── lifecycle ──────────────────────────────────────────────────────────
 
     /**
-     * Attach to live agents, make sure every project has a coordinator,
-     * deliver held messages, and review thread turns that ended while the
-     * plugin was not watching (DSH stopped or the plugin reloaded mid-turn).
+     * Attach to live agents, bring every coordinating chat up, deliver held
+     * messages, and review thread turns that ended while the plugin was not
+     * watching (DSH stopped or the plugin reloaded mid-turn).
      */
     async start() {
         // The Changes tab's kept texts (net.js): none for threads gone from the store or from DSH, none unused for 30
@@ -1596,47 +1404,134 @@ export class ProjectManager {
         this.netTimer = setInterval(() => void this.sweepNet(), NET_SWEEP_MS);
         this.netTimer.unref?.();
         for (const agent of this.ctx.agents.list?.() ?? []) this.maybeInstall(agent);
-        await this.nameNameless();
-        if (this.disposed) return;
         await this.refreshRecords();
         if (this.disposed) return;
-        for (const id of this.projects.keys()) await this.noteHome(id);
-        if (this.disposed) return;
-        // A ◆ coordinator archived or unarchived in DSH while the plugin was off: its threads follow it now.
+        // A coordinating chat archived or unarchived in DSH while the plugin was off: its threads follow it now.
         await this.matchArchive();
         for (const id of [...this.projects.keys()]) {
             if (this.disposed) return;
             await this.resume(id);
         }
         if (!this.disposed) await this.catchUpReplies();
-        if (!this.disposed) await this.plainThreadTitles();
         if (!this.disposed) await this.recountChanges();
     }
 
     /**
-     * Bring a project's coordinator up as at a start: made, or resumed on
-     * its settings, then what was held for it delivered and the turns its
-     * threads ended meanwhile reviewed. Not while the project is archived,
-     * nor for one made in the window whose coordinator never started: it
-     * gets one when the user asks.
+     * Bring a coordinating chat up as at a start: its tools on, then what
+     * was held for it delivered and the turns its threads ended meanwhile
+     * reviewed. Not while it is archived or stopped coordinating; a chat DSH
+     * no longer has is marked gone, and what its threads send it waits.
      */
     async resume(id) {
-        if (this.archived(id)) return;
-        if (!this.fromProfile(id) && !this.store.projects[id]?.coordinatorSessionId) return;
+        if (this.archived(id) || !this.coordinating(id)) return;
+        const sessionId = this.store.projects[id]?.coordinatorSessionId;
+        if (typeof sessionId !== 'string' || sessionId === '') return;
         try {
-            if (this.fromProfile(id)) this.noteProjectRow(id);
-            const sessionId = await this.ensureCoordinator(id);
-            if (!sessionId) return;
+            const live = this.ctx.agents.get(sessionId);
+            if (live) this.maybeInstall(live);
+            else if (!await this.exists(sessionId)) {
+                if (this.store.projects[id]?.gone !== true) {
+                    this.store.putProject(id, { gone: true });
+                    this.log(`coordinator ${id} gone`);
+                }
+                return;
+            }
+            if (this.store.projects[id]?.gone === true) this.store.putProject(id, { gone: undefined });
+            this.seeArchive(id, sessionId);
             await this.noteHome(id);
+            this.log(`coordinator ${id} ${sessionId} resumed`);
         } catch (error) {
             this.log(`error coordinator ${id} ${String(error?.message ?? error).slice(0, 300)}`);
-            this.ctx.logger?.warn?.('coordinator: could not start coordinator for %s: %s', id, error?.message ?? error);
             return;
         }
         // Reloaded meanwhile: the new manager delivers and reviews.
         if (this.disposed) return;
         await this.flushPending(id);
         await this.catchUp(id);
+    }
+
+    /**
+     * /coordinate in a chat, or its Coordinate button: from now on the chat
+     * runs work in threads that report back to it, or with `on` false it
+     * stops (its threads keep running; their reports wait until it
+     * coordinates again). A thread can't coordinate, nor a subagent's
+     * session: their work reports to the chat above them.
+     * @returns {Promise<{kind: 'success'|'error', text: string}>} what DSH shows under the command.
+     */
+    async coordinate(agent, on) {
+        const sessionId = agent?.id;
+        if (typeof sessionId !== 'string' || sessionId === '') return { kind: 'error', text: 'There is no chat here to coordinate from.' };
+        const who = this.store.lookup(sessionId);
+        if (who?.role === 'thread') {
+            return { kind: 'error', text: `This chat is a thread: it reports to "${this.projects.get(who.projectId)?.name ?? UNTITLED_CHAT}", which coordinates it.` };
+        }
+        const header = agent.session?.header;
+        if (!who && header?.origin === 'subagent') return { kind: 'error', text: 'This is a subagent\'s session: its work reports to the chat it works for.' };
+        if (!on) {
+            if (who?.role !== 'coordinator' || !this.coordinating(who.projectId)) return { kind: 'success', text: 'This chat isn\'t coordinating threads.' };
+            this.store.putProject(who.projectId, { off: true });
+            clearTimeout(this.retries.get(who.projectId)?.timer);
+            this.retries.delete(who.projectId);
+            this.forget(agent);
+            this.log(`coordinate ${who.projectId} off`);
+            const open = Object.values(this.store.project(who.projectId).threads).filter((t) => !t.resolved).length;
+            return { kind: 'success', text: open > 0 ? `Stopped coordinating. Its ${open === 1 ? 'thread keeps' : `${open} threads keep`} running; reports wait until you run /coordinate here again.` : 'Stopped coordinating.' };
+        }
+        if (who?.role === 'coordinator' && this.coordinating(who.projectId)) return { kind: 'success', text: 'This chat already coordinates threads.' };
+        const projectId = who?.projectId ?? sessionId;
+        const was = this.store.projects[projectId];
+        const folder = typeof header?.cwd === 'string' && header.cwd !== '' ? header.cwd : was?.folder;
+        if (typeof folder !== 'string' || folder === '') return { kind: 'error', text: 'This chat has no folder for threads to work in.' };
+        const title = clipTitle(await this.currentTitle(sessionId).catch(() => undefined) ?? '');
+        this.store.putProject(projectId, {
+            coordinatorSessionId: sessionId, folder, off: undefined, gone: undefined,
+            ...(title ? { name: title } : {}),
+            ...(typeof was?.createdAt === 'string' ? {} : { createdAt: new Date().toISOString() }),
+        });
+        this.addStored(projectId);
+        this.maybeInstall(agent);
+        this.log(`coordinate ${projectId} on${who ? ' again' : ''}`);
+        // After DSH logs the command's result, so what was held for the chat comes after it.
+        const later = setTimeout(() => {
+            void this.resume(projectId).catch((error) => this.log(`error coordinate ${projectId} ${String(error?.message ?? error).slice(0, 200)}`));
+        }, 0);
+        later.unref?.();
+        return { kind: 'success', text: 'Coordinating. Ask for work here as usual: what runs long or splits into parts goes to threads that report back to this chat.' };
+    }
+
+    /** What the user typed after /coordinate: nothing or "on" starts, "off" or "stop" stops. */
+    onCommand(agent, rawInput) {
+        const arg = String(rawInput ?? '').trim().toLowerCase();
+        if (arg === '' || arg === 'on') return this.coordinate(agent, true);
+        if (arg === 'off' || arg === 'stop') return this.coordinate(agent, false);
+        return { kind: 'error', text: '/coordinate starts coordinating threads from this chat; /coordinate off stops.' };
+    }
+
+    /**
+     * The Coordinate button, or Stop coordinating in the Threads menu: the
+     * same as typing the command in the chat, so DSH shows it there and the
+     * window's record of the chat follows from it.
+     * @returns {Promise<{coordinating: boolean, session: string, text: string}>}
+     */
+    async coordinateFromWindow(target, on) {
+        const sessionId = typeof target === 'string' ? target.trim() : '';
+        if (sessionId === '') throw new ProjectError('no chat given');
+        let agent;
+        try { agent = (await this.sc.resolveAgent(sessionId))?.agent; } catch { agent = undefined; }
+        if (!agent) throw new ProjectError('DSH has no such chat right now');
+        let result;
+        try {
+            const commands = this.ctx.get?.('commands');
+            if (typeof commands?.execute === 'function' && typeof commands.find === 'function' && commands.find(agent, COMMAND)) {
+                result = (await commands.execute(agent, on ? `/${COMMAND}` : `/${COMMAND} off`, [], AbortSignal.timeout(30000)))?.result;
+            }
+        } catch (error) {
+            throw new ProjectError(String(error?.message ?? error).slice(0, 200));
+        }
+        result ??= await this.coordinate(agent, on);
+        if (result?.kind !== 'success') throw new ProjectError(result?.text || 'the chat could not start coordinating');
+        const who = this.store.lookup(sessionId);
+        return { coordinating: who?.role === 'coordinator' && this.coordinating(who.projectId), session: sessionId, text: result.text ?? '' };
     }
 
     async dispose() {
@@ -1673,32 +1568,9 @@ export class ProjectManager {
     }
 
     /**
-     * A project the store holds no name for (one from a profile row since
-     * removed) takes its coordinator's title, "◆ DSH Plugins", once; until
-     * then, and when the title says nothing more, it goes by its id. Never
-     * an empty name, so never a bare "◆ ".
-     */
-    async nameNameless() {
-        const nameless = [...this.projects.keys()].filter((id) => !this.fromProfile(id) && storedName(this.store.projects[id]) === ''
-            && typeof this.store.projects[id]?.coordinatorSessionId === 'string');
-        if (nameless.length === 0) return;
-        const titles = new Map((await this.listed()).map((item) => [item?.sessionId, item?.projections?.values?.title]));
-        for (const projectId of nameless) {
-            if (this.disposed) return;
-            const sessionId = this.store.projects[projectId].coordinatorSessionId;
-            let title = titles.get(sessionId);
-            if (typeof title !== 'string') title = await this.sessionTitle(sessionId).catch(() => undefined);
-            const name = typeof title === 'string' && title.startsWith('◆ ') ? clipTitle(title.slice(2)) : '';
-            if (name === '') continue;
-            this.store.putProject(projectId, { name });
-            this.log(`name ${projectId} from its coordinator`);
-        }
-    }
-
-    /**
-     * Every session the store knows for a running project, for the session
-     * list while DSH has no value of this plugin's projection for it.
-     * @returns {Record<string, {role: 'coordinator'|'thread', project: string, name: string, thread?: string, coordinator?: string}>}
+     * Every coordinating chat and thread the store knows, for the session
+     * list while DSH has no value of this plugin's projection for one.
+     * @returns {Record<string, {role: 'coordinator'|'thread', project: string, name: string, thread?: string, coordinator?: string, off?: true}>}
      */
     knownSessions() {
         const out = {};
@@ -1706,7 +1578,7 @@ export class ProjectManager {
             const stored = this.store.project(projectId);
             const coordinator = typeof stored.coordinatorSessionId === 'string' && stored.coordinatorSessionId !== '' ? stored.coordinatorSessionId : undefined;
             const name = this.project(projectId).name;
-            if (coordinator) out[coordinator] = { role: 'coordinator', project: projectId, name };
+            if (coordinator) out[coordinator] = { role: 'coordinator', project: projectId, name, ...(stored.off === true ? { off: true } : {}) };
             for (const [threadId, t] of Object.entries(stored.threads ?? {})) {
                 if (typeof t?.sessionId !== 'string' || t.sessionId === '' || out[t.sessionId]) continue;
                 out[t.sessionId] = { role: 'thread', project: projectId, name, thread: threadId, ...(coordinator ? { coordinator } : {}) };
@@ -1754,47 +1626,6 @@ export class ProjectManager {
         if (refreshed > 0) this.log(`records refreshed=${refreshed}`);
     }
 
-    /**
-     * Threads started before thread sessions lost the project's name in
-     * front ("Storefront › Fix login") keep it until renamed. Once per
-     * project, a thread session still titled exactly that is renamed to the
-     * thread's own title; a title the user changed is left as it is.
-     */
-    async plainThreadTitles() {
-        try {
-            const todo = [...this.projects.keys()].filter((id) => this.store.project(id).plainTitles !== true);
-            if (todo.length === 0) return;
-            const old = new Map();
-            for (const projectId of todo) {
-                const name = this.project(projectId).name;
-                for (const [threadId, t] of Object.entries(this.store.project(projectId).threads ?? {})) {
-                    const was = t?.title;
-                    if (typeof was !== 'string' || was === '') continue;
-                    // Older versions cut titles at 80 characters, mid-word and without "…".
-                    const title = clipTitle(was, { cut: was.length >= 80 });
-                    if (title !== was) this.store.putThread(projectId, threadId, { title });
-                    if (typeof t.sessionId === 'string') old.set(t.sessionId, { from: dshTitle(`${name} › ${was}`), to: title });
-                }
-            }
-            let renamed = 0;
-            if (old.size > 0) {
-                const { items } = await this.sc.list({}, AbortSignal.timeout(20000));
-                const titles = new Map((Array.isArray(items) ? items : []).map((item) => [item?.sessionId, item?.projections?.values?.title]));
-                for (const [sessionId, { from, to }] of old) {
-                    if (this.disposed) return;
-                    let now = titles.get(sessionId);
-                    if (typeof now !== 'string') now = await this.sessionTitle(sessionId).catch(() => undefined);
-                    if (now !== from) continue;
-                    await this.sc.rename({ sessionId, title: to }).then(() => { renamed += 1; }, () => {});
-                }
-            }
-            for (const projectId of todo) this.store.putProject(projectId, { plainTitles: true });
-            this.log(`thread-titles renamed=${renamed}`);
-        } catch (error) {
-            this.log(`error thread-titles ${String(error?.message ?? error).slice(0, 300)}`);
-        }
-    }
-
     /** A session's title as DSH lists it, else as its log has it; undefined when neither says. */
     async currentTitle(sessionId) {
         try {
@@ -1826,10 +1657,10 @@ export class ProjectManager {
         }
     }
 
-    /** Create one ordinary session in the project's workspace, or another folder of it. */
-    async createSession(project, folder = project.workspacePath) {
+    /** Create one ordinary session in a folder: a thread, in its coordinating chat's folder. */
+    async createSession(folder) {
         const ws = await this.ctx.workspaceRegistry.create(folder);
-        const created = await this.sc.create({ workspaceId: ws.id, ...(project.agentPreset ? { agentPreset: project.agentPreset } : {}) });
+        const created = await this.sc.create({ workspaceId: ws.id });
         return created.sessionId;
     }
 
@@ -1838,97 +1669,6 @@ export class ProjectManager {
         const r = await this.sc.resolveAgent(sessionId);
         if (r?.agent) this.maybeInstall(r.agent);
         return r?.agent;
-    }
-
-    /** One coordinator check per project at a time, across managers. */
-    async ensureCoordinator(projectId, { create = this.fromProfile(projectId) } = {}) {
-        const key = `${this.storeFile}#${projectId}`;
-        while (ensuring.has(key)) await ensuring.get(key).catch(() => {});
-        const run = this.ensureCoordinatorOnce(projectId, create);
-        ensuring.set(key, run);
-        try {
-            return await run;
-        } finally {
-            if (ensuring.get(key) === run) ensuring.delete(key);
-        }
-    }
-
-    /**
-     * @param {boolean} create - make a coordinator when there is none: always
-     *   for a profile project; for one made on the Projects page, only when the
-     *   user adds it. Without, a coordinator session that is gone (deleted in
-     *   DSH) leaves the project without one.
-     */
-    async ensureCoordinatorOnce(projectId, create) {
-        const project = this.project(projectId);
-        const stored = this.store.project(projectId);
-        // A coordinator DSH has loaded exists; only one it hasn't needs its log read to know.
-        const live = stored.coordinatorSessionId ? this.ctx.agents.get(stored.coordinatorSessionId) : undefined;
-        if (live || await this.exists(stored.coordinatorSessionId)) {
-            if (live) this.maybeInstall(live);
-            this.seeArchive(projectId, stored.coordinatorSessionId);
-            await this.applyCoordinatorRoute(projectId);
-            this.applyCoordinatorPermission(projectId);
-            this.log(`coordinator ${projectId} ${stored.coordinatorSessionId} resumed`);
-            await this.welcome(projectId, stored.coordinatorSessionId, false);
-            return stored.coordinatorSessionId;
-        }
-        if (!create) {
-            if (stored.coordinatorSessionId) {
-                this.store.putProject(projectId, { coordinatorSessionId: undefined, welcomedSession: undefined });
-                this.log(`coordinator ${projectId} gone`);
-            }
-            return null;
-        }
-        if (typeof project.workspacePath !== 'string' || project.workspacePath === '') {
-            throw new ProjectError(`"${project.name}" has no workspace for its coordinator to work in; move one into it first`);
-        }
-        // The plugin reloaded meanwhile; the new manager makes the coordinator.
-        if (this.disposed) return null;
-        const sessionId = await this.createSession(project);
-        this.store.putProject(projectId, {
-            coordinatorSessionId: sessionId, coordinatorCreatedAt: new Date().toISOString(), coordinatorRoute: undefined, coordinatorAccess: undefined,
-            dshArchive: { coordinator: sessionId, archived: false },
-        });
-        // Attaching puts it on its permission setting (install).
-        await this.attach(sessionId);
-        await this.sc.rename({ sessionId, title: `◆ ${project.name}` }).catch(() => {});
-        await this.applyCoordinatorRoute(projectId);
-        this.log(`coordinator ${projectId} ${sessionId}`);
-        await this.welcome(projectId, sessionId, true);
-        return sessionId;
-    }
-
-    /**
-     * Give a coordinator its first turn: it introduces itself. DSH lists a
-     * session only once it has had a turn, so until then the user can't find
-     * the coordinator in the sidebar to talk to it. Once per coordinator
-     * session; held like any message while the project is paused.
-     * @param {boolean} fresh - the session was just created, so it has had no turn.
-     */
-    async welcome(projectId, sessionId, fresh) {
-        if (!this.config.welcome) return;
-        const stored = this.store.project(projectId);
-        if (stored.welcomedSession === sessionId) return;
-        if (!fresh) {
-            // A coordinator from before this check: welcome it only if it never had a turn.
-            let used;
-            try {
-                const events = (await this.sc.inspect(sessionId, AbortSignal.timeout(20000))).events ?? [];
-                used = events.some((e) => e?.type === 'turn/start') || stored.pendingHandbacks.length > 0;
-            } catch (error) {
-                this.log(`error welcome ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
-                return;
-            }
-            if (used) {
-                this.store.putProject(projectId, { welcomedSession: sessionId });
-                return;
-            }
-        }
-        this.store.putProject(projectId, { welcomedSession: sessionId });
-        const project = this.project(projectId);
-        const outcome = await this.deliver(projectId, welcomeMessage(project.name, this.goalOf(projectId)));
-        this.log(`welcome ${projectId} ${sessionId} ${outcome}`);
     }
 
     /**
@@ -1963,6 +1703,8 @@ export class ProjectManager {
         if (!agent || this.installed.has(agent)) return;
         const who = this.store.lookup(agent.id);
         if (!who || !this.projects.has(who.projectId)) return;
+        // A chat that stopped coordinating is a plain chat again; its threads keep theirs.
+        if (who.role === 'coordinator' && !this.coordinating(who.projectId)) return;
         // Runs inside the serial `agent/created` listener chain, where a throw
         // would fail the session's creation: log and leave the session plain.
         try {
@@ -1984,7 +1726,11 @@ export class ProjectManager {
         try { dispose(); } catch {}
     }
 
-    /** Install tools, prompt section, route override and status watcher in one agent scope. */
+    /**
+     * Install tools and the prompt section in one agent scope; for a thread
+     * also its route override, status watcher and guards. The coordinating
+     * chat gets no guard: it keeps the user's own access.
+     */
     install(agent, who) {
         const scoped = agent.ctx;
         const disposers = [];
@@ -1992,12 +1738,13 @@ export class ProjectManager {
         const { projectId, role, threadId } = who;
         try {
             add(scoped.systemPrompt?.section({
-                name: `projects:${role}`,
+                name: `coordinator:${role}`,
                 order: SECTION_ORDER,
                 interpolate: false,
                 text: () => (role === 'coordinator' ? this.coordinatorText(projectId) : this.threadText(projectId, threadId)),
             }));
             for (const tool of this.buildTools(this, who)) add(scoped.tools.register(tool));
+            if (role !== 'thread') return () => { for (const d of disposers.reverse()) { try { d(); } catch {} } };
             if (this.selectionMode === 'override') {
                 // Outermost, so the Host's own selection listener cannot undo it.
                 add(scoped.on('agent/request', async (_event, next) => {
@@ -2006,43 +1753,28 @@ export class ProjectManager {
                     return route ? applyRoute(resolved, route.model, route.effort) : resolved;
                 }, { prepend: true }));
             }
-            if (role === 'thread') {
-                if (agent.status === 'running') {
-                    // Attached mid-turn (the plugin reloaded): review the turn when it ends,
-                    // and watch the permission prompts it is already waiting on.
-                    this.turns.set(agent.id, { running: true });
-                    const t = this.store.thread(projectId, threadId);
-                    if (t && !t.busy) this.store.putThread(projectId, threadId, { busy: true });
-                    void this.rearmApprovals(projectId, threadId, agent).catch((error) => {
-                        this.log(`error approval ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
-                    });
-                }
-                add(scoped.on('agent/status', ({ status }) => {
-                    void this.onThreadStatus(projectId, threadId, agent, status).catch((error) => {
-                        this.log(`error status ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
-                    });
-                }));
-                add(scoped.on('session/event', (_session, event) => this.onThreadEvent(projectId, threadId, agent, event)));
-                add(() => this.clearApprovals(agent.id));
-                add(() => { this.pendingSends.delete(agent.id); this.callSteps.delete(agent.id); this.askedCalls.delete(agent.id); });
-            } else {
-                add(scoped.on('session/event', (_session, event) => {
-                    if (event?.type === 'model/selection') this.onSelection(who, agent, event.data);
-                    else if (event?.type === 'permission/preset') this.onPermission(who, agent, event.data);
-                }));
-                // On Read Only, what would need the user's approval (a write, a wider sandbox) is refused without asking them.
-                add(scoped.on('approval/request', (req, next) => {
-                    if (!this.readOnlyCoordinator(projectId)) return next();
-                    this.log(`read-only-refused ${projectId}/coordinator ${String(req?.toolName ?? 'request').slice(0, 80)}`);
-                    return 'rejected';
-                }, { prepend: true }));
-                // A setting changed while it was not loaded.
-                this.applyCoordinatorPermission(projectId, agent);
+            if (agent.status === 'running') {
+                // Attached mid-turn (the plugin reloaded): review the turn when it ends,
+                // and watch the permission prompts it is already waiting on.
+                this.turns.set(agent.id, { running: true });
+                const t = this.store.thread(projectId, threadId);
+                if (t && !t.busy) this.store.putThread(projectId, threadId, { busy: true });
+                void this.rearmApprovals(projectId, threadId, agent).catch((error) => {
+                    this.log(`error approval ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
+                });
             }
+            add(scoped.on('agent/status', ({ status }) => {
+                void this.onThreadStatus(projectId, threadId, agent, status).catch((error) => {
+                    this.log(`error status ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
+                });
+            }));
+            add(scoped.on('session/event', (_session, event) => this.onThreadEvent(projectId, threadId, agent, event)));
+            add(() => this.clearApprovals(agent.id));
+            add(() => { this.pendingSends.delete(agent.id); this.callSteps.delete(agent.id); this.askedCalls.delete(agent.id); });
             add(() => this.ownSelections.delete(agent.id));
             add(() => this.ownPermissions.delete(agent.id));
             // The user's tools it may not use: left out of what its model is offered, and refused if called anyway.
-            if (typeof scoped.tools?.guard === 'function') add(scoped.tools.guard((exec) => this.callReason(who, exec, agent)));
+            if (typeof scoped.tools?.guard === 'function') add(scoped.tools.guard((exec) => this.callReason(who, exec)));
             add(() => this.dropWall(agent));
             this.applyWall(agent, who);
         } catch (error) {
@@ -2052,13 +1784,9 @@ export class ProjectManager {
         return () => { for (const d of disposers.reverse()) { try { d(); } catch {} } };
     }
 
-    /** The model route for one session, read live so setting changes apply on the next request. */
+    /** The model route for one thread, read live so a change applies on the next request. */
     routeFor(who) {
-        if (!this.projects.has(who.projectId)) return null;
-        if (who.role === 'coordinator') {
-            const s = this.settings(who.projectId);
-            return { model: s.coordinatorModel.value, effort: s.coordinatorEffort.value };
-        }
+        if (who.role !== 'thread' || !this.projects.has(who.projectId)) return null;
         const t = this.store.thread(who.projectId, who.threadId);
         return t ? { model: t.model, effort: t.effort } : null;
     }
@@ -2072,7 +1800,7 @@ export class ProjectManager {
         const route = this.routeFor(who);
         if (!route || (!route.model && !route.effort)) return route;
         const check = checkSelection(await this.catalog(), route.model, route.effort, { fit: true });
-        if (check.ok && check.fitted) this.log(`fit ${who.projectId}/${who.threadId ?? 'coordinator'} ${check.note}`);
+        if (check.ok && check.fitted) this.log(`fit ${who.projectId}/${who.threadId} ${check.note}`);
         return check.ok ? { model: check.model ?? route.model, effort: check.effort } : route;
     }
 
@@ -2099,13 +1827,13 @@ export class ProjectManager {
     }
 
     /**
-     * Put one session on its project route from its next model request, the
-     * way the DSH model picker does, without saving a global default.
+     * Put one thread on its route from its next model request, the way the
+     * DSH model picker does, without saving a global default.
      * @returns the selection recorded, or false.
      */
     async selectRoute(agent, who) {
         if (this.selectionMode !== 'session' || !agent) return false;
-        const label = `${who.projectId}/${who.threadId ?? 'coordinator'}`;
+        const label = `${who.projectId}/${who.threadId}`;
         try {
             const wanted = this.fullSelection(await this.checkedRoute(who));
             if (!wanted) throw new Error('no DSH default model to build on');
@@ -2123,59 +1851,23 @@ export class ProjectManager {
     }
 
     /**
-     * Select the coordinator's route when its settings differ from the ones
-     * it last got. A new coordinator on the DSH default needs no selection.
-     * @returns false only when a needed selection failed.
-     */
-    async applyCoordinatorRoute(projectId) {
-        if (this.selectionMode !== 'session') return true;
-        const stored = this.store.project(projectId);
-        if (!stored.coordinatorSessionId) return true;
-        const s = this.settings(projectId);
-        const key = routeKey(s.coordinatorModel.value, s.coordinatorEffort.value);
-        if (stored.coordinatorRoute === key) return true;
-        if (stored.coordinatorRoute === undefined && key === '[null,null]') {
-            this.store.putProject(projectId, { coordinatorRoute: key });
-            return true;
-        }
-        let agent;
-        try {
-            agent = await this.attach(stored.coordinatorSessionId);
-        } catch (error) {
-            this.log(`error select ${projectId}/coordinator ${String(error?.message ?? error).slice(0, 200)}`);
-            return false;
-        }
-        if (!await this.selectRoute(agent, { projectId, role: 'coordinator' })) return false;
-        this.store.putProject(projectId, { coordinatorRoute: key });
-        return true;
-    }
-
-    /**
-     * A `model/selection` on a project session. One the manager made itself
-     * is skipped. Any other is the user's pick in DSH's own model picker
-     * (the composer's model menu or /model): on a coordinator it becomes the
-     * project's coordinator model and effort, on a thread that thread's, so
-     * the project's settings say what its sessions run on.
+     * A `model/selection` on a thread. One the manager made itself is
+     * skipped. Any other is the user's pick in DSH's own model picker (the
+     * composer's model menu or /model): it becomes that thread's model and
+     * effort, so Thread settings say what it runs on.
      */
     onSelection(who, agent, data) {
         try {
-            if (typeof data?.provider !== 'string' || typeof data?.model !== 'string' || !this.projects.has(who.projectId)) return;
+            if (who.role !== 'thread' || typeof data?.provider !== 'string' || typeof data?.model !== 'string' || !this.projects.has(who.projectId)) return;
             if (this.ownSelections.get(agent.id) === selectionKey(data)) {
                 this.ownSelections.delete(agent.id);
                 return;
             }
             const model = `${data.provider}:${data.model}`;
             const effort = typeof data.reasoningEffort === 'string' && data.reasoningEffort !== '' ? data.reasoningEffort : undefined;
-            if (who.role === 'coordinator') {
-                this.store.putSettings(who.projectId, { coordinatorModel: model, coordinatorEffort: effort });
-                // It already runs on the pick, so nothing selects it again.
-                const s = this.settings(who.projectId);
-                this.store.putProject(who.projectId, { coordinatorRoute: routeKey(s.coordinatorModel.value, s.coordinatorEffort.value) });
-            } else {
-                if (!this.store.thread(who.projectId, who.threadId)) return;
-                this.store.putThread(who.projectId, who.threadId, { model, effort });
-            }
-            this.log(`picked ${who.projectId}/${who.threadId ?? 'coordinator'} ${model} effort=${effort ?? '-'}`);
+            if (!this.store.thread(who.projectId, who.threadId)) return;
+            this.store.putThread(who.projectId, who.threadId, { model, effort });
+            this.log(`picked ${who.projectId}/${who.threadId} ${model} effort=${effort ?? '-'}`);
         } catch (error) {
             this.log(`error picked ${who.projectId} ${String(error?.message ?? error).slice(0, 200)}`);
         }
@@ -2188,13 +1880,10 @@ export class ProjectManager {
     coordinatorText(projectId) {
         const project = this.project(projectId);
         return coordinatorPolicy({
-            name: project.name,
-            goal: this.goalOf(projectId),
             workspacePath: project.workspacePath,
             home: isHome(project.workspacePath),
             guarded: this.guards().map(([name]) => name),
             yourTools: this.access(projectId).yourTools.value,
-            readOnly: this.readOnlyCoordinator(projectId),
             paused: this.paused(projectId),
             threads: this.store.project(projectId).threads,
             memory: this.readMemory(projectId),
@@ -2208,7 +1897,6 @@ export class ProjectManager {
         const tools = this.toolsFor({ projectId, role: 'thread', threadId });
         return threadPolicy({
             name: project.name,
-            goal: this.goalOf(projectId),
             threadId,
             title: t?.title ?? threadId,
             home: isHome(t?.folder ?? project.workspacePath),
@@ -2525,17 +2213,27 @@ export class ProjectManager {
     }
 
     /**
+     * A coordinating chat goes by its title, whoever gave it (DSH from its
+     * first message, or the user), so briefs and notes name it as DSH does.
      * A thread renamed in DSH (Rename on its row in the session list) takes
      * that name here too, so the plugin's lists and the coordinator's roster
-     * say what DSH says. Only a name someone gave counts: a title DSH makes
-     * from the first message never replaces the one the thread started with.
-     * Never throws: this runs inside DSH's event delivery.
+     * say what DSH says; for a thread only a name someone gave counts: a
+     * title DSH makes from the first message never replaces the one it
+     * started with. Never throws: this runs inside DSH's event delivery.
      */
     followTitle(session, event) {
         try {
-            if (event.data?.source?.kind !== 'user' || typeof event.data?.title !== 'string') return;
+            if (typeof event.data?.title !== 'string') return;
             const who = this.store.lookup(session?.id);
-            if (who?.role !== 'thread' || !this.projects.has(who.projectId)) return;
+            if (!who || !this.projects.has(who.projectId)) return;
+            if (who.role === 'coordinator') {
+                const name = clipTitle(event.data.title);
+                if (!name || name === storedName(this.store.projects[who.projectId])) return;
+                this.store.putProject(who.projectId, { name });
+                this.log(`chat-title ${who.projectId}`);
+                return;
+            }
+            if (who.role !== 'thread' || event.data?.source?.kind !== 'user') return;
             const title = clipTitle(event.data.title);
             if (!title || title === this.store.thread(who.projectId, who.threadId)?.title) return;
             this.store.putThread(who.projectId, who.threadId, { title });
@@ -3209,8 +2907,8 @@ export class ProjectManager {
 
     /**
      * Something the user should hear about wherever they are in the window,
-     * kept once the coordinator has it: the ◆ row shows it unread and the
-     * window shows a notice, until the user opens the coordinator (seeNews).
+     * kept once the coordinating chat has it: its row shows it unread and
+     * the window shows a notice, until the user opens the chat (seeNews).
      * @param {{kind: string, thread: string, status?: string}} news - kind from NEWS_KINDS.
      */
     noteNews(projectId, news) {
@@ -3257,12 +2955,13 @@ export class ProjectManager {
     // ── what the DSH window draws ──────────────────────────────────────────
 
     /**
-     * What a project tool result records for the DSH window: its presentation
-     * meta, which the `coordinatorSession` projection folds (projection.js). It
-     * names the project and the session's role; for a coordinator it carries
-     * the roster entries the call touched (all of them with `full`), and
-     * `action` is the card the call's turn shows. Never throws: a tool's
-     * result must not fail over its picture.
+     * What a tool result records for the DSH window: its presentation meta,
+     * which the `coordinatorSession` projection folds (projection.js). It
+     * names the coordinating chat (as `project`) and the session's role; for
+     * a coordinator it carries the roster entries the call touched (all of
+     * them with `full`) and whether it stopped coordinating, and `action` is
+     * the card the call's turn shows. Never throws: a tool's result must not
+     * fail over its picture.
      * @param {string} projectId
      * @param {{role: 'coordinator'|'thread', threadId?: string}} who
      * @param {{action?: object, threads?: string[], full?: boolean}} [details]
@@ -3281,6 +2980,7 @@ export class ProjectManager {
                 const ids = details.full ? rosterIds(stored.threads) : (details.threads ?? []).filter((id) => stored.threads[id]);
                 out.threads = ids.map((id) => rosterEntry(id, stored.threads[id]));
                 if (details.full) out.full = true;
+                if (stored.off === true) out.off = true;
             }
             if (details.action) out.action = details.action;
             return out;
@@ -3292,8 +2992,8 @@ export class ProjectManager {
 
     /**
      * The projection's starting value for a session this store knows, so a
-     * coordinator or thread from before the projection existed shows its
-     * project and threads the first time DSH folds it.
+     * coordinating chat or thread whose value DSH dropped (an update) shows
+     * its threads, or its chat, the first time DSH folds it again.
      * @param {string} sessionId
      */
     seedView(sessionId) {
@@ -3310,7 +3010,7 @@ export class ProjectManager {
         const t = this.store.thread(projectId, id);
         if (!t) {
             const known = Object.keys(this.store.project(projectId).threads).join(', ') || 'none';
-            throw new ProjectError(`no thread "${id}" in this project (threads: ${known})`);
+            throw new ProjectError(`no thread "${id}" here (threads: ${known})`);
         }
         return { id, t };
     }
@@ -3319,15 +3019,15 @@ export class ProjectManager {
      * Refuse a thread start or message that would use a guarded tool
      * (config.guardedTools, or a tool another plugin marks as the user's
      * own) the user's words don't call for: `allowed` (the user's tools
-     * their checked words give the thread) or the project's goal must name
-     * it, and only the user's words give a marked one. The first real run drifted from a test task the
-     * coordinator picked itself into the user's model lanes; this holds
-     * whatever the model makes of its prompt, under either yourTools.
+     * their checked words give the thread) must name it. The first real run
+     * drifted from a test task the coordinator picked itself into the
+     * user's model lanes; this holds whatever the model makes of its
+     * prompt, under either yourTools.
      */
     guard(projectId, what, text, allowed) {
         const guard = this.guards();
         if (guard.length === 0) return;
-        const ok = new Set([...allowed, ...this.goalTools(projectId, guard)]);
+        const ok = new Set(allowed);
         const blocked = guardedIn(text, guard).filter((name) => !ok.has(name));
         if (blocked.length === 0) return;
         this.log(`guard ${projectId} ${what} ${blocked.join(',')}`);
@@ -3365,15 +3065,16 @@ export class ProjectManager {
     async startThread(projectId, { title, ask, brief, model, effort }) {
         const project = this.project(projectId);
         if (this.archived(projectId)) throw new ProjectError(ARCHIVED);
-        if (this.paused(projectId)) throw new ProjectError('the project is paused; new threads are blocked until it resumes');
+        if (!this.coordinating(projectId)) throw new ProjectError(STOPPED);
+        if (this.paused(projectId)) throw new ProjectError('threads are paused here; new ones are blocked until the user resumes them in Thread settings');
         const cleanTitle = clipTitle(title);
         if (!cleanTitle) throw new ProjectError('title is required');
         if (!String(brief ?? '').trim()) throw new ProjectError('brief is required');
         const userWords = typeof ask === 'string' ? ask.trim().slice(0, 4000) : '';
         if (!userWords) throw new ProjectError('ask is required: copy the user\'s words from their message');
-        // A thread works where its project does, so it shows under its project in DSH's list.
+        // A thread works where its chat does, in the same DSH workspace.
         const where = project.workspacePath;
-        if (!where) throw new ProjectError('DSH has no workspace for this project\'s folder right now');
+        if (!where) throw new ProjectError('this chat has no folder for threads to work in');
         // The user's tools the thread gets: the ones the ask names that the user really wrote.
         const tools = await this.askedTools(projectId, userWords);
         this.guard(projectId, 'start', `${cleanTitle}\n${userWords}\n${brief}`, tools);
@@ -3384,10 +3085,10 @@ export class ProjectManager {
         const preset = this.presets() ? this.presetOf(access.threadPermission.value) : undefined;
         if (this.presets() && !preset) {
             this.log(`permission ${projectId} unknown preset ${access.threadPermission.value}`);
-            throw new ProjectError(`threads in this project start on the permission "${access.threadPermission.value}", which DSH doesn't offer. Tell the user to choose another in Project settings`);
+            throw new ProjectError(`threads here start on the permission "${access.threadPermission.value}", which DSH doesn't offer. Tell the user to choose another in Thread settings`);
         }
         const s = this.settings(projectId);
-        // Not given, or "default": the project's thread default.
+        // Not given, or "default": the chat's thread default.
         const given = (value) => value !== undefined && value !== 'default';
         const or = (value, fallback) => (given(value) ? value : fallback);
         // An effort the model lacks never stops a start: it runs at the nearest
@@ -3400,12 +3101,12 @@ export class ProjectManager {
         const starts = (this.store.project(projectId).threadStarts ?? []).filter((ms) => now - ms < HOUR);
         if (starts.length >= this.config.maxThreadsPerHour) {
             this.log(`thread-limit ${projectId} ${starts.length}`);
-            throw new ProjectError(`thread limit reached: this project started ${starts.length} threads in the last hour (maxThreadsPerHour). Tell the user, and continue in existing threads with thread_send`);
+            throw new ProjectError(`thread limit reached: this chat started ${starts.length} threads in the last hour (maxThreadsPerHour). Tell the user, and continue in existing threads with thread_send`);
         }
         this.store.putProject(projectId, { threadStarts: [...starts, now] });
 
         const threadId = this.store.reserveThreadId(projectId);
-        const sessionId = await this.createSession(project, where);
+        const sessionId = await this.createSession(where);
         this.store.putThread(projectId, threadId, {
             sessionId, title: cleanTitle, model: check.model, effort: check.effort,
             resolved: false, createdAt: new Date().toISOString(), handbackTimes: [], seenTurn: null, ownCounts: true,
@@ -3413,12 +3114,12 @@ export class ProjectManager {
             tools,
         });
         const agent = await this.attach(sessionId);
-        // On the project's thread permission before it reads its brief; a thread that can't be put there doesn't start.
+        // On the thread permission before it reads its brief; a thread that can't be put there doesn't start.
         if (preset) {
             if (!agent || !this.setPermission(agent, preset, `${projectId}/${threadId}`)) {
                 this.store.putThread(projectId, threadId, { resolved: true });
                 this.log(`thread-start ${projectId}/${threadId} ${sessionId} not started: permission`);
-                throw new ProjectError(`${threadId} could not be put on the permission "${preset}", so it did not start. Tell the user (details in the projects log)`);
+                throw new ProjectError(`${threadId} could not be put on the permission "${preset}", so it did not start. Tell the user (details in the coordinator log)`);
             }
             this.store.putThread(projectId, threadId, { permission: this.permissionOf(sessionId) ?? preset });
         }
@@ -3426,7 +3127,7 @@ export class ProjectManager {
         if (this.selectionMode === 'session') {
             const applied = await this.selectRoute(agent, { projectId, role: 'thread', threadId });
             if (!applied) {
-                if (check.model || check.effort) notes.push('the model could not be set, so the thread runs on the DSH default (details in the projects log)');
+                if (check.model || check.effort) notes.push('the model could not be set, so the thread runs on the DSH default (details in the coordinator log)');
             } else if (!check.model || (!check.effort && applied.reasoningEffort)) {
                 // The thread keeps what it started on, even when the DSH default changes later, so record it.
                 this.store.putThread(projectId, threadId, {
@@ -3488,14 +3189,14 @@ export class ProjectManager {
         return { mode, text: running ? `Queued: ${id} sees this when its turn ends${reopened}; steer=true redirects it now.` : `Sent to ${id}${reopened}.` };
     }
 
-    // ── messages to chats outside the project ──────────────────────────────
+    // ── messages to other chats ────────────────────────────────────────────
 
     /**
      * Whether the coordinator's turn now is one the user started: the
      * newest prompt in it is the user's own message, not a note from a
-     * thread, the plugin or another chat. A message out of the project goes
-     * only from such a turn, so two coordinators can't keep answering each
-     * other's replies.
+     * thread, the plugin or another chat. A message to another chat goes
+     * only from such a turn, so two coordinating chats can't keep answering
+     * each other's replies.
      */
     async userTurn(projectId) {
         const sessionId = this.store.project(projectId).coordinatorSessionId;
@@ -3517,54 +3218,39 @@ export class ProjectManager {
     }
 
     /**
-     * The chat chat_message names: another project's coordinator (its
-     * name, with or without ◆, or its id), or a chat that belongs to no
-     * project (its title as DSH lists it, or its session id). A thread
-     * stays with its project, so naming one is refused with where to send
-     * instead; so is a title several chats share.
-     * @returns {Promise<{sessionId: string, name: string, kind: 'project'|'chat'}>}
+     * The chat chat_message names: its title as DSH lists it, or its session
+     * id. A thread takes messages only from the chat that started it, so
+     * naming one is refused with where to send instead; so is a title
+     * several chats share, and this chat itself.
+     * @returns {Promise<{sessionId: string, name: string, kind: 'chat'}>}
      */
     async messageTarget(projectId, to) {
         const raw = String(to ?? '').trim();
-        if (!raw) throw new ProjectError('to is required: a chat\'s title, or another project\'s name');
-        const bare = raw.replace(/^◆\s*/, '').replace(/^"([^]*)"$/, '$1').trim();
+        if (!raw) throw new ProjectError('to is required: a chat\'s title as DSH lists it, or its session id');
+        const bare = raw.replace(/^"([^]*)"$/, '$1').trim();
         const key = bare.toLowerCase();
-        const own = this.project(projectId);
-        if (bare === projectId || String(own.name).trim().toLowerCase() === key) throw new ProjectError('that is this project: you are its coordinator');
-        const toProject = (id) => {
-            const name = this.project(id).name;
-            const sessionId = this.store.project(id).coordinatorSessionId;
-            if (!sessionId) throw new ProjectError(`◆ ${name} has no coordinator right now`);
-            // A message would wake the coordinator the user retired with its project.
-            if (this.archived(id)) throw new ProjectError(`◆ ${name} is archived; the user can bring it back with Restore project in its ◆ row's menu`);
-            return { sessionId, name: `◆ ${name}`, kind: 'project' };
-        };
-        for (const [id, p] of this.projects) {
-            if (id === bare || String(p.name).trim().toLowerCase() === key) return toProject(id);
-        }
+        const own = this.store.project(projectId).coordinatorSessionId;
         const chats = await this.chatList();
-        const byId = chats.find((c) => c.sessionId === raw);
+        const byId = chats.find((c) => c.sessionId === bare);
         const found = byId ? [byId] : chats.filter((c) => c.title.trim().toLowerCase() === key);
         if (found.length === 0) {
-            const others = [...this.projects].filter(([id]) => id !== projectId && this.store.project(id).coordinatorSessionId).map(([, p]) => `◆ ${p.name}`);
-            const recent = chats.filter((c) => !this.store.lookup(c.sessionId) && c.title).slice(0, 8).map((c) => `"${c.title}"`);
-            throw new ProjectError(`no chat or project here is called "${clipTitle(bare)}".${others.length ? ` Other projects: ${others.join(', ')}.` : ''}`
-                + `${recent.length ? ` Recent chats: ${recent.join(', ')}.` : ''} Put one of these in to as it is written, or ask the user which chat they mean`);
+            const recent = chats.filter((c) => c.sessionId !== own && this.store.lookup(c.sessionId)?.role !== 'thread' && c.title).slice(0, 8).map((c) => `"${c.title}"`);
+            throw new ProjectError(`no chat here is called "${clipTitle(bare)}".${recent.length ? ` Recent chats: ${recent.join(', ')}.` : ''}`
+                + ' Put one of these in to as it is written, or ask the user which chat they mean');
         }
         if (found.length > 1) {
             const list = found.slice(0, 8).map((c) => `${c.sessionId} (in ${c.cwd}${Number.isFinite(c.updatedAt) && c.updatedAt > 0 ? `, last active ${new Date(c.updatedAt).toISOString().slice(0, 16).replace('T', ' ')} UTC` : ''})`);
             throw new ProjectError(`${found.length} chats are called "${clipTitle(bare)}": ${list.join('; ')}. Put the id of the one the user means in to, or ask the user`);
         }
         const chat = found[0];
+        if (chat.sessionId === own) throw new ProjectError('that is this chat');
         const who = this.store.lookup(chat.sessionId);
-        if (who?.projectId === projectId) {
-            if (who.role === 'coordinator') throw new ProjectError('that is this chat: you are its coordinator');
-            throw new ProjectError(`that is this project's thread ${who.threadId}: use thread_send`);
+        if (who?.role === 'thread' && this.projects.has(who.projectId)) {
+            if (who.projectId === projectId) throw new ProjectError(`that is your thread ${who.threadId}: use thread_send`);
+            const name = this.project(who.projectId).name;
+            throw new ProjectError(`that is a thread of the chat "${name}", and a thread takes messages only from the chat that started it. Send it to "${name}" instead`);
         }
-        if (who && this.projects.has(who.projectId)) {
-            if (who.role === 'coordinator') return toProject(who.projectId);
-            throw new ProjectError(`that is a thread of ◆ ${this.project(who.projectId).name}, and a thread stays with its project. Send it to ◆ ${this.project(who.projectId).name} instead`);
-        }
+        if (who?.role === 'coordinator' && this.archived(who.projectId)) throw new ProjectError(`"${chat.title || chat.sessionId}" is archived; the user can unarchive it in DSH`);
         return { sessionId: chat.sessionId, name: `"${chat.title || chat.sessionId}"`, kind: 'chat' };
     }
 
@@ -3576,13 +3262,12 @@ export class ProjectManager {
     }
 
     /**
-     * chat_message: send a chat outside the project, or another
-     * project's coordinator, a message the user asked for. It goes only in
-     * a turn the user started, with their words (`ask`) as they wrote them,
-     * and a guarded tool in it needs the user's words for it, as a thread's
-     * start does. The chat stays outside the project: it gets no thread,
-     * card, tools or place in the project. Its answer to the message comes
-     * back to the coordinator once, as a note (collectReplies).
+     * chat_message: send another chat a message the user asked for. It goes
+     * only in a turn the user started, with their words (`ask`) as they
+     * wrote them, and a guarded tool in it needs the user's words for it, as
+     * a thread's start does. The other chat stays as it is: it gets no
+     * thread, card or tools. Its answer to the message comes back to this
+     * chat once, as a note (collectReplies).
      * @returns the chat it went to.
      */
     async sendMessage(projectId, { to, ask, text }) {
@@ -3591,17 +3276,17 @@ export class ProjectManager {
         const userWords = typeof ask === 'string' ? ask.trim().slice(0, 4000) : '';
         if (!userWords) throw new ProjectError('ask is required: copy the user\'s words from their message');
         const from = this.store.project(projectId).coordinatorSessionId;
-        if (!from) throw new ProjectError('this project has no coordinator right now');
+        if (!from) throw new ProjectError('this chat doesn\'t coordinate threads');
         if (!await this.userTurn(projectId)) {
             this.log(`guard ${projectId} message-not-asked`);
-            throw new ProjectError('a message goes out of the project only in a turn the user started. Tell the user what came in, and send it when they ask');
+            throw new ProjectError('a message goes to another chat only in a turn the user started. Tell the user what came in, and send it when they ask');
         }
         if (!wordsKey(await this.userText(projectId)).includes(wordsKey(userWords))) {
             this.log(`guard ${projectId} message-unsaid`);
             throw new ProjectError('ask must be the user\'s own words, copied from their message here');
         }
         const target = await this.messageTarget(projectId, to);
-        // The user's tools: a chat outside a project has all of them, so the message may name only the ones the user's words do.
+        // The user's tools: another chat has all of them, so the message may name only the ones the user's words do.
         const tools = await this.askedTools(projectId, userWords);
         this.guard(projectId, 'message', `${userWords}\n${body}`, tools);
         const after = await this.lastSeq(target.sessionId);
@@ -3617,8 +3302,9 @@ export class ProjectManager {
     }
 
     /**
-     * The turn in which a chat answered a coordinator's message: the first
-     * of its messages from `from` after `after`, and the turn that took it.
+     * The turn in which a chat answered a coordinating chat's message: the
+     * first of its messages from `from` after `after`, and the turn that
+     * took it.
      */
     async messageTurn(sessionId, after, from) {
         const events = (await this.sc.inspect(sessionId, AbortSignal.timeout(20000))).events ?? [];
@@ -3633,7 +3319,7 @@ export class ProjectManager {
         return { found: true, ended: true, reply: reply.trim(), ending: describeEnding(events[end].data?.reason ?? null) };
     }
 
-    /** A session went idle: if it owes a coordinator a reply, look for it, one check at a time. */
+    /** A session went idle: if it owes a coordinating chat a reply, look for it, one check at a time. */
     onAgentStatus(agent, status) {
         const id = agent?.id;
         if (status !== 'idle' || this.disposed || !this.awaited.has(id)) return;
@@ -3645,9 +3331,9 @@ export class ProjectManager {
     }
 
     /**
-     * Deliver each reply a chat owes a coordinator, once: the answer of the
-     * turn that took the message, once that turn ended. A chat DSH no
-     * longer has owes nothing.
+     * Deliver each reply a chat owes a coordinating chat, once: the answer
+     * of the turn that took the message, once that turn ended. A chat DSH
+     * no longer has owes nothing.
      */
     async collectReplies(target) {
         for (const projectId of [...this.projects.keys()]) {
@@ -3785,7 +3471,7 @@ export class ProjectManager {
         if (Object.keys(fields).length > 0) this.store.putThread(projectId, threadId, fields);
         if ('model' in fields && this.selectionMode === 'session'
             && !await this.selectRoute(await this.attach(t.sessionId), { projectId, role: 'thread', threadId })) {
-            out.push('but the model could not be set, so it keeps its current one (details in the projects log)');
+            out.push('but the model could not be set, so it keeps its current one (details in the coordinator log)');
         }
         if (changes.stop === true) {
             if (this.ctx.agents.get(t.sessionId)?.status !== 'running') {
@@ -3810,52 +3496,37 @@ export class ProjectManager {
     }
 
     /**
-     * Change the project's own settings. A model or effort of "default"
-     * clears it, so the project row or the plugin default applies again;
+     * Change a coordinating chat's own settings for its threads. A model or
+     * effort of "default" clears it, so the plugin default applies again;
      * `paused: null` does the same for pause.
-     * @param {object} changes - coordinatorModel, coordinatorEffort, threadModel, threadEffort, paused, and from
-     *   Project settings only, goal (null: the profile row's again).
+     * @param {object} changes - threadModel, threadEffort, paused.
      * @returns {Promise<{notes: string[], flushed: number}>}
      */
     async changeSettings(projectId, changes) {
         const next = {};
         const current = this.settings(projectId);
         const val = (v) => (v === 'default' ? undefined : v);
-        const pairs = [['coordinatorModel', 'coordinatorEffort'], ['threadModel', 'threadEffort']];
         const notes = [];
-        let catalog;
-        for (const [mKey, eKey] of pairs) {
-            if (changes[mKey] === undefined && changes[eKey] === undefined) continue;
-            catalog ??= await this.catalog();
+        if (changes.threadModel !== undefined || changes.threadEffort !== undefined) {
+            const catalog = await this.catalog();
             // A cleared setting is checked as what it falls back to.
-            const inherited = effectiveSettings(pluginDefaults(this.config), this.project(projectId), {});
-            const model = changes[mKey] === undefined ? current[mKey].value : changes[mKey] === 'default' ? inherited[mKey].value : changes[mKey];
-            const effort = changes[eKey] === undefined ? current[eKey].value : changes[eKey] === 'default' ? inherited[eKey].value : changes[eKey];
+            const inherited = effectiveSettings(pluginDefaults(this.config), {});
+            const model = changes.threadModel === undefined ? current.threadModel.value : changes.threadModel === 'default' ? inherited.threadModel.value : changes.threadModel;
+            const effort = changes.threadEffort === undefined ? current.threadEffort.value : changes.threadEffort === 'default' ? inherited.threadEffort.value : changes.threadEffort;
             // An effort set now must be offered; one kept from before or inherited is fitted.
-            const effortGiven = changes[eKey] !== undefined && changes[eKey] !== 'default';
+            const effortGiven = changes.threadEffort !== undefined && changes.threadEffort !== 'default';
             const check = checkSelection(catalog, model, effort, { fit: !effortGiven });
             if (!check.ok) throw new ProjectError(check.error);
-            if (changes[mKey] !== undefined) next[mKey] = changes[mKey] === 'default' ? undefined : check.model;
-            if (changes[eKey] !== undefined) next[eKey] = changes[eKey] === 'default' ? undefined : (check.effort ?? val(effort)?.trim());
-            // The project's own effort follows a new model: fitted, or cleared when the model has no levels.
-            else if (changes[mKey] !== undefined && current[eKey].source === 'project setting' && (check.fitted || check.effort === undefined)) next[eKey] = check.effort;
-            if (check.note) notes.push(`${mKey === 'coordinatorModel' ? 'Coordinator' : 'Threads'}: ${check.note}.`);
+            if (changes.threadModel !== undefined) next.threadModel = changes.threadModel === 'default' ? undefined : check.model;
+            if (changes.threadEffort !== undefined) next.threadEffort = changes.threadEffort === 'default' ? undefined : (check.effort ?? val(effort)?.trim());
+            // The chat's own effort follows a new model: fitted, or cleared when the model has no levels.
+            else if (changes.threadModel !== undefined && current.threadEffort.source === 'chat setting' && (check.fitted || check.effort === undefined)) next.threadEffort = check.effort;
+            if (check.note) notes.push(`Threads: ${check.note}.`);
         }
         const wasPaused = this.paused(projectId);
         if (changes.paused === null) next.paused = undefined;
         else if (typeof changes.paused === 'boolean') next.paused = changes.paused;
-        // The goal: the user's own text (an empty one too), or null to use the profile row's again.
-        if (changes.goal === null) next.goal = undefined;
-        else if (typeof changes.goal === 'string') {
-            const goal = changes.goal.replace(/\r\n?/g, '\n').trim();
-            if (goal.length > GOAL_CHARS) throw new ProjectError(`a goal can be at most ${GOAL_CHARS} characters; this one has ${goal.length}`);
-            next.goal = goal;
-        }
         this.store.putSettings(projectId, next);
-        // Every call also retries a coordinator selection that failed before.
-        if (!await this.applyCoordinatorRoute(projectId)) {
-            notes.push('The coordinator model could not be switched; it keeps its current one (details in the projects log).');
-        }
         let flushed = 0;
         if (wasPaused && !this.paused(projectId)) flushed = await this.flushPending(projectId);
         this.log(`settings ${projectId} ${Object.keys(next).join(',')}`);
@@ -3870,7 +3541,6 @@ export class ProjectManager {
         const { notes, flushed } = await this.changeSettings(projectId, changes);
         const s = this.settings(projectId);
         return [
-            `Coordinator: ${describeRoute(s.coordinatorModel.value, s.coordinatorEffort.value)} (${s.coordinatorModel.source} / ${s.coordinatorEffort.source})`,
             `New threads: ${describeRoute(s.threadModel.value, s.threadEffort.value)} (${s.threadModel.source} / ${s.threadEffort.source})`,
             `Paused: ${this.paused(projectId) ? 'yes' : 'no'}${flushed ? ` (delivered ${flushed} held handbacks)` : ''}`,
             ...this.accessLines(projectId),
@@ -3878,27 +3548,26 @@ export class ProjectManager {
         ].join('\n');
     }
 
-    /** The access settings as thread_settings shows them; only the user changes them and the goal, in Project settings. */
+    /** The access settings as thread_settings shows them; only the user changes them, in Thread settings. */
     accessLines(projectId) {
         const a = this.access(projectId);
         const guarded = this.guards().map(([name]) => name);
-        const permission = (value) => (value === 'default' ? `DSH's default (${this.presets()?.defaultPreset ?? 'unknown'})` : value);
+        const permission = (value) => (value === 'default' ? `DSH's default (${this.permissionCatalog()?.defaultPreset ?? 'unknown'})` : value);
         return [
-            // Without their names: the coordinator mentions the user's tools only when asked (its rule 2 names them).
+            // Without their names: the chat mentions the user's tools only when asked.
             guarded.length === 0 ? null
-                : `The user's tools: you don't have them; ${a.yourTools.value === 'always' ? 'every thread has them' : 'a thread has the ones the user\'s words for it name'}`,
-            this.presets() ? `Permissions: coordinator ${permission(a.coordinatorPermission.value)}, new threads ${permission(a.threadPermission.value)}` : null,
-            'The user changes these and the goal in Project settings; thread_settings can\'t.',
+                : `The user's tools: you have them; ${a.yourTools.value === 'always' ? 'every thread has them' : 'a thread has the ones the user\'s words for it name'}`,
+            this.presets() ? `Permissions: new threads ${permission(a.threadPermission.value)}` : null,
+            'The user changes these in Thread settings; thread_settings can\'t.',
         ].filter((line) => line !== null);
     }
 
     /**
-     * Change the project's access settings, from the window only: the
-     * user's tools ("asked" or "always") and the coordinator's and new
-     * threads' permission (a preset DSH offers, or "default"). null clears
-     * the project's own, so its profile row or the plugin default applies.
-     * Walls follow at once, and the coordinator moves to its new
-     * permission; running threads keep theirs.
+     * Change a coordinating chat's access settings for its threads, from the
+     * window only: the user's tools ("asked" or "always") and the permission
+     * new threads start on (a preset DSH offers, or "default"). null clears
+     * the chat's own, so the plugin default applies. Walls follow at once;
+     * running threads keep their permission.
      * @returns {string[]} notes.
      */
     changeAccess(projectId, changes) {
@@ -3907,22 +3576,18 @@ export class ProjectManager {
             if (changes.yourTools !== null && !TOOL_MODES.includes(changes.yourTools)) throw new ProjectError('your tools must be "asked" or "always"');
             next.yourTools = changes.yourTools ?? undefined;
         }
-        for (const key of ['coordinatorPermission', 'threadPermission']) {
-            const value = changes[key];
-            if (value === undefined) continue;
+        const value = changes.threadPermission;
+        if (value !== undefined) {
             if (value !== null && (typeof value !== 'string' || !this.presetOf(value))) {
                 const offered = this.permissionCatalog()?.options.map((o) => o.value) ?? [];
                 throw new ProjectError(offered.length ? `"${String(value).slice(0, 40)}" is not one of DSH's permissions (${['default', ...offered].join(', ')})` : 'this DSH has no permission presets');
             }
-            next[key] = value ?? undefined;
+            next.threadPermission = value ?? undefined;
         }
         if (Object.keys(next).length === 0) return [];
         this.store.putSettings(projectId, next);
         this.log(`access ${projectId} ${Object.keys(next).join(',')}`);
         if ('yourTools' in next) this.rewall(projectId);
-        if ('coordinatorPermission' in next && !this.applyCoordinatorPermission(projectId)) {
-            return ['The coordinator\'s permission could not be changed (details in the projects log).'];
-        }
         return [];
     }
 
@@ -3932,98 +3597,14 @@ export class ProjectManager {
         const preset = typeof value === 'string' ? this.presetOf(value) : undefined;
         if (!preset) throw new ProjectError(`"${String(value).slice(0, 40)}" is not one of DSH's permissions`);
         const agent = await this.attach(t.sessionId);
-        if (!agent || !this.setPermission(agent, preset, `${projectId}/${id}`)) throw new ProjectError(`${id}'s permission could not be changed (details in the projects log)`);
+        if (!agent || !this.setPermission(agent, preset, `${projectId}/${id}`)) throw new ProjectError(`${id}'s permission could not be changed (details in the coordinator log)`);
         this.store.putThread(projectId, id, { permission: preset });
         return `${id}: permission ${preset}.`;
     }
 
-    // ── projects made in the window (remote.js) ──────────────────────────────
+    // ── archive: a coordinating chat leaves DSH's session list with its threads ──
 
-    /**
-     * Make a project in the store, without a coordinator, and add it to the
-     * running set.
-     * @returns its id: the name as a slug, made unique.
-     */
-    makeProject(name, source, extra = {}) {
-        const base = slugify(name);
-        let id = base;
-        for (let n = 2; this.projects.has(id) || this.store.projects[id] !== undefined; n += 1) id = `${base}-${n}`;
-        const orders = Object.values(this.store.projects).map((p) => (Number.isFinite(p?.order) ? p.order : -1));
-        this.store.putProject(id, { name, source, createdAt: new Date().toISOString(), order: Math.max(-1, ...orders) + 1, ...extra });
-        this.addStored(id);
-        this.log(`project-new ${id} ${source}`);
-        return id;
-    }
-
-    /** A project name as the user typed it: one line, at most 80 bytes like a DSH title. */
-    projectName(value) {
-        const name = clipTitle(typeof value === 'string' ? value : '');
-        if (name === '') throw new ProjectError('a project needs a name');
-        return name;
-    }
-
-    /**
-     * A new project from the Projects page: a ◆ coordinator in a DSH
-     * workspace, started at once, whose threads work there too.
-     * @returns {id, coordinator}.
-     */
-    async createProject(name, workspaceId) {
-        const clean = this.projectName(name);
-        const ws = this.workspace(workspaceId);
-        if (!ws) throw new ProjectError(typeof workspaceId === 'string' && workspaceId !== '' ? 'DSH has no such workspace' : 'a project needs a workspace to work in');
-        const id = this.makeProject(clean, 'page', { home: ws.id });
-        const coordinator = await this.ensureCoordinator(id, { create: true });
-        if (!coordinator) throw new ProjectError(`◆ ${clean} was made, but its coordinator could not start; open the Projects page to try again`);
-        return { id, coordinator };
-    }
-
-    /** Rename a project made on the Projects page or imported; its coordinator, if any, follows. */
-    async renameProject(projectId, name) {
-        this.project(projectId);
-        if (this.fromProfile(projectId)) throw new ProjectError('this project\'s name is set in your profile, so rename it there');
-        const clean = this.projectName(name);
-        const stored = this.store.project(projectId);
-        const was = stored.name;
-        if (clean === was) return;
-        this.store.putProject(projectId, { name: clean });
-        this.log(`project-rename ${projectId}`);
-        const sessionId = stored.coordinatorSessionId;
-        if (!sessionId) return;
-        // The coordinator's title is "◆ <name>"; one the user renamed stays theirs.
-        if (await this.currentTitle(sessionId) === dshTitle(`◆ ${was}`)) await this.sc.rename({ sessionId, title: `◆ ${clean}` }).catch(() => {});
-    }
-
-    /**
-     * Delete a project made on the Projects page whose coordinator never
-     * started. Its workspace and chats stay in DSH. One with a coordinator
-     * keeps it: its threads would lose their project.
-     */
-    deleteProject(projectId) {
-        const project = this.project(projectId);
-        if (this.fromProfile(projectId)) throw new ProjectError('this project is set in your profile, so remove it there');
-        if (this.store.projects[projectId]?.coordinatorSessionId) throw new ProjectError(`◆ ${project.name} has a coordinator, so it can't be deleted here`);
-        this.store.removeProject(projectId);
-        this.projects.delete(projectId);
-        this.log(`project-delete ${projectId}`);
-    }
-
-    /**
-     * Start the coordinator of a project made on the Projects page that has
-     * none (it never started, or the user deleted it in DSH).
-     * @returns the coordinator's session id.
-     */
-    async startCoordinator(projectId) {
-        const project = this.project(projectId);
-        if (this.archived(projectId)) throw new ProjectError(ARCHIVED);
-        if (!this.fromProfile(projectId) && !this.homeOf(projectId)) throw new ProjectError(`DSH has no workspace for ${project.name}'s folder right now`);
-        const sessionId = await this.ensureCoordinator(projectId, { create: true });
-        if (!sessionId) throw new ProjectError('the coordinator could not start');
-        return sessionId;
-    }
-
-    // ── archive: a project leaves DSH's session list with its coordinator and threads ──
-
-    /** The project's sessions: its coordinator, then each thread's, resolved ones too. */
+    /** A coordinating chat's sessions: its own, then each thread's, resolved ones too. */
     projectSessions(projectId) {
         const stored = this.store.project(projectId);
         const ids = typeof stored.coordinatorSessionId === 'string' && stored.coordinatorSessionId !== '' ? [stored.coordinatorSessionId] : [];
@@ -4044,7 +3625,7 @@ export class ProjectManager {
         }
     }
 
-    /** Run one archive or restore of a project after any still running, across managers. */
+    /** Run one archive or restore of a coordinating chat after any still running, across managers. */
     archiveStep(projectId, step) {
         const key = `${this.storeFile}#${projectId}`;
         const run = (archiving.get(key) ?? Promise.resolve()).then(step);
@@ -4055,13 +3636,13 @@ export class ProjectManager {
     }
 
     /**
-     * Archive a project with its coordinator and threads: whatever runs in
-     * them stops, and DSH archives each one, so they leave the session list
-     * and the Projects page together. Nothing is deleted. While archived the
-     * project starts no threads, and what a thread sends its coordinator
-     * waits; restoreProject brings them all back.
+     * Archive a coordinating chat with its threads: whatever runs in them
+     * stops, and DSH archives each one, so they leave the session list
+     * together. Nothing is deleted. While archived the chat starts no
+     * threads, and what a thread sends it waits; restoreProject brings them
+     * all back.
      * @param {object} [options]
-     * @param {'window'|'dsh'|'start'} [options.via] - the plugin's own action; DSH's own Archive on the ◆ row; or found so at a start.
+     * @param {'window'|'dsh'|'start'} [options.via] - the plugin's own action; DSH's own Archive on the chat's row; or found so at a start.
      * @returns {{archived: number, failed: number}} how many sessions DSH archived now, and how many it refused.
      */
     async archiveProject(projectId, { via = 'window' } = {}) {
@@ -4098,18 +3679,18 @@ export class ProjectManager {
             }
             this.store.putProject(projectId, { archived: { ...mark, sessions: [...done] } });
             this.log(`archive ${projectId} via=${via} sessions=${archived}${failed ? ` failed=${failed}` : ''}`);
-            if (failed > 0 && via === 'window') throw new ProjectError(`DSH didn't archive ${failed} of ◆ ${this.project(projectId).name}'s sessions; try again`);
+            if (failed > 0 && via === 'window') throw new ProjectError(`DSH didn't archive ${failed} of the sessions of "${this.project(projectId).name}"; try again`);
             return { archived, failed };
         });
     }
 
     /**
-     * Bring an archived project back with its coordinator and threads: DSH
-     * unarchives each one, and the coordinator gets what waited for it.
-     * Work that archiving stopped stays stopped.
+     * Bring an archived coordinating chat back with its threads: DSH
+     * unarchives each one, and the chat gets what waited for it. Work that
+     * archiving stopped stays stopped.
      * @param {object} [options]
      * @param {'window'|'dsh'|'start'} [options.via] - as for archiveProject.
-     * @param {boolean} [options.resume] - bring the coordinator up now (false at a start, which does that next).
+     * @param {boolean} [options.resume] - bring the chat up now (false at a start, which does that next).
      * @returns {{restored: number}} how many sessions DSH unarchived now.
      */
     async restoreProject(projectId, { via = 'window', resume = true } = {}) {
@@ -4137,19 +3718,19 @@ export class ProjectManager {
     }
 
     /**
-     * At a start, what changed while the plugin was off: a ◆ coordinator
-     * DSH archived takes its project's threads with it; an archived
-     * project whose coordinator DSH unarchived comes back with its threads,
-     * as when either happens while the plugin runs (onWorkspaceState); and
-     * an archived project with sessions DSH never archived (it refused, or
-     * the project was archived by hand in the file) has them archived now.
-     * A thread the user unarchived on its own stays as they left it.
+     * At a start, what changed while the plugin was off: a coordinating chat
+     * DSH archived takes its threads with it; an archived one DSH unarchived
+     * comes back with its threads, as when either happens while the plugin
+     * runs (onWorkspaceState); and an archived one with sessions DSH never
+     * archived (it refused, or it was archived by hand in the file) has them
+     * archived now. A thread the user unarchived on its own stays as they
+     * left it.
      *
-     * Only a change counts: a coordinator DSH already had archived when the
-     * plugin last looked, or before it ever looked (the first start of this
+     * Only a change counts: a chat DSH already had archived when the plugin
+     * last looked, or before it ever looked (the first start of this
      * version, or a DSH home copied from another), or one DSH doesn't know,
-     * archives nothing. Only the project's own mark, or DSH archiving a
-     * coordinator it knows while the plugin was off, does.
+     * archives nothing. Only the chat's own mark, or DSH archiving a chat it
+     * knows while the plugin was off, does.
      */
     async matchArchive() {
         const archived = this.archivedNow();
@@ -4181,16 +3762,15 @@ export class ProjectManager {
     }
 
     /**
-     * Whether a project's coordinator was archived in DSH when the plugin
-     * last looked: true or false, or undefined when it never looked at this
-     * coordinator.
+     * Whether a coordinating chat was archived in DSH when the plugin last
+     * looked: true or false, or undefined when it never looked at this one.
      */
     seenArchived(projectId, coordinator) {
         const seen = this.store.projects[projectId]?.dshArchive;
         return seen?.coordinator === coordinator ? seen.archived === true : undefined;
     }
 
-    /** Keep whether DSH has a project's coordinator archived now, for the next start to compare with. */
+    /** Keep whether DSH has a coordinating chat archived now, for the next start to compare with. */
     seeArchive(projectId, coordinator, archived = this.archivedNow().has(coordinator)) {
         const seen = this.store.projects[projectId]?.dshArchive;
         if (seen?.coordinator === coordinator && seen.archived === archived) return;
@@ -4199,10 +3779,10 @@ export class ProjectManager {
 
     /**
      * DSH's archive set changed (its domain/changed event for the workspace
-     * registry). A ◆ coordinator archived there, from its row's Archive or
-     * the shortcut, takes its project's threads with it; unarchived there,
-     * from its row or the Undo on DSH's notice, it brings them back. A
-     * project whose own archive or restore is running is left to it.
+     * registry). A coordinating chat archived there, from its row's Archive
+     * or the shortcut, takes its threads with it; unarchived there, from its
+     * row or the Undo on DSH's notice, it brings them back. A chat whose own
+     * archive or restore is running is left to it.
      */
     onWorkspaceState(change) {
         if (this.disposed || change?.domain !== 'workspace' || change.table !== '' || change.operation !== 'put') return;
@@ -4227,10 +3807,10 @@ export class ProjectManager {
     }
 
     /**
-     * What DSH's own Archive on a ◆ row stops besides the coordinator's own
-     * work: its project's threads that are running now, which go with it.
+     * What DSH's own Archive on a coordinating chat's row stops besides the
+     * chat's own work: its threads that are running now, which go with it.
      * DSH asks before stopping them and names them. Undefined when there are
-     * none, or the session is no running project's coordinator.
+     * none, or the session coordinates no threads.
      * @returns {{kind: string, items: {id: string, label: string}[]}|undefined}
      */
     archiveActivity(sessionId) {
@@ -4242,21 +3822,21 @@ export class ProjectManager {
             const items = rosterIds(stored.threads)
                 .filter((id) => !archived.has(stored.threads[id].sessionId) && this.ctx.agents.get(stored.threads[id].sessionId)?.status === 'running')
                 .map((id) => ({ id: stored.threads[id].sessionId, label: stored.threads[id].title || id }));
-            return items.length > 0 ? { kind: 'project threads', items } : undefined;
+            return items.length > 0 ? { kind: 'threads', items } : undefined;
         } catch {
             return undefined;
         }
     }
 
-    // ── the Project settings dialog (remote.js) ────────────────────────────
+    // ── the Thread settings dialog (remote.js) ─────────────────────────────
 
-    /** The project a window call names: a project id, or the id of one of its sessions. */
+    /** The coordinating chat a window call names: its session id, or the id of one of its threads. */
     projectFor(target) {
         const value = typeof target === 'string' ? target.trim() : '';
         if (this.projects.has(value)) return value;
         const who = value ? this.store.lookup(value) : null;
         if (who && this.projects.has(who.projectId)) return who.projectId;
-        throw new ProjectError(value ? `"${value.slice(0, 80)}" is not a project here, nor one of its sessions` : 'no project given');
+        throw new ProjectError(value ? `"${value.slice(0, 80)}" doesn't coordinate threads, nor is it one of their threads` : 'no chat given');
     }
 
     /**
@@ -4276,19 +3856,19 @@ export class ProjectManager {
     }
 
     /**
-     * A project as its Project settings dialog shows it: each of the four
-     * settings and the three access settings with its source and what it
-     * falls back to without the project's own, pause (with how many messages
-     * it holds and whose handbacks), and every thread with its model, its
-     * permission and the user's tools it has.
+     * A coordinating chat as its Thread settings dialog shows it: the
+     * thread model and effort and the access settings, each with its source
+     * and what it falls back to without the chat's own, pause (with how many
+     * messages it holds and whose handbacks), and every thread with its
+     * model, its permission and the user's tools it has.
      */
     describeProject(projectId) {
         const project = this.project(projectId);
         const stored = this.store.project(projectId);
         const settings = this.settings(projectId);
-        const inherited = effectiveSettings(pluginDefaults(this.config), project, {});
+        const inherited = effectiveSettings(pluginDefaults(this.config), {});
         const access = this.access(projectId);
-        const inheritedAccess = effectiveAccess(pluginDefaults(this.config), project, {});
+        const inheritedAccess = effectiveAccess(pluginDefaults(this.config), {});
         const own = typeof stored.settings.paused === 'boolean';
         const toolsOf = (who) => {
             const tools = this.toolsFor(who);
@@ -4298,16 +3878,12 @@ export class ProjectManager {
             project: {
                 id: projectId,
                 name: project.name,
-                source: project.source,
                 workspace: project.workspacePath ?? null,
                 // The window's first asks stay out of the rest of the user's home folder.
                 homeFolder: isHome(project.workspacePath),
                 coordinator: stored.coordinatorSessionId ?? null,
                 archived: this.archived(projectId),
-                live: this.liveSelection(stored.coordinatorSessionId) ?? null,
-                // Its permission preset now, while DSH has it loaded; and the user's tools it has.
-                permission: this.permissionOf(stored.coordinatorSessionId) ?? null,
-                tools: toolsOf({ projectId, role: 'coordinator' }),
+                off: stored.off === true,
             },
             settings: Object.fromEntries(SETTING_KEYS.map((key) => [key, { ...settings[key], inherited: inherited[key] }])),
             access: Object.fromEntries(ACCESS_KEYS.map((key) => [key, { ...access[key], inherited: inheritedAccess[key] }])),
@@ -4315,16 +3891,8 @@ export class ProjectManager {
             guarded: this.guards().map(([name]) => name),
             permissions: this.permissionCatalog(),
             paused: {
-                value: this.paused(projectId), source: own ? 'project setting' : 'project config', inherited: project.paused === true,
+                value: this.paused(projectId), source: own ? 'chat setting' : 'plugin default', inherited: false,
                 held: stored.pendingHandbacks.length, handbacks: heldHandbacks(stored.pendingHandbacks),
-            },
-            // The goal, where it comes from, the profile row's under it, and the user's tools it names (every thread has those).
-            goal: {
-                value: this.goalOf(projectId),
-                source: typeof stored.settings.goal === 'string' ? 'project setting' : typeof project.goal === 'string' && project.goal.trim() !== '' ? 'project config' : 'none',
-                inherited: typeof project.goal === 'string' ? project.goal.trim() : '',
-                tools: this.goalTools(projectId),
-                max: GOAL_CHARS,
             },
             threads: rosterIds(stored.threads).map((id) => {
                 const t = stored.threads[id];
@@ -4341,15 +3909,14 @@ export class ProjectManager {
     }
 
     /**
-     * Every project as the plugin's page lists it: the four settings and the
-     * access settings with their sources, what the coordinator runs on right
-     * now (model and permission), pause, and how many threads are open.
+     * Every coordinating chat as the plugin's page lists it: the thread
+     * settings and access settings with their sources, pause, whether it
+     * stopped coordinating, and how many threads are open. In DSH's
+     * workspace order, then oldest first.
      */
     listProjects() {
-        // The order of the Projects page: DSH's workspace order of each project's home, then the profile's order, then
-        // the projects made in the window, in their stored order.
         const workspaceAt = new Map(this.workspaceList().map((ws, i) => [ws.id, i]));
-        const listed = [...this.projects.keys()].map((projectId, index) => {
+        const listed = [...this.projects.keys()].map((projectId) => {
             const project = this.project(projectId);
             const stored = this.store.project(projectId);
             const settings = this.settings(projectId);
@@ -4360,40 +3927,34 @@ export class ProjectManager {
             return {
                 id: projectId,
                 name: project.name,
-                source: project.source,
                 workspace: project.workspacePath ?? null,
                 home: home?.id ?? null,
-                workspaces: home ? [{ id: home.id, path: home.path, title: home.title }] : [],
                 coordinator: stored.coordinatorSessionId ?? null,
-                live: this.liveSelection(stored.coordinatorSessionId) ?? null,
-                permission: this.permissionOf(stored.coordinatorSessionId) ?? null,
                 paused: this.paused(projectId),
                 archived: this.archived(projectId),
+                off: stored.off === true,
                 settings: Object.fromEntries(SETTING_KEYS.map((key) => [key, { value: settings[key].value ?? null, source: settings[key].source }])),
                 access: Object.fromEntries(ACCESS_KEYS.map((key) => [key, { value: access[key].value, source: access[key].source }])),
                 threads: { open, resolved: ids.length - open },
-                order: [
-                    home && workspaceAt.has(home.id) ? workspaceAt.get(home.id) : workspaceAt.size,
-                    this.fromProfile(projectId) ? index : 10000 + (Number.isFinite(stored.order) ? stored.order : index),
-                ],
+                order: [home && workspaceAt.has(home.id) ? workspaceAt.get(home.id) : workspaceAt.size, String(stored.createdAt ?? '')],
             };
         });
-        const by = (a, b) => a.order[0] - b.order[0] || a.order[1] - b.order[1];
+        const by = (a, b) => a.order[0] - b.order[0] || (a.order[1] < b.order[1] ? -1 : a.order[1] > b.order[1] ? 1 : 0);
         return listed.sort(by).map(({ order, ...project }) => project);
     }
 
     /**
-     * A change from the window: from the Project settings dialog, the
-     * project's settings or one thread's model, effort and permission (null
-     * puts a value back to its default); from a thread row's ⋯, the thread
-     * renamed, stopped, resolved or reopened as the user's own (updateThread).
-     * @param {object} changes - {coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?, goal?, yourTools?,
-     *   coordinatorPermission?, threadPermission?} or {thread, model?, effort?, permission?, title?, resolved?, stop?}.
-     * @returns the project as describeProject shows it, with `notes` from the change.
+     * A change from the window: from the Thread settings dialog, the chat's
+     * settings or one thread's model, effort and permission (null puts a
+     * value back to its default); from a thread row's ⋯, the thread renamed,
+     * stopped, resolved or reopened as the user's own (updateThread).
+     * @param {object} changes - {threadModel?, threadEffort?, paused?, yourTools?, threadPermission?}
+     *   or {thread, model?, effort?, permission?, title?, resolved?, stop?}.
+     * @returns the chat as describeProject shows it, with `notes` from the change.
      */
     async changeFromWindow(projectId, changes) {
         const text = (value) => (value === null ? 'default' : typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined);
-        // An access value: a word, or null to clear the project's own.
+        // An access value: a word, or null to clear the chat's own.
         const word = (value) => (value === null ? null : typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined);
         let notes = [];
         if (changes.thread !== undefined) {
@@ -4412,32 +3973,29 @@ export class ProjectManager {
         } else {
             const access = this.changeAccess(projectId, {
                 yourTools: word(changes.yourTools),
-                coordinatorPermission: word(changes.coordinatorPermission),
                 threadPermission: word(changes.threadPermission),
             });
             ({ notes } = await this.changeSettings(projectId, {
-                coordinatorModel: text(changes.coordinatorModel),
-                coordinatorEffort: text(changes.coordinatorEffort),
                 threadModel: text(changes.threadModel),
                 threadEffort: text(changes.threadEffort),
                 paused: changes.paused === null || typeof changes.paused === 'boolean' ? changes.paused : undefined,
-                goal: changes.goal === null || typeof changes.goal === 'string' ? changes.goal : undefined,
             }));
             notes = [...access, ...notes];
         }
         return { ...this.describeProject(projectId), notes };
     }
 
+    /** A coordinating chat's shared notes: one file per chat, named by its session id. */
     memoryPath(projectId) {
-        const project = this.project(projectId);
-        return project.memoryFile ? dataPath(project.memoryFile) : `${dataPath(this.config.memoryDir)}/${projectId}.md`;
+        this.project(projectId);
+        return `${dataPath(this.config.memoryDir)}/${projectId}.md`;
     }
 
     memory(projectId, action, text) {
         const path = this.memoryPath(projectId);
         if (action === 'read') {
             const body = this.readMemory(projectId);
-            return body.trim() ? body : '(project memory is empty)';
+            return body.trim() ? body : '(the shared notes are empty)';
         }
         if (action !== 'append' && action !== 'replace') throw new ProjectError('action must be read, append or replace');
         const add = String(text ?? '').trim();
@@ -4445,12 +4003,12 @@ export class ProjectManager {
         if (!add) throw new ProjectError('text is required');
         const body = action === 'append' ? `${this.readMemory(projectId).replace(/\s*$/, '')}\n${add}\n`.replace(/^\n/, '') : `${add}\n`;
         if (Buffer.byteLength(body) > this.config.maxMemoryBytes) {
-            throw new ProjectError(`memory would exceed ${this.config.maxMemoryBytes} bytes; summarize it with action "replace"`);
+            throw new ProjectError(`the notes would exceed ${this.config.maxMemoryBytes} bytes; summarize them with action "replace"`);
         }
         ensurePrivateDir(dirname(path));
         writeFileSync(path, body, { mode: 0o600 });
         this.log(`memory ${projectId} ${action} bytes=${statSync(path).size}`);
-        return `Project memory ${action === 'append' ? 'appended' : 'replaced'} (${Buffer.byteLength(body)} bytes).`;
+        return `Shared notes ${action === 'append' ? 'appended' : 'replaced'} (${Buffer.byteLength(body)} bytes).`;
     }
 
     /**
