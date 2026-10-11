@@ -53,7 +53,7 @@ import {
     handbackMessage, idleMessage, approvalMessage, welcomeMessage, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS, STOPPED_BY_USER,
     outsideMessage, replyMessage,
 } from './prompts.js';
-import { META_MARK, MAX_THREADS } from './projection.js';
+import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
 import { changeRecord, changeTotals, withChange } from './changes.js';
 import { planFleetShellImport } from './fleet-shell.js';
 import { planCategories } from './categories.js';
@@ -108,6 +108,9 @@ export const timing = { retryMs: 60000, maxRetryMs: 15 * 60000 };
 const HANDBACK_SENT = 'Handback delivered to the coordinator.';
 const HANDBACK_HELD = 'Handback saved; the coordinator gets it when the project resumes.';
 const HANDBACK_RETRY = 'Handback saved; the coordinator could not take it just now, and it is sent again automatically.';
+
+/** A stored project's name, trimmed; '' when the store holds none. */
+const storedName = (stored) => (typeof stored?.name === 'string' ? stored.name.trim() : '');
 
 /**
  * Lower-kebab id from a project name. Letters in any script are kept
@@ -408,14 +411,17 @@ export class ProjectManager {
      */
     addStored(projectId) {
         const stored = this.store.projects[projectId];
-        if (typeof stored?.name !== 'string' || stored.name.trim() === '' || this.projects.has(projectId)) return;
+        if (stored === null || typeof stored !== 'object' || this.projects.has(projectId)) return;
         if (typeof stored.home !== 'string' && typeof stored.coordinatorSessionId !== 'string') return;
+        // One with no name in the store (a profile row since removed) still has its coordinator and threads to keep
+        // together; its coordinator's title names it (nameNameless).
+        if (storedName(stored) === '' && typeof stored.coordinatorSessionId !== 'string') return;
         const manager = this;
         this.projects.set(projectId, {
             id: projectId,
             goal: '',
             source: stored.source === 'import' ? 'import' : 'page',
-            get name() { return manager.store.projects[projectId]?.name ?? projectId; },
+            get name() { return storedName(manager.store.projects[projectId]) || projectId; },
             get workspacePath() { return manager.homeOf(projectId)?.path; },
         });
     }
@@ -1059,6 +1065,10 @@ export class ProjectManager {
      */
     async start() {
         for (const agent of this.ctx.agents.list?.() ?? []) this.maybeInstall(agent);
+        await this.nameNameless();
+        if (this.disposed) return;
+        await this.refreshRecords();
+        if (this.disposed) return;
         for (const id of this.projects.keys()) await this.noteHome(id);
         if (this.disposed) return;
         await this.importFleetShell();
@@ -1100,6 +1110,99 @@ export class ProjectManager {
         for (const sessionId of [...this.approvals.keys()]) this.clearApprovals(sessionId);
         for (const { timer } of this.retries.values()) clearTimeout(timer);
         this.retries.clear();
+    }
+
+    /** DSH's session list: [{sessionId, projections: {values}}, …]; [] when it can't be read. */
+    async listed() {
+        try {
+            const { items } = await this.sc.list({}, AbortSignal.timeout(20000));
+            return Array.isArray(items) ? items : [];
+        } catch (error) {
+            this.log(`error list ${String(error?.message ?? error).slice(0, 200)}`);
+            return [];
+        }
+    }
+
+    /**
+     * A project the store holds no name for (one from a profile row since
+     * removed) takes its coordinator's title, "◆ DSH Plugins", once; until
+     * then, and when the title says nothing more, it goes by its id. Never
+     * an empty name, so never a bare "◆ ".
+     */
+    async nameNameless() {
+        const nameless = [...this.projects.keys()].filter((id) => !this.fromProfile(id) && storedName(this.store.projects[id]) === ''
+            && typeof this.store.projects[id]?.coordinatorSessionId === 'string');
+        if (nameless.length === 0) return;
+        const titles = new Map((await this.listed()).map((item) => [item?.sessionId, item?.projections?.values?.title]));
+        for (const projectId of nameless) {
+            if (this.disposed) return;
+            const sessionId = this.store.projects[projectId].coordinatorSessionId;
+            let title = titles.get(sessionId);
+            if (typeof title !== 'string') title = await this.sessionTitle(sessionId).catch(() => undefined);
+            const name = typeof title === 'string' && title.startsWith('◆ ') ? clipTitle(title.slice(2)) : '';
+            if (name === '') continue;
+            this.store.putProject(projectId, { name });
+            this.log(`name ${projectId} from its coordinator`);
+        }
+    }
+
+    /**
+     * Every session the store knows for a running project, for the session
+     * list while DSH has no value of this plugin's projection for it.
+     * @returns {Record<string, {role: 'coordinator'|'thread', project: string, name: string, thread?: string, coordinator?: string}>}
+     */
+    knownSessions() {
+        const out = {};
+        for (const projectId of this.projects.keys()) {
+            const stored = this.store.project(projectId);
+            const coordinator = typeof stored.coordinatorSessionId === 'string' && stored.coordinatorSessionId !== '' ? stored.coordinatorSessionId : undefined;
+            const name = this.project(projectId).name;
+            if (coordinator) out[coordinator] = { role: 'coordinator', project: projectId, name };
+            for (const [threadId, t] of Object.entries(stored.threads ?? {})) {
+                if (typeof t?.sessionId !== 'string' || t.sessionId === '' || out[t.sessionId]) continue;
+                out[t.sessionId] = { role: 'thread', project: projectId, name, thread: threadId, ...(coordinator ? { coordinator } : {}) };
+            }
+        }
+        return out;
+    }
+
+    /**
+     * DSH keeps each session's value of this plugin's projection from the
+     * version of the plugin that last folded it, and drops a value from
+     * another version when it lists the session, until that session is next
+     * loaded. So after an update a thread nobody opened since showed flat in
+     * the session list, with no mark. Once per start, every project session
+     * DSH lists without a value is read again from its log, starting from
+     * the store's view (the projection's init), and DSH saves the result as
+     * it saves any cold read. Sessions DSH has loaded fold as they run.
+     */
+    async refreshRecords() {
+        let cache;
+        try { cache = this.ctx.get?.('sessionProjectionCache'); } catch { cache = undefined; }
+        if (typeof cache?.coldSnapshot !== 'function') return;
+        const known = Object.keys(this.knownSessions());
+        if (known.length === 0) return;
+        const items = new Map((await this.listed()).map((item) => [item?.sessionId, item]));
+        const loaded = (id) => {
+            try { return this.ctx.get?.('sessions')?.get?.(id) !== undefined; } catch { return false; }
+        };
+        let refreshed = 0;
+        for (const sessionId of known) {
+            if (this.disposed) return;
+            const item = items.get(sessionId);
+            if (!item || loaded(sessionId)) continue;
+            const value = item.projections?.values?.[PROJECTION_KEY];
+            if (value !== null && typeof value === 'object' && (value.role === 'coordinator' || value.role === 'thread')) continue;
+            try {
+                const { meta, inheritedEventCount, events } = await this.sc.inspect(sessionId, AbortSignal.timeout(20000));
+                if (loaded(sessionId)) continue;
+                cache.coldSnapshot(meta, inheritedEventCount ?? 0, Array.isArray(events) ? events : []);
+                refreshed += 1;
+            } catch (error) {
+                this.log(`error record ${sessionId} ${String(error?.message ?? error).slice(0, 200)}`);
+            }
+        }
+        if (refreshed > 0) this.log(`records refreshed=${refreshed}`);
     }
 
     /**

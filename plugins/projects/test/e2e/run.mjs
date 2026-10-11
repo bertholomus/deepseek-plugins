@@ -36,6 +36,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Script } from 'node:vm';
 import { startFakeModel } from './fake-model.mjs';
+import { STATE_VERSION } from '../../lib/projection.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pluginsDir = resolve(here, '../../..');
@@ -334,6 +335,31 @@ function windowView(sessionId) {
     } catch {
         return null;
     }
+}
+
+/** A session's saved `projectSession` row's state version, or null. */
+function savedVersion(sessionId) {
+    try {
+        return JSON.parse(readFileSync(join(home, 'storages', 'session_projcache', 'sessions', `${sessionId}.json`), 'utf8'))?.record?.rows?.projectSession?.ver ?? null;
+    } catch {
+        return null;
+    }
+}
+
+/** Give sessions' saved `projectSession` rows an older state version, as an older version of the plugin left them (DSH stopped). */
+function ageViews(ids, ver) {
+    const aged = [];
+    for (const id of ids) {
+        const file = join(home, 'storages', 'session_projcache', 'sessions', `${id}.json`);
+        try {
+            const doc = JSON.parse(readFileSync(file, 'utf8'));
+            if (!doc?.record?.rows?.projectSession) continue;
+            doc.record.rows.projectSession.ver = ver;
+            writeFileSync(file, JSON.stringify(doc));
+            aged.push(id);
+        } catch {}
+    }
+    return aged;
 }
 
 /** Wait for the coordinator to answer an automatic message, then for it to be idle. */
@@ -755,8 +781,14 @@ try {
     }, null, 2)}\n`);
     const oldText = readText(oldFile);
     await stopDsh(child);
+    // (25) Views saved by an older version of the plugin, which DSH drops until the session is next loaded.
+    const agedViews = ageViews([coord, threadSession('t1')], STATE_VERSION - 1);
     child = startDsh(dsh);
     await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge after the second restart', 90000);
+    const viewsBack = await waitFor(() => agedViews.length === 2 && agedViews.every((id) => savedVersion(id) === STATE_VERSION), 'the old views read again', 30000).catch(() => false);
+    check('views an older version of the plugin saved are read again at start, from the store', viewsBack && /records refreshed=2\b/.test(readText(logFile))
+        && windowView(threadSession('t1'))?.role === 'thread' && windowView(threadSession('t1'))?.coordinator === coord && windowView(coord)?.role === 'coordinator',
+        `${agedViews.length} aged; ${agedViews.map((id) => savedVersion(id)).join(',')}; ${(/records refreshed=\d+/.exec(readText(logFile)) ?? ['no refresh'])[0]}`);
     await waitFor(() => signIns() > signInsBefore, 'the new web sign-in link', 30000);
     const webAgain = await signInWeb();
     lc = await waitFor(() => changesOf(webAgain), 'the project after the second restart', 30000).catch(() => undefined);
