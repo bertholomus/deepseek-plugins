@@ -4971,8 +4971,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * DSH's session list, as the plugin keeps it: each project's threads
          * nest under its coordinator (useNesting), and DSH's own drags of
          * session rows keep a thread in its project and a chat out of one
-         * (useSessionDragGuard), each refusal said in a toast over the list.
-         * DSH's rows, its order, its view options and its search stay its own.
+         * (useSessionDragGuard), each refusal said in DSH's banner at the top
+         * of the window. Not centered over the list: the list is narrower than
+         * any of the reasons, and DSH's banner doesn't keep to the window, so
+         * it would cut off the start of the sentence. DSH's rows, its order,
+         * its view options and its search stay its own.
          */
         function SessionList({ useWorkspaces = noWorkspaces }) {
             const pinnedIds = useWorkspaces((state) => state.pinnedSessionIds);
@@ -4986,7 +4989,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             useSessionDragGuard(tree, read);
             if (tree === null || toast === null || typeof document === 'undefined') return null;
             return h(ui.Toast, {
-                key: toast.seq, text: toast.text, icon: h(ui.IconInfoOutlineRegular, { size: 16 }), anchor: tree, holdMs: 4000,
+                key: toast.seq, text: toast.text, icon: h(ui.IconInfoOutlineRegular, { size: 16 }), holdMs: 4000,
                 onDone: () => setToast((prev) => (prev?.seq === toast.seq ? null : prev)),
             });
         }
