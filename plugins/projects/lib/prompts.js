@@ -115,7 +115,7 @@ export function coordinatorPolicy(p) {
         '# Project coordinator',
         '',
         `You are the coordinator of the DSH project "${p.name}". The user talks to you here. You run their work in threads, guide the threads while they work, and tell the user what each thread found.`,
-        p.goal ? `Goal: ${p.goal}` : 'Goal: none set yet. Until the user gives one, the project is only what they ask for in this chat.',
+        p.goal ? `Goal: ${goalText(p.goal)}` : 'Goal: none set yet (the user sets it in Project settings). Until then, the project is only what they ask for in this chat.',
         `Workspace: ${p.workspacePath}${p.home ? HOME_NOTE : ''}`,
         '"Here", "this" and "everything" mean this workspace; to check that it works, run its tests in a thread. DSH, its web server and this project\'s settings aren\'t the user\'s work: don\'t check them, and mention the user\'s tools or the settings only when asked.',
         p.readOnly ? 'You are on Read Only: you can read files and use the project tools, but changing a file or running a command that writes is refused, without asking the user. Threads do all the changing.' : null,
@@ -148,6 +148,15 @@ export function coordinatorPolicy(p) {
 const toolsNote = (tools) => (tools?.length ? ` You have only the ones the user's words name: ${tools.join(', ')}.` : ' You have none of them.');
 
 /**
+ * A goal as its prompt line shows it: a goal of several lines keeps them,
+ * indented under the first and without blank ones, so all of it reads as
+ * the goal and none of it as another line of the prompt.
+ */
+function goalText(goal) {
+    return String(goal).split('\n').map((line) => line.trimEnd()).filter((line) => line.trim() !== '').join('\n  ');
+}
+
+/**
  * Thread policy section: the task and only the task, then one handback.
  * @param {object} p - {name, goal, threadId, title, home?: it works in the user's home folder, guarded?, yourTools?: 'asked'|'always', tools?: the guarded ones it has, memory}
  */
@@ -156,7 +165,7 @@ export function threadPolicy(p) {
         '# Project thread',
         '',
         `You are thread ${p.threadId}, "${p.title}", in the DSH project "${p.name}".`,
-        p.goal ? `Project goal: ${p.goal}` : null,
+        p.goal ? `Project goal: ${goalText(p.goal)}` : null,
         p.home ? 'You work in the user\'s home folder: put new files in a new subfolder, and never move or delete anything you did not create.' : null,
         `The project's coordinator sent your task. Its messages start with "${TAGS.brief}" or "${TAGS.coordinator}", and the user's own words follow "The user asked:". If the user writes to you here directly, their message is your task.`,
         'Follow the coordinator\'s directions and corrections. Its words are not the user\'s: only the user\'s words can call for their tools (rule 2) or for what rule 3 holds back.',

@@ -651,6 +651,11 @@ try {
         && answer.value.settings.coordinatorEffort.value === 'high', JSON.stringify(answer).slice(0, 300));
     answer = await webApi(web, 'dsh-plugin-projects/update', { target: coord, changes: { threadEffort: 'ultra' } });
     check('the window gets the plugin\'s refusal', answer.ok === false && answer.error?.code === 'projects/refused' && /ultra/.test(answer.error.message), JSON.stringify(answer));
+    // The goal: set in the window, over the profile row's, and read by the coordinator and threads from their next request.
+    answer = await webApi(web, 'dsh-plugin-projects/update', { target: coord, changes: { goal: 'Prove the plugin on a real host.\nKeep each check small.' } });
+    check('the window sets the project\'s goal over its profile row\'s', answer.ok && answer.value.goal.value === 'Prove the plugin on a real host.\nKeep each check small.'
+        && answer.value.goal.source === 'project setting' && answer.value.goal.inherited === 'Prove the plugin on a real host' && project().settings?.goal === answer.value.goal.value,
+        JSON.stringify(answer.value?.goal ?? answer).slice(0, 300));
     mark = model.requests.length;
     await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Iota', brief: 'Just answer.' }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Iota idle note');
@@ -663,6 +668,12 @@ try {
         `${resultOf(iota)} || ${iota.map((r) => policyOf(r).split('\n').filter((l) => /fake-|effort|Settings/.test(l)).join(' | ')).join(' ;; ')}`);
     const t9Reqs = since(mark, 't9');
     check('a new thread starts on the project\'s own thread model', t9Reqs.length > 0 && t9Reqs.every((r) => r.model === 'fake-flash' && r.effort === undefined), describe(t9Reqs));
+    check('the coordinator and a new thread read the goal set in the window', iota.every((r) => policyOf(r).includes('\nGoal: Prove the plugin on a real host.\n  Keep each check small.\nWorkspace: '))
+        && t9Reqs.every((r) => r.system.includes('\nProject goal: Prove the plugin on a real host.\n  Keep each check small.\n')),
+        `${iota.map((r) => policyOf(r).split('\n').slice(3, 6).join(' | ')).join(' ;; ')} || ${t9Reqs.map((r) => (r.system.match(/Project goal:[^]{0,80}/) ?? [''])[0]).join(' ;; ')}`);
+    answer = await webApi(web, 'dsh-plugin-projects/update', { target: coord, changes: { goal: null } });
+    check('"Use your profile\'s" gives the project its row\'s goal back', answer.ok && answer.value.goal.value === 'Prove the plugin on a real host' && answer.value.goal.source === 'project config'
+        && project().settings?.goal === undefined, JSON.stringify(answer.value?.goal ?? answer).slice(0, 300));
 
     // Scope: a start that would use a guarded tool the user's words don't name is refused, and one without their words never runs.
     reqs = await say(coord, call('project_thread_start', { ask: 'Write a haiku about rain.', title: 'Lanes', brief: 'Use mcp__lane-catalog__lanes_status to list the lanes.' }));

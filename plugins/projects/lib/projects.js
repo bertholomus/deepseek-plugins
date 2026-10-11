@@ -63,6 +63,8 @@ const SECTION_ORDER = 9500;
 const HOUR = 60 * 60 * 1000;
 /** DSH keeps a session title to 80 bytes of UTF-8 (`maxTitleBytes` in its base profile) and cuts anything longer. */
 const TITLE_BYTES = 80;
+/** The longest goal the user can set in Project settings: it goes into every request of the project's sessions. */
+const GOAL_CHARS = 2000;
 
 /**
  * A thread's one title, used for its session and everywhere the plugin names it. It fits DSH's session-title
@@ -771,7 +773,7 @@ export class ProjectManager {
         if (who.role !== 'thread') return new Set();
         const guard = this.guards();
         const known = new Set(guard.map(([name]) => name));
-        const names = new Set(guardedIn(this.project(who.projectId).goal ?? '', guard, { aliases: true }));
+        const names = new Set(guardedIn(this.goalOf(who.projectId), guard, { aliases: true }));
         const t = this.store.thread(who.projectId, who.threadId);
         for (const name of Array.isArray(t?.tools) ? t.tools : []) if (known.has(name)) names.add(name);
         return names;
@@ -939,7 +941,7 @@ export class ProjectManager {
         if (guard.length === 0 || !ask) return [];
         const named = guardedIn(ask, guard, { aliases: true });
         if (named.length === 0) return [];
-        const said = new Set(guardedIn(`${this.project(projectId).goal ?? ''}\n${await this.userText(projectId)}`, guard, { aliases: true }));
+        const said = new Set(guardedIn(`${this.goalOf(projectId)}\n${await this.userText(projectId)}`, guard, { aliases: true }));
         const unsaid = named.filter((name) => !said.has(name));
         if (unsaid.length > 0) {
             this.log(`guard ${projectId} ask-unsaid ${unsaid.join(',')}`);
@@ -1156,6 +1158,18 @@ export class ProjectManager {
     paused(projectId) {
         const override = this.store.project(projectId).settings.paused;
         return typeof override === 'boolean' ? override : this.project(projectId).paused === true;
+    }
+
+    /**
+     * What the project is for, as the coordinator's and threads' prompts
+     * read it: the goal the user set in Project settings, else the profile
+     * row's, else none (''). It counts as the user's own words.
+     */
+    goalOf(projectId) {
+        const own = this.store.project(projectId).settings.goal;
+        if (typeof own === 'string') return own;
+        const goal = this.project(projectId).goal;
+        return typeof goal === 'string' ? goal.trim() : '';
     }
 
     liveStatus(sessionId) {
@@ -1546,7 +1560,7 @@ export class ProjectManager {
         }
         this.store.putProject(projectId, { welcomedSession: sessionId });
         const project = this.project(projectId);
-        const outcome = await this.deliver(projectId, welcomeMessage(project.name, project.goal?.trim()));
+        const outcome = await this.deliver(projectId, welcomeMessage(project.name, this.goalOf(projectId)));
         this.log(`welcome ${projectId} ${sessionId} ${outcome}`);
     }
 
@@ -1807,7 +1821,7 @@ export class ProjectManager {
         const project = this.project(projectId);
         return coordinatorPolicy({
             name: project.name,
-            goal: project.goal,
+            goal: this.goalOf(projectId),
             workspacePath: project.workspacePath,
             home: isHome(project.workspacePath),
             guarded: this.guards().map(([name]) => name),
@@ -1826,7 +1840,7 @@ export class ProjectManager {
         const tools = this.toolsFor({ projectId, role: 'thread', threadId });
         return threadPolicy({
             name: project.name,
-            goal: project.goal,
+            goal: this.goalOf(projectId),
             threadId,
             title: t?.title ?? threadId,
             home: isHome(t?.folder ?? project.workspacePath),
@@ -2471,7 +2485,7 @@ export class ProjectManager {
     guard(projectId, what, text, allowed) {
         const guard = this.guards();
         if (guard.length === 0) return;
-        const ok = new Set([...allowed, ...guardedIn(this.project(projectId).goal ?? '', guard, { aliases: true })]);
+        const ok = new Set([...allowed, ...guardedIn(this.goalOf(projectId), guard, { aliases: true })]);
         const blocked = guardedIn(text, guard).filter((name) => !ok.has(name));
         if (blocked.length === 0) return;
         this.log(`guard ${projectId} ${what} ${blocked.join(',')}`);
@@ -2899,7 +2913,8 @@ export class ProjectManager {
      * Change the project's own settings. A model or effort of "default"
      * clears it, so the project row or the plugin default applies again;
      * `paused: null` does the same for pause.
-     * @param {object} changes - coordinatorModel, coordinatorEffort, threadModel, threadEffort, paused.
+     * @param {object} changes - coordinatorModel, coordinatorEffort, threadModel, threadEffort, paused, and from
+     *   Project settings only, goal (null: the profile row's again).
      * @returns {Promise<{notes: string[], flushed: number}>}
      */
     async changeSettings(projectId, changes) {
@@ -2929,6 +2944,13 @@ export class ProjectManager {
         const wasPaused = this.paused(projectId);
         if (changes.paused === null) next.paused = undefined;
         else if (typeof changes.paused === 'boolean') next.paused = changes.paused;
+        // The goal: the user's own text (an empty one too), or null to use the profile row's again.
+        if (changes.goal === null) next.goal = undefined;
+        else if (typeof changes.goal === 'string') {
+            const goal = changes.goal.replace(/\r\n?/g, '\n').trim();
+            if (goal.length > GOAL_CHARS) throw new ProjectError(`a goal can be at most ${GOAL_CHARS} characters; this one has ${goal.length}`);
+            next.goal = goal;
+        }
         this.store.putSettings(projectId, next);
         // Every call also retries a coordinator selection that failed before.
         if (!await this.applyCoordinatorRoute(projectId)) {
@@ -2956,7 +2978,7 @@ export class ProjectManager {
         ].join('\n');
     }
 
-    /** The access settings as project_settings shows them; only the user changes them, in Project settings. */
+    /** The access settings as project_settings shows them; only the user changes them and the goal, in Project settings. */
     accessLines(projectId) {
         const a = this.access(projectId);
         const guarded = this.guards().map(([name]) => name);
@@ -2966,7 +2988,7 @@ export class ProjectManager {
             guarded.length === 0 ? null
                 : `The user's tools: ${a.yourTools.value === 'always' ? 'every session has them' : 'you don\'t have them; a thread has the ones the user\'s words for it name'}`,
             this.presets() ? `Permissions: coordinator ${permission(a.coordinatorPermission.value)}, new threads ${permission(a.threadPermission.value)}` : null,
-            'The user changes these in Project settings; project_settings can\'t.',
+            'The user changes these and the goal in Project settings; project_settings can\'t.',
         ].filter((line) => line !== null);
     }
 
@@ -3167,6 +3189,14 @@ export class ProjectManager {
                 value: this.paused(projectId), source: own ? 'project setting' : 'project config', inherited: project.paused === true,
                 held: stored.pendingHandbacks.length, handbacks: heldHandbacks(stored.pendingHandbacks),
             },
+            // The goal, where it comes from, the profile row's under it, and the user's tools it names (every thread has those).
+            goal: {
+                value: this.goalOf(projectId),
+                source: typeof stored.settings.goal === 'string' ? 'project setting' : typeof project.goal === 'string' && project.goal.trim() !== '' ? 'project config' : 'none',
+                inherited: typeof project.goal === 'string' ? project.goal.trim() : '',
+                tools: guardedIn(this.goalOf(projectId), this.guards(), { aliases: true }),
+                max: GOAL_CHARS,
+            },
             threads: rosterIds(stored.threads).map((id) => {
                 const t = stored.threads[id];
                 return {
@@ -3228,7 +3258,7 @@ export class ProjectManager {
      * A change from the Project settings dialog: the project's settings, or
      * one thread's model, effort and permission. null puts a value back to
      * its default.
-     * @param {object} changes - {coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?, yourTools?,
+     * @param {object} changes - {coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?, goal?, yourTools?,
      *   coordinatorPermission?, threadPermission?} or {thread, model?, effort?, permission?}.
      * @returns the project as describeProject shows it, with `notes` from the change.
      */
@@ -3255,6 +3285,7 @@ export class ProjectManager {
                 threadModel: text(changes.threadModel),
                 threadEffort: text(changes.threadEffort),
                 paused: changes.paused === null || typeof changes.paused === 'boolean' ? changes.paused : undefined,
+                goal: changes.goal === null || typeof changes.goal === 'string' ? changes.goal : undefined,
             }));
             notes = [...access, ...notes];
         }

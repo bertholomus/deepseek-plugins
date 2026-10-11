@@ -2,7 +2,8 @@
  * Durable project state. One JSON file, atomic writes, mode 600. Shape:
  *
  * { version: 1, projects: { [projectId]: {
- *     coordinatorSessionId, settings: { coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?, yourTools?, coordinatorPermission?, threadPermission? },
+ *     coordinatorSessionId, settings: { coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?, goal?: the user's, from
+ *       Project settings only, yourTools?, coordinatorPermission?, threadPermission? },
  *     nextThread, pendingHandbacks: [text | {text, from: thread session}], threadStarts: [ms], rowSeen?: { the project row's models, efforts and access last seen },
  *     welcomedSession?: the coordinator session that got (or never needed) its first-turn welcome,
  *     coordinatorRoute?, coordinatorAccess?: the model route and permission setting the coordinator last got,
@@ -35,8 +36,9 @@
  *
  * Settings here are the project's own: set in its Project settings dialog,
  * by picking a model in its coordinator's DSH model picker, or by the
- * coordinator with project_settings. They sit above the profile config;
- * deleting a key means "use default".
+ * coordinator with project_settings (never the goal or access, which only
+ * the user sets). They sit above the profile config; deleting a key means
+ * "use default".
  *
  * @module dsh-plugin-projects/store
  */

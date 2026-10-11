@@ -435,6 +435,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             `.dshp-ps-link:focus-visible{border-radius:3px;box-shadow:0 0 0 2px ${RING}}`,
             '.dshp-ps-link:disabled{cursor:default;opacity:.6}',
             '.dshp-ps-alert{flex:1 0 100%;margin:0;padding:6px 8px;border-radius:var(--dsw-radius-sm);font-size:12px;line-height:18px}',
+            // The goal: its text box takes the row's whole width, Save and Cancel under it while it is changed.
+            '.dshp-ps-goal{align-items:stretch}',
+            '.dshp-ps-goal>.dshp-ps-text{flex:1 0 100%}',
+            '.dshp-ps-goal-input{flex:1 0 100%;box-sizing:border-box;min-height:64px;padding:8px 10px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:none;font:inherit;font-size:13px;line-height:19px;color:var(--dsw-alias-label-primary);resize:vertical;outline:none}',
+            `.dshp-ps-goal-input:focus{outline:2px solid ${RING};outline-offset:-2px}`,
+            '.dshp-ps-goal-input::placeholder{color:var(--dsw-alias-label-secondary)}',
+            '.dshp-ps-goal>.dshp-ps-fit{flex:1 0 100%}',
+            '.dshp-ps-goal-actions{display:flex;flex:1 0 100%;justify-content:flex-end;gap:8px}',
             `.dshp-ps-alert.dshp-ps-error{background:var(--dsw-alias-interactive-bg-hover-danger,var(--dsw-alias-interactive-bg-hover));color:${ERROR_TEXT}}`,
             '.dshp-ps-alert.dshp-ps-info{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}',
             '.dshp-ps-empty{padding:16px 14px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
@@ -5735,6 +5743,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             project: 'Project',
             noThreads: 'No threads yet. Each thread the coordinator starts shows up here with its model.',
             allResolved: 'Every thread is resolved.',
+            goal: 'Goal',
+            goalHint: 'What this project is for. The coordinator and its threads read it with every request.',
+            goalPlaceholder: 'What this project is for',
+            goalFromProfile: 'From your profile',
+            goalUseProfile: 'Use your profile\'s',
+            goalTools: (names) => `It names ${listText(names)}, so every thread in this project can use ${names.length === 1 ? 'it' : 'them'}.`,
+            save: 'Save',
+            saving: 'Saving…',
+            cancel: 'Cancel',
             pause: 'Pause this project',
             pauseHint: 'New threads and handbacks wait until you resume.',
             own: 'Set for this project',
@@ -6007,6 +6024,50 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }, message.text) : null);
         }
 
+        /**
+         * The project's goal: the user's own text, saved with Save (or Ctrl+Enter),
+         * or the profile row's. The user's tools it names are open to every
+         * thread in the project, so the row says which.
+         * @param props.goal - {value, source: 'project setting'|'project config'|'none', inherited, tools, max}.
+         * @param props.onSave - (changes) => Promise<boolean>: whether the plugin took it.
+         */
+        function GoalRow({ goal, busy, message, onSave }) {
+            const [draft, setDraft] = React.useState(null);
+            const saved = typeof goal?.value === 'string' ? goal.value : '';
+            const text = draft ?? saved;
+            const changed = draft !== null && draft.trim() !== saved;
+            const save = async () => { if (await onSave({ goal: text })) setDraft(null); };
+            const profile = typeof goal?.inherited === 'string' && goal.inherited !== '';
+            const own = goal?.source === 'project setting' && (saved !== '' || profile);
+            const source = own ? [h('span', { key: 'own', className: 'dshp-ps-own' }, SETTINGS.own), profile ? h('button', {
+                key: 'reset', type: 'button', className: 'dshp-ps-link', disabled: busy, 'data-projects-goal-reset': '', onClick: () => { setDraft(null); void onSave({ goal: null }); },
+            }, SETTINGS.goalUseProfile) : null] : profile ? [h('span', { key: 'from' }, SETTINGS.goalFromProfile)] : null;
+            const tools = Array.isArray(goal?.tools) ? goal.tools.filter((name) => typeof name === 'string') : EMPTY;
+            return h('div', { className: 'dshp-ps-row dshp-ps-goal', 'data-projects-setting': 'goal' },
+                h('div', { className: 'dshp-ps-text' },
+                    h('label', { className: 'dshp-ps-title', htmlFor: 'dshp-ps-goal' }, h('span', null, SETTINGS.goal)),
+                    h('div', { className: 'dshp-ps-desc', id: 'dshp-ps-goal-hint' }, SETTINGS.goalHint),
+                    source ? h('div', { className: 'dshp-ps-source' }, ...source.filter(Boolean)) : null),
+                h('textarea', {
+                    id: 'dshp-ps-goal', className: 'dshp-ps-goal-input', value: text, rows: 3, maxLength: Number.isFinite(goal?.max) ? goal.max : undefined,
+                    placeholder: SETTINGS.goalPlaceholder, 'aria-describedby': 'dshp-ps-goal-hint', readOnly: busy, 'data-projects-goal': '',
+                    onChange: (event) => setDraft(event.target.value),
+                    onKeyDown: (event) => {
+                        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && changed) { event.preventDefault(); void save(); }
+                        // Escape puts the text back, and closes the dialog only once nothing is changed.
+                        else if (event.key === 'Escape' && changed) { event.preventDefault(); event.stopPropagation(); setDraft(null); }
+                    },
+                }),
+                tools.length > 0 ? h('div', { className: 'dshp-ps-fit', 'data-projects-goal-tools': '' }, SETTINGS.goalTools(tools)) : null,
+                changed ? h('div', { className: 'dshp-ps-goal-actions' },
+                    h(ui.Button, { variant: 'outline', size: 'sm', disabled: busy, onClick: () => setDraft(null) }, SETTINGS.cancel),
+                    h(ui.Button, { variant: 'primary', size: 'sm', disabled: busy, onClick: () => void save(), 'data-projects-goal-save': '' }, busy ? SETTINGS.saving : SETTINGS.save)) : null,
+                message ? h('p', {
+                    className: `dshp-ps-alert ${message.kind === 'error' ? 'dshp-ps-error' : 'dshp-ps-info'}`,
+                    role: message.kind === 'error' ? 'alert' : 'status',
+                }, message.text) : null);
+        }
+
         function Section({ id, heading, meta, children }) {
             return h('section', { className: 'dshp-ps-section', 'data-projects-settings-section': id },
                 h('div', { className: 'dshp-ps-head' },
@@ -6016,9 +6077,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * One project's settings: the coordinator's and new threads' model and
-         * effort, each thread's, and pause. Every change goes to the plugin at
-         * once, like DSH's own settings, and the dialog shows what the plugin
+         * One project's settings: its goal and pause, the coordinator's and
+         * new threads' model and effort, access, and each thread's. Every
+         * change but the goal's text (Save) goes to the plugin at once, like
+         * DSH's own settings, and the dialog shows what the plugin
          * then holds; it reads again every few seconds, so a change made in a
          * chat or by the coordinator shows up too.
          */
@@ -6071,7 +6133,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 setBusy(null);
                 if (!result.ok) {
                     setMessage({ key, kind: 'error', text: errorText(result.error) });
-                    return;
+                    return false;
                 }
                 if (isObject(result.value) && isObject(result.value.settings)) {
                     setData(result.value);
@@ -6080,6 +6142,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }
                 const note = noteText(result.value?.notes);
                 if (note) setMessage({ key, kind: 'info', text: note });
+                return true;
             };
             const messageFor = (key) => (message?.key === key ? message : null);
             // Opened at Access (the Access row of the Threads menu or the Projects page): that section, its first control focused.
@@ -6198,6 +6261,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 body = [
                     catalog.status === 'failed' && !catalog.value ? h('p', { key: 'catalog', className: 'dshp-ps-alert dshp-ps-info', role: 'status' }, SETTINGS.catalogFailed, ' ',
                         h('button', { type: 'button', className: 'dshp-ps-link', onClick: () => link.catalog.load() }, SETTINGS.retry)) : null,
+                    // What the project is for comes first, and whether it runs.
+                    h(Section, { key: 'project', id: 'project', heading: SETTINGS.project },
+                        h(GoalRow, { goal: data.goal, busy: busy === 'goal', message: messageFor('goal'), onSave: (changes) => change('goal', changes) }),
+                        h(SettingRow, {
+                            id: 'paused', title: SETTINGS.pause, description: SETTINGS.pauseHint, message: messageFor('paused'),
+                            control: h(ui.Switch, { checked: data.paused?.value === true, label: SETTINGS.pause, disabled, onChange: (next) => change('paused', { paused: next }) }),
+                        })),
                     h(Section, { key: 'models', id: 'models', heading: SETTINGS.models }, ...SETTING_ROUTES.map(routeRow)),
                     h(Section, { key: 'access', id: 'access', heading: SETTINGS.access },
                         toolsRow,
@@ -6209,11 +6279,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         resolved.length > 0 ? h('button', {
                             key: 'more', type: 'button', className: 'dshp-ps-more', 'aria-expanded': showResolved, onClick: () => setShowResolved((value) => !value),
                         }, h(ui.IconChevronRightOutlineRegular, { size: 12 }), `${showResolved ? 'Hide' : 'Show'} ${plural(resolved.length, 'resolved thread')}`) : null),
-                    h(Section, { key: 'project', id: 'project', heading: SETTINGS.project },
-                        h(SettingRow, {
-                            id: 'paused', title: SETTINGS.pause, description: SETTINGS.pauseHint, message: messageFor('paused'),
-                            control: h(ui.Switch, { checked: data.paused?.value === true, label: SETTINGS.pause, disabled, onChange: (next) => change('paused', { paused: next }) }),
-                        })),
                     h('p', { key: 'note', className: 'dshp-ps-note' }, SETTINGS.note,
                         openDefaults ? [' ', h('button', {
                             key: 'defaults', type: 'button', className: 'dshp-ps-link', 'data-projects-open-defaults': '',
@@ -6348,7 +6413,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             roomFor, besidePref, sidebarGroups, sidebarRules, placeHeaders, describeWorkspaces, sectionWorkspace, sectionAt, listText, OTHERS, clockOf, againText, ThreadCard, EndingBar,
             noticeOf, noticeView, TriggerNotice, ProjectNotice,
             permissionName, permissionShown, permissionIn, toolsText, accessOf, accessSummary, PermissionPicker, ToolsControl, ModelsSummary,
-            NewsNotice, newsLine, newsDot, ThreadMark, RowPlace, CoordinatorOffer, workspaceOfSession, projectIn,
+            NewsNotice, newsLine, newsDot, ThreadMark, RowPlace, CoordinatorOffer, workspaceOfSession, projectIn, GoalRow,
         };
         return module.exports;
     },

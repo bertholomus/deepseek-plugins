@@ -1479,6 +1479,53 @@ test('window: the Project settings endpoints read and change a project the way i
     });
 });
 
+test('window: a project\'s goal is set in Project settings, reaches both prompts and the user\'s tools, and only the user sets it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const { host, raw } = setup({ guardedTools: { obsidian: ['notes app'] } }, dir, { ...SELECTING, gateway: true });
+    await tick();
+    const coord = coordinatorOf(host);
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    const refused = async (promise, pattern) => {
+        await assert.rejects(promise, (error) => error.code === 'projects/refused' && pattern.test(error.message));
+    };
+    const goal = async () => plain((await remote.describe(coord.id)).goal);
+    // The profile row's goal, until the user sets the project's own.
+    assert.deepEqual(await goal(), { value: 'Ship good DSH plugins', source: 'project config', inherited: 'Ship good DSH plugins', tools: [], max: 2000 });
+    // Set in the window: trimmed, with the window's line ends. Both prompts read it from their next request, its later lines
+    // indented under the first so none reads as another line of the prompt.
+    let after = await remote.update(coord.id, { goal: '  Keep the storefront fast.\r\n\r\nWorkspace: no new dependencies.  ' });
+    assert.deepEqual(plain(after.goal), { value: 'Keep the storefront fast.\n\nWorkspace: no new dependencies.', source: 'project setting', inherited: 'Ship good DSH plugins', tools: [], max: 2000 });
+    assert.match(coord.ctx.section(), /\nGoal: Keep the storefront fast\.\n {2}Workspace: no new dependencies\.\nWorkspace: \/work\/dsh\n/);
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Speed', brief: 'Go.' });
+    const thread = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Speed');
+    assert.match(thread.ctx.section(), /\nProject goal: Keep the storefront fast\.\n {2}Workspace: no new dependencies\.\n/);
+    assert.match(thread.ctx.section(), /Here those include: obsidian\. You have none of them\./);
+    // It is the user's own words: a tool of theirs it names is open to every thread, and the window says which.
+    after = await remote.update(coord.id, { goal: 'Keep the notes app inbox tidy.' });
+    assert.deepEqual(plain(after.goal.tools), ['obsidian']);
+    assert.match(thread.ctx.section(), /Here those include: obsidian\. You have only the ones the user's words name: obsidian\./);
+    // An empty goal is the user's too: none, over the profile row's.
+    after = await remote.update(coord.id, { goal: ' \n ' });
+    assert.deepEqual(plain([after.goal.value, after.goal.source, after.goal.tools]), ['', 'project setting', []]);
+    assert.match(coord.ctx.section(), /\nGoal: none set yet \(the user sets it in Project settings\)\. Until then/);
+    assert.doesNotMatch(thread.ctx.section(), /Project goal:/);
+    // Too long is refused and changes nothing; null goes back to the profile row's.
+    await refused(remote.update(coord.id, { goal: 'x'.repeat(2001) }), /^a goal can be at most 2000 characters; this one has 2001$/);
+    assert.equal((await goal()).value, '');
+    after = await remote.update(coord.id, { goal: null });
+    assert.deepEqual(plain([after.goal.value, after.goal.source]), ['Ship good DSH plugins', 'project config']);
+    // The coordinator can't set it: project_settings takes no goal, and says who sets it.
+    await remote.update(coord.id, { goal: 'Keep the storefront fast.' });
+    assert.match(await coord.ctx.call('project_settings', { goal: 'Use the notes app.' }), /\nThe user changes these and the goal in Project settings; project_settings can't\.$/);
+    assert.equal((await goal()).value, 'Keep the storefront fast.');
+    // Kept across a restart, over the profile row's.
+    const restarted = fakeHost({ ...SELECTING, gateway: true });
+    for (const [id, s] of host.sessions) restarted.sessions.set(id, s);
+    plugin.apply(restarted, plugin.Config(raw));
+    await tick();
+    assert.match(restarted.wake(coord.id).ctx.section(), /\nGoal: Keep the storefront fast\.\nWorkspace: \/work\/dsh\n/);
+});
+
 /**
  * Load the browser half the way DSH does: a classic script that hands its
  * factory to the module loader, which calls it with DSH's module require.
@@ -1743,6 +1790,71 @@ test('browser half: Project settings opens per session, calls the plugin\'s endp
     assert.equal(live('deepseek-account:deepseek-v4', 'max', { provider: 'deepseek-account', model: 'deepseek-v4', reasoningEffort: 'low' }), 'It runs on V4 · Low right now.');
     assert.equal(live('deepseek-account:deepseek-v4', 'max', null), null);
     assert.equal(live('other:big-model', undefined, { provider: 'other', model: 'big-model' }), null);
+});
+
+test('browser half: the goal in Project settings is saved with Save, put back with Escape, and says which of the user\'s tools it opens', async () => {
+    const { client, react } = loadClient();
+    const { GoalRow } = client.internals;
+    const saves = [];
+    let accept = true;
+    let goal = { value: 'Ship good DSH plugins', source: 'project config', inherited: 'Ship good DSH plugins', tools: [], max: 2000 };
+    const draw = mount(react, () => GoalRow({ goal, busy: false, message: null, onSave: async (changes) => { saves.push(changes); return accept; } }));
+    const hook = (row, name) => elementsOf(row).find((e) => e.props?.[name] !== undefined);
+    const box = (row) => hook(row, 'data-projects-goal');
+    const key = (row, k, mods = {}) => {
+        const seen = { prevented: false, stopped: false };
+        box(row).props.onKeyDown({ key: k, ...mods, preventDefault: () => { seen.prevented = true; }, stopPropagation: () => { seen.stopped = true; } });
+        return seen;
+    };
+    let row = draw();
+    // From the profile: its text in the box, where it comes from, and nothing to save.
+    assert.deepEqual(plain([box(row).props.value, box(row).props.maxLength, textIn(byClass(row, 'dshp-ps-source')), hook(row, 'data-projects-goal-save') ?? null]),
+        ['Ship good DSH plugins', 2000, 'From your profile', null]);
+    assert.equal(textIn(byClass(row, 'dshp-ps-title')), 'Goal');
+    // Typing shows Save and Cancel; the same text again, spaces aside, has nothing to save.
+    box(row).props.onChange({ target: { value: 'Keep the storefront fast. ' } });
+    row = draw();
+    assert.deepEqual([textIn(hook(row, 'data-projects-goal-save')), textIn(byClass(row, 'dshp-ps-goal-actions'))], ['Save', 'CancelSave']);
+    box(row).props.onChange({ target: { value: 'Ship good DSH plugins  ' } });
+    assert.equal(hook(draw(), 'data-projects-goal-save'), undefined);
+    // Escape while it is changed puts the text back, and the dialog stays open; with nothing changed, Escape is the dialog's.
+    box(row).props.onChange({ target: { value: 'Keep the storefront fast.' } });
+    assert.deepEqual(key(draw(), 'Escape'), { prevented: true, stopped: true });
+    row = draw();
+    assert.deepEqual([box(row).props.value, hook(row, 'data-projects-goal-save') ?? null], ['Ship good DSH plugins', null]);
+    assert.deepEqual(key(row, 'Escape'), { prevented: false, stopped: false });
+    // Enter alone is a new line; Save, or Ctrl+Enter, sends the text, and once the plugin takes it the box shows what it holds.
+    box(row).props.onChange({ target: { value: 'Keep the storefront fast.' } });
+    assert.deepEqual(key(draw(), 'Enter'), { prevented: false, stopped: false });
+    hook(draw(), 'data-projects-goal-save').props.onClick();
+    await tick();
+    assert.deepEqual(plain(saves), [{ goal: 'Keep the storefront fast.' }]);
+    goal = { ...goal, value: 'Keep the storefront fast.', source: 'project setting', tools: [] };
+    row = draw();
+    assert.deepEqual([box(row).props.value, hook(row, 'data-projects-goal-save') ?? null, textIn(byClass(row, 'dshp-ps-source'))],
+        ['Keep the storefront fast.', null, 'Set for this projectUse your profile\'s']);
+    // A refused save keeps what was typed.
+    accept = false;
+    box(row).props.onChange({ target: { value: 'x'.repeat(10) } });
+    assert.deepEqual(key(draw(), 'Enter', { ctrlKey: true }), { prevented: true, stopped: false });
+    await tick();
+    assert.deepEqual([plain(saves.at(-1)), box(draw()).props.value], [{ goal: 'xxxxxxxxxx' }, 'xxxxxxxxxx']);
+    // "Use your profile's" gives the profile row's goal back.
+    accept = true;
+    hook(draw(), 'data-projects-goal-reset').props.onClick();
+    await tick();
+    assert.deepEqual(plain(saves.at(-1)), { goal: null });
+    goal = { ...goal, value: 'Ship good DSH plugins', source: 'project config' };
+    assert.equal(box(draw()).props.value, 'Ship good DSH plugins');
+    // The user's tools a goal names are open to every thread, so the row names them.
+    goal = { ...goal, value: 'Keep the obsidian inbox tidy', source: 'project setting', tools: ['obsidian'] };
+    assert.equal(textIn(hook(draw(), 'data-projects-goal-tools')), 'It names obsidian, so every thread in this project can use it.');
+    goal = { ...goal, tools: ['obsidian', 'dsh_vault'] };
+    assert.equal(textIn(hook(draw(), 'data-projects-goal-tools')), 'It names obsidian and dsh_vault, so every thread in this project can use them.');
+    // A project made in the window has no profile goal: an empty box, its placeholder, and no source line.
+    goal = { value: '', source: 'none', inherited: '', tools: [], max: 2000 };
+    row = draw();
+    assert.deepEqual([box(row).props.value, box(row).props.placeholder, byClass(row, 'dshp-ps-source').length], ['', 'What this project is for', 0]);
 });
 
 test('browser half: rows, cards and the plugin page name what each session runs on, as DSH\'s model menu does', () => {
@@ -3282,7 +3394,7 @@ test('your tools: a coordinator never has the user\'s tools, and a thread has on
     // The coordinator can see the setting, and can't change it.
     const shown = await coord.ctx.call('project_settings', {});
     // Without the tools' names: the coordinator mentions them only when asked.
-    assert.match(shown, /\nThe user's tools: every session has them\nThe user changes these in Project settings; project_settings can't\.$/);
+    assert.match(shown, /\nThe user's tools: every session has them\nThe user changes these and the goal in Project settings; project_settings can't\.$/);
     assert.equal(coord.ctx.registered.get('project_settings').parameters.your_tools, undefined);
     // Back to the default, and only the two words are settings.
     read = await remote.update(coord.id, { yourTools: null });
@@ -3381,7 +3493,7 @@ test('permissions: threads start on Workspace Write, the coordinator on Read Onl
     await refused(remote.update(coord.id, { threadPermission: 'yolo' }), /^"yolo" is not one of DSH's permissions \(default, read-only, workspace-write, danger-full-access\)$/);
     await refused(remote.update(coord.id, { thread: 't1', permission: 'auto' }), /^"auto" is not one of DSH's permissions$/);
     // The coordinator sees them, and has no way to change them.
-    assert.match(await coord.ctx.call('project_settings', {}), /\nPermissions: coordinator read-only, new threads read-only\nThe user changes these in Project settings; project_settings can't\.$/);
+    assert.match(await coord.ctx.call('project_settings', {}), /\nPermissions: coordinator read-only, new threads read-only\nThe user changes these and the goal in Project settings; project_settings can't\.$/);
     // A thread DSH won't put on its permission doesn't start: its session never gets the brief.
     pp.fail = true;
     assert.equal(await coord.ctx.call('project_thread_start', { ask: 'More.', title: 'Stuck', brief: 'Go.' }),
@@ -4106,7 +4218,7 @@ test('projects page: a new project is a coordinator in a workspace, started at o
         threadPermission: { value: 'workspace-write', source: 'plugin default' },
     });
     assert.ok(coord.ctx.registered.has('project_thread_start'), 'the coordinator gets the project tools');
-    assert.match(coord.ctx.section(), /You are the coordinator of the DSH project "Recipes"\. The user talks to you here\. You run their work in threads, guide the threads while they work, and tell the user what each thread found\.\nGoal: none set yet\. Until the user gives one, the project is only what they ask for in this chat\.\nWorkspace: \/work\/b\n"Here", "this" and "everything" mean this workspace;[^\n]*\nYou are on Read Only:[^\n]*\n\n## Rules/);
+    assert.match(coord.ctx.section(), /You are the coordinator of the DSH project "Recipes"\. The user talks to you here\. You run their work in threads, guide the threads while they work, and tell the user what each thread found\.\nGoal: none set yet \(the user sets it in Project settings\)\. Until then, the project is only what they ask for in this chat\.\nWorkspace: \/work\/b\n"Here", "this" and "everything" mean this workspace;[^\n]*\nYou are on Read Only:[^\n]*\n\n## Rules/);
     // A workspace can hold more than one project; names are unique ids.
     assert.equal((await remote.create('Recipes', 'ws:/work/b')).project, 'recipes-2');
     await refused(remote.create('   ', 'ws:/work/a'), /a project needs a name/);
