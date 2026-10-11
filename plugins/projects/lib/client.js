@@ -455,6 +455,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-pg-heading{display:flex;align-items:baseline;gap:12px;margin-bottom:16px;padding-top:28px}',
             '[data-platform=darwin] .dshp-pg-heading{padding-top:calc(28px + var(--dsh-frame-top-clearance,0px))}',
             '.dshp-pg-heading h1{margin:0;font-size:20px;font-weight:500;line-height:28px}',
+            '.dshp-tree,.dshp-tree-group{list-style:none;margin:0;padding:0}',
+            '.dshp-tree-item{outline:none}',
+            '.dshp-tree-row{display:flex;align-items:center;gap:6px;min-height:30px;padding-inline-end:10px;border-radius:6px;cursor:default}',
+            '.dshp-tree-row:hover{background:var(--dsh-color-bg-hover,rgba(127,127,127,.08))}',
+            '.dshp-tree-item:focus-visible>.dshp-tree-row{outline:2px solid var(--dsh-color-focus-ring,Highlight);outline-offset:-2px}',
+            '.dshp-tree-chevron{display:inline-flex;width:12px;flex:none;opacity:.7}',
+            '.dshp-tree-diamond{width:14px;text-align:center;flex:none;font-size:12px}',
+            '.dshp-tree-title{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshp-tree-category>.dshp-tree-row .dshp-tree-title{font-weight:500}',
+            '.dshp-tree-meta{margin-left:auto;padding-left:12px;flex:none;font-size:12px;opacity:.65;white-space:nowrap}',
+            '.dshp-tree-dot{display:inline-flex;flex:none}',
+            '.dshp-tree-glyph{display:inline-flex;width:14px;flex:none;opacity:.75}',
             '.dshp-pg-count{font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
             '.dshp-pg-heading .dshp-pg-new{margin-left:auto;align-self:center}',
             `.dshp-pg-alert{display:flex;align-items:center;gap:10px;margin:-4px 0 12px;padding:6px 6px 6px 14px;border-radius:12px;background:var(--dsw-alias-interactive-bg-hover-danger,var(--dsw-alias-interactive-bg-hover));font-size:13px;line-height:20px;color:${ERROR_TEXT}}`,
@@ -4917,6 +4929,140 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * while you read), then the workspaces in no project. A row opens to
          * its threads, workspaces and chats, and stays open across restarts.
          */
+        /** Where the page's closed tree items are kept (the window's own storage); every item starts open. */
+        const CLOSED_KEY = `${BUNDLE}/page-closed`;
+
+        /**
+         * The page's tree: Category › Workspace › (◆ project › thread | chat),
+         * each category's workspaces in DSH's own order and each workspace's
+         * sessions in DSH's order, every one of them (no "Show more"). A
+         * thread is drawn under its project wherever it works, never apart
+         * from it (the user's rule); workspaces in no category come last,
+         * under Other workspaces.
+         * @returns {Array<{kind, id, title, children, row?, project?, path?}>}
+         */
+        function pageModel({ categories, listed, items, sessions, archived }) {
+            const byId = sessions?.byId ?? {};
+            const hidden = (id) => { const row = byId[id]; return !row || row.blank === true || archived.has(id); };
+            const titleOf = (row) => (typeof row?.title === 'string' && row.title.trim() !== '' ? row.title : PAGE.newChat);
+            const coordOf = new Map(listed.filter((p) => typeof p?.coordinator === 'string' && p.coordinator !== '').map((p) => [p.coordinator, p]));
+            const threadsOf = new Map();
+            const threadIds = new Set();
+            for (const ws of items) {
+                for (const id of Array.isArray(ws?.sessionIds) ? ws.sessionIds : EMPTY) {
+                    if (hidden(id) || coordOf.has(id) || !isThreadRow(sessions, id)) continue;
+                    const parent = valueIn(sessions, id)?.coordinator ?? known.map.get(id)?.coordinator;
+                    if (typeof parent !== 'string' || !coordOf.has(parent)) continue;
+                    if (!threadsOf.has(parent)) threadsOf.set(parent, []);
+                    threadsOf.get(parent).push({ kind: 'thread', id, title: titleOf(byId[id]), row: byId[id], children: EMPTY });
+                    threadIds.add(id);
+                }
+            }
+            const workspace = (ws) => {
+                const ids = Array.isArray(ws.sessionIds) ? ws.sessionIds : EMPTY;
+                const projects = listed.filter((p) => p.home === ws.workspaceId && coordOf.get(p.coordinator) === p).map((p) => ({
+                    kind: 'project', id: p.coordinator, title: p.name || p.id, project: p, row: byId[p.coordinator], children: threadsOf.get(p.coordinator) ?? EMPTY,
+                }));
+                // A thread the list can't tie to its project yet stays out of the chats; it shows once its project is known.
+                const chats = ids.filter((id) => !hidden(id) && !coordOf.has(id) && !threadIds.has(id) && !isThreadRow(sessions, id))
+                    .map((id) => ({ kind: 'session', id, title: titleOf(byId[id]), row: byId[id], children: EMPTY }));
+                return { kind: 'workspace', id: ws.workspaceId, title: ws.title || folderName(ws.path ?? ws.workspaceId), path: ws.path ?? '', children: [...projects, ...chats] };
+            };
+            const filed = new Set();
+            const tree = (Array.isArray(categories) ? categories : EMPTY).filter((c) => isObject(c) && typeof c.id === 'string').map((c) => {
+                const ids = new Set((Array.isArray(c.workspaces) ? c.workspaces : EMPTY).map((w) => w?.id));
+                const own = items.filter((ws) => ids.has(ws.workspaceId) && !filed.has(ws.workspaceId));
+                for (const ws of own) filed.add(ws.workspaceId);
+                return { kind: 'category', id: c.id, title: c.name || c.id, children: own.map(workspace) };
+            });
+            const loose = items.filter((ws) => typeof ws?.workspaceId === 'string' && !filed.has(ws.workspaceId));
+            if (loose.length > 0) tree.push({ kind: 'category', id: OTHERS, title: SIDEBAR.others, children: loose.map(workspace) });
+            return tree;
+        }
+
+        /** The items a tree shows now, in drawn order, each with its key, level, parent and place among its siblings. */
+        function visibleItems(tree, closed) {
+            const out = [];
+            const walk = (nodes, level, parent) => nodes.forEach((node, i) => {
+                const key = `${node.kind}:${node.id}`;
+                const open = node.children.length > 0 && !closed.has(key);
+                out.push({ node, key, level, parent, pos: i + 1, size: nodes.length, open });
+                if (open) walk(node.children, level + 1, key);
+            });
+            walk(tree, 1, null);
+            return out;
+        }
+
+        const TREE_GLYPHS = { category: 'IconFolderCloseRegular', workspace: 'IconFolderOpenOutlineRegular', thread: 'IconBranchOutlineRegular' };
+
+        /**
+         * The Projects page's tree, as a screen reader and the keys expect:
+         * one tab stop, Up and Down in drawn order, Right opens or goes in,
+         * Left closes or goes to the parent, Home and End, Enter opens a
+         * session or opens and closes a group.
+         */
+        function PageTree({ tree, label, onOpenSession, statuses }) {
+            const [closed, toggleClosed] = useStoredSet(CLOSED_KEY);
+            const shown = visibleItems(tree, closed);
+            const [current, setCurrent] = React.useState(null);
+            const refs = React.useRef(new Map());
+            const at = Math.max(0, shown.findIndex((x) => x.key === current));
+            const focusKey = (key) => { setCurrent(key); refs.current.get(key)?.focus(); };
+            const activate = (x) => {
+                if (x.node.kind === 'category' || x.node.kind === 'workspace') { if (x.node.children.length > 0) toggleClosed(x.key, x.open); }
+                else onOpenSession(x.node.id);
+            };
+            const onKeyDown = (event) => {
+                const x = shown.find((item) => item.key === current) ?? shown[0];
+                if (!x || event.altKey || event.metaKey || event.ctrlKey) return;
+                const i = shown.indexOf(x);
+                const go = (y) => { if (y) { event.preventDefault(); focusKey(y.key); } };
+                switch (event.key) {
+                    case 'ArrowDown': go(shown[i + 1]); break;
+                    case 'ArrowUp': go(shown[i - 1]); break;
+                    case 'Home': go(shown[0]); break;
+                    case 'End': go(shown[shown.length - 1]); break;
+                    case 'ArrowRight':
+                        event.preventDefault();
+                        if (x.node.children.length > 0 && !x.open) toggleClosed(x.key, false);
+                        else if (x.open) focusKey(shown[i + 1].key);
+                        break;
+                    case 'ArrowLeft':
+                        event.preventDefault();
+                        if (x.open) toggleClosed(x.key, true);
+                        else if (x.parent) focusKey(x.parent);
+                        break;
+                    case 'Enter': case ' ': event.preventDefault(); activate(x); break;
+                    default:
+                }
+            };
+            const item = (x) => {
+                const { node } = x;
+                const kids = x.open ? shown.filter((y) => y.parent === x.key) : EMPTY;
+                const Icon = ui[TREE_GLYPHS[node.kind]];
+                const glyph = node.kind === 'project' ? h('span', { className: 'dshp-tree-diamond', 'aria-hidden': true }, '◆')
+                    : Icon ? h('span', { className: 'dshp-tree-glyph', 'aria-hidden': true }, h(Icon, { size: 14 })) : h('span', { className: 'dshp-tree-glyph', 'aria-hidden': true });
+                const dot = node.row ? chatDot(node.row, statuses) : null;
+                const count = node.kind === 'project' ? plural(node.children.length, 'thread') : node.kind === 'category' ? plural(node.children.length, 'workspace') : null;
+                return h('li', {
+                    key: x.key, role: 'treeitem', 'aria-level': x.level, 'aria-setsize': x.size, 'aria-posinset': x.pos,
+                    'aria-expanded': node.children.length > 0 ? x.open : undefined, tabIndex: x === shown[at] ? 0 : -1,
+                    className: `dshp-tree-item dshp-tree-${node.kind}`, 'data-projects-node': node.kind, 'data-projects-id': node.id,
+                    ref: (el) => { if (el) refs.current.set(x.key, el); else refs.current.delete(x.key); },
+                    onFocus: (event) => { if (event.target === event.currentTarget) setCurrent(x.key); },
+                    onClick: (event) => { event.stopPropagation(); setCurrent(x.key); activate(x); },
+                },
+                h('div', { className: 'dshp-tree-row', style: { paddingInlineStart: `${8 + (x.level - 1) * 20}px` } },
+                    h('span', { className: 'dshp-tree-chevron', 'aria-hidden': true }, node.children.length > 0 ? h(x.open ? ui.IconChevronDownOutlineRegular : ui.IconChevronRightOutlineRegular, { size: 12 }) : null),
+                    glyph,
+                    h('span', { className: 'dshp-tree-title', 'data-projects-title': node.title }, node.title),
+                    dot && ui.StateDot ? h('span', { className: 'dshp-tree-dot', 'aria-hidden': true }, h(ui.StateDot, { state: dot })) : null,
+                    count ? h('span', { className: 'dshp-tree-meta' }, count) : node.kind === 'workspace' && node.path ? h('span', { className: 'dshp-tree-meta' }, shortPath(node.path)) : null),
+                kids.length > 0 ? h('ul', { role: 'group', className: 'dshp-tree-group' }, ...kids.map(item)) : null);
+            };
+            return h('ul', { role: 'tree', 'aria-label': label, className: 'dshp-tree', onKeyDown }, ...shown.filter((x) => x.level === 1).map(item));
+        }
+
         function ProjectsPage({ useSessions, useSessionStatus, useWorkspaces = noWorkspaces, projects }) {
             useFacts(projects.facts);
             useWatch(projects.facts, 'list');
@@ -5002,12 +5148,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     : h('div', { className: 'dshp-pg-state', role: 'status' }, PAGE.loading);
             } else {
                 content = h(React.Fragment, null,
-                    ordered.length === 0 ? h('div', { className: 'dshp-pg-empty', 'data-projects-empty': '' },
+                    ordered.length === 0 && !(Array.isArray(items) && items.length > 0) ? h('div', { className: 'dshp-pg-empty', 'data-projects-empty': '' },
                         h('span', { className: 'dshp-pg-empty-glyph' }, h(ProjectsIcon, { size: 28 })),
                         h('h2', null, PAGE.emptyTitle),
                         h('p', null, PAGE.emptyText),
                         h(ui.Button, { variant: 'primary', size: 'sm', className: 'dshp-pg-cta', onClick: () => actions.create(null), 'data-projects-new': '' }, PAGE.newProject))
-                        : h('ul', {
+                        : h(PageTree, {
+                            tree: pageModel({ categories: projects.facts.categories?.() ?? EMPTY, listed: all, items: Array.isArray(items) ? items : EMPTY, sessions, archived }),
+                            label: PAGE.title, statuses, onOpenSession: (id) => projects.openSession(id),
+                        }),
+                        false ? h('ul', {
                             className: 'dshp-pg-list', 'aria-label': PAGE.title,
                             // Up and down walk the rows and what open rows show (not a menu one of them opened).
                             onKeyDown: (event) => { if (event.currentTarget.contains(event.target)) arrowKeys(event, event.currentTarget); },
@@ -5023,7 +5173,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                 : h(GroupProject, shared));
                         }),
                         placed.others.length > 0 ? h('li', { key: OTHERS, className: 'dshp-pg-item dshp-pg-item-others' },
-                            h(OtherWorkspaces, { page, now, open: opened.has(OTHERS), onToggle: (on) => toggleOpen(OTHERS, on) })) : null));
+                            h(OtherWorkspaces, { page, now, open: opened.has(OTHERS), onToggle: (on) => toggleOpen(OTHERS, on) })) : null) : null);
             }
             let overlay = null;
             if (dialog?.kind === 'delete') {
@@ -6505,6 +6655,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the views are built on.
         module.exports.internals = {
+            pageModel, visibleItems,
             valueIn, takeKnown, coordinatorName, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, nestingRules, sectionGroups, nestingCss,
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,

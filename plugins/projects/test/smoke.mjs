@@ -1004,6 +1004,47 @@ test('old session records: each project session DSH lists without a value is rea
     assert.doesNotMatch(readFileSync(join(dir2, 'projects.log'), 'utf8'), /records refreshed|error record/);
 });
 
+test('browser half: the Projects page is the whole tree, each thread under its project wherever it works, with one tab stop', () => {
+    const { client } = loadClient();
+    const { pageModel, visibleItems, takeKnown } = client.internals;
+    takeKnown({});
+    const value = (v) => ({ values: { projectSession: v } });
+    const sessions = {
+        byId: { c: { id: 'c', title: '◆ Storefront' }, t1: { id: 't1', title: 'Fix cart' }, t2: { id: 't2', title: 'Hero images' }, x: { id: 'x', title: 'A chat' }, y: { id: 'y', title: 'Old' }, z: { id: 'z', title: 'Notes' } },
+        projectionsBySession: {
+            c: value({ role: 'coordinator', project: { id: 'storefront', name: 'Storefront' } }),
+            t1: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' } }),
+            t2: value({ role: 'thread', coordinator: 'c', thread: { id: 't2' } }),
+        },
+    };
+    const items = [
+        { workspaceId: 'w-sf', title: 'storefront', path: '/home/u/storefront', sessionIds: ['c', 't1', 'x', 'y'] },
+        { workspaceId: 'w-assets', title: 'storefront-assets', path: '/home/u/storefront-assets', sessionIds: ['t2'] },
+        { workspaceId: 'w-notes', title: 'notes', path: '/home/u/notes', sessionIds: ['z'] },
+    ];
+    const tree = pageModel({
+        categories: [{ id: 'shop', name: 'Shop', workspaces: [{ id: 'w-assets' }, { id: 'w-sf' }] }],
+        listed: [{ id: 'storefront', name: 'Storefront', coordinator: 'c', home: 'w-sf' }], items, sessions, archived: new Set(['y']),
+    });
+    const shape = (nodes) => nodes.map((n) => [n.kind, n.title, ...(n.children.length ? [shape(n.children)] : [])]);
+    // DSH's workspace order inside a category; the project first in its workspace, then the chats; the thread working
+    // in storefront-assets under its project, not in that workspace; an archived chat left out; Other workspaces last.
+    assert.deepEqual(plain(shape(tree)), [
+        ['category', 'Shop', [
+            ['workspace', 'storefront', [['project', 'Storefront', [['thread', 'Fix cart'], ['thread', 'Hero images']]], ['session', 'A chat']]],
+            ['workspace', 'storefront-assets'],
+        ]],
+        ['category', 'Other workspaces', [['workspace', 'notes', [['session', 'Notes']]]]],
+    ]);
+    // Levels 1-4, positions among siblings, and closed items hide what is in them.
+    const shown = visibleItems(tree, new Set());
+    assert.deepEqual(plain(shown.map((x) => [x.node.title, x.level, `${x.pos}/${x.size}`, x.open])), [
+        ['Shop', 1, '1/2', true], ['storefront', 2, '1/2', true], ['Storefront', 3, '1/2', true], ['Fix cart', 4, '1/2', false], ['Hero images', 4, '2/2', false],
+        ['A chat', 3, '2/2', false], ['storefront-assets', 2, '2/2', false], ['Other workspaces', 1, '2/2', true], ['notes', 2, '1/1', true], ['Notes', 3, '1/1', false],
+    ]);
+    assert.deepEqual(plain(visibleItems(tree, new Set(['project:c', 'category:@others'])).map((x) => x.node.title)), ['Shop', 'storefront', 'Storefront', 'A chat', 'storefront-assets', 'Other workspaces']);
+});
+
 test('browser half: a session DSH lists without the plugin\'s value is placed by what the plugin\'s store knows, not by its title', async () => {
     const { client } = loadClient();
     const { rowPlace, isThreadRow, coordinatorName, takeKnown, projectFacts } = client.internals;
