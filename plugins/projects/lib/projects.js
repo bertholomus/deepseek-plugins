@@ -1287,6 +1287,7 @@ export class ProjectManager {
         const live = stored.coordinatorSessionId ? this.ctx.agents.get(stored.coordinatorSessionId) : undefined;
         if (live || await this.exists(stored.coordinatorSessionId)) {
             if (live) this.maybeInstall(live);
+            this.seeArchive(projectId, stored.coordinatorSessionId);
             await this.applyCoordinatorRoute(projectId);
             this.applyCoordinatorPermission(projectId);
             this.log(`coordinator ${projectId} ${stored.coordinatorSessionId} resumed`);
@@ -1308,6 +1309,7 @@ export class ProjectManager {
         const sessionId = await this.createSession(project);
         this.store.putProject(projectId, {
             coordinatorSessionId: sessionId, coordinatorCreatedAt: new Date().toISOString(), coordinatorRoute: undefined, coordinatorAccess: undefined,
+            dshArchive: { coordinator: sessionId, archived: false },
         });
         // Attaching puts it on its permission setting (install).
         await this.attach(sessionId);
@@ -3039,6 +3041,12 @@ export class ProjectManager {
      * an archived project with sessions DSH never archived (it refused, or
      * the project was archived by hand in the file) has them archived now.
      * A thread the user unarchived on its own stays as they left it.
+     *
+     * Only a change counts: a coordinator DSH already had archived when the
+     * plugin last looked, or before it ever looked (the first start of this
+     * version, or a DSH home copied from another), or one DSH doesn't know,
+     * archives nothing. Only the project's own mark, or DSH archiving a
+     * coordinator it knows while the plugin was off, does.
      */
     async matchArchive() {
         const archived = this.archivedNow();
@@ -3052,16 +3060,38 @@ export class ProjectManager {
             const done = Array.isArray(mark?.sessions) ? mark.sessions : [];
             try {
                 if (!mark) {
-                    if (archived.has(coordinator)) await this.archiveProject(projectId, { via: 'start' });
+                    if (archived.has(coordinator) && this.seenArchived(projectId, coordinator) === false && await this.exists(coordinator)) {
+                        await this.archiveProject(projectId, { via: 'start' });
+                    }
                 } else if (done.includes(coordinator) && !archived.has(coordinator)) {
                     await this.restoreProject(projectId, { via: 'start', resume: false });
-                } else if (this.projectSessions(projectId).some((id) => !archived.has(id) && !done.includes(id))) {
+                } else if (!Array.isArray(mark.sessions) || this.projectSessions(projectId).some((id) => !archived.has(id) && !done.includes(id))) {
+                    // A mark made by hand lists no sessions yet: this archives what DSH hasn't and lists them all, so a
+                    // later start knows which ones the archive saw to, even when DSH already had every one archived.
                     await this.archiveProject(projectId, { via: 'start' });
                 }
             } catch (error) {
                 this.log(`error archive-match ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
             }
+            this.seeArchive(projectId, coordinator);
         }
+    }
+
+    /**
+     * Whether a project's coordinator was archived in DSH when the plugin
+     * last looked: true or false, or undefined when it never looked at this
+     * coordinator.
+     */
+    seenArchived(projectId, coordinator) {
+        const seen = this.store.projects[projectId]?.dshArchive;
+        return seen?.coordinator === coordinator ? seen.archived === true : undefined;
+    }
+
+    /** Keep whether DSH has a project's coordinator archived now, for the next start to compare with. */
+    seeArchive(projectId, coordinator, archived = this.archivedNow().has(coordinator)) {
+        const seen = this.store.projects[projectId]?.dshArchive;
+        if (seen?.coordinator === coordinator && seen.archived === archived) return;
+        this.store.putProject(projectId, { dshArchive: { coordinator, archived } });
     }
 
     /**
@@ -3083,6 +3113,7 @@ export class ProjectManager {
         for (const projectId of this.projects.keys()) {
             const coordinator = this.store.projects[projectId]?.coordinatorSessionId;
             if (typeof coordinator !== 'string' || coordinator === '' || now.has(coordinator) === before.has(coordinator)) continue;
+            this.seeArchive(projectId, coordinator, now.has(coordinator));
             if (archiving.has(`${this.storeFile}#${projectId}`)) continue;
             const step = now.has(coordinator)
                 ? (this.archived(projectId) ? undefined : () => this.archiveProject(projectId, { via: 'dsh' }))

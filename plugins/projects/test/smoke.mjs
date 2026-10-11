@@ -4968,6 +4968,70 @@ test('a start matches what DSH archived meanwhile, and finishes an archive made 
     assert.equal((await next.provided.get('dshPluginProjectsRemote').list()).projects[0].archived, true);
 });
 
+test('a start archives nothing for a coordinator DSH had archived before the plugin looked, or has no session for', async () => {
+    const { host, config, dir, coord, alpha, beta } = await projectWithThreads();
+    assert.deepEqual(storedIn(dir).dshArchive, { coordinator: coord.id, archived: false }, 'a new coordinator is noted unarchived');
+    await switchOff(host);
+    const log = () => readFileSync(join(dir, 'projects.log'), 'utf8');
+
+    // A store from before the plugin noted DSH's archive (or a DSH home copied from another): the ◆ row is archived
+    // in DSH, but nothing says that happened while the plugin was off, so the project stays as it is.
+    const file = JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8'));
+    delete file.projects['dsh-plugins'].dshArchive;
+    writeFileSync(join(dir, 'projects.json'), JSON.stringify(file));
+    let next = await startOver(host, config, [coord.id, alpha.id]);
+    assert.deepEqual(next.workspaceRegistry.archives, []);
+    assert.equal(storedIn(dir).archived, undefined);
+    assert.deepEqual(storedIn(dir).dshArchive, { coordinator: coord.id, archived: true });
+    assert.doesNotMatch(log(), /archive dsh-plugins via=start/);
+    await switchOff(next);
+    // Still so at the next start: no change, nothing to do.
+    next = await startOver(host, config, [coord.id, alpha.id]);
+    assert.deepEqual(next.workspaceRegistry.archives, []);
+    assert.equal(storedIn(dir).archived, undefined);
+    await switchOff(next);
+    // Unarchived in DSH meanwhile: only noted. Then archived in DSH while the plugin was off: its threads go too.
+    next = await startOver(host, config, [alpha.id]);
+    assert.deepEqual(storedIn(dir).dshArchive, { coordinator: coord.id, archived: false });
+    await switchOff(next);
+    next = await startOver(host, config, [coord.id, alpha.id]);
+    assert.deepEqual(next.workspaceRegistry.archives, [[beta.id, true]]);
+    assert.equal(storedIn(dir).archived.via, 'start');
+    assert.deepEqual(storedIn(dir).archived.sessions, [coord.id, alpha.id, beta.id]);
+    await switchOff(next);
+
+    // Archived by hand in the file while DSH already has every session archived: nothing to archive, and the mark
+    // now lists them, so a later start knows them as the archive's own.
+    const marked = JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8'));
+    marked.projects['dsh-plugins'].archived = { at: '2026-10-11T04:23:47.000Z', via: 'hand' };
+    writeFileSync(join(dir, 'projects.json'), JSON.stringify(marked));
+    next = await startOver(host, config, [coord.id, alpha.id, beta.id]);
+    assert.deepEqual(next.workspaceRegistry.archives, []);
+    assert.deepEqual(storedIn(dir).archived, { at: '2026-10-11T04:23:47.000Z', via: 'hand', sessions: [coord.id, alpha.id, beta.id] });
+    assert.match(log(), /archive dsh-plugins via=start sessions=0\n/);
+    await switchOff(next);
+    // And DSH unarchiving its ◆ row meanwhile brings the project back.
+    next = await startOver(host, config, [alpha.id, beta.id]);
+    assert.equal(storedIn(dir).archived, undefined);
+    assert.deepEqual(next.workspaceRegistry.archivedSessionIds, []);
+});
+
+test('a start archives nothing for a coordinator DSH has no session for, though its archive names it', async () => {
+    const { host, config, dir, coord } = await projectWithThreads();
+    await switchOff(host);
+    // A DSH home copied from another: its archive set names the coordinator, but DSH holds no such session.
+    const copied = fakeHost({ gateway: true });
+    for (const [id, s] of host.sessions) copied.sessions.set(id, { ...s, prompts: [] });
+    await copied.workspaceRegistry.archiveSession(coord.id, { stopActivity: true });
+    copied.workspaceRegistry.archives.splice(0);
+    copied.sessions.delete(coord.id);
+    plugin.apply(copied, config);
+    await settle();
+    assert.deepEqual(copied.workspaceRegistry.archives, []);
+    assert.equal(storedIn(dir).archived, undefined);
+    assert.doesNotMatch(readFileSync(join(dir, 'projects.log'), 'utf8'), /archive dsh-plugins via=start/);
+});
+
 test('archiving refuses what DSH refuses, and a session DSH no longer has counts as gone', async () => {
     const { host, dir, coord, alpha, registry, remote } = await projectWithThreads();
     host.sessions.delete(alpha.id);
