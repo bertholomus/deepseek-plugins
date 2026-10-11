@@ -242,7 +242,7 @@ try {
     // 1. The coordinator starts a thread whose brief writes inside its folder.
     let mark = model.requests.length;
     await bridge('POST', `/sessions/${coord}/prompt`, {
-        text: call('project_thread_start', { ask: 'Write a note in the project folder.', title: 'Notes', brief: call('write', { file_path: inside, content: 'inside\n' }) }),
+        text: call('thread_start', { ask: 'Write a note in the project folder.', title: 'Notes', brief: call('write', { file_path: inside, content: 'inside\n' }) }),
     });
     const thread = await waitFor(() => project().threads?.t1?.sessionId, 'the thread session');
     await waitFor(() => resultsSince(mark).some((t) => t.includes(inside) || /wrote|created|written/i.test(t)), 'the inside write', 60000).catch(() => null);
@@ -261,7 +261,7 @@ try {
     check('a write inside its folder goes through', readText(inside) === 'inside\n', JSON.stringify(resultsSince(mark)).slice(0, 400));
 
     // 2. The coordinator sends the thread on to a file just outside its folder.
-    const send = (text) => bridge('POST', `/sessions/${coord}/prompt`, { text: call('project_thread_send', { thread: 't1', text }) });
+    const send = (text) => bridge('POST', `/sessions/${coord}/prompt`, { text: call('thread_send', { thread: 't1', text }) });
     await waitIdle(coord);
     mark = model.requests.length;
     await send(call('write', { file_path: beside, content: 'outside\n' }));

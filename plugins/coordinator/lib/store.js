@@ -18,7 +18,7 @@
  *     archived?: { at, via: 'window' | 'dsh' | 'start' | 'hand', sessions?: the project's sessions the archive saw to, archived
  *       in DSH or gone from it }: the project is archived with its coordinator and threads (projects.js archiveProject),
  *     awaiting?: [{ to: a chat's session id, name: as the coordinator named it, from: the coordinator's session id,
- *       after: the chat's last event seq before the message, at }]: messages to chats outside the project (project_message)
+ *       after: the chat's last event seq before the message, at }]: messages to chats outside the project (chat_message)
  *       whose reply hasn't come back yet,
  *     A project made in the window also keeps its definition here (a profile row has its own):
  *     name, source: 'page' | 'import', createdAt, order: its place among them, importedFrom?: the old project's id } },
@@ -46,7 +46,7 @@
  *
  * Settings here are the project's own: set in its Project settings dialog,
  * by picking a model in its coordinator's DSH model picker, or by the
- * coordinator with project_settings (never the goal or access, which only
+ * coordinator with thread_settings (never the goal or access, which only
  * the user sets). They sit above the profile config; deleting a key means
  * "use default".
  *

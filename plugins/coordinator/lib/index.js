@@ -3,7 +3,7 @@
  *
  * Each project in the plugin config gets one coordinator session in its
  * workspace. The coordinator starts thread sessions for focused work with
- * project tools; threads report back with project_handback, and the handback
+ * project tools; threads report back with thread_handback, and the handback
  * arrives in the coordinator as its next turn. Every session is an ordinary
  * DSH session made through the Host's sessionController, so the user watches
  * and talks to the coordinator and every thread in the DSH window.
@@ -56,7 +56,7 @@ const Project = z.object({
     coordinatorPermission: z.string(),
     /** The DSH permission preset new threads start on, or "default"; empty uses the plugin default. */
     threadPermission: z.string(),
-    /** Block new threads and hold handbacks. The coordinator's project_settings can override it. */
+    /** Block new threads and hold handbacks. The coordinator's thread_settings can override it. */
     paused: z.boolean().default(false),
     /** Project memory file; defaults to <memoryDir>/<id>.md. */
     memoryFile: z.string(),
@@ -142,7 +142,7 @@ export function apply(ctx, config) {
     ctx.on('agent/disposed', ({ agent }) => {
         manager.forget(agent);
     });
-    // A chat a coordinator messaged (project_message) went idle: its answer goes back to that coordinator once.
+    // A chat a coordinator messaged (chat_message) went idle: its answer goes back to that coordinator once.
     ctx.on('agent/status', ({ agent, status }) => {
         manager.onAgentStatus(agent, status);
     });

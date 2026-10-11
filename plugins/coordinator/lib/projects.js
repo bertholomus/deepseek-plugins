@@ -108,7 +108,7 @@ function dshTitle(value) {
 /** Delivery retry delays for a coordinator that cannot take a message; tests shorten them. */
 export const timing = { retryMs: 60000, maxRetryMs: 15 * 60000 };
 
-/** What project_handback returns. The idle review counts a turn as handed back by these texts. */
+/** What thread_handback returns. The idle review counts a turn as handed back by these texts. */
 const HANDBACK_SENT = 'Handback delivered to the coordinator.';
 const HANDBACK_HELD = 'Handback saved; the coordinator gets it when the project resumes.';
 const HANDBACK_RETRY = 'Handback saved; the coordinator could not take it just now, and it is sent again automatically.';
@@ -119,17 +119,17 @@ const QUESTION_RETRY = 'Saved; the coordinator could not take it just now, and i
 const ARCHIVED = 'the project is archived; restore it first';
 /** DSH's tools that change files, which a coordinator on Read Only is refused (str_replace_editor's view only reads). */
 const WRITE_TOOLS = new Set(['write', 'edit', 'str_replace_editor']);
-const READ_ONLY_REASON = 'You are on Read Only, so you don\'t change files. Start a thread for this change with project_thread_start, or send it to the thread already doing that work.';
+const READ_ONLY_REASON = 'You are on Read Only, so you don\'t change files. Start a thread for this change with thread_start, or send it to the thread already doing that work.';
 /**
  * A coordinator on Read Only asking for a wider sandbox (DSH's shell, file and code tools take `sandbox_permissions`):
  * refused before DSH asks anyone, so it never reads as the user's refusal and isn't taken for a reason to widen its access.
  */
-const READ_ONLY_WIDER = 'You are on Read Only, so this didn\'t run and nobody was asked: a step that needs more than reading belongs in a thread. Start one for it with project_thread_start, or send it to the thread already doing that work. Don\'t suggest widening your access.';
+const READ_ONLY_WIDER = 'You are on Read Only, so this didn\'t run and nobody was asked: a step that needs more than reading belongs in a thread. Start one for it with thread_start, or send it to the thread already doing that work. Don\'t suggest widening your access.';
 /**
  * A coordinator on Read Only running a command while DSH offers no Read Only preset to hold it (the plugin's
  * fallback keeps it on DSH's default): refused, as a write is (behaviour review 5, S3 r2's coordinator ran ls).
  */
-const READ_ONLY_COMMAND = 'You are on Read Only, so you don\'t run commands: this didn\'t run and nobody was asked. Read files with your read tools; anything that needs a command goes to a thread: start one with project_thread_start, or send it to the thread already doing that work.';
+const READ_ONLY_COMMAND = 'You are on Read Only, so you don\'t run commands: this didn\'t run and nobody was asked. Read files with your read tools; anything that needs a command goes to a thread: start one with thread_start, or send it to the thread already doing that work.';
 /** Whether a call asks for a sandbox wider than reading. */
 const asksWider = (exec) => {
     const mode = isObject(exec?.arguments) ? exec.arguments.sandbox_permissions : undefined;
@@ -360,7 +360,7 @@ function changedFiles(records, max = 12) {
 const isHome = (folder) => typeof folder === 'string' && expand(folder).replace(/\/+$/, '') === homedir().replace(/\/+$/, '');
 
 /** The plugin's own tools, never taken for one of the user's even when a guarded name is a word in them. */
-const OWN_TOOLS = new Set(['project_memory', 'project_handback', 'project_ask_coordinator', 'project_thread_start', 'project_thread_send', 'project_thread_list', 'project_thread_read', 'project_thread_update', 'project_settings', 'project_message']);
+const OWN_TOOLS = new Set(['shared_notes', 'thread_handback', 'thread_ask', 'thread_start', 'thread_send', 'thread_list', 'thread_read', 'thread_update', 'thread_settings', 'chat_message']);
 
 /** Text as its words alone (lower case, no punctuation), to find an ask in what the user wrote. */
 const wordsKey = (text) => String(text ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
@@ -619,7 +619,7 @@ export class ProjectManager {
         this.ownPermissions = new Map();
         /** The pending pass over every wall after DSH's tool list changed. */
         this.wallTimer = undefined;
-        /** Session ids of chats outside a project that owe a coordinator the reply to its message (project_message). */
+        /** Session ids of chats outside a project that owe a coordinator the reply to its message (chat_message). */
         this.awaited = new Set();
         /** sessionId → the check of its replies running now, so one reply is never delivered twice. */
         this.replyChecks = new Map();
@@ -3101,7 +3101,7 @@ export class ProjectManager {
             const event = events[i];
             if (roleOf(event) === 'assistant') reply = textOf(event) || reply;
             prompt = promptOf(event) ?? prompt;
-            if (event?.type === 'tool/call' && event.data?.name === 'project_handback') {
+            if (event?.type === 'tool/call' && event.data?.name === 'thread_handback') {
                 handbacks.set(event.data.callId, argsOf(event.data.arguments)?.status);
             } else if (event?.type === 'tool/result') {
                 const callId = event.data?.message?.toolCallId ?? event.data?.message?.source?.callId;
@@ -3400,7 +3400,7 @@ export class ProjectManager {
         const starts = (this.store.project(projectId).threadStarts ?? []).filter((ms) => now - ms < HOUR);
         if (starts.length >= this.config.maxThreadsPerHour) {
             this.log(`thread-limit ${projectId} ${starts.length}`);
-            throw new ProjectError(`thread limit reached: this project started ${starts.length} threads in the last hour (maxThreadsPerHour). Tell the user, and continue in existing threads with project_thread_send`);
+            throw new ProjectError(`thread limit reached: this project started ${starts.length} threads in the last hour (maxThreadsPerHour). Tell the user, and continue in existing threads with thread_send`);
         }
         this.store.putProject(projectId, { threadStarts: [...starts, now] });
 
@@ -3480,7 +3480,7 @@ export class ProjectManager {
         // A user's answer or change of plan reaches a running turn now, not when the turn ends.
         const running = this.liveStatus(t.sessionId) === 'running';
         const mode = steer && running ? 'steer' : 'queue';
-        // The coordinator's own words (project_thread_send) carry rule 3's bar under them, as a brief does.
+        // The coordinator's own words (thread_send) carry rule 3's bar under them, as a brief does.
         await this.prompt(t.sessionId, coordinatorMessage(text.trim(), userWords, { note: guard }), mode, this.store.project(projectId).coordinatorSessionId);
         this.log(`thread-send ${projectId}/${id} mode=${mode}${running && mode === 'queue' ? ' after-turn' : ''} chars=${text.length}`);
         const reopened = t.resolved ? ' (reopened)' : '';
@@ -3517,7 +3517,7 @@ export class ProjectManager {
     }
 
     /**
-     * The chat project_message names: another project's coordinator (its
+     * The chat chat_message names: another project's coordinator (its
      * name, with or without ◆, or its id), or a chat that belongs to no
      * project (its title as DSH lists it, or its session id). A thread
      * stays with its project, so naming one is refused with where to send
@@ -3559,7 +3559,7 @@ export class ProjectManager {
         const who = this.store.lookup(chat.sessionId);
         if (who?.projectId === projectId) {
             if (who.role === 'coordinator') throw new ProjectError('that is this chat: you are its coordinator');
-            throw new ProjectError(`that is this project's thread ${who.threadId}: use project_thread_send`);
+            throw new ProjectError(`that is this project's thread ${who.threadId}: use thread_send`);
         }
         if (who && this.projects.has(who.projectId)) {
             if (who.role === 'coordinator') return toProject(who.projectId);
@@ -3576,7 +3576,7 @@ export class ProjectManager {
     }
 
     /**
-     * project_message: send a chat outside the project, or another
+     * chat_message: send a chat outside the project, or another
      * project's coordinator, a message the user asked for. It goes only in
      * a turn the user started, with their words (`ask`) as they wrote them,
      * and a guarded tool in it needs the user's words for it, as a thread's
@@ -3750,7 +3750,7 @@ export class ProjectManager {
 
     /**
      * Rename a thread, change its route, resolve or reopen it, or stop its
-     * turn: the coordinator's project_thread_update, or (`by: 'user'`) the
+     * turn: the coordinator's thread_update, or (`by: 'user'`) the
      * user's own from a row's ⋯ in the window. The user's stop is DSH's own
      * stop, so the thread waits for them as after DSH's stop button, and a
      * stop that fails is refused rather than noted.
@@ -3863,7 +3863,7 @@ export class ProjectManager {
     }
 
     /**
-     * Change settings through the coordinator's project_settings tool.
+     * Change settings through the coordinator's thread_settings tool.
      * @returns {Promise<string>} the settings after the change, as the tool reports them.
      */
     async updateSettings(projectId, changes) {
@@ -3878,7 +3878,7 @@ export class ProjectManager {
         ].join('\n');
     }
 
-    /** The access settings as project_settings shows them; only the user changes them and the goal, in Project settings. */
+    /** The access settings as thread_settings shows them; only the user changes them and the goal, in Project settings. */
     accessLines(projectId) {
         const a = this.access(projectId);
         const guarded = this.guards().map(([name]) => name);
@@ -3888,7 +3888,7 @@ export class ProjectManager {
             guarded.length === 0 ? null
                 : `The user's tools: you don't have them; ${a.yourTools.value === 'always' ? 'every thread has them' : 'a thread has the ones the user\'s words for it name'}`,
             this.presets() ? `Permissions: coordinator ${permission(a.coordinatorPermission.value)}, new threads ${permission(a.threadPermission.value)}` : null,
-            'The user changes these and the goal in Project settings; project_settings can\'t.',
+            'The user changes these and the goal in Project settings; thread_settings can\'t.',
         ].filter((line) => line !== null);
     }
 
@@ -4467,7 +4467,7 @@ export class ProjectManager {
         if (length > CARD_CHARS && !t.shorten) {
             this.store.putThread(projectId, threadId, { shorten: true });
             this.log(`handback-long ${projectId}/${threadId} chars=${length}`);
-            throw new ProjectError(`summary is ${length} characters, and your card shows ${CARD_CHARS}. Call project_handback again with at most ${CARD_CHARS}: the result first, then where (paths, links), then what you need, keeping any request sent or file left outside the workspace; leave out how you got there`);
+            throw new ProjectError(`summary is ${length} characters, and your card shows ${CARD_CHARS}. Call thread_handback again with at most ${CARD_CHARS}: the result first, then where (paths, links), then what you need, keeping any request sent or file left outside the workspace; leave out how you got there`);
         }
         if (!this.allowHandback(projectId, threadId)) {
             throw new ProjectError(`handback limit reached (${this.config.maxHandbacksPerHour} per hour); finish the work and hand back once`);

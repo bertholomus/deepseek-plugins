@@ -45,7 +45,7 @@ test('coordinator: a long memory shows its start and its newest lines', () => {
     const excerpt = memoryExcerpt(memory);
     assert.ok(excerpt.startsWith('# Summary\n- fact 0\n'));
     assert.ok(excerpt.endsWith('\n- fact 399'));
-    assert.match(excerpt, /\n\[… \d+ characters left out; project_memory read shows all …\]\n- fact \d+\n/);
+    assert.match(excerpt, /\n\[… \d+ characters left out; shared_notes read shows all …\]\n- fact \d+\n/);
     assert.ok(excerpt.length < 4100, `${excerpt.length}`);
     assert.equal(memoryExcerpt('short'), 'short');
 });

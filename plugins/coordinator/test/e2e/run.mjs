@@ -462,18 +462,18 @@ try {
 
     // 2. Thread start and handback.
     let mark = model.requests.length;
-    await say(coord, call('project_thread_start', {
+    await say(coord, call('thread_start', {
         ask: 'Check the Alpha work and report.',
         title: 'Alpha',
-        brief: `Do the work, then report. ${call('project_handback', { status: 'done', summary: 'Alpha finished: nothing to change.' })}`,
+        brief: `Do the work, then report. ${call('thread_handback', { status: 'done', summary: 'Alpha finished: nothing to change.' })}`,
     }));
     let saw = await coordinatorSaw(mark, 'SAW-HANDBACK', 'the Alpha handback');
     const firstCoord = since(mark, 'coordinator')[0];
     check('coordinator asks with effort max', firstCoord.effort === 'max', describe(since(mark, 'coordinator')));
-    check('coordinator has coordinator tools only', firstCoord.tools.includes('project_thread_start') && !firstCoord.tools.includes('project_handback'));
+    check('coordinator has coordinator tools only', firstCoord.tools.includes('thread_start') && !firstCoord.tools.includes('thread_handback'));
     const t1Reqs = since(mark, 't1');
     check('thread asks with effort high', t1Reqs.length > 0 && t1Reqs.every((r) => r.model === 'fake-model' && r.effort === 'high'), describe(t1Reqs));
-    check('thread has thread tools only', t1Reqs[0]?.tools.includes('project_handback') && !t1Reqs[0]?.tools.includes('project_thread_start'));
+    check('thread has thread tools only', t1Reqs[0]?.tools.includes('thread_handback') && !t1Reqs[0]?.tools.includes('thread_start'));
     // A DSH goal's rounds had a coordinator poll its threads (behaviour review 3), so it isn't offered create_goal; threads are.
     check('a coordinator is kept off DSH goals, and a thread is not', !firstCoord.tools.includes('create_goal') && firstCoord.tools.includes('update_goal')
         && t1Reqs[0]?.tools.includes('create_goal'), `${firstCoord.tools.join(',')} | ${t1Reqs[0]?.tools.join(',')}`);
@@ -503,13 +503,13 @@ try {
     // 3. A thread that ends its turn without a handback: the plugin nudges it once, from its coordinator, which takes
     // no turn for it; when it ends that way again, the coordinator gets the idle note.
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Beta', brief: 'Just answer.' }));
+    await say(coord, call('thread_start', { ask: 'Please do this.', title: 'Beta', brief: 'Just answer.' }));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Beta idle note');
     check('idle note reaches the coordinator', saw.fresh.includes('[Thread idle without a handback: t2 · "Beta"]') && saw.fresh.includes('Plain reply.'), saw.fresh.slice(0, 300));
     const t2 = threadSession('t2');
     const beta = since(mark, 't2');
     check('a turn that ends without a handback gets one nudge from its coordinator, sent by the plugin, and the note comes when it ends that way again', beta.length === 2
-        && beta[1].fresh.includes('[From the coordinator]\n\nFinish the task and call project_handback.') && readText(logFile).includes(`nudge ${PROJECT_ID}/t2 idle`)
+        && beta[1].fresh.includes('[From the coordinator]\n\nFinish the task and call thread_handback.') && readText(logFile).includes(`nudge ${PROJECT_ID}/t2 idle`)
         && saw.fresh.includes('(It was nudged once already to finish and hand back') && since(mark, 'coordinator').filter((r) => r.fresh.includes('t2 · "Beta"')).length === 1
         && fromSession(startingWith(await messagesOf(t2), '[From the coordinator]'), coord), `${describe(since(mark))} | ${saw.fresh.slice(-300)}`);
 
@@ -534,7 +534,7 @@ try {
     // 5. A failed turn: the plugin nudges it once, from its coordinator; when it fails again, the note says so.
     // The roster now notes the direct talk.
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Gamma', brief: 'E2E:fail' }));
+    await say(coord, call('thread_start', { ask: 'Please do this.', title: 'Gamma', brief: 'E2E:fail' }));
     check('roster notes the direct talk', since(mark, 'coordinator')[0]?.system.includes('- t2 · "Beta" · idle · no handback yet · the user talked to it directly; its reply: "Plain reply."'),
         since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => l.startsWith('- t')).join(' | '));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Gamma failure note');
@@ -548,7 +548,7 @@ try {
     // 6. A thread waiting on a permission prompt, then stopped.
     mark = model.requests.length;
     const probe = join(root, 'outside', 'approval-probe.txt');
-    await say(coord, call('project_thread_start', {
+    await say(coord, call('thread_start', {
         ask: 'Please do this.',
         title: 'Delta',
         brief: call('write', { file_path: probe, content: 'x', sandbox_permissions: 'danger-full-access', justification: 'E2E approval check.' }),
@@ -572,25 +572,25 @@ try {
 
     // 7. Coordinator effort changes from the next request, mid-turn.
     mark = model.requests.length;
-    let reqs = await say(coord, call('project_settings', { coordinator_effort: 'low' }));
+    let reqs = await say(coord, call('thread_settings', { coordinator_effort: 'low' }));
     check('settings change applies from the next request', reqs[0]?.effort === 'max' && reqs.at(-1)?.effort === 'low', describe(reqs));
 
     // 8. A thread model without efforts, and a bad effort.
-    reqs = await say(coord, call('project_settings', { thread_model: 'fake-flash' }));
+    reqs = await say(coord, call('thread_settings', { thread_model: 'fake-flash' }));
     check('settings note the dropped effort', resultOf(reqs).includes('has no effort levels'), resultOf(reqs));
     mark = model.requests.length;
-    reqs = await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Epsilon', brief: 'Just answer.' }));
+    reqs = await say(coord, call('thread_start', { ask: 'Please do this.', title: 'Epsilon', brief: 'Just answer.' }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Epsilon idle note');
     const t5Reqs = since(mark, 't5');
     check('flash thread asks without effort', t5Reqs.length > 0 && t5Reqs.every((r) => r.model === 'fake-flash' && r.effort === undefined), describe(t5Reqs));
-    reqs = await say(coord, call('project_settings', { thread_effort: 'ultra' }));
+    reqs = await say(coord, call('thread_settings', { thread_effort: 'ultra' }));
     check('bad effort is refused', /ultra/.test(resultOf(reqs)) && project().settings?.threadEffort !== 'ultra', resultOf(reqs));
 
     // 9. One thread's effort, then a coordinator message to it.
-    reqs = await say(coord, call('project_thread_update', { thread: 't1', effort: 'max' }));
+    reqs = await say(coord, call('thread_update', { thread: 't1', effort: 'max' }));
     check('thread update reports the change', /effort/.test(resultOf(reqs)), resultOf(reqs));
     mark = model.requests.length;
-    await say(coord, call('project_thread_send', { thread: 't1', text: 'One more check, please.' }));
+    await say(coord, call('thread_send', { thread: 't1', text: 'One more check, please.' }));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the t1 idle note');
     const t1More = since(mark, 't1');
     check('thread override reaches the wire', t1More.length > 0 && t1More.every((r) => r.effort === 'max'), describe(t1More));
@@ -598,36 +598,36 @@ try {
     check('a coordinator message comes from the coordinator', fromSession(startingWith(await messagesOf(t1), '[From the coordinator]'), coord));
 
     // 10. Memory reaches the coordinator's next request and new threads.
-    reqs = await say(coord, call('project_memory', { action: 'append', text: '- E2E memory fact.' }));
+    reqs = await say(coord, call('shared_notes', { action: 'append', text: '- E2E memory fact.' }));
     check('memory is written', resultOf(reqs).includes('appended') && readText(join(memoryDir, `${PROJECT_ID}.md`)).includes('E2E memory fact.'));
     check('memory is in the coordinator prompt', reqs.at(-1)?.system.includes('E2E memory fact.'));
     check('memory folder is 700', modeOf(memoryDir) === 0o700, octal(modeOf(memoryDir)));
 
     // 11. List and read.
-    reqs = await say(coord, call('project_thread_list', { include_resolved: true }));
+    reqs = await say(coord, call('thread_list', { include_resolved: true }));
     check('list shows every thread', ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon'].every((t) => resultOf(reqs).includes(t)), resultOf(reqs));
-    reqs = await say(coord, call('project_thread_read', { thread: 't2' }));
+    reqs = await say(coord, call('thread_read', { thread: 't2' }));
     check('read shows what the user said, not injected context', resultOf(reqs).includes('Hello from the user.') && !resultOf(reqs).includes('Current runtime context'), resultOf(reqs));
 
     // 12. Resolve.
-    await say(coord, call('project_thread_update', { thread: 't2', resolved: true }));
-    reqs = await say(coord, call('project_thread_list', {}));
+    await say(coord, call('thread_update', { thread: 't2', resolved: true }));
+    reqs = await say(coord, call('thread_list', {}));
     check('resolved threads leave the list', !resultOf(reqs).includes('Beta') && resultOf(reqs).includes('Alpha'), resultOf(reqs));
     // A title longer than DSH keeps (80 bytes) is cut once, at a word, with "…", and DSH keeps exactly that.
-    reqs = await say(coord, call('project_thread_update', { thread: 't2', title: 'Draft the spring launch announcement with product highlights, pricing tiers and a wholesale FAQ' }));
+    reqs = await say(coord, call('thread_update', { thread: 't2', title: 'Draft the spring launch announcement with product highlights, pricing tiers and a wholesale FAQ' }));
     const longTitle = 'Draft the spring launch announcement with product highlights, pricing tiers…';
     check('a long title is cut once, at a word, and DSH keeps it whole', resultOf(reqs).includes(`renamed to "${longTitle}"`)
         && (await bridge('GET', `/sessions/${t2}`)).title === longTitle, `${resultOf(reqs).slice(0, 200)} / ${(await bridge('GET', `/sessions/${t2}`)).title}`);
 
     // 13. Pause holds a handback; resume delivers it.
-    reqs = await say(coord, call('project_settings', { paused: true }));
+    reqs = await say(coord, call('thread_settings', { paused: true }));
     check('pause is on', resultOf(reqs).includes('Paused: yes'), resultOf(reqs));
     mark = model.requests.length;
-    reqs = await say(t1, call('project_handback', { status: 'done', summary: 'Held while paused.' }));
+    reqs = await say(t1, call('thread_handback', { status: 'done', summary: 'Held while paused.' }));
     await sleep(500);
     check('handback is held while paused', resultOf(reqs).includes('Handback saved') && since(mark, 'coordinator').length === 0, resultOf(reqs));
     mark = model.requests.length;
-    reqs = await say(coord, call('project_settings', { paused: false }));
+    reqs = await say(coord, call('thread_settings', { paused: false }));
     check('resume delivers the held handback', resultOf(reqs).includes('delivered 1 held handback'), resultOf(reqs));
     saw = await coordinatorSaw(mark, 'SAW-HANDBACK', 'the held handback');
     check('held handback arrives', saw.fresh.includes('Held while paused.'));
@@ -636,14 +636,14 @@ try {
 
     // 14. A stop the coordinator asks for is not echoed back to it.
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', {
+    await say(coord, call('thread_start', {
         ask: 'Please do this.',
         title: 'Zeta',
         brief: call('write', { file_path: probe, content: 'x', sandbox_permissions: 'danger-full-access', justification: 'E2E stop check.' }),
     }));
     await coordinatorSaw(mark, 'SAW-APPROVAL', 'the Zeta approval note');
     mark = model.requests.length;
-    reqs = await say(coord, call('project_thread_update', { thread: 't6', stop: true }));
+    reqs = await say(coord, call('thread_update', { thread: 't6', stop: true }));
     check('coordinator can stop a thread', resultOf(reqs).includes('current turn stopped'), resultOf(reqs));
     await waitIdle(threadSession('t6'));
     await sleep(1500);
@@ -653,12 +653,12 @@ try {
     // while the first turn runs; DSH runs both before going idle. The first
     // hands back, the second fails, and the coordinator hears about both.
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', {
+    await say(coord, call('thread_start', {
         ask: 'Please do this.',
         title: 'Eta',
-        brief: `E2E:slow 4000\n${call('project_handback', { status: 'done', summary: 'Eta part one done.' })}`,
+        brief: `E2E:slow 4000\n${call('thread_handback', { status: 'done', summary: 'Eta part one done.' })}`,
     }));
-    const sent = await say(coord, call('project_thread_send', { thread: 't7', text: 'E2E:fail', steer: false }));
+    const sent = await say(coord, call('thread_send', { thread: 't7', text: 'E2E:fail', steer: false }));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Eta failure note');
     const t7Reqs = since(mark, 't7');
     check('the second message was queued while the first turn ran, and the coordinator heard so', sent[0].at < (t7Reqs[1]?.at ?? 0)
@@ -671,7 +671,7 @@ try {
     // the thread was cut off, and nothing sends the thread on: it waits for the
     // user's Resume. Then: same coordinator, routes kept, threads still wired.
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Theta', brief: 'E2E:slow 120000\nWork for a long time.' }));
+    await say(coord, call('thread_start', { ask: 'Please do this.', title: 'Theta', brief: 'E2E:slow 120000\nWork for a long time.' }));
     await waitFor(() => since(mark, 't8').length > 0, 'the Theta request');
     const exited = new Promise((r) => child.once('exit', r));
     child.kill('SIGKILL');
@@ -689,11 +689,11 @@ try {
         && since(mark, 'coordinator').filter((r) => r.fresh.includes('t8 · "Theta"')).length === 1
         && since(mark, 't8').length === 0 && !readText(logFile).includes(`nudge ${PROJECT_ID}/t8 `), `${describe(since(mark))} | ${saw.fresh.slice(0, 300)}`);
     mark = model.requests.length;
-    await say(coord, call('project_thread_send', { thread: 't1', text: 'After the restart.' }));
+    await say(coord, call('thread_send', { thread: 't1', text: 'After the restart.' }));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the t1 idle note after restart');
     check('coordinator keeps its effort after restart', since(mark, 'coordinator').every((r) => r.effort === 'low'), describe(since(mark, 'coordinator')));
     const t1After = since(mark, 't1');
-    check('thread keeps its effort and tools after restart', t1After.length > 0 && t1After.every((r) => r.effort === 'max' && r.tools.includes('project_handback')), describe(t1After));
+    check('thread keeps its effort and tools after restart', t1After.length > 0 && t1After.every((r) => r.effort === 'max' && r.tools.includes('thread_handback')), describe(t1After));
 
     // 17. New defaults saved while DSH runs (the form on the plugin's page
     // writes the same file) apply without restarting the plugin, to whatever
@@ -727,7 +727,7 @@ try {
         && answer.value.goal.source === 'project setting' && answer.value.goal.inherited === 'Prove the plugin on a real host' && project().settings?.goal === answer.value.goal.value,
         JSON.stringify(answer.value?.goal ?? answer).slice(0, 300));
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Iota', brief: 'Just answer.' }));
+    await say(coord, call('thread_start', { ask: 'Please do this.', title: 'Iota', brief: 'Just answer.' }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Iota idle note');
     check('the coordinator asks with the default effort again', since(mark, 'coordinator').every((r) => r.effort === 'high'), describe(since(mark, 'coordinator')));
     // Models and efforts are settings: neither the coordinator's own prompt section nor its start result names them unless it chose one.
@@ -746,12 +746,12 @@ try {
         && project().settings?.goal === undefined, JSON.stringify(answer.value?.goal ?? answer).slice(0, 300));
 
     // Scope: a start that would use a guarded tool the user's words don't name is refused, and one without their words never runs.
-    reqs = await say(coord, call('project_thread_start', { ask: 'Write a haiku about rain.', title: 'Lanes', brief: 'Use mcp__lane-catalog__lanes_status to list the lanes.' }));
+    reqs = await say(coord, call('thread_start', { ask: 'Write a haiku about rain.', title: 'Lanes', brief: 'Use mcp__lane-catalog__lanes_status to list the lanes.' }));
     check('a start that would use a guarded tool the user did not ask for is refused', resultOf(reqs).startsWith('TOOL-RESULT: Failed: this would use lane-catalog, and the user\'s words do not ask for it.')
         && readText(logFile).includes(`guard ${PROJECT_ID} start lane-catalog`), resultOf(reqs));
     check('the coordinator\'s rules name the user\'s tools it doesn\'t have', reqs.some((r) => r.system.includes('\n   You don\'t have these here: lane-catalog, notes-app. When the user\'s words ask for work that needs one, start a thread with their words in `ask`; the thread gets the ones their words name. Leave them out of briefs, even to forbid them.\n')),
         reqs.at(-1)?.system.split('\n').filter((l) => /these here|include/.test(l)).join(' | '));
-    reqs = await say(coord, call('project_thread_start', { title: 'No ask', brief: 'Just answer.' }));
+    reqs = await say(coord, call('thread_start', { title: 'No ask', brief: 'Just answer.' }));
     check('a start without the user\'s words is rejected before it runs', resultOf(reqs) !== '' && /\bask\b/.test(resultOf(reqs))
         && !Object.values(project().threads ?? {}).some((t) => t.title === 'No ask' || t.title === 'Lanes'), resultOf(reqs).slice(0, 300));
 
@@ -763,7 +763,7 @@ try {
     check('selections the plugin makes itself are not taken for picks', readText(logFile).split('\n').filter((l) => / picked /.test(l)).length === 1,
         readText(logFile).split('\n').filter((l) => / picked | select /.test(l)).join('\n'));
     mark = model.requests.length;
-    await say(coord, call('project_thread_send', { thread: 't5', text: 'After the new defaults.' }));
+    await say(coord, call('thread_send', { thread: 't5', text: 'After the new defaults.' }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the t5 idle note after the new defaults');
     check('the coordinator runs on the pick', since(mark, 'coordinator').every((r) => r.model === 'fake-model' && r.effort === 'max'), describe(since(mark, 'coordinator')));
     const t5After = since(mark, 't5');
@@ -774,7 +774,7 @@ try {
     check('the window says the inherited effort is fitted', answer.ok && (answer.value?.notes ?? []).some((n) => /fake:fake-mini doesn't offer effort "max", so it runs at "high"/.test(n)),
         JSON.stringify(answer).slice(0, 400));
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Kappa', brief: 'Just answer.' }));
+    await say(coord, call('thread_start', { ask: 'Please do this.', title: 'Kappa', brief: 'Just answer.' }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Kappa idle note');
     const kappa = since(mark, 't10');
     check('a thread whose model lacks the default effort starts at the nearest one', kappa.length > 0 && kappa.every((r) => r.model === 'fake-mini' && r.effort === 'high'), describe(kappa));
@@ -811,7 +811,7 @@ try {
     }
     check('git makes the workspace a repository, so DSH records each turn\'s changes', gitReady);
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Lambda', brief: call('write', { file_path: join(ws, 'notes.md'), content: 'one\ntwo\nthree\n' }) }));
+    await say(coord, call('thread_start', { ask: 'Please do this.', title: 'Lambda', brief: call('write', { file_path: join(ws, 'notes.md'), content: 'one\ntwo\nthree\n' }) }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Lambda idle note');
     const lambdaId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Lambda')?.[0];
     const lambda = threadSession(lambdaId);
@@ -851,7 +851,7 @@ try {
     // own: A changed nothing, B the file it wrote (its shell edit isn't counted until shell edits are).
     const quietThread = async (title) => {
         const at = model.requests.length;
-        await say(coord, call('project_thread_start', { ask: 'Please do this.', title, brief: 'Wait for the next message.' }));
+        await say(coord, call('thread_start', { ask: 'Please do this.', title, brief: 'Wait for the next message.' }));
         await coordinatorSaw(at, 'SAW-IDLE', `the ${title} idle note`);
         return Object.entries(project().threads ?? {}).find(([, t]) => t.title === title)?.[0];
     };
@@ -937,13 +937,13 @@ try {
     // 22c. A message to a thread in the middle of a turn reaches that turn, so an answer the user gives the
     // coordinator gets there now, not when the turn ends (behaviour review 4, S3); steer=false queues it (15).
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', {
+    await say(coord, call('thread_start', {
         ask: 'Please do this.',
         title: 'Xi',
-        brief: `E2E:slow 4000\n${call('project_handback', { status: 'done', summary: 'Xi done.' })}`,
+        brief: `E2E:slow 4000\n${call('thread_handback', { status: 'done', summary: 'Xi done.' })}`,
     }));
     const xiId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Xi')?.[0];
-    const steered = (await say(coord, call('project_thread_send', { thread: xiId, text: 'XI-ANSWER: the user picked the blue theme.' }))).filter((r) => whoOf(r) === 'coordinator');
+    const steered = (await say(coord, call('thread_send', { thread: xiId, text: 'XI-ANSWER: the user picked the blue theme.' }))).filter((r) => whoOf(r) === 'coordinator');
     await coordinatorSaw(mark, 'SAW-HANDBACK', 'the Xi handback');
     await waitIdle(threadSession(xiId));
     const xiReqs = since(mark, xiId);
@@ -956,7 +956,7 @@ try {
     // asks for nothing again.
     mark = model.requests.length;
     const quitProbe = join(root, 'outside', 'quit-probe.txt');
-    await say(coord, call('project_thread_start', {
+    await say(coord, call('thread_start', {
         ask: 'Please do this.',
         title: 'Nu',
         brief: call('write', { file_path: quitProbe, content: 'x', sandbox_permissions: 'danger-full-access', justification: 'E2E quit check.' }),
@@ -1046,7 +1046,7 @@ try {
         && fromSession(startingWith(await messagesOf(threadSession('t3')), '[From the coordinator]'), coord), `${refusedWhy(answer2)} ${retried?.fresh.slice(0, 300)}`);
     // Retry starts the count again, so the plugin nudges the retried turn that ended without a handback, and the coordinator hears after that.
     check('the coordinator hears how the retry went, after the plugin\'s nudge', saw.fresh.includes('[Thread idle without a handback: t3 · "Gamma"]')
-        && since(mark, 't3').length === 2 && since(mark, 't3')[1].fresh.includes('Finish the task and call project_handback.'), `${describe(since(mark))} | ${saw.fresh.slice(0, 300)}`);
+        && since(mark, 't3').length === 2 && since(mark, 't3')[1].fresh.includes('Finish the task and call thread_handback.'), `${describe(since(mark))} | ${saw.fresh.slice(0, 300)}`);
     check('a turn that finishes clears the failure', (await viewOf(threadSession('t3')))?.ending === undefined, JSON.stringify(await viewOf(threadSession('t3'))));
     // Resume: the same for a stopped thread.
     mark = model.requests.length;
@@ -1090,7 +1090,7 @@ try {
     refused = await api('createCategory', { name: 'Later', workspace: wsA });
     check('categories are no part of this plugin', !refused.ok, JSON.stringify(refused).slice(0, 300));
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Mu', brief: 'Just answer.', folder: 'elsewhere' }));
+    await say(coord, call('thread_start', { ask: 'Please do this.', title: 'Mu', brief: 'Just answer.', folder: 'elsewhere' }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Mu idle note');
     const muId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Mu')?.[0];
     const muView = muId ? await bridge('GET', `/sessions/${threadSession(muId)}`) : null;
@@ -1121,7 +1121,7 @@ try {
     // escaped, so the message that carries them (the user's words, here) names no tool, nor "lanes", while the ask does.
     const madeThreads = () => Object.values(store().projects?.[madeId]?.threads ?? {});
     const s4 = 'Use lane-catalog to check which of my model lanes are up right now.';
-    const lanesStart = `E2E:call project_thread_start ${JSON.stringify({ ask: s4, title: 'Lanes up', brief: `Report which are up. E2E:force ${LANES} {}` }).replace(/l/g, '\\u006c').replace(/L/g, '\\u004c')}`;
+    const lanesStart = `E2E:call thread_start ${JSON.stringify({ ask: s4, title: 'Lanes up', brief: `Report which are up. E2E:force ${LANES} {}` }).replace(/l/g, '\\u006c').replace(/L/g, '\\u004c')}`;
     reqs = await say(madeCoord, lanesStart);
     check('an ask that names the user\'s tool when the user never did is refused', resultOf(reqs).startsWith('TOOL-RESULT: Failed: ask names lane-catalog, but the user\'s messages don\'t.')
         && readText(logFile).includes(` guard ${madeId} ask-unsaid lane-catalog`) && !madeThreads().some((t) => t.title === 'Lanes up'), resultOf(reqs));
@@ -1139,7 +1139,7 @@ try {
     const notesAsk = 'Read my notes app and tell me the first line.';
     await say(madeCoord, notesAsk);
     mark = model.requests.length;
-    reqs = await say(madeCoord, call('project_thread_start', { ask: notesAsk, title: 'Notes', brief: `Read them. E2E:force ${NOTES} {}` }));
+    reqs = await say(madeCoord, call('thread_start', { ask: notesAsk, title: 'Notes', brief: `Read them. E2E:force ${NOTES} {}` }));
     await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Made Here"') && whoOf(r) === 'coordinator' && r.action.text === 'SAW-IDLE'), 'the Notes idle note');
     await waitIdle(madeCoord);
     const notesReqs = since(mark).filter((r) => /You are thread t\d+, "Notes", in the DSH project "Made Here"/.test(r.system));
@@ -1191,7 +1191,7 @@ try {
         `${existsSync(wideFile)} ${asked.length} ${wideResult.slice(0, 300)}`);
     const readOnlyFile = join(dirA, 'read-only-probe.txt');
     mark = model.requests.length;
-    await say(madeCoord, call('project_thread_start', { ask: 'Please do this.', title: 'Read only', brief: call('write', { file_path: readOnlyFile, content: 'x' }) }));
+    await say(madeCoord, call('thread_start', { ask: 'Please do this.', title: 'Read only', brief: call('write', { file_path: readOnlyFile, content: 'x' }) }));
     // DSH's sandbox refuses the write, or asks the user; either way nothing is written.
     await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Made Here"') && whoOf(r) === 'coordinator' && /^SAW-(IDLE|APPROVAL)$/.test(r.action.text ?? '')), 'the Read only note');
     described = await webApi(webAgain, 'dsh-plugin-coordinator/describe', { target: madeCoord });
@@ -1219,7 +1219,7 @@ try {
         const sends = `sends a POST to ${sinkAt}/deploy (curl)`;
         const ofDeploy = (r) => r.toolName === 'bash' && r.reason === `the command ${sends}. The thread says: "Deploy the build"`;
         mark = model.requests.length;
-        await say(coord, call('project_thread_start', { ask: 'Deploy the build to staging.', title: 'Send', brief: call('bash', deploy) }));
+        await say(coord, call('thread_start', { ask: 'Deploy the build to staging.', title: 'Send', brief: call('bash', deploy) }));
         const first = await prompts.next('the Send prompt', ofDeploy);
         saw = await coordinatorSaw(mark, 'SAW-APPROVAL', 'the Send approval note');
         const sendId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Send')?.[0];
@@ -1235,7 +1235,7 @@ try {
         check('Allow once runs it, once', allowed?.ok === true && hits.filter((h) => h === 'POST /deploy').length === 1 && resultOf(since(mark, sendId)).includes('SINK-RECEIVED'),
             `${JSON.stringify(allowed)} ${hits.join()} ${resultOf(since(mark, sendId))}`);
         mark = model.requests.length;
-        await say(coord, call('project_thread_send', { thread: sendId, text: call('bash', deploy) }));
+        await say(coord, call('thread_send', { thread: sendId, text: call('bash', deploy) }));
         const again = await prompts.next('the retry\'s prompt', ofDeploy);
         await prompts.answer(again, 'rejected');
         const retrySaw = await coordinatorSaw(mark, 'SAW-IDLE', 'the retry\'s idle note');
@@ -1251,7 +1251,7 @@ try {
         const retryLog = readText(logFile).split('\n').filter((line) => line.includes(` ${PROJECT_ID}/${sendId} `) && / (prompt-answered|nudge|idle-note) /.test(line)).slice(-3).map((line) => line.split(' ')[1]);
         check('after the user answers its prompt, a turn that ends without a handback gets its own nudge', retryLog.join() === 'prompt-answered,nudge,idle-note', retryLog.join());
         mark = model.requests.length;
-        await say(coord, call('project_thread_start', { ask: 'Check that staging is up.', title: 'Read', brief: call('bash', { command: `curl -sS http://${sinkAt}/health`, description: 'Check staging' }) }));
+        await say(coord, call('thread_start', { ask: 'Check that staging is up.', title: 'Read', brief: call('bash', { command: `curl -sS http://${sinkAt}/health`, description: 'Check staging' }) }));
         await coordinatorSaw(mark, 'SAW-IDLE', 'the Read idle note');
         const readId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Read')?.[0];
         const readAsked = (await bridge('GET', `/sessions/${threadSession(readId)}/events?types=approval/asked&limit=20`)).events ?? [];
@@ -1260,7 +1260,7 @@ try {
         // and refuses the second unasked; the thread reads the answer before it sends again.
         mark = model.requests.length;
         const both = [call('bash', { command: `curl -sS -X POST http://${sinkAt}/first`, description: 'Send the first' }), call('bash', { command: `curl -sS -X POST http://${sinkAt}/second`, description: 'Send the second' })];
-        await say(coord, call('project_thread_start', { ask: 'Send both.', title: 'Both', brief: both.join('\n') }));
+        await say(coord, call('thread_start', { ask: 'Send both.', title: 'Both', brief: both.join('\n') }));
         const firstOfTwo = await prompts.next('the Both prompt', (r) => r.toolName === 'bash' && r.reason?.startsWith(`the command sends a POST to ${sinkAt}/first (curl)`));
         await prompts.answer(firstOfTwo, 'rejected');
         await coordinatorSaw(mark, 'SAW-IDLE', 'the Both idle note');
@@ -1273,7 +1273,7 @@ try {
         // once that one is allowed, in the tool itself. A Reject there sends nothing.
         mark = model.requests.length;
         const wide = { command: `curl -sS -X POST http://${sinkAt}/wide`, description: 'Send it wide', sandbox_permissions: 'danger-full-access', justification: 'E2E escalation check.' };
-        await say(coord, call('project_thread_start', { ask: 'Send it with wider access.', title: 'Wide', brief: call('bash', wide) }));
+        await say(coord, call('thread_start', { ask: 'Send it with wider access.', title: 'Wide', brief: call('bash', wide) }));
         const ours = await prompts.next('the Wide prompt', (r) => r.toolName === 'bash' && r.reason?.startsWith(`the command sends a POST to ${sinkAt}/wide (curl)`));
         await prompts.answer(ours, 'allowed-once');
         const widen = await prompts.next('DSH\'s prompt to widen the Wide sandbox', (r) => r.toolName === 'bash' && r.reason === 'escalate sandbox to danger-full-access: E2E escalation check.');
@@ -1289,7 +1289,7 @@ try {
             && posted() === 1 && (await coordAsked()) === askedBefore && readText(logFile).includes(`send-refused ${PROJECT_ID}/coordinator request curl`), resultOf(reqs));
         changed = await webApi(webAgain, 'dsh-plugin-coordinator/update', { target: madeCoord, changes: { threadPermission: 'danger-full-access' } });
         mark = model.requests.length;
-        await say(madeCoord, call('project_thread_start', { ask: 'Please do this.', title: 'Never asks', brief: call('bash', { command: `curl -sS -X POST http://${sinkAt}/deploy`, description: 'Deploy' }) }));
+        await say(madeCoord, call('thread_start', { ask: 'Please do this.', title: 'Never asks', brief: call('bash', { command: `curl -sS -X POST http://${sinkAt}/deploy`, description: 'Deploy' }) }));
         await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Made Here"') && whoOf(r) === 'coordinator' && r.action.text === 'SAW-IDLE'), 'the Never asks idle note');
         await waitIdle(madeCoord);
         const neverReqs = since(mark).filter((r) => /You are thread t\d+, "Never asks", in the DSH project "Made Here"/.test(r.system));
@@ -1308,16 +1308,16 @@ try {
         await sleep(2500);
         const tidyId = sendId;
         mark = model.requests.length;
-        await say(coord, call('project_thread_send', { thread: tidyId, text: call('bash', { command: `cd ${ws} && mkdir old && mv legacy old/ && mkdir -p scratch && echo hi > scratch/a.txt`, description: 'Move the old notes' }) }));
+        await say(coord, call('thread_send', { thread: tidyId, text: call('bash', { command: `cd ${ws} && mkdir old && mv legacy old/ && mkdir -p scratch && echo hi > scratch/a.txt`, description: 'Move the old notes' }) }));
         await coordinatorSaw(mark, 'SAW-IDLE', 'the Tidy idle note');
         check('a thread\'s command that makes folders keeps them as its own', existsSync(join(ws, 'old', 'legacy', 'notes.txt')) && readText(logFile).includes(`made-dirs ${PROJECT_ID}/${tidyId} 2`),
             readText(logFile).split('\n').filter((line) => line.includes('made-dirs')).join(' | '));
         mark = model.requests.length;
-        await say(coord, call('project_thread_send', { thread: tidyId, text: call('bash', { command: `cd ${ws} && rm -rf scratch`, description: 'Clean up the scratch folder' }) }));
+        await say(coord, call('thread_send', { thread: tidyId, text: call('bash', { command: `cd ${ws} && rm -rf scratch`, description: 'Clean up the scratch folder' }) }));
         await coordinatorSaw(mark, 'SAW-IDLE', 'the scratch idle note');
         check('what a thread\'s command made, it deletes without asking', !existsSync(join(ws, 'scratch')) && deleteAsks(tidyId) === 0, `${deleteAsks(tidyId)}`);
         mark = model.requests.length;
-        await say(coord, call('project_thread_send', { thread: tidyId, text: call('bash', { command: `cd ${ws} && rm -rf old`, description: 'Remove the old folder' }) }));
+        await say(coord, call('thread_send', { thread: tidyId, text: call('bash', { command: `cd ${ws} && rm -rf old`, description: 'Remove the old folder' }) }));
         const tidyAsk = await prompts.next('the Tidy delete prompt', (r) => r.toolName === 'bash' && r.reason?.startsWith('the command deletes old (rm)'));
         await prompts.answer(tidyAsk, 'rejected');
         await coordinatorSaw(mark, 'SAW-IDLE', 'the Tidy delete idle note');
@@ -1329,10 +1329,10 @@ try {
         const webId = readId;
         if (model.requests.some((r) => whoOf(r) === webId && r.system.includes(`in the DSH project "${PROJECT}"`) && r.tools.includes('working_directory'))) {
             mark = model.requests.length;
-            await say(coord, call('project_thread_send', { thread: webId, text: call('working_directory', { cd: join(ws, 'packages', 'web') }) }));
+            await say(coord, call('thread_send', { thread: webId, text: call('working_directory', { cd: join(ws, 'packages', 'web') }) }));
             await coordinatorSaw(mark, 'SAW-IDLE', 'the working directory idle note');
             mark = model.requests.length;
-            await say(coord, call('project_thread_send', { thread: webId, text: call('bash', { command: 'rm -rf src', description: 'Remove the old sources' }) }));
+            await say(coord, call('thread_send', { thread: webId, text: call('bash', { command: 'rm -rf src', description: 'Remove the old sources' }) }));
             const webAsk = await prompts.next('the Web delete prompt', (r) => r.toolName === 'bash' && r.reason?.startsWith('the command deletes src (rm)'));
             await prompts.answer(webAsk, 'rejected');
             await coordinatorSaw(mark, 'SAW-IDLE', 'the Web delete idle note');
@@ -1346,13 +1346,13 @@ try {
         sink.close();
     }
 
-    // 26. A coordinator's message out of its project (project_message): to a chat in no project, and to another
+    // 26. A coordinator's message out of its project (chat_message): to a chat in no project, and to another
     // project's coordinator. The chat stays outside: no project tools or prompt, no role in the window. Its answer
     // comes back to the coordinator once, and a turn the message started can't send one on.
     const plainTitle = (await bridge('GET', `/sessions/${plainId}`)).title;
     const ours = (r) => r.system.includes(`You are the coordinator of the DSH project "${PROJECT}"`);
     mark = model.requests.length;
-    reqs = await say(coord, call('project_message', { to: plainId, ask: 'Say hello to my plain chat for me.', text: 'Hello from the e2e project.' }));
+    reqs = await say(coord, call('chat_message', { to: plainId, ask: 'Say hello to my plain chat for me.', text: 'Hello from the e2e project.' }));
     check('a coordinator sends a chat in no project the message the user asked for', resultOf(reqs) === `TOOL-RESULT: Sent to "${plainTitle}". Its reply comes back to you once, as a note.`, resultOf(reqs));
     const plainSaw = await waitFor(() => since(mark).find((r) => r.fresh.includes(`[Message from the coordinator of "${PROJECT}"]`)), 'the chat\'s turn on the message');
     check('the chat reads it as from the project, with the user\'s words, and has no project tools or prompt', plainSaw.fresh.includes('The user asked: "Say hello to my plain chat for me."')
@@ -1368,8 +1368,8 @@ try {
     await new Promise((r) => setTimeout(r, 1500));
     check('a later turn of that chat sends the coordinator nothing', !since(mark).some((r) => ours(r)), describe(since(mark)));
     mark = model.requests.length;
-    const bounce = call('project_message', { to: PROJECT, ask: 'Tell the E2E project hello.', text: 'Hello back.' });
-    reqs = await say(coord, call('project_message', { to: '◆ Made Here', ask: 'Ask Made Here to say hello back.', text: bounce }));
+    const bounce = call('chat_message', { to: PROJECT, ask: 'Tell the E2E project hello.', text: 'Hello back.' });
+    reqs = await say(coord, call('chat_message', { to: '◆ Made Here', ask: 'Ask Made Here to say hello back.', text: bounce }));
     check('a coordinator sends another project\'s coordinator a message', resultOf(reqs) === 'TOOL-RESULT: Sent to ◆ Made Here. Its reply comes back to you once, as a note.', resultOf(reqs));
     const back = await waitFor(() => since(mark).find((r) => ours(r) && r.fresh.includes('[Reply from ◆ Made Here]')), 'Made Here\'s reply');
     await waitIdle(coord);

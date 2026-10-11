@@ -85,6 +85,7 @@ npm test                                  # dsh-site, session-bridge, coordinato
 npm install --no-save @deepseek-ai/schemastery @deepseek-ai/dsh-llm@next @deepseek-ai/dsh-brand@next @deepseek-ai/dsh-tools@next
 node plugins/discord/test/smoke.mjs       # discord (no token needed)
 node plugins/coordinator/test/smoke.mjs   # coordinator (fake DSH host)
+node plugins/coordinator/test/client.mjs  # coordinator's window half
 node plugins/categories/test/smoke.mjs    # categories (fake DSH host)
 
 # coordinator + session-bridge on a real DSH, with a scripted model server

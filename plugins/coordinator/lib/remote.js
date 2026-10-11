@@ -5,7 +5,7 @@
  * app and in a browser). This module adds one more, `dsh-plugin-coordinator`,
  * so the Project settings dialog in lib/client.js reads and changes a
  * project's models, effort and pause the way the coordinator's
- * project_settings tool does, through the same manager methods, and its
+ * thread_settings tool does, through the same manager methods, and its
  * access settings (the user's tools, permissions), which only it does, the
  * plugin's page and the Projects page list every project, a failed or
  * stopped thread runs again from its card (Retry, Resume), a thread's

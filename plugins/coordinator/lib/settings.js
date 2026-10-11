@@ -4,12 +4,12 @@
  * effort. Each resolves from the first layer that sets it:
  *
  *   the project's own setting (its Project settings dialog, its coordinator's
- *   DSH model picker, or the project_settings tool) → project row in the
+ *   DSH model picker, or the thread_settings tool) → project row in the
  *   profile → plugin row → DSH default
  *
  * A thread fixes its model and effort when it starts (start arguments win
  * over the thread defaults), and keeps them until changed with
- * project_thread_update, the dialog or its own model picker. Pure
+ * thread_update, the dialog or its own model picker. Pure
  * functions, no host imports.
  *
  * @module dsh-plugin-coordinator/settings

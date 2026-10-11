@@ -1,7 +1,7 @@
 /**
  * Model-facing project tools, registered in one agent's scope. The coordinator
- * gets the thread, message and settings tools, a thread gets project_handback,
- * and both get project_memory. Each tool is bound to its project (and thread) when it
+ * gets the thread, message and settings tools, a thread gets thread_handback,
+ * and both get shared_notes. Each tool is bound to its project (and thread) when it
  * is registered, so a call can never reach another project.
  *
  * @module dsh-plugin-coordinator/tools
@@ -62,7 +62,7 @@ export function projectTools(manager, who) {
     const id = (value) => String(value ?? '').trim();
     const shared = [
         tool({
-            name: 'project_memory',
+            name: 'shared_notes',
             description: 'Read or write the project\'s shared memory file, which every coordinator and thread reads. Write only facts the user stated or you checked: decisions, conventions, how the user wants to work. Never plans or guesses.',
             parameters: {
                 action: { type: 'string', required: true, enum: ['read', 'append', 'replace'], description: 'read, append (add lines at the end), or replace (rewrite the whole file)' },
@@ -78,7 +78,7 @@ export function projectTools(manager, who) {
         return [
             ...shared,
             tool({
-                name: 'project_handback',
+                name: 'thread_handback',
                 description: 'Your report to the user, through the coordinator. Call it once, as your last step: done when finished, blocked when stuck, needs_decision when the user must choose.',
                 parameters: {
                     status: { type: 'string', required: true, enum: HANDBACK_STATUSES, description: 'done, blocked or needs_decision; progress only for news the coordinator needs before you finish' },
@@ -90,8 +90,8 @@ export function projectTools(manager, who) {
                 },
             }),
             tool({
-                name: 'project_ask_coordinator',
-                description: 'Ask your coordinator a question while you work, when you are unsure and no sensible default fits. Its answer arrives here as a message from the coordinator. Not for results: those go in project_handback.',
+                name: 'thread_ask',
+                description: 'Ask your coordinator a question while you work, when you are unsure and no sensible default fits. Its answer arrives here as a message from the coordinator. Not for results: those go in thread_handback.',
                 parameters: {
                     question: { type: 'string', required: true, description: 'One short question, with the options you see and the one you would pick' },
                 },
@@ -106,7 +106,7 @@ export function projectTools(manager, who) {
     return [
         ...shared,
         tool({
-            name: 'project_thread_start',
+            name: 'thread_start',
             description: 'Start a thread: a separate DSH session in the project that does one task and reports back to you with a handback. One thread per distinct ask.',
             parameters: {
                 title: { type: 'string', required: true, description: 'A few plain words naming the task, in the user\'s words' },
@@ -128,7 +128,7 @@ export function projectTools(manager, who) {
             },
         }),
         tool({
-            name: 'project_thread_send',
+            name: 'thread_send',
             description: 'Send a message to a thread. A running thread reads it in the turn it is running, at its next step; steer=false queues it until that turn ends. An idle thread starts its next turn with it.',
             parameters: {
                 thread: { type: 'string', required: true, description: 'Thread id, e.g. "t3"' },
@@ -142,8 +142,8 @@ export function projectTools(manager, who) {
             },
         }),
         tool({
-            name: 'project_message',
-            description: 'Send a message to a chat outside this project, or to another project\'s coordinator, when the user asks you to. That chat stays outside this project: it gets no thread, card or tools. Its reply comes back to you once, as a note. For this project\'s threads, use project_thread_send.',
+            name: 'chat_message',
+            description: 'Send a message to a chat outside this project, or to another project\'s coordinator, when the user asks you to. That chat stays outside this project: it gets no thread, card or tools. Its reply comes back to you once, as a note. For this project\'s threads, use thread_send.',
             parameters: {
                 to: { type: 'string', required: true, description: 'Another project\'s name, or the chat\'s title as DSH lists it (or its session id)' },
                 ask: { type: 'string', required: true, description: 'The user\'s request to send it, copied word for word from their message' },
@@ -155,7 +155,7 @@ export function projectTools(manager, who) {
             },
         }),
         tool({
-            name: 'project_thread_list',
+            name: 'thread_list',
             description: 'List the project\'s threads with live status and last handback.',
             parameters: {
                 include_resolved: { type: 'boolean', description: 'Also list resolved threads' },
@@ -165,7 +165,7 @@ export function projectTools(manager, who) {
             },
         }),
         tool({
-            name: 'project_thread_read',
+            name: 'thread_read',
             description: 'Read how a thread is doing: the files it changed so far, its latest steps, and its latest messages (user and assistant text).',
             parameters: {
                 thread: { type: 'string', required: true, description: 'Thread id, e.g. "t3"' },
@@ -176,7 +176,7 @@ export function projectTools(manager, who) {
             },
         }),
         tool({
-            name: 'project_thread_update',
+            name: 'thread_update',
             description: 'Change a thread when the user asks: rename it, change its model or effort, resolve or reopen it, or stop its current turn.',
             parameters: {
                 thread: { type: 'string', required: true, description: 'Thread id, e.g. "t3"' },
@@ -196,7 +196,7 @@ export function projectTools(manager, who) {
             },
         }),
         tool({
-            name: 'project_settings',
+            name: 'thread_settings',
             description: 'Show or change which model and effort the coordinator and new threads use, or pause the project. With no arguments it shows them, and the user\'s tools and permission settings, which only the user changes. Only when the user asks.',
             parameters: {
                 coordinator_model: { type: 'string', description: `Coordinator model. ${MODEL_HELP}` },
