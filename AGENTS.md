@@ -1,3 +1,9 @@
+# Who these rules are for
+
+The handoff rules below are only for the two accounts that build these plugins (A and B in `HANDOFF.md`), each working in its own checkout of this repository.
+
+**If you run inside DSH** (your instructions say you are powered by DeepSeek Harness), as a project coordinator (◆), a project thread, or any other DSH chat whose folder is this repository, **skip this whole file**. Don't pull, don't read or act on `HANDOFF.md`, and don't commit or push unless the user asks you to. Its "Doing now" and "Next steps" are the builders' to-do list, not your task: do what the user, your coordinator or your brief asks.
+
 # Two-account handoff rules
 
 Two accounts work on this repo. Either one can run out of usage at any time.
