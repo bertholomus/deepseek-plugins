@@ -8,7 +8,8 @@
  * project_settings tool does, through the same manager methods, and its
  * access settings (the user's tools, permissions), which only it does, the
  * plugin's page and the Projects page list every project, a failed or
- * stopped thread runs again from its card (Retry, Resume), a project is made
+ * stopped thread runs again from its card (Retry, Resume), a thread's
+ * Changes tab reads its diffs (changes), a project is made
  * in a workspace, renamed or removed (create, rename, remove,
  * addCoordinator), archived with its coordinator and threads or brought
  * back (archive, restore), and the window hears what the user hasn't seen
@@ -201,6 +202,21 @@ export class ProjectsRemote {
     }
 
     /**
+     * A thread's own changes for its Changes tab: each file with lines added
+     * and deleted and each edit's hunks, the project's other threads that
+     * changed the same files, and the turns DSH's Review can still show.
+     * @param target - the thread's session id, or a session or id of its project with `thread`.
+     * @param thread - the thread's id (t3), when target isn't its session.
+     */
+    async changes(target, thread) {
+        try {
+            return await this.manager.threadDiffs(target, typeof thread === 'string' ? thread : undefined);
+        } catch (error) {
+            throw failure(error);
+        }
+    }
+
+    /**
      * Run a thread again after its last turn failed (Retry) or stopped (Resume).
      * @param target - as for describe.
      * @param thread - the thread's id (t3).
@@ -246,5 +262,5 @@ function markRemote(Class, names) {
     }
 }
 markRemote(ProjectsRemote, [
-    'describe', 'list', 'sessions', 'news', 'seeNews', 'update', 'continueThread', 'create', 'rename', 'remove', 'addCoordinator', 'archive', 'restore',
+    'describe', 'list', 'sessions', 'news', 'seeNews', 'update', 'continueThread', 'changes', 'create', 'rename', 'remove', 'addCoordinator', 'archive', 'restore',
 ]);

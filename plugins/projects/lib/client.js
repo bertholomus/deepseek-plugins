@@ -279,6 +279,45 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-chat-body{display:flex;flex:1 1 auto;min-width:0;min-height:0}',
             '.dshp-t-tab-title{display:inline-flex;align-items:center;gap:6px;min-width:0}',
             '.dshp-t-tab-title>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            // Threads: a thread's Changes tab, its bar and buttons as DSH's own Review tab draws them
+            '.dshp-ch{display:flex;flex-direction:column;box-sizing:border-box;width:100%;height:100%;min-width:0;min-height:0;color:var(--dsw-alias-label-primary)}',
+            '.dshp-ch-bar{flex:none;display:flex;align-items:center;gap:8px;box-sizing:border-box;min-height:44px;padding:4px 6px 4px 12px;border-bottom:.5px solid var(--dsw-alias-border-l3)}',
+            '.dshp-ch-title{display:flex;flex-direction:column;align-items:flex-start;flex:1;min-width:0}',
+            '.dshp-ch-name{max-width:100%;padding:0;border:0;background:none;font:inherit;font-size:12px;font-weight:500;line-height:17px;color:var(--dsw-alias-label-primary);text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            'button.dshp-ch-name{cursor:pointer}',
+            'button.dshp-ch-name:hover,button.dshp-ch-name:focus-visible{outline:none;text-decoration:underline}',
+            '.dshp-ch-sub{display:inline-flex;align-items:center;gap:6px;min-height:15px;font-size:11px;line-height:15px;color:var(--dsw-alias-label-secondary);white-space:nowrap}',
+            '.dshp-ch-tool{flex:none;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:var(--dsw-radius-sm);background:none;color:var(--dsw-alias-label-secondary);cursor:pointer}',
+            '.dshp-ch-tool:hover,.dshp-ch-tool:focus-visible{outline:none;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
+            `.dshp-ch-tool:focus-visible{box-shadow:inset 0 0 0 2px ${RING}}`,
+            '.dshp-ch-tool[aria-disabled=true]{cursor:progress}',
+            '.dshp-ch-busy{animation:dshp-ch-turn 1s linear infinite}',
+            '@keyframes dshp-ch-turn{to{transform:rotate(360deg)}}',
+            '@media (prefers-reduced-motion:reduce){.dshp-ch-busy{animation:none}}',
+            '.dshp-ch-body{flex:1 1 auto;min-width:0;min-height:0;overflow:auto;padding:8px 8px 20px}',
+            '.dshp-ch-files{display:flex;flex-direction:column;gap:8px}',
+            '.dshp-ch-file{display:flex;flex-direction:column;min-width:0}',
+            '.dshp-ch-file-head{display:flex;align-items:center;gap:2px;min-width:0}',
+            '.dshp-ch-file-toggle{display:flex;align-items:center;gap:6px;flex:1;min-width:0;height:30px;padding:0 6px;border:0;border-radius:var(--dsw-radius-sm);background:none;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer}',
+            '.dshp-ch-file-toggle:hover,.dshp-ch-file-toggle:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover)}',
+            `.dshp-ch-file-toggle:focus-visible{box-shadow:inset 0 0 0 2px ${RING}}`,
+            '.dshp-ch-chev{flex:none;color:var(--dsw-alias-label-tertiary);transform:rotate(-90deg);transition:transform .12s}',
+            '.dshp-ch-chev-open{transform:none}',
+            '.dshp-ch-file-icon,.dshp-ch-tab-icon{flex:none;display:inline-flex}',
+            '.dshp-ch-path{flex:0 1 auto;min-width:0}',
+            '.dshp-ch-new{flex:none;padding:0 6px;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover);font-size:10px;line-height:16px;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-ch-file-head .dshp-t-counts{flex:none;margin-left:auto;padding-left:6px;font-size:11px}',
+            '.dshp-ch-file-body{display:flex;flex-direction:column;gap:4px;min-width:0;padding:2px 0 10px}',
+            // The file's name heads its section, so DSH's diff leaves out its own path row (always its body's first).
+            '.dshp-ch-diff[data-diff]>:nth-child(2)>:first-child{display:none}',
+            // DSH's code card keeps its margin for chat; here the file's own spacing holds.
+            '.dshp-ch-diff[data-diff]{margin:0}',
+            '.dshp-ch-note{margin:0;padding:0 4px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}',
+            // Under the path: the toggle's padding, chevron, icon and their gaps.
+            '.dshp-ch-note.dshp-ch-when{margin-top:-6px;padding-left:46px}',
+            `.dshp-ch-link{padding:0;border:0;background:none;font:inherit;color:${LINK_TEXT};text-decoration:underline;text-underline-offset:2px;cursor:pointer}`,
+            `.dshp-ch-link:focus-visible{outline:2px solid ${RING};outline-offset:1px;border-radius:2px}`,
+            '.dshp-ch-foot{display:flex;flex-direction:column;gap:6px;margin-top:12px;padding-top:10px;border-top:.5px solid var(--dsw-alias-border-l3)}',
             // The plugin's messages between sessions: DSH's notice box, saying what came in (TriggerNotice).
             '.dshp-nt{min-width:0;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-turn-trigger-bg,var(--dsw-alias-markdown-code-block));container-type:inline-size;transition:background-color .1s}',
             '.dshp-nt:hover{background:var(--dsw-alias-turn-trigger-bg-hover,var(--dsw-alias-interactive-bg-hover))}',
@@ -343,6 +382,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             'button.dshp-t-changes:hover,button.dshp-t-changes:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}',
             'button.dshp-t-changes:focus-visible{box-shadow:inset 0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}',
             '.dshp-t-changes-icon{flex:none;display:inline-flex}',
+            // In a thread's header, its own changes: the counts open its Changes tab.
+            '.dshp-t-changes-pill .dshp-t-counts{font-size:11px}',
+            '@container (width<=480px){.dshp-t-changes-pill .dshp-t-changes-icon{display:none}}',
             '.dshp-t-counts{display:inline-flex;gap:5px;font-family:var(--ds-font-family-code);font-variant-numeric:tabular-nums}',
             // DSH's green is too light to read on white at this size; deepened toward the text color.
             '.dshp-t-added{color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 60%,var(--dsw-alias-label-primary))}',
@@ -1370,7 +1412,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** A thread's chat in the right sidebar: `dsh-resource://projectthread/session/<session id>`. */
         const CHAT_PROTOCOL = 'projectthread';
         const CHAT_PREFIX = `dsh-resource://${CHAT_PROTOCOL}/session/`;
-        const KINDS = { chat: 'projectthread', pane: 'projectthreads', link: 'projectthreadlink' };
+        /** A thread's Changes tab, its own file edits as diffs: `dsh-resource://projectchanges/session/<thread session id>`. */
+        const CHANGES_PROTOCOL = 'projectchanges';
+        const CHANGES_PREFIX = `dsh-resource://${CHANGES_PROTOCOL}/session/`;
+        const KINDS = { chat: 'projectthread', pane: 'projectthreads', link: 'projectthreadlink', changes: CHANGES_PROTOCOL };
         /** DSH's Review tab for one turn's changes (dsh-client-ui-deliverables): `<session>/<seq>/<turn>`. */
         const REVIEW_PREFIX = 'dsh-resource://changes-review/session/';
         const IDS = {
@@ -1381,6 +1426,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             chat: `${BUNDLE}/thread-chat`,
             pane: `${BUNDLE}/threads-pane`,
             link: `${BUNDLE}/thread-link`,
+            changes: `${BUNDLE}/thread-changes`,
             settings: `${BUNDLE}/project-settings`,
             settingsItem: `${BUNDLE}/project-settings-item`,
             archive: `${BUNDLE}/archive`,
@@ -1485,6 +1531,20 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             reviewChanges: 'Review changes',
             reviewLatest: 'Review the latest changes',
             diffGone: 'DSH has no diff of this to show. It keeps diffs only until it restarts.',
+            // A thread's Changes tab.
+            changes: 'Changes',
+            openChanges: 'See what this thread changed',
+            changesLoading: 'Reading changes…',
+            changesFailed: 'Couldn\'t read this thread\'s changes.',
+            changesNone: 'This thread hasn\'t changed any files yet.',
+            changesRead: 'Read again',
+            changesNew: 'new',
+            changesOpenFile: 'Open the whole file in the sidebar',
+            changesClipped: 'Part of this is too large to show here. Its lines are still counted.',
+            changesAlso: 'Also changed by',
+            changesReview: 'DSH\'s review of the whole folder',
+            changesShell: 'Edits made by commands the thread ran in its shell aren\'t shown yet.',
+            changesFolded: (n) => `${plural(n, 'file')} folded. Open one to see its diff.`,
             retryThread: 'Retry',
             resumeThread: 'Resume',
             retrying: 'Retrying…',
@@ -1562,6 +1622,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         const chatAddress = (sessionId) => `${CHAT_PREFIX}${encodeURIComponent(sessionId)}`;
+        const changesAddress = (sessionId) => `${CHANGES_PREFIX}${encodeURIComponent(sessionId)}`;
 
         /** The sessions DSH's main view holds (its "mainView" references): the main chat, or two for a moment while DSH switches. */
         function mainViews(state) {
@@ -1636,14 +1697,24 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         })();
         const useBesidePref = () => React.useSyncExternalStore(besidePref.subscribe, besidePref.get);
 
-        /** The session a thread chat address names, or undefined. */
-        function chatSessionOf(address) {
+        /** The session a `dsh-resource://<protocol>/session/<id>` address names, or undefined. */
+        function addressSession(address, protocol) {
             let url;
             try { url = new URL(address); } catch { return undefined; }
-            if (url.protocol !== 'dsh-resource:' || url.hostname.toLowerCase() !== CHAT_PROTOCOL) return undefined;
+            if (url.protocol !== 'dsh-resource:' || url.hostname.toLowerCase() !== protocol) return undefined;
             const parts = url.pathname.split('/').filter(Boolean);
             if (parts.length !== 2 || parts[0] !== 'session') return undefined;
             try { return decodeURIComponent(parts[1]) || undefined; } catch { return undefined; }
+        }
+
+        /** The session a thread chat address names, or undefined. */
+        function chatSessionOf(address) {
+            return addressSession(address, CHAT_PROTOCOL);
+        }
+
+        /** The thread a Changes tab address names, or undefined. */
+        function changesSessionOf(address) {
+            return addressSession(address, CHANGES_PROTOCOL);
         }
 
         /** The session and thread a `.dsh-thread/t3` link names, or undefined. */
@@ -2701,23 +2772,31 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * A thread's changes on its card: "+18 -3 · 2 files", opening DSH's
-         * Review tab on the newest turn that changed files while DSH still
-         * has its diff.
+         * A thread's changes on its card: "+18 -3 · 2 files", opening the
+         * thread's Changes tab. In a DSH without the plugin's tabs, they open
+         * DSH's Review tab on the newest turn that changed files (`review`)
+         * while DSH still has its diff.
          */
-        function CardChanges({ changes, onReview }) {
+        function CardChanges({ changes, onOpen, review = false }) {
             const counts = changeCounts(changes);
-            if (!changes.reviewable || !onReview) {
+            if (!onOpen) {
                 return h('span', { className: 'dshp-t-changes', title: `${changesText(changes)}. ${TEXT.diffGone}`, 'data-projects-changes': 'gone' }, ...counts);
             }
-            const label = changes.turns > 1 ? TEXT.reviewLatest : TEXT.reviewChanges;
+            const label = !review ? TEXT.openChanges : changes.turns > 1 ? TEXT.reviewLatest : TEXT.reviewChanges;
             // DSH's own code-file tile, the mark on its "Edited N files" card.
             const icon = ui.FileTypeIcon ? h('span', { className: 'dshp-t-changes-icon', 'aria-hidden': true }, h(ui.FileTypeIcon, { kind: 'code', size: 16 })) : null;
             return h(ui.Tooltip, { label, side: 'top', align: 'end' },
                 h('button', {
                     type: 'button', className: 'dshp-t-changes', 'aria-label': `${label}. ${changesText(changes)}`,
-                    'data-projects-changes': '', onClick: onReview,
+                    'data-projects-changes': review ? 'review' : '', onClick: onOpen,
                 }, icon, ...counts));
+        }
+
+        /** What a thread's change counts open: its Changes tab, or where DSH has none, DSH's Review while it can. */
+        function changesOpener(projects, sessionId, changes) {
+            if (typeof sessionId !== 'string' || sessionId === '' || !changes) return {};
+            if (projects.hasChanges?.() === true) return { onOpen: () => projects.openChanges(sessionId) };
+            return changes.reviewable && changes.last ? { onOpen: () => projects.openReview(sessionId, changes.last), review: true } : {};
         }
 
         /** The project name, as a link to the coordinator unless that is where the user is. */
@@ -2793,6 +2872,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const rows = useRows(projects, useSessions, info?.roster, statuses, byId, paused ? handbacks : EMPTY);
             const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, open);
             const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), open);
+            // In a thread, its own changes as a pill in its header.
+            const ownId = info?.me?.role === 'thread' && typeof info.me.thread?.id === 'string' ? info.me.thread.id : undefined;
+            const own = useThreadChanges(projects, useSessions, coordinator, ownId !== undefined ? [sessionId] : EMPTY, ownId !== undefined)[ownId];
             const described = useProjectInfo(projects.facts, sessionId, info !== undefined, open);
             const permissions = usePermissions(useSessions, rowSessions(rows));
             if (info === undefined) return null;
@@ -2873,6 +2955,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         : { label: TEXT.openBeside, icon: ui.IconCompareSplitOutlineRegular, run: (row) => { change(false); projects.openPaired(row.session); } },
                 })),
             foot.length > 0 ? h('div', { className: 'dshp-t-menu-foot' }, ...foot) : null), document.body) : null;
+            const pill = own && projects.hasChanges?.() === true ? h(ui.Tooltip, { label: TEXT.openChanges, side: 'bottom' },
+                h('button', {
+                    type: 'button', className: 'dshp-t-trigger dshp-t-changes-pill', 'aria-label': `${TEXT.openChanges}. ${changesText(own)}`,
+                    'data-projects-changes-pill': '', onClick: () => projects.openChanges(sessionId),
+                },
+                ui.FileTypeIcon ? h('span', { className: 'dshp-t-changes-icon', 'aria-hidden': true }, h(ui.FileTypeIcon, { kind: 'code', size: 14 })) : null,
+                lineCounts(own.added, own.deleted))) : null;
             const gear = settingsOn ? h(ui.Tooltip, { label: SETTINGS.title, side: 'bottom' },
                 h('button', {
                     type: 'button', className: 'dshp-t-trigger dshp-t-gear', 'aria-label': SETTINGS.title, 'data-projects-settings-trigger': '',
@@ -2880,7 +2969,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }, h(ui.IconSlidersTwoOutlineRegular, { size: 14 }))) : null;
 
             return h('div', { ref: rootRef, className: 'dshp-t-hdr', 'data-projects-threads': info.me.role, onMouseLeave: scheduleClose },
-                parent, trigger, gear, menu);
+                parent, pill, trigger, gear, menu);
         }
 
         /**
@@ -3103,6 +3192,201 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 h('div', { className: 'dshp-t-empty', role: 'status' }, text,
                     found.state === 'missing' ? h('div', null, h('button', { type: 'button', className: 'dshp-t-retry', onClick: retry },
                         h(ui.IconRefreshOutlineRegular, { size: 12 }), TEXT.retry)) : null));
+        }
+
+        /** DSH's own words for its diff card's controls, for the Changes tab's diffs. */
+        const DIFF_LABELS = Object.freeze({
+            codeLabel: 'Code block', wrapLabel: 'Wrap lines', unwrapLabel: 'Do not wrap lines',
+            copy: 'Copy', copied: 'Copied',
+            collapseAria: 'Collapse diff', expandAria: (count) => `Expand ${count} more diff lines`,
+            collapse: 'Collapse', expand: (count) => `… ${count} more lines`,
+        });
+        /** Lines one file's diff shows before its middle folds. */
+        const CHANGES_MAX_LINES = 40;
+        /** A Changes tab with more files than this starts with them folded. */
+        const CHANGES_OPEN_FILES = 8;
+        const whole = (n) => (Number.isSafeInteger(n) && n >= 0 ? n : 0);
+
+        /** A thread's title as DSH's session store has it, for its tabs. */
+        function threadTitleIn(state, sessionId) {
+            const value = valueIn(state, sessionId);
+            return (value?.role === 'thread' ? value.thread?.title : undefined) ?? state?.byId?.[sessionId]?.displayTitle ?? TEXT.thread;
+        }
+
+        /** DSH's address for a file read through a session: a path inside its folder is relative to it, any other absolute. */
+        function fileAddress(sessionId, path) {
+            const encode = (part) => encodeURIComponent(part).replace(/%3A/gi, ':');
+            const clean = String(path).replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+            return `dsh-resource://file/session/${encode(sessionId)}/${clean.split('/').map(encode).join('/')}`;
+        }
+
+        /** "Turns 1, 2 · by this thread and Docs helper": when a file changed, and who changed it besides the thread. */
+        function editsText(edits) {
+            const turns = [...new Set(edits.map((e) => e.turn).filter(Number.isSafeInteger))].sort((a, b) => a - b);
+            const by = [...new Set(edits.map((e) => (typeof e.by === 'string' ? e.by : '')))];
+            const helpers = by.filter(Boolean);
+            const when = turns.length === 0 ? '' : turns.length === 1 ? `Turn ${turns[0]}` : `Turns ${turns.join(', ')}`;
+            const who = helpers.length === 0 ? '' : `by ${by.includes('') ? 'this thread and ' : ''}${listText(helpers)}`;
+            return [when, who].filter(Boolean).join(' · ');
+        }
+
+        /** Why a Changes tab couldn't read a thread's changes, in one sentence. */
+        function readFailure(error) {
+            const code = String(error?.code ?? '');
+            const message = String(error?.message ?? '').trim();
+            if (code === 'projects/refused' && message) return `${message.replace(/^./, (c) => c.toUpperCase())}${/[.!?]$/.test(message) ? '' : '.'}`;
+            if (code === 'projects/unreachable' || code.startsWith('gateway/not') || code.startsWith('rpc/') || !message) return SETTINGS.unreachable;
+            return `${TEXT.changesFailed} ${message}`;
+        }
+
+        /** "+12 -3" in DSH's colors for added and deleted lines. */
+        const lineCounts = (added, deleted) => h('span', { className: 'dshp-t-counts' },
+            h('span', { className: 'dshp-t-added' }, `+${GROUPED.format(added)}`),
+            h('span', { className: 'dshp-t-deleted' }, `-${GROUPED.format(deleted)}`));
+
+        /** One changed file in a Changes tab: its name and counts, folding open to its edits' hunks in DSH's diff. */
+        function ChangedFile({ file, open, onToggle, onOpenFile, onOpenThread }) {
+            const bodyId = React.useId();
+            const diffs = React.useMemo(() => file.edits.flatMap((edit) => (Array.isArray(edit.hunks) ? edit.hunks : EMPTY)
+                .map((hunk) => ({ path: file.path, oldText: typeof hunk.oldText === 'string' ? hunk.oldText : null, newText: String(hunk.newText ?? '') }))), [file]);
+            const clipped = file.edits.some((edit) => edit.clipped === true);
+            const also = (Array.isArray(file.alsoBy) ? file.alsoBy : EMPTY).filter((other) => isObject(other) && typeof other.thread === 'string');
+            const added = whole(file.added);
+            const deleted = whole(file.deleted);
+            return h('section', { className: 'dshp-ch-file', 'data-projects-changes-file': file.path, 'data-open': open ? '' : undefined },
+                h('div', { className: 'dshp-ch-file-head' },
+                    h('button', {
+                        type: 'button', className: 'dshp-ch-file-toggle', 'aria-expanded': open, 'aria-controls': open ? bodyId : undefined,
+                        'aria-label': `${file.path}${file.created ? ` (${TEXT.changesNew})` : ''}: ${plural(added, 'line')} added, ${deleted} deleted`,
+                        onClick: onToggle,
+                    },
+                    h(ui.IconChevronDownOutlineRegular, { size: 12, className: open ? 'dshp-ch-chev dshp-ch-chev-open' : 'dshp-ch-chev' }),
+                    ui.FileTypeIcon ? h('span', { className: 'dshp-ch-file-icon', 'aria-hidden': true }, h(ui.FileTypeIcon, { path: file.path, size: 16 })) : null,
+                    ui.PathLabel ? h(ui.PathLabel, { path: file.path, className: 'dshp-ch-path' }) : h('span', { className: 'dshp-ch-path', title: file.path }, file.path),
+                    file.created ? h('span', { className: 'dshp-ch-new' }, TEXT.changesNew) : null,
+                    lineCounts(added, deleted)),
+                    onOpenFile ? h(ui.Tooltip, { label: TEXT.changesOpenFile, side: 'bottom', align: 'end' },
+                        h('button', { type: 'button', className: 'dshp-ch-tool', 'aria-label': `Open ${file.path} in the sidebar`, 'data-projects-changes-open': '', onClick: onOpenFile },
+                            h(ui.IconInspectOutlineRegular ?? ui.IconRightUpOutlineRegular, { size: 15 }))) : null),
+                open ? h('div', { id: bodyId, className: 'dshp-ch-file-body' },
+                    // When and by whom, under the file's name, so it never reads as the next file's.
+                    h('p', { className: 'dshp-ch-note dshp-ch-when' }, editsText(file.edits)),
+                    diffs.length > 0 && ui.DiffBlock ? h(ui.DiffBlock, { diffs, labels: DIFF_LABELS, maxLines: CHANGES_MAX_LINES, className: 'dshp-ch-diff' }) : null,
+                    clipped ? h('p', { className: 'dshp-ch-note' }, TEXT.changesClipped) : null,
+                    also.length > 0 ? h('p', { className: 'dshp-ch-note', 'data-projects-changes-also': '' }, `${TEXT.changesAlso} `,
+                        ...also.flatMap((other, i) => [
+                            i > 0 ? (i === also.length - 1 ? ' and ' : ', ') : null,
+                            typeof other.session === 'string' && onOpenThread
+                                ? h('button', {
+                                    key: other.thread, type: 'button', className: 'dshp-ch-link', 'aria-label': `See what ${other.title || other.thread} changed`,
+                                    onClick: () => onOpenThread(other.session),
+                                }, other.title || other.thread)
+                                : h('span', { key: other.thread }, other.title || other.thread),
+                        ]), '.') : null) : null);
+        }
+
+        /**
+         * A thread's Changes tab: each file it changed with DSH's file tools,
+         * or a subagent of its did, with lines added and deleted and the hunks
+         * in DSH's diff. The plugin reads them from the sessions' logs
+         * (remote.js `changes`) when the tab shows, each time the thread's
+         * records gain a turn, and on Read again.
+         */
+        function ThreadChangesTab({ useTabInfo, useSessions, projects }) {
+            const { tab } = useTabInfo();
+            const thread = changesSessionOf(tab.contentId);
+            const visible = tab.visible !== false;
+            const mark = useSessions((state) => lastChange(valueIn(state, thread)));
+            const stored = useSessions((state) => threadTitleIn(state, thread));
+            const [read, setRead] = React.useState({ phase: 'loading' });
+            const [again, setAgain] = React.useState(0);
+            const [folds, setFolds] = React.useState(() => new Map());
+            const asked = React.useRef('');
+            React.useEffect(() => {
+                if (thread === undefined || !visible) return undefined;
+                const key = `${mark}|${again}`;
+                if (asked.current === key) return undefined;
+                asked.current = key;
+                let live = true;
+                let done = false;
+                setRead((prev) => (prev.phase === 'ready' ? { ...prev, busy: true } : { phase: 'loading' }));
+                void Promise.resolve(projects.link.call('changes', { target: thread })).then((result) => {
+                    done = true;
+                    if (!live) return;
+                    // A failed read again keeps what the tab showed, and says it failed.
+                    setRead((prev) => (result?.ok && isObject(result.value) ? { phase: 'ready', value: result.value }
+                        : prev.phase === 'ready' ? { phase: 'ready', value: prev.value, error: result?.error } : { phase: 'failed', error: result?.error }));
+                });
+                return () => {
+                    live = false;
+                    if (!done) asked.current = '';
+                };
+            }, [thread, visible, mark, again, projects]);
+            const value = read.phase === 'ready' ? read.value : undefined;
+            const files = (Array.isArray(value?.files) ? value.files : EMPTY).filter((f) => isObject(f) && typeof f.path === 'string' && f.path !== '' && Array.isArray(f.edits));
+            const name = typeof value?.title === 'string' && value.title !== '' ? value.title : stored;
+            const added = files.reduce((n, f) => n + whole(f.added), 0);
+            const deleted = files.reduce((n, f) => n + whole(f.deleted), 0);
+            const openAll = files.length <= CHANGES_OPEN_FILES;
+            const isOpen = (path) => folds.get(path) ?? openAll;
+            const toggle = (path) => setFolds((prev) => new Map(prev).set(path, !(prev.get(path) ?? openAll)));
+            const openFile = (path) => {
+                try { tab.actions.openResource(fileAddress(thread, path)); } catch (error) { console.warn(`[projects] could not open ${path}: ${error?.message ?? error}`); }
+            };
+            const reviewable = (Array.isArray(value?.turns) ? value.turns : EMPTY)
+                .filter((t) => isObject(t) && t.reviewable === true && Number.isSafeInteger(t.turn) && Number.isSafeInteger(t.seq));
+            const folded = files.filter((f) => !isOpen(f.path)).length;
+            const retry = () => setAgain((n) => n + 1);
+            const busy = read.phase === 'loading' || read.busy === true;
+            let body;
+            if (thread === undefined) body = h('div', { className: 'dshp-t-empty' }, TEXT.changesFailed);
+            else if (read.phase === 'loading') body = h('div', { className: 'dshp-t-empty', role: 'status' }, TEXT.changesLoading);
+            else if (read.phase === 'failed') {
+                body = h('div', { className: 'dshp-t-empty', role: 'alert' }, readFailure(read.error),
+                    h('div', null, h('button', { type: 'button', className: 'dshp-t-retry', onClick: retry }, h(ui.IconRefreshOutlineRegular, { size: 12 }), TEXT.retry)));
+            } else if (files.length === 0) body = h('div', { className: 'dshp-t-empty' }, TEXT.changesNone);
+            else {
+                body = h('div', { className: 'dshp-ch-files' }, ...files.map((file) => h(ChangedFile, {
+                    key: file.path, file, open: isOpen(file.path), onToggle: () => toggle(file.path),
+                    onOpenFile: () => openFile(file.path),
+                    onOpenThread: (session) => projects.openChanges(session),
+                })));
+            }
+            return h('div', { className: 'dshp-ch', 'data-projects-changes-tab': thread ?? '', 'data-state': read.phase },
+                h('div', { className: 'dshp-ch-bar' },
+                    h('div', { className: 'dshp-ch-title' },
+                        thread !== undefined
+                            ? h('button', { type: 'button', className: 'dshp-ch-name', title: `${TEXT.openTip}: ${name}`, onClick: () => projects.openThread(thread) }, name)
+                            : h('span', { className: 'dshp-ch-name' }, name),
+                        h('span', { className: 'dshp-ch-sub', 'aria-live': 'polite' },
+                            files.length > 0 ? [lineCounts(added, deleted), h('span', { key: 'f', className: 'dshp-t-files' }, `· ${plural(files.length, 'file')}`)]
+                                : read.phase === 'ready' ? TEXT.changes : '')),
+                    h(ui.Tooltip, { label: TEXT.changesRead, side: 'bottom', align: 'end' },
+                        h('button', {
+                            type: 'button', className: 'dshp-ch-tool', 'aria-label': TEXT.changesRead, 'data-projects-changes-read': '',
+                            'aria-disabled': busy ? 'true' : undefined, onClick: () => { if (!busy) retry(); },
+                        }, h(ui.IconRefreshOutlineRegular, { size: 15, className: busy ? 'dshp-ch-busy' : undefined })))),
+                h('div', { className: 'dshp-ch-body' },
+                    read.error && read.phase === 'ready' ? h('p', { className: 'dshp-ch-note dshp-t-error', role: 'alert' }, readFailure(read.error)) : null,
+                    folded > 0 && folded === files.length ? h('p', { className: 'dshp-ch-note' }, TEXT.changesFolded(folded)) : null,
+                    body,
+                    read.phase === 'ready' ? h('div', { className: 'dshp-ch-foot' },
+                        reviewable.length > 0 ? h('p', { className: 'dshp-ch-note', 'data-projects-changes-reviews': '' }, `${TEXT.changesReview}: `,
+                            ...reviewable.flatMap((t, i) => [
+                                i > 0 ? ' · ' : null,
+                                h('button', { key: t.seq, type: 'button', className: 'dshp-ch-link', 'data-projects-changes-review': String(t.turn), onClick: () => projects.openReview(thread, t) }, `Turn ${t.turn}`),
+                            ])) : null,
+                        whole(value?.unread) > 0 ? h('p', { className: 'dshp-ch-note' }, `What ${plural(value.unread, 'subagent')} changed couldn't be read.`) : null,
+                        h('p', { className: 'dshp-ch-note' }, TEXT.changesShell)) : null));
+        }
+
+        /** A Changes tab's title: DSH's code-file mark and the thread's name. */
+        function ThreadChangesTitle({ useTabInfo, useSessions }) {
+            const { tab } = useTabInfo();
+            const title = useSessions((state) => threadTitleIn(state, changesSessionOf(tab.contentId)));
+            return h('span', { className: 'dshp-t-tab-title', 'data-projects-changes-title': '' },
+                ui.FileTypeIcon ? h('span', { className: 'dshp-ch-tab-icon', 'aria-hidden': true }, h(ui.FileTypeIcon, { kind: 'code', size: 14 })) : null,
+                h('span', null, `${TEXT.changes} · ${title}`));
         }
 
         /** The cards one turn earned, one per thread, in the order they happened. */
@@ -3365,10 +3649,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         when ? h('time', { key: 'when', className: 'dshp-t-card-when', dateTime: new Date(at).toISOString() }, when) : null,
                         when && reason ? ' · ' : null, reason || null,
                     ]) : null),
-                view.changes ? h(CardChanges, {
-                    changes: view.changes,
-                    onReview: enabled && view.changes.last ? () => projects.openReview(view.session, view.changes.last) : undefined,
-                }) : null,
+                view.changes ? h(CardChanges, { changes: view.changes, ...changesOpener(projects, enabled ? view.session : undefined, view.changes) }) : null,
                 view.state || enabled ? h('div', { className: 'dshp-t-card-side' },
                 view.state ? h('span', { className: 'dshp-t-card-state' },
                     h(ui.StateDot, { state: view.state.dot }),
@@ -4423,6 +4704,19 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 openPane() {
                     try { ctx.sidebarRight.openTab(KINDS.pane); } catch (error) { warn('could not open the Threads panel', error); }
                 },
+                /** A thread's Changes tab, in this chat's right sidebar; one already open there comes forward. */
+                openChanges(sessionId) {
+                    if (typeof sessionId !== 'string' || sessionId === '') return;
+                    try {
+                        ctx.sidebarRight.openResource(changesAddress(sessionId), { kind: KINDS.changes });
+                    } catch (error) {
+                        warn('could not open the thread\'s changes', error);
+                    }
+                },
+                /** Whether this DSH has the Changes tab (a right sidebar with the plugin's tab types). */
+                hasChanges() {
+                    try { return ctx.get('sidebarRightTabs')?.get?.(KINDS.changes) !== undefined; } catch { return false; }
+                },
                 /**
                  * DSH's Review tab on one turn's changes (`last`: {seq, turn}).
                  * The tab reviews the session whose sidebar holds it, so the
@@ -4545,7 +4839,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
                 name: 'sidebar.panellist', id: IDS.page, order: 5, label: PAGE.entry,
             }, ProjectsIcon));
-            // The right-sidebar parts: a thread's chat, the Threads pane, and thread links from replies.
+            // The right-sidebar parts: a thread's chat, the Threads pane, thread links from replies, and a thread's Changes.
             ctx.inject(['resources', 'sidebarRightTabs'], (scope) => {
                 scope.effect(() => scope.resources.register(threadChatResources(scope.sessions)), 'projects: thread chat resources');
                 scope.effect(() => scope.sidebarRightTabs.register({
@@ -4572,6 +4866,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     canOpen: (address) => linkTarget(address) !== undefined,
                     title: (address) => `${TEXT.thread} ${linkTarget(address)?.threadId ?? ''}`.trim(),
                 }), 'projects: thread links');
+                scope.effect(() => scope.sidebarRightTabs.register({
+                    id: IDS.changes,
+                    kind: KINDS.changes,
+                    patterns: [`${CHANGES_PREFIX}**`],
+                    canOpen: (address) => changesSessionOf(address) !== undefined,
+                    title: (address) => `${TEXT.changes} · ${threadTitleIn(scope.sessions.list.getSnapshot(), changesSessionOf(address))}`,
+                }), 'projects: thread changes');
                 scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
                     name: 'sidebar.right.pane.tab', key: IDS.chat, inject: withApi,
                     children: { [CONVERSATION_SLOT]: { kind: 'single', scope: 'session' } },
@@ -4586,6 +4887,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
                     name: 'sidebar.right.pane.tab', key: IDS.link, inject: withApi,
                 }, ThreadLinkTab));
+                scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
+                    name: 'sidebar.right.pane.tab', key: IDS.changes, inject: withApi,
+                }, ThreadChangesTab));
+                scope.slots.inject('sidebar.right.pane.tab.title', () => scope.slots.register({
+                    name: 'sidebar.right.pane.tab.title', key: IDS.changes,
+                }, ThreadChangesTitle));
             });
         }
 
@@ -6227,6 +6534,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
+            CardChanges, changesOpener, ThreadChangesTab, ThreadChangesTitle, ChangedFile, editsText, fileAddress, readFailure, changesAddress, changesSessionOf, DIFF_LABELS,
             rowState, endingOf, endingIn, endingReason, endingLine, openSessions, markState, hoverLine, continueError, GROUPS,
             roomFor, besidePref, sectionWorkspace, sectionAt, listText, clockOf, againText, ThreadCard, EndingBar,
             SessionList, SIDEBAR,

@@ -17,7 +17,7 @@ import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol';
 import * as plugin from '../lib/index.js';
 import { effectiveSettings, effectiveAccess, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
 import { slugify, timing, clipTitle, guardList, guardedIn, unsaidPart } from '../lib/projects.js';
-import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS, lineDelta, editOf, editsIn, editSummary } from '../lib/changes.js';
+import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS, lineDelta, editOf, editsIn, editSummary, hunksOf, subagentsIn, diffFiles, placeIn, MAX_HUNK_CHARS, MAX_VIEW_CHARS } from '../lib/changes.js';
 import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, cardSummary, threadMarkdown, outsideMessage, replyMessage, NUDGE } from '../lib/prompts.js';
 import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
 
@@ -1648,7 +1648,7 @@ test('window: the Project settings endpoints read and change a project the way i
     assert.equal(remote.typertRemote.namespace, 'dsh-plugin-projects');
     assert.equal(remote.typertRemote.serviceKey, 'dshPluginProjectsRemote');
     assert.deepEqual(remoteMethods(remote).map((m) => m.method), [
-        'describe', 'list', 'sessions', 'news', 'seeNews', 'update', 'continueThread', 'create', 'rename', 'remove', 'addCoordinator', 'archive', 'restore',
+        'describe', 'list', 'sessions', 'news', 'seeNews', 'update', 'continueThread', 'changes', 'create', 'rename', 'remove', 'addCoordinator', 'archive', 'restore',
     ]);
     // Categories are the categories plugin's: none of their endpoints here, and the list has no categories in it.
     for (const name of ['createCategory', 'renameCategory', 'removeCategory', 'moveCategory', 'fileWorkspace', 'listCategories']) {
@@ -1771,7 +1771,7 @@ test('window: a project\'s goal is set in Project settings, reaches both prompts
  * factory to the module loader, which calls it with DSH's module require.
  * The primitives are stand-ins; an icon is its own name.
  */
-function loadClient({ storage, document, innerWidth } = {}) {
+function loadClient({ storage, document, innerWidth, primitives = {} } = {}) {
     let loaded;
     const localStorage = storage ? { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => { storage.set(key, String(value)); } } : undefined;
     const window = { __ModuleLoader__: { load: (m) => { loaded = m; } }, localStorage, addEventListener: () => {}, removeEventListener: () => {}, innerWidth };
@@ -1790,6 +1790,7 @@ function loadClient({ storage, document, innerWidth } = {}) {
         },
         settingsTextField: (field) => ({ field }),
         Toast: () => null,
+        ...primitives,
     };
     const ui = new Proxy(base, { get: (target, name) => (name in target ? target[name] : typeof name === 'string' && name.startsWith('Icon') ? name : undefined) });
     const modules = {
@@ -1797,7 +1798,7 @@ function loadClient({ storage, document, innerWidth } = {}) {
             createElement: (type, props, ...children) => ({ type, props, children }), useSyncExternalStore: (_subscribe, get) => get(),
             // Enough of React's hooks to call a component once and read what it draws.
             useState: (init) => [typeof init === 'function' ? init() : init, () => {}], useRef: (current) => ({ current }),
-            useEffect: () => {}, useLayoutEffect: () => {}, useCallback: (fn) => fn, useMemo: (fn) => fn(),
+            useEffect: () => {}, useLayoutEffect: () => {}, useCallback: (fn) => fn, useMemo: (fn) => fn(), useId: () => ':r0:',
         },
         'react-dom': { createPortal: (node) => node }, '@deepseek-ai/dsh-client-ui-primitives': ui,
     };
@@ -1923,6 +1924,8 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
         ['projects.thread.conversation', null, null],
         ['sidebar.right.pane.tab', 'dsh-plugin-projects/threads-pane', null],
         ['sidebar.right.pane.tab', 'dsh-plugin-projects/thread-link', null],
+        ['sidebar.right.pane.tab', 'dsh-plugin-projects/thread-changes', null],
+        ['sidebar.right.pane.tab.title', 'dsh-plugin-projects/thread-changes', null],
     ]);
     // The thread chat tab hosts the conversation slot it renders.
     const chatTab = registered.find((r) => r.name === 'sidebar.right.pane.tab' && r.key === 'dsh-plugin-projects/thread-chat');
@@ -1932,8 +1935,9 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
         ['dsh-plugin-projects/thread-chat', 'projectthread', ['dsh-resource://projectthread/session/**']],
         ['dsh-plugin-projects/threads-pane', 'projectthreads', null],
         ['dsh-plugin-projects/thread-link', 'projectthreadlink', ['dsh-resource://file/session/**/.dsh-thread/*']],
+        ['dsh-plugin-projects/thread-changes', 'projectchanges', ['dsh-resource://projectchanges/session/**']],
     ]);
-    const [chat, pane, link] = types;
+    const [chat, pane, link, changes] = types;
     assert.equal(chat.canOpen('dsh-resource://projectthread/session/s%2F1'), true);
     assert.equal(chat.canOpen('dsh-resource://projectthread/other/s1'), false);
     assert.equal(chat.title('dsh-resource://projectthread/session/s1'), 'Thread');
@@ -1943,6 +1947,11 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
     assert.equal(link.canOpen('dsh-resource://file/session/s1/.dsh-thread/notes.md'), false);
     assert.equal(link.title('dsh-resource://file/session/s1/.dsh-thread/T12'), 'Thread t12');
     assert.equal(link.priority, undefined, 'the extension band ranks above the builtin file viewer');
+    // A thread's Changes tab, addressed by its session.
+    assert.equal(changes.canOpen('dsh-resource://projectchanges/session/s%2F1'), true);
+    assert.equal(changes.canOpen('dsh-resource://projectchanges/session/'), false);
+    assert.equal(changes.canOpen('dsh-resource://projectthread/session/s1'), false);
+    assert.equal(changes.title('dsh-resource://projectchanges/session/s1'), 'Changes · Thread');
 });
 
 test('browser half: Project settings opens per session, calls the plugin\'s endpoints and reads models as DSH does', async () => {
@@ -5146,6 +5155,158 @@ test('changes: own edits count lines as a diff does', () => {
     ])), [{ turn: 1, seq: 3, path: 'w.md', added: 1, deleted: 0, created: true }]);
 });
 
+test('changes: the Changes tab draws each edit\'s hunks as DSH\'s own diff card does', () => {
+    // write and edit keep their hunks in the result, a new file is all new text, str_replace_editor has only its arguments.
+    assert.deepEqual(hunksOf('write', { file_path: 'n.md', content: 'one\n' }, { operation: 'create', diffs: [] }), [{ oldText: null, newText: 'one\n' }]);
+    assert.deepEqual(hunksOf('write', { file_path: 'n.md', content: 'x' }, { operation: 'update', diffs: [{ path: 'n.md', oldText: 'y', newText: 'x' }] }), [{ oldText: 'y', newText: 'x' }]);
+    assert.deepEqual(hunksOf('edit', { file_path: 'e.md' }, { diffs: [{ path: 'e.md', oldText: 'a\nb', newText: 'a\nB' }, { path: 'e.md', oldText: null, newText: 'new' }, 'junk'] }),
+        [{ oldText: 'a\nb', newText: 'a\nB' }, { oldText: null, newText: 'new' }]);
+    assert.deepEqual(hunksOf('str_replace_editor', { command: 'create', path: 's.md', file_text: 'p\n' }), [{ oldText: null, newText: 'p\n' }]);
+    assert.deepEqual(hunksOf('str_replace_editor', { command: 'str_replace', path: 's.md', old_str: 'p', new_str: 'q' }), [{ oldText: 'p', newText: 'q' }]);
+    assert.deepEqual(hunksOf('str_replace_editor', { command: 'insert', path: 's.md', new_str: 'r\n' }), [{ oldText: '', newText: 'r\n' }]);
+    assert.deepEqual(hunksOf('str_replace_editor', { command: 'view', path: 's.md' }), []);
+    assert.deepEqual(hunksOf('edit', {}, undefined), []);
+    assert.deepEqual(hunksOf('bash', { command: 'ls' }, {}), []);
+    const log = [
+        { seq: 1, type: 'turn/start', data: { turn: 1 } },
+        { seq: 2, type: 'tool/call', data: { turn: 1, callId: 'w', name: 'write', arguments: JSON.stringify({ file_path: '/w/a.md', content: 'a\n' }) } },
+        { seq: 3, type: 'tool/result', data: { turn: 1, message: { toolCallId: 'w' }, meta: { operation: 'create', diffs: [] } } },
+        { seq: 4, type: 'subagent/catalog', data: { version: 1, childId: 'c1', childCreatedAt: 1, mode: 'local', label: '  Docs  ' } },
+        { seq: 5, type: 'subagent/catalog', data: { version: 1, childId: 'c1', childCreatedAt: 1, mode: 'local', label: 'again' } },
+        { seq: 6, type: 'subagent/catalog', data: { version: 1, childId: 'x1', mode: 'external', label: 'Remote' } },
+        { seq: 7, type: 'turn/start', data: { turn: 2 } },
+        { seq: 8, type: 'subagent/catalog', data: { version: 1, childId: 'c2', mode: 'fork' } },
+        { seq: 9, type: 'subagent/catalog', data: { childId: '' } },
+    ];
+    // editsIn keeps the hunks only when asked.
+    assert.deepEqual(plain(editsIn(log)), [{ turn: 1, seq: 3, path: '/w/a.md', added: 1, deleted: 0, created: true }]);
+    assert.deepEqual(plain(editsIn(log, { hunks: true })), [{ turn: 1, seq: 3, path: '/w/a.md', added: 1, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'a\n' }] }]);
+    // The subagents a session started, each once, with the turn it started in; an external one has no session here.
+    assert.deepEqual(subagentsIn(log), [{ id: 'c1', label: 'Docs', turn: 1 }, { id: 'c2', label: '', turn: 2 }]);
+    assert.deepEqual(subagentsIn(undefined), []);
+    // By file, in the order first changed, relative to the folder; a subagent's edit says whose; lines add up.
+    assert.deepEqual(plain(diffFiles([
+        { turn: 1, seq: 3, path: '/w/a.md', added: 1, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'a\n' }] },
+        { turn: 1, seq: 5, path: '/w/b.md', added: 1, deleted: 1, hunks: [{ oldText: 'x', newText: 'y' }] },
+        { turn: 2, seq: 9, path: './a.md', added: 1, deleted: 0, by: 'Docs', hunks: [{ oldText: '', newText: 'b\n' }] },
+        { turn: 2, seq: 10, path: '/elsewhere/c.md', added: 2, deleted: 0, hunks: [] },
+    ], '/w/')), [
+        { path: 'a.md', added: 2, deleted: 0, created: true, edits: [
+            { turn: 1, seq: 3, added: 1, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'a\n' }] },
+            { turn: 2, seq: 9, by: 'Docs', added: 1, deleted: 0, hunks: [{ oldText: '', newText: 'b\n' }] },
+        ] },
+        { path: 'b.md', added: 1, deleted: 1, edits: [{ turn: 1, seq: 5, added: 1, deleted: 1, hunks: [{ oldText: 'x', newText: 'y' }] }] },
+        { path: '/elsewhere/c.md', added: 2, deleted: 0, edits: [{ turn: 2, seq: 10, added: 2, deleted: 0, hunks: [] }] },
+    ]);
+    // A hunk too big to send, or past the whole view's budget, is left out (clipped); its lines still count.
+    const [big] = diffFiles([{ turn: 1, seq: 1, path: 'big.txt', added: 1, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'x'.repeat(MAX_HUNK_CHARS + 1) }, { oldText: 'k', newText: 'l' }] }]);
+    assert.deepEqual(plain(big), { path: 'big.txt', added: 1, deleted: 0, created: true, edits: [{ turn: 1, seq: 1, added: 1, deleted: 0, created: true, hunks: [{ oldText: 'k', newText: 'l' }], clipped: true }] });
+    const half = 'y'.repeat(MAX_HUNK_CHARS - 10);
+    const many = diffFiles(Array.from({ length: 20 }, (_, i) => ({ turn: 1, seq: i, path: `f${i}.txt`, added: 1, deleted: 0, hunks: [{ oldText: null, newText: half }] })));
+    assert.equal(many.length, 20);
+    assert.equal(many.filter((f) => f.edits[0].clipped).length, 20 - Math.floor(MAX_VIEW_CHARS / half.length));
+    assert.equal(placeIn('/w', '/w/x/y.md'), 'x/y.md');
+    assert.equal(placeIn('/w', '/wx/y.md'), '/wx/y.md');
+    assert.equal(placeIn('', './z.md'), 'z.md');
+});
+
+test('changes: a thread\'s Changes tab reads its own edits and its subagents\' from their logs', async () => {
+    const { host } = setup({}, undefined, { ...SELECTING, gateway: true });
+    const summaries = new Map();
+    host.services.workspaceChanges = { summary: (sessionId, seq) => summaries.get(`${sessionId}/${seq}`) };
+    await tick();
+    const coord = coordinatorOf(host);
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    const refused = async (promise, pattern) => {
+        await assert.rejects(promise, (error) => error.code === 'projects/refused' && pattern.test(error.message));
+    };
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Edit', brief: 'Go.' });
+    const t1 = threadOf(host, coord);
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Other', brief: 'Go.' });
+    const t2 = [...host.live.values()].find((a) => a.id !== coord.id && a.id !== t1.id);
+    for (const t of [t1, t2]) host.sessions.get(t.id).folder = '/work/dsh';
+    const log = (t) => host.sessions.get(t.id).events;
+    const push = (t, type, data) => { const e = { seq: log(t).length + 1, type, data }; log(t).push(e); t.ctx.sessionEvent(e); return e; };
+    let calls = 0;
+    const tool = (t, turn, name, args, meta) => {
+        const callId = `fc-${++calls}`;
+        push(t, 'tool/call', { turn, callId, name, arguments: JSON.stringify(args) });
+        return push(t, 'tool/result', { turn, message: { role: 'tool', toolCallId: callId, isError: false, content: [] }, ...(meta ? { meta } : {}) }).seq;
+    };
+    const turn = async (t, n, body) => {
+        t.ctx.emitStatus(t, 'running');
+        push(t, 'turn/start', { turn: n });
+        body();
+        push(t, 'turn/end', { turn: n, reason: { kind: 'completed' } });
+        t.ctx.emitStatus(t, 'idle');
+        await tick();
+    };
+    const announce = (t, turn, files) => {
+        const e = push(t, 'workspace/changes', { turn });
+        summaries.set(`${t.id}/${e.seq}`, { turn, cwd: '/work/dsh', files, total: files.length, added: 0, deleted: 0 });
+        return e.seq;
+    };
+    /** A subagent's own log, as DSH keeps it beside its parent's. */
+    const child = (id, events) => host.sessions.set(id, { events: events.map((e, i) => ({ seq: i + 1, ...e })), prompts: [], title: null });
+    let w1;
+    let e1;
+    await turn(t1, 1, () => {
+        w1 = tool(t1, 1, 'write', { file_path: '/work/dsh/a.md', content: 'one\ntwo\n' }, { operation: 'create', path: '/work/dsh/a.md', diffs: [] });
+        e1 = tool(t1, 1, 'edit', { file_path: 'b.js', old_string: 'x = 1', new_string: 'x = 2' }, { path: 'b.js', diffs: [{ path: 'b.js', oldText: 'a\nx = 1\nb', newText: 'a\nx = 2\nb' }] });
+    });
+    const seq1 = announce(t1, 1, [{ path: '/work/dsh/a.md', display: 'a.md', added: 2, deleted: 0 }]);
+    // In turn 2 t1 edits a.md and starts two subagents: one writes c.txt and starts another, which edits a.md; one's log is gone.
+    let r2;
+    await turn(t1, 2, () => {
+        r2 = tool(t1, 2, 'str_replace_editor', { command: 'str_replace', path: '/work/dsh/a.md', old_str: 'one', new_str: 'ONE' });
+        push(t1, 'subagent/catalog', { version: 1, childId: 'sub-1', childCreatedAt: 1, mode: 'local', label: 'Docs helper' });
+        push(t1, 'subagent/catalog', { version: 1, childId: 'sub-gone', childCreatedAt: 2, mode: 'local', label: 'Lost' });
+        push(t1, 'subagent/catalog', { version: 1, childId: 'sub-far', childCreatedAt: 3, mode: 'external', label: 'Elsewhere' });
+    });
+    child('sub-1', [
+        { type: 'turn/start', data: { turn: 1 } },
+        { type: 'tool/call', data: { turn: 1, callId: 's1', name: 'write', arguments: { file_path: '/work/dsh/c.txt', content: 'c\n' } } },
+        { type: 'tool/result', data: { turn: 1, message: { toolCallId: 's1' }, meta: { operation: 'create', path: '/work/dsh/c.txt', diffs: [] } } },
+        { type: 'subagent/catalog', data: { version: 1, childId: 'sub-2', mode: 'local' } },
+    ]);
+    child('sub-2', [
+        { type: 'tool/call', data: { turn: 1, callId: 's2', name: 'edit', arguments: { file_path: '/work/dsh/a.md', old_string: 'two', new_string: 'TWO' } } },
+        { type: 'tool/result', data: { turn: 1, message: { toolCallId: 's2' }, meta: { path: '/work/dsh/a.md', diffs: [{ path: '/work/dsh/a.md', oldText: 'ONE\ntwo\n', newText: 'ONE\nTWO\n' }] } } },
+    ]);
+    const seq2 = announce(t1, 2, [{ path: '/work/dsh/a.md', display: 'a.md', added: 1, deleted: 1 }]);
+    // t2 edits b.js too: its records name it.
+    await turn(t2, 1, () => tool(t2, 1, 'edit', { file_path: '/work/dsh/b.js', old_string: 'b', new_string: 'B' }, { path: '/work/dsh/b.js', diffs: [{ path: '/work/dsh/b.js', oldText: 'x = 2\nb', newText: 'x = 2\nB' }] }));
+    announce(t2, 1, [{ path: '/work/dsh/b.js', display: 'b.js', added: 1, deleted: 1 }]);
+    await tick();
+    const read = plain(await remote.changes(t1.id));
+    assert.deepEqual(read, {
+        project: 'dsh-plugins', thread: 't1', title: 'Edit', session: t1.id, folder: '/work/dsh',
+        files: [
+            { path: 'a.md', added: 4, deleted: 2, created: true, edits: [
+                { turn: 1, seq: w1, added: 2, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'one\ntwo\n' }] },
+                { turn: 2, seq: r2, added: 1, deleted: 1, hunks: [{ oldText: 'one', newText: 'ONE' }] },
+                { turn: 2, seq: 2, by: 'Docs helper', added: 1, deleted: 1, hunks: [{ oldText: 'ONE\ntwo\n', newText: 'ONE\nTWO\n' }] },
+            ] },
+            { path: 'b.js', added: 1, deleted: 1, edits: [{ turn: 1, seq: e1, added: 1, deleted: 1, hunks: [{ oldText: 'a\nx = 1\nb', newText: 'a\nx = 2\nb' }] }], alsoBy: [{ thread: 't2', title: 'Other', session: t2.id }] },
+            { path: 'c.txt', added: 1, deleted: 0, created: true, edits: [{ turn: 2, seq: 3, by: 'Docs helper', added: 1, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'c\n' }] }] },
+        ],
+        turns: [{ turn: 1, seq: seq1, reviewable: true }, { turn: 2, seq: seq2, reviewable: true }],
+        unread: 1,
+    });
+    // From any session of the project with the thread's id: the same.
+    assert.deepEqual(plain(await remote.changes(coord.id, ' t1 ')), read);
+    await refused(remote.changes(coord.id), /not a thread/);
+    await refused(remote.changes(coord.id, 't9'), /no thread "t9"/);
+    await refused(remote.changes('nowhere', 't1'), /not a project here/);
+    // DSH dropped its copy: the diffs stay, Review is no longer offered.
+    summaries.clear();
+    assert.deepEqual(plain(await remote.changes(t1.id)).turns, [{ turn: 1, seq: seq1 }, { turn: 2, seq: seq2 }]);
+    // A thread whose log can't be read says so.
+    host.inspectError = new Error('read timed out');
+    await refused(remote.changes(t1.id), /couldn't read t1's records: read timed out/);
+    host.inspectError = undefined;
+});
+
 test('browser half: a thread\'s changes read as DSH\'s card counts them, and its projection says when to read them again', () => {
     const { client } = loadClient();
     const { changesOf, changesText, lastChange, REVIEW_PREFIX } = client.internals;
@@ -5159,6 +5320,181 @@ test('browser half: a thread\'s changes read as DSH\'s card counts them, and its
     assert.equal(lastChange(undefined), '');
     // DSH's own Review tab, as its "Edited N files" card opens it.
     assert.equal(REVIEW_PREFIX, 'dsh-resource://changes-review/session/');
+});
+
+/**
+ * Draw a component again and again with state, refs and effects that hold
+ * between draws, effects running after each draw (their dependencies are
+ * the component's own business), so a fetch it starts can land.
+ */
+function liveMount(react, render) {
+    const cells = [];
+    const refs = [];
+    return () => {
+        let at = 0;
+        let ref = 0;
+        const effects = [];
+        react.useState = (init) => {
+            const k = at++;
+            if (!(k in cells)) cells[k] = typeof init === 'function' ? init() : init;
+            return [cells[k], (next) => { cells[k] = typeof next === 'function' ? next(cells[k]) : next; }];
+        };
+        react.useRef = (init) => {
+            const k = ref++;
+            if (!(k in refs)) refs[k] = { current: init };
+            return refs[k];
+        };
+        react.useEffect = (fn) => { effects.push(fn); };
+        const out = render();
+        for (const fn of effects) fn();
+        return out;
+    };
+}
+
+test('browser half: a thread\'s Changes tab lists its files with their diffs, and its counts open it', async () => {
+    const { client, react } = loadClient({ primitives: { DiffBlock: 'DiffBlock', PathLabel: 'PathLabel', FileTypeIcon: 'FileTypeIcon', Tooltip: 'Tooltip' } });
+    const { ThreadChangesTab, ThreadChangesTitle, ChangedFile, editsText, fileAddress, readFailure, changesOpener, CardChanges, changesAddress, changesSessionOf, DIFF_LABELS } = client.internals;
+    // The tab's address names the thread's session.
+    assert.equal(changesAddress('s/1'), 'dsh-resource://projectchanges/session/s%2F1');
+    assert.equal(changesSessionOf(changesAddress('s/1')), 's/1');
+    assert.equal(changesSessionOf('dsh-resource://projectthread/session/s1'), undefined);
+    // DSH's own file tab reads a file through the thread's session: inside its folder relative to it, else absolute.
+    assert.equal(fileAddress('s1', 'src/a b.js'), 'dsh-resource://file/session/s1/src/a%20b.js');
+    assert.equal(fileAddress('s1', './x.md'), 'dsh-resource://file/session/s1/x.md');
+    assert.equal(fileAddress('s1', '/elsewhere/c:d.md'), 'dsh-resource://file/session/s1//elsewhere/c:d.md');
+    assert.equal(editsText([{ turn: 2 }, { turn: 1 }, { turn: 2, by: 'Docs helper' }]), 'Turns 1, 2 · by this thread and Docs helper');
+    assert.equal(editsText([{ turn: 3, by: 'A' }, { turn: 3, by: 'B' }]), 'Turn 3 · by A and B');
+    assert.equal(editsText([{ turn: 1 }]), 'Turn 1');
+    assert.equal(readFailure({ code: 'projects/refused', message: 'couldn\'t read t1\'s records: read timed out' }), 'Couldn\'t read t1\'s records: read timed out.');
+    assert.match(readFailure({ code: 'projects/unreachable', message: 'socket closed' }), /didn't answer/);
+    assert.equal(readFailure({ code: 'x', message: 'boom' }), 'Couldn\'t read this thread\'s changes. boom');
+    assert.equal(DIFF_LABELS.expand(4), '… 4 more lines');
+
+    // The tab: reading, then each file with its counts and DSH's diff of its edits' hunks.
+    const value = {
+        project: 'p', thread: 't1', title: 'Edit docs', session: 's-t1', folder: '/w',
+        files: [
+            { path: 'a.md', added: 4, deleted: 2, created: true, edits: [
+                { turn: 1, seq: 3, added: 2, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'one\ntwo\n' }] },
+                { turn: 2, seq: 2, by: 'Docs helper', added: 1, deleted: 1, hunks: [{ oldText: 'two', newText: 'TWO' }], clipped: true },
+            ], alsoBy: [{ thread: 't2', title: 'Other', session: 's-t2' }] },
+            { path: 'src/b.js', added: 1, deleted: 1, edits: [{ turn: 1, seq: 5, added: 1, deleted: 1, hunks: [{ oldText: 'x = 1', newText: 'x = 2' }] }] },
+        ],
+        turns: [{ turn: 1, seq: 6, reviewable: true }, { turn: 2, seq: 9 }],
+        unread: 1,
+    };
+    const calls = [];
+    let answer = { ok: true, value };
+    const opened = [];
+    const projects = {
+        link: { call: async (method, args) => { calls.push([method, { ...args }]); return answer; } },
+        openThread: (id) => opened.push(['thread', id]), openChanges: (id) => opened.push(['changes', id]), openReview: (id, last) => opened.push(['review', id, last.seq, last.turn]),
+    };
+    const tab = { contentId: changesAddress('s-t1'), visible: true, actions: { openResource: (address) => opened.push(['file', address]) } };
+    let marks = [{ turn: 1, seq: 6 }];
+    const state = () => ({
+        byId: { 's-t1': { displayTitle: 'Edit docs (DSH)' } },
+        projectionsBySession: { 's-t1': { values: { projectSession: { role: 'thread', coordinator: 's-c', thread: { id: 't1', title: 'Edit docs' }, changes: marks } } } },
+    });
+    const draw = liveMount(react, () => ThreadChangesTab({ useTabInfo: () => ({ tab }), useSessions: (select) => select(state()), projects }));
+    let tree = draw();
+    assert.equal(tree.props['data-state'], 'loading');
+    assert.equal(textIn(byClass(tree, 'dshp-t-empty')), 'Reading changes…');
+    assert.deepEqual(plain(calls), [['changes', { target: 's-t1' }]]);
+    await tick();
+    tree = draw();
+    assert.equal(tree.props['data-state'], 'ready');
+    assert.equal(textIn(byClass(tree, 'dshp-ch-name')), 'Edit docs');
+    assert.equal(textIn(byClass(tree, 'dshp-ch-sub')), '+5-3· 2 files');
+    const files = elementsOf(tree).filter((e) => e.type === ChangedFile);
+    assert.deepEqual(files.map((f) => [f.props.file.path, f.props.open]), [['a.md', true], ['src/b.js', true]]);
+    // A file: its name, "new", its counts; DSH's diff of every hunk under its path; when, by whom, and who else.
+    let file = files[0].type(files[0].props);
+    assert.equal(file.props['data-projects-changes-file'], 'a.md');
+    const head = elementsOf(file).find((e) => e.props?.className === 'dshp-ch-file-toggle');
+    assert.equal(head.props['aria-expanded'], true);
+    assert.equal(head.props['aria-label'], 'a.md (new): 4 lines added, 2 deleted');
+    assert.deepEqual([elementsOf(head).find((e) => e.type === 'PathLabel').props.path, textIn(head)], ['a.md', 'new+4-2']);
+    const diff = elementsOf(file).find((e) => e.type === 'DiffBlock');
+    assert.deepEqual(plain(diff.props.diffs), [{ path: 'a.md', oldText: null, newText: 'one\ntwo\n' }, { path: 'a.md', oldText: 'two', newText: 'TWO' }]);
+    assert.equal(diff.props.maxLines, 40);
+    assert.deepEqual(byClass(file, 'dshp-ch-note').map(textIn), [
+        'Turns 1, 2 · by this thread and Docs helper',
+        'Part of this is too large to show here. Its lines are still counted.',
+        'Also changed by Other.',
+    ]);
+    // Its "open" button opens DSH's own file tab; another thread's name opens that thread's Changes.
+    elementsOf(file).find((e) => e.props?.['data-projects-changes-open'] === '').props.onClick();
+    elementsOf(file).find((e) => e.props?.className === 'dshp-ch-link').props.onClick();
+    assert.deepEqual(opened.splice(0), [['file', 'dsh-resource://file/session/s-t1/a.md'], ['changes', 's-t2']]);
+    // DSH's review of a turn it still holds, what couldn't be read, and what isn't shown yet.
+    assert.deepEqual(byClass(tree, 'dshp-ch-note').map(textIn), [
+        'DSH\'s review of the whole folder: Turn 1',
+        'What 1 subagent changed couldn\'t be read.',
+        'Edits made by commands the thread ran in its shell aren\'t shown yet.',
+    ]);
+    elementsOf(tree).find((e) => e.props?.['data-projects-changes-review'] === '1').props.onClick();
+    elementsOf(tree).find((e) => e.props?.className === 'dshp-ch-name').props.onClick();
+    assert.deepEqual(opened.splice(0), [['review', 's-t1', 6, 1], ['thread', 's-t1']]);
+    // A click on a file's name folds it.
+    files[0].props.onToggle();
+    tree = draw();
+    assert.deepEqual(elementsOf(tree).filter((e) => e.type === ChangedFile).map((f) => f.props.open), [false, true]);
+    file = ChangedFile(elementsOf(tree).find((e) => e.type === ChangedFile).props);
+    assert.equal(byClass(file, 'dshp-ch-file-body').length, 0);
+    // Drawn again, nothing is read again until the thread's records gain a turn, or on Read again.
+    draw();
+    assert.equal(calls.length, 1);
+    marks = [...marks, { turn: 2, seq: 9 }];
+    tree = draw();
+    assert.equal(calls.length, 2);
+    assert.equal(tree.props['data-state'], 'ready', 'what it showed stays while it reads');
+    await tick();
+    // A read that fails keeps what it showed, and says so; Read again tries once more.
+    answer = { ok: false, error: { code: 'projects/refused', message: 'couldn\'t read t1\'s records: read timed out' } };
+    elementsOf(draw()).find((e) => e.props?.['data-projects-changes-read'] === '').props.onClick();
+    tree = draw();
+    await tick();
+    tree = draw();
+    assert.equal(calls.length, 3);
+    assert.equal(byClass(tree, 'dshp-ch-file').length + elementsOf(tree).filter((e) => e.type === ChangedFile).length, 2);
+    assert.equal(textIn(byClass(tree, 'dshp-t-error')), 'Couldn\'t read t1\'s records: read timed out.');
+    // A thread that changed nothing says so; a hidden tab reads nothing.
+    const quiet = liveMount(react, () => ThreadChangesTab({ useTabInfo: () => ({ tab: { ...tab, contentId: changesAddress('s-t9'), visible: false } }), useSessions: (select) => select(state()), projects }));
+    quiet();
+    assert.equal(calls.length, 3);
+    answer = { ok: true, value: { ...value, files: [], turns: [], unread: undefined } };
+    const none = liveMount(react, () => ThreadChangesTab({ useTabInfo: () => ({ tab: { ...tab, contentId: changesAddress('s-t9') } }), useSessions: (select) => select(state()), projects }));
+    none();
+    await tick();
+    tree = none();
+    assert.equal(textIn(byClass(tree, 'dshp-t-empty')), 'This thread hasn\'t changed any files yet.');
+    // Many files start folded.
+    answer = { ok: true, value: { ...value, files: Array.from({ length: 9 }, (_, i) => ({ path: `f${i}.md`, added: 1, deleted: 0, edits: [] })) } };
+    const many = liveMount(react, () => ThreadChangesTab({ useTabInfo: () => ({ tab: { ...tab, contentId: changesAddress('s-t8') } }), useSessions: (select) => select(state()), projects }));
+    many();
+    await tick();
+    tree = many();
+    assert.ok(elementsOf(tree).filter((e) => e.type === ChangedFile).every((f) => f.props.open === false));
+    assert.equal(textIn(byClass(tree, 'dshp-ch-note')[0]), '9 files folded. Open one to see its diff.');
+    // The tab's title names the thread.
+    assert.equal(textIn(ThreadChangesTitle({ useTabInfo: () => ({ tab }), useSessions: (select) => select(state()) })), 'Changes · Edit docs');
+
+    // A card's counts open the thread's Changes tab; a DSH without it opens DSH's Review while it can; else they only say.
+    const counts = { added: 5, deleted: 3, files: 2, turns: 2, last: { seq: 9, turn: 2 }, reviewable: false };
+    const withTab = { ...projects, hasChanges: () => true };
+    let card = CardChanges({ changes: counts, ...changesOpener(withTab, 's-t1', counts) });
+    const button = elementsOf(card).find((e) => e.type === 'button');
+    assert.equal(button.props['aria-label'], 'See what this thread changed. 2 files changed: 5 lines added, 3 deleted');
+    assert.equal(button.props['data-projects-changes'], '');
+    button.props.onClick();
+    assert.deepEqual(opened.splice(0), [['changes', 's-t1']]);
+    const noTab = { ...projects, hasChanges: () => false };
+    card = CardChanges({ changes: { ...counts, reviewable: true }, ...changesOpener(noTab, 's-t1', { ...counts, reviewable: true }) });
+    assert.equal(elementsOf(card).find((e) => e.type === 'button').props['data-projects-changes'], 'review');
+    card = CardChanges({ changes: counts, ...changesOpener(noTab, 's-t1', counts) });
+    assert.equal(card.props['data-projects-changes'], 'gone');
+    assert.deepEqual(plain(changesOpener(withTab, undefined, counts)), {}, 'a card whose thread has no session opens nothing');
 });
 
 // ── the DSH window's view (projection.js) ───────────────────────────────────

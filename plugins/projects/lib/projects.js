@@ -54,7 +54,7 @@ import {
     outsideMessage, replyMessage,
 } from './prompts.js';
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
-import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS } from './changes.js';
+import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS, diffFiles, subagentsIn, placeIn } from './changes.js';
 import { sendOf, codeSendOf } from './sends.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
@@ -2198,6 +2198,68 @@ export class ProjectManager {
         let reviewable = false;
         try { reviewable = typeof t.sessionId === 'string' && this.ctx.get?.('workspaceChanges')?.summary?.(t.sessionId, totals.last.seq) !== undefined; } catch {}
         return { ...totals, reviewable };
+    }
+
+    /**
+     * A thread's changes as its Changes tab shows them: each file it changed
+     * through DSH's file tools, or a subagent working for it did, with lines
+     * added and deleted and each edit's hunks, read from their logs; the
+     * project's other threads that changed the same files (from their
+     * records); and the turns whose diff DSH can still show in its Review.
+     * @param {string} target - the thread's session, or a session of its project with `threadId`.
+     */
+    async threadDiffs(target, threadId = undefined) {
+        const projectId = this.projectFor(target);
+        const named = typeof threadId === 'string' && threadId.trim() !== '' ? threadId : this.store.lookup(String(target))?.threadId;
+        if (!named) throw new ProjectError('not a thread: name one of this project\'s threads');
+        const { id: own, t } = this.requireThread(projectId, named);
+        const base = { project: projectId, thread: own, title: t.title ?? '', session: t.sessionId ?? null };
+        if (typeof t.sessionId !== 'string') return { ...base, files: [], turns: [] };
+        let inspected;
+        try {
+            inspected = await this.sc.inspect(t.sessionId, AbortSignal.timeout(20000));
+        } catch (error) {
+            throw new ProjectError(`couldn't read ${own}'s records: ${String(error?.message ?? error).slice(0, 200)}`);
+        }
+        const events = ownEvents(inspected);
+        const folder = inspected?.meta?.cwd ?? t.folder ?? this.project(projectId).workspacePath;
+        const edits = editsIn(events, { hunks: true });
+        // Its subagents' edits, from their own logs (two levels down), at the turn that started them.
+        const children = subagentsIn(events).map((child) => ({ ...child, depth: 1 }));
+        let unread = 0;
+        for (let i = 0; i < children.length && i < 40; i++) {
+            const child = children[i];
+            let log;
+            try {
+                log = ownEvents(await this.sc.inspect(child.id, AbortSignal.timeout(10000)));
+            } catch {
+                unread += 1;
+                continue;
+            }
+            const by = child.label || 'a subagent';
+            for (const edit of editsIn(log, { hunks: true })) edits.push({ ...edit, turn: child.turn ?? edit.turn, by });
+            if (child.depth < 2) children.push(...subagentsIn(log).map((c) => ({ ...c, turn: child.turn, label: c.label || child.label, depth: child.depth + 1 })));
+        }
+        // The thread's own edits came first in its log; a subagent's go with the turn that started it.
+        const ordered = edits.map((edit, i) => ({ edit, i })).sort((a, b) => (a.edit.turn ?? 0) - (b.edit.turn ?? 0) || a.i - b.i).map(({ edit }) => edit);
+        const files = diffFiles(ordered, folder);
+        // The project's other threads whose records name a file this one changed.
+        for (const [otherId, other] of Object.entries(this.store.project(projectId)?.threads ?? {})) {
+            if (otherId === own || !Array.isArray(other?.changes)) continue;
+            const theirs = new Set(other.changes.flatMap((r) => (Array.isArray(r?.files) ? r.files.map((f) => placeIn(folder, String(f?.path ?? ''))) : [])));
+            for (const file of files) {
+                if (!theirs.has(file.path)) continue;
+                const who = { thread: otherId, title: String(other.title ?? '').slice(0, 120), ...(typeof other.sessionId === 'string' ? { session: other.sessionId } : {}) };
+                file.alsoBy = [...(file.alsoBy ?? []), who];
+            }
+        }
+        const workspaceChanges = this.ctx.get?.('workspaceChanges');
+        const turns = (Array.isArray(t.changes) ? t.changes : []).filter((r) => Number.isSafeInteger(r?.turn) && Number.isSafeInteger(r?.seq)).map((r) => {
+            let reviewable = false;
+            try { reviewable = workspaceChanges?.summary?.(t.sessionId, r.seq) !== undefined; } catch {}
+            return { turn: r.turn, seq: r.seq, ...(reviewable ? { reviewable: true } : {}) };
+        });
+        return { ...base, folder: typeof folder === 'string' ? folder : null, files, turns, ...(unread > 0 ? { unread } : {}) };
     }
 
     clearApprovals(sessionId) {

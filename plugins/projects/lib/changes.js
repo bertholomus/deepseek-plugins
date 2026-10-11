@@ -203,9 +203,10 @@ function argsOf(value) {
  * The edits in a session's records, in order: each successful file-tool
  * call (its `tool/call` and then its `tool/result`) as an edit with the
  * turn it ran in and its result's seq. Failed calls changed nothing.
- * @returns {Array<{turn: number, seq: number, path: string, added: number, deleted: number, created?: true}>}
+ * @param {{hunks?: boolean}} [options] - `hunks`: keep each edit's hunks (hunksOf) for a diff view.
+ * @returns {Array<{turn: number, seq: number, path: string, added: number, deleted: number, created?: true, hunks?: object[]}>}
  */
-export function editsIn(events) {
+export function editsIn(events, { hunks = false } = {}) {
     const calls = new Map();
     const out = [];
     for (const event of Array.isArray(events) ? events : []) {
@@ -221,11 +222,12 @@ export function editsIn(events) {
         if (!call) continue;
         calls.delete(callId);
         if (message?.isError === true || event.data?.error !== undefined) continue;
-        const edit = editOf(call.name, argsOf(call.args), event.data?.meta);
+        const args = argsOf(call.args);
+        const edit = editOf(call.name, args, event.data?.meta);
         if (!edit || !(edit.added + edit.deleted > 0 || edit.created)) continue;
         const turn = Number.isSafeInteger(event.data?.turn) ? event.data.turn : call.turn;
         if (!Number.isSafeInteger(turn) || !Number.isSafeInteger(event.seq)) continue;
-        out.push({ turn, seq: event.seq, ...edit });
+        out.push({ turn, seq: event.seq, ...edit, ...(hunks ? { hunks: hunksOf(call.name, args, event.data?.meta) } : {}) });
     }
     return out;
 }
@@ -238,19 +240,124 @@ export function editsIn(events) {
  * @returns {{turn, files: Array<{path, added, deleted}>, total, added, deleted}|null} null when nothing changed.
  */
 export function editSummary(turn, edits, folder = '') {
-    const root = typeof folder === 'string' ? folder.replace(/\/+$/, '') : '';
-    const place = (path) => {
-        const p = root !== '' && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
-        return p.replace(/^(\.\/)+/, '');
-    };
     const byPath = new Map();
     for (const e of Array.isArray(edits) ? edits : []) {
         if (typeof e?.path !== 'string' || e.path === '') continue;
-        const path = place(e.path);
+        const path = placeIn(folder, e.path);
         const was = byPath.get(path) ?? { path, added: 0, deleted: 0 };
         byPath.set(path, { path, added: was.added + count(e.added), deleted: was.deleted + count(e.deleted) });
     }
     if (byPath.size === 0) return null;
     const files = [...byPath.values()];
     return { turn, files, total: files.length, added: files.reduce((n, f) => n + f.added, 0), deleted: files.reduce((n, f) => n + f.deleted, 0) };
+}
+
+/** A path inside the folder written relative to it, as the records keep it; any other path as it is. */
+export function placeIn(folder, path) {
+    const root = typeof folder === 'string' ? folder.replace(/\/+$/, '') : '';
+    const p = root !== '' && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
+    return p.replace(/^(\.\/)+/, '');
+}
+
+/**
+ * A thread's changes as its Changes tab shows them: each file with its
+ * edits' hunks, in the shape DSH's DiffBlock draws (`oldText` null for a
+ * file the edit created). Text past these limits is left out, its lines
+ * still counted.
+ */
+export const MAX_HUNK_CHARS = 64 * 1024;
+export const MAX_VIEW_CHARS = 1024 * 1024;
+
+/**
+ * One successful file-tool call's hunks: `write` and `edit` keep theirs,
+ * with three lines of context, in the result's `meta.diffs`, and a new
+ * file's text is the call's `content`; `str_replace_editor` has only its
+ * arguments, so its hunk is the text it replaced, without context.
+ * @returns {Array<{oldText: string|null, newText: string}>}
+ */
+export function hunksOf(name, args, meta) {
+    const a = isObject(args) ? args : {};
+    const m = isObject(meta) ? meta : {};
+    if (name === 'write' || name === 'edit') {
+        if (name === 'write' && m.operation === 'create') return [{ oldText: null, newText: textOf(a.content) }];
+        if (!Array.isArray(m.diffs)) return [];
+        return m.diffs.filter(isObject).map((d) => ({ oldText: typeof d.oldText === 'string' ? d.oldText : null, newText: textOf(d.newText) }));
+    }
+    if (name === 'str_replace_editor') {
+        switch (a.command) {
+            case 'create': return [{ oldText: null, newText: textOf(a.file_text) }];
+            case 'str_replace': return [{ oldText: textOf(a.old_str), newText: textOf(a.new_str) }];
+            case 'insert': return [{ oldText: '', newText: textOf(a.new_str) }];
+            default: return [];
+        }
+    }
+    return [];
+}
+
+/**
+ * The subagents a session started, from DSH's `subagent/catalog` facts in
+ * its log: each child session once, with its label and the turn of the
+ * session it started in. An external child has no session here.
+ * @returns {Array<{id: string, label: string, turn: number|null}>}
+ */
+export function subagentsIn(events) {
+    const out = [];
+    const seen = new Set();
+    let turn = null;
+    for (const event of Array.isArray(events) ? events : []) {
+        if (event?.type === 'turn/start' && Number.isSafeInteger(event.data?.turn)) turn = event.data.turn;
+        if (event?.type !== 'subagent/catalog') continue;
+        const d = event.data;
+        if (!isObject(d) || typeof d.childId !== 'string' || d.childId === '' || d.mode === 'external' || seen.has(d.childId)) continue;
+        seen.add(d.childId);
+        out.push({ id: d.childId, label: typeof d.label === 'string' ? d.label.trim().slice(0, 80) : '', turn });
+    }
+    return out;
+}
+
+/**
+ * Edits grouped by file for the Changes tab, in the order the files were
+ * first changed: lines added and deleted over every edit, whether the
+ * first edit created the file, and each edit with its turn, who made it
+ * (`by`, a subagent) and its hunks. Past MAX_VIEW_CHARS of text in all, and
+ * for any hunk past MAX_HUNK_CHARS, the hunks are left out (`clipped`)
+ * while their lines still count.
+ * @param {Array} edits - from editsIn with hunks, a subagent's carrying `by`.
+ * @param {string} [folder] - the thread's folder: paths inside it are written relative to it.
+ * @returns {Array<{path, added, deleted, created?, edits: Array<{turn, seq, by?, added, deleted, created?, hunks, clipped?}>}>}
+ */
+export function diffFiles(edits, folder = '') {
+    const byPath = new Map();
+    let budget = MAX_VIEW_CHARS;
+    for (const e of Array.isArray(edits) ? edits : []) {
+        if (typeof e?.path !== 'string' || e.path === '') continue;
+        const path = placeIn(folder, e.path);
+        let file = byPath.get(path);
+        if (!file) {
+            if (byPath.size >= MAX_FILES) continue;
+            file = { path, added: 0, deleted: 0, ...(e.created ? { created: true } : {}), edits: [] };
+            byPath.set(path, file);
+        }
+        file.added += count(e.added);
+        file.deleted += count(e.deleted);
+        const hunks = [];
+        let clipped = false;
+        for (const hunk of Array.isArray(e.hunks) ? e.hunks : []) {
+            if (!isObject(hunk)) continue;
+            const size = (typeof hunk.oldText === 'string' ? hunk.oldText.length : 0) + textOf(hunk.newText).length;
+            if (size > MAX_HUNK_CHARS || size > budget) {
+                clipped = true;
+                continue;
+            }
+            budget -= size;
+            hunks.push({ oldText: typeof hunk.oldText === 'string' ? hunk.oldText : null, newText: textOf(hunk.newText) });
+        }
+        file.edits.push({
+            turn: Number.isSafeInteger(e.turn) ? e.turn : null, seq: Number.isSafeInteger(e.seq) ? e.seq : null,
+            ...(typeof e.by === 'string' && e.by !== '' ? { by: e.by } : {}),
+            added: count(e.added), deleted: count(e.deleted), ...(e.created ? { created: true } : {}),
+            hunks, ...(clipped ? { clipped: true } : {}),
+        });
+    }
+    return [...byPath.values()];
 }

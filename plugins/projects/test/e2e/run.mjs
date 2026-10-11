@@ -11,7 +11,8 @@
  * settings, memory, pause, a restart, the browser half DSH serves for the
  * plugin's page, a saved default that applies without a restart, the Project
  * settings endpoints the window calls, a pick in DSH's own model picker,
- * a thread's code changes as DSH records them, failed and stopped threads
+ * a thread's code changes as DSH records them and its Changes tab reads
+ * them (a subagent's too), failed and stopped threads
  * as the window shows them, with Retry and Resume, a project made in the
  * window and the Projects page's order, a thread in its project's
  * workspace, a coordinator's message to a chat in no project and to
@@ -872,6 +873,32 @@ try {
     check('each thread counts only its own edits: none for the one that waited, its file for the one that wrote', changesFor(waitsId) === null
         && (project().threads?.[waitsId]?.changes ?? []).length === 0 && changesFor(writesId)?.files === 1 && changesFor(writesId).added === 1 && changesFor(writesId).deleted === 0
         && filesOfB.join() === 'b-new.txt', `A ${JSON.stringify(changesFor(waitsId))} B ${JSON.stringify(changesFor(writesId))} ${filesOfB.join()}`);
+    // 22c. A thread's Changes tab (remote.js `changes`): its own edits with each one's hunks, read from its
+    // log and its subagents' logs, and the turns DSH can still review; another thread in the folder shows only its own.
+    const tabOf = (web, target, thread) => webApi(web, 'dsh-plugin-projects/changes', thread ? { target, thread } : { target });
+    let tab = await tabOf(web, lambda);
+    const notesIn = (read) => (read.ok ? read.value.files.find((f) => f.path === 'notes.md') : undefined);
+    let notes = notesIn(tab);
+    check('a thread\'s Changes tab reads its file and each edit\'s hunks from its log, and the turns DSH can review', tab.ok && tab.value.files.length === 1
+        && notes?.added === 4 && notes.deleted === 1 && notes.created === true && notes.edits.length === 2
+        && notes.edits[0].hunks[0]?.oldText === null && notes.edits[0].hunks[0].newText === 'one\ntwo\nthree\n'
+        && notes.edits[1].hunks.some((hunk) => hunk.oldText?.includes('two') && hunk.newText.includes('TWO'))
+        && tab.value.turns.length === 2 && tab.value.turns.every((t) => t.reviewable === true), JSON.stringify(tab).slice(0, 700));
+    const tabA = await tabOf(web, coord, waitsId);
+    const tabB = await tabOf(web, sessionB);
+    check('each thread\'s Changes tab shows only its own edits, whatever DSH says of the folder', tabA.ok && tabA.value.files.length === 0
+        && tabB.ok && tabB.value.files.map((f) => f.path).join() === 'b-new.txt' && tabB.value.files[0].edits[0].hunks[0]?.newText === 'from B\n',
+        `${JSON.stringify(tabA).slice(0, 200)} ${JSON.stringify(tabB).slice(0, 300)}`);
+    // B delegates to a subagent, which writes a file in its own session: B's tab shows it, by the subagent, at that turn.
+    // (A line of its own: DSH 0.2.1 adds its own words to a child's prompt, right after it.)
+    await say(sessionB, call('subagent', { description: 'Write a file', prompt: `${call('write', { file_path: join(ws, 'from-sub.txt'), content: 'sub one\nsub two\n' })}\n`, run_in_background: false }));
+    const subIn = (read) => (read?.ok ? read.value.files.find((f) => f.path === 'from-sub.txt') : undefined);
+    const tabSub = await waitFor(async () => { const got = await tabOf(web, sessionB); return subIn(got) ? got : null; }, 'the subagent\'s file in B\'s Changes tab', 20000).catch(() => null);
+    const sub = subIn(tabSub);
+    const bNew = tabSub?.value.files.find((f) => f.path === 'b-new.txt');
+    check('a subagent\'s edit shows in its thread\'s Changes tab, by the subagent, at the turn that started it', sub?.added === 2 && sub.created === true
+        && sub.edits[0]?.by === 'Write a file' && sub.edits[0].hunks[0]?.newText === 'sub one\nsub two\n' && sub.edits[0].turn > bNew?.edits[0].turn,
+        JSON.stringify(tabSub?.value ?? null).slice(0, 700));
 
     // DSH restarts: the totals stay with the plugin, and Review is no longer offered.
     const lastSeq = lc?.last.seq;
@@ -892,6 +919,12 @@ try {
     card = lastSeq !== undefined ? await dshCard(webAgain, lastSeq) : { status: 0, value: null };
     check('after a restart the thread\'s changes stay, without a diff to review', lc?.added === 4 && lc.deleted === 1 && lc.files === 1 && lc.reviewable === false && card.status === 404,
         `${JSON.stringify(lc)} ${card.status}`);
+    tab = await tabOf(webAgain, lambda);
+    notes = notesIn(tab);
+    const subAgain = subIn(await tabOf(webAgain, coord, writesId));
+    check('after a restart the Changes tab still shows the diffs, its subagent\'s too, and no turn to review in DSH', notes?.added === 4 && notes.edits.length === 2
+        && tab.value.turns.length === 2 && tab.value.turns.every((t) => t.reviewable !== true) && subAgain?.edits[0]?.by === 'Write a file',
+        `${JSON.stringify(tab).slice(0, 500)} ${JSON.stringify(subAgain ?? null).slice(0, 200)}`);
     mark = model.requests.length;
     await say(coord, 'Which threads changed files?');
     const lambdaLine = since(mark, 'coordinator')[0]?.system.split('\n').find((l) => l.startsWith(`- ${lambdaId} · "Lambda" · `)) ?? '';
