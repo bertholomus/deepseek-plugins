@@ -2673,7 +2673,7 @@ test('browser half: each session list row says its place in a project, and the C
     const list = '[role="tree"] div:has(>*>[data-row-key="session:ses_01.ab-c:9"])';
     const C = ':has(>[data-row-key="session:ses_01.ab-c:9"])';
     const T = ':has(>[data-row-key="session:ses_t1"],>[data-row-key="session:ses_t2"])';
-    assert.equal(rules.length, 8);
+    assert.equal(rules.length, 9);
     for (const rule of rules) assert.ok(rule.startsWith(list), rule);
     assert.ok(rules.includes(`${list}{display:flex;flex-direction:column}`));
     assert.ok(rules.includes(`${list}>:nth-child(n+5){order:3}`));
@@ -2684,6 +2684,9 @@ test('browser half: each session list row says its place in a project, and the C
     // The corner is drawn in the indent, not in the row's leading seat; the branch mark leaves the seat but is still read aloud.
     assert.ok(rules.some((rule) => rule.startsWith(`${list}>${T}::before{content:"";position:absolute;`)));
     assert.ok(rules.includes(`${list}>${T} .dshp-t-mark[data-projects-thread-mark=""]{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}`));
+    // DSH's time (the row's third child, before its actions) leaves the row too, still read aloud, so the indent
+    // doesn't cost the title its room; a status DSH writes there instead ("Approval") and the actions stay.
+    assert.ok(rules.includes(`${list}>${T}>[data-row-key]>:nth-child(3):not(:last-child,[aria-hidden="true"]){position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}`));
     const has = (ids) => `:has(${ids.map((id) => `>[data-row-key="session:${id}"]`).join(',')})`;
     // Two projects in one workspace stay apart: each is drawn where its coordinator is, and what DSH lists after a
     // coordinator follows that project's threads.

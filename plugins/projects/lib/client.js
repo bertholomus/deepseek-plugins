@@ -3864,7 +3864,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * follow its threads. DSH's order, data and wrappers stay as they
          * are. A nested thread is indented, with its corner drawn in the
          * indent: the row's leading seat stays free for DSH's marks and other
-         * plugins' (a thread in another workspace keeps its branch mark there).
+         * plugins' (a thread in another workspace keeps its branch mark there),
+         * and its time is left out, so its title has the room of DSH's own.
          *
          * Every selector names rows by DSH's own row keys and looks only at a
          * wrapper's child or a section's grandchildren, and where a project
@@ -3894,6 +3895,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 `${T}::before{${NEST_CORNER}}`,
                 // The branch mark gives way to the corner; the row's description still says "Project thread".
                 `${T} .dshp-t-mark[data-projects-thread-mark=""]{${HIDDEN}}`,
+                // DSH's time (the row's child after its title, before its actions) gives way to the indent, still read
+                // aloud, so the title keeps the room it has in DSH's own rows. A status DSH writes there instead
+                // ("Approval", hidden from screen readers since the seat says it) stays.
+                `${T}>[data-row-key]>:nth-child(3):not(:last-child,[aria-hidden="true"]){${HIDDEN}}`,
             );
             return rules.join('\n');
         }
