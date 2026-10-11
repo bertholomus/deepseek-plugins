@@ -1372,6 +1372,70 @@ test('browser half: the Projects page gives each thread its state, marks a pause
     assert.equal(elementsOf(drawTree()).find((e) => e.props?.role === 'tree').props.onKeyDown({ key: 'ArrowDown', metaKey: true, preventDefault: () => assert.fail('taken') }), undefined);
 });
 
+test('browser half: on the Projects page, a thread whose handback a pause holds reads as its Threads menu says', () => {
+    const { client, react } = loadClient();
+    const { ProjectsPage, PageTree, rowsOf, withHeld } = client.internals;
+    const value = (v) => ({ values: { projectSession: v } });
+    const roster = [{ id: 't1', session: 'held' }, { id: 't2', session: 'ask' }, { id: 't3', session: 'run' }, { id: 't4', session: 'none' }];
+    const titles = { held: 'Audit the nightly backfill job', ask: 'Pick a warehouse', run: 'Load the archive', none: 'Not started' };
+    const sessions = {
+        phase: 'ready',
+        byId: { d: { id: 'd', title: '◆ Data Pipeline' }, ...Object.fromEntries(Object.entries(titles).map(([id, title]) => [id, { id, title }])) },
+        projectionsBySession: {
+            d: value({ role: 'coordinator', project: { id: 'data-pipeline', name: 'Data Pipeline' }, threads: roster }),
+            ...Object.fromEntries(roster.map((t) => [t.session, value({ role: 'thread', coordinator: 'd', thread: { id: t.id } })])),
+        },
+    };
+    const workspaces = { phase: 'ready', archivedSessionIds: [], items: [{ workspaceId: 'w-dp', title: 'data-pipeline', path: '/home/u/data-pipeline', sessionIds: ['d', ...Object.keys(titles)] }] };
+    // The pause holds t1's done handback, t2's question, and one from t3, which runs again.
+    const handbacks = [{ thread: 't1', status: 'done' }, { thread: 't2', status: 'needs_decision' }, { thread: 't3', status: 'done' }];
+    let paused = true;
+    const watched = [];
+    const facts = {
+        subscribe: () => () => {}, getSnapshot: () => 0, list: async () => {}, newsOf: () => undefined,
+        projects: () => [{ id: 'data-pipeline', name: 'Data Pipeline', coordinator: 'd', home: 'w-dp', paused }], listFailed: () => false,
+        paused: () => paused,
+        // describe's answer, which the Threads menu reads the held handbacks from too.
+        info: (target) => (target === 'd' ? { paused: { value: paused, held: handbacks.length, handbacks } } : null),
+        watch: (key) => { watched.push(key); return () => {}; },
+    };
+    const statuses = new Map([['run', { running: true }]]);
+    const props = { useSessions: (select) => select(sessions), useSessionStatus: (select) => select(statuses), useWorkspaces: (select) => select(workspaces), projects: { facts, openSession: () => {} } };
+    // The page's own effects run, so what it reads shows.
+    let effects = [];
+    const states = () => {
+        effects = [];
+        react.useEffect = (effect) => { effects.push(effect); };
+        const treeEl = elementsOf(mount(react, () => ProjectsPage(props))()).find((e) => e.type === PageTree);
+        react.useEffect = () => {};
+        const tree = mount(react, () => PageTree(treeEl.props))();
+        return Object.fromEntries(elementsOf(tree).filter((e) => e.props?.role === 'treeitem' && e.props['data-projects-node'] === 'thread').map((li) => {
+            const state = byClass(li.children[0], 'dshp-tree-state')[0];
+            return [textIn(byClass(li.children[0], 'dshp-tree-title')), [state.props['data-projects-state'], textIn(state)]];
+        }));
+    };
+    // The Threads menu's dot and word for each thread.
+    const menu = () => Object.fromEntries(withHeld(rowsOf(roster, statuses, sessions.byId, {}), paused ? handbacks : []).map((row) => [titles[row.session], [row.dot, row.stateLabel]]));
+    let page = states();
+    assert.deepEqual(plain(page), {
+        'Audit the nightly backfill job': ['done', 'Done'], 'Pick a warehouse': ['warning', 'Needs a decision'], 'Load the archive': ['ongoing', 'Running'], 'Not started': ['idle', 'Idle'],
+    });
+    assert.deepEqual(plain(page), plain(menu()));
+    // It reads the paused project's description while it shows it, as the Threads menu does.
+    for (const effect of effects) effect();
+    assert.deepEqual(watched, ['list', 'd:d']);
+    // Resumed: nothing is held, and the page no longer reads it.
+    paused = false;
+    page = states();
+    assert.deepEqual(plain(page), {
+        'Audit the nightly backfill job': ['idle', 'Idle'], 'Pick a warehouse': ['idle', 'Idle'], 'Load the archive': ['ongoing', 'Running'], 'Not started': ['idle', 'Idle'],
+    });
+    assert.deepEqual(plain(page), plain(menu()));
+    watched.length = 0;
+    for (const effect of effects) effect();
+    assert.deepEqual(watched, ['list']);
+});
+
 test('browser half: a row on the Projects page has ⋯: a project\'s settings and Archive project…, a thread\'s other way to open and its project\'s settings', () => {
     const storage = new Map();
     const { client, react } = loadClient({ storage });

@@ -4691,12 +4691,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * threads as its Threads menu counts them (its coordinator's roster;
          * the list's count until this window has the roster), whether it is
          * paused and its news; a thread what its coordinator's roster and its
-         * own session say of it (its state, as the Threads menu gives it).
+         * own session say of it (its state, as the Threads menu gives it),
+         * with the handback a pause holds for it.
          * @param pausedOf - coordinator => whether its project is paused, else the list's word.
          * @param newsOf - coordinator => its unread news ({unread}), or undefined.
-         * @returns {Array<{kind, id, title, children, row?, project?, folder?, counts?, resolved?, handback?, ending?, paused?, news?}>}
+         * @param heldOf - coordinator => the handbacks its pause holds ([{thread, status}]), as the Threads menu has them.
+         * @returns {Array<{kind, id, title, children, row?, project?, folder?, counts?, resolved?, handback?, ending?, held?, paused?, news?}>}
          */
-        function pageModel({ listed, items, sessions, archived, pausedOf, newsOf }) {
+        function pageModel({ listed, items, sessions, archived, pausedOf, newsOf, heldOf }) {
             const byId = sessions?.byId ?? {};
             const hidden = (id) => { const row = byId[id]; return !row || row.blank === true || archived.has(id); };
             const titleOf = (row) => (typeof row?.title === 'string' && row.title.trim() !== '' ? row.title : PAGE.newChat);
@@ -4706,6 +4708,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (!isObject(p) || p.archived === true || typeof p.coordinator !== 'string' || p.coordinator === '' || archived.has(p.coordinator)) continue;
                 if (!coordOf.has(p.coordinator)) coordOf.set(p.coordinator, p);
             }
+            const pausedNow = (p) => (pausedOf?.(p.coordinator) ?? p.paused) === true;
             const workspaces = (Array.isArray(items) ? items : EMPTY).filter((ws) => typeof ws?.workspaceId === 'string');
             const rosterOf = (coordinator) => { const threads = valueIn(sessions, coordinator)?.threads; return Array.isArray(threads) ? threads : null; };
             // Each coordinator's roster by thread session: what it calls resolved, and each thread's last handback.
@@ -4713,6 +4716,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const entryOf = (coordinator, id) => {
                 if (!rosters.has(coordinator)) rosters.set(coordinator, new Map((rosterOf(coordinator) ?? EMPTY).filter((t) => isObject(t) && typeof t.session === 'string').map((t) => [t.session, t])));
                 return rosters.get(coordinator).get(id);
+            };
+            // What a paused project's pause holds, by thread: that thread reads as its handback (withHeld).
+            const helds = new Map();
+            const heldFor = (coordinator, entry) => {
+                if (!helds.has(coordinator)) {
+                    const list = pausedNow(coordOf.get(coordinator)) ? heldOf?.(coordinator) : undefined;
+                    helds.set(coordinator, new Map((Array.isArray(list) ? list : EMPTY).filter((hb) => isObject(hb) && typeof hb.thread === 'string' && typeof hb.status === 'string').map((hb) => [hb.thread, hb.status])));
+                }
+                return typeof entry?.id === 'string' ? helds.get(coordinator).get(entry.id) : undefined;
             };
             const threadsOf = new Map();
             const placed = new Set();
@@ -4726,7 +4738,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     if (!threadsOf.has(parent)) threadsOf.set(parent, []);
                     threadsOf.get(parent).push({
                         kind: 'thread', id, title: titleOf(byId[id]), row: byId[id], resolved: entry?.resolved === true,
-                        handback: isObject(entry?.handback) ? entry.handback : undefined, ending: endingIn(sessions, id), children: EMPTY,
+                        handback: isObject(entry?.handback) ? entry.handback : undefined, ending: endingIn(sessions, id), held: heldFor(parent, entry), children: EMPTY,
                     });
                 }
             }
@@ -4741,7 +4753,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     folder: workspaceName(home) || (typeof p.workspace === 'string' && p.workspace !== '' ? folderName(p.workspace) : ''),
                     counts: { open: counts.open, resolved: counts.resolved },
                     children: [...threads.filter((t) => !t.resolved), ...threads.filter((t) => t.resolved)],
-                    paused: (pausedOf?.(p.coordinator) ?? p.paused) === true, news: newsOf?.(p.coordinator),
+                    paused: pausedNow(p), news: newsOf?.(p.coordinator),
                 };
             });
         }
@@ -4775,12 +4787,20 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return [node.paused === true ? TEXT.paused : '', node.folder ?? '', threads].filter((part) => part !== '').join(' · ');
         }
 
-        /** A thread's state on the page, in the Threads menu's words and dots, live from DSH's own status of its session. */
+        /**
+         * A thread's state on the page, in the Threads menu's words and dots,
+         * live from DSH's own status of its session. While it isn't running or
+         * waiting on the user, one whose handback a pause holds reads as that
+         * handback, as the Threads menu has it (withHeld).
+         */
         function treeThreadState(node, statuses) {
             const status = statuses?.get?.(node.id);
+            const running = (status?.running ?? node.row?.running) === true;
+            const pending = status?.pendingInteraction ?? undefined;
+            const held = typeof node.held === 'string' && node.resolved !== true && !running && pending === undefined;
             const state = rowState({
-                resolved: node.resolved === true, running: (status?.running ?? node.row?.running) === true,
-                pending: status?.pendingInteraction ?? undefined, hb: node.handback, ending: node.ending,
+                resolved: node.resolved === true, running, pending,
+                hb: held ? { status: node.held } : node.handback, ending: held ? undefined : node.ending,
             });
             return { dot: state.dot, label: state.label };
         }
@@ -5042,7 +5062,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const tree = pageModel({
                 listed, items, sessions, archived,
                 pausedOf: (coordinator) => projects.facts.paused?.(coordinator), newsOf: (coordinator) => projects.facts.newsOf?.(coordinator),
+                heldOf: (coordinator) => projects.facts.info?.(coordinator)?.paused?.handbacks,
             });
+            // What a paused project's pause holds comes with its description: read it while the page shows the project.
+            const pausedKey = tree.filter((node) => node.paused).map((node) => node.id).join('\n');
+            React.useEffect(() => {
+                const stops = pausedKey === '' ? EMPTY : pausedKey.split('\n').map((coordinator) => projects.facts.watch(`d:${coordinator}`));
+                return () => { for (const stop of stops) stop(); };
+            }, [projects.facts, pausedKey]);
             // A row's ⋯: Project settings where DSH lets the plugin open them, Archive project… where it can ask first,
             // and for a thread the other way to open it.
             const settingsOn = useSettingsAvailable(projects.settings ?? NO_DIALOG);
