@@ -688,7 +688,10 @@ function cloud(args, program) {
     return verb ? { kind: 'deploy', program, what: `makes a change in the cloud (${program} ${pos.slice(0, pos.indexOf(verb) + 1).join(' ').slice(0, 60)})` } : null;
 }
 
-const AWS_TAKES = new Set(['--profile', '--region', '--output', '--endpoint-url', '--query', '--cli-input-json', '--cli-input-yaml', '--color', '--ca-bundle', '--cli-read-timeout', '--cli-connect-timeout', '--page-size', '--max-items', '--starting-token', '--cli-binary-format']);
+const AWS_TAKES = new Set(['--profile', '--region', '--output', '--endpoint-url', '--query', '--cli-input-json', '--cli-input-yaml', '--color', '--ca-bundle', '--cli-read-timeout', '--cli-connect-timeout', '--page-size', '--max-items', '--starting-token', '--cli-binary-format',
+    // aws s3's own.
+    '--acl', '--cache-control', '--content-type', '--content-encoding', '--content-disposition', '--content-language', '--exclude', '--include', '--storage-class',
+    '--metadata', '--metadata-directive', '--expires', '--grants', '--website-redirect', '--sse-c', '--sse-c-key', '--sse-kms-key-id', '--source-region', '--expected-size', '--request-payer', '--checksum-algorithm']);
 const AWS_VERBS = /^(create|delete|put|update|modify|start|stop|terminate|run|invoke|publish|send|deploy|register|deregister|attach|detach|associate|disassociate|reboot|restore|tag|untag|enable|disable|import|cancel|reset|set|add|remove|replace|accept|reject|authorize|revoke|copy|upload|execute|apply|batch|transact|purge|complete|abort|change|rotate|restart|promote|failover|initiate|respond|resume|suspend|signal|subscribe|unsubscribe|confirm|allocate|release|assign|unassign|activate|deactivate)(-|$)/;
 
 function aws(args) {
@@ -697,8 +700,12 @@ function aws(args) {
     if (!service || service === 'configure' || service === 'help' || has(args, '--dryrun', '--dry-run')) return null;
     if (service === 's3') {
         if (['rm', 'mb', 'rb'].includes(op)) return { kind: 'deploy', program: 'aws', what: `changes S3 (aws s3 ${op} ${placeOf(pos[2] ?? '')})` };
-        if (['cp', 'mv', 'sync'].includes(op) && (/^s3:\/\//i.test(pos.at(-1)) || (op === 'mv' && /^s3:\/\//i.test(pos[2] ?? '')))) return { kind: 'deploy', program: 'aws', what: `copies to S3 (aws s3 ${op} → ${placeOf(pos.at(-1))})` };
-        return null;
+        if (!['cp', 'mv', 'sync'].includes(op)) return null;
+        // Source, then destination: an option's value after them (an option it doesn't know) is no destination.
+        const s3 = (a) => /^s3:\/\//i.test(a ?? '');
+        const to = pos.slice(3).find(s3);
+        if (to) return { kind: 'deploy', program: 'aws', what: `copies to S3 (aws s3 ${op} → ${placeOf(to)})` };
+        return op === 'mv' && s3(pos[2]) ? { kind: 'deploy', program: 'aws', what: `changes S3 (aws s3 mv ${placeOf(pos[2])})` } : null;
     }
     return AWS_VERBS.test(op ?? '') ? { kind: 'deploy', program: 'aws', what: `makes a change in AWS (aws ${service} ${op})` } : null;
 }
@@ -743,9 +750,11 @@ function remote(name, args) {
         return { kind: 'remote', program: name, what: `runs commands on ${placeOf(host) || 'another machine'} (${name})` };
     }
     if (name === 'scp' || name === 'rsync') {
-        const pos = positionals(args, name === 'scp' ? new Set([...'cDFiJlPoSX']) : new Set(['e', '--rsh', '--rsync-path', '--exclude-from', '--include-from', '--files-from', '--password-file', '--log-file', '--partial-dir', '--temp-dir', '--backup-dir', '--suffix', '--chmod', '--chown', '--timeout', '--contimeout', '--port', '--bwlimit']));
-        const dest = pos.at(-1);
-        return pos.length > 1 && remotePath(dest) ? { kind: 'remote', program: name, what: `copies files to ${placeOf(dest.replace(/:.*$/, '')) || 'another machine'} (${name})` } : null;
+        const pos = positionals(args, name === 'scp' ? new Set([...'cDFiJlPoSX']) : new Set(['e', 'f', 'T', '--rsh', '--rsync-path', '--exclude', '--include', '--filter', '--exclude-from', '--include-from', '--files-from', '--password-file',
+            '--log-file', '--partial-dir', '--temp-dir', '--backup-dir', '--suffix', '--chmod', '--chown', '--timeout', '--contimeout', '--port', '--bwlimit']));
+        // A place on another machine after the first path is where the files go: an option's value after it is not.
+        const dest = pos.slice(1).find(remotePath);
+        return dest ? { kind: 'remote', program: name, what: `copies files to ${placeOf(dest.replace(/:.*$/, '')) || 'another machine'} (${name})` } : null;
     }
     if (name === 'rclone') {
         const pos = positionals(args, new Set(['--config', '--include', '--exclude', '--filter', '--transfers', '--checkers', '--bwlimit', '--log-file', '--log-level', '--max-age', '--min-age']));

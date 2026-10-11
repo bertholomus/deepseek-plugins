@@ -5719,7 +5719,11 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     const work = mkdtempSync(join(tmpdir(), 'projects-work-'));
     writeFileSync(join(work, 'deploy.sh'), '#!/bin/sh\ncurl -fsS -X POST --data @build.json http://127.0.0.1:8787/deploy\n');
     writeFileSync(join(work, 'run.sh'), '#!/bin/sh\necho ok\n');
-    writeFileSync(join(work, 'package.json'), JSON.stringify({ scripts: { build: 'tsc', release: 'npm publish' } }));
+    writeFileSync(join(work, 'package.json'), JSON.stringify({ scripts: {
+        build: 'tsc', release: 'npm publish',
+        'sync:assets': 'aws s3 sync ./dist s3://acme-assets --cache-control max-age=31536000', 'sync:prod': 'rsync -avz ./dist/ deploy@web1:/var/www/app --exclude node_modules',
+    } }));
+    writeFileSync(join(work, 'Makefile'), 'sync:\n\taws s3 sync ./dist s3://acme-site --delete --cache-control max-age=31536000\n');
     mkdirSync(join(work, 'scripts'));
     writeFileSync(join(work, 'scripts', 'release.sh'), '#!/bin/sh\ngh release create "v$2" dist/*.tar.gz --notes-file CHANGELOG.md\n');
     const outside = mkdtempSync(join(tmpdir(), 'projects-outside-'));
@@ -5767,6 +5771,15 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         ['gcloud app deploy app.yaml --version v2 --quiet', 'makes a change in the cloud (gcloud app deploy)'],
         ['./scripts/release.sh --version 1.4.2', 'runs ./scripts/release.sh, which makes a change on GitHub (gh release create)'],
         ['curl -X POST "$API_URL/deploy" -d @build.json -H "Authorization: Bearer $TOKEN" --version', 'sends a POST to $API_URL/deploy (curl)'],
+        // An option after the destination, or a value it takes, is no destination.
+        ['aws s3 sync ./dist s3://acme-site --delete --cache-control max-age=31536000', 'copies to S3 (aws s3 sync → acme-site)'],
+        ['aws s3 cp ./build s3://acme-site/ --recursive --acl public-read', 'copies to S3 (aws s3 cp → acme-site/)'],
+        ['aws s3 sync build/ s3://acme-site --exclude "*.map"', 'copies to S3 (aws s3 sync → acme-site)'],
+        ['aws s3 cp index.html s3://acme-site/index.html --content-type text/html', 'copies to S3 (aws s3 cp → acme-site/index.html)'],
+        ['rsync -avz ./dist/ deploy@web1:/var/www/app --exclude node_modules', 'copies files to web1 (rsync)'],
+        ['npm run sync:assets', 'runs npm run sync:assets, which copies to S3 (aws s3 sync → acme-assets)'],
+        ['npm run sync:prod', 'runs npm run sync:prod, which copies files to web1 (rsync)'],
+        ['make sync', 'runs make sync, which copies to S3 (aws s3 sync → acme-site)'],
     ]) {
         const decision = await gate(t1, shell, { command });
         assert.deepEqual([decision.kind, decision.reason, decision.displayReason?.en], ['ask', `the command ${what}`, `This command ${what}. A thread asks you before each command that sends outside the workspace.`], command);
