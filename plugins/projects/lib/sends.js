@@ -351,12 +351,15 @@ function afterRunner(name, args) {
     return [];
 }
 
-/** The command a line runs once what only wraps it is taken off: `sudo env X=1 timeout 5 curl …` runs curl. */
-function commandOf(words) {
+/**
+ * The command a line runs once what only wraps it is taken off: `sudo env X=1 timeout 5 curl …` runs curl.
+ * @param {Map<string, string|null>} [assigned] - gets the variables set for it (`X=1 cmd`, `env X=1 cmd`; null: `env -u X`).
+ */
+function commandOf(words, assigned) {
     let w = words;
     for (let guard = 0; guard < 16 && w.length > 0; guard++) {
         const first = w[0];
-        if (/^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/.test(first)) { w = w.slice(1); continue; }
+        if (/^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/.test(first)) { setFrom(assigned, first); w = w.slice(1); continue; }
         if (['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', '{', '}', 'time', 'coproc', 'fi', 'done', 'esac'].includes(first)) { w = w.slice(1); continue; }
         if (['for', 'case', 'select', 'function', 'in'].includes(first)) return [];
         const name = programOf(first);
@@ -368,7 +371,9 @@ function commandOf(words) {
                 if (a === '--') { i++; break; }
                 if (a === '-S' || a === '--split-string') return [...splitWords(args[i + 1] ?? ''), ...args.slice(i + 2)];
                 if (a.startsWith('--split-string=')) return [...splitWords(a.slice(15)), ...args.slice(i + 1)];
+                if (a === '-u' || a === '--unset') assigned?.set(args[i + 1], null);
                 if (a === '-u' || a === '-C' || a === '--unset' || a === '--chdir') { i += 2; continue; }
+                if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(a)) setFrom(assigned, a);
                 if (a.startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(a)) { i++; continue; }
                 break;
             }
@@ -405,6 +410,34 @@ function commandOf(words) {
         w = args.slice(skipOptions(args, WRAP[name]));
     }
     return w;
+}
+
+/** `NAME=value` (or `NAME+=more`) into a map of variables; a name that holds a secret, or a value that isn't known, is left out. */
+function setFrom(vars, word) {
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)(\+?)=(.*)$/s.exec(word);
+    if (!vars || !m) return;
+    if (m[2] === '' || vars.get(m[1])) vars.set(m[1], m[2] === '' ? m[3] : vars.get(m[1]) + m[3]);
+    else vars.delete(m[1]);
+}
+
+/** A variable whose value is a password, a key or a token: it is never filled in, so its value is shown nowhere. */
+const SECRET_NAME = /TOKEN|SECRET|PASS|PWD|KEY|CRED|AUTH|COOKIE|SESSION|SIGN|PRIVATE|BEARER/i;
+
+/**
+ * A word with the variables it names filled in where their values are known
+ * (`$X`, `${X}`, `${X:-default}`), so the prompt names the place a command
+ * really sends to; the others stay as they are.
+ */
+function expand(word, vars) {
+    if (!word.includes('$') || !vars || vars.size === 0 && !word.includes('${')) return word;
+    return word.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-=])([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (m, braced, op, fallback, bare) => {
+        const name = braced ?? bare;
+        if (SECRET_NAME.test(name)) return m;
+        const value = vars.get(name);
+        if (op === undefined) return typeof value === 'string' ? value : m;
+        // `${X:-default}`: the default when X is unset or (with the colon) empty.
+        return typeof value === 'string' && !(op.startsWith(':') && value === '') ? value : expand(fallback, vars);
+    });
 }
 
 /** A string's words as the shell would split it, quotes taken off. */
@@ -543,7 +576,7 @@ function git(args) {
     const rest = args.slice(at + 1);
     if (sub === 'push') {
         if (dryRun(rest) || rest.includes('-n')) return null;
-        const remote = positionals(rest, new Set(['o', '--push-option', '--repo', '--receive-pack', '--exec', '--signed', '--force-with-lease']))[0];
+        const remote = positionals(rest, new Set(['o', '--push-option', '--repo', '--receive-pack', '--exec']))[0];
         // A remote given as a URL is shown as a place, so a token in it isn't.
         const where = remote === undefined ? 'its remote' : /^[a-z][a-z0-9+.-]*:\/\//i.test(remote) ? placeOf(remote) : remote;
         return { kind: 'push', program: 'git', what: `pushes to ${where} (git push)` };
@@ -1078,8 +1111,18 @@ function interpreter(name, args, ctx, inputs) {
 
 /** What one simple command (its words) sends, or null. */
 function wordsSendOf(rawWords, ctx, inputs = []) {
-    const words = commandOf(rawWords);
+    const assigned = new Map();
+    const words = commandOf(rawWords, assigned);
     if (words.length === 0) return null;
+    // A script it runs sees the variables set for it: `DEPLOY_URL=http://… ./deploy.sh`.
+    if (assigned.size > 0) {
+        const env = new Map(ctx.env ?? []);
+        for (const [name, value] of assigned) {
+            if (value === null) env.delete(name);
+            else env.set(name, value);
+        }
+        ctx = { ...ctx, env };
+    }
     const first = words[0];
     let name = programOf(first);
     name = ALIASES[name] ?? name;
@@ -1152,12 +1195,33 @@ function wordsSendOf(rawWords, ctx, inputs = []) {
     return null;
 }
 
-/** What a command line sends: each of its commands, then the command lines inside it. */
+/** What a command line sends: each of its commands, then the command lines inside it, every send named. */
 function lineSendOf(text, ctx) {
     const { commands, nested } = splitShell(text);
+    const found = [];
     let here = ctx;
+    // The shell's variables as the line sets them, the ones it was given first; the exported ones go on to what it runs.
+    const vars = new Map(ctx.env ?? []);
+    const exported = new Set(vars.keys());
     for (let i = 0; i < commands.length; i++) {
-        const { words, inputs } = commands[i];
+        const words = commands[i].words.map((w) => expand(w, vars));
+        const { inputs } = commands[i];
+        if (words.length > 0 && words.every((w) => /^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(w))) {
+            for (const w of words) setFrom(vars, w);
+            continue;
+        }
+        if (['export', 'declare', 'typeset', 'local', 'readonly'].includes(words[0])) {
+            const exports = words[0] === 'export' || words.some((w) => /^-[a-zA-Z]*x/.test(w));
+            for (const w of words.slice(1)) {
+                setFrom(vars, w);
+                if (exports && /^[A-Za-z_]/.test(w)) exported.add(w.replace(/\+?=.*$/s, ''));
+            }
+            continue;
+        }
+        if (words[0] === 'unset') {
+            for (const w of words.slice(1)) vars.delete(w);
+            continue;
+        }
         // A later command runs where `cd` went: `cd web && npm run deploy`.
         // Somewhere it can't tell (`cd "$DIR"`, `cd ~/x`, `cd -`), no file is read: names alone count.
         if (words[0] === 'cd' || words[0] === 'pushd' || words[0] === 'popd') {
@@ -1168,16 +1232,37 @@ function lineSendOf(text, ctx) {
         // Text piped into an interpreter is its code: `cat <<EOF | python3`, `echo '…' | node`.
         const before = i > 0 && commands[i - 1].pipe ? commands[i - 1] : undefined;
         const fed = before ? [...before.inputs, ...(['echo', 'printf'].includes(before.words[0]) ? [before.words.slice(1).filter((w) => !/^-[neE]+$/.test(w)).join(' ')] : [])] : [];
-        const found = wordsSendOf(words, here, [...inputs, ...fed]);
-        if (found) return found;
+        found.push(wordsSendOf(words, { ...here, env: new Map([...vars].filter(([name]) => exported.has(name))) }, [...inputs, ...fed]));
     }
     if ((ctx.depth ?? 0) < MAX_DEPTH) {
-        for (const inner of nested) {
-            const found = lineSendOf(inner, { ...ctx, depth: (ctx.depth ?? 0) + 1 });
-            if (found) return found;
-        }
+        for (const inner of nested) found.push(lineSendOf(inner, { ...ctx, depth: (ctx.depth ?? 0) + 1 }));
     }
-    return null;
+    return combined(found);
+}
+
+/**
+ * Sends said as one, in the order they run, each once: the user allows all
+ * of them with one answer, so the prompt names every one.
+ */
+function combined(list) {
+    const seen = new Set();
+    const all = list.filter((f) => f && !seen.has(f.what) && seen.add(f.what));
+    if (all.length < 2) return all[0] ?? null;
+    const whats = all.length > 6 ? [...all.slice(0, 5).map((f) => f.what), `${all.length - 5} more`] : all.map((f) => f.what);
+    const unread = [...new Set(all.flatMap((f) => f.unread ?? []))];
+    return {
+        kind: [...new Set(all.map((f) => f.kind))].join('+'),
+        program: [...new Set(all.map((f) => f.program))].join('+'),
+        what: listOf(whats),
+        ...(unread.length > 0 ? { unread } : {}),
+    };
+}
+
+/** "A and B", "A, B and C"; with semicolons when one already has a comma ("runs x, which …; and B"). */
+function listOf(items) {
+    if (items.length < 2) return items[0] ?? '';
+    const sep = items.some((w) => w.includes(',')) ? ';' : ',';
+    return `${items.slice(0, -1).join(`${sep} `)}${sep === ';' ? ';' : ''} and ${items.at(-1)}`;
 }
 
 /**

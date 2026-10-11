@@ -5719,6 +5719,9 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     const work = mkdtempSync(join(tmpdir(), 'projects-work-'));
     writeFileSync(join(work, 'deploy.sh'), '#!/bin/sh\ncurl -fsS -X POST --data @build.json http://127.0.0.1:8787/deploy\n');
     writeFileSync(join(work, 'run.sh'), '#!/bin/sh\necho ok\n');
+    writeFileSync(join(work, 'deploy-staging.sh'), '#!/usr/bin/env bash\nTARGET="${DEPLOY_URL:-http://127.0.0.1:8787/deploy}"\ncurl -fsS -X POST -H "Authorization: Bearer ${STAGING_TOKEN}" --data @build.json "$TARGET"\n');
+    mkdirSync(join(work, 'billing'));
+    writeFileSync(join(work, 'billing', 'deploy.sh'), '#!/bin/bash\ncurl -fsS -X POST -H "Authorization: Bearer ${STAGING_TOKEN}" -d \'{"service":"billing"}\' "${STAGING_URL}"\n');
     writeFileSync(join(work, 'package.json'), JSON.stringify({ scripts: {
         build: 'tsc', release: 'npm publish',
         'sync:assets': 'aws s3 sync ./dist s3://acme-assets --cache-control max-age=31536000', 'sync:prod': 'rsync -avz ./dist/ deploy@web1:/var/www/app --exclude node_modules',
@@ -5780,6 +5783,19 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         ['npm run sync:assets', 'runs npm run sync:assets, which copies to S3 (aws s3 sync → acme-assets)'],
         ['npm run sync:prod', 'runs npm run sync:prod, which copies files to web1 (rsync)'],
         ['make sync', 'runs make sync, which copies to S3 (aws s3 sync → acme-site)'],
+        // Every send in a line is named, each with where it goes.
+        ['git push origin main && gh pr create --fill', 'pushes to origin (git push) and makes a change on GitHub (gh pr create)'],
+        ['npm version patch && git push --follow-tags && npm publish', 'pushes to its remote (git push) and publishes (npm publish)'],
+        ['curl -X POST http://localhost:3000/api/reset && curl -X POST https://api.example.com/v1/deploy', 'sends a POST to localhost:3000/api/reset (curl) and sends a POST to api.example.com/v1/deploy (curl)'],
+        ['STAGING_TOKEN= ./deploy.sh; bash -c \'curl -fsS -X POST http://127.0.0.1:9/deploy\'', 'runs ./deploy.sh, which sends a POST to 127.0.0.1:8787/deploy (curl); and sends a POST to 127.0.0.1:9/deploy (curl)'],
+        ['git push --force-with-lease origin feature/login-fix', 'pushes to origin (git push)'],
+        ['git push --signed origin main', 'pushes to origin (git push)'],
+        // A variable the command sets, or a script's default for one, is filled in; one that holds a token never is.
+        ['STAGING_TOKEN=scratch-local-test DEPLOY_URL=http://127.0.0.1:8799/deploy ./deploy-staging.sh', 'runs ./deploy-staging.sh, which sends a POST to 127.0.0.1:8799/deploy (curl)'],
+        ['./deploy-staging.sh', 'runs ./deploy-staging.sh, which sends a POST to 127.0.0.1:8787/deploy (curl)'],
+        ['STAGING_URL=http://127.0.0.1:8799/deploy STAGING_TOKEN=local-mock-only ./billing/deploy.sh', 'runs ./billing/deploy.sh, which sends a POST to 127.0.0.1:8799/deploy (curl)'],
+        ['HOOK=https://hooks.example.com/build; curl -X POST "$HOOK"', 'sends a POST to hooks.example.com/build (curl)'],
+        ['BOT_TOKEN=123:abc; curl -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage"', 'sends a POST to api.telegram.org/bot$BOT_TOKEN/sendMessage (curl)'],
     ]) {
         const decision = await gate(t1, shell, { command });
         assert.deepEqual([decision.kind, decision.reason, decision.displayReason?.en], ['ask', `the command ${what}`, `This command ${what}. A thread asks you before each command that sends outside the workspace.`], command);
