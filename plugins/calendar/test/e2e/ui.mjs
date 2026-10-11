@@ -101,7 +101,7 @@
  *   at the wallpaper's tint, the view at tint + .2, both blurred by its
  *   blur, and the same fallbacks without them;
  * - a narrow window (420 px): the side column folds, Week shows 3 days,
- *   search fits;
+ *   search fits; the event dialog's dates and times in full;
  * - the settings menu's Show weekends and Show week numbers, each checked
  *   as it is: Week from Monday to Friday with its ISO week number by the
  *   title, Month in five columns with each week's number, the small month's
@@ -2419,6 +2419,38 @@ try {
             toggle && !sideShown && columns === 3 && overflow <= 1 && searchFits && focusIn && focusBack,
             JSON.stringify({ toggle, sideShown, columns, overflow, search, focusIn, focusBack }));
         await page.setViewportSize({ width: 1280, height: 800 });
+    });
+
+    // 20b. The event dialog in a narrow window: Ends under Starts, each date and time as wide as its whole text needs.
+    await step('the event dialog in a narrow window', async () => {
+        await page.setViewportSize({ width: 420, height: 820 });
+        await page.waitForTimeout(600);
+        try {
+            await page.locator('[data-calendar-new]').click();
+            const form = page.locator('[data-calendar-event-form="new"]');
+            await form.waitFor({ state: 'visible' });
+            await page.waitForTimeout(300);
+            const fields = await form.evaluate((el) => [...el.querySelectorAll('[data-calendar-start-day],[data-calendar-start-time],[data-calendar-end-day],[data-calendar-end-time]')].map((input) => {
+                // The same field at its own width, out of the row: what it needs to show all of its text.
+                const free = input.cloneNode();
+                free.style.cssText = 'position:absolute;visibility:hidden;width:auto;min-width:0;flex:none';
+                input.parentElement.append(free);
+                const need = free.getBoundingClientRect().width;
+                free.remove();
+                const r = input.getBoundingClientRect();
+                return { width: Math.round(r.width * 10) / 10, need: Math.round(need * 10) / 10, top: Math.round(r.top) };
+            }));
+            const overflow = await page.evaluate(() => { const c = document.querySelector('.dshcal-dlg-content'); return c.scrollWidth - c.clientWidth; });
+            await shot(page, 'narrow-event-dialog');
+            await page.keyboard.press('Escape');
+            await dialogGone();
+            const [startDay, startTime, endDay, endTime] = fields;
+            check('in a narrow window the event dialog shows its dates and times in full, Ends under Starts',
+                fields.length === 4 && fields.every((f) => f.width + 0.5 >= f.need) && endDay.top > startDay.top && startTime.top === startDay.top && endTime.top === endDay.top && overflow <= 1,
+                JSON.stringify({ fields, overflow }));
+        } finally {
+            await page.setViewportSize({ width: 1280, height: 800 });
+        }
     });
 
     // 21. Weekends hidden and week numbers shown, from the settings menu at the foot of the side column; kept after a
