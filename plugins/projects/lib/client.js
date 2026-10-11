@@ -487,6 +487,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // A ◆ project with news the user hasn't seen reads bold, as its row in the session list does.
             '.dshp-tree-item[data-projects-unread]>.dshp-tree-row .dshp-tree-title{font-weight:600}',
             '.dshp-tree-glyph{display:inline-flex;width:14px;flex:none;opacity:.75}',
+            // A project's or a thread's ⋯ at the end of its row, as on DSH's own rows: shown while the row is pointed at,
+            // has the focus or has its menu open, its place kept meanwhile. DSH's menu wraps the button in a box of its own.
+            '.dshp-tree-row>:has(>.dshp-tree-more){flex:none;display:inline-flex;margin-left:auto;margin-right:-6px}',
+            '.dshp-tree-meta+:has(>.dshp-tree-more){margin-left:4px}',
+            '.dshp-tree-more{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:var(--dsw-radius-sm,4px);background:none;color:var(--dsw-alias-label-secondary);cursor:pointer;visibility:hidden}',
+            '.dshp-tree-more:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
+            '.dshp-tree-row:hover .dshp-tree-more,.dshp-tree-item:focus-visible>.dshp-tree-row .dshp-tree-more,.dshp-tree-more:focus,.dshp-tree-more[aria-expanded="true"]{visibility:visible}',
             '.dshp-pg-count{font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
             `.dshp-pg-said{${HIDDEN}}`,
             // Find by name, above the tree; a found name's words are marked in its title.
@@ -4533,7 +4540,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, SessionList));
             // The Projects entry in DSH's sidebar, after Plugins, and the page it opens.
             ctx.slots.inject('main', () => ctx.slots.register({
-                name: 'main', key: IDS.page, inject: withApi,
+                name: 'main', key: IDS.page, inject: () => ({ projects, flow: shared.flow }),
             }, ProjectsPage));
             ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
                 name: 'sidebar.panellist', id: IDS.page, order: 5, label: PAGE.entry,
@@ -4600,6 +4607,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             threadOrder: 'A project\'s threads keep the session list\'s order, open ones first.',
             threadIn: 'A thread can\'t go inside another thread.',
             projectOrder: 'Projects keep the order of the workspaces they work in.',
+            // A row's ⋯: what DSH's session list offers for it.
+            projectActions: (name) => `Project actions: ${name}`,
+            threadActions: (name) => `Thread actions: ${name}`,
         };
 
         /**
@@ -4819,15 +4829,45 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
+         * ⋯ on a project's or a thread's row on the Projects page: what the
+         * plugin adds to the row's menu in the session list. A project's:
+         * Project settings and Archive project…; a thread's: the other way
+         * to open it (Open in full view, or beside its coordinator) and its
+         * project's settings. A right-click, Shift+F10 or the context-menu
+         * key on the row opens it too.
+         * @param items - [{id, label, icon}]; `run(id)` does the one picked.
+         */
+        function RowMenu({ label, items, run, open, setOpen }) {
+            return h(ui.Menu, {
+                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end', autoFocus: true,
+                onSelect: (id) => {
+                    setOpen(false);
+                    run(id);
+                },
+                anchor: h('button', {
+                    type: 'button', className: 'dshp-tree-more', tabIndex: -1, 'aria-label': label, 'aria-haspopup': 'menu', 'aria-expanded': open, 'data-projects-page-menu': '',
+                    onClick: (event) => {
+                        event.stopPropagation();
+                        setOpen(!open);
+                    },
+                }, h(ui.IconEllipsisOutlineRegular, { size: 14 })),
+            });
+        }
+
+        /**
          * The Projects page's tree, as a screen reader and the keys expect:
          * one tab stop, Up and Down in drawn order, Right opens a project or
          * goes into it, Left closes it or goes to its project, Home and End,
          * Enter opens a project's coordinator or a thread. Alt and an arrow
          * go to onMove, which says why the item stays (pageRefusal); the
-         * focus stays on it.
+         * focus stays on it. An item with a menu has ⋯ at the end of its
+         * row, and a right-click, Shift+F10 or the context-menu key opens it
+         * too, the keyboard then on its ⋯ (DSH's menu walks its items from
+         * its own button).
          * @param onMove - (key, arrow) => the reason said, or null for a key left to DSH.
+         * @param menu - {has(node), draw({node, open, setOpen})}: which items have a menu, and each one's (an element).
          */
-        function PageTree({ tree, label, onOpenSession, onMove, statuses, find = '', treeRef }) {
+        function PageTree({ tree, label, onOpenSession, onMove, menu, statuses, find = '', treeRef }) {
             const [stored, toggleStored] = useStoredSet(CLOSED_KEY);
             // While a find is on, everything it keeps starts open, and what is closed then is forgotten when the
             // find changes (React's way to reset state when a prop changes: set it while drawing).
@@ -4848,8 +4888,28 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const focusKey = (key) => { setCurrent(key); refs.current.get(key)?.focus(); };
             // Every row is a session: a project's opens its coordinator.
             const activate = (x) => onOpenSession(x.node.id);
+            // The item whose menu is open; one opened by its keys hands the keyboard to the row's ⋯ once it shows.
+            const [menuKey, setMenuKey] = React.useState(null);
+            const byKey = React.useRef(false);
+            React.useLayoutEffect(() => {
+                if (menuKey === null || !byKey.current) return;
+                byKey.current = false;
+                refs.current.get(menuKey)?.querySelector(':scope>.dshp-tree-row .dshp-tree-more')?.focus();
+            }, [menuKey]);
+            // Clicks and keys in a menu (drawn elsewhere in the page) reach the tree through React, not the page.
+            const inside = (event) => !event.target || typeof event.currentTarget?.contains !== 'function' || event.currentTarget.contains(event.target);
             const onKeyDown = (event) => {
+                if (!inside(event)) return;
+                // A row's ⋯ has its own keys while its menu is open, and Enter and Space always; else the tree's keys work from it.
+                const onItem = typeof event.target?.matches !== 'function' || event.target.matches('[role="treeitem"]');
+                if (!onItem && (menuKey !== null || event.key === 'Enter' || event.key === ' ')) return;
                 const x = shown.find((item) => item.key === current) ?? shown[0];
+                if (x && menu?.has(x.node) && !event.altKey && !event.ctrlKey && !event.metaKey && ((event.key === 'F10' && event.shiftKey) || event.key === 'ContextMenu')) {
+                    event.preventDefault();
+                    byKey.current = true;
+                    setMenuKey(x.key);
+                    return;
+                }
                 if (x && event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey && /^Arrow(Up|Down|Left|Right)$/.test(event.key)) {
                     if ((onMove?.(x.key, event.key) ?? null) !== null) event.preventDefault();
                     return;
@@ -4886,14 +4946,29 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const dot = thread ? null : treeDot(node, statuses);
                 const meta = treeMeta(node);
                 const unread = node.news?.unread?.length ?? 0;
+                const menuOn = menu?.has(node) === true;
                 return h('li', {
                     key: x.key, role: 'treeitem', 'aria-level': x.level, 'aria-setsize': x.size, 'aria-posinset': x.pos,
                     'aria-expanded': node.children.length > 0 ? x.open : undefined, tabIndex: x === shown[at] ? 0 : -1,
+                    'aria-keyshortcuts': menuOn ? 'Shift+F10' : undefined,
                     className: `dshp-tree-item dshp-tree-${node.kind}`, 'data-projects-node': node.kind, 'data-projects-id': node.id,
                     'data-projects-paused': node.paused === true ? '' : undefined, 'data-projects-unread': unread > 0 ? unread : undefined,
                     ref: (el) => { if (el) refs.current.set(x.key, el); else refs.current.delete(x.key); },
                     onFocus: (event) => { if (event.target === event.currentTarget) setCurrent(x.key); },
-                    onClick: (event) => { event.stopPropagation(); setCurrent(x.key); activate(x); },
+                    onClick: (event) => {
+                        if (!inside(event)) return;
+                        event.stopPropagation();
+                        setCurrent(x.key);
+                        activate(x);
+                    },
+                    // A right-click on the row itself (not an item inside it) opens its menu.
+                    onContextMenu: menuOn ? (event) => {
+                        if (!inside(event) || (event.target?.closest && event.target.closest('[role="treeitem"]') !== event.currentTarget)) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setCurrent(x.key);
+                        setMenuKey(x.key);
+                    } : undefined,
                 },
                 h('div', { className: 'dshp-tree-row', style: { paddingInlineStart: `${8 + (x.level - 1) * 20}px` } },
                     // The chevron folds a project's threads; a click on the rest of its row opens its coordinator.
@@ -4912,7 +4987,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     thread ? h('span', { className: 'dshp-tree-meta dshp-tree-state', 'data-projects-state': thread.dot },
                         ui.StateDot ? h('span', { className: 'dshp-tree-dot', 'aria-hidden': true }, h(ui.StateDot, { state: thread.dot })) : null,
                         h('span', { className: 'dshp-tree-state-word' }, thread.label))
-                        : meta ? h('span', { className: 'dshp-tree-meta' }, meta) : null),
+                        : meta ? h('span', { className: 'dshp-tree-meta' }, meta) : null,
+                    menuOn ? menu.draw({ node, open: menuKey === x.key, setOpen: (on) => { if (on) setCurrent(x.key); setMenuKey(on ? x.key : null); } }) : null),
                 kids.length > 0 ? h('ul', { role: 'group', className: 'dshp-tree-group' }, ...kids.map(item)) : null);
             };
             return h('ul', { role: 'tree', 'aria-label': label, className: 'dshp-tree', onKeyDown, ref: treeRef }, ...shown.filter((x) => x.level === 1).map(item));
@@ -4947,7 +5023,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * with how many: every ◆ project with its threads (pageModel), with
          * Find by name over them.
          */
-        function ProjectsPage({ useSessions, useSessionStatus, useWorkspaces = noWorkspaces, projects }) {
+        function ProjectsPage({ useSessions, useSessionStatus, useWorkspaces = noWorkspaces, projects, flow }) {
             useFacts(projects.facts);
             useWatch(projects.facts, 'list');
             const listed = projects.facts.projects();
@@ -4967,6 +5043,33 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 listed, items, sessions, archived,
                 pausedOf: (coordinator) => projects.facts.paused?.(coordinator), newsOf: (coordinator) => projects.facts.newsOf?.(coordinator),
             });
+            // A row's ⋯: Project settings where DSH lets the plugin open them, Archive project… where it can ask first,
+            // and for a thread the other way to open it.
+            const settingsOn = useSettingsAvailable(projects.settings ?? NO_DIALOG);
+            const archiveOn = React.useSyncExternalStore(flow?.subscribe ?? NO_DIALOG.subscribe, () => flow?.getSnapshot().available === true);
+            const beside = useBesidePref();
+            const sliders = h(ui.IconSlidersTwoOutlineRegular, {});
+            const menu = {
+                has: (node) => (node.kind === 'project' ? settingsOn || archiveOn : node.kind === 'thread'),
+                draw: ({ node, open, setOpen }) => {
+                    const items = node.kind === 'project' ? [
+                        ...(settingsOn ? [{ id: 'settings', label: SETTINGS.title, icon: sliders }] : []),
+                        ...(archiveOn ? [{ id: 'archive', label: ARCHIVE.item, icon: h(ui.IconArchiveOutlineRegular, {}) }] : []),
+                    ] : [
+                        beside ? { id: 'full', label: TEXT.openFull, icon: h(ui.IconRightUpOutlineRegular, {}) } : { id: 'beside', label: TEXT.openBeside, icon: h(ui.IconCompareSplitOutlineRegular, {}) },
+                        ...(settingsOn ? [{ id: 'settings', label: SETTINGS.title, icon: sliders }] : []),
+                    ];
+                    return h(RowMenu, {
+                        label: node.kind === 'project' ? PAGE.projectActions(node.title) : PAGE.threadActions(node.title), items, open, setOpen,
+                        run: (id) => {
+                            if (id === 'settings') projects.settings.open(node.id);
+                            else if (id === 'archive') flow?.open(node.id);
+                            else if (id === 'full') projects.openFull(node.id);
+                            else if (id === 'beside') projects.openPaired(node.id);
+                        },
+                    });
+                },
+            };
             // Alt and an arrow on the tree, answered on the whole tree (a find shows only part of it); the same words twice are said twice.
             const move = (key, arrow) => {
                 const reason = pageRefusal(tree, key, arrow);
@@ -5002,7 +5105,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         type: 'button', className: 'dshp-mp-search-clear', 'aria-label': PAGE.findClear, 'data-projects-find-clear': '',
                         onClick: () => { setFind(''); findRef.current?.focus(); },
                     }, h(ui.IconCloseFillRegular, null)) : null),
-                    kept.length > 0 ? h(PageTree, { tree: kept, label: PAGE.title, statuses, find, treeRef, onMove: move, onOpenSession: (id) => projects.openSession(id) })
+                    kept.length > 0 ? h(PageTree, { tree: kept, label: PAGE.title, statuses, find, treeRef, onMove: move, menu, onOpenSession: (id) => projects.openSession(id) })
                         : h('div', { className: 'dshp-pg-state dshp-pg-find-none', role: 'status', 'data-projects-find-none': '' }, PAGE.findNone(find.trim())));
             }
             return h('div', { className: 'dshp-pg', 'data-projects-page': '' },
@@ -5409,6 +5512,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
         }
         const useSettingsAvailable = (dialog) => React.useSyncExternalStore(dialog.subscribe, () => dialog.getSnapshot().available);
+        /** For a part drawn without Project settings or the archive flow: neither can open. */
+        const NO_DIALOG = Object.freeze({ subscribe: () => () => {}, getSnapshot: () => ({ available: false }) });
 
         /**
          * The plugin's endpoints (remote.js) over the window's own connection,
@@ -6110,14 +6215,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             });
             ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => applyDefaultsForm(scope, { catalog, link, dialog, sessionsOf }));
             ctx.inject(['connection', 'remote', 'remote.session'], (scope) => applySettings(scope, dialog, link, facts, flow));
-            ctx.inject(['sessions', 'uiWorkspace', 'sidebarRight'], (scope) => applyThreads(scope, dialog, { catalog, link, facts }));
+            ctx.inject(['sessions', 'uiWorkspace', 'sidebarRight'], (scope) => applyThreads(scope, dialog, { catalog, link, facts, flow }));
         }
 
         module.exports.inject = inject;
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the views are built on.
         module.exports.internals = {
-            pageModel, visibleItems, pageRefusal, treeMeta, PageTree, ProjectsPage, findInTree, withHit,
+            pageModel, visibleItems, pageRefusal, treeMeta, PageTree, ProjectsPage, RowMenu, findInTree, withHit,
             valueIn, takeKnown, coordinatorName, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, nestingRules, sectionGroups, nestingCss, nestedOrder, readInOrder, describeRows, undoRows, rowWords,
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,

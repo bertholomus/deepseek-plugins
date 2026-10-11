@@ -1372,6 +1372,147 @@ test('browser half: the Projects page gives each thread its state, marks a pause
     assert.equal(elementsOf(drawTree()).find((e) => e.props?.role === 'tree').props.onKeyDown({ key: 'ArrowDown', metaKey: true, preventDefault: () => assert.fail('taken') }), undefined);
 });
 
+test('browser half: a row on the Projects page has ⋯: a project\'s settings and Archive project…, a thread\'s other way to open and its project\'s settings', () => {
+    const storage = new Map();
+    const { client, react } = loadClient({ storage });
+    const { ProjectsPage, PageTree, RowMenu } = client.internals;
+    const value = (v) => ({ values: { projectSession: v } });
+    const sessions = {
+        phase: 'ready',
+        byId: { c: { id: 'c', title: '◆ Storefront' }, run: { id: 'run', title: 'Upgrade the payments SDK' }, ask: { id: 'ask', title: 'Pick a colour' }, d: { id: 'd', title: '◆ Data Pipeline' } },
+        projectionsBySession: {
+            c: value({ role: 'coordinator', project: { id: 'storefront', name: 'Storefront' }, threads: [{ id: 't1', session: 'run' }, { id: 't2', session: 'ask' }] }),
+            run: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' } }),
+            ask: value({ role: 'thread', coordinator: 'c', thread: { id: 't2' } }),
+            d: value({ role: 'coordinator', project: { id: 'data-pipeline', name: 'Data Pipeline' }, threads: [] }),
+        },
+    };
+    const workspaces = {
+        phase: 'ready', archivedSessionIds: [],
+        items: [{ workspaceId: 'w-sf', title: 'storefront', path: '/home/u/storefront', sessionIds: ['c', 'run', 'ask'] }, { workspaceId: 'w-dp', title: 'data-pipeline', path: '/home/u/data-pipeline', sessionIds: ['d'] }],
+    };
+    const listed = [{ id: 'storefront', name: 'Storefront', coordinator: 'c', home: 'w-sf' }, { id: 'data-pipeline', name: 'Data Pipeline', coordinator: 'd', home: 'w-dp' }];
+    const facts = { subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {}, list: async () => {}, projects: () => listed, listFailed: () => false };
+    // Project settings and the archive's confirmation open where DSH lets the plugin draw them.
+    const done = [];
+    let settingsOn = true;
+    let archiveOn = true;
+    const settings = { subscribe: () => () => {}, getSnapshot: () => ({ available: settingsOn }), open: (id, options) => done.push(['settings', id, options]) };
+    const flow = { subscribe: () => () => {}, getSnapshot: () => ({ available: archiveOn }), open: (id) => done.push(['archive', id]) };
+    const projects = {
+        facts, settings,
+        openSession: (id) => done.push(['open', id]), openFull: (id) => done.push(['full', id]), openPaired: (id) => done.push(['beside', id]),
+    };
+    const props = { useSessions: (select) => select(sessions), useSessionStatus: (select) => select(new Map()), useWorkspaces: (select) => select(workspaces), projects, flow };
+    // The page drawn afresh each time (what it passes reads the switches above), the tree's own state kept.
+    const treeOf = (lib, r) => {
+        let now;
+        const draw = mount(r, () => lib.PageTree(now));
+        return () => {
+            now = elementsOf(mount(r, () => lib.ProjectsPage(props))()).find((e) => e.type === lib.PageTree).props;
+            return draw();
+        };
+    };
+    let drawTree = treeOf(client.internals, react);
+    const items = (tree) => elementsOf(tree).filter((e) => e.props?.role === 'treeitem');
+    const row = (tree, id) => items(tree).find((li) => li.props['data-projects-id'] === id);
+    // A row's ⋯ is its own part, last in the row; Menu is DSH's, drawn by RowMenu.
+    const menuOf = (li) => elementsOf(li.children[0]).find((e) => e.type === RowMenu);
+    const drawn = (li) => RowMenu(menuOf(li).props);
+    const picks = (li) => plain(drawn(li).props.items.map((item) => [item.id, item.label, item.icon?.type]));
+    let tree = drawTree();
+    assert.equal(menuOf(row(tree, 'c')), elementsOf(row(tree, 'c').children[0]).at(-1));
+    assert.deepEqual(picks(row(tree, 'c')), [['settings', 'Project settings', 'IconSlidersTwoOutlineRegular'], ['archive', 'Archive project…', 'IconArchiveOutlineRegular']]);
+    // A thread opens beside its coordinator from its row, so its ⋯ offers the full view; with that turned off, the other way.
+    assert.deepEqual(picks(row(tree, 'run')), [['full', 'Open in full view', 'IconRightUpOutlineRegular'], ['settings', 'Project settings', 'IconSlidersTwoOutlineRegular']]);
+    // Each is named for its row, opens on its own, and keeps the tree's one tab stop.
+    const menu = drawn(row(tree, 'c'));
+    assert.deepEqual(plain([menu.props.open, menu.props.portal, menu.props.align, menu.props.autoFocus, menu.props.closeOnPointerLeave]), [false, true, 'end', true, true]);
+    const button = menu.props.anchor;
+    assert.deepEqual(plain([button.type, button.props.className, button.props.tabIndex, button.props['aria-label'], button.props['aria-haspopup'], button.props['aria-expanded'], button.props['data-projects-page-menu']]),
+        ['button', 'dshp-tree-more', -1, 'Project actions: Storefront', 'menu', false, '']);
+    assert.equal(drawn(row(tree, 'ask')).props.anchor.props['aria-label'], 'Thread actions: Pick a colour');
+    assert.deepEqual(items(tree).map((li) => li.props['aria-keyshortcuts']), ['Shift+F10', 'Shift+F10', 'Shift+F10', 'Shift+F10']);
+    // A click on ⋯ opens its menu and not the row's chat; picking an item closes it and does it.
+    let stopped = 0;
+    button.props.onClick({ stopPropagation: () => { stopped += 1; } });
+    tree = drawTree();
+    assert.deepEqual([stopped, drawn(row(tree, 'c')).props.open, drawn(row(tree, 'run')).props.open, drawn(row(tree, 'c')).props.anchor.props['aria-expanded']], [1, true, false, true]);
+    assert.equal(row(tree, 'c').props.tabIndex, 0);
+    drawn(row(tree, 'c')).props.onSelect('settings');
+    tree = drawTree();
+    assert.equal(drawn(row(tree, 'c')).props.open, false);
+    drawn(row(tree, 'c')).props.onSelect('archive');
+    drawn(row(tree, 'run')).props.onSelect('full');
+    drawn(row(tree, 'ask')).props.onSelect('settings');
+    assert.deepEqual(plain(done), [['settings', 'c', null], ['archive', 'c'], ['full', 'run'], ['settings', 'ask', null]]);
+    // The keys: Shift+F10 or the context-menu key opens the focused row's menu (the keyboard then on its ⋯, which DSH's
+    // menu walks from); while it is open, keys from ⋯ are the menu's; Escape closes it and the tree's keys work again.
+    done.length = 0;
+    const tabStop = (t) => items(t).find((li) => li.props.tabIndex === 0).props['data-projects-id'];
+    const key = (name, extra = {}) => {
+        let prevented = 0;
+        elementsOf(drawTree()).find((e) => e.props?.role === 'tree').props.onKeyDown({ key: name, preventDefault: () => { prevented += 1; }, ...extra });
+        return prevented;
+    };
+    const onItem = { target: { matches: (selector) => selector === '[role="treeitem"]' } };
+    const onMore = { target: { matches: () => false } };
+    assert.equal(key('ArrowDown', onItem), 1);
+    assert.equal(tabStop(drawTree()), 'run');
+    assert.equal(key('F10', { shiftKey: true, ...onItem }), 1);
+    tree = drawTree();
+    assert.deepEqual([drawn(row(tree, 'run')).props.open, drawn(row(tree, 'c')).props.open], [true, false]);
+    assert.equal(key('ArrowDown', onMore), 0);
+    assert.equal(tabStop(drawTree()), 'run');
+    drawn(row(drawTree(), 'run')).props.onClose();
+    assert.equal(drawn(row(drawTree(), 'run')).props.open, false);
+    assert.equal(key('ArrowDown', onMore), 1);
+    assert.equal(tabStop(drawTree()), 'ask');
+    // From ⋯, Enter and Space are its own (they open the menu), whatever the tree would do.
+    assert.deepEqual([key('Enter', onMore), key(' ', onMore)], [0, 0]);
+    assert.deepEqual(plain(done), []);
+    assert.equal(key('ContextMenu', onItem), 1);
+    assert.equal(drawn(row(drawTree(), 'ask')).props.open, true);
+    drawn(row(drawTree(), 'ask')).props.onClose();
+    // With Alt, Ctrl or Meta, F10 and the context-menu key are DSH's.
+    assert.deepEqual([key('F10', { shiftKey: true, altKey: true, ...onItem }), key('ContextMenu', { ctrlKey: true, ...onItem })], [0, 0]);
+    // A right-click on the row opens its menu; one inside a nested row is that row's, not its project's.
+    const li = { closest: () => li, contains: () => true };
+    let prevented = 0;
+    row(drawTree(), 'c').props.onContextMenu({ target: li, currentTarget: li, preventDefault: () => { prevented += 1; }, stopPropagation: () => {} });
+    assert.deepEqual([prevented, drawn(row(drawTree(), 'c')).props.open, tabStop(drawTree())], [1, true, 'c']);
+    drawn(row(drawTree(), 'c')).props.onClose();
+    const nested = { closest: () => 'the thread\'s row' };
+    row(drawTree(), 'c').props.onContextMenu({ target: nested, currentTarget: li, preventDefault: () => assert.fail('taken'), stopPropagation: () => {} });
+    assert.equal(drawn(row(drawTree(), 'c')).props.open, false);
+    // Clicks and keys in a menu, drawn elsewhere in the page, reach the tree through React: it leaves them be.
+    const outside = { target: { matches: () => true }, currentTarget: { contains: () => false } };
+    row(drawTree(), 'run').props.onClick({ ...outside, stopPropagation: () => assert.fail('taken') });
+    assert.equal(key('ArrowUp', outside), 0);
+    assert.equal(key('F10', { shiftKey: true, ...outside }), 0);
+    assert.deepEqual(plain(done), []);
+    // With the beside view off, a thread's ⋯ opens it beside its coordinator; without Project settings or the archive,
+    // a project has no ⋯ and its keys open nothing, and a thread's offers only the other way to open it.
+    storage.set('dsh-plugin-projects/open-beside', 'off');
+    const fresh = loadClient({ storage });
+    const later = fresh.client.internals;
+    settingsOn = false;
+    archiveOn = false;
+    drawTree = treeOf(later, fresh.react);
+    tree = drawTree();
+    const laterMenu = (el) => elementsOf(el.children[0]).find((e) => e.type === later.RowMenu);
+    assert.deepEqual([laterMenu(row(tree, 'c')), row(tree, 'c').props['aria-keyshortcuts'], row(tree, 'c').props.onContextMenu], [undefined, undefined, undefined]);
+    const threadMenu = later.RowMenu(laterMenu(row(tree, 'run')).props);
+    assert.deepEqual(plain(threadMenu.props.items.map((item) => [item.id, item.label, item.icon?.type])), [['beside', 'Open beside its coordinator', 'IconCompareSplitOutlineRegular']]);
+    threadMenu.props.onSelect('beside');
+    assert.deepEqual(plain(done), [['beside', 'run']]);
+    assert.equal(elementsOf(drawTree()).find((e) => e.props?.role === 'tree').props.onKeyDown({ key: 'F10', shiftKey: true, ...onItem, preventDefault: () => assert.fail('taken') }), undefined);
+    // Only one archive's confirmation: a project the page shows is never archived (it leaves the page first).
+    archiveOn = true;
+    tree = drawTree();
+    assert.deepEqual(plain(later.RowMenu(laterMenu(row(tree, 'd')).props).props.items.map((item) => item.id)), ['archive']);
+});
+
 test('browser half: Find by name on the Projects page keeps each match under its project, and its folds are its own', () => {
     const { client, react } = loadClient();
     const { ProjectsPage, PageTree, findInTree, withHit } = client.internals;
@@ -1656,7 +1797,7 @@ function loadClient({ storage, document, innerWidth } = {}) {
             createElement: (type, props, ...children) => ({ type, props, children }), useSyncExternalStore: (_subscribe, get) => get(),
             // Enough of React's hooks to call a component once and read what it draws.
             useState: (init) => [typeof init === 'function' ? init() : init, () => {}], useRef: (current) => ({ current }),
-            useEffect: () => {}, useCallback: (fn) => fn, useMemo: (fn) => fn(),
+            useEffect: () => {}, useLayoutEffect: () => {}, useCallback: (fn) => fn, useMemo: (fn) => fn(),
         },
         'react-dom': { createPortal: (node) => node }, '@deepseek-ai/dsh-client-ui-primitives': ui,
     };
