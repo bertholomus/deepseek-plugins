@@ -5734,6 +5734,7 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     mkdirSync(join(work, 'scripts'));
     writeFileSync(join(work, 'scripts', 'release.sh'), '#!/bin/sh\ngh release create "v$2" dist/*.tar.gz --notes-file CHANGELOG.md\n');
     writeFileSync(join(work, 'scripts', 'report.py'), 'import requests\n\ns = requests.Session()\ns.headers["Authorization"] = "Bearer t"\nr = s.post("https://reports.example.com/api/runs", json={"passed": 12})\nprint(r.status_code)\n');
+    writeFileSync(join(work, 'scripts', 'deploy.ps1'), 'param([string]$Environment = \'staging\')\nInvoke-RestMethod -Uri "https://deploy.example.com/hooks/$Environment" `\n    -Method Post\n');
     // A local app: a route table and an ORM's delete send nothing.
     writeFileSync(join(work, 'server.js'), "const fastify = require('fastify')({ logger: true });\nconst routes = [\n  { method: 'GET', url: '/items', handler: async () => [] },\n  { method: 'POST', url: '/items', handler: async (req) => ({ id: 1, ...req.body }) },\n];\nfor (const route of routes) fastify.route(route);\nfastify.listen({ port: 3000 });\n");
     writeFileSync(join(work, 'app.py'), 'from flask import Flask, jsonify\nfrom flask_sqlalchemy import SQLAlchemy\n\napp = Flask(__name__)\ndb = SQLAlchemy(app)\n\n@app.route("/items/<int:item_id>", methods=["DELETE"])\ndef delete_item(item_id):\n    db.session.delete(Item.query.get_or_404(item_id))\n    db.session.commit()\n    return jsonify(ok=True)\n\nif __name__ == "__main__":\n    app.run(port=5000)\n');
@@ -5839,6 +5840,20 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         ['python3 scripts/report.py', 'runs scripts/report.py, which runs code that sends a POST (python3)'],
         [`python3 -c "from requests import post; print(post('https://api.example.com/x', json={}).status_code)"`, 'runs code that sends a POST (python3)'],
         ['node -e "require(\'axios\').post(\'https://api.example.com/x\', {a: 1}).then(r => console.log(r.status))"', 'runs code that sends a POST (node)'],
+        // PowerShell read as PowerShell: a backtick goes on to the next line, a hashtable, a group and a script block are
+        // one word each and what they run is read, a splatted hashtable gives its options, `$x =` assigns what runs, and `\`
+        // is a path's own.
+        ['Invoke-RestMethod -Uri "https://api.example.com/v1/items" `\n    -Method Post `\n    -ContentType "application/json" `\n    -Body $json', 'sends a POST to api.example.com/v1/items (invoke-restmethod)', 'pwsh'],
+        ["$params = @{ Uri = 'https://api.example.com/v1/items'; Method = 'Post'; Body = $json; ContentType = 'application/json' }\nInvoke-RestMethod @params", 'sends a POST to api.example.com/v1/items (invoke-restmethod)', 'pwsh'],
+        ['.\\scripts\\deploy.ps1 -Environment prod', 'runs .\\scripts\\deploy.ps1, which sends a POST to deploy.example.com/hooks/$Environment (invoke-restmethod)', 'pwsh'],
+        ['& .\\scripts\\Publish-Release.ps1', 'runs .\\scripts\\Publish-Release.ps1, whose name says it publishes. The plugin couldn\'t see what .\\scripts\\Publish-Release.ps1 runs', 'pwsh'],
+        ['Get-ChildItem dist | ForEach-Object { Invoke-RestMethod -Uri "https://files.example.com/$($_.Name)" -Method Put -InFile $_.FullName }', 'sends a PUT to files.example.com/$($_.Name) (invoke-restmethod)', 'pwsh'],
+        ['Get-ChildItem dist | %{Invoke-RestMethod -Uri "https://files.example.com/$($_.Name)" -Method Put -InFile $_.FullName}', 'sends a PUT to files.example.com/$($_.Name) (invoke-restmethod)', 'pwsh'],
+        ["$resp = Invoke-RestMethod -Uri https://api.example.com/v1/items -Method Post -Body $json -ContentType 'application/json'; $resp.id", 'sends a POST to api.example.com/v1/items (invoke-restmethod)', 'pwsh'],
+        ["Invoke-RestMethod -Uri $uri -Headers @{ Authorization = \"Bearer $token\"; Accept = 'application/json' } -Method Post -Body $json", 'sends a POST to $uri (invoke-restmethod)', 'pwsh'],
+        ['try { Invoke-RestMethod -Uri $uri -Method Delete } catch { Write-Error $_ }', 'sends a DELETE to $uri (invoke-restmethod)', 'pwsh'],
+        ["Invoke-RestMethod -Body (ConvertTo-Json @{ name = 'x'; done = $true }) -Uri https://api.example.com/items -Method Post", 'sends a POST to api.example.com/items (invoke-restmethod)', 'pwsh'],
+        ['(New-Object System.Net.WebClient).UploadFile("https://files.example.com/upload", "dist/app.zip")', 'runs code that sends a POST (pwsh)', 'pwsh'],
     ]) {
         const decision = await gate(t1, shell, { command });
         assert.deepEqual([decision.kind, decision.reason, decision.displayReason?.en], ['ask', `the command ${what}`, `This command ${what}. A thread asks you before each command that sends outside the workspace.`], command);
@@ -5849,6 +5864,10 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         // A local app whose code has a route table or an ORM's delete.
         'node server.js', 'npm start', 'python3 app.py', 'node -e "console.log(JSON.stringify({ method: \'POST\', path: \'/items\' }))"']) {
         assert.deepEqual(await gate(t1, 'bash', { command }), { kind: 'allow' }, command);
+    }
+    for (const command of ['Invoke-RestMethod -Uri https://api.example.com/v1/items', 'Get-Content .\\scripts\\deploy.ps1', "Write-Host 'Invoke-RestMethod -Method Post is what it does'",
+        '$url = "https://hooks.example.com/deploy"; Write-Host $url']) {
+        assert.deepEqual(await gate(t1, 'pwsh', { command }), { kind: 'allow' }, command);
     }
     // Nothing outside the workspace is read: that run.sh pushes, but only its name is seen.
     assert.deepEqual(await gate(t1, 'bash', { command: './run.sh', workdir: outside }), { kind: 'allow' });

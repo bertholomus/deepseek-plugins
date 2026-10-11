@@ -14,7 +14,7 @@
  *
  * @module dsh-plugin-projects/sends
  */
-import { basename, dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 
 /** How deep scripts that run scripts are followed. */
 const MAX_DEPTH = 3;
@@ -250,9 +250,229 @@ export function splitShell(text) {
     return { commands, nested };
 }
 
-/** A program's name as its path ends: `/usr/bin/curl` and `curl.exe` are `curl`. */
+/** What a backtick stands for in PowerShell text: `` `n `` is a newline, and any other character stands for itself. */
+const PWSH_ESCAPES = { n: '\n', t: '\t', r: '\r', 0: '\0', a: '\x07', b: '\b', e: '\x1b', f: '\f', v: '\v' };
+
+/**
+ * Where PowerShell text that runs nothing itself ends: a quoted string (a
+ * doubled quote inside is a quote, and in `"…"` a backtick escapes), a
+ * here-string (`@"` to a line that starts with `"@`) or a block comment.
+ * `i` is its first character; -1 when none starts there or nothing closes it.
+ */
+function pwshTextEnd(s, i) {
+    const c = s[i];
+    if (c === '@' && (s[i + 1] === '"' || s[i + 1] === "'") && /^[ \t]*\r?\n/.test(s.slice(i + 2, i + 66))) {
+        const close = s.indexOf(`\n${s[i + 1]}@`, i + 2);
+        return close < 0 ? -1 : close + 2;
+    }
+    if (c === "'" || c === '"') {
+        for (let k = i + 1; k < s.length; k++) {
+            if (c === '"' && s[k] === '`') k++;
+            else if (c === '"' && s[k] === '$' && s[k + 1] === '(') k = pwshClose(s, k + 1);
+            else if (s[k] === c && s[k + 1] === c) k++;
+            else if (s[k] === c) return k;
+        }
+        return -1;
+    }
+    if (c === '<' && s[i + 1] === '#') {
+        const close = s.indexOf('#>', i + 2);
+        return close < 0 ? s.length - 1 : close + 1;
+    }
+    return -1;
+}
+
+const PWSH_PAIRS = { '(': ')', '{': '}', '[': ']' };
+
+/** The index of the bracket that closes the `(`, `{` or `[` at `open` in PowerShell text; the end of the text when none does. */
+function pwshClose(s, open) {
+    const want = [];
+    for (let i = open; i < s.length; i++) {
+        const c = s[i];
+        if (c === '`') { i++; continue; }
+        const textEnd = pwshTextEnd(s, i);
+        if (textEnd >= 0) { i = textEnd; continue; }
+        if (c === '#' && /[\s;({|]/.test(s[i - 1] ?? ' ')) {
+            const end = s.indexOf('\n', i);
+            i = (end < 0 ? s.length : end) - 1;
+            continue;
+        }
+        const close = PWSH_PAIRS[c];
+        if (close) want.push(close);
+        else if ((c === ')' || c === '}' || c === ']') && want.length > 0) {
+            want.pop();
+            if (want.length === 0) return i;
+        }
+    }
+    return s.length;
+}
+
+/**
+ * A PowerShell command line in statements, as PowerShell splits it: each
+ * with its words (quotes taken off, and a group `( )`, `$( )` or `@( )`, a
+ * hashtable `@{ }`, a script block `{ }` or a type `[ ]` kept whole as one
+ * word), the character each word starts with in the text (`marks`: a quote
+ * or a `$` makes an expression of a statement), its text with what the
+ * groups hold blanked (`code`), and whether its output goes on to the next
+ * one (`|`). A backtick at a line's end goes on to the next line, `\` is a
+ * path's own, and `$x=1` is `$x = 1`. What a group, a script block or a
+ * string's `$( )` runs is split too, into statements of their own that come
+ * before the one they are in; a hashtable's `Key = value` lines are marked
+ * `table`.
+ * @returns {{words: string[], marks: string[], code: string, pipe: boolean, table: boolean}[]}
+ */
+function splitPwsh(text, out = [], table = false) {
+    const s = String(text ?? '');
+    const blanks = [];
+    const mine = [];
+    let words = [];
+    let marks = [];
+    let word = null;
+    let mark = '';
+    let from = -1;
+    let redirect = false;
+    const add = (part, at) => {
+        if (from < 0) from = at;
+        if (word === null) mark = s[at];
+        word = (word ?? '') + part;
+    };
+    const endWord = () => {
+        if (word === null) return;
+        if (!redirect) {
+            words.push(word);
+            marks.push(mark);
+        }
+        redirect = false;
+        word = null;
+    };
+    const end = (at, pipe) => {
+        endWord();
+        if (words.length > 0) {
+            const statement = { words, marks, code: '', pipe, table, from, to: at };
+            mine.push(statement);
+            out.push(statement);
+        }
+        words = [];
+        marks = [];
+        from = -1;
+        redirect = false;
+    };
+    // What a group runs is split first; the group stays one word of this statement, blanked in its code.
+    const inside = (at, close, isTable = false) => {
+        splitPwsh(s.slice(at, close), out, isTable);
+        blanks.push([at, close]);
+    };
+    let i = 0;
+    while (i < s.length) {
+        const c = s[i];
+        const next = s[i + 1];
+        const textEnd = c === '#' ? -1 : pwshTextEnd(s, i);
+        if (c === '`') {
+            if (next === '\n' || (next === '\r' && s[i + 2] === '\n')) {
+                endWord();
+                i += next === '\r' ? 3 : 2;
+            } else {
+                if (i + 1 < s.length) add(PWSH_ESCAPES[next] ?? next, i);
+                i += 2;
+            }
+        } else if (textEnd >= 0 && c === '<') {
+            i = textEnd + 1;
+        } else if (textEnd >= 0) {
+            // A string: what its `$( )` runs is read, and its quotes and escapes are taken off.
+            const here = c === '@';
+            const quote = here ? next : c;
+            const start = here ? s.indexOf('\n', i) + 1 : i + 1;
+            const stop = here ? textEnd - 2 : textEnd;
+            if (quote === '"') {
+                for (let k = start; k < stop; k++) {
+                    if (s[k] === '`') k++;
+                    else if (s[k] === '$' && s[k + 1] === '(') {
+                        const close = pwshClose(s, k + 1);
+                        inside(k + 2, close);
+                        k = close;
+                    }
+                }
+            }
+            const body = s.slice(start, stop).replace(/\r$/, '');
+            add(quote === "'" ? (here ? body : body.replace(/''/g, "'"))
+                : body.replace(here ? /`(.)/gs : /`(.)|""/gs, (m, x) => (x === undefined ? '"' : PWSH_ESCAPES[x] ?? x)), i);
+            i = textEnd + 1;
+        } else if (((c === '$' || c === '@') && next === '(') || (c === '@' && next === '{')) {
+            const close = pwshClose(s, i + 1);
+            inside(i + 2, close, next === '{');
+            add(s.slice(i, close + 1), i);
+            i = close + 1;
+            if (next === '{') endWord();
+        } else if (c === '$' && next === '{') {
+            // `${env:PATH}`: a variable.
+            const close = s.indexOf('}', i);
+            const stop = close < 0 ? s.length : close + 1;
+            add(s.slice(i, stop), i);
+            i = stop;
+        } else if (c === '(' || c === '{' || c === '[') {
+            // A keyword's or a command's own name ends before its group: `if($x){…}`, `ForEach-Object{…}`.
+            if (c !== '[' && /^[A-Za-z][\w-]*$/.test(word ?? '')) endWord();
+            const close = pwshClose(s, i);
+            if (c !== '[') inside(i + 1, close);
+            add(s.slice(i, close + 1), i);
+            i = close + 1;
+            if (c === '{') endWord();
+        } else if (c === '#' && word === null) {
+            const stop = s.indexOf('\n', i);
+            i = stop < 0 ? s.length : stop;
+        } else if (c === ' ' || c === '\t' || c === '\r' || c === '\u00a0') {
+            endWord();
+            i++;
+        } else if (c === '>' || ((c === '*' || (c >= '0' && c <= '9')) && word === null && next === '>')) {
+            // Where output goes (`> out.txt`, `2>&1`, `*> $null`): no word.
+            endWord();
+            let k = c === '>' ? i + 1 : i + 2;
+            if (s[k] === '>') k++;
+            if (s[k] === '&' && /\d/.test(s[k + 1] ?? '')) k += 2;
+            else redirect = true;
+            i = k;
+        } else if (c === '\n' || c === ';') {
+            end(i, false);
+            i++;
+        } else if (c === '|') {
+            end(i, next !== '|');
+            i += next === '|' ? 2 : 1;
+        } else if (c === '&' && next !== '&' && word === null && words.length === 0) {
+            // The call operator, a word of its own: `& .\build.ps1`.
+            add('&', i);
+            endWord();
+            i++;
+        } else if (c === '&') {
+            // `&&`, or a job's `&`.
+            end(i, false);
+            i += next === '&' ? 2 : 1;
+        } else if (c === '=' && /^(?:\[[^\]]*\])*\$[^\s=]+$/.test(word ?? '')) {
+            // An assignment written without spaces: `$x=1`, `$n+=1`.
+            const [, target, op] = /^(.+?)((?:[-+*/%]|\?\?)?)$/s.exec(word);
+            word = target;
+            endWord();
+            add(`${op}=`, i);
+            endWord();
+            i++;
+        } else {
+            add(c, i);
+            i++;
+        }
+    }
+    end(s.length, false);
+    const bare = s.split('');
+    for (const [at, close] of blanks) for (let k = at; k < close; k++) if (bare[k] !== '\n') bare[k] = ' ';
+    const code = bare.join('');
+    for (const statement of mine) {
+        statement.code = code.slice(statement.from, statement.to);
+        delete statement.from;
+        delete statement.to;
+    }
+    return out;
+}
+
+/** A program's name as its path ends: `/usr/bin/curl`, `C:\tools\curl.exe` and `curl.exe` are `curl`. */
 function programOf(word) {
-    return basename(String(word ?? '')).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+    return String(word ?? '').split(/[\\/]/).pop().replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
 }
 
 /** Its own words, where a scope or a version doesn't name the program: `@vercel/cli@1` is `vercel`. */
@@ -831,6 +1051,8 @@ const CODE_SENDS = [
     [/\bHTTP::Request->new\(\s*['"]?(POST|PUT|PATCH|DELETE)/, (m) => `a ${m[1]}`],
     [/\bCURLOPT_(?:POST|POSTFIELDS|UPLOAD|CUSTOMREQUEST)\b/, () => 'a request that changes something'],
     [/\bInvoke-(?:WebRequest|RestMethod)\b[^\n]*-Method\s+['"]?(Post|Put|Patch|Delete)\b/i, (m) => `a ${m[1].toUpperCase()}`],
+    // .NET's WebClient, from PowerShell: `(New-Object System.Net.WebClient).UploadFile(…)`.
+    [/\.\s*Upload(?:File|String|Data|Values)(?:Async|TaskAsync)?\s*\(/i, () => 'a POST'],
 ];
 /** A request's method in code: it counts where the code calls a web client (CALLS_CLIENT), not in a route table or other data. */
 const METHOD_OPTION = /\bmethod\s*[:=]\s*['"`](POST|PUT|PATCH|DELETE)['"`]/i;
@@ -999,7 +1221,8 @@ function within(cwd, dir) {
 }
 
 /** A file a command names, read through the caller (only files in the workspace are given). */
-function readScript(ctx, path) {
+function readScript(ctx, named) {
+    const path = ctx.shell === 'pwsh' && typeof named === 'string' ? named.replace(/\\/g, '/') : named;
     if (typeof ctx.read !== 'function' || typeof path !== 'string' || path === '' || path.includes('$') || path.startsWith('~')) return undefined;
     if (!isAbsolute(path) && (ctx.cwd === null || ctx.cwd === undefined)) return undefined;
     const full = isAbsolute(path) ? path : resolve(ctx.cwd, path);
@@ -1018,20 +1241,23 @@ function contentSendOf(text, how, ctx, label) {
     const shebang = first.startsWith('#!') ? programOf(first.slice(2).trim().split(/\s+/).find((w, i) => !(i === 0 && /\/env$/.test(w)) && !w.startsWith('-')) ?? '') : undefined;
     const kind = shebang ?? how;
     if (SHELLS.has(kind) || (kind === undefined && /\.(sh|bash|zsh|ksh)$/i.test(label))) return lineSendOf(text, ctx);
+    // A PowerShell script by its statements, and by its code where they find nothing.
+    if (kind === 'pwsh' || kind === 'powershell' || (kind === undefined && /\.ps1$/i.test(label))) return pwshLineSendOf(text, ctx) ?? codeSendOf(text, ctx, 'pwsh');
     return codeSendOf(text, ctx, kind ?? 'code');
 }
 
 /** A script run from a file: by its name, and by what it runs when it can be read. */
 function scriptSendOf(path, how, ctx) {
     const shown = String(path);
-    if (TEST_FILE.test(shown)) return null;
+    const name = shown.split(ctx.shell === 'pwsh' ? /[\\/]/ : '/').pop();
+    if (TEST_FILE.test(ctx.shell === 'pwsh' ? shown.replace(/\\/g, '/') : shown)) return null;
     const file = (ctx.depth ?? 0) < MAX_DEPTH ? readScript(ctx, shown) : undefined;
     if (file) {
         const deeper = { ...ctx, depth: (ctx.depth ?? 0) + 1, cwd: dirname(file.full) };
         const inside = contentSendOf(file.text, how, deeper, shown);
         if (inside) return runs(shown, inside);
     }
-    return sendingName(basename(shown), file !== undefined) ? byName(shown, basename(shown), file !== undefined, basename(shown)) : null;
+    return sendingName(name, file !== undefined) ? byName(shown, name, file !== undefined, name) : null;
 }
 
 /** A send inside what a command runs, said through it: "runs ./deploy.sh, which sends a POST to …". */
@@ -1182,7 +1408,7 @@ function interpreter(name, args, ctx, inputs) {
     }
     if (name === 'pwsh' || name === 'powershell') {
         const command = optionValue(args.map((a) => (/^-(c|command)$/i.test(a) ? '-Command' : a)), ['-Command']);
-        if (command !== undefined) return (ctx.depth ?? 0) < MAX_DEPTH ? lineSendOf(command, { ...deeper, shell: 'pwsh' }) : null;
+        if (command !== undefined) return (ctx.depth ?? 0) < MAX_DEPTH ? pwshLineSendOf(command, deeper) : null;
         const file = optionValue(args.map((a) => (/^-(f|file)$/i.test(a) ? '-File' : a)), ['-File']);
         return file !== undefined ? scriptSendOf(file, 'pwsh', ctx) : null;
     }
@@ -1290,12 +1516,13 @@ function wordsSendOf(rawWords, ctx, inputs = []) {
         return task ? byName(`${name} ${task}`, task, false, name) : null;
     }
     if (SHELLS.has(name) || INTERPRETERS.has(name) || isPython(name) || name === 'source' || name === '.') return interpreter(name, args, ctx, inputs);
-    if (first.includes('/') || SCRIPT_EXT.test(first)) return scriptSendOf(first, undefined, ctx);
+    if (first.includes('/') || SCRIPT_EXT.test(first) || (ctx.shell === 'pwsh' && first.includes('\\'))) return scriptSendOf(first, undefined, ctx);
     return null;
 }
 
 /** What a command line sends: each of its commands, then the command lines inside it, every send named. */
-function lineSendOf(text, ctx) {
+function lineSendOf(text, outer) {
+    const ctx = { ...outer, shell: 'bash' };
     const { commands, nested } = splitShell(text);
     const found = [];
     let here = ctx;
@@ -1339,6 +1566,78 @@ function lineSendOf(text, ctx) {
     return combined(found);
 }
 
+/** PowerShell's words that start a statement but run no command; what their conditions and blocks run was split out. */
+const PWSH_KEYWORDS = new Set(['if', 'elseif', 'else', 'switch', 'foreach', 'for', 'while', 'do', 'until', 'try', 'catch', 'finally', 'trap', 'function', 'filter',
+    'workflow', 'configuration', 'param', 'begin', 'process', 'end', 'clean', 'dynamicparam', 'class', 'enum', 'data', 'using', 'parallel', 'sequence', 'inlinescript']);
+/** An assignment's target and operator in PowerShell: `$resp =`, `[int]$n +=`, `$x.y =`. */
+const PWSH_TARGET = /^(?:\[[^\]]*\])*\$[^\s=]*$/;
+const PWSH_ASSIGN = /^(?:[-+*/%]|\?\?)?=$/;
+
+/**
+ * What a PowerShell command line sends: each statement's command, with what
+ * an assignment runs (`$resp = Invoke-RestMethod …`), a splatted hashtable's
+ * options (`Invoke-RestMethod @params`), and what script blocks and groups
+ * run; then the code of statements that are no command (`(New-Object
+ * System.Net.WebClient).UploadFile(…)`).
+ */
+function pwshLineSendOf(text, outer) {
+    let here = { ...outer, shell: 'pwsh' };
+    const tables = new Map();
+    const found = [];
+    const code = [];
+    for (const { words: all, marks, code: source, table } of splitPwsh(text)) {
+        if (table) continue;
+        let k = 0;
+        let target;
+        while (k + 1 < all.length && PWSH_TARGET.test(all[k]) && PWSH_ASSIGN.test(all[k + 1])) {
+            target = all[k];
+            k += 2;
+        }
+        if (/^\$\w+$/.test(target ?? '') && k === all.length - 1 && all[k].startsWith('@{')) tables.set(target.slice(1).toLowerCase(), splatted(all[k]));
+        while (k < all.length && PWSH_KEYWORDS.has(all[k].toLowerCase())) {
+            k += ['function', 'filter', 'workflow', 'configuration', 'class', 'enum', 'data'].includes(all[k].toLowerCase()) ? 2 : 1;
+            // Its condition, its types, its switches (`switch -Regex`) and its blocks.
+            while (k < all.length && (/^[([{]/.test(marks[k]) || /^-\w+$/.test(all[k]))) k++;
+        }
+        const head = all[k]?.toLowerCase();
+        if (head === undefined || ['throw', 'exit', 'break', 'continue'].includes(head)) continue;
+        // The call and dot-source operators run what follows, even a quoted path.
+        const called = head === '&' || head === '.';
+        if (called || head === 'return') k++;
+        if (k >= all.length) continue;
+        // Not a command but an expression (a string, a variable, a group): read as code once the line is read.
+        if (!called && /^[$@([{'"]/.test(marks[k])) {
+            code.push(source);
+            continue;
+        }
+        let words = all.slice(k);
+        // A later command runs where `cd` went; somewhere it can't tell, no file is read.
+        if (['cd', 'chdir', 'sl', 'set-location', 'pushd', 'push-location', 'popd', 'pop-location'].includes(words[0].toLowerCase())) {
+            const to = words.length === 2 ? words[1] : words.length === 3 && /^-(literal)?path$/i.test(words[1]) ? words[2] : undefined;
+            here = { ...here, cwd: to === undefined || /^[~$-]/.test(to) || to.includes('$') ? null : within(here.cwd, to.replace(/\\/g, '/')) };
+            continue;
+        }
+        words = words.flatMap((w) => (/^@\w+$/.test(w) && tables.has(w.slice(1).toLowerCase()) ? tables.get(w.slice(1).toLowerCase()) : [w]));
+        found.push(wordsSendOf(words, here));
+    }
+    if (code.length > 0) found.push(codeFound(code.join('\n'), here, 'pwsh'));
+    return combined(found);
+}
+
+/** A hashtable's keys and values as the options it splats: `@{ Uri = 'https://…'; Method = 'Post'; UseBasicParsing = $true }`. */
+function splatted(table) {
+    const options = [];
+    for (const { words } of splitPwsh(table.slice(2, -1), [], true).filter((statement) => statement.table)) {
+        const glued = /^([\w-]+)=(.*)$/s.exec(words[0]);
+        const [key, value] = words[1] === '=' ? [words[0], words[2]]
+            : glued ? [glued[1], glued[2] || words[1]]
+                : words[1]?.startsWith('=') ? [words[0], words[1].slice(1) || words[2]] : [];
+        if (key === undefined || /^\$false$/i.test(value ?? '')) continue;
+        options.push(`-${key}`, ...(value === undefined || /^\$true$/i.test(value) ? [] : [value]));
+    }
+    return options;
+}
+
 /**
  * Sends said as one, in the order they run, each once: the user allows all
  * of them with one answer, so the prompt names every one.
@@ -1376,7 +1675,8 @@ function listOf(items) {
  */
 export function sendOf(command, options = {}) {
     if (typeof command !== 'string' || command.trim() === '') return null;
-    return shown(lineSendOf(command, { depth: 0, shell: options.shell ?? 'bash', cwd: options.cwd, read: options.read }));
+    const ctx = { depth: 0, cwd: options.cwd, read: options.read };
+    return shown(options.shell === 'pwsh' ? pwshLineSendOf(command, ctx) : lineSendOf(command, ctx));
 }
 
 /** A send as the user and the coordinator read it: no password or token from a URL. */
