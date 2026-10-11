@@ -5022,6 +5022,8 @@ test('browser half: an archived project leaves the Projects page, and its ◆ ro
     confirmOf(modal).props.onClick();
     await tick();
     assert.deepEqual(calls, [['c', false], ['c', false]]);
+    // Back, it says how many threads came with it, as the plugin lists them.
+    facts.projects = () => [{ id: 'storefront', coordinator: 'c', threads: { open: 1, resolved: 1 } }];
     assert.equal(flow.getSnapshot().target, null, 'archived: the dialog closes');
 
     // The notice says so, with Undo, which brings it all back.
@@ -5032,7 +5034,7 @@ test('browser half: an archived project leaves the Projects page, and its ◆ ro
     await tick();
     assert.deepEqual(calls.at(-1), ['c', true]);
     toast = elementsOf(ArchiveOverlay({ flow, facts })).find((e) => e.props?.holdMs);
-    assert.equal(toast.props.text, '◆ Storefront is back with its threads.');
+    assert.equal(toast.props.text, '◆ Storefront is back with its 2 threads.');
     assert.deepEqual(plain(toast.props.actions), []);
 
     // Shown with DSH's archived chats, the ◆ row's menu restores it.
@@ -5042,4 +5044,19 @@ test('browser half: an archived project leaves the Projects page, and its ◆ ro
     restoreItem.props.onSelect();
     await tick();
     assert.deepEqual(calls.at(-1), ['c', true]);
+
+    // A project with no threads: its coordinator alone, in the singular.
+    const lone = { ...facts, info: () => ({ project: { id: 'data', name: 'Data' }, threads: [] }), projects: () => [{ id: 'data', coordinator: 'd', threads: { open: 0, resolved: 0 } }] };
+    const one = mount(react, () => ArchiveConfirm({ target: 'd', flow, facts: lone, useSessionStatus: (select) => select(new Map()) }))();
+    assert.equal(one.props.title, 'Archive ◆ Data?');
+    assert.equal(one.props.description, 'Its coordinator leaves the session list and the Projects page, and whatever runs in it stops first. Nothing is deleted.');
+    assert.equal(textIn(one.children), 'To bring it back, show archived chats in the session list and choose Restore project in the ◆ row\'s menu.');
+    elementsOf(one.props.footer).find((e) => e.props?.['data-projects-archive-confirm'] === '').props.onClick();
+    await tick();
+    toast = elementsOf(ArchiveOverlay({ flow, facts: lone })).find((e) => e.props?.holdMs);
+    assert.equal(toast.props.text, '◆ Data archived.');
+    toast.props.actions[0].onClick();
+    await tick();
+    toast = elementsOf(ArchiveOverlay({ flow, facts: lone })).find((e) => e.props?.holdMs);
+    assert.equal(toast.props.text, '◆ Data is back.');
 });

@@ -5082,15 +5082,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             item: 'Archive project…',
             restore: 'Restore project',
             title: (name) => `Archive ◆ ${name}?`,
-            body: (threads) => `Its coordinator${threads > 0 ? ` and its ${plural(threads, 'thread')}` : ''} leave the session list and the Projects page, and whatever runs in them stops first. Nothing is deleted.`,
+            body: (threads) => (threads > 0
+                ? `Its coordinator and its ${plural(threads, 'thread')} leave the session list and the Projects page, and whatever runs in them stops first. Nothing is deleted.`
+                : 'Its coordinator leaves the session list and the Projects page, and whatever runs in it stops first. Nothing is deleted.'),
             running: (names) => `Running now: ${listText(names)}.`,
-            back: 'To bring them back, show archived chats in the session list and choose Restore project in the ◆ row\'s menu.',
+            back: (threads) => `To bring ${threads > 0 ? 'them' : 'it'} back, show archived chats in the session list and choose Restore project in the ◆ row's menu.`,
             confirm: 'Archive project',
             cancel: 'Cancel',
             pending: 'Archiving…',
             loading: 'Reading this project…',
             done: (name, threads) => `◆ ${name} archived${threads > 0 ? ` with its ${plural(threads, 'thread')}` : ''}.`,
-            restored: (name) => `◆ ${name} is back with its threads.`,
+            restored: (name, threads) => `◆ ${name} is back${threads > 0 ? ` with its ${plural(threads, 'thread')}` : ''}.`,
             undo: 'Undo',
         };
         const SETTING_ROUTES = [
@@ -5678,7 +5680,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         async function restoreProject(flow, facts, target, name) {
             flow.say(null);
             const result = await facts.archive(target, true);
-            flow.say(result.ok ? { text: ARCHIVE.restored(name) } : { text: errorText(result.error), error: true });
+            if (!result.ok) {
+                flow.say({ text: errorText(result.error), error: true });
+                return;
+            }
+            // Its threads as the plugin lists them now that it is back.
+            const listed = facts.projects?.().find((p) => p?.coordinator === target || p?.id === target);
+            const threads = (Number(listed?.threads?.open) || 0) + (Number(listed?.threads?.resolved) || 0);
+            flow.say({ text: ARCHIVE.restored(name, threads) });
         }
 
         /**
@@ -5718,7 +5727,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h(ui.Button, { key: 'confirm', variant: 'outline', disabled: busy || !info, onClick: () => { void confirm(); }, 'data-projects-archive-confirm': '' }, ARCHIVE.confirm)),
             },
             running.length > 0 ? h('p', { key: 'running', className: 'dshp-ar-line' }, ARCHIVE.running(running)) : null,
-            h('p', { key: 'back', className: 'dshp-ar-line' }, ARCHIVE.back),
+            h('p', { key: 'back', className: 'dshp-ar-line' }, ARCHIVE.back(threads.length)),
             busy ? h('p', { key: 'busy', className: 'dshp-ar-line', role: 'status' }, ARCHIVE.pending) : null,
             error ? h('p', { key: 'error', className: 'dshp-ar-line dshp-ar-error', role: 'alert' }, error) : null);
         }
