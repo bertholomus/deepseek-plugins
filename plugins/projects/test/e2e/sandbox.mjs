@@ -255,7 +255,7 @@ try {
     summary.coordinator = theirs;
     check('the thread runs on Workspace Write with approvals "ask", though DSH\'s default here is Full access with approvals "never"',
         mine?.preset === 'workspace-write' && mine.sandbox === 'workspace-write' && mine.approval === 'ask', JSON.stringify(mine));
-    check('its coordinator stays on DSH\'s default', theirs?.preset === 'danger-full-access' && theirs.approval === 'never', JSON.stringify(theirs));
+    check('its coordinator is on Read Only, the plugin\'s default for coordinators', theirs?.preset === 'read-only' && theirs.sandbox === 'read-only', JSON.stringify(theirs));
     const order = (await events(thread, 'permission/preset,user/message')).map((e) => e.type);
     check('the thread is on Workspace Write before it reads its brief', order.indexOf('permission/preset') >= 0 && order.indexOf('permission/preset') < order.indexOf('user/message'), JSON.stringify(order));
     check('a write inside its folder goes through', readText(inside) === 'inside\n', JSON.stringify(resultsSince(mark)).slice(0, 400));
