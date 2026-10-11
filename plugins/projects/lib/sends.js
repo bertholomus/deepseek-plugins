@@ -1075,8 +1075,9 @@ function wordsSendOf(rawWords, ctx, inputs = []) {
     let name = programOf(first);
     name = ALIASES[name] ?? name;
     const args = words.slice(1);
-    // Help and version text only.
-    if (args.includes('--help') || args.includes('--version')) return null;
+    // Help and version text only. `--version` is that alone: after a command's other words it's often an option's
+    // name (`helm upgrade … --version 4.10.1`, `gcloud app deploy --version v2`) or a script's own.
+    if (args.includes('--help') || (args.length === 1 && args[0] === '--version')) return null;
     if (name === 'eval') return (ctx.depth ?? 0) < MAX_DEPTH ? lineSendOf(args.join(' '), { ...ctx, depth: (ctx.depth ?? 0) + 1 }) : null;
     if (['npx', 'bunx', 'pnpx'].includes(name)) {
         const call = optionValue(args, ['-c', '--call']);

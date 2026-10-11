@@ -5720,6 +5720,8 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     writeFileSync(join(work, 'deploy.sh'), '#!/bin/sh\ncurl -fsS -X POST --data @build.json http://127.0.0.1:8787/deploy\n');
     writeFileSync(join(work, 'run.sh'), '#!/bin/sh\necho ok\n');
     writeFileSync(join(work, 'package.json'), JSON.stringify({ scripts: { build: 'tsc', release: 'npm publish' } }));
+    mkdirSync(join(work, 'scripts'));
+    writeFileSync(join(work, 'scripts', 'release.sh'), '#!/bin/sh\ngh release create "v$2" dist/*.tar.gz --notes-file CHANGELOG.md\n');
     const outside = mkdtempSync(join(tmpdir(), 'projects-outside-'));
     writeFileSync(join(outside, 'run.sh'), '#!/bin/sh\ngit push\n');
     const { host, dir } = setup({ projects: [{ name: 'DSH Plugins', goal: 'Ship good DSH plugins', workspacePath: work }] }, undefined, { presets: true });
@@ -5759,12 +5761,19 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         ['git push https://acme-bot:ghp_xxxxxxxx@github.com/acme/web.git HEAD:main', 'pushes to github.com/acme/web.git (git push)'],
         ['git push https://ghp_xxxxxxxx@github.com/acme/web.git', 'pushes to github.com/acme/web.git (git push)'],
         ['git -c credential.helper= push "https://x-access-token:$GH_TOKEN@github.com/acme/web.git" HEAD:main', 'pushes to github.com/acme/web.git (git push)'],
+        // --version after a command's other words is an option's name or a script's own, not a version query.
+        ['helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx --namespace ingress-nginx --create-namespace --version 4.10.1', 'makes a change with helm (helm upgrade)'],
+        ['helm install redis bitnami/redis --version 19.0.2 -n cache', 'makes a change with helm (helm install)'],
+        ['gcloud app deploy app.yaml --version v2 --quiet', 'makes a change in the cloud (gcloud app deploy)'],
+        ['./scripts/release.sh --version 1.4.2', 'runs ./scripts/release.sh, which makes a change on GitHub (gh release create)'],
+        ['curl -X POST "$API_URL/deploy" -d @build.json -H "Authorization: Bearer $TOKEN" --version', 'sends a POST to $API_URL/deploy (curl)'],
     ]) {
         const decision = await gate(t1, shell, { command });
         assert.deepEqual([decision.kind, decision.reason, decision.displayReason?.en], ['ask', `the command ${what}`, `This command ${what}. A thread asks you before each command that sends outside the workspace.`], command);
     }
     // Reads run: a GET, a syntax check, a dry run, a script that doesn't send, a build.
-    for (const command of ['curl -sS http://127.0.0.1:8787/deploy', 'bash -n deploy.sh', 'git push --dry-run', './run.sh', 'npm run build', 'git status']) {
+    for (const command of ['curl -sS http://127.0.0.1:8787/deploy', 'bash -n deploy.sh', 'git push --dry-run', './run.sh', 'npm run build', 'git status',
+        'git --version', 'curl --version', 'gh pr create --help']) {
         assert.deepEqual(await gate(t1, 'bash', { command }), { kind: 'allow' }, command);
     }
     // Nothing outside the workspace is read: that run.sh pushes, but only its name is seen.
