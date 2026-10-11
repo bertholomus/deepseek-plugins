@@ -29,7 +29,7 @@ function loadClient({ storage, document, globals = {}, console: log = console, l
         URL, console: log, setInterval, clearInterval, setTimeout, clearTimeout, queueMicrotask, ...globals,
     });
     if (!loaded) return { window };
-    const base = { Toast: 'Toast', Menu: 'Menu', Modal: 'Modal', Button: 'Button', Input: 'Input', StateDot: 'StateDot' };
+    const base = { Toast: 'Toast', Menu: 'Menu', Modal: 'Modal', Button: 'Button', Input: 'Input', StateDot: 'StateDot', Tooltip: 'Tooltip' };
     const ui = new Proxy(base, { get: (target, name) => (name in target ? target[name] : typeof name === 'string' && name.startsWith('Icon') ? name : undefined) });
     const modules = {
         react: {
@@ -127,7 +127,7 @@ test('browser half: loads as DSH loads it, registers the session list, the page 
     const { id, client } = loadClient({ document, console: { ...console, warn: (...parts) => { warnings.push(parts.join(' ')); } } });
     assert.equal(id, 'dsh-plugin-categories');
     assert.deepEqual(plain(client.inject), ['slots']);
-    const { CSS, SidebarTree, CategoriesPage, CategoriesIcon } = client.internals;
+    const { CSS, SidebarTree, CategoriesPage, CategoriesIcon, CategoryChip } = client.internals;
     // Its styles once, under its own prefix, and the session list's rules read DSH's own indent.
     assert.equal(heads.length, 1);
     assert.deepEqual(plain(heads[0].dataset), { plugin: 'dsh-plugin-categories', pluginCss: 'dsh-plugin-categories/client.css' });
@@ -145,12 +145,14 @@ test('browser half: loads as DSH loads it, registers the session list, the page 
     const effects = [];
     const rpc = [];
     const opened = [];
+    const panels = [];
     const connection = { rpc: { call: async (path, method, payload) => { rpc.push([path, method, plain(payload)]); return { ok: true, value: { categories: [] } }; } } };
     const ctx = {
         effect: (fn, label) => { effects.push(label); return fn(); },
         inject: (names, fn) => { injected.push(plain(names)); fn(ctx); },
         slots: { inject: (_name, fn) => fn(), register: (slot, component) => { registered.push([slot, component]); return () => {}; } },
         connection, uiWorkspace: { openSession: (sessionId) => { opened.push(sessionId); } },
+        get: (name) => (name === 'layout' ? { selectPanel: (panel) => { panels.push(panel); } } : undefined),
     };
     client.apply(ctx);
     assert.deepEqual(injected, [['connection'], ['uiWorkspace']]);
@@ -158,6 +160,8 @@ test('browser half: loads as DSH loads it, registers the session list, the page 
         ['shell.overlay', 'dsh-plugin-categories:sidebar', undefined, undefined, SidebarTree],
         ['main', 'dsh-plugin-categories:page', undefined, undefined, CategoriesPage],
         ['sidebar.panellist', 'dsh-plugin-categories:page', 6, 'Categories', CategoriesIcon],
+        // Just before the projects plugin's Threads menu (-25) when that plugin is on.
+        ['conversation.session.header.actions', 'dsh-plugin-categories:chip', -27, undefined, CategoryChip],
     ]);
     await tick();
     assert.deepEqual(rpc, [['/api', 'dsh-plugin-categories/list', { args: {} }]]);
@@ -165,6 +169,11 @@ test('browser half: loads as DSH loads it, registers the session list, the page 
     // The views share one window API: the categories, opening a session as DSH's list does, DSH's own Add workspace.
     const { plugin } = registered[0][0].inject();
     assert.equal(registered[1][0].inject().plugin, plugin);
+    // The chip shares it too, and opens the page DSH's sidebar entry opens, through DSH's layout.
+    const chip = registered[3][0].inject();
+    assert.equal(chip.plugin, plugin);
+    chip.openPage()();
+    assert.deepEqual(panels, ['dsh-plugin-categories:page']);
     assert.equal(plugin.facts.categories().length, 0);
     plugin.openSession('s1');
     plugin.openSession('');
@@ -1467,6 +1476,101 @@ test('browser half: a category\'s header and a workspace\'s row drag in DSH\'s l
     assert.deepEqual([listeners.size, body.children.length], [0, 0]);
 });
 
+test('browser half: every session in a category names its category and workspace at its top, and a click opens the Categories page', () => {
+    const warnings = [];
+    const { client, react } = loadClient({ console: { ...console, warn: (...parts) => { warnings.push(parts.join(' ')); } } });
+    const { CategoryChip, chipLine, categoryHolding, pageOpener, workspaceOfSession, CSS } = client.internals;
+    // DSH's sessions: plain chats, a coordinator and its thread as another plugin's projections decorate them, a
+    // subagent under a chat, a blank New Session, an archived chat, and parents that loop.
+    const state = {
+        byId: {
+            chat: { id: 'chat', title: 'Tensor modulation sweep status' },
+            c1: { id: 'c1', title: '◆ Shop', projectionValues: { projectSession: { role: 'coordinator', project: { name: 'Shop' }, threads: [] } } },
+            t1: { id: 't1', title: 'Fix cart', projectionValues: { projectSession: { role: 'thread', coordinator: 'c1', thread: { id: 't1' } } } },
+            sub: { id: 'sub', title: 'Look around', parentId: 'chat', origin: 'subagent' },
+            fresh: { id: 'fresh', title: '', blank: true }, old: { id: 'old', title: 'Old notes' }, loose: { id: 'loose', title: 'Scratch pad' },
+            a: { id: 'a', title: 'A', parentId: 'b' }, b: { id: 'b', title: 'B', parentId: 'a' },
+        },
+    };
+    const workspaces = workspacesOf([
+        { workspaceId: 'w-tm', path: '/u/tensor-modulation', title: 'tensor-modulation', sessionIds: ['chat', 'fresh', 'old'] },
+        { workspaceId: 'w-shop', path: '/u/shop', title: '', sessionIds: ['c1', 't1'] },
+        { workspaceId: 'w-scratch', path: '/u/scratch', title: 'scratch', sessionIds: ['loose'] },
+    ], { archivedSessionIds: ['old'] });
+    let categories = [
+        { id: 'local-model-recipe', name: 'Local Model Recipe', source: 'import', workspaces: [{ id: 'w-tm', path: '/u/tensor-modulation', title: 'tensor-modulation' }] },
+        { id: 'shop', name: 'Shop', source: 'page', workspaces: [{ id: 'w-shop', path: '/u/shop', title: 'shop' }] },
+    ];
+    const plugin = { facts: factsOf(() => categories) };
+    const opened = [];
+    const dsh = { get: (name) => (name === 'layout' ? { selectPanel: (id) => opened.push(id) } : undefined) };
+    const props = (sessionId, ctx = dsh) => ({
+        sessionId, plugin, openPage: () => pageOpener(ctx), useSessions: (select) => select(state), useWorkspaces: (select) => select(workspaces),
+    });
+    const chip = (sessionId, ctx) => CategoryChip(props(sessionId, ctx));
+    const button = (tree) => byHook(tree, 'data-categories-chip');
+    // A plain chat: the category and the workspace, named for screen readers, and a click opens the Categories page.
+    const plainChat = chip('chat');
+    assert.deepEqual([plainChat.type, plainChat.props.label, plainChat.props.side], ['Tooltip', 'Local Model Recipe / tensor-modulation · Open Categories', 'bottom']);
+    const own = button(plainChat);
+    assert.deepEqual([own.type, own.props.type, own.props.className], ['button', 'button', 'dshc-chip']);
+    assert.equal(own.props['data-categories-chip'], 'local-model-recipe');
+    assert.equal(own.props['aria-label'], 'Category: Local Model Recipe, workspace tensor-modulation');
+    assert.equal(textIn(own), 'Local Model Recipe/tensor-modulation');
+    assert.equal(byClass(own, 'dshc-chip-sep').length, 1, 'DSH\'s crumb mark between them');
+    assert.equal(elementsOf(own).find((e) => e.type === 'IconFolderCloseRegular')?.props.className, 'dshc-chip-glyph');
+    own.props.onClick();
+    assert.deepEqual(opened, ['dsh-plugin-categories:page'], 'the panel DSH\'s sidebar entry opens');
+    // A coordinator and its thread are sessions in their workspace like any other (a workspace without a title shows
+    // its folder, as DSH's list does), and a subagent shows its parent's.
+    for (const id of ['c1', 't1']) assert.equal(button(chip(id)).props['aria-label'], 'Category: Shop, workspace shop', id);
+    assert.equal(button(chip('sub')).props['aria-label'], 'Category: Local Model Recipe, workspace tensor-modulation');
+    // Nothing for a blank, archived or unknown session, nor for one whose workspace is in no category.
+    for (const id of ['fresh', 'old', 'nowhere', 'loose', 'a', '']) assert.equal(chip(id), null, id);
+    assert.deepEqual(plain(chipLine(state, 'sub')), ['sub', 'chat'], 'nearest first');
+    assert.deepEqual(plain(chipLine(state, 'a')), ['a', 'b'], 'a loop of parents ends');
+    assert.deepEqual(plain(chipLine(state, 'fresh')), []);
+    assert.deepEqual([workspaceOfSession(workspaces, 't1'), workspaceOfSession(workspaces, 'sub'), workspaceOfSession(undefined, 'chat')], ['w-shop', undefined, undefined]);
+    assert.equal(categoryHolding(null, 'w-tm'), undefined, 'none until the plugin has listed its categories');
+    assert.equal(CategoryChip({ sessionId: 'chat', plugin }), null, 'nothing where DSH hands it no sessions or workspaces');
+
+    // Live: it reads the categories as they are now, so a rename or a workspace filed elsewhere shows at the next draw.
+    categories = [
+        { ...categories[0], name: 'Local Models', workspaces: [] },
+        { ...categories[1], workspaces: [...categories[1].workspaces, { id: 'w-scratch', path: '/u/scratch', title: 'scratch' }, { id: 'w-tm', path: '/u/tensor-modulation', title: 'tensor-modulation' }] },
+    ];
+    assert.equal(button(chip('chat')).props['aria-label'], 'Category: Shop, workspace tensor-modulation');
+    assert.equal(button(chip('loose')).props['aria-label'], 'Category: Shop, workspace scratch');
+    categories = [{ ...categories[1], name: 'Storefront' }];
+    assert.equal(textIn(button(chip('c1'))), 'Storefront/shop');
+    // It keeps the categories read while it shows, as the session list and the page do.
+    let watching = 0;
+    const watched = { ...plugin.facts, watch: () => { watching += 1; return () => { watching -= 1; }; } };
+    mount(react, () => CategoryChip({ ...props('chat'), plugin: { facts: watched } }), { effects: true })();
+    assert.equal(watching, 1);
+
+    // A DSH that offers plugins no way to its panels: plain text, named for screen readers by text of its own.
+    const text = chip('chat', {});
+    assert.equal(text.type, 'span');
+    assert.equal(text.props['data-categories-chip'], 'shop');
+    assert.equal(text.props.onClick, undefined);
+    assert.equal(textIn(byClass(text, 'dshc-sr')), 'Category: Storefront, workspace tensor-modulation');
+    assert.equal(byClass(text, 'dshc-chip-text')[0].props['aria-hidden'], true);
+    assert.equal(pageOpener({ get: () => { throw new Error('no such service'); } }), undefined);
+    assert.equal(pageOpener({ get: () => ({}) }), undefined);
+    // DSH refusing the panel is a warning, never a throw into DSH's header.
+    const refused = pageOpener({ get: () => ({ selectPanel: () => { throw new Error('main panel is not registered'); } }) });
+    assert.doesNotThrow(() => refused());
+    assert.deepEqual(warnings, ['[categories] could not open the Categories page: main panel is not registered']);
+    // An unnamed category goes by its id, as in the session list.
+    categories = [{ ...categories[0], name: '' }];
+    assert.equal(textIn(button(chip('c1'))), 'shop/shop');
+
+    // One line, ending in "…" when it doesn't fit, and gone where the header is narrow.
+    assert.match(CSS, /\.dshc-chip-text\{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;/);
+    assert.match(CSS, /@container \(width<=600px\)\{\.dshc-chip\{display:none\}\}/);
+});
+
 test('browser half: the projects plugin\'s data changes nothing here: the same page, the same list, only this plugin\'s endpoints', async () => {
     // DSH's sessions as the projects plugin's projections make them: a coordinator and its threads, in two workspaces.
     const value = (v) => ({ values: { projectSession: v } });
@@ -1515,6 +1619,13 @@ test('browser half: the projects plugin\'s data changes nothing here: the same p
         return [plain(elementsOf(drawn).filter((e) => e.props?.menu?.actions).map((e) => [e.props.group.id, e.props.count])), textIn(elementsOf(drawn).find((e) => e.type === 'style'))];
     };
     assert.deepEqual(sidebar(decorated), sidebar(bare));
+    // And the chip at a session's top: a ◆ coordinator and its threads are sessions in their workspaces.
+    const chip = (sessions, id) => plain(client.internals.CategoryChip({
+        sessionId: id, plugin: { facts: factsOf(() => categories) }, useSessions: (select) => select(sessions), useWorkspaces: (select) => select(workspacesOf(items)),
+    }));
+    for (const id of ['c', 't1', 't2', 'x']) assert.deepEqual(chip(decorated, id), chip(bare, id), id);
+    assert.equal(textIn(byClass(chip(decorated, 'c'), 'dshc-sr')), 'Category: Shop, workspace storefront');
+    assert.equal(chip(decorated, 't2'), null, 'its workspace is in no category');
     // It calls only its own endpoints, over DSH's connection.
     const rpc = [];
     const ctx = {

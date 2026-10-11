@@ -1,5 +1,5 @@
 /**
- * dsh-plugin-categories, browser half. Two parts, both on DSH's own rows:
+ * dsh-plugin-categories, browser half. Three parts:
  *
  * - DSH's session list by category (SidebarTree): a header over each
  *   category's workspaces, then Other workspaces for the rest. A header
@@ -11,11 +11,14 @@
  * - The Categories page (CategoriesPage), opened from its entry in DSH's
  *   sidebar: the tree Category › Workspace › session, with Find by name
  *   and New category.
+ * - The chip at the top of a session (CategoryChip), in DSH's header: the
+ *   category and workspace the session is in; a click opens the page.
  *
- * Both read the categories from the plugin's host half (its `list`
- * endpoint) through one store (categoryFacts) and change them through its
- * endpoints. A session here is DSH's own row: its DSH title and DSH's dot.
- * Nothing here reads or writes another plugin's data or DOM.
+ * All three read the categories from the plugin's host half (its `list`
+ * endpoint) through one store (categoryFacts), and the list and the page
+ * change them through its endpoints. A session here is DSH's own row: its
+ * DSH title and DSH's dot. Nothing here reads or writes another plugin's
+ * data or DOM.
  *
  * Hand-written in the module format DSH serves to the browser, so the plugin
  * needs no build step: the factory gets DSH's module `require` and returns
@@ -36,10 +39,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /** The package: its endpoints' namespace, and the prefix of what it keeps in the window's storage. */
         const BUNDLE = 'dsh-plugin-categories';
-        /** The plugin's entries in DSH's slots: the session list's headers, and the page with its sidebar entry. */
+        /** The plugin's entries in DSH's slots: the session list's headers, the page with its sidebar entry, and the chip in a session's header. */
         const IDS = {
             sidebar: `${BUNDLE}:sidebar`,
             page: `${BUNDLE}:page`,
+            chip: `${BUNDLE}:chip`,
         };
 
         /** DSH's drop line (its own style), drawn over the session list for the plugin's drags: they never touch DSH's rows. */
@@ -135,6 +139,23 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshc-sb-head[data-categories-drop]{background:var(--dsw-alias-interactive-bg-hover);box-shadow:inset 0 0 0 1px var(--dsw-alias-state-business-primary)}',
             `.dshc-sb-drop-line{position:fixed;z-index:2147483000;height:12px;pointer-events:none;background:${DROP_LINE}}`,
             '.dshc-sb-drop-line[hidden]{display:none}',
+            // The chip at the top of a session: its category and workspace, among DSH's header actions. Those never
+            // shrink; while they show the chip they may, by the chip alone, before the title does. Its text breaks at
+            // any letter, so its least width is a letter, and it shows one line, cut at a letter with "…" as DSH's
+            // title is. Found by DSH's markup (the actions are the box right after the title's nav), not by its
+            // generated class names.
+            '@container (width>600px){nav[aria-label]+div:has(>[data-slot]>[data-categories-chip]){flex-shrink:1000}}',
+            '@container (width>600px){nav[aria-label]+div:has(>[data-slot]>[data-categories-chip])>[data-slot]>:not([data-categories-chip]){flex-shrink:0}}',
+            '.dshc-chip{flex:0 1000 auto;display:inline-flex;align-items:center;gap:5px;box-sizing:border-box;min-width:0;max-width:280px;min-height:28px;padding:3px 6px;border:0;border-radius:var(--dsw-radius-sm);background:none;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);text-align:left}',
+            'button.dshc-chip{cursor:pointer}',
+            'button.dshc-chip:hover,button.dshc-chip:focus-visible{color:var(--dsw-alias-label-primary)}',
+            `button.dshc-chip:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover);box-shadow:inset 0 0 0 2px ${RING}}`,
+            '.dshc-chip-glyph{flex:none;color:var(--dsw-alias-label-tertiary)}',
+            '.dshc-chip-text{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;min-width:0;overflow:hidden;word-break:break-all}',
+            '.dshc-chip-sep{margin:0 4px;color:var(--dsw-alias-label-caption)}',
+            // Gone where the header is narrow (a chat with a pane open beside it), before DSH drops its own labels
+            // (540 px and less); DSH's header is then as DSH draws it.
+            '@container (width<=600px){.dshc-chip{display:none}}',
             `.dshc-sr{${HIDDEN}}`,
         ].join('');
         const CSS_ID = `${BUNDLE}/client.css`;
@@ -156,6 +177,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** A set with nothing in it, never added to. */
         const EMPTY_SET = new Set();
         const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+        /** Two lists with the same items in the same order. */
+        const sameList = (a, b) => a === b || (a.length === b.length && a.every((item, i) => item === b[i]));
         const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
         /** Names as a sentence lists them: "A", "A and B", "A, B and C". */
         const listText = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
@@ -170,6 +193,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /** A DSH workspace's name as its row shows it. */
         const workspaceTitle = (ws) => (typeof ws?.title === 'string' && ws.title !== '' ? ws.title : folderName(ws?.path ?? ws?.workspaceId ?? ''));
+
+        /** The workspace in DSH's list that holds a session (the first that lists it, as DSH finds it), or undefined. */
+        function workspaceOfSession(workspaces, sessionId) {
+            for (const ws of Array.isArray(workspaces?.items) ? workspaces.items : EMPTY) {
+                if (typeof ws?.workspaceId === 'string' && Array.isArray(ws.sessionIds) && ws.sessionIds.includes(sessionId)) return ws.workspaceId;
+            }
+            return undefined;
+        }
 
         /** What the window says wherever it shows. */
         const TEXT = {
@@ -1575,6 +1606,76 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 overlay);
         }
 
+        // ── At the top of a session ────────────────────────────────────────
+
+        const CHIP = {
+            /** What the chip is to a screen reader. */
+            name: (category, workspace) => `Category: ${category}, workspace ${workspace}`,
+            open: 'Open Categories',
+        };
+
+        /**
+         * The sessions a header stands for, nearest first: the session, then
+         * the ones a subagent or teammate DSH started works under. Empty for a
+         * session DSH doesn't list, or a blank one.
+         */
+        function chipLine(state, sessionId) {
+            const line = [];
+            for (let id = sessionId; typeof id === 'string' && id !== '' && line.length < 8 && !line.includes(id); id = state?.byId?.[id]?.parentId) {
+                const row = state?.byId?.[id];
+                if (!isObject(row) || row.blank === true) break;
+                line.push(id);
+            }
+            return line.length > 0 ? line : EMPTY;
+        }
+
+        /** The category holding a workspace, as the plugin lists them (the first, as the session list places it), or undefined. */
+        function categoryHolding(categories, workspaceId) {
+            if (typeof workspaceId !== 'string' || !Array.isArray(categories)) return undefined;
+            return categories.find((c) => isObject(c) && typeof c.id === 'string' && Array.isArray(c.workspaces) && c.workspaces.some((ws) => ws?.id === workspaceId));
+        }
+
+        /** DSH's way to the Categories page, as its sidebar entry opens it (DSH's `layout`); undefined where this DSH has none. */
+        function pageOpener(ctx) {
+            let layout;
+            try { layout = ctx.get?.('layout'); } catch { layout = undefined; }
+            if (typeof layout?.selectPanel !== 'function') return undefined;
+            return () => {
+                try { layout.selectPanel(IDS.page); } catch (error) { console.warn(`[categories] could not open the Categories page: ${error?.message ?? error}`); }
+            };
+        }
+
+        /**
+         * At the top of every session whose workspace is in a category, among
+         * DSH's header actions: the category and the workspace, which DSH's
+         * header doesn't name. It follows the plugin's list, so a workspace
+         * filed in another category or a category renamed shows at the next
+         * draw. A click opens the Categories page, as its sidebar entry does;
+         * where DSH offers no way there it is plain text. Nothing for a blank,
+         * archived or unknown session; a subagent's or a teammate's is its
+         * parent's.
+         */
+        function CategoryChip({ sessionId, useSessions = noSessions, useWorkspaces = noWorkspaces, plugin, openPage }) {
+            useFacts(plugin.facts);
+            useWatch(plugin.facts);
+            const line = useSessions((state) => chipLine(state, sessionId), sameList);
+            const archived = useWorkspaces((state) => Array.isArray(state?.archivedSessionIds) && state.archivedSessionIds.includes(sessionId));
+            const workspaceId = useWorkspaces((state) => line.map((id) => workspaceOfSession(state, id)).find((id) => id !== undefined));
+            const workspace = useWorkspaces((state) => workspaceTitle((Array.isArray(state?.items) ? state.items : EMPTY).find((ws) => ws?.workspaceId === workspaceId)));
+            const category = categoryHolding(plugin.facts.categories(), workspaceId);
+            if (archived || category === undefined || workspace === '') return null;
+            const name = typeof category.name === 'string' && category.name !== '' ? category.name : category.id;
+            const open = typeof openPage === 'function' ? openPage() : undefined;
+            const shown = [
+                h(ui.IconFolderCloseRegular, { key: 'g', size: 14, className: 'dshc-chip-glyph', 'aria-hidden': true }),
+                h('span', { key: 't', className: 'dshc-chip-text', 'aria-hidden': open ? undefined : true },
+                    name, h('span', { className: 'dshc-chip-sep' }, '/'), workspace),
+            ];
+            if (!open) return h('span', { className: 'dshc-chip', 'data-categories-chip': category.id }, h('span', { className: 'dshc-sr' }, CHIP.name(name, workspace)), ...shown);
+            return h(ui.Tooltip, { label: `${name} / ${workspace} · ${CHIP.open}`, side: 'bottom' },
+                h('button', { type: 'button', className: 'dshc-chip', 'aria-label': CHIP.name(name, workspace), 'data-categories-chip': category.id, onClick: open }, ...shown));
+        }
+
         // ── In DSH's window ────────────────────────────────────────────────
 
         /**
@@ -1615,6 +1716,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
                 name: 'sidebar.panellist', id: IDS.page, order: 6, label: PAGE.entry,
             }, CategoriesIcon));
+            // Where each session sits, at its top: its category and workspace, opening the Categories page. After DSH's
+            // subagents (-30); with the projects plugin on, just before its Threads menu (-25).
+            ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
+                name: 'conversation.session.header.actions', id: IDS.chip, order: -27, inject: () => ({ plugin, openPage: () => pageOpener(ctx) }),
+            }, CategoryChip));
         }
 
         /** Required services (cordis inject); each part below waits for its own. */
@@ -1639,11 +1745,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.apply = apply;
         // For the plugin's own tests: the pieces the views are built on.
         module.exports.internals = {
-            BUNDLE, IDS, OTHERS, CSS, TEXT, PAGE, SIDEBAR,
-            hostLink, errorText, categoryFacts, listText, plural, shortPath, folderName, workspaceTitle, chatDot,
+            BUNDLE, IDS, OTHERS, CSS, TEXT, PAGE, SIDEBAR, CHIP,
+            hostLink, errorText, categoryFacts, listText, plural, shortPath, folderName, workspaceTitle, workspaceOfSession, sameList, chatDot,
             pageModel, visibleItems, treeMeta, treeDot, findInTree, withHit, PageTree, CategoriesPage, CategoriesIcon, NameDialog, ConfirmDialog,
             sidebarGroups, sidebarRules, groupDot, sectionWorkspace, sectionAt, placeHeaders, describeWorkspaces, useTreeSync, useCategoryDrags,
-            dshAddFlow, workspaceAdder, CategoryMenu, CategoryHeader, SidebarTree, windowApi,
+            dshAddFlow, workspaceAdder, CategoryMenu, CategoryHeader, SidebarTree,
+            chipLine, categoryHolding, pageOpener, CategoryChip, windowApi,
         };
         return module.exports;
     },
