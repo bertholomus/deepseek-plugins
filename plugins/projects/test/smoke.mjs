@@ -8,12 +8,10 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
 import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol';
 import * as plugin from '../lib/index.js';
@@ -22,7 +20,6 @@ import { slugify, timing, clipTitle, guardList, guardedIn } from '../lib/project
 import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS, lineDelta, editOf, editsIn, editSummary } from '../lib/changes.js';
 import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, cardSummary, threadMarkdown, outsideMessage, replyMessage } from '../lib/prompts.js';
 import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
-import { planFleetShellImport } from '../lib/fleet-shell.js';
 
 const CATALOG = {
     default: { provider: 'deepseek', model: 'deepseek-v4' },
@@ -1006,147 +1003,144 @@ test('old session records: each project session DSH lists without a value is rea
     assert.doesNotMatch(readFileSync(join(dir2, 'projects.log'), 'utf8'), /records refreshed|error record/);
 });
 
-test('browser half: the Projects page is the whole tree, each thread under its project wherever it works, with one tab stop', () => {
+test('browser half: the Projects page is every ◆ project in the list\'s order, each with its threads wherever they work, open ones first', () => {
     const { client } = loadClient();
     const { pageModel, visibleItems, takeKnown } = client.internals;
     takeKnown({});
     const value = (v) => ({ values: { projectSession: v } });
     const sessions = {
-        byId: { c: { id: 'c', title: '◆ Storefront' }, t1: { id: 't1', title: 'Fix cart' }, t2: { id: 't2', title: 'Hero images' }, x: { id: 'x', title: 'A chat' }, y: { id: 'y', title: 'Old' }, z: { id: 'z', title: 'Notes' } },
+        byId: {
+            c: { id: 'c', title: '◆ Storefront' }, t1: { id: 't1', title: 'Fix cart' }, t2: { id: 't2', title: 'Hero images' }, t3: { id: 't3', title: 'Old copy' },
+            y: { id: 'y', title: 'Archived one' }, d: { id: 'd', title: '◆ Data' }, dt: { id: 'dt', title: 'Nightly load' }, x: { id: 'x', title: 'A chat' }, z: { id: 'z', title: 'Notes' },
+            e: { id: 'e', title: '◆ Ops' },
+        },
         projectionsBySession: {
-            c: value({ role: 'coordinator', project: { id: 'storefront', name: 'Storefront' } }),
+            c: value({ role: 'coordinator', project: { id: 'storefront', name: 'Storefront' }, threads: [
+                { id: 't1', session: 't1' }, { id: 't2', session: 't2' }, { id: 't3', session: 't3', resolved: true }, { id: 't4', session: 'y' },
+            ] }),
             t1: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' } }),
             t2: value({ role: 'thread', coordinator: 'c', thread: { id: 't2' } }),
+            t3: value({ role: 'thread', coordinator: 'c', thread: { id: 't3' } }),
+            y: value({ role: 'thread', coordinator: 'c', thread: { id: 't4' } }),
+            d: value({ role: 'coordinator', project: { id: 'data', name: 'Data' }, threads: [{ id: 't1', session: 'dt' }] }),
+            dt: value({ role: 'thread', coordinator: 'd', thread: { id: 't1' } }),
         },
     };
     const items = [
-        { workspaceId: 'w-sf', title: 'storefront', path: '/home/u/storefront', sessionIds: ['c', 't1', 'x', 'y'] },
+        { workspaceId: 'w-sf', title: 'storefront', path: '/home/u/storefront', sessionIds: ['t3', 'c', 't1', 'x', 'y'] },
         { workspaceId: 'w-assets', title: 'storefront-assets', path: '/home/u/storefront-assets', sessionIds: ['t2'] },
-        { workspaceId: 'w-notes', title: 'notes', path: '/home/u/notes', sessionIds: ['z'] },
+        { workspaceId: 'w-data', title: '', path: '/home/u/data-pipeline', sessionIds: ['d', 'dt', 'z'] },
     ];
-    const tree = pageModel({
-        categories: [{ id: 'shop', name: 'Shop', workspaces: [{ id: 'w-assets' }, { id: 'w-sf' }] }],
-        listed: [{ id: 'storefront', name: 'Storefront', coordinator: 'c', home: 'w-sf' }], items, sessions, archived: new Set(['y']),
-    });
+    const listed = [
+        { id: 'data', name: 'Data', coordinator: 'd', home: 'w-data' },
+        { id: 'storefront', name: 'Storefront', coordinator: 'c', home: 'w-sf', paused: true },
+        // One whose coordinator never started has nothing to open; one DSH doesn't list yet goes by what the list says.
+        { id: 'later', name: 'Later', coordinator: null, home: 'w-sf' },
+        { id: 'ops', name: 'Ops', coordinator: 'e', home: 'w-gone', workspace: '/srv/ops', workspaces: [], threads: { open: 2, resolved: 1 } },
+    ];
+    const tree = pageModel({ listed, items, sessions, archived: new Set(['y']) });
     const shape = (nodes) => nodes.map((n) => [n.kind, n.title, ...(n.children.length ? [shape(n.children)] : [])]);
-    // DSH's workspace order inside a category; the project first in its workspace, then the chats; the thread working
-    // in storefront-assets under its project, not in that workspace; an archived chat left out; Other workspaces last.
+    // Projects only, in the list's order. A project's threads in DSH's order, the resolved one last, the thread that
+    // works in storefront-assets under its project; no chats, and no archived thread.
     assert.deepEqual(plain(shape(tree)), [
-        ['category', 'Shop', [
-            ['workspace', 'storefront', [['project', 'Storefront', [['thread', 'Fix cart'], ['thread', 'Hero images']]], ['session', 'A chat']]],
-            ['workspace', 'storefront-assets'],
-        ]],
-        ['category', 'Other workspaces', [['workspace', 'notes', [['session', 'Notes']]]]],
+        ['project', 'Data', [['thread', 'Nightly load']]],
+        ['project', 'Storefront', [['thread', 'Fix cart'], ['thread', 'Hero images'], ['thread', 'Old copy']]],
+        ['project', 'Ops'],
     ]);
-    // Levels 1-4, positions among siblings, and closed items hide what is in them.
+    // Each carries the name of the workspace it works in, its threads as its Threads menu counts them (its roster:
+    // the archived thread too), and its pause.
+    assert.deepEqual(plain(tree.map((n) => [n.id, n.folder, n.counts, n.paused])), [
+        ['d', 'data-pipeline', { open: 1, resolved: 0 }, false],
+        ['c', 'storefront', { open: 3, resolved: 1 }, true],
+        ['e', 'ops', { open: 2, resolved: 1 }, false],
+    ]);
+    // Levels, places among siblings, and a folded project hides its threads.
     const shown = visibleItems(tree, new Set());
     assert.deepEqual(plain(shown.map((x) => [x.node.title, x.level, `${x.pos}/${x.size}`, x.open])), [
-        ['Shop', 1, '1/2', true], ['storefront', 2, '1/2', true], ['Storefront', 3, '1/2', true], ['Fix cart', 4, '1/2', false], ['Hero images', 4, '2/2', false],
-        ['A chat', 3, '2/2', false], ['storefront-assets', 2, '2/2', false], ['Other workspaces', 1, '2/2', true], ['notes', 2, '1/1', true], ['Notes', 3, '1/1', false],
+        ['Data', 1, '1/3', true], ['Nightly load', 2, '1/1', false],
+        ['Storefront', 1, '2/3', true], ['Fix cart', 2, '1/3', false], ['Hero images', 2, '2/3', false], ['Old copy', 2, '3/3', false],
+        ['Ops', 1, '3/3', false],
     ]);
-    assert.deepEqual(plain(visibleItems(tree, new Set(['project:c', 'category:@others'])).map((x) => x.node.title)), ['Shop', 'storefront', 'Storefront', 'A chat', 'storefront-assets', 'Other workspaces']);
+    assert.deepEqual(plain(visibleItems(tree, new Set(['project:c'])).map((x) => x.node.title)), ['Data', 'Nightly load', 'Storefront', 'Ops']);
+    // The newest paused word wins over the list's.
+    assert.deepEqual(plain(pageModel({ listed, items, sessions, archived: new Set(), pausedOf: (id) => (id === 'c' ? false : undefined) }).map((n) => n.paused)), [false, false, false]);
 });
 
-test('browser half: the Projects page is headed Categories, each row says what it is, and New category makes one', async () => {
+test('browser half: the Projects page is headed Projects with how many, and a project\'s row says where it works and its threads', () => {
     const { client, react } = loadClient();
     const { ProjectsPage, PageTree, treeMeta, listText } = client.internals;
     const value = (v) => ({ values: { projectSession: v } });
     const sessions = {
         phase: 'ready',
-        byId: { c: { id: 'c', title: '◆ DSH Plugins' }, t1: { id: 't1', title: 'Fix the page' }, t2: { id: 't2', title: 'Old fix' }, x: { id: 'x', title: 'A chat' }, n: { id: 'n', title: 'Notes' } },
+        byId: { c: { id: 'c', title: '◆ DSH Plugins' }, t1: { id: 't1', title: 'Fix the page' }, t2: { id: 't2', title: 'Old fix' }, x: { id: 'x', title: 'A chat' }, r: { id: 'r', title: '◆ Recipes' } },
         projectionsBySession: {
             c: value({ role: 'coordinator', project: { id: 'dsh-plugins', name: 'DSH Plugins' }, threads: [{ id: 't1', session: 't1', resolved: false }, { id: 't2', session: 't2', resolved: true }] }),
             t1: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' } }),
             t2: value({ role: 'thread', coordinator: 'c', thread: { id: 't2' } }),
+            r: value({ role: 'coordinator', project: { id: 'recipes', name: 'Recipes' }, threads: [] }),
         },
     };
     let workspaces = {
         phase: 'ready', archivedSessionIds: [],
         items: [
-            { workspaceId: 'w-dsh', title: 'deepseek-plugins', path: '/home/u/deepseek-plugins', sessionIds: ['c', 't1', 't2', 'x'] },
-            { workspaceId: 'w-notes', title: 'notes', path: '/Users/u/notes', sessionIds: ['n'] },
-            { workspaceId: 'w-loose', title: 'loose', path: '/tmp/loose', sessionIds: [] },
+            { workspaceId: 'w-dsh', title: 'deepseek-plugins', path: '/home/u/deepseek-plugins', sessionIds: ['c', 't2', 't1', 'x'] },
+            { workspaceId: 'w-notes', title: 'notes', path: '/Users/u/notes', sessionIds: ['r'] },
         ],
     };
-    // A category can share its name with the ◆ project inside it (the user's own data): the rows still tell them apart.
-    let categories = [{ id: 'dsh-plugins', name: 'DSH Plugins', workspaces: [{ id: 'w-dsh' }] }, { id: 'general', name: 'General', workspaces: [{ id: 'w-notes' }] }];
-    let listed = [{ id: 'dsh-plugins', name: 'DSH Plugins', coordinator: 'c', home: 'w-dsh', source: 'profile' }];
-    const calls = [];
-    let answer = { ok: true };
-    const facts = {
-        subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {}, list: async () => {},
-        projects: () => listed, categories: () => categories, listFailed: () => false,
-        act: async (method, args) => { calls.push([method, args]); return answer; },
-    };
+    let listed = [
+        { id: 'dsh-plugins', name: 'DSH Plugins', coordinator: 'c', home: 'w-dsh', source: 'profile' },
+        { id: 'recipes', name: 'Recipes', coordinator: 'r', home: 'w-notes', source: 'page' },
+    ];
+    const facts = { subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {}, list: async () => {}, projects: () => listed, listFailed: () => false };
     const props = {
         useSessions: (select) => select(sessions), useSessionStatus: (select) => select(new Map()), useWorkspaces: (select) => select(workspaces),
         projects: { facts, openSession: () => {} },
     };
     const draw = mount(react, () => ProjectsPage(props));
     const classed = (tree, name) => textIn(byClass(tree, name));
-    const newButton = (tree) => elementsOf(tree).find((e) => e.props?.['data-projects-new'] !== undefined);
     let page = draw();
-    // The heading speaks of categories; Other workspaces holds the workspaces in none, so it isn't counted.
-    assert.equal(textIn(elementsOf(page).filter((e) => e.type === 'h1')), 'Categories');
-    assert.equal(classed(page, 'dshp-pg-count'), '2 categories');
-    assert.equal(textIn(newButton(page)), 'New category');
-    assert.doesNotMatch(textIn(page), /project/i);
-    // Each level says what it is: a category, a workspace by its path, a ◆ project with its threads.
+    // Headed Projects, with how many; nothing else on it but Find by name and the tree.
+    assert.equal(textIn(elementsOf(page).filter((e) => e.type === 'h1')), 'Projects');
+    assert.equal(classed(page, 'dshp-pg-count'), '2 projects');
+    assert.doesNotMatch(textIn(page), /categor|workspace|chat/i);
+    assert.equal(elementsOf(page).some((e) => e.props?.['data-projects-new'] !== undefined || typeof e.props?.onSubmit === 'function'), false);
     const treeEl = elementsOf(page).find((e) => e.type === PageTree);
-    assert.equal(treeEl.props.label, 'Categories');
-    const rows = elementsOf(mount(react, () => PageTree(treeEl.props))()).filter((e) => e.props?.role === 'treeitem')
-        .map((li) => [li.props['aria-level'], li.props['data-projects-node'], classed(li.children[0], 'dshp-tree-diamond'), classed(li.children[0], 'dshp-tree-title'), classed(li.children[0], 'dshp-tree-meta')]);
-    assert.deepEqual(plain(rows), [
-        [1, 'category', '', 'DSH Plugins', 'Category · 1 workspace'],
-        [2, 'workspace', '', 'deepseek-plugins', '~/deepseek-plugins'],
-        [3, 'project', '◆', 'DSH Plugins', 'Project · 1 open thread · 1 resolved'],
-        [4, 'thread', '', 'Fix the page', 'Idle'],
-        [4, 'thread', '', 'Old fix', 'Resolved'],
-        [3, 'session', '', 'A chat', ''],
-        [1, 'category', '', 'General', 'Category · 1 workspace'],
-        [2, 'workspace', '', 'notes', '~/notes'],
-        [3, 'session', '', 'Notes', ''],
-        [1, 'category', '', 'Other workspaces', '1 workspace'],
-        [2, 'workspace', '', 'loose', '/tmp/loose'],
+    assert.equal(treeEl.props.label, 'Projects');
+    const items = elementsOf(mount(react, () => PageTree(treeEl.props))()).filter((e) => e.props?.role === 'treeitem');
+    // A ◆ project, the workspace it works in and its threads as its Threads menu counts them; under it its threads, open
+    // ones first, each with its state.
+    assert.deepEqual(plain(items.map((li) => [li.props['aria-level'], li.props['data-projects-node'], classed(li.children[0], 'dshp-tree-diamond'),
+        classed(li.children[0], 'dshp-tree-title'), classed(li.children[0], 'dshp-tree-meta')])), [
+        [1, 'project', '◆', 'DSH Plugins', 'deepseek-plugins · 1 open thread · 1 resolved'],
+        [2, 'thread', '', 'Fix the page', 'Idle'],
+        [2, 'thread', '', 'Old fix', 'Resolved'],
+        [1, 'project', '◆', 'Recipes', 'notes · no threads yet'],
     ]);
-    assert.deepEqual([treeMeta({ kind: 'category', id: 'new', children: [] }), treeMeta({ kind: 'project', id: 'c', children: [] }), treeMeta({ kind: 'workspace', id: 'w', path: '', children: [] })],
-        ['Category · 0 workspaces', 'Project · no threads yet', null]);
-    assert.equal(treeMeta({ kind: 'project', id: 'c', children: [{ resolved: false }, { resolved: false }, { resolved: true }, { resolved: true }] }), 'Project · 2 open threads · 2 resolved');
+    // One tab stop; a project without threads has nothing to fold.
+    assert.deepEqual(items.map((li) => li.props.tabIndex), [0, -1, -1, -1]);
+    assert.deepEqual(items.map((li) => li.props['aria-expanded']), [true, undefined, undefined, undefined]);
+    assert.equal(elementsOf(items[3].children[0]).some((e) => e.props?.['data-projects-chevron'] !== undefined), false);
+    assert.deepEqual([
+        treeMeta({ kind: 'project', id: 'c', folder: 'shop', counts: { open: 2, resolved: 0 }, children: [] }),
+        treeMeta({ kind: 'project', id: 'c', folder: 'shop', paused: true, counts: { open: 0, resolved: 3 }, children: [] }),
+        treeMeta({ kind: 'project', id: 'c', folder: '', counts: { open: 0, resolved: 0 }, children: [] }),
+        treeMeta({ kind: 'thread', id: 't', children: [] }),
+    ], ['shop · 2 open threads', 'Paused · shop · 0 open threads · 3 resolved', 'no threads yet', null]);
 
-    // New category asks for a name, in the sidebar's words; a refusal shows under the field, and the dialog stays.
-    newButton(page).props.onClick();
-    page = draw();
-    let dialog = elementsOf(page).find((e) => typeof e.props?.onSubmit === 'function');
-    assert.deepEqual([dialog.props.title, dialog.props.label, dialog.props.action], ['New category', 'Category name', 'Create']);
-    assert.match(dialog.props.description, /In DSH's sidebar, drag workspaces onto it/);
-    answer = { ok: false, error: { code: 'projects/refused', message: 'a category needs a name' } };
-    assert.equal(await dialog.props.onSubmit('Work'), 'A category needs a name.');
-    assert.ok(elementsOf(draw()).some((e) => typeof e.props?.onSubmit === 'function'));
-    // Made, through the endpoint the sidebar uses, in no workspace; the dialog closes and the page says so.
-    answer = { ok: true, value: { category: 'work' } };
-    assert.equal(await dialog.props.onSubmit('Work'), null);
-    assert.deepEqual(plain(calls), [['createCategory', { name: 'Work', workspace: '' }], ['createCategory', { name: 'Work', workspace: '' }]]);
-    page = draw();
-    assert.equal(elementsOf(page).some((e) => typeof e.props?.onSubmit === 'function'), false);
-    assert.equal(textIn(elementsOf(page).find((e) => e.props?.['data-projects-page-said'] !== undefined)), 'Work created.');
-
-    // Nothing yet: the empty state says how the levels fit, and promises no project of workspaces.
-    categories = [];
+    // No project yet: loading until DSH has its workspaces, then the empty state says what a project is and where one comes from.
+    listed = [];
     workspaces = { ...workspaces, items: [], phase: 'pending' };
     page = draw();
-    assert.equal(classed(page, 'dshp-pg-state'), 'Loading categories…');
+    assert.equal(classed(page, 'dshp-pg-state'), 'Loading projects…');
     workspaces = { ...workspaces, phase: 'ready' };
     page = draw();
     const empty = byClass(page, 'dshp-pg-empty')[0];
-    assert.equal(textIn(elementsOf(empty).filter((e) => e.type === 'h2')), 'No workspaces yet');
-    const said = textIn(elementsOf(empty).filter((e) => e.type === 'p'));
-    assert.doesNotMatch(said, /gathers|No projects/);
-    assert.match(said, /Categories group workspaces, and a ◆ project lives in one workspace/);
+    assert.equal(textIn(elementsOf(empty).filter((e) => e.type === 'h2')), 'No projects yet');
+    assert.match(textIn(elementsOf(empty).filter((e) => e.type === 'p')), /^A project is a ◆ coordinator in one of your workspaces, with the threads it starts\./);
     assert.equal(classed(page, 'dshp-pg-count'), '');
-    assert.equal(textIn(newButton(page)), 'New category');
-    // Still loading the plugin's list: no heading button yet.
+    // Still loading the plugin's list.
     listed = null;
-    assert.equal(newButton(draw()), undefined);
+    assert.equal(classed(draw(), 'dshp-pg-state'), 'Loading projects…');
 
     // The entry in DSH's sidebar is named as the page is headed.
     const registered = [];
@@ -1161,18 +1155,18 @@ test('browser half: the Projects page is headed Categories, each row says what i
         sidebarRight: {},
     };
     client.apply(ctx);
-    assert.equal(registered.find((r) => r.name === 'sidebar.panellist')?.label, 'Categories');
-    // The note on imported names lists them as a sentence does.
+    assert.equal(registered.find((r) => r.name === 'sidebar.panellist')?.label, 'Projects');
+    // Names as a sentence lists them (the access texts use it).
     assert.deepEqual([listText([]), listText(['A']), listText(['A', 'B']), listText(['A', 'B', 'C'])], ['', 'A', 'A and B', 'A, B and C']);
 });
 
-test('browser half: the Categories page gives each thread its state, marks a paused project and its news, and a chevron folds a project', () => {
+test('browser half: the Projects page gives each thread its state, marks a paused project and its news, and a chevron folds a project', () => {
     const { client, react } = loadClient();
     const { ProjectsPage, PageTree } = client.internals;
     const value = (v) => ({ values: { projectSession: v } });
     const at = (minutes) => new Date(Date.UTC(2026, 9, 11, 2, minutes)).toISOString();
     const thread = (id) => value({ role: 'thread', coordinator: 'c', thread: { id } });
-    const titles = { run: 'Upgrade the payments SDK', wait: 'Write outside', fail: 'Bad request', stop: 'Stopped one', block: 'Blocked one', ask: 'Pick a colour', done: 'Hero images', idle: 'Not started' };
+    const titles = { run: 'Upgrade the payments SDK', wait: 'Write outside', fail: 'Bad request', stop: 'Stopped one', block: 'Blocked one', ask: 'Pick a colour', done: 'Hero images', idle: 'Not started', gone: 'Resolved one' };
     const sessions = {
         phase: 'ready',
         byId: { c: { id: 'c', title: '◆ Storefront' }, d: { id: 'd', title: '◆ Data Pipeline' }, dt: { id: 'dt', title: 'Nightly load' }, x: { id: 'x', title: 'A chat' },
@@ -1184,11 +1178,11 @@ test('browser half: the Categories page gives each thread its state, marks a pau
                 { id: 't3', session: 'block', handback: { status: 'blocked', at: at(3) } },
                 { id: 't4', session: 'ask', handback: { status: 'needs_decision', at: at(4) } },
                 { id: 't5', session: 'done', handback: { status: 'done', at: at(5) } },
-                { id: 't6', session: 'idle' }, { id: 't7', session: 'run' }, { id: 't8', session: 'wait' },
+                { id: 't6', session: 'idle' }, { id: 't7', session: 'run' }, { id: 't8', session: 'wait' }, { id: 't9', session: 'gone', resolved: true },
             ] }),
             fail: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' }, ending: { state: 'failed', at: at(2), kind: 'error', message: 'HTTP 400' } }),
             stop: value({ role: 'thread', coordinator: 'c', thread: { id: 't2' }, ending: { state: 'stopped', at: at(2) } }),
-            ...Object.fromEntries(['block', 'ask', 'done', 'idle', 'run', 'wait'].map((id) => [id, thread(id)])),
+            ...Object.fromEntries(['block', 'ask', 'done', 'idle', 'run', 'wait', 'gone'].map((id) => [id, thread(id)])),
             d: value({ role: 'coordinator', project: { id: 'data-pipeline', name: 'Data Pipeline' }, threads: [{ id: 't1', session: 'dt', handback: { status: 'done', at: at(6) } }] }),
             dt: value({ role: 'thread', coordinator: 'd', thread: { id: 't1' } }),
         },
@@ -1196,21 +1190,16 @@ test('browser half: the Categories page gives each thread its state, marks a pau
     const workspaces = {
         phase: 'ready', archivedSessionIds: [],
         items: [
-            { workspaceId: 'w-sf', title: 'storefront', path: '/home/u/storefront', sessionIds: ['c', ...Object.keys(titles), 'x'] },
+            // The resolved thread comes first in DSH's list, and is drawn last.
+            { workspaceId: 'w-sf', title: 'storefront', path: '/home/u/storefront', sessionIds: ['c', 'gone', ...Object.keys(titles).filter((id) => id !== 'gone'), 'x'] },
             { workspaceId: 'w-dp', title: 'data-pipeline', path: '/home/u/data-pipeline', sessionIds: ['d', 'dt'] },
         ],
     };
-    // Two categories the old sidebar's import made, and one made since.
-    const categories = [
-        { id: 'shop', name: 'Shop', source: 'import', workspaces: [{ id: 'w-sf' }] },
-        { id: 'data', name: 'Data', source: 'import', workspaces: [{ id: 'w-dp' }] },
-        { id: 'later', name: 'Later', source: 'page', workspaces: [] },
-    ];
     const listed = [{ id: 'storefront', name: 'Storefront', coordinator: 'c', home: 'w-sf' }, { id: 'data-pipeline', name: 'Data Pipeline', coordinator: 'd', home: 'w-dp', paused: false }];
     let news = { c: { unread: [{ kind: 'handback', status: 'blocked', title: 'Blocked one' }] } };
     const facts = {
         subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {}, list: async () => {},
-        projects: () => listed, categories: () => categories, listFailed: () => false, act: async () => ({ ok: true }),
+        projects: () => listed, listFailed: () => false,
         // Data Pipeline was paused since the list was read: the newer word wins.
         paused: (coordinator) => (coordinator === 'd' ? true : undefined), newsOf: (coordinator) => news[coordinator],
     };
@@ -1222,45 +1211,41 @@ test('browser half: the Categories page gives each thread its state, marks a pau
         projects: { facts, openSession: (id) => opened.push(id) },
     };
     const page = mount(react, () => ProjectsPage(props))();
-    // The note names the imported categories, and says what didn't come with them.
-    const note = elementsOf(page).find((e) => e.props?.['data-projects-imported'] !== undefined);
-    assert.equal(textIn(note), 'Imported from your old sidebar: Shop and Data, with their workspaces. Their old instructions, files and defaults for new sessions weren\'t carried over.');
-    assert.doesNotMatch(textIn(page), /project/i);
     const treeEl = elementsOf(page).find((e) => e.type === PageTree);
     const drawTree = mount(react, () => PageTree(treeEl.props));
     const items = (tree) => elementsOf(tree).filter((e) => e.props?.role === 'treeitem');
     const row = (tree, id) => items(tree).find((li) => li.props['data-projects-id'] === id);
     let tree = drawTree();
     // Each thread in the Threads menu's words and dots: what DSH says of its session first, then a failed or stopped
-    // last turn after its handback, then the handback.
-    const states = Object.keys(titles).map((id) => {
-        const state = byClass(row(tree, id).children[0], 'dshp-tree-state')[0];
-        return [titles[id], state.props['data-projects-state'], textIn(state)];
+    // last turn after its handback, then the handback; the resolved one last.
+    const states = items(row(tree, 'c').children[1]).map((li) => {
+        const state = byClass(li.children[0], 'dshp-tree-state')[0];
+        return [textIn(byClass(li.children[0], 'dshp-tree-title')), state.props['data-projects-state'], textIn(state)];
     });
     assert.deepEqual(plain(states), [
         ['Upgrade the payments SDK', 'ongoing', 'Running'], ['Write outside', 'warning', 'Needs you'], ['Bad request', 'error', 'Failed'],
         ['Stopped one', 'idle', 'Stopped'], ['Blocked one', 'warning', 'Blocked'], ['Pick a colour', 'warning', 'Needs a decision'],
-        ['Hero images', 'done', 'Done'], ['Not started', 'idle', 'Idle'],
+        ['Hero images', 'done', 'Done'], ['Not started', 'idle', 'Idle'], ['Resolved one', 'done', 'Resolved'],
     ]);
-    // A paused project says so where it says what it is; one with news reads bold, its dot named for screen readers.
+    // A paused project says so first, with the pause sign; one with news reads bold, its dot named for screen readers.
     const dp = row(tree, 'd');
     assert.equal(dp.props['data-projects-paused'], '');
-    assert.equal(textIn(byClass(dp.children[0], 'dshp-tree-meta')), 'Project · Paused · 1 open thread');
+    assert.equal(textIn(byClass(dp.children[0], 'dshp-tree-meta')), 'Paused · data-pipeline · 1 open thread');
+    assert.equal(byClass(dp.children[0], 'dshp-t-paused-mark').length, 1);
     const sf = row(tree, 'c');
-    assert.equal(sf.props['data-projects-paused'], undefined);
-    assert.equal(sf.props['data-projects-unread'], 1);
+    assert.deepEqual([sf.props['data-projects-paused'], sf.props['data-projects-unread'], byClass(sf.children[0], 'dshp-t-paused-mark').length], [undefined, 1, 0]);
+    assert.equal(textIn(byClass(sf.children[0], 'dshp-tree-meta')), 'storefront · 8 open threads · 1 resolved');
     const mark = elementsOf(sf.children[0]).find((e) => e.props?.['data-projects-news-mark'] !== undefined);
     assert.deepEqual([mark.props.role, mark.props['aria-label']], ['img', 'New: “Blocked one” is blocked']);
-    // A chat's dot says what it means too: DSH's own, running or waiting.
-    statuses.set('x', { running: true });
-    tree = drawTree();
-    assert.equal(elementsOf(row(tree, 'x').children[0]).find((e) => e.props?.role === 'img')?.props['aria-label'], 'Running');
-    // Seen: no mark, and the project's own dot is DSH's again (none while it is idle).
+    // Seen: no mark; the project's own dot is DSH's for its coordinator (none while it is idle, Running while it runs).
     news = {};
-    tree = mount(react, () => PageTree(elementsOf(mount(react, () => ProjectsPage(props))()).find((e) => e.type === PageTree).props))();
+    const fresh = () => mount(react, () => PageTree(elementsOf(mount(react, () => ProjectsPage(props))()).find((e) => e.type === PageTree).props))();
+    tree = fresh();
     assert.equal(row(tree, 'c').props['data-projects-unread'], undefined);
     assert.equal(elementsOf(row(tree, 'c').children[0]).some((e) => e.props?.role === 'img'), false);
-    // The chevron folds a project's threads and stays on the page; the rest of its row opens the coordinator.
+    statuses.set('c', { running: true });
+    assert.equal(elementsOf(row(fresh(), 'c').children[0]).find((e) => e.props?.role === 'img')?.props['aria-label'], 'Running');
+    // The chevron folds a project's threads and stays on the page; the rest of its row, or Enter, opens the coordinator.
     tree = drawTree();
     const chevron = (li) => elementsOf(li.children[0]).find((e) => e.props?.['data-projects-chevron'] !== undefined);
     assert.equal(row(tree, 'c').props['aria-expanded'], true);
@@ -1275,34 +1260,60 @@ test('browser half: the Categories page gives each thread its state, marks a pau
     assert.equal(row(tree, 'c').props['aria-expanded'], true);
     row(tree, 'c').props.onClick({ stopPropagation: () => {} });
     assert.deepEqual(opened, ['c']);
-    // A row that holds nothing has no chevron to click.
-    assert.equal(chevron(row(drawTree(), 'x')), undefined);
+    // The keys, from the project's row: ↓ to its first thread, which becomes the one tab stop, and Enter opens it;
+    // ← goes back to the project, Enter opens its coordinator, ← again folds it and → opens it; End and Home.
+    row(drawTree(), 'c').props.onFocus({ target: 1, currentTarget: 1 });
+    const key = (name) => {
+        let prevented = 0;
+        elementsOf(drawTree()).find((e) => e.props?.role === 'tree').props.onKeyDown({ key: name, preventDefault: () => { prevented += 1; } });
+        return prevented;
+    };
+    assert.equal(key('ArrowDown'), 1);
+    assert.deepEqual([row(drawTree(), 'run').props.tabIndex, row(drawTree(), 'c').props.tabIndex], [0, -1]);
+    assert.equal(key('Enter'), 1);
+    assert.deepEqual(opened, ['c', 'run']);
+    key('ArrowLeft');
+    key('Enter');
+    assert.deepEqual(opened, ['c', 'run', 'c']);
+    key('ArrowLeft');
+    assert.equal(row(drawTree(), 'c').props['aria-expanded'], false);
+    key('ArrowRight');
+    assert.equal(row(drawTree(), 'c').props['aria-expanded'], true);
+    key('End');
+    assert.equal(row(drawTree(), 'dt').props.tabIndex, 0);
+    key('Home');
+    assert.equal(row(drawTree(), 'c').props.tabIndex, 0);
+    // Keys with a modifier are DSH's own.
+    assert.equal(elementsOf(drawTree()).find((e) => e.props?.role === 'tree').props.onKeyDown({ key: 'ArrowDown', metaKey: true, preventDefault: () => assert.fail('taken') }), undefined);
 });
 
-test('browser half: Find by name on the Categories page keeps each match where it lives, and its folds are its own', () => {
+test('browser half: Find by name on the Projects page keeps each match under its project, and its folds are its own', () => {
     const { client, react } = loadClient();
-    const { ProjectsPage, PageTree, findInTree, withHit, treeMeta } = client.internals;
+    const { ProjectsPage, PageTree, findInTree, withHit } = client.internals;
     const value = (v) => ({ values: { projectSession: v } });
     const sessions = {
         phase: 'ready',
-        byId: { c: { id: 'c', title: '◆ Storefront' }, t1: { id: 't1', title: 'Fix the cart' }, t2: { id: 't2', title: 'Hero images' }, x: { id: 'x', title: 'Fleet power budget' }, n: { id: 'n', title: 'Lane restarts' } },
+        byId: { c: { id: 'c', title: '◆ Storefront' }, t1: { id: 't1', title: 'Fix the cart' }, t2: { id: 't2', title: 'Hero images' }, t3: { id: 't3', title: 'Fleet power budget' },
+            f: { id: 'f', title: '◆ Fleet Ops' }, n: { id: 'n', title: 'Lane restarts' } },
         projectionsBySession: {
-            c: value({ role: 'coordinator', project: { id: 'storefront', name: 'Storefront' }, threads: [{ id: 't1', session: 't1' }, { id: 't2', session: 't2', resolved: true }] }),
+            c: value({ role: 'coordinator', project: { id: 'storefront', name: 'Storefront' }, threads: [{ id: 't1', session: 't1' }, { id: 't2', session: 't2', resolved: true }, { id: 't3', session: 't3' }] }),
             t1: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' } }),
             t2: value({ role: 'thread', coordinator: 'c', thread: { id: 't2' } }),
+            t3: value({ role: 'thread', coordinator: 'c', thread: { id: 't3' } }),
+            f: value({ role: 'coordinator', project: { id: 'fleet-ops', name: 'Fleet Ops' }, threads: [{ id: 't1', session: 'n' }] }),
+            n: value({ role: 'thread', coordinator: 'f', thread: { id: 't1' } }),
         },
     };
     const workspaces = {
         phase: 'ready', archivedSessionIds: [],
         items: [
-            { workspaceId: 'w-sf', title: 'storefront', path: '/home/u/storefront', sessionIds: ['c', 't1', 't2', 'x'] },
-            { workspaceId: 'w-ops', title: 'fleet-ops', path: '/home/u/fleet-ops', sessionIds: ['n'] },
+            { workspaceId: 'w-sf', title: 'storefront', path: '/home/u/storefront', sessionIds: ['c', 't1', 't2', 't3'] },
+            { workspaceId: 'w-ops', title: 'fleet-ops', path: '/home/u/fleet-ops', sessionIds: ['f', 'n'] },
         ],
     };
     const facts = {
-        subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {}, list: async () => {}, act: async () => ({ ok: true }),
-        projects: () => [{ id: 'storefront', name: 'Storefront', coordinator: 'c', home: 'w-sf' }],
-        categories: () => [{ id: 'shop', name: 'Shop', workspaces: [{ id: 'w-sf' }] }, { id: 'fleet', name: 'Fleet Services', workspaces: [{ id: 'w-ops' }] }],
+        subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {}, list: async () => {},
+        projects: () => [{ id: 'storefront', name: 'Storefront', coordinator: 'c', home: 'w-sf' }, { id: 'fleet-ops', name: 'Fleet Ops', coordinator: 'f', home: 'w-ops' }],
         listFailed: () => false,
     };
     const props = {
@@ -1318,23 +1329,23 @@ test('browser half: Find by name on the Categories page keeps each match where i
     assert.deepEqual([find(page).props['aria-label'], find(page).props.role, find(page).props.value, clear(page)], ['Find by name', 'searchbox', '', undefined]);
     assert.equal(treeOf(page).props.find, '');
     const whole = treeOf(page).props.tree;
-    // A thread's name: its project, workspace and category stay around it, and nothing else; its project still counts all.
+    // A thread's name: its project stays around it, and nothing else; the project still counts all its threads.
     find(page).props.onChange({ target: { value: 'cart' } });
     page = draw();
     let tree = mount(react, () => PageTree(treeOf(page).props))();
-    assert.deepEqual(titles(tree), ['Shop', 'storefront', 'Storefront', 'Fix the cart']);
-    assert.equal(textIn(byClass(elementsOf(tree).find((e) => e.props?.['data-projects-node'] === 'project').children[0], 'dshp-tree-meta')), 'Project · 1 open thread · 1 resolved');
+    assert.deepEqual(titles(tree), ['Storefront', 'Fix the cart']);
+    assert.equal(textIn(byClass(elementsOf(tree).find((e) => e.props?.['data-projects-node'] === 'project').children[0], 'dshp-tree-meta')), 'storefront · 2 open threads · 1 resolved');
     // The words are marked in the title, which keeps its whole name for the review's hooks.
     const hit = elementsOf(tree).find((e) => e.type === 'mark');
     assert.deepEqual([textIn(hit), hit.props.className], ['cart', 'dshp-tree-hit']);
     assert.deepEqual(plain(withHit('Fix the cart', 'CART').map((part) => (typeof part === 'string' ? part : `[${textIn(part)}]`))), ['Fix the ', '[cart]']);
     assert.deepEqual(plain(withHit('Fix', 'zz')), ['Fix']);
-    // A category's name keeps the whole category; any case matches; a chat's name keeps only it in its workspace.
-    assert.deepEqual(plain(findInTree(whole, 'FLEET').map((n) => [n.title, n.children.map((w) => [w.title, w.children.map((c) => c.title)])])), [
-        ['Shop', [['storefront', ['Fleet power budget']]]],
-        ['Fleet Services', [['fleet-ops', ['Lane restarts']]]],
+    // A project's name keeps the whole project; any case matches; a thread's name keeps only it under its project.
+    assert.deepEqual(plain(findInTree(whole, 'FLEET').map((n) => [n.title, n.children.map((t) => t.title)])), [
+        ['Storefront', ['Fleet power budget']],
+        ['Fleet Ops', ['Lane restarts']],
     ]);
-    // Closing an item while finding is the find's own: the page's kept folds don't change, and a new find starts open.
+    // Closing a project while finding is the find's own: the page's kept folds don't change, and a new find starts open.
     find(page).props.onChange({ target: { value: 'storefront' } });
     let treeProps = treeOf(draw()).props;
     const drawTree = mount(react, () => PageTree(treeProps));
@@ -1373,8 +1384,7 @@ test('browser half: Find by name on the Categories page keeps each match where i
     let prevented = 0;
     find(page).props.onKeyDown({ key: 'Escape', preventDefault: () => { prevented += 1; }, stopPropagation: () => {} });
     page = draw();
-    assert.deepEqual([find(page).props.value, prevented, titles(mount(react, () => PageTree(treeOf(page).props))()).length], ['', 1, 9]);
-    assert.equal(treeMeta({ kind: 'category', id: 'c', children: [{}], whole: [{}, {}] }), 'Category · 2 workspaces');
+    assert.deepEqual([find(page).props.value, prevented, titles(mount(react, () => PageTree(treeOf(page).props))()).length], ['', 1, 6]);
 });
 
 test('browser half: a session DSH lists without the plugin\'s value is placed by what the plugin\'s store knows, not by its title', async () => {
@@ -1413,8 +1423,12 @@ test('window: the Project settings endpoints read and change a project the way i
     assert.equal(remote.typertRemote.serviceKey, 'dshPluginProjectsRemote');
     assert.deepEqual(remoteMethods(remote).map((m) => m.method), [
         'describe', 'list', 'sessions', 'news', 'seeNews', 'update', 'continueThread', 'create', 'rename', 'remove', 'addCoordinator',
-        'createCategory', 'renameCategory', 'removeCategory', 'moveCategory', 'fileWorkspace',
     ]);
+    // Categories are the categories plugin's: none of their endpoints here, and the list has no categories in it.
+    for (const name of ['createCategory', 'renameCategory', 'removeCategory', 'moveCategory', 'fileWorkspace', 'listCategories']) {
+        assert.equal(name in remote, false, name);
+    }
+    assert.deepEqual(Object.keys(await remote.list()).sort(), ['guarded', 'permissions', 'projects']);
     const refused = async (promise, pattern) => {
         await assert.rejects(promise, (error) => error.code === 'projects/refused' && pattern.test(error.message));
     };
@@ -1673,7 +1687,7 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
         ['sidebar.session.row.hover', 'dsh-plugin-projects/thread-hover', 20],
         ['sidebar.workspaces.session.menu.item', 'dsh-plugin-projects/full-view-item', 50],
         ['shell.overlay', 'dsh-plugin-projects/news-notice', null],
-        ['shell.overlay', 'dsh-plugin-projects/sidebar-groups', null],
+        ['shell.overlay', 'dsh-plugin-projects/session-list', null],
         ['main', 'dsh-plugin-projects/projects', null],
         ['sidebar.panellist', 'dsh-plugin-projects/projects', 5],
         ['sidebar.right.pane.tab', 'dsh-plugin-projects/thread-chat', null],
@@ -2399,6 +2413,25 @@ test('browser half: each session list row says its place in a project, and the C
     assert.doesNotMatch(kept, /x"\]/);
 });
 
+test('browser half: the session list overlay looks only for DSH\'s own list, and draws nothing but a refusal\'s toast', () => {
+    const asked = [];
+    const document = {
+        addEventListener: () => {}, removeEventListener: () => {}, createElement: () => ({ dataset: {} }), head: { appendChild: () => {} },
+        querySelector: (selector) => { asked.push(selector); return null; },
+    };
+    const { client, react } = loadClient({ document });
+    asked.length = 0;
+    react.useLayoutEffect = () => {};
+    const { SessionList, SIDEBAR } = client.internals;
+    // No list in the window yet: nothing to watch or nest, and nothing drawn.
+    assert.equal(mount(react, () => SessionList({ useWorkspaces: (select) => select({ pinnedSessionIds: ['c'] }) }))(), null);
+    assert.equal(mount(react, () => SessionList({}))(), null);
+    assert.deepEqual([...new Set(asked)], ['[data-slot="sidebar.workspaces"] [role="tree"]']);
+    // What it says when it refuses a drag speaks of projects, threads and chats only.
+    assert.deepEqual(Object.keys(SIDEBAR), ['threadStays', 'chatOut', 'projectIn', 'chatStays', 'projectStays']);
+    for (const text of Object.values(SIDEBAR)) assert.doesNotMatch(text, /categor/i);
+});
+
 test('browser half: a thread opens beside its coordinator, and in full view where the window is too narrow or when asked', async () => {
     const { client } = loadClient();
     const { roomFor } = client.internals;
@@ -2637,339 +2670,6 @@ test('browser half: a thread\'s newest card says when its last turn ended, and h
     // A card that isn't the thread's newest says none of it.
     card = ThreadCard({ view: { ...view(failed, { dot: 'error', label: 'Failed' }), newest: false }, projects });
     assert.deepEqual([byClass(card, 'dshp-t-card-why').length, textIn(byClass(card, 'dshp-t-card-state-text'))], [0, 'Failed']);
-});
-
-test('browser half: DSH\'s session list is grouped by category, collapsible, with Other workspaces last', () => {
-    const { client } = loadClient();
-    const { sidebarGroups, sidebarRules, OTHERS } = client.internals;
-    const items = ['w2', 'w1', 'w4', 'w3', 'w5'].map((workspaceId) => ({ workspaceId, sessionIds: [] }));
-    const categories = [
-        { id: 'a', name: 'Alpha', workspaces: [{ id: 'w2' }, { id: 'gone' }] },
-        { id: 'b', name: 'Beta', workspaces: [{ id: 'w4' }, { id: 'w1' }, { id: 'w2' }] },
-        { id: 'c', name: 'Empty', workspaces: [] },
-    ];
-    // In the plugin's order, empty ones too; each holds its workspaces in DSH's order, a workspace once; DSH's
-    // deleted ones drop out; Other workspaces holds the rest.
-    assert.deepEqual(plain(sidebarGroups(categories, items)), [
-        { id: 'a', name: 'Alpha', category: true, workspaces: ['w2'] },
-        { id: 'b', name: 'Beta', category: true, workspaces: ['w1', 'w4'] },
-        { id: 'c', name: 'Empty', category: true, workspaces: [] },
-        { id: OTHERS, name: 'Other workspaces', category: false, workspaces: ['w3', 'w5'] },
-    ]);
-    // Other workspaces shows while it holds one, or while a workspace is dragged (somewhere to drop it).
-    const filed = [{ id: 'a', name: 'All', workspaces: items.map((ws) => ({ id: ws.workspaceId })) }];
-    assert.deepEqual(plain(sidebarGroups(filed, items)).map((g) => g.id), ['a']);
-    assert.deepEqual(plain(sidebarGroups(filed, items, true)).map((g) => [g.id, g.workspaces.length]), [['a', 5], [OTHERS, 0]]);
-    // Not known yet: DSH's list as it is. No categories: Other workspaces over them all (see the test after this one).
-    assert.deepEqual(plain(sidebarGroups([], items)).map((g) => [g.id, g.workspaces.length]), [[OTHERS, 5]]);
-    assert.equal(sidebarGroups(null, items), null);
-    assert.equal(sidebarGroups(categories, undefined), null);
-
-    const groups = sidebarGroups(categories, items);
-    const rules = sidebarRules(groups, new Set(['b'])).split('\n');
-    const on = '[data-slot="sidebar.workspaces"] [role="tree"]:has(>[data-projects-sb]):has(>div>*>[data-row-key^="workspace:"])';
-    const section = (id) => `div:has(>*>[data-row-key="workspace:${id}"])`;
-    for (const rule of rules) assert.doesNotMatch(rule, /:has\([^)]*:has\(/, rule);
-    assert.ok(rules.includes(`${on}{display:flex;flex-direction:column}`));
-    // Each workspace's section right after its category's header (headers take the even places), a collapsed category's hidden.
-    assert.ok(rules.includes(`${on}>${section('w2')}{order:1}`));
-    assert.ok(rules.includes(`${on}>${section('w1')}{order:3;display:none!important}`));
-    assert.ok(rules.includes(`${on}>${section('w3')}{order:7}`));
-    // Headers hide where DSH shows no workspaces (In one list, search).
-    assert.ok(rules.includes('[data-slot="sidebar.workspaces"] [role="tree"]:not(:has(>div>*>[data-row-key^="workspace:"]))>[data-projects-sb]{display:none}'));
-    // An id that could break out of a selector gets no rule.
-    const odd = sidebarRules([{ id: 'x', name: 'X', category: true, workspaces: ['a"] *{display:none} [x="'] }], new Set()).split('\n');
-    for (const rule of odd) assert.doesNotMatch(rule, /display:none\} \[x=/);
-
-    // The headers sit in DSH's list just before their category's first section, an empty category's before the
-    // next header, DSH's Ungrouped bucket last: the list reads in the order it is drawn. A second pass moves nothing.
-    const { placeHeaders, describeWorkspaces } = client.internals;
-    let moves = 0;
-    const fakeTree = (kids) => {
-        const tree = {
-            children: kids,
-            insertBefore(node, ref) {
-                moves += 1;
-                this.children.splice(this.children.indexOf(node), 1);
-                this.children.splice(ref === null ? this.children.length : this.children.indexOf(ref), 0, node);
-            },
-        };
-        for (const kid of kids) Object.defineProperty(kid, 'nextElementSibling', { get: () => tree.children[tree.children.indexOf(kid) + 1] ?? null });
-        return tree;
-    };
-    const head = (id) => ({ id: `H:${id}`, getAttribute: (name) => (name === 'data-projects-sb' ? id : null), contains: () => false });
-    const sec = (ws) => ({ id: ws === '' ? 'strays' : ws, getAttribute: () => null, querySelector: () => ({ getAttribute: () => `workspace:${ws}` }) });
-    const tree = fakeTree([sec('w2'), sec('w1'), sec('w4'), sec('w3'), sec('w5'), sec(''), head('a'), head('b'), head('c'), head(OTHERS)]);
-    placeHeaders(tree, groups);
-    assert.deepEqual(tree.children.map((e) => e.id), ['H:a', 'w2', 'H:b', 'w1', 'w4', 'H:c', `H:${OTHERS}`, 'w3', 'w5', 'strays']);
-    const before = moves;
-    placeHeaders(tree, groups);
-    assert.equal(moves, before);
-
-    // Each workspace row names its category to a screen reader; the plugin's words go when the categories do.
-    const attrs = new Map();
-    const wsRow = (id, own = {}) => {
-        const a = new Map(Object.entries({ 'data-row-key': `workspace:${id}`, ...own }));
-        attrs.set(id, a);
-        return { getAttribute: (n) => a.get(n) ?? null, setAttribute: (n, v) => a.set(n, String(v)), hasAttribute: (n) => a.has(n), removeAttribute: (n) => a.delete(n) };
-    };
-    const rows = [wsRow('w2'), wsRow('w1'), wsRow('w3'), wsRow('new')];
-    const list = { querySelectorAll: () => rows };
-    describeWorkspaces(list, groups);
-    assert.equal(attrs.get('w2').get('aria-description'), 'in Alpha');
-    assert.equal(attrs.get('w1').get('aria-description'), 'in Beta');
-    assert.equal(attrs.get('w3').get('aria-description'), 'in Other workspaces');
-    assert.equal(attrs.get('new').has('aria-description'), false);
-    describeWorkspaces(list, null);
-    assert.deepEqual(['w2', 'w1', 'w3'].map((id) => attrs.get(id).has('aria-description')), [false, false, false]);
-});
-
-/**
- * DSH's session list as the plugin draws it, with what DSH's stand-ins
- * give it: the list's workspaces, the categories, and DSH's own Add
- * workspace (`adding`: its state, or null where DSH has none). Its headers
- * and their menus draw as they would in the list.
- */
-function drawSidebar({ items, categories, adding = { busy: false } }) {
-    const tree = { id: 'dsh-list' };
-    const { client, react } = loadClient({ document: { querySelector: () => tree, head: {} } });
-    react.useLayoutEffect = () => {};
-    const calls = [];
-    const facts = {
-        subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {},
-        categories: () => categories(),
-        list: async () => { calls.push(['list']); },
-        act: async (method, args) => { calls.push([method, args]); return { ok: true, value: {} }; },
-    };
-    const flow = { made: null };
-    const addWorkspace = adding === null ? undefined : {
-        state: () => adding,
-        start(made) { calls.push(['start']); flow.made = made; return true; },
-        stop() {},
-    };
-    const props = {
-        useWorkspaces: (select) => select({ items, pinnedSessionIds: [] }), useSessionStatus: (select) => select(new Map()),
-        projects: { facts, addWorkspace },
-    };
-    const draw = mount(react, () => client.internals.SidebarTree(props));
-    /** A header as drawn now ({type: CategoryHeader, props}), by its group's id. */
-    const header = (id) => elementsOf(draw()).find((e) => e.props?.menu?.actions && e.props.group.id === id);
-    /** A header drawn on its own, with state that holds; `menu()` draws its ⋯ menu. */
-    const open = (id) => {
-        const el = header(id);
-        const again = mount(react, () => el.type(el.props));
-        return {
-            again,
-            menu: () => {
-                const m = elementsOf(again()).find((e) => typeof e.props?.setOpen === 'function');
-                return m.type(m.props);
-            },
-        };
-    };
-    const said = () => textIn(elementsOf(draw()).find((e) => e.props?.['data-projects-sidebar-said'] !== undefined));
-    return { client, draw, header, open, said, calls, flow };
-}
-
-test('browser half: with no categories, Other workspaces heads DSH\'s list, and its ⋯ makes the first category', async () => {
-    const { client } = loadClient();
-    const { sidebarGroups, OTHERS } = client.internals;
-    const items = [{ workspaceId: 'w-a', title: 'alpha', sessionIds: [] }, { workspaceId: 'w-b', title: 'beta', sessionIds: [] }];
-    // Every workspace under Other workspaces, in DSH's order, as on the Projects page; nothing to head without workspaces.
-    assert.deepEqual(plain(sidebarGroups([], items)), [{ id: OTHERS, name: 'Other workspaces', category: false, workspaces: ['w-a', 'w-b'] }]);
-    assert.equal(sidebarGroups([], []), null);
-
-    let categories = [];
-    const { draw, header, open, said, calls } = drawSidebar({ items, categories: () => categories });
-    // One header, over both workspaces, with the CSS that sets DSH's rows under it (and hides it in In one list and search).
-    const heads = elementsOf(draw()).filter((e) => e.props?.menu?.actions);
-    assert.deepEqual(heads.map((e) => [e.props.group.id, e.props.count]), [[OTHERS, 2]]);
-    const css = textIn(elementsOf(draw()).find((e) => e.type === 'style'));
-    assert.match(css, /div:has\(>\*>\[data-row-key="workspace:w-a"\]\)\{order:1\}/);
-    assert.match(css, /:not\(:has\(>div>\*>\[data-row-key\^="workspace:"\]\)\)>\[data-projects-sb\]\{display:none\}/);
-
-    // Its ⋯ menu opens as a category's does: the ⋯ button, a right-click, Shift+F10 and the context-menu key.
-    const others = open(OTHERS);
-    let head = others.again();
-    assert.equal(head.props['aria-keyshortcuts'], 'Shift+F10');
-    assert.equal(head.props['data-projects-sb'], OTHERS);
-    let menu = others.menu();
-    assert.equal(menu.props.open, false);
-    const button = menu.props.anchor;
-    assert.deepEqual([button.props['aria-label'], button.props['data-projects-others-menu'], button.props['data-projects-category-menu']], ['Actions for Other workspaces', '', undefined]);
-    button.props.onClick({ stopPropagation() {} });
-    assert.equal(others.menu().props.open, true);
-    others.menu().props.onClose();
-    assert.equal(others.menu().props.open, false);
-    let prevented = 0;
-    head.props.onContextMenu({ currentTarget: { contains: () => true }, target: {}, preventDefault() { prevented += 1; } });
-    assert.deepEqual([others.menu().props.open, prevented], [true, 1]);
-    const key = (name, extra = {}) => {
-        const el = {};
-        return { key: name, target: el, currentTarget: el, preventDefault() { prevented += 1; }, stopPropagation() {}, ...extra };
-    };
-    for (const press of [key('F10', { shiftKey: true }), key('ContextMenu')]) {
-        others.menu().props.onClose();
-        head = others.again();
-        head.props.onKeyDown(press);
-        assert.equal(others.menu().props.open, true, press.key);
-    }
-    // Alt+↑ and Alt+↓ move nothing: it is no category. The keys are still taken, so DSH's list doesn't move either.
-    prevented = 0;
-    head.props.onKeyDown(key('ArrowUp', { altKey: true }));
-    head.props.onKeyDown(key('ArrowDown', { altKey: true }));
-    assert.equal(prevented, 2);
-    await tick();
-    assert.deepEqual(calls, []);
-
-    // New workspace… (DSH's own Add workspace) and New category…; no Add a workspace, Move, Rename or Delete.
-    menu = others.menu();
-    assert.deepEqual(plain(menu.props.items.map((item) => item.label)), ['New workspace…', 'New category…']);
-    // New category… makes the first category, in no workspace, and says so.
-    menu.props.onSelect('new');
-    const dialog = elementsOf(draw()).find((e) => typeof e.props?.onSubmit === 'function');
-    assert.deepEqual([dialog.props.title, dialog.props.action], ['New category', 'Create']);
-    assert.equal(await dialog.props.onSubmit('Work'), null);
-    assert.deepEqual(plain(calls), [['createCategory', { name: 'Work', workspace: '' }]]);
-    assert.equal(said(), 'Work created.');
-    // Once there is one, it heads its (empty) group and Other workspaces still holds both.
-    categories = [{ id: 'work', name: 'Work', workspaces: [] }];
-    assert.deepEqual(elementsOf(draw()).filter((e) => e.props?.menu?.actions).map((e) => [e.props.group.id, e.props.count]), [['work', 0], [OTHERS, 2]]);
-    assert.ok(header('work'));
-
-    // Where DSH has no Add workspace (no folder picker, or another plugin draws the list), only New category….
-    const bare = drawSidebar({ items, categories: () => [], adding: null });
-    assert.deepEqual(plain(bare.open(OTHERS).menu().props.items.map((item) => item.label)), ['New category…']);
-});
-
-test('browser half: New workspace… in a header\'s ⋯ runs DSH\'s own Add workspace and files the workspace it makes there', async () => {
-    const items = [{ workspaceId: 'w-a', title: 'alpha', sessionIds: [] }, { workspaceId: 'w-b', title: 'beta', sessionIds: [] }];
-    let adding = { busy: false };
-    const side = drawSidebar({ items, categories: () => [{ id: 'fleet', name: 'Fleet', workspaces: [{ id: 'w-a' }] }], adding });
-    const { OTHERS } = side.client.internals;
-    // A category's menu: New workspace… right under Add a workspace, the rest as before.
-    let menu = side.open('fleet').menu();
-    assert.deepEqual(plain(menu.props.items.map((item) => item.label ?? item.type)),
-        ['Add a workspace', 'New workspace…', 'separator', 'Move up', 'Move down', 'separator', 'Rename…', 'New category…', 'Delete…']);
-    assert.equal(menu.props.anchor.props['data-projects-category-menu'], 'fleet');
-    // It starts DSH's flow; the workspace DSH makes is filed last in the category, which opens, and the list says so.
-    menu.props.onSelect('newWorkspace');
-    assert.deepEqual(side.calls, [['start']]);
-    side.flow.made({ workspaceId: 'w-new', title: 'gamma', path: '/work/gamma' });
-    await tick();
-    assert.deepEqual(plain(side.calls.slice(1)), [['fileWorkspace', { workspace: 'w-new', category: 'fleet', before: '' }]]);
-    assert.equal(side.said(), 'gamma added to Fleet.');
-
-    // From Other workspaces it stays in no category; the list is read again, which puts DSH's order back in category order.
-    side.calls.length = 0;
-    side.open(OTHERS).menu().props.onSelect('newWorkspace');
-    side.flow.made({ workspaceId: 'w-new2', title: '', path: '/work/delta' });
-    await tick();
-    assert.deepEqual(plain(side.calls), [['start'], ['list']]);
-    assert.equal(side.said(), 'delta added to Other workspaces.');
-
-    // While DSH's flow runs already, the item is there but greyed.
-    adding.busy = true;
-    menu = side.open('fleet').menu();
-    assert.equal(menu.props.items.find((item) => item.id === 'newWorkspace').disabled, true);
-    adding = null;
-});
-
-test('browser half: DSH\'s own Add workspace, as its session list hands it to its +, and the workspace it makes', () => {
-    const { client } = loadClient();
-    const { workspaceAdder, dshAddFlow } = client.internals;
-    // DSH's stores tell their subscribers at once (zustand underneath).
-    const store = (value) => {
-        const listeners = new Set();
-        return {
-            listeners,
-            getSnapshot: () => value,
-            subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
-            set(next) { value = next; for (const fn of [...listeners]) fn(); },
-        };
-    };
-    // ui-workspace's controls: its + asks for the flow (not while it runs), and the flow says while it runs.
-    const state = store({ addRequested: false, directoryBusy: false, searchRequest: 0 });
-    const request = () => {
-        const s = state.getSnapshot();
-        state.set(s.directoryBusy ? s : { ...s, addRequested: true });
-    };
-    const pickers = store(true);
-    const face = { requestAddWorkspace: request, closeAddWorkspace: () => {}, hooks: { workspaceShortcuts: state, directoryFlow: pickers } };
-    let entries = [{ component: () => null, options: {}, inject: () => face }];
-    const slots = { entriesOfSlot: (name) => (name === 'sidebar.workspaces' ? entries : []) };
-    const flow = dshAddFlow(slots);
-    assert.equal(flow.request, request);
-    assert.equal(flow.state, state);
-    // No folder picker (DSH hides its + then), another plugin's list, or none at all: no flow.
-    pickers.set(false);
-    assert.equal(dshAddFlow(slots), undefined);
-    pickers.set(true);
-    entries = [{ component: () => null, options: {}, inject: () => ({ hooks: {} }) }];
-    assert.equal(dshAddFlow(slots), undefined);
-    entries = [{ component: () => null, options: {}, inject: () => { throw new Error('needs its scope'); } }];
-    assert.equal(dshAddFlow(slots), undefined);
-    entries = [];
-    assert.equal(dshAddFlow(slots), undefined);
-    assert.equal(dshAddFlow(undefined), undefined);
-    // An older DSH's slots without entriesOfSlot: its entries.
-    assert.equal(dshAddFlow({ entries: () => [{ component: () => null, options: {}, inject: () => face }] })?.request, request);
-
-    // What DSH's list does with a request: closes it, opens its folder dialog (busy) and makes the workspace picked.
-    const list = store({ items: [{ workspaceId: 'w1', title: 'one' }] });
-    const set = (change) => state.set({ ...state.getSnapshot(), ...change });
-    const opens = () => { set({ addRequested: false }); set({ directoryBusy: true }); };
-    const gains = (ws) => list.set({ items: [ws, ...list.getSnapshot().items] });
-    const picks = (ws) => { gains(ws); set({ directoryBusy: false }); };
-    const made = [];
-    const adder = workspaceAdder(() => ({ request, state }), () => list);
-    const quiet = () => state.listeners.size === 0 && list.listeners.size === 0;
-    assert.deepEqual(plain(adder.state()), { busy: false });
-    assert.equal(adder.start((ws) => made.push(ws.workspaceId)), true);
-    assert.equal(state.getSnapshot().addRequested, true);
-    opens();
-    picks({ workspaceId: 'w2', title: 'two' });
-    assert.deepEqual(made, ['w2']);
-    assert.ok(quiet(), 'done waiting');
-
-    // Cancelled, then Choose again after a folder DSH couldn't open: the same run. A workspace made meanwhile some
-    // other way (DSH's empty chat's own picker, another window) isn't it.
-    assert.equal(adder.start((ws) => made.push(ws.workspaceId)), true);
-    opens();
-    set({ directoryBusy: false });
-    gains({ workspaceId: 'w3', title: 'three' });
-    set({ directoryBusy: true });
-    // A folder that was a workspace already: DSH's list gains none.
-    list.set({ items: [...list.getSnapshot().items] });
-    assert.deepEqual(made, ['w2']);
-    picks({ workspaceId: 'w4', title: 'four' });
-    assert.deepEqual(made, ['w2', 'w4']);
-
-    // Cancelled, then DSH's own + (or its shortcut) starts the flow: that one is DSH's, and nothing is filed.
-    assert.equal(adder.start((ws) => made.push(ws.workspaceId)), true);
-    opens();
-    set({ directoryBusy: false });
-    request();
-    assert.ok(quiet(), 'DSH\'s own run ends the wait');
-    opens();
-    picks({ workspaceId: 'w5', title: 'five' });
-    assert.deepEqual(made, ['w2', 'w4']);
-
-    // While DSH's flow runs it can't start again; where DSH has none, or doesn't take the request, it doesn't start.
-    set({ directoryBusy: true });
-    assert.deepEqual(plain(adder.state()), { busy: true });
-    assert.equal(adder.start(() => made.push('no')), false);
-    set({ directoryBusy: false });
-    const none = workspaceAdder(() => undefined, () => list);
-    assert.equal(none.state(), null);
-    assert.equal(none.start(() => made.push('no')), false);
-    const deaf = workspaceAdder(() => ({ request: () => {}, state }), () => list);
-    assert.equal(deaf.start(() => made.push('no')), false);
-    assert.ok(quiet(), 'nothing left waiting');
-    // Stopping (the plugin stops) drops a wait.
-    adder.start(() => made.push('no'));
-    adder.stop();
-    assert.ok(quiet());
-    assert.deepEqual(made, ['w2', 'w4']);
 });
 
 test('session mode: a failed selection is reported, and the coordinator retries later', async () => {
@@ -4401,7 +4101,7 @@ test('browser half: a plain chat in a project\'s workspace offers its coordinato
     assert.equal(offer('chat'), null);
 });
 
-// ── projects as groups of workspaces (the Projects page and the import) ───
+// ── projects made in the window, and the store ─────────────────────────────
 
 /** Run with DSH's data folder at `home`, as a DSH started with DSH_HOME does. */
 async function withDshHome(home, run) {
@@ -4441,10 +4141,9 @@ test('projects page: a new project is a coordinator in a workspace, started at o
         return found === undefined ? undefined : plain(found);
     };
 
-    // The profile project works in its own folder once DSH has it; a fresh store has no categories.
-    let list = await remote.list();
+    // The profile project works in its own folder once DSH has it.
+    const list = await remote.list();
     assert.deepEqual(project(list, 'dsh-plugins').workspaces.map((w) => w.id), ['ws:/work/dsh']);
-    assert.deepEqual(plain(list.categories), []);
 
     // A new project: its coordinator starts in the workspace straight away.
     const made = await remote.create('  Recipes  ', 'ws:/work/b');
@@ -4454,7 +4153,7 @@ test('projects page: a new project is a coordinator in a workspace, started at o
     assert.equal(host.sessions.get(made.coordinator).cwd, 'ws:/work/b');
     const { settings, access, ...recipes } = project(made, 'recipes');
     assert.deepEqual(recipes, {
-        id: 'recipes', name: 'Recipes', source: 'page', workspace: '/work/b', home: 'ws:/work/b', category: null,
+        id: 'recipes', name: 'Recipes', source: 'page', workspace: '/work/b', home: 'ws:/work/b',
         workspaces: [{ id: 'ws:/work/b', path: '/work/b', title: 'b' }],
         coordinator: made.coordinator, live: null, permission: null, paused: false, threads: { open: 0, resolved: 0 },
     });
@@ -4469,6 +4168,11 @@ test('projects page: a new project is a coordinator in a workspace, started at o
     assert.match(coord.ctx.section(), /You are the coordinator of the DSH project "Recipes"\. The user talks to you here\. You run their work in threads, guide the threads while they work, and tell the user what each thread found\.\nGoal: none set yet \(the user sets it in Project settings\)\. Until then, the project is only what they ask for in this chat\.\nWorkspace: \/work\/b\n"Here", "this" and "everything" mean this workspace;[^\n]*\nYou are on Read Only:[^\n]*\n\n## Rules/);
     // A workspace can hold more than one project; names are unique ids.
     assert.equal((await remote.create('Recipes', 'ws:/work/b')).project, 'recipes-2');
+    // The Projects page's order: DSH's order of each project's workspace (DSH lists the newest workspace first), then
+    // the profile's order, then the order they were made in here.
+    assert.equal((await remote.create('Alpha', 'ws:/work/a')).project, 'alpha');
+    assert.deepEqual(host.workspaceRegistry.list().map((ws) => ws.id), ['ws:/work/dsh', 'ws:/work/a', 'ws:/work/b', 'ws:/work/c']);
+    assert.deepEqual((await remote.list()).projects.map((p) => p.id), ['dsh-plugins', 'alpha', 'recipes', 'recipes-2']);
     await refused(remote.create('   ', 'ws:/work/a'), /a project needs a name/);
     await refused(remote.create('Nowhere'), /a project needs a workspace to work in/);
     await refused(remote.create('Nowhere', 'ws:/nope'), /DSH has no such workspace/);
@@ -4495,9 +4199,10 @@ test('projects page: a new project is a coordinator in a workspace, started at o
     plugin.apply(again, plugin.Config(raw));
     await tick();
     const after = await again.provided.get('dshPluginProjectsRemote').list();
-    // In the tree's order: DSH lists its own folder first.
+    // In the same order.
     assert.deepEqual(after.projects.map((p) => [p.id, p.name, p.coordinator !== null, p.workspaces.map((w) => w.id)]), [
         ['dsh-plugins', 'DSH Plugins', true, ['ws:/work/dsh']],
+        ['alpha', 'Alpha', true, ['ws:/work/a']],
         ['recipes', 'Recipe Lab', true, ['ws:/work/b']],
         ['recipes-2', 'Recipes', true, ['ws:/work/b']],
     ]);
@@ -4530,286 +4235,125 @@ test('projects page: a project whose coordinator was deleted in DSH gets no new 
     assert.equal(again.sessions.get(second).cwd, 'ws:/work/a');
 });
 
-test('categories: named sets of workspaces in their order, kept in step with DSH\'s own workspace order', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
-    const options = { gateway: true, workspaces: ['/work/a', '/work/b', '/work/c', '/work/d'] };
-    const { host, raw } = setup({}, dir, options);
-    await tick();
-    const remote = host.provided.get('dshPluginProjectsRemote');
-    const registry = host.workspaceRegistry;
-    const refused = async (promise, pattern) => {
-        await assert.rejects(promise, (error) => error.code === 'projects/refused' && pattern.test(error.message));
-    };
-    const tree = (list) => plain(list.categories).map((c) => [c.id, c.name, c.workspaces.map((w) => w.id.slice(9))]);
-    const dshOrder = () => registry.list().map((ws) => ws.id.slice(9));
-    // DSH lists a new workspace first: its own folder came in at the start.
-    assert.deepEqual(dshOrder(), ['dsh', 'a', 'b', 'c', 'd']);
-
-    let list = await remote.createCategory('  Fleet Services ', 'ws:/work/c');
-    assert.equal(list.category, 'fleet-services');
-    assert.deepEqual(tree(list), [['fleet-services', 'Fleet Services', ['c']]]);
-    // DSH's order follows: each category's workspaces together, in the categories' order, then the rest.
-    assert.deepEqual(dshOrder(), ['c', 'dsh', 'a', 'b', 'd']);
-    list = await remote.createCategory('Lab');
-    assert.deepEqual(tree(list), [['fleet-services', 'Fleet Services', ['c']], ['lab', 'Lab', []]]);
-    await remote.fileWorkspace('ws:/work/a', 'lab');
-    list = await remote.fileWorkspace('ws:/work/b', 'lab', 'ws:/work/a');
-    assert.deepEqual(tree(list), [['fleet-services', 'Fleet Services', ['c']], ['lab', 'Lab', ['b', 'a']]]);
-    assert.deepEqual(dshOrder(), ['c', 'b', 'a', 'dsh', 'd']);
-    // Filed with no anchor, a workspace goes last in its category; moving to another one takes it out of the first.
-    list = await remote.fileWorkspace('ws:/work/b', 'lab', '');
-    assert.deepEqual(tree(list)[1][2], ['a', 'b']);
-    list = await remote.fileWorkspace('ws:/work/b', 'fleet-services', 'ws:/work/c');
-    assert.deepEqual(tree(list), [['fleet-services', 'Fleet Services', ['b', 'c']], ['lab', 'Lab', ['a']]]);
-    assert.deepEqual(dshOrder(), ['b', 'c', 'a', 'dsh', 'd']);
-
-    // Categories move; DSH's order moves with them, as few workspaces as it takes.
-    const before = registry.moves.length;
-    list = await remote.moveCategory('lab', 'fleet-services');
-    assert.deepEqual(tree(list).map(([id]) => id), ['lab', 'fleet-services']);
-    assert.deepEqual(dshOrder(), ['a', 'b', 'c', 'dsh', 'd']);
-    assert.equal(registry.moves.length - before, 1);
-    list = await remote.moveCategory('lab', '');
-    assert.deepEqual(tree(list).map(([id]) => id), ['fleet-services', 'lab']);
-
-    // Rename; refusals.
-    list = await remote.renameCategory('lab', 'Labs');
-    assert.equal(tree(list)[1][1], 'Labs');
-    await refused(remote.renameCategory('nope', 'X'), /"nope" is not a category here/);
-    await refused(remote.createCategory('   '), /a category needs a name/);
-    await refused(remote.createCategory('Other', 'ws:/nope'), /DSH has no such workspace/);
-    await refused(remote.fileWorkspace('ws:/nope', 'lab'), /DSH has no such workspace/);
-    await refused(remote.fileWorkspace('ws:/work/a', 'nope'), /"nope" is not a category here/);
-    await refused(remote.fileWorkspace('ws:/work/d', 'lab', 'ws:/work/b'), /that workspace is in another category/);
-    await refused(remote.moveCategory('lab', 'nope'), /"nope" is not a category here/);
-    // Ids stay as made, and are unique.
-    assert.equal((await remote.createCategory('Lab')).category, 'lab-2');
-    await remote.removeCategory('lab-2');
-
-    // Out of a category: last among the workspaces in none.
-    list = await remote.fileWorkspace('ws:/work/b', '');
-    assert.deepEqual(tree(list), [['fleet-services', 'Fleet Services', ['c']], ['lab', 'Labs', ['a']]]);
-    assert.deepEqual(dshOrder(), ['c', 'a', 'dsh', 'd', 'b']);
-
-    // A project's place in the list follows its workspace's.
-    await remote.create('Ops', 'ws:/work/a');
-    list = await remote.list();
-    assert.deepEqual(list.projects.map((p) => [p.id, p.category]), [['ops', 'lab'], ['dsh-plugins', null]]);
-
-    // Deleting a category leaves its workspaces, chats and projects where they are, in none.
-    list = await remote.removeCategory('lab');
-    assert.deepEqual(tree(list), [['fleet-services', 'Fleet Services', ['c']]]);
-    assert.equal(list.projects.find((p) => p.id === 'ops').coordinator !== null, true);
-    assert.deepEqual(dshOrder(), ['c', 'a', 'dsh', 'd', 'b']);
-
-    // A workspace DSH adds later (DSH lists it first) goes after the categories when the window lists, among the others in none.
-    registry.add('/work/new');
-    assert.equal(dshOrder()[0], 'new');
-    await remote.list();
-    await tick();
-    assert.deepEqual(dshOrder(), ['c', 'new', 'a', 'dsh', 'd', 'b']);
-
-    // After a restart: the same categories; DSH's order needs no moves.
-    const moves = registry.moves.length;
-    const again = fakeHost(options);
-    for (const [id, session] of host.sessions) again.sessions.set(id, session);
-    again.workspaceRegistry = registry;
-    plugin.apply(again, plugin.Config(raw));
-    await tick();
-    assert.deepEqual(tree(await again.provided.get('dshPluginProjectsRemote').list()), [['fleet-services', 'Fleet Services', ['c']]]);
-    assert.equal(registry.moves.length, moves);
-    const saved = JSON.parse(readFileSync(raw.storeFile, 'utf8'));
-    assert.deepEqual([saved.version, Object.keys(saved.categories), saved.categoryOf], [1, ['fleet-services'], { 'ws:/work/c': 'fleet-services' }]);
-});
-
-test('categories: once, the groups from before become categories with their names, order and workspaces; the old records stay', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
-    const storeFile = join(dir, 'projects.json');
+test('store: what an older version wrote about categories and its groups is saved exactly as the file has it, and nothing acts on it', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
+    // The old sidebar's file, which an older version imported once: nothing reads it now.
+    mkdirSync(join(home, 'fleet-shell'));
+    writeFileSync(join(home, 'fleet-shell', 'state.json'), JSON.stringify({ projects: [{ id: 'p1', name: 'Old Alpha' }], projectOf: { 'ws:/work/c': 'p1' } }));
+    // An older version's file: its categories, a group from before them that never got a coordinator, and its imports.
     const old = {
         version: 1,
-        projects: {
-            'dsh-plugins': { settings: {}, threads: {}, pendingHandbacks: [], nextThread: 1, home: 'ws:/work/dsh' },
-            'local-model-recipe': { name: 'Local Model Recipe', source: 'import', createdAt: '2026-10-10T08:13:00.000Z', order: 0, importedFrom: 'p4' },
-            empty: { name: 'Empty', source: 'page', createdAt: '2026-10-10T09:00:00.000Z', order: 2 },
-            lab: { name: 'Lab', source: 'page', createdAt: '2026-10-10T08:30:00.000Z', order: 1, home: 'ws:/work/b', coordinatorSessionId: 'gone' },
+        projects: { kitchen: { name: 'Kitchen', source: 'import', createdAt: 1, order: 0, importedFrom: 'k1' } },
+        workspaceOf: { 'ws:/work/a': 'kitchen' },
+        categories: {
+            work: { name: 'Work', order: 0, createdAt: 2, source: 'group' },
+            home: { name: 'Home', order: 1, createdAt: 3, source: 'import', importedFrom: 'h1' },
+            // Even one an older version would have passed over.
+            blank: { name: '  ', order: 2 },
         },
-        workspaceOf: { 'ws:/work/dsh': 'dsh-plugins', 'ws:/work/a': 'local-model-recipe', 'ws:/work/c': 'lab', 'ws:/work/b': 'lab', 'ws:/work/d': 'dsh-plugins' },
-        imports: { fleetShell: { at: '2026-10-10T08:13:00.000Z', projects: 1, joined: 0, workspaces: 1, skipped: 0 } },
+        categoryOf: { 'ws:/work/a': 'work', 'ws:/work/b': 'home' },
+        imports: {
+            categories: { at: 2, categories: 1, workspaces: 1 },
+            fleetShell: { at: 3, file: '/old/fleet-shell/state.json', categories: 1, joined: 0, workspaces: 1, skipped: 0 },
+        },
     };
-    const text = `${JSON.stringify(old, null, 2)}\n`;
-    writeFileSync(storeFile, text);
-    const options = { gateway: true, workspaces: ['/work/dsh', '/work/a', '/work/b', '/work/c', '/work/d', '/work/e'] };
-    const { host, raw } = setup({ storeFile }, dir, options);
-    await tick();
-    const remote = host.provided.get('dshPluginProjectsRemote');
-    const list = await remote.list();
-    // The profile's project first, then the others in their order; an empty group too.
-    assert.deepEqual(plain(list.categories).map((c) => [c.id, c.name, c.source, c.workspaces.map((w) => w.id.slice(9))]), [
-        ['dsh-plugins', 'DSH Plugins', 'group', ['dsh', 'd']],
-        ['local-model-recipe', 'Local Model Recipe', 'import', ['a']],
-        ['lab', 'Lab', 'group', ['b', 'c']],
-        ['empty', 'Empty', 'group', []],
-    ]);
-    // Only the ones with a coordinator are projects.
-    assert.deepEqual(list.projects.map((p) => [p.id, p.home]), [['dsh-plugins', 'ws:/work/dsh'], ['lab', 'ws:/work/b']]);
-    // DSH's order now reads like the list.
-    assert.deepEqual(host.workspaceRegistry.list().map((ws) => ws.id.slice(9)), ['dsh', 'd', 'a', 'b', 'c', 'e']);
-    const saved = JSON.parse(readFileSync(storeFile, 'utf8'));
-    assert.equal(saved.version, 1);
-    assert.deepEqual(saved.workspaceOf, old.workspaceOf, 'an older version still finds its groups');
-    assert.deepEqual(saved.projects.empty, old.projects.empty);
-    assert.deepEqual({ ...saved.imports.categories, at: 'x' }, { at: 'x', categories: 4, workspaces: 5, backup: join(dir, 'projects.v1.json') });
-    assert.equal(readFileSync(join(dir, 'projects.v1.json'), 'utf8'), text, 'the store from before is kept');
-    assert.match(readFileSync(raw.logFile, 'utf8'), /categories from groups categories=4 workspaces=5/);
+    const options = { gateway: true, workspaces: ['/work/a', '/work/b', '/work/c'] };
+    const kept = async (dir, file) => {
+        const { host, raw } = setup({}, dir, options);
+        await tick();
+        const remote = host.provided.get('dshPluginProjectsRemote');
+        // A group without a coordinator is not a project.
+        assert.deepEqual((await remote.list()).projects.map((p) => p.id), ['dsh-plugins']);
+        // Saved again and again since: the profile project's coordinator, a new project, its rename.
+        await remote.create('Recipes', 'ws:/work/b');
+        await remote.rename('recipes', 'Recipe Lab');
+        const saved = JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8'));
+        assert.deepEqual(Object.keys(saved.projects).sort(), ['dsh-plugins', 'kitchen', 'recipes']);
+        assert.deepEqual(saved.projects.kitchen, file.projects.kitchen);
+        // No copy of the file, nothing about categories or the old sidebar in the log, and DSH's workspace order untouched.
+        assert.deepEqual(readdirSync(dir).filter((name) => name.endsWith('.json')), ['projects.json']);
+        assert.doesNotMatch(readFileSync(raw.logFile, 'utf8'), /categor|fleet-shell|workspace-order/);
+        assert.deepEqual(host.workspaceRegistry.moves, []);
+        return saved;
+    };
+    await withDshHome(home, async () => {
+        const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+        writeFileSync(join(dir, 'projects.json'), JSON.stringify(old));
+        const saved = await kept(dir, old);
+        for (const key of ['workspaceOf', 'categories', 'categoryOf', 'imports']) assert.deepEqual(saved[key], old[key], key);
 
-    // Once: a restart moves nothing again, and a category made since stays.
-    await remote.createCategory('Later');
+        // A file from before categories (an older version would have made them from its groups) is saved without any.
+        const before = { version: 1, projects: old.projects, workspaceOf: old.workspaceOf };
+        const dir2 = mkdtempSync(join(tmpdir(), 'projects-'));
+        writeFileSync(join(dir2, 'projects.json'), JSON.stringify(before));
+        const saved2 = await kept(dir2, before);
+        assert.deepEqual(Object.keys(saved2), ['version', 'projects', 'workspaceOf']);
+        assert.deepEqual(saved2.workspaceOf, old.workspaceOf);
+    });
+});
+
+test('store: switched off and on again, the plugin reads its file anew and keeps what changed there meanwhile', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const file = join(dir, 'projects.json');
+    writeFileSync(file, JSON.stringify({
+        version: 1, projects: {}, workspaceOf: {},
+        categories: { work: { name: 'Work', order: 0, createdAt: 1, source: 'page' }, home: { name: 'Home', order: 1, createdAt: 2, source: 'page' } },
+        categoryOf: { 'ws:/work/a': 'work', 'ws:/work/b': 'home' },
+        imports: { categories: { at: 1, categories: 0, workspaces: 0 } },
+    }));
+    const options = { gateway: true, workspaces: ['/work/a', '/work/b'] };
+    const { host, raw } = setup({}, dir, options);
+    await tick();
+    assert.ok(JSON.parse(readFileSync(file, 'utf8')).projects['dsh-plugins'].coordinatorSessionId, 'the first start saved');
+    // Switched off: DSH runs the plugin's disposers.
+    for (const dispose of host.effects.splice(0)) await dispose();
+    // Meanwhile the file changes: a category goes, and a project setting changes.
+    const onDisk = JSON.parse(readFileSync(file, 'utf8'));
+    delete onDisk.categories.home;
+    delete onDisk.categoryOf['ws:/work/b'];
+    onDisk.projects['dsh-plugins'].settings.threadEffort = 'low';
+    writeFileSync(file, JSON.stringify(onDisk));
+    // Switched on again, in the same DSH.
     const again = fakeHost(options);
     for (const [id, session] of host.sessions) again.sessions.set(id, session);
     again.workspaceRegistry = host.workspaceRegistry;
     plugin.apply(again, plugin.Config(raw));
     await tick();
-    assert.deepEqual(plain((await again.provided.get('dshPluginProjectsRemote').list()).categories).map((c) => c.id), ['dsh-plugins', 'local-model-recipe', 'lab', 'empty', 'later']);
-    assert.equal(readFileSync(raw.logFile, 'utf8').match(/categories from groups/g).length, 1);
+    const remote = again.provided.get('dshPluginProjectsRemote');
+    const row = (await remote.list()).projects.find((p) => p.id === 'dsh-plugins');
+    assert.deepEqual(row.settings.threadEffort, { value: 'low', source: 'project setting' }, 'the file as it is now');
+    // Its next save keeps the change, and the categories exactly as the file has them.
+    await remote.update('dsh-plugins', { paused: true });
+    const saved = JSON.parse(readFileSync(file, 'utf8'));
+    assert.deepEqual([saved.projects['dsh-plugins'].settings.threadEffort, saved.projects['dsh-plugins'].settings.paused], ['low', true]);
+    for (const key of ['workspaceOf', 'categories', 'categoryOf', 'imports']) assert.deepEqual(saved[key], onDisk[key], key);
+    // While it runs, a save writes them as the file has them just then, never the copy it read at start.
+    const now = JSON.parse(readFileSync(file, 'utf8'));
+    now.categories.later = { name: 'Later', order: 1, createdAt: 3, source: 'page' };
+    writeFileSync(file, JSON.stringify(now));
+    await remote.update('dsh-plugins', { paused: false });
+    assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).categories, now.categories);
 });
 
-test('import: the old sidebar\'s projects come in once, as categories in their order; only names and workspaces, and the old file is only read', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
-    const file = join(home, 'fleet-shell', 'state.json');
-    mkdirSync(join(home, 'fleet-shell'));
-    const old = {
-        prefs: { projectsSidebar: true, treeOrder: 'updated' },
-        projects: [
-            { id: 'p4', name: 'Local Model Recipe', instructions: '', files: [], defaults: {} },
-            { id: 'p3', name: 'Fleet  Services', instructions: '', files: [], defaults: {} },
-            { id: 'p1', name: 'dsh plugins', instructions: '', files: [], defaults: {} },
-            { id: 'p9', name: 'Security' },
-            { id: 'p8', name: '   ' },
-        ],
-        projectOf: {
-            'ws:/work/a': 'p4', 'ws:/work/b': 'p3', 'ws:/work/gone': 'p3', 'ws:/work/c': '_none',
-            'ws:/work/d': 'p1', 'ws:/work/dsh': 'p4', 'ws:/work/e': 'p-deleted',
-        },
-    };
-    const text = `${JSON.stringify(old, null, 2)}\n`;
-    writeFileSync(file, text);
-    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
-    const options = { gateway: true, workspaces: ['/work/dsh', '/work/a', '/work/b', '/work/c', '/work/d', '/work/e'] };
-    await withDshHome(home, async () => {
-        const { host, raw } = setup({}, dir, options);
-        await tick();
-        const remote = host.provided.get('dshPluginProjectsRemote');
-        const list = await remote.list();
-        assert.deepEqual(plain(list.categories).map((c) => [c.id, c.name, c.source, c.importedFrom, c.workspaces.map((w) => w.id.slice(9))]), [
-            ['local-model-recipe', 'Local Model Recipe', 'import', 'p4', ['dsh', 'a']],
-            ['fleet-services', 'Fleet Services', 'import', 'p3', ['b']],
-            ['dsh-plugins', 'dsh plugins', 'import', 'p1', ['d']],
-            ['security', 'Security', 'import', 'p9', []],
-        ]);
-        // No projects come in: only the profile's has a coordinator.
-        assert.deepEqual(list.projects.map((p) => p.id), ['dsh-plugins']);
-        assert.equal([...host.sessions.values()].filter((v) => v.title?.startsWith('◆')).length, 1);
-        const store = plain(ProjectStore.open(raw.storeFile));
-        assert.deepEqual({ ...store.imports.fleetShell, at: 'x' }, { at: 'x', file, categories: 4, joined: 0, workspaces: 4, skipped: 1 });
-        assert.match(readFileSync(raw.logFile, 'utf8'), /import fleet-shell categories=4 joined=0 workspaces=4 skipped=1/);
-        assert.equal(readFileSync(file, 'utf8'), text, 'the old file is unchanged');
-
-        // Once only: a later start with a changed old file imports nothing.
-        writeFileSync(file, JSON.stringify({ ...old, projects: [...old.projects, { id: 'p7', name: 'Later' }], projectOf: { 'ws:/work/c': 'p7' } }));
-        await remote.fileWorkspace('ws:/work/b', '');
-        const again = fakeHost(options);
-        for (const [id, session] of host.sessions) again.sessions.set(id, session);
-        again.workspaceRegistry = host.workspaceRegistry;
-        plugin.apply(again, plugin.Config(raw));
-        await tick();
-        const after = await again.provided.get('dshPluginProjectsRemote').list();
-        assert.deepEqual(plain(after.categories).map((c) => [c.id, c.workspaces.map((w) => w.id.slice(9))]), [
-            ['local-model-recipe', ['dsh', 'a']], ['fleet-services', []], ['dsh-plugins', ['d']], ['security', []],
-        ]);
-    });
-});
-
-test('import: an unreadable old file is logged and tried again at the next start; none at all is quiet', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
-    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
-    await withDshHome(home, async () => {
-        const { host, raw } = setup({}, dir, { gateway: true });
-        await tick();
-        assert.deepEqual(plain(ProjectStore.open(raw.storeFile).imports), {});
-        assert.doesNotMatch(readFileSync(raw.logFile, 'utf8'), /import/);
-        mkdirSync(join(home, 'fleet-shell'));
-        writeFileSync(join(home, 'fleet-shell', 'state.json'), '{ not json');
-        const again = fakeHost({ gateway: true });
-        for (const [id, session] of host.sessions) again.sessions.set(id, session);
-        again.workspaceRegistry = host.workspaceRegistry;
-        plugin.apply(again, plugin.Config(raw));
-        await tick();
-        assert.match(readFileSync(raw.logFile, 'utf8'), /error import fleet-shell/);
-        assert.deepEqual(plain(ProjectStore.open(raw.storeFile).imports), {});
-    });
-});
-
-test('import plan: one group per name in the old order, a name already here joins it, and what stays where it is', () => {
-    const state = {
-        projects: [{ id: 'p1', name: ' Alpha  One ' }, { id: 'p2', name: 'beta' }, { id: 'p3', name: 'alpha one' }, { id: 'p4', name: ' ' }, { id: 5, name: 'No id' }],
-        projectOf: { w1: 'p1', w2: 'p3', w3: 'p2', w4: '_none', w5: 'p-deleted', w6: 'p1', w7: 'p2' },
-    };
-    const plan = planFleetShellImport(state, { names: new Map([['beta', 'beta-here']]), known: (id) => id !== 'w6', placed: (id) => id === 'w7' });
-    assert.deepEqual(plan, {
-        groups: [{ name: 'Alpha One', from: 'p1', workspaces: ['w1', 'w2'] }, { name: 'beta', join: 'beta-here', from: 'p2', workspaces: ['w3'] }],
-        kept: ['w7'], skipped: ['w6'], loose: ['w4', 'w5'],
-    });
-    const none = { groups: [], kept: [], skipped: [], loose: [] };
-    const here = { names: new Map(), known: () => true, placed: () => false };
-    assert.deepEqual(planFleetShellImport(null, here), none);
-    assert.deepEqual(planFleetShellImport({ projects: 'p1', projectOf: null }, here), none);
-});
-
-test('import preview: says what the move to categories and the import will do, reading only, and that they ran once they have', () => {
-    const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
-    for (const dir of ['fleet-shell', 'storages', 'projects']) mkdirSync(join(home, dir));
-    const state = { projects: [{ id: 'p1', name: 'Fleet Services' }, { id: 'p2', name: 'Security' }], projectOf: { w1: 'p1', w2: 'p1', w3: 'p2', w4: '_none', w9: 'p2' } };
-    const workspaces = {
-        w1: { path: '/work/fleet-ops', title: 'fleet-ops', sessionIds: ['s-chat'] },
-        w2: { path: '/work/plugins', title: 'deepseek-plugins', sessionIds: ['s-coordinator'] },
-        w3: { path: '/work/lab', title: 'Vulnerability Lab', sessionIds: [] },
-        w4: { path: '/work/discord', title: 'DSH Discord', sessionIds: [] },
-    };
-    const projectsFile = join(home, 'projects', 'projects.json');
-    const files = {
-        [join(home, 'fleet-shell', 'state.json')]: JSON.stringify(state),
-        [join(home, 'storages', 'workspace.json')]: JSON.stringify({ unit: { name: 'workspace', version: 2 }, global: {}, tables: { workspaces } }),
-        [projectsFile]: JSON.stringify({
-            version: 1,
-            projects: { 'dsh-plugins': { coordinatorSessionId: 's-coordinator', home: 'w2' }, lab: { name: 'Lab', source: 'page', order: 0 }, elsewhere: { coordinatorSessionId: 's-other-dsh' } },
-            workspaceOf: { w2: 'dsh-plugins', w3: 'lab' },
-        }),
-    };
-    for (const [file, text] of Object.entries(files)) writeFileSync(file, text);
-    const script = fileURLToPath(new URL('../scripts/import-preview.mjs', import.meta.url));
-    const run = () => spawnSync(process.execPath, [script], { env: { ...process.env, DSH_HOME: home }, encoding: 'utf8' });
-    const first = run();
-    assert.equal(first.status, 0, first.stderr);
-    assert.match(first.stdout, /Groups become categories, once, at the first start with this version \(the store is copied to .*projects\.v1\.json first\):\n\n1\. The project "dsh-plugins" from your profile, under the same name\n {5}deepseek-plugins \(\/work\/plugins\)\n2\. Lab\n {5}Vulnerability Lab \(\/work\/lab\)\n/);
-    assert.match(first.stdout, /Projects with a coordinator stay projects, in their coordinator's workspace: dsh-plugins in deepseek-plugins \(\/work\/plugins\)/);
-    assert.match(first.stdout, /Groups without a coordinator are only categories now: lab/);
-    assert.match(first.stdout, /1\. Fleet Services, a new category\n {5}fleet-ops \(\/work\/fleet-ops\)\n2\. Security, a new category\n {5}\(no workspaces\)\n/);
-    assert.match(first.stdout, /names and workspaces only; its instructions, files and defaults stay behind/);
-    assert.match(first.stdout, /Already in a category here, stays there: deepseek-plugins \(\/work\/plugins\) in "dsh-plugins", Vulnerability Lab \(\/work\/lab\) in "lab"/);
-    assert.match(first.stdout, /Ungrouped in the old sidebar, goes to Other workspaces: DSH Discord \(\/work\/discord\)/);
-    assert.match(first.stdout, /Gone from DSH, skipped: w9/);
-    assert.match(first.stdout, /Result: 2 new categories, 0 joined, 1 workspaces placed, 1 skipped\./);
-    assert.match(first.stdout, /it names coordinators this DSH doesn't list in any workspace: elsewhere \(s-other-dsh\)\./);
-    assert.doesNotMatch(first.stdout, /dsh-plugins \(s-coordinator\)/);
-    for (const [file, text] of Object.entries(files)) assert.equal(readFileSync(file, 'utf8'), text, `${file} is unchanged`);
-    // Once both have run, it says so.
-    writeFileSync(projectsFile, JSON.stringify({
-        version: 1, projects: {}, categories: {}, categoryOf: {},
-        imports: { categories: { at: '2026-10-10T22:00:00.000Z' }, fleetShell: { at: '2026-10-10T15:00:00.000Z', projects: 2, workspaces: 2, skipped: 1 } },
-    }));
-    const done = run().stdout;
-    assert.match(done, /Groups already became categories \(2026-10-10T22:00:00\.000Z\)\./);
-    assert.match(done, /The old sidebar was already imported \(2026-10-10T15:00:00\.000Z\): 2 groups, 2 workspaces, 1 skipped\. It won't run again\./);
+test('store: a reload keeps one copy, so a tool call that outlives the old instance and the new one\'s writes both stay', async () => {
+    const { host, config, dir } = setup();
+    await tick();
+    const coord = coordinatorOf(host);
+    // Hold session creation, so the tool call outlives the instance that took it.
+    const create = host.sessionController.create;
+    let release;
+    host.sessionController.create = (req) => new Promise((r) => { release = () => r(create(req)); });
+    const started = coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Late', brief: 'x' });
+    await tick();
+    host.sessionController.create = create;
+    await reload(host, config);
+    await tick();
+    // The new instance writes first, then the old one's call finishes.
+    await coord.ctx.call('project_settings', { thread_effort: 'max' });
+    release();
+    assert.match(await started, /^Started t1 "Late"/);
+    const saved = JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'];
+    assert.deepEqual([saved.settings.threadEffort, saved.threads.t1?.title], ['max', 'Late']);
 });
 
 // ── code changes (changes.js) ──────────────────────────────────────────────

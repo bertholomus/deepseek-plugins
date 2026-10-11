@@ -12,11 +12,10 @@
  * plugin's page, a saved default that applies without a restart, the Project
  * settings endpoints the window calls, a pick in DSH's own model picker,
  * a thread's code changes as DSH records them, failed and stopped threads
- * as the window shows them, with Retry and Resume, categories of
- * workspaces: the one-time import of the old sidebar's projects as
- * categories, the Projects page's endpoints and DSH's own workspace order
- * kept in step, a thread in its project's workspace, a coordinator's
- * message to a chat in no project and to another project's coordinator,
+ * as the window shows them, with Retry and Resume, a project made in the
+ * window and the Projects page's order, a thread in its project's
+ * workspace, a coordinator's message to a chat in no project and to
+ * another project's coordinator,
  * and the user's tools and permissions: an MCP
  * server named as one of the user's tools that no coordinator is offered
  * and a thread gets only from the user's words, threads on Workspace Write.
@@ -823,26 +822,6 @@ try {
     const lastSeq = lc?.last.seq;
     const signIns = () => [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].length;
     const signInsBefore = signIns();
-    // (24, checked below) The all-in-one mod's old sidebar projects, which the plugin reads once at the next start.
-    const dirA = join(root, 'old-a');
-    const dirB = join(root, 'old-b');
-    mkdirSync(dirA);
-    mkdirSync(dirB);
-    const wsA = (await bridge('POST', '/sessions', { workspacePath: dirA })).workspace.id;
-    const wsB = (await bridge('POST', '/sessions', { workspacePath: dirB })).workspace.id;
-    const homeWs = (await bridge('GET', '/workspaces')).find((w) => w.path === realpathSync(ws))?.id;
-    const oldFile = join(home, 'fleet-shell', 'state.json');
-    mkdirSync(dirname(oldFile), { recursive: true });
-    writeFileSync(oldFile, `${JSON.stringify({
-        prefs: { projectsSidebar: true },
-        projects: [
-            { id: 'p1', name: ' Old  Alpha ', instructions: '', files: [], defaults: {} },
-            { id: 'p2', name: 'e2e project', instructions: '', files: [], defaults: {} },
-            { id: 'p3', name: '   ' },
-        ],
-        projectOf: { [wsA]: 'p1', [wsB]: 'p2', [homeWs]: 'p1', 'gone-workspace': 'p1', 'loose-workspace': '_none' },
-    }, null, 2)}\n`);
-    const oldText = readText(oldFile);
     await stopDsh(child);
     // (25) Views saved by an older version of the plugin, which DSH drops until the session is next loaded.
     const agedViews = ageViews([coord, threadSession('t1')], STATE_VERSION - 1);
@@ -910,57 +889,41 @@ try {
         && (await viewOf(threadSession('t4')))?.ending === undefined, `${refusedWhy(answer2)} ${since(mark, 't4')[0]?.fresh.slice(0, 300)}`);
     check('the plugin logs each retry', readText(logFile).includes(`thread-continue ${PROJECT_ID}/t3 after=error`) && readText(logFile).includes(`thread-continue ${PROJECT_ID}/t4 after=aborted`));
 
-    // 24. Categories and projects. The old sidebar's projects were read once
-    // at the restart above: each name becomes a category holding the
-    // workspaces it held (only names and workspaces), and the old file is
-    // only read. Then the Projects page's endpoints: a project is a ◆
-    // coordinator in a workspace, started at once; categories hold
-    // workspaces, and DSH's own workspace order follows them.
-    check('the old sidebar\'s projects are imported once, as categories', readText(logFile).includes('import fleet-shell categories=2 joined=0 workspaces=3 skipped=1')
-        && readText(logFile).split('\n').filter((l) => l.includes(' import fleet-shell ')).length === 1, readText(logFile).split('\n').filter((l) => l.includes('import')).join('\n'));
-    check('the old file is only read', readText(oldFile) === oldText);
+    // 24. Projects made in the window. New project starts a ◆ coordinator in
+    // a workspace at once; the Projects page lists every project in DSH's
+    // own workspace order; a profile project is renamed in the profile, and
+    // one with a coordinator isn't deleted. A thread works in its project's
+    // workspace, whatever folder is named.
+    const dirA = join(root, 'made-here');
+    const dirB = join(root, 'elsewhere');
+    mkdirSync(dirA);
+    mkdirSync(dirB);
+    const wsA = (await bridge('POST', '/sessions', { workspacePath: dirA })).workspace.id;
+    await bridge('POST', '/sessions', { workspacePath: dirB });
     const api = (method, args) => webApi(webAgain, `dsh-plugin-projects/${method}`, args);
-    let lists = await api('list', {});
-    const category = (name) => lists.value?.categories?.find((c) => c.name === name);
-    const holds = (name) => category(name)?.workspaces?.map((w) => w.id) ?? [];
-    const dshOrder = async () => (await bridge('GET', '/workspaces')).map((w) => w.id);
-    const together = (order, ids) => ids.length === 0 || order.slice(order.indexOf(ids[0]), order.indexOf(ids[0]) + ids.length).join() === ids.join();
-    check('an old project becomes a category holding its workspaces, and no project', lists.ok && category('Old Alpha')?.source === 'import'
-        && holds('Old Alpha').length === 2 && holds('Old Alpha').includes(wsA) && holds('Old Alpha').includes(homeWs) && holds('e2e project').join() === wsB
-        && lists.value.projects.map((p) => p.id).join() === PROJECT_ID, JSON.stringify(lists.value?.categories));
-    let order = await dshOrder();
-    check('DSH\'s own workspace order holds each category together, in their order', together(order, holds('Old Alpha')) && together(order, holds('e2e project'))
-        && order.indexOf(holds('Old Alpha')[0]) < order.indexOf(wsB), JSON.stringify(order));
     mark = model.requests.length;
-    lists = await api('create', { name: 'Made Here', workspace: wsA });
+    let lists = await api('create', { name: 'Made Here', workspace: wsA });
     const madeId = lists.value?.project;
     const madeCoord = lists.value?.coordinator;
     await waitFor(() => since(mark).some((r) => r.system.includes('You are the coordinator of the DSH project "Made Here"') && r.fresh.includes('[Project created')), 'the new coordinator\'s welcome');
     const madeView = madeCoord ? await bridge('GET', `/sessions/${madeCoord}`) : null;
     check('New project starts a welcomed ◆ coordinator in its workspace', lists.ok && madeView?.cwd === realpathSync(dirA) && madeView?.title === '◆ Made Here'
-        && lists.value.projects.find((p) => p.id === madeId)?.home === wsA && lists.value.projects.find((p) => p.id === madeId)?.category === category('Old Alpha')?.id,
-    JSON.stringify(madeView).slice(0, 300));
-    lists = await api('createCategory', { name: 'Later', workspace: wsB });
-    const laterId = lists.value?.category;
-    check('a new category takes the workspace it was made with', lists.ok && holds('Later').join() === wsB && holds('e2e project').length === 0, JSON.stringify(lists.value?.categories));
-    lists = await api('fileWorkspace', { workspace: wsA, category: laterId, before: wsB });
-    order = await dshOrder();
-    check('a workspace filed before another lands there, in DSH\'s order too', lists.ok && holds('Later').join() === `${wsA},${wsB}` && together(order, [wsA, wsB]), `${JSON.stringify(lists.value?.categories)} ${JSON.stringify(order)}`);
-    lists = await api('moveCategory', { category: laterId, before: category('Old Alpha')?.id });
-    order = await dshOrder();
-    check('a category moves, and DSH\'s order with it', lists.ok && lists.value.categories[0]?.id === laterId && order.indexOf(wsB) < order.indexOf(homeWs), `${JSON.stringify(lists.value?.categories?.map((c) => c.id))} ${JSON.stringify(order)}`);
-    lists = await api('renameCategory', { category: laterId, name: 'Later On' });
-    check('rename a category', lists.ok && category('Later On')?.id === laterId);
-    let refused = await api('fileWorkspace', { workspace: wsA, category: 'nope' });
-    check('a category that doesn\'t exist is refused', !refused.ok && refused.error?.code === 'projects/refused' && /not a category here/.test(refused.error.message), JSON.stringify(refused));
-    refused = await api('rename', { project: PROJECT_ID, name: 'Nope' });
+        && lists.value.projects.find((p) => p.id === madeId)?.home === wsA, JSON.stringify(madeView).slice(0, 300));
+    lists = await api('list', {});
+    const order = (await bridge('GET', '/workspaces')).map((w) => w.id);
+    const places = lists.value?.projects?.map((p) => order.indexOf(p.home)) ?? [];
+    check('the Projects page lists every project in DSH\'s own workspace order, with no categories', lists.ok
+        && lists.value.projects.map((p) => p.id).sort().join() === [PROJECT_ID, madeId].sort().join()
+        && places.every((at, i) => at >= 0 && (i === 0 || places[i - 1] <= at)) && Object.keys(lists.value).sort().join() === 'guarded,permissions,projects',
+    `${JSON.stringify(lists.value?.projects?.map((p) => [p.id, p.home]))} ${JSON.stringify(order)}`);
+    let refused = await api('rename', { project: PROJECT_ID, name: 'Nope' });
     check('a profile project is renamed in the profile, not here', !refused.ok && /set in your profile/.test(refused.error?.message ?? ''), JSON.stringify(refused));
     refused = await api('remove', { project: madeId });
     check('a project with a coordinator isn\'t deleted', !refused.ok && /has a coordinator/.test(refused.error?.message ?? ''), JSON.stringify(refused));
-    lists = await api('removeCategory', { category: laterId });
-    check('deleting a category leaves its workspaces and projects, in none', lists.ok && !category('Later On') && lists.value.projects.some((p) => p.id === madeId && p.category === null), JSON.stringify(lists.value).slice(0, 300));
+    refused = await api('createCategory', { name: 'Later', workspace: wsA });
+    check('categories are no part of this plugin', !refused.ok, JSON.stringify(refused).slice(0, 300));
     mark = model.requests.length;
-    await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Mu', brief: 'Just answer.', folder: 'old-b' }));
+    await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Mu', brief: 'Just answer.', folder: 'elsewhere' }));
     await coordinatorSaw(mark, 'SAW-IDLE', 'the Mu idle note');
     const muId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Mu')?.[0];
     const muView = muId ? await bridge('GET', `/sessions/${threadSession(muId)}`) : null;

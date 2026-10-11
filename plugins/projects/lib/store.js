@@ -18,21 +18,29 @@
  *     awaiting?: [{ to: a chat's session id, name: as the coordinator named it, from: the coordinator's session id,
  *       after: the chat's last event seq before the message, at }]: messages to chats outside the project (project_message)
  *       whose reply hasn't come back yet,
- *     A project made on the Projects page also keeps its definition here (a profile row has its own):
+ *     A project made in the window also keeps its definition here (a profile row has its own):
  *     name, source: 'page' | 'import', createdAt, order: its place among them, importedFrom?: the old project's id } },
- *   categories: { [categoryId]: { name, order: its place in the list, createdAt, source: 'group' | 'page' | 'import',
- *     importedFrom?: the old sidebar project's id } }: named sets of DSH workspaces, above them in the session list,
- *   categoryOf: { [DSH workspace id]: categoryId }: the category each workspace is in, one at most,
- *   workspaceOf: { [DSH workspace id]: projectId }: before categories, the group each workspace was in. Kept as it
- *     was when categories replaced groups, so an older version of the plugin still finds its groups; never written now,
- *   imports: { fleetShell?: { at, file, categories, joined, workspaces, skipped }, categories?: { at, categories, workspaces, backup? } }:
- *     one-time imports and moves already made }
+ *   workspaceOf?, categories?, categoryOf?, imports?: categories and the groups before them, from when they were part of this plugin (below) }
  *
- * Until categories, a project made on the Projects page or imported was a
+ * Categories moved to the categories plugin (plugins/categories). This
+ * plugin only keeps what an older version of it wrote about them, because
+ * that older version needs it if the user goes back to it, and the
+ * categories plugin reads it once to bring the user's categories over.
+ * Nothing here uses or changes `workspaceOf`, `categories`, `categoryOf` or
+ * `imports`: each save reads them from the file again and writes them back
+ * exactly as it has them just then (a file without them is saved without
+ * them), so a change made there by another hand is never written over:
+ *   categories: { [categoryId]: { name, order: its place in the list, createdAt, source: 'group' | 'page' | 'import',
+ *     importedFrom?: the old sidebar project's id } }: named sets of DSH workspaces,
+ *   categoryOf: { [DSH workspace id]: categoryId }: the category each workspace was in, one at most,
+ *   workspaceOf: { [DSH workspace id]: projectId }: before categories, the group each workspace was in,
+ *   imports: { fleetShell?: { at, file, categories, joined, workspaces, skipped }, categories?: { at, categories, workspaces, backup? } }:
+ *     the one-time imports and moves that older version made.
+ *
+ * Before categories, a project made on the Projects page or imported was a
  * group of workspaces (◇) that got a coordinator only when the user added
- * one. Those groups became categories (`migrateCategories` in projects.js);
- * their entries stay under `projects`, and only the ones with a coordinator
- * are projects now.
+ * one. Their entries stay under `projects`, and only the ones with a
+ * coordinator are projects.
  *
  * Settings here are the project's own: set in its Project settings dialog,
  * by picking a model in its coordinator's DSH model picker, or by the
@@ -40,10 +48,15 @@
  * the user sets). They sit above the profile config; deleting a key means
  * "use default".
  *
+ * The plugin's managers in one process share one copy of the file while
+ * any of them runs (ProjectStore.open). When the last one stops (the plugin
+ * is switched off), the copy is let go (ProjectStore.release), so the next
+ * start reads the file again.
+ *
  * @module dsh-plugin-projects/store
  */
-import { readFileSync, renameSync, writeFileSync, mkdirSync, chmodSync, statSync, existsSync, copyFileSync, constants } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { readFileSync, renameSync, writeFileSync, mkdirSync, chmodSync, statSync, existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
 /** Resolve a '~'-prefixed path. */
@@ -99,6 +112,20 @@ export function ensurePrivateDir(dir) {
 /** Open stores by file, so every manager in this process shares one copy. */
 const opened = new Map();
 
+/**
+ * What an older version of this plugin wrote about categories and the
+ * groups before them (see the module doc), passed through as the file has it.
+ */
+const KEPT = ['workspaceOf', 'categories', 'categoryOf', 'imports'];
+
+const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+/** The KEPT keys a parsed file has, each exactly as it has it; none from a file that isn't version 1. */
+function keptIn(parsed) {
+    if (!isObject(parsed) || parsed.version !== 1) return {};
+    return Object.fromEntries(KEPT.filter((key) => Object.hasOwn(parsed, key)).map((key) => [key, parsed[key]]));
+}
+
 export class ProjectStore {
     /**
      * The store for a file, shared within the process. A manager left over
@@ -116,46 +143,51 @@ export class ProjectStore {
         return store;
     }
 
+    /**
+     * Forget the shared copy of a file: the next open reads the file again.
+     * For when no manager runs on it (the plugin was switched off), since the
+     * file may change before the next one starts.
+     * @param {string} file - store path.
+     */
+    static release(file) {
+        opened.delete(dataPath(file));
+    }
+
     /** @param {string} file - store path. */
     constructor(file) {
         this.file = dataPath(file);
         /** @type {Record<string, object>} */
         this.projects = {};
-        /** @type {Record<string, string>} workspace id → project id (groups, before categories) */
-        this.workspaceOf = {};
-        /** @type {Record<string, object>} category id → its definition */
-        this.categories = {};
-        /** @type {Record<string, string>} workspace id → category id */
-        this.categoryOf = {};
-        /** Whether the file has categories: false until groups became categories, once. */
-        this.hasCategories = false;
-        /** @type {Record<string, object>} */
-        this.imports = {};
+        /** The KEPT keys as the file had them when last read: written back when it can't be read just then. */
+        this.kept = {};
         this.load();
     }
 
     load() {
-        const plain = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
         try {
             const parsed = JSON.parse(readFileSync(this.file, 'utf8'));
-            if (parsed?.version === 1 && parsed.projects && typeof parsed.projects === 'object') {
-                this.projects = parsed.projects;
-                this.workspaceOf = Object.fromEntries(Object.entries(plain(parsed.workspaceOf)).filter(([, id]) => typeof id === 'string'));
-                this.hasCategories = plain(parsed.categories) === parsed.categories;
-                this.categories = Object.fromEntries(Object.entries(plain(parsed.categories))
-                    .filter(([, c]) => plain(c) === c && typeof c.name === 'string' && c.name.trim() !== ''));
-                this.categoryOf = Object.fromEntries(Object.entries(plain(parsed.categoryOf)).filter(([, id]) => typeof id === 'string'));
-                this.imports = plain(parsed.imports);
-            }
+            if (parsed?.version === 1 && parsed.projects && typeof parsed.projects === 'object') this.projects = parsed.projects;
+            this.kept = keptIn(parsed);
         } catch {
             // Missing or corrupt store: start clean, never crash.
             this.projects = {};
-            this.workspaceOf = {};
-            this.categories = {};
-            this.categoryOf = {};
-            this.hasCategories = false;
-            this.imports = {};
+            this.kept = {};
         }
+    }
+
+    /**
+     * The KEPT keys exactly as the file has them now, read again for every
+     * save, so what another hand changed there is never written over. None
+     * when the file is gone; the copy last read when it is there but can't
+     * be read just then, so a passing read error never drops them.
+     */
+    keptOnDisk() {
+        try {
+            this.kept = keptIn(JSON.parse(readFileSync(this.file, 'utf8')));
+        } catch (error) {
+            if (error?.code === 'ENOENT') this.kept = {};
+        }
+        return this.kept;
     }
 
     /** Persist atomically; the store must survive crashes mid-write. */
@@ -164,11 +196,7 @@ export class ProjectStore {
             ensurePrivateDir(dirname(this.file));
             const tmp = `${this.file}.tmp`;
             // Still version 1: an older version of the plugin reads the file as it did and keeps its groups.
-            const state = {
-                version: 1, projects: this.projects, workspaceOf: this.workspaceOf,
-                ...(this.hasCategories ? { categories: this.categories, categoryOf: this.categoryOf } : {}),
-                imports: this.imports,
-            };
+            const state = { version: 1, projects: this.projects, ...this.keptOnDisk() };
             writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
             chmodSync(tmp, 0o600);
             renameSync(tmp, this.file);
@@ -223,78 +251,13 @@ export class ProjectStore {
         return threads[threadId];
     }
 
-    /** The workspaces in a project, in the order they joined it. */
-    workspacesOf(projectId) {
-        return Object.keys(this.workspaceOf).filter((id) => this.workspaceOf[id] === projectId);
-    }
-
     /**
-     * Put a workspace in a project, or (projectId null) in none. A workspace
-     * is in one project at most, so this takes it out of any other.
+     * Forget a project and its state. The groups of workspaces from before
+     * categories (`workspaceOf`) stay as they are: a project made since
+     * never held one.
      */
-    placeWorkspace(workspaceId, projectId) {
-        if (projectId === null) delete this.workspaceOf[workspaceId];
-        else {
-            // Re-adding moves it to the end, the order it joined in.
-            delete this.workspaceOf[workspaceId];
-            this.workspaceOf[workspaceId] = projectId;
-        }
-        this.save();
-    }
-
-    /** Forget a project: its state, and its workspaces go back to none. */
     removeProject(projectId) {
         delete this.projects[projectId];
-        for (const id of this.workspacesOf(projectId)) delete this.workspaceOf[id];
-        this.save();
-    }
-
-    /**
-     * Copy the file as it is now to `<name>.v1.json` beside it, once: the
-     * store from before categories, kept in case the user wants it back.
-     * @returns the copy's path, or '' when there was nothing to copy or a copy exists.
-     */
-    backup() {
-        const copy = join(dirname(this.file), `${basename(this.file, '.json')}.v1.json`);
-        try {
-            if (!existsSync(this.file)) return '';
-            copyFileSync(this.file, copy, constants.COPYFILE_EXCL);
-            chmodSync(copy, 0o600);
-            return copy;
-        } catch {
-            return '';
-        }
-    }
-
-    /** The workspaces in a category, in the order they were filed. */
-    workspacesInCategory(categoryId) {
-        return Object.keys(this.categoryOf).filter((id) => this.categoryOf[id] === categoryId);
-    }
-
-    /** Merge fields into a category, made on first use, and persist. */
-    putCategory(categoryId, fields) {
-        this.categories[categoryId] = { ...this.categories[categoryId], ...fields };
-        this.save();
-        return this.categories[categoryId];
-    }
-
-    /** Forget a category; its workspaces go back to none. */
-    removeCategory(categoryId) {
-        delete this.categories[categoryId];
-        for (const id of this.workspacesInCategory(categoryId)) delete this.categoryOf[id];
-        this.save();
-    }
-
-    /** Put a workspace in a category, or (categoryId null) in none. A workspace is in one category at most. */
-    fileWorkspace(workspaceId, categoryId) {
-        if (categoryId === null) delete this.categoryOf[workspaceId];
-        else this.categoryOf[workspaceId] = categoryId;
-        this.save();
-    }
-
-    /** Record a one-time import as made. */
-    putImport(key, record) {
-        this.imports[key] = record;
         this.save();
     }
 
