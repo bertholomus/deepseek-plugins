@@ -1857,6 +1857,75 @@ test('browser half: a category\'s header and a workspace\'s row drag in DSH\'s l
     assert.deepEqual([listeners.size, body.children.length], [0, 0]);
 });
 
+test('browser half: an empty Other workspaces shows once the browser has started a workspace\'s drag, held at the list\'s lower edge', () => {
+    const listeners = new Map();
+    const body = new FakeElement();
+    const document = {
+        querySelector: () => ({}),
+        createElement: () => new FakeElement(),
+        body,
+        addEventListener: (type, fn) => { listeners.set(type, fn); },
+        removeEventListener: (type, fn) => { if (listeners.get(type) === fn) listeners.delete(type); },
+    };
+    // The browser draws its next frame after it has handled dragstart and started the drag: here, when the test says.
+    const frames = [];
+    const frame = () => { for (const fn of frames.splice(0)) fn(); };
+    const { client, react } = loadClient({ document, globals: { Element: FakeElement, requestAnimationFrame: (fn) => frames.push(fn) } });
+    const { useCategoryDrags, CategoryHeader, CSS, OTHERS } = client.internals;
+    // Every workspace is in a category, so the list has no Other workspaces until one is dragged.
+    const rows = { w1: new FakeElement({ 'data-row-key': 'workspace:w1' }), w2: new FakeElement({ 'data-row-key': 'workspace:w2' }) };
+    const section = (ws) => new FakeElement({}, new FakeElement({}, rows[ws]), new FakeElement({}));
+    const head = new FakeElement({ 'data-categories-sb': 'a' });
+    const tree = new FakeElement({ role: 'tree' }, head, section('w1'), section('w2'));
+    const dimmed = (el) => el.hasAttribute('data-categories-dragging');
+    const sectionOf = (ws) => rows[ws].parentElement.parentElement;
+    const dragging = [];
+    const read = {
+        current: {
+            groups: [{ id: 'a', name: 'Alpha', category: true, workspaces: ['w1', 'w2'] }], folded: new Set(), titleOf: (id) => id,
+            dragging: (on) => dragging.push(on), file() {}, moveCategory() {},
+        },
+    };
+    react.useEffect = (fn) => { fn(); };
+    useCategoryDrags(tree, read);
+    const fire = (type, target) => listeners.get(type)({ type, target, clientY: 0, dataTransfer: { setData() {} }, stopPropagation() {}, preventDefault() {} });
+
+    // Nothing in the list changes while the browser still handles dragstart: Other workspaces added then could scroll
+    // the list, or cover the row where the drag was pressed, and the browser would call the drag off.
+    fire('dragstart', rows.w2);
+    assert.deepEqual([dragging, dimmed(sectionOf('w2'))], [[], false]);
+    // Once it has started the drag: the row is dimmed, and Other workspaces shows as somewhere to drop it.
+    frame();
+    assert.deepEqual([dragging, dimmed(sectionOf('w2'))], [[true], true]);
+    fire('dragend', rows.w2);
+    assert.deepEqual([dragging, dimmed(sectionOf('w2'))], [[true, false], false]);
+    // A drag the browser ends before its first frame shows nothing at all.
+    fire('dragstart', rows.w1);
+    fire('dragend', rows.w1);
+    frame();
+    assert.deepEqual([dragging, dimmed(sectionOf('w1'))], [[true, false, false], false]);
+    // A category's drag is dimmed the same way, and asks for no Other workspaces.
+    fire('dragstart', head);
+    frame();
+    assert.deepEqual([dragging.at(-1), dimmed(head)], [false, true]);
+    fire('dragend', head);
+
+    // The empty Other workspaces goes last in DSH's list, which scrolls: it is held at the list's lower edge, on the
+    // sidebar's own fill, so it is in sight wherever the list is scrolled. One that holds workspaces, and a category
+    // (even an empty one), sit in their own places.
+    const drawn = (group) => CategoryHeader({
+        group, index: 1, count: group.workspaces.length, folded: false, dot: null, onToggle() {}, onMove() {},
+        menu: { workspaces: [], actions: {}, first: true, last: true },
+    }).props;
+    const others = drawn({ id: OTHERS, name: 'Other workspaces', category: false, workspaces: [] });
+    assert.deepEqual([others.className, others['data-categories-sb'], others['aria-label']], ['dshc-sb-head dshc-sb-pinned', OTHERS, 'Other workspaces, 0 workspaces']);
+    assert.equal(drawn({ id: OTHERS, name: 'Other workspaces', category: false, workspaces: ['w1'] }).className, 'dshc-sb-head');
+    assert.equal(drawn({ id: 'e', name: 'Empty', category: true, workspaces: [] }).className, 'dshc-sb-head');
+    assert.ok(CSS.includes('.dshc-sb-head.dshc-sb-pinned{position:sticky;bottom:0;z-index:1;background:var(--dsw-specific-sidebar-fill,var(--dsw-alias-bg-base))}'));
+    // Lit as somewhere to drop, it keeps that fill under DSH's hover colour, so the rows under it still don't show through.
+    assert.match(CSS, /\.dshc-sb-head\.dshc-sb-pinned:is\(:hover,\[data-categories-drop\]\)\{background:linear-gradient\([^)]*\)[^}]*var\(--dsw-specific-sidebar-fill/);
+});
+
 test('browser half: every session in a category names its category and workspace at its top, and a click opens the Categories page', () => {
     const warnings = [];
     const { client, react } = loadClient({ console: { ...console, warn: (...parts) => { warnings.push(parts.join(' ')); } } });

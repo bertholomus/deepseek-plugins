@@ -148,6 +148,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // Dragging a category or a workspace: what moves is dimmed, the category it goes into is lit, and DSH's line shows where.
             '[data-categories-dragging]{opacity:.5}',
             '.dshc-sb-head[data-categories-drop]{background:var(--dsw-alias-interactive-bg-hover);box-shadow:inset 0 0 0 1px var(--dsw-alias-state-business-primary)}',
+            // Other workspaces with nothing in it shows only while a workspace is dragged, as somewhere to drop it. It
+            // goes last in a list that scrolls, so it is held at the list's lower edge, in sight wherever the list is
+            // scrolled, on the sidebar's own fill so the rows under it don't show through.
+            '.dshc-sb-head.dshc-sb-pinned{position:sticky;bottom:0;z-index:1;background:var(--dsw-specific-sidebar-fill,var(--dsw-alias-bg-base))}',
+            '.dshc-sb-head.dshc-sb-pinned:is(:hover,[data-categories-drop]){background:linear-gradient(var(--dsw-alias-interactive-bg-hover),var(--dsw-alias-interactive-bg-hover)) var(--dsw-specific-sidebar-fill,var(--dsw-alias-bg-base))}',
             `.dshc-sb-drop-line{position:fixed;z-index:2147483000;height:12px;pointer-events:none;background:${DROP_LINE}}`,
             '.dshc-sb-drop-line[hidden]{display:none}',
             // The chip at the top of a session: its category and workspace, among DSH's header actions. Those never
@@ -1460,9 +1465,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         event.dataTransfer.effectAllowed = 'move';
                         event.dataTransfer.setData('text/plain', next.name);
                     } catch { /* a synthetic event */ }
-                    // After the browser has taken its picture of the row.
-                    requestAnimationFrame(() => { if (drag === next) next.source.setAttribute('data-categories-dragging', ''); });
-                    read.current.dragging(next.kind === 'workspace');
+                    // After the browser has taken its picture of the row and started the drag. Changed during
+                    // dragstart (an empty Other workspaces showing up), the list could scroll the row out from under
+                    // the pointer or cover it, and the browser would call the drag off.
+                    requestAnimationFrame(() => {
+                        if (drag !== next) return;
+                        next.source.setAttribute('data-categories-dragging', '');
+                        read.current.dragging(next.kind === 'workspace');
+                    });
                 };
                 const onStart = (event) => {
                     const el = under(event);
@@ -1766,7 +1776,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 ref: head, role: 'treeitem', tabIndex: 0, 'aria-level': 1, 'aria-expanded': !folded,
                 'aria-label': `${group.name}, ${plural(n, 'workspace')}${status}`,
                 'aria-keyshortcuts': group.category ? 'Alt+ArrowUp Alt+ArrowDown Shift+F10' : 'Shift+F10',
-                className: 'dshc-sb-head', 'data-categories-sb': group.id,
+                // Other workspaces with nothing in it, shown while a workspace is dragged: held where it can be seen.
+                className: !group.category && n === 0 ? 'dshc-sb-head dshc-sb-pinned' : 'dshc-sb-head', 'data-categories-sb': group.id,
                 'data-categories-menu-open': open ? '' : undefined,
                 draggable: group.category,
                 style: index === 0 ? { order: 0, marginTop: 0 } : { order: 2 * index },

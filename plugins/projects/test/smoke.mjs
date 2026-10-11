@@ -2234,7 +2234,7 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
     assert.deepEqual(types.map((t) => [t.id, t.kind, t.patterns ? [...t.patterns] : null]), [
         ['dsh-plugin-projects/thread-chat', 'projectthread', ['dsh-resource://projectthread/session/**']],
         ['dsh-plugin-projects/threads-pane', 'projectthreads', null],
-        ['dsh-plugin-projects/thread-link', 'projectthreadlink', ['dsh-resource://file/session/**/.dsh-thread/*']],
+        ['dsh-plugin-projects/thread-link', 'projectthreadlink', ['dsh-resource://file/session/**/.dsh-thread/*', 'dsh-resource://file/session/*/.t*']],
         ['dsh-plugin-projects/thread-changes', 'projectchanges', ['dsh-resource://projectchanges/session/**']],
     ]);
     const [chat, pane, link, changes] = types;
@@ -2246,6 +2246,12 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
     assert.equal(link.canOpen('dsh-resource://file/session/s%2F1/.dsh-thread/t3'), true);
     assert.equal(link.canOpen('dsh-resource://file/session/s1/.dsh-thread/notes.md'), false);
     assert.equal(link.title('dsh-resource://file/session/s1/.dsh-thread/T12'), 'Thread t12');
+    // So does the short `[title](.t3)`; a file whose name only starts with `.t` stays DSH's.
+    assert.equal(link.canOpen('dsh-resource://file/session/s%2F1/.t3'), true);
+    assert.equal(link.title('dsh-resource://file/session/s1/.t12'), 'Thread t12');
+    for (const name of ['.tmp', '.tool-versions', '.t', '.t3x', '.t3.md', '.T3', 'docs/.t3']) {
+        assert.equal(link.canOpen(`dsh-resource://file/session/s1/${name}`), false, name);
+    }
     assert.equal(link.priority, undefined, 'the extension band ranks above the builtin file viewer');
     // A thread's Changes tab, addressed by its session.
     assert.equal(changes.canOpen('dsh-resource://projectchanges/session/s%2F1'), true);
@@ -2830,6 +2836,92 @@ test('browser half: the arrows leave a row\'s open ⋯ to DSH\'s menu, and go on
     assert.deepEqual(focused, ['c', 'a', 'a']);
 });
 
+test('browser half: the Threads menu opens when the pointer moves onto its trigger, not when the header moves the trigger under a still pointer', async () => {
+    const doc = { body: 'body', addEventListener: () => {}, removeEventListener: () => {}, querySelector: () => ({}) };
+    const { client, react } = loadClient({ document: doc, primitives: { useAnchoredPosition: () => null, useDismissOnOutsidePointer: () => {}, MenuSurface: 'MenuSurface' } });
+    const { ThreadsMenu } = client.internals;
+    const state = { projectionsBySession: { 's-c': { values: { projectSession: { role: 'coordinator', project: { name: 'Shop' }, threads: [] } } } } };
+    const quiet = { subscribe: () => () => {} };
+    const projects = {
+        facts: { ...quiet, getSnapshot: () => 0, watch: () => () => {}, paused: () => false, info: () => undefined, describe: async () => {} },
+        settings: { ...quiet, getSnapshot: () => ({ available: false }) },
+        catalog: { ...quiet, getSnapshot: () => ({ status: 'ready', value: undefined }), ensure: () => {} },
+        refresh: () => {}, hasPane: () => false, hasChanges: () => false,
+    };
+    // State and refs hold between draws, as React's do; effects don't run.
+    const refs = [];
+    const draw = mount(react, () => {
+        let at = 0;
+        react.useRef = (init) => {
+            const k = at++;
+            if (!(k in refs)) refs[k] = { current: init };
+            return refs[k];
+        };
+        return ThreadsMenu({ sessionId: 's-c', useSessions: (select) => select(state), useSessionStatus: (select) => select(new Map()), projects });
+    });
+    const shown = () => {
+        const tree = draw();
+        const all = elementsOf(tree);
+        const trigger = all.find((e) => e.props?.['data-projects-threads-trigger'] === '').props;
+        const menu = all.find((e) => e.props?.['data-projects-threads-menu'] === '')?.props;
+        return { root: tree.props, trigger, menu, open: trigger['aria-expanded'] };
+    };
+    const later = () => new Promise((r) => setTimeout(r, 200));
+    // What the browser sends the trigger, in its order, to whichever of these the trigger listens to.
+    const send = (props, ...events) => { for (const [name, event] of events) props[name]?.(event); };
+    const mouse = (x, y) => ({ pointerType: 'mouse', movementX: x, movementY: y });
+    const enter = [['onPointerEnter', mouse(0, 0)], ['onMouseEnter', {}]];
+    const move = (x, y) => [['onPointerMove', mouse(x, y)], ['onMouseMove', {}]];
+    let at = shown();
+    assert.equal(at.open, false);
+
+    // Opening the Changes tab from the pill re-flows the header and puts the trigger under the pointer, which
+    // doesn't move: the browser says the pointer came in, and no more. The menu stays closed.
+    send(at.trigger, ...enter);
+    await later();
+    at = shown();
+    assert.deepEqual([at.open, at.menu], [false, undefined]);
+    // A move of nothing (as a browser may send after a re-flow), or a finger's: still closed.
+    send(at.trigger, ...move(0, 0), ['onPointerMove', { pointerType: 'touch', movementX: 6, movementY: 2 }]);
+    await later();
+    at = shown();
+    assert.equal(at.open, false);
+    // The pointer moves there: it opens, a moment later.
+    send(at.trigger, ...move(3, -1));
+    assert.equal(shown().open, false);
+    await later();
+    at = shown();
+    assert.equal(at.open, true);
+    assert.equal(at.menu.role, 'dialog');
+
+    // From the open menu back onto the trigger (the menu's leave comes between the pointer's and the mouse's
+    // enter), it stays open.
+    send(at.trigger, enter[0]);
+    at.menu.onMouseLeave({});
+    send(at.trigger, enter[1], ...move(-2, 0));
+    await later();
+    at = shown();
+    assert.equal(at.open, true);
+    // Out of the header, it closes; a move on the trigger after that (still there once Escape closed it, say)
+    // doesn't open it again until the pointer comes onto it anew.
+    at.root.onMouseLeave({});
+    await later();
+    at = shown();
+    assert.equal(at.open, false);
+    send(at.trigger, ...move(2, 2));
+    await later();
+    assert.equal(shown().open, false);
+    // Passing over the trigger and out of the header doesn't open it.
+    send(at.trigger, ...enter, ...move(4, 0));
+    at.root.onMouseLeave({});
+    await later();
+    assert.equal(shown().open, false);
+    // Coming onto it and moving there, it opens.
+    send(at.trigger, ...enter, ...move(1, 0));
+    await later();
+    assert.equal(shown().open, true);
+});
+
 test('browser half: Rename, Mark resolved or Reopen from a row shows at once, and the coordinator\'s own later change wins', () => {
     const { client } = loadClient();
     const { newestRoster: resolvedRoster } = client.internals;
@@ -3022,6 +3114,10 @@ test('browser half: thread rows, cards and links read the projection as DSH send
     assert.equal(resolveLink(state, { sessionId: 'not-loaded', threadId: 't1' }).state, 'loading');
     assert.equal(resolveLink(state, undefined).state, 'invalid');
     assert.equal(linkTarget('dsh-resource://file/session/s-c/.dsh-thread/notes.md'), undefined);
+    // The short `.t3` names the same thread; `.tmp` names a file.
+    assert.deepEqual(plain(linkTarget('dsh-resource://file/session/s-c/.t3')), plain(target));
+    assert.deepEqual(plain(resolveLink(state, linkTarget('dsh-resource://file/session/s-c/.t3'))), { state: 'found', session: 's-t3', coordinator: 's-c' });
+    assert.equal(linkTarget('dsh-resource://file/session/s-c/.tmp'), undefined);
 
     // A sidebar chat address keeps any session id intact.
     assert.equal(chatSessionOf(chatAddress('sess/with ?#%')), 'sess/with ?#%');

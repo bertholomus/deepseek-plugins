@@ -1476,6 +1476,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * address of the session, which the link tab type claims.
          */
         const LINK = /^dsh-resource:\/\/file\/session\/([^/?#]+)\/\.dsh-thread\/(t\d+)\/?(?:[?#].*)?$/i;
+        /** The short `[title](.t3)` a reply may write instead: `.t` and digits exactly, so `.tmp` or `.tool-versions` stay files. */
+        const SHORT_LINK = /^dsh-resource:\/\/file\/session\/([^/?#]+)\/\.(t\d+)\/?(?:[?#].*)?$/;
         const EMPTY = Object.freeze([]);
         /** A set with nothing in it, never added to. */
         const EMPTY_SET = new Set();
@@ -1763,9 +1765,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return addressSession(address, CHANGES_PROTOCOL);
         }
 
-        /** The session and thread a `.dsh-thread/t3` link names, or undefined. */
+        /** The session and thread a `.dsh-thread/t3` (or `.t3`) link names, or undefined. */
         function linkTarget(address) {
-            const m = LINK.exec(String(address));
+            const m = LINK.exec(String(address)) ?? SHORT_LINK.exec(String(address));
             if (!m) return undefined;
             try { return { sessionId: decodeURIComponent(m[1]), threadId: m[2].toLowerCase() }; } catch { return undefined; }
         }
@@ -3085,6 +3087,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const triggerRef = React.useRef(null);
             const panelRef = React.useRef(null);
             const hoverTimer = React.useRef(undefined);
+            // The pointer came onto the trigger and hasn't moved over it yet.
+            const hoverArmed = React.useRef(false);
             const pinned = React.useRef(false);
             const focusFirst = React.useRef(false);
             const now = useNow(open);
@@ -3092,6 +3096,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const cancelHover = () => {
                 clearTimeout(hoverTimer.current);
                 hoverTimer.current = undefined;
+                hoverArmed.current = false;
             };
             const change = React.useCallback((next) => {
                 cancelHover();
@@ -3164,11 +3169,22 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 'aria-haspopup': 'dialog', 'aria-expanded': open,
                 'aria-label': `${TEXT.threads}: ${paused ? `${TEXT.projectPaused}, ` : ''}${info.roster === null ? TEXT.loading : summaryText(counts)}`,
                 'data-projects-threads-trigger': '', 'data-projects-paused': paused ? '' : undefined,
-                onMouseEnter: () => {
-                    cancelHover();
+                // Hovering opens it: the pointer comes onto the trigger, then moves there. A header that re-flows
+                // under a still pointer (the Changes tab opening from the pill puts the trigger where the pill was)
+                // brings the trigger to the pointer without a move, and that alone must not open the menu.
+                onPointerEnter: () => {
                     if (open) return;
+                    cancelHover();
+                    hoverArmed.current = true;
+                },
+                onPointerMove: (event) => {
+                    if (!hoverArmed.current || open || event.pointerType === 'touch' || (event.movementX === 0 && event.movementY === 0)) return;
+                    hoverArmed.current = false;
                     hoverTimer.current = setTimeout(() => { hoverTimer.current = undefined; change(true); }, 150);
                 },
+                // Coming back from the open menu keeps it open. A mouse event, as the menu's leave is, so it comes
+                // after that leave and cancels the close it starts.
+                onMouseEnter: () => { if (open) cancelHover(); },
                 onClick: () => {
                     cancelHover();
                     pinned.current = true;
@@ -5430,7 +5446,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 scope.effect(() => scope.sidebarRightTabs.register({
                     id: IDS.link,
                     kind: KINDS.link,
-                    patterns: ['dsh-resource://file/session/**/.dsh-thread/*'],
+                    // `.t*` matches files such as `.tmp` too: canOpen leaves those to DSH's file viewer.
+                    patterns: ['dsh-resource://file/session/**/.dsh-thread/*', 'dsh-resource://file/session/*/.t*'],
                     canOpen: (address) => linkTarget(address) !== undefined,
                     title: (address) => `${TEXT.thread} ${linkTarget(address)?.threadId ?? ''}`.trim(),
                 }), 'projects: thread links');
@@ -7282,7 +7299,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
             CardChanges, changesOpener, ThreadChangesTab, ThreadChangesTitle, ChangedFile, shownCounts, editsText, fileAddress, readFailure, changesAddress, changesSessionOf, DIFF_LABELS,
-            threadMenuItems, rowMenuItems, runThreadItem, ThreadMore, ThreadList, inMoreList, newestRoster, arrowKeys, ThreadFind, findRows, FIND_FROM,
+            threadMenuItems, rowMenuItems, runThreadItem, ThreadMore, ThreadList, inMoreList, newestRoster, arrowKeys, ThreadFind, findRows, FIND_FROM, ThreadsMenu,
             progressOf, elapsedText, handbackGist, cardDetail, CardDetail, useThreadLive, pendingAsk,
             renameFlow, RenameThread, RenameOverlay, RENAME,
             rowState, endingOf, endingIn, endingReason, endingLine, openSessions, markState, hoverLine, continueError, GROUPS,
