@@ -1045,6 +1045,122 @@ test('browser half: the Projects page is the whole tree, each thread under its p
     assert.deepEqual(plain(visibleItems(tree, new Set(['project:c', 'category:@others'])).map((x) => x.node.title)), ['Shop', 'storefront', 'Storefront', 'A chat', 'storefront-assets', 'Other workspaces']);
 });
 
+test('browser half: the Projects page is headed Categories, each row says what it is, and New category makes one', async () => {
+    const { client, react } = loadClient();
+    const { ProjectsPage, PageTree, treeMeta, listText } = client.internals;
+    const value = (v) => ({ values: { projectSession: v } });
+    const sessions = {
+        phase: 'ready',
+        byId: { c: { id: 'c', title: '◆ DSH Plugins' }, t1: { id: 't1', title: 'Fix the page' }, x: { id: 'x', title: 'A chat' }, n: { id: 'n', title: 'Notes' } },
+        projectionsBySession: {
+            c: value({ role: 'coordinator', project: { id: 'dsh-plugins', name: 'DSH Plugins' } }),
+            t1: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' } }),
+        },
+    };
+    let workspaces = {
+        phase: 'ready', archivedSessionIds: [],
+        items: [
+            { workspaceId: 'w-dsh', title: 'deepseek-plugins', path: '/home/u/deepseek-plugins', sessionIds: ['c', 't1', 'x'] },
+            { workspaceId: 'w-notes', title: 'notes', path: '/Users/u/notes', sessionIds: ['n'] },
+            { workspaceId: 'w-loose', title: 'loose', path: '/tmp/loose', sessionIds: [] },
+        ],
+    };
+    // A category can share its name with the ◆ project inside it (the user's own data): the rows still tell them apart.
+    let categories = [{ id: 'dsh-plugins', name: 'DSH Plugins', workspaces: [{ id: 'w-dsh' }] }, { id: 'general', name: 'General', workspaces: [{ id: 'w-notes' }] }];
+    let listed = [{ id: 'dsh-plugins', name: 'DSH Plugins', coordinator: 'c', home: 'w-dsh', source: 'profile' }];
+    const calls = [];
+    let answer = { ok: true };
+    const facts = {
+        subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {}, list: async () => {},
+        projects: () => listed, categories: () => categories, listFailed: () => false,
+        act: async (method, args) => { calls.push([method, args]); return answer; },
+    };
+    const props = {
+        useSessions: (select) => select(sessions), useSessionStatus: (select) => select(new Map()), useWorkspaces: (select) => select(workspaces),
+        projects: { facts, openSession: () => {} },
+    };
+    const draw = mount(react, () => ProjectsPage(props));
+    const classed = (tree, name) => textIn(byClass(tree, name));
+    const newButton = (tree) => elementsOf(tree).find((e) => e.props?.['data-projects-new'] !== undefined);
+    let page = draw();
+    // The heading speaks of categories; Other workspaces holds the workspaces in none, so it isn't counted.
+    assert.equal(textIn(elementsOf(page).filter((e) => e.type === 'h1')), 'Categories');
+    assert.equal(classed(page, 'dshp-pg-count'), '2 categories');
+    assert.equal(textIn(newButton(page)), 'New category');
+    assert.doesNotMatch(textIn(page), /project/i);
+    // Each level says what it is: a category, a workspace by its path, a ◆ project with its threads.
+    const treeEl = elementsOf(page).find((e) => e.type === PageTree);
+    assert.equal(treeEl.props.label, 'Categories');
+    const rows = elementsOf(mount(react, () => PageTree(treeEl.props))()).filter((e) => e.props?.role === 'treeitem')
+        .map((li) => [li.props['aria-level'], li.props['data-projects-node'], classed(li.children[0], 'dshp-tree-diamond'), classed(li.children[0], 'dshp-tree-title'), classed(li.children[0], 'dshp-tree-meta')]);
+    assert.deepEqual(plain(rows), [
+        [1, 'category', '', 'DSH Plugins', 'Category · 1 workspace'],
+        [2, 'workspace', '', 'deepseek-plugins', '~/deepseek-plugins'],
+        [3, 'project', '◆', 'DSH Plugins', 'Project · 1 thread'],
+        [4, 'thread', '', 'Fix the page', ''],
+        [3, 'session', '', 'A chat', ''],
+        [1, 'category', '', 'General', 'Category · 1 workspace'],
+        [2, 'workspace', '', 'notes', '~/notes'],
+        [3, 'session', '', 'Notes', ''],
+        [1, 'category', '', 'Other workspaces', '1 workspace'],
+        [2, 'workspace', '', 'loose', '/tmp/loose'],
+    ]);
+    assert.deepEqual([treeMeta({ kind: 'category', id: 'new', children: [] }), treeMeta({ kind: 'project', id: 'c', children: [] }), treeMeta({ kind: 'workspace', id: 'w', path: '', children: [] })],
+        ['Category · 0 workspaces', 'Project · 0 threads', null]);
+
+    // New category asks for a name, in the sidebar's words; a refusal shows under the field, and the dialog stays.
+    newButton(page).props.onClick();
+    page = draw();
+    let dialog = elementsOf(page).find((e) => typeof e.props?.onSubmit === 'function');
+    assert.deepEqual([dialog.props.title, dialog.props.label, dialog.props.action], ['New category', 'Category name', 'Create']);
+    assert.match(dialog.props.description, /In DSH's sidebar, drag workspaces onto it/);
+    answer = { ok: false, error: { code: 'projects/refused', message: 'a category needs a name' } };
+    assert.equal(await dialog.props.onSubmit('Work'), 'A category needs a name.');
+    assert.ok(elementsOf(draw()).some((e) => typeof e.props?.onSubmit === 'function'));
+    // Made, through the endpoint the sidebar uses, in no workspace; the dialog closes and the page says so.
+    answer = { ok: true, value: { category: 'work' } };
+    assert.equal(await dialog.props.onSubmit('Work'), null);
+    assert.deepEqual(plain(calls), [['createCategory', { name: 'Work', workspace: '' }], ['createCategory', { name: 'Work', workspace: '' }]]);
+    page = draw();
+    assert.equal(elementsOf(page).some((e) => typeof e.props?.onSubmit === 'function'), false);
+    assert.equal(textIn(elementsOf(page).find((e) => e.props?.['data-projects-page-said'] !== undefined)), 'Work created.');
+
+    // Nothing yet: the empty state says how the levels fit, and promises no project of workspaces.
+    categories = [];
+    workspaces = { ...workspaces, items: [], phase: 'pending' };
+    page = draw();
+    assert.equal(classed(page, 'dshp-pg-state'), 'Loading categories…');
+    workspaces = { ...workspaces, phase: 'ready' };
+    page = draw();
+    const empty = byClass(page, 'dshp-pg-empty')[0];
+    assert.equal(textIn(elementsOf(empty).filter((e) => e.type === 'h2')), 'No workspaces yet');
+    const said = textIn(elementsOf(empty).filter((e) => e.type === 'p'));
+    assert.doesNotMatch(said, /gathers|No projects/);
+    assert.match(said, /Categories group workspaces, and a ◆ project lives in one workspace/);
+    assert.equal(classed(page, 'dshp-pg-count'), '');
+    assert.equal(textIn(newButton(page)), 'New category');
+    // Still loading the plugin's list: no heading button yet.
+    listed = null;
+    assert.equal(newButton(draw()), undefined);
+
+    // The entry in DSH's sidebar keeps its name.
+    const registered = [];
+    const ctx = {
+        effect: (fn) => fn(),
+        inject: (names, fn) => { if (!names.includes('configForms')) fn(ctx); },
+        slots: { inject: (_name, fn) => fn(), register: (slot) => { registered.push(slot); return () => {}; } },
+        resources: { register: () => () => {} },
+        sidebarRightTabs: { register: () => () => {} },
+        sessions: { list: { getSnapshot: () => ({ ids: [], byId: {}, phase: 'ready', projectionsBySession: {} }), subscribe: () => () => {} } },
+        uiWorkspace: {},
+        sidebarRight: {},
+    };
+    client.apply(ctx);
+    assert.equal(registered.find((r) => r.name === 'sidebar.panellist')?.label, 'Projects');
+    // The note on imported names lists them as a sentence does.
+    assert.deepEqual([listText([]), listText(['A']), listText(['A', 'B']), listText(['A', 'B', 'C'])], ['', 'A', 'A and B', 'A, B and C']);
+});
+
 test('browser half: a session DSH lists without the plugin\'s value is placed by what the plugin\'s store knows, not by its title', async () => {
     const { client } = loadClient();
     const { rowPlace, isThreadRow, coordinatorName, takeKnown, projectFacts } = client.internals;
@@ -1182,7 +1298,25 @@ function loadClient({ storage, document, innerWidth } = {}) {
         },
         'react-dom': {}, '@deepseek-ai/dsh-client-ui-primitives': ui,
     };
-    return { id: loaded.id, client: loaded.factory((name) => modules[name]), window };
+    return { id: loaded.id, client: loaded.factory((name) => modules[name]), window, react: modules.react };
+}
+
+/**
+ * Draw a component again and again with state that holds between draws
+ * (the stand-in React's useState forgets), so a click can open what it opens.
+ * @returns a function that draws it once more.
+ */
+function mount(react, render) {
+    const cells = [];
+    return () => {
+        let at = 0;
+        react.useState = (init) => {
+            const k = at++;
+            if (!(k in cells)) cells[k] = typeof init === 'function' ? init() : init;
+            return [cells[k], (next) => { cells[k] = typeof next === 'function' ? next(cells[k]) : next; }];
+        };
+        return render();
+    };
 }
 
 /** Every element in a tree a component returned (the test React's {type, props, children}), depth first. */
@@ -2260,41 +2394,6 @@ test('browser half: DSH\'s session list is grouped by category, collapsible, wit
     assert.equal(attrs.get('new').has('aria-description'), false);
     describeWorkspaces(list, null);
     assert.deepEqual(['w2', 'w1', 'w3'].map((id) => attrs.get(id).has('aria-description')), [false, false, false]);
-});
-
-test('browser half: the Projects page puts a project on one row: its workspaces, what waits on you, what runs, when it moved', () => {
-    const { client } = loadClient();
-    const { placeWorkspaces, chatsIn, pulseOf, pulseText, listText } = client.internals;
-    const items = [
-        { workspaceId: 'w1', title: 'api', path: '/home/u/api', sessionIds: ['s1', 's2', 's3', 'c'] },
-        { workspaceId: 'w2', title: '', path: '/home/u/web', sessionIds: ['s4'] },
-        { workspaceId: 'w3', title: 'loose', path: '/home/u/loose', sessionIds: [] },
-    ];
-    const listed = [{ id: 'p', workspaces: [{ id: 'w1' }, { id: 'w2' }, { id: 'gone', title: 'Gone' }] }];
-    const placed = placeWorkspaces(listed, items, true);
-    assert.deepEqual(plain(placed.of.get('p')).map((ws) => [ws.id, ws.title]), [['w1', 'api'], ['w2', 'web']]);
-    assert.deepEqual(plain(placed.others).map((ws) => ws.id), ['w3']);
-    // Before DSH's list has loaded, a workspace the plugin knows stays.
-    assert.deepEqual(plain(placeWorkspaces(listed, items, false).of.get('p')).map((ws) => ws.id), ['w1', 'w2', 'gone']);
-
-    const sessions = {
-        byId: {
-            s1: { id: 's1', title: 'One', updatedAt: 100 },
-            s2: { id: 's2', title: 'Two', updatedAt: 300, running: true },
-            s3: { id: 's3', title: 'Blank', updatedAt: 500, blank: true },
-            s4: { id: 's4', title: 'Four', updatedAt: 200 },
-            c: { id: 'c', title: '◆ P', updatedAt: 50, projectionValues: { projectSession: { role: 'coordinator', project: { name: 'P' }, threads: [] } } },
-        },
-    };
-    // A workspace's chats, newest first: none archived or blank, and no coordinator or thread.
-    assert.deepEqual(plain(chatsIn(placed.of.get('p')[0], sessions, new Set(['s9'])).map((row) => row.id)), ['s2', 's1']);
-    assert.deepEqual(plain(chatsIn(placed.of.get('p')[0], sessions, new Set(['s2'])).map((row) => row.id)), ['s1']);
-    const statuses = new Map([['s1', { pendingInteraction: { kind: 'approval' } }]]);
-    assert.deepEqual(plain(pulseOf(['s1', 's2', 's4', 'missing', undefined], sessions, statuses)), { waiting: 1, running: 1, at: 300 });
-    assert.deepEqual(plain(pulseOf([], sessions, statuses)), { waiting: 0, running: 0, at: 0 });
-    assert.equal(pulseText({ waiting: 2, running: 1, at: 1 }), ', 2 waiting on you, 1 running');
-    assert.equal(pulseText({ waiting: 0, running: 0, at: 1 }), '');
-    assert.deepEqual([listText([]), listText(['A']), listText(['A', 'B']), listText(['A', 'B', 'C'])], ['', 'A', 'A and B', 'A, B and C']);
 });
 
 test('session mode: a failed selection is reported, and the coordinator retries later', async () => {

@@ -450,8 +450,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-ps-reach{display:inline-flex;align-items:flex-start;gap:5px;min-width:0}',
             '.dshp-ps-reach>.dshp-perm-glyph{margin-top:3px}',
             '.dshp-ps-reach>span:last-child{min-width:0}',
-            // The Projects page (the Projects entry in the sidebar): DSH's page layout, as on Automation tasks,
-            // with one row per project in a list; a row opens to its threads, workspaces and chats.
+            // The Projects page (the Projects entry in the sidebar), headed Categories: DSH's page layout, as on
+            // Automation tasks, with the whole tree: categories, their workspaces, each one's ◆ projects and chats.
             '.dshp-pg{display:flex;width:100%;min-width:0;height:100%;min-height:0;overflow:hidden;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);font-size:14px;line-height:1.6}',
             '.dshp-pg-scroll{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;container-type:inline-size;--dsh-scrollbar-width:9px;--dsh-scrollbar-thumb-border:2px}',
             '.dshp-pg-content{max-width:960px;margin:0 auto;padding:0 clamp(24px,4vw,48px) 48px}',
@@ -467,112 +467,23 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-tree-diamond{width:14px;text-align:center;flex:none;font-size:12px}',
             '.dshp-tree-title{flex:0 1 auto;min-width:4em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshp-tree-category>.dshp-tree-row .dshp-tree-title{font-weight:500}',
-            '.dshp-tree-meta{margin-left:auto;padding-left:12px;flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12px;opacity:.65;white-space:nowrap}',
+            // What follows a title (a level and its count, a path) gives way before the title does.
+            '.dshp-tree-meta{margin-left:auto;padding-left:12px;flex:0 100 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12px;opacity:.65;white-space:nowrap}',
             '.dshp-tree-dot{display:inline-flex;flex:none}',
             '.dshp-tree-glyph{display:inline-flex;width:14px;flex:none;opacity:.75}',
             '.dshp-pg-count{font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
             '.dshp-pg-heading .dshp-pg-new{margin-left:auto;align-self:center}',
-            `.dshp-pg-alert{display:flex;align-items:center;gap:10px;margin:-4px 0 12px;padding:6px 6px 6px 14px;border-radius:12px;background:var(--dsw-alias-interactive-bg-hover-danger,var(--dsw-alias-interactive-bg-hover));font-size:13px;line-height:20px;color:${ERROR_TEXT}}`,
-            '.dshp-pg-alert>span{flex:1;min-width:0}',
-            '.dshp-pg-alert .dshp-t-icon{margin:0;color:inherit}',
             '.dshp-pg-note{display:flex;align-items:center;gap:8px;margin:-4px 0 12px;padding:5px 5px 5px 12px;border-radius:12px;background:var(--dsw-alias-interactive-bg-hover);font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
             '.dshp-pg-note>svg{flex:none}',
             '.dshp-pg-note>span{flex:1;min-width:0}',
             '.dshp-pg-note .dshp-t-icon{margin:0}',
-            // The list: a row per project, a hairline between them, Other workspaces last.
-            '.dshp-pg-list{display:flex;flex-direction:column;margin:0;padding:6px;list-style:none;border:.5px solid var(--dsw-alias-border-l3);border-radius:16px;background:var(--dsw-alias-bg-base)}',
-            '.dshp-pg-item+.dshp-pg-item::before{content:"";display:block;margin:2px 10px;border-top:.5px solid var(--dsw-alias-border-l3)}',
-            '.dshp-pg-row{display:grid;grid-template-columns:24px 16px minmax(0,1fr) auto auto;align-items:center;column-gap:8px;box-sizing:border-box;min-height:56px;padding:7px 8px 7px 6px;border-radius:12px;cursor:pointer}',
-            '.dshp-pg-row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
-            '.dshp-pg-chev{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:var(--dsw-radius-sm);background:none;color:var(--dsw-alias-label-secondary);cursor:pointer}',
-            '.dshp-pg-chev:hover{color:var(--dsw-alias-label-primary)}',
-            `.dshp-pg-chev:focus-visible{outline:none;box-shadow:0 0 0 2px ${RING}}`,
-            '.dshp-pg-chev svg{transition:transform .15s var(--ds-ease-in-out,ease)}',
-            '.dshp-pg-chev[aria-expanded=true] svg{transform:rotate(90deg)}',
-            '.dshp-pg-glyph{display:inline-flex;align-items:center;justify-content:center;width:16px;font-size:13px;line-height:1}',
-            '.dshp-pg-hollow{color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pg-row-text{display:flex;flex-direction:column;min-width:0}',
-            '.dshp-pg-title{display:flex;align-items:center;gap:8px;min-width:0;margin:0;font-size:15px;font-weight:500;line-height:22px}',
-            '.dshp-pg-name{display:inline-flex;align-items:center;min-width:0;max-width:100%;padding:0;border:0;border-radius:4px;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer}',
-            '.dshp-pg-name:disabled{cursor:default}',
-            '.dshp-pg-name:not(:disabled):hover .dshp-pg-name-text{text-decoration:underline;text-underline-offset:3px}',
-            `.dshp-pg-name:focus-visible{outline:none;box-shadow:0 0 0 2px ${RING}}`,
-            '.dshp-pg-name-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-            '.dshp-pg-badge{flex:none;display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px;border-radius:11px;background:var(--dsw-alias-interactive-bg-hover);font-size:12px;font-weight:400;line-height:18px;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pg-row:hover .dshp-pg-badge{background:var(--dsw-alias-bg-base)}',
-            '.dshp-pg-line{display:flex;align-items:center;gap:6px;min-width:0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pg-line>svg{flex:none}',
-            '.dshp-pg-line-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-            '.dshp-pg-pulses{display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap;font-variant-numeric:tabular-nums}',
-            '.dshp-pg-pulses>*+*::before{content:"·";margin-right:6px;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pg-pulse{display:inline-flex;align-items:center;gap:6px}',
-            '.dshp-pg-pulse[data-state=warning]{color:var(--dsw-alias-label-primary)}',
-            // As wide as a coordinated project's two buttons, so the times line up down the list.
-            '.dshp-pg-actions{display:inline-flex;align-items:center;justify-content:flex-end;gap:2px;min-width:54px}',
-            '.dshp-pg-proj[data-fresh]>.dshp-pg-row{animation:dshp-pg-fresh 2.4s ease-out}',
-            `@keyframes dshp-pg-fresh{0%,45%{box-shadow:0 0 0 2px ${RING}}100%{box-shadow:0 0 0 2px transparent}}`,
-            `@media (prefers-reduced-motion:reduce){.dshp-pg-proj[data-fresh]>.dshp-pg-row{animation:none;box-shadow:0 0 0 2px ${RING}}.dshp-pg-chev svg{transition:none}}`,
-            // An open row: under the name, what it runs on, its threads, its workspaces.
-            '.dshp-pg-body{padding:0 6px 8px 34px}',
-            '.dshp-pg-models{display:flex;flex-wrap:wrap;gap:2px 6px;padding:0 0 4px}',
-            '.dshp-pg-model{display:inline-flex;align-items:center;gap:6px;min-width:0;height:28px;padding:0 8px;border:0;border-radius:var(--dsw-radius-md);background:none;font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary);text-align:left}',
-            '.dshp-pg-model-value{color:var(--dsw-alias-label-primary)}',
-            '.dshp-pg-model>svg{flex:none;color:var(--dsw-alias-label-tertiary)}',
-            '.dshp-pg-model-glyph{flex:none;display:inline-flex;margin-right:-2px;color:var(--dsw-alias-label-secondary)}',
-            'button.dshp-pg-model{cursor:pointer}',
-            'button.dshp-pg-model:hover{background:var(--dsw-alias-interactive-bg-hover)}',
-            `button.dshp-pg-model:focus-visible{outline:none;box-shadow:inset 0 0 0 2px ${RING}}`,
-            '.dshp-pg-body .dshp-t-paused{margin:0 0 6px}',
-            '.dshp-pg-body .dshp-t-row{border-radius:12px;font-size:14px;line-height:21px}',
-            '.dshp-pg-body .dshp-t-main{grid-template-columns:16px minmax(0,1fr);column-gap:10px;min-height:52px;padding:8px 10px}',
-            '.dshp-pg-body .dshp-t-row[data-acts]>.dshp-t-main{padding-right:calc(20px + var(--dshp-t-acts))}',
-            '.dshp-pg-body .dshp-t-row-acts{right:10px}',
-            '.dshp-pg-body .dshp-t-dot{width:16px;height:21px}',
-            '.dshp-pg-body .dshp-t-line,.dshp-pg-body .dshp-t-meta{height:auto;font-size:13px;line-height:20px}',
-            '.dshp-pg-body .dshp-t-group{padding:8px 10px 4px;font-size:12px;line-height:18px}',
-            '.dshp-pg-body .dshp-t-notice{padding:6px 10px 8px;font-size:13px;line-height:20px}',
-            '.dshp-pg-adds{display:flex;flex-wrap:wrap;gap:2px 4px;margin-top:2px}',
             '.dshp-pg-state{padding:48px 0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
             `.dshp-pg-state.dshp-t-error{color:${ERROR_TEXT}}`,
             '.dshp-pg-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:72px 20px;text-align:center;color:var(--dsw-alias-label-secondary)}',
             '.dshp-pg-empty-glyph{display:inline-flex;margin-bottom:4px;color:var(--dsw-alias-label-tertiary)}',
             '.dshp-pg-empty h2{margin:0;font-size:15px;font-weight:500;line-height:22px;color:var(--dsw-alias-label-primary)}',
             '.dshp-pg-empty p{max-width:440px;margin:0;font-size:13px;line-height:21px}',
-            '.dshp-pg-empty .dshp-pg-cta{margin-top:12px}',
-            // A workspace: one line, its path on a hover; a click shows its chats.
-            '.dshp-pg-ws-list{display:flex;flex-direction:column;gap:1px}',
-            '.dshp-pg-ws{display:flex;align-items:center;gap:2px;border-radius:10px}',
-            '.dshp-pg-ws:hover,.dshp-pg-ws:focus-within{background:var(--dsw-alias-interactive-bg-hover)}',
-            '.dshp-pg-ws-item[aria-busy=true]{opacity:.55;pointer-events:none;transition:opacity .12s}',
-            '.dshp-pg-ws-toggle{display:grid;grid-template-columns:10px 16px minmax(0,1fr) auto;align-items:center;column-gap:8px;flex:1;min-width:0;box-sizing:border-box;min-height:36px;padding:4px 8px 4px 10px;border:0;border-radius:10px;background:none;font:inherit;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer}',
-            `.dshp-pg-ws-toggle:focus-visible{outline:none;box-shadow:inset 0 0 0 2px ${RING}}`,
-            '.dshp-pg-ws-arrow{display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary)}',
-            '.dshp-pg-ws-arrow svg{transition:transform .12s}',
-            '.dshp-pg-ws-toggle[aria-expanded=true] .dshp-pg-ws-arrow svg{transform:rotate(90deg)}',
-            '.dshp-pg-ws-folder{display:inline-flex;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pg-ws-title{display:flex;align-items:center;gap:8px;min-width:0;font-size:14px;line-height:20px}',
-            '.dshp-pg-ws-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-            '.dshp-pg-ws-tag{flex:none;padding:0 7px;border-radius:9px;background:var(--dsw-alias-interactive-bg-hover);font-size:11px;font-weight:400;line-height:18px;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pg-ws:hover .dshp-pg-ws-tag,.dshp-pg-ws:focus-within .dshp-pg-ws-tag{background:var(--dsw-alias-bg-base)}',
-            '.dshp-pg-ws-meta{display:inline-flex;align-items:center;gap:8px;padding-left:8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap;font-variant-numeric:tabular-nums}',
-            '.dshp-pg-ws-meta>span+span::before{content:"·";padding-right:8px}',
-            '.dshp-pg-ws-meta>.dshp-pg-ws-dot+span::before{content:none}',
-            '.dshp-pg-ws-dot{display:inline-flex;align-items:center}',
-            '.dshp-pg-ws-acts{flex:none;display:inline-flex;align-items:center;gap:2px;padding-right:6px}',
-            '.dshp-pg-ws-acts .dshp-t-icon{width:28px;height:28px;margin:0}',
-            '.dshp-pg-chats{display:flex;flex-direction:column;gap:1px;margin:2px 0 4px 23px;padding-left:10px;border-left:.5px solid var(--dsw-alias-border-l3)}',
-            '.dshp-pg-chat{display:grid;grid-template-columns:14px minmax(0,1fr) auto;align-items:center;column-gap:8px;box-sizing:border-box;width:100%;min-height:32px;padding:5px 10px 5px 8px;border:0;border-radius:10px;background:none;font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);text-align:left;cursor:pointer}',
-            '.dshp-pg-chat:hover,.dshp-pg-chat:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}',
-            `.dshp-pg-chat:focus-visible{outline:none;box-shadow:inset 0 0 0 2px ${RING}}`,
-            '.dshp-pg-chat-dot{display:inline-flex;align-items:center;justify-content:center;width:14px}',
-            '.dshp-pg-chat-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-            '.dshp-pg-chat-ago{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
-            '.dshp-pg-chat-none{padding:6px 8px;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
-            '.dshp-pg-more,.dshp-pg-add{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;box-sizing:border-box;height:32px;padding:0 10px;border:0;border-radius:10px;background:none;font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary);cursor:pointer}',
-            '.dshp-pg-more:hover,.dshp-pg-more:focus-visible,.dshp-pg-add:hover,.dshp-pg-add:focus-visible,.dshp-pg-add[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
-            `.dshp-pg-more:focus-visible,.dshp-pg-add:focus-visible{outline:none;box-shadow:inset 0 0 0 2px ${RING}}`,
-            '.dshp-pg-add:disabled{cursor:default}',
-            '.dshp-pg-menu-glyph{display:inline-flex;align-items:center;justify-content:center;width:16px;font-size:11px;line-height:1}',
+            // The dialogs (New category, Rename, Delete) and a menu item's quieter part, shared with the session list's category menus.
             '.dshp-pg-menu-from{color:var(--dsw-alias-label-secondary)}',
             '.dshp-pg-dialog.dshp-pg-dialog{width:min(440px,100%)}',
             '.dshp-pg-input{box-sizing:border-box;width:100%;height:44px;padding:7px 14px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-lg);background:none;font:inherit;font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary);outline:none}',
@@ -582,8 +493,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-pg-input:disabled{color:var(--dsw-alias-label-dimmed)}',
             `.dshp-pg-dialog-error{margin-top:8px;font-size:12px;line-height:18px;color:${ERROR_TEXT}}`,
             `.dshp-pg-danger:not(:disabled){color:${ERROR_TEXT}}`,
-            // A narrow page keeps each row's dots and time, not their words.
-            '@container (width<=560px){.dshp-pg-pulse-text{display:none}.dshp-pg-body{padding-left:14px}}',
             // Category headers in DSH's session list (sidebarRules places DSH's rows under them)
             '.dshp-sb-head{display:flex;align-items:center;gap:6px;box-sizing:border-box;height:30px;margin-top:10px;padding:0 8px;border-radius:var(--dsw-radius-md);font-size:13px;font-weight:500;line-height:18px;color:var(--dsw-alias-label-primary);cursor:pointer;user-select:none;outline:none}',
             '.dshp-sb-head:is(:hover,[data-projects-menu-open]){background:var(--dsw-alias-interactive-bg-hover)}',
@@ -4344,15 +4253,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 hasPane() {
                     try { return ctx.get('sidebarRightTabs')?.get?.(KINDS.pane) !== undefined; } catch { return false; }
                 },
-                /** A new chat in a workspace, as DSH's session list starts one; undefined where DSH can't. */
-                get newChat() {
-                    let start;
-                    try { start = ctx.uiWorkspace?.startSession; } catch { start = undefined; }
-                    if (typeof start !== 'function') return undefined;
-                    return (workspaceId) => {
-                        try { ctx.uiWorkspace.startSession(workspaceId); } catch (error) { warn('could not start a chat', error); }
-                    };
-                },
                 /** DSH's Plugins page at this plugin (its Default models and projects); undefined where DSH can't open it. */
                 get openDefaults() {
                     let nav;
@@ -4431,7 +4331,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 name: 'main', key: IDS.page, inject: withApi,
             }, ProjectsPage));
             ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
-                name: 'sidebar.panellist', id: IDS.page, order: 5, label: PAGE.title,
+                name: 'sidebar.panellist', id: IDS.page, order: 5, label: PAGE.entry,
             }, ProjectsIcon));
             // The right-sidebar parts: a thread's chat, the Threads pane, and thread links from replies.
             ctx.inject(['resources', 'sidebarRightTabs'], (scope) => {
@@ -4480,58 +4380,23 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         // ── Projects page ──────────────────────────────────────────────────
 
         const PAGE = {
-            title: 'Projects',
-            loading: 'Loading projects…',
-            emptyTitle: 'No projects yet',
-            emptyText: 'A project gathers the workspaces that belong together. Give it a ◆ coordinator and it plans the work and starts threads for you.',
-            notStarted: 'The coordinator starts the next time DSH loads the plugin.',
-            open: 'Open',
-            newProject: 'New project',
-            newProjectItem: 'New project…',
-            nameLabel: 'Project name',
-            newText: 'It starts empty. Put workspaces in it, then add a ◆ coordinator when you want one.',
-            newWith: (title) => `${title} moves into it.`,
-            create: 'Create',
-            creating: 'Creating…',
-            rename: 'Rename',
-            renameItem: 'Rename…',
-            renameTitle: 'Rename project',
-            renaming: 'Renaming…',
-            deleteItem: 'Delete…',
-            deleteTitle: 'Delete project',
-            deleting: 'Deleting…',
-            deleteText: (name, n) => `This deletes “${name}”. ${n === 0 ? 'It holds no workspaces.' : n === 1 ? 'Its workspace goes back to Other workspaces.' : `Its ${n} workspaces go back to Other workspaces.`} No chats or folders are deleted.`,
+            /** The entry in DSH's sidebar that opens the page. */
+            entry: 'Projects',
+            title: 'Categories',
+            loading: 'Loading categories…',
+            emptyTitle: 'No workspaces yet',
+            emptyText: 'Add a workspace in DSH\'s sidebar and it shows up here. Categories group workspaces, and a ◆ project lives in one workspace with its threads.',
+            // New category on the page takes the sidebar's words (SIDEBAR) but this text: workspaces are filed in DSH's sidebar.
+            newText: 'It starts empty and goes last. In DSH\'s sidebar, drag workspaces onto it or add them from its ⋯ menu.',
+            // What each level is, on its row, so a category never reads as a project.
+            category: 'Category',
+            project: 'Project',
             cancel: 'Cancel',
             close: 'Close',
-            addCoordinator: 'Add coordinator',
-            adding: 'Adding a coordinator…',
-            coordinatorWhere: 'Where should it work?',
-            addWorkspace: 'Add a workspace',
-            addNone: 'Every workspace is already here',
-            notInProject: 'Not in a project',
-            inOtherProjects: 'In other projects',
-            moveTo: 'Move to project',
-            removeFromProject: 'Remove from project',
-            workspaces: 'Workspaces',
-            others: 'Other workspaces',
-            othersText: 'Not in a project yet. Use ⋯ on one to move it into a project.',
-            coordinatorHere: 'Coordinator works here',
-            noWorkspaces: 'No workspaces yet. Add one and its chats show up here.',
-            noWorkspacesYet: 'No workspaces yet',
-            noChats: 'No chats yet',
-            noThreads: 'No threads yet',
             newChat: 'New chat',
-            showAll: (n) => `Show all ${n}`,
-            showFewer: 'Show fewer',
             imported: (names) => `Imported from your old sidebar: ${listText(names)}.`,
             dismiss: 'Dismiss',
-            waiting: (n) => `${n} waiting`,
-            running: (n) => `${n} running`,
-            waitingLabel: (n) => (n === 1 ? 'one chat waiting on you' : `${n} chats waiting on you`),
         };
-        /** Chats a workspace shows before "Show all"; workspaces the Other workspaces card shows before it. */
-        const CHATS_SHOWN = 5;
-        const OTHERS_SHOWN = 6;
 
         /**
          * The Projects entry's icon, drawn like DSH's own (a 16 px grid and a
@@ -4552,58 +4417,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const NO_WORKSPACES = Object.freeze({ items: EMPTY, archivedSessionIds: EMPTY, phase: 'none' });
         const noWorkspaces = (select) => select(NO_WORKSPACES);
 
-        /** Whether a project has a ◆ coordinator (or gets one from the profile); the others are groups of workspaces (◇). */
-        const coordinated = (project) => (typeof project.coordinator === 'string' && project.coordinator !== '') || project.source === 'profile';
-
         /** A path with the home folder as ~, as DSH's session list shows paths. */
         const shortPath = (path) => String(path ?? '').replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~');
 
         /** Names as a sentence lists them: "A", "A and B", "A, B and C". */
         const listText = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
-
-        /**
-         * Every project's workspaces with DSH's own title, path and chats for
-         * each, and the workspaces in no project. The plugin says what
-         * belongs where; DSH's list says what exists and what it's called.
-         */
-        function placeWorkspaces(listed, items, ready) {
-            const live = new Map(items.map((ws) => [ws.workspaceId, ws]));
-            const view = (id, ws, known) => ({
-                id,
-                title: ws?.title || known?.title || folderName(ws?.path ?? known?.path ?? id),
-                path: ws?.path ?? known?.path ?? '',
-                sessionIds: Array.isArray(ws?.sessionIds) ? ws.sessionIds : EMPTY,
-            });
-            const placed = new Set();
-            const of = new Map();
-            for (const project of listed) {
-                const list = [];
-                for (const known of Array.isArray(project.workspaces) ? project.workspaces : EMPTY) {
-                    if (!isObject(known) || typeof known.id !== 'string' || placed.has(known.id)) continue;
-                    // One DSH has deleted: gone once DSH's list has loaded.
-                    if (ready && !live.has(known.id)) continue;
-                    placed.add(known.id);
-                    list.push(view(known.id, live.get(known.id), known));
-                }
-                of.set(project.id, list);
-            }
-            const others = items.filter((ws) => typeof ws?.workspaceId === 'string' && !placed.has(ws.workspaceId)).map((ws) => view(ws.workspaceId, ws));
-            return { of, others };
-        }
-
-        /** Whether a session is a project's coordinator or thread, which its project's card shows instead. */
-        const projectSession = (sessions, id) => valueIn(sessions, id) !== undefined || coordinatorName(sessions, id) !== undefined || isThreadRow(sessions, id);
-
-        /** A workspace's chats, the newest first: none archived or blank, and no coordinator or thread. */
-        function chatsIn(ws, sessions, archived, skip) {
-            const out = [];
-            for (const id of ws.sessionIds) {
-                const row = sessions.byId?.[id];
-                if (!row || row.blank === true || archived.has(id) || skip?.has(id) || projectSession(sessions, id)) continue;
-                out.push(row);
-            }
-            return out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-        }
 
         /** A chat's dot as DSH's session list draws it: waiting on the user, running, or none. */
         function chatDot(row, statuses) {
@@ -4612,236 +4430,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return (status?.running ?? row.running) === true ? 'ongoing' : null;
         }
 
-        /** The ⋯ button that opens a row's or a card's menu. */
-        function MenuButton({ label, open, onClick, ...rest }) {
-            return h('button', {
-                type: 'button', className: 'dshp-t-icon', 'aria-label': label, 'aria-haspopup': 'menu', 'aria-expanded': open, onClick, ...rest,
-            }, h(ui.IconEllipsisOutlineRegular, { size: 15 }));
-        }
-
-        /** A project in a menu, with its glyph. */
-        const projectItem = (project, id = `p:${project.id}`) => ({
-            id, label: project.name || project.id,
-            icon: h('span', { className: 'dshp-pg-menu-glyph', 'aria-hidden': true }, coordinated(project) ? '◆' : '◇'),
-        });
-
-        /** ⋯ on a workspace: move it to another project, into a new one, or out of its project. */
-        function WorkspaceMenu({ ws, inProject, targets, actions }) {
-            const [open, setOpen] = React.useState(false);
-            const items = [
-                { type: 'label', id: 'to', text: PAGE.moveTo },
-                ...targets.map((project) => projectItem(project)),
-                { id: 'new', label: PAGE.newProjectItem, icon: h(ui.IconProjectAddOutlineRegular, {}) },
-                ...(inProject ? [{ type: 'separator', id: 'sep' }, { id: 'out', label: PAGE.removeFromProject, icon: h(ui.IconCloseOutlineRegular, {}) }] : []),
-            ];
-            return h(ui.Menu, {
-                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end',
-                onSelect: (id) => {
-                    setOpen(false);
-                    if (id === 'new') actions.create(ws);
-                    else if (id === 'out') void actions.move(ws.id, null);
-                    else if (id.startsWith('p:')) void actions.move(ws.id, id.slice(2));
-                },
-                anchor: h(MenuButton, { label: `${PAGE.moveTo}: ${ws.title}`, open, 'data-projects-workspace-menu': ws.id, onClick: () => setOpen((v) => !v) }),
-            });
-        }
-
-        /**
-         * ⋯ on a project made on this page or imported: Add coordinator while
-         * it has none (asking where it should work when the project holds
-         * several workspaces), Rename, and Delete while it has no coordinator.
-         */
-        function ProjectMenu({ project, workspaces = EMPTY, busy = false, actions }) {
-            const [open, setOpen] = React.useState(false);
-            const name = project.name || project.id;
-            const group = !coordinated(project);
-            const where = workspaces.map((ws) => ({ id: `c:${ws.id}`, label: ws.title, icon: h(ui.IconFolderCloseRegular, {}) }));
-            const items = [
-                // With several workspaces, a submenu of them says where it works.
-                ...(group ? [{
-                    id: 'coordinator', label: busy ? PAGE.adding : PAGE.addCoordinator, disabled: busy || workspaces.length === 0,
-                    icon: h('span', { className: 'dshp-pg-menu-glyph', 'aria-hidden': true }, '◆'),
-                    submenu: workspaces.length > 1 ? where : undefined,
-                }, { type: 'separator', id: 'sep' }] : []),
-                { id: 'rename', label: PAGE.renameItem, icon: h(ui.IconEditOutlineRegular, {}) },
-                ...(group ? [{ id: 'delete', label: PAGE.deleteItem, icon: h(ui.IconTrashOutlineRegular, {}), danger: true }] : []),
-            ];
-            return h(ui.Menu, {
-                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end',
-                onSelect: (id) => {
-                    setOpen(false);
-                    if (id === 'rename') actions.rename(project);
-                    else if (id === 'delete') actions.remove(project);
-                    else if (id === 'coordinator') void actions.addCoordinator(project, workspaces[0]?.id);
-                    else if (id.startsWith('c:')) void actions.addCoordinator(project, id.slice(2));
-                },
-                anchor: h(MenuButton, { label: `Project actions: ${name}`, open, 'data-projects-project-menu': project.id, onClick: () => setOpen((v) => !v) }),
-            });
-        }
-
-        /**
-         * "Add a workspace" under a project's workspaces: any workspace not in
-         * it, those in no project first. One a coordinator works in stays put,
-         * so it isn't offered.
-         */
-        function AddWorkspace({ project, others, elsewhere, actions }) {
-            const [open, setOpen] = React.useState(false);
-            const folder = h(ui.IconFolderCloseRegular, {});
-            const items = others.length + elsewhere.length === 0 ? [{ id: 'none', label: PAGE.addNone, disabled: true }] : [
-                ...(others.length > 0 ? [{ type: 'label', id: 'free', text: PAGE.notInProject }] : []),
-                ...others.map((ws) => ({ id: `w:${ws.id}`, label: ws.title, icon: folder })),
-                ...(elsewhere.length > 0 ? [{ type: 'label', id: 'taken', text: PAGE.inOtherProjects }] : []),
-                ...elsewhere.map(({ ws, from }) => ({
-                    id: `w:${ws.id}`, icon: folder,
-                    label: h('span', null, ws.title, h('span', { className: 'dshp-pg-menu-from' }, ` · ${from.name || from.id}`)),
-                })),
-            ];
-            return h(ui.Menu, {
-                open, onClose: () => setOpen(false), items, portal: true, align: 'start',
-                onSelect: (id) => {
-                    setOpen(false);
-                    if (id.startsWith('w:')) void actions.move(id.slice(2), project.id);
-                },
-                anchor: h('button', {
-                    type: 'button', className: 'dshp-pg-add', 'data-dshp-item': '', 'aria-haspopup': 'menu', 'aria-expanded': open,
-                    'data-projects-add-workspace': project.id, onClick: () => setOpen((v) => !v),
-                }, h(ui.IconPlusOutlineRegular, { size: 14 }), PAGE.addWorkspace),
-            });
-        }
-
-        /**
-         * Add coordinator, quiet beside "Add a workspace" in an open project
-         * without one (⋯ offers it too): it works in the project's workspace,
-         * or in the one picked when the project holds several.
-         */
-        function AddCoordinator({ project, workspaces, busy, actions }) {
-            const [open, setOpen] = React.useState(false);
-            const props = {
-                type: 'button', className: 'dshp-pg-add', 'data-dshp-item': '', disabled: busy, 'aria-busy': busy || undefined,
-                'data-projects-add-coordinator': project.id,
-            };
-            const content = [h('span', { key: 'g', className: 'dshp-pg-menu-glyph', 'aria-hidden': true }, '◆'), busy ? PAGE.adding : PAGE.addCoordinator];
-            if (workspaces.length < 2) return h('button', { ...props, onClick: () => void actions.addCoordinator(project, workspaces[0]?.id) }, ...content);
-            return h(ui.Menu, {
-                open, onClose: () => setOpen(false), portal: true, align: 'start',
-                items: [{ type: 'label', id: 'where', text: PAGE.coordinatorWhere }, ...workspaces.map((ws) => ({ id: ws.id, label: ws.title, icon: h(ui.IconFolderCloseRegular, {}) }))],
-                onSelect: (id) => {
-                    setOpen(false);
-                    void actions.addCoordinator(project, id);
-                },
-                anchor: h('button', { ...props, 'aria-haspopup': 'menu', 'aria-expanded': open, onClick: () => setOpen((v) => !v) }, ...content),
-            });
-        }
-
-        /**
-         * One workspace on the page, on one line: its folder and name (its
-         * path in a tooltip), how many chats it holds and when one last
-         * moved, and a dot while one runs or waits on you. A click shows its
-         * chats, the newest first; New chat starts one there, as DSH's
-         * session list does; ⋯ moves it.
-         */
-        function WorkspaceRow({ ws, chats, open, onToggle, now, statuses, tag, menu, busy, projects }) {
-            const [all, setAll] = React.useState(false);
-            const dots = chats.map((row) => chatDot(row, statuses));
-            const dot = dots.includes('warning') ? 'warning' : dots.includes('ongoing') ? 'ongoing' : null;
-            const latest = chats[0]?.updatedAt;
-            const shown = all ? chats : chats.slice(0, CHATS_SHOWN);
-            const path = shortPath(ws.path);
-            const newChat = projects.newChat ? h(ui.Tooltip, { label: PAGE.newChat, side: 'bottom', portal: true },
-                h('button', {
-                    type: 'button', className: 'dshp-t-icon', 'aria-label': `${PAGE.newChat} in ${ws.title}`, 'data-projects-new-chat': ws.id,
-                    onClick: () => projects.newChat(ws.id),
-                }, h(ui.IconNewChatOutlineRegular, { size: 15 }))) : null;
-            const name = h('span', { className: 'dshp-pg-ws-name', 'data-projects-path': path || undefined }, ws.title);
-            return h('div', { className: 'dshp-pg-ws-item', 'data-projects-workspace': ws.id, 'aria-busy': busy || undefined },
-                h('div', { className: 'dshp-pg-ws' },
-                    h('button', {
-                        type: 'button', className: 'dshp-pg-ws-toggle', 'data-dshp-item': '', 'aria-expanded': open, onClick: onToggle,
-                        'aria-label': `${ws.title}${tag ? `, ${tag}` : ''}. ${chats.length === 0 ? PAGE.noChats : plural(chats.length, 'chat')}${path ? `. ${path}` : ''}`,
-                    },
-                    h('span', { className: 'dshp-pg-ws-arrow', 'aria-hidden': true }, h(ui.IconTriangleRightFillRegular, { size: 10 })),
-                    h('span', { className: 'dshp-pg-ws-folder', 'aria-hidden': true }, h(open ? ui.IconFolderOpenRegular : ui.IconFolderCloseRegular, { size: 16 })),
-                    h('span', { className: 'dshp-pg-ws-title' },
-                        // The path on demand: a hover on the name.
-                        path ? h(ui.Tooltip, { label: path, side: 'right', delayMs: 400, maxWidth: 520, portal: true }, name) : name,
-                        tag ? h('span', { className: 'dshp-pg-ws-tag' }, tag) : null),
-                    h('span', { className: 'dshp-pg-ws-meta' },
-                        dot ? h('span', { className: 'dshp-pg-ws-dot', 'data-state': dot }, h(ui.StateDot, { state: dot })) : null,
-                        h('span', null, chats.length === 0 ? PAGE.noChats : plural(chats.length, 'chat')),
-                        latest !== undefined ? h('span', null, ago(latest, now)) : null)),
-                    h('span', { className: 'dshp-pg-ws-acts' }, newChat, menu)),
-                open ? h('div', { className: 'dshp-pg-chats', role: 'group', 'aria-label': `Chats in ${ws.title}` },
-                    chats.length === 0 ? h('div', { className: 'dshp-pg-chat-none' }, PAGE.noChats) : null,
-                    // `shown` starts where `chats` does, so a row's dot is at its own index.
-                    ...shown.map((row, i) => h('button', {
-                        key: row.id, type: 'button', className: 'dshp-pg-chat', 'data-dshp-item': '', 'data-projects-chat': row.id,
-                        onClick: () => projects.openThread(row.id),
-                    },
-                    h('span', { className: 'dshp-pg-chat-dot' }, dots[i] ? h(ui.StateDot, { state: dots[i] }) : null),
-                    h('span', { className: 'dshp-pg-chat-title' }, row.displayTitle || row.title || PAGE.newChat),
-                    h('span', { className: 'dshp-pg-chat-ago' }, ago(row.updatedAt, now)))),
-                    chats.length > CHATS_SHOWN ? h('button', {
-                        type: 'button', className: 'dshp-pg-more', 'data-dshp-item': '', onClick: () => setAll((v) => !v),
-                    }, all ? PAGE.showFewer : PAGE.showAll(chats.length)) : null) : null);
-        }
-
-        /** Workspaces, each opening to its chats; `limit` folds a long list behind "Show all". */
-        function WorkspaceList({ list, chatsOf, now, statuses, projects, busy, menuFor, tagFor, limit }) {
-            const [open, setOpen] = React.useState(() => new Set());
-            const [all, setAll] = React.useState(false);
-            const toggle = (id) => setOpen((prev) => {
-                const next = new Set(prev);
-                if (next.has(id)) next.delete(id);
-                else next.add(id);
-                return next;
-            });
-            const shown = limit && !all ? list.slice(0, limit) : list;
-            return h('div', { className: 'dshp-pg-ws-list' },
-                ...shown.map((ws) => h(WorkspaceRow, {
-                    key: ws.id, ws, chats: chatsOf(ws), open: open.has(ws.id), onToggle: () => toggle(ws.id), now, statuses, projects,
-                    busy: busy.has(ws.id), menu: menuFor(ws), tag: tagFor?.(ws),
-                })),
-                limit && list.length > limit ? h('button', {
-                    type: 'button', className: 'dshp-pg-more', 'data-dshp-item': '', onClick: () => setAll((v) => !v),
-                }, all ? PAGE.showFewer : PAGE.showAll(list.length)) : null);
-        }
-
-        /**
-         * What a project's workspace rows need from the page: each one's
-         * chats, its ⋯ menu (none for the one a coordinator works in, which
-         * stays put), the projects it can move to, and what "Add a workspace"
-         * offers.
-         */
-        function workspaceParts(project, page, skip) {
-            const { placed, listed, sessions, archived, actions } = page;
-            const targets = listed.filter((p) => p.id !== project.id);
-            const home = coordinated(project) ? project.home : undefined;
-            const holders = new Map();
-            for (const p of targets) for (const ws of placed.of.get(p.id) ?? EMPTY) holders.set(ws.id, p);
-            const stays = new Set(listed.filter((p) => coordinated(p) && typeof p.home === 'string').map((p) => p.home));
-            return {
-                chatsOf: (ws) => chatsIn(ws, sessions, archived, skip),
-                menuFor: (ws) => (ws.id === home ? null : h(WorkspaceMenu, { ws, inProject: true, targets, actions })),
-                tagFor: (ws) => (ws.id === home ? PAGE.coordinatorHere : null),
-                others: placed.others,
-                elsewhere: [...holders.entries()].filter(([id]) => !stays.has(id)).map(([id, from]) => ({ ws: (placed.of.get(from.id) ?? EMPTY).find((w) => w.id === id), from })).filter((x) => x.ws),
-            };
-        }
-
-        /** Scroll a project's row into view and ring it for a moment, after it was made. */
-        function useFresh(fresh) {
-            const ref = React.useRef(null);
-            React.useEffect(() => {
-                if (fresh) ref.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
-            }, [fresh]);
-            return ref;
-        }
-
         /**
          * A set of ids kept in the window's storage, so it holds across
-         * restarts (the projects open on the page, the sidebar's collapsed
-         * groups, a note dismissed). Without storage it lasts until the window
-         * closes.
+         * restarts (the items closed in the page's tree, the sidebar's
+         * collapsed categories, a note dismissed). Without storage it lasts
+         * until the window closes.
          */
         function useStoredSet(key) {
             const [set, setSet] = React.useState(() => {
@@ -4869,244 +4462,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return [set, toggle];
         }
 
-        /** The projects open on the page, and the import note once dismissed. */
-        const OPEN_KEY = `${BUNDLE}/page-open`;
+        /** The import note on the page, once dismissed. */
         const NOTE_KEY = `${BUNDLE}/page-notes`;
-        /** Other workspaces' id on the page and in the sidebar: the workspaces in no project. */
+        /** Other workspaces' id on the page and in the sidebar: the workspaces in no category. */
         const OTHERS = '@others';
 
-        /**
-         * What a row says about some sessions: how many wait on you, how many
-         * run, and when the newest last moved (0 for never).
-         */
-        function pulseOf(ids, sessions, statuses) {
-            const pulse = { waiting: 0, running: 0, at: 0 };
-            for (const id of ids) {
-                const row = typeof id === 'string' ? sessions?.byId?.[id] : undefined;
-                if (!row) continue;
-                if (Number.isFinite(row.updatedAt) && row.updatedAt > pulse.at) pulse.at = row.updatedAt;
-                const dot = chatDot(row, statuses);
-                if (dot === 'warning') pulse.waiting += 1;
-                else if (dot === 'ongoing') pulse.running += 1;
-            }
-            return pulse;
-        }
-
-        /** What waits, what runs and when it moved, for a row's label. */
-        function pulseText(pulse) {
-            const parts = [];
-            if (pulse.waiting > 0) parts.push(`${pulse.waiting} waiting on you`);
-            if (pulse.running > 0) parts.push(`${pulse.running} running`);
-            return parts.length > 0 ? `, ${parts.join(', ')}` : '';
-        }
-
-        /**
-         * A row on the Projects page, for a project or for Other workspaces:
-         * its name with what waits on you, what runs and when it last moved,
-         * and under the name its workspaces, or once open what it holds. A
-         * click on the row opens or closes it; its chevron is the row's tab
-         * stop, where Enter, Space and the arrow keys do the same.
-         */
-        function PageRow({ id, label, open, onToggle, glyph, hollow, title, badge, line, pulse, now, actions }) {
-            const pulses = [];
-            if (pulse.waiting > 0) {
-                pulses.push(h('span', { key: 'w', className: 'dshp-pg-pulse', 'data-state': 'warning' },
-                    h(ui.StateDot, { state: 'warning' }), h('span', { className: 'dshp-pg-pulse-text' }, PAGE.waiting(pulse.waiting))));
-            }
-            if (pulse.running > 0) {
-                pulses.push(h('span', { key: 'r', className: 'dshp-pg-pulse', 'data-state': 'ongoing' },
-                    h(ui.StateDot, { state: 'ongoing' }), h('span', { className: 'dshp-pg-pulse-text' }, PAGE.running(pulse.running))));
-            }
-            if (pulse.at > 0) pulses.push(h('span', { key: 'a', className: 'dshp-pg-ago' }, ago(pulse.at, now)));
-            return h('div', {
-                className: 'dshp-pg-row',
-                onClick: (event) => {
-                    // Not on one of the row's buttons, in a menu it opened (drawn elsewhere), or while selecting its text.
-                    if (!event.currentTarget.contains(event.target) || event.target.closest('button,a,input')) return;
-                    if (String(window.getSelection?.() ?? '') !== '') return;
-                    onToggle();
-                },
-            },
-            h('button', {
-                type: 'button', className: 'dshp-pg-chev', 'data-dshp-item': '', 'data-projects-toggle': id,
-                'aria-expanded': open, 'aria-controls': open ? `dshp-pg-body-${id}` : undefined, 'aria-label': label,
-                onClick: () => onToggle(),
-                onKeyDown: (event) => {
-                    if (event.key === 'ArrowRight' && !open) onToggle(true);
-                    else if (event.key === 'ArrowLeft' && open) onToggle(false);
-                    else return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                },
-            }, h(ui.IconChevronRightOutlineRegular, { size: 12 })),
-            h('span', { className: hollow ? 'dshp-pg-glyph dshp-pg-hollow' : 'dshp-pg-glyph', 'aria-hidden': true }, glyph),
-            h('div', { className: 'dshp-pg-row-text' },
-                h('h2', { className: 'dshp-pg-title', id: `dshp-pg-${id}` }, title, badge),
-                h('div', { className: 'dshp-pg-line' }, line)),
-            h('span', { className: 'dshp-pg-pulses' }, ...pulses),
-            h('span', { className: 'dshp-pg-actions' }, actions));
-        }
-
-        /** A closed row's second line: the names of its workspaces. */
-        function workspaceNames(workspaces) {
-            if (workspaces.length === 0) return h('span', { className: 'dshp-pg-line-text' }, PAGE.noWorkspacesYet);
-            const names = workspaces.map((ws) => ws.title).join(', ');
-            return h(React.Fragment, null,
-                h(ui.IconFolderCloseRegular, { size: 13, 'aria-hidden': true }),
-                h('span', { className: 'dshp-pg-line-text', 'data-projects-workspace-names': '', title: names }, names));
-        }
-
-        /**
-         * A project with a ◆ coordinator: its name opens the coordinator.
-         * Open, it shows what it runs on (each opens Project settings with
-         * that menu open), the pause with Resume, its threads by state as in
-         * the Threads menu (Done, Idle and Resolved fold behind their counts),
-         * then its workspaces with their own chats.
-         */
-        function CoordinatedProject({ project, workspaces, page, useSessions, projects, now, settingsOn, open, onToggle, fresh }) {
-            const coordinator = typeof project.coordinator === 'string' && project.coordinator !== '' ? project.coordinator : undefined;
-            const info = useSessions((state) => (coordinator ? projectContext(state, coordinator) : undefined), sameContext);
-            const { statuses, sessions } = page;
-            const byId = sessions.byId;
-            React.useEffect(() => { if (coordinator) projects.refresh(coordinator); }, [coordinator, projects]);
-            const paused = project.paused === true || usePaused(projects.facts, coordinator, null) === true;
-            const handbacks = useHeldHandbacks(projects.facts, coordinator);
-            useWatch(projects.facts, coordinator && paused ? `d:${coordinator}` : null, paused);
-            const rows = useRows(projects, useSessions, info?.roster, statuses, byId, paused ? handbacks : EMPTY);
-            const { cv, models } = useRosterModels(projects, useSessions, rows, coordinator, open);
-            const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), open);
-            // Which of the user's tools each thread has only describe says; read while the row is open.
-            const described = useProjectInfo(projects.facts, coordinator, Boolean(coordinator) && open, open);
-            const permissions = usePermissions(useSessions, rowSessions(rows));
-            const listedAccess = React.useSyncExternalStore(projects.facts.subscribe, projects.facts.listedAccess);
-            const ref = useFresh(fresh);
-            const summary = summaryModels(cv, models, coordinator, { settings: project.settings });
-            const accessInfo = described ?? { access: project.access, ...listedAccess };
-            const access = accessSummary(accessInfo);
-            const name = project.name || project.id;
-            const target = coordinator ?? project.id;
-            const counts = info?.roster ? countsOf(rows)
-                : { open: Number(project.threads?.open) || 0, waiting: 0, running: 0, resolved: Number(project.threads?.resolved) || 0 };
-            const skip = React.useMemo(() => new Set([coordinator, ...rowSessions(rows)].filter(Boolean)), [coordinator, rows]);
-            const parts = workspaceParts(project, page, skip);
-            // Its threads by their own state; its coordinator and plain chats by DSH's.
-            const chats = workspaces.flatMap((ws) => parts.chatsOf(ws).map((row) => row.id));
-            const others = pulseOf([coordinator, ...chats], sessions, statuses);
-            const moved = pulseOf(rowSessions(rows), sessions, statuses).at;
-            const pulse = { waiting: counts.waiting + others.waiting, running: counts.running + others.running, at: Math.max(others.at, moved) };
-            const model = (id, label, text, glyph, pick = id) => {
-                const content = [h('span', { key: 'l' }, label), glyph ? h('span', { key: 'g', className: 'dshp-pg-model-glyph' }, glyph) : null,
-                    h('span', { key: 'v', className: 'dshp-pg-model-value' }, text ?? '…')];
-                if (!settingsOn) return h('span', { key: id, className: 'dshp-pg-model', 'data-projects-models': id }, ...content);
-                return h('button', {
-                    key: id, type: 'button', className: 'dshp-pg-model', 'data-dshp-item': '', 'data-projects-models': id,
-                    'aria-label': `${label}: ${text ?? 'loading'}. Change it in ${SETTINGS.title}`,
-                    onClick: () => projects.settings.open(target, { pick }),
-                }, ...content, h(ui.IconChevronDownOutlineRegular, { key: 'c', size: 12 }));
-            };
-            let threads;
-            if (!coordinator) threads = h('div', { className: 'dshp-t-notice' }, PAGE.notStarted);
-            else if (info === undefined) threads = h('div', { className: 'dshp-t-notice', role: 'status' }, TEXT.loading);
-            else {
-                threads = rosterNotice(info, rows, projects) ?? h(ThreadList, {
-                    rows, now, models, changes, projects, quietModel: summary.thread,
-                    access: accessOf(described, permissions), permissions: accessInfo.permissions,
-                    quietPermission: permissionShown(accessInfo.access?.threadPermission?.value, accessInfo.permissions).preset,
-                    fold: ['done', 'idle', 'resolved'],
-                    onOpen: (row) => projects.openThread(row.session),
-                });
-            }
-            const title = h('button', {
-                type: 'button', className: 'dshp-pg-name', disabled: !coordinator, 'aria-label': `Open ◆ ${name}`,
-                onClick: () => { if (coordinator) projects.openSession(coordinator); },
-            }, h('span', { className: 'dshp-pg-name-text' }, name));
-            return h('section', { ref, className: 'dshp-pg-proj', 'aria-labelledby': `dshp-pg-${project.id}`, 'data-projects-project': project.id, 'data-fresh': fresh ? '' : undefined },
-                h(PageRow, {
-                    id: project.id, open, onToggle, now, pulse, glyph: '◆', title,
-                    label: `${name}, ${plural(workspaces.length, 'workspace')}${pulseText(pulse)}${paused ? `, ${TEXT.paused}` : ''}`,
-                    badge: paused ? h('span', { className: 'dshp-pg-badge', 'data-projects-paused': '' }, h(ui.IconPauseOutlineRegular, { size: 12 }), TEXT.paused) : null,
-                    line: open ? h('span', { className: 'dshp-pg-line-text', 'data-projects-summary': '' }, counts.open + counts.resolved > 0 ? summaryText(counts) : PAGE.noThreads)
-                        : workspaceNames(workspaces),
-                    actions: [
-                        settingsOn ? h(ui.Tooltip, { key: 's', label: SETTINGS.title, side: 'bottom', portal: true },
-                            h('button', {
-                                type: 'button', className: 'dshp-t-icon', 'aria-label': `${SETTINGS.title}: ${name}`, 'data-projects-settings-trigger': '',
-                                onClick: () => projects.settings.open(target),
-                            }, h(ui.IconSlidersTwoOutlineRegular, { size: 14 }))) : null,
-                        project.source === 'profile' ? null : h(ProjectMenu, { key: 'm', project, actions: page.actions }),
-                    ],
-                }),
-                open ? h('div', { className: 'dshp-pg-body', id: `dshp-pg-body-${project.id}` },
-                    paused && coordinator ? h(PausedNotice, { coordinator, role: 'coordinator', projects }) : null,
-                    h('div', { className: 'dshp-pg-models', role: 'group', 'aria-label': 'Models and access' },
-                        model('coordinator', TEXT.coordinator, summary.coordinator),
-                        model('thread', 'New threads', summary.thread),
-                        access.permission ? model('access', SETTINGS.threadAccess, access.permission.name, permissionGlyph(access.permission.preset, 12)) : null,
-                        access.tools ? model('tools', SETTINGS.yourTools, access.tools, toolsGlyph(), 'access') : null),
-                    threads,
-                    h('div', { role: 'group', 'aria-label': PAGE.workspaces, 'data-projects-workspaces': project.id },
-                        h('div', { className: 'dshp-t-group' }, PAGE.workspaces),
-                        h(WorkspaceList, { list: workspaces, now, statuses, projects, busy: page.busy, chatsOf: parts.chatsOf, menuFor: parts.menuFor, tagFor: parts.tagFor }),
-                        h('div', { className: 'dshp-pg-adds' },
-                            h(AddWorkspace, { project, others: parts.others, elsewhere: parts.elsewhere, actions: page.actions })))) : null);
-        }
-
-        /**
-         * A project without a coordinator (◇): a named set of workspaces.
-         * Open, each workspace opens to its chats, and Add coordinator gives
-         * it one.
-         */
-        function GroupProject({ project, workspaces, page, now, open, onToggle, fresh }) {
-            const name = project.name || project.id;
-            const ref = useFresh(fresh);
-            const parts = workspaceParts(project, page);
-            const lists = workspaces.map((ws) => parts.chatsOf(ws));
-            const chats = lists.reduce((n, list) => n + list.length, 0);
-            const pulse = pulseOf(lists.flat().map((row) => row.id), page.sessions, page.statuses);
-            const busy = page.busy.has(project.id);
-            return h('section', {
-                ref, className: 'dshp-pg-proj', 'aria-labelledby': `dshp-pg-${project.id}`, 'data-projects-project': project.id, 'data-projects-group': '',
-                'data-fresh': fresh ? '' : undefined,
-            },
-            h(PageRow, {
-                id: project.id, open, onToggle, now, pulse, glyph: '◇', hollow: true,
-                label: `${name}, ${plural(workspaces.length, 'workspace')}${pulseText(pulse)}`,
-                title: h('span', { className: 'dshp-pg-name-text' }, name),
-                line: open ? h('span', { className: 'dshp-pg-line-text' }, `${plural(workspaces.length, 'workspace')}${chats > 0 ? ` · ${plural(chats, 'chat')}` : ''}`)
-                    : workspaceNames(workspaces),
-                actions: h(ProjectMenu, { project, workspaces, busy, actions: page.actions }),
-            }),
-            open ? h('div', { className: 'dshp-pg-body', id: `dshp-pg-body-${project.id}` },
-                workspaces.length === 0 ? h('div', { className: 'dshp-t-notice' }, PAGE.noWorkspaces)
-                    : h(WorkspaceList, { list: workspaces, now, statuses: page.statuses, projects: page.projects, busy: page.busy, chatsOf: parts.chatsOf, menuFor: parts.menuFor }),
-                h('div', { className: 'dshp-pg-adds' },
-                    h(AddWorkspace, { project, others: parts.others, elsewhere: parts.elsewhere, actions: page.actions }),
-                    workspaces.length > 0 ? h(AddCoordinator, { project, workspaces, busy, actions: page.actions }) : null)) : null);
-        }
-
-        /** The workspaces in no project, last on the page; open, each has ⋯ to move it into one. */
-        function OtherWorkspaces({ page, now, open, onToggle }) {
-            const { placed, listed, sessions, archived, actions } = page;
-            const list = placed.others;
-            const chatsOf = (ws) => chatsIn(ws, sessions, archived);
-            const pulse = pulseOf(list.flatMap((ws) => chatsOf(ws).map((row) => row.id)), sessions, page.statuses);
-            return h('section', { className: 'dshp-pg-proj dshp-pg-others', 'aria-labelledby': `dshp-pg-${OTHERS}`, 'data-projects-others': '' },
-                h(PageRow, {
-                    id: OTHERS, open, onToggle, now, pulse,
-                    glyph: h(ui.IconFolderCloseRegular, { size: 15 }), hollow: true,
-                    label: `${PAGE.others}, ${plural(list.length, 'workspace')}${pulseText(pulse)}`,
-                    title: h('span', { className: 'dshp-pg-name-text' }, PAGE.others),
-                    line: open ? h('span', { className: 'dshp-pg-line-text' }, PAGE.othersText) : workspaceNames(list),
-                }),
-                open ? h('div', { className: 'dshp-pg-body', id: `dshp-pg-body-${OTHERS}` },
-                    h(WorkspaceList, {
-                        list, now, statuses: page.statuses, projects: page.projects, busy: page.busy, limit: OTHERS_SHOWN, chatsOf,
-                        menuFor: (ws) => h(WorkspaceMenu, { ws, inProject: false, targets: listed, actions }),
-                    })) : null);
-        }
-
-        /** The name dialog for New project and Rename: DSH's own rename dialog, with the plugin's refusal under the field. */
-        function NameDialog({ title, description, label = PAGE.nameLabel, initial = '', action, busyLabel, onSubmit, onClose }) {
+        /** The name dialog for New category and Rename: DSH's own rename dialog, with the plugin's refusal under the field. */
+        function NameDialog({ title, description, label, initial = '', action, busyLabel, onSubmit, onClose }) {
             const [draft, setDraft] = React.useState(initial);
             const [busy, setBusy] = React.useState(false);
             const [error, setError] = React.useState('');
@@ -5179,38 +4541,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, error ? h('div', { className: 'dshp-pg-dialog-error', role: 'alert' }, error) : undefined);
         }
 
-        /** Delete a project, as DSH asks before it deletes a workspace. */
-        function DeleteDialog({ project, count, onSubmit, onClose }) {
-            const [busy, setBusy] = React.useState(false);
-            const [error, setError] = React.useState('');
-            const alive = React.useRef(true);
-            React.useEffect(() => () => { alive.current = false; }, []);
-            const submit = async () => {
-                if (busy) return;
-                setBusy(true);
-                setError('');
-                const problem = await onSubmit();
-                if (alive.current && problem) {
-                    setBusy(false);
-                    setError(problem);
-                }
-            };
-            return h(ui.Modal, {
-                open: true, title: PAGE.deleteTitle, description: PAGE.deleteText(project.name || project.id, count), closeLabel: PAGE.close, className: 'dshp-pg-dialog',
-                onClose: () => { if (!busy) onClose(); },
-                footer: h(React.Fragment, null,
-                    h(ui.Button, { variant: 'outline', disabled: busy, onClick: onClose, 'data-modal-autofocus': true }, PAGE.cancel),
-                    h(ui.Button, { variant: 'outline', className: 'dshp-pg-danger', disabled: busy, onClick: () => void submit(), 'data-projects-dialog-submit': '' }, busy ? PAGE.deleting : PAGE.deleteTitle)),
-            }, error ? h('div', { className: 'dshp-pg-dialog-error', role: 'alert' }, error) : undefined);
-        }
-
-        /**
-         * The Projects page, opened from the Projects entry in DSH's sidebar:
-         * every project as one row in a list, the most recently active first
-         * (in the order they had when the page opened, so rows don't jump
-         * while you read), then the workspaces in no project. A row opens to
-         * its threads, workspaces and chats, and stays open across restarts.
-         */
         /** Where the page's closed tree items are kept (the window's own storage); every item starts open. */
         const CLOSED_KEY = `${BUNDLE}/page-closed`;
 
@@ -5278,6 +4608,20 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const TREE_GLYPHS = { category: 'IconFolderCloseRegular', workspace: 'IconFolderOpenOutlineRegular', thread: 'IconBranchOutlineRegular' };
 
         /**
+         * What a tree row says after its title: a category and a ◆ project
+         * say what they are and what they hold, so the two never read alike
+         * (a category and the project in it can share a name); a workspace
+         * shows its path. Other workspaces is no category: it holds the
+         * workspaces in none.
+         */
+        function treeMeta(node) {
+            const n = node.children.length;
+            if (node.kind === 'category') return node.id === OTHERS ? plural(n, 'workspace') : `${PAGE.category} · ${plural(n, 'workspace')}`;
+            if (node.kind === 'project') return `${PAGE.project} · ${plural(n, 'thread')}`;
+            return node.kind === 'workspace' && node.path ? shortPath(node.path) : null;
+        }
+
+        /**
          * The Projects page's tree, as a screen reader and the keys expect:
          * one tab stop, Up and Down in drawn order, Right opens or goes in,
          * Left closes or goes to the parent, Home and End, Enter opens a
@@ -5325,7 +4669,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const glyph = node.kind === 'project' ? h('span', { className: 'dshp-tree-diamond', 'aria-hidden': true }, '◆')
                     : Icon ? h('span', { className: 'dshp-tree-glyph', 'aria-hidden': true }, h(Icon, { size: 14 })) : h('span', { className: 'dshp-tree-glyph', 'aria-hidden': true });
                 const dot = node.row ? chatDot(node.row, statuses) : null;
-                const count = node.kind === 'project' ? plural(node.children.length, 'thread') : node.kind === 'category' ? plural(node.children.length, 'workspace') : null;
+                const meta = treeMeta(node);
                 return h('li', {
                     key: x.key, role: 'treeitem', 'aria-level': x.level, 'aria-setsize': x.size, 'aria-posinset': x.pos,
                     'aria-expanded': node.children.length > 0 ? x.open : undefined, tabIndex: x === shown[at] ? 0 : -1,
@@ -5339,168 +4683,76 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     glyph,
                     h('span', { className: 'dshp-tree-title', 'data-projects-title': node.title }, node.title),
                     dot && ui.StateDot ? h('span', { className: 'dshp-tree-dot', 'aria-hidden': true }, h(ui.StateDot, { state: dot })) : null,
-                    count ? h('span', { className: 'dshp-tree-meta' }, count) : node.kind === 'workspace' && node.path ? h('span', { className: 'dshp-tree-meta' }, shortPath(node.path)) : null),
+                    meta ? h('span', { className: 'dshp-tree-meta' }, meta) : null),
                 kids.length > 0 ? h('ul', { role: 'group', className: 'dshp-tree-group' }, ...kids.map(item)) : null);
             };
             return h('ul', { role: 'tree', 'aria-label': label, className: 'dshp-tree', onKeyDown }, ...shown.filter((x) => x.level === 1).map(item));
         }
 
+        /**
+         * The page the Projects entry in DSH's sidebar opens, headed
+         * Categories: the whole tree, with New category. A project shows
+         * only as a ◆ row inside its workspace, and each row says what it is
+         * (treeMeta), so a category never reads as a project.
+         */
         function ProjectsPage({ useSessions, useSessionStatus, useWorkspaces = noWorkspaces, projects }) {
             useFacts(projects.facts);
             useWatch(projects.facts, 'list');
-            const settingsOn = useSettingsAvailable(projects.settings);
             const listed = projects.facts.projects();
             const failed = projects.facts.listFailed();
             const sessions = useSessions((state) => state);
             const statuses = useSessionStatus((value) => value);
             const items = useWorkspaces((state) => state.items);
             const archivedIds = useWorkspaces((state) => state.archivedSessionIds);
-            const ready = useWorkspaces((state) => state.phase) === 'ready';
-            const now = useNow(true);
-            const [dialog, setDialog] = React.useState(null);
-            const [notice, setNotice] = React.useState('');
-            const [busy, setBusy] = React.useState(() => new Set());
-            const [fresh, setFresh] = React.useState(null);
-            const [opened, toggleOpen] = useStoredSet(OPEN_KEY);
+            // Until DSH's own list has its workspaces, an empty tree means nothing yet.
+            const pending = useWorkspaces((state) => state.phase) === 'pending';
+            const [naming, setNaming] = React.useState(false);
+            const [said, setSaid] = React.useState('');
             const [notes, dismissNote] = useStoredSet(NOTE_KEY);
-            React.useEffect(() => {
-                if (fresh === null) return undefined;
-                // A project just made opens, so "Add a workspace" is right there.
-                toggleOpen(fresh, true);
-                const timer = setTimeout(() => setFresh(null), 2400);
-                return () => clearTimeout(timer);
-            }, [fresh, toggleOpen]);
+            const announce = (text) => setSaid((prev) => (prev === text ? `${text} ` : text));
             const all = Array.isArray(listed) ? listed : EMPTY;
             const archived = React.useMemo(() => new Set(Array.isArray(archivedIds) ? archivedIds : EMPTY), [archivedIds]);
-            const placed = React.useMemo(() => placeWorkspaces(all, Array.isArray(items) ? items : EMPTY, ready), [all, items, ready]);
-            // The order cards had when the page opened (or a project came or went): the most recent activity first.
-            const latest = React.useRef(null);
-            latest.current = { sessions, placed };
-            const key = all.map((p) => p.id).join('\n');
-            const settled = sessions?.phase === 'ready';
-            const rank = React.useMemo(() => {
-                const { sessions: state, placed: where } = latest.current;
-                const activity = (project) => {
-                    let at = 0;
-                    const consider = (id) => {
-                        const t = typeof id === 'string' ? state?.byId?.[id]?.updatedAt : undefined;
-                        if (Number.isFinite(t) && t > at) at = t;
-                    };
-                    consider(project.coordinator);
-                    for (const ws of where.of.get(project.id) ?? EMPTY) for (const id of ws.sessionIds) consider(id);
-                    return at;
-                };
-                // The profile's and the plugin's order among projects that never ran.
-                return all.map((p, i) => ({ id: p.id, i, at: activity(p) })).sort((a, b) => b.at - a.at || a.i - b.i).map((x) => x.id);
-            }, [key, settled, ready]);
-            const mark = (id, on) => setBusy((prev) => {
-                const next = new Set(prev);
-                if (on) next.add(id);
-                else next.delete(id);
-                return next;
-            });
-            const act = async (id, method, args) => {
-                mark(id, true);
-                setNotice('');
-                const result = await projects.facts.act(method, args);
-                mark(id, false);
-                if (!result.ok) setNotice(errorText(result.error));
-                return result;
-            };
-            const actions = {
-                move: (workspace, project) => act(workspace, 'move', { workspace, project: project ?? '' }),
-                async addCoordinator(project, workspace) {
-                    const result = await act(project.id, 'addCoordinator', { project: project.id, workspace: workspace ?? '' });
-                    if (result.ok && typeof result.value?.coordinator === 'string') projects.openSession(result.value.coordinator);
-                },
-                create: (ws) => setDialog({ kind: 'new', ws: ws ?? null }),
-                rename: (project) => setDialog({ kind: 'rename', project }),
-                remove: (project) => setDialog({ kind: 'delete', project }),
-            };
-            const page = { placed, listed: all, sessions, statuses, archived, busy, actions, projects };
+            const tree = pageModel({ categories: projects.facts.categories?.() ?? EMPTY, listed: all, items: Array.isArray(items) ? items : EMPTY, sessions, archived });
+            // Other workspaces comes last in the tree, but it is no category.
+            const count = tree.filter((node) => node.id !== OTHERS).length;
             const imported = all.filter((p) => p.source === 'import').map((p) => p.name || p.id);
-            const byProject = new Map(all.map((p) => [p.id, p]));
-            const ordered = rank.map((id) => byProject.get(id)).filter(Boolean);
             let content;
-            if (listed === null) {
-                content = failed
-                    ? h('div', { className: 'dshp-pg-state dshp-t-error', role: 'alert' }, SETTINGS.unreachable, ' ',
-                        h('button', { type: 'button', className: 'dshp-t-retry', onClick: () => { void projects.facts.list(0); } },
-                            h(ui.IconRefreshOutlineRegular, { size: 12 }), TEXT.retry))
-                    : h('div', { className: 'dshp-pg-state', role: 'status' }, PAGE.loading);
+            if (listed === null && failed) {
+                content = h('div', { className: 'dshp-pg-state dshp-t-error', role: 'alert' }, SETTINGS.unreachable, ' ',
+                    h('button', { type: 'button', className: 'dshp-t-retry', onClick: () => { void projects.facts.list(0); } },
+                        h(ui.IconRefreshOutlineRegular, { size: 12 }), TEXT.retry));
+            } else if (listed === null || (tree.length === 0 && pending)) {
+                content = h('div', { className: 'dshp-pg-state', role: 'status' }, PAGE.loading);
+            } else if (tree.length === 0) {
+                content = h('div', { className: 'dshp-pg-empty', 'data-projects-empty': '' },
+                    h('span', { className: 'dshp-pg-empty-glyph' }, h(ProjectsIcon, { size: 28 })),
+                    h('h2', null, PAGE.emptyTitle),
+                    h('p', null, PAGE.emptyText));
             } else {
-                content = h(React.Fragment, null,
-                    ordered.length === 0 && !(Array.isArray(items) && items.length > 0) ? h('div', { className: 'dshp-pg-empty', 'data-projects-empty': '' },
-                        h('span', { className: 'dshp-pg-empty-glyph' }, h(ProjectsIcon, { size: 28 })),
-                        h('h2', null, PAGE.emptyTitle),
-                        h('p', null, PAGE.emptyText),
-                        h(ui.Button, { variant: 'primary', size: 'sm', className: 'dshp-pg-cta', onClick: () => actions.create(null), 'data-projects-new': '' }, PAGE.newProject))
-                        : h(PageTree, {
-                            tree: pageModel({ categories: projects.facts.categories?.() ?? EMPTY, listed: all, items: Array.isArray(items) ? items : EMPTY, sessions, archived }),
-                            label: PAGE.title, statuses, onOpenSession: (id) => projects.openSession(id),
-                        }),
-                        false ? h('ul', {
-                            className: 'dshp-pg-list', 'aria-label': PAGE.title,
-                            // Up and down walk the rows and what open rows show (not a menu one of them opened).
-                            onKeyDown: (event) => { if (event.currentTarget.contains(event.target)) arrowKeys(event, event.currentTarget); },
-                        },
-                        ...ordered.map((project) => {
-                            const workspaces = placed.of.get(project.id) ?? EMPTY;
-                            const shared = {
-                                project, workspaces, page, now, fresh: fresh === project.id,
-                                open: opened.has(project.id), onToggle: (on) => toggleOpen(project.id, on),
-                            };
-                            return h('li', { key: project.id, className: 'dshp-pg-item' }, coordinated(project)
-                                ? h(CoordinatedProject, { ...shared, useSessions, projects, settingsOn })
-                                : h(GroupProject, shared));
-                        }),
-                        placed.others.length > 0 ? h('li', { key: OTHERS, className: 'dshp-pg-item dshp-pg-item-others' },
-                            h(OtherWorkspaces, { page, now, open: opened.has(OTHERS), onToggle: (on) => toggleOpen(OTHERS, on) })) : null) : null);
+                content = h(PageTree, { tree, label: PAGE.title, statuses, onOpenSession: (id) => projects.openSession(id) });
             }
-            let overlay = null;
-            if (dialog?.kind === 'delete') {
-                overlay = h(DeleteDialog, {
-                    project: dialog.project, count: (placed.of.get(dialog.project.id) ?? EMPTY).length, onClose: () => setDialog(null),
-                    onSubmit: async () => {
-                        const result = await projects.facts.act('remove', { project: dialog.project.id });
-                        if (!result.ok) return errorText(result.error);
-                        setDialog(null);
-                        return null;
-                    },
-                });
-            } else if (dialog) {
-                const naming = dialog.kind === 'new';
-                overlay = h(NameDialog, {
-                    title: naming ? PAGE.newProject : PAGE.renameTitle,
-                    description: naming ? (dialog.ws ? PAGE.newWith(dialog.ws.title) : PAGE.newText) : undefined,
-                    initial: naming ? '' : dialog.project.name || '',
-                    action: naming ? PAGE.create : PAGE.rename,
-                    busyLabel: naming ? PAGE.creating : PAGE.renaming,
-                    onClose: () => setDialog(null),
-                    onSubmit: async (name) => {
-                        const result = naming
-                            ? await projects.facts.act('create', { name, workspace: dialog.ws?.id ?? '' })
-                            : await projects.facts.act('rename', { project: dialog.project.id, name });
-                        if (!result.ok) return errorText(result.error);
-                        if (naming && typeof result.value?.project === 'string') setFresh(result.value.project);
-                        setDialog(null);
-                        return null;
-                    },
-                });
-            }
+            // New category, as the sidebar makes one: a refusal shows under the name, and the new category is said.
+            const overlay = naming ? h(NameDialog, {
+                title: SIDEBAR.newTitle, description: PAGE.newText, label: SIDEBAR.nameLabel, action: SIDEBAR.create, busyLabel: SIDEBAR.creating,
+                onClose: () => setNaming(false),
+                onSubmit: async (name) => {
+                    const result = await projects.facts.act('createCategory', { name, workspace: '' });
+                    if (!result.ok) return errorText(result.error);
+                    announce(SIDEBAR.created(name));
+                    setNaming(false);
+                    return null;
+                },
+            }) : null;
             return h('div', { className: 'dshp-pg', 'data-projects-page': '' },
                 h('div', { className: 'dshp-pg-scroll' },
                     h('div', { className: 'dshp-pg-content' },
                         h('div', { className: 'dshp-pg-heading' },
                             h('h1', null, PAGE.title),
-                            all.length > 0 ? h('span', { className: 'dshp-pg-count' }, plural(all.length, 'project')) : null,
-                            all.length > 0 ? h(ui.Button, {
+                            count > 0 ? h('span', { className: 'dshp-pg-count' }, plural(count, 'category', 'categories')) : null,
+                            listed !== null ? h(ui.Button, {
                                 variant: 'outline', size: 'sm', className: 'dshp-pg-new', icon: h(ui.IconPlusOutlineRegular, { size: 14 }),
-                                onClick: () => actions.create(null), 'data-projects-new': '',
-                            }, PAGE.newProject) : null),
-                        notice ? h('div', { className: 'dshp-pg-alert', role: 'alert', 'data-projects-page-error': '' },
-                            h('span', null, notice),
-                            h('button', { type: 'button', className: 'dshp-t-icon', 'aria-label': PAGE.dismiss, onClick: () => setNotice('') }, h(ui.IconCloseOutlineRegular, { size: 14 }))) : null,
+                                onClick: () => setNaming(true), 'data-projects-new': '',
+                            }, SIDEBAR.newTitle) : null),
                         // Where the old sidebar's projects went, said once, until dismissed.
                         imported.length > 0 && !notes.has('imported') ? h('div', { className: 'dshp-pg-note', 'data-projects-imported': '' },
                             h(ui.IconInfoOutlineRegular, { size: 14, 'aria-hidden': true }),
@@ -5508,6 +4760,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             h('button', { type: 'button', className: 'dshp-t-icon', 'aria-label': `${PAGE.dismiss}: ${PAGE.imported(imported)}`, onClick: () => dismissNote('imported', true) },
                                 h(ui.IconCloseOutlineRegular, { size: 14 }))) : null,
                         content)),
+                // What the page made, said to screen readers.
+                h('div', { className: 'dshp-sr', role: 'status', 'aria-live': 'polite', 'data-projects-page-said': '' }, said),
                 overlay);
         }
 
@@ -6937,13 +6191,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the views are built on.
         module.exports.internals = {
-            pageModel, visibleItems,
+            pageModel, visibleItems, treeMeta, PageTree, ProjectsPage,
             valueIn, takeKnown, coordinatorName, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, nestingRules, sectionGroups, nestingCss,
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
             rowState, endingOf, endingIn, endingReason, endingLine, openSessions, markState, hoverLine, continueError, GROUPS,
-            roomFor, besidePref, sidebarGroups, sidebarRules, placeHeaders, describeWorkspaces, sectionWorkspace, sectionAt, placeWorkspaces, chatsIn, pulseOf, pulseText, listText, OTHERS, clockOf, againText, ThreadCard, EndingBar,
+            roomFor, besidePref, sidebarGroups, sidebarRules, placeHeaders, describeWorkspaces, sectionWorkspace, sectionAt, listText, OTHERS, clockOf, againText, ThreadCard, EndingBar,
             noticeOf, noticeView, TriggerNotice, ProjectNotice,
             permissionName, permissionShown, permissionIn, toolsText, accessOf, accessSummary, PermissionPicker, ToolsControl, ModelsSummary,
             NewsNotice, newsLine, newsDot, ThreadMark, RowPlace, CoordinatorOffer, workspaceOfSession, projectIn,
