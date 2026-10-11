@@ -8,15 +8,18 @@
  * that it parses, then drives the window with Playwright's Chromium:
  *
  * - the Calendar page from its entry in DSH's sidebar, in Week view; its
- *   quiet notice that a settings file it couldn't read was set aside; and,
- *   as the profile has askBeforeEmails off, the side column's note that
- *   chats can email guests without asking (with nothing to change it);
+ *   quiet notice that a settings file it couldn't read was set aside;
+ * - at 1280 px, the side column folded behind its button, which shows it
+ *   beside the view (the focus going into it, and back on folding it);
+ *   and, as the profile has askBeforeEmails off, its note that chats can
+ *   email guests without asking (with nothing to change it);
  * - a timed event, an all-day event and a weekly repeating event made
  *   through the event dialog (each checked through the plugin's endpoints);
  *   an event's details, which take the focus and close on Escape;
  * - one occurrence of the repeating event changed (scope 'one') and another
  *   deleted (scope 'one'), the rest of the series as it was;
  * - Month, Day and Agenda views, the choice kept by the plugin, N and T;
+ *   a narrow month's timed events without their times in front;
  * - a calendar hidden and shown again from the side column;
  * - a change the host says would email six guests ('calendar/needs-notify',
  *   played here, as the calendars kept in DSH email no one): the question
@@ -29,6 +32,12 @@
  *   a calendar that can't send it;
  * - no default calendar (the host's own state: every calendar hidden, none
  *   chosen): the event dialog shows none chosen and asks for one;
+ * - dragging: an event in Week to another time and day (Escape first,
+ *   leaving it), by its bottom edge to another end, and on with Alt and an
+ *   arrow key; in Month to another day at the same time; a repeating one,
+ *   asked which occurrences move;
+ * - search: / to the field, the events found by day, one opened with its
+ *   way to the calendar, Escape to clear it;
  * - Accounts: the account list and every Add account choice up to its form,
  *   and a new calendar kept in DSH;
  * - Microsoft, against stand-ins on this computer for its sign-in page and
@@ -68,9 +77,11 @@
  *   move (calendar_update_event), and the button that opens an event on the
  *   page; a read and an answer that didn't work, each in the plugin's own
  *   row saying what wasn't done and why;
- * - the Agenda pane in DSH's right sidebar, and an event opened from it;
+ * - the Agenda pane in DSH's right sidebar: an event's details beside it,
+ *   the chat staying, and Open in Calendar to the event on the page;
  * - light and dark, with and without a stand-in wallpaper;
- * - a narrow window (420 px): the side column folds, Week shows 3 days.
+ * - a narrow window (420 px): the side column folds, Week shows 3 days,
+ *   search fits.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js \
  *   PLAYWRIGHT_MODULE=/path/to/node_modules/playwright/index.mjs \
@@ -84,9 +95,10 @@
  * wallpaper; the event dialog, with no calendar chosen too, the question
  * before an email, the one before a move that drops part of a series, a
  * change stopped because the event changed, Accounts, Microsoft's and
- * Google's sign-ins, a removal's notice, the Agenda pane, chat cards, a
- * narrow window; and the window whenever a step fails). KEEP=1 keeps the
- * temporary folder.
+ * Google's sign-ins, a removal's notice, the Agenda pane and an event's
+ * details beside it, chat cards, the side column folded, a drag, search
+ * results, a narrow window; and the window whenever a step fails). KEEP=1
+ * keeps the temporary folder.
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -633,6 +645,33 @@ try {
         check('a settings file the plugin couldn\'t read: the page says quietly that it was set aside and nothing was deleted, until closed',
             aside.length === 1 && text.includes(`“${aside[0]}”`) && /Nothing was deleted/.test(text), JSON.stringify({ aside, text }));
     });
+    // The side column at 1280 px: beside DSH's sidebar the page is narrower than 1100 px, so it starts folded; its
+    // button shows it beside the view (and it stays shown for the steps below).
+    await step('the side column at 1280 px', async () => {
+        const side = page.locator('[data-calendar-side]');
+        const toggle = page.locator('[data-calendar-side-toggle]');
+        const width = await page.locator('[data-calendar-page]').evaluate((el) => el.clientWidth);
+        const foldedFirst = !(await side.isVisible());
+        const newInHeader = await page.locator('[data-calendar-new]').isVisible();
+        await shot(page, 'side-folded');
+        await toggle.click();
+        await side.waitFor({ state: 'visible' });
+        const shown = await page.evaluate(() => {
+            const s = document.querySelector('[data-calendar-side]').getBoundingClientRect();
+            const m = document.querySelector('[data-calendar-main]').getBoundingClientRect();
+            const root = document.querySelector('[data-calendar-page]');
+            return { beside: s.right <= m.left, over: root.hasAttribute('data-side-open'), focusIn: Boolean(document.activeElement?.closest('[data-calendar-side]')) };
+        });
+        const expanded = await toggle.getAttribute('aria-expanded');
+        await toggle.click();
+        await side.waitFor({ state: 'hidden' });
+        const focusBack = await page.evaluate(() => document.activeElement?.hasAttribute('data-calendar-side-toggle') === true);
+        await toggle.click();
+        await side.waitFor({ state: 'visible' });
+        check('at 1280 px the side column starts folded behind its button, which shows it beside the view, the focus going into it and back to the button on folding it',
+            width < 1100 && foldedFirst && newInHeader && shown.beside && !shown.over && shown.focusIn && expanded === 'true' && focusBack,
+            JSON.stringify({ width, foldedFirst, newInHeader, shown, expanded, focusBack }));
+    });
     await step('chats may email guests without asking', async () => {
         // askBeforeEmails is off in this profile: said quietly in the side column, with nothing there to change it.
         const note = page.locator('[data-calendar-side] [data-calendar-ask-off]');
@@ -786,7 +825,14 @@ try {
         await page.locator('[data-calendar-view="month"]').click();
         await page.locator('[data-calendar-grid="month"]').waitFor({ state: 'visible' });
         await shot(page, 'month-light');
+        // Beside the side column the month is narrow: a timed event's title alone, without its time in front.
+        const month = await page.locator('[data-calendar-grid="month"]').evaluate((el) => ({
+            width: el.clientWidth,
+            times: [...el.querySelectorAll('.dshcal-line-time')].map((t) => getComputedStyle(t).display),
+        }));
         await page.locator('[data-calendar-view="week"]').click();
+        check('a narrow month shows timed events by their titles, without their times in front', month.width < 910 && month.times.length > 0 && month.times.every((d) => d === 'none'),
+            JSON.stringify(month));
     });
 
     // 5. A calendar hidden and shown again.
@@ -994,6 +1040,165 @@ try {
             if (made) await api('deleteEvent', { id: made.id, scope: 'all' });
             await waitFor(async () => (await tagged()) === 1, 'the default calendar back', 15000).catch(() => {});
         }
+    });
+
+    // 8b. Dragging, with the mouse as a person drags (a few steps on the way); updateEvent's calls counted.
+    /** Press at one point, move to another in steps (Escape on the way when asked), let go. */
+    const dragMouse = async (from, to, { escape = false, steps = 12 } = {}) => {
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(from.x + (to.x - from.x) / 4, from.y + (to.y - from.y) / 4, { steps: 3 });
+        await page.mouse.move(to.x, to.y, { steps });
+        if (escape) await page.keyboard.press('Escape');
+        await page.mouse.up();
+    };
+    /** A point in a day's column of the week, minutes into the day (and dy pixels on). */
+    const pointIn = async (day, minutes, dy = 0) => {
+        const box = await page.locator(`[data-calendar-day-column="${day}"]`).boundingBox();
+        return { x: box.x + box.width / 2, y: box.y + (minutes / 60) * 48 + dy };
+    };
+    const updates = [];
+    const onUpdate = (request) => {
+        if (request.url().endsWith('/api/dsh-plugin-calendar/updateEvent')) updates.push(JSON.parse(request.postData() ?? '{}').payload?.args);
+    };
+    let dragged;
+    let draggedTo;
+    await step('an event dragged in Week', async () => {
+        dragged = (await api('createEvent', { input: { title: 'E2E Drag me', start: `${day1}T11:00`, end: `${day1}T12:00`, timeZone: ZONE } })).value?.occurrence;
+        await page.locator('[data-calendar-view="week"]').click();
+        await showDay(day1);
+        const columns = await page.locator('[data-calendar-day-column]').evaluateAll((els) => els.map((e) => e.getAttribute('data-calendar-day-column')));
+        const target = columns[columns.indexOf(day1) + 1] ?? columns[columns.indexOf(day1) - 1];
+        draggedTo = target;
+        await page.locator('[data-calendar-scroll]').evaluate((el) => { el.scrollTop = 9 * 48; });
+        const ev = () => grid.locator(`.dshcal-ev[data-calendar-event="${dragged?.id}"]`);
+        await ev().waitFor({ state: 'visible', timeout: 10000 });
+        updates.length = 0;
+        page.on('request', onUpdate);
+        try {
+            // Escape on the way: it stays where it was, nothing is saved, nothing opens.
+            const box = await ev().boundingBox();
+            const grab = { x: box.x + box.width / 2, y: box.y + 10 };
+            const to = await pointIn(target, 13.5 * 60, 11);
+            await dragMouse(grab, to, { escape: true });
+            await page.waitForTimeout(500);
+            const cancelled = updates.length === 0 && (await page.locator('[data-calendar-ghost]').count()) === 0 && (await page.locator('[data-calendar-details]').count()) === 0;
+            // Held over the next day at 13:30: the ghost says where; let go, it's there, an hour long.
+            await page.mouse.move(grab.x, grab.y);
+            await page.mouse.down();
+            await page.mouse.move(grab.x, grab.y + 20, { steps: 3 });
+            await page.mouse.move(to.x, to.y, { steps: 12 });
+            const ghost = (await page.locator('[data-calendar-ghost="move"]').textContent().catch(() => '')) ?? '';
+            await shot(page, 'drag-week');
+            await page.mouse.up();
+            const moved = await waitFor(async () => (await events(target, target)).find((o) => o.id === dragged.id && o.startLocal === `${target}T13:30`), 'the moved event', 10000);
+            const toast = (await page.locator('.dshcal-toast').first().textContent().catch(() => '')) ?? '';
+            const opened = await page.locator('[data-calendar-details]').count();
+            // Its bottom edge an hour lower: it ends at 15:30.
+            await page.waitForTimeout(400);
+            const after = await ev().boundingBox();
+            const edge = { x: after.x + after.width / 2, y: after.y + after.height - 3 };
+            await dragMouse(edge, { x: edge.x, y: edge.y + 48 });
+            const longer = await waitFor(async () => (await events(target, target)).find((o) => o.id === dragged.id && o.endLocal === `${target}T15:30`), 'the longer event', 10000);
+            // Alt with the down arrow: a quarter hour later, still in focus.
+            await page.waitForTimeout(400);
+            await ev().focus();
+            await page.keyboard.press('Alt+ArrowDown');
+            const nudged = await waitFor(async () => (await events(target, target)).find((o) => o.id === dragged.id && o.startLocal === `${target}T13:45`), 'the nudged event', 10000);
+            const focused = await waitFor(() => page.evaluate((id) => document.activeElement?.getAttribute('data-calendar-event') === id, dragged.id), 'the focus on it', 5000).catch(() => false);
+            check('an event dragged in Week goes to another time and day, by its bottom edge to another end, and on a quarter hour with Alt and an arrow; Escape on the way leaves it',
+                cancelled && /1:30|13:30/.test(ghost) && /E2E Drag me/.test(ghost) && moved.endLocal === `${target}T14:30` && /^Moved “E2E Drag me” to /.test(toast) && opened === 0
+                && longer.startLocal === `${target}T13:30` && nudged.endLocal === `${target}T15:45` && focused
+                && updates.length === 3 && updates.every((u) => u.id === dragged.id && u.scope === 'all' && u.patch?.notify === undefined),
+                JSON.stringify({ cancelled, ghost, moved: moved?.startLocal, toast, opened, longer: longer?.endLocal, nudged: nudged?.startLocal, focused, updates }));
+        } finally {
+            page.off('request', onUpdate);
+        }
+    });
+    await step('an event dragged in Month', async () => {
+        await page.locator('[data-calendar-view="month"]').click();
+        await page.locator('[data-calendar-grid="month"]').waitFor({ state: 'visible' });
+        for (let i = 0; i < 3 && !(await page.locator(`[data-calendar-cell="${draggedTo}"]`).count()); i++) {
+            const first = await page.locator('[data-calendar-cell]').first().getAttribute('data-calendar-cell');
+            await page.locator(first < draggedTo ? '[data-calendar-next]' : '[data-calendar-prev]').click();
+            await page.waitForTimeout(400);
+        }
+        const cells = await page.locator('[data-calendar-cell]').evaluateAll((els) => els.map((e) => e.getAttribute('data-calendar-cell')));
+        const toDay = cells.includes(addDays(draggedTo, 2)) ? addDays(draggedTo, 2) : addDays(draggedTo, -2);
+        const piece = grid.locator(`.dshcal-line[data-calendar-event="${dragged?.id}"]`);
+        await piece.waitFor({ state: 'visible', timeout: 10000 });
+        const box = await piece.boundingBox();
+        const cell = await page.locator(`[data-calendar-cell="${toDay}"]`).boundingBox();
+        await page.mouse.move(box.x + 12, box.y + box.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box.x + 30, box.y + box.height / 2, { steps: 3 });
+        await page.mouse.move(cell.x + cell.width / 2, cell.y + cell.height - 10, { steps: 12 });
+        const marked = await page.locator('[data-calendar-cell][data-drop]').evaluateAll((els) => els.map((e) => e.getAttribute('data-calendar-cell')));
+        await shot(page, 'drag-month');
+        await page.mouse.up();
+        const moved = await waitFor(async () => (await events(toDay, toDay)).find((o) => o.id === dragged?.id && o.startLocal === `${toDay}T13:45`), 'the event on its new day', 10000);
+        await page.locator('[data-calendar-view="week"]').click();
+        check('an event dragged in Month goes to another day at the same time of day, the day it would go to marked on the way',
+            moved.endLocal === `${toDay}T15:45` && JSON.stringify(marked) === JSON.stringify([toDay]), JSON.stringify({ toDay, marked, moved: moved && [moved.startLocal, moved.endLocal] }));
+    });
+    await step('a repeating event dragged asks which occurrences move', async () => {
+        const series = (await api('createEvent', { input: { title: 'E2E Drag series', start: `${day1}T08:00`, end: `${day1}T08:30`, timeZone: ZONE, repeat: 'FREQ=WEEKLY' } })).value?.occurrence;
+        await showDay(day1);
+        await page.locator('[data-calendar-scroll]').evaluate((el) => { el.scrollTop = 6 * 48; });
+        const ev = grid.locator(`.dshcal-ev[data-calendar-event="${series?.eventId}.${compact(day1, '08:00')}"]`);
+        await ev.waitFor({ state: 'visible', timeout: 10000 });
+        const box = await ev.boundingBox();
+        await dragMouse({ x: box.x + box.width / 2, y: box.y + 8 }, { x: box.x + box.width / 2, y: box.y + 8 + 48 });
+        const one = page.locator('[data-calendar-scope="one"]');
+        await one.waitFor({ state: 'visible' });
+        const question = (await one.locator('xpath=ancestor::*[@role="dialog"][1]').textContent()) ?? '';
+        const shownThere = await page.evaluate((id) => {
+            const el = document.querySelector(`[data-calendar-main] .dshcal-ev[data-calendar-event="${id}"]`);
+            return el ? Math.round(el.getBoundingClientRect().top - el.parentElement.getBoundingClientRect().top) : -1;
+        }, `${series?.eventId}.${compact(day1, '08:00')}`);
+        await shot(page, 'drag-series');
+        await one.click();
+        await page.locator('[data-calendar-submit]').click();
+        await one.waitFor({ state: 'detached' });
+        const list = await waitFor(async () => {
+            const found = (await events(day1, addDays(day1, 14))).filter((o) => o.title === 'E2E Drag series');
+            return found.some((o) => o.startLocal === `${day1}T09:00`) ? found : null;
+        }, 'the occurrence moved', 10000);
+        const starts = list.map((o) => o.startLocal);
+        check('a repeating event dragged asks which occurrences move, shows it where it goes meanwhile, and moves the one chosen',
+            /Move “E2E Drag series”\?/.test(question) && /This event/.test(question) && shownThere === 9 * 48 + 1
+            && starts.includes(`${day1}T09:00`) && starts.includes(`${addDays(day1, 7)}T08:00`) && !starts.includes(`${day1}T08:00`),
+            JSON.stringify({ question, shownThere, starts }));
+        await api('deleteEvent', { id: series?.id, scope: 'all' }).catch(() => {});
+    });
+
+    // 8c. Search.
+    await step('search', async () => {
+        await page.locator('[data-calendar-range]').click();
+        await page.keyboard.press('/');
+        const focused = await page.evaluate(() => document.activeElement?.hasAttribute('data-calendar-search') === true);
+        await page.keyboard.type('offsite');
+        const results = page.locator('[data-calendar-grid="search"]');
+        const hit = results.locator('[data-calendar-event]', { hasText: 'E2E Offsite' }).first();
+        await hit.waitFor({ state: 'visible', timeout: 10000 });
+        const text = (await results.textContent()) ?? '';
+        await shot(page, 'search');
+        await hit.click();
+        const details = page.locator('[data-calendar-details]');
+        await details.waitFor({ state: 'visible' });
+        const detailsText = (await details.textContent()) ?? '';
+        const show = (await details.locator('[data-calendar-open-page]').textContent()) ?? '';
+        await page.keyboard.press('Escape');
+        await details.waitFor({ state: 'detached' });
+        // Nothing found, said so; Escape in the field clears it, and the week is back.
+        await page.locator('[data-calendar-search]').fill('nothing-is-called-this');
+        await results.getByText('Nothing matches').waitFor({ state: 'visible', timeout: 10000 });
+        await page.locator('[data-calendar-search]').press('Escape');
+        await results.waitFor({ state: 'detached' });
+        const cleared = (await page.locator('[data-calendar-search]').inputValue()) === '' && (await page.locator('[data-calendar-grid="week"]').count()) === 1;
+        check('search: / goes to the field, the events found show by day, one opens with a way to it in the calendar, and Escape clears it',
+            focused && /1 event found/.test(text) && /E2E Offsite/.test(detailsText) && /Show in calendar/.test(show) && cleared,
+            JSON.stringify({ focused, text: text.slice(0, 200), detailsText: detailsText.slice(0, 100), show, cleared }));
     });
 
     // 9. Accounts.
@@ -1654,12 +1859,26 @@ try {
         await pane.locator('[data-calendar-event]', { hasText: 'E2E Planning' }).first().waitFor({ state: 'visible', timeout: 10000 });
         const text = await pane.textContent();
         await shot(page, 'agenda-pane');
-        await pane.locator('[data-calendar-event]', { hasText: 'E2E Planning' }).locator('.dshcal-pane-what').click();
+        // An event's details open beside the pane; the chat stays. Open in Calendar shows it on the page.
+        const row = pane.locator('[data-calendar-event]', { hasText: 'E2E Planning' }).first();
+        await row.locator('.dshcal-pane-what').click();
         const details = page.locator('[data-calendar-details]');
         await details.waitFor({ state: 'visible', timeout: 10000 });
         const detailsText = await details.textContent();
-        check('the Agenda pane lists today and the next days, and opens an event on the page', /Today/.test(text ?? '') && /E2E Offsite/.test(text ?? '')
-            && /E2E Planning/.test(detailsText ?? '') && (await page.locator('[data-calendar-page]').count()) === 1, (text ?? '').slice(0, 300));
+        const beside = await page.evaluate(() => {
+            const pop = document.querySelector('[data-calendar-details]').getBoundingClientRect();
+            const pane = document.querySelector('[data-calendar-pane]').getBoundingClientRect();
+            return pop.right <= pane.left + 12 && pop.left < pane.left;
+        });
+        const stayed = (await page.locator('[data-calendar-page]').count()) === 0;
+        await shot(page, 'agenda-pane-details');
+        await details.locator('[data-calendar-open-page]').click();
+        await page.locator('[data-calendar-page]').waitFor({ state: 'visible', timeout: 10000 });
+        await details.waitFor({ state: 'visible', timeout: 10000 });
+        const pageText = await details.textContent();
+        check('the Agenda pane lists today and the next days; an event\'s details open beside it, the chat staying, and Open in Calendar shows it on the page',
+            /Today/.test(text ?? '') && /E2E Offsite/.test(text ?? '') && /E2E Planning/.test(detailsText ?? '') && beside && stayed && /E2E Planning/.test(pageText ?? ''),
+            JSON.stringify({ text: (text ?? '').slice(0, 300), beside, stayed, pageText: (pageText ?? '').slice(0, 100) }));
         await page.keyboard.press('Escape');
     });
 
@@ -1706,13 +1925,19 @@ try {
             const root = document.querySelector('[data-calendar-page]');
             return root.scrollWidth - root.clientWidth;
         });
+        const search = await page.locator('[data-calendar-search]').boundingBox();
+        const searchFits = search !== null && search.x >= 0 && search.x + search.width <= 420 && search.width >= 200;
         await shot(page, 'narrow-week');
         await page.locator('[data-calendar-side-toggle]').click();
         await page.locator('[data-calendar-side]').waitFor({ state: 'visible', timeout: 5000 });
+        const focusIn = await page.evaluate(() => Boolean(document.activeElement?.closest('[data-calendar-side]')));
         await shot(page, 'narrow-side');
         await page.keyboard.press('Escape');
-        check('in a narrow window the side column folds behind a button and Week shows three days, nothing sticking out', toggle && !sideShown && columns === 3 && overflow <= 1,
-            JSON.stringify({ toggle, sideShown, columns, overflow }));
+        await page.locator('[data-calendar-side]').waitFor({ state: 'hidden', timeout: 5000 });
+        const focusBack = await page.evaluate(() => document.activeElement?.hasAttribute('data-calendar-side-toggle') === true);
+        check('in a narrow window the side column folds behind a button (the focus going in and back), Week shows three days, search fits, nothing sticking out',
+            toggle && !sideShown && columns === 3 && overflow <= 1 && searchFits && focusIn && focusBack,
+            JSON.stringify({ toggle, sideShown, columns, overflow, search, focusIn, focusBack }));
         await page.setViewportSize({ width: 1280, height: 800 });
     });
 
