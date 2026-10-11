@@ -40,7 +40,8 @@ export class CalendarError extends Error {
      *   'drops-changes', 'choose-calendar' and 'changed' as remote.js says.
      * @param {{people?: string[], mail?: object}} [details] - for a refusal over who a change emails or reaches
      *   ('needs-notify', 'needs-approval', 'changed'): people, every one of them, for the window to name and to
-     *   hold the change to when the user says yes (approved); mail, what they get (mailDetails()).
+     *   hold the change to when the user says yes (approved); mail, what they get (mailDetails()). 'changed'
+     *   naming no one (people empty): the event changed meanwhile, with nobody new to ask about.
      */
     constructor(message, code, details) {
         super(message);
@@ -1719,9 +1720,10 @@ export class CalendarManager {
      * Run a change; when the server says the event changed meanwhile, sync
      * and try once more. With retry false (a deletion, a new time, a change
      * that emails or reaches people: decided on the event as it was), sync
-     * and say so instead; `recheck` first works the change out again on the
-     * event as the sync left it, so one that would now email or reach
-     * someone the user wasn't told of says who ('changed').
+     * and say so instead ('changed', naming no one); `recheck` first works
+     * the change out again on the event as the sync left it, so one that
+     * would now email or reach someone the user wasn't told of says who
+     * ('changed', naming them).
      */
     async changing(calendarId, run, { retry = true, recheck } = {}) {
         return this.locked(`sync:${calendarId}`, async () => {
@@ -1737,7 +1739,8 @@ export class CalendarManager {
             await this.syncCalendar(calendarId);
             if (!retry) {
                 recheck?.();
-                throw new CalendarError('The event changed on its server meanwhile (in another app, or by someone else), so nothing was done. Look at it again first.');
+                // Nobody new to ask about: 'changed' naming no one, so the window offers to look at it again.
+                throw new CalendarError('The event changed on its server meanwhile (in another app, or by someone else), so nothing was done. Look at it again first.', 'changed', { people: [] });
             }
             return this.locked(`sync:${calendarId}`, async () => {
                 try {

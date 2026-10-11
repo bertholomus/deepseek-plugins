@@ -761,7 +761,19 @@ test('a change decided on the event as it was is not tried again after the event
             if (refusals++ === 0) throw new SourceError('conflict', 'The event changed on the server meanwhile.');
             return put(...args);
         };
-        await assert.rejects(m.updateEvent(ev.id, { start: '2026-10-16T18:00' }), /changed on its server meanwhile \(in another app, or by someone else\), so nothing was done/);
+        // It reaches no one new: 'changed', naming no one, so the window has the user look at it again rather than ask.
+        const nobodyNew = (error) => refusedFor('changed', /^The event changed on its server meanwhile \(in another app, or by someone else\), so nothing was done\. Look at it again first\.$/)(error)
+            && Array.isArray(error.people) && error.people.length === 0 && error.mail === undefined;
+        await assert.rejects(m.updateEvent(ev.id, { start: '2026-10-16T18:00' }), nobodyNew);
+        assert.equal(refusals, 1, 'not tried again');
+        // The window's changes pass it on as it is; an agent is told to read the event again first.
+        refusals = 0;
+        const { WindowChanges } = await import('../lib/asked.js');
+        await assert.rejects(new WindowChanges(m).update(ev.id, { start: '2026-10-16T18:00' }, 'all'), nobodyNew);
+        refusals = 0;
+        const tools = Object.fromEntries(calendarTools(m).map((tool) => [tool.name, tool]));
+        await assert.rejects(tools.calendar_update_event.execute({ id: ev.id, start: '2026-10-16T18:00' }),
+            /^Error: Not done: The event changed on its server meanwhile \(in another app, or by someone else\), so nothing was done\. Look at it again first\. Read the event again \(calendar_get_event\) and tell the user what changed before trying again\.$/);
         assert.equal(refusals, 1, 'not tried again');
         // A change that doesn't depend on the time still is.
         refusals = 0;
