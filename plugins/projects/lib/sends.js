@@ -824,17 +824,22 @@ function mail(name, args) {
 // ── Code ──────────────────────────────────────────────────────────────────
 
 const CODE_SENDS = [
-    [/\b(?:requests|httpx|urllib3|session|aiohttp|client)\s*\.\s*(post|put|patch|delete)\s*\(/i, (m) => `a ${m[1].toUpperCase()}`],
     [/\.\s*(?:request|open)\s*\(\s*['"](POST|PUT|PATCH|DELETE)['"]/i, (m) => `a ${m[1].toUpperCase()}`],
     [/\bhttp\.(Post|PostForm)\s*\(|\bNet::HTTP\.(post|post_form|put|patch|delete)\b/, (m) => `a ${(m[1] ?? m[2]).replace(/_form$|Form$/, '').toUpperCase()}`],
-    [/\bmethod\s*[:=]\s*['"`](POST|PUT|PATCH|DELETE)['"`]/i, (m) => `a ${m[1].toUpperCase()}`],
-    [/\b(?:axios|got|ky|superagent|needle|ofetch|\$fetch|undici)\s*\.\s*(post|put|patch|delete)\s*\(/i, (m) => `a ${m[1].toUpperCase()}`],
-    [/\burlopen\s*\([^)]*\bdata\s*=/, () => 'a POST'],
+    [/\$fetch\s*\.\s*(post|put|patch|delete)\s*\(/i, (m) => `a ${m[1].toUpperCase()}`],
     [/\bNet::HTTP::(Post|Put|Patch|Delete)\b|\b(?:HTTParty|Faraday|RestClient)\s*\.\s*(post|put|patch|delete)\b/, (m) => `a ${(m[1] ?? m[2]).toUpperCase()}`],
     [/\bHTTP::Request->new\(\s*['"]?(POST|PUT|PATCH|DELETE)/, (m) => `a ${m[1]}`],
     [/\bCURLOPT_(?:POST|POSTFIELDS|UPLOAD|CUSTOMREQUEST)\b/, () => 'a request that changes something'],
     [/\bInvoke-(?:WebRequest|RestMethod)\b[^\n]*-Method\s+['"]?(Post|Put|Patch|Delete)\b/i, (m) => `a ${m[1].toUpperCase()}`],
 ];
+/** A request's method in code: it counts where the code calls a web client (CALLS_CLIENT), not in a route table or other data. */
+const METHOD_OPTION = /\bmethod\s*[:=]\s*['"`](POST|PUT|PATCH|DELETE)['"`]/i;
+const CALLS_CLIENT = /\b(?:fetch|axios|got|ky|superagent|needle|ofetch|request|urlopen|Request)\s*\(|\$fetch\s*\(|\.ajax\s*\(|\bhttps?\.request\b|\b(?:requests|httpx|urllib3|aiohttp|urllib|undici|XMLHttpRequest|HttpClient|WebClient|WebRequest|HttpURLConnection|HTTParty|Faraday|RestClient|Invoke-WebRequest|Invoke-RestMethod)\b/i;
+/** Python's web clients, and what each makes its sessions or clients with. */
+const PY_CLIENTS = { requests: ['Session', 'session'], httpx: ['Client', 'AsyncClient'], aiohttp: ['ClientSession'], urllib3: ['PoolManager'] };
+/** JavaScript's, and what each makes a client of its own with (`const api = axios.create(…)`). */
+const JS_CLIENTS = { axios: ['create'], got: ['extend'], ky: ['create', 'extend'], superagent: [], needle: [], ofetch: ['create'], undici: [] };
+const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const CODE_MAIL = /\b(?:smtplib|nodemailer|Net::SMTP|Mail::Sendmail|PHPMailer|Send-MailMessage)\b/;
 
 /** Code that runs commands: then its strings and lists of strings are read as command lines. */
@@ -851,10 +856,14 @@ export function codeSendOf(code, ctx = { depth: 0 }, program = 'code') {
 }
 
 function codeFound(text, ctx, program) {
+    const method = clientMethod(text) ?? urllibMethod(text);
+    if (method) return { kind: 'request', program, what: `runs code that sends a ${method} (${program})` };
     for (const [re, said] of CODE_SENDS) {
         const m = re.exec(text);
         if (m) return { kind: 'request', program, what: `runs code that sends ${said(m)} (${program})` };
     }
+    const option = CALLS_CLIENT.test(text) ? METHOD_OPTION.exec(text) : null;
+    if (option) return { kind: 'request', program, what: `runs code that sends a ${option[1].toUpperCase()} (${program})` };
     if (CODE_MAIL.test(text)) return { kind: 'email', program, what: `runs code that sends email (${program})` };
     // Its strings are read as commands only where it runs commands, so a message that mentions one is no send.
     if ((ctx.depth ?? 0) >= MAX_DEPTH || !SPAWNS.test(text)) return null;
@@ -876,6 +885,88 @@ function codeFound(text, ctx, program) {
         if (found) return said(found);
     }
     return null;
+}
+
+/**
+ * A method that changes something, called on a web client: a client module
+ * (`requests.post(`, `axios.delete(`), a name code imports one as (`import
+ * requests as r`), a session or a client it makes from one (`s =
+ * requests.Session()`, `async with aiohttp.ClientSession() as s`,
+ * `httpx.Client().post(`, `require('axios').post(`), or a function it
+ * imports from one (`from requests import post`). An ORM's session changes a
+ * database, not a web resource: with SQLAlchemy, `db.session.delete(row)` is
+ * none.
+ * @returns the method ("POST"), or undefined.
+ */
+function clientMethod(text) {
+    const receivers = new Set(['client', ...Object.keys(PY_CLIENTS), ...Object.keys(JS_CLIENTS)]);
+    if (!/\b(?:sqlalchemy|flask_sqlalchemy|sqlmodel)\b/.test(text)) receivers.add('session');
+    const makers = [];
+    const functions = new Map();
+    for (const [module, made] of Object.entries(PY_CLIENTS)) {
+        for (const name of [module, ...[...text.matchAll(new RegExp(`\\bimport\\s+${module}\\s+as\\s+(\\w+)`, 'g'))].map((m) => m[1])]) {
+            receivers.add(name);
+            makers.push(...made.map((maker) => `${escaped(name)}\\s*\\.\\s*${maker}`));
+        }
+        for (const m of text.matchAll(new RegExp(`\\bfrom\\s+${module}\\s+import\\s+(?:\\(([^)]*)\\)|([^\\n;#]+))`, 'g'))) {
+            for (const part of (m[1] ?? m[2]).split(',')) {
+                const [name, as = name] = part.trim().split(/\s+as\s+/);
+                if (made.includes(name)) makers.push(escaped(as));
+                if (/^(post|put|patch|delete)$/.test(name)) functions.set(as, name.toUpperCase());
+            }
+        }
+    }
+    for (const [module, made] of Object.entries(JS_CLIENTS)) makers.push(...made.map((maker) => `${module}\\s*\\.\\s*${maker}`));
+    const maker = `(?:${makers.join('|')})`;
+    for (const m of text.matchAll(new RegExp(`(?:^|[^\\w.])((?:self\\.|this\\.)?[A-Za-z_$][\\w$]*)\\s*=\\s*(?:await\\s+)?${maker}\\s*\\(`, 'gm'))) receivers.add(m[1]);
+    for (const m of text.matchAll(new RegExp(`\\bwith\\s+${maker}\\s*\\([^\\n]*?\\)\\s+as\\s+(\\w+)`, 'g'))) receivers.add(m[1]);
+    const call = new RegExp(`(?<![\\w$])(?:${[...receivers].map(escaped).join('|')})\\s*\\.\\s*(post|put|patch|delete)\\s*\\(`
+        + `|${maker}\\s*\\([^\\n]*?\\)\\s*\\.\\s*(post|put|patch|delete)\\s*\\(`
+        + `|\\brequire\\s*\\(\\s*['"](?:${Object.keys(JS_CLIENTS).join('|')})['"]\\s*\\)\\s*\\.\\s*(post|put|patch|delete)\\s*\\(`, 'i').exec(text);
+    if (call) return (call[1] ?? call[2] ?? call[3]).toUpperCase();
+    for (const [name, method] of functions) if (new RegExp(`(?:^|[^\\w.])${escaped(name)}\\s*\\(`, 'm').test(text)) return method;
+    return undefined;
+}
+
+/**
+ * Python's standard library sending a body: `urllib.request.Request(url,
+ * data)` or `urlopen(url, data)`, the data given by position or as `data=`,
+ * unless `method=` names a read.
+ * @returns the method, or undefined.
+ */
+function urllibMethod(text) {
+    if (!/\burllib\b/.test(text)) return undefined;
+    for (const m of text.matchAll(/\b(?:Request|urlopen)\s*\(/g)) {
+        const args = callArgs(text, m.index + m[0].length - 1);
+        const named = (key) => args.find((a) => new RegExp(`^${key}\\s*=`).test(a))?.replace(/^\w+\s*=\s*/, '');
+        const method = /^['"]([A-Za-z]+)['"]$/.exec(named('method') ?? '')?.[1].toUpperCase();
+        const data = named('data') ?? (args[1] !== undefined && !/^\w+\s*=/.test(args[1]) ? args[1] : undefined);
+        if (method ? !READ_METHODS.has(method) : data !== undefined && data !== 'None') return method ?? 'POST';
+    }
+    return undefined;
+}
+
+/** The arguments of the call whose `(` is at `open`, as written: split at its own commas, with quotes and brackets kept. */
+function callArgs(text, open) {
+    const args = [];
+    let depth = 0;
+    let from = open + 1;
+    for (let i = open; i < text.length; i++) {
+        const c = text[i];
+        if (c === '"' || c === "'" || c === '`') {
+            let k = i + 1;
+            while (k < text.length && text[k] !== c) k += text[k] === '\\' ? 2 : 1;
+            i = k;
+        } else if ('([{'.includes(c)) depth++;
+        else if (')]}'.includes(c) && --depth === 0) {
+            args.push(text.slice(from, i).trim());
+            break;
+        } else if (c === ',' && depth === 1) {
+            args.push(text.slice(from, i).trim());
+            from = i + 1;
+        }
+    }
+    return args.filter((a) => a !== '');
 }
 
 // ── Scripts and tasks ─────────────────────────────────────────────────────

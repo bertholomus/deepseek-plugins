@@ -5727,12 +5727,16 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     mkdirSync(join(work, 'billing'));
     writeFileSync(join(work, 'billing', 'deploy.sh'), '#!/bin/bash\ncurl -fsS -X POST -H "Authorization: Bearer ${STAGING_TOKEN}" -d \'{"service":"billing"}\' "${STAGING_URL}"\n');
     writeFileSync(join(work, 'package.json'), JSON.stringify({ scripts: {
-        build: 'tsc', release: 'npm publish', ship: 'echo shipped',
+        build: 'tsc', release: 'npm publish', ship: 'echo shipped', start: 'node server.js',
         'sync:assets': 'aws s3 sync ./dist s3://acme-assets --cache-control max-age=31536000', 'sync:prod': 'rsync -avz ./dist/ deploy@web1:/var/www/app --exclude node_modules',
     } }));
     writeFileSync(join(work, 'Makefile'), 'sync:\n\taws s3 sync ./dist s3://acme-site --delete --cache-control max-age=31536000\n');
     mkdirSync(join(work, 'scripts'));
     writeFileSync(join(work, 'scripts', 'release.sh'), '#!/bin/sh\ngh release create "v$2" dist/*.tar.gz --notes-file CHANGELOG.md\n');
+    writeFileSync(join(work, 'scripts', 'report.py'), 'import requests\n\ns = requests.Session()\ns.headers["Authorization"] = "Bearer t"\nr = s.post("https://reports.example.com/api/runs", json={"passed": 12})\nprint(r.status_code)\n');
+    // A local app: a route table and an ORM's delete send nothing.
+    writeFileSync(join(work, 'server.js'), "const fastify = require('fastify')({ logger: true });\nconst routes = [\n  { method: 'GET', url: '/items', handler: async () => [] },\n  { method: 'POST', url: '/items', handler: async (req) => ({ id: 1, ...req.body }) },\n];\nfor (const route of routes) fastify.route(route);\nfastify.listen({ port: 3000 });\n");
+    writeFileSync(join(work, 'app.py'), 'from flask import Flask, jsonify\nfrom flask_sqlalchemy import SQLAlchemy\n\napp = Flask(__name__)\ndb = SQLAlchemy(app)\n\n@app.route("/items/<int:item_id>", methods=["DELETE"])\ndef delete_item(item_id):\n    db.session.delete(Item.query.get_or_404(item_id))\n    db.session.commit()\n    return jsonify(ok=True)\n\nif __name__ == "__main__":\n    app.run(port=5000)\n');
     const outside = mkdtempSync(join(tmpdir(), 'projects-outside-'));
     writeFileSync(join(outside, 'run.sh'), '#!/bin/sh\ngit push\n');
     const { host, dir } = setup({ projects: [{ name: 'DSH Plugins', goal: 'Ship good DSH plugins', workspacePath: work }] }, undefined, { presets: true });
@@ -5829,13 +5833,21 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         ['BOT_TOKEN=123:abc; curl -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage"', 'sends a POST to api.telegram.org/bot$BOT_TOKEN/sendMessage (curl)'],
         [`mkdir -p .tmp-deploy-test && cp deploy.sh .tmp-deploy-test/ && (cd /tmp && STAGING_TOKEN=dummy ${copied})`, `runs ${copied}, whose name says it deploys. The plugin couldn't see what ${copied} runs`],
         ['npm run ship', 'runs npm run ship: the plugin found no send in it, but its name says it ships'],
+        // Code that posts through the standard library's Request, or through a session or a client by any name.
+        [`python3 -c "import urllib.request, json; req = urllib.request.Request('https://hooks.slack.com/services/T000/B000/XXX', data=json.dumps({'text': 'Build done'}).encode(), headers={'Content-Type': 'application/json'}); print(urllib.request.urlopen(req).status)"`, 'runs code that sends a POST (python3)'],
+        ['python3 - <<\'EOF\'\nimport json, urllib.request\npayload = json.dumps({"text": "deploy finished"}).encode()\nreq = urllib.request.Request("https://hooks.slack.com/services/XXX", payload, {"Content-Type": "application/json"})\nprint(urllib.request.urlopen(req).status)\nEOF', 'runs code that sends a POST (python3)'],
+        ['python3 scripts/report.py', 'runs scripts/report.py, which runs code that sends a POST (python3)'],
+        [`python3 -c "from requests import post; print(post('https://api.example.com/x', json={}).status_code)"`, 'runs code that sends a POST (python3)'],
+        ['node -e "require(\'axios\').post(\'https://api.example.com/x\', {a: 1}).then(r => console.log(r.status))"', 'runs code that sends a POST (node)'],
     ]) {
         const decision = await gate(t1, shell, { command });
         assert.deepEqual([decision.kind, decision.reason, decision.displayReason?.en], ['ask', `the command ${what}`, `This command ${what}. A thread asks you before each command that sends outside the workspace.`], command);
     }
     // Reads run: a GET, a syntax check, a dry run, a script that doesn't send, a build.
     for (const command of ['curl -sS http://127.0.0.1:8787/deploy', 'bash -n deploy.sh', 'git push --dry-run', './run.sh', 'npm run build', 'git status',
-        'git --version', 'curl --version', 'gh pr create --help']) {
+        'git --version', 'curl --version', 'gh pr create --help',
+        // A local app whose code has a route table or an ORM's delete.
+        'node server.js', 'npm start', 'python3 app.py', 'node -e "console.log(JSON.stringify({ method: \'POST\', path: \'/items\' }))"']) {
         assert.deepEqual(await gate(t1, 'bash', { command }), { kind: 'allow' }, command);
     }
     // Nothing outside the workspace is read: that run.sh pushes, but only its name is seen.
