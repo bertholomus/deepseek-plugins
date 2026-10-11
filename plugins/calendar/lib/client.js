@@ -2657,9 +2657,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /**
          * A card beside what opened it (to its right, else its left, else
          * below or above it; in the middle without one), or a sheet at the
-         * bottom of a narrow window. Escape or a press outside closes it
-         * (onClose says which: 'escape', 'outside'), and the focus goes back
-         * where it was.
+         * bottom of a narrow window. It takes the focus once it is placed;
+         * Escape or a press outside closes it (onClose says which: 'escape',
+         * 'outside'), and the focus goes back where it was.
          */
         function Popover({ anchor, onClose, label, children, ...rest }) {
             const ref = React.useRef(null);
@@ -2695,10 +2695,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }
                 setPlace({ left, top: clamp(top, 12, Math.max(12, vh - hgt - 12)) });
             }, [anchor]);
+            // The focus moves in once it is placed: hidden while it is measured, it can't take the focus.
+            const focused = React.useRef(false);
+            React.useEffect(() => {
+                if (place === null || focused.current) return;
+                focused.current = true;
+                const el = ref.current;
+                (el?.querySelector('[data-pop-autofocus]') ?? el)?.focus?.({ preventScroll: true });
+            }, [place]);
             React.useEffect(() => {
                 const before = document.activeElement;
                 const el = ref.current;
-                (el?.querySelector('[data-pop-autofocus]') ?? el)?.focus?.({ preventScroll: true });
                 const onKey = (event) => {
                     if (event.key !== 'Escape' || event.defaultPrevented) return;
                     if (document.querySelector('[role=dialog][aria-modal=true]')) return;
@@ -2719,8 +2726,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 };
             }, []);
             const style = place === null ? { left: -9999, top: 0, visibility: 'hidden' } : place.sheet ? {} : { left: place.left, top: place.top };
+            // Escape inside it is its own: the page under it doesn't see it too.
+            const onKeyDown = (event) => {
+                if (event.key !== 'Escape' || document.querySelector('[role=dialog][aria-modal=true]')) return;
+                event.preventDefault();
+                event.stopPropagation();
+                close.current('escape');
+            };
             return ReactDOM.createPortal(h('div', {
-                ref, className: 'dshcal-pop', role: 'dialog', 'aria-label': label, tabIndex: -1, style, 'data-sheet': place?.sheet ? '' : undefined, ...rest,
+                ref, className: 'dshcal-pop', role: 'dialog', 'aria-label': label, tabIndex: -1, style, 'data-sheet': place?.sheet ? '' : undefined, onKeyDown, ...rest,
             }, children), document.body);
         }
 

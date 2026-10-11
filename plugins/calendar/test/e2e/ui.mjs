@@ -13,6 +13,7 @@
  *   chats can email guests without asking (with nothing to change it);
  * - a timed event, an all-day event and a weekly repeating event made
  *   through the event dialog (each checked through the plugin's endpoints);
+ *   an event's details, which take the focus and close on Escape;
  * - one occurrence of the repeating event changed (scope 'one') and another
  *   deleted (scope 'one'), the rest of the series as it was;
  * - Month, Day and Agenda views, the choice kept by the plugin, N and T;
@@ -663,6 +664,19 @@ try {
         const made = (await events(day1, day1)).find((o) => o.title === 'E2E Planning');
         check('a timed event made in the dialog is in the calendar at its time, and on the page', made && made.startLocal === `${day1}T10:00` && made.endLocal === `${day1}T10:30`
             && made.timeZone === ZONE && made.calendarId === defaultCalendar, JSON.stringify(made));
+    });
+    await step('an event\'s details and the keyboard', async () => {
+        // Opened, the details take the focus; Escape closes them (not the page under them), and the focus goes back.
+        await eventOnPage('E2E Planning').click();
+        const details = page.locator('[data-calendar-details]');
+        await details.waitFor({ state: 'visible' });
+        const inside = await page.waitForFunction(() => document.querySelector('[data-calendar-details]')?.contains(document.activeElement), null, { timeout: 5000 })
+            .then(() => true, () => false);
+        await page.keyboard.press('Escape');
+        await details.waitFor({ state: 'detached', timeout: 5000 });
+        const back = await page.evaluate(() => document.activeElement?.closest?.('[data-calendar-event]')?.textContent ?? '');
+        check('an event\'s details take the focus when they open; Escape closes them and the focus goes back to the event', inside && /E2E Planning/.test(back),
+            JSON.stringify({ inside, back }));
     });
     await step('an all-day event made in the dialog', async () => {
         await page.locator('[data-calendar-side-new]').click();
