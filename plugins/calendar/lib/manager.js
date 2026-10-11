@@ -38,14 +38,16 @@ export class CalendarError extends Error {
      * @param {string} message
      * @param {string} [code] - 'needs-notify': the change would email people, and it didn't say to tell them;
      *   'drops-changes', 'choose-calendar' and 'changed' as remote.js says.
-     * @param {{people?: string[]}} [details] - people: who a 'needs-notify' change would email or reach, for the
-     *   window to hold the change to when the user says to send (approved).
+     * @param {{people?: string[], mail?: object}} [details] - for a refusal over who a change emails or reaches
+     *   ('needs-notify', 'needs-approval', 'changed'): people, every one of them, for the window to name and to
+     *   hold the change to when the user says yes (approved); mail, what they get (mailDetails()).
      */
     constructor(message, code, details) {
         super(message);
         this.name = 'CalendarError';
         if (code !== undefined) this.code = code;
         if (Array.isArray(details?.people)) this.people = details.people;
+        if (details?.mail !== undefined) this.mail = details.mail;
     }
 }
 
@@ -74,6 +76,9 @@ export const PALETTE = ['#4f7cff', '#e5484d', '#30a46c', '#f5a524', '#8e4ec6', '
 const REACH_WORDS = { add: 'put it on', remove: 'take it off', change: 'change it on' };
 
 const KIND_NAMES = { local: 'Kept in DSH', ics: 'Subscription', caldav: 'CalDAV', google: 'Google', microsoft: 'Microsoft' };
+
+/** What the user may change on someone else's invitation: their own reminders, busy or free, and privacy. */
+const OWN_FIELDS = new Set(['alarms', 'busy', 'privacy']);
 
 /** Fields a change may set, as the window and the tools give them. */
 const INPUT_FIELDS = ['title', 'start', 'end', 'allDay', 'timeZone', 'location', 'description', 'url', 'repeat', 'alarms', 'attendees', 'busy', 'privacy', 'status', 'conference'];
@@ -1351,7 +1356,7 @@ export class CalendarManager {
         if (mail === undefined) return undefined;
         if (notify === true && mail.cannot) return { message: mail.cannot };
         if (mail.forced && notify !== true) {
-            return { message: `This would email ${mail.what} to ${peopleWords(mail.to)} (${mail.why}), so it's made only when they are to be told.`, code: 'needs-notify', people: peopleOf(mail) };
+            return { message: `This would email ${mail.what} to ${peopleWords(mail.to)} (${mail.why}), so it's made only when they are to be told.`, code: 'needs-notify', people: peopleOf(mail), mail: mailDetails(mail) };
         }
         return undefined;
     }
@@ -1376,7 +1381,23 @@ export class CalendarManager {
         const reached = fresh(mail?.reaches);
         if (emailed.length === 0 && reached.length === 0) return;
         const what = emailed.length > 0 ? `email ${mail.what} to ${peopleWords(emailed)}` : `${REACH_WORDS[mail.reach] ?? 'reach'} the calendars of ${peopleWords(reached)}`;
-        throw new CalendarError(`The event changed since this change was looked at (on its server, or in another app): it would now also ${what}, so nothing was done. Look at it again first.`, 'changed');
+        throw new CalendarError(`The event changed since this change was looked at (on its server, or in another app): it would now also ${what}, so nothing was done. Look at it again first.`, 'changed',
+            { people: peopleOf(mail), mail: mailDetails(mail) });
+    }
+
+    /**
+     * Who a change may email or reach: `approved`, who the user was shown
+     * (the approval prompt's list, or the window's question); else, for a
+     * caller that shows them first (confirm: the window), nobody yet, so a
+     * change that would email or reach someone is refused naming every one
+     * of them ('needs-approval'); else who the change's own first look found.
+     */
+    knownFor(mail, approved, confirm = false) {
+        if (Array.isArray(approved)) return approved;
+        const people = peopleOf(mail);
+        if (!confirm) return people;
+        if (people.length > 0) throw new CalendarError(approvalText(mail), 'needs-approval', { people, mail: mailDetails(mail) });
+        return [];
     }
 
     // ── Plans: what a change does, worked out before it's asked about and again just before it's made ──
@@ -1440,8 +1461,12 @@ export class CalendarManager {
         }
         const which = this.scopeOf(at, scope);
         const before = this.recordOf(at, which);
-        if (this.roleOf(before, at.account) === 'guest' && fields.attendees !== undefined && this.mailerOf(at.calendar) !== 'never') {
-            throw new CalendarError('This is someone else\'s invitation: only its organizer changes who is invited.');
+        if (this.roleOf(before, at.account) === 'guest' && this.mailerOf(at.calendar) !== 'never') {
+            if (fields.attendees !== undefined) throw new CalendarError('This is someone else\'s invitation: only its organizer changes who is invited.');
+            // Its title, time, place and notes are its organizer's; the user's own reminders, busy or free and privacy are theirs.
+            if (Object.keys(fields).some((k) => fields[k] !== undefined && !OWN_FIELDS.has(k))) {
+                throw new CalendarError('This is someone else\'s invitation: its organizer sets its title, time, place, link and notes. Answer it, or change your own reminders, whether it shows you as busy, or whether it\'s private.');
+            }
         }
         const mail = this.mailOf({ kind: 'update', calendar: at.calendar, before, after: this.guestsAfter(before, fields), patch: fields, scope: which, notify });
         this.checkMail(mail, notify);
@@ -1707,9 +1732,9 @@ export class CalendarManager {
      * @param {object} input - calendarId (default: the default calendar), and INPUT_FIELDS.
      * @param {string} by - who asked, for the log: 'window' or 'agent'.
      */
-    async createEvent(input, by = 'window', { approved } = {}) {
+    async createEvent(input, by = 'window', { approved, confirm = false } = {}) {
         const { calendar, account, record, mail } = this.planCreate(input);
-        this.checkKnown(mail, approved);
+        this.checkKnown(mail, this.knownFor(mail, approved, confirm));
         const emails = mail.to.length > 0;
         // A CalDAV server invites the guests of an event that names its organizer.
         if (emails && account.kind === 'caldav') record.organizer = { email: this.selfAddress(account) };
@@ -1758,13 +1783,13 @@ export class CalendarManager {
      * Change an event. scope: 'one' (this occurrence of a series), 'following'
      * (this one and the ones after it), 'all' (the series, or a single event).
      */
-    async updateEvent(id, patchIn = {}, scope = 'all', by = 'window', { approved } = {}) {
+    async updateEvent(id, patchIn = {}, scope = 'all', by = 'window', { approved, confirm = false } = {}) {
         const plan = this.planUpdate(id, patchIn, scope);
-        if (plan.move) return this.moveEvent(id, plan.target.id, by, { notify: plan.notify, dropChanges: plan.dropChanges, approved });
+        if (plan.move) return this.moveEvent(id, plan.target.id, by, { notify: plan.notify, dropChanges: plan.dropChanges, approved, confirm });
         const first = plan.at;
         const { which } = plan;
-        // Who the user was told the change reaches: the approval prompt's list, else this first look's.
-        const known = approved ?? peopleOf(plan.mail);
+        // Who the user was told the change reaches: the approval prompt's or the window's list, else this first look's.
+        const known = this.knownFor(plan.mail, approved, confirm);
         this.checkKnown(plan.mail, known);
         // A new time is decided on the event as it was: if it changed meanwhile, say so rather than try again.
         const retry = peopleOf(plan.mail).length === 0 && !['start', 'end', 'allDay', 'timeZone', 'repeat'].some((k) => plan.fields[k] !== undefined);
@@ -1984,10 +2009,10 @@ export class CalendarManager {
      * would email them (a cancellation from here, an invitation from there)
      * is made only when it says to tell them.
      */
-    async moveEvent(id, calendarId, by = 'window', { notify = false, dropChanges = false, approved } = {}) {
+    async moveEvent(id, calendarId, by = 'window', { notify = false, dropChanges = false, approved, confirm = false } = {}) {
         const plan = this.planMove(id, calendarId, { notify, dropChanges });
         const { at, target } = plan;
-        const known = approved ?? peopleOf(plan.mail);
+        const known = this.knownFor(plan.mail, approved, confirm);
         this.checkKnown(plan.mail, known);
         const zone = this.zone();
         const targetAccount = this.store.accounts[target.accountId];
@@ -2039,11 +2064,11 @@ export class CalendarManager {
      * organizer). A delete that would email someone without it is refused.
      * @returns {Promise<{emailed?: {what: string, to: string[]}}>}
      */
-    async deleteEvent(id, scope = 'all', by = 'window', { notify = false, approved } = {}) {
+    async deleteEvent(id, scope = 'all', by = 'window', { notify = false, approved, confirm = false } = {}) {
         const plan = this.planDelete(id, scope, { notify });
         const first = plan.at;
         const { which } = plan;
-        const known = approved ?? peopleOf(plan.mail);
+        const known = this.knownFor(plan.mail, approved, confirm);
         this.checkKnown(plan.mail, known);
         let mail = plan.mail;
         await this.changing(first.calendar.id, async () => {
@@ -2218,7 +2243,6 @@ export class CalendarManager {
 
 const short = (error) => String(error?.message ?? error).replace(/\s+/g, ' ').slice(0, 160);
 
-/** A change's result, with who it emailed when it emailed someone. */
 /** A change's result with who it emailed, and whose calendars it reached without emailing them. */
 const withMail = (view, mail) => ({
     ...view,
@@ -2234,6 +2258,17 @@ export function peopleOf(mail) {
         if (!out.has(key)) out.set(key, person);
     }
     return [...out.values()];
+}
+
+/** What a change emails or reaches, for a refusal's details: {emailed?: {what, to}, reached?: {how, to}, why?}. */
+export const mailDetails = (mail) => ({ ...withMail({}, mail), ...(mail?.forced && mail?.why ? { why: mail.why } : {}) });
+
+/** A window change that didn't say who the user saw, refused in words naming who it would email or reach. */
+function approvalText(mail) {
+    const parts = [];
+    if (mail?.to?.length > 0) parts.push(`email ${mail.what} to ${peopleWords(mail.to)}`);
+    if (mail?.reaches?.length > 0) parts.push(`${REACH_WORDS[mail.reach] ?? 'change it on'} the calendars of ${peopleWords(mail.reaches)} without emailing them`);
+    return `This would ${parts.join(', and ')}, so it's made once the user has seen who.`;
 }
 
 /** " mail=2 reach=1" for the log: how many, never who. */

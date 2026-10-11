@@ -366,6 +366,9 @@ function grantOf(body, started, previous) {
     return grant;
 }
 
+/** What a refresh the token endpoint turned down (invalid_grant) says: the sign-in has ended. */
+export const SIGN_IN_ENDED = 'The sign-in has expired or was revoked. Sign in again.';
+
 /** A SourceError for a token endpoint's refusal, in words without secrets. */
 function tokenError(res, during) {
     const body = parseJson(res.text);
@@ -374,7 +377,7 @@ function tokenError(res, during) {
     const status = res.status;
     if (code === 'invalid_grant') {
         return new SourceError('auth', during === 'refresh'
-            ? 'The sign-in has expired or was revoked. Sign in again.'
+            ? SIGN_IN_ENDED
             : 'The sign-in code wasn\'t accepted (it may have expired). Start the sign-in again.', { status });
     }
     if (code === 'invalid_client' || code === 'unauthorized_client') {

@@ -37,7 +37,7 @@
 import { createHash } from 'node:crypto';
 import { HttpError, formBody } from '../http.js';
 import { cleanRecord, instantOf } from '../model.js';
-import { accessToken, idTokenClaims, loopbackSignIn, retryAfter } from '../oauth.js';
+import { SIGN_IN_ENDED, accessToken, idTokenClaims, loopbackSignIn, retryAfter } from '../oauth.js';
 import { addDays, daysBetween, ianaZone, isDay, normalLocal, offsetAt, toInstant, toLocal } from '../zones.js';
 import { SourceError, statusError } from './index.js';
 
@@ -312,9 +312,14 @@ class GoogleCalendar {
         }
         let rejected;
         for (let attempt = 0; ; attempt++) {
-            const token = await accessToken(this.env.secret, {
-                tokenUrl: urls.token, clientId, clientSecret, request: this.env.request, now: this.now, rejected,
-            });
+            let token;
+            try {
+                token = await accessToken(this.env.secret, {
+                    tokenUrl: urls.token, clientId, clientSecret, request: this.env.request, now: this.now, rejected,
+                });
+            } catch (error) {
+                throw endedSignIn(error);
+            }
             const headers = { Authorization: `Bearer ${token}`, Accept: 'application/json' };
             if (body !== undefined) headers['Content-Type'] = 'application/json; charset=utf-8';
             if (etag) headers['If-Match'] = etag;
@@ -895,6 +900,15 @@ function timeOf(value, zone) {
 /** An end for an event that has none: the same instant, or the next day. */
 function defaultEnd(start) {
     return 'date' in start ? { date: addDays(start.date, 1) } : { ...start };
+}
+
+/**
+ * Google ended the sign-in. It does that every 7 days for an OAuth app left
+ * in Testing, so the user is told how to stop it.
+ */
+function endedSignIn(error) {
+    if (!(error instanceof SourceError) || error.message !== SIGN_IN_ENDED) return error;
+    return new SourceError('auth', `${SIGN_IN_ENDED} If Google asks every week, your Google app is still in Testing, where Google ends sign-ins after 7 days: publish it (Google Auth Platform, Audience, Publish app).`, { status: error.status });
 }
 
 function personOf(value) {

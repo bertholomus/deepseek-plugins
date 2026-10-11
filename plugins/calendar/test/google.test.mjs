@@ -378,9 +378,10 @@ test('a 401 renews the token once and tries again; a second 401 asks to sign in'
 
     ctx.store.revokeRefreshTokens();
     ctx.store.expireAccessTokens();
+    // Google ended the sign-in: the user is told why that can happen every week, and what stops it.
     await assert.rejects(ctx.source.calendars(), (e) => {
         messages.push(e.message);
-        return e.code === 'auth' && /Sign in again/.test(e.message);
+        return e.code === 'auth' && /Sign in again\. If Google asks every week, your Google app is still in Testing, where Google ends sign-ins after 7 days: publish it/.test(e.message);
     });
     // A secret store without a grant: not signed in.
     const bare = google.create({ id: 'acct-2', kind: 'google' }, { ...ctx.env, secret: memorySecret() });
