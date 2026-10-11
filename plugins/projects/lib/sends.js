@@ -1033,6 +1033,8 @@ function remote(name, args, label = name) {
         return { kind: 'remote', program: name, what: `runs commands on ${placeOf(host) || 'another machine'} (${name})` };
     }
     if (name === 'scp' || name === 'rsync') {
+        // A dry run copies nothing: `rsync -n`, `--dry-run`.
+        if (name === 'rsync' && (dryRun(args) || hasShort(args, 'n'))) return null;
         const pos = positionals(args, name === 'scp' ? new Set([...'cDFiJlPoSX']) : new Set(['e', 'f', 'T', '--rsh', '--rsync-path', '--exclude', '--include', '--filter', '--exclude-from', '--include-from', '--files-from', '--password-file',
             '--log-file', '--partial-dir', '--temp-dir', '--backup-dir', '--suffix', '--chmod', '--chown', '--timeout', '--contimeout', '--port', '--bwlimit']));
         // A place on another machine after the first path is where the files go: an option's value after it is not.
@@ -1232,6 +1234,12 @@ function callArgs(text, open) {
 /** Words in a name that say it sends: always, or only when what it runs can't be read. */
 const STRONG = new Set(['deploy', 'deploys', 'deployment', 'deployments', 'redeploy', 'undeploy', 'publish', 'upload', 'uploads', 'ship', 'rollout', 'promote', 'notify', 'announce', 'broadcast']);
 const WEAK = new Set(['release', 'releases', 'push', 'send', 'submit']);
+/**
+ * Words that say a name only tries or checks what it names (`deploy:dry`,
+ * `deploy_check`, `release:plan`), and so sends nothing; `test` too, before
+ * the sending word: `test:deploy` tests a deploy, `deploy:test` deploys.
+ */
+const DRY = new Set(['dry', 'dryrun', 'check', 'checks', 'plan', 'diff', 'lint', 'validate']);
 
 /** The words of a name: `scripts/publish-npm.mjs` and `pushImage` give [scripts, publish, npm, mjs] and [push, image]. */
 function nameWords(name) {
@@ -1239,7 +1247,8 @@ function nameWords(name) {
 }
 function sendingName(name, known) {
     const words = nameWords(name);
-    return words.some((w) => STRONG.has(w)) || (!known && words.some((w) => WEAK.has(w)));
+    const at = words.findIndex((w) => STRONG.has(w) || (!known && WEAK.has(w)));
+    return at >= 0 && !words.some((w, i) => DRY.has(w) || ((w === 'test' || w === 'tests') && i < at));
 }
 
 /** A test's file: `test/x.mjs`, `x.test.js`, `test_x.py`, `x_test.go`, `spec/x_spec.rb`. */

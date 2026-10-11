@@ -5733,7 +5733,8 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     writeFileSync(join(work, 'package.json'), JSON.stringify({ scripts: {
         build: 'tsc', release: 'npm publish', ship: 'echo shipped', start: 'node server.js',
         'sync:assets': 'aws s3 sync ./dist s3://acme-assets --cache-control max-age=31536000', 'sync:prod': 'rsync -avz ./dist/ deploy@web1:/var/www/app --exclude node_modules',
-        'release:ci': 'cross-env CI=true semantic-release',
+        'release:ci': 'cross-env CI=true semantic-release', 'deploy:dry': 'wrangler deploy --dry-run', 'test:deploy': 'vitest run tests/deploy',
+        'deploy:test': 'sst deploy --stage test',
     } }));
     writeFileSync(join(work, 'Makefile'), 'DOCKER ?= docker\nPYTHON ?= python3 # the one on PATH\nIMAGE ?= ghcr.io/acme/web:latest\n\n'
         + 'sync:\n\taws s3 sync ./dist s3://acme-site --delete --cache-control max-age=31536000\n'
@@ -5742,6 +5743,7 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     mkdirSync(join(work, 'scripts'));
     writeFileSync(join(work, 'scripts', 'release.sh'), '#!/bin/sh\ngh release create "v$2" dist/*.tar.gz --notes-file CHANGELOG.md\n');
     writeFileSync(join(work, 'scripts', 'publish.mjs'), "import { execSync } from 'node:child_process';\nexecSync('npm publish', { stdio: 'inherit' });\n");
+    writeFileSync(join(work, 'scripts', 'deploy_check.sh'), '#!/bin/sh\nnpx wrangler deploy --dry-run --outdir /tmp/check\n');
     writeFileSync(join(work, 'scripts', 'report.py'), 'import requests\n\ns = requests.Session()\ns.headers["Authorization"] = "Bearer t"\nr = s.post("https://reports.example.com/api/runs", json={"passed": 12})\nprint(r.status_code)\n');
     writeFileSync(join(work, 'scripts', 'deploy.ps1'), 'param([string]$Environment = \'staging\')\nInvoke-RestMethod -Uri "https://deploy.example.com/hooks/$Environment" `\n    -Method Post\n');
     // A local app: a route table and an ORM's delete send nothing.
@@ -5865,6 +5867,8 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         ['BOT_TOKEN=123:abc; curl -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage"', 'sends a POST to api.telegram.org/bot$BOT_TOKEN/sendMessage (curl)'],
         [`mkdir -p .tmp-deploy-test && cp deploy.sh .tmp-deploy-test/ && (cd /tmp && STAGING_TOKEN=dummy ${copied})`, `runs ${copied}, whose name says it deploys. The plugin couldn't see what ${copied} runs`],
         ['npm run ship', 'runs npm run ship: the plugin found no send in it, but its name says it ships'],
+        // A name that tries or checks says no send (below), but one that deploys to a test site does.
+        ['npm run deploy:test', 'runs npm run deploy:test: the plugin found no send in it, but its name says it deploys'],
         // Code that posts through the standard library's Request, or through a session or a client by any name.
         [`python3 -c "import urllib.request, json; req = urllib.request.Request('https://hooks.slack.com/services/T000/B000/XXX', data=json.dumps({'text': 'Build done'}).encode(), headers={'Content-Type': 'application/json'}); print(urllib.request.urlopen(req).status)"`, 'runs code that sends a POST (python3)'],
         ['python3 - <<\'EOF\'\nimport json, urllib.request\npayload = json.dumps({"text": "deploy finished"}).encode()\nreq = urllib.request.Request("https://hooks.slack.com/services/XXX", payload, {"Content-Type": "application/json"})\nprint(urllib.request.urlopen(req).status)\nEOF', 'runs code that sends a POST (python3)'],
@@ -5896,6 +5900,9 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         'node server.js', 'npm start', 'python3 app.py', 'node -e "console.log(JSON.stringify({ method: \'POST\', path: \'/items\' }))"',
         // A package script given the words after it.
         'npm run release:ci -- --dry-run',
+        // A dry run or a check, whatever its name.
+        'npm run deploy:dry', 'npm run test:deploy', './scripts/deploy_check.sh --dry-run',
+        'rsync -avzn dist/ deploy@web1:/var/www/app/', 'rsync -avz --dry-run --delete dist/ deploy@web1:/var/www/app/',
         // A cloud command that reads, though its group or its resource is named like a change.
         'gcloud run services list', 'gcloud run services describe api --region us-central1', 'gcloud run services logs read api --limit 50',
         'gcloud deploy releases list --delivery-pipeline web --region us-central1', 'gcloud functions describe send-welcome-email --region us-central1',
