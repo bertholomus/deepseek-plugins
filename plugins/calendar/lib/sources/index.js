@@ -154,12 +154,25 @@ export function newPeople(planned, now) {
 }
 
 /**
+ * newPeople() both ways: the people an event names now that the change
+ * wasn't worked out with, and those it was worked out with that it no
+ * longer names. Either way the change was worked out on the event as it
+ * isn't any more: written, it would email someone unnamed, or put back
+ * someone another app took off (and say they were told).
+ * @returns {string[]} their addresses.
+ */
+export function otherPeople(planned, now) {
+    return [...newPeople(planned, now), ...newPeople(now, planned)];
+}
+
+/**
  * The 'conflict' a change stops with when the event, read just before it,
- * names people it wasn't worked out with (newPeople): nothing is written,
- * and the manager syncs and works the change out again, naming them.
+ * names other people than it was worked out with (newPeople, otherPeople):
+ * nothing is written, and the manager syncs and works the change out
+ * again, naming them.
  */
 export function peopleConflict(what) {
-    return new SourceError('conflict', `${what}: on the server it names people it didn't when the change was worked out, so nothing was changed.`);
+    return new SourceError('conflict', `${what}: on the server it names other people than when the change was worked out, so nothing was changed.`);
 }
 
 /**

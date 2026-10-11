@@ -989,11 +989,13 @@ test('a change with no etag held reads the event first and sends If-Match; a cha
     assert.equal(store.requests[2].ifMatch, etag);
     assert.equal(store.get(cal, thursday).status, 'cancelled');
 
-    // The whole series through a changed occurrence: the series is read, then changed only while it is as read.
+    // The whole series through a changed occurrence: the series is read with its changed occurrences (by its uid),
+    // then changed only while it is as read.
     store.requests.length = 0;
     etag = store.get(cal, gym.id).etag;
     await source.update(calendar, { item: late, record: late.events[0] }, { location: 'Gym hall' }, 'all');
-    assert.deepEqual(steps().slice(0, 3), [`GET ${late.remoteId}`, `GET ${gym.id}`, `PATCH ${gym.id}`]);
+    assert.deepEqual(steps().slice(0, 3), [`GET ${late.remoteId}`, 'GET events', `PATCH ${gym.id}`]);
+    assert.equal(store.requests[1].query.iCalUID, gym.iCalUID);
     assert.equal(store.requests[2].ifMatch, etag);
     assert.equal(store.get(cal, gym.id).location, 'Gym hall');
 
@@ -1001,7 +1003,8 @@ test('a change with no etag held reads the event first and sends If-Match; a cha
     const plain = ctx.env.request;
     ctx.env.request = async (url, init) => {
         const res = await plain(url, init);
-        if (init?.method === 'GET' && new URL(url).pathname.endsWith(`/events/${gym.id}`)) store.patch(cal, gym.id, { description: 'Changed elsewhere' });
+        const read = new URL(url);
+        if (init?.method === 'GET' && read.pathname.endsWith('/events') && read.searchParams.get('iCalUID') === gym.iCalUID) store.patch(cal, gym.id, { description: 'Changed elsewhere' });
         return res;
     };
     await assert.rejects(source.update(calendar, { item: late, record: late.events[0] }, { location: 'Pool' }, 'all'),
@@ -1044,6 +1047,51 @@ test('an occurrence found by its start, or a series found from its occurrence, w
     const [moved] = await source.update(calendar, { ...monday, planned: bob }, { start: wall('2026-10-19T10:00:00'), end: wall('2026-10-19T10:15:00') }, 'one');
     assert.deepEqual(moved.events[0].start, wall('2026-10-19T10:00:00'));
     assert.deepEqual(writes().map((r) => r.method), ['PATCH']);
+});
+
+test('a whole series with someone added at Google to one of its changed occurrences since: they are read too, and nothing is written', async (t) => {
+    const ctx = await signedIn(t);
+    const { store, source, calendar, cal } = ctx;
+    const standup = store.insert(cal, {
+        summary: 'Standup', start: at('2026-10-05T09:30:00'), end: at('2026-10-05T09:45:00'), recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=10'],
+        attendees: [{ email: 'ann@example.com' }],
+    });
+    const late = `${standup.id}_20261026T163000Z`;
+    store.patch(cal, late, { summary: 'Standup (late)', start: at('2026-10-26T10:00:00'), end: at('2026-10-26T10:15:00') });
+    const { items } = await source.sync(calendar, undefined);
+    const master = items.find((i) => i.remoteId === standup.id);
+    // Worked out as the manager does: on everyone on the series and its changed occurrences.
+    const plannedOn = (list) => list.filter((i) => i.events[0].uid === standup.iCalUID).map((i) => i.events[0]);
+    const conflict = (e) => e instanceof SourceError && e.code === 'conflict';
+    const writes = () => store.requests.filter((r) => r.method === 'PATCH' || r.method === 'DELETE');
+
+    // Xen is added at Google to the 26th alone. The series' etag is held, and still holds, but a change to all of it
+    // reaches Xen: its changed occurrences are read too, and nothing is written.
+    store.patch(cal, late, { attendees: [{ email: 'ann@example.com' }, { email: 'xen@example.com' }] });
+    store.requests.length = 0;
+    const all = { item: master, record: master.events[0], planned: plannedOn(items) };
+    await assert.rejects(source.update(calendar, all, { title: 'Daily' }, 'all'), conflict);
+    await assert.rejects(source.remove(calendar, all, 'all'), conflict);
+    // So does a change from the 19th on, which reaches the 26th; from Nov 2 on, it doesn't, and the series ends before then.
+    const series = { ...all, planned: [master.events[0]] };
+    await assert.rejects(source.update(calendar, { ...series, from: wall('2026-10-19T09:30:00') }, { rrule: 'FREQ=WEEKLY;BYDAY=MO;COUNT=2' }, 'all'), conflict);
+    assert.equal(writes().length, 0);
+    assert.ok(requestsOf(store, 'GET', '/events').every((r) => r.query.iCalUID === standup.iCalUID));
+    await source.update(calendar, { ...series, from: wall('2026-11-02T09:30:00') }, { rrule: 'FREQ=WEEKLY;BYDAY=MO;COUNT=4' }, 'all');
+    assert.deepEqual(store.get(cal, standup.id).recurrence, ['RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=4']);
+
+    // After a sync, worked out with Xen on it, a change to all of it goes.
+    const { items: again } = await source.sync(calendar, undefined);
+    const fresh = again.find((i) => i.remoteId === standup.id);
+    await source.update(calendar, { item: fresh, record: fresh.events[0], planned: plannedOn(again) }, { title: 'Daily' }, 'all');
+    assert.equal(store.get(cal, standup.id).summary, 'Daily');
+    // Xen taken off the 26th at Google stops it again: the change would say Xen was told.
+    store.patch(cal, late, { attendees: [{ email: 'ann@example.com' }] });
+    const { items: last } = await source.sync(calendar, undefined);
+    const now = last.find((i) => i.remoteId === standup.id);
+    await assert.rejects(source.remove(calendar, { item: now, record: now.events[0], planned: plannedOn(again) }, 'all'), conflict);
+    await source.remove(calendar, { item: now, record: now.events[0], planned: plannedOn(last) }, 'all');
+    assert.equal(store.get(cal, standup.id).status, 'cancelled');
 });
 
 test('respond: the account\'s own answer, the rest of the guest list untouched', async (t) => {
