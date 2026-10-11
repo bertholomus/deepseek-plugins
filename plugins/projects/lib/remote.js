@@ -233,7 +233,7 @@ export class ProjectsRemote {
 
     /**
      * Change a project's settings, or one thread's model, effort or
-     * permission, or stop, resolve or reopen a thread. Values are strings;
+     * permission, or rename, stop, resolve or reopen a thread. Values are strings;
      * null goes back to the default.
      * `paused` is a boolean. Access settings change only here (and in the
      * profile): yourTools "asked" or "always", a permission DSH offers or
@@ -241,7 +241,7 @@ export class ProjectsRemote {
      * @param target - as for describe.
      * @param changes - {coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?,
      *   yourTools?, coordinatorPermission?, threadPermission?} or {thread, model?, effort?, permission?},
-     *   or from a thread row's ⋯ {thread, resolved?, stop?}.
+     *   or from a thread row's ⋯ {thread, title?, resolved?, stop?}.
      * @returns the project as describe returns it, with `notes` from the change.
      */
     async update(target, changes) {

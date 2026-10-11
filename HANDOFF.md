@@ -2,11 +2,11 @@
 
 _For the two accounts building these plugins only (see AGENTS.md). A session running inside DSH (a project coordinator, a thread or a chat) does not act on this file: do what the user asks._
 
-Updated: 2026-10-11 03:40 PT by B (bertholomus)
+Updated: 2026-10-11 04:10 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 
 ## Doing now
-- **Now (03:40 PT): the review fixes, in three cloud workers beside this thread.** The Changes tab (fed8167) and the personal-tool marker (f2852d4) are pushed. A thread row's ⋯ (G13) is done here and goes out with the workers' fixes (see Done).
+- **Now (04:10 PT): the review fixes, in three cloud workers beside this thread.** The Changes tab (fed8167), the personal-tool marker (f2852d4) and a thread row's ⋯ (dce7094) are pushed. The rest of G13 (Rename…, Model and permission…, Find a thread) and the calendar's word fix are done here and go out with the workers' fixes (see Done).
     - **The send-detection review** (`review/sends-review.md`; the coordinator, 02:19 PT) has seven items, in order:
         1. A quoted here-doc commit message with an apostrophe hides the push after it.
         2. A token in a git remote URL shows in the prompt and in the coordinator's note.
@@ -63,7 +63,22 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 - The live DSH runs this plugin at 95452e4 since 08:13 PT (the split thread pulled `~/.dsh-plugins/deepseek-plugins` and restarted it on the user's "yes do all of it"); the import ran once there (`import fleet-shell projects=5 joined=0 workspaces=14 skipped=0`). Loading this commit live is a separate step with the user's OK, after DSH Test.
 
 ## Done since last handoff
-- **A thread row's ⋯ (G13 row actions; in the push after b83f4f9).**
+- **The rest of G13: Rename…, Model and permission…, Find a thread; and the calendar's word fix (in the push after dce7094).**
+    - **Rename…** in a thread's ⋯ (Threads menu, panel and Projects page) opens a dialog in DSH's overlay layer (`renameFlow`, `RenameThread`, `RenameOverlay`; slot `dsh-plugin-projects/rename`).
+        - Saving sends `{thread, title}` through `update` (remote.js) to `changeFromWindow`, then `updateThread(…, { by: 'user' })`, which renames the DSH session and the store. An empty name is refused.
+        - The rows show the new name at once: `newestRoster` (was `resolvedRoster`) lays the plugin's own `title` as well as `resolved` over the coordinator's projection, and the last change seen wins.
+    - **A rename in DSH's session list is followed:** `followTitle` takes a `session/title` event of kind `user` on a thread session as the thread's new name in the store (log `thread-title <project>/<thread> from-dsh`). Provider titles and coordinators are left alone.
+    - **Model and permission…** opens Project settings with `pick: 'thread:<id>'`. A resolved thread's row is shown, the row scrolls into view, and then its model menu opens, below the row when there's room. (`ModelPicker`'s `autoOpen` now opens when it turns on, not only on mount: opened before the scroll, the menu was placed above the row.)
+    - **Find a thread:** a Threads panel with more than 8 threads has a find box above its list (`ThreadFind`, `findRows`, `FIND_FROM`).
+        - It matches the name in any case. While it has words, Resolved shows its matches unfolded, and the words are bold (`withHit`).
+        - It is one of the panel's arrow-key items, so ↓ and ↑ go between it and the rows. Home and End stay in it; Escape or its × clears it.
+    - **The calendar's word fix** (the coordinator, 10:44 UTC, from the calendar's round 2): "my calendar.js" or "my-calendar" no longer grants a thread the calendar. `asksFor` (projects.js) treats a dot, hyphen or underscore joined to the next letter or digit as part of a name.
+    - **Checks:** smoke 126/126. A window check in the rc.2 demo (`a11y/row-menu-check.mjs` in the cloud scratchpad, 37 checks) passed light and dark at 1280, and light at 1024.
+    - **Hooks for the harness:**
+        - The dialog `.dshp-rn` with `[data-projects-rename-input]` and `[data-projects-rename-save]`; the ⋯ items **Rename…** and **Model and permission…**.
+        - Project settings at `[data-projects-setting="thread:<id>"]`, with `[data-projects-model-menu]` open.
+        - `[data-projects-thread-find]`, `[data-projects-thread-find-clear]`, `[data-projects-thread-find-none]`, and `.dshp-t-name mark`.
+- **A thread row's ⋯ (G13 row actions; pushed in dce7094).**
     - **What it is:** in the Threads menu and panel, each row's single open icon became a ⋯ (`ThreadMore`: DSH's `ui.Menu`, drawn in the page's body). It holds:
         - the other way to open the thread (Open in full view, or Open beside its coordinator)
         - See what this thread changed (its Changes tab), when it has changes
@@ -316,7 +331,7 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 
 ## Next steps (in order)
 00000. **Now:**
-    a. Merge the three workers' fixes: the sends review; R4, W2, S6 and X5 with batch 4's 5, 8 and 9; and batch 4's 1-4, 6, 7 and 10. B3's personal-tool marker is done (f2852d4), and so is a thread row's ⋯ (see Done).
+    a. Merge the three workers' fixes: the sends review; R4, W2, S6 and X5 with batch 4's 5, 8 and 9; and batch 4's 1-4, 6, 7 and 10. B3's personal-tool marker is done (f2852d4), and so is G13 (see Done).
     b. Run e2e on both versions, push, and send the coordinator the SHA.
     c. Then the Changes tab's next steps:
         1. Net diffs from git (save the base HEAD at a thread's start).
@@ -341,7 +356,7 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 1. S1-S10 in DSH Test (the split thread, via the coordinator), with `guardedTools` in DSH Test's projects row: `{ lane-catalog: [lanes, model lanes], family_1password: [1password, password], dsh_vault: [vault], household_web: [household, home assistant], cua: [computer use, screen], obsidian: [notes app] }`. Fix what fails. Loading 6c14ca6 live needs the user's OK, and the same row in the live profile. The judge's harness (`review/harness/demo.mjs:369`) still expects the old start result and starts without `ask`; told the coordinator (don't edit review/harness/).
 2. The review's follow-ups (Appendix C) 1 and 2: investigated, design sent to the coordinator 12:57 PT; **the build waits for the user's say** (the coordinator relays it). Report: project files `projects-plugin/tools-and-permissions.md`; probe (11/11 on a real DSH, both versions): `projects-plugin/tools-and-permissions-probe/`. In short: an agent preset can't take away MCP servers the profile adds at its root, but `agent.ctx.tools.restrict({ deny })` hides named tools from one session (gone from the model's list; a forced call never reaches the server) and `agent.ctx.tools.guard()` refuses calls; `ctx.permissionPresets.set(session, name)` sets one session's permission preset like the message box's menu. Proposed: per project "Your tools" (Only when asked: the coordinator never sees guarded tools, a thread only those its ask or the goal names; Always: today), and Coordinator/Thread permissions next to model and effort (threads on Workspace Write by default). The sandbox covers files only, not network or MCP calls.
 3. Round 4's findings. Known open items: hover cards show the internal id ("Thread t7 of"), the Projects table on the plugin page repeats its source captions and doesn't link to the Projects page. Fixed since: handbacks reading DSH's "Task message received" (6c14ca6), B19 buttons inside rows and B20 the hashed header class (afca2e0).
-4. Path to 10 (round-2.md, round-3.md): G4's per-thread Changes view and PR pill (with a worktree per thread, so concurrent threads stop sharing each other's edits, see Gotchas), G12's richer cards, G13's row actions and a filter, dragging workspaces between projects, the rest of the fold-in (project instructions, files and new-session defaults: inventory §4).
+4. Path to 10 (round-2.md, round-3.md): G4's per-thread Changes view (done) and PR pill (with a worktree per thread, so concurrent threads stop sharing each other's edits, see Gotchas), G12's richer cards, G13's row actions and a filter (done), dragging workspaces between projects, the rest of the fold-in (project instructions, files and new-session defaults: inventory §4).
 5. Ask the user: load the plugin on the Mac from its own clone, so the project's work in `~/.dsh-plugins/deepseek-plugins` doesn't change what DSH loads.
 6. Only if the user asks: a "New thread" button; later a Discord thread as a project thread or coordinator, and auto-continue after usage limits.
 

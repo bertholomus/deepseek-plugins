@@ -1429,7 +1429,7 @@ test('browser half: a row on the Projects page has ⋯: a project\'s settings an
     assert.equal(menuOf(row(tree, 'c')), elementsOf(row(tree, 'c').children[0]).at(-1));
     assert.deepEqual(picks(row(tree, 'c')), [['settings', 'Project settings', 'IconSlidersTwoOutlineRegular'], ['archive', 'Archive project…', 'IconArchiveOutlineRegular']]);
     // A thread opens beside its coordinator from its row, so its ⋯ offers the full view; with that turned off, the other way.
-    assert.deepEqual(picks(row(tree, 'run')), [['full', 'Open in full view', 'IconRightUpOutlineRegular'], ['settings', 'Project settings', 'IconSlidersTwoOutlineRegular']]);
+    assert.deepEqual(picks(row(tree, 'run')), [['full', 'Open in full view', 'IconRightUpOutlineRegular'], ['thread-settings', 'Model and permission…', 'IconSlidersTwoOutlineRegular'], ['settings', 'Project settings', 'IconSlidersTwoOutlineRegular']]);
     // Each is named for its row, opens on its own, and keeps the tree's one tab stop.
     const menu = drawn(row(tree, 'c'));
     // DSH's autoFocus misses a list in the page's body (hidden while it measures it), so the page's own hook finds it by its class.
@@ -1922,6 +1922,7 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
         ['sidebar.workspaces.session.menu.item', 'dsh-plugin-projects/project-settings-item', 250],
         ['shell.overlay', 'dsh-plugin-projects/archive', null],
         ['sidebar.workspaces.session.menu.item', 'dsh-plugin-projects/archive-item', 260],
+        ['shell.overlay', 'dsh-plugin-projects/rename', null],
         ['conversation.session.header.actions', 'dsh-plugin-projects/threads-menu', -25],
         ['conversation.chat.turnTail', 'dsh-plugin-projects/thread-cards', 30],
         ['conversation.chat.node', 'turn-trigger', null],
@@ -2379,6 +2380,144 @@ test('browser half: a thread row\'s ⋯ holds the other way to open it, its chan
     assert.equal(room([row, { ...row, id: 't2', session: 's2', group: 'waiting', ending: { state: 'failed' } }]), 2);
 });
 
+test('browser half: a thread\'s ⋯ has Rename…, which renames it through the plugin in a dialog, and Model and permission…, which opens Project settings at its row', async () => {
+    const { client, react } = loadClient();
+    const { ThreadRow, ThreadMore, rowMenuItems, threadMenuItems, runThreadItem, renameFlow, RenameThread, RenameOverlay, settingsDialog } = client.internals;
+    const rename = renameFlow();
+    const settings = settingsDialog();
+    const row = { id: 't1', title: 'Fix login', line: 'Done · Fixed it', dot: 'done', session: 's1', group: 'done', running: false };
+    const did = [];
+    let answer = { ok: true, value: { notes: ['t1: renamed to "Sign-in fix".'] } };
+    const facts = { change: async (target, changes) => { did.push(['change', target, plain(changes)]); return answer; } };
+    const projects = { facts, rename, settings };
+    const action = { label: 'Open in full view', icon: 'IconRightUpOutlineRegular', run: () => {} };
+    const ids = (items) => plain(items.map((item) => item.id));
+    // Neither shows until its dialog is drawn in this window.
+    assert.deepEqual(ids(rowMenuItems({ row, action, projects })), ['open', 'resolve']);
+    const offRename = rename.connect();
+    const offSettings = settings.connect();
+    // After the ways to open it, before Stop, Mark resolved or Reopen.
+    assert.deepEqual(plain(rowMenuItems({ row, action, projects }).map((i) => [i.id, i.label, i.icon.type])), [
+        ['open', 'Open in full view', 'IconRightUpOutlineRegular'], ['rename', 'Rename…', 'IconEditOutlineRegular'],
+        ['thread-settings', 'Model and permission…', 'IconSlidersTwoOutlineRegular'], ['resolve', 'Mark resolved', 'IconCheckCircleOutlineRegular'],
+    ]);
+    assert.deepEqual(ids(rowMenuItems({ row: { ...row, running: true, group: 'running' }, action, projects })), ['open', 'rename', 'thread-settings', 'stop']);
+    // Without the plugin to rename it, only its row in Project settings.
+    assert.deepEqual(ids(threadMenuItems({ thread: { running: false, resolved: false }, live: false, rename, settings })), ['thread-settings']);
+
+    // Each opens elsewhere, so the Threads menu closes first; neither changes anything by itself.
+    const left = [];
+    const draw = mount(react, () => ThreadRow({ row, now: 0, onOpen() {}, action, projects, onLeave: () => left.push('leave') }));
+    const moreOf = (el) => el.children.find((c) => c?.props?.className === 'dshp-t-row-acts').children.find((c) => c?.type === ThreadMore);
+    assert.equal(await moreOf(draw()).props.run('rename'), '');
+    assert.deepEqual(plain(rename.getSnapshot().ask), { target: 's1', thread: 't1', title: 'Fix login' });
+    assert.equal(await moreOf(draw()).props.run('thread-settings'), '');
+    assert.deepEqual([settings.getSnapshot().target, settings.getSnapshot().pick], ['s1', 'thread:t1']);
+    assert.deepEqual([left, did], [['leave', 'leave'], []]);
+    // As the Projects page runs them, through any session of the project.
+    rename.close();
+    await runThreadItem('rename', { target: 'c', thread: 't2', title: 'Old copy', rename, settings });
+    assert.deepEqual(plain(rename.getSnapshot().ask), { target: 'c', thread: 't2', title: 'Old copy' });
+    // Project settings takes a thread's own row (thread:<id>), and nothing else that looks like one.
+    settings.open('c', { pick: 'thread:t2' });
+    assert.equal(settings.getSnapshot().pick, 'thread:t2');
+    settings.open('c', { pick: 'thread:../t2' });
+    assert.equal(settings.getSnapshot().pick, null);
+
+    // The dialog: the name now, ready to type over.
+    rename.close();
+    assert.equal(RenameOverlay({ flow: rename, facts }), null);
+    rename.open({ target: 's1', thread: 't1', title: 'Fix login' });
+    const shown = RenameOverlay({ flow: rename, facts });
+    assert.equal(shown.type, RenameThread);
+    const drawDialog = mount(react, () => RenameThread(shown.props));
+    const input = (d) => elementsOf(d.children).find((e) => e.props?.['data-projects-rename-input'] !== undefined);
+    const saveOf = (d) => elementsOf(d.props.footer).find((e) => e.props?.['data-projects-rename-save'] !== undefined);
+    const submit = (d) => elementsOf(d.children).find((e) => e.type === 'form').props.onSubmit({ preventDefault() {} });
+    let dialog = drawDialog();
+    assert.deepEqual(plain([dialog.props.title, dialog.props.className, input(dialog).props.value, input(dialog).props['aria-label'], input(dialog).props['data-modal-autofocus'], saveOf(dialog).props.variant, textIn(saveOf(dialog))]),
+        ['Rename thread', 'dshp-rn', 'Fix login', 'Thread name', '', 'primary', 'Rename']);
+    // Only spaces can't be saved; the same name, spaces aside, closes it with no change.
+    input(dialog).props.onChange({ target: { value: '   ' } });
+    assert.equal(saveOf(drawDialog()).props.disabled, true);
+    input(dialog).props.onChange({ target: { value: '  Fix   login ' } });
+    submit(drawDialog());
+    await tick();
+    assert.deepEqual([did, rename.getSnapshot().ask], [[], null]);
+
+    // A new name goes to the plugin with its spaces tidied; a refusal shows in the dialog, which stays open.
+    rename.open({ target: 's1', thread: 't1', title: 'Fix login' });
+    const again = mount(react, () => RenameThread(RenameOverlay({ flow: rename, facts }).props));
+    dialog = again();
+    input(dialog).props.onChange({ target: { value: '  Sign-in   fix ' } });
+    answer = { ok: false, error: { code: 'projects/refused', message: 'no thread t1 in this project' } };
+    submit(again());
+    await tick();
+    dialog = again();
+    const alert = byClass(dialog.children, 'dshp-ar-error')[0];
+    assert.deepEqual([alert.props.role, textIn(alert), rename.getSnapshot().ask?.thread], ['alert', 'No thread t1 in this project.', 't1']);
+    // While the plugin answers: Renaming…, and nothing to press twice.
+    let finish;
+    facts.change = (target, changes) => { did.push(['change', target, plain(changes)]); return new Promise((resolve) => { finish = resolve; }); };
+    saveOf(dialog).props.onClick();
+    dialog = again();
+    assert.deepEqual([saveOf(dialog).props.disabled, input(dialog).props.disabled, textIn(byClass(dialog.children, 'dshp-ar-line')[0])], [true, true, 'Renaming…']);
+    finish({ ok: true, value: { notes: ['t1: renamed to "Sign-in fix".'] } });
+    await tick();
+    assert.deepEqual(did, [['change', 's1', { thread: 't1', title: 'Sign-in fix' }], ['change', 's1', { thread: 't1', title: 'Sign-in fix' }]]);
+    assert.equal(rename.getSnapshot().ask, null, 'renamed: the dialog closes');
+
+    // Gone from this window (its overlay unmounted): nothing opens, and the ⋯ doesn't offer it.
+    offRename();
+    rename.open({ target: 's1', thread: 't1', title: 'Fix login' });
+    assert.equal(rename.getSnapshot().ask, null);
+    assert.deepEqual(ids(rowMenuItems({ row, action, projects })), ['open', 'thread-settings', 'resolve']);
+    offSettings();
+    assert.deepEqual(ids(rowMenuItems({ row, action, projects })), ['open', 'resolve']);
+});
+
+test('browser half: over 8 threads, Find a thread keeps the rows whose name holds the words, resolved ones too, with the words marked', () => {
+    const { client, react } = loadClient();
+    const { ThreadFind, ThreadList, ThreadRow, findRows, FIND_FROM } = client.internals;
+    const rows = ['Fix login', 'Hero images', 'Cart totals', 'Login copy'].map((title, i) => ({
+        id: `t${i + 1}`, title, line: 'Done', dot: 'done', session: `s${i + 1}`, group: i === 3 ? 'resolved' : 'done', running: false,
+    }));
+    assert.equal(FIND_FROM, 8);
+    assert.deepEqual(plain(findRows(rows, ' LOGIN ').map((r) => r.id)), ['t1', 't4']);
+    assert.equal(findRows(rows, '  '), rows);
+    // The list passes the words to its rows, and while finding the Resolved group's matches show unfolded.
+    const listed = (props) => elementsOf(mount(react, () => ThreadList({ now: 0, onOpen() {}, ...props }))()).filter((e) => e.type === ThreadRow).map((e) => [e.props.row.id, e.props.find]);
+    assert.deepEqual(plain(listed({ rows: findRows(rows, 'login'), find: 'login', fold: [] })), [['t1', 'login'], ['t4', 'login']]);
+    // Without words, Resolved stays folded behind its count.
+    assert.deepEqual(plain(listed({ rows })), [['t1', ''], ['t2', ''], ['t3', '']]);
+    // A row marks the words in its name, which keeps its whole name for its label.
+    const drawn = mount(react, () => ThreadRow({ row: rows[3], now: 0, onOpen() {}, find: 'login' }))();
+    const name = byClass(drawn, 'dshp-t-name')[0];
+    assert.deepEqual(plain([textIn(name), name.children.map((c) => (typeof c === 'string' ? c : `[${textIn(c)}]`)), byClass(name, 'dshp-tree-hit').length]), ['Login copy', ['[Login]', ' copy'], 1]);
+    assert.match(drawn.children[0].props['aria-label'], /^Login copy\. /);
+
+    // The box: one of the panel's items, so the arrows go on to the rows; Home and End stay in its words, and Escape clears them.
+    const said = [];
+    const inputRef = { current: { focus: () => said.push('focus') } };
+    const box = (find) => ThreadFind({ find, setFind: (value) => said.push(value), inputRef });
+    const inputOf = (el) => elementsOf(el).find((e) => e.props?.['data-projects-thread-find'] !== undefined);
+    const clearOf = (el) => elementsOf(el).find((e) => e.props?.['data-projects-thread-find-clear'] !== undefined);
+    assert.deepEqual(plain([inputOf(box('')).props.role, inputOf(box('')).props['aria-label'], inputOf(box('')).props.placeholder, inputOf(box('')).props['data-dshp-item'], inputOf(box('')).props.className, clearOf(box(''))]),
+        ['searchbox', 'Find a thread', 'Find a thread', '', 'dshp-t-find-box', null]);
+    inputOf(box('')).props.onChange({ target: { value: 'log' } });
+    const press = (key, find) => {
+        const event = { key, stopped: false, prevented: false, stopPropagation() { this.stopped = true; }, preventDefault() { this.prevented = true; } };
+        inputOf(box(find)).props.onKeyDown(event);
+        return [event.stopped, event.prevented];
+    };
+    assert.deepEqual([press('Home', 'log'), press('End', 'log'), press('ArrowDown', 'log'), press('ArrowUp', 'log'), press('Escape', 'log'), press('Escape', '')],
+        [[true, false], [true, false], [false, false], [false, false], [true, true], [false, false]]);
+    // Its × clears the words and hands the keyboard back to the box.
+    assert.deepEqual([inputOf(box('log')).props.className, clearOf(box('log')).props['aria-label']], ['dshp-t-find-box dshp-t-find-query', 'Clear the find']);
+    clearOf(box('log')).props.onClick();
+    assert.deepEqual(said, ['log', '', '', 'focus']);
+});
+
 test('browser half: the arrows leave a row\'s open ⋯ to DSH\'s menu, and go on from a row\'s ⋯ when it is closed', () => {
     const focused = [];
     const doc = {
@@ -2409,9 +2548,9 @@ test('browser half: the arrows leave a row\'s open ⋯ to DSH\'s menu, and go on
     assert.deepEqual(focused, ['c', 'a', 'a']);
 });
 
-test('browser half: Mark resolved or Reopen from a row shows at once, and the coordinator\'s own later change wins', () => {
+test('browser half: Rename, Mark resolved or Reopen from a row shows at once, and the coordinator\'s own later change wins', () => {
     const { client } = loadClient();
-    const { resolvedRoster } = client.internals;
+    const { newestRoster: resolvedRoster } = client.internals;
     const seen = new Map();
     const roster = (t1, t2 = true) => [{ id: 't1', resolved: t1 }, { id: 't2', resolved: t2 }];
     const answer = (t1, t2 = true) => [{ id: 't1', resolved: t1 }, { id: 't2', resolved: t2 }];
@@ -2431,6 +2570,15 @@ test('browser half: Mark resolved or Reopen from a row shows at once, and the co
     // Threads the plugin hasn't named, or no answer yet: the roster as it is.
     assert.deepEqual(plain(resolvedRoster(roster(false), [{ id: 't9', resolved: true }], new Map(), 'c').map((e) => e.resolved)), [false, true]);
     assert.equal(resolvedRoster(same, undefined, new Map(), 'c'), same);
+    // A name works the same way: Rename in the window shows at once, and the coordinator's own rename after it wins.
+    const names = new Map();
+    const named = (r, a) => plain(resolvedRoster([{ id: 't1', title: r }], [{ id: 't1', title: a }], names, 'c').map((e) => e.title));
+    assert.deepEqual(named('Fix login', 'Fix login'), ['Fix login']);
+    assert.deepEqual(named('Fix login', 'Fix the login loop'), ['Fix the login loop']);
+    assert.deepEqual(named('Fix the login loop', 'Fix the login loop'), ['Fix the login loop']);
+    assert.deepEqual(named('Login loop', 'Fix the login loop'), ['Login loop']);
+    // An answer without a name leaves the roster's.
+    assert.deepEqual(plain(resolvedRoster([{ id: 't1', title: 'Fix login' }], [{ id: 't1', title: '' }], new Map(), 'c').map((e) => e.title)), ['Fix login']);
 });
 
 test('browser half: access reads as DSH names it, and each thread row says what it can reach', () => {
@@ -3564,6 +3712,18 @@ test('window: a thread row\'s ⋯ stops it as the user\'s own stop, and marks it
     assert.deepEqual([after.notes, after.threads[0].resolved], [['t1: reopened.'], false]);
     assert.doesNotMatch(await coord.ctx.call('project_thread_list', {}), /resolved hidden/);
     await refused(remote.update(coord.id, { thread: 't9', resolved: true }), /no thread "t9"/);
+
+    // Rename: the thread's name and its chat's in DSH, as the user's own; an empty one is refused.
+    after = await remote.update(coord.id, { thread: 't1', title: '  Long   job ' });
+    assert.deepEqual([after.notes, after.threads[0].title, ts.title], [['t1: renamed to "Long job".'], 'Long job', 'Long job']);
+    await refused(remote.update(coord.id, { thread: 't1', title: '   ' }), /name can't be empty/);
+    // Renamed in DSH's own list: the plugin follows a name someone gave it, never one DSH made from a message, and only a thread's.
+    host.emit('session/event', { id: thread.id }, { seq: 90, type: 'session/title', data: { title: 'Nightly job', messageSeqs: [], source: { kind: 'user' } } });
+    assert.match(await coord.ctx.call('project_thread_list', {}), /"Nightly job"/);
+    host.emit('session/event', { id: thread.id }, { seq: 91, type: 'session/title', data: { title: 'Run the long job', messageSeqs: [1], source: { kind: 'provider' } } });
+    host.emit('session/event', { id: coord.id }, { seq: 92, type: 'session/title', data: { title: 'Mine now', messageSeqs: [], source: { kind: 'user' } } });
+    assert.deepEqual([(await remote.describe(coord.id)).threads[0].title, (await remote.describe(coord.id)).project.name], ['Nightly job', 'DSH Plugins']);
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /thread-title dsh-plugins\/t1 from-dsh/);
 });
 
 test('a permission prompt left unanswered tells the coordinator', async () => {
@@ -3868,6 +4028,12 @@ test('scope: the user\'s word for a guarded tool, or the goal, asks for it; a ho
     assert.equal(guardedIn('mcp__lane-catalog__lanes_status', guardList(['lane-catalog'])).join(), 'lane-catalog');
     assert.deepEqual(guardList({ a: ['x', ' ', 'y'], ' ': ['z'] }), [['a', ['x', 'y']]]);
     assert.deepEqual(guardedIn('My Lanes and the Notes App', guardList({ 'lane-catalog': ['lane'], obsidian: ['notes app'] }), { aliases: true }), ['lane-catalog', 'obsidian']);
+    // The user's words ask only with whole words: a name in a file or identifier name doesn't ask, a sentence's end or a plural does.
+    const asked = (text) => guardedIn(text, withPersonal(guardList({ 'lane-catalog': ['lanes'] }), [['calendar_list_events', personalMark('calendar')]]), { aliases: true });
+    assert.deepEqual(
+        ['Fix my calendar.js.', 'Rename my-calendar to agenda.', 'open my_calendar_view', 'What is on my calendar?', 'My Calendars, please.', 'my calendar\'s events',
+            'use lane-catalog', 'use the lane catalog', 'read lane-catalog.json', 'see lanes-v2', 'the LANES list', 'call mcp__lane-catalog__lanes_status'].map((t) => asked(t).join()),
+        ['', '', '', 'calendar', 'calendar', 'calendar', 'lane-catalog', 'lane-catalog', '', '', 'lane-catalog', 'lane-catalog']);
 });
 
 /** DSH's own tools and the user's MCP servers, as a session is offered them before any restriction. */

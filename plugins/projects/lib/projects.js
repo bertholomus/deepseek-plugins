@@ -199,6 +199,20 @@ function holds(words, name) {
 }
 
 /**
+ * Whether the user's words ask for a name: as whole words, in any case and
+ * also in the plural, and never inside a file or identifier name. A dot,
+ * hyphen or underscore with a letter or digit on both sides joins them, so
+ * "my calendar.js" and "my-calendar" don't ask for "my calendar". A mark in
+ * the name itself may be a space too: "lane catalog" asks for lane-catalog.
+ */
+function asksFor(text, name) {
+    const parts = String(name ?? '').toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').split(/([^\p{L}\p{N}]+)/u).filter(Boolean);
+    if (parts.length === 0) return false;
+    const body = parts.map((part) => (/^[\p{L}\p{N}]+$/u.test(part) ? part : /\s/u.test(part) ? '\\s+' : '[\\s._-]+')).join('');
+    return new RegExp(`(?<![\\p{L}\\p{N}]|[\\p{L}\\p{N}][._-])${body}(?:e?s)?(?![\\p{L}\\p{N}]|[._-][\\p{L}\\p{N}])`, 'iu').test(String(text ?? ''));
+}
+
+/**
  * The user's answers in DSH's question box (ask_user_question) in a
  * session's log: the options they picked and what they typed. The tool's
  * result is the answers as JSON ({answers: [{id, selected, custom?}]}).
@@ -226,17 +240,18 @@ export function questionAnswers(events) {
 
 /**
  * The guarded tools a text names: by name, also inside a tool id such as
- * mcp__lane-catalog__lanes_status, and with `aliases`, by the words the
- * user may call one by. A brief uses a tool when it names it; the user's
- * words ask for one when they name it or an alias. A group another plugin
- * marks as the user's own (withPersonal) is named only by its words, never
- * by its bare name: a brief about a date picker doesn't use "calendar".
+ * mcp__lane-catalog__lanes_status, and with `aliases`, the user's words
+ * asking for one by its name or the words they may call it by (asksFor:
+ * never inside a file or identifier name). A brief uses a tool when it
+ * names it; the user's words ask for one when they name it or an alias. A
+ * group another plugin marks as the user's own (withPersonal) is named
+ * only by its words, never by its bare name: a brief about a date picker
+ * doesn't use "calendar".
  */
 export function guardedIn(text, guard, { aliases = false } = {}) {
+    if (aliases) return guard.filter(([name, alias, mark]) => (mark ? alias : [name, ...alias]).some((a) => asksFor(text, a))).map(([name]) => name);
     const words = wordsOf(text);
-    return guard.filter(([name, alias, mark]) => (mark
-        ? alias.some((a) => holds(words, a))
-        : holds(words, name) || (aliases && alias.some((a) => holds(words, a))))).map(([name]) => name);
+    return guard.filter(([name, alias, mark]) => (mark ? alias.some((a) => holds(words, a)) : holds(words, name))).map(([name]) => name);
 }
 
 /**
@@ -2176,6 +2191,27 @@ export class ProjectManager {
     }
 
     /**
+     * A thread renamed in DSH (Rename on its row in the session list) takes
+     * that name here too, so the plugin's lists and the coordinator's roster
+     * say what DSH says. Only a name someone gave counts: a title DSH makes
+     * from the first message never replaces the one the thread started with.
+     * Never throws: this runs inside DSH's event delivery.
+     */
+    followTitle(session, event) {
+        try {
+            if (event.data?.source?.kind !== 'user' || typeof event.data?.title !== 'string') return;
+            const who = this.store.lookup(session?.id);
+            if (who?.role !== 'thread' || !this.projects.has(who.projectId)) return;
+            const title = clipTitle(event.data.title);
+            if (!title || title === this.store.thread(who.projectId, who.threadId)?.title) return;
+            this.store.putThread(who.projectId, who.threadId, { title });
+            this.log(`thread-title ${who.projectId}/${who.threadId} from-dsh`);
+        } catch (error) {
+            this.log(`error thread-title ${String(error?.message ?? error).slice(0, 200)}`);
+        }
+    }
+
+    /**
      * Every session's events, as DSH's own change recorder hears them: a
      * file edit by a subagent (or a teammate) that works for a thread counts
      * for that thread's turn. The thread's own edits are read from its log.
@@ -2183,6 +2219,10 @@ export class ProjectManager {
      */
     onSessionEvent(session, event) {
         const type = event?.type;
+        if (type === 'session/title') {
+            this.followTitle(session, event);
+            return;
+        }
         if (type !== 'tool/call' && type !== 'tool/result') return;
         try {
             const id = session?.id;
@@ -3659,9 +3699,9 @@ export class ProjectManager {
      * A change from the window: from the Project settings dialog, the
      * project's settings or one thread's model, effort and permission (null
      * puts a value back to its default); from a thread row's ⋯, the thread
-     * stopped, resolved or reopened as the user's own (updateThread).
+     * renamed, stopped, resolved or reopened as the user's own (updateThread).
      * @param {object} changes - {coordinatorModel?, coordinatorEffort?, threadModel?, threadEffort?, paused?, goal?, yourTools?,
-     *   coordinatorPermission?, threadPermission?} or {thread, model?, effort?, permission?, resolved?, stop?}.
+     *   coordinatorPermission?, threadPermission?} or {thread, model?, effort?, permission?, title?, resolved?, stop?}.
      * @returns the project as describeProject shows it, with `notes` from the change.
      */
     async changeFromWindow(projectId, changes) {
@@ -3671,11 +3711,14 @@ export class ProjectManager {
         let notes = [];
         if (changes.thread !== undefined) {
             const { id } = this.requireThread(projectId, changes.thread);
-            // A row's ⋯: Stop, Mark resolved or Reopen, the user's own.
+            // A row's ⋯: Rename, Stop, Mark resolved or Reopen, the user's own.
             const resolved = typeof changes.resolved === 'boolean' ? changes.resolved : undefined;
             const stop = changes.stop === true;
-            if (resolved !== undefined || stop) notes.push(await this.updateThread(projectId, id, { resolved, stop }, { by: 'user' }));
-            if (changes.model !== undefined || changes.effort !== undefined || (changes.permission === undefined && resolved === undefined && !stop)) {
+            const title = typeof changes.title === 'string' ? changes.title : undefined;
+            if (title !== undefined && !clipTitle(title)) throw new ProjectError('a thread\'s name can\'t be empty');
+            if (resolved !== undefined || stop || title !== undefined) notes.push(await this.updateThread(projectId, id, { resolved, stop, title }, { by: 'user' }));
+            const other = resolved !== undefined || stop || title !== undefined;
+            if (changes.model !== undefined || changes.effort !== undefined || (changes.permission === undefined && !other)) {
                 notes.push(await this.updateThread(projectId, id, { model: text(changes.model), effort: text(changes.effort) }));
             }
             if (changes.permission !== undefined) notes.push(await this.changeThreadPermission(projectId, id, word(changes.permission)));

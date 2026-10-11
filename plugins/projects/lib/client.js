@@ -269,6 +269,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-pane .dshp-t-meta{height:17px;line-height:17px}',
             '.dshp-t-pane .dshp-t-line{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;font-size:12px;line-height:17px}',
             '.dshp-t-pane .dshp-t-group{padding:12px 10px 4px}',
+            // Find a thread, above a long list; the found words are marked in each name.
+            '.dshp-t-find{position:relative;margin:0 0 6px}',
+            '.dshp-t-find .dshp-t-find-box{display:flex;width:100%;box-sizing:border-box}',
+            '.dshp-t-find .dshp-t-find-query{padding-right:34px}',
+            '.dshp-t-notice.dshp-t-find-none{padding:6px 10px}',
             '.dshp-t-empty{padding:28px 16px;text-align:center;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
             // Threads: a thread's chat in the right sidebar
             '.dshp-t-chat{display:flex;flex-direction:column;width:100%;height:100%;min-width:0;min-height:0}',
@@ -497,6 +502,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // The confirmation before a project is archived (ArchiveConfirm).
             '.dshp-ar-line{margin:0 0 10px;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
             `.dshp-ar-error{color:${ERROR_TEXT}}`,
+            '.dshp-rn-form{margin:0 0 10px}',
+            '.dshp-rn-form>span{width:100%}',
             '.dshp-ps-state{display:flex;flex-direction:column;align-items:center;gap:10px;padding:36px 12px;text-align:center;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
             `.dshp-ps-state.dshp-ps-error{color:${ERROR_TEXT}}`,
             '.dshp-ps-controls{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;min-width:0;max-width:100%}',
@@ -902,8 +909,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 intent.current = 'first';
                 setOpen(true);
             };
-            // Opened from a project's models summary: this menu is what the user asked for.
-            React.useEffect(() => { if (autoOpen) show(); }, []);
+            // Opened from a project's models summary, or at one thread: this menu is what the user asked for.
+            React.useEffect(() => { if (autoOpen) show(); }, [autoOpen]);
             const drill = (next) => {
                 setQuery('');
                 intent.current = next === 'model' && showSearch ? 'search' : 'checked';
@@ -1431,6 +1438,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             settingsItem: `${BUNDLE}/project-settings-item`,
             archive: `${BUNDLE}/archive`,
             archiveItem: `${BUNDLE}/archive-item`,
+            rename: `${BUNDLE}/rename`,
             fullItem: `${BUNDLE}/full-view-item`,
             paused: `${BUNDLE}/paused-bar`,
             ending: `${BUNDLE}/ending-bar`,
@@ -1548,6 +1556,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             retryThread: 'Retry',
             resumeThread: 'Resume',
             // A thread row's ⋯, in the Threads menu and panel and on the Projects page.
+            renameThread: 'Rename…',
+            findThread: 'Find a thread',
+            threadSettings: 'Model and permission…',
             stopThread: 'Stop',
             resolveThread: 'Mark resolved',
             reopenThread: 'Reopen',
@@ -2507,18 +2518,23 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * What a thread's ⋯ offers: the other way to open it (`open`, the
-         * list's action), its changes (`opener`, changesOpener's), Stop while
-         * it runs, and Mark resolved or Reopen. Stop and the rest need the
-         * plugin (`live`), which makes the change as the user's own.
+         * list's action), its changes (`opener`, changesOpener's), Rename…,
+         * Model and permission… (Project settings at its row), Stop while it
+         * runs, and Mark resolved or Reopen. Rename, Stop and the rest need
+         * the plugin (`live`), which makes the change as the user's own.
          * @param thread - {running, resolved}.
+         * @param rename - the Rename dialog (renameFlow), when this window has it.
+         * @param settings - the Project settings dialog, when this window has it.
          * @returns [{id, label, icon}] in the order shown.
          */
-        function threadMenuItems({ thread, open, opener, changes, live }) {
+        function threadMenuItems({ thread, open, opener, changes, live, rename, settings }) {
             const icon = (name) => (ui[name] ? h(ui[name], {}) : undefined);
             const review = changes?.turns > 1 ? TEXT.reviewLatest : TEXT.reviewChanges;
             return [
                 open ? { id: 'open', label: open.label, icon: h(open.icon, {}) } : null,
                 opener?.onOpen ? { id: 'changes', label: opener.review ? review : TEXT.openChanges, icon: icon('IconCodeOutlineRegular') } : null,
+                live && rename?.getSnapshot?.().available ? { id: 'rename', label: TEXT.renameThread, icon: icon('IconEditOutlineRegular') } : null,
+                settings?.getSnapshot?.().available ? { id: 'thread-settings', label: TEXT.threadSettings, icon: icon('IconSlidersTwoOutlineRegular') } : null,
                 live && thread.running ? { id: 'stop', label: TEXT.stopThread, icon: icon('IconStopFillRegular') } : null,
                 live && thread.resolved ? { id: 'reopen', label: TEXT.reopenThread, icon: icon('IconRefreshOutlineRegular') } : null,
                 live && !thread.resolved && !thread.running ? { id: 'resolve', label: TEXT.resolveThread, icon: icon('IconCheckCircleOutlineRegular') } : null,
@@ -2526,14 +2542,19 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * Do what a thread's ⋯ item says: open it or its changes, or stop,
-         * resolve or reopen it through the plugin (remote.js `update`).
+         * Do what a thread's ⋯ item says: open it or its changes, ask for a
+         * new name (`rename`, renameFlow) or show its row in Project settings
+         * (`settings`), or stop, resolve or reopen it through the plugin
+         * (remote.js `update`).
          * @param target - a session of the thread's project, which the change goes through.
+         * @param title - the thread's name now, for Rename.
          * @returns the plugin's refusal as a sentence, or '' when it's done.
          */
-        async function runThreadItem(id, { target, thread, open, opener, facts }) {
+        async function runThreadItem(id, { target, thread, title, open, opener, facts, rename, settings }) {
             if (id === 'open') open?.();
             else if (id === 'changes') opener?.onOpen?.();
+            else if (id === 'rename') rename?.open?.({ target, thread, title });
+            else if (id === 'thread-settings') settings?.open?.(target, { pick: `thread:${thread}` });
             const changes = id === 'stop' ? { stop: true } : id === 'resolve' ? { resolved: true } : id === 'reopen' ? { resolved: false } : null;
             if (changes === null || typeof facts?.change !== 'function') return '';
             const said = (error) => (continueError(error) === TEXT.continueFailed ? TEXT.threadChangeFailed : continueError(error));
@@ -2621,7 +2642,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 thread: { running: row.running === true, resolved: row.group === 'resolved' },
                 open: action && !current ? action : undefined,
                 opener: projects && changes ? changesOpener(projects, row.session, changes) : undefined,
-                changes, live: typeof projects?.facts?.change === 'function',
+                changes, live: typeof projects?.facts?.change === 'function', rename: projects?.rename, settings: projects?.settings,
             });
         }
 
@@ -2636,7 +2657,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * @param props.access - {permission?, tools}: what it can reach (accessOf), or undefined.
          * @param props.permissions - the permissions DSH offers, for their names.
          */
-        function ThreadRow({ row, current, now, model, quietModel, access, quietPermission, permissions, changes, onOpen, action, onLeave, projects, slots = 0 }) {
+        function ThreadRow({ row, current, now, model, quietModel, access, quietPermission, permissions, changes, onOpen, action, onLeave, projects, slots = 0, find = '' }) {
             const enabled = !current && row.session !== undefined;
             const quiet = model !== undefined && model === quietModel;
             const permission = access?.permission !== undefined && access.permission !== quietPermission ? access.permission : undefined;
@@ -2647,8 +2668,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [menuOpen, setMenuOpen] = React.useState(false);
             const run = (id) => {
                 const opener = projects && changes ? changesOpener(projects, row.session, changes) : undefined;
-                if (id === 'changes') onLeave?.();
-                return runThreadItem(id, { target: row.session, thread: row.id, open: () => action?.run(row), opener, facts: projects?.facts });
+                // These open elsewhere (its Changes tab, a dialog), so the Threads menu closes first.
+                if (id === 'changes' || id === 'rename' || id === 'thread-settings') onLeave?.();
+                return runThreadItem(id, {
+                    target: row.session, thread: row.id, title: row.title, open: () => action?.run(row), opener,
+                    facts: projects?.facts, rename: projects?.rename, settings: projects?.settings,
+                });
             };
             const acts = [
                 row.ending && row.session !== undefined && projects ? h(RowContinue, { key: 'continue', row, projects }) : null,
@@ -2687,7 +2712,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             },
             h('span', { className: 'dshp-t-dot', 'data-state': row.dot }, h(ui.StateDot, { state: row.dot })),
             h('span', { className: 'dshp-t-text' },
-                h('span', { className: 'dshp-t-name' }, row.title),
+                h('span', { className: 'dshp-t-name' }, ...withHit(row.title, find)),
                 h('span', { className: 'dshp-t-second' },
                     h('span', { className: 'dshp-t-line' }, current ? `${TEXT.current} · ${row.line}` : row.line),
                     h('span', { className: 'dshp-t-meta' },
@@ -2712,7 +2737,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * @param props.action - {label, icon, run(row)}: the other way to open a thread, first in its row's ⋯.
          * @param props.onLeave - called before a row's ⋯ opens the thread's changes elsewhere.
          */
-        function ThreadList({ rows, current, now, models, quietModel, access, quietPermission, permissions, changes, onOpen, action, onLeave, projects, fold = FOLDED }) {
+        function ThreadList({ rows, current, now, models, quietModel, access, quietPermission, permissions, changes, onOpen, action, onLeave, projects, fold = FOLDED, find = '' }) {
             const [shown, setShown] = React.useState(() => new Set(rows.filter((row) => row.session !== undefined && row.session === current).map((row) => row.group)));
             // The most buttons a row has (Retry or Resume, and its ⋯).
             const slots = rows.reduce((most, row) => {
@@ -2730,7 +2755,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const members = rows.filter((row) => row.group === group.id);
                 if (members.length === 0) return null;
                 const list = members.map((row) => h(ThreadRow, {
-                    key: row.id, row, current: row.session !== undefined && row.session === current, now, onOpen, action, onLeave, projects, quietModel, slots,
+                    key: row.id, row, current: row.session !== undefined && row.session === current, now, onOpen, action, onLeave, projects, quietModel, slots, find,
                     model: row.session !== undefined ? models?.[row.session] : undefined,
                     access: row.session !== undefined ? access?.[row.session] : undefined, quietPermission, permissions,
                     changes: changes?.[row.id],
@@ -2807,34 +2832,44 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
         }
 
+        /** What newestRoster takes from the plugin's answer: [field, its value there, its value in the roster]. */
+        const TOLD_FIELDS = Object.freeze([
+            ['resolved', (t) => t.resolved === true, (entry) => entry.resolved === true],
+            ['title', (t) => (typeof t.title === 'string' && t.title !== '' ? t.title : undefined), (entry) => entry.title],
+        ]);
+
         /**
-         * A roster with each thread's resolved state from the plugin's
-         * answer (describe's `threads`) where that changed after the roster
-         * did. The roster comes from the coordinator's session (its project
-         * tools' results), so Mark resolved or Reopen from a row's ⋯ reaches
-         * it only at the coordinator's next project tool, and after a reload
-         * the plugin's answer is the newer; a resolve by the coordinator
-         * reaches the roster first. Whichever changed last wins, the plugin's
-         * at the first look.
-         * @param seen - Map `<scope>/<thread>` → {roster, plugin, winner}, kept across draws by the caller.
+         * A roster with each thread's resolved state and name from the
+         * plugin's answer (describe's `threads`) where that changed after the
+         * roster did. The roster comes from the coordinator's session (its
+         * project tools' results), so Rename, Mark resolved or Reopen from a
+         * row's ⋯ reaches it only at the coordinator's next project tool, and
+         * after a reload the plugin's answer is the newer; a change by the
+         * coordinator reaches the roster first. Whichever changed last wins,
+         * the plugin's at the first look.
+         * @param seen - Map `<scope>/<thread>/<field>` → {listed, plugin, winner}, kept across draws by the caller.
          */
-        function resolvedRoster(roster, threads, seen, scope = '') {
+        function newestRoster(roster, threads, seen, scope = '') {
             if (!Array.isArray(roster) || !Array.isArray(threads)) return roster;
             const told = new Map();
-            for (const t of threads) if (isObject(t) && typeof t.id === 'string') told.set(t.id, t.resolved === true);
+            for (const t of threads) if (isObject(t) && typeof t.id === 'string') told.set(t.id, t);
             let changed = false;
             const out = roster.map((entry) => {
                 if (!isObject(entry) || typeof entry.id !== 'string' || !told.has(entry.id)) return entry;
-                const key = `${scope}/${entry.id}`;
-                const listed = entry.resolved === true;
-                const plugin = told.get(entry.id);
-                const last = seen.get(key);
-                const winner = !last ? 'plugin' : last.listed !== listed ? 'roster' : last.plugin !== plugin ? 'plugin' : last.winner;
-                seen.set(key, { listed, plugin, winner });
-                const resolved = winner === 'roster' ? listed : plugin;
-                if (resolved === listed) return entry;
-                changed = true;
-                return { ...entry, resolved };
+                let next = entry;
+                for (const [field, fromPlugin, fromRoster] of TOLD_FIELDS) {
+                    const plugin = fromPlugin(told.get(entry.id));
+                    if (plugin === undefined) continue;
+                    const key = `${scope}/${entry.id}/${field}`;
+                    const listed = fromRoster(entry);
+                    const last = seen.get(key);
+                    const winner = !last ? 'plugin' : last.listed !== listed ? 'roster' : last.plugin !== plugin ? 'plugin' : last.winner;
+                    seen.set(key, { listed, plugin, winner });
+                    const value = winner === 'roster' ? listed : plugin;
+                    if (value !== listed) next = { ...next, [field]: value };
+                }
+                if (next !== entry) changed = true;
+                return next;
             });
             return changed ? out : roster;
         }
@@ -2844,13 +2879,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * ending included. Thread sessions this window hasn't loaded are read
          * once, so a thread that failed or stopped says so from the start.
          * @param held - the handbacks a pause holds ([{thread, status}]).
-         * @param threads - describe's threads for the project, for resolvedRoster; `scope` its coordinator.
+         * @param threads - describe's threads for the project, for newestRoster; `scope` its coordinator.
          */
         function useRows(projects, useSessions, listed, statuses, byId, held, threads, scope) {
-            // Mark resolved or Reopen from a row's ⋯ shows at once (resolvedRoster).
+            // Rename, Mark resolved or Reopen from a row's ⋯ shows at once (newestRoster).
             const seen = React.useRef(null);
             if (seen.current === null) seen.current = new Map();
-            const roster = React.useMemo(() => resolvedRoster(listed, threads, seen.current, scope), [listed, threads, scope]);
+            const roster = React.useMemo(() => newestRoster(listed, threads, seen.current, scope), [listed, threads, scope]);
             const sessions = React.useMemo(() => openSessions(roster), [roster]);
             const endings = useEndings(useSessions, sessions);
             const key = sessions.join('\n');
@@ -3171,6 +3206,37 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * A row opens the thread's chat as a tab here; its button makes it the
          * main chat.
          */
+        /** A Threads panel with more threads than this has Find a thread above its list. */
+        const FIND_FROM = 8;
+
+        /** The rows whose name holds the words, in any case; all of them for no words. */
+        function findRows(rows, find) {
+            const words = String(find ?? '').trim().toLowerCase();
+            return words === '' ? rows : rows.filter((row) => String(row.title).toLowerCase().includes(words));
+        }
+
+        /**
+         * Find a thread, above the Threads panel's list. Its arrows go on to
+         * the rows (it is one of the panel's items), Home and End stay in the
+         * words, and Escape clears them.
+         */
+        function ThreadFind({ find, setFind, inputRef }) {
+            return h('div', { className: 'dshp-t-find' }, h(ui.Input, {
+                ref: inputRef, type: 'text', role: 'searchbox', value: find, placeholder: TEXT.findThread, 'aria-label': TEXT.findThread,
+                'data-projects-thread-find': '', 'data-dshp-item': '',
+                className: find !== '' ? 'dshp-t-find-box dshp-t-find-query' : 'dshp-t-find-box',
+                icon: ui.IconSearchOutlineRegular ? h(ui.IconSearchOutlineRegular, { size: 14 }) : undefined,
+                onChange: (event) => setFind(event.target.value),
+                onKeyDown: (event) => {
+                    if (event.key === 'Home' || event.key === 'End') event.stopPropagation();
+                    else if (event.key === 'Escape' && find !== '') { event.preventDefault(); event.stopPropagation(); setFind(''); }
+                },
+            }), find !== '' ? h('button', {
+                type: 'button', className: 'dshp-mp-search-clear', 'aria-label': PAGE.findClear, 'data-projects-thread-find-clear': '',
+                onClick: () => { setFind(''); inputRef.current?.focus(); },
+            }, h(ui.IconCloseFillRegular, null)) : null);
+        }
+
         function ThreadsPane({ sessionId, useSessions, useSessionStatus, useTabInfo, projects }) {
             const { tab } = useTabInfo();
             const info = useSessions((state) => projectContext(state, sessionId), sameContext);
@@ -3179,6 +3245,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const byId = useSessions((state) => state.byId);
             const now = useNow(tab.visible !== false);
             const rootRef = React.useRef(null);
+            const findRef = React.useRef(null);
+            const [find, setFind] = React.useState('');
             const coordinator = info?.coordinator;
             React.useEffect(() => {
                 if (coordinator !== undefined && coordinator !== sessionId) projects.refresh(coordinator);
@@ -3195,6 +3263,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 return h('div', { className: 'dshp-t-pane', 'data-projects-threads-pane': '' }, h('div', { className: 'dshp-t-empty' }, TEXT.notProject));
             }
             const notice = rosterNotice(info, rows, projects);
+            // Over 8 threads, Find a thread; while it has words, the rows whose name holds them, resolved ones too.
+            const finding = notice === null && (rows.length > FIND_FROM || find !== '');
+            const found = finding ? findRows(rows, find) : rows;
+            const words = finding ? find.trim() : '';
             return h('div', {
                 ref: rootRef, className: 'dshp-t-pane', 'data-projects-threads-pane': '',
                 onKeyDown: (event) => { if (rootRef.current?.contains(event.target)) arrowKeys(event, rootRef.current); },
@@ -3209,8 +3281,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     }, h(ui.IconSlidersTwoOutlineRegular, { size: 14 })))) : null),
             h(ModelsSummary, { ...summaryModels(cv, models, coordinator, described), access: accessSummary(described), onPick: settingsOn ? (pick) => projects.settings.open(sessionId, { pick }) : undefined }),
             paused ? h(PausedNotice, { coordinator, role: info.me.role, projects }) : null,
-            notice ?? h(ThreadList, {
-                rows, current: sessionId, now, models, changes, projects,
+            finding ? h(ThreadFind, { find, setFind, inputRef: findRef }) : null,
+            notice ?? (found.length === 0 ? h('div', { className: 'dshp-t-notice dshp-t-find-none', role: 'status', 'data-projects-thread-find-none': '' }, PAGE.findNone(words)) : h(ThreadList, {
+                rows: found, current: sessionId, now, models, changes, projects, find: words, fold: words !== '' ? [] : FOLDED,
                 access: accessOf(described, permissions), permissions: described?.permissions,
                 quietPermission: permissionShown(described?.access?.threadPermission?.value, described?.permissions).preset,
                 onOpen: (row) => {
@@ -3218,7 +3291,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     try { tab.actions.openResource(chatAddress(row.session)); } catch { projects.openBeside(row.session); }
                 },
                 action: { label: TEXT.openFull, icon: ui.IconRightUpOutlineRegular, run: (row) => projects.openFull(row.session) },
-            }));
+            })));
         }
 
         /** The resource behind a thread's sidebar chat: the thread session, held while the tab shows it. */
@@ -4849,6 +4922,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 },
                 /** The Project settings dialog, for the entry points. */
                 settings: dialog,
+                /** The Rename dialog, for a thread's ⋯. */
+                rename: shared.renames,
                 /** DSH's model catalog, to name the models sessions run on. */
                 catalog,
                 /** The plugin's endpoints (remote.js). */
@@ -5208,11 +5283,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (!coordOf.has(p.coordinator)) coordOf.set(p.coordinator, p);
             }
             const workspaces = (Array.isArray(items) ? items : EMPTY).filter((ws) => typeof ws?.workspaceId === 'string');
-            // A coordinator's roster, with Mark resolved and Reopen from a row's ⋯ shown at once (resolvedRoster).
+            // A coordinator's roster, with Rename, Mark resolved and Reopen from a row's ⋯ shown at once (newestRoster).
             const rosterOf = (coordinator) => {
                 const threads = valueIn(sessions, coordinator)?.threads;
                 if (!Array.isArray(threads)) return null;
-                return seen instanceof Map ? resolvedRoster(threads, describedOf?.(coordinator), seen, coordinator) : threads;
+                return seen instanceof Map ? newestRoster(threads, describedOf?.(coordinator), seen, coordinator) : threads;
             };
             // Each coordinator's roster by thread session: what it calls resolved, and each thread's last handback.
             const rosters = new Map();
@@ -5568,10 +5643,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         ...(archiveOn ? [{ id: 'archive', label: ARCHIVE.item, icon: h(ui.IconArchiveOutlineRegular, {}) }] : []),
                     ] : [
                         beside ? { id: 'full', label: TEXT.openFull, icon: h(ui.IconRightUpOutlineRegular, {}) } : { id: 'beside', label: TEXT.openBeside, icon: h(ui.IconCompareSplitOutlineRegular, {}) },
-                        // Stop, Mark resolved or Reopen, as on its row in the Threads menu and panel.
+                        // Rename…, Model and permission…, Stop, Mark resolved or Reopen, as on its row in the Threads menu and panel.
                         ...threadMenuItems({
                             thread: { running: (statuses?.get?.(node.id)?.running ?? node.row?.running) === true, resolved: node.resolved === true },
                             live: typeof node.thread === 'string' && typeof projects.facts?.change === 'function',
+                            rename: projects.rename, settings: typeof node.thread === 'string' ? projects.settings : undefined,
                         }),
                         ...(settingsOn ? [{ id: 'settings', label: SETTINGS.title, icon: sliders }] : []),
                     ];
@@ -5583,7 +5659,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             else if (id === 'full') projects.openFull(node.id);
                             else if (id === 'beside') projects.openPaired(node.id);
                             else {
-                                void runThreadItem(id, { target: node.id, thread: node.thread, facts: projects.facts }).then((refusal) => {
+                                void runThreadItem(id, {
+                                    target: node.id, thread: node.thread, title: node.title, facts: projects.facts, rename: projects.rename, settings: projects.settings,
+                                }).then((refusal) => {
                                     if (refusal) setTold((prev) => ({ text: refusal, seq: (prev?.seq ?? 0) + 1 }));
                                 });
                             }
@@ -6023,9 +6101,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     listeners.add(listener);
                     return () => listeners.delete(listener);
                 },
-                /** @param options - {pick?: 'coordinator'|'thread'|'access'}: open with that model menu open, or at Access. */
+                /**
+                 * @param options - {pick?: 'coordinator'|'thread'|'access'|'thread:<id>'}: open with that model menu
+                 *   open (New threads', or one thread's on its own row), or at Access.
+                 */
                 open(target, options) {
-                    const pick = options?.pick === 'coordinator' || options?.pick === 'thread' || options?.pick === 'access' ? options.pick : null;
+                    const named = typeof options?.pick === 'string' && /^thread:[\w-]+$/.test(options.pick);
+                    const pick = named || options?.pick === 'coordinator' || options?.pick === 'thread' || options?.pick === 'access' ? options.pick : null;
                     if (typeof target === 'string' && target !== '' && snapshot.available) set({ target, seq: snapshot.seq + 1, pick });
                 },
                 close() {
@@ -6350,6 +6432,23 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 return true;
             };
             const messageFor = (key) => (message?.key === key ? message : null);
+            // Opened at one thread (Model and permission… in its row's ⋯): its row in view, a resolved one shown,
+            // then its model menu open (placed where the row is once in view, below it when there's room).
+            const atThread = typeof pick === 'string' && pick.startsWith('thread:') ? pick : null;
+            const shownThread = React.useRef(false);
+            const [threadInView, setThreadInView] = React.useState(null);
+            React.useEffect(() => {
+                if (atThread === null || data === null || shownThread.current || typeof document === 'undefined') return;
+                shownThread.current = true;
+                const id = atThread.slice('thread:'.length);
+                if (Array.isArray(data.threads) && data.threads.some((t) => t?.id === id && t.resolved === true)) setShowResolved(true);
+                const show = () => {
+                    document.querySelector(`[data-projects-setting="${atThread}"]`)?.scrollIntoView?.({ block: 'center' });
+                    setThreadInView(atThread);
+                };
+                if (typeof requestAnimationFrame === 'function') requestAnimationFrame(show);
+                else show();
+            }, [atThread, data]);
             // Opened at Access (the Access row of the Threads menu or the Projects page): that section, its first control focused.
             const shownAccess = React.useRef(false);
             React.useEffect(() => {
@@ -6453,7 +6552,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         control: h('div', { className: 'dshp-ps-controls' },
                             h(ModelPicker, {
                                 id: `dshp-ps-${t.id}`, label: `${t.title || t.id} (${t.id})`, catalog: catalog.value, busy: busy === key, disabled,
-                                value: { model: t.model ?? undefined, effort: t.effort ?? undefined }, own: { model: true, effort: true },
+                                value: { model: t.model ?? undefined, effort: t.effort ?? undefined }, own: { model: true, effort: true }, autoOpen: threadInView === key,
                                 onPick: (pick) => change(key, { thread: t.id, ...pick }),
                             }),
                             perms && !t.resolved && typeof t.session === 'string' ? h(PermissionPicker, {
@@ -6548,6 +6647,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * Archiving a project from its ◆ row: the confirmation open for a
          * coordinator's session (`target`), and the notice after (`said`).
          */
+        const RENAME = Object.freeze({
+            title: 'Rename thread',
+            label: 'Thread name',
+            save: 'Rename',
+            cancel: 'Cancel',
+            pending: 'Renaming…',
+        });
+
         function archiveFlow() {
             let snapshot = { target: null, seq: 0, available: false, said: null };
             const listeners = new Set();
@@ -6652,6 +6759,92 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
+         * Rename… from a thread's ⋯: which thread is being renamed, through
+         * which session of its project. Drawn in DSH's overlay layer
+         * (RenameOverlay), so it outlives the menu it came from.
+         */
+        function renameFlow() {
+            let snapshot = { ask: null, seq: 0, available: false };
+            const listeners = new Set();
+            const set = (next) => {
+                snapshot = { ...snapshot, ...next };
+                for (const listener of [...listeners]) listener();
+            };
+            return {
+                getSnapshot: () => snapshot,
+                subscribe: (listener) => {
+                    listeners.add(listener);
+                    return () => listeners.delete(listener);
+                },
+                /** @param ask - {target, thread, title}: a session of the thread's project, the thread's id and its name now. */
+                open(ask) {
+                    if (!snapshot.available || typeof ask?.target !== 'string' || ask.target === '' || typeof ask.thread !== 'string') return;
+                    set({ ask: { target: ask.target, thread: ask.thread, title: typeof ask.title === 'string' ? ask.title : '' }, seq: snapshot.seq + 1 });
+                },
+                close() {
+                    if (snapshot.ask !== null) set({ ask: null });
+                },
+                connect() {
+                    set({ available: true });
+                    return () => set({ available: false, ask: null });
+                },
+            };
+        }
+
+        /**
+         * The Rename dialog: the thread's name, ready to type over; Enter or
+         * Rename saves it through the plugin, which renames its chat in DSH
+         * too. A refusal shows in the dialog, which stays open.
+         */
+        function RenameThread({ ask, flow, facts }) {
+            const [name, setName] = React.useState(ask.title);
+            const [busy, setBusy] = React.useState(false);
+            const [error, setError] = React.useState(null);
+            const clean = name.replace(/\s+/g, ' ').trim();
+            const close = () => { if (!busy) flow.close(); };
+            const save = async () => {
+                if (busy || clean === '') return;
+                if (clean === ask.title.replace(/\s+/g, ' ').trim()) {
+                    flow.close();
+                    return;
+                }
+                setBusy(true);
+                setError(null);
+                let result;
+                try {
+                    result = await facts.change(ask.target, { thread: ask.thread, title: clean });
+                } catch (failure) {
+                    result = { ok: false, error: failure };
+                }
+                setBusy(false);
+                if (result?.ok === false) {
+                    setError(errorText(result.error));
+                    return;
+                }
+                flow.close();
+            };
+            return h(ui.Modal, {
+                open: true, title: RENAME.title, closeLabel: SETTINGS.close, className: 'dshp-rn', onClose: close,
+                footer: h(React.Fragment, null,
+                    h(ui.Button, { key: 'cancel', variant: 'outline', disabled: busy, onClick: close }, RENAME.cancel),
+                    h(ui.Button, { key: 'save', variant: 'primary', disabled: busy || clean === '', onClick: () => { void save(); }, 'data-projects-rename-save': '' }, RENAME.save)),
+            },
+            h('form', { key: 'form', className: 'dshp-rn-form', onSubmit: (event) => { event.preventDefault(); void save(); } },
+                h(ui.Input, {
+                    type: 'text', value: name, 'aria-label': RENAME.label, 'data-modal-autofocus': '', 'data-projects-rename-input': '', maxLength: 300,
+                    disabled: busy, onChange: (event) => setName(event.target.value), onFocus: (event) => event.target.select?.(),
+                })),
+            busy ? h('p', { key: 'busy', className: 'dshp-ar-line', role: 'status' }, RENAME.pending) : null,
+            error ? h('p', { key: 'error', className: 'dshp-ar-line dshp-ar-error', role: 'alert' }, error) : null);
+        }
+
+        /** The Rename dialog in DSH's overlay layer while one is open. */
+        function RenameOverlay({ flow, facts }) {
+            const state = React.useSyncExternalStore(flow.subscribe, flow.getSnapshot);
+            return state.ask === null ? null : h(RenameThread, { key: state.seq, ask: state.ask, flow, facts });
+        }
+
+        /**
          * "Archive project…" in a ◆ coordinator's menu in the session list,
          * beside Project settings; "Restore project" there while it is
          * archived (shown with DSH's archived chats).
@@ -6689,7 +6882,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, SETTINGS.title);
         }
 
-        function applySettings(ctx, dialog, link, facts, flow) {
+        function applySettings(ctx, dialog, link, facts, flow, renames) {
             /** DSH's Plugins page, at this plugin; false when this DSH can't open it. Called without `go`, it only asks. */
             const openDefaults = (go = true) => {
                 let nav;
@@ -6712,6 +6905,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 name: 'sidebar.workspaces.session.menu.item', id: IDS.archiveItem, order: 260, inject: () => ({ flow, facts }),
             }, ArchiveMenuItem));
             ctx.effect(() => flow.connect(), 'projects: archive');
+            if (renames) {
+                ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+                    name: 'shell.overlay', id: IDS.rename, inject: () => ({ flow: renames, facts }),
+                }, RenameOverlay));
+                ctx.effect(() => renames.connect(), 'projects: rename');
+            }
         }
 
         /** Required services (cordis inject); each part below waits for its own. */
@@ -6720,6 +6919,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function apply(ctx) {
             const dialog = settingsDialog();
             const flow = archiveFlow();
+            const renames = renameFlow();
             // DSH's services the parts share, once DSH provides them: one model catalog and one link to the plugin.
             const bound = {};
             const bind = (name, then) => (scope) => scope.effect(() => {
@@ -6740,8 +6940,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 scope.effect(() => followDefault(scope.sessions, catalog), 'projects: DSH default model');
             });
             ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => applyDefaultsForm(scope, { catalog, link, dialog, sessionsOf }));
-            ctx.inject(['connection', 'remote', 'remote.session'], (scope) => applySettings(scope, dialog, link, facts, flow));
-            ctx.inject(['sessions', 'uiWorkspace', 'sidebarRight'], (scope) => applyThreads(scope, dialog, { catalog, link, facts, flow }));
+            ctx.inject(['connection', 'remote', 'remote.session'], (scope) => applySettings(scope, dialog, link, facts, flow, renames));
+            ctx.inject(['sessions', 'uiWorkspace', 'sidebarRight'], (scope) => applyThreads(scope, dialog, { catalog, link, facts, flow, renames }));
         }
 
         module.exports.inject = inject;
@@ -6754,7 +6954,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
             CardChanges, changesOpener, ThreadChangesTab, ThreadChangesTitle, ChangedFile, editsText, fileAddress, readFailure, changesAddress, changesSessionOf, DIFF_LABELS,
-            threadMenuItems, rowMenuItems, runThreadItem, ThreadMore, ThreadList, inMoreList, resolvedRoster, arrowKeys,
+            threadMenuItems, rowMenuItems, runThreadItem, ThreadMore, ThreadList, inMoreList, newestRoster, arrowKeys, ThreadFind, findRows, FIND_FROM,
+            renameFlow, RenameThread, RenameOverlay, RENAME,
             rowState, endingOf, endingIn, endingReason, endingLine, openSessions, markState, hoverLine, continueError, GROUPS,
             roomFor, besidePref, sectionWorkspace, sectionAt, listText, clockOf, againText, ThreadCard, EndingBar,
             SessionList, SIDEBAR,
