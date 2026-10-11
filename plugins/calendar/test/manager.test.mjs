@@ -1666,6 +1666,38 @@ test('the window\'s yes counts only for the change it was asked about, once, and
     }
 });
 
+test('the window\'s yes holds to whether the change tells the guests: one to change their calendars quietly can\'t email them', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        const { WindowChanges } = await import('../lib/asked.js');
+        const google = standIn(m, { id: 'g', kind: 'google', name: 'Google', email: 'me@gmail.com' }, { id: 'cal-g', remoteId: 'primary', name: 'Me' }, 'events');
+        const window = new WindowChanges(m, { now: () => NOW });
+        const lunch = await m.createEvent({ calendarId: 'cal-g', title: 'Lunch', start: '2026-10-15T12:00', attendees: ['ann@example.com'] });
+        const updates = () => google.filter((c) => c.op === 'update');
+        // Asked about a new title, which changes it on ann's calendar without emailing her.
+        await assert.rejects(window.update(lunch.id, { title: 'Lunch!' }), refusedFor('needs-approval', /^This would change it on the calendars of ann@example\.com without emailing them/));
+        // That yes, sent back saying to tell her, counts for nothing: emailing her is asked about first.
+        await assert.rejects(window.update(lunch.id, { title: 'Lunch!', notify: true, approved: ['ann@example.com'] }), refusedFor('needs-approval', /^This would email an update to ann@example\.com/));
+        assert.equal(updates().length, 0);
+        // As it was asked, it goes, without email.
+        const quiet = await window.update(lunch.id, { title: 'Lunch!', approved: ['ann@example.com'] });
+        assert.deepEqual([quiet.reached, quiet.emailed, updates().length, updates()[0].patch.notify], [{ how: 'change', to: ['ann@example.com'] }, undefined, 1, undefined]);
+
+        // A question whether to tell the guests is kept for the change that tells them: the window's yes comes back with notify set.
+        standIn(m, { id: 'dav', kind: 'caldav', name: 'iCloud', url: 'https://caldav.icloud.com/', username: 'me@icloud.com', email: 'me@icloud.com', addresses: ['me@icloud.com'] },
+            { id: 'cal-dav', remoteId: 'https://p52-caldav.icloud.com/1/calendars/home/', name: 'Home', scheduling: true }, 'ics');
+        const planning = await m.createEvent({ calendarId: 'cal-dav', title: 'Planning', start: '2026-10-15T10:00', attendees: ['ann@example.com'], notify: true });
+        await assert.rejects(window.update(planning.id, { start: '2026-10-15T11:00' }), refusedFor('needs-notify', /an update to ann@example\.com/));
+        const moved = await window.update(planning.id, { start: '2026-10-15T11:00', notify: true, approved: ['ann@example.com'] });
+        assert.deepEqual([moved.startLocal, moved.emailed], ['2026-10-15T11:00', { what: 'an update', to: ['ann@example.com'] }]);
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
 test('someone else\'s Google meeting that lets its guests change it: a change to it reaches everyone on it, so it is asked about', async () => {
     const { make, done } = setup();
     const m = make();
