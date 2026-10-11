@@ -94,9 +94,9 @@ export const Config = z.object({
     coordinatorPermission: live(z.string()),
     /** Plugin-wide permission new threads start on: a DSH permission preset, or "default" for DSH's default. Empty means workspace-write. */
     threadPermission: live(z.string()),
-    /** "idle": when a thread ends a turn the coordinator started without a handback, tell the coordinator. "off": only explicit handbacks. */
+    /** "idle": when a thread ends a turn the coordinator started without a handback, nudge it once, and tell the coordinator when it ends that way again. "off": only explicit handbacks. */
     autoHandback: z.union(['idle', 'off']).default('idle'),
-    /** Handbacks (explicit plus automatic) one thread may send per hour; stops runaway loops. */
+    /** Handbacks one thread may send per hour, explicit plus the plugin's notes and nudges; stops runaway loops. */
     maxHandbacksPerHour: z.number().default(30),
     /** New threads one project may start per hour; stops a coordinator stuck starting threads in a loop. */
     maxThreadsPerHour: z.number().default(20),

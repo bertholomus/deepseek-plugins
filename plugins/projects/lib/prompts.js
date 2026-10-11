@@ -268,13 +268,18 @@ export const userMustFix = (ending) => /^The turn (was blocked|failed: the user 
 /** What a thread is sent once after a turn that failed or stopped without a handback: the plugin sends it itself. */
 export const NUDGE = 'Carry on from where you left off and finish the task.';
 
+/** What a thread is sent once after a turn that just ended without a handback: the plugin sends it itself. */
+export const IDLE_NUDGE = 'Finish the task and call project_handback.';
+
 /**
  * The automatic note when a thread goes idle without a handback. Each such
- * turn gets one nudge in a row: after a failed or stopped turn the plugin
- * sends NUDGE itself (a coordinator turn would only say so), and after one
- * that just ended the coordinator answers it, nudges it or passes on its
- * result. When the thread ends that way again, or only the user can fix
- * it, the coordinator tells the user in one line and sends nothing more.
+ * turn gets one nudge in a row, which the plugin sends itself (a coordinator
+ * turn would only say so): NUDGE after a turn that failed or stopped,
+ * IDLE_NUDGE after one that just ended. So the coordinator gets this note
+ * when the thread ends that way again, or only the user can fix it, and
+ * tells the user in one line and sends nothing more; or when the plugin
+ * couldn't send the nudge (the project was paused), and then nudges it, or
+ * after a turn that just ended answers it or passes on its result.
  * @param {string} ending - how the turn ended when it did not complete, or ''.
  * @param {object} [options]
  * @param {boolean} [options.nudge] - ask the coordinator to nudge a failed or stopped turn (when the plugin can't send it).
@@ -288,8 +293,8 @@ export function idleMessage(threadId, title, lastText, ending = '', { nudge = fa
     let next;
     if (ending && nudge) next = `(The user has not seen this. Nudge it once: send it "${NUDGE}" with ${send}, and say nothing to the user unless it ${failed ? 'fails' : 'stops'} again.)`;
     else if (ending) next = `(Tell the user in one line, starting with ${link}, that its turn ${failed ? 'failed' : 'stopped'}${again ? ' again after a nudge' : ''} and why; its card has ${failed ? 'Retry' : 'Resume'}. Send it nothing more unless the user asks.)`;
-    else if (again) next = `(It ended its turn again without a handback after it was nudged. Tell the user in one line, starting with ${link}, what its last reply says. Send it nothing more unless the user asks.)`;
-    else next = `(If its last reply is a result, check it against the ask and pass it on as you would a handback, starting with ${link}. Otherwise send it one message with ${send}: the answer to its question when the user's words, the brief or project memory answer it (ask the user only what is theirs to decide), else "Finish the task and call project_handback.". Send nothing more if it ends this way again: you will be told to tell the user.)`;
+    else if (again) next = `(It was nudged once already to finish and hand back, and ended its turn again without a handback. Tell the user in one line, starting with ${link}, what its last reply says. Don't nudge it again: send it nothing more unless the user asks.)`;
+    else next = `(If its last reply is a result, check it against the ask and pass it on as you would a handback, starting with ${link}. Otherwise send it one message with ${send}: the answer to its question when the user's words, the brief or project memory answer it (ask the user only what is theirs to decide), else "${IDLE_NUDGE}". Send nothing more if it ends this way again: you will be told to tell the user.)`;
     return `${TAGS.idle}: ${threadId} · "${title}"]\n\n${ending ? `${ending}\n\n` : ''}${body}\n\n${next}`;
 }
 

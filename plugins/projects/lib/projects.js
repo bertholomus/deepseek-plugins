@@ -51,7 +51,7 @@ import {
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage, cardSummary,
     handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, welcomeMessage, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS, STOPPED_BY_USER, NUDGE,
-    outsideMessage, replyMessage,
+    IDLE_NUDGE, outsideMessage, replyMessage,
 } from './prompts.js';
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
 import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS } from './changes.js';
@@ -1906,8 +1906,8 @@ export class ProjectManager {
         if (this.config.autoHandback !== 'idle' || !this.allowHandback(projectId, threadId)) return;
         // One nudge in a row for a turn that ended without a handback, counted apart for a turn that failed or stopped
         // and one that just ended, so each note says what happened; the user hears when it didn't help, or when only they
-        // can fix it, and the coordinator sends nothing more. A failed or stopped turn's nudge the plugin sends itself,
-        // since a coordinator turn would only say so; while the project is paused its note waits like any other, and the
+        // can fix it, and the coordinator sends nothing more. The plugin sends the nudge itself, since a coordinator turn
+        // would only say so (and tell the user); while the project is paused its note waits like any other, and the
         // coordinator nudges it on resume. A handback, the user's words or their Retry start the count again.
         // A turn cut off because DSH closed while it ran (a quit, or a crash: its log can't tell them apart) gets no
         // nudge and doesn't count, so nothing starts again on its own after the user quits: the note tells them, and
@@ -1917,25 +1917,27 @@ export class ProjectManager {
         const again = !cutOff && (ended ? t.nudged === true : t.stalled === true);
         const nudge = !again && !cutOff && !(ended && userMustFix(turn.ending));
         if (!cutOff) this.store.putThread(projectId, threadId, ended ? { nudged: nudge ? true : undefined } : { nudged: undefined, stalled: true });
-        if (nudge && ended && !this.held(projectId) && await this.nudgeThread(projectId, threadId, turn)) return;
+        if (nudge && !this.held(projectId) && await this.nudgeThread(projectId, threadId, turn, ended)) return;
         const news = nudge && ended ? undefined : { kind: ended ? endingStateOf(turn.ending) : 'finished', thread: threadId };
         await this.deliver(projectId, idleMessage(threadId, t.title, turn.reply, turn.ending, { nudge: nudge && ended, again }), undefined, news);
         this.log(`idle-note ${projectId}/${threadId} chars=${turn.reply.length}${turn.ending ? ` ended=${turn.endKind}` : ''}${nudge && ended ? ' nudge' : ''}${again ? ' again' : ''}`);
     }
 
     /**
-     * The one nudge after a turn that failed or stopped without a handback, sent to the thread as from its
-     * coordinator (the next turn's end is reviewed as the coordinator's).
+     * The one nudge after a turn that ended without a handback (NUDGE after one that failed or stopped, IDLE_NUDGE
+     * after one that just ended), sent to the thread as from its coordinator (the next turn's end is reviewed as the
+     * coordinator's).
+     * @param {boolean} ended - the turn failed or stopped.
      * @returns whether it went; when it didn't, the coordinator gets the note and nudges it.
      */
-    async nudgeThread(projectId, threadId, turn) {
+    async nudgeThread(projectId, threadId, turn, ended) {
         try {
-            await this.sendToThread(projectId, threadId, NUDGE, false);
+            await this.sendToThread(projectId, threadId, ended ? NUDGE : IDLE_NUDGE, false);
         } catch (error) {
             this.log(`error nudge ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
             return false;
         }
-        this.log(`nudge ${projectId}/${threadId} ended=${turn.endKind}`);
+        this.log(`nudge ${projectId}/${threadId} ${ended ? `ended=${turn.endKind}` : 'idle'}`);
         return true;
     }
 

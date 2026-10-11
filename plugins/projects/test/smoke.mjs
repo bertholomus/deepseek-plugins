@@ -18,7 +18,7 @@ import * as plugin from '../lib/index.js';
 import { effectiveSettings, effectiveAccess, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
 import { slugify, timing, clipTitle, guardList, guardedIn, unsaidPart } from '../lib/projects.js';
 import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS, lineDelta, editOf, editsIn, editSummary } from '../lib/changes.js';
-import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, cardSummary, threadMarkdown, outsideMessage, replyMessage, NUDGE } from '../lib/prompts.js';
+import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, cardSummary, threadMarkdown, outsideMessage, replyMessage, NUDGE, IDLE_NUDGE } from '../lib/prompts.js';
 import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
 
 const CATALOG = {
@@ -634,23 +634,77 @@ test('thread start → brief → handback → coordinator turn', async () => {
     assert.match(await coord.ctx.call('project_thread_send', { thread: 't9', text: 'hi' }), /^Failed: no thread "t9".*threads: t1/);
 });
 
-test('idle without a handback sends the automatic note with the last reply', async () => {
-    const { host } = setup();
+test('idle without a handback: the plugin nudges the thread once, then sends the automatic note with the last reply', async () => {
+    const { host, dir } = setup();
     await tick();
     const coord = coordinatorOf(host);
     await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Docs', brief: 'Write docs.' });
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
-    host.sessions.get(thread.id).events.push({ seq: 1, type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text: 'I wrote half the docs.' }] } } });
+    const ts = host.sessions.get(thread.id);
+    ts.events.push({ seq: 1, type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text: 'I wrote half the docs.' }] } } });
     thread.ctx.emitStatus(thread, 'running');
     await thread.ctx.call('project_handback', { status: 'progress', summary: 'Halfway' });
     thread.ctx.emitStatus(thread, 'idle');
     await tick();
     const cp = host.sessions.get(coord.id).prompts;
+    // The plugin sends the nudge itself, from the coordinator, which takes no turn for it (behaviour review 4: the
+    // coordinator's own nudge turn told the user about it without the thread's link).
+    assert.equal(cp.length, 1, 'the progress handback only');
+    assert.deepEqual([ts.prompts.at(-1), sourceOf(ts, ts.prompts.length - 1)],
+        [{ mode: 'queue', text: `[From the coordinator]\n\n${IDLE_NUDGE}` }, { kind: 'agent-message', form: 'relay', senderSessionId: coord.id }]);
+    // It ends its turn that way again: the coordinator gets the note, which says it was nudged already.
+    ts.events.push({ seq: ts.events.length + 1, type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text: 'The rest needs the API list.' }] } } });
+    thread.ctx.emitStatus(thread, 'running');
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
     assert.equal(cp.length, 2, 'progress handback plus idle note');
-    assert.match(cp[1].text, /^\[Thread idle without a handback: t1 · "Docs"\]\n\nIts last reply:\n\nI wrote half the docs\./);
+    assert.match(cp[1].text, /^\[Thread idle without a handback: t1 · "Docs"\]\n\nIts last reply:\n\nThe rest needs the API list\.\n\n\(It was nudged once already to finish and hand back, [^]*Don't nudge it again/);
+    assert.equal(ts.prompts.length, 2, 'one nudge');
     // The plugin's own note, which DSH draws as "Plugin status updated".
     assert.deepEqual(sourceOf(host.sessions.get(coord.id), 1), { kind: 'cordis-host-runner' });
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), / nudge dsh-plugins\/t1 idle\n[^]* idle-note dsh-plugins\/t1 chars=28 again\n/);
     assert.match(await coord.ctx.call('project_thread_read', { thread: 't1' }), /## assistant\nI wrote half the docs\./);
+});
+
+test('the idle nudge waits while the project is paused, and counts toward the hourly handback limit', async () => {
+    const { host } = setup({ maxHandbacksPerHour: 2 });
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Docs', brief: 'Write docs.' });
+    const thread = threadOf(host, coord);
+    const ts = host.sessions.get(thread.id);
+    const cp = host.sessions.get(coord.id).prompts;
+    const idle = (reply) => {
+        thread.ctx.emitStatus(thread, 'running');
+        const marks = turnMarks(host, thread.id);
+        marks.start();
+        assistantSays(host, thread.id, reply);
+        marks.end();
+        thread.ctx.emitStatus(thread, 'idle');
+    };
+    // Paused, the thread is not sent on: the coordinator gets the note on resume and sends its one message itself.
+    await coord.ctx.call('project_settings', { paused: true });
+    idle('Half done.');
+    await tick();
+    assert.deepEqual([ts.prompts.length, cp.length], [1, 0]);
+    await coord.ctx.call('project_settings', { paused: false });
+    await tick();
+    assert.match(cp.at(-1).text, /^\[Thread idle without a handback: t1 · "Docs"\]\n\nIts last reply:\n\nHalf done\.\n\n\(If its last reply is a result, [^]* else "Finish the task and call project_handback\."/);
+    assert.equal(ts.prompts.length, 1);
+
+    // The user's words start the count again, so the next such turn gets the plugin's nudge: the second automatic
+    // message this hour. After the user's next words, the limit holds the nudge back too.
+    userSays(host, coord.id, 'Write the rest of the docs.');
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Write the rest.', ask: 'Write the rest of the docs.' });
+    idle('Most of it.');
+    await tick();
+    assert.equal(ts.prompts.at(-1).text, `[From the coordinator]\n\n${IDLE_NUDGE}`);
+    userSays(host, coord.id, 'Add the FAQ too.');
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Add the FAQ.', ask: 'Add the FAQ too.' });
+    const sent = [ts.prompts.length, cp.length];
+    idle('Started the FAQ.');
+    await tick();
+    assert.deepEqual([ts.prompts.length, cp.length], sent);
 });
 
 test('autoHandback off sends only explicit handbacks', async () => {
@@ -3221,7 +3275,8 @@ test('a turn the user drives in a thread does not wake the coordinator', async (
     assert.equal(host.sessions.get(coord.id).prompts.length, 0, 'no idle note for a direct turn');
     assert.match(coord.ctx.section(), /t1 · "Chat" · idle · no handback yet · the user talked to it directly; its reply: "It parses the config\."/);
 
-    // A turn the coordinator starts still gets the note when it ends without a handback.
+    // A turn the coordinator starts is still reviewed when it ends without a handback: the plugin nudges it, and the
+    // coordinator gets the note when it ends that way again.
     await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Also check the tests.' });
     userSays(host, thread.id, '[model changed: ...]', 'model-selection');
     assistantSays(host, thread.id, 'Tests pass.');
@@ -3229,8 +3284,14 @@ test('a turn the user drives in a thread does not wake the coordinator', async (
     thread.ctx.emitStatus(thread, 'idle');
     await tick();
     const cp = host.sessions.get(coord.id).prompts;
+    assert.equal(cp.length, 0);
+    assert.equal(host.sessions.get(thread.id).prompts.at(-1).text, `[From the coordinator]\n\n${IDLE_NUDGE}`);
+    assistantSays(host, thread.id, 'Tests pass; nothing else to do.');
+    thread.ctx.emitStatus(thread, 'running');
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
     assert.equal(cp.length, 1);
-    assert.match(cp[0].text, /^\[Thread idle without a handback: t1 · "Chat"\]\n\nIts last reply:\n\nTests pass\./);
+    assert.match(cp[0].text, /^\[Thread idle without a handback: t1 · "Chat"\]\n\nIts last reply:\n\nTests pass; nothing else to do\./);
 
     // project_thread_read shows prompts and replies, not injected context.
     const read = await coord.ctx.call('project_thread_read', { thread: 't1', count: 10 });
@@ -3262,7 +3323,7 @@ test('the idle note says when a thread turn failed', async () => {
     assert.match(host.sessions.get(coord.id).prompts[0].text, /^\[Thread idle without a handback: t1 · "Flaky"\]\n\nThe turn failed: provider unavailable\n\nIt produced no reply text\./);
 });
 
-test('a thread that ends its turn again without a handback after its one message goes to the user; failures count apart', async () => {
+test('a thread that ends its turn without a handback gets one nudge from the plugin, then goes to the user; failures count apart', async () => {
     const { host, dir } = setup();
     await tick();
     const coord = coordinatorOf(host);
@@ -3279,39 +3340,38 @@ test('a thread that ends its turn again without a handback after its one message
         marks.end();
         thread.ctx.emitStatus(thread, 'idle');
     };
-    const first = /\n\n\(If its last reply is a result, check it against the ask[^]*\. Send nothing more if it ends this way again: you will be told to tell the user\.\)$/;
-    const again = (reply) => `[Thread idle without a handback: t1 · "Stall"]\n\nIts last reply:\n\n${reply}\n\n(It ended its turn again without a handback after it was nudged. Tell the user in one line, starting with [Stall](.dsh-thread/t1), what its last reply says. Send it nothing more unless the user asks.)`;
+    const nudged = `[From the coordinator]\n\n${IDLE_NUDGE}`;
+    const again = (reply) => `[Thread idle without a handback: t1 · "Stall"]\n\nIts last reply:\n\n${reply}\n\n(It was nudged once already to finish and hand back, and ended its turn again without a handback. Tell the user in one line, starting with [Stall](.dsh-thread/t1), what its last reply says. Don't nudge it again: send it nothing more unless the user asks.)`;
 
-    // The first time, the coordinator sends it one message.
-    stall('Which file?');
+    // The first time, the plugin sends it the nudge itself, from its coordinator, which takes no turn for it.
+    stall('Half the notes.');
     await tick();
-    assert.match(cp.at(-1).text, first);
-    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'The README.' });
-    // A failure in between gets the plugin's own nudge and leaves the count alone.
+    assert.deepEqual([ts.prompts.at(-1).text, cp.length], [nudged, 0]);
+    // A failure in between gets the plugin's other nudge and leaves the count alone.
     thread.ctx.emitStatus(thread, 'running');
     marks.start();
     marks.end('error', 'provider unavailable');
     thread.ctx.emitStatus(thread, 'idle');
     await tick();
-    assert.equal(ts.prompts.at(-1).text, '[From the coordinator]\n\nCarry on from where you left off and finish the task.');
+    assert.deepEqual([ts.prompts.at(-1).text, cp.length], ['[From the coordinator]\n\nCarry on from where you left off and finish the task.', 0]);
     // It ends again without a handback: the coordinator tells the user, and sends it nothing more.
-    const notes = cp.length;
     stall('Still reading.');
     await tick();
-    assert.equal(cp.length, notes + 1);
+    assert.equal(cp.length, 1);
     assert.equal(cp.at(-1).text, again('Still reading.'));
+    const sent = ts.prompts.length;
     stall('Reading more.');
     await tick();
     assert.equal(cp.at(-1).text, again('Reading more.'), 'still the user\'s, until something new');
-    assert.match(log(), / idle-note dsh-plugins\/t1 chars=11\n[^]* nudge dsh-plugins\/t1 ended=error\n[^]* idle-note dsh-plugins\/t1 chars=14 again\n/);
+    assert.equal(ts.prompts.length, sent, 'one nudge in a row');
+    assert.match(log(), / nudge dsh-plugins\/t1 idle\n[^]* nudge dsh-plugins\/t1 ended=error\n[^]* idle-note dsh-plugins\/t1 chars=14 again\n/);
 
     // The user's words start the count again, and so does a handback.
     userSays(host, coord.id, 'Write the notes in NOTES.md.');
     await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Write them in NOTES.md.', ask: 'Write the notes in NOTES.md.' });
     stall('Which heading?');
     await tick();
-    assert.match(cp.at(-1).text, first);
-    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Finish the task and call project_handback.' });
+    assert.equal(ts.prompts.at(-1).text, nudged);
     thread.ctx.emitStatus(thread, 'running');
     marks.start();
     await thread.ctx.call('project_handback', { status: 'done', summary: 'Wrote NOTES.md.' });
@@ -3321,7 +3381,7 @@ test('a thread that ends its turn again without a handback after its one message
     await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Now the changelog.' });
     stall('Which version?');
     await tick();
-    assert.match(cp.at(-1).text, first);
+    assert.equal(ts.prompts.at(-1).text, nudged);
 });
 
 test('a failed or stopped thread shows in the roster until a turn finishes; Retry and Resume send it on from its coordinator', async () => {
@@ -3537,9 +3597,14 @@ test('news: what threads hand back or need the user for waits per project until 
     await tick();
     assert.deepEqual(await unread(), [{ seq: 1, kind: 'handback', thread: 't1', title: 'Docs', status: 'blocked' }]);
 
-    // A turn that ends without a handback; a permission prompt left waiting.
+    // A turn that ends without a handback, news once the plugin's nudge didn't help; a permission prompt left waiting.
     await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Finish the docs.' });
     ts.events.push({ seq: ts.events.length + 1, type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text: 'Done with the docs.' }] } } });
+    turnEnd();
+    thread.ctx.emitStatus(thread, 'running');
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    assert.deepEqual((await unread()).map((n) => n.seq), [1], 'nudged, not news');
     turnEnd();
     thread.ctx.emitStatus(thread, 'running');
     thread.ctx.emitStatus(thread, 'idle');
@@ -3692,11 +3757,13 @@ test('model-facing text: a project without a goal asks for one; a handback\'s no
     assert.match(idleMessage('t3', 'Long', '', 'The turn was stopped before it finished.'), /that its turn stopped and why; its card has Resume\./);
     assert.equal(userMustFix('The turn failed: the user signed out of DeepSeek.'), true);
     assert.equal(userMustFix('The turn failed (HTTP 500): boom'), false);
-    // A turn that just ended without a handback: one message (the answer, or the nudge), then the user hears of the next
-    // such turn in one line (behaviour review 3: a stalled thread got three messages, then the coordinator did the work).
+    // A turn that just ended without a handback: one message (the plugin's nudge; while the project was paused, the
+    // coordinator's answer or nudge), then the user hears of the next such turn in one line (behaviour review 3: a
+    // stalled thread got three messages, then the coordinator did the work).
     assert.match(idleMessage('t3', 'Chat', 'Which file?'), /\n\n\(If its last reply is a result, check it against the ask and pass it on as you would a handback, starting with \[Chat\]\(\.dsh-thread\/t3\)\. Otherwise send it one message with project_thread_send thread="t3": the answer to its question when the user's words, the brief or project memory answer it \(ask the user only what is theirs to decide\), else "Finish the task and call project_handback\."\. Send nothing more if it ends this way again: you will be told to tell the user\.\)$/);
-    assert.match(idleMessage('t3', 'Chat', 'Still reading.', '', { again: true }), /\n\n\(It ended its turn again without a handback after it was nudged\. Tell the user in one line, starting with \[Chat\]\(\.dsh-thread\/t3\), what its last reply says\. Send it nothing more unless the user asks\.\)$/);
+    assert.match(idleMessage('t3', 'Chat', 'Still reading.', '', { again: true }), /\n\n\(It was nudged once already to finish and hand back, and ended its turn again without a handback\. Tell the user in one line, starting with \[Chat\]\(\.dsh-thread\/t3\), what its last reply says\. Don't nudge it again: send it nothing more unless the user asks\.\)$/);
     assert.equal(NUDGE, 'Carry on from where you left off and finish the task.');
+    assert.equal(IDLE_NUDGE, 'Finish the task and call project_handback.');
     assert.match(approvalMessage('t4', 'Deploy', 'Deploy', 'shell', 'rm -rf build'), /\n\n\(Tell the user in one line, starting with \[Deploy\]\(\.dsh-thread\/t4\), what it wants to do and that they approve or reject it in its chat\. Never approve it yourself or do the work another way, and do not start another thread for it\.\)$/);
     // A card or roster line is cut at a sentence end, or a word end, never inside a name (the first real run's card ended
     // "…deepseek-v41-a7 (DeepSeek-V4.1-Flash-T").
@@ -4474,7 +4541,7 @@ test('thread sessions an older version titled "<project> › <title>" are rename
     assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /coordinator dsh-plugins s1 resumed[^]*error thread-titles/);
 });
 
-test('a config reload while a thread runs still reports its turn and its permission prompt', async () => {
+test('a config reload while a thread runs still reports its permission prompt, and reviews its turn', async () => {
     const { host, config } = setup({ approvalNoticeSeconds: 0.02 });
     await tick();
     const coord = coordinatorOf(host);
@@ -4496,8 +4563,9 @@ test('a config reload while a thread runs still reports its turn and its permiss
     assistantSays(host, thread.id, 'The deploy was rejected.');
     thread.ctx.emitStatus(thread, 'idle');
     await tick();
-    assert.equal(cp.length, 2, 'and reports the turn when it ends');
-    assert.match(cp[1].text, /^\[Thread idle without a handback: t1 · "Busy"\]\n\nIts last reply:\n\nThe deploy was rejected\./);
+    // It ended without a handback, so the plugin nudges it.
+    assert.equal(cp.length, 1);
+    assert.equal(host.sessions.get(thread.id).prompts.at(-1).text, `[From the coordinator]\n\n${IDLE_NUDGE}`);
 });
 
 test('a permission prompt the coordinator heard about isn\'t sent again when the plugin reloads or is switched off and on', async () => {
@@ -4537,7 +4605,7 @@ test('a permission prompt the coordinator heard about isn\'t sent again when the
     assert.equal((readFileSync(join(dir, 'projects.log'), 'utf8').match(/approval-note /g) ?? []).length, 2);
 });
 
-test('a turn that ends during a reload is reported by the new instance', async () => {
+test('a turn that ends during a reload is reviewed by the new instance', async () => {
     const { host, config } = setup();
     await tick();
     const coord = coordinatorOf(host);
@@ -4553,9 +4621,9 @@ test('a turn that ends during a reload is reported by the new instance', async (
     thread.ctx.emitStatus(thread, 'idle');
     plugin.apply(host, config);
     await tick();
-    const cp = host.sessions.get(coord.id).prompts;
-    assert.equal(cp.length, 1);
-    assert.match(cp[0].text, /^\[Thread idle without a handback: t1 · "Gap"\]\n\nIts last reply:\n\nFinished in the gap\./);
+    // It ended without a handback, so the new instance nudges it, once.
+    assert.equal(host.sessions.get(coord.id).prompts.length, 0);
+    assert.deepEqual(host.sessions.get(thread.id).prompts.map((p) => p.text).slice(1), [`[From the coordinator]\n\n${IDLE_NUDGE}`]);
 });
 
 test('a handback the coordinator cannot take is retried, in order', async () => {

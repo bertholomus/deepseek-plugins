@@ -6,8 +6,8 @@
  * this repo's projects and session-bridge plugins and a scripted model
  * server, then drives the coordinator and its threads through the bridge
  * socket and checks what reached the model: models and efforts on the wire,
- * tool scoping, handbacks, the automatic notes (idle, failed, stopped,
- * waiting on approval, cut off by a DSH crash), queued turns, a message
+ * tool scoping, handbacks, the plugin's nudges and automatic notes (idle,
+ * failed, stopped, waiting on approval, cut off by a DSH crash), queued turns, a message
  * that reaches a thread's running turn, direct talk,
  * settings, memory, pause, a restart, the browser half DSH serves for the
  * plugin's page, a saved default that applies without a restart, the Project
@@ -495,12 +495,18 @@ try {
     await sleep(1000);
     check('a turn that handed back sends no idle note', !readText(logFile).includes(`idle-note ${PROJECT_ID}/t1 `) && since(mark, 'coordinator').every((r) => r.action.text !== 'SAW-IDLE'), describe(since(mark)));
 
-    // 3. A thread that stops without a handback: the idle note.
+    // 3. A thread that ends its turn without a handback: the plugin nudges it once, from its coordinator, which takes
+    // no turn for it; when it ends that way again, the coordinator gets the idle note.
     mark = model.requests.length;
     await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Beta', brief: 'Just answer.' }));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Beta idle note');
     check('idle note reaches the coordinator', saw.fresh.includes('[Thread idle without a handback: t2 · "Beta"]') && saw.fresh.includes('Plain reply.'), saw.fresh.slice(0, 300));
     const t2 = threadSession('t2');
+    const beta = since(mark, 't2');
+    check('a turn that ends without a handback gets one nudge from its coordinator, sent by the plugin, and the note comes when it ends that way again', beta.length === 2
+        && beta[1].fresh.includes('[From the coordinator]\n\nFinish the task and call project_handback.') && readText(logFile).includes(`nudge ${PROJECT_ID}/t2 idle`)
+        && saw.fresh.includes('(It was nudged once already to finish and hand back') && since(mark, 'coordinator').filter((r) => r.fresh.includes('t2 · "Beta"')).length === 1
+        && fromSession(startingWith(await messagesOf(t2), '[From the coordinator]'), coord), `${describe(since(mark))} | ${saw.fresh.slice(-300)}`);
 
     // 4. The user talks to a thread directly: the coordinator is not woken.
     mark = model.requests.length;
@@ -980,7 +986,9 @@ try {
     check('Retry sends the thread on from its coordinator', answer2.ok && answer2.value?.project?.id === PROJECT_ID
         && retried?.fresh.includes('[From the coordinator]\n\nThe user asked you to try again. Your last turn failed (HTTP 400): fake model rejected the request. Carry on from where you left off.') && retried.action.text === 'RESUMED'
         && fromSession(startingWith(await messagesOf(threadSession('t3')), '[From the coordinator]'), coord), `${refusedWhy(answer2)} ${retried?.fresh.slice(0, 300)}`);
-    check('the coordinator hears how the retry went', saw.fresh.includes('[Thread idle without a handback: t3 · "Gamma"]') && saw.fresh.includes('RESUMED'), saw.fresh.slice(0, 300));
+    // Retry starts the count again, so the plugin nudges the retried turn that ended without a handback, and the coordinator hears after that.
+    check('the coordinator hears how the retry went, after the plugin\'s nudge', saw.fresh.includes('[Thread idle without a handback: t3 · "Gamma"]')
+        && since(mark, 't3').length === 2 && since(mark, 't3')[1].fresh.includes('Finish the task and call project_handback.'), `${describe(since(mark))} | ${saw.fresh.slice(0, 300)}`);
     check('a turn that finishes clears the failure', (await viewOf(threadSession('t3')))?.ending === undefined, JSON.stringify(await viewOf(threadSession('t3'))));
     // Resume: the same for a stopped thread.
     mark = model.requests.length;
