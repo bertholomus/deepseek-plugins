@@ -2,8 +2,6 @@
 
 Your calendars in DSH, for you and for your agents: iCloud, Google, Microsoft 365, Outlook.com and Exchange Online, Fastmail, Nextcloud, Yahoo, mailbox.org, Zoho and any other CalDAV server, subscribed `.ics` feeds, and calendars kept in DSH itself. The plugin syncs them into a store of its own and sends every change to the server that holds the event, so your phone and your other apps see it too.
 
-> **Status.** This version is the host half: the accounts, the sync, the store, the agents' tools and their write rules, and the endpoints the window uses. The window (a Calendar page, the account dialog and an agenda beside chats, drawn on the wallpaper plugin's glass when it is on) comes next. Until then, a new DSH has the **Personal** calendar, kept in DSH, and agents can read and change it.
-
 ## Accounts
 
 | Service | How it connects | What you give it |
@@ -44,6 +42,16 @@ Microsoft's sign-in needs an app registration of your own:
 4. Give the plugin its **Application (client) ID** (or `microsoftClientId` in its config) and the tenant (`common` by default).
 
 Signing in opens Microsoft in your browser and comes back to this computer on `localhost` (with PKCE); signing in to an account again names it on Microsoft's page. When the browser runs on another device, the page it ends on doesn't load; its address finishes the sign-in when you paste it. Or sign in with a code: type it on Microsoft's page (`microsoft.com/devicelogin`) on any device. Many work accounts' rules turn sign-in with a code down. Microsoft emails a meeting's guests itself, and that can't be held back: when an event with guests is saved, and whenever the meeting you organize changes or is cancelled. So those changes are made only when they say to tell the guests (see [Guests and email](#guests-and-email)).
+
+## The window
+
+**Calendar** in DSH's sidebar opens the Calendar page: Month, Week, Day and Agenda views, and a side column with a small month, your calendars by account and **Accounts**. Keys: `M`, `W`, `D` and `A` for the views, `N` or `J` and `P` or `K` for the next and previous, `T` for today, `C` for a new event. A calendar's box shows or hides it; its menu renames it, sets its color, makes it the default for new events, exports or imports `.ics`, and deletes a calendar kept in DSH. A click on an empty time makes an hour's event there, and a drag makes one as long as the drag; a click on an event shows its details, where you change it, delete it or answer an invitation. A repeating event asks which occurrences a change or a delete reaches. A change that would email someone asks first, in the plugin's words, naming who gets what; only your **Send** tells them, and the note after says who was emailed.
+
+**Accounts** lists each account and how its sync stands, and adds one: iCloud, Google, Microsoft 365, Outlook.com and Exchange Online, Fastmail, Nextcloud, Yahoo or another CalDAV server, a subscribed feed, or a calendar kept in DSH. Google and Microsoft sign in on their own pages in your browser; Microsoft can also show a code to type on another device. Removing an account says what happens to DSH's access to it.
+
+The **Agenda** tab in DSH's right sidebar, beside chats, lists today and the next days, what's on now and next, with **Join** for a call. In chats, each `calendar_*` call shows as a card: the events it read, one event, free time, or what a change did, with a button to the event on the page.
+
+With the wallpaper plugin's glass on, the page and its cards sit on the wallpaper: they keep no background of their own and follow its public `--wp-blur`, `--wp-tint` and `body.wp-still`. Light and dark follow DSH's theme. In a narrow window the side column folds behind a button, and Week shows three days.
 
 ## For agents
 
@@ -154,6 +162,9 @@ RADICALE_VENV=/path/to/venv node --test plugins/calendar/test/*.test.mjs
 # on a real DSH, with a scripted model server (Read Only, Workspace Write and Full access chats)
 npm install --prefix /tmp/dsh @deepseek-ai/dsh
 DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js RADICALE_VENV=/path/to/venv node plugins/calendar/test/e2e/run.mjs
+
+# the window, in a real DSH and Chromium (SHOTS=/some/folder keeps screenshots)
+DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js PLAYWRIGHT_MODULE=/path/to/node_modules/playwright/index.mjs node plugins/calendar/test/e2e/ui.mjs
 ```
 
 No test uses a real account: Google and Microsoft are stand-in servers (`test/standins`), and CalDAV runs against answers shaped like iCloud's, Fastmail's and Nextcloud's (`test/fixtures`), a stand-in server and, when it is installed, a real Radicale server.
