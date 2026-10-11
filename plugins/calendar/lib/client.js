@@ -284,6 +284,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ':is(.dshcal-ev,.dshcal-bar,.dshcal-line)[data-moving]{opacity:.35}',
             '.dshcal-wk-ghost>span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshcal-wk-ghost>span+span{font-weight:500;opacity:.85}',
+            '.dshcal-wk-ghost[data-short]{padding-top:1px;padding-bottom:1px}',
             ':is(.dshcal-mo-cell,.dshcal-wk-lanecell)[data-drop]{background:var(--cal-accent-soft);box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--cal-accent) 60%,transparent)}',
 
             // ── Month: weeks of days, bars and lines in lanes.
@@ -3668,6 +3669,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             const cols = columnsOf(segments, 20, 30, maxCols);
                             const dayEnd = startOfDay(addDays(day, 1), zone);
                             const ghost = ghostOn(day);
+                            // Its words: the title, then where it goes; under 45 minutes, on one line, where first (moved, where it starts).
+                            const ghostShort = ghost !== null && ghost.to - ghost.from < 45;
+                            const ghostWhere = ghost?.first ? (ghostShort && moving.mode === 'move' ? timeText(moving.t.start, zone) : ghostWords(moving.t, zone)) : '';
+                            const ghostText = ghostWhere && ghost.day ? `${dayText(ghost.day)} · ${ghostWhere}` : ghostWhere;
                             return h('div', { key: day, className: 'dshcal-wk-col', 'data-today': day === today ? '' : undefined, 'data-calendar-day-column': day, ...columnHandlers(day) },
                                 segments.map(({ o, from, to }) => {
                                     const place = cols.places.get(o.id);
@@ -3708,10 +3713,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                     className: 'dshcal-wk-ghost', style: { top: (drag.from / 60) * HOUR_PX, height: Math.max(12, ((drag.to - drag.from) / 60) * HOUR_PX) },
                                 }, clockRangeText(drag.from, Math.min(1440, drag.to))) : null,
                                 ghost ? h('div', {
-                                    className: 'dshcal-wk-ghost', 'data-calendar-ghost': moving.mode,
+                                    className: 'dshcal-wk-ghost', 'data-calendar-ghost': moving.mode, 'data-short': ghostShort ? '' : undefined,
                                     style: { top: (ghost.from / 60) * HOUR_PX, height: Math.max(12, ((ghost.to - ghost.from) / 60) * HOUR_PX) },
-                                }, ghost.first ? h('span', null, moving.title) : null,
-                                ghost.first ? h('span', null, ghost.day ? `${dayText(ghost.day)} · ${ghostWords(moving.t, zone)}` : ghostWords(moving.t, zone)) : null) : null,
+                                }, ...(!ghostText ? [] : ghostShort ? [h('span', null, `${ghostText} · ${moving.title}`)] : [h('span', null, moving.title), h('span', null, ghostText)])) : null,
                                 day === today ? h('div', { className: 'dshcal-now', style: { top: (nowMinutes / 60) * HOUR_PX }, 'aria-hidden': true }) : null);
                         }))));
         }
