@@ -3793,15 +3793,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ['idle', /^\[Thread idle without a handback: (t\d+) · "(.*)"\]$/],
             ['approval', /^\[Thread waiting for approval: (t\d+) · "(.*)"\]$/],
             ['question', /^\[Question from thread (t\d+) · "(.*)"\]$/],
-            ['brief', /^\[Brief from the coordinator of "(.*)" · you are thread (t\d+), "(.*)"\]$/],
+            ['brief', /^\[Brief from the chat "(.*)" · you are thread (t\d+), "(.*)"\]$/],
             ['coordinator', /^\[From the coordinator\]$/],
-            ['message', /^\[Message from the coordinator of "(.*)"\]$/],
+            ['message', /^\[Message from the chat "(.*)"\]$/],
             ['reply', /^\[Reply from (.+)\]$/],
         ];
         /** The sources DSH draws those messages with: another session's (a handback, a brief) and a plugin's (the notes). */
         const NOTICE_SOURCES = new Set(['agent-message', 'cordis-host-runner']);
         /** The closing note in which the plugin tells the coordinator how to answer (prompts.js NOTE_START); the user's notice leaves it out. */
-        const CLOSING_NOTE = /(?:^|\n\n)\((?:The user has not seen this|For the user|Full conversation|Tell the user|If its last reply|Sent by the coordinator of)\b[^\n]*\)\s*$/;
+        const CLOSING_NOTE = /(?:^|\n\n)\((?:The user has not seen this|For the user|Full conversation|Tell the user|If its last reply|Sent by the chat)\b[^\n]*\)\s*$/;
         /** A handback's state as its notice says it: the state the thread reported, not its state now. */
         const NOTICE_STATES = {
             done: { dot: 'done', label: 'Done' },

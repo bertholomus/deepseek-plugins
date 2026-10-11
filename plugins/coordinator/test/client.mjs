@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { handbackMessage, idleMessage, approvalMessage, outsideMessage, replyMessage } from '../lib/prompts.js';
+import { handbackMessage, idleMessage, approvalMessage, outsideMessage, replyMessage, briefMessage, coordinatorMessage } from '../lib/prompts.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 10));
 /** Values made inside the script's context, copied so they compare as plain data. */
@@ -2116,6 +2116,10 @@ test('browser half: the plugin\'s messages get a notice that names them, without
     // A message from another coordinating chat, and the answer it brings back.
     assert.deepEqual(plain(noticeOf(data(outsideMessage('DSH Plugins', 'Tell Fix login.', 'Main is green.')))),
         { kind: 'message', project: 'DSH Plugins', body: 'The user asked: "Tell Fix login."\n\nMain is green.' });
+    // A thread's brief names its chat, and what that chat sends it later is the coordinator's.
+    const brief = noticeOf(data(briefMessage('DSH Plugins', 't2', 'Docs', 'Write the docs.', 'Please write the docs.')));
+    assert.deepEqual([brief.kind, brief.project, brief.thread, brief.name], ['brief', 'DSH Plugins', 't2', 'Docs']);
+    assert.equal(noticeOf(data(coordinatorMessage('Also the README.', 'Please also do the README.'))).kind, 'coordinator');
     assert.deepEqual(plain(noticeOf(data(replyMessage('"Fix login"', 'Thanks.')))), { kind: 'reply', name: 'Fix login', status: '', body: 'Thanks.' });
     // A chat an earlier version named with its "◆ " mark reads by its name alone.
     assert.deepEqual(plain(noticeOf(data(replyMessage('◆ Storefront', '', 'The turn failed (HTTP 500): down')))),
