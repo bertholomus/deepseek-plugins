@@ -797,12 +797,15 @@ function git(args) {
     const at = skipOptions(args, GIT_TAKES);
     const sub = args[at];
     const rest = args.slice(at + 1);
-    if (sub === 'push') {
-        if (dryRun(rest) || rest.includes('-n')) return null;
-        const remote = positionals(rest, new Set(['o', '--push-option', '--repo', '--receive-pack', '--exec']))[0];
+    // `git subtree push --prefix dist origin gh-pages` pushes a folder's history.
+    const subtree = sub === 'subtree' && rest[0] === 'push';
+    if (sub === 'push' || subtree) {
+        const words = subtree ? rest.slice(1) : rest;
+        if (dryRun(words) || words.includes('-n')) return null;
+        const remote = positionals(words, subtree ? new Set(['P', '--prefix', 'm', '--message']) : new Set(['o', '--push-option', '--repo', '--receive-pack', '--exec']))[0];
         // A remote given as a URL is shown as a place, so a token in it isn't.
         const where = remote === undefined ? 'its remote' : /^[a-z][a-z0-9+.-]*:\/\//i.test(remote) ? placeOf(remote) : remote;
-        return { kind: 'push', program: 'git', what: `pushes to ${where} (git push)` };
+        return { kind: 'push', program: 'git', what: `pushes to ${where} (git ${subtree ? 'subtree push' : 'push'})` };
     }
     if (sub === 'send-email') return { kind: 'email', program: 'git', what: 'sends patches by email (git send-email)' };
     if ((sub === 'svn' && rest[0] === 'dcommit') || (sub === 'lfs' && rest[0] === 'push')) return { kind: 'push', program: 'git', what: `pushes to its remote (git ${sub} ${rest[0]})` };
@@ -875,6 +878,7 @@ const DEPLOY = {
         image: ['push'], manifest: ['push'], trust: ['sign'],
         build: (rest, args) => imagePush(args), buildx: (rest, args) => ['build', 'bake'].includes(rest[0]) && imagePush(args),
     },
+    'docker-compose': { push: true },
     podman: { push: true, manifest: ['push'], build: (rest, args) => imagePush(args) }, buildah: { push: true, manifest: ['push'] },
     skopeo: { copy: true, delete: true, sync: true },
     crane: { push: true, copy: true, cp: true, delete: true, tag: true, append: true, mutate: true, rebase: true, flatten: true },
@@ -913,6 +917,7 @@ const TAKES = {
     pulumi: new Set(['C', 's', '--cwd', '--stack']),
     docker: new Set(['c', 'H', 'l', 't', 'f', 'o', '--context', '--host', '--config', '--log-level', '--tlscacert', '--tlscert', '--tlskey', '--tag', '--file', '--platform',
         '--build-arg', '--target', '--output', '--cache-from', '--cache-to', '--label', '--secret', '--ssh', '--progress', '--network', '--builder', '--project-name', 'p']),
+    'docker-compose': new Set(['f', 'p', 'H', '--file', '--project-name', '--project-directory', '--env-file', '--profile', '--host', '--context', '--log-level', '--ansi']),
     podman: new Set(['c', '--connection', '--url', '--root', '--runroot', '--log-level']),
     cargo: new Set(['C', 'Z', '--manifest-path', '--config', '--color']),
 };

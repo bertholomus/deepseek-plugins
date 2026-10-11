@@ -5847,6 +5847,9 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         // An option after a script's name is the script's, not the interpreter's syntax check.
         ['bash deploy.sh -n prod', 'runs deploy.sh, which sends a POST to 127.0.0.1:8787/deploy (curl)'],
         ['node scripts/publish.mjs -c release.config.json', 'runs scripts/publish.mjs, which runs code that publishes (npm publish)'],
+        // A subtree's push, and docker-compose's.
+        ['git subtree push --prefix dist origin gh-pages', 'pushes to origin (git subtree push)'],
+        ['docker-compose push web', 'makes a change with docker-compose (docker-compose push)'],
         // Every send in a line is named, each with where it goes.
         ['git push origin main && gh pr create --fill', 'pushes to origin (git push) and makes a change on GitHub (gh pr create)'],
         ['npm version patch && git push --follow-tags && npm publish', 'pushes to its remote (git push) and publishes (npm publish)'],
