@@ -542,7 +542,7 @@ test('coordinator is created, titled and gets coordinator tools', async () => {
     assert.match(text, /\n4\. Name a thread to the user only as a link: \[Fix the login bug\]\(\.dsh-thread\/t3\) for thread t3\./);
     assert.match(text, /\n6\. Before you or a thread delete files, push, publish, send or post anything, spend money, or change settings outside the workspace, ask the user/);
     // A probe that posts, or a fake token, is sending: no brief may allow it (behaviour review 3, S3).
-    assert.match(text, /\n6\. [^\n]*exactly that\. A request to a service outside the workspace that does more than read counts as sending, and so does one with a made-up or placeholder credential; a brief never allows either\. Ask only in these cases/);
+    assert.match(text, /\n6\. [^\n]*exactly that\. A request to a service outside the workspace that does more than read counts as sending, and so does one with a made-up or placeholder credential; a brief never allows either\. Doing it again \(a retry, a check\) needs its own ask\. Ask only in these cases/);
     assert.match(text, /\n11\. Write to project_memory only decisions and preferences the user stated\./);
     assert.doesNotMatch(text, /home folder|Here those include|PAUSED/);
     // The rules behind the second behaviour review and the user's advising asks made it longer; it stays one screen.
@@ -587,7 +587,7 @@ test('thread start → brief → handback → coordinator turn', async () => {
     assert.match(thread.ctx.section(), /\n2\. Do not use the user's personal or infrastructure tools \(password managers and vaults, note apps, .*\), in any way \(tool, command line, script or web API\), unless the user's own words ask for it\./);
     // Writing outside the workspace asks first like sending does, scratch stays inside, and a request to a service that does more
     // than read, or carries a made-up credential, is sending whatever the brief says (behaviour review 3, S3, S1 and S11).
-    assert.match(thread.ctx.section(), /\n3\. Editing files in the workspace for your task is fine\. Keep scratch files inside the workspace, or delete them before you hand back\. Before you write outside the workspace, delete files, push, publish, send or post anything, spend money, or do anything that cannot be undone, hand back with status needs_decision, unless the user's words asked for exactly that\. A request to a service outside the workspace that does more than read counts as sending, and so does one with a made-up or placeholder credential, even if the brief allows it\.\n/);
+    assert.match(thread.ctx.section(), /\n3\. Editing files in the workspace for your task is fine\. Keep scratch files inside the workspace, or delete them before you hand back\. Before you write outside the workspace, delete files, push, publish, send or post anything, spend money, or do anything that cannot be undone, hand back with status needs_decision, unless the user's words asked for exactly that\. A request to a service outside the workspace that does more than read counts as sending, and so does one with a made-up or placeholder credential, even if the brief allows it\. Doing it again \(a retry, a check\) needs its own ask\. A command that sends waits for the user to allow it once in this chat; if they reject it, hand back and don't send another way\.\n/);
     // The handback names what left the workspace.
     assert.match(thread.ctx.section(), /\n4\. When you are done or stuck, call project_handback once, as your last step\. Its summary is what the user reads on your card: at most 300 characters, the result first, then where \(paths, links\); a longer one comes back to you to shorten\. Name every request you sent to a service outside the workspace and every file you wrote outside it\./);
     assert.match(thread.ctx.section(), /\n5\. After project_handback, end your turn with one short line\./);
@@ -5713,4 +5713,88 @@ test('browser half: an archived project leaves the Projects page, and its ◆ ro
     await tick();
     toast = elementsOf(ArchiveOverlay({ flow, facts: lone })).find((e) => e.props?.holdMs);
     assert.equal(toast.props.text, '◆ Data is back.');
+});
+
+test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s prompt, every time; a coordinator\'s, a subagent\'s and one that can\'t ask are refused', async () => {
+    const work = mkdtempSync(join(tmpdir(), 'projects-work-'));
+    writeFileSync(join(work, 'deploy.sh'), '#!/bin/sh\ncurl -fsS -X POST --data @build.json http://127.0.0.1:8787/deploy\n');
+    writeFileSync(join(work, 'run.sh'), '#!/bin/sh\necho ok\n');
+    writeFileSync(join(work, 'package.json'), JSON.stringify({ scripts: { build: 'tsc', release: 'npm publish' } }));
+    const outside = mkdtempSync(join(tmpdir(), 'projects-outside-'));
+    writeFileSync(join(outside, 'run.sh'), '#!/bin/sh\ngit push\n');
+    const { host, dir } = setup({ projects: [{ name: 'DSH Plugins', goal: 'Ship good DSH plugins', workspacePath: work }] }, undefined, { presets: true });
+    // DSH's approval service: a session's policy, "ask" unless a test says otherwise.
+    const policies = new Map();
+    host.services.approval = { effectivePolicy: (session) => policies.get(session.id) ?? 'ask' };
+    await tick();
+    const coord = coordinatorOf(host);
+    const log = () => readFileSync(join(dir, 'projects.log'), 'utf8');
+    // DSH's pre-execute stage for one call, its own checks having decided `own`.
+    const gate = (agent, name, args, own = { kind: 'allow' }) => host.waterfall('tools/pre-execute', { name, arguments: args, agent, callId: `pre-${++toolCalls}` }, () => Promise.resolve(own));
+    await coord.ctx.call('project_thread_start', { ask: 'Get the staging deploy working.', title: 'Deploy', brief: 'Fix deploy.sh.' });
+    const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Deploy');
+
+    // A thread's send asks the user, saying what it sends; the same send again asks again.
+    const post = { command: 'curl -sS -X POST --data @build.json http://127.0.0.1:8787/deploy', description: 'Deploy' };
+    const asked = {
+        kind: 'ask',
+        reason: 'the command sends a POST to 127.0.0.1:8787/deploy (curl)',
+        displayReason: { en: 'This command sends a POST to 127.0.0.1:8787/deploy (curl). A thread asks you before each command that sends outside the workspace.' },
+    };
+    assert.deepEqual(await gate(t1, 'bash', post), asked);
+    assert.deepEqual(await gate(t1, 'bash', post), asked);
+    // A script in the workspace by what it runs, a package script, a push.
+    assert.equal((await gate(t1, 'bash', { command: 'STAGING_TOKEN=x ./deploy.sh' })).reason, 'the command runs ./deploy.sh, which sends a POST to 127.0.0.1:8787/deploy (curl)');
+    assert.equal((await gate(t1, 'bash', { command: 'npm run release' })).reason, 'the command runs npm run release, which publishes (npm publish)');
+    assert.equal((await gate(t1, 'bash', { command: 'git push origin main' })).reason, 'the command pushes to origin (git push)');
+    // Reads run: a GET, a syntax check, a dry run, a script that doesn't send, a build.
+    for (const command of ['curl -sS http://127.0.0.1:8787/deploy', 'bash -n deploy.sh', 'git push --dry-run', './run.sh', 'npm run build', 'git status']) {
+        assert.deepEqual(await gate(t1, 'bash', { command }), { kind: 'allow' }, command);
+    }
+    // Nothing outside the workspace is read: that run.sh pushes, but only its name is seen.
+    assert.deepEqual(await gate(t1, 'bash', { command: './run.sh', workdir: outside }), { kind: 'allow' });
+    // Code run_code runs itself, and PowerShell.
+    assert.equal((await gate(t1, 'run_code', { code: "await fetch('https://api.example.com/items', { method: 'POST', body: '{}' });" })).reason, 'the command runs code that sends a POST (run_code)');
+    assert.deepEqual(await gate(t1, 'run_code', { code: "console.log(await (await fetch('https://api.example.com/items')).text());" }), { kind: 'allow' });
+    assert.equal((await gate(t1, 'pwsh', { command: 'Invoke-RestMethod -Method Post -Uri https://api.example.com/items' })).kind, 'ask');
+    assert.deepEqual(await gate(t1, 'web_fetch', { url: 'https://example.com' }), { kind: 'allow' });
+    // DSH's own refusals and prompts stand.
+    assert.deepEqual(await gate(t1, 'bash', { command: 'git push' }, { kind: 'deny', reason: 'sandbox' }), { kind: 'deny', reason: 'sandbox' });
+    assert.deepEqual(await gate(t1, 'bash', { command: 'git push' }, { kind: 'ask', reason: 'wider' }), { kind: 'ask', reason: 'wider' });
+
+    // A thread whose approvals never ask can't send, and hears how the user can let it ask.
+    policies.set(t1.id, 'never');
+    assert.deepEqual(await gate(t1, 'bash', { command: 'git push origin main' }), {
+        kind: 'deny',
+        reason: "Not run: the command pushes to origin (git push). A thread asks the user before each command that sends outside the workspace, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would send; the user can put this thread on Workspace Write so it can ask. Don't send it another way.",
+    });
+    policies.delete(t1.id);
+    // The coordinator is refused, and nobody is asked.
+    assert.deepEqual(await gate(coord, 'bash', { command: 'npm publish' }), {
+        kind: 'deny',
+        reason: "Not run: the command publishes (npm publish). You don't send anything yourself: start a thread with the user's words in `ask`; it asks the user before each command that sends.",
+    });
+    // A thread's subagent, and a subagent's subagent, are refused; a chat the user forked from the thread, and any
+    // other chat, run as DSH decides.
+    const sub = host.wake('sub-1');
+    sub.session.header = { origin: 'subagent', parentSession: t1.id };
+    const subsub = host.wake('sub-2');
+    subsub.session.header = { origin: 'subagent', parentSession: 'sub-1' };
+    const fork = host.wake('fork-1');
+    fork.session.header = { parentSession: t1.id };
+    assert.match((await gate(sub, 'bash', { command: 'git push' })).reason, /^Not run: the command pushes to its remote \(git push\)\. A subagent doesn't send anything outside the workspace: say in your result what you would send, and the thread you work for asks the user first\.$/);
+    assert.equal((await gate(subsub, 'bash', { command: 'git push' })).kind, 'deny');
+    assert.deepEqual(await gate(fork, 'bash', { command: 'git push' }), { kind: 'allow' });
+    assert.deepEqual(await gate(host.wake('plain-1'), 'bash', { command: 'git push' }), { kind: 'allow' });
+
+    // The log says who and what kind of send, never the command.
+    assert.match(log(), / send-ask dsh-plugins\/t1 request curl\n/);
+    assert.match(log(), / send-refused dsh-plugins\/t1 push git never-asks\n/);
+    assert.match(log(), / send-refused dsh-plugins\/coordinator publish npm\n/);
+    assert.match(log(), / send-refused dsh-plugins\/t1 subagent push git\n/);
+    assert.doesNotMatch(log(), /127\.0\.0\.1|origin main|build\.json/);
+    // A check that throws lets the call run, logged.
+    const broken = { ...t1, get session() { throw new Error('gone'); } };
+    assert.deepEqual(await gate(broken, 'bash', post), { kind: 'allow' });
+    assert.match(log(), / error send-check gone\n/);
 });

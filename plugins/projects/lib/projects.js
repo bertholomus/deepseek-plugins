@@ -40,8 +40,8 @@
  *
  * @module dsh-plugin-projects/projects
  */
-import { appendFileSync, readFileSync, writeFileSync, statSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { appendFileSync, readFileSync, writeFileSync, statSync, realpathSync } from 'node:fs';
+import { dirname, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { ProjectStore, expand, dataPath, ensurePrivateDir } from './store.js';
@@ -55,6 +55,7 @@ import {
 } from './prompts.js';
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
 import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS } from './changes.js';
+import { sendOf, codeSendOf } from './sends.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
 const SECTION_ORDER = 9500;
@@ -132,6 +133,17 @@ const asksWider = (exec) => {
  */
 const COORDINATOR_HIDDEN = new Set(['create_goal']);
 const GOAL_REASON = 'A coordinator doesn\'t set DSH goals: your threads hand back when they finish, so nothing needs to continue in rounds. The project\'s goal is the user\'s, in Project settings.';
+/** DSH's tools that run a command or code: what they send outside the workspace waits for the user (holdSend). */
+const SEND_TOOLS = new Set(['bash', 'pwsh', 'run_code']);
+/** The largest script or package.json the send check reads to see what a command runs. */
+const MAX_SCRIPT_BYTES = 256 * 1024;
+/** Why a command that sends didn't run, by who tried it; `what` says what it sends ("sends a POST to …"). */
+const SEND_REASONS = {
+    coordinator: (what) => `Not run: the command ${what}. You don't send anything yourself: start a thread with the user's words in \`ask\`; it asks the user before each command that sends.`,
+    subagent: (what) => `Not run: the command ${what}. A subagent doesn't send anything outside the workspace: say in your result what you would send, and the thread you work for asks the user first.`,
+    never: (what) => `Not run: the command ${what}. A thread asks the user before each command that sends outside the workspace, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would send; the user can put this thread on Workspace Write so it can ask. Don't send it another way.`,
+};
+
 /** DSH's tools that reach an MCP server named in their `server` argument, not in their own name. */
 const SERVER_TOOLS = new Set(['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource']);
 
@@ -324,6 +336,27 @@ function heldHandbacks(pending) {
     return out;
 }
 
+/**
+ * A file's text for the send check: a regular file of at most
+ * MAX_SCRIPT_BYTES inside one of the folders (links followed), else
+ * undefined. Nothing outside the workspace is read.
+ */
+function textInside(roots, path) {
+    try {
+        const full = realpathSync(path);
+        const inside = roots.some((root) => {
+            let real;
+            try { real = realpathSync(root); } catch { return false; }
+            return full === real || full.startsWith(real.endsWith(sep) ? real : `${real}${sep}`);
+        });
+        if (!inside) return undefined;
+        const stat = statSync(full);
+        return stat.isFile() && stat.size <= MAX_SCRIPT_BYTES ? readFileSync(full, 'utf8') : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 /** Arguments of a logged tool call: an object, or JSON text. */
 function argsOf(value) {
     if (typeof value !== 'string') return value ?? {};
@@ -492,6 +525,8 @@ export class ProjectManager {
         this.subCalls = new Map();
         /** A subagent's sessionId → the thread session it works for, or null when none. */
         this.subThreads = new Map();
+        /** A session's id → the project session it works for as a subagent ({projectId, role, threadId?}), or null. */
+        this.subProjects = new Map();
         /** How long a thread turn's changes wait for DSH's announcement before they are kept without it. */
         this.announceWaitMs = 3000;
     }
@@ -742,6 +777,95 @@ export class ProjectManager {
         } catch {
             return undefined;
         }
+    }
+
+    /**
+     * Rule 6, held here and not only in the prompts: a command that sends
+     * outside the workspace (lib/sends.js: a request that does more than
+     * read, a push, a publish, a deploy, a command on another machine, an
+     * email, or a script or task that does one) waits for the user. A
+     * thread's asks them in DSH's approval prompt, every time, so a retry
+     * or a check asks again; a thread whose approvals never ask, a
+     * coordinator and a subagent are refused. Called for every session's
+     * calls (index.js) once DSH's own checks let one run. Undefined lets it
+     * run: any other call, a session outside the projects, and any error
+     * (a check against a mistake, not a sandbox). Never logs the command.
+     */
+    holdSend(exec) {
+        try {
+            if (this.disposed || !SEND_TOOLS.has(exec?.name) || !exec.agent) return undefined;
+            const session = exec.agent.session;
+            const own = this.store.lookup(exec.agent.id);
+            const who = own ?? this.projectAbove(session);
+            if (!who || !this.projects.has(who.projectId)) return undefined;
+            const args = argsOf(exec.arguments);
+            const project = this.project(who.projectId);
+            const folder = (who.role === 'thread' ? this.store.thread(who.projectId, who.threadId)?.folder : undefined) ?? project.workspacePath;
+            const cwd = typeof session?.header?.cwd === 'string' ? session.header.cwd : folder;
+            const roots = [cwd, folder, project.workspacePath].filter((root) => typeof root === 'string' && root !== '').map(expand);
+            const here = typeof args.workdir === 'string' && args.workdir.trim() !== '' ? resolve(expand(cwd), expand(args.workdir.trim())) : expand(cwd);
+            const found = exec.name === 'run_code'
+                ? codeSendOf(String(args.code ?? ''), { depth: 0, cwd: here, read: (path) => textInside(roots, path) }, 'run_code')
+                : sendOf(String(args.command ?? ''), { shell: exec.name, cwd: here, read: (path) => textInside(roots, path) });
+            if (!found) return undefined;
+            const label = `${who.projectId}/${who.threadId ?? 'coordinator'}${own ? '' : ' subagent'} ${found.kind} ${String(found.program).slice(0, 40)}`;
+            if (!own) {
+                this.log(`send-refused ${label}`);
+                return { kind: 'deny', reason: SEND_REASONS.subagent(found.what) };
+            }
+            if (who.role !== 'thread') {
+                this.log(`send-refused ${label}`);
+                return { kind: 'deny', reason: SEND_REASONS.coordinator(found.what) };
+            }
+            if (this.approvalPolicyOf(session) !== 'ask') {
+                this.log(`send-refused ${label} never-asks`);
+                return { kind: 'deny', reason: SEND_REASONS.never(found.what) };
+            }
+            this.log(`send-ask ${label}`);
+            return {
+                kind: 'ask',
+                reason: `the command ${found.what}`,
+                displayReason: { en: `This command ${found.what}. A thread asks you before each command that sends outside the workspace.` },
+            };
+        } catch (error) {
+            this.log(`error send-check ${String(error?.message ?? error).slice(0, 200)}`);
+            return undefined;
+        }
+    }
+
+    /** "ask" when DSH would put an approval prompt in front of the user for this session, else "never". */
+    approvalPolicyOf(session) {
+        try {
+            const approval = this.ctx.get?.('approval');
+            if (typeof approval?.effectivePolicy !== 'function') return 'never';
+            return approval.effectivePolicy(session) === 'ask' ? 'ask' : 'never';
+        } catch {
+            return 'never';
+        }
+    }
+
+    /**
+     * The project session a subagent works for, through subagents of
+     * subagents: {projectId, role, threadId?}, or null for any other session
+     * (one the user forked from a thread is the user's own chat).
+     */
+    projectAbove(session) {
+        const id = session?.id;
+        if (typeof id !== 'string') return null;
+        if (this.subProjects.has(id)) return this.subProjects.get(id);
+        let header = session.header;
+        let found = null;
+        for (let depth = 0; depth < 8 && header?.origin === 'subagent' && typeof header.parentSession === 'string'; depth++) {
+            const who = this.store.lookup(header.parentSession);
+            if (who) {
+                found = who;
+                break;
+            }
+            header = this.ctx.agents.get(header.parentSession)?.session?.header;
+        }
+        this.subProjects.set(id, found);
+        for (const key of [...this.subProjects.keys()].slice(0, -500)) this.subProjects.delete(key);
+        return found;
     }
 
     /** Every installed session's wall again (of one project, or all). */

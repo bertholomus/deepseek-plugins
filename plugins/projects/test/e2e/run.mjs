@@ -18,7 +18,10 @@
  * another project's coordinator,
  * and the user's tools and permissions: an MCP
  * server named as one of the user's tools that no coordinator is offered
- * and a thread gets only from the user's words, threads on Workspace Write.
+ * and a thread gets only from the user's words, threads on Workspace Write,
+ * and a thread's command that sends outside the workspace waiting for the
+ * user's Allow once each time, answered as the window does, while a
+ * coordinator's is refused.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/projects/test/e2e/run.mjs
  *
@@ -29,7 +32,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { request } from 'node:http';
+import { createServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -157,6 +160,45 @@ function webApi(web, endpoint, args) {
         req.on('error', reject);
         req.end(body);
     });
+}
+
+/**
+ * DSH's approval prompts as the window gets them: its events stream on /api/remote.mux brings each request, and
+ * $events/result answers one, as the prompt's Allow once and Reject do.
+ */
+async function approvalsOf(web) {
+    const url = new URL('api/remote.mux', web.base);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(url, { headers: { cookie: web.cookie, origin: web.base.origin } });
+    const asked = [];
+    const taken = new Set();
+    let clientId;
+    let failure;
+    socket.addEventListener('open', () => socket.send(JSON.stringify({ type: 'open', streamId: 'events', endpoint: '$events', payload: { args: {} } })));
+    socket.addEventListener('error', (event) => { failure = event.message ?? 'socket error'; });
+    socket.addEventListener('message', ({ data }) => {
+        let frame;
+        try { frame = JSON.parse(String(data)); } catch { return; }
+        if (frame.streamId !== 'events') return;
+        if (frame.type === 'error') failure = JSON.stringify(frame.error);
+        const value = frame.type === 'item' ? frame.value : undefined;
+        if (value?.type === 'ready') clientId = value.clientId;
+        else if (value?.type === 'waterfall' && value.event === 'approval/request') asked.push(value);
+    });
+    await waitFor(() => {
+        if (failure) throw new Error(failure);
+        return clientId;
+    }, 'the window\'s events stream');
+    return {
+        /** The next prompt whose request matches, not taken before. */
+        next: (what, match) => waitFor(() => {
+            const found = asked.find((a) => !taken.has(a.eventId) && match(a.request ?? {}));
+            if (found) taken.add(found.eventId);
+            return found;
+        }, what),
+        answer: (prompt, outcome) => webApi(web, '$events/result', { clientId, eventId: prompt.eventId, outcome: { kind: 'result', value: outcome } }),
+        close: () => socket.close(),
+    };
 }
 
 const readText = (file) => { try { return readFileSync(file, 'utf8'); } catch { return ''; } };
@@ -1028,6 +1070,72 @@ try {
     described = await webApi(webAgain, 'dsh-plugin-projects/describe', { target: madeCoord });
     check('a thread on Read Only can\'t write even in its own folder', described.value?.threads?.find((t) => t.title === 'Read only')?.permission === 'read-only' && !existsSync(readOnlyFile),
         resultOf(since(mark).filter((r) => /You are thread t\d+, "Read only", in the DSH project/.test(r.system))));
+
+    // 25b. Rule 6, held by the plugin: a thread's command that sends outside the workspace waits for the user in DSH's
+    // prompt, which says what it sends, and its coordinator hears so; Allow once runs it once, and the same command
+    // again, as a retry, asks again (a Reject sends nothing); a read runs; the coordinator's own send is refused without
+    // asking anyone; a thread whose approvals never ask is refused, with what the user can do. The test answers the
+    // prompt as the window does.
+    const hits = [];
+    const sink = createServer((req, res) => {
+        hits.push(`${req.method} ${req.url}`);
+        req.resume();
+        req.on('end', () => res.end(req.method === 'GET' ? 'SINK-UP' : 'SINK-RECEIVED'));
+    });
+    await new Promise((r) => sink.listen(0, '127.0.0.1', r));
+    const sinkAt = `127.0.0.1:${sink.address().port}`;
+    const posted = () => hits.filter((h) => !h.startsWith('GET ')).length;
+    const prompts = await approvalsOf(webAgain);
+    try {
+        const deploy = { command: `curl -sS -X POST --data '{"v":1}' http://${sinkAt}/deploy`, description: 'Deploy the build' };
+        const sends = `sends a POST to ${sinkAt}/deploy (curl)`;
+        const ofDeploy = (r) => r.toolName === 'bash' && r.reason === `the command ${sends}`;
+        mark = model.requests.length;
+        await say(coord, call('project_thread_start', { ask: 'Deploy the build to staging.', title: 'Send', brief: call('bash', deploy) }));
+        const first = await prompts.next('the Send prompt', ofDeploy);
+        saw = await coordinatorSaw(mark, 'SAW-APPROVAL', 'the Send approval note');
+        const sendId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Send')?.[0];
+        const asks = () => readText(logFile).split('\n').filter((line) => line.endsWith(` send-ask ${PROJECT_ID}/${sendId} request curl`)).length;
+        check('a thread\'s command that sends waits for the user in DSH\'s prompt, which says what it sends', first.request.displayReason?.en === `This command ${sends}. A thread asks you before each command that sends outside the workspace.`
+            && posted() === 0 && asks() === 1, JSON.stringify(first.request));
+        check('its coordinator hears what it waits on', saw.fresh.includes(`[Thread waiting for approval: ${sendId} · "Send"]`)
+            && saw.fresh.includes(`It asked to use bash: the command ${sends}`), saw.fresh.slice(0, 400));
+        mark = model.requests.length;
+        const allowed = await prompts.answer(first, 'allowed-once');
+        await coordinatorSaw(mark, 'SAW-IDLE', 'the Send idle note');
+        check('Allow once runs it, once', allowed?.ok === true && hits.filter((h) => h === 'POST /deploy').length === 1 && resultOf(since(mark, sendId)).includes('SINK-RECEIVED'),
+            `${JSON.stringify(allowed)} ${hits.join()} ${resultOf(since(mark, sendId))}`);
+        mark = model.requests.length;
+        await say(coord, call('project_thread_send', { thread: sendId, text: call('bash', deploy) }));
+        const again = await prompts.next('the retry\'s prompt', ofDeploy);
+        await prompts.answer(again, 'rejected');
+        await coordinatorSaw(mark, 'SAW-IDLE', 'the retry\'s idle note');
+        check('the same command again, as a retry, asks again, and a Reject sends nothing', again.eventId !== first.eventId && asks() === 2 && posted() === 1
+            && resultOf(since(mark, sendId)).includes('the user rejected tool "bash"'), `${asks()} ${hits.join()} ${resultOf(since(mark, sendId))}`);
+        mark = model.requests.length;
+        await say(coord, call('project_thread_start', { ask: 'Check that staging is up.', title: 'Read', brief: call('bash', { command: `curl -sS http://${sinkAt}/health`, description: 'Check staging' }) }));
+        await coordinatorSaw(mark, 'SAW-IDLE', 'the Read idle note');
+        const readId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Read')?.[0];
+        const readAsked = (await bridge('GET', `/sessions/${threadSession(readId)}/events?types=approval/asked&limit=20`)).events ?? [];
+        check('a read runs without asking', hits.includes('GET /health') && readAsked.length === 0, `${hits.join()} ${readAsked.length}`);
+        const coordAsked = async () => ((await bridge('GET', `/sessions/${coord}/events?types=approval/asked&limit=50`)).events ?? []).length;
+        const askedBefore = await coordAsked();
+        reqs = await say(coord, call('bash', { command: `curl -sS -X POST http://${sinkAt}/deploy`, description: 'Deploy' }));
+        check('a coordinator\'s send is refused, and nobody is asked', resultOf(reqs).includes(`Not run: the command ${sends}. You don't send anything yourself`)
+            && posted() === 1 && (await coordAsked()) === askedBefore && readText(logFile).includes(`send-refused ${PROJECT_ID}/coordinator request curl`), resultOf(reqs));
+        changed = await webApi(webAgain, 'dsh-plugin-projects/update', { target: madeCoord, changes: { threadPermission: 'danger-full-access' } });
+        mark = model.requests.length;
+        await say(madeCoord, call('project_thread_start', { ask: 'Please do this.', title: 'Never asks', brief: call('bash', { command: `curl -sS -X POST http://${sinkAt}/deploy`, description: 'Deploy' }) }));
+        await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Made Here"') && whoOf(r) === 'coordinator' && r.action.text === 'SAW-IDLE'), 'the Never asks idle note');
+        await waitIdle(madeCoord);
+        const neverReqs = since(mark).filter((r) => /You are thread t\d+, "Never asks", in the DSH project "Made Here"/.test(r.system));
+        check('a thread whose approvals never ask can\'t send, and hears what the user can do', changed.ok && resultOf(neverReqs).includes('this thread\'s permission never asks')
+            && resultOf(neverReqs).includes('the user can put this thread on Workspace Write') && posted() === 1 && new RegExp(` send-refused ${madeId}/t\\d+ request curl never-asks`).test(readText(logFile)), resultOf(neverReqs));
+        await webApi(webAgain, 'dsh-plugin-projects/update', { target: madeCoord, changes: { threadPermission: 'read-only' } });
+    } finally {
+        prompts.close();
+        sink.close();
+    }
 
     // 26. A coordinator's message out of its project (project_message): to a chat in no project, and to another
     // project's coordinator. The chat stays outside: no project tools or prompt, no role in the window. Its answer

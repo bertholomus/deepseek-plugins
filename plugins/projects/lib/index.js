@@ -155,6 +155,12 @@ export function apply(ctx, config) {
     ctx.on('tools/change', () => {
         manager.onToolsChanged();
     });
+    // A project session's command that sends outside the workspace waits for the user (manager.holdSend). It runs after
+    // DSH's own checks, so their prompts and refusals stand, and for every session, since a subagent has no project scope.
+    ctx.on('tools/pre-execute', async (exec, next) => {
+        const decision = await next();
+        return decision?.kind === 'allow' ? manager.holdSend(exec) ?? decision : decision;
+    });
     // A ◆ coordinator archived or unarchived in DSH (its row's Archive or Unarchive, the Undo on DSH's notice):
     // its project's threads go or come back with it.
     ctx.on('domain/changed', (change) => {
