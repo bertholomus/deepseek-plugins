@@ -20,7 +20,7 @@ import { appendFileSync, chmodSync, existsSync } from 'node:fs';
 import { occurrences } from './expand.js';
 import { request, safeHost } from './http.js';
 import { editIcs, newUid, readIcs } from './ical.js';
-import { cleanRecord, instantOf, sameTime } from './model.js';
+import { addressKey, cleanRecord, instantOf, isEmailAddress, sameTime } from './model.js';
 import { describeRule, expandWall, parseRule, ruleText, WEEKDAYS } from './recur.js';
 import { CalendarStore, dataPath, ensurePrivateDir } from './store.js';
 import { SourceError, problemOf, sourceModule } from './sources/index.js';
@@ -65,6 +65,9 @@ function timeOfCompact(text, tz) {
 
 /** Colors for calendars that come without one. */
 export const PALETTE = ['#4f7cff', '#e5484d', '#30a46c', '#f5a524', '#8e4ec6', '#12a594', '#e54666', '#0090ff', '#ad7f58', '#6e56cf'];
+
+/** How a change reaches guests' calendars without emailing them (Google), as an instruction. */
+const REACH_WORDS = { add: 'put it on', remove: 'take it off', change: 'change it on' };
 
 const KIND_NAMES = { local: 'Kept in DSH', ics: 'Subscription', caldav: 'CalDAV', google: 'Google', microsoft: 'Microsoft' };
 
@@ -335,9 +338,9 @@ export class CalendarManager {
      * The calendar new events go to: the user's choice; else the main
      * calendar of the first account added that names one (Google's primary,
      * Microsoft's default, a CalDAV server's default); else the accounts'
-     * only writable calendar; else the one kept in DSH. Never a pick
+     * only writable calendar; else the first one kept in DSH. Never a pick
      * among an account's calendars, where one can be shared with a team or a
-     * family.
+     * family: with none of these, undefined, and a new event asks which.
      */
     defaultCalendarId() {
         const chosen = this.store.prefs.defaultCalendar;
@@ -348,7 +351,7 @@ export class CalendarManager {
         const main = remote.filter((c) => c.primary === true).sort((a, b) => added(a) - added(b))[0];
         if (main) return main.id;
         if (remote.length === 1) return remote[0].id;
-        return (writable.find((c) => c.accountId === 'local') ?? remote[0])?.id;
+        return writable.find((c) => c.accountId === 'local')?.id;
     }
 
     /** Read the account's calendars from its server; add new ones, drop gone ones. */
@@ -888,17 +891,33 @@ export class CalendarManager {
         return map;
     }
 
-    /** The account's own addresses, to tell which attendee is the user. */
-    selfEmails(account) {
+    /**
+     * The account's own addresses as addressKey() gives them, to tell which
+     * person on an event is the user: its email and user name where they are
+     * emails, and every address its server names the user by (CalDAV).
+     */
+    selfKeys(account) {
         const out = new Set();
-        const addresses = Array.isArray(account?.addresses) ? account.addresses : [];
-        for (const value of [account?.email, account?.username, ...addresses]) if (typeof value === 'string' && value.includes('@')) out.add(value.toLowerCase());
+        for (const value of [account?.email, account?.username]) if (isEmailAddress(value)) out.add(addressKey(value));
+        for (const value of Array.isArray(account?.addresses) ? account.addresses : []) {
+            const key = addressKey(value);
+            if (key !== '') out.add(key);
+        }
         return out;
     }
 
+    /** Whether a person on an event is the user: marked so by the server, or named by one of the user's addresses. */
+    isSelf(person, keys) {
+        if (person?.self === true) return true;
+        return [person?.address, person?.email].some((value) => {
+            const key = addressKey(value);
+            return key !== '' && keys.has(key);
+        });
+    }
+
     selfOf(record, account) {
-        const mine = this.selfEmails(account);
-        return (record.attendees ?? []).find((p) => p.self || mine.has(String(p.email).toLowerCase()));
+        const mine = this.selfKeys(account);
+        return (record.attendees ?? []).find((p) => this.isSelf(p, mine));
     }
 
     /**
@@ -1177,37 +1196,64 @@ export class CalendarManager {
         return 'never';
     }
 
-    /** The user's part in an event: 'organizer', 'guest' (someone else's invitation), or 'own' (no organizer named). */
+    /**
+     * The user's part in an event: 'organizer', 'guest' (someone else's
+     * invitation), 'own' (no organizer named), or 'unplaced': a CalDAV
+     * event whose organizer can't be told apart from the user (the server
+     * named none of the user's addresses, or names the organizer only by a
+     * kind of address it didn't name the user by). An unplaced event counts
+     * as the user's for what a change to it emails (the server may well
+     * schedule it as theirs), and as an invitation for answering it.
+     */
     roleOf(record, account) {
         const organizer = record?.organizer;
-        if (!organizer?.email) return 'own';
-        if (organizer.self === true || this.selfEmails(account).has(String(organizer.email).toLowerCase())) return 'organizer';
+        if (!organizer?.email && !organizer?.address) return 'own';
+        if (this.isSelf(organizer, this.selfKeys(account))) return 'organizer';
+        if (account?.kind === 'caldav' && !this.placed(organizer, account)) return 'unplaced';
         return 'guest';
+    }
+
+    /**
+     * Whether an organizer who isn't the user by any address the account
+     * knows is surely someone else: the server named the user's addresses,
+     * among them one of the kind the organizer is named by (an email, a urn,
+     * a principal's URL).
+     */
+    placed(person, account) {
+        const known = (Array.isArray(account?.addresses) ? account.addresses : []).map(addressKey).filter((k) => k !== '');
+        if (known.length === 0) return false;
+        const kindOf = (key) => (key.startsWith('path:') ? 'path' : key.startsWith('urn:') ? 'urn' : isEmailAddress(key) ? 'email' : 'other');
+        const kinds = new Set(known.map(kindOf));
+        if (isEmailAddress(person.email)) return kinds.has('email');
+        const kind = kindOf(addressKey(person.address ?? person.email));
+        return kind !== 'other' && kinds.has(kind);
     }
 
     /** The other people on an event (the user aside), by address. */
     guestsOf(record, account) {
-        const mine = this.selfEmails(account);
+        const mine = this.selfKeys(account);
         const out = new Map();
         for (const p of record?.attendees ?? []) {
             const email = String(p?.email ?? '').trim();
-            if (email === '' || p.self === true || mine.has(email.toLowerCase()) || out.has(email.toLowerCase())) continue;
+            if (email === '' || this.isSelf(p, mine) || out.has(email.toLowerCase())) continue;
             out.set(email.toLowerCase(), email);
         }
         return [...out.values()];
     }
 
-    /** The user's own address on an account, to name as a meeting's organizer. */
+    /** The user's own email on an account, to name as a meeting's organizer. */
     selfAddress(account) {
         const addresses = Array.isArray(account?.addresses) ? account.addresses : [];
-        return [...addresses, account?.email, account?.username].find((v) => typeof v === 'string' && /^[^@\s]+@[^@\s]+$/.test(v));
+        return [...addresses, account?.email, account?.username].find(isEmailAddress);
     }
 
     /**
      * Who a change emails: {to: their addresses, what: what they get, forced:
      * true when the server emails them whatever the change says, why: the
      * reason it's forced, cannot: why a change that says to tell the guests
-     * can't}. Nothing here changes anything.
+     * can't}. Google puts an event on its guests' calendars and takes it off
+     * them without emailing anyone: those guests are `reaches`, and `reach`
+     * says how ('add', 'remove', 'change'). Nothing here changes anything.
      * @param {{kind: 'create'|'update'|'delete'|'move'|'respond', calendar: object, target?: object,
      *          before?: object, after?: object, patch?: object, scope?: string, notify?: boolean}} change -
      *   before: the event as it is (the occurrence, for one); after: as the change leaves its guests;
@@ -1222,7 +1268,7 @@ export class CalendarManager {
         const organizer = record?.organizer?.email;
         if (kind === 'respond') {
             // An answer goes to the organizer wherever the server tells them.
-            return role === 'guest' && mailer !== 'never' ? { to: [organizer], what: 'the answer', forced: true, why: 'an answer is sent to the organizer' } : nobody;
+            return (role === 'guest' || role === 'unplaced') && mailer !== 'never' ? { to: [organizer], what: 'the answer', forced: true, why: 'an answer is sent to the organizer' } : nobody;
         }
         if (role === 'guest') {
             // Someone else's invitation: only taking it out of the calendar can tell its organizer (a decline).
@@ -1243,7 +1289,14 @@ export class CalendarManager {
             const canInvite = targetMailer !== 'never' && (targetAccount?.kind !== 'caldav' || this.selfAddress(targetAccount) !== undefined);
             const cancels = leaving.to.length > 0;
             const invites = canInvite && (targetMailer === 'always' || notify);
-            if (!cancels && !invites) return notify && targetMailer === 'never' && mailer === 'never' ? { ...nobody, cannot: this.cannotMail(target) } : nobody;
+            if (!cancels && !invites) {
+                // Google takes it off its guests' calendars here, or puts it on theirs there, without emailing them.
+                const off = leaving.reaches ?? [];
+                const on = targetMailer === 'asked' ? people : [];
+                const reaches = peopleOf({ reaches: [...off, ...on] });
+                if (reaches.length > 0) return { ...nobody, reaches, reach: off.length > 0 && on.length > 0 ? 'change' : off.length > 0 ? 'remove' : 'add' };
+                return notify && targetMailer === 'never' && mailer === 'never' ? { ...nobody, cannot: this.cannotMail(target) } : nobody;
+            }
             const what = cancels && invites ? 'a cancellation and a new invitation' : cancels ? 'a cancellation' : 'invitations';
             const forced = (cancels && leaving.forced) || (invites && targetMailer === 'always');
             return { to: people, what, forced, why: 'a meeting moved to another calendar is a new meeting for its guests', cancels, invites };
@@ -1252,8 +1305,17 @@ export class CalendarManager {
         if (mailer === 'never') return notify ? { ...nobody, cannot: this.cannotMail(calendar) } : nobody;
         // The user's own reminders change nothing for anyone else.
         if (kind === 'update' && Object.keys(patch).every((k) => k === 'alarms' || k === 'notify' || patch[k] === undefined)) return nobody;
-        if (mailer === 'asked') return notify ? { to: people, what, forced: false } : nobody;
-        if (account.kind === 'caldav' && role !== 'organizer') {
+        if (mailer === 'asked') {
+            if (notify) return { to: people, what, forced: false };
+            // Google puts the event on its guests' calendars, changes it there and takes it off them, without
+            // emailing them: what a change says shows on theirs too (their guest list, the notes).
+            if (kind === 'create') return { ...nobody, reaches: people, reach: 'add' };
+            if (kind === 'delete') return { ...nobody, reaches: people, reach: 'remove' };
+            const had = this.guestsOf(before, account).length > 0;
+            const has = this.guestsOf(after, account).length > 0;
+            return { ...nobody, reaches: people, reach: !had ? 'add' : !has ? 'remove' : 'change' };
+        }
+        if (account.kind === 'caldav' && role === 'own') {
             // A CalDAV server schedules only an event that names its organizer, and one saved without telling its
             // guests names none: telling them names the user, which invites them; there is nothing to cancel yet.
             if (!notify || kind === 'delete') return nobody;
@@ -1262,7 +1324,8 @@ export class CalendarManager {
             if (scope === 'one') return { ...nobody, cannot: 'Only the whole event or series can invite its guests from here. Change it without telling them, or tell them about the whole series.' };
             return { to: people, what: 'invitations', forced: false };
         }
-        const why = account.kind !== 'microsoft' ? 'this calendar\'s server emails a meeting\'s guests itself'
+        const why = role === 'unplaced' ? 'its organizer may be you under another address, and then the server emails its guests itself'
+            : account.kind !== 'microsoft' ? 'this calendar\'s server emails a meeting\'s guests itself'
             : kind === 'create' ? 'Microsoft invites the guests as soon as an event with them is saved'
             : kind === 'delete' ? 'Microsoft emails a meeting\'s guests when it is cancelled' : 'Microsoft emails a meeting\'s guests about each change to it';
         return { to: people, what, forced: true, why };
@@ -1295,29 +1358,155 @@ export class CalendarManager {
     }
 
     /**
-     * Who a change a tool is about to make would email (the approval question
-     * names them), worked out as the change itself does. Undefined when the
-     * change can't be made as asked. Never throws.
-     * @param {'create'|'update'|'delete'|'respond'} kind
-     * @param {{id?: string, input?: object, scope?: string, notify?: boolean}} change - input as the manager takes it.
+     * Refuse a change that would email or reach someone the user wasn't told
+     * of: `known` is who they were told of (the approval prompt's list, or
+     * the change's own first look). The event can change on its server while
+     * a prompt waits, or between that look and the write.
      */
-    previewMail(kind, { id, input = {}, scope, notify = false } = {}) {
-        try {
-            if (kind === 'create') {
-                const calendar = this.calendar(input.calendarId || this.defaultCalendarId());
-                return this.mailOf({ kind, calendar, after: this.recordFrom({ ...input, title: input.title || '-' }), notify });
-            }
-            const at = this.locate(id);
-            if (kind === 'update' && input.calendarId && input.calendarId !== at.calendar.id) {
-                return this.mailOf({ kind: 'move', calendar: at.calendar, target: this.calendar(input.calendarId), before: at.master ?? at.records[0], notify });
-            }
-            const which = this.scopeOf(at, scope ?? 'all');
-            const before = this.recordOf(at, which);
-            if (kind === 'update') return this.mailOf({ kind, calendar: at.calendar, before, after: this.guestsAfter(before, input), patch: input, scope: which, notify });
-            return this.mailOf({ kind, calendar: at.calendar, before, scope: which, notify });
-        } catch {
-            return undefined;
+    checkKnown(mail, known) {
+        if (!Array.isArray(known)) return;
+        const told = new Set(known.map((p) => String(p).toLowerCase()));
+        const fresh = (list) => (list ?? []).filter((p) => !told.has(String(p).toLowerCase()));
+        const emailed = fresh(mail?.to);
+        const reached = fresh(mail?.reaches);
+        if (emailed.length === 0 && reached.length === 0) return;
+        const what = emailed.length > 0 ? `email ${mail.what} to ${peopleWords(emailed)}` : `${REACH_WORDS[mail.reach] ?? 'reach'} the calendars of ${peopleWords(reached)}`;
+        throw new CalendarError(`The event changed since this change was looked at (on its server, or in another app): it would now also ${what}, so nothing was done. Look at it again first.`, 'changed');
+    }
+
+    // ── Plans: what a change does, worked out before it's asked about and again just before it's made ──
+
+    /**
+     * What a change would do, worked out as the change itself works it out,
+     * without making it: {mail} (who it emails or reaches: mailOf), and
+     * move: true for an update that moves the event. It throws the change's
+     * own refusal, so nobody is asked about a change that would then be
+     * refused, and the refusal is in the change's own words.
+     * @param {'create'|'update'|'delete'|'respond'} kind
+     * @param {{id?: string, input?: object, scope?: string, notify?: boolean, status?: string}} change - input as the manager takes it.
+     */
+    planChange(kind, { id, input = {}, scope, notify = false, status } = {}) {
+        const plan = kind === 'create' ? this.planCreate({ ...input, notify })
+            : kind === 'update' ? this.planUpdate(id, { ...input, notify }, scope ?? 'all')
+            : kind === 'delete' ? this.planDelete(id, scope ?? 'all', { notify })
+            : kind === 'respond' ? this.planRespond(id, status, scope ?? 'all')
+            : undefined;
+        if (plan === undefined) throw new CalendarError(`"${kind}" isn't a change.`);
+        return { mail: plan.mail, ...(plan.move ? { move: true } : {}) };
+    }
+
+    /** A new event: its calendar, its record, and who it emails or reaches. */
+    planCreate(input = {}) {
+        const calendarId = input.calendarId || this.defaultCalendarId();
+        if (!calendarId) {
+            if (!Object.values(this.store.calendars).some((c) => !c.readOnly)) throw new CalendarError('There is no calendar that can be written.');
+            throw new CalendarError('Say which calendar it goes in: no default calendar is chosen, and more than one could be meant.', 'choose-calendar');
         }
+        const calendar = this.calendar(calendarId);
+        this.writable(calendar);
+        const account = this.store.accounts[calendar.accountId];
+        // The organizer is the user, never a caller's word.
+        const { organizer: _organizer, notify: notifyIn, dropChanges: _drop, ...fields } = input;
+        const notify = notifyIn === true;
+        const record = this.recordFrom(fields);
+        const mail = this.mailOf({ kind: 'create', calendar, after: record, notify });
+        this.checkMail(mail, notify);
+        return { calendar, account, record, notify, mail };
+    }
+
+    /**
+     * A change to an event: the event as it is (`at`), the scope, the
+     * fields, the record it starts from, and who it emails or reaches. For
+     * a move to another calendar, the move's plan, with move: true.
+     */
+    planUpdate(id, patchIn = {}, scope = 'all') {
+        const at = this.locate(id);
+        this.writable(at.calendar);
+        // The organizer is never a caller's word; notify is a choice, not a field.
+        const { organizer: _organizer, notify: notifyIn, calendarId, dropChanges, ...fields } = patchIn;
+        const notify = notifyIn === true;
+        if (calendarId && calendarId !== at.calendar.id) {
+            // A move takes the whole event or series to the other calendar, and nothing else changes on the way.
+            if (this.scopeOf(at, scope) !== 'all') {
+                throw new CalendarError('Only a whole event or series moves to another calendar. To move one occurrence, delete only it here, then add it to the other calendar as an event of its own.');
+            }
+            if (Object.values(fields).some((v) => v !== undefined)) throw new CalendarError('Move the event to the other calendar on its own first, then change it there.');
+            return { ...this.planMove(id, calendarId, { notify, dropChanges: dropChanges === true }), move: true, dropChanges: dropChanges === true };
+        }
+        const which = this.scopeOf(at, scope);
+        const before = this.recordOf(at, which);
+        if (this.roleOf(before, at.account) === 'guest' && fields.attendees !== undefined && this.mailerOf(at.calendar) !== 'never') {
+            throw new CalendarError('This is someone else\'s invitation: only its organizer changes who is invited.');
+        }
+        const mail = this.mailOf({ kind: 'update', calendar: at.calendar, before, after: this.guestsAfter(before, fields), patch: fields, scope: which, notify });
+        this.checkMail(mail, notify);
+        return { at, which, fields, notify, before, mail };
+    }
+
+    /** A move of a whole event or series to another calendar: the event as it is, where it goes, and who it emails or reaches. */
+    planMove(id, calendarId, { notify = false, dropChanges = false } = {}) {
+        const at = this.locate(id);
+        const target = this.calendar(calendarId);
+        this.writable(target);
+        this.writable(at.calendar);
+        if (at.instance || (at.recurrenceId && !at.series)) throw new CalendarError('Move the whole series, from its own event.');
+        const master = at.master ?? at.records[0];
+        if (this.roleOf(master, at.account) === 'guest') {
+            throw new CalendarError('This is someone else\'s invitation, so it stays in the calendar it was sent to. Answer it there, or delete it.');
+        }
+        const dropped = this.droppedByMove(at, target);
+        if (dropped !== undefined && !dropChanges) throw new CalendarError(dropped, 'drops-changes');
+        const mail = this.mailOf({ kind: 'move', calendar: at.calendar, target, before: master, notify });
+        this.checkMail(mail, notify);
+        return { at, target, master, notify, mail };
+    }
+
+    /**
+     * What a series would lose moving to `target`, in words, or undefined:
+     * Google and Microsoft take a new series as its rule alone, so the
+     * occurrences changed on their own stay behind, and Microsoft keeps no
+     * skipped or extra dates (the skipped ones come back).
+     */
+    droppedByMove(at, target) {
+        if (!at.series || !at.master) return undefined;
+        const kind = this.store.accounts[target.accountId]?.kind;
+        if (kind !== 'google' && kind !== 'microsoft') return undefined;
+        const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+        const changed = at.records.filter((r) => r !== at.master && r.recurrenceId).length;
+        const parts = [];
+        if (changed > 0) parts.push(count(changed, 'occurrence changed on its own', 'occurrences changed on their own'));
+        if (kind === 'microsoft') {
+            const skipped = at.master.exdates?.length ?? 0;
+            const extra = at.master.rdates?.length ?? 0;
+            if (skipped > 0) parts.push(`${count(skipped, 'skipped date', 'skipped dates')} (${skipped === 1 ? 'it comes' : 'they come'} back)`);
+            if (extra > 0) parts.push(count(extra, 'extra date', 'extra dates'));
+        }
+        if (parts.length === 0) return undefined;
+        const list = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
+        return `Moving this series to ${this.calendarName(target)} would drop ${list}: ${KIND_NAMES[kind]} takes a new repeating event as its rule alone.`;
+    }
+
+    /** A delete: the event as it is, the scope, and who it emails or reaches. */
+    planDelete(id, scope = 'all', { notify = false } = {}) {
+        const at = this.locate(id);
+        this.writable(at.calendar);
+        const which = this.scopeOf(at, scope);
+        const mail = this.mailOf({ kind: 'delete', calendar: at.calendar, before: this.recordOf(at, which), scope: which, notify });
+        this.checkMail(mail, notify);
+        return { at, which, notify, mail };
+    }
+
+    /** An answer to an invitation: the event as it is, the scope, and who hears it. */
+    planRespond(id, status, scope = 'all') {
+        if (status !== undefined && !['accepted', 'declined', 'tentative'].includes(status)) throw new CalendarError('The answer is accepted, declined or tentative.');
+        if (scope === 'following') throw new CalendarError('An answer is for one occurrence (one) or the whole series (all).');
+        const at = this.locate(id);
+        this.writable(at.calendar);
+        const which = this.scopeOf(at, scope);
+        const before = this.recordOf(at, which);
+        if (!this.selfOf(before, at.account)) throw new CalendarError('You aren\'t on this event\'s guest list, so there is nothing to answer.');
+        // The organizer hears the answer where the server tells them.
+        return { at, which, mail: this.mailOf({ kind: 'respond', calendar: at.calendar, before }) };
     }
 
     /** The record a change with this scope starts from: the occurrence for 'one', else the series' (or the event's). */
@@ -1379,8 +1568,9 @@ export class CalendarManager {
             const people = [];
             for (const p of list) {
                 const email = String(typeof p === 'string' ? p : p?.email ?? '').trim();
-                if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new CalendarError(`"${email}" isn't an email address.`);
                 const old = had.get(email.toLowerCase());
+                // Someone already on the event may be named by another kind of address (a CalDAV server's urn:uuid).
+                if (old === undefined && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new CalendarError(`"${email}" isn't an email address.`);
                 const person = { ...old, email };
                 if (typeof p === 'object' && typeof p.name === 'string' && p.name.trim()) person.name = p.name.trim();
                 if (typeof p === 'object' && p.optional === true) person.role = 'optional';
@@ -1512,18 +1702,9 @@ export class CalendarManager {
      * @param {object} input - calendarId (default: the default calendar), and INPUT_FIELDS.
      * @param {string} by - who asked, for the log: 'window' or 'agent'.
      */
-    async createEvent(input, by = 'window') {
-        const calendarId = input.calendarId || this.defaultCalendarId();
-        if (!calendarId) throw new CalendarError('There is no calendar that can be written.');
-        const calendar = this.calendar(calendarId);
-        this.writable(calendar);
-        const account = this.store.accounts[calendar.accountId];
-        // The organizer is the user, never a caller's word.
-        const { organizer: _organizer, notify: notifyIn, ...fields } = input;
-        const notify = notifyIn === true;
-        const record = this.recordFrom(fields);
-        const mail = this.mailOf({ kind: 'create', calendar, after: record, notify });
-        this.checkMail(mail, notify);
+    async createEvent(input, by = 'window', { approved } = {}) {
+        const { calendar, account, record, mail } = this.planCreate(input);
+        this.checkKnown(mail, approved);
         const emails = mail.to.length > 0;
         // A CalDAV server invites the guests of an event that names its organizer.
         if (emails && account.kind === 'caldav') record.organizer = { email: this.selfAddress(account) };
@@ -1554,7 +1735,7 @@ export class CalendarManager {
             throw new CalendarError(`${asCalendarError(lost).message} It may have been made anyway: asking again with the same details won't make a second one.`);
         });
         this.lostCreates.delete(key);
-        this.log(`create ${calendar.id} by=${by}${record.rrule ? ' repeats' : ''}${record.attendees ? ` people=${record.attendees.length}` : ''}${emails ? ` mail=${mail.to.length}` : ''}`);
+        this.log(`create ${calendar.id} by=${by}${record.rrule ? ' repeats' : ''}${record.attendees ? ` people=${record.attendees.length}` : ''}${mailLog(mail)}`);
         const eventId = eventIdOf(calendar.id, created.uid);
         const zone = this.zone();
         const startMs = startOfTime(record.start, zone);
@@ -1572,39 +1753,30 @@ export class CalendarManager {
      * Change an event. scope: 'one' (this occurrence of a series), 'following'
      * (this one and the ones after it), 'all' (the series, or a single event).
      */
-    async updateEvent(id, patchIn = {}, scope = 'all', by = 'window') {
-        const first = this.locate(id);
-        this.writable(first.calendar);
-        // The organizer is never a caller's word; notify is a choice, not a field.
-        const { organizer: _organizer, notify: notifyIn, calendarId, ...fields } = patchIn;
-        const notify = notifyIn === true;
-        if (calendarId && calendarId !== first.calendar.id) {
-            // A move takes the whole event or series to the other calendar, and nothing else changes on the way.
-            if (this.scopeOf(first, scope) !== 'all') {
-                throw new CalendarError('Only a whole event or series moves to another calendar. To move one occurrence, delete only it here, then add it to the other calendar as an event of its own.');
-            }
-            if (Object.values(fields).some((v) => v !== undefined)) throw new CalendarError('Move the event to the other calendar on its own first, then change it there.');
-            return this.moveEvent(id, calendarId, by, { notify });
-        }
-        const which = this.scopeOf(first, scope);
-        const account = first.account;
-        const before = this.recordOf(first, which);
-        if (this.roleOf(before, account) === 'guest' && fields.attendees !== undefined && this.mailerOf(first.calendar) !== 'never') {
-            throw new CalendarError('This is someone else\'s invitation: only its organizer changes who is invited.');
-        }
-        const mail = this.mailOf({ kind: 'update', calendar: first.calendar, before, after: this.guestsAfter(before, fields), patch: fields, scope: which, notify });
-        this.checkMail(mail, notify);
-        const emails = mail.to.length > 0;
-        // A CalDAV server tells the guests of an event that names its organizer: the user, when it names none yet.
-        if (emails && account.kind === 'caldav' && this.roleOf(before, account) !== 'organizer') fields.organizer = { email: this.selfAddress(account) };
-        // Google and Microsoft tell guests about a change only when the change says so.
-        const tell = emails ? { notify: true } : {};
-        const patch = { ...fields, ...tell };
+    async updateEvent(id, patchIn = {}, scope = 'all', by = 'window', { approved } = {}) {
+        const plan = this.planUpdate(id, patchIn, scope);
+        if (plan.move) return this.moveEvent(id, plan.target.id, by, { notify: plan.notify, dropChanges: plan.dropChanges, approved });
+        const first = plan.at;
+        const { which } = plan;
+        // Who the user was told the change reaches: the approval prompt's list, else this first look's.
+        const known = approved ?? peopleOf(plan.mail);
+        this.checkKnown(plan.mail, known);
         // A new time is decided on the event as it was: if it changed meanwhile, say so rather than try again.
-        const retry = !emails && !['start', 'end', 'allDay', 'timeZone', 'repeat'].some((k) => fields[k] !== undefined);
+        const retry = peopleOf(plan.mail).length === 0 && !['start', 'end', 'allDay', 'timeZone', 'repeat'].some((k) => plan.fields[k] !== undefined);
+        let mail = plan.mail;
         let after;
         await this.changing(first.calendar.id, async () => {
-            const at = this.locate(id);
+            // Worked out again on the event as it is now, since who it emails can have changed since.
+            const now = this.planUpdate(id, patchIn, scope);
+            this.checkKnown(now.mail, known);
+            mail = now.mail;
+            const { at, fields } = now;
+            const emails = mail.to.length > 0;
+            // A CalDAV server tells the guests of an event that names its organizer: the user, when it names none yet.
+            if (emails && at.account.kind === 'caldav' && this.roleOf(now.before, at.account) === 'own') fields.organizer = { email: this.selfAddress(at.account) };
+            // Google and Microsoft tell guests about a change only when the change says so.
+            const tell = emails ? { notify: true } : {};
+            const patch = { ...fields, ...tell };
             const { source, style } = await this.source(at.account);
             const calendar = at.calendar;
             if (which === 'one') {
@@ -1659,7 +1831,7 @@ export class CalendarManager {
             // The occurrence that was asked about, where it is now.
             after = { uid: at.uid, near: at.series ? at.originalStart + delta : startOfTime(changed.start, zone) };
         }, { retry });
-        this.log(`update ${first.calendar.id} ${first.eventId} scope=${which} by=${by}${emails ? ` mail=${mail.to.length}` : ''}`);
+        this.log(`update ${first.calendar.id} ${first.eventId} scope=${which} by=${by}${mailLog(mail)}`);
         let view;
         try {
             if (which === 'one' || after === undefined) view = this.event(which === 'one' ? id : first.eventId);
@@ -1807,43 +1979,50 @@ export class CalendarManager {
      * would email them (a cancellation from here, an invitation from there)
      * is made only when it says to tell them.
      */
-    async moveEvent(id, calendarId, by = 'window', { notify = false } = {}) {
-        const at = this.locate(id);
-        const target = this.calendar(calendarId);
-        this.writable(target);
-        this.writable(at.calendar);
-        if (at.instance || (at.recurrenceId && !at.series)) throw new CalendarError('Move the whole series, from its own event.');
+    async moveEvent(id, calendarId, by = 'window', { notify = false, dropChanges = false, approved } = {}) {
+        const plan = this.planMove(id, calendarId, { notify, dropChanges });
+        const { at, target } = plan;
+        const known = approved ?? peopleOf(plan.mail);
+        this.checkKnown(plan.mail, known);
         const zone = this.zone();
-        const records = at.records;
-        const master = at.master ?? records[0];
-        if (this.roleOf(master, at.account) === 'guest') {
-            throw new CalendarError('This is someone else\'s invitation, so it stays in the calendar it was sent to. Answer it there, or delete it.');
-        }
-        const mail = this.mailOf({ kind: 'move', calendar: at.calendar, target, before: master, notify });
-        this.checkMail(mail, notify);
-        const emails = mail.to.length > 0;
         const targetAccount = this.store.accounts[target.accountId];
         const { source: to, style: toStyle } = await this.source(targetAccount);
-        // A meeting that is cancelled here and sent from there is a new meeting, with its own uid.
-        const uid = emails || master.organizer ? newUid() : at.uid;
-        const copies = records.map((r) => {
-            const copy = structuredClone(r);
-            copy.uid = uid;
-            delete copy.remoteId;
-            if (mail.invites && targetAccount.kind === 'caldav') copy.organizer = { email: this.selfAddress(targetAccount) };
-            // Where the server schedules, an organizer would make it a meeting: only when it invites.
-            else if (!mail.invites && this.mailerOf(target) !== 'never') delete copy.organizer;
-            return copy;
-        });
+        let mail = plan.mail;
+        let master = plan.master;
+        let uid;
+        // The copies, from the event as it is now: who the move emails is worked out again first.
+        const copiesNow = () => {
+            const now = this.planMove(id, calendarId, { notify, dropChanges });
+            this.checkKnown(now.mail, known);
+            mail = now.mail;
+            master = now.master;
+            // A meeting that is cancelled here and sent from there is a new meeting, with its own uid.
+            uid = mail.to.length > 0 || master.organizer ? newUid() : now.at.uid;
+            return now.at.records.map((r) => {
+                const copy = structuredClone(r);
+                copy.uid = uid;
+                delete copy.remoteId;
+                if (mail.invites && targetAccount.kind === 'caldav') copy.organizer = { email: this.selfAddress(targetAccount) };
+                // Where the server schedules, an organizer would make it a meeting: only when it invites.
+                else if (!mail.invites && this.mailerOf(target) !== 'never') delete copy.organizer;
+                return copy;
+            });
+        };
         if (toStyle === 'ics') {
-            await this.changing(target.id, () => this.putIcs(target, null, copies.map((r) => ({ uid, recurrenceId: r.recurrenceId, record: r })), uid), { retry: false });
+            await this.changing(target.id, () => {
+                const copies = copiesNow();
+                return this.putIcs(target, null, copies.map((r) => ({ uid, recurrenceId: r.recurrenceId, record: r })), uid);
+            }, { retry: false });
         } else {
-            const copy = copies.find((r) => !r.recurrenceId) ?? copies[0];
-            await this.changing(target.id, async () => this.takeItems(target, await to.create({ ...target }, { ...copy, ...(mail.invites ? { notify: true } : {}) })), { retry: false });
+            await this.changing(target.id, async () => {
+                const copies = copiesNow();
+                const copy = copies.find((r) => !r.recurrenceId) ?? copies[0];
+                this.takeItems(target, await to.create({ ...target }, { ...copy, ...(mail.invites ? { notify: true } : {}) }));
+            }, { retry: false });
         }
         // Out of here, with the cancellation the move said it sends (none when it sends none).
-        await this.deleteEvent(at.master ? at.eventId : id, 'all', by, { notify: mail.cancels === true });
-        this.log(`move ${at.calendar.id} ${target.id} by=${by}${emails ? ` mail=${mail.to.length}` : ''}`);
+        await this.deleteEvent(at.master ? at.eventId : id, 'all', by, { notify: mail.cancels === true, approved: known });
+        this.log(`move ${at.calendar.id} ${target.id} by=${by}${mailLog(mail)}`);
         const startMs = startOfTime(master.start, zone);
         const found = this.find({ from: startMs - DAY, to: startMs + 2 * DAY, calendars: [target.id] }).find(({ o }) => o.record.uid === uid);
         return withMail(found ? this.view(found) : { id }, mail);
@@ -1855,18 +2034,23 @@ export class CalendarManager {
      * organizer). A delete that would email someone without it is refused.
      * @returns {Promise<{emailed?: {what: string, to: string[]}}>}
      */
-    async deleteEvent(id, scope = 'all', by = 'window', { notify = false } = {}) {
-        const first = this.locate(id);
-        this.writable(first.calendar);
-        const which = this.scopeOf(first, scope);
-        const mail = this.mailOf({ kind: 'delete', calendar: first.calendar, before: this.recordOf(first, which), scope: which, notify });
-        this.checkMail(mail, notify);
-        const emails = mail.to.length > 0;
-        const tell = emails ? { notify: true } : {};
-        // CalDAV: taking out an invitation declines it unless the server is told not to.
-        const quiet = emails ? {} : { scheduleReply: false };
+    async deleteEvent(id, scope = 'all', by = 'window', { notify = false, approved } = {}) {
+        const plan = this.planDelete(id, scope, { notify });
+        const first = plan.at;
+        const { which } = plan;
+        const known = approved ?? peopleOf(plan.mail);
+        this.checkKnown(plan.mail, known);
+        let mail = plan.mail;
         await this.changing(first.calendar.id, async () => {
-            const at = this.locate(id);
+            // Worked out again on the event as it is now, since who it emails can have changed since.
+            const now = this.planDelete(id, scope, { notify });
+            this.checkKnown(now.mail, known);
+            mail = now.mail;
+            const emails = mail.to.length > 0;
+            const tell = emails ? { notify: true } : {};
+            // CalDAV: taking out an invitation declines it unless the server is told not to.
+            const quiet = emails ? {} : { scheduleReply: false };
+            const { at } = now;
             const { source, style } = await this.source(at.account);
             const calendar = at.calendar;
             const zone = this.zone();
@@ -1921,28 +2105,32 @@ export class CalendarManager {
                 this.takeItems(calendar, await source.update({ ...calendar }, { item: at.item, record: master }, { rrule: older.rrule, ...tell }, 'all'));
             }
         }, { retry: false });
-        this.log(`delete ${first.calendar.id} ${first.eventId} scope=${which} by=${by}${emails ? ` mail=${mail.to.length}` : ''}`);
-        return emails ? { emailed: { what: mail.what, to: mail.to } } : {};
+        this.log(`delete ${first.calendar.id} ${first.eventId} scope=${which} by=${by}${mailLog(mail)}`);
+        return withMail({}, mail);
     }
 
     /** Answer an invitation: accepted, declined or tentative; for one occurrence ('one') or the whole series ('all'). */
-    async respond(id, status, scope = 'all', by = 'window') {
+    async respond(id, status, scope = 'all', by = 'window', { approved } = {}) {
         if (!['accepted', 'declined', 'tentative'].includes(status)) throw new CalendarError('The answer is accepted, declined or tentative.');
-        if (scope === 'following') throw new CalendarError('An answer is for one occurrence (one) or the whole series (all).');
-        const first = this.locate(id);
-        this.writable(first.calendar);
-        const which = this.scopeOf(first, scope);
-        // The organizer hears the answer where the server tells them.
-        const mail = this.mailOf({ kind: 'respond', calendar: first.calendar, before: this.recordOf(first, which) });
+        const plan = this.planRespond(id, status, scope);
+        const first = plan.at;
+        const { which } = plan;
+        const known = approved ?? peopleOf(plan.mail);
+        this.checkKnown(plan.mail, known);
+        let mail = plan.mail;
         await this.changing(first.calendar.id, async () => {
-            const at = this.locate(id);
+            const now = this.planRespond(id, status, scope);
+            this.checkKnown(now.mail, known);
+            mail = now.mail;
+            const { at } = now;
             const { source, style } = await this.source(at.account);
             const base = which === 'one' ? this.occurrenceRecord(at) : (at.master ?? at.override);
             const self = this.selfOf(base, at.account);
             if (!self) throw new CalendarError('You aren\'t on this event\'s guest list, so there is nothing to answer.');
             if (style === 'ics') {
                 const record = structuredClone(base);
-                record.attendees = record.attendees.map((p) => (String(p.email).toLowerCase() === String(self.email).toLowerCase() ? { ...p, status } : p));
+                const mine = base.attendees.indexOf(self);
+                record.attendees = record.attendees.map((p, i) => (i === mine ? { ...p, status } : p));
                 await this.putIcs(at.calendar, at.item, [{ uid: at.uid, ...(which === 'one' ? { recurrenceId: at.recurrenceId } : {}), record }], at.uid);
             } else if (typeof source.respond === 'function') {
                 this.takeItems(at.calendar, await source.respond({ ...at.calendar }, { item: which === 'one' ? (at.overrideItem ?? at.item) : at.item, record: which === 'one' ? (at.override ?? at.master) : (at.master ?? at.override), occurrence: which === 'one' ? at.recurrenceId : undefined }, status, which));
@@ -1950,7 +2138,7 @@ export class CalendarManager {
                 throw new CalendarError('This account can\'t answer invitations from here.');
             }
         });
-        this.log(`respond ${first.calendar.id} ${first.eventId} ${status} by=${by}${mail.to.length ? ' mail=1' : ''}`);
+        this.log(`respond ${first.calendar.id} ${first.eventId} ${status} by=${by}${mailLog(mail)}`);
         return withMail(this.event(id), mail);
     }
 
@@ -2026,7 +2214,25 @@ export class CalendarManager {
 const short = (error) => String(error?.message ?? error).replace(/\s+/g, ' ').slice(0, 160);
 
 /** A change's result, with who it emailed when it emailed someone. */
-const withMail = (view, mail) => (mail?.to?.length > 0 ? { ...view, emailed: { what: mail.what, to: mail.to } } : view);
+/** A change's result with who it emailed, and whose calendars it reached without emailing them. */
+const withMail = (view, mail) => ({
+    ...view,
+    ...(mail?.to?.length > 0 ? { emailed: { what: mail.what, to: mail.to } } : {}),
+    ...(mail?.reaches?.length > 0 ? { reached: { how: mail.reach, to: mail.reaches } } : {}),
+});
+
+/** Everyone a change emails or reaches (mailOf), once each. */
+export function peopleOf(mail) {
+    const out = new Map();
+    for (const person of [...(mail?.to ?? []), ...(mail?.reaches ?? [])]) {
+        const key = String(person).toLowerCase();
+        if (!out.has(key)) out.set(key, person);
+    }
+    return [...out.values()];
+}
+
+/** " mail=2 reach=1" for the log: how many, never who. */
+const mailLog = (mail) => `${mail?.to?.length ? ` mail=${mail.to.length}` : ''}${mail?.reaches?.length ? ` reach=${mail.reaches.length}` : ''}`;
 
 /** People in words: up to five addresses, then how many more. */
 export function peopleWords(list) {

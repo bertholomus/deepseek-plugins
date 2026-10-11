@@ -290,8 +290,9 @@ describe('the source, against a stand-in server', () => {
         const found = await caldav.discover(account, stubEnv(fetch));
         assert.equal(found.principal, 'https://caldav.icloud.com/1234567890/principal/');
         assert.equal(found.home, 'https://p52-caldav.icloud.com/1234567890/calendars/');
-        // iCloud schedules: it emails a meeting's guests itself. The user's addresses are its mailto: ones.
-        const about = { scheduling: true, addresses: ['alice@icloud.com', 'alice@me.com'] };
+        // iCloud schedules: it emails a meeting's guests itself. The user's addresses are every one it names (N1):
+        // the mailto: ones as emails, its principal's URL in full, and its urn:uuid, as iCloud's own meetings name their organizer.
+        const about = { scheduling: true, addresses: ['alice@icloud.com', 'alice@me.com', 'https://p52-caldav.icloud.com/1234567890/principal/', 'urn:uuid:1234567890'] };
         assert.deepEqual(found.calendars, [
             {
                 remoteId: 'https://p52-caldav.icloud.com/1234567890/calendars/2A7C6E1F-3B5D-4C8A-9E0F-1D2C3B4A5968/',
@@ -722,6 +723,39 @@ describe('the source, against a stand-in server', () => {
         assert.equal(header(quiet[1], 'schedule-reply'), 'F');
     });
 
+    test('a change whose etag can\'t be read isn\'t made; a server that keeps none for it gets If-Match: *; one gone meanwhile is a conflict, or done for a delete', async () => {
+        const collection = 'https://dav.example.com/cal/home/';
+        const { fetch, calls } = fakeServer({
+            [`PROPFIND ${collection}flaky.ics`]: { status: 500 },
+            [`PROPFIND ${collection}offline.ics`]: new TypeError('fetch failed'),
+            [`PROPFIND ${collection}bare.ics`]: { body: multistatus([{ href: '/cal/home/bare.ics', props: '' }]) },
+            [`PUT ${collection}bare.ics`]: { status: 204, headers: { etag: '"b2"' } },
+            [`DELETE ${collection}bare.ics`]: { status: 204 },
+            [`PROPFIND ${collection}gone.ics`]: { status: 404 },
+        });
+        const source = caldav.create({ id: 'd', kind: 'caldav', url: 'https://dav.example.com/', username: 'alice' }, stubEnv(fetch));
+        const calendar = { remoteId: collection };
+        const writes = () => calls.filter((c) => c.method === 'PUT' || c.method === 'DELETE').length;
+
+        await assert.rejects(source.put(calendar, { remoteId: `${collection}flaky.ics` }, ics('f', 'F'), 'f'),
+            (e) => isCode('server')(e) && e.message === 'The event\'s version on the server couldn\'t be read, so nothing was changed. Try again.');
+        await assert.rejects(source.remove(calendar, { remoteId: `${collection}flaky.ics` }), isCode('server'));
+        await assert.rejects(source.put(calendar, { remoteId: `${collection}offline.ics` }, ics('o', 'O'), 'o'), isCode('network'));
+        assert.equal(writes(), 0, 'no unconditional write');
+
+        // A server that keeps no etag for it: it must at least still be there.
+        await source.put(calendar, { remoteId: `${collection}bare.ics` }, ics('b', 'B'), 'b');
+        assert.equal(header(calls.at(-1), 'if-match'), '*');
+        await source.remove(calendar, { remoteId: `${collection}bare.ics` });
+        assert.equal(header(calls.at(-1), 'if-match'), undefined);
+
+        // Deleted on the server meanwhile: a change to it is a conflict (the manager syncs); a delete has nothing left to do.
+        await assert.rejects(source.put(calendar, { remoteId: `${collection}gone.ics` }, ics('g', 'G'), 'g'), isCode('conflict'));
+        const before = writes();
+        await source.remove(calendar, { remoteId: `${collection}gone.ics` });
+        assert.equal(writes(), before);
+    });
+
     test('a create repeated after a timeout: the event already there with its uid counts as made; another one there is a conflict', async () => {
         const collection = 'https://dav.example.com/cal/home/';
         const uid = '6f1c2b7e-0d4a-4c3e-9a51-2b8f0e7d6c5a';
@@ -778,7 +812,7 @@ describe('the source, against a stand-in server', () => {
         const found = await caldav.discover(account, stubEnv(nextcloud.fetch));
         assert.deepEqual(primaryOf(found.calendars), ['https://cloud.example.com/remote.php/dav/calendars/alice/personal/']);
         assert.deepEqual(found.calendars.map((c) => [c.name, c.scheduling, c.addresses]), [
-            ['Personal', true, ['alice@example.com']], ['Contact birthdays', true, ['alice@example.com']], ['Work stuff (Bob)', true, ['alice@example.com']],
+            ...['Personal', 'Contact birthdays', 'Work stuff (Bob)'].map((name) => [name, true, ['alice@example.com', 'https://cloud.example.com/remote.php/dav/principals/users/alice/']]),
         ]);
         assert.ok(!nextcloud.calls.some((c) => c.url.endsWith('/inbox/')), 'the principal said it: no request to the inbox');
 
@@ -1026,8 +1060,9 @@ END:VCALENDAR&#13;
             readOnly: false,
             description: 'Team things',
             timeZone: 'Europe/Paris',
-            // Radicale doesn't schedule: it emails nobody, and says so (no outbox).
+            // Radicale doesn't schedule: it emails nobody, and says so (no outbox). It names its user by the principal's URL.
             scheduling: false,
+            addresses: [`${base}${user}/`],
         });
         assert.deepEqual(await fresh().calendars(), found.calendars);
     });

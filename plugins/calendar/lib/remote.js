@@ -24,8 +24,15 @@ export const SERVICE = 'dshPluginCalendarRemote';
  * 'calendar/needs-notify': the change would email people (its message says
  * who and what); made again with notify, it goes ahead and emails them.
  */
+/**
+ * The refusals the window answers in its own way: 'needs-notify' (send it,
+ * or not), 'drops-changes' (move a series anyway), 'choose-calendar' (no
+ * default calendar), 'changed' (look at the event again).
+ */
+const WINDOW_CODES = new Set(['needs-notify', 'drops-changes', 'choose-calendar', 'changed']);
+
 function failure(error) {
-    if (error instanceof CalendarError) return new RemoteError(error.code === 'needs-notify' ? 'calendar/needs-notify' : 'calendar/refused', error.message, {});
+    if (error instanceof CalendarError) return new RemoteError(WINDOW_CODES.has(error.code) ? `calendar/${error.code}` : 'calendar/refused', error.message, {});
     return new RemoteError('calendar/failed', String(error?.message ?? error).slice(0, 300), {});
 }
 
@@ -100,7 +107,9 @@ export class CalendarRemote {
      * or 'all' (an occurrence's `scopes` say which it takes). Fields as createEvent's; null clears one;
      * patch.notify tells the guests (a change the server would email them about anyway is refused without
      * it: 'calendar/needs-notify'). patch.calendarId, given alone with scope 'all', moves the whole event or
-     * series to that calendar; with other fields or another scope it is refused.
+     * series to that calendar; with other fields or another scope it is refused. A series that would lose
+     * occurrences changed on their own (or, into Microsoft, skipped and extra dates) is refused with
+     * 'calendar/drops-changes', saying what; patch.dropChanges moves it anyway.
      */
     async updateEvent(id, patch, scope) {
         return this.run(async () => ({ occurrence: await this.manager.updateEvent(text(id), object(patch), text(scope) || 'all', 'window') }));

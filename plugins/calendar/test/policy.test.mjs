@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CHANGE_TOOLS, MODES, accessOf, canAsk, changeGate, decide, describeChange, planOf } from '../lib/policy.js';
+import { CHANGE_TOOLS, MODES, ShownPlans, accessOf, canAsk, changeGate, decide, describeChange, planOf } from '../lib/policy.js';
 import { CalendarError } from '../lib/manager.js';
 
 /** DSH's permission presets, as the plugin sees them: the session's preset by name, and what a name means. */
@@ -190,9 +190,10 @@ test('policy: the gate before each tool runs', async () => {
 });
 
 /**
- * A manager that says who a change would email (previewMail, as manager.js
- * works it out) for a few events: a meeting the user organizes on a server
- * that emails its guests, someone else's invitation, and a repeating one.
+ * A manager that says who a change would email (planChange, as manager.js
+ * works it out, refusing what the change would refuse) for a few events: a
+ * meeting the user organizes on a server that emails its guests, someone
+ * else's invitation, and a repeating one.
  */
 function mailingManager() {
     const events = {
@@ -205,6 +206,19 @@ function mailingManager() {
     };
     const people = ['ann@example.com', 'bob@example.com', 'cy@example.com'];
     const asked = [];
+    const mailOf = (kind, change) => {
+        if (kind === 'respond') return change.id.startsWith('weekly') || change.id === 'board' ? { to: ['boss@example.com'], what: 'the answer', forced: true } : { to: [], what: '', forced: false };
+        if (change.id === 'board') return { to: [], what: '', forced: false };
+        if (kind === 'create') {
+            if (!change.input.attendees?.length) return { to: [], what: '', forced: false };
+            // A Google calendar: guests are emailed only when told, and put on their calendars either way.
+            if (change.input.calendarId === 'google') return change.notify ? { to: change.input.attendees, what: 'invitations', forced: false } : { to: [], what: '', forced: false, reaches: change.input.attendees, reach: 'add' };
+            return { to: change.input.attendees, what: 'invitations', forced: true, why: 'Microsoft invites the guests as soon as an event with them is saved' };
+        }
+        if (kind === 'update' && Object.keys(change.input).every((k) => k === 'alarms' || k === 'notify')) return { to: [], what: '', forced: false };
+        const list = kind === 'update' && change.input.attendees ? [...new Set([...people, ...change.input.attendees])] : people;
+        return { to: list, what: kind === 'delete' ? 'a cancellation' : 'an update', forced: true, why: 'this calendar\'s server emails a meeting\'s guests itself' };
+    };
     return {
         asked,
         event(id) {
@@ -222,18 +236,13 @@ function mailingManager() {
         defaultCalendarId: () => 'work',
         calendar: (id) => ({ id, name: 'Work' }),
         calendarName: (calendar) => calendar.name,
-        previewMail(kind, change) {
+        planChange(kind, change) {
             asked.push({ kind, ...change });
-            if (kind === 'respond') return change.id.startsWith('weekly') || change.id === 'board' ? { to: ['boss@example.com'], what: 'the answer', forced: true } : { to: [], what: '', forced: false };
-            if (change.id === 'board') return { to: [], what: '', forced: false };
-            if (kind === 'create') return change.input.attendees?.length ? { to: change.input.attendees, what: 'invitations', forced: true, why: 'Microsoft invites the guests as soon as an event with them is saved' } : { to: [], what: '', forced: false };
-            if (kind === 'update' && Object.keys(change.input).every((k) => k === 'alarms' || k === 'notify')) return { to: [], what: '', forced: false };
-            const list = kind === 'update' && change.input.attendees ? [...new Set([...people, ...change.input.attendees])] : people;
-            return { to: list, what: kind === 'delete' ? 'a cancellation' : 'an update', forced: true, why: 'this calendar\'s server emails a meeting\'s guests itself' };
-        },
-        mailProblem(mail, notify) {
-            if (mail?.forced && notify !== true) return { message: `This would email ${mail.what} to ${mail.to.join(', ')} (${mail.why}), so it's made only when they are to be told.`, code: 'needs-notify' };
-            return undefined;
+            const mail = mailOf(kind, change);
+            if (kind !== 'respond' && mail.forced && change.notify !== true) {
+                throw new CalendarError(`This would email ${mail.what} to ${mail.to.join(', ')} (${mail.why}), so it's made only when they are to be told.`, 'needs-notify');
+            }
+            return { mail };
         },
     };
 }
@@ -334,7 +343,7 @@ test('policy: a change that emails someone asks first, and a chat that can\'t as
         'policy calendar_update_event access=danger-full-access allow',
         'policy calendar_delete_event access=danger-full-access allow',
         'policy calendar_update_event access=danger-full-access mail=3 allow',
-        'policy calendar_update_event access=workspace-write mail=3 deny',
+        'policy calendar_update_event access=workspace-write deny',
         'policy calendar_update_event access=danger-full-access deny',
         'policy calendar_update_event access=read-only deny',
     ]);
@@ -347,4 +356,30 @@ test('policy: whether the chat can ask', () => {
     // No approval service, or one that fails: the ask goes to DSH, which decides.
     assert.equal(canAsk(undefined, {}), true);
     assert.equal(canAsk({ effectivePolicy: () => { throw new Error('x'); } }, {}), true);
+});
+
+test('policy: who the gate named goes to the call\'s tool, once; a refused call names no one', async () => {
+    let clock = 0;
+    const shown = new ShownPlans(() => clock);
+    const gate = (preset, approval) => changeGate({
+        presets: () => presetsWith(preset), approval: () => approval, manager: mailingManager(), mode: () => 'preset', shown, log: () => {},
+    });
+    const allow = async () => ({ kind: 'allow' });
+    const asks = { effectivePolicy: () => 'ask' };
+    const call = (callId, name, args) => ({ callId, name, arguments: args, agent: { session: {} } });
+    assert.equal((await gate('workspace-write', asks)(call('c1', 'calendar_update_event', { id: 'sync', start: '2026-10-16 11:00', notify_guests: true }), allow)).kind, 'ask');
+    assert.deepEqual(shown.take('c1'), ['ann@example.com', 'bob@example.com', 'cy@example.com']);
+    assert.equal(shown.take('c1'), undefined, 'once');
+    // Nobody to tell: an empty list, which holds the change to nobody.
+    assert.equal((await gate('danger-full-access', asks)(call('c2', 'calendar_update_event', { id: 'sync', reminders: [10] }), allow)).kind, 'allow');
+    assert.deepEqual(shown.take('c2'), []);
+    // Refused: nothing kept.
+    assert.equal((await gate('workspace-write', asks)(call('c3', 'calendar_update_event', { id: 'sync', title: 'Sync' }), allow)).kind, 'deny');
+    assert.equal(shown.take('c3'), undefined);
+    // Kept six hours at most.
+    await gate('workspace-write', asks)(call('c4', 'calendar_delete_event', { id: 'sync', notify_guests: true }), allow);
+    clock += 7 * 3_600_000;
+    await gate('workspace-write', asks)(call('c5', 'calendar_delete_event', { id: 'sync', notify_guests: true }), allow);
+    assert.equal(shown.take('c4'), undefined);
+    assert.equal(shown.take('c5').length, 3);
 });

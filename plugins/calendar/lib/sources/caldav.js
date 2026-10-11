@@ -14,9 +14,11 @@
  *   compares them with the last sync's. New and changed resources come in
  *   calendar-multiget batches, or one GET each where multiget fails.
  * - Writes are conditional: If-None-Match: * for a new resource, If-Match
- *   with the last etag for a change or a delete; a 412 is a conflict. A new
- *   resource is named after its UID, so a create repeated after a timeout
- *   finds the one the first try made instead of adding a second.
+ *   with the last etag for a change or a delete (read from the server when
+ *   the plugin has none; a change whose etag can't be read isn't made); a
+ *   412 is a conflict. A new resource is named after its UID, so a create
+ *   repeated after a timeout finds the one the first try made instead of
+ *   adding a second.
  * - The password goes only to the host the account names (sameService;
  *   iCloud's other icloud.com hosts too, as it moves clients from
  *   caldav.icloud.com to pNN-caldav.icloud.com): an address a server hands
@@ -33,6 +35,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { HttpError, basicAuth, request as httpRequest, isLocal, safeUrl, sameService } from '../http.js';
 import { parseIcs, unescapeText } from '../ical.js';
+import { isEmailAddress } from '../model.js';
 import { ianaZone } from '../zones.js';
 import { SourceError, statusError } from './index.js';
 
@@ -819,8 +822,10 @@ class CalDavSource {
      * Whether the server schedules (RFC 6638: it emails a meeting's guests
      * itself when its organizer saves or deletes it, and tells the
      * organizer when a guest answers or takes it out), the user's own
-     * addresses there, and the user's default calendar, where new events
-     * go: {scheduling?: boolean, addresses: string[], defaultCalendar?: string}.
+     * addresses there (every one: emails, and the urn:uuid or principal
+     * URL a server may name its own user by, as userAddress() keeps them),
+     * and the user's default calendar, where new events go:
+     * {scheduling?: boolean, addresses: string[], defaultCalendar?: string}.
      * scheduling is undefined when the server didn't say, defaultCalendar
      * when it names none.
      */
@@ -837,16 +842,7 @@ class CalDavSource {
             return { addresses: [] };
         }
         if (self === undefined) return { addresses: [] };
-        const addresses = kids(self.props.get(ADDRESSES), DAV, 'href')
-            .map((h) => /^mailto:(.+)$/i.exec(h.text.trim())?.[1])
-            .map((a) => {
-                try {
-                    return a === undefined ? undefined : decodeURIComponent(a);
-                } catch {
-                    return a;
-                }
-            })
-            .filter((a) => a !== undefined && /^[^@\s]+@[^@\s]+$/.test(a));
+        const addresses = kids(self.props.get(ADDRESSES), DAV, 'href').map((h) => userAddress(h.text, base)).filter((a) => a !== undefined);
         // An outbox means the server schedules; one it says isn't there (404) means it doesn't.
         const outbox = kids(self.props.get(OUTBOX), DAV, 'href').length > 0;
         const scheduling = outbox ? true : self.failed.includes(404) ? false : undefined;
@@ -1135,9 +1131,20 @@ class CalDavSource {
         const target = item ? hrefUrl(item.remoteId ?? '') : hrefUrl(`${folderOf(collection)}${resourceName(uid)}.ics`);
         if (target === undefined) throw new SourceError('config', 'This event has no address on the server.');
         const headers = { 'Content-Type': 'text/calendar; charset=utf-8' };
-        // A change only while the event is as it was read: without a stored etag, the server's own first.
-        if (item) headers['If-Match'] = item.etag || await this.etagOf(target).catch(() => undefined) || '*';
-        else headers['If-None-Match'] = '*';
+        if (item) {
+            // A change only while the event is as it was read: without a stored etag, the server's own first.
+            let etag;
+            try {
+                etag = await this.versionOf(item, target);
+            } catch (error) {
+                // Taken out meanwhile: a change to it is a conflict, which syncs.
+                if (error instanceof SourceError && error.code === 'not-found') throw new SourceError('conflict', 'Saving the event: it was deleted on the server meanwhile.', { status: 404 });
+                throw error;
+            }
+            headers['If-Match'] = etag ?? '*';
+        } else {
+            headers['If-None-Match'] = '*';
+        }
         const res = await this.send('PUT', target, { headers, body: raw });
         if (!res.ok) {
             const made = !item && res.status === 412 ? await this.madeBefore(target, String(uid ?? '').trim()) : undefined;
@@ -1184,8 +1191,26 @@ class CalDavSource {
     }
 
     /**
+     * The etag a change to `item` (at `target`) goes under: the one stored,
+     * else the server's own, read now; null when the server keeps none for
+     * it. A read that fails stops the change, since a write without one
+     * would go over whatever is there; 'not-found' when it is gone.
+     */
+    async versionOf(item, target) {
+        if (item.etag) return item.etag;
+        try {
+            return (await this.etagOf(target)) ?? null;
+        } catch (error) {
+            if (error instanceof SourceError && ['auth', 'not-found', 'rate'].includes(error.code)) throw error;
+            const code = error instanceof SourceError && error.code === 'network' ? 'network' : 'server';
+            throw new SourceError(code, 'The event\'s version on the server couldn\'t be read, so nothing was changed. Try again.');
+        }
+    }
+
+    /**
      * Deletes a resource, only while its etag is item.etag (without one, the
-     * server's own, read first). Gone already counts as done.
+     * server's own, read first; a server that keeps none for it, without a
+     * condition). Gone already counts as done.
      * opts.scheduleReply false: the server doesn't tell the organizer
      * (RFC 6638's Schedule-Reply), so taking out someone else's invitation
      * doesn't decline it.
@@ -1193,11 +1218,43 @@ class CalDavSource {
     async remove(calendar, item, { scheduleReply } = {}) {
         const target = hrefUrl(item?.remoteId ?? '');
         if (target === undefined) throw new SourceError('config', 'This event has no address on the server.');
-        const etag = item.etag || await this.etagOf(target).catch(() => undefined);
+        let etag;
+        try {
+            etag = await this.versionOf(item, target);
+        } catch (error) {
+            if (error instanceof SourceError && error.code === 'not-found') return;
+            throw error;
+        }
         const headers = { ...(etag ? { 'If-Match': etag } : {}), ...(scheduleReply === false ? { 'Schedule-Reply': 'F' } : {}) };
         const res = await this.send('DELETE', target, { headers });
         if (res.ok || res.status === 404 || res.status === 410) return;
         throw writeError(res, 'Deleting the event');
+    }
+}
+
+/**
+ * One of the user's calendar user addresses, as the account keeps it: a
+ * mailto address as the email alone, a urn as it is, and a principal's
+ * path or URL as a full URL. undefined for anything else.
+ */
+export function userAddress(text, base) {
+    const value = String(text ?? '').trim();
+    if (value === '') return undefined;
+    const mail = /^mailto:(.+)$/i.exec(value);
+    if (mail) {
+        let email = mail[1];
+        try {
+            email = decodeURIComponent(email);
+        } catch {}
+        email = email.trim();
+        return isEmailAddress(email) ? email : undefined;
+    }
+    if (/^urn:[a-z0-9][a-z0-9-]*:\S+$/i.test(value)) return value;
+    try {
+        const url = new URL(value, base);
+        return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : undefined;
+    } catch {
+        return undefined;
     }
 }
 

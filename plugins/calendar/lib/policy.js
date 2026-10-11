@@ -13,16 +13,22 @@
  *   'off'    - agents can't change calendars; the window still can.
  *
  * A change that emails someone (an invitation, an update, a cancellation,
- * an answer) asks the user first whatever the setting, naming who gets
- * what, unless `askBeforeEmails` is off. A chat whose approval prompts are
- * off (Full access) can't ask, so it gets a refusal that says why, as it
- * does for any change that would ask. So does a change the tool would
- * refuse anyway (a missing scope, guests who'd be emailed without the call
- * saying to tell them): nobody is asked about something that won't happen.
+ * an answer), or that puts an event on other people's calendars or takes
+ * it off them without emailing them (Google), asks the user first whatever
+ * the setting, naming who, unless `askBeforeEmails` is off. A chat whose
+ * approval prompts are off (Full access) can't ask, so it gets a refusal
+ * that says why, as it does for any change that would ask. So does a
+ * change the tool would refuse anyway (a missing scope, guests who'd be
+ * emailed without the call saying to tell them), in the tool's own words:
+ * nobody is asked about something that won't happen.
+ *
+ * Who the user was told of goes to the tool with the call (ShownPlans): the
+ * event can change on its server while the prompt waits, and a change that
+ * would by then email or reach someone else stops instead.
  *
  * @module dsh-plugin-calendar/policy
  */
-import { CalendarError, peopleWords } from './manager.js';
+import { CalendarError, peopleOf, peopleWords } from './manager.js';
 import { changeInput, refusalText, scopeArg } from './args.js';
 
 export const MODES = ['preset', 'ask', 'off'];
@@ -90,14 +96,15 @@ const CLEAR_WORDS = { location: 'no place', description: 'no notes', url: 'no li
 const KINDS = { calendar_create_event: 'create', calendar_update_event: 'update', calendar_delete_event: 'delete', calendar_respond: 'respond' };
 
 /**
- * What a call would do as far as other people go, worked out as the tool
- * will: {mail} (who it emails: manager.mailOf), or {refusal} when the tool
- * would refuse it before changing anything. {} when that can't be told
- * here (the tool then decides). Never throws.
+ * What a call would do as far as other people go, worked out by the very
+ * check the tool makes first (manager.planChange): {mail} (who it emails
+ * or reaches: manager.mailOf), or {refusal}, in the tool's own words, when
+ * the tool would refuse it before changing anything. {} when that can't be
+ * told here (the tool then decides). Never throws.
  */
 export function planOf(manager, name, args) {
     const kind = KINDS[name];
-    if (kind === undefined || typeof manager?.previewMail !== 'function') return {};
+    if (kind === undefined || typeof manager?.planChange !== 'function') return {};
     const a = args !== null && typeof args === 'object' ? args : {};
     const notify = a.notify_guests === true;
     try {
@@ -105,18 +112,26 @@ export function planOf(manager, name, args) {
         const change = kind === 'create' ? { input: changeInput(a, manager.zone()), notify }
             : kind === 'update' ? { id, input: changeInput(a, manager.zone()), scope: scopeArg(manager, id, a.scope), notify }
             : kind === 'delete' ? { id, scope: scopeArg(manager, id, a.scope), notify }
-            : { id, scope: scopeArg(manager, id, a.scope, { answer: true }) };
-        const mail = manager.previewMail(kind, change);
-        // An answer goes to its organizer by itself: asking the user is all it takes.
-        const problem = kind === 'respond' ? undefined : manager.mailProblem?.(mail, notify);
-        return problem ? { refusal: refusalText(problem), mail } : { mail };
+            : { id, scope: scopeArg(manager, id, a.scope, { answer: true }), status: a.answer };
+        return { mail: manager.planChange(kind, change).mail };
     } catch (error) {
         return error instanceof CalendarError ? { refusal: refusalText(error) } : {};
     }
 }
 
-/** ", and email an update to a, b and c" for a change that emails people. */
-const emailWords = (mail) => (mail?.to?.length > 0 ? `, and email ${mail.what} to ${peopleWords(mail.to)}` : '');
+/** How a change reaches guests' calendars without emailing them, as an instruction. */
+const REACH_WORDS = { add: 'put it on', remove: 'take it off', change: 'change it on' };
+
+/**
+ * ", and email an update to a, b and c" for a change that emails people,
+ * and ", and put it on the calendars of d without emailing them" for one
+ * that reaches them without email.
+ */
+const emailWords = (mail) => {
+    const emailed = mail?.to?.length > 0 ? `, and email ${mail.what} to ${peopleWords(mail.to)}` : '';
+    const reached = mail?.reaches?.length > 0 ? `, and ${REACH_WORDS[mail.reach] ?? 'change it on'} the calendars of ${peopleWords(mail.reaches)} without emailing them` : '';
+    return `${emailed}${reached}`;
+};
 
 /**
  * A change in words for the approval prompt: what, which event, where, and
@@ -164,7 +179,8 @@ export function describeChange(manager, name, args = {}, mail = planOf(manager, 
                 .filter((k) => a[k] !== undefined && a[k] !== null && !(typeof a[k] === 'string' && a[k].trim() === ''))
                 .map((k) => (k === 'guests' ? guestChange(event, guests) : k.replace('_', ' ')));
             const cleared = Array.isArray(a.clear) ? [...new Set(a.clear)].filter((k) => Object.hasOwn(CLEAR_WORDS, k)).map((k) => CLEAR_WORDS[k]) : [];
-            const moving = typeof a.calendar_id === 'string' && a.calendar_id.trim() !== '' ? ` and move it to ${calendarWords()}` : '';
+            const moving = typeof a.calendar_id === 'string' && a.calendar_id.trim() !== ''
+                ? ` and move it to ${calendarWords()}${a.drop_changes === true ? ', without its occurrences changed on their own' : ''}` : '';
             const what = fields.length + cleared.length ? `: ${[...fields, ...cleared].join(', ')}` : '';
             const tell = mail === undefined && a.notify_guests === true ? ', and email its guests' : told;
             return `Change ${SCOPE_WORDS[a.scope] ?? ''}${eventWords()}${what}${moving}${tell}?`;
@@ -201,16 +217,45 @@ function cantAsk(mail) {
         return `This would email ${mail.what} to ${peopleWords(mail.to)}, and the user is asked before anything is emailed from their calendars. `
             + 'This chat can\'t ask (its approval prompts are off), so nothing was done. Tell the user what would be sent and to whom; they can do it on the Calendar page or in their calendar app.';
     }
+    if (mail?.reaches?.length > 0) {
+        return `This would ${REACH_WORDS[mail.reach] ?? 'change it on'} the calendars of ${peopleWords(mail.reaches)} (Google does that without emailing them), and the user is asked before a change reaches other people. `
+            + 'This chat can\'t ask (its approval prompts are off), so nothing was done. Tell the user what you would change and who it reaches; they can do it on the Calendar page or in their calendar app.';
+    }
     return 'The calendar plugin asks the user before each change, and this chat can\'t ask (its approval prompts are off), so nothing was done. Tell the user what you would change; they can do it on the Calendar page.';
+}
+
+/**
+ * Who the gate told the user a call's change emails or reaches, kept by the
+ * call's id until its tool runs (take()), which then stops the change
+ * rather than email or reach anyone else. Kept six hours at most.
+ */
+export class ShownPlans {
+    constructor(now = () => Date.now()) {
+        this.now = now;
+        this.plans = new Map();
+    }
+
+    set(callId, mail) {
+        if (typeof callId !== 'string' || callId === '') return;
+        for (const [id, plan] of this.plans) if (this.now() - plan.at > 6 * 3_600_000) this.plans.delete(id);
+        this.plans.set(callId, { people: peopleOf(mail), at: this.now() });
+    }
+
+    /** The people shown for this call, once; undefined when the gate showed nothing for it. */
+    take(callId) {
+        const plan = this.plans.get(callId);
+        this.plans.delete(callId);
+        return plan?.people;
+    }
 }
 
 /**
  * The `tools/pre-execute` gate for the calendar's change tools. Other gates
  * run first; a refusal or a question from them stands.
  * @param {{presets: () => object|undefined, approval?: () => object|undefined, manager: object, mode: () => string,
- *          askEmails?: () => boolean, log: (line: string) => void}} deps
+ *          askEmails?: () => boolean, shown?: ShownPlans, log: (line: string) => void}} deps
  */
-export function changeGate({ presets, approval = () => undefined, manager, mode, askEmails = () => true, log }) {
+export function changeGate({ presets, approval = () => undefined, manager, mode, askEmails = () => true, shown, log }) {
     return async (exec, next) => {
         if (!CHANGE_TOOLS.has(exec?.name)) return next();
         const downstream = await next();
@@ -223,10 +268,12 @@ export function changeGate({ presets, approval = () => undefined, manager, mode,
             const plan = planOf(manager, exec.name, exec.arguments);
             mail = plan.mail;
             if (plan.refusal !== undefined) decision = { deny: plan.refusal };
-            else if (mail?.to?.length > 0 && askEmails()) decision = 'ask';
+            else if (peopleOf(mail).length > 0 && askEmails()) decision = 'ask';
         }
         if (decision === 'ask' && !canAsk(approval(), session)) decision = { deny: cantAsk(mail) };
-        log(`policy ${exec.name} access=${access}${mail?.to?.length > 0 ? ` mail=${mail.to.length}` : ''} ${typeof decision === 'string' ? decision : 'deny'}`);
+        log(`policy ${exec.name} access=${access}${mail?.to?.length > 0 ? ` mail=${mail.to.length}` : ''}${mail?.reaches?.length > 0 ? ` reach=${mail.reaches.length}` : ''} ${typeof decision === 'string' ? decision : 'deny'}`);
+        // The tool holds the change to who this said it reaches.
+        if (typeof decision === 'string' && mail !== undefined) shown?.set(exec.callId, mail);
         if (decision === 'allow') return { kind: 'allow' };
         if (decision === 'ask') {
             const text = describeChange(manager, exec.name, exec.arguments, mail);
