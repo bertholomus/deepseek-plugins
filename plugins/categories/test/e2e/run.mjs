@@ -7,10 +7,11 @@
  * categories makes DSH's workspaces; then, as on the user's DSH, the
  * projects plugin's store holds categories from before this plugin and the
  * all-in-one mod's old sidebar file is there. At the next start the plugin
- * moves the categories over once (reading the projects store only), imports
- * the old sidebar once, and keeps DSH's own workspace order in step. Then
- * the window's endpoints (list, make, file, move, rename, delete, refusals),
- * the browser half DSH serves, and a restart that changes nothing.
+ * moves the categories over once, exactly as they are (reading the projects
+ * store only), doesn't read the old sidebar file (that store had
+ * categories), and keeps DSH's own workspace order in step. Then the
+ * window's endpoints (list, make, file, move, rename, delete, refusals), the
+ * browser half DSH serves, and a restart that changes nothing.
  *
  * With PROJECTS=1 the projects plugin runs beside it, on the same store
  * file: its own categories and placements stay as they were (rollback data),
@@ -21,7 +22,7 @@
  * Without DSH_BIN it runs `dsh` from PATH. KEEP=1 keeps the temp folder.
  */
 import { spawn, execFileSync } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -250,23 +251,29 @@ try {
         mkdirSync(dir);
         wsId[k] = (await bridge('POST', '/sessions', { workspacePath: dir })).workspace.id;
     }
-    const homeWs = (await bridge('GET', '/workspaces')).find((w) => w.path === realpathSync(ws))?.id;
+    // DSH's own folder as a workspace too, the one the projects plugin's ◆ project works in.
+    const homeWs = (await bridge('POST', '/sessions', { workspacePath: ws })).workspace.id;
     await stopDsh(child);
 
-    // 2. As on the user's DSH: the projects plugin's store has categories (one with a placement DSH no longer
-    // has), and never imported the old sidebar; the old sidebar file names two projects, one by a name here.
+    // 2. As on the user's DSH: the projects plugin's store has four categories in their places, one (General)
+    // with the same id as a ◆ project and one placement of a workspace DSH no longer has; groups from before
+    // categories are still recorded; the old sidebar was never imported. The old sidebar file still names
+    // projects the user deleted as categories.
     const projectsStore = {
         version: 1,
         projects: {
             'e2e-project': { settings: { goal: 'Keep it' }, threads: {}, pendingHandbacks: [], nextThread: 1, home: homeWs },
+            'testing-out-coordinator': { name: 'Testing out Coordinator', source: 'page', order: 0, settings: {}, threads: {}, pendingHandbacks: [], nextThread: 3, home: wsId.a },
         },
-        workspaceOf: { [wsId.a]: 'dsh-plugins' },
+        workspaceOf: { [wsId.b]: 'dsh-plugins', [wsId.a]: 'testing-out-coordinator' },
         categories: {
-            'dsh-plugins': { name: 'DSH Plugins', order: 0, createdAt: '2026-10-10T08:13:00.000Z', source: 'group' },
-            'testing-out-coordinator': { name: 'General', order: 1, createdAt: '2026-10-10T09:00:00.000Z', source: 'group' },
+            'local-model-recipe': { name: 'Local Model Recipe', order: 1, createdAt: '2026-10-10T08:13:00.000Z', source: 'import', importedFrom: 'p4' },
+            'fleet-services': { name: 'Fleet Services', order: 2, createdAt: '2026-10-10T08:13:00.000Z', source: 'import', importedFrom: 'p3' },
+            experimentation: { name: 'Experimentation', order: 3, createdAt: '2026-10-10T08:13:00.000Z', source: 'import', importedFrom: 'p2' },
+            'testing-out-coordinator': { name: 'General', order: 0, createdAt: '2026-10-10T09:00:00.000Z', source: 'group' },
         },
-        categoryOf: { [wsId.a]: 'dsh-plugins', [wsId.b]: 'testing-out-coordinator', 'gone-workspace': 'testing-out-coordinator' },
-        imports: { categories: { at: '2026-10-11T01:37:00.000Z', categories: 2, workspaces: 3 } },
+        categoryOf: { [wsId.c]: 'local-model-recipe', 'clef-quant-gone': 'local-model-recipe', [wsId.d]: 'fleet-services', [wsId.e]: 'experimentation', [wsId.a]: 'testing-out-coordinator', [wsId.b]: 'testing-out-coordinator' },
+        imports: { categories: { at: '2026-10-11T01:37:00.000Z', categories: 5, workspaces: 14 } },
     };
     mkdirSync(dirname(projectsFile), { recursive: true });
     const projectsText = `${JSON.stringify(projectsStore, null, 2)}\n`;
@@ -275,40 +282,38 @@ try {
     writeFileSync(oldFile, `${JSON.stringify({
         prefs: { projectsSidebar: true },
         projects: [
-            { id: 'p1', name: ' Old  Alpha ', instructions: 'not read', files: [], defaults: {} },
-            { id: 'p2', name: 'general', instructions: '', files: [], defaults: {} },
-            { id: 'p3', name: '   ' },
+            { id: 'p1', name: 'DSH Plugins', instructions: 'not read', files: [], defaults: {} },
+            { id: 'p4', name: 'Local Model Recipe' }, { id: 'p5', name: 'General' }, { id: 'p6', name: 'Project Testing' }, { id: 'p7', name: 'Security' },
         ],
-        projectOf: { [wsId.c]: 'p1', [wsId.d]: 'p2', [wsId.a]: 'p1', 'gone-workspace-2': 'p1', [wsId.e]: '_none' },
+        projectOf: { [wsId.b]: 'p1', [wsId.c]: 'p4', [wsId.a]: 'p5', [homeWs]: 'p6', [wsId.e]: 'p7' },
         agentOverride: { lane: 'not read' },
     }, null, 2)}\n`);
     const oldText = readText(oldFile);
 
-    // 3. The plugin's first start: the categories move over once, and the old sidebar comes in once.
+    // 3. The plugin's first start: the categories move over once, exactly as they are; the old sidebar isn't read.
     writeProfile(WITH_PROJECTS ? ['categories', 'session-bridge', 'projects'] : ['categories', 'session-bridge']);
     child = await boot(dsh, 'categories\' first start');
-    await waitFor(() => readText(logFile).includes('import fleet-shell'), 'the old sidebar\'s import', 30000);
+    await waitFor(() => readText(logFile).includes('move from projects'), 'the move from the projects store', 30000);
     const web = await signInWeb();
     const api = (method, args) => webApi(web, `dsh-plugin-categories/${method}`, args);
     let lists = await waitFor(async () => { const r = await api('list', {}); return r.ok ? r : null; }, 'the categories endpoint', 30000);
     const category = (name) => lists.value?.categories?.find((c) => c.name === name);
     const holds = (name) => category(name)?.workspaces?.map((w) => w.id) ?? [];
     const store = readJson(storeFile);
-    check('the projects plugin\'s categories come over unchanged, ids, names and order', JSON.stringify(Object.keys(store.categories ?? {}).slice(0, 2)) === JSON.stringify(['dsh-plugins', 'testing-out-coordinator'])
-        && JSON.stringify(store.categories['dsh-plugins']) === JSON.stringify(projectsStore.categories['dsh-plugins'])
-        && JSON.stringify(store.categories['testing-out-coordinator']) === JSON.stringify(projectsStore.categories['testing-out-coordinator']),
-    JSON.stringify(store.categories));
-    check('with their workspaces, a placement DSH no longer lists kept as it was', store.categoryOf?.[wsId.a] === 'dsh-plugins' && store.categoryOf?.[wsId.b] === 'testing-out-coordinator'
-        && store.categoryOf?.['gone-workspace'] === 'testing-out-coordinator', JSON.stringify(store.categoryOf));
+    check('the projects plugin\'s categories come over exactly as they are, General keeping the id it shares with a ◆ project',
+        JSON.stringify(store.categories) === JSON.stringify(projectsStore.categories) && JSON.stringify(store.categoryOf) === JSON.stringify(projectsStore.categoryOf),
+        JSON.stringify({ categories: store.categories, categoryOf: store.categoryOf }));
+    check('the list shows them in their order, each with the workspaces DSH has', JSON.stringify(lists.value?.categories?.map((c) => [c.id, c.name])) === JSON.stringify([
+        ['testing-out-coordinator', 'General'], ['local-model-recipe', 'Local Model Recipe'], ['fleet-services', 'Fleet Services'], ['experimentation', 'Experimentation'],
+    ]) && holds('General').length === 2 && holds('General').includes(wsId.a) && holds('General').includes(wsId.b) && holds('Local Model Recipe').join() === wsId.c
+        && holds('Fleet Services').join() === wsId.d && holds('Experimentation').join() === wsId.e, JSON.stringify(lists.value?.categories));
     check('the move is logged once, with a copy of the projects store', readText(logFile).split('\n').filter((l) => l.includes(' move from projects ')).length === 1
-        && readText(logFile).includes('move from projects from=categories categories=2 workspaces=3 backup=') && readText(join(categoriesDir, 'from-projects.json')) === projectsText,
+        && readText(logFile).includes('move from projects from=categories categories=4 workspaces=6 backup=') && readText(join(categoriesDir, 'from-projects.json')) === projectsText,
     readText(logFile));
     if (!WITH_PROJECTS) check('the projects store is only read', readText(projectsFile) === projectsText);
-    check('the old sidebar comes in once: a new category, and a name already here joins it', readText(logFile).includes('import fleet-shell categories=1 joined=1 workspaces=2 skipped=1')
-        && category('Old Alpha')?.source === 'import' && category('Old Alpha')?.importedFrom === 'p1' && holds('Old Alpha').join() === wsId.c
-        && holds('General').length === 2 && holds('General').includes(wsId.b) && holds('General').includes(wsId.d) && holds('DSH Plugins').join() === wsId.a,
-    JSON.stringify(lists.value?.categories));
-    check('the old file is only read, and only names and workspaces come over', readText(oldFile) === oldText && !/not read|agentOverride/.test(readText(storeFile)));
+    check('the old sidebar isn\'t read: nothing deleted comes back', !readText(logFile).includes('fleet-shell') && store.imports?.fleetShell === undefined
+        && !['DSH Plugins', 'Project Testing', 'Security'].some((name) => category(name)) && readText(oldFile) === oldText && !/not read|agentOverride/.test(readText(storeFile)),
+    readText(logFile));
     check('the plugin\'s folder is 700, its store, log and copy 600', modeOf(categoriesDir) === 0o700 && modeOf(storeFile) === 0o600 && modeOf(logFile) === 0o600
         && modeOf(join(categoriesDir, 'from-projects.json')) === 0o600,
     [categoriesDir, storeFile, logFile].map((f) => octal(modeOf(f))).join(' '));
@@ -316,10 +321,10 @@ try {
     const together = (order, ids) => ids.length === 0 || order.slice(order.indexOf(ids[0]), order.indexOf(ids[0]) + ids.length).join() === ids.join();
     let order = await waitFor(async () => {
         const now = await dshOrder();
-        return now.indexOf(wsId.a) === 0 && together(now, holds('General')) ? now : null;
+        return together(now, holds('General')) && now.indexOf(holds('General')[0]) === 0 ? now : null;
     }, 'DSH\'s order in category order', 15000).catch(async () => dshOrder());
-    check('DSH\'s own workspace order holds each category together, in their order, then the rest', order[0] === wsId.a && together(order, holds('General'))
-        && order.indexOf(holds('General')[1]) < order.indexOf(wsId.c) && order.indexOf(wsId.c) < order.indexOf(wsId.e), JSON.stringify(order));
+    check('DSH\'s own workspace order holds each category together, in their order, then the rest', together(order, holds('General')) && order.indexOf(holds('General')[0]) === 0
+        && order.indexOf(wsId.c) === 2 && order.indexOf(wsId.d) === 3 && order.indexOf(wsId.e) === 4 && order.indexOf(homeWs) === 5, JSON.stringify(order));
 
     // The browser half: DSH serves it, and it parses (DSH sends browser halves in batches, so one that does not parse breaks others).
     const app = await httpGet(web.base.href, { cookie: web.cookie });
@@ -330,17 +335,17 @@ try {
     check('DSH serves the browser half and it parses', client.status === 200 && parses, `${clientUrl ?? 'not in the boot graph'}: ${client.status}`);
 
     // 4. The window's endpoints.
-    lists = await api('createCategory', { name: 'Later', workspace: wsId.e });
+    lists = await api('createCategory', { name: 'Later', workspace: homeWs });
     const laterId = lists.value?.category;
-    check('a new category is last, with the workspace it was made with', lists.ok && laterId === 'later' && lists.value.categories.at(-1)?.id === laterId && holds('Later').join() === wsId.e,
+    check('a new category is last, with the workspace it was made with', lists.ok && laterId === 'later' && lists.value.categories.at(-1)?.id === laterId && holds('Later').join() === homeWs,
         JSON.stringify(lists));
-    lists = await api('fileWorkspace', { workspace: wsId.d, category: laterId, before: wsId.e });
+    lists = await api('fileWorkspace', { workspace: wsId.d, category: laterId, before: homeWs });
     order = await dshOrder();
-    check('a workspace filed before another lands there, in DSH\'s order too', lists.ok && holds('Later').join() === `${wsId.d},${wsId.e}` && holds('General').join() === wsId.b
-        && together(order, [wsId.d, wsId.e]), `${JSON.stringify(lists.value?.categories)} ${JSON.stringify(order)}`);
-    lists = await api('moveCategory', { category: laterId, before: 'dsh-plugins' });
+    check('a workspace filed before another lands there, in DSH\'s order too', lists.ok && holds('Later').join() === `${wsId.d},${homeWs}` && holds('Fleet Services').length === 0
+        && together(order, [wsId.d, homeWs]), `${JSON.stringify(lists.value?.categories)} ${JSON.stringify(order)}`);
+    lists = await api('moveCategory', { category: laterId, before: 'testing-out-coordinator' });
     order = await dshOrder();
-    check('a category moves, and DSH\'s order with it', lists.ok && lists.value.categories[0]?.id === laterId && order.indexOf(wsId.e) < order.indexOf(wsId.a),
+    check('a category moves, and DSH\'s order with it', lists.ok && lists.value.categories[0]?.id === laterId && order.indexOf(homeWs) < order.indexOf(wsId.a),
         `${JSON.stringify(lists.value?.categories?.map((c) => c.id))} ${JSON.stringify(order)}`);
     lists = await api('renameCategory', { category: laterId, name: 'Later On' });
     check('a category is renamed', lists.ok && category('Later On')?.id === laterId);
@@ -354,10 +359,10 @@ try {
         JSON.stringify(refusals.map(([r]) => r.error ?? r)));
     lists = await api('removeCategory', { category: laterId });
     order = await dshOrder();
-    check('deleting a category leaves its workspaces in DSH, in none', lists.ok && !category('Later On') && order.includes(wsId.d) && order.includes(wsId.e)
-        && order.indexOf(wsId.c) < order.indexOf(wsId.d), JSON.stringify(order));
-    lists = await api('fileWorkspace', { workspace: wsId.e, category: 'testing-out-coordinator' });
-    check('a workspace goes into a moved-over category', lists.ok && holds('General').join() === `${wsId.b},${wsId.e}`, JSON.stringify(lists.value?.categories));
+    check('deleting a category leaves its workspaces in DSH, in none', lists.ok && !category('Later On') && order.includes(wsId.d) && order.includes(homeWs)
+        && order.indexOf(wsId.e) < order.indexOf(wsId.d) && order.indexOf(wsId.e) < order.indexOf(homeWs), JSON.stringify(order));
+    lists = await api('fileWorkspace', { workspace: wsId.d, category: 'fleet-services' });
+    check('a workspace goes back into a moved-over category', lists.ok && holds('Fleet Services').join() === wsId.d, JSON.stringify(lists.value?.categories));
 
     if (WITH_PROJECTS) {
         // Beside the projects plugin: each answers for its own, and the categories it kept stay in its store as they were.
@@ -382,7 +387,7 @@ try {
     const again = await waitFor(async () => { const r = await webApi(webAgain, 'dsh-plugin-categories/list', {}); return r.ok ? r : null; }, 'the categories after the restart', 30000);
     await sleep(500);
     check('after a restart the categories are as they were, nothing moved or imported again', JSON.stringify(again.value?.categories) === JSON.stringify(before.categories)
-        && readText(logFile).split('\n').filter((l) => / (move from projects|import fleet-shell) /.test(l)).length === 2 && readText(storeFile) === before.store,
+        && readText(logFile).split('\n').filter((l) => / move from projects /.test(l)).length === 1 && !readText(logFile).includes('fleet-shell') && readText(storeFile) === before.store,
     readText(logFile));
     check('DSH\'s order needed no moves', JSON.stringify(await dshOrder()) === JSON.stringify(before.order) && orderLines() === linesBefore, `${orderLines()} vs ${linesBefore}`);
 } catch (error) {

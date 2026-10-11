@@ -40,6 +40,8 @@ export const Config = z.object({
 export function apply(ctx, config) {
     if (!config.enabled) return;
     const manager = new CategoryManager({ ctx, config });
+    // Switched off or reloaded: this manager stops, and the next start reads the store from its file.
+    ctx.effect(() => () => manager.dispose(), 'categories.manager()');
 
     // The window's endpoints (remote.js), served by DSH's own gateway.
     // Optional: without them the window draws DSH's list as it is.

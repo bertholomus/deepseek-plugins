@@ -75,25 +75,12 @@ export function writePrivate(file, text) {
 
 const plain = (value) => (value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {});
 
-/** Open stores by file, so every manager in this process shares one copy. */
-const opened = new Map();
-
+/**
+ * Each start of the plugin reads the file as it is then: a store is never
+ * kept in memory across a switch-off or a config reload, so an edit to the
+ * file while the plugin was off is what the next start sees and keeps.
+ */
 export class CategoryStore {
-    /**
-     * The store for a file, shared within the process: a manager left over
-     * from a config reload and the new one never overwrite each other.
-     * @param {string} file - store path.
-     */
-    static open(file) {
-        const path = dataPath(file);
-        let store = opened.get(path);
-        if (!store) {
-            store = new CategoryStore(path);
-            opened.set(path, store);
-        }
-        return store;
-    }
-
     /** @param {string} file - store path. */
     constructor(file) {
         this.file = dataPath(file);

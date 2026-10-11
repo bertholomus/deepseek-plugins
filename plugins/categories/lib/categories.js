@@ -107,7 +107,9 @@ export class CategoryManager {
     constructor({ ctx, config }) {
         this.ctx = ctx;
         this.config = config;
-        this.store = CategoryStore.open(config.storeFile);
+        /** Read from the file now: a switch-off or config reload left nothing in memory. */
+        this.store = new CategoryStore(config.storeFile);
+        this.disposed = false;
         this.logFile = config.logFile ? dataPath(config.logFile) : '';
         if (this.logFile) {
             try { ensurePrivateDir(dirname(this.logFile)); } catch {}
@@ -125,6 +127,14 @@ export class CategoryManager {
         this.moveFromProjects();
         this.importFleetShell();
         await this.syncWorkspaceOrder();
+    }
+
+    /**
+     * Switched off, or replaced by a config reload: this manager changes
+     * nothing more. The next start reads the store from its file again.
+     */
+    dispose() {
+        this.disposed = true;
     }
 
     /** DSH's workspace with this id, or undefined. */
@@ -155,7 +165,7 @@ export class CategoryManager {
      * leaves the move for the next start.
      */
     moveFromProjects() {
-        if (this.store.exists) return;
+        if (this.disposed || this.store.exists) return;
         const file = this.config.projectsStoreFile ? dataPath(this.config.projectsStoreFile) : '';
         let text = '';
         if (file) {
@@ -211,9 +221,14 @@ export class CategoryManager {
      * already in a category here, stays where it is. The old file is only
      * read. A file that can't be read (other than missing) is tried again at
      * the next start.
+     *
+     * Only for a DSH whose categories never lived in the projects plugin's
+     * store: when that store had categories, they are the user's as they
+     * left them (some made from this same file, perhaps deleted since), so
+     * the old file is not read at all.
      */
     importFleetShell() {
-        if (this.store.imports.fleetShell) return;
+        if (this.disposed || this.store.imports.fleetShell || this.store.imports.projects?.from === 'categories') return;
         const file = join(dshHome(), 'fleet-shell', 'state.json');
         let state;
         try {
@@ -252,6 +267,11 @@ export class CategoryManager {
         return Object.entries(this.store.categories).map(([id, c], i) => ({ id, c, i }))
             .sort((a, b) => at(a.c) - at(b.c) || a.i - b.i)
             .map(({ id, c }) => [id, c]);
+    }
+
+    /** A refusal once this manager is stopped: a late call must not write over the store a new start read. */
+    requireLive() {
+        if (this.disposed) throw new CategoryError('the categories plugin was switched off or reloaded; try again');
     }
 
     /** A category the window names, or a refusal. */
@@ -299,6 +319,7 @@ export class CategoryManager {
      * the start. @returns its id.
      */
     async createCategory(name, workspaceId) {
+        this.requireLive();
         const clean = this.categoryName(name);
         if (workspaceId !== undefined && !this.workspace(workspaceId)) throw new CategoryError('DSH has no such workspace');
         const id = this.makeCategory(clean, 'page');
@@ -307,6 +328,7 @@ export class CategoryManager {
     }
 
     renameCategory(categoryId, name) {
+        this.requireLive();
         const category = this.requireCategory(categoryId);
         const clean = this.categoryName(name);
         if (clean === category.name) return;
@@ -316,6 +338,7 @@ export class CategoryManager {
 
     /** Delete a category: its workspaces and their chats stay in DSH, in Other workspaces. */
     async removeCategory(categoryId) {
+        this.requireLive();
         this.requireCategory(categoryId);
         this.store.removeCategory(categoryId);
         this.log(`category-delete ${categoryId}`);
@@ -324,6 +347,7 @@ export class CategoryManager {
 
     /** Move a category before another one, or (before null) to the end. */
     async moveCategory(categoryId, beforeId) {
+        this.requireLive();
         this.requireCategory(categoryId);
         const before = typeof beforeId === 'string' && beforeId !== '' ? beforeId : null;
         if (before !== null) this.requireCategory(before);
@@ -343,6 +367,7 @@ export class CategoryManager {
      * kept in step, so its list holds each category's workspaces together.
      */
     async fileWorkspace(workspaceId, categoryId, beforeId = null) {
+        this.requireLive();
         if (!this.workspace(workspaceId)) throw new CategoryError('DSH has no such workspace');
         if (categoryId !== null) this.requireCategory(categoryId);
         const before = typeof beforeId === 'string' && beforeId !== '' && beforeId !== workspaceId ? beforeId : null;
@@ -371,6 +396,7 @@ export class CategoryManager {
         const registry = this.ctx.workspaceRegistry;
         if (typeof registry?.insertBefore !== 'function') return;
         const run = async () => {
+            if (this.disposed) return;
             const current = this.workspaceList().map((ws) => ws.id);
             const bucket = (id) => (this.store.categories[this.store.categoryOf[id]] ? this.store.categoryOf[id] : null);
             const groups = new Map(this.categoryEntries().map(([id]) => [id, []]));

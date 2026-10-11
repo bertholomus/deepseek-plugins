@@ -18,8 +18,10 @@ Deleting a category deletes nothing in DSH: its workspaces and their chats go to
 
 Two moves run once, when the plugin starts in a DSH for the first time (before its store exists):
 
-1. **Categories from the projects plugin.** Before this plugin, the projects plugin kept the categories, in its store (`~/.dsh/projects/projects.json`). Whatever categories that store holds come over unchanged: the same ids, names, order and workspaces. None is renamed or left out. The projects store is only read; it is copied first to `~/.dsh/categories/from-projects.json` (a later move never overwrites that copy). A projects store from before categories, where projects were also groups of workspaces, gives its groups as categories instead, except a project that has a coordinator and holds only its own workspace: that one stays a project, not a category.
-2. **Your old sidebar.** The all-in-one mod's old sidebar kept projects of workspaces in `~/.dsh/fleet-shell/state.json`. Each one becomes a category here, in the same order, holding the same workspaces. Only names and which workspaces each held come over: the old instructions, files and defaults stay behind. A name that is already a category here joins it; a workspace already in a category, or one DSH no longer has, stays where it is. The old file is only read. When the projects plugin had already imported it, that import is remembered and this one doesn't run.
+1. **Categories from the projects plugin.** Before this plugin, the projects plugin kept the categories, in its store (`~/.dsh/projects/projects.json`). Whatever categories that store holds when the plugin first starts come over exactly as they are: the same ids, names, order and workspaces. None is renamed or left out, including one with the same id as a ◆ project. A workspace placed in one that DSH no longer has stays recorded and isn't shown. The projects store is only read; it is copied first to `~/.dsh/categories/from-projects.json` (a later move never overwrites that copy).
+2. **Your old sidebar, only when there were no categories yet.** The all-in-one mod's old sidebar kept projects of workspaces in `~/.dsh/fleet-shell/state.json`. When the projects store has categories, they are your categories as you left them (some made from this file, perhaps deleted since), so the old file isn't read at all. Otherwise (no projects store, or one from before categories) each old project becomes a category, in the same order, holding the same workspaces. Only names and which workspaces each held come over: the old instructions, files and defaults stay behind. A name that is already a category here joins it; a workspace already in a category, or one DSH no longer has, stays where it is. The old file is only read, and an import the projects plugin already made isn't made again.
+
+A projects store from before categories, where projects were also groups of workspaces, gives its groups as categories, except a project that has a coordinator and holds only its own workspace: that one stays a project, not a category.
 
 A store that can't be read (other than missing) is logged, and its move is tried again at the next start.
 
@@ -32,6 +34,8 @@ node plugins/categories/scripts/import-preview.mjs
 It reads `$DSH_HOME` (else `~/.dsh`); once the moves have run, it says when.
 
 The projects plugin keeps its old categories in its own store as they were, so an older version of it still finds them. Neither plugin reads or writes the other's data after this one move.
+
+Each start reads the store from its file. Switched off in DSH's Plugins page (or reloaded by a config change), the plugin stops changing anything, and switched on again it starts from the file as it is then.
 
 ## Setup
 
@@ -72,9 +76,9 @@ A path under `~/.dsh` follows `$DSH_HOME`.
 node plugins/categories/test/smoke.mjs
 ```
 
-The smoke tests run the host half against a fake Host: categories and their workspaces in DSH's order, the refusals, the one-time move from the projects store (categories as they are, groups from before them without a project that has a coordinator in its own workspace, nothing to move, a store that can't be read yet), the old sidebar's import and the preview script, and the browser half's parts.
+The smoke tests run the host half against a fake Host: categories and their workspaces in DSH's order, the refusals, the one-time move from the projects store (its categories exactly as they are with the old sidebar left unread, groups from before them without a project that has a coordinator in its own workspace, nothing to move, a store that can't be read yet), a switch-off and on that reads the file again, the old sidebar's import and the preview script.
 
-The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin and session-bridge. A first start makes DSH's workspaces; then a projects store with categories and an old sidebar file are put where the user's are, and the next start moves the categories over once and imports the old sidebar once (the projects store and the old file untouched, a copy kept, the files private). It checks DSH's own workspace order, that DSH serves the browser half and it parses, the endpoints as the window calls them (make, file before another, move, rename, delete, the refusals) and a restart that changes nothing. With `PROJECTS=1` the projects plugin runs beside it: each answers only for its own, and the projects store keeps its categories as they were.
+The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin and session-bridge. A first start makes DSH's workspaces; then a projects store shaped like the user's (four categories, one with a ◆ project's id, a placement of a workspace that's gone) and an old sidebar file still naming deleted categories are put where the user's are, and the next start moves the categories over once, exactly as they are, without reading the old file (the projects store and the old file untouched, a copy kept, the files private). It checks DSH's own workspace order, that DSH serves the browser half and it parses, the endpoints as the window calls them (make, file before another, move, rename, delete, the refusals) and a restart that changes nothing. With `PROJECTS=1` the projects plugin runs beside it: each answers only for its own, and the projects store keeps its categories as they were.
 
 ```bash
 npm install --prefix /tmp/dsh @deepseek-ai/dsh

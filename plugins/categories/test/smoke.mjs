@@ -16,7 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol';
 import * as plugin from '../lib/index.js';
-import { CategoryStore, dataPath } from '../lib/store.js';
+import { dataPath } from '../lib/store.js';
 import { clipName, slugify, longestRun } from '../lib/categories.js';
 import { planFleetShellImport, planFromProjects } from '../lib/plan.js';
 
@@ -75,9 +75,16 @@ function fakeHost({ workspaces = [], gateway = true, registry = fakeWorkspaces(w
             fn(Object.assign(Object.create(host), Object.fromEntries(names.map((name) => [name, services[name]]))));
         },
         on() {},
-        effect() {},
+        /** The plugin's disposers, run by switchOff as DSH does when the plugin is switched off or reloaded. */
+        effects: [],
+        effect(fn) { host.effects.push(fn()); },
     };
     return host;
+}
+
+/** Switch the plugin off, as DSH does (`disabled: true`, or a config reload): its disposers run. */
+function switchOff(host) {
+    for (const dispose of host.effects.splice(0)) dispose?.();
 }
 
 function setup(overrides = {}, dir = mkdtempSync(join(tmpdir(), 'categories-')), hostOptions = {}) {
@@ -92,11 +99,10 @@ function setup(overrides = {}, dir = mkdtempSync(join(tmpdir(), 'categories-')),
     return { host, raw, dir, remote: host.provided.get('dshPluginCategoriesRemote') };
 }
 
-/** The same plugin started again, as after a DSH restart, on the same workspaces. */
+/** The same plugin started again (switched off and on, or DSH restarted), on the same workspaces. */
 async function restart(host, raw) {
+    switchOff(host);
     const again = fakeHost({ registry: host.workspaceRegistry });
-    // A new process: the store is read from its file again.
-    CategoryStore.open(raw.storeFile).load();
     plugin.apply(again, plugin.Config(raw));
     await tick();
     return again.provided.get('dshPluginCategoriesRemote');
@@ -223,26 +229,31 @@ test('categories: named sets of workspaces in their order, kept in step with DSH
     assert.doesNotMatch(log, /Labs|Fleet Services/);
 });
 
-/** The projects plugin's store as the live 5f0487a writes it: categories, placements, the import's record. */
+/**
+ * The projects plugin's store as on the user's DSH after its duplicate categories were deleted and the
+ * list rearranged: four categories in their places, one of them (General) with the same id as a ◆ project,
+ * a placement of a workspace DSH no longer has (clef-quant), two ◆ projects whose groups from before
+ * categories are still recorded for an older version, and the records of the old sidebar's import and of
+ * the groups' move to categories.
+ */
 function projectsStoreWithCategories() {
     return {
         version: 1,
         projects: {
             'dsh-plugins': { settings: { goal: 'Ship it' }, threads: { t1: { sessionId: 's-t1', title: 'Fix CI' } }, pendingHandbacks: [], nextThread: 2, coordinatorSessionId: 's-dsh', home: 'ws:/work/dsh' },
-            'testing-out-coordinator': { name: 'Testing out Coordinator', source: 'page', order: 0, coordinatorSessionId: 's-test', home: 'ws:/work/notes' },
+            'testing-out-coordinator': { name: 'Testing out Coordinator', source: 'page', order: 0, coordinatorSessionId: 's-test', home: 'ws:/work/albertlee', threads: { t1: { sessionId: 's-n1' }, t2: { sessionId: 's-n2' } } },
         },
-        workspaceOf: { 'ws:/work/dsh': 'dsh-plugins' },
+        workspaceOf: { 'ws:/work/dsh': 'dsh-plugins', 'ws:/work/d2': 'dsh-plugins', 'ws:/work/albertlee': 'testing-out-coordinator', 'ws:/work/c': 'testing-out-coordinator' },
         categories: {
-            'dsh-plugins': { name: 'DSH Plugins', order: 0, createdAt: '2026-10-10T08:13:00.000Z', source: 'group' },
             'local-model-recipe': { name: 'Local Model Recipe', order: 1, createdAt: '2026-10-10T08:13:00.000Z', source: 'import', importedFrom: 'p4' },
             'fleet-services': { name: 'Fleet Services', order: 2, createdAt: '2026-10-10T08:13:00.000Z', source: 'import', importedFrom: 'p3' },
             experimentation: { name: 'Experimentation', order: 3, createdAt: '2026-10-10T08:13:00.000Z', source: 'import', importedFrom: 'p2' },
-            'testing-out-coordinator': { name: 'General', order: 4, createdAt: '2026-10-10T09:00:00.000Z', source: 'group' },
+            'testing-out-coordinator': { name: 'General', order: 0, createdAt: '2026-10-10T09:00:00.000Z', source: 'group' },
             broken: { order: 5 },
         },
         categoryOf: {
-            'ws:/work/dsh': 'dsh-plugins', 'ws:/work/a': 'local-model-recipe', 'ws:/work/b': 'local-model-recipe', 'ws:/work/ops': 'fleet-services',
-            'ws:/work/lab': 'experimentation', 'ws:/work/notes': 'testing-out-coordinator', 'ws:/work/gone': 'fleet-services', 'ws:/work/x': 'broken',
+            'ws:/work/a': 'local-model-recipe', 'ws:/work/clef-quant': 'local-model-recipe', 'ws:/work/b': 'local-model-recipe', 'ws:/work/ops': 'fleet-services',
+            'ws:/work/lab': 'experimentation', 'ws:/work/albertlee': 'testing-out-coordinator', 'ws:/work/dsh': 'testing-out-coordinator', 'ws:/work/x': 'broken',
         },
         imports: {
             fleetShell: { at: '2026-10-10T08:13:00.000Z', file: '/home/u/.dsh/fleet-shell/state.json', projects: 5, joined: 0, workspaces: 14, skipped: 0 },
@@ -251,62 +262,101 @@ function projectsStoreWithCategories() {
     };
 }
 
-test('move: at the first start, whatever categories the projects plugin kept come over unchanged, with a copy of its store; it is only read', async () => {
+/** The all-in-one mod's old sidebar file, still holding the projects the user deleted as categories. */
+const OLD_SIDEBAR = {
+    projects: [
+        { id: 'p1', name: 'DSH Plugins' }, { id: 'p4', name: 'Local Model Recipe' }, { id: 'p3', name: 'Fleet Services' }, { id: 'p2', name: 'Experimentation' },
+        { id: 'p5', name: 'General' }, { id: 'p6', name: 'Project Testing' }, { id: 'p7', name: 'Security' },
+    ],
+    projectOf: { 'ws:/work/dsh': 'p1', 'ws:/work/albertlee': 'p5', 'ws:/work/c': 'p6', 'ws:/work/new': 'p7', 'ws:/work/a': 'p4' },
+};
+
+test('move: at the first start, the projects plugin\'s categories come over exactly as they are, with a copy of its store; it and the old sidebar are only read', async () => {
     const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
-    // An old sidebar file is there too: its import already ran (the projects store says so), so it doesn't run again.
     mkdirSync(join(home, 'fleet-shell'));
-    writeFileSync(join(home, 'fleet-shell', 'state.json'), JSON.stringify({ projects: [{ id: 'p9', name: 'Security' }], projectOf: { 'ws:/work/c': 'p9' } }));
+    const oldText = JSON.stringify(OLD_SIDEBAR);
+    writeFileSync(join(home, 'fleet-shell', 'state.json'), oldText);
     const dir = mkdtempSync(join(tmpdir(), 'categories-'));
     mkdirSync(join(dir, 'projects'));
     const projectsFile = join(dir, 'projects', 'projects.json');
-    const text = `${JSON.stringify(projectsStoreWithCategories(), null, 2)}\n`;
+    // Without the import's record too: a store with categories is never followed by the old sidebar.
+    const source = projectsStoreWithCategories();
+    delete source.imports.fleetShell;
+    const text = `${JSON.stringify(source, null, 2)}\n`;
     writeFileSync(projectsFile, text, { mode: 0o600 });
-    const options = { workspaces: ['/work/new', '/work/dsh', '/work/a', '/work/b', '/work/ops', '/work/lab', '/work/notes', '/work/c'] };
+    const options = { workspaces: ['/work/new', '/work/dsh', '/work/a', '/work/b', '/work/ops', '/work/lab', '/work/albertlee', '/work/c'] };
     await withDshHome(home, async () => {
         const { host, raw, remote } = setup({}, dir, options);
         await tick();
         const list = await remote.list();
-        // The same ids, names (General stays General), sources and order; the workspaces DSH has.
+        // The same ids (General keeps the id it shares with a ◆ project), names, sources and order; the workspaces
+        // DSH has (clef-quant is gone). Nothing from the old sidebar or the old groups.
         assert.deepEqual(plain(list.categories).map((c) => [c.id, c.name, c.source, c.importedFrom ?? null, c.workspaces.map((w) => w.id.slice(9))]), [
-            ['dsh-plugins', 'DSH Plugins', 'group', null, ['dsh']],
+            ['testing-out-coordinator', 'General', 'group', null, ['dsh', 'albertlee']],
             ['local-model-recipe', 'Local Model Recipe', 'import', 'p4', ['a', 'b']],
             ['fleet-services', 'Fleet Services', 'import', 'p3', ['ops']],
             ['experimentation', 'Experimentation', 'import', 'p2', ['lab']],
-            ['testing-out-coordinator', 'General', 'group', null, ['notes']],
         ]);
         const store = JSON.parse(readFileSync(raw.storeFile, 'utf8'));
-        const source = projectsStoreWithCategories();
-        // Each category as it was, field for field; a placement DSH no longer lists is kept too; the broken one isn't.
+        // Each category as it was, field for field; a placement DSH no longer lists is kept too; the one without a name isn't.
         assert.deepEqual(store.categories, Object.fromEntries(Object.entries(source.categories).filter(([id]) => id !== 'broken')));
         assert.deepEqual(store.categoryOf, Object.fromEntries(Object.entries(source.categoryOf).filter(([, id]) => id !== 'broken')));
-        // The old sidebar's import is remembered as made, so it doesn't run again here.
-        assert.deepEqual(store.imports.fleetShell, source.imports.fleetShell);
         const copy = join(dir, 'categories', 'from-projects.json');
-        assert.deepEqual({ ...store.imports.projects, at: 'x' }, { at: 'x', file: projectsFile, from: 'categories', categories: 5, workspaces: 7, backup: copy });
+        assert.deepEqual({ ...store.imports.projects, at: 'x' }, { at: 'x', file: projectsFile, from: 'categories', categories: 4, workspaces: 7, backup: copy });
+        assert.equal(store.imports.fleetShell, undefined);
         assert.equal(readFileSync(copy, 'utf8'), text, 'a copy of the projects store as it was');
         assert.equal(mode(copy), 0o600);
         assert.equal(readFileSync(projectsFile, 'utf8'), text, 'the projects store is only read');
-        assert.match(readFileSync(raw.logFile, 'utf8'), /move from projects from=categories categories=5 workspaces=7 backup=/);
-        assert.doesNotMatch(readFileSync(raw.logFile, 'utf8'), /import fleet-shell/);
-        // DSH's order reads like the list: each category's workspaces together, then the rest.
-        assert.deepEqual(host.workspaceRegistry.list().map((ws) => ws.id.slice(9)), ['dsh', 'a', 'b', 'ops', 'lab', 'notes', 'new', 'c']);
+        assert.equal(readFileSync(join(home, 'fleet-shell', 'state.json'), 'utf8'), oldText);
+        assert.match(readFileSync(raw.logFile, 'utf8'), /move from projects from=categories categories=4 workspaces=7 backup=/);
+        assert.doesNotMatch(readFileSync(raw.logFile, 'utf8'), /fleet-shell/);
+        // DSH's order reads like the list: each category's workspaces together, then the rest in DSH's order.
+        assert.deepEqual(host.workspaceRegistry.list().map((ws) => ws.id.slice(9)), ['dsh', 'albertlee', 'a', 'b', 'ops', 'lab', 'new', 'c']);
 
-        // Once: the projects store changes, a category is renamed here; a restart moves nothing again.
+        // Once: the projects store changes, a category is renamed here; a restart moves and imports nothing.
         writeFileSync(projectsFile, JSON.stringify({ version: 1, projects: {}, categories: { other: { name: 'Other', order: 0 } }, categoryOf: {} }));
-        await remote.renameCategory('testing-out-coordinator', 'Notes');
+        await remote.renameCategory('experimentation', 'Experiments');
         const again = await restart(host, raw);
         assert.deepEqual(tree(await again.list()).map(([id, name]) => [id, name]), [
-            ['dsh-plugins', 'DSH Plugins'], ['local-model-recipe', 'Local Model Recipe'], ['fleet-services', 'Fleet Services'], ['experimentation', 'Experimentation'], ['testing-out-coordinator', 'Notes'],
+            ['testing-out-coordinator', 'General'], ['local-model-recipe', 'Local Model Recipe'], ['fleet-services', 'Fleet Services'], ['experimentation', 'Experiments'],
         ]);
         assert.equal(readFileSync(raw.logFile, 'utf8').match(/move from projects/g).length, 1);
+        assert.doesNotMatch(readFileSync(raw.logFile, 'utf8'), /fleet-shell/);
 
-        // The plugin's store gone (the user deleted it to move again): a second copy, the first kept.
+        // The plugin's store gone (the user deleted it to move again): a second copy, the first kept, and still no import.
         const first = readFileSync(copy, 'utf8');
+        writeFileSync(projectsFile, text);
         rmSync(raw.storeFile);
         await restart(host, raw);
         assert.equal(readFileSync(copy, 'utf8'), first);
-        assert.equal(JSON.parse(readFileSync(raw.storeFile, 'utf8')).imports.projects.backup, join(dir, 'categories', 'from-projects-2.json'));
+        const moved = JSON.parse(readFileSync(raw.storeFile, 'utf8'));
+        assert.deepEqual([moved.imports.projects.backup, Object.keys(moved.categories)], [join(dir, 'categories', 'from-projects-2.json'), ['local-model-recipe', 'fleet-services', 'experimentation', 'testing-out-coordinator']]);
+        assert.doesNotMatch(readFileSync(raw.logFile, 'utf8'), /fleet-shell/);
     });
+});
+
+test('switched off and on, the plugin reads its store from the file as it is then, and a late call to the old one is refused', async () => {
+    const { host, raw, remote } = setup({}, undefined, { workspaces: ['/work/a', '/work/b'] });
+    await tick();
+    await remote.createCategory('Alpha', 'ws:/work/a');
+    await remote.createCategory('Beta', 'ws:/work/b');
+    switchOff(host);
+    // While it was off, the file was changed by hand: Beta deleted.
+    const file = JSON.parse(readFileSync(raw.storeFile, 'utf8'));
+    delete file.categories.beta;
+    delete file.categoryOf['ws:/work/b'];
+    writeFileSync(raw.storeFile, JSON.stringify(file));
+    // A late call to the switched-off plugin changes nothing.
+    await refused(remote.createCategory('Gamma'), /switched off or reloaded/);
+    await refused(remote.fileWorkspace('ws:/work/b', 'beta'), /switched off or reloaded/);
+    const on = fakeHost({ registry: host.workspaceRegistry });
+    plugin.apply(on, plugin.Config(raw));
+    await tick();
+    const again = on.provided.get('dshPluginCategoriesRemote');
+    assert.deepEqual(tree(await again.list()), [['alpha', 'Alpha', ['a']]]);
+    // Its next change keeps the edit.
+    await again.createCategory('Gamma', 'ws:/work/b');
+    assert.deepEqual(Object.keys(JSON.parse(readFileSync(raw.storeFile, 'utf8')).categories), ['alpha', 'gamma']);
 });
 
 test('move: a projects store from before categories gives its groups, never a project that has a coordinator and only its own workspace', async () => {
@@ -376,14 +426,16 @@ test('move: no projects store is nothing to move, done once; one that can\'t be 
         assert.equal(existsSync(second.raw.storeFile), false);
         writeFileSync(join(dir2, 'projects', 'projects.json'), JSON.stringify(projectsStoreWithCategories()));
         const later = await restart(second.host, second.raw);
-        assert.equal((await later.list()).categories.length, 5);
+        assert.equal((await later.list()).categories.length, 4);
     });
 });
 
 test('move plan: categories as they are, groups from before them, and nothing from anything else', () => {
     const now = '2026-10-11T04:00:00.000Z';
     const plan = planFromProjects(projectsStoreWithCategories(), now);
-    assert.deepEqual([plan.from, plan.order], ['categories', ['dsh-plugins', 'local-model-recipe', 'fleet-services', 'experimentation', 'testing-out-coordinator']]);
+    assert.deepEqual([plan.from, plan.order, plan.projects], ['categories', ['testing-out-coordinator', 'local-model-recipe', 'fleet-services', 'experimentation'], []]);
+    // The old sidebar's import, when the projects store records it, is remembered here too.
+    assert.deepEqual(plan.fleetShell, projectsStoreWithCategories().imports.fleetShell);
     // Order by their place in the list, then as listed.
     const shuffled = planFromProjects({ version: 1, categories: { b: { name: 'B', order: 1 }, a: { name: 'A', order: 0 }, c: { name: 'C' } }, categoryOf: { w: 'c', v: 'nope' } }, now);
     assert.deepEqual([shuffled.order, shuffled.categoryOf], [['a', 'b', 'c'], { w: 'c' }]);
@@ -451,13 +503,13 @@ test('import: the old sidebar\'s projects come in once, as categories in their o
     });
 });
 
-test('import: a name that is already a category joins it; an unreadable old file is logged and tried again; none at all is quiet', async () => {
+test('import: after groups from before categories, a name already here joins it; an unreadable old file is logged and tried again; none at all is quiet', async () => {
     const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
     await withDshHome(home, async () => {
         const dir = mkdtempSync(join(tmpdir(), 'categories-'));
         mkdirSync(join(dir, 'projects'));
-        // The projects plugin made one category, and never imported the old sidebar.
-        writeFileSync(join(dir, 'projects', 'projects.json'), JSON.stringify({ version: 1, projects: {}, categories: { fleet: { name: 'Fleet Services', order: 0 } }, categoryOf: { 'ws:/work/a': 'fleet' } }));
+        // A projects store from before categories, with one group, that never imported the old sidebar.
+        writeFileSync(join(dir, 'projects', 'projects.json'), JSON.stringify({ version: 1, projects: { fleet: { name: 'Fleet Services', source: 'page', order: 0 } }, workspaceOf: { 'ws:/work/a': 'fleet' } }));
         const options = { workspaces: ['/work/a', '/work/b', '/work/c'] };
         const { host, raw } = setup({}, dir, options);
         await tick();
@@ -491,8 +543,6 @@ test('import plan: one group per name in the old order, a name already here join
 });
 
 test('import preview: says what the move from the projects store and the import will do, reading only, and that they ran once they have', () => {
-    const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
-    for (const dir of ['fleet-shell', 'storages', 'projects']) mkdirSync(join(home, dir));
     const state = { projects: [{ id: 'p1', name: 'Fleet Services' }, { id: 'p2', name: 'Security' }], projectOf: { w1: 'p1', w2: 'p1', w3: 'p2', w4: '_none', w9: 'p2' } };
     const workspaces = {
         w1: { path: '/work/fleet-ops', title: 'fleet-ops', sessionIds: ['s-chat'] },
@@ -500,40 +550,69 @@ test('import preview: says what the move from the projects store and the import 
         w3: { path: '/work/lab', title: 'Vulnerability Lab', sessionIds: [] },
         w4: { path: '/work/discord', title: 'DSH Discord', sessionIds: [] },
     };
-    const projectsFile = join(home, 'projects', 'projects.json');
-    const files = {
-        [join(home, 'fleet-shell', 'state.json')]: JSON.stringify(state),
-        [join(home, 'storages', 'workspace.json')]: JSON.stringify({ unit: { name: 'workspace', version: 2 }, global: {}, tables: { workspaces } }),
-        [projectsFile]: JSON.stringify({
-            version: 1,
-            projects: { 'dsh-plugins': { coordinatorSessionId: 's-coordinator', home: 'w2' } },
-            categories: { 'dsh-plugins': { name: 'DSH Plugins', order: 0, source: 'group' }, lab: { name: 'Lab', order: 1, source: 'page' } },
-            categoryOf: { w2: 'dsh-plugins', w3: 'lab' },
-        }),
+    /** A DSH home with the old sidebar file, DSH's workspaces and this projects store; every file's text. */
+    const homeWith = (projects) => {
+        const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
+        for (const dir of ['fleet-shell', 'storages', 'projects']) mkdirSync(join(home, dir));
+        const files = {
+            [join(home, 'fleet-shell', 'state.json')]: JSON.stringify(state),
+            [join(home, 'storages', 'workspace.json')]: JSON.stringify({ unit: { name: 'workspace', version: 2 }, global: {}, tables: { workspaces } }),
+            [join(home, 'projects', 'projects.json')]: JSON.stringify(projects),
+        };
+        for (const [file, text] of Object.entries(files)) writeFileSync(file, text);
+        return { home, files };
     };
-    for (const [file, text] of Object.entries(files)) writeFileSync(file, text);
     const script = fileURLToPath(new URL('../scripts/import-preview.mjs', import.meta.url));
-    const run = () => spawnSync(process.execPath, [script], { env: { ...process.env, DSH_HOME: home }, encoding: 'utf8' });
-    const first = run();
-    assert.equal(first.status, 0, first.stderr);
-    assert.match(first.stdout, /From the projects plugin's store \(.*projects\.json, only read; copied to .*from-projects\.json first\), at the first start:\n\n1\. DSH Plugins\n {5}deepseek-plugins \(\/work\/plugins\)\n2\. Lab\n {5}Vulnerability Lab \(\/work\/lab\)\n/);
-    assert.match(first.stdout, /1\. Fleet Services, a new category\n {5}fleet-ops \(\/work\/fleet-ops\)\n2\. Security, a new category\n {5}\(no workspaces\)\n/);
-    assert.match(first.stdout, /names and workspaces only; its instructions, files and defaults stay behind/);
-    assert.match(first.stdout, /Already in a category here, stays there: deepseek-plugins \(\/work\/plugins\) in "dsh-plugins", Vulnerability Lab \(\/work\/lab\) in "lab"/);
-    assert.match(first.stdout, /Ungrouped in the old sidebar, goes to Other workspaces: DSH Discord \(\/work\/discord\)/);
-    assert.match(first.stdout, /Gone from DSH, skipped: w9/);
-    assert.match(first.stdout, /Result: 2 new categories, 0 joined, 1 workspaces placed, 1 skipped\./);
-    for (const [file, text] of Object.entries(files)) assert.equal(readFileSync(file, 'utf8'), text, `${file} is unchanged`);
-    assert.equal(existsSync(join(home, 'categories')), false, 'nothing of its own is made');
-    // Once both have run, it says so.
-    mkdirSync(join(home, 'categories'));
-    writeFileSync(join(home, 'categories', 'categories.json'), JSON.stringify({
-        version: 1, categories: {}, categoryOf: {},
-        imports: { projects: { at: '2026-10-11T04:00:00.000Z', categories: 5, workspaces: 14 }, fleetShell: { at: '2026-10-10T15:00:00.000Z', projects: 2, workspaces: 2, skipped: 1 } },
-    }));
-    const done = run().stdout;
-    assert.match(done, /The categories already came over from the projects plugin \(2026-10-11T04:00:00\.000Z\): 5 categories, 14 workspaces\./);
-    assert.match(done, /The old sidebar was already imported \(2026-10-10T15:00:00\.000Z\): 2 groups, 2 workspaces, 1 skipped\. It won't run again\./);
+    const run = (home) => spawnSync(process.execPath, [script], { env: { ...process.env, DSH_HOME: home }, encoding: 'utf8' });
+    const unchanged = ({ home, files }) => {
+        for (const [file, text] of Object.entries(files)) assert.equal(readFileSync(file, 'utf8'), text, `${file} is unchanged`);
+        assert.equal(existsSync(join(home, 'categories')), false, 'nothing of its own is made');
+    };
+
+    // The projects plugin has categories: those come over, and the old sidebar isn't read.
+    const withCategories = homeWith({
+        version: 1,
+        projects: { 'dsh-plugins': { coordinatorSessionId: 's-coordinator', home: 'w2' } },
+        workspaceOf: { w2: 'dsh-plugins' },
+        categories: { 'fleet-services': { name: 'Fleet Services', order: 1, source: 'import' }, lab: { name: 'Lab', order: 2, source: 'page' } },
+        categoryOf: { w1: 'fleet-services', w3: 'lab' },
+    });
+    let out = run(withCategories.home);
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /From the projects plugin's store \(.*projects\.json, only read; copied to .*from-projects\.json first\), at the first start:\n\n1\. Fleet Services\n {5}fleet-ops \(\/work\/fleet-ops\)\n2\. Lab\n {5}Vulnerability Lab \(\/work\/lab\)\n/);
+    assert.match(out.stdout, /The old sidebar \(.*state\.json\) isn't read: the projects plugin's store had categories, so those are your categories as you left them\./);
+    assert.doesNotMatch(out.stdout, /a new category|Security|DSH Plugins/);
+    unchanged(withCategories);
+
+    // A projects store from before categories: its groups come over (not a project in only its own workspace), then the old sidebar.
+    const before = homeWith({
+        version: 1,
+        projects: { 'dsh-plugins': { coordinatorSessionId: 's-coordinator', home: 'w2' }, lab: { name: 'Lab', source: 'page', order: 0 } },
+        workspaceOf: { w2: 'dsh-plugins', w3: 'lab' },
+    });
+    out = run(before.home);
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /at the first start:\n\n1\. Lab\n {5}Vulnerability Lab \(\/work\/lab\)\n\nThese were groups of workspaces, from before categories\.\nProjects with a coordinator in their own workspace stay projects only: dsh-plugins\n/);
+    assert.match(out.stdout, /1\. Fleet Services, a new category\n {5}fleet-ops \(\/work\/fleet-ops\)\n {5}deepseek-plugins \(\/work\/plugins\)\n2\. Security, a new category\n {5}\(no workspaces\)\n/);
+    assert.match(out.stdout, /names and workspaces only; its instructions, files and defaults stay behind/);
+    assert.match(out.stdout, /Already in a category here, stays there: Vulnerability Lab \(\/work\/lab\) in "lab"/);
+    assert.match(out.stdout, /Ungrouped in the old sidebar, goes to Other workspaces: DSH Discord \(\/work\/discord\)/);
+    assert.match(out.stdout, /Gone from DSH, skipped: w9/);
+    assert.match(out.stdout, /Result: 2 new categories, 0 joined, 2 workspaces placed, 1 skipped\./);
+    unchanged(before);
+
+    // Once they have run, it says so.
+    const ran = (home, imports) => {
+        mkdirSync(join(home, 'categories'));
+        writeFileSync(join(home, 'categories', 'categories.json'), JSON.stringify({ version: 1, categories: {}, categoryOf: {}, imports }));
+        return run(home).stdout;
+    };
+    out = ran(withCategories.home, { projects: { at: '2026-10-11T04:00:00.000Z', from: 'categories', categories: 3, workspaces: 5 } });
+    assert.match(out, /The categories already came over from the projects plugin \(2026-10-11T04:00:00\.000Z\): 3 categories, 5 workspaces\./);
+    assert.match(out, /isn't read: the projects plugin's store had categories/);
+    out = ran(before.home, { projects: { at: '2026-10-11T04:00:00.000Z', from: 'groups', categories: 1, workspaces: 1 }, fleetShell: { at: '2026-10-11T04:00:01.000Z', categories: 2, joined: 0, workspaces: 2, skipped: 1 } });
+    assert.match(out, /The categories already came over from the projects plugin \(2026-10-11T04:00:00\.000Z\): 1 category, 1 workspace\./);
+    assert.match(out, /The old sidebar was already imported \(2026-10-11T04:00:01\.000Z\): 2 categories, 2 workspaces, 1 skipped\. It won't run again\./);
 });
 
 test('names and ids: one line within DSH\'s 80 bytes, ids in any script', () => {

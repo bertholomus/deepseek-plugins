@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
  * What the plugin does once at its first start in this DSH, shown before it
- * runs: the categories the projects plugin kept come over, and the
- * all-in-one mod's old sidebar projects come in as categories (only their
- * names and which workspaces each held). It only reads: the plugin's store
+ * runs: the categories the projects plugin kept come over, or, when that
+ * store never had categories, the all-in-one mod's old sidebar projects come
+ * in as categories (only their names and which workspaces each held). It
+ * only reads: the plugin's store
  * (the default <DSH home>/categories/categories.json, or the path given),
  * the projects plugin's store (<DSH home>/projects/projects.json, or the
  * second path given), DSH's workspaces (<DSH home>/storages/workspace.json)
@@ -43,6 +44,8 @@ const label = (id) => {
 const store = new CategoryStore(process.argv[2] ?? '~/.dsh/categories/categories.json');
 let { categories, categoryOf } = store;
 let fleetShell = store.imports.fleetShell;
+/** Whether the categories came from the projects plugin's store, which had them: then the old sidebar is never read. */
+let fromCategories = store.imports.projects?.from === 'categories';
 
 // 1. The categories the projects plugin kept, once.
 if (store.exists) {
@@ -57,6 +60,7 @@ if (store.exists) {
     const plan = planFromProjects(stored instanceof Error ? {} : stored, new Date().toISOString());
     ({ categories, categoryOf } = plan);
     fleetShell = plan.fleetShell;
+    fromCategories = plan.from === 'categories';
     const copy = join(dirname(store.file), 'from-projects.json');
     if (plan.from === 'none') console.log(`\nNothing comes over from the projects plugin: ${short(projectsFile)} ${stored instanceof Error ? "isn't there" : 'has no categories or groups'}.`);
     else {
@@ -74,8 +78,12 @@ if (store.exists) {
     }
 }
 
-// 2. The old sidebar's projects come in as categories, once.
+// 2. The old sidebar's projects come in as categories, once, unless the projects plugin already had categories.
 const oldFile = join(home, 'fleet-shell', 'state.json');
+if (fromCategories) {
+    console.log(`\nThe old sidebar (${short(oldFile)}) isn't read: the projects plugin's store had categories, so those are your categories as you left them.`);
+    process.exit(0);
+}
 if (fleetShell) {
     const made = fleetShell.categories ?? fleetShell.projects;
     console.log(`\nThe old sidebar was already imported (${fleetShell.at}): ${made} ${fleetShell.categories === undefined ? 'groups' : 'categories'}, ${fleetShell.workspaces} workspaces, ${fleetShell.skipped} skipped. It won't run again.`);
