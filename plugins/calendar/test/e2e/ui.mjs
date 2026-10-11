@@ -1209,12 +1209,12 @@ try {
         ];
         check('a Google meeting made, changed and deleted without email: the dialogs say it still reaches the guest\'s calendar (not when the box is ticked), each is made once the user has seen whose calendar it reaches, and each toast says whose calendars it was put on, changed on and taken off',
             JSON.stringify(asked) === JSON.stringify(want)
-            && unticked && addHint === 'Saving still puts it on their Google calendars, without email.' && hiddenWhenTicked
+            && unticked && addHint === 'Unticked, Google still puts it on the guests\' Google calendars, without an email.' && hiddenWhenTicked
             && made?.calendarId === googleCalendar.id && (made.attendees ?? []).some((a) => a.email === 'ann@example.com')
             && /^Added “E2E Lunch with Ann” on .+\. Put on the calendars of ann@example\.com, without emailing anyone\.$/.test(added)
-            && hintBefore === 0 && changeHint === 'Saving still changes it on their Google calendars, without email.'
+            && hintBefore === 0 && changeHint === 'Unticked, Google still changes it on the guests\' Google calendars, without an email.'
             && changed === 'Saved. Changed on the calendars of ann@example.com, without emailing anyone.'
-            && deleteBox === 'Tell ann@example.com by email' && deleteHint === 'Deleting it still takes it off their Google calendars, without email.'
+            && deleteBox === 'Tell ann@example.com by email' && deleteHint === 'Unticked, Google still removes it from the guests\' Google calendars, without an email.'
             && deleted === 'Deleted “E2E Lunch with Ann and Bo”. Taken off the calendars of ann@example.com, without emailing anyone.' && gone && quiet,
             JSON.stringify({ asked, unticked, addHint, hiddenWhenTicked, made: made && { calendarId: made.calendarId, attendees: made.attendees }, added, hintBefore, changeHint, changed,
                 deleteBox, deleteHint, deleted, gone, writes: writes.map((r) => `${r.method} ${r.path} ${r.query.sendUpdates}`) }));

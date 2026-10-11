@@ -2272,11 +2272,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // Ticked only by the user: unticked, nobody is told (or, where the server emails anyway, the user is asked).
             const tell = mail.mode === 'ask' && d.notify === true;
             const tellLabel = !editing || (home?.kind === 'caldav' && roleOf(occurrence) === 'own') ? 'Send invitations by email' : 'Send updates to guests by email';
-            // Google shows a meeting on its guests' calendars by itself: unticked, saving still reaches them, without email.
+            // Google shows a meeting on its guests' calendars by itself: unticked, saving still puts it on theirs, changes it
+            // there, or takes it off (a move out of Google, or every guest taken off), without an email.
             const reaches = home?.kind === 'google' && mail.mode === 'ask' && !tell && others > 0
                 && (!editing || d.calendarId !== homeId || Object.keys(changePatch(initial, d, { repeatTouched, originalRule: occurrence.repeat })).some((k) => k !== 'alarms' && k !== 'notify'));
-            const reachHint = !reaches ? ''
-                : `Saving still ${!editing ? 'puts it on' : d.calendarId !== homeId && store.calendar(d.calendarId)?.kind !== 'google' ? 'takes it off' : 'changes it on'} their Google calendars, without email.`;
+            const reachHow = !editing || othersOf(initial.guests).length === 0 ? 'puts it on'
+                : (d.calendarId !== homeId && store.calendar(d.calendarId)?.kind !== 'google') || othersOf(d.guests).length === 0 ? 'removes it from' : 'changes it on';
+            const reachHint = reaches ? `Unticked, Google still ${reachHow} the guests' Google calendars, without an email.` : '';
             const set = (patch) => {
                 setD((current) => ({ ...current, ...patch }));
                 setErrors((current) => {
@@ -3468,8 +3470,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 h('ol', { className: 'dshcal-steps' },
                     h('li', null, 'In ', outLink('https://console.cloud.google.com/projectcreate', 'Google Cloud Console'), ', create a project, or pick one.'),
                     h('li', null, 'Turn on the ', outLink('https://console.cloud.google.com/apis/library/calendar-json.googleapis.com', 'Google Calendar API'), ' for it.'),
-                    h('li', null, 'Set up its ', outLink('https://console.cloud.google.com/apis/credentials/consent', 'OAuth consent screen'), ': External, with your Google address as a test user.'),
+                    h('li', null, 'Set up its ', outLink('https://console.cloud.google.com/apis/credentials/consent', 'OAuth consent screen'), ': ', h('b', null, 'External'),
+                        '. With a Google Workspace account you can pick ', h('b', null, 'Internal'), ' instead, for your organization only, and skip the next step.'),
+                    h('li', null, 'Under Audience, ', h('b', null, 'Publish app'), ', so it is In production. An app left in Testing has Google end its sign-ins after 7 days.'),
                     h('li', null, 'Under ', outLink('https://console.cloud.google.com/apis/credentials', 'Credentials'), ', Create credentials → OAuth client ID, of type ', h('b', null, 'Desktop app'), '. Copy its client ID and client secret here.')),
+                h('p', { className: 'dshcal-hint', style: { margin: 0 }, 'data-calendar-google-unverified': '' },
+                    'Signing in, Google first says it hasn\'t verified the app. It\'s your own: choose ', h('b', null, 'Advanced'), ', then ', h('b', null, 'Go to'), ' your app\'s name.'),
                 h(Field, { label: 'Client ID', id: 'dshcal-google-id' },
                     h('input', { id: 'dshcal-google-id', className: 'dshcal-input', value: clientId, placeholder: '….apps.googleusercontent.com', spellCheck: false, autoComplete: 'off', 'data-modal-autofocus': true, 'data-calendar-google-id': '', onChange: (e) => setClientId(e.target.value) })),
                 h(Field, { label: 'Client secret', id: 'dshcal-google-secret', hint: 'Kept in DSH\'s credential store, not in the plugin\'s files.' },
@@ -3510,6 +3516,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         '. Exactly that, with no port: Microsoft lets the sign-in come back to any port on localhost.'),
                     h('li', null, 'Under API permissions, add the Microsoft Graph delegated permissions ', code('Calendars.ReadWrite'), ', ', code('User.Read'), ' and ', code('offline_access'), '.'),
                     h('li', null, 'Copy its Application (client) ID here.')),
+                h('p', { className: 'dshcal-hint', style: { margin: 0 }, 'data-calendar-microsoft-admin-note': '' },
+                    'A work or school account whose organization has an admin approve apps: the admin grants these permissions once, with ', h('b', null, 'Grant admin consent'), ' under API permissions.'),
                 h('p', { className: 'dshcal-hint', style: { margin: 0 }, 'data-calendar-microsoft-code-note': '' },
                     'Only to sign in with a code (from another device), also turn on ', h('b', null, 'Allow public client flows'), ' under Authentication. The sign-in in the browser doesn\'t need it.'),
                 h(Field, { label: 'Application (client) ID', id: 'dshcal-ms-id' },
@@ -3546,22 +3554,28 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function MicrosoftSignIn({ store, accountId, onDone, onSetup, slot }) {
             const signIn = useSignIn(store, 'microsoft', accountId);
             const [method, setMethod] = React.useState('browser');
-            const [copied, setCopied] = React.useState(false);
+            // 'done' after the code is copied, 'failed' when the browser wouldn't copy it.
+            const [copied, setCopied] = React.useState('');
             const flow = signIn.flow;
+            const failedText = flow?.status === 'failed' ? String(flow.error || '') : '';
+            // Microsoft's words when an organization has its admin approve apps (AADSTS65001, 90094 and the like).
+            const needsAdmin = /AADSTS(65001|90094|900941|90099)|admin(istrator)?('s)? (consent|approval)|approval required/i.test(`${failedText} ${signIn.error}`);
             const withCode = method === 'code';
             const waiting = flow?.status === 'waiting';
             React.useEffect(() => { if (flow?.status === 'done') onDone(flow.account); }, [flow?.status]);
             const begin = (next) => {
                 setMethod(next);
-                setCopied(false);
+                setCopied('');
                 void signIn.start(next === 'code' ? 'code' : '');
             };
             const copy = async () => {
                 try {
                     await navigator.clipboard.writeText(flow.userCode);
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 2000);
-                } catch {}
+                    setCopied('done');
+                    setTimeout(() => setCopied((c) => (c === 'done' ? '' : c)), 2000);
+                } catch {
+                    setCopied('failed');
+                }
             };
             return h('div', { className: 'dshcal-form', 'data-calendar-microsoft-signin': method },
                 !flow ? h('p', { className: 'dshcal-hint', style: { margin: 0 } }, withCode
@@ -3570,7 +3584,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 waiting && flow.userCode ? h(React.Fragment, null,
                     h('div', { className: 'dshcal-usercode' },
                         h('b', { 'data-calendar-user-code': '' }, flow.userCode),
-                        h(Btn, { size: 'sm', onClick: () => void copy() }, icon(copied ? 'IconCheckOutlineRegular' : 'IconCopyOutlineRegular'), copied ? 'Copied' : 'Copy')),
+                        h(Btn, { size: 'sm', onClick: () => void copy() }, icon(copied === 'done' ? 'IconCheckOutlineRegular' : 'IconCopyOutlineRegular'), copied === 'done' ? 'Copied' : 'Copy')),
+                    copied === 'failed' ? h('p', { className: 'dshcal-hint', role: 'status', style: { margin: 0 }, 'data-calendar-copy-failed': '' }, 'This browser wouldn\'t copy it: select the code and copy it yourself.') : null,
                     isUrl(flow.verificationUri) ? h('div', { className: 'dshcal-inline' },
                         h('span', null, 'Enter it at'),
                         h('a', { className: 'dshcal-btn dshcal-btn-primary dshcal-btn-sm', href: flow.verificationUri, target: '_blank', rel: 'noopener noreferrer', 'data-calendar-verification': '' }, linkLabel(flow.verificationUri), icon('IconRightUpOutlineRegular', { size: 12 }))) : null,
@@ -3578,6 +3593,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 waiting && !flow.userCode ? h(SignInWait, { key: flow.flow, who: 'Microsoft', prefix: 'microsoft', flow, busy: signIn.busy, onFinish: signIn.finish, fallback: 'http://localhost' }) : null,
                 flow?.status === 'failed' ? h(Alert, { text: flow.error || 'The sign-in didn\'t finish.' }) : null,
                 h(Alert, { text: signIn.error }),
+                needsAdmin ? h('p', { className: 'dshcal-hint', style: { margin: 0 }, 'data-calendar-microsoft-admin': '' },
+                    'Your organization has an admin approve apps. Ask them to grant this app\'s permissions (Grant admin consent, under API permissions in its app registration), then sign in again.') : null,
                 h('div', { className: 'dshcal-inline', style: { gap: 16 } },
                     withCode
                         ? h('button', { type: 'button', className: 'dshcal-link', style: smallLink, disabled: signIn.busy, onClick: () => begin('browser'), 'data-calendar-microsoft-browser': '' }, 'Sign in on Microsoft\'s page instead')
@@ -3985,10 +4002,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const tellFor = (scope) => {
                 const mail = mailMode({ kind: 'delete', calendar, occurrence: o, guests: guests.length, scope });
                 if (mail.mode !== 'ask') return null;
-                const label = mail.to === 'organizer' ? `Tell ${organizer} you won't be there`
-                    : guests.length === 1 ? `Tell ${guests[0].name || guests[0].email} by email` : `Tell the ${guests.length} guests by email`;
+                const label = mail.to === 'organizer' ? `Tell ${organizer} you won't be there` : `Tell ${peopleText(guests.map((g) => g.name || g.email))} by email`;
                 // Google takes a meeting off its guests' calendars by itself: unticked, deleting it still reaches them.
-                const quiet = calendar?.kind === 'google' && mail.to === 'guests' ? 'Deleting it still takes it off their Google calendars, without email.' : '';
+                const quiet = calendar?.kind === 'google' && mail.to === 'guests' ? 'Unticked, Google still removes it from the guests\' Google calendars, without an email.' : '';
                 return { label, quiet };
             };
             const run = async (scope, tellThem) => {
