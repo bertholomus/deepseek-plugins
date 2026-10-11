@@ -298,6 +298,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-nt-why{margin:8px 0;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-secondary)}',
             '.dshp-nt-text{margin:0;max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:var(--dsw-font-xxs-12);color:var(--dsw-alias-label-primary)}',
             // In a chat beside a thread, the time gives way first; the name gives way before the state.
+            // Narrow (a coordinator beside its thread), a long thread name takes a second line rather than being cut.
+            '@container (width<=480px){.dshp-nt-line{white-space:normal;overflow-wrap:break-word;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}}',
             '@container (width<=380px){.dshp-nt-time{display:none}.dshp-nt-state+.dshp-nt-chev{margin-left:0}.dshp-nt-state{margin-left:auto}.dshp-nt-head{gap:8px;padding:12px 12px}.dshp-nt-body{padding:0 12px 12px 34px}}',
             '@media (prefers-reduced-motion:reduce){.dshp-nt{transition:none}}',
             // Threads: cards under a turn
@@ -1144,7 +1146,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         const TABLE = {
             heading: 'Projects',
-            hint: 'What each project runs on and can reach. A project\'s own choice comes first, then its row in your profile, then the defaults above.',
+            hint: 'What each project runs on and can reach. A value with no note under it follows the defaults above; one set for the project, or in its row in your profile, says so.',
+            noCoordinator: 'No coordinator yet',
+            archived: 'Archived',
             loading: 'Loading projects…',
             failed: 'The projects plugin didn\'t answer, so its projects can\'t be listed right now.',
             none: 'No projects yet. Add one under "projects" in this plugin\'s config.',
@@ -1152,6 +1156,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             settings: 'Settings',
             paused: 'Paused',
         };
+        /** Sources a project inherits from: the table says nothing under them, as its hint explains. */
+        const INHERITED = new Set(['plugin default', 'DSH default']);
         /** Where a project's model and effort come from: a line for one source, a phrase each for two. */
         const SOURCE_LINE = { 'project setting': 'Set for this project', 'project config': 'From your profile', 'plugin default': 'From Default models', 'DSH default': 'Follows DSH\'s default model' };
         const SOURCE_PHRASE = { 'project setting': 'set for this project', 'project config': 'from your profile', 'plugin default': 'from Default models', 'DSH default': 'follows DSH' };
@@ -1167,6 +1173,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }
             return `Model ${SOURCE_PHRASE[m?.source] ?? ''} · effort ${SOURCE_PHRASE[e.source] ?? ''}`;
         }
+
+        const hasCoordinator = (p) => typeof p?.coordinator === 'string' && p.coordinator !== '';
 
         /** A coordinator selection signature, to read the table again when a pick changes one. */
         function selectionsKey(state, sessionIds) {
@@ -1261,8 +1269,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     const m = p.settings?.[mKey];
                     const e = p.settings?.[eKey];
                     const route = resolveRoute(cv, m?.value ?? undefined, e?.value ?? undefined);
-                    return cell(key, label, routeLabel(route), (live ? liveNote(cv, route, live) : undefined) ?? sourceLine(m, levelsOf(route) ? e : undefined), permission);
+                    const effort = levelsOf(route) ? e : undefined;
+                    // Only what a project sets itself gets a note: the defaults would say the same in every cell.
+                    const inherited = INHERITED.has(m?.source) && (!isObject(effort) || effort.value == null || INHERITED.has(effort.source));
+                    return cell(key, label, routeLabel(route), (live ? liveNote(cv, route, live) : undefined) ?? (inherited ? undefined : sourceLine(m, effort)), permission);
                 };
+                // A project whose coordinator hasn't started has nothing running for it to show.
+                const noCoordinator = (p) => h('div', { key: 'c', className: 'dshp-pt-cell', role: 'cell', 'data-projects-table-no-coordinator': '' },
+                    h('span', { className: 'dshp-pt-label' }, TEXT.coordinator),
+                    h('span', { className: 'dshp-pt-source' }, TABLE.noCoordinator));
                 const threadsLine = (t) => {
                     const open = Number(t?.open) || 0;
                     const resolved = Number(t?.resolved) || 0;
@@ -1277,12 +1292,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     ...list.map((p) => h('div', { key: p.id, className: 'dshp-pt-row', role: 'row', 'data-projects-table-row': p.id },
                         h('div', { className: 'dshp-pt-cell', role: 'cell' },
                             h('span', { className: 'dshp-pt-name' },
-                                h('span', { className: 'dshp-pt-diamond', 'aria-hidden': true }, '◆'),
+                                h('span', { className: 'dshp-pt-diamond', 'aria-hidden': true }, hasCoordinator(p) ? '◆' : '◇'),
                                 h('span', { className: 'dshp-pt-name-text', title: p.workspace || undefined }, p.name || p.id),
-                                p.paused ? h('span', { className: 'dshp-pt-badge' }, TABLE.paused) : null),
+                                p.archived ? h('span', { className: 'dshp-pt-badge' }, TABLE.archived) : p.paused ? h('span', { className: 'dshp-pt-badge' }, TABLE.paused) : null),
                             h('span', { className: 'dshp-pt-source' }, threadsLine(p.threads)),
                             toolsLine(p)),
-                        routeCell(p, 'c', TEXT.coordinator, 'coordinatorModel', 'coordinatorEffort', p.live, permissionLine(p, 'coordinatorPermission', typeof p.permission === 'string' ? p.permission : undefined)),
+                        hasCoordinator(p)
+                            ? routeCell(p, 'c', TEXT.coordinator, 'coordinatorModel', 'coordinatorEffort', p.live, permissionLine(p, 'coordinatorPermission', typeof p.permission === 'string' ? p.permission : undefined))
+                            : noCoordinator(p),
                         routeCell(p, 't', 'New threads', 'threadModel', 'threadEffort', undefined, permissionLine(p, 'threadPermission')),
                         h('div', { className: 'dshp-pt-cell dshp-pt-action', role: 'cell' },
                             settingsOn ? h(ui.Button, {
@@ -1465,6 +1482,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             endedFailed: 'Failed',
             endedStopped: 'Stopped',
             stoppedEarly: 'It stopped before it finished.',
+            youStopped: 'You stopped it.',
+            youStoppedEarly: 'You stopped it before it finished.',
         };
         /** A new project's first asks, shown under the coordinator's greeting until the user writes. */
         const SUGGESTIONS = [
@@ -2217,6 +2236,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return useSessions(select, sameEndings);
         }
 
+        /**
+         * A stop DSH counts as the user's: its stop button, the session bridge, or the coordinator or an
+         * archive, which stop a thread only when the user asks.
+         */
+        const stoppedByYou = (ending) => ending?.state === 'stopped' && ending.kind === 'aborted' && ending.cause === 'user';
+
         /** Why a thread's last turn didn't finish, as a sentence ('' when it was simply stopped). */
         function endingReason(ending) {
             switch (ending?.kind) {
@@ -2228,14 +2253,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 default:
                     if (ending?.cause === 'hook') return ending.hook ? `A DSH plugin stopped it (${ending.hook}).` : 'A DSH plugin stopped it.';
                     if (ending?.cause === 'disposed') return 'Its session closed while it ran.';
+                    if (stoppedByYou(ending)) return TEXT.youStopped;
                     return '';
             }
         }
 
-        /** A failed or stopped last turn as one line: "Failed · <why>", "Stopped before it finished", "Stopped · <why>". */
+        /** A failed or stopped last turn as one line: "Failed · <why>", "Stopped by you", "Stopped before it finished", "Stopped · <why>". */
         function endingLine(ending) {
             const why = endingReason(ending);
             if (ending.state === 'failed') return `Failed · ${why}`;
+            if (stoppedByYou(ending)) return 'Stopped by you';
             return why ? `Stopped · ${why}` : 'Stopped before it finished';
         }
 
@@ -2893,6 +2920,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 access: accessOf(described, permissions), permissions: described?.permissions,
                 quietPermission: permissionShown(described?.access?.threadPermission?.value, described?.permissions).preset,
                 onOpen: (row) => {
+                    if (projects.replaceThreadTab?.(sessionId, row.session)) return;
                     try { tab.actions.openResource(chatAddress(row.session)); } catch { projects.openBeside(row.session); }
                 },
                 action: { label: TEXT.openFull, icon: ui.IconRightUpOutlineRegular, run: (row) => projects.openFull(row.session) },
@@ -2991,7 +3019,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const facts = useChatFacts(threadSession, useSessions, useSessionStatus);
             const value = facts.value;
             const sub = value?.role === 'thread'
-                ? `${value.thread?.id ?? TEXT.thread} · ◆ ${value.project?.name || TEXT.coordinator}`
+                ? `${TEXT.thread} of ◆ ${value.project?.name || TEXT.coordinator}`
                 : value?.role === 'coordinator' ? `◆ ${TEXT.coordinator}` : '';
             return h('div', { className: 'dshp-t-chat', 'data-projects-thread-chat': threadSession ?? '' },
                 h('div', { className: 'dshp-t-chat-bar' },
@@ -3550,7 +3578,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const { busy, error, run, retry } = useContinue(projects, row);
             const now = useNow(row !== undefined);
             if (!row || busyNow) return null;
-            const why = endingReason(ending) || (retry ? '' : TEXT.stoppedEarly);
+            const why = stoppedByYou(ending) ? TEXT.youStoppedEarly : endingReason(ending) || (retry ? '' : TEXT.stoppedEarly);
             const at = Date.parse(ending.at ?? '');
             const text = error || why;
             const action = retry ? TEXT.retryThread : TEXT.resumeThread;
@@ -3870,6 +3898,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             if (row.ending) {
                 const why = endingReason(row.ending);
                 if (row.ending.state === 'failed') return `Last turn failed · ${why}`;
+                if (stoppedByYou(row.ending)) return 'Last turn stopped by you';
                 return why ? `Last turn stopped · ${why}` : 'Last turn stopped before it finished';
             }
             return isObject(row.entry.handback) ? `Last handback · ${row.line}` : row.line;
@@ -3957,7 +3986,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     try { onScreen = sidebar.mounted?.getSnapshot?.(); } catch { onScreen = undefined; }
                     if (onScreen === coordinator || (onScreen === undefined && tries >= 2)) {
                         try {
-                            sidebar.openResource(chatAddress(sessionId), { kind: KINDS.chat });
+                            sidebar.openResource(chatAddress(sessionId), { kind: KINDS.chat, ...threadTabFor(sidebar, coordinator, sessionId) });
                             return;
                         } catch (error) {
                             if (tries >= 40) { warn('could not open the thread beside its coordinator', error); return; }
@@ -3968,6 +3997,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     if (++tries <= 40) setTimeout(place, 50);
                 };
                 place();
+            };
+            /**
+             * Where a thread opens in its coordinator's sidebar: in place of the thread tab already there (the one
+             * in front, else the newest), so opening one thread after another doesn't pile up tabs. Nothing to
+             * replace when the thread is open there already (DSH brings it to the front) or no thread is.
+             */
+            const threadTabFor = (sidebar, coordinator, sessionId) => {
+                let tabs;
+                try { tabs = sidebar.tabsIn?.(coordinator); } catch { tabs = undefined; }
+                const threads = (Array.isArray(tabs) ? tabs : EMPTY).filter((tab) => tab?.kind === KINDS.chat && typeof tab.id === 'string');
+                if (threads.length === 0 || threads.some((tab) => chatSessionOf(tab.contentId) === sessionId)) return {};
+                let front;
+                try { front = sidebar.active?.(); } catch { front = undefined; }
+                const take = threads.find((tab) => tab.id === front?.id) ?? threads[threads.length - 1];
+                return { replaceTab: take.id };
             };
             const failed = new Set();
             const catalog = shared.catalog ?? catalogSource(() => undefined);
@@ -4011,6 +4055,28 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     else openFull(sessionId);
                 },
                 openFull,
+                /**
+                 * A thread from the Threads panel: in place of the thread tab shown in the panel's sidebar
+                 * (threadTabFor), so the panel stays and thread after thread doesn't pile up tabs.
+                 * @param holder - the session whose right sidebar holds the panel.
+                 * @returns whether it opened; false when that sidebar isn't on screen or has no thread tab to replace.
+                 */
+                replaceThreadTab(holder, sessionId) {
+                    const sidebar = ctx.sidebarRight;
+                    if (typeof holder !== 'string' || typeof sessionId !== 'string' || sessionId === '' || typeof sidebar?.openResource !== 'function') return false;
+                    let onScreen;
+                    try { onScreen = sidebar.mounted?.getSnapshot?.(); } catch { onScreen = undefined; }
+                    if (onScreen !== holder) return false;
+                    const place = threadTabFor(sidebar, holder, sessionId);
+                    if (place.replaceTab === undefined) return false;
+                    try {
+                        sidebar.openResource(chatAddress(sessionId), { kind: KINDS.chat, ...place });
+                        return true;
+                    } catch (error) {
+                        warn('could not open the thread', error);
+                        return false;
+                    }
+                },
                 /**
                  * A click on a thread's row in DSH's session list opens the
                  * pair at once, so DSH never shows the thread as the main

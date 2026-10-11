@@ -2302,7 +2302,8 @@ test('browser half: a failed or stopped thread reads Failed or Stopped everywher
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
     assert.deepEqual(plain(['t7', 't6', 't8', 't9', 't10'].map((id) => [id, byId[id].group, byId[id].dot, byId[id].stateLabel, byId[id].line])), [
         ['t7', 'waiting', 'error', 'Failed', 'Failed · The model rejected the request.'],
-        ['t6', 'idle', 'idle', 'Stopped', 'Stopped before it finished'],
+        // A stop DSH counts as the user's is named as theirs.
+        ['t6', 'idle', 'idle', 'Stopped', 'Stopped by you'],
         ['t8', 'done', 'done', 'Done', 'Done · Spike done.'],
         ['t9', 'waiting', 'error', 'Failed', 'Failed · The model rejected the request.'],
         ['t10', 'resolved', 'done', 'Resolved', 'Resolved'],
@@ -2320,11 +2321,11 @@ test('browser half: a failed or stopped thread reads Failed or Stopped everywher
     assert.deepEqual(plain([
         { state: 'failed', kind: 'blocked' }, { state: 'failed', kind: 'signed-out' }, { state: 'failed', kind: 'error' },
         { state: 'stopped', kind: 'interrupted' }, { state: 'stopped', kind: 'max-tokens' }, { state: 'stopped', kind: 'aborted', cause: 'hook', hook: 'budget' },
-        { state: 'stopped', kind: 'aborted', cause: 'disposed' },
+        { state: 'stopped', kind: 'aborted', cause: 'disposed' }, { state: 'stopped', kind: 'aborted', cause: 'user' }, { state: 'stopped', kind: 'aborted' },
     ].map(endingLine)), [
         'Failed · A DSH plugin blocked the turn.', 'Failed · You signed out of DeepSeek.', 'Failed · DSH couldn\'t finish the turn.',
         'Stopped · DSH closed while it ran.', 'Stopped · It reached the output token limit.', 'Stopped · A DSH plugin stopped it (budget).',
-        'Stopped · Its session closed while it ran.',
+        'Stopped · Its session closed while it ran.', 'Stopped by you', 'Stopped before it finished',
     ]);
 
     // Cards: the idle note's card names the failure; every card of the thread says its state now.
@@ -2349,7 +2350,7 @@ test('browser half: a failed or stopped thread reads Failed or Stopped everywher
 
     // The hover card says what the thread last did; DSH ends it with the session's own status.
     assert.deepEqual(plain(['t7', 't6', 't8', 't9'].map((id) => hoverLine(byId[id]))), [
-        'Last turn failed · The model rejected the request.', 'Last turn stopped before it finished', 'Last handback · Done · Spike done.', 'Last turn failed · The model rejected the request.',
+        'Last turn failed · The model rejected the request.', 'Last turn stopped by you', 'Last handback · Done · Spike done.', 'Last turn failed · The model rejected the request.',
     ]);
     assert.equal(hoverLine({ ...byId.t7, pending: true }), undefined);
     assert.equal(hoverLine(rowsOf([{ id: 't1', session: 's1', title: 'x', resolved: false }], new Map(), {}, {})[0]), 'No handback yet');
@@ -2556,6 +2557,60 @@ test('browser half: a thread opens beside its coordinator, and in full view wher
     assert.deepEqual([opened, holds, beside], [['t'], [], []]);
 });
 
+test('browser half: a thread opened beside its coordinator, or from the Threads panel, takes the place of the thread tab already there', () => {
+    const { client } = loadClient();
+    const coordValue = { role: 'coordinator', project: { name: 'P' }, threads: [] };
+    const thread = (id) => ({ role: 'thread', coordinator: 'c', thread: { id } });
+    const row = (value, main = 0) => ({ title: 'x', ...(value ? { projectionValues: { projectSession: value } } : {}), retainedBy: { mainView: main } });
+    const snapshot = { ids: ['c', 't1', 't2', 't3'], byId: { c: row(coordValue, 1), t1: row(thread('t1')), t2: row(thread('t2')), t3: row(thread('t3')) }, phase: 'ready', projectionsBySession: {} };
+    const address = (id) => `dsh-resource://projectthread/session/${encodeURIComponent(id)}`;
+    let tabs = [];
+    let front;
+    const placed = [];
+    const registered = [];
+    const ctx = {
+        effect: (fn) => fn(),
+        inject: (names, fn) => { if (!names.includes('configForms')) fn(ctx); },
+        slots: { inject: (_name, fn) => fn(), register: (slot) => { registered.push(slot); return () => {}; } },
+        resources: { register: () => () => {} },
+        sidebarRightTabs: { register: () => () => {} },
+        sessions: { list: { getSnapshot: () => snapshot, subscribe: () => () => {} }, retain: () => ({ release() {} }) },
+        uiWorkspace: { openSession: () => {} },
+        sidebarRight: {
+            mounted: { getSnapshot: () => 'c' },
+            tabsIn: (id) => (id === 'c' ? tabs : []),
+            active: () => front,
+            openResource: (at, options) => placed.push([decodeURIComponent(at.split('/').pop()), options.kind, options.replaceTab ?? null]),
+        },
+    };
+    client.apply(ctx);
+    const { projects } = registered.find((r) => r.name === 'main').inject();
+    // The first thread gets a tab; opened again, DSH brings that tab to the front.
+    projects.openThread('t1');
+    tabs = [{ id: 'a', kind: 'projectthread', contentId: address('t1') }];
+    projects.openThread('t1');
+    // Another thread takes the place of the thread tab in front, else of the newest one (here the Threads panel is in front).
+    projects.openThread('t2');
+    tabs = [{ id: 'a', kind: 'projectthread', contentId: address('t1') }, { id: 'p', kind: 'projectthreads', contentId: 'dsh-resource://page/projectthreads' },
+        { id: 'b', kind: 'projectthread', contentId: address('t2') }];
+    front = { id: 'a' };
+    projects.openThread('t3');
+    front = { id: 'p' };
+    projects.openThread('t3');
+    assert.deepEqual(placed, [['t1', 'projectthread', null], ['t1', 'projectthread', null], ['t2', 'projectthread', 'a'], ['t3', 'projectthread', 'a'], ['t3', 'projectthread', 'b']]);
+
+    // From the Threads panel (in front, in the coordinator's sidebar): the newest thread tab gives way and the panel stays.
+    placed.length = 0;
+    assert.equal(projects.replaceThreadTab('c', 't3'), true);
+    assert.deepEqual(placed, [['t3', 'projectthread', 'b']]);
+    // The panel opens the thread its own way when there's none to replace, the thread is there already, or its sidebar isn't on screen.
+    assert.equal(projects.replaceThreadTab('c', 't2'), false);
+    assert.equal(projects.replaceThreadTab('t1', 't3'), false);
+    tabs = [{ id: 'p', kind: 'projectthreads', contentId: 'dsh-resource://page/projectthreads' }];
+    assert.equal(projects.replaceThreadTab('c', 't3'), false);
+    assert.equal(placed.length, 1);
+});
+
 test('browser half: with "Open threads beside their coordinator" off, a thread opens on its own and its menus pair it', async () => {
     const storage = new Map([['dsh-plugin-projects/open-beside', 'off']]);
     const { client } = loadClient({ storage });
@@ -2711,8 +2766,11 @@ test('browser half: a thread\'s newest card says when its last turn ended, and h
     // Retried and failed again: it says so, and the time moves on.
     card = ThreadCard({ view: view({ ...failed, times: 2, turn: 4 }, { dot: 'error', label: 'Failed' }), projects });
     assert.deepEqual([textIn(byClass(card, 'dshp-t-card-state-label')), textIn(byClass(card, 'dshp-t-card-state-text'))], ['Failed', 'Failed twice']);
-    // Stopped with no reason to give: just when.
+    // Stopped by the user: when, and that they did.
     card = ThreadCard({ view: view({ state: 'stopped', kind: 'aborted', cause: 'user', turn: 3, seq: 9, at: at.toISOString() }, { dot: 'idle', label: 'Stopped' }), projects });
+    assert.equal(textIn(byClass(card, 'dshp-t-card-why')), `${hhmm} · You stopped it.`);
+    // Stopped with no reason to give: just when.
+    card = ThreadCard({ view: view({ state: 'stopped', kind: 'aborted', turn: 3, seq: 9, at: at.toISOString() }, { dot: 'idle', label: 'Stopped' }), projects });
     assert.equal(textIn(byClass(card, 'dshp-t-card-why')), hhmm);
     // A card that isn't the thread's newest says none of it.
     card = ThreadCard({ view: { ...view(failed, { dot: 'error', label: 'Failed' }), newest: false }, projects });
