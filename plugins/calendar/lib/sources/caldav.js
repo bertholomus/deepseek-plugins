@@ -123,6 +123,8 @@ const TIMEZONE = clark(CALDAV, 'calendar-timezone');
 const TIMEZONE_ID = clark(CALDAV, 'calendar-timezone-id');
 const CALENDAR_DATA = clark(CALDAV, 'calendar-data');
 const CTAG = clark(CS, 'getctag');
+const OUTBOX = clark(CALDAV, 'schedule-outbox-URL');
+const ADDRESSES = clark(CALDAV, 'calendar-user-address-set');
 const COLOR = clark(ICAL, 'calendar-color');
 const ORDER = clark(ICAL, 'calendar-order');
 
@@ -440,6 +442,7 @@ const HOME_BODY = propfind(['d:current-user-principal', 'c:calendar-home-set']);
 const CALENDARS_BODY = propfind(CALENDAR_PROPS);
 const LIST_BODY = propfind(['d:resourcetype', 'd:getetag']);
 const CTAG_BODY = propfind(['cs:getctag']);
+const SCHEDULING_BODY = propfind(['c:schedule-outbox-URL', 'c:calendar-user-address-set']);
 const ETAG_BODY = propfind(['d:getetag']);
 const QUERY_BODY = `${XML_DECLARATION}<c:calendar-query ${NAMESPACES}><d:prop><d:getetag/></d:prop>`
     + '<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"/></c:comp-filter></c:filter></c:calendar-query>';
@@ -761,15 +764,49 @@ class CalDavSource {
             const said = answered === undefined ? '' : ` (it answered HTTP ${answered})`;
             throw new SourceError('config', `No CalDAV calendars were found at ${safeUrl(start)}${said}. Check the address, or give the address of a calendar.`);
         }
-        this.located = { homes, principal, given };
+        this.located = { homes, principal, given, ...await this.schedulingOf(principal) };
         const calendars = await this.listAll();
         this.env.log?.(`caldav ${this.account.id}: found homes=${homes.length} calendars=${calendars.length}`);
         return { home: homes[0], principal, calendars };
     }
 
-    /** The calendars in every home found, and the one the address named. */
+    /**
+     * Whether the server schedules (RFC 6638: it emails a meeting's guests
+     * itself when its organizer saves or deletes it, and tells the
+     * organizer when a guest answers or takes it out), and the user's own
+     * addresses there: {scheduling?: boolean, addresses: string[]}.
+     * scheduling is undefined when the server didn't say.
+     */
+    async schedulingOf(principal) {
+        if (principal === undefined) return { addresses: [] };
+        let self;
+        try {
+            const answer = await this.multistatus('PROPFIND', principal, { depth: 0, body: SCHEDULING_BODY }, 'Reading the account');
+            self = selfOf(answer, principal);
+        } catch (error) {
+            if (error instanceof SourceError && error.code === 'auth') throw error;
+            return { addresses: [] };
+        }
+        if (self === undefined) return { addresses: [] };
+        const addresses = kids(self.props.get(ADDRESSES), DAV, 'href')
+            .map((h) => /^mailto:(.+)$/i.exec(h.text.trim())?.[1])
+            .map((a) => {
+                try {
+                    return a === undefined ? undefined : decodeURIComponent(a);
+                } catch {
+                    return a;
+                }
+            })
+            .filter((a) => a !== undefined && /^[^@\s]+@[^@\s]+$/.test(a));
+        // An outbox means the server schedules; one it says isn't there (404) means it doesn't.
+        const outbox = kids(self.props.get(OUTBOX), DAV, 'href').length > 0;
+        const scheduling = outbox ? true : self.failed.includes(404) ? false : undefined;
+        return { ...(scheduling !== undefined ? { scheduling } : {}), addresses: [...new Set(addresses)] };
+    }
+
+    /** The calendars in every home found, and the one the address named (with whether the server schedules). */
     async listAll() {
-        const { homes, given } = this.located;
+        const { homes, given, scheduling, addresses = [] } = this.located;
         const found = [];
         for (const home of homes) {
             try {
@@ -796,7 +833,8 @@ class CalDavSource {
         });
         // Apple's calendar-order where servers keep one, the rest after them; the server's own order otherwise.
         const orderOf = (c) => ORDERS.get(c) ?? Infinity;
-        return calendars.map((c, at) => ({ c, at })).sort((a, b) => (orderOf(a.c) - orderOf(b.c)) || (a.at - b.at)).map(({ c }) => c);
+        const about = { ...(scheduling !== undefined ? { scheduling } : {}), ...(addresses.length > 0 ? { addresses } : {}) };
+        return calendars.map((c, at) => ({ c, at })).sort((a, b) => (orderOf(a.c) - orderOf(b.c)) || (a.at - b.at)).map(({ c }) => ({ ...c, ...about }));
     }
 
     /** The account's calendars that hold events (see sources/index.js). */
@@ -1024,7 +1062,8 @@ class CalDavSource {
         const target = item ? hrefUrl(item.remoteId ?? '') : hrefUrl(`${folderOf(collection)}${resourceName(uid)}.ics`);
         if (target === undefined) throw new SourceError('config', 'This event has no address on the server.');
         const headers = { 'Content-Type': 'text/calendar; charset=utf-8' };
-        if (item) headers['If-Match'] = item.etag || '*';
+        // A change only while the event is as it was read: without a stored etag, the server's own first.
+        if (item) headers['If-Match'] = item.etag || await this.etagOf(target).catch(() => undefined) || '*';
         else headers['If-None-Match'] = '*';
         const res = await this.send('PUT', target, { headers, body: raw });
         if (!res.ok) throw writeError(res, 'Saving the event');
@@ -1045,11 +1084,19 @@ class CalDavSource {
         return textOf(selfOf(answer, url)?.props.get(GETETAG)) || undefined;
     }
 
-    /** Deletes a resource, only while its etag is item.etag. Gone already counts as done. */
-    async remove(calendar, item) {
+    /**
+     * Deletes a resource, only while its etag is item.etag (without one, the
+     * server's own, read first). Gone already counts as done.
+     * opts.scheduleReply false: the server doesn't tell the organizer
+     * (RFC 6638's Schedule-Reply), so taking out someone else's invitation
+     * doesn't decline it.
+     */
+    async remove(calendar, item, { scheduleReply } = {}) {
         const target = hrefUrl(item?.remoteId ?? '');
         if (target === undefined) throw new SourceError('config', 'This event has no address on the server.');
-        const res = await this.send('DELETE', target, { headers: item.etag ? { 'If-Match': item.etag } : {} });
+        const etag = item.etag || await this.etagOf(target).catch(() => undefined);
+        const headers = { ...(etag ? { 'If-Match': etag } : {}), ...(scheduleReply === false ? { 'Schedule-Reply': 'F' } : {}) };
+        const res = await this.send('DELETE', target, { headers });
         if (res.ok || res.status === 404 || res.status === 410) return;
         throw writeError(res, 'Deleting the event');
     }

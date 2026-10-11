@@ -276,25 +276,30 @@ describe('the source, against a stand-in server', () => {
         const { fetch, calls } = fakeServer({
             'PROPFIND https://caldav.icloud.com/': { body: fixture('icloud-root.xml') },
             'PROPFIND https://caldav.icloud.com/1234567890/principal/': { status: 301, headers: { location: 'https://p52-caldav.icloud.com/1234567890/principal/' } },
-            'PROPFIND https://p52-caldav.icloud.com/1234567890/principal/': { body: fixture('icloud-principal.xml') },
+            // The principal answers what is asked: its calendar home, or whether the server schedules and the user's addresses.
+            'PROPFIND https://p52-caldav.icloud.com/1234567890/principal/': (call) => ({ body: fixture(/schedule-outbox-URL/.test(call.body) ? 'icloud-scheduling.xml' : 'icloud-principal.xml') }),
             'PROPFIND https://p52-caldav.icloud.com/1234567890/calendars/': { body: fixture('icloud-home.xml') },
         });
         const account = { id: 'icloud-1', kind: 'caldav', name: 'iCloud', preset: 'icloud', username: 'alice' };
         const found = await caldav.discover(account, stubEnv(fetch));
         assert.equal(found.principal, 'https://caldav.icloud.com/1234567890/principal/');
         assert.equal(found.home, 'https://p52-caldav.icloud.com/1234567890/calendars/');
+        // iCloud schedules: it emails a meeting's guests itself. The user's addresses are its mailto: ones.
+        const about = { scheduling: true, addresses: ['alice@icloud.com', 'alice@me.com'] };
         assert.deepEqual(found.calendars, [
             {
                 remoteId: 'https://p52-caldav.icloud.com/1234567890/calendars/2A7C6E1F-3B5D-4C8A-9E0F-1D2C3B4A5968/',
-                name: 'Team & Ops', color: '#1BADF8', readOnly: true, description: 'Shared by the team',
+                name: 'Team & Ops', color: '#1BADF8', readOnly: true, description: 'Shared by the team', ...about,
             },
             {
                 remoteId: 'https://p52-caldav.icloud.com/1234567890/calendars/home/',
-                name: 'Home', color: '#FF2968', readOnly: false, timeZone: 'America/Los_Angeles',
+                name: 'Home', color: '#FF2968', readOnly: false, timeZone: 'America/Los_Angeles', ...about,
             },
         ]);
         assert.deepEqual(calls.map((c) => [c.method, c.url, header(c, 'depth')]), [
             ['PROPFIND', 'https://caldav.icloud.com/', '0'],
+            ['PROPFIND', 'https://caldav.icloud.com/1234567890/principal/', '0'],
+            ['PROPFIND', 'https://p52-caldav.icloud.com/1234567890/principal/', '0'],
             ['PROPFIND', 'https://caldav.icloud.com/1234567890/principal/', '0'],
             ['PROPFIND', 'https://p52-caldav.icloud.com/1234567890/principal/', '0'],
             ['PROPFIND', 'https://p52-caldav.icloud.com/1234567890/calendars/', '1'],
@@ -630,11 +635,52 @@ describe('the source, against a stand-in server', () => {
         const plain = await source.put(calendar, null, ics('x', 'X'), 'abc-123@example.com');
         assert.equal(plain.remoteId, `${collection}abc-123@example.com.ics`);
 
+        // No stored etag: the server's own is read first, so a change made elsewhere meanwhile is a conflict, not lost.
+        await source.put(calendar, { remoteId: `${collection}no-etag.ics` }, ics('n', 'N2'), 'n');
+        assert.equal(header(puts.at(-1), 'if-match'), '"e2"');
+
         await source.remove(calendar, { remoteId: `${collection}new.ics`, etag: '"e1"' });
         await source.remove(calendar, { remoteId: `${collection}gone.ics`, etag: '"e9"' });
         await assert.rejects(source.remove(calendar, { remoteId: `${collection}new.ics`, etag: '"old"' }), isCode('conflict'));
         await assert.rejects(source.remove(calendar, { remoteId: `${collection}locked.ics`, etag: '"e1"' }), isCode('forbidden'));
         assert.ok(calls.filter((c) => c.method === 'DELETE').every((c) => header(c, 'if-match') !== undefined));
+        assert.ok(calls.filter((c) => c.method === 'DELETE').every((c) => header(c, 'schedule-reply') === undefined));
+
+        // Taking out an invitation without telling its organizer: Schedule-Reply: F (RFC 6638), and the etag read first.
+        const before = calls.length;
+        await source.remove(calendar, { remoteId: `${collection}no-etag.ics` }, { scheduleReply: false });
+        const quiet = calls.slice(before);
+        assert.deepEqual(quiet.map((c) => c.method), ['PROPFIND', 'DELETE']);
+        assert.equal(header(quiet[1], 'if-match'), '"e2"');
+        assert.equal(header(quiet[1], 'schedule-reply'), 'F');
+    });
+
+    test('scheduling: a server without an outbox doesn\'t schedule; one that doesn\'t say is unknown', async () => {
+        const principal = '<d:current-user-principal><d:href>/dav/principals/alice/</d:href></d:current-user-principal>';
+        const routes = (scheduling) => ({
+            'PROPFIND https://dav.example.com/': { body: multistatus([{ href: '/', props: principal }]) },
+            'PROPFIND https://dav.example.com/dav/principals/alice/': (call) => {
+                if (!/schedule-outbox-URL/.test(call.body)) return { body: multistatus([{ href: '/dav/principals/alice/', props: '<c:calendar-home-set><d:href>/dav/calendars/alice/</d:href></c:calendar-home-set>' }]) };
+                return { body: scheduling };
+            },
+            'PROPFIND https://dav.example.com/dav/calendars/alice/': {
+                body: multistatus([{ href: '/dav/calendars/alice/personal/', props: '<d:resourcetype><d:collection/><c:calendar/></d:resourcetype><d:displayname>Personal</d:displayname>' }]),
+            },
+        });
+        const account = { id: 'r', kind: 'caldav', url: 'https://dav.example.com/', username: 'alice' };
+        // Radicale: both asked for, both "404 Not Found".
+        const radicale = `<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:c="${CALDAV}"><d:response><d:href>/dav/principals/alice/</d:href>`
+            + '<d:propstat><d:prop><c:schedule-outbox-URL/><c:calendar-user-address-set/></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat></d:response></d:multistatus>';
+        const none = await caldav.discover(account, stubEnv(fakeServer(routes(radicale)).fetch));
+        assert.equal(none.calendars[0].scheduling, false);
+        assert.equal(none.calendars[0].addresses, undefined);
+        // An error, or an answer that says nothing about it: unknown (the plugin then takes it as a server that schedules).
+        const silent = await caldav.discover(account, stubEnv(fakeServer(routes(multistatus([{ href: '/dav/principals/alice/' }]))).fetch));
+        assert.equal(silent.calendars[0].scheduling, undefined);
+        const failing = fakeServer(routes(undefined));
+        const broken = await caldav.discover(account, stubEnv(async (url, init) => (/schedule-outbox-URL/.test(init?.body ?? '') ? new Response('nope', { status: 500 }) : failing.fetch(url, init))));
+        assert.equal(broken.calendars[0].scheduling, undefined);
+        assert.equal(broken.calendars[0].name, 'Personal');
     });
 
     test('errors: a refused sign-in, an unauthenticated principal, no password, an unreachable server, plain http', async () => {

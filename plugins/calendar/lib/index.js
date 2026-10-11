@@ -47,6 +47,14 @@ export const Config = z.object({
      * first, 'off' never.
      */
     agentChanges: z.union(MODES).default('preset'),
+    /**
+     * Whether a chat's change that emails someone (an invitation, an update,
+     * a cancellation, an answer) asks the user first, naming who gets what,
+     * whatever agentChanges says. A chat that can't ask (Full access) is
+     * refused such changes instead. Off: emailing changes follow
+     * agentChanges like any other.
+     */
+    askBeforeEmails: z.boolean().default(true),
     /** Google sign-in: the client id of the user's own OAuth client (Desktop app). The window can set it too. */
     googleClientId: z.string().default(''),
     /** The credential (DSH's store or the environment) that holds that client's secret. */
@@ -129,14 +137,18 @@ export function apply(ctx, config) {
     });
 
     if (config.tools) {
+        // Each tool is marked as the user's own (tools.js PERSONAL), so project sessions get it only as the user allows.
         for (const tool of calendarTools(manager)) ctx.tools.register(tool);
         // Changes go through the chat's permission first (policy.js).
+        const service = (key) => {
+            try { return ctx.get?.(key); } catch { return undefined; }
+        };
         ctx.on('tools/pre-execute', changeGate({
-            presets: () => {
-                try { return ctx.get?.('permissionPresets'); } catch { return undefined; }
-            },
+            presets: () => service('permissionPresets'),
+            approval: () => service('approval'),
             manager,
             mode: () => config.agentChanges,
+            askEmails: () => config.askBeforeEmails !== false,
             log: (line) => manager.log(line),
         }));
     }

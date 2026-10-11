@@ -34,9 +34,14 @@ const CONFLICT = Symbol('conflict');
 
 /** A refusal the user (or the agent) can act on: its message says what to do. */
 export class CalendarError extends Error {
-    constructor(message) {
+    /**
+     * @param {string} message
+     * @param {string} [code] - 'needs-notify': the change would email people, and it didn't say to tell them.
+     */
+    constructor(message, code) {
         super(message);
         this.name = 'CalendarError';
+        if (code !== undefined) this.code = code;
     }
 }
 
@@ -236,6 +241,8 @@ export class CalendarManager {
             readOnly: calendar.readOnly === true,
             hidden: calendar.hidden === true,
             isDefault: this.defaultCalendarId() === calendar.id,
+            // Whether its server can email guests (invitations, updates, cancellations).
+            canEmail: this.mailerOf(calendar) !== 'never',
             ...(calendar.timeZone ? { timeZone: calendar.timeZone } : {}),
             ...(calendar.description ? { description: calendar.description } : {}),
             ...(calendar.error ? { error: calendar.error.message } : {}),
@@ -293,6 +300,7 @@ export class CalendarManager {
                 ...had, id, accountId: account.id, remoteId: c.remoteId, name: c.name || had?.name || 'Calendar', color,
                 readOnly: c.readOnly === true, mode: c.mode ?? 'masters',
                 ...(c.timeZone ? { timeZone: c.timeZone } : {}), ...(c.description ? { description: c.description } : {}),
+                ...(typeof c.scheduling === 'boolean' ? { scheduling: c.scheduling } : {}),
             };
             if (had === undefined) {
                 added++;
@@ -306,6 +314,9 @@ export class CalendarManager {
                 dropped++;
             }
         }
+        // The user's own addresses, where the server names them (CalDAV): who the user is on a guest list.
+        const addresses = [...new Set(found.flatMap((c) => (Array.isArray(c.addresses) ? c.addresses : [])))];
+        if (addresses.length > 0) account.addresses = addresses;
         account.calendarsAt = this.now();
         if (added || dropped) this.log(`calendars ${account.id} added=${added} dropped=${dropped} total=${seen.size}`);
         this.saveState();
@@ -771,7 +782,8 @@ export class CalendarManager {
     /** The account's own addresses, to tell which attendee is the user. */
     selfEmails(account) {
         const out = new Set();
-        for (const value of [account?.email, account?.username]) if (typeof value === 'string' && value.includes('@')) out.add(value.toLowerCase());
+        const addresses = Array.isArray(account?.addresses) ? account.addresses : [];
+        for (const value of [account?.email, account?.username, ...addresses]) if (typeof value === 'string' && value.includes('@')) out.add(value.toLowerCase());
         return out;
     }
 
@@ -866,7 +878,10 @@ export class CalendarManager {
         }
         if (self) out.myStatus = self.status ?? 'needs-action';
         out.readOnly = calendar.readOnly === true;
-        if (self && !(record.organizer && this.selfEmails(account).has(String(record.organizer.email).toLowerCase()))) out.canRespond = !out.readOnly;
+        const role = this.roleOf(record, account);
+        // Someone else's invitation: answered, or deleted, but its time and guests are its organizer's.
+        if (role === 'guest') out.invitation = true;
+        if (self && role !== 'organizer') out.canRespond = !out.readOnly;
         return out;
     }
 
@@ -1035,6 +1050,178 @@ export class CalendarManager {
         if (account?.error?.code === 'auth') throw new CalendarError(`The ${account.name} account needs signing in again first (Calendar page → Accounts).`);
     }
 
+    // ── Who a change emails ────────────────────────────────────────────
+
+    /**
+     * Whether a calendar's server emails guests: 'asked' (Google: only when a
+     * change says to tell them), 'always' (Microsoft, and CalDAV servers that
+     * schedule: a meeting's guests hear of every change its organizer makes),
+     * or 'never' (calendars kept here, subscriptions, CalDAV servers that
+     * don't schedule).
+     */
+    mailerOf(calendar) {
+        const kind = this.store.accounts[calendar?.accountId]?.kind;
+        if (kind === 'google') return 'asked';
+        if (kind === 'microsoft') return 'always';
+        // A CalDAV server that didn't say whether it schedules counts as one that does.
+        if (kind === 'caldav') return calendar.scheduling === false ? 'never' : 'always';
+        return 'never';
+    }
+
+    /** The user's part in an event: 'organizer', 'guest' (someone else's invitation), or 'own' (no organizer named). */
+    roleOf(record, account) {
+        const organizer = record?.organizer;
+        if (!organizer?.email) return 'own';
+        if (organizer.self === true || this.selfEmails(account).has(String(organizer.email).toLowerCase())) return 'organizer';
+        return 'guest';
+    }
+
+    /** The other people on an event (the user aside), by address. */
+    guestsOf(record, account) {
+        const mine = this.selfEmails(account);
+        const out = new Map();
+        for (const p of record?.attendees ?? []) {
+            const email = String(p?.email ?? '').trim();
+            if (email === '' || p.self === true || mine.has(email.toLowerCase()) || out.has(email.toLowerCase())) continue;
+            out.set(email.toLowerCase(), email);
+        }
+        return [...out.values()];
+    }
+
+    /** The user's own address on an account, to name as a meeting's organizer. */
+    selfAddress(account) {
+        const addresses = Array.isArray(account?.addresses) ? account.addresses : [];
+        return [...addresses, account?.email, account?.username].find((v) => typeof v === 'string' && /^[^@\s]+@[^@\s]+$/.test(v));
+    }
+
+    /**
+     * Who a change emails: {to: their addresses, what: what they get, forced:
+     * true when the server emails them whatever the change says, why: the
+     * reason it's forced, cannot: why a change that says to tell the guests
+     * can't}. Nothing here changes anything.
+     * @param {{kind: 'create'|'update'|'delete'|'move'|'respond', calendar: object, target?: object,
+     *          before?: object, after?: object, patch?: object, scope?: string, notify?: boolean}} change -
+     *   before: the event as it is (the occurrence, for one); after: as the change leaves its guests;
+     *   target: the calendar a move goes to.
+     */
+    mailOf({ kind, calendar, target, before, after, patch = {}, scope = 'all', notify = false }) {
+        const account = this.store.accounts[calendar.accountId];
+        const mailer = this.mailerOf(calendar);
+        const record = before ?? after;
+        const role = this.roleOf(record, account);
+        const nobody = { to: [], what: '', forced: false };
+        const organizer = record?.organizer?.email;
+        if (kind === 'respond') {
+            // An answer goes to the organizer wherever the server tells them.
+            return role === 'guest' && mailer !== 'never' ? { to: [organizer], what: 'the answer', forced: true, why: 'an answer is sent to the organizer' } : nobody;
+        }
+        if (role === 'guest') {
+            // Someone else's invitation: only taking it out of the calendar can tell its organizer (a decline).
+            if (kind !== 'delete' || mailer === 'never' || account.kind === 'microsoft') return nobody;
+            // A CalDAV server can be told not to decline a whole invitation, but declines one occurrence taken out.
+            if (account.kind === 'caldav' && scope !== 'all') return { to: [organizer], what: 'a decline', forced: true, why: 'the server tells the organizer when an occurrence is taken out' };
+            return notify ? { to: [organizer], what: 'a decline', forced: false } : nobody;
+        }
+        const seen = new Map();
+        for (const email of [...this.guestsOf(before, account), ...this.guestsOf(after, account)]) if (!seen.has(email.toLowerCase())) seen.set(email.toLowerCase(), email);
+        const people = [...seen.values()];
+        if (people.length === 0) return nobody;
+        if (kind === 'move') {
+            // A meeting moved to another calendar is a new meeting for its guests: taken out here, made there.
+            const leaving = this.mailOf({ kind: 'delete', calendar, before, notify });
+            const targetMailer = this.mailerOf(target);
+            const targetAccount = this.store.accounts[target.accountId];
+            const canInvite = targetMailer !== 'never' && (targetAccount?.kind !== 'caldav' || this.selfAddress(targetAccount) !== undefined);
+            const cancels = leaving.to.length > 0;
+            const invites = canInvite && (targetMailer === 'always' || notify);
+            if (!cancels && !invites) return notify && targetMailer === 'never' && mailer === 'never' ? { ...nobody, cannot: this.cannotMail(target) } : nobody;
+            const what = cancels && invites ? 'a cancellation and a new invitation' : cancels ? 'a cancellation' : 'invitations';
+            const forced = (cancels && leaving.forced) || (invites && targetMailer === 'always');
+            return { to: people, what, forced, why: 'a meeting moved to another calendar is a new meeting for its guests', cancels, invites };
+        }
+        const what = kind === 'create' ? 'invitations' : kind === 'delete' ? 'a cancellation' : scope === 'following' ? 'updates' : 'an update';
+        if (mailer === 'never') return notify ? { ...nobody, cannot: this.cannotMail(calendar) } : nobody;
+        // The user's own reminders change nothing for anyone else.
+        if (kind === 'update' && Object.keys(patch).every((k) => k === 'alarms' || k === 'notify' || patch[k] === undefined)) return nobody;
+        if (mailer === 'asked') return notify ? { to: people, what, forced: false } : nobody;
+        if (account.kind === 'caldav' && role !== 'organizer') {
+            // A CalDAV server schedules only an event that names its organizer, and one saved without telling its
+            // guests names none: telling them names the user, which invites them; there is nothing to cancel yet.
+            if (!notify || kind === 'delete') return nobody;
+            if (!this.selfAddress(account)) return { ...nobody, cannot: 'The server didn\'t say which address is yours, so it can\'t send invitations from this account.' };
+            // Every part of a meeting names the same organizer: one occurrence can't become one on its own.
+            if (scope === 'one') return { ...nobody, cannot: 'Only the whole event or series can invite its guests from here. Change it without telling them, or tell them about the whole series.' };
+            return { to: people, what: 'invitations', forced: false };
+        }
+        const why = account.kind !== 'microsoft' ? 'this calendar\'s server emails a meeting\'s guests itself'
+            : kind === 'create' ? 'Microsoft invites the guests as soon as an event with them is saved'
+            : kind === 'delete' ? 'Microsoft emails a meeting\'s guests when it is cancelled' : 'Microsoft emails a meeting\'s guests about each change to it';
+        return { to: people, what, forced: true, why };
+    }
+
+    /** Why a calendar can't email guests. */
+    cannotMail(calendar) {
+        if (this.store.accounts[calendar.accountId]?.kind === 'local') return 'Calendars kept in DSH can\'t email anyone. Save it without telling the guests, and tell them another way.';
+        return 'This calendar\'s server doesn\'t email guests. Save it without telling them, and tell them another way.';
+    }
+
+    /**
+     * Why a change can't be made as asked, as far as email goes: it would
+     * email people without saying to tell them ('needs-notify'), or it says
+     * to and can't. {message, code?} or undefined.
+     */
+    mailProblem(mail, notify) {
+        if (mail === undefined) return undefined;
+        if (notify === true && mail.cannot) return { message: mail.cannot };
+        if (mail.forced && notify !== true) {
+            return { message: `This would email ${mail.what} to ${peopleWords(mail.to)} (${mail.why}), so it's made only when they are to be told.`, code: 'needs-notify' };
+        }
+        return undefined;
+    }
+
+    /** Refuse a change mailProblem() finds a problem with. */
+    checkMail(mail, notify) {
+        const problem = this.mailProblem(mail, notify);
+        if (problem) throw new CalendarError(problem.message, problem.code);
+    }
+
+    /**
+     * Who a change a tool is about to make would email (the approval question
+     * names them), worked out as the change itself does. Undefined when the
+     * change can't be made as asked. Never throws.
+     * @param {'create'|'update'|'delete'|'respond'} kind
+     * @param {{id?: string, input?: object, scope?: string, notify?: boolean}} change - input as the manager takes it.
+     */
+    previewMail(kind, { id, input = {}, scope, notify = false } = {}) {
+        try {
+            if (kind === 'create') {
+                const calendar = this.calendar(input.calendarId || this.defaultCalendarId());
+                return this.mailOf({ kind, calendar, after: this.recordFrom({ ...input, title: input.title || '-' }), notify });
+            }
+            const at = this.locate(id);
+            if (kind === 'update' && input.calendarId && input.calendarId !== at.calendar.id) {
+                return this.mailOf({ kind: 'move', calendar: at.calendar, target: this.calendar(input.calendarId), before: at.master ?? at.records[0], notify });
+            }
+            const which = this.scopeOf(at, scope ?? 'all');
+            const before = this.recordOf(at, which);
+            if (kind === 'update') return this.mailOf({ kind, calendar: at.calendar, before, after: this.guestsAfter(before, input), patch: input, scope: which, notify });
+            return this.mailOf({ kind, calendar: at.calendar, before, scope: which, notify });
+        } catch {
+            return undefined;
+        }
+    }
+
+    /** The record a change with this scope starts from: the occurrence for 'one', else the series' (or the event's). */
+    recordOf(at, which) {
+        return which === 'one' ? this.occurrenceRecord(at) : (at.master ?? at.override);
+    }
+
+    /** A record as an update's guest list leaves it (the record itself when the update doesn't give one). */
+    guestsAfter(before, input) {
+        if (input?.attendees === undefined) return before;
+        return { ...before, attendees: this.recordFrom({ attendees: input.attendees }, before).attendees };
+    }
+
     // ── Changing ───────────────────────────────────────────────────────
 
     /**
@@ -1055,6 +1242,11 @@ export class CalendarManager {
         }
         if (has('url') && record.url && !/^https?:\/\//i.test(record.url)) throw new CalendarError('A link starts with https:// or http://.');
         if (has('busy')) record.busy = input.busy !== false;
+        if (has('organizer')) {
+            const email = String(input.organizer?.email ?? '').trim();
+            if (email === '') delete record.organizer;
+            else record.organizer = { email, ...(typeof input.organizer?.name === 'string' && input.organizer.name.trim() ? { name: input.organizer.name.trim() } : {}) };
+        }
         if (has('privacy')) {
             if (input.privacy === null || input.privacy === 'public' || input.privacy === '') delete record.privacy;
             else if (input.privacy === 'private' || input.privacy === 'confidential') record.privacy = input.privacy;
@@ -1144,19 +1336,24 @@ export class CalendarManager {
         return cleanRecord(record);
     }
 
-    /** Run a change; when the server says the event changed meanwhile, sync and try once more. */
-    async changing(calendarId, run) {
+    /**
+     * Run a change; when the server says the event changed meanwhile, sync
+     * and try once more. With retry false (a deletion, a new time: decided
+     * on the event as it was), sync and say so instead.
+     */
+    async changing(calendarId, run, { retry = true } = {}) {
         return this.locked(`sync:${calendarId}`, async () => {
             try {
                 return await run();
             } catch (error) {
                 if (!(error instanceof SourceError) || error.code !== 'conflict') throw asCalendarError(error);
             }
-            this.log(`conflict ${calendarId} retry`);
+            this.log(`conflict ${calendarId} ${retry ? 'retry' : 'stopped'}`);
             return CONFLICT;
         }).then(async (result) => {
             if (result !== CONFLICT) return result;
             await this.syncCalendar(calendarId);
+            if (!retry) throw new CalendarError('The event changed on its server meanwhile (in another app, or by someone else), so nothing was done. Look at it again first.');
             return this.locked(`sync:${calendarId}`, async () => {
                 try {
                     return await run();
@@ -1167,14 +1364,18 @@ export class CalendarManager {
         });
     }
 
-    /** Write a CalDAV or local item's new text (null: no event left in it). */
-    async putIcs(calendar, item, edits, uid) {
+    /**
+     * Write a CalDAV or local item's new text (null: no event left in it).
+     * opts.scheduleReply false: a deletion asks the server not to tell the
+     * organizer (an invitation taken out declines it otherwise).
+     */
+    async putIcs(calendar, item, edits, uid, { scheduleReply } = {}) {
         const { source } = await this.source(this.store.accounts[calendar.accountId]);
         const raw = editIcs(item?.raw ?? null, edits, { now: this.now(), zone: this.zone() });
         const items = this.store.itemsOf(calendar.id);
         let made;
         if (raw === null) {
-            await source.remove({ ...calendar }, item);
+            await source.remove({ ...calendar }, item, scheduleReply === false ? { scheduleReply: false } : {});
             delete items[item.remoteId];
         } else {
             const put = await source.put({ ...calendar }, item ?? null, raw, uid);
@@ -1207,39 +1408,71 @@ export class CalendarManager {
         if (!calendarId) throw new CalendarError('There is no calendar that can be written.');
         const calendar = this.calendar(calendarId);
         this.writable(calendar);
-        const record = this.recordFrom(input);
+        const account = this.store.accounts[calendar.accountId];
+        // The organizer is the user, never a caller's word.
+        const { organizer: _organizer, notify: notifyIn, ...fields } = input;
+        const notify = notifyIn === true;
+        const record = this.recordFrom(fields);
+        const mail = this.mailOf({ kind: 'create', calendar, after: record, notify });
+        this.checkMail(mail, notify);
+        const emails = mail.to.length > 0;
+        // A CalDAV server invites the guests of an event that names its organizer.
+        if (emails && account.kind === 'caldav') record.organizer = { email: this.selfAddress(account) };
         record.uid = newUid();
         const created = await this.changing(calendar.id, async () => {
-            const { source, style } = await this.source(this.store.accounts[calendar.accountId]);
+            const { source, style } = await this.source(account);
             if (style === 'ics') {
                 const item = await this.putIcs(calendar, null, [{ uid: record.uid, record }], record.uid);
                 return { remoteId: item.remoteId, uid: record.uid };
             }
-            const items = await source.create({ ...calendar }, { ...record, ...(input.notify === true ? { notify: true } : {}) });
+            const items = await source.create({ ...calendar }, { ...record, ...(emails ? { notify: true } : {}) });
             this.takeItems(calendar, items);
             const first = items?.[0];
             return { remoteId: first?.remoteId, uid: first?.events?.[0]?.uid ?? record.uid };
         });
-        this.log(`create ${calendar.id} by=${by}${record.rrule ? ' repeats' : ''}${record.attendees ? ` people=${record.attendees.length}` : ''}`);
+        this.log(`create ${calendar.id} by=${by}${record.rrule ? ' repeats' : ''}${record.attendees ? ` people=${record.attendees.length}` : ''}${emails ? ` mail=${mail.to.length}` : ''}`);
         const eventId = eventIdOf(calendar.id, created.uid);
         const zone = this.zone();
         const startMs = startOfTime(record.start, zone);
         const first = this.find({ from: startMs - DAY, to: startMs + 2 * DAY + spanLength(record, zone), calendars: [calendar.id] })
             .find(({ o }) => o.record.uid === created.uid);
-        return first ? this.view(first) : { id: eventId, eventId, calendarId: calendar.id, title: record.title };
+        return withMail(first ? this.view(first) : { id: eventId, eventId, calendarId: calendar.id, title: record.title }, mail);
     }
 
     /**
      * Change an event. scope: 'one' (this occurrence of a series), 'following'
      * (this one and the ones after it), 'all' (the series, or a single event).
      */
-    async updateEvent(id, patch = {}, scope = 'all', by = 'window') {
+    async updateEvent(id, patchIn = {}, scope = 'all', by = 'window') {
         const first = this.locate(id);
         this.writable(first.calendar);
-        if (patch.calendarId && patch.calendarId !== first.calendar.id) return this.moveEvent(id, patch.calendarId, by, { notify: patch.notify === true });
+        // The organizer is never a caller's word; notify is a choice, not a field.
+        const { organizer: _organizer, notify: notifyIn, calendarId, ...fields } = patchIn;
+        const notify = notifyIn === true;
+        if (calendarId && calendarId !== first.calendar.id) {
+            // A move takes the whole event or series to the other calendar, and nothing else changes on the way.
+            if (this.scopeOf(first, scope) !== 'all') {
+                throw new CalendarError('Only a whole event or series moves to another calendar. To move one occurrence, delete only it here, then add it to the other calendar as an event of its own.');
+            }
+            if (Object.values(fields).some((v) => v !== undefined)) throw new CalendarError('Move the event to the other calendar on its own first, then change it there.');
+            return this.moveEvent(id, calendarId, by, { notify });
+        }
         const which = this.scopeOf(first, scope);
-        // Google and Microsoft tell guests about a change only when asked (the tools' notify_guests).
-        const tell = patch.notify === true ? { notify: true } : {};
+        const account = first.account;
+        const before = this.recordOf(first, which);
+        if (this.roleOf(before, account) === 'guest' && fields.attendees !== undefined && this.mailerOf(first.calendar) !== 'never') {
+            throw new CalendarError('This is someone else\'s invitation: only its organizer changes who is invited.');
+        }
+        const mail = this.mailOf({ kind: 'update', calendar: first.calendar, before, after: this.guestsAfter(before, fields), patch: fields, scope: which, notify });
+        this.checkMail(mail, notify);
+        const emails = mail.to.length > 0;
+        // A CalDAV server tells the guests of an event that names its organizer: the user, when it names none yet.
+        if (emails && account.kind === 'caldav' && this.roleOf(before, account) !== 'organizer') fields.organizer = { email: this.selfAddress(account) };
+        // Google and Microsoft tell guests about a change only when the change says so.
+        const tell = emails ? { notify: true } : {};
+        const patch = { ...fields, ...tell };
+        // A new time is decided on the event as it was: if it changed meanwhile, say so rather than try again.
+        const retry = !emails && !['start', 'end', 'allDay', 'timeZone', 'repeat'].some((k) => fields[k] !== undefined);
         let after;
         await this.changing(first.calendar.id, async () => {
             const at = this.locate(id);
@@ -1296,14 +1529,16 @@ export class CalendarManager {
             }
             // The occurrence that was asked about, where it is now.
             after = { uid: at.uid, near: at.series ? at.originalStart + delta : startOfTime(changed.start, zone) };
-        });
-        this.log(`update ${first.calendar.id} ${first.eventId} scope=${which} by=${by}`);
+        }, { retry });
+        this.log(`update ${first.calendar.id} ${first.eventId} scope=${which} by=${by}${emails ? ` mail=${mail.to.length}` : ''}`);
+        let view;
         try {
-            if (which === 'one' || after === undefined) return this.event(which === 'one' ? id : first.eventId);
-            return this.viewNear(first.calendar.id, after.uid, after.near) ?? this.event(eventIdOf(first.calendar.id, after.uid));
+            if (which === 'one' || after === undefined) view = this.event(which === 'one' ? id : first.eventId);
+            else view = this.viewNear(first.calendar.id, after.uid, after.near) ?? this.event(eventIdOf(first.calendar.id, after.uid));
         } catch {
-            return { id };
+            view = { id };
         }
+        return withMail(view, mail);
     }
 
     /** The view of an event's occurrence nearest a time (within a day): what a change made. */
@@ -1437,7 +1672,12 @@ export class CalendarManager {
         return { uid: at.uid, near: startOfTime(changed.start, zone) };
     }
 
-    /** Move an event to another calendar: made there, then taken out here. */
+    /**
+     * Move a whole event or series to another calendar: made there, then
+     * taken out here. For its guests that is a new meeting, so a move that
+     * would email them (a cancellation from here, an invitation from there)
+     * is made only when it says to tell them.
+     */
     async moveEvent(id, calendarId, by = 'window', { notify = false } = {}) {
         const at = this.locate(id);
         const target = this.calendar(calendarId);
@@ -1446,30 +1686,56 @@ export class CalendarManager {
         if (at.instance || (at.recurrenceId && !at.series)) throw new CalendarError('Move the whole series, from its own event.');
         const zone = this.zone();
         const records = at.records;
-        const { source: to, style: toStyle } = await this.source(this.store.accounts[target.accountId]);
-        const uid = at.uid;
-        if (toStyle === 'ics') {
-            await this.changing(target.id, () => this.putIcs(target, null, records.map((r) => ({ uid, recurrenceId: r.recurrenceId, record: r })), uid));
-        } else {
-            // A new event there: its guests are invited only when asked (Microsoft would email them all).
-            const master = structuredClone(at.master ?? records[0]);
-            if (notify) master.notify = true;
-            else delete master.attendees;
-            await this.changing(target.id, async () => this.takeItems(target, await to.create({ ...target }, master)));
+        const master = at.master ?? records[0];
+        if (this.roleOf(master, at.account) === 'guest') {
+            throw new CalendarError('This is someone else\'s invitation, so it stays in the calendar it was sent to. Answer it there, or delete it.');
         }
-        await this.deleteEvent(at.master ? at.eventId : id, 'all', by);
-        this.log(`move ${at.calendar.id} ${target.id} by=${by}`);
-        const startMs = startOfTime((at.master ?? records[0]).start, zone);
+        const mail = this.mailOf({ kind: 'move', calendar: at.calendar, target, before: master, notify });
+        this.checkMail(mail, notify);
+        const emails = mail.to.length > 0;
+        const targetAccount = this.store.accounts[target.accountId];
+        const { source: to, style: toStyle } = await this.source(targetAccount);
+        // A meeting that is cancelled here and sent from there is a new meeting, with its own uid.
+        const uid = emails || master.organizer ? newUid() : at.uid;
+        const copies = records.map((r) => {
+            const copy = structuredClone(r);
+            copy.uid = uid;
+            delete copy.remoteId;
+            if (mail.invites && targetAccount.kind === 'caldav') copy.organizer = { email: this.selfAddress(targetAccount) };
+            // Where the server schedules, an organizer would make it a meeting: only when it invites.
+            else if (!mail.invites && this.mailerOf(target) !== 'never') delete copy.organizer;
+            return copy;
+        });
+        if (toStyle === 'ics') {
+            await this.changing(target.id, () => this.putIcs(target, null, copies.map((r) => ({ uid, recurrenceId: r.recurrenceId, record: r })), uid), { retry: false });
+        } else {
+            const copy = copies.find((r) => !r.recurrenceId) ?? copies[0];
+            await this.changing(target.id, async () => this.takeItems(target, await to.create({ ...target }, { ...copy, ...(mail.invites ? { notify: true } : {}) })), { retry: false });
+        }
+        // Out of here, with the cancellation the move said it sends (none when it sends none).
+        await this.deleteEvent(at.master ? at.eventId : id, 'all', by, { notify: mail.cancels === true });
+        this.log(`move ${at.calendar.id} ${target.id} by=${by}${emails ? ` mail=${mail.to.length}` : ''}`);
+        const startMs = startOfTime(master.start, zone);
         const found = this.find({ from: startMs - DAY, to: startMs + 2 * DAY, calendars: [target.id] }).find(({ o }) => o.record.uid === uid);
-        return found ? this.view(found) : { id };
+        return withMail(found ? this.view(found) : { id }, mail);
     }
 
-    /** Delete an event, one occurrence, or this and the following ones. opts.notify: Google tells the guests. */
+    /**
+     * Delete an event, one occurrence, or this and the following ones.
+     * opts.notify: tell the guests (or, for someone else's invitation, its
+     * organizer). A delete that would email someone without it is refused.
+     * @returns {Promise<{emailed?: {what: string, to: string[]}}>}
+     */
     async deleteEvent(id, scope = 'all', by = 'window', { notify = false } = {}) {
-        const tell = notify ? { notify: true } : {};
         const first = this.locate(id);
         this.writable(first.calendar);
         const which = this.scopeOf(first, scope);
+        const mail = this.mailOf({ kind: 'delete', calendar: first.calendar, before: this.recordOf(first, which), scope: which, notify });
+        this.checkMail(mail, notify);
+        const emails = mail.to.length > 0;
+        const tell = emails ? { notify: true } : {};
+        // CalDAV: taking out an invitation declines it unless the server is told not to.
+        const quiet = emails ? {} : { scheduleReply: false };
         await this.changing(first.calendar.id, async () => {
             const at = this.locate(id);
             const { source, style } = await this.source(at.account);
@@ -1477,7 +1743,7 @@ export class CalendarManager {
             const zone = this.zone();
             if (which === 'all') {
                 if (style === 'ics') {
-                    await this.putIcs(calendar, at.item, at.records.map((r) => ({ uid: at.uid, recurrenceId: r.recurrenceId, record: null })), at.uid);
+                    await this.putIcs(calendar, at.item, at.records.map((r) => ({ uid: at.uid, recurrenceId: r.recurrenceId, record: null })), at.uid, quiet);
                 } else {
                     const out = await source.remove({ ...calendar }, { item: at.item, record: at.master ?? at.override, occurrence: at.recurrenceId, ...tell }, 'all');
                     this.takeItems(calendar, out?.items, out?.removed ?? [at.item.remoteId]);
@@ -1487,7 +1753,7 @@ export class CalendarManager {
             if (which === 'one') {
                 if (style === 'ics') {
                     if (!at.master) {
-                        await this.putIcs(calendar, at.overrideItem ?? at.item, [{ uid: at.uid, recurrenceId: at.recurrenceId, record: null }], at.uid);
+                        await this.putIcs(calendar, at.overrideItem ?? at.item, [{ uid: at.uid, recurrenceId: at.recurrenceId, record: null }], at.uid, quiet);
                         return;
                     }
                     const master = structuredClone(at.master);
@@ -1506,7 +1772,7 @@ export class CalendarManager {
             const master = at.master;
             const rule = parseRule(master.rrule);
             if (at.originalStart <= startOfTime(master.start, zone)) {
-                if (style === 'ics') await this.putIcs(calendar, at.item, at.records.map((r) => ({ uid: at.uid, recurrenceId: r.recurrenceId, record: null })), at.uid);
+                if (style === 'ics') await this.putIcs(calendar, at.item, at.records.map((r) => ({ uid: at.uid, recurrenceId: r.recurrenceId, record: null })), at.uid, quiet);
                 else {
                     const out = await source.remove({ ...calendar }, { item: at.item, record: master, ...tell }, 'all');
                     this.takeItems(calendar, out?.items, out?.removed ?? [at.item.remoteId]);
@@ -1525,16 +1791,20 @@ export class CalendarManager {
             } else {
                 this.takeItems(calendar, await source.update({ ...calendar }, { item: at.item, record: master }, { rrule: older.rrule, ...tell }, 'all'));
             }
-        });
-        this.log(`delete ${first.calendar.id} ${first.eventId} scope=${which} by=${by}`);
+        }, { retry: false });
+        this.log(`delete ${first.calendar.id} ${first.eventId} scope=${which} by=${by}${emails ? ` mail=${mail.to.length}` : ''}`);
+        return emails ? { emailed: { what: mail.what, to: mail.to } } : {};
     }
 
-    /** Answer an invitation: accepted, declined or tentative. */
+    /** Answer an invitation: accepted, declined or tentative; for one occurrence ('one') or the whole series ('all'). */
     async respond(id, status, scope = 'all', by = 'window') {
         if (!['accepted', 'declined', 'tentative'].includes(status)) throw new CalendarError('The answer is accepted, declined or tentative.');
+        if (scope === 'following') throw new CalendarError('An answer is for one occurrence (one) or the whole series (all).');
         const first = this.locate(id);
         this.writable(first.calendar);
-        const which = this.scopeOf(first, scope === 'following' ? 'all' : scope);
+        const which = this.scopeOf(first, scope);
+        // The organizer hears the answer where the server tells them.
+        const mail = this.mailOf({ kind: 'respond', calendar: first.calendar, before: this.recordOf(first, which) });
         await this.changing(first.calendar.id, async () => {
             const at = this.locate(id);
             const { source, style } = await this.source(at.account);
@@ -1551,8 +1821,8 @@ export class CalendarManager {
                 throw new CalendarError('This account can\'t answer invitations from here.');
             }
         });
-        this.log(`respond ${first.calendar.id} ${first.eventId} ${status} by=${by}`);
-        return this.event(id);
+        this.log(`respond ${first.calendar.id} ${first.eventId} ${status} by=${by}${mail.to.length ? ' mail=1' : ''}`);
+        return withMail(this.event(id), mail);
     }
 
     // ── Files ──────────────────────────────────────────────────────────
@@ -1579,17 +1849,22 @@ export class CalendarManager {
             if (list) list.push(r);
             else byUid.set(r.uid, [r]);
         }
-        const { source, style } = await this.source(this.store.accounts[calendar.accountId]);
+        const account = this.store.accounts[calendar.accountId];
+        const { source, style } = await this.source(account);
+        // Imported events invite nobody: on a server their guests and organizer stay out (a server that
+        // schedules, and Microsoft, would email them all). Calendars kept in DSH keep everything.
+        const keep = (r) => {
+            if (account.kind === 'local') return r;
+            const copy = structuredClone(r);
+            delete copy.attendees;
+            delete copy.organizer;
+            return copy;
+        };
         let added = 0;
         for (const [uid, list] of byUid) {
             await this.changing(calendar.id, async () => {
-                if (style === 'ics') await this.putIcs(calendar, null, list.map((r) => ({ uid, recurrenceId: r.recurrenceId, record: r })), uid);
-                else {
-                    // Imported events invite nobody: their guests stay out (Microsoft would email them all).
-                    const master = structuredClone(list.find((r) => !r.recurrenceId) ?? list[0]);
-                    delete master.attendees;
-                    this.takeItems(calendar, await source.create({ ...calendar }, master));
-                }
+                if (style === 'ics') await this.putIcs(calendar, null, list.map((r) => ({ uid, recurrenceId: r.recurrenceId, record: keep(r) })), uid);
+                else this.takeItems(calendar, await source.create({ ...calendar }, keep(list.find((r) => !r.recurrenceId) ?? list[0])));
             });
             added++;
         }
@@ -1618,6 +1893,19 @@ export class CalendarManager {
 // ── Helpers ────────────────────────────────────────────────────────────
 
 const short = (error) => String(error?.message ?? error).replace(/\s+/g, ' ').slice(0, 160);
+
+/** A change's result, with who it emailed when it emailed someone. */
+const withMail = (view, mail) => (mail?.to?.length > 0 ? { ...view, emailed: { what: mail.what, to: mail.to } } : view);
+
+/** People in words: up to five addresses, then how many more. */
+export function peopleWords(list) {
+    const people = [...(list ?? [])];
+    if (people.length === 0) return 'no one';
+    const shown = people.slice(0, 5);
+    const more = people.length - shown.length;
+    if (more > 0) return `${shown.join(', ')} and ${more} more`;
+    return shown.length === 1 ? shown[0] : `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)}`;
+}
 
 function asCalendarError(error) {
     if (error instanceof CalendarError) return error;

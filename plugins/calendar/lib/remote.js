@@ -19,9 +19,13 @@ export const NAMESPACE = 'dsh-plugin-calendar';
 /** Cordis service key the gateway looks the service up by. */
 export const SERVICE = 'dshPluginCalendarRemote';
 
-/** A refusal the user can act on, as a Remote failure the window shows. */
+/**
+ * A refusal the user can act on, as a Remote failure the window shows.
+ * 'calendar/needs-notify': the change would email people (its message says
+ * who and what); made again with notify, it goes ahead and emails them.
+ */
 function failure(error) {
-    if (error instanceof CalendarError) return new RemoteError('calendar/refused', error.message, {});
+    if (error instanceof CalendarError) return new RemoteError(error.code === 'needs-notify' ? 'calendar/needs-notify' : 'calendar/refused', error.message, {});
     return new RemoteError('calendar/failed', String(error?.message ?? error).slice(0, 300), {});
 }
 
@@ -77,32 +81,36 @@ export class CalendarRemote {
     }
 
     /**
-     * A new event: {occurrence}. input: {calendarId?, title, start, end?, allDay?, timeZone?, location?,
-     * description?, url?, repeat?, alarms?, attendees?, busy?, privacy?, notify?}. notify: invite the guests now
-     * (Google and Microsoft email them; Microsoft refuses guests without it).
+     * A new event: {occurrence}, with occurrence.emailed {what, to} when it emailed someone. input: {calendarId?,
+     * title, start, end?, allDay?, timeZone?, location?, description?, url?, repeat?, alarms?, attendees?, busy?,
+     * privacy?, notify?}. notify: invite the guests now. Where the server would email them anyway (Microsoft, a
+     * CalDAV server that schedules), guests without notify are refused with 'calendar/needs-notify'.
      */
     async createEvent(input) {
         return this.run(async () => ({ occurrence: await this.manager.createEvent(object(input), 'window') }));
     }
 
     /**
-     * Change an event: {occurrence}, as it is now. scope: 'one', 'following' or 'all' (an occurrence's
-     * `scopes` say which it takes). Fields as createEvent's; null clears one; patch.calendarId moves it;
-     * patch.notify tells the guests.
+     * Change an event: {occurrence}, as it is now (with emailed, as createEvent's). scope: 'one', 'following'
+     * or 'all' (an occurrence's `scopes` say which it takes). Fields as createEvent's; null clears one;
+     * patch.notify tells the guests (a change the server would email them about anyway is refused without
+     * it: 'calendar/needs-notify'). patch.calendarId, given alone with scope 'all', moves the whole event or
+     * series to that calendar; with other fields or another scope it is refused.
      */
     async updateEvent(id, patch, scope) {
         return this.run(async () => ({ occurrence: await this.manager.updateEvent(text(id), object(patch), text(scope) || 'all', 'window') }));
     }
 
-    /** Delete an event, one occurrence, or this and the following ones: {}. notify: tell its guests (Google; Microsoft always does). */
+    /**
+     * Delete an event, one occurrence, or this and the following ones: {emailed?: {what, to}}. notify: tell
+     * its guests (for someone else's invitation, its organizer); a delete the server would email them about
+     * anyway is refused without it ('calendar/needs-notify').
+     */
     async deleteEvent(id, scope, notify) {
-        return this.run(async () => {
-            await this.manager.deleteEvent(text(id), text(scope) || 'all', 'window', { notify: notify === true });
-            return {};
-        });
+        return this.run(async () => this.manager.deleteEvent(text(id), text(scope) || 'all', 'window', { notify: notify === true }));
     }
 
-    /** Answer an invitation ('accepted', 'declined', 'tentative'): {occurrence}. */
+    /** Answer an invitation ('accepted', 'declined', 'tentative') for scope 'one' or 'all': {occurrence}, with emailed when the organizer was sent it. */
     async respond(id, status, scope) {
         return this.run(async () => ({ occurrence: await this.manager.respond(text(id), text(status), text(scope) || 'all', 'window') }));
     }

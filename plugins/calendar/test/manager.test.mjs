@@ -371,3 +371,265 @@ test('a subscribed feed is read only, follows its ETag, and survives a restart',
         done();
     }
 });
+
+// ── Guests and email ───────────────────────────────────────────────────
+
+/**
+ * A stand-in source for an account added to the store by hand: CalDAV-like
+ * ('ics': iCalendar text, put and remove) or Google/Microsoft-like
+ * ('events': create, update, remove, respond). Every call is noted.
+ */
+function standIn(m, account, calendar, style) {
+    const calls = [];
+    let n = 0;
+    const source = style === 'ics' ? {
+        async put(_calendar, item, raw, uid) {
+            calls.push({ op: 'put', raw, item: item?.remoteId });
+            return { remoteId: item?.remoteId ?? `${calendar.remoteId}${uid}.ics`, etag: `"e${++n}"` };
+        },
+        async remove(_calendar, item, opts = {}) {
+            calls.push({ op: 'remove', item: item?.remoteId, ...opts });
+        },
+        async sync(_calendar, state) { return { reset: false, items: [], removed: [], state: state ?? {} }; },
+    } : {
+        async create(_calendar, record) {
+            calls.push({ op: 'create', record });
+            const uid = `${account.kind}-${++n}`;
+            const { notify: _notify, ...kept } = record;
+            return [{ remoteId: uid, events: [{ ...kept, uid, organizer: { email: account.email, self: true } }] }];
+        },
+        async update(_calendar, target, patch, scope) {
+            calls.push({ op: 'update', patch, scope });
+            return [];
+        },
+        async remove(_calendar, target, scope) {
+            calls.push({ op: 'remove', notify: target.notify === true, scope });
+            return { removed: [target.item.remoteId], items: [] };
+        },
+        async respond(_calendar, target, status, scope) {
+            calls.push({ op: 'respond', status, scope });
+            return [];
+        },
+        async sync(_calendar, state) { return { reset: false, items: [], removed: [], state: state ?? {} }; },
+    };
+    m.store.accounts[account.id] = { calendarsAt: NOW, ...account };
+    m.store.calendars[calendar.id] = { readOnly: false, mode: 'masters', color: '#4f7cff', ...calendar, accountId: account.id };
+    m.store.itemsOf(calendar.id);
+    const previous = m.source.bind(m);
+    m.source = async (a) => (a.id === account.id ? { style, source } : previous(a));
+    m.changed();
+    return calls;
+}
+
+/** An invitation from someone else, as a CalDAV server would hold it. */
+function invitationIcs(uid, start) {
+    return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//test//EN', 'BEGIN:VEVENT', `UID:${uid}`, 'DTSTAMP:20261001T000000Z',
+        `DTSTART;TZID=Europe/Berlin:${start}`, 'DURATION:PT1H', 'SUMMARY:Board review',
+        'ORGANIZER;CN=Boss:mailto:boss@example.com', 'ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:me@icloud.com',
+        'ATTENDEE;PARTSTAT=ACCEPTED:mailto:ann@example.com', 'END:VEVENT', 'END:VCALENDAR', ''].join('\r\n');
+}
+
+/** iCalendar text with its folded lines joined again. */
+const unfold = (raw) => String(raw).replace(/\r\n[ \t]/g, '');
+
+const refusedFor = (code, pattern) => (error) => error instanceof CalendarError && error.code === code && pattern.test(error.message);
+
+test('CalDAV that schedules: a change that would email guests is made only when it says to tell them', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        const calls = standIn(m,
+            { id: 'dav', kind: 'caldav', name: 'iCloud', url: 'https://caldav.icloud.com/', username: 'me@icloud.com', email: 'me@icloud.com', addresses: ['me@icloud.com'] },
+            { id: 'cal-dav', remoteId: 'https://p52-caldav.icloud.com/1/calendars/home/', name: 'Home', scheduling: true }, 'ics');
+        assert.equal(m.calendarView(m.calendar('cal-dav')).canEmail, true);
+
+        // Guests without telling them: the server isn't asked to schedule (no organizer), and nobody is emailed.
+        const quiet = await m.createEvent({ calendarId: 'cal-dav', title: 'Lunch', start: '2026-10-14T12:00', attendees: ['ann@example.com'] });
+        assert.equal(quiet.emailed, undefined);
+        assert.doesNotMatch(unfold(calls.at(-1).raw), /ORGANIZER/);
+        assert.match(unfold(calls.at(-1).raw), /ATTENDEE.*ann@example\.com/);
+
+        // Telling them names the user as the organizer, and the server sends the invitations.
+        const meeting = await m.createEvent({ calendarId: 'cal-dav', title: 'Planning', start: '2026-10-15T10:00', attendees: ['ann@example.com', 'bob@example.com'], notify: true });
+        assert.deepEqual(meeting.emailed, { what: 'invitations', to: ['ann@example.com', 'bob@example.com'] });
+        assert.match(unfold(calls.at(-1).raw), /ORGANIZER:mailto:me@icloud\.com/);
+
+        // Now the server emails its guests about every change: refused without notify, nothing sent to the server.
+        const sent = calls.length;
+        await assert.rejects(m.updateEvent(meeting.id, { start: '2026-10-15T11:00' }),
+            refusedFor('needs-notify', /^This would email an update to ann@example\.com and bob@example\.com \(this calendar's server emails a meeting's guests itself\)/));
+        await assert.rejects(m.deleteEvent(meeting.id), refusedFor('needs-notify', /a cancellation to ann@example\.com and bob@example\.com/));
+        assert.equal(calls.length, sent);
+        // The user's own reminders tell nobody anything.
+        assert.equal((await m.updateEvent(meeting.id, { alarms: [15] })).emailed, undefined);
+        const moved = await m.updateEvent(meeting.id, { start: '2026-10-15T11:00', notify: true });
+        assert.deepEqual(moved.emailed, { what: 'an update', to: ['ann@example.com', 'bob@example.com'] });
+        assert.equal(moved.startLocal, '2026-10-15T11:00');
+        // A guest taken off is told too.
+        const fewer = await m.updateEvent(meeting.id, { attendees: ['ann@example.com'], notify: true });
+        assert.deepEqual(fewer.emailed.to, ['ann@example.com', 'bob@example.com']);
+
+        // Someone else's invitation: taking it out doesn't decline it unless asked (Schedule-Reply: F).
+        const items = m.store.itemsOf('cal-dav');
+        items['https://p52-caldav.icloud.com/1/calendars/home/inv-1.ics'] = {
+            remoteId: 'https://p52-caldav.icloud.com/1/calendars/home/inv-1.ics', etag: '"i1"', raw: invitationIcs('inv-1', '20261016T090000'),
+            events: (await import('../lib/ical.js')).readIcs(invitationIcs('inv-1', '20261016T090000'), { zone: ZONE }).events,
+        };
+        m.changed();
+        const invitation = week(m).find((o) => o.title === 'Board review');
+        assert.equal(invitation.invitation, true);
+        assert.equal(invitation.canRespond, true);
+        await assert.rejects(m.updateEvent(invitation.id, { attendees: ['ann@example.com', 'eve@example.com'], notify: true }), /someone else's invitation: only its organizer changes who is invited/);
+        await assert.rejects(m.moveEvent(invitation.id, m.defaultCalendarId() === 'cal-dav' ? m.state().calendars.find((c) => c.name === 'Personal').id : m.defaultCalendarId()), /someone else's invitation/);
+        const answered = await m.respond(invitation.id, 'accepted');
+        assert.deepEqual(answered.emailed, { what: 'the answer', to: ['boss@example.com'] });
+        await assert.rejects(m.respond(invitation.id, 'declined', 'following'), /one occurrence \(one\) or the whole series \(all\)/);
+        assert.deepEqual(await m.deleteEvent(invitation.id), {});
+        assert.deepEqual(calls.at(-1), { op: 'remove', item: 'https://p52-caldav.icloud.com/1/calendars/home/inv-1.ics', scheduleReply: false });
+
+        // Many guests: five by name, then how many more.
+        const crowd = Array.from({ length: 7 }, (_, i) => `p${i + 1}@example.com`);
+        const big = await m.createEvent({ calendarId: 'cal-dav', title: 'All hands', start: '2026-10-16T15:00', attendees: crowd, notify: true });
+        await assert.rejects(m.deleteEvent(big.id), refusedFor('needs-notify', /to p1@example\.com, p2@example\.com, p3@example\.com, p4@example\.com, p5@example\.com and 2 more \(/));
+        assert.deepEqual((await m.deleteEvent(big.id, 'all', 'window', { notify: true })).emailed.to, crowd);
+        assert.equal(calls.at(-1).scheduleReply, undefined);
+
+        // What the log keeps: counts, never addresses.
+        const log = readFileSync(m.config.logFile, 'utf8');
+        assert.match(log, /create cal-dav by=window people=2 mail=2/);
+        assert.doesNotMatch(log, /@example\.com|@icloud\.com/);
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
+test('CalDAV that doesn\'t schedule, and calendars kept here: nothing is emailed, and a change that says to tell guests is refused', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        standIn(m, { id: 'rad', kind: 'caldav', name: 'Radicale', url: 'https://dav.example.com/', username: 'me', email: 'me@example.com' },
+            { id: 'cal-rad', remoteId: 'https://dav.example.com/me/cal/', name: 'Cal', scheduling: false }, 'ics');
+        assert.equal(m.calendarView(m.calendar('cal-rad')).canEmail, false);
+        await assert.rejects(m.createEvent({ calendarId: 'cal-rad', title: 'X', start: '2026-10-14T12:00', attendees: ['ann@example.com'], notify: true }),
+            /This calendar's server doesn't email guests\. Save it without telling them, and tell them another way\./);
+        const ev = await m.createEvent({ calendarId: 'cal-rad', title: 'X', start: '2026-10-14T12:00', attendees: ['ann@example.com'] });
+        assert.equal((await m.updateEvent(ev.id, { start: '2026-10-14T13:00' })).emailed, undefined);
+
+        const personal = m.state().calendars.find((c) => c.name === 'Personal');
+        assert.equal(personal.canEmail, false);
+        const local = await m.createEvent({ calendarId: personal.id, title: 'Y', start: '2026-10-14T12:00', attendees: ['ann@example.com'] });
+        await assert.rejects(m.deleteEvent(local.id, 'all', 'window', { notify: true }), /Calendars kept in DSH can't email anyone/);
+        // Without guests, telling them is nothing to refuse.
+        const alone = await m.createEvent({ calendarId: personal.id, title: 'Z', start: '2026-10-14T15:00', notify: true });
+        assert.equal(alone.emailed, undefined);
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
+test('Microsoft and Google: Microsoft emails a meeting\'s guests about every change, Google only when told', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        const ms = standIn(m, { id: 'ms', kind: 'microsoft', name: 'Outlook', email: 'me@outlook.com' }, { id: 'cal-ms', remoteId: 'AAA', name: 'Calendar' }, 'events');
+        await assert.rejects(m.createEvent({ calendarId: 'cal-ms', title: 'Sync', start: '2026-10-14T12:00', attendees: ['ann@example.com'] }),
+            refusedFor('needs-notify', /invitations to ann@example\.com \(Microsoft invites the guests as soon as an event with them is saved\)/));
+        assert.equal(ms.length, 0);
+        const sync = await m.createEvent({ calendarId: 'cal-ms', title: 'Sync', start: '2026-10-14T12:00', attendees: ['ann@example.com'], notify: true });
+        assert.equal(ms.at(-1).record.notify, true);
+        assert.deepEqual(sync.emailed, { what: 'invitations', to: ['ann@example.com'] });
+        await assert.rejects(m.updateEvent(sync.id, { title: 'Sync (moved)' }), refusedFor('needs-notify', /an update to ann@example\.com \(Microsoft emails a meeting's guests about each change to it\)/));
+        await m.updateEvent(sync.id, { title: 'Sync (moved)', notify: true });
+        assert.equal(ms.at(-1).patch.notify, true);
+        await assert.rejects(m.deleteEvent(sync.id), refusedFor('needs-notify', /a cancellation to ann@example\.com \(Microsoft emails a meeting's guests when it is cancelled\)/));
+        // An event of the user's own with no one else on it: nothing to tell.
+        const solo = await m.createEvent({ calendarId: 'cal-ms', title: 'Focus', start: '2026-10-14T15:00' });
+        assert.deepEqual(await m.deleteEvent(solo.id), {});
+
+        const google = standIn(m, { id: 'g', kind: 'google', name: 'Google', email: 'me@gmail.com' }, { id: 'cal-g', remoteId: 'primary', name: 'Me' }, 'events');
+        const lunch = await m.createEvent({ calendarId: 'cal-g', title: 'Lunch', start: '2026-10-15T12:00', attendees: ['ann@example.com'] });
+        assert.equal(google.at(-1).record.notify, undefined, 'Google is told not to email');
+        assert.equal(lunch.emailed, undefined);
+        assert.equal((await m.updateEvent(lunch.id, { start: '2026-10-15T13:00' })).emailed, undefined);
+        assert.deepEqual((await m.updateEvent(lunch.id, { start: '2026-10-15T12:30', notify: true })).emailed, { what: 'an update', to: ['ann@example.com'] });
+        assert.equal(google.at(-1).patch.notify, true);
+        assert.deepEqual(await m.deleteEvent(lunch.id, 'all', 'window', { notify: true }), { emailed: { what: 'a cancellation', to: ['ann@example.com'] } });
+        assert.equal(google.at(-1).notify, true);
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
+test('moving: only a whole event or series, on its own; a meeting moved is a new one for its guests', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        const work = await m.createCalendar({ name: 'Work' });
+        const personal = m.state().calendars.find((c) => c.name === 'Personal');
+        await m.createEvent({ title: 'Gym', start: '2026-10-12T18:00', repeat: 'FREQ=DAILY;COUNT=5', calendarId: personal.id });
+        const gym = () => week(m).filter((o) => o.title === 'Gym');
+        const second = gym()[1];
+        await assert.rejects(m.updateEvent(second.id, { calendarId: work.id, start: '2026-10-13T19:00' }, 'one'), /Only a whole event or series moves to another calendar/);
+        await assert.rejects(m.updateEvent(second.id, { calendarId: work.id }, 'following'), /Only a whole event or series moves/);
+        await assert.rejects(m.updateEvent(second.id, { calendarId: work.id, title: 'Gym!' }, 'all'), /Move the event to the other calendar on its own first, then change it there\./);
+        assert.equal(gym().length, 5);
+        assert.ok(gym().every((o) => o.calendarId === personal.id), 'nothing moved, nothing lost');
+        const moved = await m.updateEvent(second.id, { calendarId: work.id }, 'all');
+        assert.equal(moved.calendarId, work.id);
+        assert.equal(gym().length, 5);
+        assert.ok(gym().every((o) => o.calendarId === work.id));
+
+        // A meeting with guests moved to a server that schedules: its guests get a new invitation, so it says to tell them.
+        const calls = standIn(m, { id: 'dav', kind: 'caldav', name: 'iCloud', url: 'https://caldav.icloud.com/', username: 'me@icloud.com', email: 'me@icloud.com' },
+            { id: 'cal-dav', remoteId: 'https://p52-caldav.icloud.com/1/calendars/home/', name: 'Home', scheduling: true }, 'ics');
+        const party = await m.createEvent({ title: 'Party', start: '2026-10-17T19:00', calendarId: personal.id, attendees: ['ann@example.com'] });
+        await assert.rejects(m.updateEvent(party.id, { calendarId: 'cal-dav' }),
+            refusedFor('needs-notify', /^This would email invitations to ann@example\.com \(a meeting moved to another calendar is a new meeting for its guests\)/));
+        assert.equal(calls.length, 0);
+        const there = await m.updateEvent(party.id, { calendarId: 'cal-dav', notify: true });
+        assert.equal(there.calendarId, 'cal-dav');
+        assert.deepEqual(there.emailed, { what: 'invitations', to: ['ann@example.com'] });
+        assert.match(unfold(calls.at(-1).raw), /ORGANIZER:mailto:me@icloud\.com/);
+        assert.equal(week(m).filter((o) => o.title === 'Party').length, 1, 'gone from Personal');
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
+test('a change decided on the event as it was is not tried again after the event changed on its server', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        const calls = standIn(m, { id: 'dav', kind: 'caldav', name: 'Fastmail', url: 'https://caldav.fastmail.com/', username: 'me@fastmail.com', email: 'me@fastmail.com' },
+            { id: 'cal-dav', remoteId: 'https://caldav.fastmail.com/dav/calendars/user/me/Default/', name: 'Default', scheduling: true }, 'ics');
+        const ev = await m.createEvent({ calendarId: 'cal-dav', title: 'Haircut', start: '2026-10-16T17:00' });
+        const { SourceError } = await import('../lib/sources/index.js');
+        const source = (await m.source(m.store.accounts.dav)).source;
+        const put = source.put;
+        let refusals = 0;
+        source.put = async (...args) => {
+            if (refusals++ === 0) throw new SourceError('conflict', 'The event changed on the server meanwhile.');
+            return put(...args);
+        };
+        await assert.rejects(m.updateEvent(ev.id, { start: '2026-10-16T18:00' }), /changed on its server meanwhile \(in another app, or by someone else\), so nothing was done/);
+        assert.equal(refusals, 1, 'not tried again');
+        // A change that doesn't depend on the time still is.
+        refusals = 0;
+        const renamed = await m.updateEvent(ev.id, { title: 'Haircut (Main St)' });
+        assert.equal(renamed.title, 'Haircut (Main St)');
+        assert.equal(refusals, 2);
+        assert.ok(calls.length >= 2);
+    } finally {
+        m.dispose();
+        done();
+    }
+});
