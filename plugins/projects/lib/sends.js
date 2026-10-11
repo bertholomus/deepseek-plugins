@@ -23,19 +23,77 @@ const HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 
 
 // ── Reading a command line ────────────────────────────────────────────────
 
-/** The index of the `)` that closes the `(` at `open`, quotes and nesting kept; the end of the text when none does. */
+/**
+ * The index of the `)` that closes the `(` at `open`, quotes and nesting
+ * kept; the end of the text when none does. A here-document's body is text,
+ * so an apostrophe in it opens no quote. A quote that nothing closes is
+ * read as a plain character.
+ */
 function closeParen(s, open) {
     let depth = 0;
+    // In `$((…))`, `<<` shifts.
+    const docs = s[open + 1] === '(' ? null : [];
     for (let i = open; i < s.length; i++) {
         const c = s[i];
         if (c === '\\') { i++; continue; }
-        if (c === "'") { const end = s.indexOf("'", i + 1); i = end < 0 ? s.length : end; continue; }
-        if (c === '"') { i = closeDouble(s, i + 1); continue; }
+        if (c === '\n' && docs?.length > 0) { i = bodiesAt(s, i + 1, docs.splice(0)).end - 1; continue; }
+        if (c === '<' && s[i + 1] === '<' && s[i + 2] !== '<' && docs) {
+            const doc = heredocAt(s, i + 2);
+            if (doc) { docs.push(doc); i = doc.end - 1; continue; }
+        }
+        if (c === '#' && /[\s;(|&]/.test(s[i - 1] ?? ' ')) { const end = s.indexOf('\n', i); i = (end < 0 ? s.length : end) - 1; continue; }
+        if (c === "'") { const end = s.indexOf("'", i + 1); if (end >= 0) i = end; continue; }
+        if (c === '"') { const end = closeDouble(s, i + 1); if (end < s.length) i = end; continue; }
         if (c === '`') { i = closeBacktick(s, i + 1); continue; }
         if (c === '(') depth++;
         else if (c === ')' && --depth === 0) return i;
     }
     return s.length;
+}
+
+/** The here-document `<<WORD` or `<<-WORD` names after `at`: its delimiter with quotes taken off, whether tabs are stripped, and where the word ends. */
+function heredocAt(s, at) {
+    let i = at;
+    const strip = s[i] === '-';
+    if (strip) i++;
+    while (s[i] === ' ' || s[i] === '\t') i++;
+    let delim = '';
+    while (i < s.length && !/[\s;&|<>()]/.test(s[i])) {
+        const c = s[i];
+        if (c === "'" || c === '"') {
+            const end = s.indexOf(c, i + 1);
+            if (end < 0) return null;
+            delim += s.slice(i + 1, end);
+            i = end + 1;
+        } else if (c === '\\') {
+            delim += s[i + 1] ?? '';
+            i += 2;
+        } else {
+            delim += c;
+            i++;
+        }
+    }
+    return delim === '' ? null : { delim, strip, end: i };
+}
+
+/** The bodies of here-documents, which start on the line at `at`: each one's lines up to its delimiter, and where the last one ends. */
+function bodiesAt(s, at, docs) {
+    let i = at;
+    const bodies = [];
+    for (const doc of docs) {
+        const lines = [];
+        while (i < s.length) {
+            const end = s.indexOf('\n', i);
+            const line = s.slice(i, end < 0 ? s.length : end);
+            i = end < 0 ? s.length : end + 1;
+            // `<<-` takes the tabs off each line, the last one's too.
+            const bare = doc.strip ? line.replace(/^\t+/, '') : line;
+            if (bare === doc.delim) break;
+            lines.push(bare);
+        }
+        bodies.push(lines.join('\n'));
+    }
+    return { bodies, end: i };
 }
 
 /** The index of the `"` that closes a double-quoted text starting at `from`. */
@@ -103,22 +161,10 @@ export function splitShell(text) {
     };
     // Here-documents start on the line after the one that names them.
     const readBodies = (at) => {
-        let i = at;
-        for (const doc of pending) {
-            const lines = [];
-            while (i < s.length) {
-                const end = s.indexOf('\n', i);
-                const line = s.slice(i, end < 0 ? s.length : end);
-                i = end < 0 ? s.length : end + 1;
-                // `<<-` takes the tabs off each line, the last one's too.
-                const bare = doc.strip ? line.replace(/^\t+/, '') : line;
-                if (bare === doc.delim) break;
-                lines.push(bare);
-            }
-            doc.into.push(lines.join('\n'));
-        }
+        const { bodies, end } = bodiesAt(s, at, pending);
+        pending.forEach((doc, k) => doc.into.push(bodies[k]));
         pending = [];
-        return i;
+        return end;
     };
     let i = 0;
     while (i < s.length) {
@@ -127,11 +173,11 @@ export function splitShell(text) {
         if (c === '\\') {
             if (next !== '\n' && i + 1 < s.length) add(next);
             i += 2;
-        } else if (c === "'") {
-            const end = s.indexOf("'", i + 1);
-            const stop = end < 0 ? s.length : end;
-            add(s.slice(i + 1, stop));
-            i = stop + 1;
+        } else if (c === "'" || (c === '"' && closeDouble(s, i + 1) >= s.length)) {
+            // A quote that nothing closes is a plain character, so what follows it is still read.
+            const end = c === "'" ? s.indexOf("'", i + 1) : -1;
+            add(end < 0 ? c : s.slice(i + 1, end));
+            i = end < 0 ? i + 1 : end + 1;
         } else if (c === '"') {
             const end = closeDouble(s, i + 1);
             const inner = s.slice(i + 1, end);

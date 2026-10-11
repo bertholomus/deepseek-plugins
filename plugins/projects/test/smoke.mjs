@@ -5743,10 +5743,22 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     };
     assert.deepEqual(await gate(t1, 'bash', post), asked);
     assert.deepEqual(await gate(t1, 'bash', post), asked);
-    // A script in the workspace by what it runs, a package script, a push.
-    assert.equal((await gate(t1, 'bash', { command: 'STAGING_TOKEN=x ./deploy.sh' })).reason, 'the command runs ./deploy.sh, which sends a POST to 127.0.0.1:8787/deploy (curl)');
-    assert.equal((await gate(t1, 'bash', { command: 'npm run release' })).reason, 'the command runs npm run release, which publishes (npm publish)');
-    assert.equal((await gate(t1, 'bash', { command: 'git push origin main' })).reason, 'the command pushes to origin (git push)');
+    // A script in the workspace by what it runs, a package script, a push; and each send that went through
+    // without asking in the send detection review, with what the prompt says about it.
+    const commit = (then) => `git add -A && git commit -m "$(cat <<'EOF'\nFix the login redirect\n\nThe callback didn't keep the next= parameter.\nEOF\n)" && ${then}`;
+    for (const [command, what, shell = 'bash'] of [
+        ['STAGING_TOKEN=x ./deploy.sh', 'runs ./deploy.sh, which sends a POST to 127.0.0.1:8787/deploy (curl)'],
+        ['npm run release', 'runs npm run release, which publishes (npm publish)'],
+        ['git push origin main', 'pushes to origin (git push)'],
+        // An apostrophe in a commit message's here-document opens no quote, so what comes after the commit counts.
+        [commit('git push origin feature/login-fix'), 'pushes to origin (git push)'],
+        [commit('npm publish'), 'publishes (npm publish)'],
+        [commit('curl -X POST https://api.example.com/x'), 'sends a POST to api.example.com/x (curl)'],
+        ['git commit -m "$(cat <<\'EOF\'\nRename the `--dry flag\n\nEOF\n)" && git push', 'pushes to its remote (git push)'],
+    ]) {
+        const decision = await gate(t1, shell, { command });
+        assert.deepEqual([decision.kind, decision.reason, decision.displayReason?.en], ['ask', `the command ${what}`, `This command ${what}. A thread asks you before each command that sends outside the workspace.`], command);
+    }
     // Reads run: a GET, a syntax check, a dry run, a script that doesn't send, a build.
     for (const command of ['curl -sS http://127.0.0.1:8787/deploy', 'bash -n deploy.sh', 'git push --dry-run', './run.sh', 'npm run build', 'git status']) {
         assert.deepEqual(await gate(t1, 'bash', { command }), { kind: 'allow' }, command);
