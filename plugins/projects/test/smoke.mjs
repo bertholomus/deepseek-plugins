@@ -1559,7 +1559,7 @@ function loadClient({ storage, document, innerWidth } = {}) {
             useState: (init) => [typeof init === 'function' ? init() : init, () => {}], useRef: (current) => ({ current }),
             useEffect: () => {}, useCallback: (fn) => fn, useMemo: (fn) => fn(),
         },
-        'react-dom': {}, '@deepseek-ai/dsh-client-ui-primitives': ui,
+        'react-dom': { createPortal: (node) => node }, '@deepseek-ai/dsh-client-ui-primitives': ui,
     };
     return { id: loaded.id, client: loaded.factory((name) => modules[name]), window, react: modules.react };
 }
@@ -2660,8 +2660,8 @@ test('browser half: DSH\'s session list is grouped by category, collapsible, wit
     const filed = [{ id: 'a', name: 'All', workspaces: items.map((ws) => ({ id: ws.workspaceId })) }];
     assert.deepEqual(plain(sidebarGroups(filed, items)).map((g) => g.id), ['a']);
     assert.deepEqual(plain(sidebarGroups(filed, items, true)).map((g) => [g.id, g.workspaces.length]), [['a', 5], [OTHERS, 0]]);
-    // No categories, or not known yet: DSH's list as it is.
-    assert.equal(sidebarGroups([], items), null);
+    // Not known yet: DSH's list as it is. No categories: Other workspaces over them all (see the test after this one).
+    assert.deepEqual(plain(sidebarGroups([], items)).map((g) => [g.id, g.workspaces.length]), [[OTHERS, 5]]);
     assert.equal(sidebarGroups(null, items), null);
     assert.equal(sidebarGroups(categories, undefined), null);
 
@@ -2722,6 +2722,254 @@ test('browser half: DSH\'s session list is grouped by category, collapsible, wit
     assert.equal(attrs.get('new').has('aria-description'), false);
     describeWorkspaces(list, null);
     assert.deepEqual(['w2', 'w1', 'w3'].map((id) => attrs.get(id).has('aria-description')), [false, false, false]);
+});
+
+/**
+ * DSH's session list as the plugin draws it, with what DSH's stand-ins
+ * give it: the list's workspaces, the categories, and DSH's own Add
+ * workspace (`adding`: its state, or null where DSH has none). Its headers
+ * and their menus draw as they would in the list.
+ */
+function drawSidebar({ items, categories, adding = { busy: false } }) {
+    const tree = { id: 'dsh-list' };
+    const { client, react } = loadClient({ document: { querySelector: () => tree, head: {} } });
+    react.useLayoutEffect = () => {};
+    const calls = [];
+    const facts = {
+        subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {},
+        categories: () => categories(),
+        list: async () => { calls.push(['list']); },
+        act: async (method, args) => { calls.push([method, args]); return { ok: true, value: {} }; },
+    };
+    const flow = { made: null };
+    const addWorkspace = adding === null ? undefined : {
+        state: () => adding,
+        start(made) { calls.push(['start']); flow.made = made; return true; },
+        stop() {},
+    };
+    const props = {
+        useWorkspaces: (select) => select({ items, pinnedSessionIds: [] }), useSessionStatus: (select) => select(new Map()),
+        projects: { facts, addWorkspace },
+    };
+    const draw = mount(react, () => client.internals.SidebarTree(props));
+    /** A header as drawn now ({type: CategoryHeader, props}), by its group's id. */
+    const header = (id) => elementsOf(draw()).find((e) => e.props?.menu?.actions && e.props.group.id === id);
+    /** A header drawn on its own, with state that holds; `menu()` draws its ⋯ menu. */
+    const open = (id) => {
+        const el = header(id);
+        const again = mount(react, () => el.type(el.props));
+        return {
+            again,
+            menu: () => {
+                const m = elementsOf(again()).find((e) => typeof e.props?.setOpen === 'function');
+                return m.type(m.props);
+            },
+        };
+    };
+    const said = () => textIn(elementsOf(draw()).find((e) => e.props?.['data-projects-sidebar-said'] !== undefined));
+    return { client, draw, header, open, said, calls, flow };
+}
+
+test('browser half: with no categories, Other workspaces heads DSH\'s list, and its ⋯ makes the first category', async () => {
+    const { client } = loadClient();
+    const { sidebarGroups, OTHERS } = client.internals;
+    const items = [{ workspaceId: 'w-a', title: 'alpha', sessionIds: [] }, { workspaceId: 'w-b', title: 'beta', sessionIds: [] }];
+    // Every workspace under Other workspaces, in DSH's order, as on the Projects page; nothing to head without workspaces.
+    assert.deepEqual(plain(sidebarGroups([], items)), [{ id: OTHERS, name: 'Other workspaces', category: false, workspaces: ['w-a', 'w-b'] }]);
+    assert.equal(sidebarGroups([], []), null);
+
+    let categories = [];
+    const { draw, header, open, said, calls } = drawSidebar({ items, categories: () => categories });
+    // One header, over both workspaces, with the CSS that sets DSH's rows under it (and hides it in In one list and search).
+    const heads = elementsOf(draw()).filter((e) => e.props?.menu?.actions);
+    assert.deepEqual(heads.map((e) => [e.props.group.id, e.props.count]), [[OTHERS, 2]]);
+    const css = textIn(elementsOf(draw()).find((e) => e.type === 'style'));
+    assert.match(css, /div:has\(>\*>\[data-row-key="workspace:w-a"\]\)\{order:1\}/);
+    assert.match(css, /:not\(:has\(>div>\*>\[data-row-key\^="workspace:"\]\)\)>\[data-projects-sb\]\{display:none\}/);
+
+    // Its ⋯ menu opens as a category's does: the ⋯ button, a right-click, Shift+F10 and the context-menu key.
+    const others = open(OTHERS);
+    let head = others.again();
+    assert.equal(head.props['aria-keyshortcuts'], 'Shift+F10');
+    assert.equal(head.props['data-projects-sb'], OTHERS);
+    let menu = others.menu();
+    assert.equal(menu.props.open, false);
+    const button = menu.props.anchor;
+    assert.deepEqual([button.props['aria-label'], button.props['data-projects-others-menu'], button.props['data-projects-category-menu']], ['Actions for Other workspaces', '', undefined]);
+    button.props.onClick({ stopPropagation() {} });
+    assert.equal(others.menu().props.open, true);
+    others.menu().props.onClose();
+    assert.equal(others.menu().props.open, false);
+    let prevented = 0;
+    head.props.onContextMenu({ currentTarget: { contains: () => true }, target: {}, preventDefault() { prevented += 1; } });
+    assert.deepEqual([others.menu().props.open, prevented], [true, 1]);
+    const key = (name, extra = {}) => {
+        const el = {};
+        return { key: name, target: el, currentTarget: el, preventDefault() { prevented += 1; }, stopPropagation() {}, ...extra };
+    };
+    for (const press of [key('F10', { shiftKey: true }), key('ContextMenu')]) {
+        others.menu().props.onClose();
+        head = others.again();
+        head.props.onKeyDown(press);
+        assert.equal(others.menu().props.open, true, press.key);
+    }
+    // Alt+↑ and Alt+↓ move nothing: it is no category. The keys are still taken, so DSH's list doesn't move either.
+    prevented = 0;
+    head.props.onKeyDown(key('ArrowUp', { altKey: true }));
+    head.props.onKeyDown(key('ArrowDown', { altKey: true }));
+    assert.equal(prevented, 2);
+    await tick();
+    assert.deepEqual(calls, []);
+
+    // New workspace… (DSH's own Add workspace) and New category…; no Add a workspace, Move, Rename or Delete.
+    menu = others.menu();
+    assert.deepEqual(plain(menu.props.items.map((item) => item.label)), ['New workspace…', 'New category…']);
+    // New category… makes the first category, in no workspace, and says so.
+    menu.props.onSelect('new');
+    const dialog = elementsOf(draw()).find((e) => typeof e.props?.onSubmit === 'function');
+    assert.deepEqual([dialog.props.title, dialog.props.action], ['New category', 'Create']);
+    assert.equal(await dialog.props.onSubmit('Work'), null);
+    assert.deepEqual(plain(calls), [['createCategory', { name: 'Work', workspace: '' }]]);
+    assert.equal(said(), 'Work created.');
+    // Once there is one, it heads its (empty) group and Other workspaces still holds both.
+    categories = [{ id: 'work', name: 'Work', workspaces: [] }];
+    assert.deepEqual(elementsOf(draw()).filter((e) => e.props?.menu?.actions).map((e) => [e.props.group.id, e.props.count]), [['work', 0], [OTHERS, 2]]);
+    assert.ok(header('work'));
+
+    // Where DSH has no Add workspace (no folder picker, or another plugin draws the list), only New category….
+    const bare = drawSidebar({ items, categories: () => [], adding: null });
+    assert.deepEqual(plain(bare.open(OTHERS).menu().props.items.map((item) => item.label)), ['New category…']);
+});
+
+test('browser half: New workspace… in a header\'s ⋯ runs DSH\'s own Add workspace and files the workspace it makes there', async () => {
+    const items = [{ workspaceId: 'w-a', title: 'alpha', sessionIds: [] }, { workspaceId: 'w-b', title: 'beta', sessionIds: [] }];
+    let adding = { busy: false };
+    const side = drawSidebar({ items, categories: () => [{ id: 'fleet', name: 'Fleet', workspaces: [{ id: 'w-a' }] }], adding });
+    const { OTHERS } = side.client.internals;
+    // A category's menu: New workspace… right under Add a workspace, the rest as before.
+    let menu = side.open('fleet').menu();
+    assert.deepEqual(plain(menu.props.items.map((item) => item.label ?? item.type)),
+        ['Add a workspace', 'New workspace…', 'separator', 'Move up', 'Move down', 'separator', 'Rename…', 'New category…', 'Delete…']);
+    assert.equal(menu.props.anchor.props['data-projects-category-menu'], 'fleet');
+    // It starts DSH's flow; the workspace DSH makes is filed last in the category, which opens, and the list says so.
+    menu.props.onSelect('newWorkspace');
+    assert.deepEqual(side.calls, [['start']]);
+    side.flow.made({ workspaceId: 'w-new', title: 'gamma', path: '/work/gamma' });
+    await tick();
+    assert.deepEqual(plain(side.calls.slice(1)), [['fileWorkspace', { workspace: 'w-new', category: 'fleet', before: '' }]]);
+    assert.equal(side.said(), 'gamma added to Fleet.');
+
+    // From Other workspaces it stays in no category; the list is read again, which puts DSH's order back in category order.
+    side.calls.length = 0;
+    side.open(OTHERS).menu().props.onSelect('newWorkspace');
+    side.flow.made({ workspaceId: 'w-new2', title: '', path: '/work/delta' });
+    await tick();
+    assert.deepEqual(plain(side.calls), [['start'], ['list']]);
+    assert.equal(side.said(), 'delta added to Other workspaces.');
+
+    // While DSH's flow runs already, the item is there but greyed.
+    adding.busy = true;
+    menu = side.open('fleet').menu();
+    assert.equal(menu.props.items.find((item) => item.id === 'newWorkspace').disabled, true);
+    adding = null;
+});
+
+test('browser half: DSH\'s own Add workspace, as its session list hands it to its +, and the workspace it makes', () => {
+    const { client } = loadClient();
+    const { workspaceAdder, dshAddFlow } = client.internals;
+    // DSH's stores tell their subscribers at once (zustand underneath).
+    const store = (value) => {
+        const listeners = new Set();
+        return {
+            listeners,
+            getSnapshot: () => value,
+            subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+            set(next) { value = next; for (const fn of [...listeners]) fn(); },
+        };
+    };
+    // ui-workspace's controls: its + asks for the flow (not while it runs), and the flow says while it runs.
+    const state = store({ addRequested: false, directoryBusy: false, searchRequest: 0 });
+    const request = () => {
+        const s = state.getSnapshot();
+        state.set(s.directoryBusy ? s : { ...s, addRequested: true });
+    };
+    const pickers = store(true);
+    const face = { requestAddWorkspace: request, closeAddWorkspace: () => {}, hooks: { workspaceShortcuts: state, directoryFlow: pickers } };
+    let entries = [{ component: () => null, options: {}, inject: () => face }];
+    const slots = { entriesOfSlot: (name) => (name === 'sidebar.workspaces' ? entries : []) };
+    const flow = dshAddFlow(slots);
+    assert.equal(flow.request, request);
+    assert.equal(flow.state, state);
+    // No folder picker (DSH hides its + then), another plugin's list, or none at all: no flow.
+    pickers.set(false);
+    assert.equal(dshAddFlow(slots), undefined);
+    pickers.set(true);
+    entries = [{ component: () => null, options: {}, inject: () => ({ hooks: {} }) }];
+    assert.equal(dshAddFlow(slots), undefined);
+    entries = [{ component: () => null, options: {}, inject: () => { throw new Error('needs its scope'); } }];
+    assert.equal(dshAddFlow(slots), undefined);
+    entries = [];
+    assert.equal(dshAddFlow(slots), undefined);
+    assert.equal(dshAddFlow(undefined), undefined);
+    // An older DSH's slots without entriesOfSlot: its entries.
+    assert.equal(dshAddFlow({ entries: () => [{ component: () => null, options: {}, inject: () => face }] })?.request, request);
+
+    // What DSH's list does with a request: closes it, opens its folder dialog (busy) and makes the workspace picked.
+    const list = store({ items: [{ workspaceId: 'w1', title: 'one' }] });
+    const set = (change) => state.set({ ...state.getSnapshot(), ...change });
+    const opens = () => { set({ addRequested: false }); set({ directoryBusy: true }); };
+    const gains = (ws) => list.set({ items: [ws, ...list.getSnapshot().items] });
+    const picks = (ws) => { gains(ws); set({ directoryBusy: false }); };
+    const made = [];
+    const adder = workspaceAdder(() => ({ request, state }), () => list);
+    const quiet = () => state.listeners.size === 0 && list.listeners.size === 0;
+    assert.deepEqual(plain(adder.state()), { busy: false });
+    assert.equal(adder.start((ws) => made.push(ws.workspaceId)), true);
+    assert.equal(state.getSnapshot().addRequested, true);
+    opens();
+    picks({ workspaceId: 'w2', title: 'two' });
+    assert.deepEqual(made, ['w2']);
+    assert.ok(quiet(), 'done waiting');
+
+    // Cancelled, then Choose again after a folder DSH couldn't open: the same run. A workspace made meanwhile some
+    // other way (DSH's empty chat's own picker, another window) isn't it.
+    assert.equal(adder.start((ws) => made.push(ws.workspaceId)), true);
+    opens();
+    set({ directoryBusy: false });
+    gains({ workspaceId: 'w3', title: 'three' });
+    set({ directoryBusy: true });
+    // A folder that was a workspace already: DSH's list gains none.
+    list.set({ items: [...list.getSnapshot().items] });
+    assert.deepEqual(made, ['w2']);
+    picks({ workspaceId: 'w4', title: 'four' });
+    assert.deepEqual(made, ['w2', 'w4']);
+
+    // Cancelled, then DSH's own + (or its shortcut) starts the flow: that one is DSH's, and nothing is filed.
+    assert.equal(adder.start((ws) => made.push(ws.workspaceId)), true);
+    opens();
+    set({ directoryBusy: false });
+    request();
+    assert.ok(quiet(), 'DSH\'s own run ends the wait');
+    opens();
+    picks({ workspaceId: 'w5', title: 'five' });
+    assert.deepEqual(made, ['w2', 'w4']);
+
+    // While DSH's flow runs it can't start again; where DSH has none, or doesn't take the request, it doesn't start.
+    set({ directoryBusy: true });
+    assert.deepEqual(plain(adder.state()), { busy: true });
+    assert.equal(adder.start(() => made.push('no')), false);
+    set({ directoryBusy: false });
+    const none = workspaceAdder(() => undefined, () => list);
+    assert.equal(none.state(), null);
+    assert.equal(none.start(() => made.push('no')), false);
+    const deaf = workspaceAdder(() => ({ request: () => {}, state }), () => list);
+    assert.equal(deaf.start(() => made.push('no')), false);
+    assert.ok(quiet(), 'nothing left waiting');
+    // Stopping (the plugin stops) drops a wait.
+    adder.start(() => made.push('no'));
+    adder.stop();
+    assert.ok(quiet());
+    assert.deepEqual(made, ['w2', 'w4']);
 });
 
 test('session mode: a failed selection is reported, and the coordinator retries later', async () => {

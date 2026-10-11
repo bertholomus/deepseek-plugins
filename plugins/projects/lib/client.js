@@ -523,11 +523,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-sb-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshp-sb-dot{flex:none;display:inline-flex;align-items:center}',
             '.dshp-sb-count{flex:none;min-width:16px;font-size:12px;font-weight:400;text-align:right;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
-            // A category's ⋯ takes the count's place while the header is pointed at, focused or its menu is open, as DSH's rows show theirs.
+            // A header's ⋯ takes the count's place while the header is pointed at, focused or its menu is open, as DSH's rows show theirs.
             '.dshp-sb-more{flex:none;display:none;align-items:center;justify-content:center;width:20px;height:20px;margin-right:-2px;padding:0;border:0;border-radius:var(--dsw-radius-sm,4px);background:none;color:var(--dsw-alias-label-secondary);cursor:pointer}',
             '.dshp-sb-more:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
-            '.dshp-sb-head:not(.dshp-sb-plain):is(:hover,:focus-visible,[data-projects-menu-open]) .dshp-sb-more{display:inline-flex}',
-            '.dshp-sb-head:not(.dshp-sb-plain):is(:hover,:focus-visible,[data-projects-menu-open]) .dshp-sb-count{display:none}',
+            '.dshp-sb-head:is(:hover,:focus-visible,[data-projects-menu-open]) .dshp-sb-more{display:inline-flex}',
+            '.dshp-sb-head:is(:hover,:focus-visible,[data-projects-menu-open]) .dshp-sb-count{display:none}',
             '@media (prefers-reduced-motion:reduce){.dshp-sb-chev{transition:none}}',
             // Dragging a category or a workspace: what moves is dimmed, the category it goes into is lit, and DSH's line shows where.
             '[data-projects-dragging]{opacity:.5}',
@@ -4008,6 +4008,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const failed = new Set();
             const catalog = shared.catalog ?? catalogSource(() => undefined);
             const link = shared.link ?? hostLink(() => undefined, catalog);
+            /** DSH's own Add workspace, started from a header's New workspace… in the session list. */
+            const adder = workspaceAdder(() => dshAddFlow(ctx.slots), () => {
+                try { return ctx.get?.('workspaces')?.list; } catch { return undefined; }
+            });
             /** DSH's message box of a session (its composer's shell), or undefined. */
             const composerOf = (sessionId) => {
                 const scope = ctx.sessions?.scope?.(sessionId);
@@ -4287,6 +4291,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         try { nav.openBundle(BUNDLE); } catch (error) { warn('could not open the plugin\'s page', error); }
                     };
                 },
+                /** DSH's own Add workspace and the workspace it makes (workspaceAdder). */
+                addWorkspace: adder,
                 /** Read a session's projections once per connection; `again` retries a failed read. */
                 refresh(sessionId, again = false) {
                     if (typeof sessionId !== 'string' || sessionId === '') return;
@@ -4351,6 +4357,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.slots.inject('shell.overlay', () => ctx.slots.register({
                 name: 'shell.overlay', id: IDS.sidebar, inject: withApi,
             }, SidebarTree));
+            // A header's New workspace… still waiting on DSH's flow stops waiting with the plugin.
+            ctx.effect(() => () => projects.addWorkspace.stop(), 'projects: New workspace from the session list');
             // The Categories entry in DSH's sidebar, after Plugins, and the page it opens.
             ctx.slots.inject('main', () => ctx.slots.register({
                 name: 'main', key: IDS.page, inject: withApi,
@@ -4935,7 +4943,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const SIDEBAR = {
             others: 'Other workspaces',
             actions: (name) => `Category actions: ${name}`,
+            othersActions: 'Actions for Other workspaces',
             addWorkspace: 'Add a workspace',
+            newWorkspace: 'New workspace…',
             addNone: 'Every workspace is already here',
             inNone: 'In no category',
             inOther: 'In other categories',
@@ -4958,6 +4968,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             deleting: 'Deleting…',
             in: (name) => `in ${name}`,
             filed: (ws, category) => `${ws} moved to ${category}.`,
+            added: (ws, group) => `${ws} added to ${group}.`,
             moved: (name) => `${name} moved.`,
             created: (name) => `${name} created.`,
             renamed: (name) => `Renamed to ${name}.`,
@@ -4977,12 +4988,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * The groups DSH's session list shows: every category in the plugin's
          * order, empty ones too, each with the workspaces it holds in DSH's
          * order, then Other workspaces (the rest) while it holds any, or while
-         * a workspace is dragged (somewhere to drop it). null while the
-         * categories aren't known, or there are none: the list then stays as
-         * DSH draws it.
+         * a workspace is dragged (somewhere to drop it). With no categories,
+         * Other workspaces holds every workspace, so its ⋯ can make the first
+         * one. null while the categories aren't known, or while there are
+         * neither categories nor workspaces: the list then stays as DSH draws
+         * it.
          */
         function sidebarGroups(categories, items, othersShown = false) {
-            if (!Array.isArray(categories) || categories.length === 0 || !Array.isArray(items)) return null;
+            if (!Array.isArray(categories) || !Array.isArray(items)) return null;
             const order = items.map((ws) => ws?.workspaceId).filter((id) => typeof id === 'string');
             const placed = new Set();
             const groups = [];
@@ -5500,12 +5513,130 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, [tree, read]);
         }
 
+        /** What DSH's session list entry hands its own component, read once per entry (dshAddFlow). */
+        const listFaces = new WeakMap();
+
         /**
-         * ⋯ on a category's header: Add a workspace (those in no category
-         * first), Move up and down, Rename, New category and Delete. Shift+F10
+         * DSH's own Add workspace, as DSH's session list hands it to the +
+         * over the list: ui-workspace's `sidebar.workspaces` entry injects
+         * `requestAddWorkspace`, which opens DSH's folder picker or folder
+         * dialog, and `workspaceShortcuts`, the state of that flow. DSH has no
+         * service for it, so this reads the entry as DSH's renderer does.
+         * undefined where this DSH has none, where no folder picker is
+         * installed (DSH hides its + then), or where another plugin draws the
+         * list.
+         * @param slots - DSH's `slots` service.
+         * @returns {request(), state} or undefined.
+         */
+        function dshAddFlow(slots) {
+            let entry;
+            try {
+                entry = (typeof slots?.entriesOfSlot === 'function' ? slots.entriesOfSlot('sidebar.workspaces') : slots?.entries?.('sidebar.workspaces'))?.[0];
+            } catch {
+                return undefined;
+            }
+            if (!isObject(entry) || typeof entry.inject !== 'function') return undefined;
+            if (!listFaces.has(entry)) {
+                let face = null;
+                try { face = entry.inject(); } catch { /* not DSH's own list */ }
+                listFaces.set(entry, face);
+            }
+            const face = listFaces.get(entry);
+            const state = face?.hooks?.workspaceShortcuts;
+            const pickers = face?.hooks?.directoryFlow;
+            if (typeof face?.requestAddWorkspace !== 'function' || typeof state?.getSnapshot !== 'function' || typeof state.subscribe !== 'function') return undefined;
+            if (typeof pickers?.getSnapshot === 'function' && pickers.getSnapshot() !== true) return undefined;
+            return { request: face.requestAddWorkspace, state };
+        }
+
+        /**
+         * DSH's own Add workspace started from a menu here, and the workspace
+         * it makes. DSH's state says while its flow runs: `addRequested` until
+         * it opens, then `directoryBusy` while the folder is chosen and DSH
+         * makes the workspace (DSH then opens a new chat there itself). The
+         * first workspace DSH's list gains while the flow runs is the one it
+         * made. Choose again, after a folder DSH couldn't open, is the same
+         * run; another start of DSH's flow (its + or its shortcut) ends the
+         * wait, and a folder that was a workspace already adds none.
+         * @param flowOf - DSH's flow as it is now (dshAddFlow), or undefined.
+         * @param listOf - DSH's workspace list ({getSnapshot, subscribe}), or undefined.
+         */
+        function workspaceAdder(flowOf, listOf) {
+            let wait = null;
+            const parts = () => {
+                const flow = flowOf();
+                const list = listOf();
+                return flow && typeof list?.getSnapshot === 'function' && typeof list.subscribe === 'function' ? { flow, list } : null;
+            };
+            const busy = (flow) => flow.state.getSnapshot()?.directoryBusy === true;
+            const workspaces = (list) => {
+                const items = list.getSnapshot()?.items;
+                return (Array.isArray(items) ? items : EMPTY).filter((ws) => typeof ws?.workspaceId === 'string');
+            };
+            const stop = () => {
+                const run = wait;
+                wait = null;
+                run?.off();
+            };
+            return {
+                /** Whether New workspace… can start DSH's flow: null where it can't, else {busy} (the flow runs already). */
+                state() {
+                    const p = parts();
+                    return p ? { busy: busy(p.flow) } : null;
+                },
+                /**
+                 * Start DSH's flow; `made(workspace)` gets the workspace it makes, once.
+                 * @returns whether it started.
+                 */
+                start(made) {
+                    const p = parts();
+                    if (!p || busy(p.flow)) return false;
+                    const { flow, list } = p;
+                    stop();
+                    const known = () => new Set(workspaces(list).map((ws) => ws.workspaceId));
+                    const run = { known: known(), asked: false, starting: true, off: () => {} };
+                    const check = () => {
+                        if (wait !== run || run.starting) return;
+                        const now = flow.state.getSnapshot() ?? {};
+                        // DSH's flow asked for again, by its + or its shortcut: that run is DSH's own.
+                        if (now.addRequested === true && !run.asked) { stop(); return; }
+                        run.asked = now.addRequested === true;
+                        // Only the flow running makes the workspace waited for; one added elsewhere meanwhile isn't it.
+                        if (!run.asked && now.directoryBusy !== true) { run.known = known(); return; }
+                        const ws = workspaces(list).find((w) => !run.known.has(w.workspaceId));
+                        if (ws === undefined) return;
+                        stop();
+                        made(ws);
+                    };
+                    const offs = [flow.state.subscribe(check), list.subscribe(check)];
+                    run.off = () => { for (const off of offs) if (typeof off === 'function') off(); };
+                    wait = run;
+                    try { flow.request(); } catch { /* DSH didn't take it: below */ }
+                    run.starting = false;
+                    const now = flow.state.getSnapshot() ?? {};
+                    run.asked = now.addRequested === true;
+                    if (!run.asked && now.directoryBusy !== true) {
+                        stop();
+                        return false;
+                    }
+                    return true;
+                },
+                stop,
+            };
+        }
+
+        /**
+         * ⋯ on a header. A category's: Add a workspace (those in no category
+         * first), New workspace (DSH's own Add workspace, filed there), Move
+         * up and down, Rename, New category and Delete. Other workspaces' (no
+         * category): New workspace and New category. A right-click, Shift+F10
          * or the context-menu key opens it from the header too.
          */
         function CategoryMenu({ group, first, last, open, setOpen, workspaces, actions }) {
+            // DSH's own Add workspace, where this DSH has it; greyed while it runs.
+            const adding = actions.adding?.() ?? null;
+            const made = adding === null ? EMPTY : [{ id: 'newWorkspace', label: SIDEBAR.newWorkspace, icon: h(ui.IconFolderOpenOutlineRegular, {}), disabled: adding.busy }];
+            const create = { id: 'new', label: SIDEBAR.newCategory, icon: h(ui.IconProjectAddOutlineRegular, {}) };
             const folder = h(ui.IconFolderCloseRegular, {});
             const free = workspaces.filter((ws) => ws.group === null);
             const taken = workspaces.filter((ws) => ws.group !== null && ws.group.id !== group.id);
@@ -5515,14 +5646,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 ...(taken.length > 0 ? [{ type: 'label', id: 'taken', text: SIDEBAR.inOther }] : []),
                 ...taken.map((ws) => ({ id: `w:${ws.id}`, icon: folder, label: h('span', null, ws.title, h('span', { className: 'dshp-pg-menu-from' }, ` · ${ws.group.name}`)) })),
             ];
-            const items = [
+            const items = !group.category ? [...made, create] : [
                 { id: 'add', label: SIDEBAR.addWorkspace, icon: h(ui.IconPlusOutlineRegular, {}), submenu: add },
+                ...made,
                 { type: 'separator', id: 's1' },
                 { id: 'up', label: SIDEBAR.moveUp, icon: h(ui.IconChevronUpOutlineRegular, {}), disabled: first },
                 { id: 'down', label: SIDEBAR.moveDown, icon: h(ui.IconChevronDownOutlineRegular, {}), disabled: last },
                 { type: 'separator', id: 's2' },
                 { id: 'rename', label: SIDEBAR.rename, icon: h(ui.IconEditOutlineRegular, {}) },
-                { id: 'new', label: SIDEBAR.newCategory, icon: h(ui.IconProjectAddOutlineRegular, {}) },
+                create,
                 { id: 'delete', label: SIDEBAR.remove, icon: h(ui.IconTrashOutlineRegular, {}), danger: true },
             ];
             return h(ui.Menu, {
@@ -5532,13 +5664,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     if (id === 'up') actions.move(group, -1);
                     else if (id === 'down') actions.move(group, 1);
                     else if (id === 'rename') actions.rename(group);
+                    else if (id === 'newWorkspace') actions.newWorkspace(group);
                     else if (id === 'new') actions.create(null);
                     else if (id === 'delete') actions.remove(group);
                     else if (id.startsWith('w:')) void actions.file(id.slice(2), group, null);
                 },
                 anchor: h('button', {
-                    type: 'button', className: 'dshp-sb-more', tabIndex: -1, 'aria-label': SIDEBAR.actions(group.name), 'aria-haspopup': 'menu', 'aria-expanded': open,
-                    'data-projects-category-menu': group.id,
+                    type: 'button', className: 'dshp-sb-more', tabIndex: -1, 'aria-label': group.category ? SIDEBAR.actions(group.name) : SIDEBAR.othersActions,
+                    'aria-haspopup': 'menu', 'aria-expanded': open,
+                    'data-projects-category-menu': group.category ? group.id : undefined,
+                    'data-projects-others-menu': group.category ? undefined : '',
                     onClick: (event) => {
                         event.stopPropagation();
                         setOpen(!open);
@@ -5548,10 +5683,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * A category's header in DSH's list: its name and how many workspaces
-         * it holds; a click, Enter or Space collapses or opens it, the arrow
-         * keys walk the headers, Alt+↑ and Alt+↓ move a category, and a
-         * category's header drags (Other workspaces stays last).
+         * A header in DSH's list, a category's or Other workspaces': its name
+         * and how many workspaces it holds; a click, Enter or Space collapses
+         * or opens it, the arrow keys walk the headers, ⋯, a right-click,
+         * Shift+F10 or the context-menu key opens its menu, Alt+↑ and Alt+↓
+         * move a category, and a category's header drags (Other workspaces
+         * stays last).
          */
         function CategoryHeader({ group, index, count, folded, dot, onToggle, onMove, menu }) {
             // Clicks and keys from the menu (drawn elsewhere in the page) reach here through React, not the page.
@@ -5566,24 +5703,24 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return h('div', {
                 role: 'treeitem', tabIndex: 0, 'aria-level': 1, 'aria-expanded': !folded,
                 'aria-label': `${group.name}, ${plural(n, 'workspace')}${status}`,
-                'aria-keyshortcuts': group.category ? 'Alt+ArrowUp Alt+ArrowDown Shift+F10' : undefined,
-                className: group.category ? 'dshp-sb-head' : 'dshp-sb-head dshp-sb-plain', 'data-projects-sb': group.id,
+                'aria-keyshortcuts': group.category ? 'Alt+ArrowUp Alt+ArrowDown Shift+F10' : 'Shift+F10',
+                className: 'dshp-sb-head', 'data-projects-sb': group.id,
                 'data-projects-menu-open': open ? '' : undefined,
                 draggable: group.category,
                 style: index === 0 ? { order: 0, marginTop: 0 } : { order: 2 * index },
                 onClick: (event) => {
                     if (own(event) && !event.target.closest?.('.dshp-sb-more')) onToggle();
                 },
-                onContextMenu: group.category ? (event) => {
+                onContextMenu: (event) => {
                     if (!own(event)) return;
                     event.preventDefault();
                     setOpen(true);
-                } : undefined,
+                },
                 onKeyDown: (event) => {
                     if (event.target !== event.currentTarget) return;
                     if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
                         if (group.category) onMove(event.key === 'ArrowUp' ? -1 : 1);
-                    } else if (group.category && ((event.key === 'F10' && event.shiftKey) || event.key === 'ContextMenu')) setOpen(true);
+                    } else if ((event.key === 'F10' && event.shiftKey) || event.key === 'ContextMenu') setOpen(true);
                     else if (event.key === 'Enter' || event.key === ' ') onToggle();
                     else if (event.key === 'ArrowRight') onToggle(true);
                     else if (event.key === 'ArrowLeft') onToggle(false);
@@ -5600,7 +5737,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             h('span', { className: 'dshp-sb-name', 'data-projects-title': '' }, group.name),
             dot ? h('span', { className: 'dshp-sb-dot', 'aria-hidden': true }, h(ui.StateDot, { state: dot })) : null,
             h('span', { className: 'dshp-sb-count', 'aria-hidden': true }, count),
-            group.category ? h(CategoryMenu, { ...menu, group, open, setOpen }) : null);
+            h(CategoryMenu, { ...menu, group, open, setOpen }));
         }
 
         const noStatuses = (select) => select(new Map());
@@ -5609,9 +5746,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * DSH's session list, as the plugin arranges it. Each project's
          * threads nest under its coordinator, and DSH's own drags of session
          * rows keep threads in their project and chats out of projects
-         * (useSessionDragGuard). With categories, a header goes over each
-         * category's workspaces, with its count, collapsible (remembered
-         * across restarts), with Other workspaces last, and headers and
+         * (useSessionDragGuard). A header goes over each category's
+         * workspaces, with its count, collapsible (remembered across
+         * restarts), with Other workspaces last (alone while there are no
+         * categories, so its ⋯ can make the first), and headers and
          * workspaces drag (useCategoryDrags). DSH has no seat for a header in
          * its list, so the headers are the plugin's own elements added to
          * the list, placed before their sections, and CSS sets DSH's rows
@@ -5659,6 +5797,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     void actions.moveCategory(group.id, by < 0 ? ids[at - 1] : ids[at + 2] ?? null);
                 },
                 create: (ws) => setDialog({ kind: 'new', ws }),
+                // DSH's own Add workspace; what it makes goes where the menu was (added, below).
+                newWorkspace: (group) => { projects.addWorkspace?.start((ws) => read.current.added(ws, group.id)); },
+                /** New workspace… shows where DSH has its Add workspace: null where it hasn't, else {busy}. */
+                adding: () => projects.addWorkspace?.state() ?? null,
                 rename: (group) => setDialog({ kind: 'rename', group }),
                 remove: (group) => setDialog({ kind: 'delete', group }),
             };
@@ -5667,6 +5809,24 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 groups, folded, pinned, titleOf, refuse, dragging: setDragging,
                 file: (ws, group, before) => { void actions.file(ws, group, before); },
                 moveCategory: (id, before) => { void actions.moveCategory(id, before); },
+                /**
+                 * A workspace DSH made from a header's New workspace…: filed
+                 * last in that category, as Add a workspace files one. From
+                 * Other workspaces (or a category deleted meanwhile) it stays
+                 * in none, and the next list puts DSH's order, which takes a
+                 * new workspace first, back in category order.
+                 */
+                added: (ws, id) => {
+                    const group = (groups ?? EMPTY).find((g) => g.id === id && g.category);
+                    const title = workspaceTitle(ws);
+                    if (group) {
+                        void act('fileWorkspace', { workspace: ws.workspaceId, category: group.id, before: '' }, SIDEBAR.added(title, group.name), () => toggle(group.id, false));
+                        return;
+                    }
+                    announce(SIDEBAR.added(title, SIDEBAR.others));
+                    toggle(OTHERS, false);
+                    void projects.facts.list();
+                },
             };
             useTreeSync(tree, read);
             useCategoryDrags(groups === null ? null : tree, read);
@@ -6411,6 +6571,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             changesOf, changesText, lastChange, REVIEW_PREFIX,
             rowState, endingOf, endingIn, endingReason, endingLine, openSessions, markState, hoverLine, continueError, GROUPS,
             roomFor, besidePref, sidebarGroups, sidebarRules, placeHeaders, describeWorkspaces, sectionWorkspace, sectionAt, listText, OTHERS, clockOf, againText, ThreadCard, EndingBar,
+            SidebarTree, workspaceAdder, dshAddFlow,
             noticeOf, noticeView, TriggerNotice, ProjectNotice,
             permissionName, permissionShown, permissionIn, toolsText, accessOf, accessSummary, PermissionPicker, ToolsControl, ModelsSummary,
             NewsNotice, newsLine, newsDot, ThreadMark, RowPlace, CoordinatorOffer, workspaceOfSession, projectIn, GoalRow,
