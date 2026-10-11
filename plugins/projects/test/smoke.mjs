@@ -541,6 +541,8 @@ test('coordinator is created, titled and gets coordinator tools', async () => {
     assert.match(text, /\n"Here", "this" and "everything" mean this workspace; to check that it works, run its tests in a thread\. DSH, its web server and this project's settings aren't the user's work/);
     assert.match(text, /\n4\. Name a thread to the user only as a link: \[Fix the login bug\]\(\.dsh-thread\/t3\) for thread t3\./);
     assert.match(text, /\n6\. Before you or a thread delete files, push, publish, send or post anything, spend money, or change settings outside the workspace, ask the user/);
+    // A probe that posts, or a fake token, is sending: no brief may allow it (behaviour review 3, S3).
+    assert.match(text, /\n6\. [^\n]*exactly that\. A request to a service outside the workspace that does more than read counts as sending, and so does one with a made-up or placeholder credential; a brief never allows either\. Ask only in these cases/);
     assert.match(text, /\n11\. Write to project_memory only decisions and preferences the user stated\./);
     assert.doesNotMatch(text, /home folder|Here those include|PAUSED/);
     // The rules behind the second behaviour review and the user's advising asks made it longer; it stays one screen.
@@ -583,8 +585,11 @@ test('thread start → brief → handback → coordinator turn', async () => {
     // A thread does the task and only the task, off the user's own tools, and hands back once, result first.
     assert.match(thread.ctx.section(), /\n1\. Do the task end to end, and only the task\./);
     assert.match(thread.ctx.section(), /\n2\. Do not use the user's personal or infrastructure tools \(password managers and vaults, note apps, .*\), in any way \(tool, command line, script or web API\), unless the user's own words ask for it\./);
-    assert.match(thread.ctx.section(), /\n3\. Editing files for your task is fine\. Before you delete files, push, publish/);
-    assert.match(thread.ctx.section(), /\n4\. When you are done or stuck, call project_handback once, as your last step\..*shows 300 characters: the result first/);
+    // Writing outside the workspace asks first like sending does, scratch stays inside, and a request to a service that does more
+    // than read, or carries a made-up credential, is sending whatever the brief says (behaviour review 3, S3, S1 and S11).
+    assert.match(thread.ctx.section(), /\n3\. Editing files in the workspace for your task is fine\. Keep scratch files inside the workspace, or delete them before you hand back\. Before you write outside the workspace, delete files, push, publish, send or post anything, spend money, or do anything that cannot be undone, hand back with status needs_decision, unless the user's words asked for exactly that\. A request to a service outside the workspace that does more than read counts as sending, and so does one with a made-up or placeholder credential, even if the brief allows it\.\n/);
+    // The handback names what left the workspace.
+    assert.match(thread.ctx.section(), /\n4\. When you are done or stuck, call project_handback once, as your last step\..*shows 300 characters: the result first, then where \(paths, links\)\. Name every request you sent to a service outside the workspace and every file you wrote outside it\./);
     assert.match(thread.ctx.section(), /\n5\. After project_handback, end your turn with one short line\./);
     assert.doesNotMatch(thread.ctx.section(), /Here those include/, 'no guarded tools are configured');
     assert.equal((await thread.ctx.request({ provider: 'deepseek', model: 'deepseek-v4' })).reasoningEffort, 'high');
