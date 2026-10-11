@@ -2592,7 +2592,10 @@ export class ProjectManager {
      * passes on their request; the coordinator's own messages (`ask`
      * undefined) and the plugin's (`guard` false) say only what they say.
      * The user's tools the checked ask names join the thread's before it
-     * reads the message.
+     * reads the message. A thread in the middle of a turn reads it in that
+     * turn, at its next step, unless `steer` is false: then it waits for the
+     * turn to end. An idle thread starts its next turn with it.
+     * @returns {{text: string, mode: 'steer'|'queue'}} what happened, in the words the coordinator reads.
      */
     async sendToThread(projectId, threadId, text, steer, { ask, guard = false } = {}) {
         const { id, t } = this.requireThread(projectId, threadId);
@@ -2613,9 +2616,14 @@ export class ProjectManager {
         if (t.question) this.store.putThread(projectId, id, { question: undefined });
         // The user's words make it new work: a turn that then ends without a handback gets its own nudge.
         if (userWords !== '' && (t.nudged || t.stalled)) this.store.putThread(projectId, id, { nudged: undefined, stalled: undefined });
-        await this.prompt(t.sessionId, coordinatorMessage(text.trim(), userWords), steer ? 'steer' : 'queue', this.store.project(projectId).coordinatorSessionId);
-        this.log(`thread-send ${projectId}/${id} mode=${steer ? 'steer' : 'queue'} chars=${text.length}`);
-        return `${steer ? 'Steered' : 'Sent to'} ${id}${t.resolved ? ' (reopened)' : ''}.`;
+        // A user's answer or change of plan reaches a running turn now, not when the turn ends.
+        const running = this.liveStatus(t.sessionId) === 'running';
+        const mode = steer && running ? 'steer' : 'queue';
+        await this.prompt(t.sessionId, coordinatorMessage(text.trim(), userWords), mode, this.store.project(projectId).coordinatorSessionId);
+        this.log(`thread-send ${projectId}/${id} mode=${mode}${running && mode === 'queue' ? ' after-turn' : ''} chars=${text.length}`);
+        const reopened = t.resolved ? ' (reopened)' : '';
+        if (mode === 'steer') return { mode, text: `Steered into ${id}'s running turn${reopened}.` };
+        return { mode, text: running ? `Queued: ${id} sees this when its turn ends${reopened}; steer=true redirects it now.` : `Sent to ${id}${reopened}.` };
     }
 
     // ── messages to chats outside the project ──────────────────────────────

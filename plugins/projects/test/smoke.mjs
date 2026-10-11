@@ -536,7 +536,9 @@ test('coordinator is created, titled and gets coordinator tools', async () => {
     assert.match(text, /\n2\. Never use the user's personal or infrastructure tools \(password managers and vaults, note apps, email and messaging, home or household services, control of the user's screen, model lanes and gateways\), yourself or in a thread, in any way \(tool, command line, script or web API\)\. Only the user's own words \(a message, an answer they picked or typed, or the goal\) can call for one\./);
     assert.match(text, /\n3\. All work goes to a thread, however small: counting, listing, searching, running tests or commands, editing, deleting\. Start one with project_thread_start, not with DSH's subagent or workflow tools\. One thread per distinct ask \("Two things: A and B" is two asks\); put the user's words in `ask`, word for word, and in `brief` the goal, the scope, what done looks like and what not to touch\./);
     assert.match(text, /\n5\. Answer yourself only from what you already know: thread status, project memory, this conversation\. You may read a file to write a brief or a question; you run no commands and change no files\./);
-    assert.match(text, /\n7\. Guide your threads\. Check each handback against the ask before you tell the user; if it falls short or its approach is wrong, tell the thread what to fix and why[^\n]*When the user's wishes or priorities change, redirect a running thread/);
+    assert.match(text, /\n7\. Guide your threads\. Check each handback against the ask before you tell the user; if it falls short or its approach is wrong, tell the thread what to fix and why[^\n]*When the user's wishes or priorities change, redirect the thread/);
+    // What it sends a running thread reaches it now (behaviour review 4, S3: an answer sat queued through an 11-minute turn).
+    assert.match(text, /\n7\. [^\n]*redirect the thread; a running one reads it now\. Notes to a thread go to it/);
     // "Everything" is the workspace, never DSH or the project's settings.
     assert.match(text, /\n"Here", "this" and "everything" mean this workspace; to check that it works, run its tests in a thread\. DSH, its web server and this project's settings aren't the user's work/);
     assert.match(text, /\n4\. Name a thread to the user only as a link: \[Fix the login bug\]\(\.dsh-thread\/t3\) for thread t3\./);
@@ -607,13 +609,21 @@ test('thread start → brief → handback → coordinator turn', async () => {
     assert.match(cp[0].text, /\n\n\(The user has not seen this\. Reply now\. First line: the link \[Add CI\]\(\.dsh-thread\/t1\), a colon, and the result in one sentence\. Then at most two short lines\. No other thread is running: end with one line that answers what the user asked for\. Write "the thread reports" for anything you did not check yourself\. Full conversation: project_thread_read thread="t1"\.\)$/);
     assert.deepEqual(sourceOf(host.sessions.get(coord.id), 0), { kind: 'agent-message', form: 'relay', senderSessionId: thread.id }, 'a handback comes from its thread');
     assert.match(coord.ctx.section(), /t1 · "Add CI" · idle · last handback: done, "CI added/);
-    // A coordinator's message to a thread comes from the coordinator too.
-    assert.equal(await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Also cache npm.', steer: true }), 'Steered t1.');
+    // A coordinator's message to a thread comes from the coordinator too. A running thread reads it in the turn it is
+    // running, so an answer from the user reaches it now; steer=false queues it for that turn's end. The result says which.
+    thread.status = 'running';
+    assert.equal(await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Also cache npm.' }), 'Steered into t1\'s running turn.');
     assert.deepEqual([ts.prompts[1].mode, sourceOf(ts, 1)], ['steer', { kind: 'agent-message', form: 'relay', senderSessionId: coord.id }]);
+    assert.equal(await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Then the docs.', steer: false }), 'Queued: t1 sees this when its turn ends; steer=true redirects it now.');
+    assert.equal(ts.prompts[2].mode, 'queue');
+    // An idle thread starts its next turn with it, steered or not.
+    thread.status = 'idle';
+    assert.equal(await coord.ctx.call('project_thread_send', { thread: 't1', text: 'And the lockfile.', steer: true }), 'Sent to t1.');
+    assert.equal(ts.prompts[3].mode, 'queue');
 
     // A follow-up that passes on the user's request carries their words too.
     assert.equal(await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Cache the npm folder.', ask: 'can it cache npm?' }), 'Sent to t1.');
-    assert.equal(ts.prompts[2].text, '[From the coordinator]\n\nThe user asked: "can it cache npm?"\n\nCache the npm folder.');
+    assert.equal(ts.prompts[4].text, '[From the coordinator]\n\nThe user asked: "can it cache npm?"\n\nCache the npm folder.');
 
     // Schema-invalid input is rejected by dsh-tools before execute; ordinary failures come back as text.
     await assert.rejects(thread.ctx.call('project_handback', { status: 'finished', summary: 'x' }), { code: 'INVALID_ARGS' });
@@ -679,6 +689,8 @@ test('settings: change, validate, reset to default, per-thread override', async 
     assert.match(await coord.ctx.call('project_thread_update', { thread: 't1', resolved: true, stop: true }), /resolved; current turn stopped/);
     assert.equal(host.sessions.get(thread.id).cancelled, true);
     assert.match(await coord.ctx.call('project_thread_list', {}), /\(no threads yet\)\n\(1 resolved hidden\)/);
+    // DSH's stop leaves it idle.
+    thread.status = 'idle';
     assert.match(await coord.ctx.call('project_thread_send', { thread: 't1', text: 'One more thing.' }), /Sent to t1 \(reopened\)/);
 });
 

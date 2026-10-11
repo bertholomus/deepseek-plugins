@@ -7,7 +7,8 @@
  * server, then drives the coordinator and its threads through the bridge
  * socket and checks what reached the model: models and efforts on the wire,
  * tool scoping, handbacks, the automatic notes (idle, failed, stopped,
- * waiting on approval, cut off by a DSH crash), queued turns, direct talk,
+ * waiting on approval, cut off by a DSH crash), queued turns, a message
+ * that reaches a thread's running turn, direct talk,
  * settings, memory, pause, a restart, the browser half DSH serves for the
  * plugin's page, a saved default that applies without a restart, the Project
  * settings endpoints the window calls, a pick in DSH's own model picker,
@@ -635,19 +636,21 @@ try {
     await sleep(1500);
     check('its own stop is not echoed back to it', !since(mark, 'coordinator').some((r) => r.fresh.includes('t6 · "Zeta"')), describe(since(mark, 'coordinator')));
 
-    // 15. Queued turns: the coordinator queues a second message while the first
-    // turn runs; DSH runs both before going idle. The first hands back, the
-    // second fails, and the coordinator hears about both.
+    // 15. Queued turns: the coordinator queues a second message (steer=false)
+    // while the first turn runs; DSH runs both before going idle. The first
+    // hands back, the second fails, and the coordinator hears about both.
     mark = model.requests.length;
     await say(coord, call('project_thread_start', {
         ask: 'Please do this.',
         title: 'Eta',
         brief: `E2E:slow 4000\n${call('project_handback', { status: 'done', summary: 'Eta part one done.' })}`,
     }));
-    const sent = await say(coord, call('project_thread_send', { thread: 't7', text: 'E2E:fail' }));
+    const sent = await say(coord, call('project_thread_send', { thread: 't7', text: 'E2E:fail', steer: false }));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Eta failure note');
     const t7Reqs = since(mark, 't7');
-    check('the second message was queued while the first turn ran', sent[0].at < (t7Reqs[1]?.at ?? 0), describe(since(mark)));
+    check('the second message was queued while the first turn ran, and the coordinator heard so', sent[0].at < (t7Reqs[1]?.at ?? 0)
+        && resultOf(sent.filter((r) => whoOf(r) === 'coordinator')) === 'TOOL-RESULT: Queued: t7 sees this when its turn ends; steer=true redirects it now.',
+        `${describe(since(mark))} | ${resultOf(sent.filter((r) => whoOf(r) === 'coordinator'))}`);
     check('the first turn handed back', since(mark, 'coordinator').some((r) => r.fresh.includes('Eta part one done.')));
     check('the queued turn that failed gets its note', saw.fresh.includes('[Thread idle without a handback: t7 · "Eta"]') && saw.fresh.includes('The turn failed (HTTP 400):'), saw.fresh.slice(0, 300));
 
@@ -873,7 +876,24 @@ try {
         && (project().threads?.[waitsId]?.changes ?? []).length === 0 && changesFor(writesId)?.files === 1 && changesFor(writesId).added === 1 && changesFor(writesId).deleted === 0
         && filesOfB.join() === 'b-new.txt', `A ${JSON.stringify(changesFor(waitsId))} B ${JSON.stringify(changesFor(writesId))} ${filesOfB.join()}`);
 
-    // 22c. The user quits DSH while a thread waits on a permission prompt. At the next start the
+    // 22c. A message to a thread in the middle of a turn reaches that turn, so an answer the user gives the
+    // coordinator gets there now, not when the turn ends (behaviour review 4, S3); steer=false queues it (15).
+    mark = model.requests.length;
+    await say(coord, call('project_thread_start', {
+        ask: 'Please do this.',
+        title: 'Xi',
+        brief: `E2E:slow 4000\n${call('project_handback', { status: 'done', summary: 'Xi done.' })}`,
+    }));
+    const xiId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Xi')?.[0];
+    const steered = (await say(coord, call('project_thread_send', { thread: xiId, text: 'XI-ANSWER: the user picked the blue theme.' }))).filter((r) => whoOf(r) === 'coordinator');
+    await coordinatorSaw(mark, 'SAW-HANDBACK', 'the Xi handback');
+    await waitIdle(threadSession(xiId));
+    const xiReqs = since(mark, xiId);
+    check('a message to a thread in the middle of a turn goes into that turn, and the coordinator hears so', resultOf(steered) === `TOOL-RESULT: Steered into ${xiId}'s running turn.`
+        && xiReqs.length === 2 && xiReqs[1].fresh.includes('XI-ANSWER') && readText(logFile).includes(`thread-send ${PROJECT_ID}/${xiId} mode=steer `),
+        `${describe(xiReqs)} | ${resultOf(steered)} | ${xiReqs[1]?.fresh.slice(0, 200)}`);
+
+    // 22d. The user quits DSH while a thread waits on a permission prompt. At the next start the
     // coordinator hears once that DSH closed while it ran, and nothing sends the thread on, so it
     // asks for nothing again.
     mark = model.requests.length;
