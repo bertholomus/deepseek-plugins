@@ -587,7 +587,7 @@ test('thread start → brief → handback → coordinator turn', async () => {
     assert.match(thread.ctx.section(), /\n2\. Do not use the user's personal or infrastructure tools \(password managers and vaults, note apps, .*\), in any way \(tool, command line, script or web API\), unless the user's own words ask for it\./);
     // Writing outside the workspace asks first like sending does, scratch stays inside, and a request to a service that does more
     // than read, or carries a made-up credential, is sending whatever the brief says (behaviour review 3, S3, S1 and S11).
-    assert.match(thread.ctx.section(), /\n3\. Editing files in the workspace for your task is fine\. Keep scratch files inside the workspace, or delete them before you hand back\. Before you write outside the workspace, delete files, push, publish, send or post anything, spend money, or do anything that cannot be undone, hand back with status needs_decision, unless the user's words asked for exactly that\. A request to a service outside the workspace that does more than read counts as sending, and so does one with a made-up or placeholder credential, even if the brief allows it\. Doing it again \(a retry, a check\) needs its own ask\. A command that sends waits for the user to allow it once in this chat; if they reject it, hand back and don't send another way\.\n/);
+    assert.match(thread.ctx.section(), /\n3\. Editing files in the workspace for your task is fine\. Keep scratch files inside the workspace, or delete them before you hand back\. Before you write outside the workspace, delete files, push, publish, send or post anything, spend money, or do anything that cannot be undone, hand back with status needs_decision, unless the user's words asked for exactly that\. A request to a service outside the workspace that does more than read counts as sending, and so does one with a made-up or placeholder credential, even if the brief allows it\. Doing it again \(a retry, a check\) needs its own ask\. A command that sends waits for the user to allow it once in this chat, one send at a time, and a copy or a wrapper of it \(another script, a copied file, a different client\) is the same send; if they reject it, hand back and don't send another way\.\n/);
     // The handback names what left the workspace.
     assert.match(thread.ctx.section(), /\n4\. When you are done or stuck, call project_handback once, as your last step\. Its summary is what the user reads on your card: at most 300 characters, the result first, then where \(paths, links\); a longer one comes back to you to shorten\. Name every request you sent to a service outside the workspace and every file you wrote outside it\./);
     assert.match(thread.ctx.section(), /\n5\. After project_handback, end your turn with one short line\./);
@@ -5738,8 +5738,14 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     await tick();
     const coord = coordinatorOf(host);
     const log = () => readFileSync(join(dir, 'projects.log'), 'utf8');
-    // DSH's pre-execute stage for one call, its own checks having decided `own`.
-    const gate = (agent, name, args, own = { kind: 'allow' }) => host.waterfall('tools/pre-execute', { name, arguments: args, agent, callId: `pre-${++toolCalls}` }, () => Promise.resolve(own));
+    // DSH's pre-execute stage for one call, its own checks having decided `own`. Like DSH, the call is logged first, with
+    // its model step: one of its own unless `inStep` names one.
+    let step = 0;
+    const gate = (agent, name, args, own = { kind: 'allow' }, inStep = ++step) => {
+        const callId = `pre-${++toolCalls}`;
+        agent.ctx.sessionEvent({ type: 'tool/call', data: { turn: 1, step: inStep, callId, name, arguments: args } });
+        return host.waterfall('tools/pre-execute', { name, arguments: args, agent, callId }, () => Promise.resolve(own));
+    };
     await coord.ctx.call('project_thread_start', { ask: 'Get the staging deploy working.', title: 'Deploy', brief: 'Fix deploy.sh.' });
     const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Deploy');
 
@@ -5756,6 +5762,21 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     // The thread's words are one line, without a URL's token, and with why it wants a wider sandbox when it asks for one.
     const wider = await gate(t1, 'bash', { command: 'git push', description: 'Push the fix\n  to https://bot:ghp_secret@github.com/acme/web', sandbox_permissions: 'danger-full-access', justification: 'The sandbox blocks the network.' });
     assert.equal(wider.displayReason.en, 'This command pushes to its remote (git push). A thread asks you before each command that sends outside the workspace.\nThe thread says: "Push the fix to https://github.com/acme/web" and, for wider access, "The sandbox blocks the network."');
+    // One send at a time: DSH asks about a step's calls one after another, so a second send from the step of one it asked
+    // about is refused without asking anyone; the next step, which reads the answer, asks again, as does the next turn.
+    // A copy or a wrapper of it would be the same send.
+    assert.deepEqual(await gate(t1, 'bash', post), asked);
+    const one = {
+        kind: 'deny',
+        reason: "Not run: the command pushes to origin (git push). Another command of yours that sends, from the same step, went to the user first, and a thread asks them about one send at a time, so nobody was asked about this one. Read their answer in that command's result: if they allowed it, run this one again only if it is still needed; if they rejected it, hand back and don't send another way. Here too, a copy or a wrapper of it (another script, a copied file, a different client) is the same send, and waits for the same answer.",
+    };
+    assert.deepEqual(await gate(t1, 'bash', { command: 'git push origin main' }, undefined, step), one);
+    assert.deepEqual(await gate(t1, 'bash', { command: 'ls' }, undefined, step), { kind: 'allow' });
+    assert.equal((await gate(t1, 'bash', { command: 'git push origin main' })).kind, 'ask');
+    assert.equal((await gate(t1, 'bash', post, undefined, step)).kind, 'deny');
+    t1.ctx.sessionEvent({ type: 'turn/end', data: { turn: 1 } });
+    assert.equal((await gate(t1, 'bash', post, undefined, step)).kind, 'ask');
+    assert.match(log(), / send-refused dsh-plugins\/t1 push git one-at-a-time\n/);
     // A script in the workspace by what it runs, a package script, a push; and each send that went through
     // without asking in the send detection review, with what the prompt says about it.
     const commit = (then) => `git add -A && git commit -m "$(cat <<'EOF'\nFix the login redirect\n\nThe callback didn't keep the next= parameter.\nEOF\n)" && ${then}`;
@@ -5828,7 +5849,7 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     policies.set(t1.id, 'never');
     assert.deepEqual(await gate(t1, 'bash', { command: 'git push origin main' }), {
         kind: 'deny',
-        reason: "Not run: the command pushes to origin (git push). A thread asks the user before each command that sends outside the workspace, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would send; the user can put this thread on Workspace Write so it can ask. Don't send it another way.",
+        reason: "Not run: the command pushes to origin (git push). A thread asks the user before each command that sends outside the workspace, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would send; the user can put this thread on Workspace Write so it can ask. Don't send it another way: a copy or a wrapper of it (another script, a copied file, a different client) is the same send, and waits for the same answer.",
     });
     policies.delete(t1.id);
     // The coordinator is refused, and nobody is asked.

@@ -3,7 +3,8 @@
  * end-to-end test. It answers from markers in the newest user text, so the
  * test drives every session by what it sends:
  *
- *   E2E:call <tool> <json args>   call that tool (the rest of the line is the JSON)
+ *   E2E:call <tool> <json args>   call that tool (the rest of the line is the JSON); one such line
+ *                                 each for several calls in one step
  *   E2E:force <tool> <json args>  call it even if the session is not offered it
  *   E2E:fail                      answer HTTP 400, so the turn fails
  *   …asked you to try again/continue  (Retry or Resume from the window) reply RESUMED
@@ -47,10 +48,12 @@ function decide(body, text) {
     if (last?.role === 'tool') return { text: `TOOL-RESULT: ${textOf(last).slice(0, 2000)}` };
     // Retry or Resume from the DSH window: the thread picks the work back up, whatever failed before.
     if (/The user asked you to (try again|continue)\./.test(text)) return { text: 'RESUMED' };
-    const call = /E2E:call (\w+) (.*)$/m.exec(text);
-    if (call) {
-        if (!tools.has(call[1])) return { text: `MISSING TOOL ${call[1]}` };
-        return { tool: call[1], args: JSON.parse(call[2]) };
+    const calls = [...text.matchAll(/E2E:call (\w+) (.*)$/gm)];
+    if (calls.length > 0) {
+        const missing = calls.find((c) => !tools.has(c[1]));
+        if (missing) return { text: `MISSING TOOL ${missing[1]}` };
+        const [first, ...more] = calls.map((c) => ({ tool: c[1], args: JSON.parse(c[2]) }));
+        return more.length > 0 ? { ...first, more } : first;
     }
     const force = /E2E:force (\S+) (.*)$/m.exec(text);
     if (force) return { tool: force[1], args: JSON.parse(force[2]) };
@@ -123,8 +126,9 @@ export async function startFakeModel({ port = 0, models = ['fake-model', 'fake-f
         const usage = { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110 };
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
         if (action.tool) {
-            res.write(chunk(id, model, { role: 'assistant', content: null, tool_calls: [{ index: 0, id: `call_${id}`, type: 'function', function: { name: action.tool, arguments: '' } }] }));
-            res.write(chunk(id, model, { tool_calls: [{ index: 0, function: { arguments: JSON.stringify(action.args) } }] }));
+            const calls = [action, ...(action.more ?? [])];
+            res.write(chunk(id, model, { role: 'assistant', content: null, tool_calls: calls.map((c, i) => ({ index: i, id: i === 0 ? `call_${id}` : `call_${id}_${i}`, type: 'function', function: { name: c.tool, arguments: '' } })) }));
+            res.write(chunk(id, model, { tool_calls: calls.map((c, i) => ({ index: i, function: { arguments: JSON.stringify(c.args) } })) }));
             res.write(chunk(id, model, {}, 'tool_calls', usage));
         } else {
             res.write(chunk(id, model, { role: 'assistant', content: action.text }));

@@ -1119,6 +1119,19 @@ try {
         const readId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Read')?.[0];
         const readAsked = (await bridge('GET', `/sessions/${threadSession(readId)}/events?types=approval/asked&limit=20`)).events ?? [];
         check('a read runs without asking', hits.includes('GET /health') && readAsked.length === 0, `${hits.join()} ${readAsked.length}`);
+        // Two sends in one step: DSH asks about them one after another, so the plugin puts the first in front of the user
+        // and refuses the second unasked; the thread reads the answer before it sends again.
+        mark = model.requests.length;
+        const both = [call('bash', { command: `curl -sS -X POST http://${sinkAt}/first`, description: 'Send the first' }), call('bash', { command: `curl -sS -X POST http://${sinkAt}/second`, description: 'Send the second' })];
+        await say(coord, call('project_thread_start', { ask: 'Send both.', title: 'Both', brief: both.join('\n') }));
+        const firstOfTwo = await prompts.next('the Both prompt', (r) => r.toolName === 'bash' && r.reason?.startsWith(`the command sends a POST to ${sinkAt}/first (curl)`));
+        await prompts.answer(firstOfTwo, 'rejected');
+        await coordinatorSaw(mark, 'SAW-IDLE', 'the Both idle note');
+        const bothId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Both')?.[0];
+        const bothAsked = (await bridge('GET', `/sessions/${threadSession(bothId)}/events?types=approval/asked&limit=20`)).events ?? [];
+        check('two sends in one step put one prompt in front of the user; the other is refused unasked, with what to do', bothAsked.length === 1 && posted() === 1
+            && resultOf(since(mark, bothId)).includes(`the command sends a POST to ${sinkAt}/second (curl). Another command of yours that sends, from the same step, went to the user first`)
+            && readText(logFile).includes(`send-refused ${PROJECT_ID}/${bothId} request curl one-at-a-time`), `${bothAsked.length} ${hits.join()} ${resultOf(since(mark, bothId))}`);
         const coordAsked = async () => ((await bridge('GET', `/sessions/${coord}/events?types=approval/asked&limit=50`)).events ?? []).length;
         const askedBefore = await coordAsked();
         reqs = await say(coord, call('bash', { command: `curl -sS -X POST http://${sinkAt}/deploy`, description: 'Deploy' }));
