@@ -550,7 +550,7 @@ export class ProjectManager {
         this.ownPermissions = new Map();
         /** The pending pass over every wall after DSH's tool list changed. */
         this.wallTimer = undefined;
-        /** Session ids of chats outside a project that owe a coordinator the reply to its message (chat_message). */
+        /** Session ids of chats that owe a coordinating chat the reply to its message (chat_message). */
         this.awaited = new Set();
         /** sessionId → the check of its replies running now, so one reply is never delivered twice. */
         this.replyChecks = new Map();
@@ -1413,7 +1413,6 @@ export class ProjectManager {
             await this.resume(id);
         }
         if (!this.disposed) await this.catchUpReplies();
-        if (!this.disposed) await this.recountChanges();
     }
 
     /**
@@ -2303,7 +2302,7 @@ export class ProjectManager {
 
     /**
      * The thread sessions whose kept texts stay (net.js prune): every thread
-     * the store has, archived projects' too (Restore project brings their
+     * the store has, archived projects' too (Restore brings their
      * diffs back), but not one whose chat DSH no longer has. Only threads
      * with kept texts that DSH's list leaves out are looked up; when the list
      * or a session can't be read, the thread stays.
@@ -2579,46 +2578,6 @@ export class ProjectManager {
     }
 
     /**
-     * Threads from before the plugin counted their own edits kept DSH's
-     * whole-folder numbers: count each one again from its log, once. A
-     * subagent's edits in those turns aren't in the thread's log, so they
-     * drop out.
-     */
-    async recountChanges() {
-        for (const projectId of [...this.projects.keys()]) {
-            for (const [threadId, t] of Object.entries(this.store.project(projectId)?.threads ?? {})) {
-                if (this.disposed) return;
-                if (t?.ownCounts === true || typeof t?.sessionId !== 'string') continue;
-                if (!Array.isArray(t.changes) || t.changes.length === 0) {
-                    this.store.putThread(projectId, threadId, { ownCounts: true });
-                    continue;
-                }
-                let inspected;
-                try {
-                    inspected = await this.sc.inspect(t.sessionId, AbortSignal.timeout(20000));
-                } catch (error) {
-                    // Tried again at the next start.
-                    this.log(`error recount ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
-                    continue;
-                }
-                if (this.disposed) return;
-                const fresh = this.store.thread(projectId, threadId);
-                if (!fresh) continue;
-                const byTurn = new Map();
-                for (const edit of editsIn(ownEvents(inspected))) byTurn.set(edit.turn, [...(byTurn.get(edit.turn) ?? []), edit]);
-                let changes = [];
-                for (const [turn, edits] of byTurn) {
-                    const summary = editSummary(turn, edits, inspected?.meta?.cwd);
-                    const record = summary && changeRecord((Array.isArray(fresh.changes) ? fresh.changes : []).find((r) => r?.turn === turn)?.seq ?? edits.at(-1).seq, summary);
-                    if (record) changes = withChange(changes, record);
-                }
-                this.store.putThread(projectId, threadId, { changes, ownCounts: true });
-                this.log(`changes recounted ${projectId}/${threadId} turns=${changes.length} was=${Array.isArray(fresh.changes) ? fresh.changes.length : 0}`);
-            }
-        }
-    }
-
-    /**
      * A thread's changes as the window shows them: totals over its turns,
      * and whether DSH can still show the newest turn's diff.
      */
@@ -2643,7 +2602,7 @@ export class ProjectManager {
     async threadDiffs(target, threadId = undefined) {
         const projectId = this.projectFor(target);
         const named = typeof threadId === 'string' && threadId.trim() !== '' ? threadId : this.store.lookup(String(target))?.threadId;
-        if (!named) throw new ProjectError('not a thread: name one of this project\'s threads');
+        if (!named) throw new ProjectError('not a thread: name one of this chat\'s threads');
         const { id: own, t } = this.requireThread(projectId, named);
         const base = { project: projectId, thread: own, title: t.title ?? '', session: t.sessionId ?? null };
         if (typeof t.sessionId !== 'string') return { ...base, files: [], turns: [] };
@@ -2925,7 +2884,7 @@ export class ProjectManager {
         this.log(`news ${projectId}/${news.thread} ${news.kind}${item.status ? ` ${item.status}` : ''} seq=${seq}`);
     }
 
-    /** The user has seen a project's news up to `seq` (all of it when omitted): they opened its coordinator. */
+    /** The user has seen a coordinating chat's news up to `seq` (all of it when omitted): they opened the chat. */
     seeNews(projectId, seq = undefined) {
         const news = this.store.project(projectId).news;
         if (!isObject(news) || !Number.isInteger(news.seq)) return;
@@ -2935,7 +2894,7 @@ export class ProjectManager {
     }
 
     /**
-     * Every project with a coordinator and its news the user hasn't seen:
+     * Every coordinating chat and its news the user hasn't seen:
      * [{project, name, coordinator, seq, seen, unread: [{seq, kind, thread, title, status?, at}]}].
      */
     listNews() {

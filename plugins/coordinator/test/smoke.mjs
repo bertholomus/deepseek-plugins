@@ -823,7 +823,7 @@ test('idle without a handback: the plugin nudges the thread once, then sends the
     assert.match(await coord.ctx.call('thread_read', { thread: 't1' }), /## assistant\nI wrote half the docs\./);
 });
 
-test('the idle nudge waits while the project is paused, and counts toward the hourly handback limit', async () => {
+test('the idle nudge waits while the chat\'s threads are paused, and counts toward the hourly handback limit', async () => {
     const { host } = setup({ maxHandbacksPerHour: 2 });
     await tick();
     const coord = coordinatorOf(host);
@@ -1803,7 +1803,7 @@ test('with approvalNoticeSeconds set, a permission prompt tells the coordinator 
     assert.equal(cp.length, 1);
 });
 
-test('news: what threads hand back or need the user for waits per project until the user opens the coordinator', async () => {
+test('news: what threads hand back or need the user for waits per chat until the user opens it', async () => {
     const { host } = setup({ approvalNoticeSeconds: 0.02 }, undefined, { gateway: true });
     await tick();
     const coord = coordinatorOf(host);
@@ -2846,7 +2846,7 @@ test('a handback the coordinator cannot take is retried, in order', async () => 
     }
 });
 
-test('a thread started while the plugin reloads stays a project thread', async () => {
+test('a thread started while the plugin reloads stays a thread of its chat', async () => {
     const { host, config, dir } = setup();
     await tick();
     const coord = coordinatorOf(host);
@@ -3112,19 +3112,6 @@ test('changes: a thread counts its own edits (and its subagents\'), never what o
     push(t1, 'workspace/changes', { turn: 2 });
     await tick();
     assert.equal((await remote.describe(coord.id)).threads.find((x) => x.session === t1.id).changes.turns, 3);
-    // A thread from before the plugin counted its own edits kept DSH's folder-wide numbers: counted again from its log, once.
-    const manager = remote.manager;
-    manager.store.putThread('dsh-plugins', 't2', { changes: [{ turn: 1, seq: 9, added: 9, deleted: 1, total: 3, files: [{ path: 'a.md', added: 3, deleted: 0 }] }], ownCounts: undefined });
-    manager.store.putThread('dsh-plugins', 't1', { ownCounts: undefined });
-    await manager.recountChanges();
-    assert.equal(manager.store.thread('dsh-plugins', 't2').changes.length, 0);
-    assert.equal(manager.store.thread('dsh-plugins', 't2').ownCounts, true);
-    // Its own log has t1's edits but not its subagent's, which drop out.
-    assert.deepEqual(plain(manager.store.thread('dsh-plugins', 't1').changes.map((r) => [r.turn, r.added, r.deleted, r.files.map((f) => f.path).join(',')]).sort((a, b) => a[0] - b[0])),
-        [[1, 4, 1, 'a.md,b.js'], [2, 2, 1, 'a.md'], [3, 1, 0, '/elsewhere/notes.md']]);
-    assert.match(readFileSync(join(dir, 'coordinator.log'), 'utf8'), /changes recounted dsh-plugins\/t2 turns=0 was=1/);
-    await manager.recountChanges();
-    assert.equal((readFileSync(join(dir, 'coordinator.log'), 'utf8').match(/changes recounted/g) ?? []).length, 2, 'once per thread');
 });
 
 test('changes: own edits count lines as a diff does', () => {

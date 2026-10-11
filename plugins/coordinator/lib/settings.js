@@ -4,7 +4,8 @@
  * effort. Each resolves from the first layer that sets it:
  *
  *   the chat's own setting (its Thread settings dialog, or the
- *   thread_settings tool) → plugin row → DSH default
+ *   thread_settings tool) → the plugin's defaults (its page in DSH, or
+ *   its row in cordis.patch.yml) → DSH default
  *
  * A thread fixes its model and effort when it starts (start arguments win
  * over the thread defaults), and keeps them until changed with
