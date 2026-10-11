@@ -20,7 +20,9 @@
  *   changes calendars without asking, Read Only reads but can't change
  *   them, Workspace Write asks the user first (here nobody can answer, so
  *   the change doesn't happen), and the plugin's agentChanges: off refuses
- *   every change;
+ *   every change; one occurrence isn't moved to another calendar, and a
+ *   change that says to tell guests where they can't be told is refused
+ *   before anyone is asked;
  * - a restart keeps the calendars and their events.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/calendar/test/e2e/run.mjs
@@ -472,6 +474,14 @@ try {
     check('and empties a field with clear (an empty string changes nothing)', /^TOOL-RESULT: Changed:/.test(call.result) && /Haircut/.test(call.result) && !/Main Street/.test(call.result), call.result);
     call = await agentCall('calendar_update_event', { id: wednesday.id, title: 'Standup (moved)' });
     check('a change to a repeating event without a scope is sent back to ask the user', /scope "one"/.test(call.result) && /Ask the user/.test(call.result), call.result);
+    const feedCalendar = (await api('state')).value?.calendars?.find((c) => c.accountId === feedAccount?.id);
+    call = await agentCall('calendar_update_event', { id: wednesday.id, scope: 'one', calendar_id: feedCalendar?.id ?? 'missing', start: '2026-10-14T11:00' });
+    const standups = (await api('events', { from: Date.parse('2026-10-12T00:00:00+02:00'), to: Date.parse('2026-10-19T00:00:00+02:00') })).value?.occurrences?.filter((o) => o.title.startsWith('Standup')) ?? [];
+    check('one occurrence isn\'t moved to another calendar, and the series stays whole where it is', /Only a whole event or series moves to another calendar/.test(call.result)
+        && standups.length === 3 && standups.every((o) => o.calendarId === personal.id), `${call.result} ${JSON.stringify(standups.map((o) => o.calendarId))}`);
+    call = await agentCall('calendar_create_event', { title: 'Party', start: '2026-10-17T19:00', guests: ['ann@example.com'], notify_guests: true });
+    check('telling guests from a calendar that can\'t email is refused before anything is made', /Calendars on this computer can't email anyone/.test(call.result)
+        && (await api('search', { query: 'party' })).value?.occurrences?.length === 0, call.result);
     call = await agentCall('calendar_free_time', { from: '2026-10-13', to: '2026-10-13', minutes: 60 });
     check('free time leaves out busy times', /Free slots:/.test(call.result) && /10:15–17:00/.test(call.result), call.result);
     await stopDsh(child);
@@ -510,7 +520,7 @@ try {
         JSON.stringify(r.value?.occurrences?.map((o) => `${o.startLocal} ${o.title}`)));
     r = await webApi(web2, 'dsh-plugin-calendar/state', {});
     check('with the subscription', r.ok && r.value?.accounts?.some((a) => a.id === feedAccount?.id), JSON.stringify(r.value?.accounts));
-    check('no event text in the log', !/Dentist|Standup|Haircut|Main Street|Plumber|Team offsite/.test(readText(logFile)), readText(logFile).slice(-800));
+    check('no event text in the log', !/Dentist|Standup|Haircut|Main Street|Plumber|Team offsite|Party|ann@example/.test(readText(logFile)), readText(logFile).slice(-800));
 } catch (error) {
     failed += 1;
     console.log(`not ok - the run stopped: ${redact(error?.stack ?? error)}`);

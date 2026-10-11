@@ -884,6 +884,8 @@ END:VCALENDAR&#13;
             readOnly: false,
             description: 'Team things',
             timeZone: 'Europe/Paris',
+            // Radicale doesn't schedule: it emails nobody, and says so (no outbox).
+            scheduling: false,
         });
         assert.deepEqual(await fresh().calendars(), found.calendars);
     });
@@ -936,6 +938,10 @@ END:VCALENDAR&#13;
         await fresh().remove(work, item);
         assert.equal((await dav('GET', `${user}/work/rm-1.ics`)).status, 404);
         await fresh().remove(work, item);
+        // Without a stored etag the server's own is read first; Schedule-Reply: F is a header a server without scheduling ignores.
+        const again = await fresh().put(work, null, ics('rm-2', 'To remove too'), 'rm-2');
+        await fresh().remove(work, { remoteId: again.remoteId }, { scheduleReply: false });
+        assert.equal((await dav('GET', `${user}/work/rm-2.ics`)).status, 404);
     });
 
     test('sync: from nothing, after another client\'s changes, and with a token the server no longer takes', async () => {

@@ -1220,7 +1220,7 @@ export class CalendarManager {
 
     /** Why a calendar can't email guests. */
     cannotMail(calendar) {
-        if (this.store.accounts[calendar.accountId]?.kind === 'local') return 'Calendars kept in DSH can\'t email anyone. Save it without telling the guests, and tell them another way.';
+        if (this.store.accounts[calendar.accountId]?.kind === 'local') return 'Calendars on this computer can\'t email anyone. Save it without telling the guests, and tell them another way.';
         return 'This calendar\'s server doesn\'t email guests. Save it without telling them, and tell them another way.';
     }
 
@@ -1911,7 +1911,7 @@ export class CalendarManager {
         const account = this.store.accounts[calendar.accountId];
         const { source, style } = await this.source(account);
         // Imported events invite nobody: on a server their guests and organizer stay out (a server that
-        // schedules, and Microsoft, would email them all). Calendars kept in DSH keep everything.
+        // schedules, and Microsoft, would email them all). Calendars on this computer keep everything.
         const keep = (r) => {
             if (account.kind === 'local') return r;
             const copy = structuredClone(r);

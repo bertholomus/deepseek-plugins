@@ -22,9 +22,12 @@
  *
  * calendar.json:
  * { version: 1,
- *   accounts: { [id]: { id, kind, name, url?, username?, email?, preset?, allowHttp?, createdAt,
- *     calendars?: [{remoteId, name, color}] (local accounts: their calendars), error?, syncedAt? } },
+ *   accounts: { [id]: { id, kind, name, url? (CalDAV; a subscription's address is in its credential
+ *     record), host? (a subscription's site), username?, email?, addresses? (the user's own, where the
+ *     server names them), preset?, allowHttp?, createdAt, calendars?: [{remoteId, name, color}] (local
+ *     accounts: their calendars), error?, syncedAt?, calendarsAt? } },
  *   calendars: { [id]: { id, accountId, remoteId, name, color?, readOnly?, timeZone?, description?, mode?,
+ *     scheduling? (CalDAV: whether its server emails a meeting's guests itself),
  *     own?: {name?, color?} (the user's choices, over the server's), hidden?, error? } },
  *   prefs: { defaultCalendar?, weekStart?, ... } }
  *
