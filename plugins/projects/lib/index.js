@@ -155,6 +155,17 @@ export function apply(ctx, config) {
     ctx.on('tools/change', () => {
         manager.onToolsChanged();
     });
+    // A ◆ coordinator archived or unarchived in DSH (its row's Archive or Unarchive, the Undo on DSH's notice):
+    // its project's threads go or come back with it.
+    ctx.on('domain/changed', (change) => {
+        manager.onWorkspaceState(change);
+    });
+    // DSH's own Archive on a ◆ row asks first while the project's threads run, names them, and stops them with it.
+    ctx.on('workspace/session-activity', async ({ sessionId }, next) => {
+        const rest = await next();
+        const own = manager.archiveActivity(sessionId);
+        return own ? [own, ...rest] : rest;
+    });
     ctx.effect(() => () => manager.dispose(), 'projects.scopes()');
     // What the DSH window draws for project sessions: roles, rosters and thread
     // cards (lib/projection.js). Optional, so a Host without projections still runs projects.

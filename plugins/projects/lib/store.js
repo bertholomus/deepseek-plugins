@@ -15,6 +15,8 @@
  *       lastEnding?: { text, kind, at }: that turn, when it failed or stopped without a handback (prompts.js describeEnding),
  *       changes?: [{ turn, seq, added, deleted, total, files: [{ path, added, deleted, binary?, oversized? }], turns? }] (changes.js) } },
  *     home?: id of the DSH workspace its coordinator and threads work in,
+ *     archived?: { at, via: 'window' | 'dsh' | 'start' | 'hand', sessions?: the project's sessions the archive saw to, archived
+ *       in DSH or gone from it }: the project is archived with its coordinator and threads (projects.js archiveProject),
  *     awaiting?: [{ to: a chat's session id, name: as the coordinator named it, from: the coordinator's session id,
  *       after: the chat's last event seq before the message, at }]: messages to chats outside the project (project_message)
  *       whose reply hasn't come back yet,

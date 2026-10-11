@@ -111,6 +111,8 @@ const HANDBACK_RETRY = 'Handback saved; the coordinator could not take it just n
 const QUESTION_SENT = 'Asked. Carry on with what doesn\'t depend on the answer; it arrives here as a message from the coordinator. If nothing can go on without it, end your turn with one short line.';
 const QUESTION_HELD = 'Saved; the coordinator gets it when the project resumes. Pick a sensible default, say which, and carry on.';
 const QUESTION_RETRY = 'Saved; the coordinator could not take it just now, and it is sent again automatically. Carry on with what doesn\'t depend on the answer.';
+/** Why work for an archived project is refused, by its tools and in the window. */
+const ARCHIVED = 'the project is archived; restore it first';
 /** DSH's tools that change files, which a coordinator on Read Only is refused (str_replace_editor's view only reads). */
 const WRITE_TOOLS = new Set(['write', 'edit', 'str_replace_editor']);
 const READ_ONLY_REASON = 'You are on Read Only, so you don\'t change files. Start a thread for this change with project_thread_start, or send it to the thread already doing that work.';
@@ -138,6 +140,8 @@ const managers = new Map();
 const liveManagers = new Set();
 /** Coordinator checks in flight, by store file and project, so two managers never make two coordinators. */
 const ensuring = new Map();
+/** Archives and restores in flight, by store file and project: one at a time, and DSH's own archive set changing meanwhile is theirs. */
+const archiving = new Map();
 
 /** Whether a session read failed because the session does not exist, not for another reason. */
 function isNotFound(error) {
@@ -963,6 +967,16 @@ export class ProjectManager {
         return typeof override === 'boolean' ? override : this.project(projectId).paused === true;
     }
 
+    /** Whether the project is archived: its coordinator and threads are archived in DSH (archiveProject). */
+    archived(projectId) {
+        return isObject(this.store.projects[projectId]?.archived);
+    }
+
+    /** Paused or archived: what is sent to the coordinator waits, and no thread starts. */
+    held(projectId) {
+        return this.archived(projectId) || this.paused(projectId);
+    }
+
     /**
      * What the project is for, as the coordinator's and threads' prompts
      * read it: the goal the user set in Project settings, else the profile
@@ -1012,28 +1026,42 @@ export class ProjectManager {
         await this.refreshRecords();
         if (this.disposed) return;
         for (const id of this.projects.keys()) await this.noteHome(id);
+        if (this.disposed) return;
+        // A ◆ coordinator archived or unarchived in DSH while the plugin was off: its threads follow it now.
+        await this.matchArchive();
         for (const id of [...this.projects.keys()]) {
             if (this.disposed) return;
-            // A project made in the window whose coordinator never started gets one when the user asks.
-            if (!this.fromProfile(id) && !this.store.projects[id]?.coordinatorSessionId) continue;
-            try {
-                if (this.fromProfile(id)) this.noteProjectRow(id);
-                const sessionId = await this.ensureCoordinator(id);
-                if (!sessionId) continue;
-                await this.noteHome(id);
-            } catch (error) {
-                this.log(`error coordinator ${id} ${String(error?.message ?? error).slice(0, 300)}`);
-                this.ctx.logger?.warn?.('projects: could not start coordinator for %s: %s', id, error?.message ?? error);
-                continue;
-            }
-            // Reloaded meanwhile: the new manager delivers and reviews.
-            if (this.disposed) return;
-            await this.flushPending(id);
-            await this.catchUp(id);
+            await this.resume(id);
         }
         if (!this.disposed) await this.catchUpReplies();
         if (!this.disposed) await this.plainThreadTitles();
         if (!this.disposed) await this.recountChanges();
+    }
+
+    /**
+     * Bring a project's coordinator up as at a start: made, or resumed on
+     * its settings, then what was held for it delivered and the turns its
+     * threads ended meanwhile reviewed. Not while the project is archived,
+     * nor for one made in the window whose coordinator never started: it
+     * gets one when the user asks.
+     */
+    async resume(id) {
+        if (this.archived(id)) return;
+        if (!this.fromProfile(id) && !this.store.projects[id]?.coordinatorSessionId) return;
+        try {
+            if (this.fromProfile(id)) this.noteProjectRow(id);
+            const sessionId = await this.ensureCoordinator(id);
+            if (!sessionId) return;
+            await this.noteHome(id);
+        } catch (error) {
+            this.log(`error coordinator ${id} ${String(error?.message ?? error).slice(0, 300)}`);
+            this.ctx.logger?.warn?.('projects: could not start coordinator for %s: %s', id, error?.message ?? error);
+            return;
+        }
+        // Reloaded meanwhile: the new manager delivers and reviews.
+        if (this.disposed) return;
+        await this.flushPending(id);
+        await this.catchUp(id);
     }
 
     async dispose() {
@@ -1667,6 +1695,11 @@ export class ProjectManager {
             });
         }
         if (turn.handedBack || byCoordinator) return;
+        if (this.archived(projectId)) {
+            // Archiving stopped it, or the user brought it back alone and talked to it: nothing for the coordinator.
+            this.log(`archived-turn ${projectId}/${threadId}`);
+            return;
+        }
         if (byUser) {
             // No note, so the coordinator takes no turn and can't send it on by itself.
             this.log(`user-stop ${projectId}/${threadId}`);
@@ -1980,7 +2013,7 @@ export class ProjectManager {
 
     async noticeApproval(projectId, threadId, agent, data) {
         const t = this.store.thread(projectId, threadId);
-        if (!t || t.resolved || !this.projects.has(projectId)) return;
+        if (!t || t.resolved || !this.projects.has(projectId) || this.archived(projectId)) return;
         const turn = await this.readTurn(agent.id, { current: true });
         // The user is talking to the thread directly, so the prompt is in front of them.
         if (!turn.fromProject || !this.allowHandback(projectId, threadId)) return;
@@ -2064,16 +2097,16 @@ export class ProjectManager {
             const pending = this.store.project(projectId).pendingHandbacks;
             const item = from || news ? { text, ...(from ? { from } : {}), ...(news ? { news } : {}) } : text;
             this.store.putProject(projectId, { pendingHandbacks: [...pending, item] });
-            if (this.paused(projectId)) return 'held';
+            if (this.held(projectId)) return 'held';
             return (await this.sendHeld(projectId)) === 0 ? 'delivered' : 'held';
         });
     }
 
-    /** Deliver held messages now, unless paused. @returns how many were sent. */
+    /** Deliver held messages now, unless paused or archived. @returns how many were sent. */
     flushPending(projectId) {
         return this.serial(projectId, async () => {
             const before = this.store.project(projectId).pendingHandbacks.length;
-            if (before === 0 || this.paused(projectId)) return 0;
+            if (before === 0 || this.held(projectId)) return 0;
             const sent = before - await this.sendHeld(projectId);
             this.log(`flush ${projectId} sent=${sent}`);
             return sent;
@@ -2085,7 +2118,7 @@ export class ProjectManager {
         const sessionId = this.store.project(projectId).coordinatorSessionId;
         // No coordinator yet: the next start makes one and sends them.
         if (!sessionId) return this.store.project(projectId).pendingHandbacks.length;
-        while (this.store.project(projectId).pendingHandbacks.length > 0 && !this.paused(projectId)) {
+        while (this.store.project(projectId).pendingHandbacks.length > 0 && !this.held(projectId)) {
             // A held message is its text (the plugin's own note) or {text, from?, news?} (a thread's handback, or a note the user hears about).
             const next = this.store.project(projectId).pendingHandbacks[0];
             const text = typeof next === 'string' ? next : typeof next?.text === 'string' ? next.text : '';
@@ -2161,7 +2194,7 @@ export class ProjectManager {
         const out = [];
         for (const projectId of this.projects.keys()) {
             const stored = this.store.project(projectId);
-            if (typeof stored.coordinatorSessionId !== 'string') continue;
+            if (typeof stored.coordinatorSessionId !== 'string' || this.archived(projectId)) continue;
             const news = isObject(stored.news) ? stored.news : {};
             const seq = Number.isInteger(news.seq) ? news.seq : 0;
             const seen = Number.isInteger(news.seen) ? news.seen : 0;
@@ -2254,6 +2287,7 @@ export class ProjectManager {
 
     async startThread(projectId, { title, ask, brief, model, effort }) {
         const project = this.project(projectId);
+        if (this.archived(projectId)) throw new ProjectError(ARCHIVED);
         if (this.paused(projectId)) throw new ProjectError('the project is paused; new threads are blocked until it resumes');
         const cleanTitle = clipTitle(title);
         if (!cleanTitle) throw new ProjectError('title is required');
@@ -2343,6 +2377,7 @@ export class ProjectManager {
      */
     async sendToThread(projectId, threadId, text, steer, { ask, guard = false } = {}) {
         const { id, t } = this.requireThread(projectId, threadId);
+        if (this.archived(projectId)) throw new ProjectError(ARCHIVED);
         if (!String(text ?? '').trim()) throw new ProjectError('text is required');
         const userWords = typeof ask === 'string' ? ask.trim().slice(0, 4000) : '';
         let tools = [];
@@ -2872,10 +2907,209 @@ export class ProjectManager {
      */
     async startCoordinator(projectId) {
         const project = this.project(projectId);
+        if (this.archived(projectId)) throw new ProjectError(ARCHIVED);
         if (!this.fromProfile(projectId) && !this.homeOf(projectId)) throw new ProjectError(`DSH has no workspace for ${project.name}'s folder right now`);
         const sessionId = await this.ensureCoordinator(projectId, { create: true });
         if (!sessionId) throw new ProjectError('the coordinator could not start');
         return sessionId;
+    }
+
+    // ── archive: a project leaves DSH's session list with its coordinator and threads ──
+
+    /** The project's sessions: its coordinator, then each thread's, resolved ones too. */
+    projectSessions(projectId) {
+        const stored = this.store.project(projectId);
+        const ids = typeof stored.coordinatorSessionId === 'string' && stored.coordinatorSessionId !== '' ? [stored.coordinatorSessionId] : [];
+        for (const id of rosterIds(stored.threads)) {
+            const sessionId = stored.threads[id]?.sessionId;
+            if (typeof sessionId === 'string' && sessionId !== '' && !ids.includes(sessionId)) ids.push(sessionId);
+        }
+        return ids;
+    }
+
+    /** DSH's archive set now; empty when this DSH has none. */
+    archivedNow() {
+        try {
+            const ids = this.ctx.workspaceRegistry?.archivedSessionIds;
+            return new Set(Array.isArray(ids) ? ids.map(String) : []);
+        } catch {
+            return new Set();
+        }
+    }
+
+    /** Run one archive or restore of a project after any still running, across managers. */
+    archiveStep(projectId, step) {
+        const key = `${this.storeFile}#${projectId}`;
+        const run = (archiving.get(key) ?? Promise.resolve()).then(step);
+        const tail = run.then(() => {}, () => {});
+        archiving.set(key, tail);
+        void tail.then(() => { if (archiving.get(key) === tail) archiving.delete(key); });
+        return run;
+    }
+
+    /**
+     * Archive a project with its coordinator and threads: whatever runs in
+     * them stops, and DSH archives each one, so they leave the session list
+     * and the Projects page together. Nothing is deleted. While archived the
+     * project starts no threads, and what a thread sends its coordinator
+     * waits; restoreProject brings them all back.
+     * @param {object} [options]
+     * @param {'window'|'dsh'|'start'} [options.via] - the plugin's own action; DSH's own Archive on the ◆ row; or found so at a start.
+     * @returns {{archived: number, failed: number}} how many sessions DSH archived now, and how many it refused.
+     */
+    async archiveProject(projectId, { via = 'window' } = {}) {
+        this.project(projectId);
+        const registry = this.ctx.workspaceRegistry;
+        if (typeof registry?.archiveSession !== 'function') throw new ProjectError('this DSH can\'t archive sessions');
+        return this.archiveStep(projectId, async () => {
+            // Marked first, so nothing is sent to the coordinator meanwhile, and its own archive (below) is this one.
+            const mark = this.archived(projectId) ? this.store.projects[projectId].archived : { at: new Date().toISOString(), via };
+            this.store.putProject(projectId, { archived: mark });
+            clearTimeout(this.retries.get(projectId)?.timer);
+            this.retries.delete(projectId);
+            const before = this.archivedNow();
+            /** The sessions this archive has seen to: archived in DSH, or gone from it. */
+            const done = new Set();
+            let archived = 0;
+            let failed = 0;
+            for (const sessionId of this.projectSessions(projectId)) {
+                this.clearApprovals(sessionId);
+                if (before.has(sessionId)) {
+                    done.add(sessionId);
+                    continue;
+                }
+                try {
+                    await registry.archiveSession(sessionId, { stopActivity: true });
+                    done.add(sessionId);
+                    archived += 1;
+                } catch (error) {
+                    // A session DSH no longer has (deleted there) has nothing to archive.
+                    if (error?.name === 'WorkspaceUnknownSessionError') done.add(sessionId);
+                    else failed += 1;
+                    this.log(`error archive ${projectId} ${sessionId} ${String(error?.message ?? error).slice(0, 200)}`);
+                }
+            }
+            this.store.putProject(projectId, { archived: { ...mark, sessions: [...done] } });
+            this.log(`archive ${projectId} via=${via} sessions=${archived}${failed ? ` failed=${failed}` : ''}`);
+            if (failed > 0 && via === 'window') throw new ProjectError(`DSH didn't archive ${failed} of ◆ ${this.project(projectId).name}'s sessions; try again`);
+            return { archived, failed };
+        });
+    }
+
+    /**
+     * Bring an archived project back with its coordinator and threads: DSH
+     * unarchives each one, and the coordinator gets what waited for it.
+     * Work that archiving stopped stays stopped.
+     * @param {object} [options]
+     * @param {'window'|'dsh'|'start'} [options.via] - as for archiveProject.
+     * @param {boolean} [options.resume] - bring the coordinator up now (false at a start, which does that next).
+     * @returns {{restored: number}} how many sessions DSH unarchived now.
+     */
+    async restoreProject(projectId, { via = 'window', resume = true } = {}) {
+        this.project(projectId);
+        const registry = this.ctx.workspaceRegistry;
+        if (typeof registry?.unarchiveSession !== 'function') throw new ProjectError('this DSH can\'t archive sessions');
+        return this.archiveStep(projectId, async () => {
+            const before = this.archivedNow();
+            let restored = 0;
+            for (const sessionId of this.projectSessions(projectId)) {
+                if (!before.has(sessionId)) continue;
+                try {
+                    await registry.unarchiveSession(sessionId);
+                    restored += 1;
+                } catch (error) {
+                    this.log(`error restore ${projectId} ${sessionId} ${String(error?.message ?? error).slice(0, 200)}`);
+                }
+            }
+            const was = this.archived(projectId);
+            if (was) this.store.putProject(projectId, { archived: undefined });
+            this.log(`restore ${projectId} via=${via} sessions=${restored}`);
+            if (was && resume && !this.disposed) await this.resume(projectId);
+            return { restored };
+        });
+    }
+
+    /**
+     * At a start, what changed while the plugin was off: a ◆ coordinator
+     * DSH archived takes its project's threads with it; an archived
+     * project whose coordinator DSH unarchived comes back with its threads,
+     * as when either happens while the plugin runs (onWorkspaceState); and
+     * an archived project with sessions DSH never archived (it refused, or
+     * the project was archived by hand in the file) has them archived now.
+     * A thread the user unarchived on its own stays as they left it.
+     */
+    async matchArchive() {
+        const archived = this.archivedNow();
+        this.archivedSeen = archived;
+        if (typeof this.ctx.workspaceRegistry?.archiveSession !== 'function') return;
+        for (const projectId of [...this.projects.keys()]) {
+            if (this.disposed) return;
+            const coordinator = this.store.projects[projectId]?.coordinatorSessionId;
+            if (typeof coordinator !== 'string' || coordinator === '') continue;
+            const mark = this.archived(projectId) ? this.store.projects[projectId].archived : undefined;
+            const done = Array.isArray(mark?.sessions) ? mark.sessions : [];
+            try {
+                if (!mark) {
+                    if (archived.has(coordinator)) await this.archiveProject(projectId, { via: 'start' });
+                } else if (done.includes(coordinator) && !archived.has(coordinator)) {
+                    await this.restoreProject(projectId, { via: 'start', resume: false });
+                } else if (this.projectSessions(projectId).some((id) => !archived.has(id) && !done.includes(id))) {
+                    await this.archiveProject(projectId, { via: 'start' });
+                }
+            } catch (error) {
+                this.log(`error archive-match ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
+            }
+        }
+    }
+
+    /**
+     * DSH's archive set changed (its domain/changed event for the workspace
+     * registry). A ◆ coordinator archived there, from its row's Archive or
+     * the shortcut, takes its project's threads with it; unarchived there,
+     * from its row or the Undo on DSH's notice, it brings them back. A
+     * project whose own archive or restore is running is left to it.
+     */
+    onWorkspaceState(change) {
+        if (this.disposed || change?.domain !== 'workspace' || change.table !== '' || change.operation !== 'put') return;
+        const ids = change.value?.archivedSessionIds;
+        if (!Array.isArray(ids)) return;
+        const before = this.archivedSeen;
+        const now = new Set(ids.map(String));
+        this.archivedSeen = now;
+        // Not started yet: the start matches the set as it is then.
+        if (!before) return;
+        for (const projectId of this.projects.keys()) {
+            const coordinator = this.store.projects[projectId]?.coordinatorSessionId;
+            if (typeof coordinator !== 'string' || coordinator === '' || now.has(coordinator) === before.has(coordinator)) continue;
+            if (archiving.has(`${this.storeFile}#${projectId}`)) continue;
+            const step = now.has(coordinator)
+                ? (this.archived(projectId) ? undefined : () => this.archiveProject(projectId, { via: 'dsh' }))
+                : (this.archived(projectId) ? () => this.restoreProject(projectId, { via: 'dsh' }) : undefined);
+            // DSH quits on any unhandled rejection in the Host, so a failure is only logged.
+            if (step) void step().catch((error) => this.log(`error archive-follow ${projectId} ${String(error?.message ?? error).slice(0, 200)}`));
+        }
+    }
+
+    /**
+     * What DSH's own Archive on a ◆ row stops besides the coordinator's own
+     * work: its project's threads that are running now, which go with it.
+     * DSH asks before stopping them and names them. Undefined when there are
+     * none, or the session is no running project's coordinator.
+     * @returns {{kind: string, items: {id: string, label: string}[]}|undefined}
+     */
+    archiveActivity(sessionId) {
+        try {
+            const who = typeof sessionId === 'string' ? this.store.lookup(sessionId) : null;
+            if (who?.role !== 'coordinator' || !this.projects.has(who.projectId) || this.archived(who.projectId)) return undefined;
+            const stored = this.store.project(who.projectId);
+            const archived = this.archivedNow();
+            const items = rosterIds(stored.threads)
+                .filter((id) => !archived.has(stored.threads[id].sessionId) && this.ctx.agents.get(stored.threads[id].sessionId)?.status === 'running')
+                .map((id) => ({ id: stored.threads[id].sessionId, label: stored.threads[id].title || id }));
+            return items.length > 0 ? { kind: 'project threads', items } : undefined;
+        } catch {
+            return undefined;
+        }
     }
 
     // ── the Project settings dialog (remote.js) ────────────────────────────
@@ -2933,6 +3167,7 @@ export class ProjectManager {
                 // The window's first asks stay out of the rest of the user's home folder.
                 homeFolder: isHome(project.workspacePath),
                 coordinator: stored.coordinatorSessionId ?? null,
+                archived: this.archived(projectId),
                 live: this.liveSelection(stored.coordinatorSessionId) ?? null,
                 // Its permission preset now, while DSH has it loaded; and the user's tools it has.
                 permission: this.permissionOf(stored.coordinatorSessionId) ?? null,
@@ -2997,6 +3232,7 @@ export class ProjectManager {
                 live: this.liveSelection(stored.coordinatorSessionId) ?? null,
                 permission: this.permissionOf(stored.coordinatorSessionId) ?? null,
                 paused: this.paused(projectId),
+                archived: this.archived(projectId),
                 settings: Object.fromEntries(SETTING_KEYS.map((key) => [key, { value: settings[key].value ?? null, source: settings[key].source }])),
                 access: Object.fromEntries(ACCESS_KEYS.map((key) => [key, { value: access[key].value, source: access[key].source }])),
                 threads: { open, resolved: ids.length - open },
@@ -3093,7 +3329,7 @@ export class ProjectManager {
         const outcome = await this.deliver(projectId, handbackMessage(threadId, t.title, status, text, { last }), t.sessionId, news);
         this.log(`handback ${projectId}/${threadId} status=${status} chars=${text.length} ${outcome}`);
         if (outcome === 'delivered') return HANDBACK_SENT;
-        return this.paused(projectId) ? HANDBACK_HELD : HANDBACK_RETRY;
+        return this.held(projectId) ? HANDBACK_HELD : HANDBACK_RETRY;
     }
 
     /**
@@ -3112,6 +3348,6 @@ export class ProjectManager {
         const outcome = await this.deliver(projectId, questionMessage(threadId, t.title, text), t.sessionId);
         this.log(`question ${projectId}/${threadId} chars=${text.length} ${outcome}`);
         if (outcome === 'delivered') return QUESTION_SENT;
-        return this.paused(projectId) ? QUESTION_HELD : QUESTION_RETRY;
+        return this.held(projectId) ? QUESTION_HELD : QUESTION_RETRY;
     }
 }

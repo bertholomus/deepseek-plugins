@@ -10,8 +10,9 @@
  * plugin's page and the Projects page list every project, a failed or
  * stopped thread runs again from its card (Retry, Resume), a project is made
  * in a workspace, renamed or removed (create, rename, remove,
- * addCoordinator), and the window hears what the user hasn't seen yet
- * (news, seeNews).
+ * addCoordinator), archived with its coordinator and threads or brought
+ * back (archive, restore), and the window hears what the user hasn't seen
+ * yet (news, seeNews).
  *
  * The gateway finds a Remote service by its `typertRemote` binding and the
  * method markers on its prototype; DSH's own services get both from
@@ -157,6 +158,35 @@ export class ProjectsRemote {
     }
 
     /**
+     * Archive a project with its coordinator and threads: what runs in them
+     * stops, and DSH archives each one. Nothing is deleted.
+     * @param project - a project id, or the id of its coordinator or one of its threads.
+     * @returns {archived: how many sessions DSH archived now, projects}.
+     */
+    async archive(project) {
+        try {
+            const done = await this.manager.archiveProject(this.manager.projectFor(project));
+            return { archived: done.archived, ...this.lists() };
+        } catch (error) {
+            throw failure(error);
+        }
+    }
+
+    /**
+     * Bring an archived project back with its coordinator and threads.
+     * @param project - as for archive.
+     * @returns {restored: how many sessions DSH unarchived now, projects}.
+     */
+    async restore(project) {
+        try {
+            const done = await this.manager.restoreProject(this.manager.projectFor(project));
+            return { restored: done.restored, ...this.lists() };
+        } catch (error) {
+            throw failure(error);
+        }
+    }
+
+    /**
      * Start the coordinator of a project made in the window that has none
      * (it never started, or it was deleted in DSH).
      * @returns {coordinator: its session id, projects}.
@@ -216,5 +246,5 @@ function markRemote(Class, names) {
     }
 }
 markRemote(ProjectsRemote, [
-    'describe', 'list', 'sessions', 'news', 'seeNews', 'update', 'continueThread', 'create', 'rename', 'remove', 'addCoordinator',
+    'describe', 'list', 'sessions', 'news', 'seeNews', 'update', 'continueThread', 'create', 'rename', 'remove', 'addCoordinator', 'archive', 'restore',
 ]);
