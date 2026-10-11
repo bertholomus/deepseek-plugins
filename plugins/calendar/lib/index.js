@@ -136,7 +136,10 @@ export function apply(ctx, config) {
     // Switched off or reloaded: this manager stops (writing what it holds), and the next start reads the files.
     ctx.effect(() => () => manager.dispose(), 'calendar.manager()');
 
+    const askEmails = config.askBeforeEmails !== false;
     const setup = {
+        /** Whether chats' emailing changes ask the user first (askBeforeEmails), for the window to say when they don't. */
+        askBeforeEmails: () => askEmails,
         async signInReady() {
             const s = await clientSettings();
             return {
@@ -154,7 +157,6 @@ export function apply(ctx, config) {
         scope.provide(SERVICE, new CalendarRemote(scope, manager, setup));
     });
 
-    const askEmails = config.askBeforeEmails !== false;
     if (!askEmails) ctx.logger?.warn?.('calendar: askBeforeEmails is off: changes from chats that email guests are made without asking the user');
 
     if (config.tools) {

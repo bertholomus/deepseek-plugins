@@ -36,12 +36,16 @@ const CONFLICT = Symbol('conflict');
 export class CalendarError extends Error {
     /**
      * @param {string} message
-     * @param {string} [code] - 'needs-notify': the change would email people, and it didn't say to tell them.
+     * @param {string} [code] - 'needs-notify': the change would email people, and it didn't say to tell them;
+     *   'drops-changes', 'choose-calendar' and 'changed' as remote.js says.
+     * @param {{people?: string[]}} [details] - people: who a 'needs-notify' change would email or reach, for the
+     *   window to hold the change to when the user says to send (approved).
      */
-    constructor(message, code) {
+    constructor(message, code, details) {
         super(message);
         this.name = 'CalendarError';
         if (code !== undefined) this.code = code;
+        if (Array.isArray(details?.people)) this.people = details.people;
     }
 }
 
@@ -1339,14 +1343,15 @@ export class CalendarManager {
 
     /**
      * Why a change can't be made as asked, as far as email goes: it would
-     * email people without saying to tell them ('needs-notify'), or it says
-     * to and can't. {message, code?} or undefined.
+     * email people without saying to tell them ('needs-notify', with the
+     * people it would email or reach), or it says to and can't. {message,
+     * code?, people?} or undefined.
      */
     mailProblem(mail, notify) {
         if (mail === undefined) return undefined;
         if (notify === true && mail.cannot) return { message: mail.cannot };
         if (mail.forced && notify !== true) {
-            return { message: `This would email ${mail.what} to ${peopleWords(mail.to)} (${mail.why}), so it's made only when they are to be told.`, code: 'needs-notify' };
+            return { message: `This would email ${mail.what} to ${peopleWords(mail.to)} (${mail.why}), so it's made only when they are to be told.`, code: 'needs-notify', people: peopleOf(mail) };
         }
         return undefined;
     }
@@ -1354,7 +1359,7 @@ export class CalendarManager {
     /** Refuse a change mailProblem() finds a problem with. */
     checkMail(mail, notify) {
         const problem = this.mailProblem(mail, notify);
-        if (problem) throw new CalendarError(problem.message, problem.code);
+        if (problem) throw new CalendarError(problem.message, problem.code, problem);
     }
 
     /**

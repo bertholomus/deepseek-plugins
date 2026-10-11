@@ -577,6 +577,10 @@ test('CalDAV that schedules: a change that would email guests is made only when 
         await assert.rejects(m.updateEvent(meeting.id, { start: '2026-10-15T11:00' }),
             refusedFor('needs-notify', /^This would email an update to ann@example\.com and bob@example\.com \(this calendar's server emails a meeting's guests itself\)/));
         await assert.rejects(m.deleteEvent(meeting.id), refusedFor('needs-notify', /a cancellation to ann@example\.com and bob@example\.com/));
+        // The refusal lists them, for the window to hold the change to when the user says to send it.
+        await assert.rejects(m.deleteEvent(meeting.id), (error) => assert.deepEqual(error.people, ['ann@example.com', 'bob@example.com']) ?? true);
+        await assert.rejects(m.deleteEvent(meeting.id, 'all', 'window', { notify: true, approved: ['ann@example.com'] }),
+            refusedFor('changed', /it would now also email a cancellation to bob@example\.com, so nothing was done/));
         assert.equal(calls.length, sent);
         // The user's own reminders tell nobody anything.
         assert.equal((await m.updateEvent(meeting.id, { alarms: [15] })).emailed, undefined);
