@@ -2714,6 +2714,23 @@ test('browser half: each session list row says its place in a project, and the C
     assert.doesNotMatch(kept, /x"\]/);
 });
 
+test('browser half: the plugin\'s mark gives way to any other mark in a row\'s leading seat, which never widens', () => {
+    let css = '';
+    const document = {
+        addEventListener: () => {}, removeEventListener: () => {}, querySelector: () => null,
+        createElement: () => ({ dataset: {} }), head: { appendChild: (tag) => { css = tag.textContent; } },
+    };
+    loadClient({ document });
+    // Beside DSH's Automation task mark or another plugin's, in DSH's slot or in the seat itself, the plugin's mark
+    // is hidden the screen-reader way (the row's description still says what it shows); alone, it is drawn. It is
+    // the only rule that reaches into DSH's row, so nothing widens the seat or moves the other marks in it.
+    const intoRow = css.split('}').filter((rule) => rule.includes('[data-row-key^="session:"]>'));
+    assert.deepEqual(intoRow, [
+        '[data-row-key^="session:"]>* .dshp-t-mark:not(:only-child),[data-row-key^="session:"]>* [data-slot]:not(:only-child)>.dshp-t-mark'
+        + '{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0',
+    ]);
+});
+
 /** Just enough of the DOM for the session list's passes: attributes, children, and the selectors they use. */
 class FakeEl {
     constructor(tag, attrs = {}, children = []) {

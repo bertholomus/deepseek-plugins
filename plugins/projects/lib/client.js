@@ -393,9 +393,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-t-mark{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:20px;color:var(--dsw-alias-label-tertiary)}',
             // A coordinator with news the user hasn't seen reads bold, like unread mail (RowPlace marks it).
             '[data-row-key^="session:"]:has([data-projects-unread]){font-weight:600}',
-            // The seat is 16 px: when the plugin's mark shares it with DSH's or another plugin's, it widens
-            // instead of letting the marks run over the title.
-            `[data-row-key^="session:"]>:has(${['', '>[data-slot]'].flatMap((at) => [`${at}>.dshp-t-mark+*`, `${at}>*+.dshp-t-mark`]).join(',')}){width:auto;min-width:16px;gap:2px}`,
+            // The seat is DSH's, 16 px, and holds one mark: the plugin's gives way to DSH's or another plugin's there
+            // (hidden the way a nested thread's branch mark is, so the row's description still says it). The seat
+            // never widens, so the other marks keep their place and the title its room.
+            `[data-row-key^="session:"]>* .dshp-t-mark:not(:only-child),[data-row-key^="session:"]>* [data-slot]:not(:only-child)>.dshp-t-mark{${HIDDEN}}`,
             '.dshp-t-hover{display:flex;flex-direction:column;gap:2px;font-size:12px;line-height:16px;color:#cfd3d6}',
             '.dshp-t-hover-head{display:flex;align-items:center;gap:6px;color:#fff}',
             '.dshp-t-hover-line{color:#adb2b8;overflow-wrap:anywhere}',
@@ -3700,6 +3701,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * takes the seat while the coordinator runs or waits). It is drawn
          * only: the seat comes before the title, so what it shows is read
          * after the title, from the row's description (RowPlace, rowWords).
+         * It gives way to any other mark in the seat, DSH's or another
+         * plugin's (CSS), so it never moves theirs.
          */
         function ThreadMark({ sessionId, useSessions, projects }) {
             useKnown();
