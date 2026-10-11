@@ -229,7 +229,7 @@ export function editsIn(events, { hunks = false } = {}) {
         if (!edit || !(edit.added + edit.deleted > 0 || edit.created)) continue;
         const turn = Number.isSafeInteger(event.data?.turn) ? event.data.turn : call.turn;
         if (!Number.isSafeInteger(turn) || !Number.isSafeInteger(event.seq)) continue;
-        out.push({ turn, seq: event.seq, ...edit, ...(hunks ? { hunks: hunksOf(call.name, args, event.data?.meta) } : {}) });
+        out.push({ turn, seq: event.seq, call: callId, ...edit, ...(hunks ? { hunks: hunksOf(call.name, args, event.data?.meta) } : {}) });
     }
     return out;
 }
@@ -363,4 +363,139 @@ export function diffFiles(edits, folder = '') {
         });
     }
     return [...byPath.values()];
+}
+
+/**
+ * A file's net change over a thread's edits, from its text before the
+ * thread's first edit (null: the file was new) to its text after the last:
+ * lines added and deleted, and hunks in DiffBlock's shape with three lines
+ * of context, so one diff shows what the thread's edits came to. Equal
+ * texts give no hunks: the edits undid each other.
+ * @param {string|null} before
+ * @param {string} after
+ * @returns {{added: number, deleted: number, created?: true, hunks: Array<{oldText: string|null, newText: string}>}|null}
+ *   null past MAX_NET_DISTANCE differing lines, too many to line up.
+ */
+export function netHunks(before, after) {
+    const b = fileLines(after);
+    if (typeof before !== 'string') return { added: b.length, deleted: 0, created: true, hunks: b.length > 0 ? [{ oldText: null, newText: b.join('\n') }] : [] };
+    const a = fileLines(before);
+    let start = 0;
+    while (start < a.length && start < b.length && a[start] === b[start]) start++;
+    let end = 0;
+    while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
+    if (start === a.length && start === b.length) return { added: 0, deleted: 0, hunks: [] };
+    // The lines between the common start and end, as numbers, so the edit script compares numbers.
+    const ids = new Map();
+    const idOf = (line) => {
+        let id = ids.get(line);
+        if (id === undefined) ids.set(line, id = ids.size);
+        return id;
+    };
+    const x = Int32Array.from(a.slice(start, a.length - end), idOf);
+    const y = Int32Array.from(b.slice(start, b.length - end), idOf);
+    const ops = editScript(x, y, MAX_NET_DISTANCE);
+    if (!ops) return null;
+    // Each run of changed lines, as old [i0, i1) and new [j0, j1) in the whole files.
+    const runs = [];
+    let i = start;
+    let j = start;
+    for (let k = 0; k < ops.length;) {
+        if (ops[k] === SAME) {
+            i++;
+            j++;
+            k++;
+            continue;
+        }
+        const run = { i0: i, j0: j };
+        for (; k < ops.length && ops[k] !== SAME; k++) {
+            if (ops[k] === DELETE) i++;
+            else j++;
+        }
+        runs.push({ ...run, i1: i, j1: j });
+    }
+    const hunks = [];
+    let added = 0;
+    let deleted = 0;
+    for (let r = 0; r < runs.length;) {
+        let last = r;
+        while (last + 1 < runs.length && runs[last + 1].i0 - runs[last].i1 <= 2 * NET_CONTEXT) last++;
+        const first = runs[r];
+        const before0 = Math.min(NET_CONTEXT, first.i0, first.j0);
+        const after0 = Math.min(NET_CONTEXT, a.length - runs[last].i1, b.length - runs[last].j1);
+        hunks.push({
+            oldText: a.slice(first.i0 - before0, runs[last].i1 + after0).join('\n'),
+            newText: b.slice(first.j0 - before0, runs[last].j1 + after0).join('\n'),
+        });
+        for (let k = r; k <= last; k++) {
+            deleted += runs[k].i1 - runs[k].i0;
+            added += runs[k].j1 - runs[k].j0;
+        }
+        r = last + 1;
+    }
+    return { added, deleted, hunks };
+}
+
+/** Lines of context around each change in a net diff, and the most differing lines matched line by line. */
+const NET_CONTEXT = 3;
+export const MAX_NET_DISTANCE = 1000;
+/** The most text one file's net diff shows in a Changes tab; past it, its counts only. */
+export const MAX_NET_CHARS = 256 * 1024;
+
+const SAME = 0;
+const DELETE = 1;
+const INSERT = 2;
+
+/**
+ * The shortest edit script from one list of numbers to another (Myers'
+ * O(ND) diff): SAME, DELETE (the next old line) and INSERT (the next new
+ * line), in order; null when more than `limit` lines differ. Each round
+ * keeps only the diagonals it can reach, so memory grows with the square
+ * of the lines that differ, not with the files.
+ */
+function editScript(x, y, limit) {
+    const n = x.length;
+    const m = y.length;
+    const max = Math.min(n + m, limit);
+    const off = max + 1;
+    const v = new Int32Array(2 * max + 3);
+    const trace = [];
+    for (let d = 0; d <= max; d++) {
+        trace.push(v.slice(off - d - 1, off + d + 2));
+        for (let k = -d; k <= d; k += 2) {
+            let i = k === -d || (k !== d && v[off + k - 1] < v[off + k + 1]) ? v[off + k + 1] : v[off + k - 1] + 1;
+            let j = i - k;
+            while (i < n && j < m && x[i] === y[j]) {
+                i++;
+                j++;
+            }
+            v[off + k] = i;
+            if (i >= n && j >= m) return walkBack(trace, n, m);
+        }
+    }
+    return null;
+}
+
+/** The edit script from the rounds editScript kept, walked back from the end of both lists. */
+function walkBack(trace, n, m) {
+    const ops = [];
+    let i = n;
+    let j = m;
+    for (let d = trace.length - 1; d >= 0; d--) {
+        const v = trace[d];
+        const at = (k) => v[k + d + 1];
+        const k = i - j;
+        const prev = k === -d || (k !== d && at(k - 1) < at(k + 1)) ? k + 1 : k - 1;
+        const pi = at(prev);
+        const pj = pi - prev;
+        while (i > pi && j > pj) {
+            ops.push(SAME);
+            i--;
+            j--;
+        }
+        if (d > 0) ops.push(i === pi ? INSERT : DELETE);
+        i = pi;
+        j = pj;
+    }
+    return ops.reverse();
 }

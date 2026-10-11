@@ -320,6 +320,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-ch-note{margin:0;padding:0 4px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}',
             // Under the path: the toggle's padding, chevron, icon and their gaps.
             '.dshp-ch-note.dshp-ch-when{margin-top:-6px;padding-left:46px}',
+            // "Each edit (N)": the file's edits one by one, under the diff of what they came to.
+            '.dshp-ch-each{display:inline-flex;align-items:center;gap:4px;align-self:flex-start;height:24px;padding:0 6px 0 4px;border:0;border-radius:var(--dsw-radius-sm);background:none;font:inherit;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);cursor:pointer}',
+            '.dshp-ch-each:hover,.dshp-ch-each:focus-visible{outline:none;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
+            `.dshp-ch-each:focus-visible{box-shadow:inset 0 0 0 2px ${RING}}`,
+            '.dshp-ch-net,.dshp-ch-edits,.dshp-ch-edit{display:flex;flex-direction:column;gap:4px;min-width:0}',
+            // Each edit of several: its place, turn and author over its own diff, so one edit reads apart from the next.
+            '.dshp-ch-edit+.dshp-ch-edit{margin-top:6px}',
+            '.dshp-ch-note.dshp-ch-edit-head{display:flex;align-items:center;gap:8px;min-width:0}',
+            '.dshp-ch-edit-head .dshp-t-counts{flex:none;margin-left:auto;padding-right:2px}',
             `.dshp-ch-link{padding:0;border:0;background:none;font:inherit;color:${LINK_TEXT};text-decoration:underline;text-underline-offset:2px;cursor:pointer}`,
             `.dshp-ch-link:focus-visible{outline:2px solid ${RING};outline-offset:1px;border-radius:2px}`,
             '.dshp-ch-foot{display:flex;flex-direction:column;gap:6px;margin-top:12px;padding-top:10px;border-top:.5px solid var(--dsw-alias-border-l3)}',
@@ -1560,6 +1569,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             changesNew: 'new',
             changesOpenFile: 'Open the whole file in the sidebar',
             changesClipped: 'Part of this is too large to show here. Its lines are still counted.',
+            changesEach: (n) => `Each edit (${n})`,
+            changesUndone: 'Its edits undid each other: the file is as it was before.',
+            changesSince: 'Something else changed this file since. This is how the thread left it.',
+            /** Why a file shows its edits one by one instead of one diff of what they came to. */
+            changesNetWhy: {
+                mixed: 'Shown edit by edit: something else changed this file between this thread\'s edits.',
+                big: 'Shown edit by edit: too much of this file changed for one diff.',
+                binary: 'Shown edit by edit: this isn\'t a text file.',
+            },
             changesAlso: 'Also changed by',
             changesReview: 'DSH\'s review of the whole folder',
             changesShell: 'Edits made by commands the thread ran in its shell aren\'t shown yet.',
@@ -3535,26 +3553,65 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             h('span', { className: 'dshp-t-added' }, `+${GROUPED.format(added)}`),
             h('span', { className: 'dshp-t-deleted' }, `-${GROUPED.format(deleted)}`));
 
-        /** One changed file in a Changes tab: its name and counts, folding open to its edits' hunks in DSH's diff. */
-        function ChangedFile({ file, open, onToggle, onOpenFile, onOpenThread }) {
+        /** What a file's edits came to, as the plugin read it (projects.js threadDiffs), or null when it couldn't say. */
+        function netOf(file) {
+            const net = file?.net;
+            return isObject(net) && Array.isArray(net.hunks) ? net : null;
+        }
+
+        /** One edit's caption when a file shows several: its place among them, its turn and who made it. */
+        function editHead(edit, i) {
+            const turn = Number.isSafeInteger(edit?.turn) ? `Turn ${edit.turn}` : '';
+            const by = typeof edit?.by === 'string' && edit.by !== '' ? `by ${edit.by}` : '';
+            return [`Edit ${i + 1}`, turn, by].filter(Boolean).join(' · ');
+        }
+
+        /** The lines a file's head counts: what its edits came to when the plugin knows, else their sum. */
+        const shownCounts = (file) => netOf(file) ?? file;
+
+        /**
+         * One changed file in a Changes tab: its name and counts, folding open
+         * to DSH's diff of what its edits came to, with each edit's hunks
+         * under "Each edit" when there are two or more; or to the edits one by
+         * one, and why, when there is no such diff.
+         */
+        function ChangedFile({ file, open, onToggle, each = false, onEach, onOpenFile, onOpenThread }) {
             const bodyId = React.useId();
-            const diffs = React.useMemo(() => file.edits.flatMap((edit) => (Array.isArray(edit.hunks) ? edit.hunks : EMPTY)
-                .map((hunk) => ({ path: file.path, oldText: typeof hunk.oldText === 'string' ? hunk.oldText : null, newText: String(hunk.newText ?? '') }))), [file]);
+            const eachId = React.useId();
+            const net = netOf(file);
+            const asDiffs = (hunks) => hunks.filter(isObject)
+                .map((hunk) => ({ path: file.path, oldText: typeof hunk.oldText === 'string' ? hunk.oldText : null, newText: String(hunk.newText ?? '') }));
+            const perEdit = React.useMemo(() => file.edits.map((edit) => asDiffs(Array.isArray(edit.hunks) ? edit.hunks : EMPTY)), [file]);
+            const netDiffs = React.useMemo(() => (net ? asDiffs(net.hunks) : EMPTY), [file]);
             const clipped = file.edits.some((edit) => edit.clipped === true);
             const also = (Array.isArray(file.alsoBy) ? file.alsoBy : EMPTY).filter((other) => isObject(other) && typeof other.thread === 'string');
-            const added = whole(file.added);
-            const deleted = whole(file.deleted);
+            const counts = shownCounts(file);
+            const added = whole(counts.added);
+            const deleted = whole(counts.deleted);
+            const created = net ? net.created === true : file.created === true;
+            const block = (list) => (list.length > 0 && ui.DiffBlock ? h(ui.DiffBlock, { key: 'diff', diffs: list, labels: DIFF_LABELS, maxLines: CHANGES_MAX_LINES, className: 'dshp-ch-diff' }) : null);
+            const clippedNote = (key) => h('p', { key, className: 'dshp-ch-note' }, TEXT.changesClipped);
+            // One edit is the file's diff; several each get their own, under a caption, so one reads apart from the next.
+            const edits = file.edits.length > 1
+                ? file.edits.map((edit, i) => h('div', { key: `edit-${i}`, className: 'dshp-ch-edit', 'data-projects-changes-edit': String(i + 1) },
+                    h('p', { className: 'dshp-ch-note dshp-ch-edit-head' }, h('span', null, editHead(edit, i)), lineCounts(whole(edit.added), whole(edit.deleted))),
+                    block(perEdit[i]),
+                    edit.clipped === true ? clippedNote('clipped') : null))
+                : [block(perEdit[0] ?? EMPTY), clipped ? clippedNote('clipped') : null];
+            const why = typeof file.netWhy === 'string' && Object.hasOwn(TEXT.changesNetWhy, file.netWhy) ? TEXT.changesNetWhy[file.netWhy] : '';
+            // One edit is the same diff again.
+            const eachable = file.edits.length > 1 && typeof onEach === 'function';
             return h('section', { className: 'dshp-ch-file', 'data-projects-changes-file': file.path, 'data-open': open ? '' : undefined },
                 h('div', { className: 'dshp-ch-file-head' },
                     h('button', {
                         type: 'button', className: 'dshp-ch-file-toggle', 'aria-expanded': open, 'aria-controls': open ? bodyId : undefined,
-                        'aria-label': `${file.path}${file.created ? ` (${TEXT.changesNew})` : ''}: ${plural(added, 'line')} added, ${deleted} deleted`,
+                        'aria-label': `${file.path}${created ? ` (${TEXT.changesNew})` : ''}: ${plural(added, 'line')} added, ${deleted} deleted`,
                         onClick: onToggle,
                     },
                     h(ui.IconChevronDownOutlineRegular, { size: 12, className: open ? 'dshp-ch-chev dshp-ch-chev-open' : 'dshp-ch-chev' }),
                     ui.FileTypeIcon ? h('span', { className: 'dshp-ch-file-icon', 'aria-hidden': true }, h(ui.FileTypeIcon, { path: file.path, size: 16 })) : null,
                     ui.PathLabel ? h(ui.PathLabel, { path: file.path, className: 'dshp-ch-path' }) : h('span', { className: 'dshp-ch-path', title: file.path }, file.path),
-                    file.created ? h('span', { className: 'dshp-ch-new' }, TEXT.changesNew) : null,
+                    created ? h('span', { className: 'dshp-ch-new' }, TEXT.changesNew) : null,
                     lineCounts(added, deleted)),
                     onOpenFile ? h(ui.Tooltip, { label: TEXT.changesOpenFile, side: 'bottom', align: 'end' },
                         h('button', { type: 'button', className: 'dshp-ch-tool', 'aria-label': `Open ${file.path} in the sidebar`, 'data-projects-changes-open': '', onClick: onOpenFile },
@@ -3562,8 +3619,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 open ? h('div', { id: bodyId, className: 'dshp-ch-file-body' },
                     // When and by whom, under the file's name, so it never reads as the next file's.
                     h('p', { className: 'dshp-ch-note dshp-ch-when' }, editsText(file.edits)),
-                    diffs.length > 0 && ui.DiffBlock ? h(ui.DiffBlock, { diffs, labels: DIFF_LABELS, maxLines: CHANGES_MAX_LINES, className: 'dshp-ch-diff' }) : null,
-                    clipped ? h('p', { className: 'dshp-ch-note' }, TEXT.changesClipped) : null,
+                    ...(net ? [
+                        h('div', { key: 'net', className: 'dshp-ch-net', 'data-projects-changes-net': '' },
+                            netDiffs.length > 0 && ui.DiffBlock ? h(ui.DiffBlock, { diffs: netDiffs, labels: DIFF_LABELS, maxLines: CHANGES_MAX_LINES, className: 'dshp-ch-diff' }) : null,
+                            net.clipped === true ? h('p', { className: 'dshp-ch-note' }, TEXT.changesClipped)
+                                : netDiffs.length === 0 ? h('p', { className: 'dshp-ch-note' }, TEXT.changesUndone) : null,
+                            net.since === true ? h('p', { className: 'dshp-ch-note' }, TEXT.changesSince) : null),
+                        eachable ? h('button', {
+                            key: 'each', type: 'button', className: 'dshp-ch-each', 'aria-expanded': each, 'aria-controls': each ? eachId : undefined,
+                            'data-projects-changes-each': '', onClick: onEach,
+                        }, h(ui.IconChevronDownOutlineRegular, { size: 12, className: each ? 'dshp-ch-chev dshp-ch-chev-open' : 'dshp-ch-chev' }), TEXT.changesEach(file.edits.length)) : null,
+                        eachable && each ? h('div', { key: 'edits', id: eachId, className: 'dshp-ch-edits', 'data-projects-changes-edits': '' }, ...edits) : null,
+                    ] : [
+                        why ? h('p', { key: 'why', className: 'dshp-ch-note', 'data-projects-changes-why': file.netWhy }, why) : null,
+                        ...edits,
+                    ]),
                     also.length > 0 ? h('p', { className: 'dshp-ch-note', 'data-projects-changes-also': '' }, `${TEXT.changesAlso} `,
                         ...also.flatMap((other, i) => [
                             i > 0 ? (i === also.length - 1 ? ' and ' : ', ') : null,
@@ -3578,8 +3648,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * A thread's Changes tab: each file it changed with DSH's file tools,
-         * or a subagent of its did, with lines added and deleted and the hunks
-         * in DSH's diff. The plugin reads them from the sessions' logs
+         * or a subagent of its did, with lines added and deleted and DSH's diff
+         * of what its edits came to (each edit's hunks one click away). The
+         * plugin reads them from the sessions' logs and the texts it kept
          * (remote.js `changes`) when the tab shows, each time the thread's
          * records gain a turn, and on Read again.
          */
@@ -3592,6 +3663,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [read, setRead] = React.useState({ phase: 'loading' });
             const [again, setAgain] = React.useState(0);
             const [folds, setFolds] = React.useState(() => new Map());
+            // The files whose edits show one by one under the diff of what they came to.
+            const [eaches, setEaches] = React.useState(() => new Set());
             const asked = React.useRef('');
             React.useEffect(() => {
                 if (thread === undefined || !visible) return undefined;
@@ -3616,11 +3689,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const value = read.phase === 'ready' ? read.value : undefined;
             const files = (Array.isArray(value?.files) ? value.files : EMPTY).filter((f) => isObject(f) && typeof f.path === 'string' && f.path !== '' && Array.isArray(f.edits));
             const name = typeof value?.title === 'string' && value.title !== '' ? value.title : stored;
-            const added = files.reduce((n, f) => n + whole(f.added), 0);
-            const deleted = files.reduce((n, f) => n + whole(f.deleted), 0);
+            const added = files.reduce((n, f) => n + whole(shownCounts(f).added), 0);
+            const deleted = files.reduce((n, f) => n + whole(shownCounts(f).deleted), 0);
             const openAll = files.length <= CHANGES_OPEN_FILES;
             const isOpen = (path) => folds.get(path) ?? openAll;
             const toggle = (path) => setFolds((prev) => new Map(prev).set(path, !(prev.get(path) ?? openAll)));
+            const toggleEach = (path) => setEaches((prev) => {
+                const next = new Set(prev);
+                if (next.has(path)) next.delete(path);
+                else next.add(path);
+                return next;
+            });
             const openFile = (path) => {
                 try { tab.actions.openResource(fileAddress(thread, path)); } catch (error) { console.warn(`[projects] could not open ${path}: ${error?.message ?? error}`); }
             };
@@ -3639,6 +3718,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             else {
                 body = h('div', { className: 'dshp-ch-files' }, ...files.map((file) => h(ChangedFile, {
                     key: file.path, file, open: isOpen(file.path), onToggle: () => toggle(file.path),
+                    each: eaches.has(file.path), onEach: () => toggleEach(file.path),
                     onOpenFile: () => openFile(file.path),
                     onOpenThread: (session) => projects.openChanges(session),
                 })));
@@ -7201,7 +7281,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
-            CardChanges, changesOpener, ThreadChangesTab, ThreadChangesTitle, ChangedFile, editsText, fileAddress, readFailure, changesAddress, changesSessionOf, DIFF_LABELS,
+            CardChanges, changesOpener, ThreadChangesTab, ThreadChangesTitle, ChangedFile, shownCounts, editsText, fileAddress, readFailure, changesAddress, changesSessionOf, DIFF_LABELS,
             threadMenuItems, rowMenuItems, runThreadItem, ThreadMore, ThreadList, inMoreList, newestRoster, arrowKeys, ThreadFind, findRows, FIND_FROM,
             progressOf, elapsedText, handbackGist, cardDetail, CardDetail, useThreadLive, pendingAsk,
             renameFlow, RenameThread, RenameOverlay, RENAME,

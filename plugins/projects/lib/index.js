@@ -166,6 +166,9 @@ export function apply(ctx, config) {
         const decision = await next();
         return decision?.kind === 'allow' || decision?.kind === 'ask' ? manager.holdSend(exec, decision) ?? manager.holdDelete(exec, decision) ?? decision : decision;
     }, { prepend: true });
+    // A thread's file edits, and its subagents': the file's text before its first edit and after each, for its
+    // Changes tab's one diff per file.
+    ctx.on('tools/execute', (exec, next) => manager.aroundTool(exec, next));
     // A ◆ coordinator archived or unarchived in DSH (its row's Archive or Unarchive, the Undo on DSH's notice):
     // its project's threads go or come back with it.
     ctx.on('domain/changed', (change) => {

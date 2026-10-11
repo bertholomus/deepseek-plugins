@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
@@ -20,6 +20,7 @@ import { slugify, timing, clipTitle, guardList, guardedIn, personalMark, withPer
 import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS, lineDelta, editOf, editsIn, editSummary, hunksOf, subagentsIn, diffFiles, placeIn, MAX_HUNK_CHARS, MAX_VIEW_CHARS } from '../lib/changes.js';
 import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, cardSummary, threadMarkdown, outsideMessage, replyMessage, NUDGE, IDLE_NUDGE } from '../lib/prompts.js';
 import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
+import { NetTexts, canonicalPath } from '../lib/net.js';
 import { grantsIn, asksFor } from '../lib/grants.js';
 import { deletesOf, codeDeletesOf, isFree } from '../lib/deletes.js';
 
@@ -6047,7 +6048,7 @@ test('changes: own edits count lines as a diff does', () => {
         { seq: 1, type: 'tool/result', data: { turn: 1, message: { toolCallId: 'early' }, meta: { operation: 'create', diffs: [] } } },
         { seq: 2, type: 'tool/call', data: { turn: 1, callId: 'w', name: 'write', arguments: { file_path: 'w.md', content: 'w\n' } } },
         { seq: 3, type: 'tool/result', data: { turn: 1, message: { toolCallId: 'w' }, meta: { operation: 'create', diffs: [] } } },
-    ])), [{ turn: 1, seq: 3, path: 'w.md', added: 1, deleted: 0, created: true }]);
+    ])), [{ turn: 1, seq: 3, call: 'w', path: 'w.md', added: 1, deleted: 0, created: true }]);
 });
 
 test('changes: the Changes tab draws each edit\'s hunks as DSH\'s own diff card does', () => {
@@ -6074,8 +6075,8 @@ test('changes: the Changes tab draws each edit\'s hunks as DSH\'s own diff card 
         { seq: 9, type: 'subagent/catalog', data: { childId: '' } },
     ];
     // editsIn keeps the hunks only when asked.
-    assert.deepEqual(plain(editsIn(log)), [{ turn: 1, seq: 3, path: '/w/a.md', added: 1, deleted: 0, created: true }]);
-    assert.deepEqual(plain(editsIn(log, { hunks: true })), [{ turn: 1, seq: 3, path: '/w/a.md', added: 1, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'a\n' }] }]);
+    assert.deepEqual(plain(editsIn(log)), [{ turn: 1, seq: 3, call: 'w', path: '/w/a.md', added: 1, deleted: 0, created: true }]);
+    assert.deepEqual(plain(editsIn(log, { hunks: true })), [{ turn: 1, seq: 3, call: 'w', path: '/w/a.md', added: 1, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'a\n' }] }]);
     // The subagents a session started, each once, with the turn it started in; an external one has no session here.
     assert.deepEqual(subagentsIn(log), [{ id: 'c1', label: 'Docs', turn: 1 }, { id: 'c2', label: '', turn: 2 }]);
     assert.deepEqual(subagentsIn(undefined), []);
@@ -6177,13 +6178,14 @@ test('changes: a thread\'s Changes tab reads its own edits and its subagents\' f
     assert.deepEqual(read, {
         project: 'dsh-plugins', thread: 't1', title: 'Edit', session: t1.id, folder: '/work/dsh',
         files: [
+            // (No texts were kept around these edits, which the log alone describes: no net diff.)
             { path: 'a.md', added: 4, deleted: 2, created: true, edits: [
                 { turn: 1, seq: w1, added: 2, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'one\ntwo\n' }] },
                 { turn: 2, seq: r2, added: 1, deleted: 1, hunks: [{ oldText: 'one', newText: 'ONE' }] },
                 { turn: 2, seq: 2, by: 'Docs helper', added: 1, deleted: 1, hunks: [{ oldText: 'ONE\ntwo\n', newText: 'ONE\nTWO\n' }] },
-            ] },
-            { path: 'b.js', added: 1, deleted: 1, edits: [{ turn: 1, seq: e1, added: 1, deleted: 1, hunks: [{ oldText: 'a\nx = 1\nb', newText: 'a\nx = 2\nb' }] }], alsoBy: [{ thread: 't2', title: 'Other', session: t2.id }] },
-            { path: 'c.txt', added: 1, deleted: 0, created: true, edits: [{ turn: 2, seq: 3, by: 'Docs helper', added: 1, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'c\n' }] }] },
+            ], netWhy: 'none' },
+            { path: 'b.js', added: 1, deleted: 1, edits: [{ turn: 1, seq: e1, added: 1, deleted: 1, hunks: [{ oldText: 'a\nx = 1\nb', newText: 'a\nx = 2\nb' }] }], netWhy: 'none', alsoBy: [{ thread: 't2', title: 'Other', session: t2.id }] },
+            { path: 'c.txt', added: 1, deleted: 0, created: true, edits: [{ turn: 2, seq: 3, by: 'Docs helper', added: 1, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'c\n' }] }], netWhy: 'none' },
         ],
         turns: [{ turn: 1, seq: seq1, reviewable: true }, { turn: 2, seq: seq2, reviewable: true }],
         unread: 1,
@@ -6200,6 +6202,97 @@ test('changes: a thread\'s Changes tab reads its own edits and its subagents\' f
     host.inspectError = new Error('read timed out');
     await refused(remote.changes(t1.id), /couldn't read t1's records: read timed out/);
     host.inspectError = undefined;
+});
+
+test('changes: a thread\'s Changes tab shows one diff per file, what its edits and its subagents\' came to', async () => {
+    const { host, dir } = setup({}, undefined, { ...SELECTING, gateway: true });
+    await tick();
+    const coord = coordinatorOf(host);
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Edit', brief: 'Go.' });
+    const t1 = threadOf(host, coord);
+    const work = mkdtempSync(join(tmpdir(), 'net-work-'));
+    host.sessions.get(t1.id).folder = work;
+    t1.session.header = { cwd: work };
+    const log = (id) => host.sessions.get(id).events;
+    let calls = 0;
+    /**
+     * One file-tool call as DSH runs it: the plugin's `tools/execute` around the tool's body (`body`, which changes
+     * the file), then its call and result in the caller's log, as DSH records a successful call.
+     */
+    const run = async (agent, name, args, body, meta) => {
+        const callId = `nc-${++calls}`;
+        const result = await host.waterfall('tools/execute', { name, arguments: args, agent, callId, signal: new AbortController().signal }, async () => {
+            body();
+            return { content: [{ type: 'text', text: 'ok' }] };
+        });
+        const events = log(agent.id);
+        events.push({ seq: events.length + 1, type: 'tool/call', data: { turn: 1, callId, name, arguments: args } });
+        events.push({ seq: events.length + 1, type: 'tool/result', data: { turn: 1, message: { toolCallId: callId }, meta } });
+        return result;
+    };
+    const notes = join(work, 'notes.md');
+    const code = join(work, 'src.js');
+    writeFileSync(code, 'a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n');
+    // The thread creates notes.md and edits it; edits src.js twice, the second undoing half the first.
+    const done = await run(t1, 'write', { file_path: notes, content: 'one\ntwo\nthree\n' }, () => writeFileSync(notes, 'one\ntwo\nthree\n'), { operation: 'create', path: notes, diffs: [] });
+    assert.deepEqual(plain(done), { content: [{ type: 'text', text: 'ok' }] }, 'the call\'s own result, as it is');
+    await run(t1, 'edit', { file_path: 'notes.md', old_string: 'two', new_string: 'TWO' }, () => writeFileSync(notes, 'one\nTWO\nthree\n'),
+        { path: notes, diffs: [{ oldText: 'one\ntwo\nthree', newText: 'one\nTWO\nthree' }] });
+    await run(t1, 'edit', { file_path: code, old_string: 'b', new_string: 'B' }, () => writeFileSync(code, 'a\nB\nc\nd\ne\nf\ng\nh\ni\nJ\n'),
+        { path: code, diffs: [{ oldText: 'a\nb\nc', newText: 'a\nB\nc' }, { oldText: 'i\nj', newText: 'i\nJ' }] });
+    await run(t1, 'edit', { file_path: code, old_string: 'B', new_string: 'b' }, () => writeFileSync(code, 'a\nb\nc\nd\ne\nf\ng\nh\ni\nJ\n'),
+        { path: code, diffs: [{ oldText: 'a\nB\nc', newText: 'a\nb\nc' }] });
+    // A subagent working for the thread edits notes.md too: its edit goes into the thread's net diff.
+    host.sessions.set('sub-n', { events: [], prompts: [], title: null });
+    const sub = { id: 'sub-n', session: { id: 'sub-n', header: { cwd: work, parentSession: t1.id } } };
+    await run(sub, 'str_replace_editor', { command: 'str_replace', path: notes, old_str: 'three', new_str: 'three\nfour' }, () => writeFileSync(notes, 'one\nTWO\nthree\nfour\n'));
+    log(t1.id).push({ seq: log(t1.id).length + 1, type: 'subagent/catalog', data: { version: 1, childId: 'sub-n', mode: 'local', label: 'Helper' } });
+    // The coordinator's own call, and a call that isn't a file edit, are run as they are and keep nothing.
+    let ran = 0;
+    const other = await host.waterfall('tools/execute', { name: 'bash', arguments: { command: 'true' }, agent: t1, callId: 'b1' }, async () => { ran += 1; return { content: [] }; });
+    await host.waterfall('tools/execute', { name: 'write', arguments: { file_path: join(work, 'coord.md'), content: 'x' }, agent: coord, callId: 'c1' }, async () => { ran += 1; return { content: [] }; });
+    assert.deepEqual([ran, plain(other)], [2, { content: [] }]);
+    const read = plain(await remote.changes(t1.id));
+    const byPath = Object.fromEntries(read.files.map((f) => [f.path, f]));
+    assert.deepEqual(Object.keys(byPath), ['notes.md', 'src.js']);
+    // notes.md: created, so its net diff is the whole file as the thread (and its subagent) left it, +4: the edits
+    // count +5 -1 one by one.
+    assert.deepEqual([byPath['notes.md'].added, byPath['notes.md'].deleted], [5, 1]);
+    assert.deepEqual(byPath['notes.md'].net, { added: 4, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'one\nTWO\nthree\nfour' }] });
+    // src.js: only what the edits came to, the last line, with its context.
+    assert.deepEqual(byPath['src.js'].net, { added: 1, deleted: 1, hunks: [{ oldText: 'g\nh\ni\nj', newText: 'g\nh\ni\nJ' }] });
+    // Kept in the plugin's folder, per thread session, for it alone.
+    const kept = join(dir, 'net', t1.id);
+    assert.equal(statSync(kept).mode & 0o777, 0o700);
+    assert.ok(readdirSync(kept).every((name) => (statSync(join(kept, name)).mode & 0o777) === 0o600));
+    assert.ok(!readdirSync(join(dir, 'net')).includes(coord.id));
+    // The file changed since by something else: the diff stays as the thread left it, and says so.
+    writeFileSync(code, 'a\nb\nc\nd\ne\nf\ng\nh\ni\nJ\nk\n');
+    assert.deepEqual(plain(await remote.changes(t1.id)).files.find((f) => f.path === 'src.js').net.since, true);
+    // The thread edits it again: something else changed it between its edits, so there's no one diff of its own.
+    await run(t1, 'edit', { file_path: code, old_string: 'a', new_string: 'A' }, () => writeFileSync(code, 'A\nb\nc\nd\ne\nf\ng\nh\ni\nJ\nk\n'),
+        { path: code, diffs: [{ oldText: 'A\nb', newText: 'a\nb' }] });
+    const mixed = plain(await remote.changes(t1.id)).files.find((f) => f.path === 'src.js');
+    assert.deepEqual([mixed.net, mixed.netWhy], [undefined, 'mixed']);
+    // A call that fails keeps its error, and what the file is after it.
+    await assert.rejects(host.waterfall('tools/execute', { name: 'write', arguments: { file_path: notes, content: 'x' }, agent: t1, callId: 'f1' }, async () => { throw new Error('disk full'); }), /disk full/);
+    assert.deepEqual(plain(await remote.changes(t1.id)).files.find((f) => f.path === 'notes.md').net.hunks, [{ oldText: null, newText: 'one\nTWO\nthree\nfour' }]);
+    // A file the thread edited before the plugin kept texts (an older version ran it): its kept first text isn't the
+    // thread's first, so its edits are shown one by one.
+    const late = join(work, 'late.md');
+    writeFileSync(late, 'x\ny\n');
+    log(t1.id).push({ seq: log(t1.id).length + 1, type: 'tool/call', data: { turn: 1, callId: 'old-1', name: 'edit', arguments: { file_path: late, old_string: 'w', new_string: 'x' } } });
+    log(t1.id).push({ seq: log(t1.id).length + 1, type: 'tool/result', data: { turn: 1, message: { toolCallId: 'old-1' }, meta: { path: late, diffs: [{ oldText: 'w\ny', newText: 'x\ny' }] } } });
+    await run(t1, 'edit', { file_path: late, old_string: 'y', new_string: 'z' }, () => writeFileSync(late, 'x\nz\n'), { path: late, diffs: [{ oldText: 'x\ny', newText: 'x\nz' }] });
+    const partial = plain(await remote.changes(t1.id)).files.find((f) => f.path === 'late.md');
+    assert.deepEqual([partial.net, partial.netWhy, partial.edits.length], [undefined, 'partial', 2]);
+    assert.ok(plain(await remote.changes(t1.id)).files.find((f) => f.path === 'notes.md').net, 'a file whose every edit it kept texts around still has its one diff');
+    // A new DSH process reads them from disk.
+    const cold = new NetTexts(join(dir, 'net'));
+    assert.deepEqual(plain(await cold.view(t1.id, canonicalPath(notes))).net?.added, 4);
+    assert.deepEqual(plain(await cold.view(t1.id, canonicalPath(code))), { why: 'mixed' });
+    assert.deepEqual(plain(await cold.view(t1.id, join(work, 'never.md'))), { why: 'none' });
 });
 
 test('browser half: a thread\'s changes read as DSH\'s card counts them, and its projection says when to read them again', () => {
@@ -6245,6 +6338,69 @@ function liveMount(react, render) {
         return out;
     };
 }
+
+test('changes: at start, the kept texts of threads the store no longer has are removed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    writeFileSync(join(dir, 'projects.json'), JSON.stringify({ version: 1, projects: { 'dsh-plugins': { threads: { t1: { title: 'Kept', sessionId: 's-kept' } } } } }));
+    for (const id of ['s-kept', 's-gone']) {
+        mkdirSync(join(dir, 'net', id), { recursive: true });
+        writeFileSync(join(dir, 'net', id, 'index.json'), JSON.stringify({ version: 1, bytes: 3, files: {} }));
+    }
+    setup({}, dir);
+    for (let i = 0; i < 50 && readdirSync(join(dir, 'net')).includes('s-gone'); i++) await tick();
+    assert.deepEqual(readdirSync(join(dir, 'net')).sort(), ['s-kept']);
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /net-prune s-gone gone/);
+});
+
+test('browser half: a file in a Changes tab shows what its edits came to, each edit a click away', () => {
+    const { client } = loadClient({ primitives: { DiffBlock: 'DiffBlock', PathLabel: 'PathLabel', FileTypeIcon: 'FileTypeIcon', Tooltip: 'Tooltip' } });
+    const { ChangedFile, shownCounts } = client.internals;
+    const edits = [
+        { turn: 1, seq: 3, added: 3, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'one\ntwo\nthree\n' }] },
+        { turn: 2, seq: 7, added: 1, deleted: 1, hunks: [{ oldText: 'two', newText: 'TWO' }] },
+    ];
+    const file = { path: 'notes.md', added: 4, deleted: 1, created: true, edits, net: { added: 3, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'one\nTWO\nthree' }] } };
+    let asked = 0;
+    const draw = (f, each = false) => ChangedFile({ file: f, open: true, onToggle() {}, each, onEach: () => { asked += 1; } });
+    const find = (tree, attr, value = '') => elementsOf(tree).find((e) => e.props?.[attr] === value);
+    let out = draw(file);
+    // Its head, and the tab's totals, count what the edits came to; the edits' own sum is theirs.
+    assert.equal(find(out, 'className', 'dshp-ch-file-toggle').props['aria-label'], 'notes.md (new): 3 lines added, 0 deleted');
+    assert.deepEqual(plain(shownCounts(file)), plain(file.net));
+    assert.equal(shownCounts({ ...file, net: undefined }).added, 4);
+    // One diff, of what the edits came to; the edits fold under "Each edit (2)".
+    assert.deepEqual(plain(elementsOf(find(out, 'data-projects-changes-net')).find((e) => e.type === 'DiffBlock').props.diffs), [{ path: 'notes.md', oldText: null, newText: 'one\nTWO\nthree' }]);
+    assert.equal(elementsOf(out).filter((e) => e.type === 'DiffBlock').length, 1);
+    const each = find(out, 'data-projects-changes-each');
+    assert.deepEqual([textIn(each), each.props['aria-expanded'], each.props['aria-controls']], ['Each edit (2)', false, undefined]);
+    each.props.onClick();
+    assert.equal(asked, 1);
+    out = draw(file, true);
+    const opened = find(out, 'data-projects-changes-edits');
+    assert.equal(find(out, 'data-projects-changes-each').props['aria-controls'], opened.props.id);
+    assert.deepEqual(plain(elementsOf(opened).filter((e) => e.type === 'DiffBlock').map((d) => d.props.diffs.map((x) => x.newText))), [['one\ntwo\nthree\n'], ['TWO']]);
+    assert.deepEqual(byClass(opened, 'dshp-ch-edit-head').map(textIn), ['Edit 1 · Turn 1+3-0', 'Edit 2 · Turn 2+1-1']);
+    // Edits that undid each other, and a file something else changed since, say so.
+    out = draw({ ...file, created: false, net: { added: 0, deleted: 0, hunks: [], since: true } });
+    assert.equal(find(out, 'className', 'dshp-ch-file-toggle').props['aria-label'], 'notes.md: 0 lines added, 0 deleted');
+    assert.deepEqual(byClass(find(out, 'data-projects-changes-net'), 'dshp-ch-note').map(textIn), [
+        'Its edits undid each other: the file is as it was before.',
+        'Something else changed this file since. This is how the thread left it.',
+    ]);
+    // Too much for the tab: its counts, and why there's no diff.
+    out = draw({ ...file, net: { ...file.net, hunks: [], clipped: true } });
+    assert.deepEqual(byClass(find(out, 'data-projects-changes-net'), 'dshp-ch-note').map(textIn), ['Part of this is too large to show here. Its lines are still counted.']);
+    // No one diff: the edits one by one, and why (nothing to say for edits from before the plugin kept texts).
+    out = draw({ ...file, net: undefined, netWhy: 'mixed' });
+    assert.equal(textIn(find(out, 'data-projects-changes-why', 'mixed')), 'Shown edit by edit: something else changed this file between this thread\'s edits.');
+    assert.deepEqual([find(out, 'data-projects-changes-each'), elementsOf(out).filter((e) => e.type === 'DiffBlock').length], [undefined, 2]);
+    assert.equal(find(out, 'className', 'dshp-ch-file-toggle').props['aria-label'], 'notes.md (new): 4 lines added, 1 deleted');
+    for (const why of ['big', 'binary']) assert.ok(find(draw({ ...file, net: undefined, netWhy: why }), 'data-projects-changes-why', why));
+    // One edit: its diff is the file's one diff, so there's no "Each edit".
+    out = draw({ ...file, edits: [edits[1]], net: { added: 1, deleted: 1, hunks: [{ oldText: 'two', newText: 'TWO' }] } }, true);
+    assert.deepEqual([find(out, 'data-projects-changes-each'), find(out, 'data-projects-changes-edits'), elementsOf(out).filter((e) => e.type === 'DiffBlock').length], [undefined, undefined, 1]);
+    assert.equal(elementsOf(draw({ ...file, net: undefined, netWhy: 'none' })).some((e) => e.props?.['data-projects-changes-why'] !== undefined), false);
+});
 
 test('browser half: a thread\'s Changes tab lists its files with their diffs, and its counts open it', async () => {
     const { client, react } = loadClient({ primitives: { DiffBlock: 'DiffBlock', PathLabel: 'PathLabel', FileTypeIcon: 'FileTypeIcon', Tooltip: 'Tooltip' } });
@@ -6303,18 +6459,22 @@ test('browser half: a thread\'s Changes tab lists its files with their diffs, an
     assert.equal(textIn(byClass(tree, 'dshp-ch-sub')), '+5-3· 2 files');
     const files = elementsOf(tree).filter((e) => e.type === ChangedFile);
     assert.deepEqual(files.map((f) => [f.props.file.path, f.props.open]), [['a.md', true], ['src/b.js', true]]);
-    // A file: its name, "new", its counts; DSH's diff of every hunk under its path; when, by whom, and who else.
+    // A file: its name, "new", its counts; DSH's diff of each edit under its place, turn, author and counts; when, by
+    // whom, and who else.
     let file = files[0].type(files[0].props);
     assert.equal(file.props['data-projects-changes-file'], 'a.md');
     const head = elementsOf(file).find((e) => e.props?.className === 'dshp-ch-file-toggle');
     assert.equal(head.props['aria-expanded'], true);
     assert.equal(head.props['aria-label'], 'a.md (new): 4 lines added, 2 deleted');
     assert.deepEqual([elementsOf(head).find((e) => e.type === 'PathLabel').props.path, textIn(head)], ['a.md', 'new+4-2']);
-    const diff = elementsOf(file).find((e) => e.type === 'DiffBlock');
-    assert.deepEqual(plain(diff.props.diffs), [{ path: 'a.md', oldText: null, newText: 'one\ntwo\n' }, { path: 'a.md', oldText: 'two', newText: 'TWO' }]);
-    assert.equal(diff.props.maxLines, 40);
+    const diffs = elementsOf(file).filter((e) => e.type === 'DiffBlock');
+    assert.deepEqual(plain(diffs.map((d) => d.props.diffs)), [[{ path: 'a.md', oldText: null, newText: 'one\ntwo\n' }], [{ path: 'a.md', oldText: 'two', newText: 'TWO' }]]);
+    assert.deepEqual(diffs.map((d) => d.props.maxLines), [40, 40]);
+    assert.deepEqual(elementsOf(file).filter((e) => e.props?.['data-projects-changes-edit'] !== undefined).map((e) => e.props['data-projects-changes-edit']), ['1', '2']);
     assert.deepEqual(byClass(file, 'dshp-ch-note').map(textIn), [
         'Turns 1, 2 · by this thread and Docs helper',
+        'Edit 1 · Turn 1+2-0',
+        'Edit 2 · Turn 2 · by Docs helper+1-1',
         'Part of this is too large to show here. Its lines are still counted.',
         'Also changed by Other.',
     ]);

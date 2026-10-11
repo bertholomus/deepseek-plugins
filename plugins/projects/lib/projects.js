@@ -41,7 +41,7 @@
  * @module dsh-plugin-projects/projects
  */
 import { appendFileSync, readFileSync, writeFileSync, statSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { ProjectStore, expand, dataPath, ensurePrivateDir } from './store.js';
@@ -54,7 +54,8 @@ import {
     IDLE_NUDGE, outsideMessage, replyMessage,
 } from './prompts.js';
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
-import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS, diffFiles, subagentsIn, placeIn } from './changes.js';
+import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS, diffFiles, subagentsIn, placeIn, MAX_NET_CHARS, MAX_VIEW_CHARS } from './changes.js';
+import { NetTexts, changedPath, canonicalPath } from './net.js';
 import { sendOf, codeSendOf, described, withoutCredentials } from './sends.js';
 import { grantsIn, asksFor as asksToDo, doing } from './grants.js';
 import { deletesOf, codeDeletesOf, deletesWhat, isFree } from './deletes.js';
@@ -631,6 +632,8 @@ export class ProjectManager {
         this.subProjects = new Map();
         /** How long a thread turn's changes wait for DSH's announcement before they are kept without it. */
         this.announceWaitMs = 3000;
+        /** Each file's text before a thread's first edit of it and after its latest, for its Changes tab's net diffs. */
+        this.net = NetTexts.open(join(dirname(this.storeFile), 'net'), (line) => this.log(line));
     }
 
     /** One action line, mode 600. Sizes and ids only, never prompt text. */
@@ -1441,6 +1444,8 @@ export class ProjectManager {
      * plugin was not watching (DSH stopped or the plugin reloaded mid-turn).
      */
     async start() {
+        // The Changes tab's kept texts: none for threads the store no longer has, and not past their limit (net.js).
+        void this.net.prune(this.threadSessions());
         for (const agent of this.ctx.agents.list?.() ?? []) this.maybeInstall(agent);
         await this.nameNameless();
         if (this.disposed) return;
@@ -2426,6 +2431,52 @@ export class ProjectManager {
         }
     }
 
+    /** The session of every thread the store has, archived projects' too. */
+    threadSessions() {
+        const sessions = new Set();
+        for (const project of Object.values(this.store.projects ?? {})) {
+            for (const thread of Object.values(project?.threads ?? {})) {
+                if (typeof thread?.sessionId === 'string' && thread.sessionId !== '') sessions.add(thread.sessionId);
+            }
+        }
+        return sessions;
+    }
+
+    /**
+     * One tool call as DSH runs it (`tools/execute`): a file-tool call of a
+     * thread, or of a subagent working for one, keeps the file's text from
+     * before the thread's first edit of it and after each (net.js), for the
+     * one diff per file its Changes tab shows. Any other call runs as it is,
+     * and keeping the texts never fails a call.
+     */
+    aroundTool(exec, next) {
+        let target = null;
+        try {
+            target = this.netTarget(exec);
+        } catch (error) {
+            this.log(`error net-target ${String(error?.message ?? error).slice(0, 200)}`);
+        }
+        return target ? this.net.around(target.thread, target.file, next, typeof exec.callId === 'string' ? exec.callId : undefined) : next();
+    }
+
+    /** The thread whose net texts a file-tool call changes, and its file as an absolute path: {thread, file}, or null. */
+    netTarget(exec) {
+        if (this.disposed || !FILE_TOOLS.has(exec?.name) || !exec.agent) return null;
+        const named = changedPath(exec.name, argsOf(exec.arguments));
+        if (!named) return null;
+        const session = exec.agent.session;
+        const id = session?.id ?? exec.agent.id;
+        const own = this.store.lookup(id);
+        const thread = own?.role === 'thread' ? id : own ? null : this.threadAbove(session);
+        if (!thread) return null;
+        const who = own ?? this.store.lookup(thread);
+        const t = who?.role === 'thread' ? this.store.thread(who.projectId, who.threadId) : null;
+        const cwd = [session?.header?.cwd, t?.folder, this.projects.get(who?.projectId)?.workspacePath].find((p) => typeof p === 'string' && p !== '');
+        const path = expand(named);
+        if (!isAbsolute(path) && cwd === undefined) return null;
+        return { thread, file: canonicalPath(resolve(expand(cwd ?? '/'), path)) };
+    }
+
     /** A file a thread (or its subagent) created, kept for the delete check: it may delete it without asking. */
     noteCreated(thread, path, cwd) {
         const base = typeof cwd === 'string' ? cwd : this.ctx.agents.get(thread)?.session?.header?.cwd;
@@ -2512,9 +2563,11 @@ export class ProjectManager {
     /**
      * A thread's changes as its Changes tab shows them: each file it changed
      * through DSH's file tools, or a subagent working for it did, with lines
-     * added and deleted and each edit's hunks, read from their logs; the
-     * project's other threads that changed the same files (from their
-     * records); and the turns whose diff DSH can still show in its Review.
+     * added and deleted and each edit's hunks, read from their logs, and
+     * what the edits came to (`net`, from the texts kept around them, or
+     * `netWhy` when there is none: net.js); the project's other threads that
+     * changed the same files (from their records); and the turns whose diff
+     * DSH can still show in its Review.
      * @param {string} target - the thread's session, or a session of its project with `threadId`.
      */
     async threadDiffs(target, threadId = undefined) {
@@ -2552,6 +2605,37 @@ export class ProjectManager {
         // The thread's own edits came first in its log; a subagent's go with the turn that started it.
         const ordered = edits.map((edit, i) => ({ edit, i })).sort((a, b) => (a.edit.turn ?? 0) - (b.edit.turn ?? 0) || a.i - b.i).map(({ edit }) => edit);
         const files = diffFiles(ordered, folder);
+        // Each file's net change, what the thread's edits came to, from the texts kept around them (net.js), if they
+        // were kept around every one of its edits; past MAX_NET_CHARS for the file, or MAX_VIEW_CHARS in all, its
+        // counts without its hunks.
+        const callsOf = new Map();
+        for (const edit of ordered) {
+            if (typeof edit.path !== 'string' || edit.path === '' || typeof edit.call !== 'string') continue;
+            const path = placeIn(folder, edit.path);
+            callsOf.set(path, [...(callsOf.get(path) ?? []), edit.call]);
+        }
+        let budget = MAX_VIEW_CHARS;
+        for (const file of files) {
+            const named = expand(file.path);
+            const at = isAbsolute(named) ? named : resolve(expand(typeof folder === 'string' ? folder : '/'), named);
+            let seen;
+            try {
+                seen = await this.net.view(t.sessionId, canonicalPath(at), callsOf.get(file.path) ?? []);
+            } catch (error) {
+                this.log(`error net-view ${projectId}/${own} ${String(error?.message ?? error).slice(0, 200)}`);
+                seen = { why: 'none' };
+            }
+            if (!seen.net) {
+                file.netWhy = seen.why;
+                continue;
+            }
+            const size = seen.net.hunks.reduce((n, hunk) => n + (hunk.oldText?.length ?? 0) + hunk.newText.length, 0);
+            if (size > MAX_NET_CHARS || size > budget) file.net = { ...seen.net, hunks: [], clipped: true };
+            else {
+                budget -= size;
+                file.net = seen.net;
+            }
+        }
         // The project's other threads whose records name a file this one changed.
         for (const [otherId, other] of Object.entries(this.store.project(projectId)?.threads ?? {})) {
             if (otherId === own || !Array.isArray(other?.changes)) continue;

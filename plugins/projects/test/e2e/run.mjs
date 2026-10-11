@@ -32,7 +32,7 @@
  * (then DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js).
  */
 import { spawn, execFileSync } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { createServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -899,6 +899,13 @@ try {
         && notes.edits[0].hunks[0]?.oldText === null && notes.edits[0].hunks[0].newText === 'one\ntwo\nthree\n'
         && notes.edits[1].hunks.some((hunk) => hunk.oldText?.includes('two') && hunk.newText.includes('TWO'))
         && tab.value.turns.length === 2 && tab.value.turns.every((t) => t.reviewable === true), JSON.stringify(tab).slice(0, 700));
+    // The one diff of what the file's edits came to (it wrote the file, then edited a line), from the texts the plugin
+    // kept around them, in its folder, for the thread alone.
+    const netDir = join(stateDir, 'net', lambda);
+    const keptPrivate = () => existsSync(netDir) && modeOf(netDir) === 0o700 && readdirSync(netDir).length > 0 && readdirSync(netDir).every((name) => modeOf(join(netDir, name)) === 0o600);
+    check('a thread\'s Changes tab has one diff of what each file\'s edits came to, kept privately for that thread',
+        JSON.stringify(notes?.net) === JSON.stringify({ added: 3, deleted: 0, created: true, hunks: [{ oldText: null, newText: 'one\nTWO\nthree' }] }) && keptPrivate(),
+        `${JSON.stringify(notes?.net ?? null)} ${existsSync(netDir) ? readdirSync(netDir).map((name) => `${name}:${octal(modeOf(join(netDir, name)))}`).join(' ') : 'no folder'}`);
     const tabA = await tabOf(web, coord, waitsId);
     const tabB = await tabOf(web, sessionB);
     check('each thread\'s Changes tab shows only its own edits, whatever DSH says of the folder', tabA.ok && tabA.value.files.length === 0
@@ -914,6 +921,8 @@ try {
     check('a subagent\'s edit shows in its thread\'s Changes tab, by the subagent, at the turn that started it', sub?.added === 2 && sub.created === true
         && sub.edits[0]?.by === 'Write a file' && sub.edits[0].hunks[0]?.newText === 'sub one\nsub two\n' && sub.edits[0].turn > bNew?.edits[0].turn,
         JSON.stringify(tabSub?.value ?? null).slice(0, 700));
+    check('a subagent\'s edit is in its thread\'s one diff of the file', sub?.net?.created === true && sub.net.hunks[0]?.newText === 'sub one\nsub two'
+        && bNew?.net?.hunks[0]?.newText === 'from B', `${JSON.stringify(sub?.net ?? null)} ${JSON.stringify(bNew?.net ?? null)}`);
 
     // 22c. A message to a thread in the middle of a turn reaches that turn, so an answer the user gives the
     // coordinator gets there now, not when the turn ends (behaviour review 4, S3); steer=false queues it (15).
@@ -980,6 +989,8 @@ try {
     check('after a restart the Changes tab still shows the diffs, its subagent\'s too, and no turn to review in DSH', notes?.added === 4 && notes.edits.length === 2
         && tab.value.turns.length === 2 && tab.value.turns.every((t) => t.reviewable !== true) && subAgain?.edits[0]?.by === 'Write a file',
         `${JSON.stringify(tab).slice(0, 500)} ${JSON.stringify(subAgain ?? null).slice(0, 200)}`);
+    check('after a restart each file\'s one diff is still there', notes?.net?.added === 3 && notes.net.hunks[0]?.newText === 'one\nTWO\nthree' && subAgain?.net?.created === true,
+        `${JSON.stringify(notes?.net ?? null)} ${JSON.stringify(subAgain?.net ?? null)}`);
     mark = model.requests.length;
     await say(coord, 'Which threads changed files?');
     const lambdaLine = since(mark, 'coordinator')[0]?.system.split('\n').find((l) => l.startsWith(`- ${lambdaId} · "Lambda" · `)) ?? '';
