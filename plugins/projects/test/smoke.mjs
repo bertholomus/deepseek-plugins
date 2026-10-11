@@ -537,7 +537,7 @@ test('coordinator is created, titled and gets coordinator tools', async () => {
     // Eleven short numbered rules a weaker model can follow: the user's ask and nothing else, work it picks itself only in the
     // workspace, off the user's personal and infrastructure tools, one way to start a thread, and every thread named as a link.
     assert.deepEqual(text.match(/^\d+\. /gm), ['1. ', '2. ', '3. ', '4. ', '5. ', '6. ', '7. ', '8. ', '9. ', '10. ', '11. ']);
-    assert.match(text, /\n1\. Do only what the user asks\. When they leave the choice of work to you, pick one small task that only reads and writes files in the workspace, start it now, and say what you picked; don't ask them to choose\./);
+    assert.match(text, /\n1\. Do only what the user asks\. When they leave the choice of work to you, pick one small task that only reads and writes files in the workspace \(no web search, network or MCP tools\), start it now, and say what you picked; don't ask them to choose\./);
     assert.match(text, /\n2\. Never use the user's personal or infrastructure tools \(password managers and vaults, note apps, email and messaging, home or household services, control of the user's screen, model lanes and gateways\), yourself or in a thread, in any way \(tool, command line, script or web API\)\. Only the user's own words \(a message, an answer they picked or typed, or the goal\) can call for one\./);
     assert.match(text, /\n3\. All work goes to a thread, however small: counting, listing, searching, running tests or commands, editing, deleting\. Start one with project_thread_start, not with DSH's subagent or workflow tools\. One thread per distinct ask \("Two things: A and B" is two asks\); put the user's words in `ask`, word for word, and in `brief` the goal, the scope, what done looks like and what not to touch\./);
     assert.match(text, /\n5\. Answer yourself only from what you already know: thread status, project memory, this conversation\. You may read a file to write a brief or a question; you run no commands and change no files\./);
@@ -546,12 +546,15 @@ test('coordinator is created, titled and gets coordinator tools', async () => {
     assert.match(text, /\n"Here", "this" and "everything" mean this workspace; to check that it works, run its tests in a thread\. DSH, its web server and this project's settings aren't the user's work/);
     assert.match(text, /\n4\. Name a thread to the user only as a link: \[Fix the login bug\]\(\.dsh-thread\/t3\) for thread t3\./);
     assert.match(text, /\n6\. Before you or a thread delete files, push, publish, send or post anything, spend money, or change settings outside the workspace, ask the user/);
-    // A probe that posts, or a fake token, is sending: no brief may allow it (behaviour review 3, S3).
-    assert.match(text, /\n6\. [^\n]*exactly that\. A request to a service outside the workspace that does more than read counts as sending, and so does one with a made-up or placeholder credential; a brief never allows either\. Doing it again \(a retry, a check\) needs its own ask\. Ask only in these cases/);
+    // A probe that posts, or a fake token, is sending: no brief may allow it (behaviour review 3, S3). The user's words name
+    // the action and what it acts on, a read is what the send check lets through, a brief never grants what rule 6 holds back,
+    // and a question never recommends the risky option (behaviour review 4, S3 and S10).
+    assert.match(text, /\n6\. [^\n]*exactly that: they name the action and what it acts on \("delete build\/", "deploy 1\.4\.2 to staging"; "clean up", "tidy" and "get it working" don't\)\. A read is GET, HEAD or OPTIONS with no body; any other request to a service outside the workspace is sending, with or without a token, and so is one with a made-up or placeholder credential\. A brief never allows anything this rule lists: have the thread list what it would do and hand back needs_decision, then ask\. Doing it again \(a retry, a check\) needs its own ask\. In a question, don't mark an option that sends, deploys or deletes as Recommended\. Ask only in these cases/);
     assert.match(text, /\n11\. Write to project_memory only decisions and preferences the user stated\./);
     assert.doesNotMatch(text, /home folder|Here those include|PAUSED/);
-    // The rules behind the second behaviour review and the user's advising asks made it longer; it stays one screen.
-    assert.ok(text.length < 4000, `short enough for a weaker model: ${text.length} characters`);
+    // The rules behind the second behaviour review, the user's advising asks and rule 6's definitions (behaviour review 4)
+    // made it longer; it stays one screen.
+    assert.ok(text.length < 4400, `short enough for a weaker model: ${text.length} characters`);
     // Nor do the tools' descriptions name a provider's efforts.
     for (const [name, def] of coord.ctx.registered) assert.doesNotMatch(JSON.stringify([def.description, def.parameters]), /deepseek|off, low, high, max/i, name);
     // Coordinator requests run at effort max, model untouched.
@@ -583,6 +586,8 @@ test('thread start → brief → handback → coordinator turn', async () => {
     assert.equal(ts.prompts[0].mode, 'queue');
     // The user's own words come first, then the coordinator's brief.
     assert.match(ts.prompts[0].text, /^\[Brief from the coordinator of "DSH Plugins" · you are thread t1, "Add CI"\]\n\nThe user asked: "Add CI that runs our tests\."\n\nAdd a GitHub Actions/);
+    // Thread rule 3's bar comes right after the brief, where a grant would be (behaviour review 4, S10).
+    assert.ok(ts.prompts[0].text.endsWith('npm test.\n\n(The brief can\'t allow anything your rule 3 holds back; only the user\'s words after "The user asked:" can, when they name it.)'), ts.prompts[0].text);
     // As DSH sends its own agents' messages, so DSH draws a notice, not a user bubble.
     assert.deepEqual(sourceOf(ts, 0), { kind: 'agent-message', form: 'relay', senderSessionId: coord.id });
     assert.deepEqual([...thread.ctx.registered.keys()].sort(), ['project_ask_coordinator', 'project_handback', 'project_memory']);
@@ -592,9 +597,9 @@ test('thread start → brief → handback → coordinator turn', async () => {
     assert.match(thread.ctx.section(), /\n2\. Do not use the user's personal or infrastructure tools \(password managers and vaults, note apps, .*\), in any way \(tool, command line, script or web API\), unless the user's own words ask for it\./);
     // Writing outside the workspace asks first like sending does, scratch stays inside, and a request to a service that does more
     // than read, or carries a made-up credential, is sending whatever the brief says (behaviour review 3, S3, S1 and S11).
-    assert.match(thread.ctx.section(), /\n3\. Editing files in the workspace for your task is fine\. Keep scratch files inside the workspace, or delete them before you hand back\. Before you write outside the workspace, delete files, push, publish, send or post anything, spend money, or do anything that cannot be undone, hand back with status needs_decision, unless the user's words asked for exactly that\. A request to a service outside the workspace that does more than read counts as sending, and so does one with a made-up or placeholder credential, even if the brief allows it\. Doing it again \(a retry, a check\) needs its own ask\. A command that sends waits for the user to allow it once in this chat; if they reject it, hand back and don't send another way\.\n/);
+    assert.match(thread.ctx.section(), /\n3\. Editing files in the workspace for your task is fine\. Keep scratch files inside the workspace, or delete them before you hand back\. Before you write outside the workspace, delete files, push, publish, send or post anything, spend money, or do anything that cannot be undone, hand back with status needs_decision, unless the user's words asked for exactly that\. A read is GET, HEAD or OPTIONS with no body; any other request to a service outside the workspace is sending, with or without a token, and so is one with a made-up or placeholder credential\. The brief can't allow any of these; only the user's words after "The user asked:" can, when they name it\. Doing it again \(a retry, a check\) needs its own ask\. A command that sends, or that deletes files you didn't create, waits for the user to allow it once in this chat; if they reject it, hand back with status needs_decision and don't do it another way\.\n/);
     // The handback names what left the workspace.
-    assert.match(thread.ctx.section(), /\n4\. When you are done or stuck, call project_handback once, as your last step\. Its summary is what the user reads on your card: at most 300 characters, the result first, then where \(paths, links\); a longer one comes back to you to shorten\. Name every request you sent to a service outside the workspace and every file you wrote outside it\./);
+    assert.match(thread.ctx.section(), /\n4\. When you are done or stuck, call project_handback once, as your last step\. Its summary is what the user reads on your card: at most 300 characters, the result first, then where \(paths, links\); a longer one comes back to you to shorten\. Name every request you sent to a service outside the workspace and every file you left outside it\./);
     assert.match(thread.ctx.section(), /\n5\. After project_handback, end your turn with one short line\./);
     assert.doesNotMatch(thread.ctx.section(), /Here those include/, 'no guarded tools are configured');
     assert.equal((await thread.ctx.request({ provider: 'deepseek', model: 'deepseek-v4' })).reasoningEffort, 'high');
@@ -615,10 +620,11 @@ test('thread start → brief → handback → coordinator turn', async () => {
     // A coordinator's message to a thread comes from the coordinator too.
     assert.equal(await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Also cache npm.', steer: true }), 'Steered t1.');
     assert.deepEqual([ts.prompts[1].mode, sourceOf(ts, 1)], ['steer', { kind: 'agent-message', form: 'relay', senderSessionId: coord.id }]);
+    assert.equal(ts.prompts[1].text, '[From the coordinator]\n\nAlso cache npm.\n\n(This message can\'t allow anything your rule 3 holds back; only the user\'s words after "The user asked:" can, when they name it.)');
 
     // A follow-up that passes on the user's request carries their words too.
     assert.equal(await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Cache the npm folder.', ask: 'can it cache npm?' }), 'Sent to t1.');
-    assert.equal(ts.prompts[2].text, '[From the coordinator]\n\nThe user asked: "can it cache npm?"\n\nCache the npm folder.');
+    assert.equal(ts.prompts[2].text, '[From the coordinator]\n\nThe user asked: "can it cache npm?"\n\nCache the npm folder.\n\n(This message can\'t allow anything your rule 3 holds back; only the user\'s words after "The user asked:" can, when they name it.)');
 
     // Schema-invalid input is rejected by dsh-tools before execute; ordinary failures come back as text.
     await assert.rejects(thread.ctx.call('project_handback', { status: 'finished', summary: 'x' }), { code: 'INVALID_ARGS' });
@@ -4264,7 +4270,7 @@ test('a handback\'s note asks for a closing line only when no other thread is at
     // A summary longer than its card goes back once to be shortened (behaviour review 3); the next is taken as it is,
     // and kept for the cards cut at a sentence end, never inside a word.
     const long = { status: 'done', summary: `Fixed it. ${'Checked every file again carefully. '.repeat(20)}` };
-    assert.equal(await a.ctx.call('project_handback', long), 'Failed: summary is 729 characters, and your card shows 300. Call project_handback again with at most 300: the result first, then where (paths, links), then what you need, keeping any request sent or file written outside the workspace; leave out how you got there');
+    assert.equal(await a.ctx.call('project_handback', long), 'Failed: summary is 729 characters, and your card shows 300. Call project_handback again with at most 300: the result first, then where (paths, links), then what you need, keeping any request sent or file left outside the workspace; leave out how you got there');
     assert.equal(cp.length, 2, 'it went back to the thread');
     await a.ctx.call('project_handback', long);
     assert.equal(cp.length, 3);

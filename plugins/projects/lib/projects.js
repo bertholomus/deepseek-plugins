@@ -2756,7 +2756,8 @@ export class ProjectManager {
         if (t.question) this.store.putThread(projectId, id, { question: undefined });
         // The user's words make it new work: a turn that then ends without a handback gets its own nudge.
         if (userWords !== '' && (t.nudged || t.stalled)) this.store.putThread(projectId, id, { nudged: undefined, stalled: undefined });
-        await this.prompt(t.sessionId, coordinatorMessage(text.trim(), userWords), steer ? 'steer' : 'queue', this.store.project(projectId).coordinatorSessionId);
+        // The coordinator's own words (project_thread_send) carry rule 3's bar under them, as a brief does.
+        await this.prompt(t.sessionId, coordinatorMessage(text.trim(), userWords, { note: guard }), steer ? 'steer' : 'queue', this.store.project(projectId).coordinatorSessionId);
         this.log(`thread-send ${projectId}/${id} mode=${steer ? 'steer' : 'queue'} chars=${text.length}`);
         return `${steer ? 'Steered' : 'Sent to'} ${id}${t.resolved ? ' (reopened)' : ''}.`;
     }
@@ -3721,7 +3722,7 @@ export class ProjectManager {
         if (length > CARD_CHARS && !t.shorten) {
             this.store.putThread(projectId, threadId, { shorten: true });
             this.log(`handback-long ${projectId}/${threadId} chars=${length}`);
-            throw new ProjectError(`summary is ${length} characters, and your card shows ${CARD_CHARS}. Call project_handback again with at most ${CARD_CHARS}: the result first, then where (paths, links), then what you need, keeping any request sent or file written outside the workspace; leave out how you got there`);
+            throw new ProjectError(`summary is ${length} characters, and your card shows ${CARD_CHARS}. Call project_handback again with at most ${CARD_CHARS}: the result first, then where (paths, links), then what you need, keeping any request sent or file left outside the workspace; leave out how you got there`);
         }
         if (!this.allowHandback(projectId, threadId)) {
             throw new ProjectError(`handback limit reached (${this.config.maxHandbacksPerHour} per hour); finish the work and hand back once`);
