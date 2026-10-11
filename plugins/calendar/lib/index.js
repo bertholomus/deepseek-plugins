@@ -4,7 +4,7 @@
  *
  * Calendars come from iCloud, Fastmail, Nextcloud and other CalDAV servers,
  * Google, Microsoft 365 and Outlook.com, subscribed .ics feeds, and
- * calendars kept on this computer (lib/sources). The host half
+ * calendars kept in DSH (lib/sources). The host half
  * (lib/manager.js) syncs them into the plugin's own store and routes every
  * change to the server that holds the event. The window (lib/client.js) has
  * a Calendar page and an agenda beside chats, styled to sit on the
@@ -21,7 +21,7 @@
 import z from '@deepseek-ai/schemastery';
 import { isLoopback } from './http.js';
 import { CalendarManager } from './manager.js';
-import { MODES, changeGate } from './policy.js';
+import { MODES, ShownPlans, changeGate } from './policy.js';
 import { CalendarRemote, SERVICE } from './remote.js';
 import { calendarTools } from './tools.js';
 
@@ -51,10 +51,14 @@ export const Config = z.object({
     agentChanges: z.union(MODES).default('preset'),
     /**
      * Whether a chat's change that emails someone (an invitation, an update,
-     * a cancellation, an answer) asks the user first, naming who gets what,
+     * a cancellation, an answer), or puts an event on other people's Google
+     * calendars or takes it off them, asks the user first, naming who,
      * whatever agentChanges says. A chat that can't ask (Full access) is
-     * refused such changes instead. Off: emailing changes follow
-     * agentChanges like any other.
+     * refused such changes instead. Off: those changes follow agentChanges
+     * like any other; the plugin warns at start, and agents are told. It is
+     * set only in the profile's config file (cordis.patch.yml), which no
+     * calendar tool or window endpoint changes; a chat that can write files
+     * there can, from DSH's next start.
      */
     askBeforeEmails: z.boolean().default(true),
     /** Google sign-in: the client id of the user's own OAuth client (Desktop app). The window can set it too. */
@@ -132,7 +136,10 @@ export function apply(ctx, config) {
     // Switched off or reloaded: this manager stops (writing what it holds), and the next start reads the files.
     ctx.effect(() => () => manager.dispose(), 'calendar.manager()');
 
+    const askEmails = config.askBeforeEmails !== false;
     const setup = {
+        /** Whether chats' emailing changes ask the user first (askBeforeEmails), for the window to say when they don't. */
+        askBeforeEmails: () => askEmails,
         async signInReady() {
             const s = await clientSettings();
             return {
@@ -150,9 +157,13 @@ export function apply(ctx, config) {
         scope.provide(SERVICE, new CalendarRemote(scope, manager, setup));
     });
 
+    if (!askEmails) ctx.logger?.warn?.('calendar: askBeforeEmails is off: changes from chats that email guests are made without asking the user');
+
     if (config.tools) {
+        // Who the approval prompt named, for the tool to hold the change to (policy.js ShownPlans).
+        const shown = new ShownPlans();
         // Each tool is marked as the user's own (tools.js PERSONAL), so project sessions get it only as the user allows.
-        for (const tool of calendarTools(manager)) ctx.tools.register(tool);
+        for (const tool of calendarTools(manager, { askEmails, shown })) ctx.tools.register(tool);
         // Changes go through the chat's permission first (policy.js).
         const service = (key) => {
             try { return ctx.get?.(key); } catch { return undefined; }
@@ -162,13 +173,20 @@ export function apply(ctx, config) {
             approval: () => service('approval'),
             manager,
             mode: () => config.agentChanges,
-            askEmails: () => config.askBeforeEmails !== false,
+            askEmails: () => askEmails,
+            shown,
             log: (line) => manager.log(line),
         }));
     }
 
     manager.start().then(() => {
         ctx.logger?.info?.('calendar: %d calendar(s) in %d account(s)', Object.keys(manager.store.calendars).length, Object.keys(manager.store.accounts).length);
+        // A file that couldn't be read is kept beside the store, and the plugin started without it: say so where it's seen.
+        const where = (issue) => (issue.held ? 'left as it is' : `set aside as ${issue.file}`);
+        if (manager.store.issue) ctx.logger?.warn?.('calendar: calendar.json could not be read and was %s; started without it, nothing deleted', where(manager.store.issue));
+        for (const [calendarId, issue] of manager.store.issues ?? []) {
+            ctx.logger?.warn?.('calendar: the saved events of %s could not be read and were %s; nothing deleted', calendarId, where(issue));
+        }
     }, (error) => {
         ctx.logger?.warn?.('calendar: startup failed: %s', error?.message ?? error);
     });

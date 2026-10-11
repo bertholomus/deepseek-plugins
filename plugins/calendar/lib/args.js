@@ -77,6 +77,7 @@ export function changeInput(args, zone) {
     if (typeof args.private === 'boolean') input.privacy = args.private ? 'private' : 'public';
     for (const field of Array.isArray(args.clear) ? args.clear : []) if (CLEARABLE.includes(field)) input[field] = null;
     if (args.notify_guests === true) input.notify = true;
+    if (args.drop_changes === true) input.dropChanges = true;
     return input;
 }
 
@@ -102,8 +103,16 @@ export function scopeArg(manager, id, scope, { answer = false } = {}) {
 /** What the model is told when a change would email people and the call didn't say to tell them. */
 export const NOTIFY_HINT = 'If the user asked for them to be told, call again with notify_guests: true; otherwise ask the user first.';
 
+/** What the model is told to do about a refusal, by its code. */
+const HINTS = {
+    'needs-notify': NOTIFY_HINT,
+    'drops-changes': 'If the user agrees to lose them, call again with drop_changes: true; otherwise leave it where it is.',
+    'choose-calendar': 'Give calendar_id (calendar_list_calendars lists the calendars), and ask the user which one if they didn\'t say.',
+    changed: 'Read the event again (calendar_get_event) and tell the user what changed before trying again.',
+};
+
 /** A refusal in words for the model: what wasn't done and why, and what to do about it. */
 export function refusalText({ message, code }) {
-    return `Not done: ${message}${code === 'needs-notify' ? ` ${NOTIFY_HINT}` : ''}`;
+    return `Not done: ${message}${HINTS[code] ? ` ${HINTS[code]}` : ''}`;
 }
 

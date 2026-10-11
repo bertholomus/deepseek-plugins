@@ -9,6 +9,7 @@
     "test:e2e": "node plugins/projects/test/e2e/run.mjs",
     "test:e2e:categories": "node plugins/categories/test/e2e/run.mjs",
     "test:e2e:calendar": "node plugins/calendar/test/e2e/run.mjs",
+    "test:e2e:calendar-ui": "node plugins/calendar/test/e2e/ui.mjs",
     "test:sandbox": "node plugins/projects/test/e2e/sandbox.mjs"
   },
   "engines": { "node": ">=20" }

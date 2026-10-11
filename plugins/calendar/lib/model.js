@@ -20,7 +20,10 @@ import { isDay, isZone, normalLocal, toInstant, toLocal } from './zones.js';
 /**
  * Someone on an event.
  * @typedef {object} Person
- * @property {string} email
+ * @property {string} email - an email address; for someone a CalDAV server names only by `address`
+ *   (with no EMAIL parameter), that address.
+ * @property {string} [address] - the calendar user address the server names them by, where it isn't
+ *   their mailto address: a urn:uuid, or a principal's URL. Written back as it was.
  * @property {string} [name]
  * @property {'needs-action'|'accepted'|'declined'|'tentative'|'delegated'} [status]
  * @property {'required'|'optional'|'chair'|'non-participant'} [role]
@@ -131,6 +134,45 @@ export function timeText(time) {
     if (!time) return '';
     if ('date' in time) return time.date;
     return `${time.local}${time.tz ? ` ${time.tz}` : ''}`;
+}
+
+/** An email address: something@somewhere, with no path or scheme in it. */
+export const isEmailAddress = (value) => typeof value === 'string' && /^[^@\s/:]+@[^@\s/:]+$/.test(value);
+
+/**
+ * A calendar user address (RFC 5545 CAL-ADDRESS) in the form two of them
+ * compare by, '' for none: an email, from a mailto address or as it is,
+ * in lower case; a urn in lower case; a principal's URL or path by its
+ * path alone, since a server names its principals at more than one host
+ * (iCloud: caldav.icloud.com and pNN-caldav.icloud.com).
+ */
+export function addressKey(value) {
+    const text = String(value ?? '').trim();
+    if (text === '') return '';
+    const decode = (s) => {
+        try {
+            return decodeURIComponent(s);
+        } catch {
+            return s;
+        }
+    };
+    const mail = /^mailto:(.*)$/i.exec(text);
+    if (mail) return decode(mail[1]).trim().toLowerCase();
+    if (isEmailAddress(text) || /^urn:/i.test(text)) return text.toLowerCase();
+    let path;
+    if (/^https?:\/\//i.test(text)) {
+        try {
+            path = new URL(text).pathname;
+        } catch {
+            return text.toLowerCase();
+        }
+    } else if (text.startsWith('/')) {
+        path = text.split(/[?#]/)[0];
+    } else {
+        return text.toLowerCase();
+    }
+    path = decode(path).replace(/\/+$/, '');
+    return `path:${path}/`;
 }
 
 /** The fields a record may carry, for copying and comparing. */

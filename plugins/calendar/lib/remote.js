@@ -20,12 +20,22 @@ export const NAMESPACE = 'dsh-plugin-calendar';
 export const SERVICE = 'dshPluginCalendarRemote';
 
 /**
- * A refusal the user can act on, as a Remote failure the window shows.
- * 'calendar/needs-notify': the change would email people (its message says
- * who and what); made again with notify, it goes ahead and emails them.
+ * The refusals the window answers in its own way, as `calendar/<code>`:
+ * 'needs-notify' (the change would email people; its message says who and
+ * what, and details.people lists them: made again with notify, and with
+ * approved: those people, it goes ahead and emails them), 'drops-changes'
+ * (move a series anyway), 'choose-calendar' (no default calendar),
+ * 'changed' (the event changed so that the change would now email or reach
+ * someone the user wasn't told of: look at it again). Any other refusal is
+ * 'calendar/refused'.
  */
+const WINDOW_CODES = new Set(['needs-notify', 'drops-changes', 'choose-calendar', 'changed']);
+
 function failure(error) {
-    if (error instanceof CalendarError) return new RemoteError(error.code === 'needs-notify' ? 'calendar/needs-notify' : 'calendar/refused', error.message, {});
+    if (error instanceof CalendarError) {
+        const details = Array.isArray(error.people) ? { people: error.people } : {};
+        return new RemoteError(WINDOW_CODES.has(error.code) ? `calendar/${error.code}` : 'calendar/refused', error.message, details);
+    }
     return new RemoteError('calendar/failed', String(error?.message ?? error).slice(0, 300), {});
 }
 
@@ -58,7 +68,11 @@ export class CalendarRemote {
      * Accounts, calendars, the user's zone and choices, and what the account
      * dialog offers: {version, zone, accounts, calendars, defaultCalendar,
      * prefs, syncing, storeIssue?, presets (CalDAV), signIn: {google: {ready,
-     * clientId?}, microsoft: {ready, clientId?}}}. `version` changes whenever
+     * clientId?}, microsoft: {ready, clientId?}}, askBeforeEmails}.
+     * defaultCalendar is null when no calendar is the default: a new event
+     * then names its calendar ('calendar/choose-calendar'). askBeforeEmails:
+     * false when the user's settings let chats' emailing changes go without
+     * asking them. `version` changes whenever
      * anything the window shows changed: poll this and refetch events when it
      * moves. storeIssue {file, at, held?}: calendar.json couldn't be read at
      * this start, and is kept beside it as `file` (held: it couldn't be moved
@@ -67,7 +81,10 @@ export class CalendarRemote {
      * folder.
      */
     async state() {
-        return this.run(async () => ({ ...this.manager.state(), presets: PRESETS, signIn: await this.setup.signInReady() }));
+        return this.run(async () => ({
+            ...this.manager.state(), presets: PRESETS, signIn: await this.setup.signInReady(),
+            askBeforeEmails: this.setup.askBeforeEmails?.() !== false,
+        }));
     }
 
     /** {occurrences, more}: the events in [from, to) (epoch ms), of the given calendars or the shown ones. */
@@ -88,11 +105,17 @@ export class CalendarRemote {
     /**
      * A new event: {occurrence}, with occurrence.emailed {what, to} when it emailed someone. input: {calendarId?,
      * title, start, end?, allDay?, timeZone?, location?, description?, url?, repeat?, alarms?, attendees?, busy?,
-     * privacy?, notify?}. notify: invite the guests now. Where the server would email them anyway (Microsoft, a
-     * CalDAV server that schedules), guests without notify are refused with 'calendar/needs-notify'.
+     * privacy?, notify?, approved?}. notify: invite the guests now. Where the server would email them anyway
+     * (Microsoft, a CalDAV server that schedules), guests without notify are refused with 'calendar/needs-notify'.
+     * approved: who the user was told it emails (that refusal's details.people); if it would now email or reach
+     * anyone else, it is refused with 'calendar/changed'. With occurrence.reached {how, to} when Google put it on
+     * guests' calendars without emailing them.
      */
     async createEvent(input) {
-        return this.run(async () => ({ occurrence: await this.manager.createEvent(object(input), 'window') }));
+        return this.run(async () => {
+            const { approved, ...rest } = object(input);
+            return { occurrence: await this.manager.createEvent(rest, 'window', { approved: list(approved) }) };
+        });
     }
 
     /**
@@ -100,19 +123,24 @@ export class CalendarRemote {
      * or 'all' (an occurrence's `scopes` say which it takes). Fields as createEvent's; null clears one;
      * patch.notify tells the guests (a change the server would email them about anyway is refused without
      * it: 'calendar/needs-notify'). patch.calendarId, given alone with scope 'all', moves the whole event or
-     * series to that calendar; with other fields or another scope it is refused.
+     * series to that calendar; with other fields or another scope it is refused. A series that would lose
+     * occurrences changed on their own (or, into Microsoft, skipped and extra dates) is refused with
+     * 'calendar/drops-changes', saying what; patch.dropChanges moves it anyway. patch.approved as createEvent's.
      */
     async updateEvent(id, patch, scope) {
-        return this.run(async () => ({ occurrence: await this.manager.updateEvent(text(id), object(patch), text(scope) || 'all', 'window') }));
+        return this.run(async () => {
+            const { approved, ...rest } = object(patch);
+            return { occurrence: await this.manager.updateEvent(text(id), rest, text(scope) || 'all', 'window', { approved: list(approved) }) };
+        });
     }
 
     /**
-     * Delete an event, one occurrence, or this and the following ones: {emailed?: {what, to}}. notify: tell
-     * its guests (for someone else's invitation, its organizer); a delete the server would email them about
-     * anyway is refused without it ('calendar/needs-notify').
+     * Delete an event, one occurrence, or this and the following ones: {emailed?: {what, to}, reached?: {how,
+     * to}}. notify: tell its guests (for someone else's invitation, its organizer); a delete the server would
+     * email them about anyway is refused without it ('calendar/needs-notify'). approved as createEvent's.
      */
-    async deleteEvent(id, scope, notify) {
-        return this.run(async () => this.manager.deleteEvent(text(id), text(scope) || 'all', 'window', { notify: notify === true }));
+    async deleteEvent(id, scope, notify, approved) {
+        return this.run(async () => this.manager.deleteEvent(text(id), text(scope) || 'all', 'window', { notify: notify === true, approved: list(approved) }));
     }
 
     /** Answer an invitation ('accepted', 'declined', 'tentative') for scope 'one' or 'all': {occurrence}, with emailed when the organizer was sent it. */
@@ -151,11 +179,12 @@ export class CalendarRemote {
 
     /**
      * Start signing in to Google ('google') or Microsoft ('microsoft'), for a
-     * new account or again for accountId. {flow, kind, status, url? (Google:
-     * open it), userCode?, verificationUri?, message? (Microsoft: show them)}.
+     * new account or again for accountId. {flow, kind, status, url? (open it
+     * in the browser), userCode?, verificationUri?, message? (a code to enter
+     * on Microsoft's page: method 'code')}.
      */
-    async startSignIn(kind, accountId) {
-        return this.run(async () => this.manager.startSignIn(text(kind), text(accountId) || undefined));
+    async startSignIn(kind, accountId, method) {
+        return this.run(async () => this.manager.startSignIn(text(kind), text(accountId) || undefined, text(method) ? { method: text(method) } : {}));
     }
 
     /** How a sign-in stands: status 'waiting', 'done' (with account) or 'failed' (with error). */
@@ -163,7 +192,7 @@ export class CalendarRemote {
         return this.run(async () => this.manager.signInStatus(text(flow)));
     }
 
-    /** Google: finish with the address the browser ended on, when it couldn't come back here. */
+    /** Finish with the address the browser ended on, when it couldn't come back here. */
     async finishSignIn(flow, url) {
         return this.run(async () => this.manager.finishSignIn(text(flow), text(url)));
     }

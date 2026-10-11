@@ -19,7 +19,7 @@
  * @module dsh-plugin-calendar/ical
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { ATTENDEE_STATUSES, cleanRecord, sameTime } from './model.js';
+import { ATTENDEE_STATUSES, addressKey, cleanRecord, isEmailAddress, sameTime } from './model.js';
 import { expandWall, parseRule } from './recur.js';
 import {
     addDays, fixedZone, ianaZone, isDay, isZone, localZone, nameOffsets, normalLocal, offsetAt, toInstant, toLocal, wallMs, wallOf, zoneIds,
@@ -789,12 +789,25 @@ function syncZones(calendar) {
 const ROLE_OF = { 'REQ-PARTICIPANT': 'required', 'OPT-PARTICIPANT': 'optional', CHAIR: 'chair', 'NON-PARTICIPANT': 'non-participant' };
 const ROLE_PARAM = Object.fromEntries(Object.entries(ROLE_OF).map(([k, v]) => [v, k]));
 
-const emailOf = (prop) => String(prop.value).trim().replace(/^mailto:/i, '').trim();
-
+/**
+ * Someone on an event. A mailto address gives their email; any other
+ * calendar user address (a urn:uuid, a principal's URL: iCloud's own
+ * meetings name their organizer so) is kept as `address`, with the email
+ * from its EMAIL parameter (RFC 7986) where there is one.
+ */
 function readPerson(prop) {
-    const email = emailOf(prop);
+    const value = String(prop.value).trim();
+    const mail = /^mailto:(.*)$/i.exec(value);
+    let email;
+    if (mail) {
+        email = mail[1].trim();
+    } else {
+        const given = paramOf(prop, 'EMAIL')?.trim().replace(/^mailto:/i, '');
+        email = isEmailAddress(given) ? given : value;
+    }
     if (email === '') return undefined;
     const person = { email };
+    if (!mail) person.address = value;
     const name = paramOf(prop, 'CN')?.trim();
     if (name && name !== email) person.name = name;
     const status = paramOf(prop, 'PARTSTAT')?.toLowerCase();
@@ -961,13 +974,24 @@ function same(a, b) {
     return ka.length === kb.length && ka.every((k) => same(a[k], b[k]));
 }
 
-/** The people on an event written back: unchanged ones as they were, changed ones keep the parameters the plugin doesn't model. */
+/**
+ * The people on an event written back: unchanged ones as they were,
+ * changed ones keep their address and the parameters the plugin doesn't
+ * model.
+ */
 function writePeople(event, name, people) {
-    const old = propsOf(event, name);
-    const byEmail = new Map(old.map((p) => [emailOf(p).toLowerCase(), p]));
+    const old = [];
+    for (const prop of propsOf(event, name)) {
+        const person = readPerson(prop);
+        if (person !== undefined) old.push({ prop, person });
+    }
+    const keyOf = (person) => addressKey(person.address ?? person.email);
+    const byKey = new Map(old.map((o) => [keyOf(o.person), o]));
+    const byEmail = new Map(old.map((o) => [o.person.email.toLowerCase(), o]));
     const props = people.map((person) => {
-        const existing = byEmail.get(person.email.toLowerCase());
-        if (existing !== undefined && same(cleanPerson(readPerson(existing)), cleanPerson(person))) return existing;
+        const found = byKey.get(keyOf(person)) ?? byEmail.get(person.email.toLowerCase());
+        const existing = found?.prop;
+        if (existing !== undefined && same(cleanPerson(found.person), cleanPerson(person))) return existing;
         const params = existing ? { ...existing.params } : {};
         if (person.name) params.CN = [person.name];
         else delete params.CN;
@@ -976,12 +1000,14 @@ function writePeople(event, name, people) {
             params.PARTSTAT = [(person.status ?? 'needs-action').toUpperCase()];
             if (existing === undefined && (person.status ?? 'needs-action') === 'needs-action') params.RSVP = ['TRUE'];
         }
-        return { name, params, value: `mailto:${person.email}` };
+        const address = person.address ?? found?.person.address;
+        if (address !== undefined && isEmailAddress(person.email) && params.EMAIL === undefined) params.EMAIL = [person.email];
+        return { name, params, value: address ?? `mailto:${person.email}` };
     });
     setProps(event, name, props);
 }
 
-const cleanPerson = (p) => ({ email: p.email.toLowerCase(), name: p.name || undefined, status: p.status, role: p.role });
+const cleanPerson = (p) => ({ email: p.email.toLowerCase(), address: p.address || undefined, name: p.name || undefined, status: p.status, role: p.role });
 
 /** Reminders written back: alarms the plugin doesn't show stay; shown ones match the list. */
 function writeAlarms(event, minutes) {

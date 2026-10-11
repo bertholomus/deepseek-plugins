@@ -496,3 +496,31 @@ test('a custom TZID and its VTIMEZONE round-trip', () => {
     assert.equal(parseIcs(fewer)[0].subs.filter((c) => c.name === 'VTIMEZONE').length, 1);
     assert.deepEqual(startsOf(fewer, zone), ['2026-10-29T13:30']);
 });
+
+test('people named by a urn:uuid or a principal\'s URL keep that address, with their email from EMAIL=', () => {
+    const raw = ics('BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//test//EN', 'BEGIN:VEVENT', 'UID:review', 'DTSTAMP:20261001T000000Z',
+        'DTSTART:20261016T090000Z', 'DURATION:PT1H', 'SUMMARY:Review',
+        'ORGANIZER;CN=Alice;EMAIL=alice@icloud.com:urn:uuid:1234567890',
+        'ATTENDEE;EMAIL=alice@icloud.com;PARTSTAT=NEEDS-ACTION:urn:uuid:1234567890',
+        'ATTENDEE;PARTSTAT=ACCEPTED:/99/principal/',
+        'ATTENDEE;CN=Ann;PARTSTAT=ACCEPTED:mailto:ann@example.com',
+        'END:VEVENT', 'END:VCALENDAR');
+    const [event] = readIcs(raw, { zone: 'UTC' }).events;
+    assert.deepEqual(event.organizer, { email: 'alice@icloud.com', address: 'urn:uuid:1234567890', name: 'Alice' });
+    assert.deepEqual(event.attendees, [
+        { email: 'alice@icloud.com', address: 'urn:uuid:1234567890', status: 'needs-action' },
+        { email: '/99/principal/', address: '/99/principal/', status: 'accepted' },
+        { email: 'ann@example.com', name: 'Ann', status: 'accepted' },
+    ]);
+    // An answer written back changes only the answer: the address and its EMAIL stay.
+    const answered = structuredClone(event);
+    answered.attendees[0].status = 'accepted';
+    const out = unfolded(editIcs(raw, [{ uid: 'review', record: answered }], { now: NOW, zone: 'UTC' }));
+    assert.match(out, /\r\nATTENDEE;EMAIL=alice@icloud\.com;PARTSTAT=ACCEPTED[^:\r\n]*:urn:uuid:1234567890\r\n/);
+    assert.match(out, /\r\nATTENDEE;PARTSTAT=ACCEPTED:\/99\/principal\/\r\n/);
+    assert.match(out, /\r\nORGANIZER;CN=Alice;EMAIL=alice@icloud\.com:urn:uuid:1234567890\r\n/);
+    // Someone new is named by email.
+    const added = structuredClone(event);
+    added.attendees.push({ email: 'bob@example.com', status: 'needs-action', role: 'required' });
+    assert.match(unfolded(editIcs(raw, [{ uid: 'review', record: added }], { now: NOW, zone: 'UTC' })), /\r\nATTENDEE[^\r\n]*:mailto:bob@example\.com\r\n/);
+});
