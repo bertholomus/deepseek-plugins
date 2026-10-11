@@ -175,6 +175,11 @@ async function step(name, run) {
         check(name, false, error?.stack ?? error);
         // What the window showed when the step failed.
         if (shots && page) await page.screenshot({ path: join(shots, `failed-${++failedShots}.png`) }).catch(() => {});
+        // A dialog left open would cover the page for the steps after this one.
+        for (let i = 0; page && i < 3 && (await page.locator('[role="dialog"]').count().catch(() => 0)) > 0; i++) {
+            await page.keyboard.press('Escape').catch(() => {});
+            await sleep(400);
+        }
     }
 }
 

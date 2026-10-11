@@ -1191,11 +1191,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * What every view shows, read from the host half: state() (accounts,
-         * calendars, the user's zone and choices) at start and every 4 s while
-         * a view watches and the window is visible, and the events of each span
-         * a view asks for, read again whenever state's version moves (a sync,
-         * a change here or by an agent). Changes go through act(), which reads
-         * both again. Also the page's way to an event (openAt) and its toasts.
+         * calendars, the user's zone and choices), and the events of each span
+         * a view asks for. While a view watches and the window is visible, the
+         * host's version() is asked every 4 s (every 12 s when only the Agenda
+         * pane shows); state() is read again when it moves (a sync, a change
+         * here or by an agent), and every minute all the same, and the events
+         * with it. Changes go through act(), which reads both again. Also the
+         * page's way to an event (openAt), its toasts, and events' titles by id.
          * @param link - the plugin's endpoints (hostLink).
          */
         function calendarStore(link) {
@@ -1205,8 +1207,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             let stateJson = '';
             let stateError = '';
             let loading;
+            /** When state() was last read, for the read every minute whatever version() says. */
+            let stateAt = 0;
             let watchers = 0;
+            /** Watchers that want the 4 s step (the page); the Agenda pane alone is asked after every 12 s. */
+            let fastWatchers = 0;
             let timer;
+            let polling = false;
             /** Spans of events: `${from}:${to}` → {from, to, data?, error, loading, stale}, the most recently used last. */
             const spans = new Map();
             let target = null;
@@ -1225,13 +1232,37 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }
             };
             const visible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden';
-            const onVisible = () => { if (visible()) void loadState(); };
+            const onVisible = () => { if (visible()) void poll(); };
+
+            /** What moved on the host, cheaply (version()); state() read again when it did, or after a minute. */
+            async function poll() {
+                if (polling || !visible()) return;
+                polling = true;
+                try {
+                    if (state === undefined || Date.now() - stateAt >= 60_000) {
+                        await loadState();
+                        return;
+                    }
+                    const result = await link.call('version', {});
+                    // A host without version() (or a failed ask): state() itself, as before.
+                    if (!result.ok || !isObject(result.value)) await loadState();
+                    else if (result.value.version !== state.version || Boolean(result.value.syncing) !== Boolean(state.syncing)) await loadState();
+                } finally {
+                    polling = false;
+                }
+            }
+            const schedule = () => {
+                clearTimeout(timer);
+                if (watchers === 0 || typeof window === 'undefined') return;
+                timer = setTimeout(() => { void poll().finally(schedule); }, fastWatchers > 0 ? 4000 : 12000);
+            };
 
             function loadState() {
                 if (loading) return loading;
                 loading = (async () => {
                     const result = await link.call('state', {});
                     loading = undefined;
+                    if (result.ok) stateAt = Date.now();
                     if (result.ok && isObject(result.value)) {
                         const json = JSON.stringify(result.value);
                         const moved = state !== undefined && state.version !== result.value.version;
@@ -1248,6 +1279,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     emit();
                 })();
                 return loading;
+            }
+
+            /** state() read after now: a read already on its way may have left before a change. */
+            async function freshState() {
+                if (loading) await loading;
+                stateJson = '';
+                return loadState();
             }
 
             async function fetchSpan(entry) {
@@ -1299,21 +1337,27 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 },
                 account: (id) => (state?.accounts ?? EMPTY).find((a) => a.id === id),
                 loadState,
-                /** Keep state fresh while a view shows; returns the stop. */
-                watch() {
+                /** Ask the host now what moved, as watch() does on its step. */
+                poll,
+                /** Keep state fresh while a view shows (fast: every 4 s, else every 12 s); returns the stop. */
+                watch(fast = true) {
                     watchers++;
+                    if (fast) fastWatchers++;
                     if (watchers === 1 && typeof window !== 'undefined') {
-                        timer = setInterval(() => { if (visible()) void loadState(); }, 4000);
                         document.addEventListener('visibilitychange', onVisible);
                         window.addEventListener('focus', onVisible);
                     }
                     void loadState();
+                    schedule();
                     return () => {
                         watchers--;
+                        if (fast) fastWatchers--;
                         if (watchers === 0 && typeof window !== 'undefined') {
-                            clearInterval(timer);
+                            clearTimeout(timer);
                             document.removeEventListener('visibilitychange', onVisible);
                             window.removeEventListener('focus', onVisible);
+                        } else {
+                            schedule();
                         }
                     };
                 },
@@ -1336,18 +1380,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     return entry;
                 },
                 /** Read everything again (a Retry). */
-                refresh() {
+                async refresh() {
                     for (const entry of spans.values()) entry.stale = true;
-                    stateJson = '';
-                    return loadState().then(emit);
+                    await freshState();
+                    emit();
                 },
                 /** Call an endpoint that changes something, then read state and events again: its answer. */
                 async act(method, args) {
                     const result = await link.call(method, args);
                     if (result.ok) {
                         for (const entry of spans.values()) entry.stale = true;
-                        stateJson = '';
-                        await loadState();
+                        await freshState();
                         emit();
                     }
                     return result;
@@ -1388,9 +1431,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /** Re-render with the store. */
         const useStore = (store) => React.useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
-        /** Keep state fresh while this view shows. */
-        function useWatch(store, on = true) {
-            React.useEffect(() => (on ? store.watch() : undefined), [store, on]);
+        /** Keep state fresh while this view shows; fast: the page's 4 s step, else the pane's slower one. */
+        function useWatch(store, on = true, fast = true) {
+            React.useEffect(() => (on ? store.watch(fast) : undefined), [store, on, fast]);
         }
         /** Now, on a step (the current-time line, the agenda's "now"). */
         function useNow(stepMs = 30_000, on = true) {
@@ -3226,7 +3269,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     store.toast('That file is too big for a calendar (over 20 MB).', 'error');
                     return;
                 }
-                const text = await file.text();
+                let text;
+                try {
+                    text = await file.text();
+                } catch (error) {
+                    store.toast(`The file couldn't be read: ${error?.message ?? error}`, 'error');
+                    return;
+                }
                 const result = await store.act('importIcs', { calendarId: id, ics: text });
                 if (result.ok) store.toast(`Added ${plural(result.value.added ?? 0, 'event')}${result.value.skipped ? `, ${result.value.skipped} already there` : ''}.`);
                 else store.toast(errorText(result.error), 'error');
@@ -3381,7 +3430,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 setBusy(true);
                 setError('');
                 const result = await store.link.call('startSignIn', { kind, accountId: accountId ?? '', ...(method ? { method } : {}) });
-                if (!alive.current) return;
+                if (!alive.current) {
+                    // The dialog closed while it started: nobody waits for it now.
+                    if (result.ok && result.value?.status === 'waiting' && typeof result.value.flow === 'string') void store.link.call('cancelSignIn', { flow: result.value.flow });
+                    return;
+                }
                 setBusy(false);
                 if (!result.ok) {
                     setError(errorText(result.error));
@@ -4175,7 +4228,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 setPop(null);
                 setViewChoice(next);
                 setAgendaSpan(AGENDA_DAYS);
-                if (next !== prefsView) void store.link.call('setPrefs', { patch: { view: next } });
+                if (next !== prefsView) {
+                    void store.link.call('setPrefs', { patch: { view: next } }).then((r) => {
+                        if (!r.ok) store.toast(`The view couldn't be kept for next time: ${errorText(r.error)}`, 'error');
+                    });
+                }
             };
             const step = (by) => {
                 setAgendaSpan(AGENDA_DAYS);
@@ -4442,7 +4499,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const visible = info?.tab?.visible !== false;
             const store = cal.store;
             useStore(store);
-            useWatch(store, visible);
+            useWatch(store, visible, false);
             const now = useNow(30_000, visible);
             const [dialog, setDialog] = React.useState(null);
             const state = store.state();

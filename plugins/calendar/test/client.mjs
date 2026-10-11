@@ -422,6 +422,57 @@ test('the window\'s own refusals keep the host\'s words', () => {
     assert.equal(I.CHOOSE_CALENDAR, 'Choose the calendar it goes to.');
 });
 
+test('the store asks the host\'s version and reads state again only when it moved; after a change, state as it is after it', async () => {
+    const calls = [];
+    let version = { ok: true, value: { version: 1, syncing: false } };
+    let now = { version: 1, syncing: false, calendars: [], accounts: [] };
+    let hold;
+    const link = {
+        async call(method) {
+            calls.push(method);
+            if (method === 'version') return version;
+            if (method === 'state') {
+                const value = now;
+                if (hold) await hold;
+                return { ok: true, value };
+            }
+            if (method === 'createEvent') {
+                now = { ...now, version: now.version + 1, calendars: [{ id: 'cal-new' }] };
+                return { ok: true, value: {} };
+            }
+            return { ok: false, error: { code: 'calendar/failed', message: 'No.' } };
+        },
+    };
+    const store = I.calendarStore(link);
+    await store.loadState();
+    await store.poll();
+    assert.deepEqual(plain(calls), ['state', 'version'], 'nothing moved: no state read');
+    now = { ...now, version: 2 };
+    version = { ok: true, value: { version: 2, syncing: false } };
+    await store.poll();
+    assert.deepEqual(plain(calls.slice(2)), ['version', 'state'], 'the version moved: state read');
+    assert.equal(store.state().version, 2);
+    version = { ok: true, value: { version: 2, syncing: true } };
+    await store.poll();
+    assert.deepEqual(plain(calls.slice(4)), ['version', 'state'], 'a sync started: state read');
+    version = { ok: false, error: { code: 'dsh/unknown-method', message: 'No such method.' } };
+    await store.poll();
+    assert.deepEqual(plain(calls.slice(6)), ['version', 'state'], 'a host without version(): state read');
+    // A state read that left before a change doesn't stand for the state after it.
+    let release;
+    hold = new Promise((resolve) => { release = resolve; });
+    const early = store.loadState();
+    const acting = store.act('createEvent', {});
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    hold = undefined;
+    release();
+    await early;
+    const result = await acting;
+    assert.equal(result.ok, true);
+    assert.equal(store.state().version, 3);
+    assert.deepEqual(plain(store.state().calendars), [{ id: 'cal-new' }], 'the new calendar is there once the change is done');
+});
+
 test('what was emailed, in a sentence', () => {
     assert.equal(I.emailedText({ what: 'an update', to: ['ann@example.com', 'bob@example.com'] }), 'Emailed an update to ann@example.com and bob@example.com.');
     assert.equal(I.emailedText({ what: 'the invitation', to: ['a@x.org', 'b@x.org', 'c@x.org', 'd@x.org', 'e@x.org'] }), 'Emailed the invitation to a@x.org, b@x.org, c@x.org and 2 others.');
