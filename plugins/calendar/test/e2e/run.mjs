@@ -93,7 +93,9 @@ async function waitFor(fn, what, timeout = 30000) {
 const root = mkdtempSync(join(tmpdir(), 'dsh-calendar-e2e-'));
 const home = join(root, 'home');
 const ws = join(root, 'ws');
-const sock = join(root, 'bridge.sock');
+// A Unix socket's path must be short (about 100 bytes): under a long temporary folder, the socket gets a short folder of its own.
+const sockDir = Buffer.byteLength(join(root, 'bridge.sock')) <= 100 ? root : mkdtempSync('/tmp/dcal-');
+const sock = join(sockDir, 'bridge.sock');
 const dshLog = join(root, 'dsh.log');
 const calendarDir = join(home, 'calendar');
 const storeFile = join(calendarDir, 'calendar.json');
@@ -287,8 +289,14 @@ const signIns = () => [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].length;
 async function boot(dsh, permission, what) {
     const before = signIns();
     const child = startDsh(dsh, permission);
-    await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, `the session bridge (${what})`, 90000);
-    await waitFor(() => signIns() > before, `the web sign-in link (${what})`, 30000);
+    try {
+        await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, `the session bridge (${what})`, 90000);
+        await waitFor(() => signIns() > before, `the web sign-in link (${what})`, 30000);
+    } catch (error) {
+        // A DSH that didn't come up isn't left running: the caller never gets it to stop.
+        await stopDsh(child);
+        throw error;
+    }
     return child;
 }
 
@@ -606,6 +614,7 @@ try {
     if (failed > 0) console.log(redact(`# DSH log tail:\n${readText(dshLog).split('\n').slice(-40).join('\n')}\n# calendar log tail:\n${readText(logFile).split('\n').slice(-20).join('\n')}`));
     if (process.env.KEEP === '1') console.log(`# kept ${root}`);
     else rmSync(root, { recursive: true, force: true });
+    if (sockDir !== root) rmSync(sockDir, { recursive: true, force: true });
 }
 
 console.log(`\n# ${passed} passed, ${failed} failed`);
