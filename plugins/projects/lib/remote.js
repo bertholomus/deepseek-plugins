@@ -65,7 +65,7 @@ export class ProjectsRemote {
     async list() {
         try {
             // DSH's own order keeps reading in category order, so a screen reader hears the list as it is drawn.
-            void this.manager.syncWorkspaceOrder();
+            this.manager.syncWorkspaceOrder().catch(() => {});
             return { ...this.lists(), guarded: this.manager.guards().map(([name]) => name), permissions: this.manager.permissionCatalog() };
         } catch (error) {
             throw failure(error);
