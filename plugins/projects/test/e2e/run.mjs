@@ -904,9 +904,11 @@ try {
         && since(quitMark, 'coordinator').filter((r) => r.fresh.includes(`${nuId} · "Nu"`)).length === 1 && since(quitMark, nuId).length === 0
         && !readText(logFile).includes(`nudge ${PROJECT_ID}/${nuId} `) && !existsSync(quitProbe), `${describe(since(quitMark))} | ${nuNote.fresh.slice(0, 300)}`);
     const viewsBack = await waitFor(() => agedViews.length === 2 && agedViews.every((id) => savedVersion(id) === STATE_VERSION), 'the old views read again', 30000).catch(() => false);
-    check('views an older version of the plugin saved are read again at start, from the store', viewsBack && /records refreshed=2\b/.test(readText(logFile))
+    // The two aged views, and any DSH hadn't saved yet when it quit (the thread cut off above).
+    const refreshed = Number([...readText(logFile).matchAll(/records refreshed=(\d+)/g)].at(-1)?.[1] ?? 0);
+    check('views an older version of the plugin saved are read again at start, from the store', viewsBack && refreshed >= 2
         && windowView(threadSession('t1'))?.role === 'thread' && windowView(threadSession('t1'))?.coordinator === coord && windowView(coord)?.role === 'coordinator',
-        `${agedViews.length} aged; ${agedViews.map((id) => savedVersion(id)).join(',')}; ${(/records refreshed=\d+/.exec(readText(logFile)) ?? ['no refresh'])[0]}`);
+        `${agedViews.length} aged; ${agedViews.map((id) => savedVersion(id)).join(',')}; records refreshed=${refreshed}`);
     await waitFor(() => signIns() > signInsBefore, 'the new web sign-in link', 30000);
     const webAgain = await signInWeb();
     lc = await waitFor(() => changesOf(webAgain), 'the project after the second restart', 30000).catch(() => undefined);
