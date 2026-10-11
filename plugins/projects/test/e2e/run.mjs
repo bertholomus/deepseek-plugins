@@ -1220,6 +1220,10 @@ try {
         await coordinatorSaw(mark, 'SAW-IDLE', 'the retry\'s idle note');
         check('the same command again, as a retry, asks again, and a Reject sends nothing', again.eventId !== first.eventId && asks() === 2 && posted() === 1
             && resultOf(since(mark, sendId)).includes('the user rejected tool "bash"'), `${asks()} ${hits.join()} ${resultOf(since(mark, sendId))}`);
+        // Its first turn used up its nudge, and the coordinator's retry starts no new count; the user's answer does, so
+        // the retry's turn that ended without a handback was nudged before the coordinator heard.
+        const retryLog = readText(logFile).split('\n').filter((line) => line.includes(` ${PROJECT_ID}/${sendId} `) && / (prompt-answered|nudge|idle-note) /.test(line)).slice(-3).map((line) => line.split(' ')[1]);
+        check('after the user answers its prompt, a turn that ends without a handback gets its own nudge', retryLog.join() === 'prompt-answered,nudge,idle-note', retryLog.join());
         mark = model.requests.length;
         await say(coord, call('project_thread_start', { ask: 'Check that staging is up.', title: 'Read', brief: call('bash', { command: `curl -sS http://${sinkAt}/health`, description: 'Check staging' }) }));
         await coordinatorSaw(mark, 'SAW-IDLE', 'the Read idle note');

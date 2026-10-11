@@ -2151,10 +2151,10 @@ export class ProjectManager {
         // and one that just ended, so each note says what happened; the user hears when it didn't help, or when only they
         // can fix it, and the coordinator sends nothing more. The plugin sends the nudge itself, since a coordinator turn
         // would only say so (and tell the user); while the project is paused its note waits like any other, and the
-        // coordinator nudges it on resume. A handback, the user's words or their Retry start the count again.
-        // A turn cut off because DSH closed while it ran (a quit, or a crash: its log can't tell them apart) gets no
-        // nudge and doesn't count, so nothing starts again on its own after the user quits: the note tells them, and
-        // the thread waits for their Resume.
+        // coordinator nudges it on resume. A handback, the user's words, their Retry or their answer to its prompt
+        // start the count again. A turn cut off because DSH closed while it ran (a quit, or a crash: its log can't
+        // tell them apart) gets no nudge and doesn't count, so nothing starts again on its own after the user quits:
+        // the note tells them, and the thread waits for their Resume.
         const ended = Boolean(endingStateOf(turn.ending));
         const cutOff = turn.endKind === 'interrupted' || (turn.endKind === 'aborted' && turn.stopCause === 'disposed');
         const again = !cutOff && (ended ? t.nudged === true : t.stalled === true);
@@ -2242,6 +2242,16 @@ export class ProjectManager {
         if (event.type === 'approval/decided') {
             clearTimeout(this.approvals.get(agent.id)?.get(id));
             this.approvals.get(agent.id)?.delete(id);
+            // The user answered its prompt (Allow once or Reject; a policy that never asks rejects by itself), so what
+            // it does next is new: a turn that then ends without a handback gets its own nudge, as after their words.
+            const outcome = event.data?.outcome;
+            if ((outcome === 'allowed-once' || outcome === 'rejected') && this.approvalPolicyOf(agent.session) === 'ask') {
+                const t = this.store.thread(projectId, threadId);
+                if (t?.nudged || t?.stalled) {
+                    this.store.putThread(projectId, threadId, { nudged: undefined, stalled: undefined });
+                    this.log(`prompt-answered ${projectId}/${threadId} ${outcome}`);
+                }
+            }
             return;
         }
         if (event.type !== 'approval/asked') return;

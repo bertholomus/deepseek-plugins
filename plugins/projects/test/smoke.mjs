@@ -727,6 +727,76 @@ test('the idle nudge waits while the project is paused, and counts toward the ho
     assert.deepEqual([ts.prompts.length, cp.length], sent);
 });
 
+test('the user\'s answer to a thread\'s permission prompt starts the nudge count again', async () => {
+    const { host, dir } = setup();
+    const policies = new Map();
+    host.services.approval = { effectivePolicy: (session) => policies.get(session.id) ?? 'ask' };
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { ask: 'Deploy the build to staging.', title: 'Deploy', brief: 'Deploy it.' });
+    const thread = threadOf(host, coord);
+    const ts = host.sessions.get(thread.id);
+    const cp = host.sessions.get(coord.id).prompts;
+    const nudge = `[From the coordinator]\n\n${IDLE_NUDGE}`;
+    const nudges = () => ts.prompts.filter((p) => p.text === nudge).length;
+    let asks = 0;
+    // A turn that ends without a handback; `outcome` answers a prompt it asked on the way.
+    const idle = (reply, outcome) => {
+        thread.ctx.emitStatus(thread, 'running');
+        const marks = turnMarks(host, thread.id);
+        marks.start();
+        if (outcome) {
+            const id = `a${++asks}`;
+            thread.ctx.sessionEvent({ type: 'approval/asked', data: { id, toolName: 'bash', reason: 'the command sends a POST to staging (curl)' } });
+            thread.ctx.sessionEvent({ type: 'approval/decided', data: { id, outcome } });
+        }
+        assistantSays(host, thread.id, reply);
+        marks.end();
+        thread.ctx.emitStatus(thread, 'idle');
+    };
+    const idleNote = /^\[Thread idle without a handback: t1 · "Deploy"\]/;
+    idle('Half done.');
+    await tick();
+    idle('Still half done.');
+    await tick();
+    assert.deepEqual([nudges(), idleNote.test(cp.at(-1).text) && /nudged once already/.test(cp.at(-1).text)], [1, true], 'its one nudge, then the note');
+
+    // The coordinator's own message is no new start: a turn that ends that way after it goes to the coordinator again.
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Try the deploy once more.' });
+    idle('Could not deploy.');
+    await tick();
+    assert.deepEqual([nudges(), /nudged once already/.test(cp.at(-1).text)], [1, true]);
+
+    // The split thread's check: after the user answers the thread's prompt (here Reject), the turn that ends without a
+    // handback gets the plugin's nudge, not the note that it was nudged already.
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Try the deploy once more.' });
+    idle('The user rejected the deploy.', 'rejected');
+    await tick();
+    assert.equal(nudges(), 2);
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), / prompt-answered dsh-plugins\/t1 rejected\n[^]* nudge dsh-plugins\/t1 idle\n/);
+    idle('Still not deployed.');
+    await tick();
+    assert.match(cp.at(-1).text, /nudged once already/);
+
+    // Allow once counts the same; a prompt that was cancelled (its turn stopped) or that a policy that never asks
+    // rejected by itself had no answer from the user, so the count stands.
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Try the deploy once more.' });
+    idle('Deployed, but the check failed.', 'allowed-once');
+    await tick();
+    assert.equal(nudges(), 3);
+    idle('Check still failing.');
+    await tick();
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Try the deploy once more.' });
+    idle('Cancelled.', 'cancelled');
+    await tick();
+    assert.equal(nudges(), 3);
+    policies.set(thread.id, 'never');
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Try the deploy once more.' });
+    idle('Refused.', 'rejected');
+    await tick();
+    assert.deepEqual([nudges(), /nudged once already/.test(cp.at(-1).text)], [3, true]);
+});
+
 test('autoHandback off sends only explicit handbacks', async () => {
     const { host } = setup({ autoHandback: 'off' });
     await tick();
