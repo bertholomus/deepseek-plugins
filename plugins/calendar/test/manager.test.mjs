@@ -1535,14 +1535,58 @@ test('a move whose second step fails says it was copied, and what to do, rather 
             return true;
         });
         assert.deepEqual(week(m).filter((o) => o.title === 'Lunch').map((o) => o.calendarId).sort(), ['cal-dav', personal.id].sort());
-        // An agent is told it is done in part, and not to move it again.
+        // An agent is told it is done in part, and not to move it again (here the copy was deleted first, so it moves again).
         const tools = Object.fromEntries(calendarTools(m).map((t) => [t.name, t]));
-        const copy = week(m).find((o) => o.title === 'Lunch' && o.calendarId === personal.id);
+        await m.deleteEvent(week(m).find((o) => o.title === 'Lunch' && o.calendarId === personal.id).id);
         dav.fail = [new SourceError('forbidden', 'Deleting the event: the server doesn\'t allow this.')];
         const work = week(m).find((o) => o.title === 'Lunch' && o.calendarId === 'cal-dav');
         await assert.rejects(tools.calendar_update_event.execute({ id: work.id, calendar_id: personal.id }),
             /^Error: Done in part: It was copied to Personal, .* Don't move it again: tell the user, and delete it from the calendar it came from only if they say so\.$/);
-        assert.ok(copy);
+        assert.deepEqual(week(m).filter((o) => o.title === 'Lunch').map((o) => o.calendarId).sort(), ['cal-dav', personal.id].sort());
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
+test('a move asked again after it stopped halfway is refused while its copy is there, so it makes no second copy', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        const { SourceError } = await import('../lib/sources/index.js');
+        const me = { username: 'me@example.org', email: 'me@example.org', addresses: ['me@example.org'] };
+        const work = standIn(m, { id: 'work', kind: 'caldav', name: 'Work', url: 'https://work.example.org/', ...me },
+            { id: 'cal-work', remoteId: 'https://work.example.org/cal/', name: 'Work', scheduling: true }, 'ics');
+        const home = standIn(m, { id: 'home', kind: 'caldav', name: 'Home', url: 'https://home.example.org/', ...me },
+            { id: 'cal-home', remoteId: 'https://home.example.org/cal/', name: 'Home', scheduling: true }, 'ics');
+        const offsite = (...people) => meetingIcs('offsite', '20261015T090000', ['ORGANIZER:mailto:me@example.org', ...people.map((p) => `ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:${p}`)], 'Offsite');
+        await holdIcs(m, 'cal-work', 'https://work.example.org/cal/offsite.ics', offsite('ann@example.com'));
+        const inWork = () => week(m).find((o) => o.title === 'Offsite' && o.calendarId === 'cal-work');
+        const copies = () => week(m).filter((o) => o.title === 'Offsite' && o.calendarId === 'cal-home');
+        // Moved to Home with invitations to ann; meanwhile bob joined it on the server, so taking it out of Work stops.
+        work.fail = [new SourceError('conflict', 'Deleting the event: it changed on the server meanwhile.')];
+        work.syncItems = [{ remoteId: 'https://work.example.org/cal/offsite.ics', raw: offsite('ann@example.com', 'bob@example.com') }];
+        await assert.rejects(m.updateEvent(inWork().id, { calendarId: 'cal-home', notify: true }), (error) => error.code === 'half-moved'
+            && /^It was copied to Home \(invitations sent to ann@example\.com\), but not taken out of Work, which stopped: The event changed since/.test(error.message));
+        assert.equal(copies().length, 1);
+        // The same move again, here or from an agent: refused while the copy is there, and nothing is written.
+        const writes = home.length;
+        const refusal = 'It was copied to Home already, by a move that stopped halfway, and that copy is still there. '
+            + 'Delete it from Work to finish the move; moving it again would make a second copy.';
+        await assert.rejects(m.updateEvent(inWork().id, { calendarId: 'cal-home', notify: true }), (error) => error.code === undefined && error.message === refusal);
+        const tools = Object.fromEntries(calendarTools(m).map((t) => [t.name, t]));
+        const again = { id: inWork().id, calendar_id: 'cal-home', notify_guests: true };
+        await assert.rejects(tools.calendar_update_event.execute(again), { message: `Not done: ${refusal}` });
+        // The agent's call is refused before anyone is asked about it.
+        assert.deepEqual(planOf(m, 'calendar_update_event', again), { refusal: `Not done: ${refusal}` });
+        assert.equal(home.length, writes);
+        assert.equal(copies().length, 1);
+        // With the copy deleted, the move is made.
+        await m.deleteEvent(copies()[0].id, 'all', 'window', { notify: true });
+        const moved = await m.updateEvent(inWork().id, { calendarId: 'cal-home', notify: true });
+        assert.deepEqual([moved.calendarId, moved.emailed.to], ['cal-home', ['ann@example.com', 'bob@example.com']]);
+        assert.deepEqual([copies().length, inWork()], [1, undefined]);
     } finally {
         m.dispose();
         done();

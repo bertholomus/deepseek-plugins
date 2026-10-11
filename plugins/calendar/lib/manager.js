@@ -115,6 +115,8 @@ export class CalendarManager {
         this.eventIndex = new Map();
         /** Creates whose answer was lost, by what they asked for: a repeat reuses the uid, so the server makes it once. */
         this.lostCreates = new Map();
+        /** Moves that made their copy but stopped before taking the event out, by event and calendar: {uid of the copy, at}. */
+        this.halfMoves = new Map();
     }
 
     // ── Lifecycle ──────────────────────────────────────────────────────
@@ -1436,6 +1438,7 @@ export class CalendarManager {
             : kind === 'respond' ? this.planRespond(id, status, scope ?? 'all')
             : undefined;
         if (plan === undefined) throw new CalendarError(`"${kind}" isn't a change.`);
+        if (plan.move) this.checkHalfMove(plan.at, plan.target);
         return { mail: plan.mail, ...(plan.move ? { move: true } : {}) };
     }
 
@@ -2111,6 +2114,7 @@ export class CalendarManager {
     async moveEvent(id, calendarId, by = 'window', { notify = false, dropChanges = false, approved, confirm = false } = {}) {
         const plan = this.planMove(id, calendarId, { notify, dropChanges });
         const { at, target } = plan;
+        this.checkHalfMove(at, target);
         const known = this.knownFor(plan.mail, approved, confirm);
         this.checkKnown(plan.mail, known);
         const zone = this.zone();
@@ -2160,6 +2164,8 @@ export class CalendarManager {
             // The copy is made, with its invitations: "nothing was done" would have the move made again, and a second copy.
             const from = this.calendarName(at.calendar);
             const sent = mail.invites && mail.to.length > 0 ? ` (invitations sent to ${peopleWords(mail.to)})` : '';
+            // Kept, so the same move asked again doesn't make a second copy (checkHalfMove).
+            this.halfMoves.set(stableJson([at.eventId, target.id]), { uid, at: this.now() });
             this.log(`move ${at.calendar.id} ${target.id} by=${by} copied, not taken out`);
             throw new CalendarError(`It was copied to ${this.calendarName(target)}${sent}, but not taken out of ${from}, which stopped: ${asCalendarError(error).message} `
                 + `Delete it from ${from} to finish the move; moving it again would make a second copy.`, 'half-moved');
@@ -2168,6 +2174,26 @@ export class CalendarManager {
         const startMs = startOfTime(master.start, zone);
         const found = this.find({ from: startMs - DAY, to: startMs + 2 * DAY, calendars: [target.id] }).find(({ o }) => o.record.uid === uid);
         return withMail(found ? this.view(found) : { id }, mail);
+    }
+
+    /**
+     * Refuse a move that was made before and stopped halfway, while its copy
+     * is still in that calendar (as the plugin last read it): moving it
+     * again would make a second copy, and send its invitations again. Kept
+     * for a day, in memory; once the copy is gone, the move goes again.
+     */
+    checkHalfMove(at, target) {
+        for (const [key, half] of this.halfMoves) if (this.now() - half.at > DAY) this.halfMoves.delete(key);
+        const key = stableJson([at.eventId, target.id]);
+        const half = this.halfMoves.get(key);
+        if (half === undefined) return;
+        if (!this.index().has(eventIdOf(target.id, half.uid))) {
+            this.halfMoves.delete(key);
+            return;
+        }
+        const from = this.calendarName(at.calendar);
+        throw new CalendarError(`It was copied to ${this.calendarName(target)} already, by a move that stopped halfway, and that copy is still there. `
+            + `Delete it from ${from} to finish the move; moving it again would make a second copy.`);
     }
 
     /**

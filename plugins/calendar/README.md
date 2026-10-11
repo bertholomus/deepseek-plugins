@@ -151,7 +151,7 @@ The plugin needs no config. Its row in `cordis.patch.yml`:
 ## Known limits
 
 - Microsoft: an event's status, link, conference, extra dates and skipped dates aren't written to Microsoft, and only the first reminder is.
-- A move is a new event in the other calendar, even within one account (Google's and CalDAV's own moves aren't used yet), so a meeting's guests get a cancellation and a new invitation where the servers email them. If the event can't be taken out of the calendar it came from, the move says it was copied but not taken out, and why: delete it there to finish, since moving it again would make a second copy.
+- A move is a new event in the other calendar, even within one account (Google's and CalDAV's own moves aren't used yet), so a meeting's guests get a cancellation and a new invitation where the servers email them. If the event can't be taken out of the calendar it came from, the move says it was copied but not taken out, and why: delete it there to finish. Moving it again would make a second copy, so the same move is refused for a day while the copy is still there (remembered in memory only, so not across a restart).
 
 ## Tests
 
