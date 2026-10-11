@@ -615,6 +615,11 @@ export class CalendarManager {
             else prefs.weekStart = patch.weekStart;
         }
         if (typeof patch.view === 'string' && ['month', 'week', 'day', 'agenda'].includes(patch.view)) prefs.view = patch.view;
+        // What Week and Month show: on with true, off (not kept) with false; anything else leaves it as it is.
+        for (const key of ['hideWeekends', 'weekNumbers']) {
+            if (patch[key] === true) prefs[key] = true;
+            else if (patch[key] === false) delete prefs[key];
+        }
         if (typeof patch.googleClientId === 'string') prefs.googleClientId = patch.googleClientId.trim();
         if (typeof patch.microsoftClientId === 'string') prefs.microsoftClientId = patch.microsoftClientId.trim();
         if (typeof patch.microsoftTenant === 'string') prefs.microsoftTenant = patch.microsoftTenant.trim();
@@ -1499,7 +1504,8 @@ export class CalendarManager {
         }
         const dropped = this.droppedByMove(at, target);
         if (dropped !== undefined && !dropChanges) throw new CalendarError(dropped, 'drops-changes');
-        const mail = this.mailOf({ kind: 'move', calendar: at.calendar, target, before: master, notify });
+        // Taken out here, the series is cancelled for everyone on any of its occurrences.
+        const mail = this.mailOf({ kind: 'move', calendar: at.calendar, target, before: this.recordOf({ ...at, master }, 'all'), notify });
         this.checkMail(mail, notify);
         return { at, target, master, notify, mail };
     }
@@ -1558,15 +1564,31 @@ export class CalendarManager {
 
     /**
      * The record a change with this scope is worked out on: the occurrence
-     * for 'one', else the series' (or the event's). A series kept as its
-     * occurrences (Microsoft) has no record of its own here: a change to all
-     * of it is worked out on the occurrence it was asked on, with everyone
-     * on any of them as its guests, since it reaches them all.
+     * for 'one', else the series' (or the event's), with everyone on any
+     * part of the series the change reaches as its guests: a change to all
+     * of it reaches the occurrences changed on their own too (partsReached).
+     * A series kept as its occurrences (Microsoft) has no record of its own
+     * here: it is worked out on the occurrence it was asked on.
      */
     recordOf(at, which) {
         if (which === 'one') return this.occurrenceRecord(at);
-        if (at.master || at.records.length < 2) return at.master ?? at.override;
-        return { ...at.override, attendees: everyoneOn([at.override, ...at.records]) };
+        const base = at.master ?? at.override;
+        const parts = this.partsReached(at, which);
+        if (parts.length < 2) return base;
+        return { ...base, attendees: everyoneOn([base, ...parts]) };
+    }
+
+    /**
+     * The records of a series that a change to all of it ('all'), or to an
+     * occurrence and the ones after it ('following'), reaches: for
+     * 'following', the series' own and the occurrences changed from that
+     * one on, and every "this and following" change before it (it may
+     * reach past it).
+     */
+    partsReached(at, which) {
+        if (which !== 'following' || !at.master) return at.records;
+        const zone = this.zone();
+        return at.records.filter((r) => r.recurrenceId === undefined || r.thisAndFuture === true || startOfTime(r.recurrenceId, zone) >= at.originalStart);
     }
 
     /** A record as an update's guest list leaves it (the record itself when the update doesn't give one). */
@@ -1856,7 +1878,7 @@ export class CalendarManager {
                 return;
             }
             if (which === 'following') {
-                after = await this.splitSeries(at, source, style, patch);
+                after = await this.splitSeries(at, source, style, patch, now.before);
                 return;
             }
             // The whole series, or a single event: the change moves it by as much as this occurrence moved.
@@ -1971,8 +1993,12 @@ export class CalendarManager {
         return { ...patch, timeZone: tz ?? undefined, start: toLocal(startMs, tz ?? zone), end: toLocal(startMs + length, tz ?? zone) };
     }
 
-    /** "This and following": the series ends before this occurrence; a new one starts here with the change. */
-    async splitSeries(at, source, style, patch) {
+    /**
+     * "This and following": the series ends before this occurrence; a new
+     * one starts here with the change. `planned`: the record the change was
+     * worked out on (recordOf), for a source that checks it before writing.
+     */
+    async splitSeries(at, source, style, patch, planned) {
         const master = at.master;
         const zone = this.zone();
         if (master?.rrule === undefined) throw new CalendarError('Only a repeating series can be changed from one occurrence on.');
@@ -1981,7 +2007,7 @@ export class CalendarManager {
         const firstStart = startOfTime(master.start, zone);
         if (splitAt <= firstStart) {
             // From the first occurrence on is the whole series.
-            return this.updateWhole(at, source, style, patch);
+            return this.updateWhole(at, source, style, patch, planned);
         }
         const tell = patch.notify === true ? { notify: true } : {};
         const before = { ...rule };
@@ -2022,21 +2048,21 @@ export class CalendarManager {
             await this.putIcs(at.calendar, null, [{ uid: newer.uid, record: newer }], newer.uid);
             return { uid: newer.uid, near };
         }
-        this.takeItems(at.calendar, await source.update({ ...at.calendar }, { item: at.item, record: master }, { rrule: older.rrule, ...tell }, 'all'));
+        this.takeItems(at.calendar, await source.update({ ...at.calendar }, { item: at.item, record: master, planned, from: at.recurrenceId }, { rrule: older.rrule, ...tell }, 'all'));
         const made = await source.create({ ...at.calendar }, { ...newer, ...tell });
         this.takeItems(at.calendar, made);
         // Google and Microsoft give the new series their own uid.
         return { uid: made?.find((i) => i.events?.length)?.events[0].uid ?? newer.uid, near };
     }
 
-    async updateWhole(at, source, style, patch) {
+    async updateWhole(at, source, style, patch, planned) {
         const master = at.master;
         const zone = this.zone();
         const changed = this.recordFrom(this.shiftedPatch(at, patch), master);
         changed.uid = at.uid;
         changed.sequence = (master.sequence ?? 0) + 1;
         if (style === 'ics') await this.putIcs(at.calendar, at.item, [{ uid: at.uid, record: changed }], at.uid);
-        else this.takeItems(at.calendar, await source.update({ ...at.calendar }, { item: at.item, record: master }, { ...diffOf(master, changed), ...(patch.notify === true ? { notify: true } : {}) }, 'all'));
+        else this.takeItems(at.calendar, await source.update({ ...at.calendar }, { item: at.item, record: master, planned }, { ...diffOf(master, changed), ...(patch.notify === true ? { notify: true } : {}) }, 'all'));
         return { uid: at.uid, near: startOfTime(changed.start, zone) };
     }
 
@@ -2167,7 +2193,7 @@ export class CalendarManager {
             if (at.originalStart <= startOfTime(master.start, zone)) {
                 if (style === 'ics') await this.putIcs(calendar, at.item, at.records.map((r) => ({ uid: at.uid, recurrenceId: r.recurrenceId, record: null })), at.uid, quiet);
                 else {
-                    const out = await source.remove({ ...calendar }, { item: at.item, record: master, ...tell }, 'all');
+                    const out = await source.remove({ ...calendar }, { item: at.item, record: master, planned: now.before, ...tell }, 'all');
                     this.takeItems(calendar, out?.items, out?.removed ?? [at.item.remoteId]);
                 }
                 return;
@@ -2182,7 +2208,7 @@ export class CalendarManager {
                 const later = at.records.filter((r) => r.recurrenceId && startOfTime(r.recurrenceId, zone) >= at.originalStart);
                 await this.putIcs(calendar, at.item, [{ uid: at.uid, record: older }, ...later.map((r) => ({ uid: at.uid, recurrenceId: r.recurrenceId, record: null }))], at.uid);
             } else {
-                this.takeItems(calendar, await source.update({ ...calendar }, { item: at.item, record: master }, { rrule: older.rrule, ...tell }, 'all'));
+                this.takeItems(calendar, await source.update({ ...calendar }, { item: at.item, record: master, planned: now.before, from: at.recurrenceId }, { rrule: older.rrule, ...tell }, 'all'));
             }
         }, { retry: false, recheck: () => this.checkKnown(this.planDelete(id, scope, { notify }).mail, known) });
         this.log(`delete ${first.calendar.id} ${first.eventId} scope=${which} by=${by}${mailLog(mail)}`);
@@ -2281,6 +2307,8 @@ export class CalendarManager {
             prefs: {
                 ...(this.store.prefs.weekStart !== undefined ? { weekStart: this.store.prefs.weekStart } : {}),
                 ...(this.store.prefs.view ? { view: this.store.prefs.view } : {}),
+                ...(this.store.prefs.hideWeekends === true ? { hideWeekends: true } : {}),
+                ...(this.store.prefs.weekNumbers === true ? { weekNumbers: true } : {}),
             },
             syncing: this.syncing.size > 0,
             // calendar.json couldn't be read at this start: the name it is kept under beside it (held: it couldn't be moved, and isn't written over).

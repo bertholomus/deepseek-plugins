@@ -122,6 +122,100 @@ test('what each view shows', () => {
     assert.equal(I.stepFrom('month', '2026-10-31', 1), '2026-11-01');
 });
 
+test('week numbers: ISO 8601\'s, and a row\'s for each first day of the week', () => {
+    // Week 1 has the year's first Thursday: 2026 starts on one, so it has 53 weeks; 2021 started in 2020's week 53.
+    const iso = (days) => days.map((day) => I.isoWeek(day));
+    assert.deepEqual(iso(['2026-10-12', '2026-10-14', '2026-10-18', '2026-10-19']), [42, 42, 42, 43]);
+    assert.deepEqual(iso(['2025-12-29', '2026-01-01', '2026-12-28', '2026-12-31', '2027-01-03', '2027-01-04']), [1, 1, 53, 53, 53, 1]);
+    assert.deepEqual(iso(['2020-12-31', '2021-01-01', '2021-01-04', '2023-01-01', '2024-12-30']), [53, 53, 1, 52, 1]);
+    // A row is numbered as most of its days are: from Monday, its own number; from Sunday or Saturday, its Monday's.
+    assert.equal(I.weekNumberOf('2026-10-18', 1), 42);
+    assert.equal(I.weekNumberOf('2026-10-18', 0), 43);
+    assert.equal(I.weekNumberOf('2026-10-17', 6), 43);
+    assert.equal(I.weekNumberOf('2026-10-16', 6), 42);
+    assert.equal(I.weekNumberOf('2027-01-02', 0), 53);
+    assert.equal(I.weekNumberOf('2027-01-03', 0), 1);
+    assert.equal(I.weekNumberOf('2027-01-01', 6), 53);
+    for (const weekStart of [1, 0, 6]) {
+        for (let day = '2025-12-01'; day < '2028-02-01'; day = I.addDays(day, 1)) {
+            const row = I.daySpan(I.weekStartOf(day, weekStart), I.addDays(I.weekStartOf(day, weekStart), 6));
+            assert.equal(I.weekNumberOf(day, weekStart), I.isoWeek(row.find((d) => I.weekdayOf(d) === 1)), `${day} from ${weekStart}`);
+        }
+    }
+    // The words by a view's title.
+    assert.equal(I.weekWords(I.daySpan('2026-10-12', '2026-10-16'), 1), 'Week 42');
+    assert.equal(I.weekWords(['2026-10-15', '2026-10-16', '2026-10-19'], 1), 'Weeks 42–43');
+    assert.equal(I.weekWords(['2026-10-18'], 0), 'Week 43');
+});
+
+test('weekends hidden: the days Week and Month show, and how they step', () => {
+    assert.deepEqual([I.isWeekend('2026-10-16'), I.isWeekend('2026-10-17'), I.isWeekend('2026-10-18'), I.isWeekend('2026-10-19')], [false, true, true, false]);
+    // Every week's row keeps its five weekdays, whichever day it starts on.
+    for (const weekStart of [1, 0, 6, 3]) {
+        const row = I.daySpan(I.weekStartOf('2026-10-14', weekStart), I.addDays(I.weekStartOf('2026-10-14', weekStart), 6));
+        assert.equal(I.visibleDays(row, true).length, 5);
+        assert.ok(I.visibleDays(row, true).every((day) => !I.isWeekend(day)));
+        assert.equal(I.visibleDays(row, false).length, 7);
+    }
+    assert.equal(I.addShownDays('2026-10-16', 1, true), '2026-10-19');
+    assert.equal(I.addShownDays('2026-10-19', -1, true), '2026-10-16');
+    assert.equal(I.addShownDays('2026-10-14', 3, true), '2026-10-19');
+    assert.equal(I.addShownDays('2026-10-16', 1, false), '2026-10-17');
+    assert.equal(I.firstShown('2026-10-17', true), '2026-10-19');
+    assert.equal(I.firstShown('2026-10-17', false), '2026-10-17');
+    // A day that shows in the same month: Aug 1, 2026 is a Saturday; May 31, 2026 a Sunday at the month's end.
+    assert.equal(I.shownNear('2026-08-01', true), '2026-08-03');
+    assert.equal(I.shownNear('2026-05-31', true), '2026-05-29');
+    assert.equal(I.shownNear('2026-05-31', false), '2026-05-31');
+
+    // Week: Monday to Friday, whether the week starts on Monday, Sunday or Saturday; it reads the whole week still.
+    for (const weekStart of [1, 0, 6]) {
+        const week = I.rangeOf('week', '2026-10-14', weekStart, LA, { hideWeekends: true });
+        assert.deepEqual(plain(week.days), ['2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16']);
+        assert.deepEqual([week.first, week.last], ['2026-10-12', '2026-10-16']);
+        const all = I.rangeOf('week', '2026-10-14', weekStart, LA);
+        assert.deepEqual([week.from, week.to, week.spanFirst, week.spanLast], [all.from, all.to, all.first, all.last]);
+    }
+    assert.equal(I.stepFrom('week', '2026-10-14', 1, false, true), '2026-10-21');
+    // A narrow page's three days: the next weekdays, from Monday on a weekend's day; a step is three weekdays.
+    const narrow = (day) => plain(I.rangeOf('week', day, 1, LA, { compact: true, hideWeekends: true }).days);
+    assert.deepEqual(narrow('2026-10-15'), ['2026-10-15', '2026-10-16', '2026-10-19']);
+    assert.deepEqual(narrow('2026-10-17'), ['2026-10-19', '2026-10-20', '2026-10-21']);
+    assert.equal(I.rangeOf('week', '2026-10-17', 1, LA, { compact: true, hideWeekends: true }).spanFirst, '2026-10-17');
+    assert.equal(I.stepFrom('week', '2026-10-15', 1, true, true), '2026-10-20');
+    assert.equal(I.stepFrom('week', '2026-10-20', -1, true, true), '2026-10-15');
+    assert.equal(I.stepFrom('week', '2026-10-17', 1, true, true), '2026-10-22');
+    // Day and Agenda keep every day.
+    assert.equal(I.rangeOf('day', '2026-10-17', 1, LA, { hideWeekends: true }).days[0], '2026-10-17');
+    assert.equal(I.rangeOf('agenda', '2026-10-14', 1, LA, { hideWeekends: true }).days.length, 30);
+    assert.equal(I.stepFrom('day', '2026-10-16', 1, false, true), '2026-10-17');
+
+    // Month: rows of five; a row whose weekdays are all in the month before or after goes.
+    const august = I.rangeOf('month', '2026-08-14', 1, LA, { hideWeekends: true });
+    assert.equal(august.days.length, 25);
+    assert.deepEqual([august.first, august.last, august.spanFirst, august.spanLast], ['2026-08-03', '2026-09-04', '2026-07-27', '2026-09-06']);
+    assert.ok(august.days.every((day) => !I.isWeekend(day)));
+    const may = I.rangeOf('month', '2026-05-10', 0, LA, { hideWeekends: true });
+    assert.deepEqual([may.first, may.last, may.days.length], ['2026-04-27', '2026-05-29', 25]);
+    assert.equal(I.rangeOf('month', '2026-05-10', 0, LA).days.length, 42);
+});
+
+test('weekends hidden: bars cut at the days on show, a short event on a hidden day left out', () => {
+    const ev = (id, start, end) => ({ id, start: Date.parse(start), end: Date.parse(end) });
+    const trip = { id: 'trip', allDay: true, startDay: '2026-10-16', lastDay: '2026-10-19', start: 0, end: 0 };
+    const weekend = { id: 'weekend', allDay: true, startDay: '2026-10-17', lastDay: '2026-10-18', start: 0, end: 0 };
+    const saturday = ev('saturday', '2026-10-17T17:00:00Z', '2026-10-17T18:00:00Z'); // 10:00–11:00 in Los Angeles
+    const sundayNight = ev('late', '2026-10-19T05:00:00Z', '2026-10-19T08:00:00Z'); // Sunday 22:00 to Monday 01:00
+    const bars = (days, hide = true) => plain(I.barItems([trip, weekend, saturday, sundayNight], days, LA, () => true, hide).map((b) => [b.key, b.a, b.b, b.contStart, b.contEnd]));
+    // A week from Sunday or Monday: Monday to Friday, the trip going on past Friday, then on from before Monday.
+    assert.deepEqual(bars(I.daySpan('2026-10-12', '2026-10-16')), [['trip', 4, 4, false, true]]);
+    assert.deepEqual(bars(I.daySpan('2026-10-19', '2026-10-23')), [['trip', 0, 0, true, false]]);
+    // The overnight event starts on the hidden Sunday, so it is left out; with weekends on show a row from Monday has it, as before.
+    assert.deepEqual(bars(I.daySpan('2026-10-19', '2026-10-25'), false).map((b) => b[0]), ['trip', 'late']);
+    // A week from Wednesday: the trip one bar over Friday and Monday, the weekend between them out of sight.
+    assert.deepEqual(bars(['2026-10-14', '2026-10-15', '2026-10-16', '2026-10-19', '2026-10-20']), [['trip', 2, 3, false, false]]);
+});
+
 test('short times for a month\'s day follow the locale', () => {
     const at = (h, m) => Date.parse(`2026-10-12T${String(h + 7).padStart(2, '0')}:${String(m).padStart(2, '0')}:00Z`);
     const parts = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', timeZone: LA }).formatToParts(at(9, 30));

@@ -269,11 +269,16 @@ export class CalendarRemote {
         });
     }
 
-    /** The window's choices ({weekStart: 0-6 (0 Sunday) or null, view}): {prefs}. */
+    /**
+     * The window's choices, those given changed and the rest kept: {weekStart:
+     * 0-6 (0 Sunday) or null, view, hideWeekends (Week and Month without
+     * Saturday and Sunday), weekNumbers (ISO 8601 week numbers shown)}.
+     * hideWeekends and weekNumbers are true for on, false for off: {prefs}.
+     */
     async setPrefs(patch) {
         return this.run(async () => {
             const p = object(patch);
-            this.manager.setPrefs({ weekStart: p.weekStart, view: p.view });
+            this.manager.setPrefs({ weekStart: p.weekStart, view: p.view, hideWeekends: p.hideWeekends, weekNumbers: p.weekNumbers });
             return { prefs: this.manager.state().prefs };
         });
     }

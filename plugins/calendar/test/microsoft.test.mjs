@@ -1355,9 +1355,52 @@ test('a series changed or deleted from one of its occurrences: someone added at 
     assert.deepEqual(writes().map((r) => [r.method, r.path]), [['PATCH', `/v1.0/me/events/${series}`]]);
     assert.equal(store.json(series).subject, 'Weekly sync');
 
-    // A guest taken off the series meanwhile is no one new: the series goes.
+    // Ann is taken off the series in Outlook. The change was worked out with her: written, it would say she was told,
+    // and a guest list built on the plugin's copy would put her back. It stops too; after a sync, it goes.
     store.updateEvent(series, { attendees: [guest('bob@example.com')] });
-    await source.remove({ remoteId: cal }, target(wednesday), 'all');
+    await assert.rejects(source.remove({ remoteId: cal }, target(wednesday), 'all'), isSourceError('conflict'));
+    assert.equal(store.events.has(series), true);
+    const synced = (await source.sync({ remoteId: cal }, undefined, { from: FROM, to: TO })).items;
+    await source.remove({ remoteId: cal }, target(byId(synced, store.occurrenceId(series, '2026-10-14'))), 'all');
+    assert.equal(store.events.has(series), false);
+});
+
+test('a whole series changed or deleted after someone was added at Microsoft to one of its occurrences: the occurrences are read too, and nothing is written', async (t) => {
+    const { store, source, sent } = await setup(t, { rules: true });
+    const cal = store.addCalendar({ name: 'Work' });
+    const guest = (address) => ({ type: 'required', status: { response: 'none', time: NO_TIME }, emailAddress: { name: address, address } });
+    const me = { organizer: { emailAddress: { name: 'Robin Park', address: 'robin@example.com' } }, isOrganizer: true };
+    const series = weeklySeries(store, cal, { ...me, attendees: [guest('ann@example.com')] });
+    const first = (await source.sync({ remoteId: cal }, undefined, { from: FROM, to: TO })).items;
+    const writes = () => sent.filter((r) => r.method === 'PATCH' || r.method === 'DELETE');
+    // Worked out as the manager does: on everyone on any of the occurrences the sync brought.
+    const target = (items) => {
+        const item = byId(items, store.occurrenceId(series, '2026-10-14'));
+        const planned = items.filter((i) => i.events[0].seriesRemoteId === series).map((i) => i.events[0]);
+        return { item, record: item.events[0], occurrence: item.events[0].recurrenceId, planned };
+    };
+
+    // Zoe is added at Microsoft to the 21st alone. The series' own event doesn't name her, but a change to all of it
+    // reaches her: its occurrences are read too, and nothing is written.
+    store.updateEvent(store.occurrenceId(series, '2026-10-21'), { attendees: [guest('ann@example.com'), guest('zoe@example.com')] });
+    sent.length = 0;
+    await assert.rejects(source.update({ remoteId: cal }, target(first), { title: 'Weekly sync', notify: true }, 'all'), isSourceError('conflict'));
+    await assert.rejects(source.remove({ remoteId: cal }, target(first), 'all'), isSourceError('conflict'));
+    assert.equal(writes().length, 0);
+    assert.equal(sent.filter((r) => r.method === 'GET' && r.path === `/v1.0/me/events/${series}/instances`).length, 2);
+    assert.equal(store.json(series).subject, 'Team sync');
+
+    // After a sync the change is worked out with Zoe on it, and it goes.
+    const again = (await source.sync({ remoteId: cal }, undefined, { from: FROM, to: TO })).items;
+    assert.deepEqual(await source.update({ remoteId: cal }, target(again), { title: 'Weekly sync', notify: true }, 'all'), []);
+    assert.deepEqual(writes().map((r) => r.method), ['PATCH']);
+    assert.equal(store.json(series).subject, 'Weekly sync');
+
+    // Zoe taken off the 21st at Microsoft stops it too: the change would say she was told.
+    store.updateEvent(store.occurrenceId(series, '2026-10-21'), { attendees: [guest('ann@example.com')] });
+    await assert.rejects(source.remove({ remoteId: cal }, target(again), 'all'), isSourceError('conflict'));
+    const last = (await source.sync({ remoteId: cal }, undefined, { from: FROM, to: TO })).items;
+    await source.remove({ remoteId: cal }, target(last), 'all');
     assert.equal(store.events.has(series), false);
 });
 

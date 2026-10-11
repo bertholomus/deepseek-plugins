@@ -527,7 +527,7 @@ function standIn(m, account, calendar, style) {
             return [{ remoteId: uid, events: [{ ...kept, uid, organizer: { email: account.email, self: true } }] }];
         },
         async update(_calendar, target, patch, scope) {
-            calls.push({ op: 'update', patch, scope, planned: target.planned });
+            calls.push({ op: 'update', patch, scope, planned: target.planned, ...(target.from !== undefined ? { from: target.from } : {}) });
             failing();
             return [];
         },
@@ -965,6 +965,53 @@ test('the calendars kept here are named "Kept in DSH", an older store\'s too; on
     }
 });
 
+test('the window\'s week choices: weekends hidden and week numbers go on with true and off with false, nothing else changes them, and a restart keeps them', async () => {
+    const { make, config, done } = setup();
+    let m = make();
+    try {
+        await m.start();
+        assert.deepEqual(m.state().prefs, {}, 'both off at first');
+        m.setPrefs({ hideWeekends: true });
+        assert.deepEqual(m.state().prefs, { hideWeekends: true });
+        m.setPrefs({ weekNumbers: true, weekStart: 1 });
+        assert.deepEqual(m.state().prefs, { weekStart: 1, hideWeekends: true, weekNumbers: true });
+        // Anything but true or false leaves them as they are, and so does a change to another choice.
+        for (const junk of ['true', 'false', 1, 0, null, {}, [true]]) m.setPrefs({ hideWeekends: junk, weekNumbers: junk });
+        m.setPrefs({ view: 'month' });
+        m.setPrefs({});
+        assert.deepEqual(m.state().prefs, { weekStart: 1, view: 'month', hideWeekends: true, weekNumbers: true });
+
+        // Saved with the other choices: a restart has them.
+        m.dispose();
+        assert.deepEqual(JSON.parse(readFileSync(config.storeFile, 'utf8')).prefs, { weekStart: 1, hideWeekends: true, weekNumbers: true, view: 'month' });
+        m = make();
+        await m.start();
+        assert.deepEqual(m.state().prefs, { weekStart: 1, view: 'month', hideWeekends: true, weekNumbers: true });
+
+        // Off takes each away, the other one and the other choices staying; off again changes nothing.
+        m.setPrefs({ hideWeekends: false });
+        assert.deepEqual(m.state().prefs, { weekStart: 1, view: 'month', weekNumbers: true });
+        m.setPrefs({ weekNumbers: false, hideWeekends: false });
+        assert.deepEqual(m.state().prefs, { weekStart: 1, view: 'month' });
+        assert.ok(!('hideWeekends' in m.store.prefs) && !('weekNumbers' in m.store.prefs), 'off is not kept as false');
+        m.dispose();
+        m = make();
+        await m.start();
+        assert.deepEqual(m.state().prefs, { weekStart: 1, view: 'month' });
+
+        // A settings file that says something other than true for them (edited by hand) is read as off.
+        m.dispose();
+        const file = JSON.parse(readFileSync(config.storeFile, 'utf8'));
+        writeFileSync(config.storeFile, JSON.stringify({ ...file, prefs: { ...file.prefs, hideWeekends: 'yes', weekNumbers: 1 } }));
+        m = make();
+        await m.start();
+        assert.deepEqual(m.state().prefs, { weekStart: 1, view: 'month' });
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
 // ── Round 2: who the user is, re-checked changes, Google's guests, one check ──
 
 /** A meeting as a CalDAV server holds it, with its organizer and people as whole iCalendar lines. */
@@ -1335,6 +1382,69 @@ test('a series kept as its occurrences (Microsoft): a change to all of it is wor
         // A change the server's copy agrees with goes.
         await m.deleteEvent(wednesday().id, 'all', 'agent', { notify: true, approved: [...told, 'cy@example.com', 'dee@example.com'] });
         assert.equal(ms.at(-1).op, 'remove');
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
+test('a whole series reaches the guests of its occurrences changed on their own: a change or delete of all of it names them, and one from an occurrence on names those from it on', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        const dav = standIn(m,
+            { id: 'dav', kind: 'caldav', name: 'iCloud', url: 'https://caldav.icloud.com/', username: 'me@icloud.com', email: 'me@icloud.com', addresses: ['me@icloud.com'] },
+            { id: 'cal-dav', remoteId: 'https://p52-caldav.icloud.com/1/calendars/home/', name: 'Home', scheduling: true }, 'ics');
+        // A weekly standup with Ann; Eve is on the one on the 26th alone.
+        await holdIcs(m, 'cal-dav', 'https://p52-caldav.icloud.com/1/calendars/home/standup.ics', ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//test//EN',
+            'BEGIN:VEVENT', 'UID:standup', 'DTSTAMP:20261001T000000Z', 'DTSTART;TZID=Europe/Berlin:20261012T093000', 'DURATION:PT15M',
+            'RRULE:FREQ=WEEKLY;COUNT=8', 'SUMMARY:Standup', 'ORGANIZER:mailto:me@icloud.com', 'ATTENDEE;PARTSTAT=ACCEPTED:mailto:ann@example.com', 'END:VEVENT',
+            'BEGIN:VEVENT', 'UID:standup', 'DTSTAMP:20261001T000000Z', 'RECURRENCE-ID;TZID=Europe/Berlin:20261026T093000',
+            'DTSTART;TZID=Europe/Berlin:20261026T100000', 'DURATION:PT15M', 'SUMMARY:Standup', 'ORGANIZER:mailto:me@icloud.com',
+            'ATTENDEE;PARTSTAT=ACCEPTED:mailto:ann@example.com', 'ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:eve@example.com', 'END:VEVENT',
+            'END:VCALENDAR', ''].join('\r\n'));
+        const on = (title, day) => week(m, '2026-10-12T00:00', '2026-11-30T00:00').find((o) => o.title === title && o.startLocal?.startsWith(day));
+        const both = ['ann@example.com', 'eve@example.com'];
+        // The whole series: a delete, and a new time, email Eve too.
+        assert.deepEqual(m.planChange('delete', { id: on('Standup', '2026-10-12').id, notify: true }).mail.to, both);
+        assert.deepEqual(m.planChange('update', { id: on('Standup', '2026-10-12').id, input: { start: '2026-10-12T09:00', end: '2026-10-12T09:15' }, notify: true }).mail.to, both);
+        // From an occurrence on: from the 19th Eve's is reached, from Nov 2 it isn't.
+        assert.deepEqual(m.planChange('delete', { id: on('Standup', '2026-10-19').id, scope: 'following', notify: true }).mail.to, both);
+        assert.deepEqual(m.planChange('update', { id: on('Standup', '2026-10-19').id, input: { title: 'Daily' }, scope: 'following', notify: true }).mail.to, both);
+        assert.deepEqual(m.planChange('delete', { id: on('Standup', '2026-11-02').id, scope: 'following', notify: true }).mail.to, ['ann@example.com']);
+        // Moved to another calendar, it is cancelled here for Eve too.
+        const personal = m.state().calendars.find((c) => c.name === 'Personal');
+        assert.deepEqual(m.planChange('update', { id: on('Standup', '2026-10-12').id, input: { calendarId: personal.id }, notify: true }).mail.to, both);
+        // Asked without telling them, the delete names her; held to Ann alone, it stops, and nothing is written.
+        await assert.rejects(m.deleteEvent(on('Standup', '2026-10-12').id), refusedFor('needs-notify', /a cancellation to ann@example\.com and eve@example\.com/));
+        const writes = dav.length;
+        await assert.rejects(m.deleteEvent(on('Standup', '2026-10-12').id, 'all', 'agent', { notify: true, approved: ['ann@example.com'] }),
+            refusedFor('changed', /email a cancellation to eve@example\.com/));
+        assert.equal(dav.length, writes);
+        assert.deepEqual((await m.deleteEvent(on('Standup', '2026-10-12').id, 'all', 'agent', { notify: true, approved: both })).emailed, { what: 'a cancellation', to: both });
+        assert.equal(dav.at(-1).op, 'remove');
+
+        // Google: Xen is on the 26th's alone. A change to all of it, or from the 19th on, puts it before Xen too, and the
+        // source is handed everyone, with where a change from an occurrence on starts, to check the server against.
+        const google = standIn(m, { id: 'g', kind: 'google', name: 'Google', email: 'me@gmail.com' }, { id: 'cal-g', remoteId: 'primary', name: 'Me' }, 'events');
+        const me = { email: 'me@gmail.com', self: true };
+        const ann = { email: 'ann@example.com' };
+        const times = (day, hh) => ({ start: { local: `${day}T${hh}:00`, tz: ZONE }, end: { local: `${day}T${hh.slice(0, 3)}45:00`, tz: ZONE } });
+        const items = m.store.itemsOf('cal-g');
+        items.G1 = { remoteId: 'G1', etag: '"g1"', events: [{ uid: 'daily', title: 'Daily', allDay: false, organizer: me, attendees: [me, ann], rrule: 'FREQ=WEEKLY;COUNT=8', ...times('2026-10-12', '08:30') }] };
+        items.G1_26 = {
+            remoteId: 'G1_26', etag: '"g2"',
+            events: [{ uid: 'daily', title: 'Daily', allDay: false, organizer: me, attendees: [me, ann, { email: 'xen@example.com' }], recurrenceId: { local: '2026-10-26T08:30:00', tz: ZONE }, ...times('2026-10-26', '08:30') }],
+        };
+        m.changed();
+        const reached = ['ann@example.com', 'xen@example.com'];
+        assert.deepEqual(m.planChange('delete', { id: on('Daily', '2026-10-12').id }).mail, { to: [], what: '', forced: false, reaches: reached, reach: 'remove' });
+        assert.deepEqual(m.planChange('update', { id: on('Daily', '2026-11-02').id, input: { title: 'Sync' }, scope: 'following' }).mail.reaches, ['ann@example.com']);
+        await m.updateEvent(on('Daily', '2026-10-19').id, { title: 'Sync' }, 'following', 'agent', { approved: reached });
+        const split = google.find((c) => c.op === 'update');
+        assert.deepEqual(split.from, { local: '2026-10-19T08:30:00', tz: ZONE });
+        assert.deepEqual(split.planned.attendees.map((p) => p.email), ['me@gmail.com', 'ann@example.com', 'xen@example.com']);
     } finally {
         m.dispose();
         done();

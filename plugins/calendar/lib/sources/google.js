@@ -41,7 +41,7 @@ import { HttpError, formBody } from '../http.js';
 import { cleanRecord, instantOf } from '../model.js';
 import { SIGN_IN_ENDED, accessToken, idTokenClaims, loopbackSignIn, retryAfter } from '../oauth.js';
 import { addDays, daysBetween, ianaZone, isDay, normalLocal, offsetAt, toInstant, toLocal } from '../zones.js';
-import { SourceError, newPeople, peopleConflict, statusError } from './index.js';
+import { SourceError, otherPeople, peopleConflict, statusError } from './index.js';
 
 export const kind = 'google';
 export const style = 'events';
@@ -552,6 +552,8 @@ class GoogleCalendar {
             return changed ? [changed] : [];
         }
         const master = isOccurrence(record) ? await this.masterOf(calendar, item, what) : { id: item.remoteId, etag: item.etag };
+        // A change to a whole series reaches its changed occurrences too: who they name is read with it.
+        if (isSeriesRecord(record) || isOccurrence(record)) master.series = await this.seriesNow(calendar, record.uid, target.from, zone);
         const event = await this.patchEvent(calendar, master, patchBody(patch, record, zone, !isOccurrence(record)), sendUpdates, what, planned);
         this.log(`changed ${event.id}`);
         if (isMaster(event)) return this.seriesItems(calendar, event, zone);
@@ -586,6 +588,8 @@ class GoogleCalendar {
             return { removed: [], items: [gone ?? cancelledFallback(one.id, record.uid, recurrenceId)] };
         }
         const master = isOccurrence(record) ? await this.masterOf(calendar, item, what) : { id: item.remoteId, etag: item.etag };
+        // A whole series takes its changed occurrences with it: who they name is read with it.
+        if (isSeriesRecord(record) || isOccurrence(record)) master.series = await this.seriesNow(calendar, record.uid, target.from, zone);
         await this.deleteEvent(calendar, master, sendUpdates, what, planned);
         this.log(`deleted ${master.id}`);
         const removed = new Set([master.id, item.remoteId]);
@@ -651,24 +655,56 @@ class GoogleCalendar {
     }
 
     /**
-     * The etag a change to `ref` ({id, etag?, event?}) goes with: the one
-     * held here, else the one Google has now, of the event just read with
-     * it (`event`: an occurrence found with events.instances) or read here
-     * (an occurrence by Google's id convention, a series found from its
-     * occurrence), so a change never goes unconditionally. An event read
-     * now must name nobody the change wasn't worked out with (`planned`,
-     * newPeople): Google would put the change on their calendars, and no
-     * 412 would say the event changed since the plugin read it.
+     * The etag a change to `ref` ({id, etag?, event?, series?}) goes with:
+     * the one held here, else the one Google has now, of the event just
+     * read with it (`event`: an occurrence found with events.instances) or
+     * read here (an occurrence by Google's id convention, a series found
+     * from its occurrence), so a change never goes unconditionally. An
+     * event read now must name the people the change was worked out with
+     * (`planned`), no one more and no one less (otherPeople): Google would
+     * put the change on their calendars, and no 412 would say the event
+     * changed since the plugin read it. A whole series is compared with its
+     * changed occurrences as Google has them now (`series`, seriesNow),
+     * etag held or not: changing one of them doesn't change the series'.
      */
     async versionOf(calendar, ref, planned, what) {
-        if (text(ref.etag)) return ref.etag;
-        const event = ref.event ?? await this.getEvent(calendar, ref.id, undefined, what);
-        const added = newPeople(planned, recordOf(event ?? {}, this.zoneOf(calendar)) ?? {});
-        if (added.length > 0) {
-            this.log(`the event names ${added.length} more since the change was worked out`);
+        const held = text(ref.etag);
+        if (held && ref.series === undefined) return held;
+        const zone = this.zoneOf(calendar);
+        let event;
+        if (!held) {
+            const listed = ref.series?.master?.id === ref.id ? ref.series.master : undefined;
+            event = ref.event ?? listed ?? await this.getEvent(calendar, ref.id, undefined, what);
+        }
+        const now = [...(held ? [] : [recordOf(event ?? {}, zone) ?? {}]), ...(ref.series?.records ?? [])];
+        const other = otherPeople(planned, now);
+        if (other.length > 0) {
+            this.log(`the event names ${other.length} other people since the change was worked out`);
             throw peopleConflict(what);
         }
-        return text(event?.etag);
+        return held ?? text(event?.etag);
+    }
+
+    /**
+     * A series as Google has it now: its own event (`master`) and its
+     * changed occurrences, as records (byUid), the cancelled ones left out.
+     * With `from` (a change from that occurrence on), only the
+     * occurrences changed from it on. {master, records}, or undefined when
+     * the series isn't there (gone: a delete is done already, and a change
+     * is answered 404).
+     */
+    async seriesNow(calendar, uid, from, zone) {
+        const events = text(uid) ? await this.byUid(calendar, uid) : [];
+        const reached = (time) => !isTime(from) || !isTime(time) || !(timeOrder(time, zone) < timeOrder(from, zone));
+        let master;
+        const records = [];
+        for (const event of events) {
+            if (event === null || typeof event !== 'object' || event.status === 'cancelled') continue;
+            if (isMaster(event)) master = event;
+            const record = recordOf(event, zone);
+            if (record !== undefined && reached(record.recurrenceId)) records.push(record);
+        }
+        return master === undefined ? undefined : { master, records };
     }
 
     /** The series a changed occurrence (an exception item) belongs to. No etag of the series is held: a change reads it first. */
@@ -752,6 +788,12 @@ const hasGuests = (record, patch) => (Array.isArray(patch?.attendees) ? patch.at
 const uidKey = (calendar, id) => `${calendar?.remoteId}\n${id}`;
 
 const calendarPath = (calendar) => `/calendars/${encodeURIComponent(calendar.remoteId)}`;
+
+/** A Time ({date} or {local, tz}). */
+const isTime = (time) => time !== null && typeof time === 'object' && (isDay(time.date) || typeof time.local === 'string');
+
+/** A Time as a number to order occurrences by: a day as its midnight in `zone`. */
+const timeOrder = (time, zone) => ('date' in time ? toInstant(`${time.date}T00:00:00`, zone, zone) : instantOf(time, zone));
 
 /** Whether an instance's originalStartTime is the occurrence's start. */
 function sameStart(original, occurrence, at, zone) {

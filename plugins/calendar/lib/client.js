@@ -118,6 +118,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-head-nav{display:flex;align-items:center;gap:4px;min-width:0;flex:1 1 280px}',
             '.dshcal-head-tools{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:8px;min-width:0;margin-left:auto}',
             '.dshcal-title{margin:0 0 0 6px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:18px;font-weight:600;line-height:26px;color:var(--cal-strong)}',
+            // The week's number by the title (under it on a narrow page).
+            '.dshcal-titles{display:flex;align-items:center;gap:6px;min-width:0}',
+            '.dshcal-wknum{flex:none;font-variant-numeric:tabular-nums}',
             // Search, in the header with the views (the two go to a row of their own when the title needs the room): its own row on a narrow page.
             '.dshcal-search{position:relative;display:flex;align-items:center;flex:0 1 220px;min-width:150px}',
             '.dshcal-search>svg{position:absolute;left:9px;color:var(--cal-meta);pointer-events:none}',
@@ -191,6 +194,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-mini-head{display:flex;align-items:center;gap:2px;padding:0 2px 2px}',
             '.dshcal-mini-title{flex:1;font-size:13px;font-weight:600;color:var(--cal-strong);padding-left:4px}',
             '.dshcal-mini-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:1px}',
+            '.dshcal-mini-grid[data-week-numbers]{grid-template-columns:20px repeat(7,1fr)}',
+            '.dshcal-mini-wk{height:28px;display:flex;align-items:center;justify-content:center;font-size:10.5px;color:var(--cal-meta);font-variant-numeric:tabular-nums}',
             '.dshcal-mini-wd{height:20px;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:600;color:var(--cal-faint);text-transform:uppercase}',
             '.dshcal-mini-day{height:28px;display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;background:none;color:var(--cal-text);font:inherit;font-size:12px;font-variant-numeric:tabular-nums;cursor:pointer}',
             '.dshcal-mini-day:hover{background:var(--cal-hover)}',
@@ -281,13 +286,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ':is(.dshcal-mo-cell,.dshcal-wk-lanecell)[data-drop]{background:var(--cal-accent-soft);box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--cal-accent) 60%,transparent)}',
 
             // ── Month: weeks of days, bars and lines in lanes.
-            '.dshcal-mo{display:flex;flex-direction:column;flex:1;min-height:0;container:dshcal-mo/inline-size}',
+            // Its columns: the days of a week on show (--cols: 7, or 5 while weekends are hidden), the week's number first when asked for.
+            '.dshcal-mo{--wk:28px;display:flex;flex-direction:column;flex:1;min-height:0;container:dshcal-mo/inline-size}',
             // Narrow days: a timed event's title alone, without its time in front.
-            '@container dshcal-mo (max-width: 909px){.dshcal-mo .dshcal-line-time{display:none}}',
-            '.dshcal-mo-head{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));flex:none;border-bottom:1px solid var(--cal-line)}',
+            '@container dshcal-mo (max-width: 909px){.dshcal-mo:not([data-cols="5"]) .dshcal-line-time{display:none}}',
+            '@container dshcal-mo (max-width: 649px){.dshcal-mo .dshcal-line-time{display:none}}',
+            '.dshcal-mo-head{display:grid;grid-template-columns:repeat(var(--cols,7),minmax(0,1fr));flex:none;border-bottom:1px solid var(--cal-line)}',
+            '.dshcal-mo[data-week-numbers] :is(.dshcal-mo-head,.dshcal-mo-week){grid-template-columns:var(--wk) repeat(var(--cols,7),minmax(0,1fr))}',
+            '.dshcal-mo-wk{display:flex;justify-content:center;box-sizing:border-box;min-width:0;padding-top:6px;font-size:11px;font-weight:500;line-height:16px;color:var(--cal-meta);font-variant-numeric:tabular-nums;background:var(--cal-fill)}',
             '.dshcal-mo-wd{padding:8px 8px 6px;font-size:11.5px;font-weight:600;letter-spacing:.03em;color:var(--cal-meta);text-transform:uppercase;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshcal-mo-weeks{flex:1;display:grid;grid-template-rows:repeat(var(--weeks),minmax(0,1fr));min-height:0}',
-            '.dshcal-mo-week{position:relative;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));grid-template-rows:28px repeat(var(--lanes),20px) minmax(0,1fr);row-gap:2px;min-height:0;overflow:hidden;border-bottom:1px solid var(--cal-line)}',
+            '.dshcal-mo-week{position:relative;display:grid;grid-template-columns:repeat(var(--cols,7),minmax(0,1fr));grid-template-rows:28px repeat(var(--lanes),20px) minmax(0,1fr);row-gap:2px;min-height:0;overflow:hidden;border-bottom:1px solid var(--cal-line)}',
             '.dshcal-mo-week:last-child{border-bottom:0}',
             '.dshcal-mo-cell{grid-row:1 / -1;min-width:0;border-left:1px solid var(--cal-line);outline:none;cursor:pointer}',
             '.dshcal-mo-cell:first-child{border-left:0}',
@@ -526,6 +535,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 + '.dshcal-ag-day{grid-template-columns:1fr;gap:4px}'
                 + '.dshcal-ag-row{grid-template-columns:1fr;gap:2px}'
                 + '.dshcal-mo-wd{padding:6px 4px;text-align:center}'
+                + '.dshcal-mo{--wk:20px}'
+                + '.dshcal-titles{flex-direction:column;align-items:flex-start;gap:0}'
+                + '.dshcal-titles>.dshcal-title{max-width:100%;line-height:20px}'
+                + '.dshcal-wknum{height:auto;margin-left:2px;padding:0;background:none;line-height:13px}'
                 + '.dshcal-line-time{display:none}'
                 + '.dshcal-search{order:3;flex:1 1 100%}'
                 + '}',
@@ -772,6 +785,48 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return 1;
         }
         const weekStartFrom = (prefs) => (Number.isInteger(prefs?.weekStart) && prefs.weekStart >= 0 && prefs.weekStart <= 6 ? prefs.weekStart : localeWeekStart());
+
+        // ── Weekends and week numbers (the user's choices: prefs.hideWeekends, prefs.weekNumbers) ──
+        // Hidden weekends leave Saturday and Sunday out of Week and Month only; Day, Agenda and the small month keep
+        // every day. A week's number is ISO 8601's.
+
+        const isWeekend = (day) => weekdayOf(day) === 0 || weekdayOf(day) === 6;
+        /** The days of a run that a view shows: all of them, or the weekdays alone while weekends are hidden. */
+        const visibleDays = (days, hideWeekends) => (hideWeekends ? days.filter((day) => !isWeekend(day)) : days);
+        /** A day `n` shown days on (back, for a negative n): weekends don't count while they are hidden. */
+        function addShownDays(day, n, hideWeekends) {
+            const by = n < 0 ? -1 : 1;
+            let d = day;
+            for (let left = Math.abs(n); left > 0;) {
+                d = addDays(d, by);
+                if (!hideWeekends || !isWeekend(d)) left--;
+            }
+            return d;
+        }
+        /** The first day from a day on that shows: the day itself, or the Monday after a hidden weekend's day. */
+        const firstShown = (day, hideWeekends) => (hideWeekends && isWeekend(day) ? addShownDays(day, 1, true) : day);
+        /** A day that shows, in the day's own month: the day itself, else the weekday after it, or before it where that's in another month. */
+        function shownNear(day, hideWeekends) {
+            const next = firstShown(day, hideWeekends);
+            return next.slice(0, 7) === day.slice(0, 7) ? next : addShownDays(day, -1, hideWeekends);
+        }
+        /** A day's ISO 8601 week number (1 to 53): weeks run Monday to Sunday, and a year's week 1 has its first Thursday. */
+        function isoWeek(day) {
+            const thursday = addDays(day, 3 - ((weekdayOf(day) + 6) % 7));
+            return Math.floor(daysBetween(`${thursday.slice(0, 4)}-01-01`, thursday) / 7) + 1;
+        }
+        /**
+         * The number of the week holding a day, as the views lay weeks out from the user's first day of the week: the
+         * ISO week most of its seven days are in, which is its fourth day's. For a week from Monday, Sunday or Saturday
+         * that is its Monday's (a week from Sunday or Saturday has its Monday among its first three days).
+         */
+        const weekNumberOf = (day, weekStart) => isoWeek(addDays(weekStartOf(day, weekStart), 3));
+        /** The week numbers of days a view shows, in words: 'Week 42', or 'Weeks 42–43' for days in two weeks. */
+        function weekWords(days, weekStart) {
+            const first = weekNumberOf(days[0], weekStart);
+            const last = weekNumberOf(days[days.length - 1], weekStart);
+            return first === last ? `Week ${first}` : `Weeks ${first}–${last}`;
+        }
 
         // ── Words for days and times, in the browser's language ────────────
 
@@ -3146,8 +3201,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return out;
         }
 
-        /** The all-day row's bars for a run of days: [{key, a, b, o, contStart, contEnd, order}]. */
-        function barItems(occurrences, days, zone, which = spansDays) {
+        /**
+         * The all-day row's bars for the days a row shows: [{key, a, b, o, contStart, contEnd, order}], a and b the
+         * first and last of those days it covers. A bar is cut to them, marked as going on where its event starts
+         * before them or ends after them (on days before or after the row, or on hidden weekend days).
+         */
+        function barItems(occurrences, days, zone, which = spansDays, hideWeekends = false) {
             const first = days[0];
             const last = days[days.length - 1];
             const out = [];
@@ -3155,13 +3214,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (!which(o)) continue;
                 const [s, e] = daysOf(o, zone);
                 if (e < first || s > last) continue;
-                const a = Math.max(0, daysBetween(first, s));
-                // A timed event shorter than a day stays on the day it starts, even when it ends after midnight.
+                // A timed event shorter than a day stays on the day it starts, even when it ends after midnight;
+                // when that day is a hidden weekend's, the view doesn't show it.
                 const long = spansDays(o);
-                out.push({
-                    key: o.id, o, a, b: long ? Math.min(days.length - 1, daysBetween(first, e)) : a,
-                    contStart: s < first, contEnd: long && e > last, order: (long ? 0 : 1e13) + o.start,
-                });
+                if (!long && hideWeekends && isWeekend(s)) continue;
+                const a = days.findIndex((day) => day >= s);
+                let b = a;
+                if (long) while (b + 1 < days.length && days[b + 1] <= e) b++;
+                // Only on days the row leaves out: nothing to draw.
+                if (a < 0 || days[a] > e) continue;
+                out.push({ key: o.id, o, a, b, contStart: s < days[a], contEnd: long && e > days[b], order: (long ? 0 : 1e13) + o.start });
             }
             return out;
         }
@@ -3176,8 +3238,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * in focus (a quarter hour, a day): `onDrop(o, times)` saves it.
          * @param ready - whether the events of these days are read (where the view opens waits for them).
          * @param movable - (o) → whether it can be dragged.
+         * @param hideWeekends - whether Saturday and Sunday are left out of `days` (Alt and an arrow then go past them).
          */
-        function TimeGrid({ days, zone, occurrences, now, today, onOpen, onCreate, onDay, onMore, scrollTo, ready = true, movable, onDrop, onDragging }) {
+        function TimeGrid({ days, zone, occurrences, now, today, onOpen, onCreate, onDay, onMore, scrollTo, ready = true, movable, onDrop, onDragging, hideWeekends = false }) {
             const scrollRef = React.useRef(null);
             const laneRef = React.useRef(null);
             const [expanded, setExpanded] = React.useState(false);
@@ -3318,7 +3381,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     onCancel: done,
                 });
             };
-            /** Alt with an arrow key: the event in focus a quarter hour earlier or later, or a day back or on. */
+            /** Alt with an arrow key: the event in focus a quarter hour earlier or later, or a day back or on (a day shown: past hidden weekends). */
             const nudge = (event, o, byDays) => {
                 if (!event.altKey || event.ctrlKey || event.metaKey || typeof movable !== 'function' || !movable(o)) return;
                 const step = { ArrowUp: [-SNAP, 0], ArrowDown: [SNAP, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[event.key];
@@ -3326,8 +3389,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 event.preventDefault();
                 event.stopPropagation();
                 let t;
-                if (step[1] !== 0) t = shiftedBy(o, zone, step[1]);
-                else {
+                if (step[1] !== 0) {
+                    const from = o.allDay ? o.startDay : dayIn(o.start, zone);
+                    t = shiftedBy(o, zone, daysBetween(from, addShownDays(from, step[1], hideWeekends)));
+                } else {
                     const start = toInstant(wallOf(startWall(o, zone) + step[0] * MINUTE), zone);
                     t = { start, end: start + Math.max(0, o.end - o.start) };
                 }
@@ -3514,10 +3579,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * month), Enter shows a day's events, a click on a day's empty space
          * makes an all-day event there, its number opens the day. An event
          * dragged to another day goes there at the same time of day:
-         * `onDrop(o, times)` saves it.
+         * `onDrop(o, times)` saves it. With weekends hidden, each week shows
+         * its five weekdays and the keys go past Saturday and Sunday; with week
+         * numbers, a narrow column before the days names each week.
          * @param movable - (o) → whether it can be dragged.
+         * @param weekStart - the user's first day of the week (0 Sunday), for the weeks' numbers.
          */
-        function MonthView({ days, month, zone, occurrences, today, now, onOpen, onCreateDay, onDay, onMore, onMove, focusDay, movable, onDrop, onDragging }) {
+        function MonthView({ days, month, zone, occurrences, today, now, onOpen, onCreateDay, onDay, onMore, onMove, focusDay, movable, onDrop, onDragging, weekStart = 1, hideWeekends = false, weekNumbers = false }) {
+            /** Days in a week's row; the week number's column, when there is one, comes first. */
+            const per = hideWeekends ? 5 : 7;
+            const lead = weekNumbers ? 1 : 0;
             const weeksRef = React.useRef(null);
             const [cap, setCap] = React.useState(3);
             // An event being dragged to another day: {id, t: where it would go}.
@@ -3561,7 +3632,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
             const dropDays = moving?.t ? coveredDays(moving.t, zone) : null;
             const weeks = [];
-            for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7));
+            for (let i = 0; i < days.length; i += per) weeks.push(days.slice(i, i + per));
             React.useLayoutEffect(() => {
                 const el = weeksRef.current;
                 if (!el) return undefined;
@@ -3575,7 +3646,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 observer.observe(el);
                 return () => observer.disconnect();
             }, [weeks.length]);
-            const [focused, setFocused] = React.useState(() => (days.includes(focusDay) ? focusDay : days.includes(today) && today.slice(0, 7) === month ? today : `${month}-01`));
+            const [focused, setFocused] = React.useState(() => (days.includes(focusDay) ? focusDay : days.includes(today) && today.slice(0, 7) === month ? today
+                : days.find((day) => day.slice(0, 7) === month) ?? `${month}-01`));
             const wantFocus = React.useRef(false);
             React.useEffect(() => {
                 if (days.includes(focusDay)) setFocused(focusDay);
@@ -3594,10 +3666,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }
             };
             const onKey = (event, day) => {
+                const row = Math.floor(days.indexOf(day) / per) * per;
                 const keys = {
-                    ArrowLeft: () => addDays(day, -1), ArrowRight: () => addDays(day, 1), ArrowUp: () => addDays(day, -7), ArrowDown: () => addDays(day, 7),
-                    Home: () => addDays(day, -(days.indexOf(day) % 7)), End: () => addDays(day, 6 - (days.indexOf(day) % 7)),
-                    PageUp: () => addMonths(day, -1), PageDown: () => addMonths(day, 1),
+                    ArrowLeft: () => addShownDays(day, -1, hideWeekends), ArrowRight: () => addShownDays(day, 1, hideWeekends), ArrowUp: () => addDays(day, -7), ArrowDown: () => addDays(day, 7),
+                    Home: () => days[row], End: () => days[row + per - 1],
+                    PageUp: () => shownNear(addMonths(day, -1), hideWeekends), PageDown: () => shownNear(addMonths(day, 1), hideWeekends),
                 };
                 if (keys[event.key] && !event.altKey && !event.metaKey && !event.ctrlKey) {
                     event.preventDefault();
@@ -3608,20 +3681,28 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }
             };
             const tabStop = days.includes(focused) ? focused : days[0];
-            return h('div', { className: 'dshcal-mo', 'data-calendar-grid': 'month' },
-                h('div', { className: 'dshcal-mo-head', 'aria-hidden': true }, days.slice(0, 7).map((day) => h('div', { key: day, className: 'dshcal-mo-wd' }, dayText(day, { weekday: 'short' })))),
+            /** A day's column in its week's row, from 1 (after the week number's, when there is one). */
+            const column = (i) => i + 1 + lead;
+            return h('div', { className: 'dshcal-mo', 'data-calendar-grid': 'month', style: { '--cols': per }, 'data-cols': per, 'data-week-numbers': weekNumbers ? '' : undefined },
+                h('div', { className: 'dshcal-mo-head', 'aria-hidden': true },
+                    weekNumbers ? h('div', { key: 'wk', className: 'dshcal-mo-wd' }) : null,
+                    days.slice(0, per).map((day) => h('div', { key: day, className: 'dshcal-mo-wd' }, dayText(day, { weekday: 'short' })))),
                 h('div', { ref: weeksRef, className: 'dshcal-mo-weeks', style: { '--weeks': weeks.length }, role: 'grid', 'aria-label': dayText(`${month}-01`, { month: 'long', year: 'numeric' }) },
                     weeks.map((week) => {
-                        const items = barItems(occurrences, week, zone, () => true);
-                        const layout = lanesOf(items, 7);
+                        const items = barItems(occurrences, week, zone, () => true, hideWeekends);
+                        const layout = lanesOf(items, per);
                         const fitted = fitLanes(layout, cap);
                         const byKey = new Map(items.map((b) => [b.key, b]));
+                        const number = weekNumbers ? weekNumberOf(week[0], weekStart) : 0;
                         return h('div', { key: week[0], className: 'dshcal-mo-week', role: 'row', style: { '--lanes': cap } },
+                            // The week's number, first in its row: "Week 42" to a screen reader.
+                            weekNumbers ? h('div', { key: 'wk', className: 'dshcal-mo-wk', role: 'rowheader', 'data-calendar-week-number': number, style: { gridColumn: '1', gridRow: '1 / -1' } },
+                                h('span', { className: 'dshcal-sr' }, 'Week '), number) : null,
                             week.map((day, i) => {
                                 const count = layout.perDay[i];
                                 const names = layout.placed.filter((p) => p.a <= i && p.b >= i).slice(0, 3).map((p) => byKey.get(p.key).o.title);
                                 return h('div', {
-                                    key: day, className: 'dshcal-mo-cell', role: 'gridcell', tabIndex: day === tabStop ? 0 : -1, style: { gridColumn: `${i + 1}` },
+                                    key: day, className: 'dshcal-mo-cell', role: 'gridcell', tabIndex: day === tabStop ? 0 : -1, style: { gridColumn: `${column(i)}` },
                                     'data-out': day.slice(0, 7) !== month ? '' : undefined, 'data-calendar-cell': day,
                                     'data-drop': dropDays && day >= dropDays[0] && day <= dropDays[1] ? '' : undefined,
                                     'aria-label': `${longDay(day, zone)}${day === today ? ', today' : ''}, ${count ? `${plural(count, 'event')}: ${names.join(', ')}${count > 3 ? '…' : ''}` : 'no events'}`,
@@ -3631,13 +3712,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                 });
                             }),
                             week.map((day, i) => h('button', {
-                                key: `n-${day}`, type: 'button', className: 'dshcal-mo-num', tabIndex: -1, 'aria-hidden': true, style: { gridColumn: `${i + 1}` },
+                                key: `n-${day}`, type: 'button', className: 'dshcal-mo-num', tabIndex: -1, 'aria-hidden': true, style: { gridColumn: `${column(i)}` },
                                 'data-out': day.slice(0, 7) !== month ? '' : undefined, 'data-today': day === today ? '' : undefined,
                                 onClick: () => onDay(day),
                             }, Number(day.slice(8, 10)) === 1 ? dayText(day, { month: 'short', day: 'numeric' }) : Number(day.slice(8, 10)))),
                             fitted.pieces.map((piece) => {
                                 const o = byKey.get(piece.key).o;
-                                const style = { ...evStyle(o.color), gridColumn: `${piece.a + 1} / ${piece.b + 2}`, gridRow: `${piece.lane + 2}` };
+                                const style = { ...evStyle(o.color), gridColumn: `${column(piece.a)} / ${column(piece.b) + 1}`, gridRow: `${piece.lane + 2}` };
                                 const common = {
                                     key: `${piece.key}:${piece.a}`, type: 'button', tabIndex: -1, 'aria-hidden': true, 'data-calendar-event': o.id, 'data-look': lookOf(o),
                                     'data-past': o.end <= now ? '' : undefined, onClick: (event) => onOpen(o, event.currentTarget), title: `${o.title} · ${shortWhen(o, zone)}`,
@@ -3653,7 +3734,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                     h('span', { className: 'dshcal-line-title' }, o.title));
                             }),
                             fitted.more.map((m) => h('button', {
-                                key: `more-${m.day}`, type: 'button', className: 'dshcal-mo-more', tabIndex: -1, style: { gridColumn: `${m.day + 1}`, gridRow: `${m.lane + 2}` },
+                                key: `more-${m.day}`, type: 'button', className: 'dshcal-mo-more', tabIndex: -1, style: { gridColumn: `${column(m.day)}`, gridRow: `${m.lane + 2}` },
                                 'data-calendar-more': week[m.day], onClick: (event) => onMore(week[m.day], event.currentTarget),
                             }, `+${m.count} more`)));
                     })));
@@ -3758,11 +3839,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         // ── The side column ────────────────────────────────────────────────
 
         /**
-         * A small month to jump to a day; the days on show are marked. One
-         * tab stop: arrow keys move between days (Home and End to the week's
-         * ends, Page Up and Page Down by month), Enter picks one.
+         * A small month to jump to a day; the days on show are marked, and
+         * each week's number is in front of it when the user asked for them.
+         * One tab stop: arrow keys move between days (Home and End to the
+         * week's ends, Page Up and Page Down by month), Enter picks one.
          */
-        function MiniMonth({ anchor, today, weekStart, shown, onPick }) {
+        function MiniMonth({ anchor, today, weekStart, weekNumbers = false, shown, onPick }) {
             const [month, setMonth] = React.useState(monthStart(anchor));
             const [focused, setFocused] = React.useState(anchor);
             const gridRef = React.useRef(null);
@@ -3800,16 +3882,22 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h('span', { className: 'dshcal-mini-title' }, dayText(month, { month: 'long', year: 'numeric' })),
                     h(IconBtn, { label: 'Previous month', glyph: icon('IconChevronLeftOutlineRegular'), size: 'sm', tip: false, onClick: () => setMonth(addMonths(month, -1)) }),
                     h(IconBtn, { label: 'Next month', glyph: icon('IconChevronRightOutlineRegular'), size: 'sm', tip: false, onClick: () => setMonth(addMonths(month, 1)) })),
-                h('div', { ref: gridRef, className: 'dshcal-mini-grid' },
+                h('div', { ref: gridRef, className: 'dshcal-mini-grid', 'data-week-numbers': weekNumbers ? '' : undefined },
+                    weekNumbers ? h('span', { key: 'wd', className: 'dshcal-mini-wd', 'aria-hidden': true }) : null,
                     days.slice(0, 7).map((day) => h('span', { key: `wd-${day}`, className: 'dshcal-mini-wd', 'aria-hidden': true }, dayText(day, { weekday: 'narrow' }))),
-                    days.map((day) => h('button', {
-                        key: day, type: 'button', className: 'dshcal-mini-day', 'aria-label': longDay(day, 'UTC'), 'aria-current': day === today ? 'date' : undefined,
-                        tabIndex: day === tabStop ? 0 : -1, 'data-calendar-mini-day': day,
-                        'data-out': inMonth(day) ? undefined : '', 'data-today': day === today ? '' : undefined, 'data-in-range': shown.has(day) && day !== today ? '' : undefined,
-                        onFocus: () => setFocused(day),
-                        onKeyDown: (event) => onKey(event, day),
-                        onClick: () => onPick(day),
-                    }, Number(day.slice(8, 10))))));
+                    days.flatMap((day, i) => [
+                        // A week's number, in front of its days: "Week 42" to a screen reader.
+                        weekNumbers && i % 7 === 0 ? h('span', { key: `wk-${day}`, className: 'dshcal-mini-wk', 'data-calendar-mini-week': weekNumberOf(day, weekStart) },
+                            h('span', { className: 'dshcal-sr' }, 'Week '), weekNumberOf(day, weekStart)) : null,
+                        h('button', {
+                            key: day, type: 'button', className: 'dshcal-mini-day', 'aria-label': longDay(day, 'UTC'), 'aria-current': day === today ? 'date' : undefined,
+                            tabIndex: day === tabStop ? 0 : -1, 'data-calendar-mini-day': day,
+                            'data-out': inMonth(day) ? undefined : '', 'data-today': day === today ? '' : undefined, 'data-in-range': shown.has(day) && day !== today ? '' : undefined,
+                            onFocus: () => setFocused(day),
+                            onKeyDown: (event) => onKey(event, day),
+                            onClick: () => onPick(day),
+                        }, Number(day.slice(8, 10))),
+                    ])));
         }
 
         /** The calendars by account: each with its color, shown or hidden, and its ⋯ menu. */
@@ -4603,34 +4691,58 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * The days a view shows around a day, the span of time it reads, and
-         * its title. A narrow page's week is three days from the day.
+         * its title. A narrow page's week is three days from the day. While
+         * weekends are hidden, Week and Month show the weekdays alone (a
+         * narrow week the three from the day, a weekend's day going on to
+         * Monday, and a month without a row whose weekdays are all in the
+         * months beside it); the span read, from spanFirst to spanLast, still
+         * holds the days left out, so details opened on one have its events.
          */
-        function rangeOf(view, anchor, weekStart, zone, { compact = false, agendaDays = AGENDA_DAYS } = {}) {
+        function rangeOf(view, anchor, weekStart, zone, { compact = false, agendaDays = AGENDA_DAYS, hideWeekends = false } = {}) {
             let first = anchor;
             let last = anchor;
             let title;
+            let days;
             if (view === 'month') {
                 const start = monthStart(anchor);
                 first = weekStartOf(start, weekStart);
                 last = addDays(weekStartOf(addDays(addMonths(start, 1), -1), weekStart), 6);
                 title = dayText(start, { month: 'long', year: 'numeric' });
+                days = visibleDays(daySpan(first, last), hideWeekends);
+                if (hideWeekends) {
+                    const month = start.slice(0, 7);
+                    const rows = [];
+                    for (let i = 0; i < days.length; i += 5) rows.push(days.slice(i, i + 5));
+                    days = rows.filter((row) => row.some((day) => day.slice(0, 7) === month)).flat();
+                }
             } else if (view === 'week') {
-                first = compact ? anchor : weekStartOf(anchor, weekStart);
-                last = addDays(first, compact ? 2 : 6);
-                title = dayRangeText(first, last, { month: 'short', day: 'numeric', year: 'numeric' });
+                if (compact) {
+                    const from = firstShown(anchor, hideWeekends);
+                    last = addShownDays(from, 2, hideWeekends);
+                    days = visibleDays(daySpan(from, last), hideWeekends);
+                } else {
+                    first = weekStartOf(anchor, weekStart);
+                    last = addDays(first, 6);
+                    days = visibleDays(daySpan(first, last), hideWeekends);
+                }
+                title = dayRangeText(days[0], days[days.length - 1], { month: 'short', day: 'numeric', year: 'numeric' });
             } else if (view === 'agenda') {
                 last = addDays(anchor, agendaDays - 1);
                 title = dayRangeText(first, last, { month: 'short', day: 'numeric', year: 'numeric' });
             } else {
                 title = longDay(anchor, zone);
             }
-            return { view, first, last, days: daySpan(first, last), from: startOfDay(first, zone), to: startOfDay(addDays(last, 1), zone), title };
+            if (!days) days = daySpan(first, last);
+            return {
+                view, first: days[0], last: days[days.length - 1], days, spanFirst: first, spanLast: last,
+                from: startOfDay(first, zone), to: startOfDay(addDays(last, 1), zone), title,
+            };
         }
 
-        /** The day a view goes to from a day, back (-1) or on (1). */
-        function stepFrom(view, anchor, by, compact = false) {
+        /** The day a view goes to from a day, back (-1) or on (1): a narrow page's week three days on, weekdays alone while weekends are hidden. */
+        function stepFrom(view, anchor, by, compact = false, hideWeekends = false) {
             if (view === 'month') return addMonths(monthStart(anchor), by);
-            if (view === 'week') return addDays(anchor, by * (compact ? 3 : 7));
+            if (view === 'week') return compact ? addShownDays(firstShown(anchor, hideWeekends), by * 3, hideWeekends) : addDays(anchor, by * 7);
             if (view === 'agenda') return addDays(anchor, by * AGENDA_DAYS);
             return addDays(anchor, by);
         }
@@ -4831,7 +4943,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const prefsView = state?.prefs?.view;
             const view = VIEWS.includes(viewChoice) ? viewChoice : VIEWS.includes(prefsView) ? prefsView : 'week';
             const weekStart = weekStartFrom(state?.prefs);
-            const range = rangeOf(view, anchor, weekStart, zone, { compact, agendaDays: agendaSpan });
+            // The user's choices for Week and Month (the settings menu): Saturday and Sunday left out, ISO week numbers shown.
+            const hideWeekends = state?.prefs?.hideWeekends === true;
+            const weekNumbers = state?.prefs?.weekNumbers === true;
+            const rangeOptions = { compact, agendaDays: agendaSpan, hideWeekends };
+            const range = rangeOf(view, anchor, weekStart, zone, rangeOptions);
+            // A day the view is on: one it shows, or one it leaves out (a hidden weekend's) where going to it shows these same days.
+            const inView = (day) => range.days.includes(day) || rangeOf(view, day, weekStart, zone, rangeOptions).first === range.first;
             const entry = state ? store.events(range.from, range.to) : null;
             // While another span loads, the last one read stays (each view shows only its own days of it).
             if (entry?.data) shown.current = entry.data.occurrences;
@@ -4889,7 +5007,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const issues = storeIssues(state).filter((i) => !closedIssues.has(i.key));
             // What a change did in part, and what is left to do (a move that stopped halfway): until the user closes it.
             const kept = store.notices();
-            const shownDays = React.useMemo(() => new Set(range.days), [range.first, range.last]);
+            const shownDays = React.useMemo(() => new Set(range.days), [range.first, range.last, range.days.length]);
 
             const closePop = (reason) => {
                 // A press outside that closed details doesn't also make an event where it landed.
@@ -4918,7 +5036,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
             const step = (by) => {
                 setAgendaSpan(AGENDA_DAYS);
-                go(stepFrom(view, anchor, by, compact));
+                go(stepFrom(view, anchor, by, compact, hideWeekends));
             };
             const goToday = () => {
                 go(dayIn(Date.now(), zone));
@@ -4927,7 +5045,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const newEvent = (preset) => {
                 setPop(null);
                 setSideOpen(false);
-                const p = preset ?? (range.days.includes(today) ? {} : { startDay: view === 'month' ? monthStart(anchor) : range.first, startTime: '09:00' });
+                const p = preset ?? (inView(today) ? {} : { startDay: view === 'month' ? shownNear(monthStart(anchor), hideWeekends) : range.first, startTime: '09:00' });
                 setDialog({ kind: 'event', mode: 'new', preset: p });
             };
             const createAt = (slot) => {
@@ -4953,7 +5071,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 store.toast(`${words === 'Added'
                     ? `Added “${o.title}” on ${dayText(day)}${o.allDay ? '' : ` at ${timeText(o.start, zone)}`}.`
                     : 'Saved.'}${told ? ` ${told}` : ''}`);
-                if (isDay(day) && !range.days.includes(day)) go(day);
+                if (isDay(day) && !inView(day)) go(day);
             };
             const syncNow = async () => {
                 setSyncBusy(true);
@@ -5029,7 +5147,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             React.useEffect(() => {
                 if (!target || !state) return;
                 const day = target.allDay ? target.startDay : Number.isFinite(target.start) ? dayIn(target.start, zone) : '';
-                if (isDay(day) && !range.days.includes(day)) {
+                // Another view's day: there first. A weekend's day this view leaves out stays here, its details open with nothing to point at.
+                if (isDay(day) && !inView(day)) {
                     setPop(null);
                     setAnchor(day);
                     setFocusDay(day);
@@ -5094,7 +5213,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h('span', { className: 'dshcal-error' }, entry.error), h(Btn, { onClick: () => void store.refresh() }, TEXT.retry));
             } else if (view === 'month') {
                 body = h(MonthView, {
-                    days: range.days, month: anchor.slice(0, 7), zone, occurrences, today, now, focusDay, ...drags,
+                    days: range.days, month: anchor.slice(0, 7), zone, occurrences, today, now, focusDay, weekStart, hideWeekends, weekNumbers, ...drags,
                     onOpen: openEvent, onMore: openDay,
                     onCreateDay: (day) => { if (!justClosed()) newEvent({ startDay: day, endDay: day, allDay: true }); },
                     onDay: (day) => { go(day); setView('day'); },
@@ -5107,16 +5226,19 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 });
             } else {
                 body = h(TimeGrid, {
-                    days: range.days, zone, occurrences, now, today, scrollTo, ready: Boolean(entry?.data), ...drags,
+                    days: range.days, zone, occurrences, now, today, scrollTo, ready: Boolean(entry?.data), hideWeekends: view === 'week' && hideWeekends, ...drags,
                     onOpen: openEvent, onCreate: createAt, onMore: openDay,
                     onDay: (day) => { go(day); setView('day'); },
                 });
             }
 
             const weekChoice = Number.isInteger(state?.prefs?.weekStart) ? `ws:${state.prefs.weekStart}` : 'ws:auto';
+            const chosen = [weekChoice, ...(hideWeekends ? [] : ['show:weekends']), ...(weekNumbers ? ['show:week-numbers'] : [])];
+            /** A menu item that is on or off: its name, and which it is said to a screen reader too (the menu's check shows it). */
+            const onOff = (text, on, pref) => h('span', { 'data-calendar-pref': pref, 'data-on': on ? 'true' : 'false' }, text, h('span', { className: 'dshcal-sr' }, on ? ', on' : ', off'));
             const side = h('aside', { ref: sideRef, id: 'dshcal-side', className: 'dshcal-side dshcal-glass', 'aria-label': 'Calendars', 'data-calendar-side': '' },
                 h(Btn, { kind: 'primary', onClick: () => newEvent(), 'data-calendar-side-new': '', style: { alignSelf: 'stretch' } }, icon('IconPlusOutlineRegular'), 'New event'),
-                h(MiniMonth, { anchor, today, weekStart, shown: shownDays, onPick: (day) => { go(day); closeOverlay(); } }),
+                h(MiniMonth, { anchor, today, weekStart, weekNumbers, shown: shownDays, onPick: (day) => { go(day); closeOverlay(); } }),
                 state && !remote ? h('div', { className: 'dshcal-note', 'data-calendar-onboarding': '' },
                     h('span', null, 'Add iCloud, Google, Microsoft 365, Fastmail or any CalDAV account to see its calendars here.',
                         h('br'), h('button', { type: 'button', className: 'dshcal-link', onClick: () => setDialog({ kind: 'accounts', start: { page: 'add' } }) }, 'Add an account'))) : null,
@@ -5131,18 +5253,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             icon('IconUserOutlineRegular'), 'Accounts',
                             attention.length ? h('span', { className: 'dshcal-dot', style: { '--dot': 'var(--cal-warn)' }, 'aria-label': `${plural(attention.length, 'account')} need${attention.length === 1 ? 's' : ''} attention` }) : null),
                         h(ui.Menu, {
-                            open: settings, portal: true, align: 'end', side: 'top', autoFocus: true, listClassName: 'dshcal-menu', selectedId: weekChoice,
+                            // The chosen ones are checked: the week's first day, and each of the two below that is on.
+                            open: settings, portal: true, align: 'end', side: 'top', autoFocus: true, listClassName: 'dshcal-menu', selectedIds: chosen,
                             items: [
                                 { type: 'label', id: 'ws', text: 'Week starts on' },
                                 { id: 'ws:auto', label: `As your language does (${weekdayName(localeWeekStart())})` },
                                 { id: 'ws:1', label: weekdayName(1) },
                                 { id: 'ws:0', label: weekdayName(0) },
                                 { id: 'ws:6', label: weekdayName(6) },
+                                { type: 'separator', id: 'show' },
+                                { id: 'show:weekends', label: onOff('Show weekends', !hideWeekends, 'weekends') },
+                                { id: 'show:week-numbers', label: onOff('Show week numbers', weekNumbers, 'week-numbers') },
                             ],
                             onSelect: (id) => {
                                 setSettings(false);
-                                if (id === weekChoice) return;
-                                void store.act('setPrefs', { patch: { weekStart: id === 'ws:auto' ? null : Number(id.slice(3)) } }).then((r) => { if (!r.ok) store.toast(errorText(r.error), 'error'); });
+                                const patch = id === 'show:weekends' ? { hideWeekends: !hideWeekends }
+                                    : id === 'show:week-numbers' ? { weekNumbers: !weekNumbers }
+                                        : id === weekChoice ? null : { weekStart: id === 'ws:auto' ? null : Number(id.slice(3)) };
+                                if (!patch) return;
+                                void store.act('setPrefs', { patch }).then((r) => { if (!r.ok) store.toast(errorText(r.error), 'error'); });
                             },
                             onClose: () => setSettings(false),
                             anchor: h(Btn, { kind: 'ghost', iconOnly: true, 'aria-label': 'Calendar settings', 'aria-haspopup': 'menu', 'aria-expanded': settings, 'data-calendar-settings': '', onClick: () => setSettings(!settings) }, icon('IconSettingsOutlineRegular')),
@@ -5166,6 +5295,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     onClick: () => { setQuery(''); searchRef.current?.focus(); },
                 }, icon('IconCloseOutlineRegular', { size: 12 })) : null);
 
+            const heading = h('h1', { className: 'dshcal-title', 'aria-live': 'polite', 'data-calendar-range': '' }, range.title);
+            const weekTag = weekNumbers && (view === 'week' || view === 'day') ? weekWords(range.days, weekStart) : '';
             const header = h('div', { className: 'dshcal-head' },
                 h('div', { className: 'dshcal-head-nav' },
                     h(IconBtn, {
@@ -5175,7 +5306,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h(Btn, { onClick: goToday, 'data-calendar-today': '', title: 'Today (T)' }, TEXT.today),
                     h(IconBtn, { label: TEXT.previous[view], glyph: icon('IconChevronLeftOutlineRegular'), onClick: () => step(-1), 'data-calendar-prev': '' }),
                     h(IconBtn, { label: TEXT.next[view], glyph: icon('IconChevronRightOutlineRegular'), onClick: () => step(1), 'data-calendar-next': '' }),
-                    h('h1', { className: 'dshcal-title', 'aria-live': 'polite', 'data-calendar-range': '' }, range.title)),
+                    // The week's number by the title, in Week and Day (under it where the page is narrow).
+                    weekTag ? h('div', { className: 'dshcal-titles' }, heading, h('span', { className: 'dshcal-tag dshcal-wknum', 'data-calendar-week-tag': '' }, weekTag)) : heading),
                 h('div', { className: 'dshcal-head-tools' },
                     search,
                     attention.length ? h(IconBtn, {
@@ -5783,6 +5915,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             hostLink, errorText, calendarStore, windowApi,
             isZone, browserZone, wallMs, wallOf, offsetAt, toLocal, toInstant, dayIn, minutesIn, startOfDay, isDay, addDays, daysBetween, weekdayOf,
             addMonths, monthStart, weekStartOf, daySpan, daysOf, spansDays, localeWeekStart, weekStartFrom,
+            isWeekend, visibleDays, addShownDays, firstShown, shownNear, isoWeek, weekNumberOf, weekWords,
             dayText, timeText, shortTime, whenText, shortWhen, relativeDay, minutesWords, reminderWords, untilWords, lookOf,
             rgbOf, textOn, colorOf, contrast, luminance,
             parseRule, untilValue, untilDay, repeatChoices, repeatFromRule, ruleFromRepeat, repeatProblem,

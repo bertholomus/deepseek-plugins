@@ -81,7 +81,12 @@
  *   the chat staying, and Open in Calendar to the event on the page;
  * - light and dark, with and without a stand-in wallpaper;
  * - a narrow window (420 px): the side column folds, Week shows 3 days,
- *   search fits.
+ *   search fits;
+ * - the settings menu's Show weekends and Show week numbers, each checked
+ *   as it is: Week from Monday to Friday with its ISO week number by the
+ *   title, Month in five columns with each week's number, the small month's
+ *   numbers; at 420 px three weekdays, the number under the title; both
+ *   kept after a reload, then turned off again from the menu.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js \
  *   PLAYWRIGHT_MODULE=/path/to/node_modules/playwright/index.mjs \
@@ -97,8 +102,9 @@
  * change stopped because the event changed, Accounts, Microsoft's and
  * Google's sign-ins, a removal's notice, the Agenda pane and an event's
  * details beside it, chat cards, the side column folded, a drag, search
- * results, a narrow window; and the window whenever a step fails). KEEP=1
- * keeps the temporary folder.
+ * results, a narrow window; Week and Month with weekends hidden and week
+ * numbers, light, dark and narrow, and the settings menu; and the window
+ * whenever a step fails). KEEP=1 keeps the temporary folder.
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -1939,6 +1945,180 @@ try {
             toggle && !sideShown && columns === 3 && overflow <= 1 && searchFits && focusIn && focusBack,
             JSON.stringify({ toggle, sideShown, columns, overflow, search, focusIn, focusBack }));
         await page.setViewportSize({ width: 1280, height: 800 });
+    });
+
+    // 21. Weekends hidden and week numbers shown, from the settings menu at the foot of the side column; kept after a
+    // reload, then turned off again (as the steps before had them).
+    await step('weekends hidden and week numbers, from the settings menu', async () => {
+        const settings = page.locator('[data-calendar-settings]');
+        const item = (pref) => page.getByRole('menuitem').filter({ has: page.locator(`[data-calendar-pref="${pref}"]`) });
+        const openMenu = async () => {
+            await settings.click();
+            await page.locator('[data-calendar-pref]').first().waitFor({ state: 'visible' });
+        };
+        /** An on/off item as the open menu shows it: what it says it is, and whether DSH's menu checks it. */
+        const itemNow = async (pref) => ({
+            on: await page.locator(`[data-calendar-pref="${pref}"]`).getAttribute('data-on'),
+            checked: (await item(pref).locator('svg').count()) > 0,
+        });
+        const prefsNow = async () => (await api('state')).value?.prefs ?? {};
+        /** One of the two chosen from the menu, and the host's prefs once they say it. */
+        const choose = async (pref, key, on) => {
+            await openMenu();
+            await item(pref).click();
+            await page.locator('[data-calendar-pref]').first().waitFor({ state: 'detached' });
+            return waitFor(async () => ((await prefsNow())[key] === true) === on, `${key} ${on ? 'on' : 'off'}`, 10000).then(() => true, () => false);
+        };
+        const weekday = (day) => new Date(`${day}T12:00:00Z`).getUTCDay();
+        const weekend = (day) => weekday(day) === 0 || weekday(day) === 6;
+        // ISO 8601: weeks from Monday, a year's week 1 the one with its first Thursday.
+        const isoWeek = (day) => {
+            const thursday = new Date(`${day}T12:00:00Z`);
+            thursday.setUTCDate(thursday.getUTCDate() + 3 - ((thursday.getUTCDay() + 6) % 7));
+            const jan4 = new Date(Date.UTC(thursday.getUTCFullYear(), 0, 4, 12));
+            return 1 + Math.round(((thursday - jan4) / 86_400_000 - 3 + ((jan4.getUTCDay() + 6) % 7)) / 7);
+        };
+        /** Week view as it shows: its days, the week's number by the title (beside it or under it), and whether the title has its room. */
+        const weekNow = async () => {
+            await page.locator('[data-calendar-view="week"]').click();
+            await page.locator('[data-calendar-grid="week"]').waitFor({ state: 'visible' });
+            await page.waitForTimeout(300);
+            return page.evaluate(() => {
+                const title = document.querySelector('[data-calendar-range]');
+                const tag = document.querySelector('[data-calendar-week-tag]');
+                const root = document.querySelector('[data-calendar-page]');
+                const [a, b] = [title?.getBoundingClientRect(), tag?.getBoundingClientRect()];
+                return {
+                    days: [...document.querySelectorAll('[data-calendar-day-column]')].map((el) => el.getAttribute('data-calendar-day-column')),
+                    tag: tag?.textContent ?? '',
+                    beside: Boolean(a && b) && b.left >= a.right && b.left - a.right < 16 && Math.abs((a.top + a.bottom) / 2 - (b.top + b.bottom) / 2) < 4,
+                    under: Boolean(a && b) && b.top >= a.bottom - 2 && b.top - a.bottom < 8 && Math.abs(b.left - a.left) < 6,
+                    titleFits: Boolean(title) && title.scrollWidth <= title.clientWidth + 1,
+                    overflow: root.scrollWidth - root.clientWidth,
+                };
+            });
+        };
+        /** Month view as it shows: its columns, each row's days and number, and the small month's numbers. */
+        const monthNow = async () => {
+            await page.locator('[data-calendar-view="month"]').click();
+            await page.locator('[data-calendar-grid="month"]').waitFor({ state: 'visible' });
+            await page.waitForTimeout(300);
+            const month = await page.evaluate(() => {
+                const grid = document.querySelector('[data-calendar-grid="month"]');
+                const root = document.querySelector('[data-calendar-page]');
+                const mini = [];
+                for (const el of document.querySelector('[data-calendar-mini] .dshcal-mini-grid')?.children ?? []) {
+                    if (el.hasAttribute('data-calendar-mini-week')) mini.push({ number: el.textContent, days: [] });
+                    else if (el.hasAttribute('data-calendar-mini-day') && mini.length) mini[mini.length - 1].days.push(el.getAttribute('data-calendar-mini-day'));
+                }
+                return {
+                    cols: grid.getAttribute('data-cols'),
+                    heads: [...grid.querySelectorAll('.dshcal-mo-wd')].map((el) => el.textContent),
+                    rows: [...grid.querySelectorAll('[role=row]')].map((row) => ({
+                        days: [...row.querySelectorAll('[data-calendar-cell]')].map((c) => c.getAttribute('data-calendar-cell')),
+                        number: row.querySelector('[data-calendar-week-number]')?.textContent ?? '',
+                    })),
+                    mini,
+                    overflow: root.scrollWidth - root.clientWidth,
+                };
+            });
+            month.firstNamed = month.rows.length ? await page.getByRole('rowheader', { name: month.rows[0].number || 'none', exact: true }).count() : 0;
+            return month;
+        };
+        const fiveDays = (days) => days.length === 5 && days.every((day, i) => weekday(day) === i + 1);
+        const numbered = (rows) => rows.every((row) => row.number === `Week ${isoWeek(row.days.find((day) => weekday(day) === 1) ?? row.days[0])}`);
+        /** The side column shown, as the steps before have it (its foot has the settings menu). */
+        const sideShown = async () => {
+            if (await page.locator('[data-calendar-side]').isVisible()) return;
+            await page.locator('[data-calendar-side-toggle]').click();
+            await page.locator('[data-calendar-side]').waitFor({ state: 'visible' });
+        };
+        try {
+            await openPage();
+            await sideShown();
+            await page.locator('[data-calendar-today]').click();
+            // As they start: weekends shown (checked), week numbers off.
+            await openMenu();
+            const first = { weekends: await itemNow('weekends'), numbers: await itemNow('week-numbers') };
+            await page.keyboard.press('Escape');
+            await page.locator('[data-calendar-pref]').first().waitFor({ state: 'detached' });
+            const hidden = await choose('weekends', 'hideWeekends', true);
+            const numbers = await choose('week-numbers', 'weekNumbers', true);
+            await openMenu();
+            const then = { weekends: await itemNow('weekends'), numbers: await itemNow('week-numbers') };
+            await shot(page, 'prefs-menu');
+            await page.keyboard.press('Escape');
+            check('the settings menu says weekends are shown and week numbers off at first, checked as they are, and turns each the other way',
+                hidden && numbers && first.weekends.on === 'true' && first.weekends.checked && first.numbers.on === 'false' && !first.numbers.checked
+                && then.weekends.on === 'false' && !then.weekends.checked && then.numbers.on === 'true' && then.numbers.checked, JSON.stringify({ first, then, hidden, numbers }));
+
+            const week = await weekNow();
+            await shot(page, 'prefs-week-light');
+            const month = await monthNow();
+            await shot(page, 'prefs-month-light');
+            await setDark(page, true);
+            await shot(page, 'prefs-month-dark');
+            await weekNow();
+            await shot(page, 'prefs-week-dark');
+            await setDark(page, false);
+            check('weekends hidden: Week shows Monday to Friday with its week number by the title; Month five columns, each row with its ISO week number (a row header, "Week N"), and the small month too',
+                fiveDays(week.days) && week.tag === `Week ${isoWeek(week.days[0])}` && week.beside && week.titleFits && month.cols === '5' && month.heads.length === 6
+                && month.rows.length >= 4 && month.rows.every((row) => fiveDays(row.days)) && numbered(month.rows) && month.firstNamed === 1
+                && month.mini.length === 6 && month.mini.every((row) => row.days.length === 7 && row.number === `Week ${isoWeek(row.days.find((day) => weekday(day) === 1))}`),
+                JSON.stringify({ week, month }).slice(0, 1500));
+
+            // A narrow window: three weekdays, the week's number under the title (which keeps its room), Month still in five.
+            await page.setViewportSize({ width: 420, height: 820 });
+            await page.waitForTimeout(600);
+            const narrowWeek = await weekNow();
+            await shot(page, 'prefs-narrow-week');
+            const narrowMonth = await monthNow();
+            await shot(page, 'prefs-narrow-month');
+            await page.locator('[data-calendar-side-toggle]').click();
+            await page.locator('[data-calendar-side]').waitFor({ state: 'visible', timeout: 5000 });
+            await shot(page, 'prefs-narrow-side');
+            await page.keyboard.press('Escape');
+            await page.locator('[data-calendar-side]').waitFor({ state: 'hidden', timeout: 5000 });
+            await page.setViewportSize({ width: 1280, height: 800 });
+            await page.waitForTimeout(600);
+            check('in a narrow window Week shows three weekdays and the week\'s number under the title, which keeps its room, and Month five columns, nothing sticking out',
+                narrowWeek.days.length === 3 && !narrowWeek.days.some(weekend) && /^Weeks? \d+(–\d+)?$/.test(narrowWeek.tag) && narrowWeek.under
+                && narrowWeek.titleFits && narrowWeek.overflow <= 1 && narrowMonth.cols === '5' && numbered(narrowMonth.rows) && narrowMonth.overflow <= 1,
+                JSON.stringify({ narrowWeek, narrowMonth: { cols: narrowMonth.cols, rows: narrowMonth.rows.length, overflow: narrowMonth.overflow } }));
+
+            // Kept: after a reload (the page as the steps before had it: its side column shown, the notice closed).
+            await page.reload({ waitUntil: 'domcontentloaded' });
+            await page.waitForTimeout(2500);
+            await dismissNotices(page);
+            await openPage();
+            await sideShown();
+            const notice = page.locator('[data-calendar-store-issue]');
+            if (await notice.count()) {
+                await notice.getByRole('button', { name: 'Close this notice' }).click();
+                await notice.waitFor({ state: 'detached' });
+            }
+            const keptWeek = await weekNow();
+            const keptMonth = await monthNow();
+            check('weekends hidden and week numbers are kept after a reload', fiveDays(keptWeek.days) && keptWeek.tag === `Week ${isoWeek(keptWeek.days[0])}`
+                && keptMonth.cols === '5' && numbered(keptMonth.rows), JSON.stringify({ keptWeek, keptMonth: { cols: keptMonth.cols, rows: keptMonth.rows } }).slice(0, 1500));
+
+            // Off again from the menu: seven days, no numbers, and neither kept.
+            const shownAgain = await choose('weekends', 'hideWeekends', false);
+            const numbersOff = await choose('week-numbers', 'weekNumbers', false);
+            const offMonth = await monthNow();
+            const offWeek = await weekNow();
+            const prefs = await prefsNow();
+            check('turned off again from the menu: Week has its seven days and no week number, Month seven columns without numbers, and neither is kept',
+                shownAgain && numbersOff && offWeek.days.length === 7 && offWeek.tag === '' && offMonth.cols === '7' && offMonth.heads.length === 7
+                && offMonth.rows.every((row) => row.days.length === 7 && row.number === '') && offMonth.mini.length === 0
+                && !('hideWeekends' in prefs) && !('weekNumbers' in prefs), JSON.stringify({ offWeek, prefs, cols: offMonth.cols, mini: offMonth.mini.length }));
+        } finally {
+            // Whatever happened above, the steps after this one find the page as it was.
+            await api('setPrefs', { patch: { hideWeekends: false, weekNumbers: false } });
+            await setDark(page, false);
+            await page.setViewportSize({ width: 1280, height: 800 });
+            await page.locator('[data-calendar-view="week"]').click().catch(() => {});
+        }
     });
 
     check('the window threw nothing', pageErrors.length === 0, pageErrors.join('\n'));

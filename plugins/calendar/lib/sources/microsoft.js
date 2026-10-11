@@ -55,7 +55,7 @@
  *
  * @module dsh-plugin-calendar/sources/microsoft
  */
-import { SourceError, newPeople, peopleConflict, statusError } from './index.js';
+import { SourceError, otherPeople, peopleConflict, statusError } from './index.js';
 import { formBody } from '../http.js';
 import { cleanRecord } from '../model.js';
 import { idTokenClaims, loopbackSignIn } from '../oauth.js';
@@ -577,23 +577,54 @@ export function create(account, env) {
     }
 
     /**
-     * The etag a change to an event ({id, etag?, event?}) goes with: the one
-     * the plugin holds, else the one Graph has now (never '*'), of the event
-     * just read (`event`) or read here. An event read now must name nobody
-     * the change wasn't worked out with (`planned`, newPeople), else the
-     * change is a conflict. null when the event is gone; undefined only if
-     * Graph sends none.
+     * The etag a change to an event ({id, etag?, event?, occurrences?,
+     * copy?}) goes with: the one the plugin holds, else the one Graph has
+     * now (never '*'), of the event just read (`event`) or read here. An
+     * event read now must name the people the change was worked out with
+     * (`planned`), no one more and no one less (otherPeople), else the
+     * change is a conflict. A whole series is compared with its occurrences
+     * as Graph has them now (`occurrences`, occurrencesNow), etag held or
+     * not: changing one of them doesn't change the series' etag. With its
+     * etag held, the plugin's copy of the series (`copy`) stands for it.
+     * null when the event is gone; undefined only if Graph sends none.
      */
     async function etagFor(ref, planned, what) {
-        if (typeof ref.etag === 'string' && ref.etag !== '') return ref.etag;
-        const event = ref.event !== undefined ? ref.event : await getEvent(ref.id);
-        if (event === null) return null;
-        const added = newPeople(planned, recordOf(event, ctx) ?? {});
-        if (added.length > 0) {
-            env.log?.(`microsoft: the event names ${added.length} more since the change was worked out`);
+        const held = typeof ref.etag === 'string' && ref.etag !== '' ? ref.etag : undefined;
+        if (held !== undefined && ref.occurrences === undefined) return held;
+        let event;
+        if (held === undefined) {
+            event = ref.event !== undefined ? ref.event : await getEvent(ref.id);
+            if (event === null) return null;
+        }
+        const now = [held === undefined ? recordOf(event, ctx) ?? {} : ref.copy ?? {}, ...(ref.occurrences ?? [])];
+        const other = otherPeople(planned, now);
+        if (other.length > 0) {
+            env.log?.(`microsoft: the event names ${other.length} other people since the change was worked out`);
             throw peopleConflict(what);
         }
-        return etagOf(event);
+        return held ?? etagOf(event);
+    }
+
+    /**
+     * A series' occurrences as Graph has them now (changed and cancelled
+     * ones too), as records, in the window the calendar syncs: the window a
+     * change to the whole series is worked out on, from what the calendar
+     * view brought of them. undefined when the series is gone (a delete is
+     * done already, and a change is answered 404).
+     */
+    async function occurrencesNow(calendar, seriesId, what) {
+        const window = windows.get(calendar.remoteId) ?? windowOf(undefined, undefined, env.now());
+        const out = [];
+        try {
+            for await (const event of instances(seriesId, window.from, window.to, what)) {
+                const record = recordOf(event, ctx);
+                if (record !== null) out.push(record);
+            }
+        } catch (error) {
+            if (error instanceof SourceError && error.code === 'not-found') return undefined;
+            throw error;
+        }
+        return out;
     }
 
     async function calendars() {
@@ -830,6 +861,9 @@ export function create(account, env) {
             // New times and rules are worked out from the series as Graph has it.
             ref = await seriesRef(item, seriesId, times);
             body = { ...fields, ...(times ? seriesTimes(ref.master, record, patch) : {}) };
+            // It reaches every occurrence: who they name is read too.
+            ref.occurrences = await occurrencesNow(calendar, seriesId, what);
+            if (item.remoteId === seriesId) ref.copy = record;
         } else {
             ref = { id: item.remoteId, etag: item.etag };
             body = { ...fieldsFor(patch, ctx), ...movedTimes(record, patch, ctx) };
@@ -864,7 +898,11 @@ export function create(account, env) {
         // A whole series goes with its own etag: the item's only when the item is the series (an occurrence's isn't the series').
         let ref = { id: item.remoteId, etag: item.etag };
         if (seriesId !== undefined && scope === 'one') ref = await occurrenceOf(target, seriesId);
-        else if (seriesId !== undefined) ref = { id: seriesId, etag: item.remoteId === seriesId ? item.etag : undefined };
+        else if (seriesId !== undefined) {
+            // It takes out every occurrence: who they name is read too.
+            const own = item.remoteId === seriesId;
+            ref = { id: seriesId, etag: own ? item.etag : undefined, occurrences: await occurrencesNow(calendar, seriesId, 'Deleting the event on Microsoft'), ...(own ? { copy: record } : {}) };
+        }
         const removed = scope === 'one' ? [ref.id] : [...new Set([ref.id, item.remoteId])];
         const etag = await etagFor(ref, planned, 'Deleting the event on Microsoft');
         // Gone already is what was asked for.
