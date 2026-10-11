@@ -7,10 +7,11 @@
  * project's models, effort and pause the way the coordinator's
  * project_settings tool does, through the same manager methods, and its
  * access settings (the user's tools, permissions), which only it does, the
- * plugin's page lists every project with its models, a failed or stopped
- * thread runs again from its card (Retry, Resume), the session list and
- * the Projects page make projects and arrange workspaces in categories, and
- * the window hears what the user hasn't seen yet (news, seeNews).
+ * plugin's page and the Projects page list every project, a failed or
+ * stopped thread runs again from its card (Retry, Resume), a project is made
+ * in a workspace, renamed or removed (create, rename, remove,
+ * addCoordinator), and the window hears what the user hasn't seen yet
+ * (news, seeNews).
  *
  * The gateway finds a Remote service by its `typertRemote` binding and the
  * method markers on its prototype; DSH's own services get both from
@@ -60,22 +61,21 @@ export class ProjectsRemote {
 
     /**
      * Every project with its models and access settings and their sources,
-     * for the plugin's page, and every category with its workspaces, with
-     * the user's tools (guardedTools) and the permissions DSH offers.
+     * for the plugin's page and the Projects page, in the Projects page's
+     * order, with the user's tools (guardedTools) and the permissions DSH
+     * offers.
      */
     async list() {
         try {
-            // DSH's own order keeps reading in category order, so a screen reader hears the list as it is drawn.
-            this.manager.syncWorkspaceOrder().catch(() => {});
             return { ...this.lists(), guarded: this.manager.guards().map(([name]) => name), permissions: this.manager.permissionCatalog() };
         } catch (error) {
             throw failure(error);
         }
     }
 
-    /** What every change answers with: the projects and the categories as they are now. */
+    /** What every change answers with: the projects as they are now. */
     lists() {
-        return { projects: this.manager.listProjects(), categories: this.manager.listCategories() };
+        return { projects: this.manager.listProjects() };
     }
 
     /**
@@ -121,11 +121,11 @@ export class ProjectsRemote {
     }
 
     /**
-     * A new project from the Projects page: its ◆ coordinator starts in the
+     * A new project made in the window: its ◆ coordinator starts in the
      * workspace, and its threads work there.
      * @param name - its name.
      * @param workspace - the DSH workspace id it works in.
-     * @returns {project: the new id, coordinator: its session id, projects, categories}.
+     * @returns {project: the new id, coordinator: its session id, projects}.
      */
     async create(name, workspace) {
         try {
@@ -136,7 +136,7 @@ export class ProjectsRemote {
         }
     }
 
-    /** Rename a project made on the Projects page. @returns the projects and categories. */
+    /** Rename a project made in the window. @returns the projects. */
     async rename(project, name) {
         try {
             await this.manager.renameProject(this.manager.projectFor(project), name);
@@ -146,7 +146,7 @@ export class ProjectsRemote {
         }
     }
 
-    /** Delete a project made on the Projects page whose coordinator never started. @returns the projects and categories. */
+    /** Delete a project made in the window whose coordinator never started. @returns the projects. */
     async remove(project) {
         try {
             this.manager.deleteProject(this.manager.projectFor(project));
@@ -157,77 +157,14 @@ export class ProjectsRemote {
     }
 
     /**
-     * Start the coordinator of a project made on the Projects page that has
-     * none (it never started, or it was deleted in DSH).
-     * @returns {coordinator: its session id, projects, categories}.
+     * Start the coordinator of a project made in the window that has none
+     * (it never started, or it was deleted in DSH).
+     * @returns {coordinator: its session id, projects}.
      */
     async addCoordinator(project) {
         try {
             const sessionId = await this.manager.startCoordinator(this.manager.projectFor(project));
             return { coordinator: sessionId, ...this.lists() };
-        } catch (error) {
-            throw failure(error);
-        }
-    }
-
-    /**
-     * A new category, last in the list.
-     * @param name - its name.
-     * @param workspace - optional: a DSH workspace id it holds from the start.
-     * @returns {category: the new id, projects, categories}.
-     */
-    async createCategory(name, workspace) {
-        try {
-            const id = await this.manager.createCategory(name, typeof workspace === 'string' && workspace !== '' ? workspace : undefined);
-            return { category: id, ...this.lists() };
-        } catch (error) {
-            throw failure(error);
-        }
-    }
-
-    /** Rename a category. @returns the projects and categories. */
-    async renameCategory(category, name) {
-        try {
-            this.manager.renameCategory(category, name);
-            return this.lists();
-        } catch (error) {
-            throw failure(error);
-        }
-    }
-
-    /** Delete a category; its workspaces go to Other workspaces. @returns the projects and categories. */
-    async removeCategory(category) {
-        try {
-            await this.manager.removeCategory(category);
-            return this.lists();
-        } catch (error) {
-            throw failure(error);
-        }
-    }
-
-    /**
-     * Move a category before another one, or (before empty) to the end.
-     * @returns the projects and categories.
-     */
-    async moveCategory(category, before) {
-        try {
-            await this.manager.moveCategory(category, typeof before === 'string' ? before : null);
-            return this.lists();
-        } catch (error) {
-            throw failure(error);
-        }
-    }
-
-    /**
-     * Put a DSH workspace in a category (empty for none), before another of
-     * its workspaces or (before empty) after the last.
-     * @returns the projects and categories.
-     */
-    async fileWorkspace(workspace, category, before) {
-        try {
-            if (typeof workspace !== 'string' || workspace === '') throw new ProjectError('workspace is required');
-            await this.manager.fileWorkspace(workspace, typeof category === 'string' && category !== '' ? category : null, typeof before === 'string' ? before : null);
-            return this.lists();
         } catch (error) {
             throw failure(error);
         }
@@ -280,5 +217,4 @@ function markRemote(Class, names) {
 }
 markRemote(ProjectsRemote, [
     'describe', 'list', 'sessions', 'news', 'seeNews', 'update', 'continueThread', 'create', 'rename', 'remove', 'addCoordinator',
-    'createCategory', 'renameCategory', 'removeCategory', 'moveCategory', 'fileWorkspace',
 ]);
