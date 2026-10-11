@@ -269,9 +269,11 @@ function fakePresets(sessions, live) {
  * `sessionController.agents.selectForNextRequest`). `tools` names the
  * Host's tools (DSH's own and the MCP servers'), which a project may keep
  * from a session; `presets: true` adds DSH's permission presets.
+ * `listening` maps an event to listeners of DSH's own, registered before
+ * the plugin's (a hook's `tools/pre-execute`, say).
  */
-function fakeHost({ selection = false, hostListener = selection, gateway = false, workspaces = [], tools = [], presets = false } = {}) {
-    const listeners = new Map();
+function fakeHost({ selection = false, hostListener = selection, gateway = false, workspaces = [], tools = [], presets = false, listening = {} } = {}) {
+    const listeners = new Map(Object.entries(listening).map(([event, list]) => [event, [...list]]));
     const effects = [];
     const sessions = new Map(); // id → {events, prompts, title, cwd}
     const live = new Map(); // id → agent
@@ -304,9 +306,11 @@ function fakeHost({ selection = false, hostListener = selection, gateway = false
             if (!names.every((name) => services[name])) return;
             fn(Object.assign(Object.create(host), Object.fromEntries(names.map((name) => [name, services[name]]))));
         },
-        on(event, fn) {
+        /** Like cordis: a listener goes last, or first with `prepend`. */
+        on(event, fn, options) {
             const list = listeners.get(event) ?? [];
-            list.push(fn);
+            if (options?.prepend) list.unshift(fn);
+            else list.push(fn);
             listeners.set(event, list);
         },
         effect(fn) { effects.push(fn()); },
@@ -5740,7 +5744,10 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     writeFileSync(join(work, 'app.py'), 'from flask import Flask, jsonify\nfrom flask_sqlalchemy import SQLAlchemy\n\napp = Flask(__name__)\ndb = SQLAlchemy(app)\n\n@app.route("/items/<int:item_id>", methods=["DELETE"])\ndef delete_item(item_id):\n    db.session.delete(Item.query.get_or_404(item_id))\n    db.session.commit()\n    return jsonify(ok=True)\n\nif __name__ == "__main__":\n    app.run(port=5000)\n');
     const outside = mkdtempSync(join(tmpdir(), 'projects-outside-'));
     writeFileSync(join(outside, 'run.sh'), '#!/bin/sh\ngit push\n');
-    const { host, dir } = setup({ projects: [{ name: 'DSH Plugins', goal: 'Ship good DSH plugins', workspacePath: work }] }, undefined, { presets: true });
+    // A stand-in for a DSH hook loaded before the plugin: when it asks about a call, it doesn't pass the call on.
+    let hookAsks = false;
+    const hook = (exec, next) => (hookAsks ? Promise.resolve({ kind: 'ask', reason: 'a hook asks about https://bot:ghp_x@github.com/acme/web.git' }) : next());
+    const { host, dir } = setup({ projects: [{ name: 'DSH Plugins', goal: 'Ship good DSH plugins', workspacePath: work }] }, undefined, { presets: true, listening: { 'tools/pre-execute': [hook] } });
     // DSH's approval service: a session's policy, "ask" unless a test says otherwise.
     const policies = new Map();
     host.services.approval = { effectivePolicy: (session) => policies.get(session.id) ?? 'ask' };
@@ -5876,9 +5883,23 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     assert.deepEqual(await gate(t1, 'run_code', { code: "console.log(await (await fetch('https://api.example.com/items')).text());" }), { kind: 'allow' });
     assert.equal((await gate(t1, 'pwsh', { command: 'Invoke-RestMethod -Method Post -Uri https://api.example.com/items' })).kind, 'ask');
     assert.deepEqual(await gate(t1, 'web_fetch', { url: 'https://example.com' }), { kind: 'allow' });
-    // DSH's own refusals and prompts stand.
+    // DSH's own refusals and prompts stand. When DSH asks about a send (a review's ask, or a hook's, which doesn't pass the
+    // call on), its prompt names the send first.
     assert.deepEqual(await gate(t1, 'bash', { command: 'git push' }, { kind: 'deny', reason: 'sandbox' }), { kind: 'deny', reason: 'sandbox' });
-    assert.deepEqual(await gate(t1, 'bash', { command: 'git push' }, { kind: 'ask', reason: 'wider' }), { kind: 'ask', reason: 'wider' });
+    assert.deepEqual(await gate(t1, 'bash', { command: 'ls' }, { kind: 'ask', reason: 'wider' }), { kind: 'ask', reason: 'wider' });
+    assert.deepEqual(await gate(t1, 'bash', { command: 'git push' }, { kind: 'ask', reason: 'Auto review denied tool "bash": it pushes', displayReason: { en: 'Auto review denied this call: it pushes' } }), {
+        kind: 'ask',
+        reason: 'the command pushes to its remote (git push); Auto review denied tool "bash": it pushes',
+        displayReason: { en: 'This command pushes to its remote (git push). A thread asks you before each command that sends outside the workspace.\nAuto review denied this call: it pushes' },
+    });
+    hookAsks = true;
+    assert.deepEqual(await gate(t1, 'bash', { command: 'git push origin main', description: 'Push the fix' }), {
+        kind: 'ask',
+        reason: 'the command pushes to origin (git push). The thread says: "Push the fix"; a hook asks about https://github.com/acme/web.git',
+        displayReason: { en: 'This command pushes to origin (git push). A thread asks you before each command that sends outside the workspace.\nThe thread says: "Push the fix"\na hook asks about https://github.com/acme/web.git' },
+    });
+    assert.deepEqual(await gate(t1, 'bash', { command: 'ls' }), { kind: 'ask', reason: 'a hook asks about https://bot:ghp_x@github.com/acme/web.git' });
+    hookAsks = false;
 
     // A thread whose approvals never ask can't send, and hears how the user can let it ask.
     policies.set(t1.id, 'never');

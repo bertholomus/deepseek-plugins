@@ -155,12 +155,13 @@ export function apply(ctx, config) {
     ctx.on('tools/change', () => {
         manager.onToolsChanged();
     });
-    // A project session's command that sends outside the workspace waits for the user (manager.holdSend). It runs after
-    // DSH's own checks, so their prompts and refusals stand, and for every session, since a subagent has no project scope.
+    // A project session's command that sends outside the workspace waits for the user (manager.holdSend), for every
+    // session, since a subagent has no project scope. It wraps DSH's own checks: their refusals stand, and when one asks
+    // without passing the call on (a hook's ask), the send is named on that same prompt.
     ctx.on('tools/pre-execute', async (exec, next) => {
         const decision = await next();
-        return decision?.kind === 'allow' ? manager.holdSend(exec) ?? decision : decision;
-    });
+        return decision?.kind === 'allow' || decision?.kind === 'ask' ? manager.holdSend(exec, decision) ?? decision : decision;
+    }, { prepend: true });
     // A ◆ coordinator archived or unarchived in DSH (its row's Archive or Unarchive, the Undo on DSH's notice):
     // its project's threads go or come back with it.
     ctx.on('domain/changed', (change) => {

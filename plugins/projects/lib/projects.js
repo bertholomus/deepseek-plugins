@@ -812,11 +812,14 @@ export class ProjectManager {
      * and the thread sees the answer before it sends again (settleSend).
      * A thread whose approvals never ask, a coordinator and a subagent are
      * refused. Called for every session's calls (index.js) once DSH's own
-     * checks let one run. Undefined lets it run: any other call, a session
-     * outside the projects, and any error (a check against a mistake, not
-     * a sandbox). Never logs the command.
+     * checks let one run, or ask about it (`asked`: a hook's or a review's
+     * ask): then DSH's words follow the plugin's on the one prompt. DSH asks
+     * to widen a call's sandbox later, in the tool itself, once this prompt
+     * is answered. Undefined leaves DSH's decision: any other call, a
+     * session outside the projects, and any error (a check against a
+     * mistake, not a sandbox). Never logs the command.
      */
-    holdSend(exec) {
+    holdSend(exec, asked) {
         try {
             if (this.disposed || !SEND_TOOLS.has(exec?.name) || !exec.agent) return undefined;
             const session = exec.agent.session;
@@ -847,8 +850,8 @@ export class ProjectManager {
                 return { kind: 'deny', reason: SEND_REASONS.never(found.what) };
             }
             const step = this.callSteps.get(exec.agent.id)?.get(exec.callId);
-            const asked = this.pendingSends.get(exec.agent.id);
-            if (step && asked && asked.callId !== exec.callId && asked.turn === step.turn && asked.step === step.step) {
+            const pending = this.pendingSends.get(exec.agent.id);
+            if (step && pending && pending.callId !== exec.callId && pending.turn === step.turn && pending.step === step.step) {
                 this.log(`send-refused ${label} one-at-a-time`);
                 return { kind: 'deny', reason: SEND_REASONS.pending(found.what) };
             }
@@ -856,10 +859,12 @@ export class ProjectManager {
             this.log(`send-ask ${label}`);
             const said = described(found);
             const words = threadWords(args);
+            const theirs = asked?.kind === 'ask' ? asked : undefined;
+            const also = withoutCredentials(theirs?.displayReason?.en ?? theirs?.reason).trim();
             return {
                 kind: 'ask',
-                reason: `the command ${said}${words ? `. The thread says: ${words}` : ''}`,
-                displayReason: { en: `This command ${said}. A thread asks you before each command that sends outside the workspace.${words ? `\nThe thread says: ${words}` : ''}` },
+                reason: `the command ${said}${words ? `. The thread says: ${words}` : ''}${theirs?.reason ? `; ${withoutCredentials(theirs.reason)}` : ''}`,
+                displayReason: { en: `This command ${said}. A thread asks you before each command that sends outside the workspace.${words ? `\nThe thread says: ${words}` : ''}${also ? `\n${also}` : ''}` },
             };
         } catch (error) {
             this.log(`error send-check ${String(error?.message ?? error).slice(0, 200)}`);
