@@ -20,8 +20,9 @@
  * - a change the host says would email six guests ('calendar/needs-notify',
  *   played here, as the calendars kept in DSH email no one): the question
  *   names all six on screen, with what they get and why; nothing sent on
- *   Don't save; notify only after Save and email, with approved: the six;
- *   who was emailed in the toast;
+ *   Don't save; notify only after Save and email, with approved: the six,
+ *   and the same change otherwise (the host holds a yes to it); who was
+ *   emailed in the toast;
  * - an event moved to another calendar with other changes: the move on its
  *   own first, the rest on the moved event; no email offered for a guest on
  *   a calendar that can't send it;
@@ -46,6 +47,8 @@
  *   sendUpdates=none); and a meeting there an agent deletes without asking
  *   (askBeforeEmails off); someone else's invitation there, whose
  *   organizer's fields the dialog keeps as they are, and Show me as saved;
+ *   one whose guests may change it, where Show me as asks first, naming its
+ *   organizer and the other guest;
  * - a series with an occurrence changed on its own moved to Microsoft: the
  *   host refuses ('calendar/drops-changes'), Don't move it keeps it, Move
  *   anyway moves it without that occurrence;
@@ -553,6 +556,16 @@ try {
     await waitFor(() => readText(calendarLog).includes('account added local'), 'the calendar plugin to start', 30000);
     const web = await signInWeb();
     const api = (method, args = {}) => webApi(web, `dsh-plugin-calendar/${method}`, args);
+    /**
+     * A new event made as the window makes one that emails or reaches people: refused first, naming them all
+     * ('calendar/needs-approval'), then the same input again with approved: them (the host holds a yes to that
+     * very change, once).
+     */
+    const createAsked = async (input) => {
+        const first = await api('createEvent', { input });
+        const people = first.error?.details?.people;
+        return first.ok || !Array.isArray(people) ? first : api('createEvent', { input: { ...input, approved: people } });
+    };
     const state = await waitFor(async () => { const r = await api('state'); return r.ok ? r.value : null; }, 'the calendar endpoints', 30000);
     const defaultCalendar = state.defaultCalendar ?? state.calendars.find((c) => c.accountId === 'local')?.id;
     const today = dayIn(Date.now(), ZONE);
@@ -812,6 +825,11 @@ try {
 
     // 6. Email: the question names everyone the change emails, with what they get and why; made only on its yes,
     // held to them.
+    /** Whether two calls make the same change: the same event, scope and fields, notify and approved aside. */
+    const sameChange = (a, b) => {
+        const fields = (call) => JSON.stringify(Object.entries(call?.patch ?? call?.input ?? {}).filter(([k]) => k !== 'notify' && k !== 'approved').sort());
+        return a?.id === b?.id && a?.scope === b?.scope && fields(a) === fields(b);
+    };
     const updateCalls = '**/api/dsh-plugin-calendar/updateEvent';
     await step('a change that would email people', async () => {
         await page.locator('[data-calendar-today]').click();
@@ -875,6 +893,7 @@ try {
                 && stillOpen && unchanged && saved !== undefined
                 && sent.length === 3 && sent[0].patch?.notify === undefined && sent[1].patch?.notify === undefined && sent[0].patch?.approved === undefined
                 && sent[2].patch?.notify === true && JSON.stringify(sent[2].patch?.approved) === JSON.stringify(six)
+                && sameChange(sent[0], sent[2]) && sameChange(sent[0], sent[1])
                 && /Emailed an update to ann@example\.com, bob@example\.com, cy@example\.com and 3 others\./.test(toast ?? ''),
                 JSON.stringify({ question: { ...question, answer: undefined }, stillOpen, unchanged, sent, toast, saved: saved?.title }));
         } finally {
@@ -1226,8 +1245,8 @@ try {
                 deleteBox, deleteHint, deleted, gone, writes: writes.map((r) => `${r.method} ${r.path} ${r.query.sendUpdates}`) }));
 
         // An agent deletes a meeting there: askBeforeEmails is off, so a chat takes it off the guest's calendar without asking.
-        const lunch = (await api('createEvent', {
-            input: { calendarId: googleCalendar.id, title: 'E2E Agent lunch', start: `${day}T14:00`, end: `${day}T14:30`, timeZone: ZONE, attendees: ['ann@example.com'], approved: ['ann@example.com'] },
+        const lunch = (await createAsked({
+            calendarId: googleCalendar.id, title: 'E2E Agent lunch', start: `${day}T14:00`, end: `${day}T14:30`, timeZone: ZONE, attendees: ['ann@example.com'],
         })).value?.occurrence;
         reachCall = await agentCall('calendar_delete_event', { id: lunch?.id }, 'Cancel my lunch with Ann');
         const left = (await events(day, day)).some((o) => o.title === 'E2E Agent lunch');
@@ -1269,6 +1288,43 @@ try {
             Object.values(locked).every(Boolean) && own.busy && own.private && /its organizer sets its title, time, place, link and notes/.test(note)
             && patches() === before + 1 && now?.busy === false && now.title === 'E2E Vendor review' && now.location === 'Room 4',
             JSON.stringify({ locked, own, note, patches: patches() - before, now: now && { busy: now.busy, title: now.title, location: now.location } }));
+
+        // One whose organizer lets guests change it: Google makes a change to it for everyone on it, so Show me as asks first.
+        google.store.insert('sam@example.com', {
+            summary: 'E2E Design review', iCalUID: 'e2e-design-review@example.com', guestsCanModify: true,
+            start: { dateTime: `${day}T17:00:00`, timeZone: ZONE }, end: { dateTime: `${day}T17:30:00`, timeZone: ZONE },
+            organizer: { email: 'olga@example.com', displayName: 'Olga Example' },
+            attendees: [
+                { email: 'olga@example.com', organizer: true, responseStatus: 'accepted' }, { email: 'sam@example.com', responseStatus: 'accepted' },
+                { email: 'pat@example.com', responseStatus: 'accepted' },
+            ],
+        });
+        await api('syncNow', { accountId: googleAccount?.id });
+        await waitFor(async () => (await events(day, day)).find((o) => o.title === 'E2E Design review'), 'the invitation its guests may change', 15000);
+        await showDay(day);
+        await eventOnPage('E2E Design review').click();
+        await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+        await page.locator('[data-calendar-edit]').click();
+        await form.waitFor({ state: 'visible' });
+        const first = patches();
+        let asked = {};
+        const calls = await callsTo('updateEvent', async () => {
+            await form.locator('[data-calendar-busy]').selectOption('free');
+            await page.locator('[data-calendar-save]').click();
+            const question = await consent();
+            await shot(page, 'invitation-question');
+            asked = { ...question, answer: undefined, sentBefore: patches() - first };
+            await question.answer(true);
+            await dialogGone();
+        });
+        const design = (await events(day, day)).find((o) => o.title === 'E2E Design review');
+        check('someone else\'s meeting whose guests may change it: Show me as asks first, naming its organizer and the other guest, and is saved on yes as the same change',
+            asked.title === 'Also change it on 2 people\'s Google calendars?' && asked.text?.includes('Its organizer lets guests change it')
+            && JSON.stringify([...(asked.people ?? [])].sort()) === JSON.stringify(['olga@example.com', 'pat@example.com'])
+            && asked.gets?.length === 2 && asked.gets.every((g) => g === 'Changed on their calendar, no email') && asked.no === 'Don\'t save' && asked.yes === 'Save'
+            && asked.sentBefore === 0 && patches() === first + 1 && design?.busy === false
+            && calls.length === 2 && sameChange(calls[0], calls[1]) && JSON.stringify([...(calls[1]?.patch?.approved ?? [])].sort()) === JSON.stringify(['olga@example.com', 'pat@example.com']),
+            JSON.stringify({ asked, patches: patches() - first, busy: design?.busy, calls }));
     });
 
     // 13. A series with an occurrence changed on its own, moved to Microsoft, which would drop that occurrence: asked first.
@@ -1322,11 +1378,9 @@ try {
         const graph = providers.graph;
         const day = addDays(today, 4);
         const person = (address, name) => ({ emailAddress: { address, name }, type: 'required' });
-        const made = await api('createEvent', {
-            input: {
-                calendarId: msCalendar.id, title: 'E2E Review', start: `${day}T11:00`, end: `${day}T11:30`, timeZone: ZONE,
-                attendees: [{ email: 'ann@example.com', name: 'Ann Example' }], notify: true, approved: ['ann@example.com'],
-            },
+        const made = await createAsked({
+            calendarId: msCalendar.id, title: 'E2E Review', start: `${day}T11:00`, end: `${day}T11:30`, timeZone: ZONE,
+            attendees: [{ email: 'ann@example.com', name: 'Ann Example' }], notify: true,
         });
         const graphId = [...graph.store.events.values()].find((e) => e.subject === 'E2E Review')?.id;
         const patches = () => graph.store.requestsTo(`/v1.0/me/events/${graphId}`, 'PATCH').length;

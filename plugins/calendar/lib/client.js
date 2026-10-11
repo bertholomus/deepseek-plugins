@@ -1601,9 +1601,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             save: { no: 'Don\'t save', yes: 'Save', email: 'Save and email', what: 'an update' },
             move: { no: 'Don\'t move', yes: 'Move', email: 'Move and email', what: 'an update' },
             delete: { no: 'Don\'t delete', yes: 'Delete', email: 'Delete and email', what: 'a cancellation' },
+            // Someone else's invitation whose organizer lets guests change it: Google makes a change to it for everyone on it.
+            invitation: {
+                no: 'Don\'t save', yes: 'Save', email: 'Save and email', what: 'an update', many: 'people', manyOwn: 'people\'s',
+                why: { change: 'Its organizer lets guests change it, so Google makes your change for everyone on it, without an email.' },
+            },
         };
 
-        /** The words for a change: 'add', 'save', 'move' or 'delete' (a "Don't …" button label reads the same). */
+        /**
+         * The words for a change: 'add', 'save', 'move' or 'delete', or 'invitation' (a change to someone else's
+         * invitation). A "Don't …" button label reads the same.
+         */
         function consentWords(action) {
             if (Object.hasOwn(CONSENT_WORDS, action)) return CONSENT_WORDS[action];
             const words = String(action ?? '').toLowerCase();
@@ -1633,7 +1641,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * everyone it names, each with what they get, and why.
          * → {code, title, why, changed, people: [{email, gets, emailed, fresh}], no, yes}.
          * @param error - the refusal: details {people, mail: {emailed?: {what, to}, reached?: {how, to}, why?}}.
-         * @param action - 'add', 'save', 'move' or 'delete'.
+         * @param action - 'add', 'save', 'move', 'delete' or 'invitation' (consentWords).
          * @param [before] - who the last question named: anyone else is marked new.
          */
         function consentQuestion(error, action, before) {
@@ -1655,12 +1663,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const mailed = people.filter((p) => p.emailed);
             const whom = (list, one, many) => (list.length === 1 ? one(list[0].email) : many(list.length));
             const title = mailed.length > 0
-                ? `Email ${what} to ${whom(mailed, (e) => e, (n) => `${n} guests`)}?`
-                : `Also ${REACH_ASK[how]} ${whom(people, (e) => `${e}'s Google calendar`, (n) => `${n} guests' Google calendars`)}?`;
+                ? `Email ${what} to ${whom(mailed, (e) => e, (n) => `${n} ${words.many ?? 'guests'}`)}?`
+                : `Also ${REACH_ASK[how]} ${whom(people, (e) => `${e}'s Google calendar`, (n) => `${n} ${words.manyOwn ?? 'guests\''} Google calendars`)}?`;
             const reason = typeof mail?.why === 'string' && mail.why.trim() ? mail.why.trim() : '';
             const why = mailed.length > 0
                 ? (reason ? `${reason.replace(/^./, (c) => c.toUpperCase())}${/[.!?]$/.test(reason) ? '' : '.'}` : mail ? 'You chose to tell them by email.' : '')
-                : REACH_WHY[how];
+                : words.why?.[how] ?? REACH_WHY[how];
             return {
                 code: String(error?.code ?? '').replace(/^calendar\//, ''),
                 title, why, people,
@@ -2422,7 +2430,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     result = moved;
                 }
                 if (Object.keys(patch).length > 0) {
-                    const made = await withConsent(sending.ask, 'save', (how) => store.act('updateEvent', {
+                    // The same patch on every round: the host holds a yes to the very change it asked about.
+                    const made = await withConsent(sending.ask, invitation ? 'invitation' : 'save', (how) => store.act('updateEvent', {
                         id: target.id, patch: { ...patch, ...asked(patch.notify, how) }, scope,
                     }));
                     if (!made.ok && movedRef.current) {

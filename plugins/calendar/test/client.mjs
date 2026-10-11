@@ -378,6 +378,14 @@ test('the question before an email names everyone, with what they get and why, i
     q = I.consentQuestion({ code: 'calendar/changed', details: { people: six.slice(0, 2), mail: { emailed: { what: 'an update', to: six.slice(0, 2) } } } }, 'save', [six[0]]);
     assert.deepEqual(plain([q.changed, q.people.map((p) => p.fresh)]), [true, [false, true]]);
     assert.deepEqual(plain([I.consentWords('Don\'t delete it').yes, I.consentWords('anything').yes]), ['Delete', 'Save']);
+    // Someone else's Google meeting that lets its guests change it: the change is made for everyone on it, its organizer too.
+    const olga = ['olga@example.com', 'pat@example.com'];
+    q = I.consentQuestion({ code: 'calendar/needs-approval', details: { people: olga, mail: { reached: { how: 'change', to: olga } } } }, 'invitation');
+    assert.deepEqual(plain([q.title, q.why, q.no, q.yes, q.people.map((p) => p.gets)]), [
+        'Also change it on 2 people\'s Google calendars?', 'Its organizer lets guests change it, so Google makes your change for everyone on it, without an email.',
+        'Don\'t save', 'Save', ['Changed on their calendar, no email', 'Changed on their calendar, no email']]);
+    q = I.consentQuestion({ code: 'calendar/needs-approval', details: { people: [olga[0]], mail: { reached: { how: 'change', to: [olga[0]] } } } }, 'invitation');
+    assert.equal(q.title, 'Also change it on olga@example.com\'s Google calendar?');
 });
 
 test('a series that would lose part of itself on a move asks first, then may ask about emails too', async () => {
