@@ -53,6 +53,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const HIDDEN = 'position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0';
         /** DSH's focus ring color, as its own controls draw it. */
         const RING = 'var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))';
+        /** DSH's header actions while the chip is among them (useChipHost). */
+        const CHIP_HOST = 'data-categories-chip-host';
         // DSH's error red reaches only 4.5:1 as small text on white: a touch of the label colour takes it past 5:1
         // in light and further from the background in dark.
         const ERROR_TEXT = 'color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary))';
@@ -83,9 +85,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshc-tree-glyph{display:inline-flex;width:14px;flex:none;opacity:.75}',
             // A category's or a workspace's ⋯ at the end of its row, as on DSH's own rows: shown while the row is
             // pointed at, has the focus or has its menu open, its place kept meanwhile so the row doesn't shift.
-            // DSH's menu wraps its button in a box of its own: that box is what sits in the row.
-            '.dshc-tree-row>:has(>.dshc-tree-more){flex:none;display:inline-flex;margin-left:auto;margin-right:-6px}',
-            '.dshc-tree-meta+:has(>.dshc-tree-more){margin-left:4px}',
+            // DSH's menu wraps its button in a box of its own, which takes the menu's class: that box is what sits in the row.
+            '.dshc-tree-row>.dshc-tree-act{flex:none;display:inline-flex;margin-left:auto;margin-right:-6px}',
+            '.dshc-tree-meta+.dshc-tree-act{margin-left:4px}',
             '.dshc-tree-more{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:var(--dsw-radius-sm,4px);background:none;color:var(--dsw-alias-label-secondary);cursor:pointer;visibility:hidden}',
             '.dshc-tree-more:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
             '.dshc-tree-row:hover .dshc-tree-more,.dshc-tree-item:focus-visible>.dshc-tree-row .dshc-tree-more,.dshc-tree-more:focus,.dshc-tree-more[aria-expanded="true"]{visibility:visible}',
@@ -151,10 +153,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // The chip at the top of a session: its category and workspace, among DSH's header actions. Those never
             // shrink; while they show the chip they may, by the chip alone, before the title does. Its text breaks at
             // any letter, so its least width is a letter, and it shows one line, cut at a letter with "…" as DSH's
-            // title is. Found by DSH's markup (the actions are the box right after the title's nav), not by its
-            // generated class names.
-            '@container (width>600px){nav[aria-label]+div:has(>[data-slot]>[data-categories-chip]){flex-shrink:1000}}',
-            '@container (width>600px){nav[aria-label]+div:has(>[data-slot]>[data-categories-chip])>[data-slot]>:not([data-categories-chip]){flex-shrink:0}}',
+            // title is. Found by DSH's markup (the actions are the box right after the title's nav, which the chip
+            // marks: useChipHost), not by its generated class names.
+            `@container (width>600px){nav[aria-label]+[${CHIP_HOST}]{flex-shrink:1000}}`,
+            `@container (width>600px){nav[aria-label]+[${CHIP_HOST}]>[data-slot]>:not([data-categories-chip]){flex-shrink:0}}`,
             '.dshc-chip{flex:0 1000 auto;display:inline-flex;align-items:center;gap:5px;box-sizing:border-box;min-width:0;max-width:280px;min-height:28px;padding:3px 6px;border:0;border-radius:var(--dsw-radius-sm);background:none;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);text-align:left}',
             'button.dshc-chip{cursor:pointer}',
             'button.dshc-chip:hover,button.dshc-chip:focus-visible{color:var(--dsw-alias-label-primary)}',
@@ -1034,12 +1036,20 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /** Where the folded categories are kept between restarts (the window's own storage). */
         const FOLDED_KEY = `${BUNDLE}/sidebar-folded`;
-        /** DSH's workspace list in its sidebar, the plugin's headers in it, and a workspace's section there (one workspace, or any). */
+        /** DSH's workspace list in its sidebar, and the plugin's headers in it. */
         const SB_TREE = '[data-slot="sidebar.workspaces"] [role="tree"]';
         const SB_HEAD = '[data-categories-sb]';
-        const sbSection = (id) => `div:has(>*>[data-row-key${id === undefined ? '^="workspace:"' : `="workspace:${id}"`}])`;
-        /** DSH's Ungrouped bucket: chats no workspace holds, under a row of its own at the end of DSH's list. */
-        const SB_STRAYS = 'div:has(>[data-row-key="workspace:"],>*>[data-row-key="workspace:"])';
+        /**
+         * The plugin's marks in DSH's list (markList): the list while it shows
+         * the categories, each of its sections with its workspace ('' for
+         * DSH's Ungrouped bucket, the chats no workspace holds), and how deep
+         * a folder's nested workspace is in Workspace Tree.
+         */
+        const SB_LIST = 'data-categories-list';
+        const SB_WS = 'data-categories-ws';
+        const SB_DEPTH = 'data-categories-depth';
+        /** A workspace's row, which DSH draws as its section's grandchild. */
+        const WS_ROW = '[data-row-key^="workspace:"]';
 
         const SIDEBAR = {
             others: 'Other workspaces',
@@ -1113,29 +1123,31 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * DSH's order in category order, so the headers also sit before their
          * sections in the DOM); a workspace the plugin hasn't placed yet goes
          * last, with Other workspaces.
+         *
+         * The rules find the list and its sections by the plugin's marks
+         * (markList), never by what an element holds: each ends in a mark,
+         * or is a child of the marked list, so a change in one workspace
+         * restyles that workspace, not the list.
          */
         function sidebarRules(groups, folded) {
-            // (:has can't hold another :has, so the list's own test names the row inside a section.)
-            const sections = '>div>*>[data-row-key^="workspace:"]';
-            const on = `${SB_TREE}:has(>${SB_HEAD}):has(${sections})`;
+            const on = `${SB_TREE}[${SB_LIST}]`;
             const last = 2 * groups.length - 1;
             const rules = [
                 `${on}{display:flex;flex-direction:column}`,
-                `${on}>*{flex-shrink:0}`,
-                `${SB_TREE}:not(:has(${sections}))>${SB_HEAD}{display:none}`,
-                `${on}>:not(${SB_HEAD}){order:${last}}`,
-                `${on}>${sbSection()}{order:${last};margin-top:4px!important;--dsh-workspace-indent:12px!important}`,
+                // Anything else DSH draws in the list goes last, and so does a section until the plugin's next pass marks
+                // it (one DSH just added, which DSH measures for its row animation before that pass).
+                `${on}>*{flex-shrink:0;order:${last}}`,
+                `${SB_TREE}:not([${SB_LIST}])>${SB_HEAD}{display:none}`,
+                `${on}>[${SB_WS}]{margin-top:4px!important;--dsh-workspace-indent:12px!important}`,
                 // DSH's Ungrouped bucket stays last, level with the headers.
-                `${on}>${SB_STRAYS}{order:${last + 1};margin-top:10px!important;--dsh-workspace-indent:0px!important}`,
+                `${on}>[${SB_WS}=""]{order:${last + 1};margin-top:10px!important;--dsh-workspace-indent:0px!important}`,
             ];
             // Workspace Tree nests a folder's workspaces in its section: each level a step further in.
-            for (let depth = 1; depth <= 4; depth += 1) {
-                rules.push(`${on}>${sbSection()}${` ${sbSection()}`.repeat(depth)}{--dsh-workspace-indent:${12 * (depth + 1)}px!important}`);
-            }
+            for (let depth = 1; depth <= 4; depth += 1) rules.push(`${on} [${SB_DEPTH}="${depth}"]{--dsh-workspace-indent:${12 * (depth + 1)}px!important}`);
             groups.forEach((group, i) => {
                 const shut = folded.has(group.id) ? ';display:none!important' : '';
                 for (const id of group.workspaces) {
-                    if (/^[\w.:-]+$/.test(id)) rules.push(`${on}>${sbSection(id)}{order:${2 * i + 1}${shut}}`);
+                    if (/^[\w.:-]+$/.test(id)) rules.push(`${on}>[${SB_WS}="${id}"]{order:${2 * i + 1}${shut}}`);
                 }
             });
             return rules.join('\n');
@@ -1264,12 +1276,54 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }
         }
 
+        /** An attribute set to a value, or gone for null, changed only when it differs. */
+        function setMark(el, name, value) {
+            if (value === null) {
+                if (el.hasAttribute(name)) el.removeAttribute(name);
+            } else if (el.getAttribute(name) !== value) el.setAttribute(name, value);
+        }
+
+        /**
+         * Mark DSH's list for sidebarRules: the list while it has the
+         * plugin's headers and shows workspaces' sections, each of its
+         * sections with its workspace ('' for DSH's Ungrouped bucket), and a
+         * folder's nested workspace in Workspace Tree with how many sections
+         * deep it is (up to 4). Only what differs changes; with no categories
+         * (null) every mark goes.
+         */
+        function markList(tree, groups) {
+            let heads = false;
+            let shown = false;
+            for (const child of tree.children) {
+                if (child.hasAttribute('data-categories-sb')) {
+                    heads = true;
+                    continue;
+                }
+                const ws = groups ? sectionWorkspace(child) : null;
+                if (ws !== null && child.querySelector(`:scope>*>${WS_ROW}`)) shown = true;
+                setMark(child, SB_WS, ws);
+            }
+            setMark(tree, SB_LIST, groups && heads && shown ? '' : null);
+            // A nested workspace's section is its row's grandparent, inside the section of each folder above it.
+            const depths = new Map();
+            for (const el of tree.querySelectorAll(`${WS_ROW},[${SB_DEPTH}]`)) {
+                if (el.hasAttribute(SB_DEPTH) && !depths.has(el)) depths.set(el, null);
+                const section = groups && el.matches(WS_ROW) ? el.parentElement?.parentElement : null;
+                if (!section || section === tree || section.parentElement === tree) continue;
+                let depth = 0;
+                for (let e = section.parentElement; e && e !== tree; e = e.parentElement) if (e.querySelector(`:scope>*>${WS_ROW}`)) depth += 1;
+                depths.set(section, depth > 0 ? String(Math.min(depth, 4)) : null);
+            }
+            for (const [el, depth] of depths) setMark(el, SB_DEPTH, depth);
+        }
+
         /**
          * Keep the plugin's parts of DSH's list in step with it: the headers'
-         * places and the workspaces' categories. DSH redraws rows on its own
-         * (a fold, Show more, a session moving up), so this runs again on
-         * every change to the list, before it is painted, and after every
-         * render here. Each pass changes only what differs.
+         * places, the marks its CSS goes by, and the workspaces' categories.
+         * DSH redraws rows on its own (a fold, Show more, a session moving
+         * up), so this runs again on every change to the list, before it is
+         * painted, and after every render here. Each pass changes only what
+         * differs.
          * @param read - a ref to {groups}: the latest categories to draw.
          */
         function useTreeSync(tree, read) {
@@ -1278,6 +1332,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (!tree?.isConnected) return;
                 const groups = read.current.groups;
                 if (groups) placeHeaders(tree, groups);
+                markList(tree, groups);
                 describeWorkspaces(tree, groups);
             };
             React.useLayoutEffect(() => {
@@ -1293,6 +1348,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 observer?.observe(tree, { childList: true, subtree: true });
                 return () => {
                     observer?.disconnect();
+                    markList(tree, null);
                     describeWorkspaces(tree, null);
                 };
             }, [tree]);
@@ -1612,7 +1668,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ];
             return h(ui.Menu, {
                 // autoFocus: its first item takes the keyboard, so a menu opened by Shift+F10 can be walked with the arrows.
-                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end', autoFocus: true,
+                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end', autoFocus: true, className: page ? 'dshc-tree-act' : undefined,
                 onSelect: (id) => {
                     setOpen(false);
                     if (id === 'up') actions.move(group, -1);
@@ -1661,7 +1717,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 { id: 'down', label: SIDEBAR.moveDown, icon: h(ui.IconChevronDownOutlineRegular, {}), disabled: last },
             ];
             return h(ui.Menu, {
-                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end', autoFocus: true,
+                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end', autoFocus: true, className: 'dshc-tree-act',
                 onSelect: (id) => {
                     setOpen(false);
                     if (id === 'up') actions.step(-1);
@@ -1936,6 +1992,30 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
+         * Mark DSH's header actions while the chip is among them, for the CSS
+         * that lets the chip, and only the chip, give way before the title
+         * does: the box right after the title's nav that holds the chip's
+         * slot. The CSS names the mark rather than finding the box by what it
+         * holds on every update of the window. The mark goes with the chip.
+         * @param text - a ref to the chip's text, null while there is no chip.
+         */
+        function useChipHost(text) {
+            const host = React.useRef(null);
+            React.useLayoutEffect(() => {
+                const slot = text.current?.parentElement?.parentElement;
+                const box = slot?.hasAttribute?.('data-slot') ? slot.parentElement : null;
+                const next = box?.previousElementSibling?.matches?.('nav[aria-label]') ? box : null;
+                if (host.current !== next) host.current?.removeAttribute(CHIP_HOST);
+                host.current = next;
+                if (next && !next.hasAttribute(CHIP_HOST)) next.setAttribute(CHIP_HOST, '');
+            });
+            React.useLayoutEffect(() => () => {
+                host.current?.removeAttribute(CHIP_HOST);
+                host.current = null;
+            }, []);
+        }
+
+        /**
          * At the top of every session whose workspace is in a category, among
          * DSH's header actions: the category and the workspace, which DSH's
          * header doesn't name. It follows the plugin's list, so a workspace
@@ -1948,6 +2028,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function CategoryChip({ sessionId, useSessions = noSessions, useWorkspaces = noWorkspaces, plugin, openPage }) {
             useFacts(plugin.facts);
             useWatch(plugin.facts);
+            const text = React.useRef(null);
+            useChipHost(text);
             const line = useSessions((state) => chipLine(state, sessionId), sameList);
             const archived = useWorkspaces((state) => Array.isArray(state?.archivedSessionIds) && state.archivedSessionIds.includes(sessionId));
             const workspaceId = useWorkspaces((state) => line.map((id) => workspaceOfSession(state, id)).find((id) => id !== undefined));
@@ -1958,7 +2040,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const open = typeof openPage === 'function' ? openPage() : undefined;
             const shown = [
                 h(ui.IconFolderCloseRegular, { key: 'g', size: 14, className: 'dshc-chip-glyph', 'aria-hidden': true }),
-                h('span', { key: 't', className: 'dshc-chip-text', 'aria-hidden': open ? undefined : true },
+                h('span', { key: 't', ref: text, className: 'dshc-chip-text', 'aria-hidden': open ? undefined : true },
                     name, h('span', { className: 'dshc-chip-sep' }, '/'), workspace),
             ];
             if (!open) return h('span', { className: 'dshc-chip', 'data-categories-chip': category.id }, h('span', { className: 'dshc-sr' }, CHIP.name(name, workspace)), ...shown);
@@ -2038,9 +2120,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             BUNDLE, IDS, OTHERS, CSS, TEXT, PAGE, SIDEBAR, CHIP,
             hostLink, errorText, categoryFacts, listText, plural, shortPath, folderName, workspaceTitle, workspaceOfSession, sameList, chatDot,
             pageModel, visibleItems, pageMove, treeMeta, treeDot, findInTree, withHit, PageTree, WorkspaceMenu, CategoriesPage, CategoriesIcon, NameDialog, ConfirmDialog,
-            sidebarGroups, sidebarRules, groupDot, sectionWorkspace, sectionAt, placeHeaders, describeWorkspaces, useTreeSync, useCategoryDrags,
+            sidebarGroups, sidebarRules, groupDot, sectionWorkspace, sectionAt, placeHeaders, markList, describeWorkspaces, useTreeSync, useCategoryDrags,
             dshAddFlow, workspaceAdder, CategoryMenu, CategoryHeader, SidebarTree,
-            chipLine, categoryHolding, pageOpener, CategoryChip, windowApi,
+            chipLine, categoryHolding, pageOpener, CategoryChip, useChipHost, windowApi,
         };
         return module.exports;
     },

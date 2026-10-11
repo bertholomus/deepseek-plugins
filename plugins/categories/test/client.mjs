@@ -1026,21 +1026,26 @@ test('browser half: DSH\'s session list is grouped by category, foldable, with O
 
     const groups = sidebarGroups(categories, items);
     const rules = sidebarRules(groups, new Set(['b'])).split('\n');
-    const on = '[data-slot="sidebar.workspaces"] [role="tree"]:has(>[data-categories-sb]):has(>div>*>[data-row-key^="workspace:"])';
-    const section = (id) => `div:has(>*>[data-row-key="workspace:${id}"])`;
-    for (const rule of rules) assert.doesNotMatch(rule, /:has\([^)]*:has\(/, rule);
+    // The rules find the list and its sections by the plugin's marks (markList), never by what an element holds, so
+    // a change in one workspace restyles that workspace, not the whole list.
+    const on = '[data-slot="sidebar.workspaces"] [role="tree"][data-categories-list]';
+    const section = (id) => `[data-categories-ws="${id}"]`;
+    for (const rule of rules) assert.doesNotMatch(rule.slice(0, rule.indexOf('{')), /:has\(|~|\+/, rule);
     assert.ok(rules.includes(`${on}{display:flex;flex-direction:column}`));
     // Each workspace's section right after its category's header (headers take the even places), a folded category's hidden.
     assert.ok(rules.includes(`${on}>${section('w2')}{order:1}`));
     assert.ok(rules.includes(`${on}>${section('w1')}{order:3;display:none!important}`));
     assert.ok(rules.includes(`${on}>${section('w3')}{order:7}`));
     // Sections a step in, as DSH's own indent; a folder's nested workspaces in Workspace Tree a step further each.
-    assert.ok(rules.includes(`${on}>div:has(>*>[data-row-key^="workspace:"]){order:7;margin-top:4px!important;--dsh-workspace-indent:12px!important}`));
-    assert.ok(rules.includes(`${on}>div:has(>*>[data-row-key^="workspace:"]) div:has(>*>[data-row-key^="workspace:"]){--dsh-workspace-indent:24px!important}`));
-    // DSH's Ungrouped bucket last, level with the headers.
-    assert.ok(rules.includes(`${on}>div:has(>[data-row-key="workspace:"],>*>[data-row-key="workspace:"]){order:8;margin-top:10px!important;--dsh-workspace-indent:0px!important}`));
+    assert.ok(rules.includes(`${on}>[data-categories-ws]{margin-top:4px!important;--dsh-workspace-indent:12px!important}`));
+    assert.ok(rules.includes(`${on} [data-categories-depth="1"]{--dsh-workspace-indent:24px!important}`));
+    assert.ok(rules.includes(`${on} [data-categories-depth="4"]{--dsh-workspace-indent:60px!important}`));
+    // DSH's Ungrouped bucket last, level with the headers; anything else in the list with Other workspaces, and so is
+    // a section DSH just added until the plugin's next pass marks it (DSH measures it for its row animation first).
+    assert.ok(rules.includes(`${on}>[data-categories-ws=""]{order:8;margin-top:10px!important;--dsh-workspace-indent:0px!important}`));
+    assert.ok(rules.includes(`${on}>*{flex-shrink:0;order:7}`));
     // Headers hide where DSH shows no workspaces (In one list, search).
-    assert.ok(rules.includes('[data-slot="sidebar.workspaces"] [role="tree"]:not(:has(>div>*>[data-row-key^="workspace:"]))>[data-categories-sb]{display:none}'));
+    assert.ok(rules.includes('[data-slot="sidebar.workspaces"] [role="tree"]:not([data-categories-list])>[data-categories-sb]{display:none}'));
     // An id that could break out of a selector gets no rule.
     const odd = sidebarRules([{ id: 'x', name: 'X', category: true, workspaces: ['a"] *{display:none} [x="'] }], new Set()).split('\n');
     for (const rule of odd) assert.doesNotMatch(rule, /display:none\} \[x=/);
@@ -1155,8 +1160,8 @@ test('browser half: with no categories, Other workspaces heads DSH\'s list, and 
     const style = elementsOf(draw()).find((e) => e.type === 'style');
     assert.equal(style.props['data-categories-sidebar'], '');
     const css = textIn(style);
-    assert.match(css, /div:has\(>\*>\[data-row-key="workspace:w-a"\]\)\{order:1\}/);
-    assert.match(css, /:not\(:has\(>div>\*>\[data-row-key\^="workspace:"\]\)\)>\[data-categories-sb\]\{display:none\}/);
+    assert.match(css, /\[data-categories-ws="w-a"\]\{order:1\}/);
+    assert.match(css, /\[role="tree"\]:not\(\[data-categories-list\]\)>\[data-categories-sb\]\{display:none\}/);
     assert.ok(tree);
 
     // Its ⋯ menu opens as a category's does: the ⋯ button, a right-click, Shift+F10 and the context-menu key.
@@ -1277,7 +1282,7 @@ test('browser half: a category\'s header folds, moves, and its ⋯ adds, renames
     const click = (target = { closest: () => null }) => ({ currentTarget: { contains: () => true }, target });
     header('fleet').props.onToggle();
     assert.equal(header('fleet').props.folded, true);
-    assert.match(textIn(elementsOf(side.draw()).find((e) => e.type === 'style')), /\[data-row-key="workspace:w-a"\]\)\{order:1;display:none!important\}/);
+    assert.match(textIn(elementsOf(side.draw()).find((e) => e.type === 'style')), /\[data-categories-ws="w-a"\]\{order:1;display:none!important\}/);
     head = mount(side.react, () => header('fleet').type(header('fleet').props))();
     assert.equal(head.props['aria-expanded'], false);
     head.props.onClick(click({ closest: (selector) => (selector === '.dshc-sb-more' ? {} : null) }));
@@ -1590,8 +1595,121 @@ class FakeElement {
         }
         return null;
     }
+    querySelectorAll(selector) {
+        const out = [];
+        const walk = (el) => { for (const child of el.children) { if (child.matches(selector)) out.push(child); walk(child); } };
+        walk(this);
+        return out;
+    }
     getBoundingClientRect() { return this.box; }
 }
+
+test('browser half: the plugin marks DSH\'s list for its rules: the list, each section\'s workspace, and how deep a nested one is', () => {
+    const { client } = loadClient();
+    const { markList, OTHERS } = client.internals;
+    const head = (id) => new FakeElement({ 'data-categories-sb': id });
+    // A workspace's section: its row's wrapper, its chats' wrapper, and in Workspace Tree a group of its folder's workspaces.
+    const section = (ws, ...more) => new FakeElement({}, new FakeElement({}, new FakeElement({ 'data-row-key': `workspace:${ws}` })), new FakeElement({}), ...more);
+    const w6 = section('w6');
+    const w5 = section('w5', new FakeElement({ role: 'group' }, w6));
+    const w3 = section('w3', new FakeElement({ role: 'group' }, w5));
+    // DSH's Ungrouped bucket (its row may be the section's child), and anything else DSH draws in the list.
+    const strays = new FakeElement({}, new FakeElement({ 'data-row-key': 'workspace:' }));
+    const more = new FakeElement({ 'data-row-key': 'overflow:list' });
+    const tree = new FakeElement({ role: 'tree' }, head('a'), section('w1'), section('w2'), head('b'), w3, head(OTHERS), section('w4'), strays, more);
+    const groups = [
+        { id: 'a', name: 'Alpha', category: true, workspaces: ['w1', 'w2'] },
+        { id: 'b', name: 'Beta', category: true, workspaces: ['w3'] },
+        { id: OTHERS, name: 'Other workspaces', category: false, workspaces: ['w4'] },
+    ];
+    const marks = () => plain(tree.children.map((el) => el.getAttribute('data-categories-ws')));
+    const depths = () => plain([w3, w5, w6].map((el) => el.getAttribute('data-categories-depth')));
+    markList(tree, groups);
+    assert.equal(tree.getAttribute('data-categories-list'), '');
+    assert.deepEqual(marks(), [null, 'w1', 'w2', null, 'w3', null, 'w4', '', null]);
+    assert.deepEqual(depths(), [null, '1', '2']);
+    // A second pass changes nothing.
+    let writes = 0;
+    for (const el of [tree, ...tree.querySelectorAll('[data-categories-ws],[data-categories-depth]')]) {
+        const set = el.setAttribute.bind(el);
+        el.setAttribute = (name, value) => { writes += 1; set(name, value); };
+    }
+    markList(tree, groups);
+    assert.equal(writes, 0);
+    // A folder's workspace drawn at the top of the list is no longer nested.
+    w5.children[2].remove();
+    tree.append(w6);
+    markList(tree, groups);
+    assert.deepEqual(depths(), [null, '1', null]);
+    assert.equal(w6.getAttribute('data-categories-ws'), 'w6');
+    // In one list or search (no workspace's section in it): the list isn't marked, so the headers hide.
+    const flat = new FakeElement({ role: 'tree' }, head('a'), new FakeElement({}, new FakeElement({ 'data-row-key': 'session:s1' })));
+    markList(flat, groups);
+    assert.equal(flat.hasAttribute('data-categories-list'), false);
+    // Neither without the plugin's headers.
+    const bare = new FakeElement({ role: 'tree' }, section('w1'));
+    markList(bare, groups);
+    assert.equal(bare.hasAttribute('data-categories-list'), false);
+    // No categories (or the plugin gone): every mark goes.
+    markList(tree, null);
+    assert.equal(tree.hasAttribute('data-categories-list'), false);
+    assert.deepEqual(marks(), tree.children.map(() => null));
+    assert.deepEqual(depths(), [null, null, null]);
+});
+
+test('browser half: the chip marks DSH\'s header actions while it is among them, for the CSS that lets it give way first', () => {
+    const { client, react } = loadClient();
+    const { useChipHost, CSS } = client.internals;
+    // DSH's header: the title's nav, then the actions box holding the slot the chip is drawn in.
+    const el = (tag, attrs = {}) => ({
+        tag, attrs: new Map(Object.entries(attrs)), parentElement: null, previousElementSibling: null,
+        hasAttribute(name) { return this.attrs.has(name); }, setAttribute(name, value) { this.attrs.set(name, String(value)); }, removeAttribute(name) { this.attrs.delete(name); },
+        matches(selector) { if (selector !== 'nav[aria-label]') throw new Error(`not faked: ${selector}`); return this.tag === 'nav' && this.attrs.has('aria-label'); },
+    });
+    const nav = el('nav', { 'aria-label': 'Session' });
+    const box = el('div');
+    const slot = el('div', { 'data-slot': 'conversation.session.header.actions' });
+    const chip = el('button');
+    const span = el('span');
+    box.previousElementSibling = nav;
+    slot.parentElement = box;
+    chip.parentElement = slot;
+    span.parentElement = chip;
+    // The hook's refs hold between draws; its first effect runs after every draw, the second's cleanup when the chip goes.
+    const refs = [];
+    let r = 0;
+    let effects = [];
+    react.useRef = (current) => { const k = r++; if (!(k in refs)) refs[k] = { current }; return refs[k]; };
+    react.useLayoutEffect = (fn, deps) => { effects.push({ fn, deps }); };
+    const text = { current: span };
+    const draw = () => { r = 0; effects = []; useChipHost(text); effects[0].fn(); };
+    draw();
+    assert.equal(box.attrs.get('data-categories-chip-host'), '');
+    assert.deepEqual(plain(effects[1].deps), []);
+    draw();
+    assert.equal(box.attrs.get('data-categories-chip-host'), '');
+    // No chip (an archived session, a workspace in no category): no mark.
+    text.current = null;
+    draw();
+    assert.equal(box.hasAttribute('data-categories-chip-host'), false);
+    // Back, then gone with the session's header.
+    text.current = span;
+    draw();
+    effects[1].fn()();
+    assert.equal(box.hasAttribute('data-categories-chip-host'), false);
+    // A box that isn't right after the title's nav, or a chip outside a slot, is DSH's to lay out.
+    box.previousElementSibling = el('div');
+    draw();
+    assert.equal(box.hasAttribute('data-categories-chip-host'), false);
+    box.previousElementSibling = nav;
+    slot.attrs.delete('data-slot');
+    draw();
+    assert.equal(box.hasAttribute('data-categories-chip-host'), false);
+    // The CSS names the mark, after the nav, rather than finding the box by what it holds.
+    assert.ok(CSS.includes('@container (width>600px){nav[aria-label]+[data-categories-chip-host]{flex-shrink:1000}}'));
+    assert.ok(CSS.includes('@container (width>600px){nav[aria-label]+[data-categories-chip-host]>[data-slot]>:not([data-categories-chip]){flex-shrink:0}}'));
+    assert.doesNotMatch(CSS, /:has\(/);
+});
 
 test('browser half: a category\'s header and a workspace\'s row drag in DSH\'s list, with DSH\'s line, and the plugin makes the move', () => {
     const listeners = new Map();

@@ -445,10 +445,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // pull the bullet down to its second line, so it hangs from the top of the line instead.
             'li button[title*=".dsh-thread/"]{vertical-align:top}',
             // Threads: session list rows. A thread row under its coordinator is indented, with a corner in the
-            // indent (nestingRules); a thread row anywhere else keeps a branch mark in the leading seat.
+            // indent (nestingCss); a thread row anywhere else keeps a branch mark in the leading seat.
             '.dshp-t-mark{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:20px;color:var(--dsw-alias-label-tertiary)}',
-            // A coordinator with news the user hasn't seen reads bold, like unread mail (RowPlace marks it).
-            '[data-row-key^="session:"]:has([data-projects-unread]){font-weight:600}',
+            // A coordinator with news the user hasn't seen reads bold, like unread mail (RowPlace marks it, markUnread its row).
+            '[data-row-key][data-projects-unread-row]{font-weight:600}',
             // The seat is DSH's, 16 px, and holds one mark: the plugin's gives way to DSH's or another plugin's there
             // (hidden the way a nested thread's branch mark is, so the row's description still says it). The seat
             // never widens, so the other marks keep their place and the title its room.
@@ -547,9 +547,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-tree-item[data-projects-unread]>.dshp-tree-row .dshp-tree-title{font-weight:600}',
             '.dshp-tree-glyph{display:inline-flex;width:14px;flex:none;opacity:.75}',
             // A project's or a thread's ⋯ at the end of its row, as on DSH's own rows: shown while the row is pointed at,
-            // has the focus or has its menu open, its place kept meanwhile. DSH's menu wraps the button in a box of its own.
-            '.dshp-tree-row>:has(>.dshp-tree-more){flex:none;display:inline-flex;margin-left:auto;margin-right:-6px}',
-            '.dshp-tree-meta+:has(>.dshp-tree-more){margin-left:4px}',
+            // has the focus or has its menu open, its place kept meanwhile. DSH's menu wraps the button in a box of its
+            // own, which takes the menu's class (RowMenu).
+            '.dshp-tree-row>.dshp-tree-act{flex:none;display:inline-flex;margin-left:auto;margin-right:-6px}',
+            '.dshp-tree-meta+.dshp-tree-act{margin-left:4px}',
             '.dshp-tree-more{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:var(--dsw-radius-sm,4px);background:none;color:var(--dsw-alias-label-secondary);cursor:pointer;visibility:hidden}',
             '.dshp-tree-more:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
             '.dshp-tree-row:hover .dshp-tree-more,.dshp-tree-item:focus-visible>.dshp-tree-row .dshp-tree-more,.dshp-tree-more:focus,.dshp-tree-more[aria-expanded="true"]{visibility:visible}',
@@ -4371,7 +4372,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * A row's mark in its leading seat: a branch on a thread (while it
-         * nests under its coordinator, nestingRules draws a corner in its
+         * nests under its coordinator, nestingCss draws a corner in its
          * indent instead), or the thread's state dot when it failed or waits
          * on the user; a pause sign on a paused project's coordinator, and a
          * dot on a coordinator with news the user hasn't seen (DSH's own dot
@@ -4520,15 +4521,22 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return null;
         }
 
-        /** The groups nestingRules nests, by their places: each with a coordinator id and threads' ids that are safe in a selector. */
+        /** The groups the plugin nests, by their places: each with its coordinator's id and its threads' ids. */
         function nestedGroups(groups) {
-            const safe = (id) => typeof id === 'string' && /^[\w.:-]+$/.test(id);
+            const named = (id) => typeof id === 'string' && id !== '';
             return (Array.isArray(groups) ? groups : EMPTY)
-                .filter((g) => safe(g?.coordinator) && Number.isInteger(g.at) && g.at >= 1 && Array.isArray(g.threads))
-                .map((g) => ({ ...g, threads: g.threads.filter(safe) }))
+                .filter((g) => named(g?.coordinator) && Number.isInteger(g.at) && g.at >= 1 && Array.isArray(g.threads))
+                .map((g) => ({ ...g, threads: g.threads.filter(named) }))
                 .filter((g) => g.threads.length > 0)
                 .sort((a, b) => a.at - b.at);
         }
+
+        /** The plugin's marks for the nesting (markNesting): a section that nests a project, the order each of its children is drawn in, and a nested thread's wrapper. */
+        const NEST = 'data-projects-nests';
+        const NEST_ORDER = 'data-projects-order';
+        const NESTED = 'data-projects-nested';
+        /** The orders the nesting CSS always has a rule for: ten projects in one workspace, three each. More add rules. */
+        const NEST_ORDERS = 30;
 
         /**
          * The CSS that nests each project's threads under its coordinator in
@@ -4544,28 +4552,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * plugins' (a thread in another workspace keeps its branch mark there),
          * and its time is left out, so its title has the room of DSH's own.
          *
-         * Every selector names rows by DSH's own row keys and looks only at a
-         * wrapper's child or a section's grandchildren, and where a project
-         * starts is a position (sectionGroups counts it), not a sibling
-         * selector: a change to one row restyles its own section, and cheaply.
-         * @param groups - sectionGroups' answer for one section.
+         * The rules find the section, each child's place and the nested
+         * threads by the plugin's marks (markNesting), never by what an
+         * element holds: each rule ends in a mark or DSH's row key, so a
+         * change to one row restyles that row, not the list around it.
+         * @param top - the highest order markNesting gave.
          */
-        function nestingRules(groups) {
-            const list = nestedGroups(groups);
-            if (list.length === 0) return '';
-            const row = (id) => `[data-row-key="session:${id}"]`;
-            const holding = (ids) => `:has(${ids.map((id) => `>${row(id)}`).join(',')})`;
-            // The section, named by its first coordinator's row.
-            const S = `[role="tree"] div:has(>*>${row(list[0].coordinator)})`;
+        function nestingCss(top = 0) {
+            const S = `[role="tree"] div[${NEST}]`;
+            const T = `${S}>[${NESTED}]`;
+            const last = Math.max(NEST_ORDERS, top);
             const rules = [
                 `${S}{display:flex;flex-direction:column}`,
                 // DSH's "Show more" button is a row of its own, as wide as its text.
                 `${S}>[data-row-key]{align-self:flex-start}`,
+                // A row DSH adds goes last until the plugin's next pass gives it its place: DSH measures its rows for
+                // their animation before that pass, and the rows Show more adds belong at the end.
+                `${S}>:not([${NEST_ORDER}]){order:${last + 1}}`,
             ];
-            // What follows each coordinator; then each project itself (later rules win).
-            list.forEach((g, k) => rules.push(`${S}>:nth-child(n+${g.at + 1}){order:${3 * k + 3}}`));
-            list.forEach((g, k) => rules.push(`${S}>${holding([g.coordinator])}{order:${3 * k + 1}}`, `${S}>${holding(g.threads)}{order:${3 * k + 2}}`));
-            const T = `${S}>${holding(list.flatMap((g) => g.threads))}`;
+            for (let order = 1; order <= last; order += 1) rules.push(`${S}>[${NEST_ORDER}="${order}"]{order:${order}}`);
             rules.push(
                 // A thread's title 16 px in from its project's: enough to show the tree, and the thread keeps room for its title.
                 `${T}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,24px) + var(--dsh-workspace-indent,0px))}`,
@@ -4581,30 +4586,49 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * The order nestingRules draws a section's children in: their places
+         * Where nestingCss draws each child of a section: the order it gets
+         * (0 for what DSH lists before the first coordinator; then, for the
+         * k-th project from 0, 3k+1 its coordinator, 3k+2 its threads and
+         * 3k+3 what DSH lists after the coordinator), and whether it holds a
+         * thread nested under its coordinator. null with nothing to nest.
+         * @param groups - sectionGroups' answer for the section.
+         * @param keys - the session each child holds, in DSH's order ('' for none).
+         */
+        function nestedPlaces(groups, keys) {
+            const list = nestedGroups(groups);
+            const count = Array.isArray(keys) ? keys.length : 0;
+            if (list.length === 0 || count === 0) return null;
+            const order = new Array(count).fill(0);
+            const nested = new Array(count).fill(false);
+            list.forEach((g, k) => { for (let i = g.at; i < count; i += 1) order[i] = 3 * k + 3; });
+            list.forEach((g, k) => {
+                const threads = new Set(g.threads);
+                keys.forEach((key, i) => {
+                    if (key === g.coordinator) order[i] = 3 * k + 1;
+                    else if (threads.has(key)) {
+                        order[i] = 3 * k + 2;
+                        nested[i] = true;
+                    }
+                });
+            });
+            return { order, nested };
+        }
+
+        /**
+         * The order nestingCss draws a section's children in: their places
          * in DSH's order (from 1), by the CSS order each gets there, then by
          * DSH's order between equals. null when that is DSH's own order.
          * @param groups - sectionGroups' answer for the section.
          * @param keys - the session each child holds, in DSH's order ('' for none).
          */
         function nestedOrder(groups, keys) {
-            const list = nestedGroups(groups);
-            const count = Array.isArray(keys) ? keys.length : 0;
-            if (list.length === 0 || count === 0) return null;
-            const order = new Array(count + 1).fill(0);
-            list.forEach((g, k) => { for (let at = g.at + 1; at <= count; at += 1) order[at] = 3 * k + 3; });
-            list.forEach((g, k) => {
-                const threads = new Set(g.threads);
-                keys.forEach((key, i) => {
-                    if (key === g.coordinator) order[i + 1] = 3 * k + 1;
-                    else if (threads.has(key)) order[i + 1] = 3 * k + 2;
-                });
-            });
-            const drawn = keys.map((key, i) => i + 1).sort((a, b) => order[a] - order[b] || a - b);
+            const places = nestedPlaces(groups, keys);
+            if (places === null) return null;
+            const drawn = keys.map((key, i) => i + 1).sort((a, b) => places.order[a - 1] - places.order[b - 1] || a - b);
             return drawn.some((at, i) => at !== i + 1) ? drawn : null;
         }
 
-        /** The sections of DSH's list that hold a coordinator's row: where nestingRules may nest a project. */
+        /** The sections of DSH's list that hold a coordinator's row: where the plugin may nest a project. */
         function projectSections(tree) {
             const sections = new Set();
             for (const mark of tree?.querySelectorAll?.('[data-projects-row="coordinator"]') ?? EMPTY) {
@@ -4614,9 +4638,48 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return sections;
         }
 
-        /** The nesting CSS for every section of DSH's list that holds a project with threads. */
-        function nestingCss(tree) {
-            return [...projectSections(tree)].map((section) => nestingRules(sectionGroups(section))).filter(Boolean).join('\n');
+        /** The session a child of one of DSH's sections holds, '' for none. */
+        const keyIn = (kid) => String(sessionRowIn(kid)?.getAttribute('data-row-key') ?? '').slice('session:'.length);
+
+        /** An attribute set to a value, or gone for null, changed only when it differs. */
+        function setMark(el, name, value) {
+            if (value === null) {
+                if (el.hasAttribute(name)) el.removeAttribute(name);
+            } else if (el.getAttribute(name) !== value) el.setAttribute(name, value);
+        }
+
+        /**
+         * Mark DSH's list for nestingCss: each section that holds a project
+         * with threads, the order each of its children is drawn in there (0
+         * too, so a child without one is one DSH added since), and each
+         * wrapper of a thread nested under its coordinator. Only a
+         * section inside the list nests (a list drawn as one flat list keeps
+         * DSH's order), marks the plugin no longer needs go, and only what
+         * differs changes.
+         * @returns the highest order given.
+         */
+        function markNesting(tree) {
+            let top = 0;
+            const kept = new Set();
+            for (const section of projectSections(tree)) {
+                if (typeof section.matches !== 'function' || !section.matches('[role="tree"] div')) continue;
+                const kids = [...section.children];
+                const places = nestedPlaces(sectionGroups(section), kids.map(keyIn));
+                if (places === null) continue;
+                kept.add(section);
+                setMark(section, NEST, '');
+                kids.forEach((kid, i) => {
+                    kept.add(kid);
+                    setMark(kid, NEST_ORDER, String(places.order[i]));
+                    setMark(kid, NESTED, places.nested[i] ? '' : null);
+                    top = Math.max(top, places.order[i]);
+                });
+            }
+            for (const el of tree?.querySelectorAll?.(`[${NEST}],[${NEST_ORDER}],[${NESTED}]`) ?? EMPTY) {
+                if (kept.has(el)) continue;
+                for (const name of [NEST, NEST_ORDER, NESTED]) el.removeAttribute(name);
+            }
+            return top;
         }
 
         const OWNS = 'data-projects-owns';
@@ -4635,7 +4698,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * A screen reader meets each project's rows in the order nestingRules
+         * A screen reader meets each project's rows in the order nestingCss
          * draws them, the threads after their coordinator: the section owns
          * its children in that order (aria-owns, which gives each child that
          * has no id one of the plugin's). Only a section the CSS nests (a div
@@ -4647,7 +4710,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             for (const section of projectSections(tree)) {
                 if (typeof section.matches !== 'function' || !section.matches('[role="tree"] div')) continue;
                 const kids = [...section.children];
-                const drawn = nestedOrder(sectionGroups(section), kids.map((kid) => String(sessionRowIn(kid)?.getAttribute('data-row-key') ?? '').slice('session:'.length)));
+                const drawn = nestedOrder(sectionGroups(section), kids.map(keyIn));
                 if (drawn === null) continue;
                 kept.add(section);
                 const owns = drawn.map((at) => ownId(kids[at - 1])).join(' ');
@@ -4688,13 +4751,32 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }
         }
 
-        /** The list as DSH draws it: no description and no order of the plugin's. */
+        const UNREAD_ROW = 'data-projects-unread-row';
+        /**
+         * A coordinator's row with news the user hasn't seen (RowPlace's
+         * mark in it says so) is marked itself, so the CSS that makes it bold
+         * names the row, rather than looking into every row for the mark.
+         */
+        function markUnread(tree) {
+            const rows = new Set();
+            for (const mark of tree?.querySelectorAll?.('[data-projects-unread]') ?? EMPTY) {
+                const row = mark.closest('[data-row-key^="session:"]');
+                if (row) rows.add(row);
+            }
+            for (const row of tree?.querySelectorAll?.(`[${UNREAD_ROW}]`) ?? EMPTY) if (!rows.has(row)) row.removeAttribute(UNREAD_ROW);
+            for (const row of rows) setMark(row, UNREAD_ROW, '');
+        }
+
+        /** The list as DSH draws it: no description, order or mark of the plugin's. */
         function undoRows(tree) {
             for (const row of tree?.querySelectorAll?.(`[${SAID}]`) ?? EMPTY) {
                 if (row.getAttribute('aria-description') === row.getAttribute(SAID)) row.removeAttribute('aria-description');
                 row.removeAttribute(SAID);
             }
             for (const section of tree?.querySelectorAll?.(`[${OWNS}]`) ?? EMPTY) unown(section);
+            for (const el of tree?.querySelectorAll?.(`[${NEST}],[${NEST_ORDER}],[${NESTED}],[${UNREAD_ROW}]`) ?? EMPTY) {
+                for (const name of [NEST, NEST_ORDER, NESTED, UNREAD_ROW]) el.removeAttribute(name);
+            }
         }
 
         /**
@@ -5578,7 +5660,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function RowMenu({ label, items, run, open, setOpen }) {
             const mark = useFirstItemFocus(open);
             return h(ui.Menu, {
-                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end', listClassName: mark,
+                open, onClose: () => setOpen(false), items, portal: true, closeOnPointerLeave: true, align: 'end', className: 'dshp-tree-act', listClassName: mark,
                 onSelect: (id) => {
                     setOpen(false);
                     run(id);
@@ -5954,23 +6036,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * Keep the nesting CSS (nestingCss) in step with DSH's list, with what
-         * a screen reader gets from it: the rows in drawn order (readInOrder)
-         * and each project row's words after its title (describeRows). DSH
-         * redraws rows on its own (a fold, Show more, a session moving up), so
-         * this runs again on every change to the list and to the rows' marks,
-         * before it is painted, and after every render here. The sheet and
-         * the attributes change only when they differ.
+         * Keep the plugin's marks in DSH's list in step with it: the nesting
+         * (markNesting, for nestingCss's sheet) with what a screen reader gets
+         * from it, the rows in drawn order (readInOrder), each project row's
+         * words after its title (describeRows), and the rows with unread news
+         * (markUnread). DSH redraws rows on its own (a fold, Show more, a
+         * session moving up), so this runs again on every change to the list
+         * and to the rows' marks, before it is painted, and after every render
+         * here. The sheet and the attributes change only when they differ.
          */
         function useNesting(tree) {
             const sheet = React.useRef(null);
             const pass = React.useRef(() => {});
             pass.current = () => {
                 if (!tree?.isConnected || !sheet.current) return;
-                const css = nestingCss(tree);
+                const css = nestingCss(markNesting(tree));
                 if (sheet.current.textContent !== css) sheet.current.textContent = css;
                 readInOrder(tree);
                 describeRows(tree);
+                markUnread(tree);
             };
             React.useLayoutEffect(() => {
                 if (!tree || typeof document === 'undefined') return undefined;
@@ -5986,7 +6070,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 };
                 run();
                 const observer = typeof MutationObserver === 'undefined' ? null : new MutationObserver(run);
-                observer?.observe(tree, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-projects-row', 'data-projects-of', 'data-projects-words'] });
+                observer?.observe(tree, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-projects-row', 'data-projects-of', 'data-projects-words', 'data-projects-unread'] });
                 return () => {
                     observer?.disconnect();
                     style.remove();
@@ -7113,7 +7197,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         // For the plugin's own tests: the pure helpers the views are built on.
         module.exports.internals = {
             pageModel, visibleItems, pageRefusal, treeMeta, PageTree, ProjectsPage, RowMenu, findInTree, withHit,
-            valueIn, takeKnown, coordinatorName, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, nestingRules, sectionGroups, nestingCss, nestedOrder, readInOrder, describeRows, undoRows, rowWords,
+            valueIn, takeKnown, coordinatorName, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, sectionGroups, nestingCss, nestedPlaces, nestedOrder, markNesting, readInOrder, describeRows, markUnread, undoRows, rowWords,
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
             selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, SUGGESTIONS, suggestionsFor,
             changesOf, changesText, lastChange, REVIEW_PREFIX,

@@ -3070,7 +3070,7 @@ test('browser half: a failed or stopped thread reads Failed or Stopped everywher
 
 test('browser half: each session list row says its place in a project, and the CSS nests each project by it', () => {
     const { client } = loadClient();
-    const { rowPlace, nestingRules } = client.internals;
+    const { rowPlace, nestingCss, nestedPlaces } = client.internals;
     const coord = (name) => ({ role: 'coordinator', project: { name }, threads: [] });
     const state = {
         byId: {
@@ -3119,57 +3119,49 @@ test('browser half: each session list row says its place in a project, and the C
     ]);
     assert.deepEqual(plain(sectionGroups(null)), []);
 
-    // The rules name the coordinators' and threads' rows by DSH's row keys, lay out and move only the wrappers of
-    // their own section (each coordinator, then its threads, then what DSH lists after the coordinator), and look
-    // no deeper than a wrapper's child or a section's grandchildren, with no sibling selector: one row's change
-    // restyles one section, cheaply (1.8 s to 0.1 s at 300 chats).
-    const css = nestingRules([{ coordinator: 'ses_01.ab-c:9', at: 4, threads: ['ses_t1', 'ses_t2'] }]);
-    const rules = css.split('\n');
-    const list = '[role="tree"] div:has(>*>[data-row-key="session:ses_01.ab-c:9"])';
-    const C = ':has(>[data-row-key="session:ses_01.ab-c:9"])';
-    const T = ':has(>[data-row-key="session:ses_t1"],>[data-row-key="session:ses_t2"])';
-    assert.equal(rules.length, 9);
-    for (const rule of rules) assert.ok(rule.startsWith(list), rule);
-    assert.ok(rules.includes(`${list}{display:flex;flex-direction:column}`));
-    assert.ok(rules.includes(`${list}>:nth-child(n+5){order:3}`));
-    // The coordinator's and threads' own orders come after the rule for what follows them, so they win.
-    assert.ok(rules.indexOf(`${list}>${C}{order:1}`) > rules.indexOf(`${list}>:nth-child(n+5){order:3}`));
-    assert.ok(rules.indexOf(`${list}>${T}{order:2}`) > rules.indexOf(`${list}>:nth-child(n+5){order:3}`));
-    assert.ok(rules.includes(`${list}>${T}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,24px) + var(--dsh-workspace-indent,0px))}`));
+    // The rules find a section, each child's place and the nested threads by the plugin's marks (markNesting), never
+    // by what an element holds: each ends in a mark or DSH's row key, so one row's change restyles that row, not the
+    // list (1.8 s to 0.1 s at 300 chats with :has() rules that looked no deeper than a section's grandchildren; the
+    // marks take the rest).
+    const rules = nestingCss().split('\n');
+    const S = '[role="tree"] div[data-projects-nests]';
+    const T = `${S}>[data-projects-nested]`;
+    for (const rule of rules) {
+        assert.ok(rule.startsWith(S), rule);
+        assert.doesNotMatch(rule.slice(0, rule.indexOf('{')), /:has\(|~|\+/, rule);
+    }
+    assert.ok(rules.includes(`${S}{display:flex;flex-direction:column}`));
+    // Each order a mark can say has its rule, ten projects' worth; a section with more gets more.
+    assert.equal(rules.filter((rule) => rule.includes('[data-projects-order=')).length, 30);
+    assert.ok(rules.includes(`${S}>[data-projects-order="3"]{order:3}`));
+    assert.equal(nestingCss(33).split('\n').filter((rule) => rule.includes('[data-projects-order=')).length, 33);
+    assert.equal(nestingCss(12), nestingCss());
+    // A child DSH adds goes last until the plugin's next pass gives it its place: DSH measures its rows for their
+    // animation before that pass, and the rows Show more adds belong at the end.
+    assert.ok(rules.includes(`${S}>:not([data-projects-order]){order:31}`));
+    assert.ok(nestingCss(33).split('\n').includes(`${S}>:not([data-projects-order]){order:34}`));
+    assert.ok(rules.includes(`${T}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,24px) + var(--dsh-workspace-indent,0px))}`));
     // The corner is drawn in the indent, not in the row's leading seat; the branch mark leaves the seat but is still read aloud.
-    assert.ok(rules.some((rule) => rule.startsWith(`${list}>${T}::before{content:"";position:absolute;`)));
-    assert.ok(rules.includes(`${list}>${T} .dshp-t-mark[data-projects-thread-mark=""]{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}`));
+    assert.ok(rules.some((rule) => rule.startsWith(`${T}::before{content:"";position:absolute;`)));
+    assert.ok(rules.includes(`${T} .dshp-t-mark[data-projects-thread-mark=""]{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}`));
     // DSH's time (the row's third child, before its actions) leaves the row too, still read aloud, so the indent
     // doesn't cost the title its room; a status DSH writes there instead ("Approval") and the actions stay.
-    assert.ok(rules.includes(`${list}>${T}>[data-row-key]>:nth-child(3):not(:last-child,[aria-hidden="true"]){position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}`));
-    const has = (ids) => `:has(${ids.map((id) => `>[data-row-key="session:${id}"]`).join(',')})`;
-    // Two projects in one workspace stay apart: each is drawn where its coordinator is, and what DSH lists after a
-    // coordinator follows that project's threads.
-    const two = nestingRules([{ coordinator: 'b', at: 6, threads: ['bt'] }, { coordinator: 'a', at: 2, threads: ['at1', 'at2'] }]).split('\n');
-    const L2 = '[role="tree"] div:has(>*>[data-row-key="session:a"])';
-    assert.deepEqual(two.slice(2, 8), [
-        `${L2}>:nth-child(n+3){order:3}`, `${L2}>:nth-child(n+7){order:6}`,
-        `${L2}>${has(['a'])}{order:1}`, `${L2}>${has(['at1', 'at2'])}{order:2}`,
-        `${L2}>${has(['b'])}{order:4}`, `${L2}>${has(['bt'])}{order:5}`,
-    ]);
-    assert.ok(two.includes(`${L2}>${has(['at1', 'at2', 'bt'])}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,24px) + var(--dsh-workspace-indent,0px))}`));
-    for (const rule of [...rules, ...two]) {
-        // A :has() inside another makes a browser drop the whole rule; a descendant step inside one, or a
-        // sibling selector after one, is what made the old rules slow.
-        assert.doesNotMatch(rule, /:has\([^)]*:has\(/, rule);
-        for (const inside of rule.match(/:has\([^)]*\)/g) ?? []) assert.doesNotMatch(inside, /\]\s+\[|\*\s+\[/, rule);
-        assert.doesNotMatch(rule, /~/, rule);
-    }
-    // Nothing to nest, or no place yet: no rules; an id that could break out of the selector gets none, a thread's is left out.
-    assert.equal(nestingRules([]), '');
-    assert.equal(nestingRules(undefined), '');
-    assert.equal(nestingRules([{ coordinator: 'c', at: 2, threads: [] }]), '');
-    assert.equal(nestingRules([{ coordinator: 'c', at: 0, threads: ['t1'] }]), '');
-    assert.equal(nestingRules([{ coordinator: 'a"] *{display:none} [x="', at: 2, threads: ['t1'] }]), '');
-    assert.equal(nestingRules([{ coordinator: '', at: 2, threads: ['t1'] }]), '');
-    const kept = nestingRules([{ coordinator: 'c', at: 2, threads: ['t1', 'x"] *{display:none} [y="'] }]);
-    assert.match(kept, /:has\(>\[data-row-key="session:t1"\]\)/);
-    assert.doesNotMatch(kept, /x"\]/);
+    assert.ok(rules.includes(`${T}>[data-row-key]>:nth-child(3):not(:last-child,[aria-hidden="true"]){position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}`));
+    // Where each child is drawn: what DSH lists before the first coordinator stays first, then each project where its
+    // coordinator is (the coordinator, its threads, what DSH lists after it), so two projects in one workspace stay apart.
+    const keys = ['', 'x', 'a', 'y', 'at2', 'bt', 'b', 'z', 'at1'];
+    assert.deepEqual(plain(nestedPlaces([{ coordinator: 'b', at: 7, threads: ['bt'] }, { coordinator: 'a', at: 3, threads: ['at1', 'at2'] }], keys)), {
+        order: [0, 0, 1, 3, 2, 5, 4, 6, 2],
+        nested: [false, false, false, false, true, true, false, false, true],
+    });
+    // Nothing to nest, or no place yet: nothing; a thread with no id is left out.
+    assert.equal(nestedPlaces([], keys), null);
+    assert.equal(nestedPlaces(undefined, keys), null);
+    assert.equal(nestedPlaces([{ coordinator: 'a', at: 3, threads: [] }], keys), null);
+    assert.equal(nestedPlaces([{ coordinator: 'a', at: 0, threads: ['at1'] }], keys), null);
+    assert.equal(nestedPlaces([{ coordinator: '', at: 3, threads: ['at1'] }], keys), null);
+    assert.equal(nestedPlaces([{ coordinator: 'a', at: 3, threads: ['at1'] }], []), null);
+    assert.deepEqual(plain(nestedPlaces([{ coordinator: 'a', at: 3, threads: ['', 'at1'] }], keys).nested), [false, false, false, false, false, false, false, false, true]);
 });
 
 test('browser half: the plugin\'s mark gives way to any other mark in a row\'s leading seat, which never widens', () => {
@@ -3204,8 +3196,9 @@ class FakeEl {
     setAttribute(name, value) { this.attrs.set(name, String(value)); }
     hasAttribute(name) { return this.attrs.has(name); }
     removeAttribute(name) { this.attrs.delete(name); }
-    /** `[a]`, `[a="v"]`, `[a^="v"]`, and the one compound selector the passes use, `[role="tree"] div`. */
+    /** `[a]`, `[a="v"]`, `[a^="v"]`, lists of them, and the one compound selector the passes use, `[role="tree"] div`. */
     matches(selector) {
+        if (selector.includes(',')) return selector.split(',').some((one) => this.matches(one));
         if (selector === '[role="tree"] div') {
             if (this.tagName !== 'DIV') return false;
             for (let e = this.parentElement; e; e = e.parentElement) if (e.getAttribute('role') === 'tree') return true;
@@ -3231,16 +3224,13 @@ class FakeEl {
 
 test('browser half: a screen reader meets each project\'s rows in drawn order, and hears the plugin\'s words after each title', () => {
     const { client } = loadClient();
-    const { nestingRules, nestedOrder, readInOrder, describeRows, undoRows } = client.internals;
+    const { nestedPlaces, nestedOrder, markNesting, readInOrder, describeRows, markUnread, undoRows } = client.internals;
     // The order the CSS draws a section in: what DSH lists before the first coordinator, then each coordinator,
-    // its threads in DSH's order, and what DSH lists after it. The same two projects as the CSS above.
+    // its threads in DSH's order, and what DSH lists after it, by the orders the plugin's marks give.
     const groups = [{ coordinator: 'b', at: 6, threads: ['bt'] }, { coordinator: 'a', at: 2, threads: ['at1', 'at2'] }];
     const keys = ['x', 'a', 'y', 'at2', 'bt', 'b', 'z', 'at1', ''];
     assert.deepEqual(plain(nestedOrder(groups, keys)), [1, 2, 4, 8, 3, 6, 5, 7, 9]);
-    const css = nestingRules(groups);
-    for (const [order, rule] of [[3, ':nth-child(n+3)'], [6, ':nth-child(n+7)'], [1, 'session:a"]'], [2, 'session:at1"]'], [4, 'session:b"]'], [5, 'session:bt"]']]) {
-        assert.ok(css.split('\n').some((line) => line.includes(rule) && line.endsWith(`{order:${order}}`)), rule);
-    }
+    assert.deepEqual(plain(nestedPlaces(groups, keys).order), [0, 1, 3, 2, 5, 4, 6, 2, 6]);
     // Nothing to nest, or DSH's own order already: nothing to reorder.
     assert.equal(nestedOrder([], keys), null);
     assert.equal(nestedOrder([{ coordinator: 'a', at: 1, threads: ['t'] }], ['a', 't', 'x']), null);
@@ -3259,6 +3249,23 @@ test('browser half: a screen reader meets each project\'s rows in drawn order, a
     const kids = [wrap(rows.head), wrap(rows.chat), wrap(rows.t2), wrap(rows.c, { id: 'dsh-own' }), wrap(rows.late), wrap(rows.t1), wrap(rows.old)];
     const section = new FakeEl('div', {}, kids);
     const tree = new FakeEl('div', { role: 'tree' }, [section]);
+    // The CSS's marks: the section nests; each child its order (0 for what DSH lists before the coordinator, so only a
+    // child DSH added since the last pass has none); the threads' wrappers nested. The highest order sizes the sheet.
+    const marks = () => plain(kids.map((k) => [k.getAttribute('data-projects-order'), k.hasAttribute('data-projects-nested')]));
+    assert.equal(markNesting(tree), 3);
+    assert.equal(section.getAttribute('data-projects-nests'), '');
+    assert.deepEqual(marks(), [['0', false], ['0', false], ['2', true], ['1', false], ['3', false], ['2', true], ['2', true]]);
+    assert.equal(markNesting(tree), 3, 'a second pass changes nothing');
+    assert.deepEqual(marks(), [['0', false], ['0', false], ['2', true], ['1', false], ['3', false], ['2', true], ['2', true]]);
+    // A chat DSH adds after the coordinator has no order until the next pass, which puts it after the project.
+    const fresh = wrap(row('session:fresh'));
+    section.children = [...kids, fresh];
+    assert.equal(fresh.getAttribute('data-projects-order'), null);
+    markNesting(tree);
+    assert.equal(fresh.getAttribute('data-projects-order'), '3');
+    section.children = kids;
+    markNesting(tree);
+    assert.deepEqual(marks(), [['0', false], ['0', false], ['2', true], ['1', false], ['3', false], ['2', true], ['2', true]]);
     readInOrder(tree);
     // The section owns its children in drawn order: the coordinator, its threads, then the chat DSH lists after it.
     // A child keeps an id it has; the others get the plugin's.
@@ -3282,6 +3289,16 @@ test('browser half: a screen reader meets each project\'s rows in drawn order, a
     assert.equal(rows.c.getAttribute('aria-description'), 'Archived');
     assert.equal(rows.c.getAttribute('data-projects-said'), null);
     assert.equal(rows.t1.getAttribute('aria-description'), null);
+    // A coordinator with news the user hasn't seen: its row is marked (the CSS makes it bold), and unmarked when it's read.
+    const news = rows.c.children[0].children[0];
+    news.setAttribute('data-projects-unread', '2');
+    markUnread(tree);
+    assert.deepEqual([rows.c.getAttribute('data-projects-unread-row'), rows.t2.getAttribute('data-projects-unread-row')], ['', null]);
+    news.removeAttribute('data-projects-unread');
+    markUnread(tree);
+    assert.equal(rows.c.hasAttribute('data-projects-unread-row'), false);
+    news.setAttribute('data-projects-unread', '1');
+    markUnread(tree);
     // A thread that leaves the section (or DSH drawing the project in its own order) ends the plugin's order there.
     section.children = section.children.filter((k) => k !== kids[2] && k !== kids[5] && k !== kids[6]);
     readInOrder(tree);
@@ -3289,21 +3306,32 @@ test('browser half: a screen reader meets each project\'s rows in drawn order, a
     assert.equal(section.hasAttribute('data-projects-owns'), false);
     assert.equal(kids[3].id, 'dsh-own');
     assert.equal(kids[1].id, '');
+    assert.equal(markNesting(tree), 0);
+    assert.equal(section.hasAttribute('data-projects-nests'), false);
+    assert.ok(section.children.every((k) => !k.hasAttribute('data-projects-order') && !k.hasAttribute('data-projects-nested')));
     // A list drawn as one flat list (the rows' section is the list itself) is never reordered: the CSS doesn't nest it.
     const flat = new FakeEl('div', { role: 'tree' }, [wrap(row('session:x')), wrap(row('session:t9', place('thread', 'c9', 'Project thread'))), wrap(row('session:c9', place('coordinator', 'c9', 'Project')))]);
     readInOrder(flat);
     assert.equal(flat.getAttribute('aria-owns'), null);
-    // Switched off: the list as DSH draws it, DSH's own descriptions kept.
+    assert.equal(markNesting(flat), 0);
+    assert.equal(flat.hasAttribute('data-projects-nests'), false);
+    assert.ok(flat.children.every((k) => !k.hasAttribute('data-projects-order') && !k.hasAttribute('data-projects-nested')));
+    // Switched off: the list as DSH draws it, DSH's own descriptions kept, none of the plugin's marks.
     section.children = kids;
+    markNesting(tree);
     readInOrder(tree);
     describeRows(tree);
     assert.ok(section.hasAttribute('aria-owns'));
+    assert.ok(section.hasAttribute('data-projects-nests'));
     undoRows(tree);
     assert.equal(section.getAttribute('aria-owns'), null);
     assert.ok(kids.every((k, i) => i === 3 || k.id === ''));
     assert.equal(rows.t2.getAttribute('aria-description'), null);
     assert.equal(rows.old.getAttribute('aria-description'), 'Archived');
     assert.equal(rows.c.getAttribute('aria-description'), 'Archived');
+    assert.equal(section.hasAttribute('data-projects-nests'), false);
+    assert.deepEqual(marks(), kids.map(() => [null, false]));
+    assert.equal(rows.c.hasAttribute('data-projects-unread-row'), false);
 });
 
 test('browser half: the session list overlay looks only for DSH\'s own list, and draws nothing but a refusal\'s toast', () => {
