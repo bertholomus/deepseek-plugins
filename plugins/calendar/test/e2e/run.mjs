@@ -18,11 +18,13 @@
  *   removing the account removes it there too;
  * - agents' calendar tools, under each of DSH's permissions: Full access
  *   changes calendars without asking, Read Only reads but can't change
- *   them, Workspace Write asks the user first (here nobody can answer, so
- *   the change doesn't happen), and the plugin's agentChanges: off refuses
- *   every change; one occurrence isn't moved to another calendar, and a
- *   change that says to tell guests where they can't be told is refused
- *   before anyone is asked;
+ *   them, Workspace Write asks the user first (allowed, the change is made;
+ *   rejected or unanswered, it isn't), and the plugin's agentChanges: off
+ *   refuses every change; one occurrence isn't moved to another calendar,
+ *   and a change that says to tell guests where they can't be told is
+ *   refused before anyone is asked;
+ * - with the CalDAV server, a delete decided on an event that changed on
+ *   the server meanwhile stops and says so;
  * - a restart keeps the calendars and their events.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/calendar/test/e2e/run.mjs
@@ -172,6 +174,45 @@ function webApi(web, endpoint, args) {
         req.on('error', reject);
         req.end(body);
     });
+}
+
+/**
+ * DSH's approval prompts as the window gets them: its events stream on /api/remote.mux brings each request, and
+ * $events/result answers one, as the prompt's Allow once and Reject do.
+ */
+async function approvalsOf(web) {
+    const url = new URL('api/remote.mux', web.base);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(url, { headers: { cookie: web.cookie, origin: web.base.origin } });
+    const asked = [];
+    const taken = new Set();
+    let clientId;
+    let failure;
+    socket.addEventListener('open', () => socket.send(JSON.stringify({ type: 'open', streamId: 'events', endpoint: '$events', payload: { args: {} } })));
+    socket.addEventListener('error', (event) => { failure = event.message ?? 'socket error'; });
+    socket.addEventListener('message', ({ data }) => {
+        let frame;
+        try { frame = JSON.parse(String(data)); } catch { return; }
+        if (frame.streamId !== 'events') return;
+        if (frame.type === 'error') failure = JSON.stringify(frame.error);
+        const value = frame.type === 'item' ? frame.value : undefined;
+        if (value?.type === 'ready') clientId = value.clientId;
+        else if (value?.type === 'waterfall' && value.event === 'approval/request') asked.push(value);
+    });
+    await waitFor(() => {
+        if (failure) throw new Error(failure);
+        return clientId;
+    }, 'the window\'s events stream');
+    return {
+        /** The next prompt whose request matches, not taken before. */
+        next: (what, match) => waitFor(() => {
+            const found = asked.find((a) => !taken.has(a.eventId) && match(a.request ?? {}));
+            if (found) taken.add(found.eventId);
+            return found;
+        }, what, 60000),
+        answer: (prompt, outcome) => webApi(web, '$events/result', { clientId, eventId: prompt.eventId, outcome: { kind: 'result', value: outcome } }),
+        close: () => socket.close(),
+    };
 }
 
 const profile = join(home, 'profiles', 'web');
@@ -445,9 +486,21 @@ try {
             return s?.calendars?.find((c) => c.accountId === caldavAccount?.id && c.name === 'Home');
         }, 'the CalDAV calendar', 20000).catch(() => undefined);
         r = await api('createEvent', { input: { calendarId: homeCal?.id, title: 'Plumber', start: '2026-10-15T08:00' } });
-        check('an event is written to the CalDAV server', r.ok && r.value?.occurrence?.calendarId === homeCal?.id, JSON.stringify(r));
-        const listing = await fetch(new URL('alice/home/', radicale.base), { method: 'PROPFIND', headers: { Depth: '1', Authorization: `Basic ${Buffer.from(`alice:${password}`).toString('base64')}` } });
-        check('the server has it', (await listing.text()).includes('.ics'));
+        const plumber = r.value?.occurrence;
+        check('an event is written to the CalDAV server', r.ok && plumber?.calendarId === homeCal?.id, JSON.stringify(r));
+        const davAuth = { Authorization: `Basic ${Buffer.from(`alice:${password}`).toString('base64')}` };
+        const listed = await (await fetch(new URL('alice/home/', radicale.base), { method: 'PROPFIND', headers: { Depth: '1', ...davAuth } })).text();
+        check('the server has it', listed.includes('.ics'));
+        // Someone moves it in another app meanwhile: a delete decided on the event as it was stops, and says so.
+        const resource = new URL([...listed.matchAll(/<(?:[\w-]+:)?href>([^<]+\.ics)<\/(?:[\w-]+:)?href>/g)][0]?.[1] ?? 'missing.ics', radicale.base);
+        const elsewhere = (await (await fetch(resource, { headers: davAuth })).text()).replace('SUMMARY:Plumber', 'SUMMARY:Plumber (now at 9)');
+        const moved = await fetch(resource, { method: 'PUT', headers: { ...davAuth, 'Content-Type': 'text/calendar; charset=utf-8' }, body: elsewhere });
+        r = await api('deleteEvent', { id: plumber?.id, scope: 'all' });
+        const kept = await fetch(resource, { headers: davAuth });
+        check('a delete stops when the event changed on its server meanwhile, and says so', moved.ok && !r.ok && /changed on its server meanwhile/.test(r.error?.message ?? '')
+            && kept.status === 200 && (await kept.text()).includes('Plumber (now at 9)'), `${moved.status} ${JSON.stringify(r)} ${kept.status}`);
+        r = await api('deleteEvent', { id: plumber?.id, scope: 'all' });
+        check('looked at again, it is deleted', r.ok && (await fetch(resource, { headers: davAuth })).status === 404, JSON.stringify(r));
         const creds = readText(credentialsFile);
         check('the password is in DSH\'s credential store under the plugin\'s record', creds.includes(`calendar/${caldavAccount?.id}`) && creds.includes(password));
         const leaks = [storeFile, logFile, join(calendarDir, 'events', `${homeCal?.id}.json`)].filter((f) => readText(f).includes(password));
@@ -505,6 +558,27 @@ try {
     await bridge('POST', `/sessions/${askingSession}/cancel`, {});
     await waitFor(async () => (await bridge('GET', `/sessions/${askingSession}`)).status !== 'running', 'the stopped turn', 30000).catch(() => {});
     check('unanswered, the change doesn\'t happen', (await webApi(await signInWeb(), 'dsh-plugin-calendar/search', { query: 'haircut' })).value?.occurrences?.length === 1);
+    // Answered as the prompt's Allow once and Reject do.
+    const asking = await signInWeb();
+    const prompts = await approvalsOf(asking);
+    const titleNow = async () => (await webApi(asking, 'dsh-plugin-calendar/search', { query: 'haircut' })).value?.occurrences?.[0]?.title;
+    try {
+        const ofRename = (from) => (q) => q.toolName === 'calendar_update_event' && String(q.reason ?? '').includes(`Change “${from}” (2026-10-16 17:00, Personal): title?`);
+        let pending = agentCall('calendar_update_event', { id: haircut?.id ?? 'missing', title: 'Haircut at 5' });
+        let prompt = await prompts.next('the rename prompt', ofRename('Haircut')).catch(() => undefined);
+        const allowed = prompt ? await prompts.answer(prompt, 'allowed-once') : undefined;
+        call = await pending;
+        check('allowed, the change is made', allowed?.ok === true && /^TOOL-RESULT: Changed:/.test(call.result) && await titleNow() === 'Haircut at 5',
+            `${JSON.stringify(prompt?.request)} ${JSON.stringify(allowed)} ${call.result}`);
+        pending = agentCall('calendar_update_event', { id: haircut?.id ?? 'missing', title: 'Haircut, cancelled' });
+        prompt = await prompts.next('the second rename prompt', ofRename('Haircut at 5')).catch(() => undefined);
+        const rejected = prompt ? await prompts.answer(prompt, 'rejected') : undefined;
+        call = await pending;
+        check('rejected, it isn\'t, and the model hears so', rejected?.ok === true && !/^TOOL-RESULT: Changed:/.test(call.result) && await titleNow() === 'Haircut at 5',
+            `${JSON.stringify(rejected)} ${call.result}`);
+    } finally {
+        prompts.close();
+    }
     await stopDsh(child);
     const reason = sessionEvents(askingSession).find((e) => e.type === 'approval/asked')?.data?.reason ?? '';
     check('the question says what would change', reason === 'Calendar: Delete “Haircut” (2026-10-16 17:00, Personal)?', reason);
