@@ -157,7 +157,7 @@ test('browser half: loads as DSH loads it, registers the session list, the page 
     assert.deepEqual(registered.map(([slot, component]) => [slot.name, slot.id ?? slot.key, slot.order, slot.label, component]), [
         ['shell.overlay', 'dsh-plugin-categories:sidebar', undefined, undefined, SidebarTree],
         ['main', 'dsh-plugin-categories:page', undefined, undefined, CategoriesPage],
-        ['sidebar.panellist', 'dsh-plugin-categories:page', 5, 'Categories', CategoriesIcon],
+        ['sidebar.panellist', 'dsh-plugin-categories:page', 6, 'Categories', CategoriesIcon],
     ]);
     await tick();
     assert.deepEqual(rpc, [['/api', 'dsh-plugin-categories/list', { args: {} }]]);

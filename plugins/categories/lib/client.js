@@ -1605,12 +1605,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, SidebarTree));
             // A header's New workspace… still waiting on DSH's flow stops waiting with the plugin.
             ctx.effect(() => () => plugin.addWorkspace.stop(), 'categories: New workspace from the session list');
-            // The Categories entry in DSH's sidebar, after Plugins, and the page it opens.
+            // The Categories entry in DSH's sidebar, after Plugins and the projects plugin's Projects (order 5), so
+            // the two always list in one order, and the page it opens.
             ctx.slots.inject('main', () => ctx.slots.register({
                 name: 'main', key: IDS.page, inject: withApi,
             }, CategoriesPage));
             ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
-                name: 'sidebar.panellist', id: IDS.page, order: 5, label: PAGE.entry,
+                name: 'sidebar.panellist', id: IDS.page, order: 6, label: PAGE.entry,
             }, CategoriesIcon));
         }
 
