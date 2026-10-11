@@ -1072,6 +1072,32 @@ describe('against Radicale', { skip: python === undefined ? 'Radicale not found:
         ...people.map((p) => `ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:${p}@example.com`), 'END:VEVENT'];
     const calendarOf = (...events) => ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//DSH calendar tests//EN', ...events.flat(), 'END:VCALENDAR', ''].join('\r\n');
 
+    /**
+     * This server as one that keeps no tags: its answers without ETag
+     * headers or getetag properties, and If-Match: * taken as "it is there"
+     * (Radicale itself compares it with the tag). → {fetch, writes: the
+     * PUTs and DELETEs sent, as "METHOD path If-Match"}.
+     */
+    function tagless() {
+        const writes = [];
+        const reach = async (url, init = {}) => {
+            const method = init.method ?? 'GET';
+            const sent = Object.entries(init.headers ?? {});
+            const ifMatch = sent.find(([k]) => k.toLowerCase() === 'if-match')?.[1] ?? '-';
+            if (method === 'PUT' || method === 'DELETE') writes.push(`${method} ${new URL(url).pathname} ${ifMatch}`);
+            if (ifMatch === '*') {
+                if ((await fetch(url, { method: 'HEAD', headers: init.headers })).status === 404) return new Response(null, { status: 412 });
+                init = { ...init, headers: Object.fromEntries(sent.filter(([k]) => k.toLowerCase() !== 'if-match')) };
+            }
+            const res = await fetch(url, init);
+            const headers = new Headers(res.headers);
+            for (const name of ['etag', 'content-length', 'content-encoding']) headers.delete(name);
+            const text = (await res.text()).replace(/<([\w.-]+:)?getetag\b[^>]*?(?:\/>|>[^<]*<\/\1getetag>)/g, '');
+            return new Response([204, 304].includes(res.status) ? null : text, { status: res.status, headers });
+        };
+        return { fetch: reach, writes };
+    }
+
     before(async () => {
         dir = mkdtempSync(join(tmpdir(), 'caldav-radicale-'));
         writeFileSync(join(dir, 'users'), `${user}:${password}\n`);
@@ -1344,6 +1370,94 @@ END:VCALENDAR&#13;
             await m.deleteEvent(on('2026-11-04').id, 'one', 'window', { notify: true });
             assert.deepEqual(await held(), ['2026-10-21T10:00 Other @ - with ann']);
             assert.deepEqual(await changedOn(path), []);
+        } finally {
+            done();
+        }
+    });
+
+    test('a server that keeps no tags: a change goes only while the event shows what the plugin read, a delete only while it names the same people', async () => {
+        const work = { remoteId: `${base}${user}/work/` };
+        const path = `${user}/work/swap.ics`;
+        const bare = tagless();
+        const source = caldav.create(account(), { ...env, request: (url, init) => request(url, { ...init, fetch: bare.fetch }) });
+        // "Swap" as the plugin read it, and the same with lines changed (by property name; [] takes it out) and lines added.
+        const read = ['BEGIN:VEVENT', 'UID:swap', 'DTSTAMP:20261001T000000Z', 'DTSTART:20261014T090000Z', 'DTEND:20261014T100000Z', 'RRULE:FREQ=WEEKLY;COUNT=4',
+            'SUMMARY:Swap', 'LOCATION:Room 1', 'ORGANIZER:mailto:alice@example.com', 'ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com', 'END:VEVENT'];
+        const edit = (changes, ...added) => [...read.slice(0, -1).flatMap((line) => changes[/^[A-Z-]+/.exec(line)[0]] ?? [line]), ...added, 'END:VEVENT'];
+        await putFile(path, calendarOf(read));
+        const item = { remoteId: `${base}${path}`, raw: (await dav('GET', path)).text };
+        const renamed = calendarOf(edit({ SUMMARY: ['SUMMARY:Swap!'] }));
+
+        // Changed by another app since: the plugin's whole copy, renamed, would undo it, so nothing is written.
+        const moved = ['BEGIN:VEVENT', 'UID:swap', 'DTSTAMP:20261001T000000Z', 'RECURRENCE-ID:20261021T090000Z', 'DTSTART:20261021T110000Z', 'DTEND:20261021T120000Z',
+            'SUMMARY:Swap', 'ORGANIZER:mailto:alice@example.com', 'ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com', 'END:VEVENT'];
+        const theirs = {
+            // Bob takes it over, and alice is a guest: the same people.
+            organizer: edit({ ORGANIZER: ['ORGANIZER:mailto:bob@example.com'], ATTENDEE: ['ATTENDEE;PARTSTAT=ACCEPTED:mailto:alice@example.com'] }),
+            title: edit({ SUMMARY: ['SUMMARY:Swap shifts'] }),
+            start: edit({ DTSTART: ['DTSTART:20261014T083000Z'] }),
+            end: edit({ DTEND: ['DTEND:20261014T110000Z'] }),
+            'all day': edit({ DTSTART: ['DTSTART;VALUE=DATE:20261014'], DTEND: ['DTEND;VALUE=DATE:20261015'] }),
+            place: edit({ LOCATION: ['LOCATION:Room 2'] }),
+            notes: edit({}, 'DESCRIPTION:Bring the keys'),
+            link: edit({}, 'URL:https://example.com/swap'),
+            status: edit({}, 'STATUS:TENTATIVE'),
+            rule: edit({ RRULE: ['RRULE:FREQ=WEEKLY;COUNT=5'] }),
+            'skipped date': edit({}, 'EXDATE:20261021T090000Z'),
+            'extra date': edit({}, 'RDATE:20261016T090000Z'),
+            'changed occurrence': [read, moved],
+        };
+        for (const [what, lines] of Object.entries(theirs)) {
+            await putFile(path, calendarOf(...(Array.isArray(lines[0]) ? lines : [lines])));
+            const there = (await dav('GET', path)).text;
+            await assert.rejects(source.put(work, item, renamed, 'swap'),
+                (e) => isCode('conflict')(e) && e.message === 'Saving the event: it changed on the server since the plugin read it, so nothing was changed.', what);
+            assert.equal((await dav('GET', path)).text, there, what);
+        }
+        assert.deepEqual(bare.writes, []);
+
+        // Only what a server and the guests set changed (stamps, answers, the rule's order, the organizer's spelling): it goes.
+        await putFile(path, calendarOf(edit({
+            DTSTAMP: ['DTSTAMP:20261011T080000Z'], RRULE: ['RRULE:COUNT=4;FREQ=WEEKLY'], ORGANIZER: ['ORGANIZER;CN=Alice:MAILTO:Alice@Example.com'],
+            ATTENDEE: ['ATTENDEE;PARTSTAT=ACCEPTED;CN=Bob:mailto:bob@example.com'],
+        }, 'LAST-MODIFIED:20261011T080000Z', 'CREATED:20261001T000000Z', 'SEQUENCE:2', 'STATUS:CONFIRMED')));
+        await source.put(work, item, renamed, 'swap');
+        assert.deepEqual(bare.writes, [`PUT /${path} *`]);
+        assert.match((await dav('GET', path)).text, /\r\nSUMMARY:Swap!\r\n/);
+
+        // A delete: not while the server names fewer people (or more), as their cancellations would differ; anything else changed, it goes.
+        await putFile(path, calendarOf(edit({ ATTENDEE: [] })));
+        await assert.rejects(source.remove(work, item), (e) => isCode('conflict')(e) && /^Deleting the event: /.test(e.message));
+        assert.equal((await dav('GET', path)).status, 200);
+        await putFile(path, calendarOf(edit({ SUMMARY: ['SUMMARY:Swap shifts'] }, 'DESCRIPTION:Bring the keys')));
+        await source.remove(work, item);
+        assert.deepEqual(bare.writes.slice(1), [`DELETE /${path} -`]);
+        assert.equal((await dav('GET', path)).status, 404);
+    });
+
+    test('a server that keeps no tags: the manager\'s change, stopped by another app\'s edit, goes again on the event as that app left it', async () => {
+        const bare = tagless();
+        const { m, id, done } = await managerOn('bare', { fetch: bare.fetch });
+        try {
+            const path = `${user}/bare/lunch.ics`;
+            const lunch = (...lines) => calendarOf(['BEGIN:VEVENT', 'UID:lunch', 'DTSTAMP:20261001T000000Z', 'DTSTART:20261014T100000Z', 'DTEND:20261014T110000Z', ...lines, 'END:VEVENT']);
+            await putFile(path, lunch('SUMMARY:Lunch'));
+            await m.syncCalendar(id, { throwErrors: true });
+            assert.equal(m.store.itemsOf(id)[`${base}${path}`].etag, undefined, 'no tag held');
+            const on = () => m.events({ from: Date.parse('2026-10-14T00:00:00Z'), to: Date.parse('2026-10-15T00:00:00Z'), calendars: [id] }).occurrences[0];
+
+            // Renamed in another app; the plugin, not synced since, gives it a place: refused, synced, and made on the new name.
+            await putFile(path, lunch('SUMMARY:Team lunch'));
+            const changed = await m.updateEvent(on().id, { location: 'Cafe' });
+            assert.deepEqual([changed.title, changed.location], ['Team lunch', 'Cafe']);
+            assert.deepEqual(bare.writes, [`PUT /${path} *`]);
+            assert.deepEqual(readIcs((await dav('GET', path)).text, { zone: ZONE }).events.map((r) => [r.title, r.location]), [['Team lunch', 'Cafe']]);
+
+            // A new time is worked out on the event as it was: stopped by an edit, it says so and isn't tried again.
+            await putFile(path, lunch('SUMMARY:Team lunch', 'LOCATION:Cafe', 'DESCRIPTION:Bring the keys'));
+            await assert.rejects(m.updateEvent(on().id, { start: '2026-10-14T13:00', end: '2026-10-14T14:00' }), /^CalendarError: The event changed on its server meanwhile/);
+            assert.equal(bare.writes.length, 1);
+            assert.match((await dav('GET', path)).text, /\r\nDTSTART:20261014T100000Z\r\n/);
         } finally {
             done();
         }

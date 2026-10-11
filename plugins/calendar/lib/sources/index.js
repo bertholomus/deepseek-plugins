@@ -61,8 +61,8 @@
  *       Store iCalendar text: a new resource (item null; it must not exist
  *       yet, and one already there with this uid is this create made
  *       before), or a changed one (only if its etag is still item.etag;
- *       without one, only while the server's copy names the same people as
- *       item.raw: see newPeople).
+ *       without one, only while the server's copy shows what item.raw
+ *       shows and names the same people: see newPeople).
  *   remove(calendar, item) → undefined
  *       Delete a resource (only if its etag is still item.etag; without
  *       one, only while the server's copy names the same people as item.raw).

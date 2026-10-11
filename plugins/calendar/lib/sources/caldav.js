@@ -15,11 +15,12 @@
  *   calendar-multiget batches, or one GET each where multiget fails.
  * - Writes are conditional: If-None-Match: * for a new resource, If-Match
  *   with the last etag for a change or a delete; a 412 is a conflict. When
- *   the plugin holds none, the event is read from the server first, and a
- *   change or a delete goes on only while it names the same people as the
- *   plugin's copy (one whose version can't be read isn't made). A new
- *   resource is named after its UID, so a create repeated after a timeout
- *   finds the one the first try made instead of adding a second.
+ *   the plugin holds none, the event is read from the server first: a
+ *   change goes on only while it shows what the plugin's copy shows and
+ *   names the same people, a delete only while it names the same people
+ *   (one whose version can't be read isn't made). A new resource is named
+ *   after its UID, so a create repeated after a timeout finds the one the
+ *   first try made instead of adding a second.
  * - The password goes only to the host the account names (sameService;
  *   iCloud's other icloud.com hosts too, as it moves clients from
  *   caldav.icloud.com to pNN-caldav.icloud.com): an address a server hands
@@ -36,7 +37,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { HttpError, basicAuth, request as httpRequest, isLocal, safeUrl, sameService } from '../http.js';
 import { parseIcs, readIcs, unescapeText } from '../ical.js';
-import { isEmailAddress } from '../model.js';
+import { addressKey, instantOf, isEmailAddress } from '../model.js';
+import { parseRule, ruleText } from '../recur.js';
 import { ianaZone } from '../zones.js';
 import { SourceError, newPeople, peopleConflict, statusError } from './index.js';
 
@@ -588,6 +590,34 @@ function uidsOf(raw) {
         .filter((prop) => prop !== undefined)
         .map((prop) => unescapeText(prop.value).trim())
         .filter((uid) => uid !== '');
+}
+
+/**
+ * What an event shows, to tell whether a server's copy changed since the
+ * plugin read it: for the series and each occurrence changed on its own,
+ * its organizer, title, times (all day or not), place, notes, link,
+ * status, rule, and skipped and extra dates. Not who is on it (newPeople
+ * looks at that) nor their answers, nor what a server stamps itself
+ * (DTSTAMP, LAST-MODIFIED, CREATED, SEQUENCE). Two copies that show the
+ * same give the same text.
+ */
+function shownOf(records, zone) {
+    const time = (t) => (t === undefined ? '' : 'date' in t ? t.date : String(instantOf(t, zone)));
+    const times = (list) => [...new Set((list ?? []).map(time))].sort();
+    const rule = (text) => {
+        try {
+            return ruleText(parseRule(text));
+        } catch {
+            return text;
+        }
+    };
+    return records.map((r) => JSON.stringify([
+        `${r.uid} ${r.recurrenceId ? time(r.recurrenceId) : ''}${r.thisAndFuture ? ' and following' : ''}`,
+        addressKey(r.organizer?.address ?? r.organizer?.email), r.title ?? '', time(r.start), time(r.end), r.allDay === true,
+        r.location ?? '', r.description ?? '', r.url ?? '',
+        // An event that gives no status is a confirmed one.
+        r.status ?? 'confirmed', r.rrule === undefined ? '' : rule(r.rrule), times(r.exdates), times(r.rdates),
+    ])).sort().join('\n');
 }
 
 /** Runs `work` on each entry, at most `limit` at a time; stops starting new ones after a failure. */
@@ -1195,11 +1225,12 @@ class CalDavSource {
      * The etag a change to `item` (at `target`) goes under: the one stored,
      * else the server's own, read now with the event; null when the server
      * keeps none for it. Read now, the event must name the same people as
-     * the plugin's copy (item.raw), for a delete (`deleting`) too: the
-     * server emails them, and a change worked out on the copy would
-     * otherwise go over theirs with no 412 to say so ('conflict').
-     * A read that fails stops the change, since a write without one would
-     * go over whatever is there; 'not-found' when it is gone.
+     * the plugin's copy (item.raw), since the server emails them; for a
+     * change (not `deleting`) it must also show what the copy shows
+     * (shownOf), since the change goes in whole and would undo what was
+     * changed there since. Otherwise 'conflict': with no tag, no 412 would
+     * say so. A read that fails stops the change, since a write without one
+     * would go over whatever is there; 'not-found' when it is gone.
      */
     async versionOf(item, target, { deleting = false } = {}) {
         if (item.etag) return item.etag;
@@ -1222,6 +1253,11 @@ class CalDavSource {
         if (newPeople(mine, theirs).length > 0 || newPeople(theirs, mine).length > 0) {
             this.env.log?.(`caldav ${this.account.id}: the event names other people since the change was worked out`);
             throw peopleConflict(deleting ? 'Deleting the event' : 'Saving the event');
+        }
+        // A change goes in whole, as the plugin's copy with it made: anything else changed there since would be undone.
+        if (!deleting && shownOf(mine, zone) !== shownOf(theirs, zone)) {
+            this.env.log?.(`caldav ${this.account.id}: the event changed on the server since the plugin read it`);
+            throw new SourceError('conflict', 'Saving the event: it changed on the server since the plugin read it, so nothing was changed.');
         }
         if (now.etag !== undefined) return now.etag;
         try {
