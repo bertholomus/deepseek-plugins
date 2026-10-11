@@ -465,13 +465,13 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 
 _Its own section, kept by the "Calendar plugin" project thread; "Doing now" above stays the projects plugin's._
 
-Updated: 2026-10-11 04:25 PT by B (bertholomus)
+Updated: 2026-10-11 04:31 PT by B (bertholomus)
 Branch: the PR branch named at the top (PR #1), fast-forwarded from a local branch, never forced.
 
 The user's goal (2026-10-11, relayed from the project chat): "create a sane calendar plugin that agents and user can use - allows syncing apple, google, exchange, other popular calendar syncing.  works with our wallpaper and glass plugin".
 
 ### Doing now (calendar)
-- The window, `lib/client.js` (a do-nothing stub on the branch until it lands), is built and tested on a local branch: a Calendar page (month, week, day, agenda), the event dialog, the account dialog (CalDAV services, Google and Microsoft sign-in in the browser or with a code, subscriptions), an agenda beside chats, chat views for the `calendar_*` tools, drawn by the wallpaper and glass contract (/mnt/project-files/wallpaper-glass.md); `test/e2e/ui.mjs` checks it on both DSH versions. It lands in the next push, with round 2's window side: Google's "reached" lines, confirming a series move that loses changes (`calendar/drops-changes`, then the same call with `dropChanges: true`), a notice when askBeforeEmails is off, and `calendar/choose-calendar` and `calendar/changed`.
+- Round 2's window side, on a local branch: Google's "reached" lines in the toasts, confirming a series move that loses changes (`calendar/drops-changes`, then the same call with `dropChanges: true`), a notice when `state().askBeforeEmails` is false, `calendar/choose-calendar` on the calendar select, `calendar/changed` (show it, reload the event), and Send passing `approved` (the refusal's `details.people`).
 
 ### Done (calendar)
 - Host half: `ical.js` (RFC 5545, keeps lines it doesn't know), `recur.js` (RRULE expansion and its words), `zones.js` (IANA through Intl, Windows names for Graph), `expand.js` (series with moved and cancelled occurrences), `store.js` (`~/.dsh/calendar`, 700/600, follows DSH_HOME), `manager.js` (accounts, sync every `syncMinutes`, every change to the server first, scope one/following/all, moves, import/export, search, free time), `http.js` (Authorization dropped when a redirect leaves the site; no secret or query in an error), `oauth.js` (loopback with PKCE, or a pasted address), `remote.js` (the window's endpoints, `/api/dsh-plugin-calendar/<method>`).
@@ -487,10 +487,11 @@ The user's goal (2026-10-11, relayed from the project chat): "create a sane cale
   - N5, N6: the tools' help follows askBeforeEmails; a start with it off or with a store set aside logs a warning; `calendar_list_calendars` says so.
   - N7: a series moved into Google or Microsoft that would lose changed occurrences (Microsoft: skipped and extra dates too) is refused naming them (`drops-changes`) unless `drop_changes`.
   - m2 tail: with no default, a new event names its calendar (`choose-calendar`); `state().defaultCalendar` is then null.
-- Tests: 167 unit tests with Radicale, in `npm test` (248 in all) through `test/calendar.test.js`; `npm run test:e2e:calendar` 47/47 on DSH 0.2.0-rc.2 and 0.2.1-alpha.2.
+- The window, `lib/client.js` (hand-written for DSH's browser module format; no build step in the repo): the Calendar page (Month, Week, Day, Agenda; side column with a small month, calendars by account, Accounts; keys M W D A, N/J P/K, T, C), event details and the event dialog (click or drag on a time to make one; scope questions for a series; a change that emails asks with the host's words, and Send repeats it with notify and `approved`), the Accounts dialog (each kind with its form; Google and Microsoft sign in on their pages, Microsoft with a code too; removal says what happens to access, and links Microsoft's page), the Agenda tab in the right sidebar, chat cards for the nine tools, glass per /mnt/project-files/wallpaper-glass.md, a narrow layout. A `calendar/needs-notify` refusal carries `details.people`; `state()` says `askBeforeEmails`.
+- Tests: 167 unit tests with Radicale and 19 for the window's helpers (`test/client.mjs`), in `npm test` (267 in all) through `test/calendar.test.js`; on DSH 0.2.0-rc.2 and 0.2.1-alpha.2, `npm run test:e2e:calendar` 47/47 and `npm run test:e2e:calendar-ui` 23/23 (needs Playwright and Chromium).
 
 ### Next steps (calendar)
-1. Land the window with round 2's window side (above), checked with `ui.mjs` and `run.mjs` on both DSH versions.
+1. Land round 2's window side (above), checked with `ui.mjs` and `run.mjs` on both DSH versions.
 2. iCalendar ranges in changes: a change to one occurrence that anchors a `RANGE=THISANDFUTURE` override, and a split from one (reading them is done).
 3. Native moves within one account (Google `events.move`, WebDAV MOVE), so a moved meeting isn't a new one for its guests.
 4. Real accounts only when the user wants them, and they give what each needs: Google, their own OAuth client (Desktop app) id and secret; Microsoft, their own Entra app's client id (redirect `http://localhost` under Mobile and desktop applications); iCloud, Fastmail and Yahoo, app passwords. One iCloud meeting made on an iPhone would confirm N1 on a real server. Loading it into the live DSH needs their OK.
