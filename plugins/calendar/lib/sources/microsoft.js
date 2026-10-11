@@ -3,14 +3,25 @@
  * Microsoft Graph v1.0. An 'events' source in 'instances' mode: Graph's
  * calendar view hands over each occurrence of a series on its own.
  *
- * Sign-in is OAuth 2.0's device authorization grant on the Microsoft
- * identity platform: the user opens Microsoft's page on any device and
- * types a short code while the plugin polls for the grant. The app is a
- * public client the user registers in Microsoft Entra; its id goes in the
- * microsoftClientId setting and never in this repository. An access token
- * lasts about an hour. The refresh token is traded for a new grant shortly
- * before that, or when Graph turns a token down, and since Microsoft
- * rotates refresh tokens every new grant is saved.
+ * Sign-in is OAuth 2.0 on the Microsoft identity platform, for a public
+ * client (no secret) the user registers in Microsoft Entra; its id goes in
+ * the microsoftClientId setting and never in this repository. By default
+ * the user signs in in the browser: the authorization code flow with PKCE
+ * (lib/oauth.js), whose redirect comes back to this computer at
+ * http://localhost and a free port. That is the redirect address the app
+ * registers, under "Mobile and desktop applications": Microsoft ignores a
+ * localhost address's port, and its portal takes http://127.0.0.1 only by
+ * editing the app's manifest. The loopback listens on 127.0.0.1 and ::1,
+ * whichever localhost means here. Signing in with a code is there too
+ * (the device authorization grant: the user types a short code on
+ * Microsoft's page, on any device, while the plugin polls); it needs the
+ * app's "Allow public client flows", and the Conditional Access of many
+ * work tenants turns it down. An access token lasts about an hour. The
+ * refresh token is traded for a new grant shortly before that, or when
+ * Graph turns a token down, and since Microsoft rotates refresh tokens
+ * every new grant is saved. A public client can't revoke its grant at
+ * Microsoft: revoke() names the page where the user withdraws the app's
+ * access.
  *
  * A calendar syncs through its calendar view's delta query, for a window of
  * time: the first round reads every event in the window, later rounds only
@@ -20,6 +31,13 @@
  * wall clock in that zone, as iCalendar does. In the calendar view a series
  * is its occurrences: the series' own event is never an item, so a new
  * series comes back from create() as its occurrences in the window.
+ *
+ * A change is made only to the event as the plugin last read it: every
+ * PATCH and DELETE sends If-Match with the event's etag (read just before
+ * when the plugin has none, as for a series it holds only the occurrences
+ * of), and Graph answers 412 if the event changed meanwhile. A new event
+ * carries the record's uid as Graph's transactionId, so a create repeated
+ * after a lost answer gets back the event the first one made, not a second.
  *
  * Microsoft emails invitations itself, with no way to hold them back:
  * saving an event with guests invites them, and adding guests invites the
@@ -37,6 +55,7 @@
 import { SourceError, statusError } from './index.js';
 import { formBody } from '../http.js';
 import { cleanRecord } from '../model.js';
+import { idTokenClaims, loopbackSignIn } from '../oauth.js';
 import {
     addDays, daysBetween, ianaToWindows, ianaZone, isDay, isZone, normalLocal, toInstant, toLocal, wallMs, wallOf,
 } from '../zones.js';
@@ -44,10 +63,24 @@ import {
 export const kind = 'microsoft';
 export const style = 'events';
 
+/**
+ * The redirect address the user's app registers, under "Mobile and desktop
+ * applications". The browser comes back to it with a port added, which
+ * Microsoft ignores for localhost.
+ */
+export const REDIRECT_URI = 'http://localhost';
+
 const GRAPH = 'https://graph.microsoft.com/v1.0';
 const LOGIN = 'https://login.microsoftonline.com';
 const SCOPE = 'offline_access Calendars.ReadWrite User.Read';
 const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
+/** The tenant personal Microsoft accounts sign in through. */
+const CONSUMERS = '9188040d-6c67-4c5b-b112-36a304b66dad';
+/** Where the user withdraws an app's access to their account, by kind of account. */
+const MANAGE_URLS = {
+    personal: 'https://account.live.com/consent/Manage',
+    work: 'https://myapplications.microsoft.com/',
+};
 /** Renew the sign-in when the access token has less than this left. */
 const EARLY = 2 * 60_000;
 const PREFER_UTC = 'outlook.timezone="UTC"';
@@ -77,13 +110,20 @@ function settingsOf(env) {
 function clientIdOf(conf) {
     if (conf.clientId === '') {
         throw new SourceError('config', 'To use Microsoft calendars, set microsoftClientId in the calendar plugin\'s settings '
-            + 'to the application (client) ID of an app you registered in Microsoft Entra, with "Allow public client flows" turned on.');
+            + `to the application (client) ID of an app you registered in Microsoft Entra, with ${REDIRECT_URI} as a redirect URI `
+            + 'under "Mobile and desktop applications".');
     }
     return conf.clientId;
 }
 
+const authorizeUrl = (conf) => `${conf.login}/${encodeURIComponent(conf.tenant)}/oauth2/v2.0/authorize`;
 const tokenUrl = (conf) => `${conf.login}/${encodeURIComponent(conf.tenant)}/oauth2/v2.0/token`;
 const deviceUrl = (conf) => `${conf.login}/${encodeURIComponent(conf.tenant)}/oauth2/v2.0/devicecode`;
+
+/** What to check when Microsoft turns the app down. */
+const CHECK_APP = 'Check that it is the app\'s application (client) ID and that microsoftTenant fits the account.';
+/** And what signing in with a code needs besides. */
+const CODE_FLOWS = ' Signing in with a code also needs the app\'s "Allow public client flows" turned on.';
 
 // ── Talking to Microsoft ───────────────────────────────────────────────
 
@@ -139,16 +179,18 @@ function fail(response, what) {
     return error;
 }
 
-/** The SourceError for an answer from Microsoft's sign-in service (its errors are OAuth's). */
-function loginFailure(response, what) {
+/**
+ * The SourceError for an answer from Microsoft's sign-in service (its errors are OAuth's).
+ * `hint` follows what to check when Microsoft turns the app down.
+ */
+function loginFailure(response, what, hint = '') {
     const code = tryJson(response).error;
     const extra = { status: response.status };
     if (code === 'invalid_grant' || code === 'interaction_required' || code === 'consent_required') {
         return new SourceError('auth', `${what}: Microsoft asks you to sign in to this account again.`, extra);
     }
     if (['invalid_client', 'unauthorized_client', 'invalid_request', 'invalid_scope', 'unsupported_grant_type', 'invalid_resource'].includes(code)) {
-        return new SourceError('config', `${what}: Microsoft turned down the app set in microsoftClientId (${code}). Check that it is the app's `
-            + 'application (client) ID, that microsoftTenant fits the account, and that the app allows public client flows.', extra);
+        return new SourceError('config', `${what}: Microsoft turned down the app set in microsoftClientId (${code}). ${CHECK_APP}${hint}`, extra);
     }
     if (code === 'temporarily_unavailable') {
         const after = Number(response.headers?.get?.('retry-after'));
@@ -223,23 +265,96 @@ function sleep(ms, signal) {
 }
 
 /**
- * Start signing in to a Microsoft account with a code (OAuth 2.0 device
- * authorization grant). Show the user `message`, or `userCode` and
- * `verificationUri`; `done` settles when they finish (with the grant to
- * keep as the account's secret and who signed in), when they decline or
- * let the code run out (a SourceError 'auth'), or when `cancel()` is called.
- * Nothing is saved here: the caller stores the grant.
+ * Start signing in to a Microsoft account. Nothing is saved here: `done`
+ * settles with the grant to keep as the account's secret and who signed in
+ * ({grant: {accessToken, refreshToken?, expiresAt, scope}, email, name}),
+ * or with a SourceError ('auth' when the user declines, lets it run out or
+ * it is cancelled), and the caller stores the grant.
+ *
+ * In the browser (the default): open `url`. Microsoft's page sends the
+ * browser back to this computer at `redirectUri` (http://localhost and a
+ * free port), and the code it brings is traded with PKCE. When the browser
+ * runs on another device, the page it ends on doesn't load: the address it
+ * shows, pasted into `finish`, completes the sign-in. `loginHint` names the
+ * account to sign in to again; without it Microsoft asks which account.
+ *
+ * With a code (`method: 'code'`, OAuth 2.0's device authorization grant):
+ * show the user `message`, or `userCode` and `verificationUri`, to type on
+ * any device; `expiresAt` is when the code runs out.
  * @param {object} env - a source env (request, now and settings are used).
- * @returns {Promise<{userCode: string, verificationUri: string, message: string, expiresAt: number,
- *   done: Promise<{grant: {accessToken: string, refreshToken?: string, expiresAt: number, scope: string}, email: string, name: string}>,
- *   cancel: () => void}>}
+ * @param {{method?: 'browser'|'code', loginHint?: string, timeoutMs?: number}} [options] - timeoutMs: how long
+ *   the browser sign-in waits (10 minutes).
+ * @returns {Promise<{url: string, redirectUri: string, done: Promise<object>, finish: (pastedUrl: string) => Promise<object>,
+ *   cancel: () => void} | {userCode: string, verificationUri: string, message: string, expiresAt: number,
+ *   done: Promise<object>, cancel: () => void}>}
  */
-export async function signIn(env) {
+export async function signIn(env, options = {}) {
     const conf = settingsOf(env);
     const clientId = clientIdOf(conf);
+    if (options?.method === 'code') return signInWithCode(env, conf, clientId);
+    return signInInBrowser(env, conf, clientId, options ?? {});
+}
+
+/** The browser sign-in (signIn without a method): the authorization code flow with PKCE, through lib/oauth.js. */
+async function signInInBrowser(env, conf, clientId, { loginHint, timeoutMs }) {
+    const hint = typeof loginHint === 'string' ? loginHint.trim() : '';
+    // Signing in again goes straight to that account; a new one is picked on Microsoft's page.
+    const extraParams = hint !== '' ? { login_hint: hint } : { prompt: 'select_account' };
+    const flow = await loopbackSignIn({
+        authorizeUrl: authorizeUrl(conf), tokenUrl: tokenUrl(conf), clientId, scopes: SCOPE.split(' '), extraParams,
+        request: env.request, timeoutMs, now: env.now ?? Date.now, redirectHost: 'localhost', redirectPath: '',
+    });
+    const stop = new AbortController();
+    const done = flow.done.then(async (tokens) => {
+        // The same grant a code sign-in keeps.
+        const grant = { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, expiresAt: tokens.expiresAt, scope: tokens.scope ?? SCOPE };
+        if (grant.refreshToken === undefined) delete grant.refreshToken;
+        try {
+            const me = await whoIs(env, conf, grant.accessToken, stop.signal);
+            return { grant, email: me.email, name: me.name };
+        } catch (error) {
+            if (stop.signal.aborted) throw stopped();
+            throw error;
+        }
+    }, (error) => {
+        throw stop.signal.aborted ? stopped() : appRefused(error);
+    });
+    done.catch(() => {});
+    return {
+        url: flow.url,
+        redirectUri: flow.redirectUri,
+        done,
+        finish: async (pastedUrl) => {
+            try {
+                await flow.finish(pastedUrl);
+            } catch (error) {
+                throw appRefused(error);
+            }
+            return done;
+        },
+        cancel: () => {
+            stop.abort();
+            flow.cancel();
+        },
+    };
+}
+
+/**
+ * A failed code exchange as the user can act on it: when Microsoft turned
+ * the app down, what to check, a redirect registered for a web app (which
+ * needs a secret) most of all.
+ */
+function appRefused(error) {
+    if (!(error instanceof SourceError) || error.code !== 'config' || error.status === undefined) return error;
+    return new SourceError('config', `Signing in to Microsoft: Microsoft turned down the app set in microsoftClientId. ${CHECK_APP} `
+        + `The app needs ${REDIRECT_URI} as a redirect URI under "Mobile and desktop applications", not "Web".`, { status: error.status });
+}
+
+/** The sign-in with a code (signIn with method 'code'): OAuth 2.0's device authorization grant. */
+async function signInWithCode(env, conf, clientId) {
     const what = 'Signing in to Microsoft';
     const response = await send(env, deviceUrl(conf), { method: 'POST', headers: FORM, body: formBody({ client_id: clientId, scope: SCOPE }) });
-    if (!response.ok) throw loginFailure(response, what);
+    if (!response.ok) throw loginFailure(response, what, CODE_FLOWS);
     const code = jsonOf(response, what);
     for (const key of ['device_code', 'user_code', 'verification_uri']) {
         if (typeof code[key] !== 'string' || code[key] === '') throw new SourceError('server', `${what}: Microsoft didn't send a sign-in code.`);
@@ -313,9 +428,43 @@ async function pollForGrant(env, conf, clientId, code, expiresAt, signal) {
             case 'bad_verification_code':
                 throw new SourceError('auth', 'Microsoft didn\'t recognize the sign-in code. Start the sign-in again.');
             default:
-                throw loginFailure(response, what);
+                throw loginFailure(response, what, CODE_FLOWS);
         }
     }
+}
+
+/**
+ * What removing a Microsoft account can do about its sign-in. A public
+ * client can't revoke its refresh token at Microsoft, so nothing is revoked
+ * here: `manageUrl` is the page where the user withdraws the app's access,
+ * for a personal account its Microsoft account page, for a work or school
+ * account My Apps. microsoftTenant says which kind the account is, else
+ * the access token does when it names its tenant (a work or school
+ * account's does); a token that doesn't, or none, is taken for a personal
+ * account's (Microsoft encrypts those). No network.
+ * @param {object} env - a source env (settings is used).
+ * @param {object} [secret] - the account's grant, or its secret ({get}).
+ * @returns {Promise<{revoked: boolean, manageUrl?: string}>}
+ */
+export async function revoke(env, secret) {
+    let grant;
+    try {
+        grant = typeof secret?.get === 'function' ? await secret.get() : secret;
+    } catch {
+        grant = undefined;
+    }
+    return { revoked: false, manageUrl: MANAGE_URLS[accountKind(settingsOf(env).tenant, grant)] };
+}
+
+/** 'personal' or 'work' (work or school): the kind of account a tenant setting and a grant are for. */
+function accountKind(tenant, grant) {
+    const setting = tenant.toLowerCase();
+    if (setting === 'consumers' || setting === CONSUMERS) return 'personal';
+    // 'organizations', or one tenant by its id or domain.
+    if (setting !== 'common') return 'work';
+    const claims = idTokenClaims(grant?.accessToken);
+    const tid = typeof claims?.tid === 'string' ? claims.tid.toLowerCase() : '';
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(tid) && tid !== CONSUMERS ? 'work' : 'personal';
 }
 
 // ── The source ─────────────────────────────────────────────────────────
@@ -398,13 +547,17 @@ export function create(account, env) {
         return target;
     }
 
-    /** One Graph exchange with the account's token, renewed when it runs out and once when Graph turns it down. */
-    async function graph(method, target, { body, prefer = PREFER_UTC, signal } = {}) {
+    /**
+     * One Graph exchange with the account's token, renewed when it runs out and once when Graph turns it down.
+     * `etag`: only while the event still has it (If-Match); Graph answers 412 if it changed.
+     */
+    async function graph(method, target, { body, prefer = PREFER_UTC, signal, etag } = {}) {
         const url = graphUrl(target);
         let token = await accessToken();
         for (let attempt = 0; ; attempt++) {
             const headers = { Authorization: `Bearer ${token}`, Accept: 'application/json', Prefer: prefer };
             if (body !== undefined) headers['Content-Type'] = 'application/json';
+            if (etag !== undefined) headers['If-Match'] = matchOf(etag);
             const response = await send(env, url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal });
             if (response.status !== 401 || attempt > 0) return response;
             token = (await renew(token)).accessToken;
@@ -418,6 +571,17 @@ export function create(account, env) {
         if (response.status === 404) return null;
         if (!response.ok) throw fail(response, what);
         return jsonOf(response, what);
+    }
+
+    /**
+     * The etag a change to an event ({id, etag?}) goes with: the one the
+     * plugin read, else the one Graph has now (never '*'). null when the
+     * event is gone; undefined only if Graph sends none.
+     */
+    async function etagFor(ref) {
+        if (typeof ref.etag === 'string' && ref.etag !== '') return ref.etag;
+        const event = await getEvent(ref.id);
+        return event === null ? null : etagOf(event);
     }
 
     async function calendars() {
@@ -434,6 +598,8 @@ export function create(account, env) {
                 const entry = { remoteId: cal.id, name: typeof cal.name === 'string' ? cal.name : '', readOnly: !cal.canEdit, mode: 'instances' };
                 const color = calendarColor(cal);
                 if (color !== undefined) entry.color = color;
+                // The account's own calendar, where Outlook puts new events.
+                if (cal.isDefaultCalendar === true) entry.primary = true;
                 out.push(entry);
             }
             next = linkOf(body['@odata.nextLink']);
@@ -546,26 +712,40 @@ export function create(account, env) {
         }
     }
 
-    /** The id of the occurrence a target means: its item's, or one looked up in the series by its original start. */
-    async function occurrenceIdOf(target, seriesId) {
+    /**
+     * The occurrence a target means, {id, etag}: its item, or one looked up
+     * in the series by its original start (with the etag Graph has for it).
+     */
+    async function occurrenceOf(target, seriesId) {
         const { item, record } = partsOf(target);
-        if (record?.seriesRemoteId !== undefined && item.remoteId !== seriesId) return item.remoteId;
+        if (record?.seriesRemoteId !== undefined && item.remoteId !== seriesId) return { id: item.remoteId, etag: item.etag };
         const when = target.occurrence ?? record?.recurrenceId;
         if (when === undefined || when === null) throw new SourceError('not-found', 'Which occurrence of the series to change wasn\'t given.');
         const at = instantOfTime(when, ctx.zone);
         for await (const event of instances(seriesId, isoSeconds(at - 2 * DAY), isoSeconds(at + 2 * DAY), 'Finding the occurrence on Microsoft')) {
             const found = recordOf(event, ctx);
-            if (found?.recurrenceId !== undefined && sameTime(found.recurrenceId, when, ctx.zone)) return event.id;
+            if (found?.recurrenceId !== undefined && sameTime(found.recurrenceId, when, ctx.zone)) return { id: event.id, etag: etagOf(event) };
         }
         throw new SourceError('not-found', 'That occurrence isn\'t in the series on Microsoft any more.');
     }
 
-    /** Graph's start, end and repeat pattern for the whole series when one of its occurrences moves (or its rule changes). */
-    async function seriesTimes(seriesId, record, patch) {
-        const moves = 'start' in patch || 'end' in patch;
-        if (!moves && !('rrule' in patch)) return {};
+    /**
+     * The series a change to all of it goes to, {id, etag, master?}: with
+     * the series' own etag (the item's when the item is the series; an
+     * occurrence's isn't the series'), and its event when `withEvent`.
+     */
+    async function seriesRef(item, seriesId, withEvent) {
+        const own = item.remoteId === seriesId && typeof item.etag === 'string' && item.etag !== '' ? item.etag : undefined;
+        if (own !== undefined && !withEvent) return { id: seriesId, etag: own };
         const master = await getEvent(seriesId);
         if (master === null) throw new SourceError('not-found', 'The series isn\'t on Microsoft any more.');
+        return { id: seriesId, etag: own ?? etagOf(master), master };
+    }
+
+    /** Graph's start, end and repeat pattern for the whole series (`master`) when one of its occurrences moves (or its rule changes). */
+    function seriesTimes(master, record, patch) {
+        const moves = 'start' in patch || 'end' in patch;
+        if (!moves && !('rrule' in patch)) return {};
         const series = recordOf(master, ctx);
         if (series === null) throw new SourceError('server', 'Microsoft sent the series without its times.');
         const times = moves && record?.start !== undefined ? shiftSeries(series, record, patch, ctx) : { start: series.start, end: series.end };
@@ -583,7 +763,9 @@ export function create(account, env) {
     /**
      * A new event: [its item], or for a series its occurrences in the
      * window (none when the window has none). With guests only when the
-     * record says `notify: true`: saving them invites them.
+     * record says `notify: true`: saving them invites them. The record's uid
+     * is Graph's transactionId: the same create again (a repeat after its
+     * answer was lost) gets back the event the first one made.
      */
     async function createEvent(calendar, record) {
         const what = 'Saving the event on Microsoft';
@@ -592,8 +774,16 @@ export function create(account, env) {
         if (attendeesFor(given.attendees, ctx).length > 0 && given.notify !== true) throw new SourceError('config', INVITES);
         const body = { ...fieldsFor(given, ctx), ...timesFor(given.start, given.end, ctx) };
         if (typeof given.rrule === 'string' && given.rrule !== '') body.recurrence = patternFromRrule(given.rrule, given.start);
+        if (typeof given.uid === 'string' && given.uid !== '') body.transactionId = given.uid;
         const response = await graph('POST', `/me/calendars/${encodeURIComponent(calendar.remoteId)}/events`, { body });
-        if (!response.ok) throw fail(response, what);
+        if (!response.ok) {
+            // The uid made an event already, one with other details: the next sync brings it.
+            if (graphCodes(response).includes('ErrorDuplicateTransactionId')) {
+                throw new SourceError('conflict', `${what}: Microsoft already has an event saved from an earlier try, with other details. `
+                    + 'Look for it in the calendar before adding this one again.', { status: response.status });
+            }
+            throw fail(response, what);
+        }
         const event = jsonOf(response, what);
         if (isSeries(event)) return savedSeries(calendar, event.id);
         const item = itemOf(event, ctx);
@@ -603,30 +793,39 @@ export function create(account, env) {
     /**
      * Change an event, one occurrence ('one'), or a whole series ('all':
      * [] then, as its occurrences come with the next sync). New guests only
-     * when the patch, the target or its record says `notify: true`.
+     * when the patch, the target or its record says `notify: true`. Only
+     * while the event is as the plugin read it (If-Match): a 412 is a
+     * 'conflict'.
      */
     async function update(calendar, target, patch = {}, scope = 'all') {
         const what = 'Saving the event on Microsoft';
         const { item, record } = partsOf(target);
         if (addsGuests(record, patch, ctx) && ![patch, target, record].some((x) => x?.notify === true)) throw new SourceError('config', NEW_GUESTS);
         const seriesId = seriesOf(item, record);
-        let id;
+        let ref;
         let body;
         if (seriesId !== undefined && scope === 'one') {
-            id = await occurrenceIdOf(target, seriesId);
             body = { ...fieldsFor(patch, ctx), ...movedTimes(record, patch, ctx) };
+            if (Object.keys(body).length === 0) return [];
+            ref = await occurrenceOf(target, seriesId);
         } else if (seriesId !== undefined) {
-            id = seriesId;
-            body = { ...fieldsFor(patch, ctx), ...(await seriesTimes(seriesId, record, patch)) };
+            const fields = fieldsFor(patch, ctx);
+            const times = 'start' in patch || 'end' in patch || 'rrule' in patch;
+            if (Object.keys(fields).length === 0 && !times) return [];
+            // New times and rules are worked out from the series as Graph has it.
+            ref = await seriesRef(item, seriesId, times);
+            body = { ...fields, ...(times ? seriesTimes(ref.master, record, patch) : {}) };
         } else {
-            id = item.remoteId;
+            ref = { id: item.remoteId, etag: item.etag };
             body = { ...fieldsFor(patch, ctx), ...movedTimes(record, patch, ctx) };
             // A rule makes a single event a series.
             const start = patch.start ?? record?.start;
             if (typeof patch.rrule === 'string' && patch.rrule !== '' && start) body.recurrence = patternFromRrule(patch.rrule, start);
+            if (Object.keys(body).length === 0) return [];
         }
-        if (Object.keys(body).length === 0) return [];
-        const response = await graph('PATCH', `/me/events/${encodeURIComponent(id)}`, { body });
+        const etag = await etagFor(ref);
+        if (etag === null) throw new SourceError('not-found', `${what}: the event isn't on Microsoft any more.`);
+        const response = await graph('PATCH', `/me/events/${encodeURIComponent(ref.id)}`, { body, etag });
         if (!response.ok) throw fail(response, what);
         // The whole series changed: its occurrences come with the next sync.
         if (seriesId !== undefined && scope !== 'one') return [];
@@ -638,14 +837,20 @@ export function create(account, env) {
         return changed === null ? [] : [changed];
     }
 
+    /** Delete an event, one occurrence ('one') or a whole series ('all'); only while it is as the plugin read it (If-Match). */
     async function remove(calendar, target, scope = 'all') {
         const { item, record } = partsOf(target);
         const seriesId = seriesOf(item, record);
-        const id = seriesId !== undefined && scope === 'one' ? await occurrenceIdOf(target, seriesId) : seriesId ?? item.remoteId;
-        const response = await graph('DELETE', `/me/events/${encodeURIComponent(id)}`);
+        // A whole series goes with its own etag: the item's only when the item is the series (an occurrence's isn't the series').
+        let ref = { id: item.remoteId, etag: item.etag };
+        if (seriesId !== undefined && scope === 'one') ref = await occurrenceOf(target, seriesId);
+        else if (seriesId !== undefined) ref = { id: seriesId, etag: item.remoteId === seriesId ? item.etag : undefined };
+        const removed = scope === 'one' ? [ref.id] : [...new Set([ref.id, item.remoteId])];
+        const etag = await etagFor(ref);
         // Gone already is what was asked for.
+        if (etag === null) return { removed, items: [] };
+        const response = await graph('DELETE', `/me/events/${encodeURIComponent(ref.id)}`, { etag });
         if (!response.ok && response.status !== 404) throw fail(response, 'Deleting the event on Microsoft');
-        const removed = scope === 'one' ? [id] : [...new Set([id, item.remoteId])];
         return { removed, items: [] };
     }
 
@@ -654,7 +859,7 @@ export function create(account, env) {
         if (action === undefined) throw new SourceError('config', 'An invitation can be accepted, declined or answered with maybe.');
         const { item, record } = partsOf(target);
         const seriesId = seriesOf(item, record);
-        const id = seriesId !== undefined && scope === 'one' ? await occurrenceIdOf(target, seriesId) : seriesId ?? item.remoteId;
+        const id = seriesId !== undefined && scope === 'one' ? (await occurrenceOf(target, seriesId)).id : seriesId ?? item.remoteId;
         const response = await graph('POST', `/me/events/${encodeURIComponent(id)}/${action}`, { body: { sendResponse: true } });
         if (!response.ok) throw fail(response, 'Answering the invitation on Microsoft');
         if (seriesId !== undefined && scope !== 'one') return [];
@@ -920,10 +1125,16 @@ function itemOf(event, ctx) {
     const record = recordOf(event, ctx);
     if (record === null || typeof event.id !== 'string') return null;
     const item = { remoteId: event.id, events: [record] };
-    const etag = [event['@odata.etag'], event.changeKey].find((v) => typeof v === 'string' && v !== '');
+    const etag = etagOf(event);
     if (etag !== undefined) item.etag = etag;
     return item;
 }
+
+/** An event's etag: Graph's @odata.etag ('W/"<changeKey>"'), else its changeKey; undefined when it has neither. */
+const etagOf = (event) => [event?.['@odata.etag'], event?.changeKey].find((v) => typeof v === 'string' && v !== '');
+
+/** An etag as If-Match takes it: Graph's as it is, a bare changeKey in the weak form Graph gives it. */
+const matchOf = (etag) => (/^(W\/)?"/.test(etag) ? etag : `W/"${etag}"`);
 
 const ENTITIES = {
     amp: '&', lt: '<', gt: '>', quot: '"', apos: '\'', nbsp: ' ', ensp: ' ', emsp: ' ', thinsp: ' ', shy: '',

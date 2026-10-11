@@ -1,15 +1,18 @@
 /**
  * Google Calendar source and OAuth tests, against the stand-in in
  * test/standins/google.mjs: the sign-in through the loopback and pasted,
- * renewing tokens, calendars, full and incremental sync, changes, series
- * with changed and cancelled occurrences, all-day events and time zones.
+ * the scopes it asks for and the ones it needs, renewing and revoking
+ * tokens, calendars, full and incremental sync, changes (conditional, and
+ * a create sent twice made once), series with changed and cancelled
+ * occurrences, all-day events and time zones.
  *
  * Run: node --test plugins/calendar/test/google.test.mjs
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { request } from '../lib/http.js';
+import { createServer } from 'node:http';
+import { HttpError, request } from '../lib/http.js';
 import { accessToken, idTokenClaims, pkce, randomState, refreshGrant } from '../lib/oauth.js';
 import * as google from '../lib/sources/google.js';
 import { SourceError } from '../lib/sources/index.js';
@@ -17,6 +20,51 @@ import { start } from './standins/google.mjs';
 
 const LA = 'America/Los_Angeles';
 const BERLIN = 'Europe/Berlin';
+
+/** The scopes the sign-in asks for, and the broad one it asked for before. */
+const EVENTS_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+const LIST_SCOPE = 'https://www.googleapis.com/auth/calendar.calendarlist.readonly';
+const BROAD_SCOPE = 'https://www.googleapis.com/auth/calendar';
+
+/**
+ * Whether the two narrow scopes allow an API request, by Google's API
+ * reference: reading the calendar list (calendar.calendarlist.readonly),
+ * and listing, reading, adding, changing, deleting and moving events and
+ * listing a series' instances (calendar.events).
+ */
+function narrowAllows({ method, path }) {
+    if (/^\/calendar\/v3\/users\/me\/calendarList(?:\/[^/]+)?$/.test(path)) return method === 'GET';
+    return /^\/calendar\/v3\/calendars\/[^/]+\/events(?:\/[^/]+(?:\/(?:instances|move))?)?$/.test(path);
+}
+
+/**
+ * The stand-in knows only Google's broad calendar scope. A token with both
+ * narrow ones passes its check as if it had the broad one (what the client
+ * is told it got stays as asked), and the test ends by checking that each
+ * API request it saw is one the narrow scopes allow.
+ */
+function narrowScopes(t, store) {
+    store.accessTokens = new (class extends Map {
+        set(token, record) {
+            const scopes = record.scope.split(' ');
+            const both = scopes.includes(EVENTS_SCOPE) && scopes.includes(LIST_SCOPE);
+            return super.set(token, both ? { ...record, scope: `${record.scope} ${BROAD_SCOPE}` } : record);
+        }
+    })();
+    const outside = [];
+    store.requests = new (class extends Array {
+        // filter and map give plain arrays.
+        static get [Symbol.species]() {
+            return Array;
+        }
+
+        push(...requests) {
+            for (const r of requests) if (!narrowAllows(r)) outside.push(`${r.method} ${r.path}`);
+            return super.push(...requests);
+        }
+    })();
+    t.after(() => assert.deepEqual(outside, [], 'requests the narrow scopes don\'t allow'));
+}
 
 /** A wall clock in a zone, as the stand-in takes it (Google reads dateTime without an offset in timeZone). */
 const at = (local, timeZone = LA) => ({ dateTime: local, timeZone });
@@ -42,6 +90,7 @@ function memorySecret(initial) {
 async function setup(t, { zone = LA, settings = {} } = {}) {
     const server = await start();
     t.after(() => server.close());
+    narrowScopes(t, server.store);
     const clock = { shift: 0 };
     const logs = [];
     const env = {
@@ -67,6 +116,49 @@ async function signedIn(t, options) {
     const [calendar] = await source.calendars();
     ctx.store.requests.length = 0;
     return { ...ctx, who, source, calendar };
+}
+
+/**
+ * Google's revoke endpoint, beside the stand-in: a refresh token it issued
+ * ends its grant (its access tokens too), a live access token ends itself,
+ * both with 200; a token it doesn't know, or already revoked, gets Google's
+ * 400 invalid_token. With `control.answer` set, every request gets that
+ * instead. `seen` keeps each request.
+ */
+async function revokeStandIn(t, store) {
+    const seen = [];
+    const control = { answer: undefined };
+    const server = createServer(async (req, res) => {
+        let body = '';
+        for await (const chunk of req) body += chunk;
+        seen.push({ method: req.method, url: req.url, type: req.headers['content-type'], body });
+        const send = (status, payload) => {
+            const text = JSON.stringify(payload);
+            res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(text) });
+            res.end(text);
+        };
+        if (control.answer) return send(control.answer.status, control.answer.body);
+        const token = new URLSearchParams(body).get('token') ?? '';
+        const refresh = store.refreshTokens.get(token);
+        const access = store.accessTokens.get(token);
+        if (refresh !== undefined && !refresh.revoked) {
+            refresh.revoked = true;
+            store.expireAccessTokens();
+            return send(200, {});
+        }
+        if (access !== undefined && access.expiresAt > Date.now()) {
+            access.expiresAt = 0;
+            return send(200, {});
+        }
+        return send(400, { error: 'invalid_token', error_description: 'Token expired or revoked' });
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const close = () => new Promise((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+    });
+    t.after(close);
+    return { url: `http://127.0.0.1:${server.address().port}/revoke`, seen, control, close };
 }
 
 /** The item whose (first) record has this title. */
@@ -107,7 +199,9 @@ test('sign-in through the loopback redirect', async (t) => {
     assert.equal(q.get('redirect_uri'), flow.redirectUri);
     assert.equal(q.get('client_id'), env.settings.googleClientId);
     assert.equal(q.get('response_type'), 'code');
-    assert.deepEqual(q.get('scope').split(' '), ['https://www.googleapis.com/auth/calendar', 'openid', 'email']);
+    // The events and the list of calendars, not the broad scope that also shares and deletes calendars.
+    assert.deepEqual(q.get('scope').split(' '), [EVENTS_SCOPE, LIST_SCOPE, 'openid', 'email']);
+    assert.deepEqual(google.SCOPES, [EVENTS_SCOPE, LIST_SCOPE, 'openid', 'email']);
     assert.equal(q.get('code_challenge_method'), 'S256');
     assert.match(q.get('code_challenge'), /^[A-Za-z0-9_-]{43}$/);
     assert.equal(q.get('access_type'), 'offline');
@@ -134,7 +228,8 @@ test('sign-in through the loopback redirect', async (t) => {
     assert.ok(store.accessTokens.has(grant.accessToken));
     assert.ok(store.refreshTokens.has(grant.refreshToken));
     assert.ok(Math.abs(grant.expiresAt - (Date.now() + 3599_000)) < 10_000);
-    assert.ok(grant.scope.split(' ').includes('https://www.googleapis.com/auth/calendar'));
+    const granted = grant.scope.split(' ');
+    assert.ok(granted.includes(EVENTS_SCOPE) && granted.includes(LIST_SCOPE) && !granted.includes(BROAD_SCOPE));
     assert.equal(idTokenClaims(grant.idToken).aud, env.settings.googleClientId);
     assert.deepEqual(store.tokenRequests, [{ grantType: 'authorization_code' }]);
     // One use: the loopback is closed now.
@@ -180,12 +275,40 @@ test('a refusal on the consent page ends the sign-in in plain words', async (t) 
     assert.deepEqual(store.tokenRequests, []);
 });
 
-test('a sign-in with the calendar permission unticked is refused', async (t) => {
+test('a sign-in with a calendar permission unticked is refused, saying which', async (t) => {
     const { env, store } = await setup(t);
-    store.uncheckedScopes.add('https://www.googleapis.com/auth/calendar');
+    const cases = [
+        [[EVENTS_SCOPE], 'Google didn\'t give access to your events. Sign in again and make sure the permission to view and edit events is ticked.'],
+        [[LIST_SCOPE], 'Google didn\'t give access to your list of calendars. Sign in again and make sure the permission to see your list of calendars is ticked.'],
+        [[EVENTS_SCOPE, LIST_SCOPE], 'Google didn\'t give access to your events or your list of calendars. Sign in again and make sure both calendar permissions are ticked.'],
+    ];
+    for (const [unticked, message] of cases) {
+        store.uncheckedScopes = new Set(unticked);
+        const flow = await google.signIn(env);
+        await fetch(flow.url);
+        await assert.rejects(flow.done, (e) => e instanceof SourceError && e.code === 'auth' && e.message === message);
+    }
+});
+
+test('a grant with the broad calendar scope, as earlier sign-ins made, still counts', async (t) => {
+    const { env, store } = await setup(t);
     const flow = await google.signIn(env);
-    await fetch(flow.url);
-    await assert.rejects(flow.done, (e) => e.code === 'auth' && /calendar permission ticked/.test(e.message));
+    // An account signed in before asked for the broad scope; Google answers with the scope a grant has.
+    const url = new URL(flow.url);
+    url.searchParams.set('scope', `${BROAD_SCOPE} openid email`);
+    await fetch(url);
+    const { grant, email } = await flow.done;
+    assert.equal(email, store.user.email);
+    assert.deepEqual(grant.scope.split(' ').filter((s) => s.includes('calendar')), [BROAD_SCOPE]);
+    await env.secret.set(grant);
+    const source = google.create({ id: 'acct-1', kind: 'google', name: 'Google', email }, env);
+    const [calendar] = await source.calendars();
+    assert.equal(calendar.remoteId, store.user.email);
+    // Renewed, it goes on working.
+    store.expireAccessTokens();
+    const [lunch] = await source.create(calendar, { uid: 'broad-1', title: 'Lunch', start: wall('2026-10-14T12:00:00'), end: wall('2026-10-14T13:00:00') });
+    assert.equal(store.get(store.user.email, lunch.remoteId).summary, 'Lunch');
+    assert.deepEqual(store.tokenRequests.map((r) => r.grantType), ['authorization_code', 'refresh_token']);
 });
 
 test('cancel and a timeout end a sign-in and close the loopback', async (t) => {
@@ -265,6 +388,60 @@ test('a 401 renews the token once and tries again; a second 401 asks to sign in'
     assertNoSecrets(ctx, [...messages, ...ctx.logs]);
 });
 
+test('revoke: removing the account ends the grant at Google; where it can\'t, the page to end it there', async (t) => {
+    const ctx = await signedIn(t);
+    const revoker = await revokeStandIn(t, ctx.store);
+    ctx.env.settings.googleRevokeUrl = revoker.url;
+    const grant = ctx.env.secret.peek();
+    const messages = [];
+    assert.equal(google.DEFAULTS.googleRevokeUrl, 'https://oauth2.googleapis.com/revoke');
+
+    // The refresh token goes in a form body, never in the address, and the whole grant ends.
+    assert.deepEqual(await google.revoke(ctx.env, grant), { revoked: true });
+    const [sent] = revoker.seen;
+    assert.deepEqual([sent.method, sent.url], ['POST', '/revoke']);
+    assert.match(sent.type, /^application\/x-www-form-urlencoded/);
+    assert.deepEqual([...new URLSearchParams(sent.body)], [['token', grant.refreshToken]]);
+    await assert.rejects(ctx.source.calendars(), (e) => {
+        messages.push(e.message);
+        return e.code === 'auth' && /Sign in again/.test(e.message);
+    });
+
+    // Ended already (sent twice, or the user removed the access on Google's page): Google says invalid_token, which counts.
+    // The secret that holds the grant does as well as the grant.
+    assert.deepEqual(await google.revoke(ctx.env, ctx.env.secret), { revoked: true });
+    assert.equal(new URLSearchParams(revoker.seen[1].body).get('token'), grant.refreshToken);
+    // A grant without a refresh token sends its access token.
+    assert.deepEqual(await google.revoke(ctx.env, { accessToken: grant.accessToken }), { revoked: true });
+    assert.equal(new URLSearchParams(revoker.seen[2].body).get('token'), grant.accessToken);
+
+    // Refused or failed: not revoked, and the Google Account page where the user removes the access.
+    const page = { revoked: false, manageUrl: 'https://myaccount.google.com/linkedapps' };
+    assert.equal(google.MANAGE_URL, page.manageUrl);
+    for (const answer of [
+        { status: 400, body: { error: 'invalid_request', error_description: 'Bad Request' } },
+        { status: 500, body: { error: 'internal_failure' } },
+        { status: 503, body: {} },
+    ]) {
+        revoker.control.answer = answer;
+        assert.deepEqual(await google.revoke(ctx.env, grant), page);
+    }
+    // No token to send: nothing is sent.
+    const sentBefore = revoker.seen.length;
+    assert.deepEqual(await google.revoke(ctx.env, undefined), page);
+    assert.deepEqual(await google.revoke(ctx.env, memorySecret()), page);
+    assert.equal(revoker.seen.length, sentBefore);
+
+    // Google out of reach: a network error naming its host, nothing more.
+    await revoker.close();
+    await assert.rejects(google.revoke(ctx.env, grant), (e) => {
+        messages.push(e.message);
+        return e instanceof SourceError && e.code === 'network' && e.message.includes('127.0.0.1') && !e.message.includes('/revoke');
+    });
+    assertNoSecrets(ctx, [...messages, ...ctx.logs]);
+    assert.ok(ctx.logs.some((line) => line === 'google revoke done'));
+});
+
 test('calendars: the visible ones, every page, with names, colors, access and zones', async (t) => {
     const ctx = await signedIn(t);
     const { store } = ctx;
@@ -280,10 +457,12 @@ test('calendars: the visible ones, every page, with names, colors, access and zo
         store.user.email, 'team@group.calendar.google.com', 'en.usa#holiday@group.v.calendar.google.com',
         'boss@example.com', 'shared@group.calendar.google.com',
     ]);
-    assert.deepEqual(list[0], { remoteId: store.user.email, name: store.user.email, readOnly: false, color: '#9fe1e7', timeZone: LA });
+    // The account's own main calendar is the primary one: new events go there unless the user says otherwise.
+    assert.deepEqual(list[0], { remoteId: store.user.email, name: store.user.email, readOnly: false, primary: true, color: '#9fe1e7', timeZone: LA });
     assert.deepEqual(list[1], {
         remoteId: 'team@group.calendar.google.com', name: 'My team', readOnly: false, color: '#ff7537', timeZone: BERLIN, description: 'Team things',
     });
+    assert.deepEqual(list.filter((c) => c.primary).map((c) => c.remoteId), [store.user.email]);
     assert.equal(list[2].readOnly, true);
     assert.equal(list[3].readOnly, true);
     assert.equal(list[4].readOnly, true, 'only writer and owner write');
@@ -571,6 +750,73 @@ test('create: an event as Google takes it; guests hear of it only when asked', a
         (e) => e instanceof SourceError && e.code === 'forbidden');
 });
 
+test('create: the event\'s id comes from its uid, so a create sent again finds the event instead of adding another', async (t) => {
+    const ctx = await signedIn(t);
+    const { store, source, calendar, cal } = ctx;
+    const idOf = (uid, n = 0) => createHash('sha256').update(n === 0 ? uid : `${uid}\n${n}`).digest('hex');
+    const steps = () => store.requests.map((r) => `${r.method} ${r.path.slice(r.path.lastIndexOf('/') + 1)}`);
+    // What goes to Google, and an answer lost on its way back.
+    const plain = ctx.env.request;
+    const inserts = [];
+    let loseAnswer = false;
+    ctx.env.request = async (url, init = {}) => {
+        const insert = init.method === 'POST' && new URL(url).pathname.endsWith('/events');
+        if (insert) inserts.push(JSON.parse(init.body));
+        const res = await plain(url, init);
+        if (insert && loseAnswer) {
+            loseAnswer = false;
+            throw new HttpError('timeout', '127.0.0.1 didn\'t answer within 30 s.');
+        }
+        return res;
+    };
+    const record = {
+        uid: '7c9e6679-7425-40de-944b-e07fc1f90ae7', title: 'Planning', start: wall('2026-10-20T10:00:00'), end: wall('2026-10-20T11:00:00'),
+        attendees: [{ email: 'sam@example.com' }], notify: true,
+    };
+
+    // Google makes the event, but its answer never comes.
+    loseAnswer = true;
+    await assert.rejects(source.create(calendar, record), (e) => e instanceof SourceError && e.code === 'network');
+    const id = idOf(record.uid);
+    assert.match(id, /^[a-v0-9]{5,1024}$/);
+    assert.equal(inserts[0].id, id);
+    assert.equal('iCalUID' in inserts[0], false);
+    assert.equal(store.get(cal, id).summary, 'Planning');
+
+    // Sent again with the same uid: Google answers 409, and the event the first one made is the result.
+    // Nothing is written again, so the guests aren't invited twice.
+    store.requests.length = 0;
+    const [made] = await source.create(calendar, record);
+    assert.deepEqual(steps(), ['POST events', `GET ${id}`]);
+    assert.equal(inserts[1].id, id);
+    assert.deepEqual([made.remoteId, made.etag, made.events[0].title, made.events[0].uid], [id, store.get(cal, id).etag, 'Planning', `${id}@google.com`]);
+    assert.equal((await source.sync(calendar, undefined)).items.filter((i) => i.events[0].title === 'Planning').length, 1);
+
+    // A deleted event keeps its id at Google: a new event with the same uid takes the uid's next id, and finds it when sent again.
+    store.remove(cal, id);
+    const [anew] = await source.create(calendar, { ...record, notify: false });
+    assert.equal(anew.remoteId, idOf(record.uid, 1));
+    const [again] = await source.create(calendar, { ...record, notify: false });
+    assert.equal(again.remoteId, anew.remoteId);
+    assert.equal(store.get(cal, id).status, 'cancelled');
+
+    // With the uid's first five ids all held by deleted events, Google picks the id.
+    const held = [0, 1, 2, 3, 4].map((n) => idOf('reused-uid', n));
+    for (const old of held) {
+        store.insert(cal, { id: old, summary: 'Old', start: at('2026-10-21T09:00:00'), end: at('2026-10-21T10:00:00') });
+        store.remove(cal, old);
+    }
+    const [picked] = await source.create(calendar, { uid: 'reused-uid', title: 'New', start: wall('2026-10-21T09:00:00'), end: wall('2026-10-21T10:00:00') });
+    assert.equal('id' in inserts.at(-1), false);
+    assert.ok(!held.includes(picked.remoteId));
+    assert.equal(store.get(cal, picked.remoteId).summary, 'New');
+
+    // Without a uid, Google picks the id too.
+    await source.create(calendar, { title: 'No uid', start: wall('2026-10-22T09:00:00'), end: wall('2026-10-22T10:00:00') });
+    assert.equal('id' in inserts.at(-1), false);
+    ctx.env.request = plain;
+});
+
 test('update: a single event with If-Match, and a conflict when it changed meanwhile', async (t) => {
     const ctx = await signedIn(t);
     const { store, source, calendar, cal } = ctx;
@@ -706,6 +952,61 @@ test('delete: one occurrence, a changed one, a whole series and a single event (
     assert.equal(requestsOf(store, 'DELETE', `/events/${lunch.id}`)[0].ifMatch, lunch.etag);
     // Already gone (410): still removed, no error.
     assert.deepEqual(await source.remove(calendar, { item: lunchItem, record: lunchItem.events[0] }, 'all'), { removed: [lunch.id], items: [] });
+});
+
+test('a change with no etag held reads the event first and sends If-Match; a change in between is a conflict', async (t) => {
+    const ctx = await signedIn(t);
+    const { store, source, calendar, cal } = ctx;
+    const gym = store.insert(cal, {
+        summary: 'Gym', start: at('2026-10-05T18:00:00'), end: at('2026-10-05T19:00:00'), recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=10'],
+    });
+    store.patch(cal, `${gym.id}_20261027T010000Z`, { summary: 'Gym (late)', start: at('2026-10-26T19:00:00'), end: at('2026-10-26T20:00:00') });
+    // Nov 9 moved four days on and Nov 16 three: events.instances around their original starts misses them, Google's id finds them.
+    const friday = `${gym.id}_20261110T020000Z`;
+    const thursday = `${gym.id}_20261117T020000Z`;
+    store.patch(cal, friday, { start: at('2026-11-13T18:00:00'), end: at('2026-11-13T19:00:00') });
+    store.patch(cal, thursday, { start: at('2026-11-19T18:00:00'), end: at('2026-11-19T19:00:00') });
+    const { items } = await source.sync(calendar, undefined);
+    const master = items.find((i) => i.remoteId === gym.id);
+    const late = items.find((i) => i.remoteId === `${gym.id}_20261027T010000Z`);
+    const steps = () => store.requests.map((r) => `${r.method} ${r.path.slice(r.path.lastIndexOf('/') + 1)}`);
+
+    // One occurrence by Google's id: read, then changed only while it is as read.
+    store.requests.length = 0;
+    let etag = store.get(cal, friday).etag;
+    await source.update(calendar, { item: master, record: master.events[0], occurrence: wall('2026-11-09T18:00:00') }, { title: 'Gym (Friday)' }, 'one');
+    assert.deepEqual(steps(), ['GET instances', `GET ${friday}`, `PATCH ${friday}`]);
+    assert.equal(store.requests[2].ifMatch, etag);
+    assert.equal(store.get(cal, friday).summary, 'Gym (Friday)');
+    // Deleted the same way.
+    store.requests.length = 0;
+    etag = store.get(cal, thursday).etag;
+    await source.remove(calendar, { item: master, record: master.events[0], occurrence: wall('2026-11-16T18:00:00') }, 'one');
+    assert.deepEqual(steps(), ['GET instances', `GET ${thursday}`, `DELETE ${thursday}`, `GET ${thursday}`]);
+    assert.equal(store.requests[2].ifMatch, etag);
+    assert.equal(store.get(cal, thursday).status, 'cancelled');
+
+    // The whole series through a changed occurrence: the series is read, then changed only while it is as read.
+    store.requests.length = 0;
+    etag = store.get(cal, gym.id).etag;
+    await source.update(calendar, { item: late, record: late.events[0] }, { location: 'Gym hall' }, 'all');
+    assert.deepEqual(steps().slice(0, 3), [`GET ${late.remoteId}`, `GET ${gym.id}`, `PATCH ${gym.id}`]);
+    assert.equal(store.requests[2].ifMatch, etag);
+    assert.equal(store.get(cal, gym.id).location, 'Gym hall');
+
+    // Someone changes the series between that read and the write: Google refuses (412), and nothing is changed or deleted.
+    const plain = ctx.env.request;
+    ctx.env.request = async (url, init) => {
+        const res = await plain(url, init);
+        if (init?.method === 'GET' && new URL(url).pathname.endsWith(`/events/${gym.id}`)) store.patch(cal, gym.id, { description: 'Changed elsewhere' });
+        return res;
+    };
+    await assert.rejects(source.update(calendar, { item: late, record: late.events[0] }, { location: 'Pool' }, 'all'),
+        (e) => e instanceof SourceError && e.code === 'conflict' && e.status === 412);
+    await assert.rejects(source.remove(calendar, { item: late, record: late.events[0] }, 'all'),
+        (e) => e instanceof SourceError && e.code === 'conflict' && e.status === 412);
+    ctx.env.request = plain;
+    assert.deepEqual([store.get(cal, gym.id).location, store.get(cal, gym.id).status], ['Gym hall', 'confirmed']);
 });
 
 test('respond: the account\'s own answer, the rest of the guest list untouched', async (t) => {

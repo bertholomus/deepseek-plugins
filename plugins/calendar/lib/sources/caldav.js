@@ -7,18 +7,23 @@
  * - Discovery (RFC 6764) starts from whatever address the user gave: a
  *   server root, /.well-known/caldav, a principal or a calendar. It asks
  *   for the signed-in user's principal, the principal's calendar home(s),
- *   and lists the calendars there that hold events.
+ *   and lists the calendars there that hold events, the user's default
+ *   calendar (RFC 6638's schedule-default-calendar-URL) marked primary.
  * - Sync prefers the sync-collection REPORT (RFC 6578). When the server has
  *   none, or no longer takes the token, it lists every resource's etag and
  *   compares them with the last sync's. New and changed resources come in
  *   calendar-multiget batches, or one GET each where multiget fails.
  * - Writes are conditional: If-None-Match: * for a new resource, If-Match
- *   with the last etag for a change or a delete; a 412 is a conflict.
- * - The password goes only to the site the account names and its other
- *   hosts (iCloud moves clients from caldav.icloud.com to
- *   pNN-caldav.icloud.com): an address a server hands over that leads to
- *   another site is refused, and http.js drops the header when a redirect
- *   leaves the site.
+ *   with the last etag for a change or a delete; a 412 is a conflict. A new
+ *   resource is named after its UID, so a create repeated after a timeout
+ *   finds the one the first try made instead of adding a second.
+ * - The password goes only to the host the account names (sameService;
+ *   iCloud's other icloud.com hosts too, as it moves clients from
+ *   caldav.icloud.com to pNN-caldav.icloud.com): an address a server hands
+ *   over that leads to another host, or from a server elsewhere to this
+ *   computer or its network, gets no request, an answer that a redirect
+ *   brought from another host isn't used, and http.js drops the header when
+ *   a redirect leaves the host.
  *
  * Multistatus answers are read with a small namespace-aware XML parser
  * (parseXml), since servers differ in prefixes, quoting, CDATA and entities.
@@ -26,7 +31,8 @@
  * @module dsh-plugin-calendar/sources/caldav
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { HttpError, basicAuth, request as httpRequest, safeUrl, sameSite } from '../http.js';
+import { HttpError, basicAuth, request as httpRequest, isLocal, safeUrl, sameService } from '../http.js';
+import { parseIcs, unescapeText } from '../ical.js';
 import { ianaZone } from '../zones.js';
 import { SourceError, statusError } from './index.js';
 
@@ -124,6 +130,8 @@ const TIMEZONE_ID = clark(CALDAV, 'calendar-timezone-id');
 const CALENDAR_DATA = clark(CALDAV, 'calendar-data');
 const CTAG = clark(CS, 'getctag');
 const OUTBOX = clark(CALDAV, 'schedule-outbox-URL');
+const INBOX = clark(CALDAV, 'schedule-inbox-URL');
+const DEFAULT_CALENDAR = clark(CALDAV, 'schedule-default-calendar-URL');
 const ADDRESSES = clark(CALDAV, 'calendar-user-address-set');
 const COLOR = clark(ICAL, 'calendar-color');
 const ORDER = clark(ICAL, 'calendar-order');
@@ -408,6 +416,9 @@ const hostOf = (url) => {
     }
 };
 
+/** Where a URL leads, for a message: its host, with its scheme when only that tells it from `from`'s. */
+const placeOf = (url, from) => (hostOf(url) === hostOf(from) ? `${hostOf(url)} over ${new URL(url).protocol.slice(0, -1)}` : hostOf(url));
+
 /** The address an account starts from: the user's, else its preset's, as an https URL. */
 function startUrl(account) {
     const preset = PRESETS.find((p) => p.id === account.preset);
@@ -442,7 +453,9 @@ const HOME_BODY = propfind(['d:current-user-principal', 'c:calendar-home-set']);
 const CALENDARS_BODY = propfind(CALENDAR_PROPS);
 const LIST_BODY = propfind(['d:resourcetype', 'd:getetag']);
 const CTAG_BODY = propfind(['cs:getctag']);
-const SCHEDULING_BODY = propfind(['c:schedule-outbox-URL', 'c:calendar-user-address-set']);
+// The default calendar is a property of the scheduling Inbox (RFC 6638 9.2); Sabre (Nextcloud) has it on the principal.
+const SCHEDULING_BODY = propfind(['c:schedule-outbox-URL', 'c:calendar-user-address-set', 'c:schedule-inbox-URL', 'c:schedule-default-calendar-URL']);
+const INBOX_BODY = propfind(['c:schedule-default-calendar-URL']);
 const ETAG_BODY = propfind(['d:getetag']);
 const QUERY_BODY = `${XML_DECLARATION}<c:calendar-query ${NAMESPACES}><d:prop><d:getetag/></d:prop>`
     + '<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"/></c:comp-filter></c:filter></c:calendar-query>';
@@ -564,6 +577,15 @@ function resourceName(uid) {
     return readable === '' ? hash : `${readable}-${hash}`;
 }
 
+/** The UIDs of the components (events, tasks) in iCalendar text, as ical.js reads them. */
+function uidsOf(raw) {
+    return parseIcs(raw).flatMap((root) => root.subs)
+        .map((c) => c.props.find((p) => p.name === 'UID'))
+        .filter((prop) => prop !== undefined)
+        .map((prop) => unescapeText(prop.value).trim())
+        .filter((uid) => uid !== '');
+}
+
 /** Runs `work` on each entry, at most `limit` at a time; stops starting new ones after a failure. */
 async function eachLimited(list, limit, work) {
     let next = 0;
@@ -628,16 +650,30 @@ class CalDavSource {
         this.env = env ?? {};
         this.kind = kind;
         this.style = style;
-        /** {homes, principal, given} once discovered: kept for this object's life only. */
+        /** {homes, principal, given, scheduling?, addresses, defaultCalendar?} once discovered: kept for this object's life only. */
         this.located = undefined;
         this.base = undefined;
         this.password = undefined;
     }
 
-    /** The account's start address (its site is the only one the password goes to). */
+    /** The account's start address (its host is the only one the password goes to, iCloud's aside: sameService). */
     start() {
         this.base ??= startUrl(this.account);
         return this.base;
+    }
+
+    /**
+     * Why `url` gets no request with the password, or undefined when it is
+     * the account's own server: an address on this computer or its network
+     * that a server elsewhere pointed to, or another host (sameService).
+     */
+    refusal(url) {
+        const start = this.start();
+        if (!isLocal(start) && isLocal(url)) return `${hostOf(start)} pointed to an address on this computer or its network, which isn't allowed.`;
+        if (!sameService(start, url)) {
+            return `The server pointed to ${placeOf(url, start)}, which isn't the server this account names. The plugin doesn't send the password there; if it is your CalDAV server, give its address instead.`;
+        }
+        return undefined;
     }
 
     async secret() {
@@ -653,30 +689,30 @@ class CalDavSource {
     }
 
     /**
-     * One signed-in request. Only to the account's own site: an address a
-     * server hands over that leads elsewhere gets no request, and http.js
-     * keeps the Authorization header on redirects within the site only.
+     * One signed-in request. Only to the account's own server (refusal): an
+     * address a server hands over that leads elsewhere gets no request,
+     * http.js keeps the Authorization header on redirects to the same host
+     * (sameService) only, and an answer a redirect brought from another
+     * host is refused rather than read.
      */
     async send(method, url, { depth, body, headers = {}, signal } = {}) {
-        const start = this.start();
-        let ours = false;
-        try {
-            ours = sameSite(start, url);
-        } catch {}
-        if (!ours) {
-            throw new SourceError('config', `The server pointed to ${hostOf(url)}, which isn't part of ${hostOf(start)}; the plugin doesn't send the password there.`);
-        }
+        const refused = this.refusal(url);
+        if (refused !== undefined) throw new SourceError('config', refused);
         const password = await this.secret();
         const sent = { Authorization: basicAuth(this.account.username ?? '', password), ...headers };
         if (depth !== undefined) sent.Depth = String(depth);
         if (body !== undefined && sent['Content-Type'] === undefined) sent['Content-Type'] = 'application/xml; charset=utf-8';
-        const init = { method, headers: sent, body, signal, keepAuth: sameSite };
+        const init = { method, headers: sent, body, signal, keepAuth: sameService };
         if (this.account.allowHttp === true) init.allowHttp = true;
         let res;
         try {
             res = await (this.env.request ?? httpRequest)(url, init);
         } catch (error) {
             throw requestError(error);
+        }
+        if (!sameService(this.start(), res.url ?? url)) {
+            throw new SourceError('config', `${hostOf(url)} sent the request on to ${placeOf(res.url, url)}, which isn't the server this account names. `
+                + 'The plugin doesn\'t send the password there; if it is your CalDAV server, give its address instead.');
         }
         // Read the password again next time, in case it was changed.
         if (res.status === 401) this.password = undefined;
@@ -709,26 +745,32 @@ class CalDavSource {
 
     /**
      * Finds the principal, the calendar homes and the calendars from the
-     * account's address (RFC 6764): the address itself, its site's
-     * /.well-known/caldav, then its site's root. The first that names a
+     * account's address (RFC 6764): the address itself, its host's
+     * /.well-known/caldav, then its host's root. The first that names a
      * principal with a calendar home wins; an address that is a calendar
-     * counts too, with its home's calendars when the server names one.
+     * counts too, with its home's calendars when the server names one. An
+     * address the plugin can't use (it sends the request on to another
+     * host, or is plain http) is passed over, and said when none works.
      * @returns {Promise<{home?: string, principal?: string, calendars: object[]}>}
      */
     async discover() {
         const start = this.start();
-        const tries = [...new Set([start, new URL('/.well-known/caldav', start).href, new URL('/', start).href])];
+        const wellKnown = new URL('/.well-known/caldav', start).href;
+        const tries = [...new Set([start, wellKnown, new URL('/', start).href])];
         let principal;
         let homes = [];
         let given;
         let answered;
+        /** Why an address was passed over: url → SourceError ('config'). */
+        const refused = new Map();
         for (const url of tries) {
             let found;
             try {
                 found = await this.probe(url);
             } catch (error) {
-                if (!(error instanceof SourceError) || ['auth', 'network', 'config', 'rate'].includes(error.code)) throw error;
-                if (url === start) answered = error.status;
+                if (!(error instanceof SourceError) || ['auth', 'network', 'rate'].includes(error.code)) throw error;
+                if (error.code === 'config') refused.set(url, error);
+                else if (url === start) answered = error.status;
                 continue;
             }
             const self = found.self;
@@ -755,12 +797,15 @@ class CalDavSource {
             }
             if (given !== undefined) break;
         }
-        if (homes.length === 0 && given === undefined) {
+        if (homes.length === 0 && given === undefined && !refused.has(start)) {
             // A server that names no principal: the address may be a calendar home itself.
             const listed = await this.listHome(start).catch(() => []);
             if (listed.length > 0) homes = [start];
         }
         if (homes.length === 0 && given === undefined) {
+            // Where /.well-known/caldav or the address itself led elsewhere, that says the most.
+            const why = refused.get(wellKnown) ?? refused.get(start);
+            if (why !== undefined) throw why;
             const said = answered === undefined ? '' : ` (it answered HTTP ${answered})`;
             throw new SourceError('config', `No CalDAV calendars were found at ${safeUrl(start)}${said}. Check the address, or give the address of a calendar.`);
         }
@@ -773,16 +818,20 @@ class CalDavSource {
     /**
      * Whether the server schedules (RFC 6638: it emails a meeting's guests
      * itself when its organizer saves or deletes it, and tells the
-     * organizer when a guest answers or takes it out), and the user's own
-     * addresses there: {scheduling?: boolean, addresses: string[]}.
-     * scheduling is undefined when the server didn't say.
+     * organizer when a guest answers or takes it out), the user's own
+     * addresses there, and the user's default calendar, where new events
+     * go: {scheduling?: boolean, addresses: string[], defaultCalendar?: string}.
+     * scheduling is undefined when the server didn't say, defaultCalendar
+     * when it names none.
      */
     async schedulingOf(principal) {
         if (principal === undefined) return { addresses: [] };
         let self;
+        let base;
         try {
             const answer = await this.multistatus('PROPFIND', principal, { depth: 0, body: SCHEDULING_BODY }, 'Reading the account');
             self = selfOf(answer, principal);
+            base = answer.base;
         } catch (error) {
             if (error instanceof SourceError && error.code === 'auth') throw error;
             return { addresses: [] };
@@ -801,12 +850,33 @@ class CalDavSource {
         // An outbox means the server schedules; one it says isn't there (404) means it doesn't.
         const outbox = kids(self.props.get(OUTBOX), DAV, 'href').length > 0;
         const scheduling = outbox ? true : self.failed.includes(404) ? false : undefined;
-        return { ...(scheduling !== undefined ? { scheduling } : {}), addresses: [...new Set(addresses)] };
+        const defaultCalendar = self.props.has(DEFAULT_CALENDAR)
+            ? hrefsOf(self.props.get(DEFAULT_CALENDAR), base)[0]
+            : await this.defaultOf(hrefsOf(self.props.get(INBOX), base)[0]);
+        return {
+            ...(scheduling !== undefined ? { scheduling } : {}), addresses: [...new Set(addresses)],
+            ...(defaultCalendar !== undefined ? { defaultCalendar } : {}),
+        };
     }
 
-    /** The calendars in every home found, and the one the address named (with whether the server schedules). */
+    /**
+     * The default calendar a scheduling Inbox names (RFC 6638 9.2), or
+     * undefined: no inbox, no default (an empty property), or no answer.
+     */
+    async defaultOf(inbox) {
+        if (inbox === undefined) return undefined;
+        try {
+            const answer = await this.multistatus('PROPFIND', inbox, { depth: 0, body: INBOX_BODY }, 'Reading the account');
+            return hrefsOf(selfOf(answer, inbox)?.props.get(DEFAULT_CALENDAR), answer.base)[0];
+        } catch (error) {
+            if (error instanceof SourceError && error.code === 'auth') throw error;
+            return undefined;
+        }
+    }
+
+    /** The calendars in every home found, and the one the address named (with whether the server schedules, and the default marked primary). */
     async listAll() {
-        const { homes, given, scheduling, addresses = [] } = this.located;
+        const { homes, given, scheduling, addresses = [], defaultCalendar } = this.located;
         const found = [];
         for (const home of homes) {
             try {
@@ -834,7 +904,8 @@ class CalDavSource {
         // Apple's calendar-order where servers keep one, the rest after them; the server's own order otherwise.
         const orderOf = (c) => ORDERS.get(c) ?? Infinity;
         const about = { ...(scheduling !== undefined ? { scheduling } : {}), ...(addresses.length > 0 ? { addresses } : {}) };
-        return calendars.map((c, at) => ({ c, at })).sort((a, b) => (orderOf(a.c) - orderOf(b.c)) || (a.at - b.at)).map(({ c }) => ({ ...c, ...about }));
+        return calendars.map((c, at) => ({ c, at })).sort((a, b) => (orderOf(a.c) - orderOf(b.c)) || (a.at - b.at))
+            .map(({ c }) => ({ ...c, ...(sameCollection(c.remoteId, defaultCalendar) ? { primary: true } : {}), ...about }));
     }
 
     /** The account's calendars that hold events (see sources/index.js). */
@@ -1055,6 +1126,8 @@ class CalDavSource {
     /**
      * Stores iCalendar text: a new resource named after the UID (it must not
      * exist yet), or a change to `item` (only while its etag is item.etag).
+     * A new one whose name is taken already by a resource holding the same
+     * UID counts as made (madeBefore).
      * @returns {Promise<{remoteId: string, etag?: string}>}
      */
     async put(calendar, item, raw, uid) {
@@ -1066,16 +1139,42 @@ class CalDavSource {
         if (item) headers['If-Match'] = item.etag || await this.etagOf(target).catch(() => undefined) || '*';
         else headers['If-None-Match'] = '*';
         const res = await this.send('PUT', target, { headers, body: raw });
-        if (!res.ok) throw writeError(res, 'Saving the event');
+        if (!res.ok) {
+            const made = !item && res.status === 412 ? await this.madeBefore(target, String(uid ?? '').trim()) : undefined;
+            if (made !== undefined) return made;
+            throw writeError(res, 'Saving the event');
+        }
         const location = res.headers.get('location');
         let remoteId = hrefUrl(res.url) ?? target;
         if (location) {
             const moved = hrefUrl(location, res.url);
-            if (moved !== undefined && !moved.endsWith('/') && sameSite(this.start(), moved)) remoteId = moved;
+            if (moved !== undefined && !moved.endsWith('/') && this.refusal(moved) === undefined) remoteId = moved;
         }
         let etag = res.headers.get('etag') ?? undefined;
         // A server that changed what it stored sends no etag: ask for it.
         if (etag === undefined) etag = await this.etagOf(remoteId).catch(() => undefined);
+        return { remoteId, etag };
+    }
+
+    /**
+     * The resource a new event's name is taken by (a 412 to If-None-Match: *),
+     * as put() returns it when it holds `uid`: the manager repeats a create
+     * that timed out with the same uid, and the first try may have been
+     * stored. undefined when it holds another event or can't be read (the
+     * create stays a conflict).
+     */
+    async madeBefore(target, uid) {
+        if (uid === '') return undefined;
+        let res;
+        try {
+            res = await this.send('GET', target, { headers: { Accept: 'text/calendar' } });
+        } catch {
+            return undefined;
+        }
+        if (!res.ok || !uidsOf(res.text).includes(uid)) return undefined;
+        const remoteId = hrefUrl(res.url) ?? target;
+        const etag = res.headers.get('etag') ?? await this.etagOf(remoteId).catch(() => undefined);
+        this.env.log?.(`caldav ${this.account.id}: put found the new event there already`);
         return { remoteId, etag };
     }
 

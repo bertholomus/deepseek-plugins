@@ -6,8 +6,11 @@
  * - Sign-in is OAuth 2.0 for desktop apps (lib/oauth.js) with a Desktop
  *   OAuth client the user makes in Google Cloud; its id and secret come
  *   from the settings (googleClientId, googleClientSecret), never from here.
+ *   It asks for the events and the list of calendars only (SCOPES); a grant
+ *   from an earlier sign-in, with Google's broad calendar scope, works too.
  *   The grant lives in the account's secret; each request takes a fresh
  *   access token from it, and a 401 renews it once and tries again.
+ *   Removing the account ends the grant at Google as well (revoke).
  * - Sync lists events with singleEvents=false and showDeleted=true, so a
  *   series comes as its master (RRULE, RDATE, EXDATE lines) plus its
  *   changed occurrences (recurringEventId + originalStartTime), and a
@@ -20,13 +23,19 @@
  * - One occurrence of a series is found with events.instances around its
  *   original start, else by Google's id convention: <master id>_<UTC
  *   start, YYYYMMDDTHHMMSSZ>, or <master id>_<YYYYMMDD> for all-day series.
+ * - Every change to an event is conditional (If-Match): on the etag held
+ *   here, else on the one read just before (an occurrence by Google's id
+ *   convention, a series found from its occurrence). 412 is a conflict.
+ * - A new event asks for an id made from its uid, so a create sent again
+ *   (its answer never came) finds the event the first one made.
  *
  * Nothing here logs or puts in a message a token, a code, the client
  * secret, event text or a URL with its query.
  *
  * @module dsh-plugin-calendar/sources/google
  */
-import { HttpError } from '../http.js';
+import { createHash } from 'node:crypto';
+import { HttpError, formBody } from '../http.js';
 import { cleanRecord, instantOf } from '../model.js';
 import { accessToken, idTokenClaims, loopbackSignIn, retryAfter } from '../oauth.js';
 import { addDays, daysBetween, ianaZone, isDay, normalLocal, offsetAt, toInstant, toLocal } from '../zones.js';
@@ -41,12 +50,43 @@ export const DEFAULTS = {
     googleAuthorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
     googleTokenUrl: 'https://oauth2.googleapis.com/token',
     googleUserinfoUrl: 'https://openidconnect.googleapis.com/v1/userinfo',
+    googleRevokeUrl: 'https://oauth2.googleapis.com/revoke',
 };
 
-const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar';
+/** The Google Account page where the user sees which apps can reach their account, and removes one (Linked apps). */
+export const MANAGE_URL = 'https://myaccount.google.com/linkedapps';
 
-/** What a sign-in asks for: the calendars, and which address signed in. */
-export const SCOPES = [CALENDAR_SCOPE, 'openid', 'email'];
+const EVENTS_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+const LIST_SCOPE = 'https://www.googleapis.com/auth/calendar.calendarlist.readonly';
+/** What sign-in asked for before: it also allows sharing and deleting calendars. */
+const BROAD_SCOPE = 'https://www.googleapis.com/auth/calendar';
+
+/**
+ * What a sign-in asks for: the events on every calendar (list, read, add,
+ * change, delete), the list of calendars (read only), and which address
+ * signed in. Not the broad calendar scope, which also allows sharing and
+ * deleting calendars: the plugin does neither.
+ */
+export const SCOPES = [EVENTS_SCOPE, LIST_SCOPE, 'openid', 'email'];
+
+/**
+ * What the plugin needs of a grant, and the scopes that allow each (Google's
+ * API reference). The broad scope allows both, so a grant from an earlier
+ * sign-in still works. `what` and `permission` say it to the user.
+ */
+const NEEDS = [
+    { what: 'your events', permission: 'to view and edit events', scopes: [EVENTS_SCOPE, BROAD_SCOPE] },
+    {
+        what: 'your list of calendars', permission: 'to see your list of calendars',
+        scopes: [LIST_SCOPE, 'https://www.googleapis.com/auth/calendar.calendarlist', 'https://www.googleapis.com/auth/calendar.readonly', BROAD_SCOPE],
+    },
+];
+
+/** How long revoking may take: removing the account waits for it. */
+const REVOKE_TIMEOUT_MS = 15_000;
+
+/** How many ids made from one uid a new event tries (a deleted event keeps its id) before Google picks one. */
+const ID_TRIES = 5;
 
 const DAY_MS = 86_400_000;
 /** events.list page size (Google's most). */
@@ -72,6 +112,7 @@ function endpoints(settings = {}) {
         authorize: pick('googleAuthorizeUrl'),
         token: pick('googleTokenUrl'),
         userinfo: pick('googleUserinfoUrl'),
+        revoke: pick('googleRevokeUrl'),
     };
 }
 
@@ -108,10 +149,9 @@ export async function signIn(env, options = {}) {
         request: env.request, timeoutMs: options.timeoutMs, now: env.now ?? Date.now,
     });
     const done = flow.done.then(async (grant) => {
-        // Google lets the user untick calendar access on the consent page.
-        if (typeof grant.scope === 'string' && !grant.scope.split(/\s+/).includes(CALENDAR_SCOPE)) {
-            throw new SourceError('auth', 'Google didn\'t give access to your calendars. Sign in again and leave the calendar permission ticked.');
-        }
+        // Google lets the user untick each permission on the consent page.
+        const missing = missingNeeds(grant.scope);
+        if (missing.length > 0) throw new SourceError('auth', missingText(missing));
         return { grant, ...(await whoSignedIn(env, grant, clientId, urls.userinfo)) };
     });
     done.catch(() => {});
@@ -125,6 +165,82 @@ export async function signIn(env, options = {}) {
         },
         cancel: flow.cancel,
     };
+}
+
+/** The needs (NEEDS) a grant's scopes don't meet; none when Google didn't say which it gave. */
+function missingNeeds(scope) {
+    if (typeof scope !== 'string') return [];
+    const granted = new Set(scope.split(/\s+/));
+    return NEEDS.filter((need) => !need.scopes.some((s) => granted.has(s)));
+}
+
+/** In words, what a sign-in didn't give, and what to do about it. */
+function missingText(missing) {
+    const what = missing.map((need) => need.what).join(' or ');
+    const tick = missing.length > 1 ? 'both calendar permissions are' : `the permission ${missing[0].permission} is`;
+    return `Google didn't give access to ${what}. Sign in again and make sure ${tick} ticked.`;
+}
+
+/**
+ * Ends the grant at Google, for an account being removed, so it stops
+ * working there too and not only here. The refresh token (else the access
+ * token) goes to Google's revoke endpoint, which ends the whole grant.
+ * @param {object} env - a source env (request, settings, log).
+ * @param {object} secret - the account's grant ({refreshToken, accessToken, ...}), or the secret that holds it (get()).
+ * @returns {Promise<{revoked: boolean, manageUrl?: string}>} revoked: Google
+ *   ended the grant, or says it had ended already. Otherwise `manageUrl` is
+ *   the Google Account page where the user removes the access.
+ * @throws {SourceError} 'network' when Google can't be reached.
+ */
+export async function revoke(env, secret) {
+    const grant = typeof secret?.get === 'function' ? await secret.get() : secret;
+    const token = text(grant?.refreshToken) ?? text(grant?.accessToken);
+    const note = (line) => {
+        try {
+            env.log?.(`google revoke ${line}`);
+        } catch {
+            // Logging never stops a removal.
+        }
+    };
+    if (token === undefined) {
+        note('no token');
+        return { revoked: false, manageUrl: MANAGE_URL };
+    }
+    let res;
+    try {
+        res = await env.request(endpoints(env.settings).revoke, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+            body: formBody({ token }),
+            timeoutMs: REVOKE_TIMEOUT_MS,
+        });
+    } catch (error) {
+        const failure = fromHttp(error);
+        if (!(failure instanceof SourceError) || failure.code === 'network') throw failure;
+        note(failure.code);
+        return { revoked: false, manageUrl: MANAGE_URL };
+    }
+    if (res.ok) {
+        note('done');
+        return { revoked: true };
+    }
+    // invalid_token: Google no longer knows the token (revoked already, or the user removed the access).
+    if (res.status === 400 && oauthError(res.text) === 'invalid_token') {
+        note('ended already');
+        return { revoked: true };
+    }
+    note(`refused HTTP ${res.status}`);
+    return { revoked: false, manageUrl: MANAGE_URL };
+}
+
+/** An OAuth error answer's code, like invalid_token, when it has a well-formed one. */
+function oauthError(body) {
+    try {
+        const code = JSON.parse(body)?.error;
+        return typeof code === 'string' && /^[a-z_]{1,64}$/.test(code) ? code : undefined;
+    } catch {
+        return undefined;
+    }
 }
 
 /** The signed-in address (and name, if Google says it): from the id token, else from userinfo. */
@@ -240,7 +356,7 @@ class GoogleCalendar {
         throw new SourceError('server', `${what}: Google sent too many pages.`);
     }
 
-    /** The account's calendars, without hidden and deleted ones. */
+    /** The account's calendars, without hidden and deleted ones. The account's own main calendar is `primary`. */
     async calendars() {
         const out = [];
         await this.pages('/users/me/calendarList', { maxResults: 250 }, 'Listing your Google calendars', undefined, (page) => {
@@ -252,6 +368,7 @@ class GoogleCalendar {
                     name: text(entry.summaryOverride) ?? text(entry.summary) ?? entry.id,
                     readOnly: !(entry.accessRole === 'owner' || entry.accessRole === 'writer'),
                 };
+                if (entry.primary === true) calendar.primary = true;
                 if (text(entry.backgroundColor)) calendar.color = entry.backgroundColor;
                 const zone = ianaZone(entry.timeZone);
                 if (zone) calendar.timeZone = zone;
@@ -354,26 +471,56 @@ class GoogleCalendar {
         }
     }
 
-    async getEvent(calendar, id, signal) {
-        return this.getJson(`${calendarPath(calendar)}/events/${encodeURIComponent(id)}`, undefined, 'Reading an event from Google Calendar', signal);
+    async getEvent(calendar, id, signal, what = 'Reading an event from Google Calendar') {
+        return this.getJson(`${calendarPath(calendar)}/events/${encodeURIComponent(id)}`, undefined, what, signal);
     }
 
     /**
      * A new event (events.insert). Guests get Google's invitation only when
      * the record says `notify: true`. Google gives the event its own uid.
+     * The event asks for an id made from the record's uid (eventIdFor): sent
+     * again because its answer never came, the insert gets 409, and the
+     * event the first one made is the result, with no second invitation.
      */
     async create(calendar, record) {
         const zone = this.zoneOf(calendar);
         const notify = record?.notify === true && Array.isArray(record.attendees) && record.attendees.length > 0;
         const what = 'Adding the event to Google Calendar';
-        const res = await this.call('POST', `${calendarPath(calendar)}/events`, {
-            query: { sendUpdates: notify ? 'all' : 'none' }, body: eventBody(record, zone), what,
-        });
-        const event = json(res, what);
+        const body = eventBody(record, zone);
+        const uid = text(record?.uid);
+        let event;
+        for (let n = 0; event === undefined; n++) {
+            // A deleted event keeps its id: the uid's next id is tried, and after a few Google picks one.
+            if (uid !== undefined && n < ID_TRIES) body.id = eventIdFor(uid, n);
+            else delete body.id;
+            try {
+                const res = await this.call('POST', `${calendarPath(calendar)}/events`, {
+                    query: { sendUpdates: notify ? 'all' : 'none' }, body, what,
+                });
+                event = json(res, what);
+            } catch (error) {
+                if (body.id === undefined || !(error instanceof SourceError) || error.status !== 409) throw error;
+                event = await this.madeAlready(calendar, body.id, what);
+            }
+        }
         if (isMaster(event) && text(event.iCalUID)) this.uids.set(uidKey(calendar, event.id), event.iCalUID);
         this.log(`created ${event.id}`);
         const item = itemOf(event, zone);
         return item ? [item] : [];
+    }
+
+    /** The event that holds an id a new event asked for (an earlier try made it), or undefined when a deleted one holds it. */
+    async madeAlready(calendar, id, what) {
+        let event;
+        try {
+            event = await this.getEvent(calendar, id, undefined, what);
+        } catch (error) {
+            if (error instanceof SourceError && (error.status === 404 || error.status === 410)) return undefined;
+            throw error;
+        }
+        if (typeof event?.id !== 'string' || event.status === 'cancelled') return undefined;
+        this.log(`create found ${event.id} made already`);
+        return event;
     }
 
     /**
@@ -474,27 +621,40 @@ class GoogleCalendar {
         return changed ? [changed] : [];
     }
 
+    /** events.patch, only while the event is as `etag` says (none held: as Google has it now, see etagNow). */
     async patchEvent(calendar, id, body, etag, sendUpdates, what) {
+        const condition = etag || await this.etagNow(calendar, id, what);
         const res = await this.call('PATCH', `${calendarPath(calendar)}/events/${encodeURIComponent(id)}`, {
-            query: { sendUpdates }, body, etag, what,
+            query: { sendUpdates }, body, etag: condition, what,
         });
         return json(res, what);
     }
 
-    /** events.delete; an event already gone (404, 410) counts as deleted. */
+    /** events.delete, on the same condition; an event already gone (404, 410) counts as deleted. */
     async deleteEvent(calendar, id, etag, sendUpdates, what) {
         try {
-            await this.call('DELETE', `${calendarPath(calendar)}/events/${encodeURIComponent(id)}`, { query: { sendUpdates }, etag, what });
+            const condition = etag || await this.etagNow(calendar, id, what);
+            await this.call('DELETE', `${calendarPath(calendar)}/events/${encodeURIComponent(id)}`, { query: { sendUpdates }, etag: condition, what });
         } catch (error) {
             if (error instanceof SourceError && (error.status === 404 || error.status === 410)) return;
             throw error;
         }
     }
 
-    /** The series a changed occurrence (an exception item) belongs to. */
+    /**
+     * The etag an event has at Google now, for a change with none held here
+     * (an occurrence found by Google's id convention, a series found from its
+     * occurrence): read just before, so the change still goes out only if
+     * nothing changed the event in between, never unconditionally.
+     */
+    async etagNow(calendar, id, what) {
+        return text((await this.getEvent(calendar, id, undefined, what))?.etag);
+    }
+
+    /** The series a changed occurrence (an exception item) belongs to. No etag of the series is held: a change reads it first. */
     async masterOf(calendar, item, what) {
         const event = await this.getEvent(calendar, item.remoteId);
-        if (typeof event?.recurringEventId !== 'string') return { id: item.remoteId, etag: item.etag };
+        if (typeof event?.recurringEventId !== 'string') return { id: item.remoteId, etag: item.etag ?? text(event?.etag) };
         if (event.recurringEventId === item.remoteId) throw new SourceError('server', `${what}: Google's answer names the event as its own series.`);
         return { id: event.recurringEventId };
     }
@@ -520,6 +680,7 @@ class GoogleCalendar {
             }
         });
         if (found !== undefined && typeof found.id === 'string') return { id: found.id, etag: found.etag, event: found };
+        // No etag of it is held: a change reads it first.
         return { id: instanceId(masterId, occurrence, at) };
     }
 
@@ -586,6 +747,16 @@ function instanceId(masterId, occurrence, at) {
     return `${masterId}_${new Date(at).toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/[-:]/g, '')}`;
 }
 
+/**
+ * The id a new event asks Google for, the same every time for the same uid:
+ * the uid's SHA-256 in hex, which is base32hex as Google wants (0-9 and
+ * a-v, 5 to 1024 characters). `n` above 0 gives the uid's next ids, for
+ * when a deleted event holds the first.
+ */
+function eventIdFor(uid, n) {
+    return createHash('sha256').update(n === 0 ? uid : `${uid}\n${n}`, 'utf8').digest('hex');
+}
+
 /** A request that never got an answer, as a SourceError (an abort stays as it is). */
 function fromHttp(error) {
     if (!(error instanceof HttpError)) return error;
@@ -621,7 +792,7 @@ function googleError(res, what) {
         return new SourceError('rate', `${what}: Google asked to slow down.`, { status: res.status, retryAfter: retryAfter(res.headers) });
     }
     if (res.status === 403 && SCOPE_REASONS.has(reason)) {
-        return new SourceError('auth', `${what}: the sign-in doesn't allow calendar access. Sign in again and leave the calendar permission ticked.`, { status: 403 });
+        return new SourceError('auth', `${what}: the sign-in doesn't allow this. Sign in again and make sure both calendar permissions are ticked.`, { status: 403 });
     }
     return statusError(res.status, what, res.headers);
 }

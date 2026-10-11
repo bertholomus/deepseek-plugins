@@ -1,11 +1,17 @@
 // The Microsoft source (lib/sources/microsoft.js) against the Graph and
-// sign-in stand-in (test/standins/microsoft.mjs). Run with:
+// sign-in stand-in (test/standins/microsoft.mjs), with what it leaves out
+// in front of it here: Microsoft's sign-in page for the browser sign-in,
+// If-Match and transactionId. Run with:
 //   node --test plugins/calendar/test/microsoft.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash, randomBytes } from 'node:crypto';
+import { createServer } from 'node:http';
 import { request } from '../lib/http.js';
 import { SourceError } from '../lib/sources/index.js';
-import { create, graphZone, htmlToText, kind, patternFromRrule, rruleFromPattern, signIn, style } from '../lib/sources/microsoft.js';
+import {
+    REDIRECT_URI, create, graphZone, htmlToText, kind, patternFromRrule, revoke, rruleFromPattern, signIn, style,
+} from '../lib/sources/microsoft.js';
 import { start } from './standins/microsoft.mjs';
 
 const ZONE = 'America/Los_Angeles';
@@ -14,6 +20,8 @@ const NOW = Date.parse('2026-10-11T12:00:00Z');
 const FROM = Date.parse('2026-10-11T00:00:00Z');
 const TO = Date.parse('2026-10-25T00:00:00Z');
 const NO_TIME = '0001-01-01T00:00:00Z';
+/** Signing in with a code (the device authorization grant) rather than in the browser. */
+const CODE = { method: 'code' };
 const LA = (local) => ({ local, tz: ZONE });
 const pst = (dateTime) => ({ dateTime, timeZone: 'Pacific Standard Time' });
 
@@ -34,22 +42,185 @@ function memorySecret(value) {
     return secret;
 }
 
-/** A stand-in, an env signed in to it, and a source for the account. */
-async function setup(t, { signedIn = true } = {}) {
+/**
+ * A stand-in, an env signed in to it, and a source for the account.
+ * `sent` holds each request's method, path and headers; with `rules`,
+ * Graph's If-Match and transactionId rules apply too (graphRules).
+ */
+async function setup(t, { signedIn = true, rules = false } = {}) {
     const graph = await start();
     t.after(() => graph.close());
     const logs = [];
     const clock = { now: NOW };
     const secret = memorySecret(signedIn ? { ...graph.store.issueGrant(), expiresAt: NOW + 3_600_000 } : undefined);
+    const checked = graphRules(graph.store, rules);
     const env = {
-        request: (url, init) => request(url, init),
+        request: checked.request,
         secret,
         log: (line) => logs.push(line),
         now: () => clock.now,
         zone: ZONE,
         settings: { ...graph.settings },
     };
-    return { graph, store: graph.store, env, secret, logs, clock, source: create(ACCOUNT, env) };
+    return { graph, store: graph.store, env, secret, logs, clock, sent: checked.sent, source: create(ACCOUNT, env) };
+}
+
+/** An answer as lib/http.js `request` gives one. */
+function answer(url, status, body) {
+    const text = JSON.stringify(body);
+    return { status, ok: status >= 200 && status < 300, url, headers: new Headers({ 'content-type': 'application/json' }), text, json: () => JSON.parse(text) };
+}
+
+/**
+ * Graph's rules the stand-in leaves out, in front of it when `enforce`: a
+ * PATCH or DELETE of an event with If-Match goes through only while the
+ * event still has that etag (else 412, as Graph answers), and a POST of an
+ * event whose transactionId made one before gets that event back (201), or
+ * a 400 when its details differ. `sent` keeps every request's method, path
+ * and headers, enforced or not.
+ */
+function graphRules(store, enforce) {
+    const sent = [];
+    const made = new Map();
+    async function rules(url, init = {}) {
+        const method = init.method ?? 'GET';
+        const { pathname } = new URL(url);
+        sent.push({ method, path: decodeURIComponent(pathname), headers: { ...init.headers } });
+        if (!enforce) return request(url, init);
+        const event = /^\/v1\.0\/me\/events\/([^/]+)$/.exec(pathname);
+        const ifMatch = init.headers?.['If-Match'];
+        if (event !== null && (method === 'PATCH' || method === 'DELETE') && ifMatch !== undefined) {
+            const now = store.json(decodeURIComponent(event[1]));
+            if (now !== undefined && now['@odata.etag'] !== ifMatch) {
+                return answer(url, 412, { error: { code: 'ErrorIrresolvableConflict', message: 'The send or update operation could not be performed because the change key passed in the request does not match the current change key for the item.' } });
+            }
+        }
+        if (method === 'POST' && /^\/v1\.0\/me\/calendars\/[^/]+\/events$/.test(pathname)) {
+            const { transactionId } = JSON.parse(init.body);
+            const before = typeof transactionId === 'string' ? made.get(transactionId) : undefined;
+            if (before !== undefined && before.body !== init.body) {
+                return answer(url, 400, { error: { code: 'ErrorDuplicateTransactionId', message: 'The TransactionId specified in the request has already been used to create a different event.' } });
+            }
+            if (before !== undefined) return answer(url, 201, store.json(before.id));
+            const response = await request(url, init);
+            if (response.ok && typeof transactionId === 'string') made.set(transactionId, { id: JSON.parse(response.text).id, body: init.body });
+            return response;
+        }
+        return request(url, init);
+    }
+    return { request: rules, sent };
+}
+
+/**
+ * Microsoft's sign-in page and token endpoint for the browser sign-in,
+ * which the Graph stand-in leaves out. The app has http://localhost as its
+ * redirect address under "Mobile and desktop applications": a public
+ * client, with no secret (`webApp`: the address is under "Web", which
+ * wants one). The page signs the user in at once and sends the browser
+ * back with a code, or with access_denied when `consent` is 'deny', adding
+ * '/' to an address without a path as Microsoft does; an unknown app or a
+ * redirect address the app doesn't have (the port of a localhost one
+ * aside) gets an error page instead. The token endpoint trades a code
+ * once, for the verifier of its challenge and the same redirect address;
+ * other grants go to the Graph stand-in.
+ */
+async function startSignInPage(graph) {
+    const page = { registered: ['http://localhost'], consent: 'allow', webApp: false, authorizations: [], tokenRequests: [], codes: new Map() };
+    const reply = (res, status, body, headers = {}) => {
+        const text = typeof body === 'string' ? body : JSON.stringify(body);
+        res.writeHead(status, { 'Content-Type': typeof body === 'string' ? 'text/plain' : 'application/json', ...headers });
+        res.end(text);
+    };
+    const refuse = (res, error, description) => reply(res, 400, { error, error_description: description });
+    const registered = (uri) => page.registered.includes(String(uri).replace(/^http:\/\/localhost:\d+(?=\/|$)/, 'http://localhost'));
+
+    function authorize(res, tenant, query) {
+        page.authorizations.push({ tenant, ...query });
+        if (query.client_id !== graph.store.clientId) return reply(res, 400, 'AADSTS700016: Application was not found in the directory.');
+        if (!registered(query.redirect_uri)) return reply(res, 400, 'AADSTS50011: The redirect URI specified in the request does not match the redirect URIs configured for the application.');
+        const back = new URL(query.redirect_uri);
+        if (page.consent === 'deny') {
+            back.searchParams.set('error', 'access_denied');
+            back.searchParams.set('error_description', 'AADSTS65004: User declined to consent to access the app.');
+        } else if (query.response_type !== 'code' || typeof query.code_challenge !== 'string') {
+            back.searchParams.set('error', 'invalid_request');
+        } else {
+            const code = `M.C5${randomBytes(24).toString('base64url')}`;
+            page.codes.set(code, { clientId: query.client_id, redirectUri: query.redirect_uri, challenge: query.code_challenge, method: query.code_challenge_method });
+            back.searchParams.set('code', code);
+        }
+        if (query.state !== undefined) back.searchParams.set('state', query.state);
+        return reply(res, 302, '', { Location: back.toString() });
+    }
+
+    function trade(res, form) {
+        page.tokenRequests.push({ ...form });
+        if (form.client_secret !== undefined || form.client_assertion !== undefined) {
+            return refuse(res, 'invalid_client', 'AADSTS700025: Client is public so neither \'client_assertion\' nor \'client_secret\' should be presented.');
+        }
+        if (page.webApp) return refuse(res, 'invalid_client', 'AADSTS7000218: The request body must contain the following parameter: \'client_assertion\' or \'client_secret\'.');
+        const code = page.codes.get(form.code);
+        page.codes.delete(form.code);
+        if (code === undefined) return refuse(res, 'invalid_grant', 'AADSTS70008: The provided authorization code or refresh token has expired or was already used.');
+        if (form.client_id !== code.clientId || form.redirect_uri !== code.redirectUri) return refuse(res, 'invalid_grant', 'AADSTS50148: The redirect URI doesn\'t match.');
+        const verified = code.method === 'S256' && createHash('sha256').update(String(form.code_verifier ?? ''), 'ascii').digest('base64url') === code.challenge;
+        if (!verified) return refuse(res, 'invalid_grant', 'AADSTS501481: The Code_Verifier does not match the code_challenge supplied in the authorization request.');
+        return reply(res, 200, graph.store.tokens(true));
+    }
+
+    const server = createServer(async (req, res) => {
+        const url = new URL(req.url, 'http://127.0.0.1');
+        const [root, tenant, oauth2, version, leaf, ...rest] = url.pathname.split('/').filter(Boolean);
+        if (root !== 'login' || oauth2 !== 'oauth2' || version !== 'v2.0' || rest.length > 0) return reply(res, 404, {});
+        if (leaf === 'authorize' && req.method === 'GET') return authorize(res, decodeURIComponent(tenant), Object.fromEntries(url.searchParams));
+        const chunks = [];
+        for await (const chunk of req) chunks.push(chunk);
+        const form = Object.fromEntries(new URLSearchParams(Buffer.concat(chunks).toString('utf8')));
+        if (leaf === 'token' && form.grant_type === 'authorization_code') return trade(res, form);
+        try {
+            if (leaf === 'token') return reply(res, 200, graph.store.token(form));
+            if (leaf === 'devicecode') return reply(res, 200, graph.store.deviceCode(form));
+        } catch (error) {
+            return refuse(res, error.code, error.message);
+        }
+        return reply(res, 404, {});
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    page.base = `http://127.0.0.1:${server.address().port}/login`;
+    page.close = () => new Promise((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+    });
+    return page;
+}
+
+/** The Graph stand-in, Microsoft's sign-in page in front of it, and an env that signs in through them. */
+async function signInSetup(t) {
+    const graph = await start();
+    t.after(() => graph.close());
+    const page = await startSignInPage(graph);
+    t.after(() => page.close());
+    const env = {
+        request: (url, init) => request(url, init), now: () => Date.now(), zone: ZONE, log() {},
+        settings: { ...graph.settings, microsoftLoginBase: page.base },
+    };
+    return { graph, page, env };
+}
+
+/** The loopback addresses this computer has, as a URL names them: 127.0.0.1, and [::1] when it has IPv6. */
+async function loopbackHosts() {
+    const server = createServer();
+    try {
+        await new Promise((resolve, reject) => {
+            server.once('error', reject);
+            server.listen(0, '::1', resolve);
+        });
+        return ['127.0.0.1', '[::1]'];
+    } catch {
+        return ['127.0.0.1'];
+    } finally {
+        server.close();
+    }
 }
 
 /** A weekly series on Mondays and Wednesdays, 9:30 to 10:00 Pacific, from Monday 2026-10-05. */
@@ -73,19 +244,163 @@ const isSourceError = (code) => (error) => error instanceof SourceError && error
 test('the module is the microsoft events source', () => {
     assert.equal(kind, 'microsoft');
     assert.equal(style, 'events');
-    for (const fn of [create, signIn, rruleFromPattern, patternFromRrule]) assert.equal(typeof fn, 'function');
+    assert.equal(REDIRECT_URI, 'http://localhost');
+    for (const fn of [create, signIn, revoke, rruleFromPattern, patternFromRrule]) assert.equal(typeof fn, 'function');
     const source = create(ACCOUNT, { request, secret: memorySecret(), now: Date.now, zone: ZONE, settings: {} });
     for (const name of ['calendars', 'sync', 'create', 'update', 'remove', 'respond']) assert.equal(typeof source[name], 'function', name);
 });
 
 // ── Sign-in ────────────────────────────────────────────────────────────
 
+test('browser sign-in: PKCE and a state, back through http://localhost, as a public client with no secret', async (t) => {
+    const { graph, page, env } = await signInSetup(t);
+    const flow = await signIn(env);
+    const url = new URL(flow.url);
+    assert.equal(`${url.origin}${url.pathname}`, `${page.base}/common/oauth2/v2.0/authorize`);
+    const asked = Object.fromEntries(url.searchParams);
+    // The address the app registers, with the port the loopback got (Microsoft ignores a localhost port).
+    assert.match(flow.redirectUri, /^http:\/\/localhost:\d+$/);
+    assert.equal(asked.redirect_uri, flow.redirectUri);
+    assert.equal(asked.client_id, 'stand-in-client-id');
+    assert.equal(asked.response_type, 'code');
+    assert.equal(asked.scope, 'offline_access Calendars.ReadWrite User.Read');
+    assert.equal(asked.code_challenge_method, 'S256');
+    assert.match(asked.code_challenge, /^[A-Za-z0-9_-]{43}$/);
+    assert.ok(asked.state.length >= 32);
+    // A new account: Microsoft asks which one.
+    assert.equal(asked.prompt, 'select_account');
+    assert.equal(asked.login_hint, undefined);
+    assert.equal(asked.client_secret, undefined);
+
+    // The loopback answers at 127.0.0.1 and, where this computer has it, ::1, at one port: localhost may mean either.
+    // An answer with another state (an old tab, or a forged link) is turned away there; the sign-in goes on.
+    const { port } = new URL(flow.redirectUri);
+    for (const host of await loopbackHosts()) {
+        const forged = await fetch(`http://${host}:${port}/?state=forged&code=M.C5forged`);
+        assert.equal(forged.status, 400, host);
+        assert.match(await forged.text(), /another sign-in/);
+        assert.equal((await fetch(`http://${host}:${port}/favicon.ico`)).status, 404);
+    }
+    assert.deepEqual(page.tokenRequests, []);
+
+    // The browser: Microsoft's page sends it back to http://localhost, and the code is traded.
+    const back = await fetch(flow.url);
+    assert.equal(back.status, 200);
+    assert.match(await back.text(), /signed in\. You can close this tab/);
+    const { grant, email, name } = await flow.done;
+    assert.deepEqual([email, name], ['robin@example.com', 'Robin Park']);
+    // The same grant a code sign-in keeps.
+    assert.deepEqual(Object.keys(grant).sort(), ['accessToken', 'expiresAt', 'refreshToken', 'scope']);
+    assert.ok(graph.store.accessTokens.has(grant.accessToken));
+    assert.ok(graph.store.refreshTokens.has(grant.refreshToken));
+    assert.equal(grant.scope, 'Calendars.ReadWrite User.Read');
+    assert.ok(Math.abs(grant.expiresAt - (Date.now() + 3_599_000)) < 10_000);
+
+    // The exchange: the code with the verifier of its challenge and the same redirect address, and no secret.
+    assert.equal(page.tokenRequests.length, 1);
+    const [traded] = page.tokenRequests;
+    assert.equal(traded.grant_type, 'authorization_code');
+    assert.equal(traded.client_id, 'stand-in-client-id');
+    assert.equal(traded.redirect_uri, flow.redirectUri);
+    assert.equal(createHash('sha256').update(traded.code_verifier, 'ascii').digest('base64url'), asked.code_challenge);
+    assert.equal('client_secret' in traded, false);
+    assert.equal('client_assertion' in traded, false);
+    assert.equal(graph.store.requestsTo('/v1.0/me', 'GET').length, 1);
+    // One use: the loopback is closed now.
+    await assert.rejects(fetch(`http://127.0.0.1:${port}/`));
+
+    // The grant renews as any other: the new one is saved.
+    const secret = memorySecret({ ...grant, expiresAt: Date.now() + 60_000 });
+    graph.store.addCalendar({ name: 'Calendar', isDefaultCalendar: true });
+    const source = create(ACCOUNT, { ...env, secret, now: () => Date.now() });
+    assert.equal((await source.calendars()).length, 1);
+    assert.equal(secret.sets, 1);
+    assert.notEqual(secret.value.refreshToken, grant.refreshToken);
+});
+
+test('browser sign-in: signing in again names the account; the address pasted from another device, with either host', async (t) => {
+    const { page, env } = await signInSetup(t);
+    const flow = await signIn(env, { loginHint: ' robin@example.com ' });
+    const asked = new URL(flow.url).searchParams;
+    assert.equal(asked.get('login_hint'), 'robin@example.com');
+    assert.equal(asked.get('prompt'), null);
+
+    // The browser can't reach this computer: the user copies the address it ended on.
+    const consent = await fetch(flow.url, { redirect: 'manual' });
+    assert.equal(consent.status, 302);
+    const pasted = consent.headers.get('location');
+    assert.ok(pasted.startsWith(`${flow.redirectUri}/?`), pasted);
+
+    // An address from another sign-in, or no address at all, is refused; the sign-in goes on.
+    const other = new URL(pasted);
+    other.searchParams.set('state', 'from-another-sign-in');
+    await assert.rejects(flow.finish(other.toString()), (e) => isSourceError('auth')(e) && /another sign-in/.test(e.message));
+    await assert.rejects(flow.finish('hello'), (e) => isSourceError('auth')(e) && e.message.includes(flow.redirectUri));
+    assert.deepEqual(page.tokenRequests, []);
+
+    // The address as the browser showed it with 127.0.0.1 for localhost does as well.
+    const result = await flow.finish(pasted.replace('//localhost:', '//127.0.0.1:'));
+    assert.deepEqual([result.email, result.name], ['robin@example.com', 'Robin Park']);
+    assert.equal((await flow.done).grant.accessToken, result.grant.accessToken);
+    // The same answer again gives the same grant, without a second exchange.
+    assert.equal((await flow.finish(pasted)).grant.accessToken, result.grant.accessToken);
+    assert.equal(page.tokenRequests.length, 1);
+    assert.equal(page.tokenRequests[0].redirect_uri, flow.redirectUri);
+
+    // And with ::1.
+    const again = await signIn(env);
+    const ended = (await fetch(again.url, { redirect: 'manual' })).headers.get('location');
+    assert.equal((await again.finish(ended.replace('//localhost:', '//[::1]:'))).email, 'robin@example.com');
+
+    // The tenant setting picks the sign-in page.
+    const work = await signIn({ ...env, settings: { ...env.settings, microsoftTenant: 'organizations' } });
+    assert.equal(new URL(work.url).pathname, '/login/organizations/oauth2/v2.0/authorize');
+    work.cancel();
+});
+
+test('browser sign-in: declined on Microsoft\'s page, stopped, out of time, or an app registered for the web', async (t) => {
+    const { page, env } = await signInSetup(t);
+    page.consent = 'deny';
+    let flow = await signIn(env);
+    const declined = await fetch(flow.url);
+    assert.equal(declined.status, 400);
+    assert.match(await declined.text(), /didn&#39;t finish: Access wasn&#39;t allowed on the sign-in page\./);
+    await assert.rejects(flow.done, (e) => isSourceError('auth')(e) && e.message === 'Access wasn\'t allowed on the sign-in page.');
+    page.consent = 'allow';
+
+    // Stopped: the loopback closes, and a pasted address can't finish it any more.
+    flow = await signIn(env);
+    flow.cancel();
+    await assert.rejects(flow.done, (e) => isSourceError('auth')(e) && /stopped/.test(e.message));
+    await assert.rejects(fetch(`http://127.0.0.1:${new URL(flow.redirectUri).port}/`));
+    await assert.rejects(flow.finish(`${flow.redirectUri}/?state=x&code=y`), isSourceError('auth'));
+
+    flow = await signIn(env, { timeoutMs: 50 });
+    await assert.rejects(flow.done, (e) => isSourceError('auth')(e) && /in time/.test(e.message));
+
+    // The redirect address under "Web": Microsoft wants a secret, and the user hears what to change.
+    page.webApp = true;
+    flow = await signIn(env);
+    assert.equal((await fetch(flow.url)).status, 400);
+    await assert.rejects(flow.done, (e) => isSourceError('config')(e) && e.message.includes('http://localhost as a redirect URI under "Mobile and desktop applications"')
+        && !/AADSTS|client_secret|code=/.test(e.message));
+    assert.equal(page.tokenRequests.length, 1);
+
+    // No app id in the settings: nothing starts, either way.
+    const { microsoftClientId, ...noApp } = env.settings;
+    assert.equal(typeof microsoftClientId, 'string');
+    for (const method of [undefined, 'code']) {
+        await assert.rejects(signIn({ ...env, settings: noApp }, { method }), (e) => isSourceError('config')(e) && /microsoftClientId/.test(e.message)
+            && e.message.includes('http://localhost'));
+    }
+});
+
 test('device code sign-in: pending twice, then the grant and who signed in', async (t) => {
     const graph = await start();
     t.after(() => graph.close());
     const env = { request: (url, init) => request(url, init), now: () => Date.now(), zone: ZONE, settings: graph.settings, log() {} };
     const before = Date.now();
-    const flow = await signIn(env);
+    const flow = await signIn(env, CODE);
     assert.match(flow.userCode, /^[0-9A-F]{9}$/);
     assert.equal(flow.verificationUri, 'https://microsoft.com/devicelogin');
     assert.ok(flow.message.includes(flow.userCode));
@@ -119,7 +434,7 @@ test('device code sign-in: the address falls back to the user principal name, an
     graph.store.user.mail = null;
     graph.store.user.userPrincipalName = 'robin@contoso.example';
     const env = { request: (url, init) => request(url, init), now: () => Date.now(), zone: ZONE, settings: { ...graph.settings, microsoftTenant: 'organizations' } };
-    const flow = await signIn(env);
+    const flow = await signIn(env, CODE);
     const { email } = await flow.done;
     assert.equal(email, 'robin@contoso.example');
     assert.deepEqual([...new Set(graph.store.tenants)], ['organizations']);
@@ -131,31 +446,32 @@ test('device code sign-in: declined, run out, stopped, or no app to sign in with
     const env = { request: (url, init) => request(url, init), now: () => Date.now(), zone: ZONE, settings: graph.settings };
 
     graph.store.devicePlan = ['authorization_pending', 'authorization_declined'];
-    let flow = await signIn(env);
+    let flow = await signIn(env, CODE);
     await assert.rejects(flow.done, (e) => isSourceError('auth')(e) && /declined/.test(e.message));
 
     graph.store.devicePlan = ['expired_token'];
-    flow = await signIn(env);
+    flow = await signIn(env, CODE);
     await assert.rejects(flow.done, (e) => isSourceError('auth')(e) && /ran out/.test(e.message));
 
     // The code runs out on this side too, without asking Microsoft again.
     graph.store.devicePlan = ['authorization_pending'];
     const polls = graph.store.counts.devicePolls;
     let calls = 0;
-    flow = await signIn({ ...env, now: () => (calls++ === 0 ? Date.now() : Date.now() + 1_000_000_000) });
+    flow = await signIn({ ...env, now: () => (calls++ === 0 ? Date.now() : Date.now() + 1_000_000_000) }, CODE);
     await assert.rejects(flow.done, (e) => isSourceError('auth')(e) && /ran out/.test(e.message));
     assert.equal(graph.store.counts.devicePolls, polls);
 
     // Pending for ever, until the user stops it.
-    flow = await signIn(env);
+    flow = await signIn(env, CODE);
     while (graph.store.counts.devicePolls === polls) await new Promise((resolve) => setTimeout(resolve, 5));
     flow.cancel();
     await assert.rejects(flow.done, (e) => isSourceError('auth')(e) && /stopped/.test(e.message));
 
     // An app id Microsoft doesn't know, and none at all.
-    await assert.rejects(signIn({ ...env, settings: { ...graph.settings, microsoftClientId: 'not-registered' } }), isSourceError('config'));
+    await assert.rejects(signIn({ ...env, settings: { ...graph.settings, microsoftClientId: 'not-registered' } }, CODE),
+        (e) => isSourceError('config')(e) && /\(unauthorized_client\)/.test(e.message) && /"Allow public client flows"/.test(e.message));
     const { microsoftClientId, ...noApp } = graph.settings;
-    await assert.rejects(signIn({ ...env, settings: noApp }), (e) => isSourceError('config')(e) && /microsoftClientId/.test(e.message));
+    await assert.rejects(signIn({ ...env, settings: noApp }, CODE), (e) => isSourceError('config')(e) && /microsoftClientId/.test(e.message));
     assert.equal(typeof microsoftClientId, 'string');
 });
 
@@ -166,7 +482,7 @@ test('device code sign-in: a dropped connection or a busy server while polling o
     graph.store.devicePlan = ['authorization_pending', 'grant'];
     graph.store.failNext({ path: '/oauth2/v2.0/token', drop: true });
     graph.store.failNext({ path: '/oauth2/v2.0/token', status: 503, headers: { 'Retry-After': '1' } });
-    const flow = await signIn(env);
+    const flow = await signIn(env, CODE);
     const { email } = await flow.done;
     assert.equal(email, 'robin@example.com');
     // Two failed polls, then the plan: pending, then the grant.
@@ -190,7 +506,7 @@ test('device code sign-in: slow_down waits five seconds longer', async (t) => {
         const text = JSON.stringify(body);
         return { status, ok: status < 300, url, headers: new Headers(), text, json: () => JSON.parse(text) };
     };
-    const flow = await signIn({ request: stub, now: () => NOW, zone: ZONE, settings: { microsoftClientId: 'app' } });
+    const flow = await signIn({ request: stub, now: () => NOW, zone: ZONE, settings: { microsoftClientId: 'app' } }, CODE);
     const settle = () => new Promise((resolve) => setImmediate(resolve));
     const tick = async (ms) => {
         t.mock.timers.tick(ms);
@@ -221,6 +537,42 @@ test('device code sign-in: slow_down waits five seconds longer', async (t) => {
         email: 'robin@example.com',
         name: 'Robin Park',
     });
+});
+
+// ── Removing the account ───────────────────────────────────────────────
+
+test('revoke: a public client can\'t revoke its grant, so the page where the user withdraws the app\'s access', async () => {
+    const jwt = (claims) => `${Buffer.from('{"typ":"JWT","alg":"RS256"}').toString('base64url')}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.c2lnbmF0dXJl`;
+    const PERSONAL = { revoked: false, manageUrl: 'https://account.live.com/consent/Manage' };
+    const WORK = { revoked: false, manageUrl: 'https://myapplications.microsoft.com/' };
+    const scope = 'Calendars.ReadWrite User.Read';
+    const work = { accessToken: jwt({ aud: '00000003-0000-0000-c000-000000000000', tid: '0b5a2c71-3e4d-4f6a-8b9c-1d2e3f4a5b6c', scp: scope }), refreshToken: '0.AXoA-work', expiresAt: NOW, scope };
+    const personal = { accessToken: 'EwBwA8l6BAAUs5opaque', refreshToken: 'M.C507_BAY.0.U.-personal', expiresAt: NOW, scope };
+    const consumers = { ...personal, accessToken: jwt({ tid: '9188040d-6c67-4c5b-b112-36a304b66dad', scp: scope }) };
+    const asked = [];
+    const env = (tenant) => ({
+        request: async (url) => {
+            asked.push(url);
+            throw new Error('No network here.');
+        },
+        now: () => NOW,
+        zone: ZONE,
+        settings: { microsoftClientId: 'app', ...(tenant === undefined ? {} : { microsoftTenant: tenant }) },
+    });
+
+    // For any account ('common'), the grant tells: a work or school account's token names its tenant, a personal one's doesn't.
+    assert.deepEqual(await revoke(env(), work), WORK);
+    assert.deepEqual(await revoke(env(), personal), PERSONAL);
+    assert.deepEqual(await revoke(env(), consumers), PERSONAL);
+    assert.deepEqual(await revoke(env(), undefined), PERSONAL);
+    // The secret as the credential store hands it does as well.
+    assert.deepEqual(await revoke(env(), memorySecret(work)), WORK);
+    // A tenant in the settings says which, whatever the token.
+    assert.deepEqual(await revoke(env('consumers'), work), PERSONAL);
+    assert.deepEqual(await revoke(env('9188040D-6C67-4C5B-B112-36A304B66DAD'), work), PERSONAL);
+    assert.deepEqual(await revoke(env('organizations'), personal), WORK);
+    assert.deepEqual(await revoke(env('contoso.onmicrosoft.com'), personal), WORK);
+    assert.deepEqual(asked, []);
 });
 
 // ── Tokens ─────────────────────────────────────────────────────────────
@@ -299,14 +651,14 @@ test('a 401 renews the sign-in once and tries again', async (t) => {
 
 // ── Calendars ──────────────────────────────────────────────────────────
 
-test('calendars: every page, with colors, read-only ones and instances mode', async (t) => {
+test('calendars: every page, with colors, read-only ones, instances mode and the default one', async (t) => {
     const { store, source } = await setup(t);
     store.pageSize = 2;
     const main = store.addCalendar({ name: 'Calendar', hexColor: '#E74856', isDefaultCalendar: true });
     const family = store.addCalendar({ name: 'Family', color: 'lightTeal' });
     const holidays = store.addCalendar({ name: 'Holidays', color: 'auto', canEdit: false });
     assert.deepEqual(await source.calendars(), [
-        { remoteId: main, name: 'Calendar', color: '#e74856', readOnly: false, mode: 'instances' },
+        { remoteId: main, name: 'Calendar', color: '#e74856', readOnly: false, mode: 'instances', primary: true },
         { remoteId: family, name: 'Family', color: '#6fcfcf', readOnly: false, mode: 'instances' },
         { remoteId: holidays, name: 'Holidays', readOnly: true, mode: 'instances' },
     ]);
@@ -548,6 +900,7 @@ test('create: a timed event, with people, a reminder, privacy and free time', as
         isAllDay: false,
         start: { dateTime: '2026-10-20T12:00:00', timeZone: 'Pacific Standard Time' },
         end: { dateTime: '2026-10-20T13:30:00', timeZone: 'Pacific Standard Time' },
+        transactionId: 'made-here',
     });
     assert.equal(sent.prefer, 'outlook.timezone="UTC"');
     assert.equal(items.length, 1);
@@ -860,6 +1213,145 @@ test('respond: accept, maybe and decline, with sendResponse', async (t) => {
     ]);
     assert.deepEqual(store.requestsTo('/accept', 'POST')[0].body, { sendResponse: true });
     await assert.rejects(source.respond({ remoteId: cal }, target(single), 'maybe', 'all'), isSourceError('config'));
+});
+
+test('changes go with If-Match: the etag the plugin read, or the one Graph has just before when it has none', async (t) => {
+    const { store, source, sent } = await setup(t, { rules: true });
+    const cal = store.addCalendar({ name: 'Work' });
+    const series = weeklySeries(store, cal);
+    const single = store.addEvent(cal, { subject: 'Dentist', start: pst('2026-10-16T08:00:00'), end: pst('2026-10-16T09:00:00') });
+    const lunch = store.addEvent(cal, { subject: 'Lunch', start: pst('2026-10-15T12:00:00'), end: pst('2026-10-15T13:00:00') });
+    const { items } = await source.sync({ remoteId: cal }, undefined, { from: FROM, to: TO });
+    const etagNow = (id) => store.json(id)['@odata.etag'];
+    const writes = () => sent.filter((r) => r.method === 'PATCH' || r.method === 'DELETE').map((r) => [r.method, r.path, r.headers['If-Match']]);
+    const reads = (id) => sent.filter((r) => r.method === 'GET' && r.path === `/v1.0/me/events/${id}`).length;
+    const target = (item) => ({ item, record: item.events[0], occurrence: item.events[0].recurrenceId });
+
+    // A single event: the etag it was read with. What comes back has the new one.
+    const dentist = byId(items, single);
+    assert.equal(dentist.etag, etagNow(single));
+    const [changed] = await source.update({ remoteId: cal }, target(dentist), { title: 'Dentist (new time)' }, 'all');
+    assert.deepEqual(writes().at(-1), ['PATCH', `/v1.0/me/events/${single}`, dentist.etag]);
+    assert.equal(changed.etag, etagNow(single));
+    assert.notEqual(changed.etag, dentist.etag);
+
+    // One occurrence: the occurrence's.
+    const monday = byId(items, store.occurrenceId(series, '2026-10-12'));
+    await source.update({ remoteId: cal }, target(monday), { title: 'Sync (Monday)' }, 'one');
+    assert.deepEqual(writes().at(-1), ['PATCH', `/v1.0/me/events/${monday.remoteId}`, monday.etag]);
+
+    // The whole series from one of its occurrences: the plugin holds no etag of the series' own, so it reads the series first.
+    const seriesEtag = etagNow(series);
+    assert.deepEqual(await source.update({ remoteId: cal }, target(byId(items, store.occurrenceId(series, '2026-10-14'))), { title: 'Weekly sync' }, 'all'), []);
+    assert.equal(reads(series), 1);
+    assert.deepEqual(writes().at(-1), ['PATCH', `/v1.0/me/events/${series}`, seriesEtag]);
+
+    // The series as a calendar that keeps series holds it: its own etag, and nothing read first...
+    const master = {
+        remoteId: series, etag: etagNow(series),
+        events: [{ uid: 'sync', title: 'Weekly sync', start: LA('2026-10-05T09:30:00'), end: LA('2026-10-05T10:00:00'), allDay: false, rrule: 'FREQ=WEEKLY;BYDAY=MO,WE;WKST=SU' }],
+    };
+    await source.update({ remoteId: cal }, { item: master, record: master.events[0] }, { location: 'Room 4' }, 'all');
+    assert.equal(reads(series), 1);
+    assert.deepEqual(writes().at(-1), ['PATCH', `/v1.0/me/events/${series}`, master.etag]);
+    // ...and one of its occurrences, found by its original start: the etag Graph listed it with.
+    const wednesday = store.occurrenceId(series, '2026-10-21');
+    const listed = etagNow(wednesday);
+    await source.update({ remoteId: cal }, { item: master, record: master.events[0], occurrence: LA('2026-10-21T09:30:00') }, { title: 'Sync (Wednesday)' }, 'one');
+    assert.deepEqual(writes().at(-1), ['PATCH', `/v1.0/me/events/${wednesday}`, listed]);
+
+    // An item without an etag: the event is read just before, and the change goes with the etag Graph has.
+    const bare = { remoteId: lunch, events: byId(items, lunch).events };
+    const lunchEtag = etagNow(lunch);
+    await source.update({ remoteId: cal }, { item: bare, record: bare.events[0] }, { location: 'Harry\'s Bar' }, 'all');
+    assert.equal(reads(lunch), 1);
+    assert.deepEqual(writes().at(-1), ['PATCH', `/v1.0/me/events/${lunch}`, lunchEtag]);
+    // A bare changeKey goes as the weak etag Graph makes of it.
+    const { changeKey } = store.json(lunch);
+    await source.update({ remoteId: cal }, { item: { ...bare, etag: changeKey }, record: bare.events[0] }, { location: 'Main St' }, 'all');
+    assert.deepEqual(writes().at(-1), ['PATCH', `/v1.0/me/events/${lunch}`, `W/"${changeKey}"`]);
+    assert.equal(store.json(lunch).location.displayName, 'Main St');
+
+    // Deletes too: an occurrence, the whole series from an occurrence (read first), and a single event.
+    const latest = (await source.sync({ remoteId: cal }, undefined, { from: FROM, to: TO })).items;
+    const nextMonday = byId(latest, store.occurrenceId(series, '2026-10-19'));
+    assert.deepEqual(await source.remove({ remoteId: cal }, target(nextMonday), 'one'), { removed: [nextMonday.remoteId], items: [] });
+    assert.deepEqual(writes().at(-1), ['DELETE', `/v1.0/me/events/${nextMonday.remoteId}`, nextMonday.etag]);
+    const seriesNow = etagNow(series);
+    await source.remove({ remoteId: cal }, target(byId(latest, store.occurrenceId(series, '2026-10-12'))), 'all');
+    assert.equal(reads(series), 2);
+    assert.deepEqual(writes().at(-1), ['DELETE', `/v1.0/me/events/${series}`, seriesNow]);
+    assert.equal(store.events.has(series), false);
+    const dentistNow = byId(latest, single);
+    await source.remove({ remoteId: cal }, target(dentistNow), 'all');
+    assert.deepEqual(writes().at(-1), ['DELETE', `/v1.0/me/events/${single}`, dentistNow.etag]);
+    // Gone already, with no etag to go by: it is read, found gone, and nothing more is sent.
+    const count = writes().length;
+    assert.deepEqual(await source.remove({ remoteId: cal }, { item: { remoteId: single, events: dentistNow.events } }, 'all'), { removed: [single], items: [] });
+    assert.equal(writes().length, count);
+
+    // Every change named an etag, never '*'.
+    assert.equal(writes().length, 10);
+    for (const [, , ifMatch] of writes()) assert.match(ifMatch, /^W\/"[^"*]+"$/);
+});
+
+test('a change made elsewhere meanwhile: Graph answers 412, a conflict, and nothing is written over', async (t) => {
+    const { store, source } = await setup(t, { rules: true });
+    const cal = store.addCalendar({ name: 'Work' });
+    const series = weeklySeries(store, cal);
+    const single = store.addEvent(cal, { subject: 'Dentist', start: pst('2026-10-16T08:00:00'), end: pst('2026-10-16T09:00:00') });
+    const first = await source.sync({ remoteId: cal }, undefined, { from: FROM, to: TO });
+    const target = (id) => ({ item: byId(first.items, id), record: byId(first.items, id).events[0], occurrence: byId(first.items, id).events[0].recurrenceId });
+
+    // Someone moves the appointment in Outlook: a change and a delete made here on the old one are turned down.
+    store.updateEvent(single, { subject: 'Dentist (moved in Outlook)', start: pst('2026-10-16T10:00:00'), end: pst('2026-10-16T11:00:00') });
+    await assert.rejects(source.update({ remoteId: cal }, target(single), { title: 'Dentist (here)' }, 'all'), (e) => isSourceError('conflict')(e) && e.status === 412);
+    await assert.rejects(source.remove({ remoteId: cal }, target(single), 'all'), isSourceError('conflict'));
+    assert.equal(store.json(single).subject, 'Dentist (moved in Outlook)');
+
+    // One occurrence changed there: the same.
+    const monday = store.occurrenceId(series, '2026-10-12');
+    store.updateEvent(monday, { subject: 'Sync (moved in Outlook)' });
+    await assert.rejects(source.update({ remoteId: cal }, target(monday), { title: 'Sync (here)' }, 'one'), isSourceError('conflict'));
+    await assert.rejects(source.remove({ remoteId: cal }, target(monday), 'one'), isSourceError('conflict'));
+    assert.equal(store.json(monday).subject, 'Sync (moved in Outlook)');
+
+    // After a sync the plugin has what Graph has, and the change goes through.
+    const second = await source.sync({ remoteId: cal }, first.state, { from: FROM, to: TO });
+    const now = byId(second.items, single);
+    const [changed] = await source.update({ remoteId: cal }, { item: now, record: now.events[0] }, { title: 'Dentist (here)' }, 'all');
+    assert.equal(changed.events[0].title, 'Dentist (here)');
+    assert.equal(store.json(single).subject, 'Dentist (here)');
+
+    // Graph's 409 for a change key that doesn't match is a conflict as well.
+    store.failNext({ path: '/v1.0/me/events/', method: 'PATCH', status: 409, body: { error: { code: 'ErrorIrresolvableConflict', message: 'The change key does not match.' } } });
+    await assert.rejects(source.update({ remoteId: cal }, { item: changed, record: changed.events[0] }, { title: 'x' }, 'all'), isSourceError('conflict'));
+});
+
+test('create: the record\'s uid is Graph\'s transactionId, so a create repeated after a lost answer makes no second event', async (t) => {
+    const { store, source, sent } = await setup(t, { rules: true });
+    const cal = store.addCalendar({ name: 'Work' });
+    const record = { uid: '1f0c6a52-7d1e-4b8a-9c3f-2e5d4b6a8c10', title: 'Planning', start: LA('2026-10-20T10:00:00'), end: LA('2026-10-20T11:00:00') };
+    const posts = () => sent.filter((r) => r.method === 'POST' && r.path === `/v1.0/me/calendars/${cal}/events`);
+    const [made] = await source.create({ remoteId: cal }, record);
+    assert.equal(store.requestsTo('/events', 'POST')[0].body.transactionId, record.uid);
+
+    // The answer was lost, and the same create goes again with the same uid: Graph gives back the event it made.
+    const [again] = await source.create({ remoteId: cal }, record);
+    assert.equal(posts().length, 2);
+    assert.equal(again.remoteId, made.remoteId);
+    assert.equal(again.events[0].title, 'Planning');
+    assert.equal(store.events.size, 1);
+
+    // The uid with other details: Microsoft turns it down, and the event it made comes with the next sync.
+    await assert.rejects(source.create({ remoteId: cal }, { ...record, title: 'Planning (room 4)' }),
+        (e) => isSourceError('conflict')(e) && /earlier try/.test(e.message) && !e.message.includes(record.uid));
+    assert.equal(store.events.size, 1);
+
+    // A record without a uid goes without one.
+    await source.create({ remoteId: cal }, { title: 'Walk', start: LA('2026-10-21T10:00:00'), end: LA('2026-10-21T11:00:00') });
+    assert.equal('transactionId' in store.requestsTo('/events', 'POST').at(-1).body, false);
+    assert.equal(store.events.size, 2);
 });
 
 // ── Mapping ────────────────────────────────────────────────────────────

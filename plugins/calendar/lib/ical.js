@@ -5,18 +5,25 @@
  * exactly as it was written.
  *
  * Times come out as model.js Times whose zone is an IANA id, 'UTC' or null
- * (floating). A zone the file defines itself (VTIMEZONE) under a name the
- * runtime doesn't know (Outlook's "Customized Time Zone") is matched to the
- * IANA zone with the same offsets; one that matches none is read as UTC.
- * Writing adds a VTIMEZONE for each IANA zone the file uses, made from the
- * runtime's zone data, as RFC 5545 asks.
+ * (floating). A TZID the runtime doesn't know is read as the zone it names
+ * (Windows', Outlook's and Lotus Notes' names, prefixed ids, "GMT+01.00"),
+ * else as the zone its VTIMEZONE defines: the IANA zone whose offsets and
+ * changes match its rules over the years the file's times use, else the
+ * nearest one, else its standard offset (a fixed offset no IANA id has is
+ * read as UTC). Floating only when nothing says what a TZID is. Writing
+ * keeps the file's own TZID for a zone its VTIMEZONE matches, and adds a
+ * VTIMEZONE for each IANA zone the file uses, made from the runtime's zone
+ * data, as RFC 5545 asks. A changed occurrence with RANGE=THISANDFUTURE
+ * keeps that on its record (`thisAndFuture`).
  *
  * @module dsh-plugin-calendar/ical
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { ATTENDEE_STATUSES, cleanRecord, sameTime } from './model.js';
 import { expandWall, parseRule } from './recur.js';
-import { addDays, ianaZone, isDay, isZone, localZone, normalLocal, offsetAt, toInstant, toLocal, wallMs, wallOf, zoneIds } from './zones.js';
+import {
+    addDays, fixedZone, ianaZone, isDay, isZone, localZone, nameOffsets, normalLocal, offsetAt, toInstant, toLocal, wallMs, wallOf, zoneIds,
+} from './zones.js';
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -254,43 +261,59 @@ export function readDuration(value) {
     };
 }
 
-/** A UTC-OFFSET value (+0530, -0800, +023045) in minutes. */
+/** A UTC-OFFSET value (+0530, -0800, +023045; leniently +05:30 or +1) in minutes. */
 function readOffset(value) {
-    const m = /^([+-])(\d{2})(\d{2})(\d{2})?$/.exec(String(value ?? '').trim());
-    if (m === null) return undefined;
-    const minutes = Number(m[2]) * 60 + Number(m[3]) + Math.round(Number(m[4] ?? 0) / 60);
+    const m = /^([+-])(\d{1,2})(?::?(\d{2}))?(?::?(\d{2}))?$/.exec(String(value ?? '').trim());
+    if (m === null || Number(m[2]) > 14 || Number(m[3] ?? 0) > 59) return undefined;
+    const minutes = Number(m[2]) * 60 + Number(m[3] ?? 0) + Math.round(Number(m[4] ?? 0) / 60);
     return m[1] === '-' ? -minutes : minutes;
 }
 
 const pad = (n) => String(n).padStart(2, '0');
 const offsetValue = (minutes) => `${minutes < 0 ? '-' : '+'}${pad(Math.floor(Math.abs(minutes) / 60))}${pad(Math.abs(minutes) % 60)}`;
 
-/** A time as a property: VALUE=DATE, a UTC 'Z' time, a TZID time, or a floating one. */
-function timeProp(name, time) {
+/**
+ * A time as a property: VALUE=DATE, a UTC 'Z' time, a TZID time, or a
+ * floating one. `nameOf` gives the TZID a zone is written as (the file's own
+ * name for it, when it has one).
+ */
+function timeProp(name, time, nameOf = (tz) => tz) {
     if ('date' in time) return { name, params: { VALUE: ['DATE'] }, value: time.date.replaceAll('-', '') };
     const value = time.local.replace(/[-:]/g, '');
     if (time.tz === 'UTC') return { name, params: {}, value: `${value}Z` };
-    if (time.tz) return { name, params: { TZID: [time.tz] }, value };
+    if (time.tz) return { name, params: { TZID: [nameOf(time.tz)] }, value };
     return { name, params: {}, value };
 }
 
 // ── Zones a file defines ───────────────────────────────────────────────
 
+/** A TZID as a key: parameters and VTIMEZONEs name a zone alike (a TZID property's value is TEXT, its commas escaped). */
+const zoneKey = (value) => unescapeText(value ?? '').trim().replace(/^"|"$/g, '').trim();
+
+/** A VTIMEZONE's TZID, as a key. */
+const tzidOf = (vtimezone) => zoneKey(propOf(vtimezone, 'TZID')?.value);
+
+/** When an observance starts, as wall-clock ms: its DTSTART (a day at midnight), or 1601 as Outlook writes it. */
+function onsetWall(part) {
+    const start = readStamp(propOf(part, 'DTSTART')?.value) ?? { date: '1601-01-01' };
+    return wallMs('date' in start ? `${start.date}T00:00:00` : start.local);
+}
+
 /**
  * A VTIMEZONE as a rule zone: `offsetAt(ms)` from its STANDARD and
  * DAYLIGHT parts (each from DTSTART on, by its RRULE and RDATEs), and the
- * onsets it found (1900 to 2200).
+ * onsets it found (1900 to 2200). Lenient as files are: an offset written
+ * +01:00, a part without TZOFFSETFROM or DTSTART.
  */
 function ruleZone(vtimezone) {
     const onsets = [];
     let first;
     for (const part of vtimezone.subs) {
         if (part.name !== 'STANDARD' && part.name !== 'DAYLIGHT') continue;
-        const from = readOffset(propOf(part, 'TZOFFSETFROM')?.value);
         const to = readOffset(propOf(part, 'TZOFFSETTO')?.value);
-        const start = readStamp(propOf(part, 'DTSTART')?.value);
-        if (from === undefined || to === undefined || start === undefined || 'date' in start) continue;
-        const wall = wallMs(start.local);
+        if (to === undefined) continue;
+        const from = readOffset(propOf(part, 'TZOFFSETFROM')?.value) ?? to;
+        const wall = onsetWall(part);
         if (first === undefined || wall < first.wall) first = { wall, from };
         onsets.push([wall - from * MINUTE, to]);
         const rrule = propOf(part, 'RRULE');
@@ -353,73 +376,242 @@ const COMMON_ZONES = [
     'Pacific/Auckland',
 ];
 
-/** Matches already made, by the VTIMEZONE's text. */
-const matched = new Map();
-
-/** The IANA zone whose offsets equal the rule zone's around a year, or undefined. */
-function matchZone(rules, year, userZone) {
-    const from = Date.UTC(year - 1, 0, 1);
-    const to = Date.UTC(year + 2, 0, 1);
-    const samples = [];
-    for (let y = year - 1; y <= year + 1; y++) samples.push(Date.UTC(y, 0, 15), Date.UTC(y, 6, 15));
-    for (const [at] of rules.onsets) if (at >= from && at < to) samples.push(at - MINUTE, at);
-    const want = samples.map((ms) => rules.offsetAt(ms));
-    if (want.every((o) => o === 0)) return 'UTC';
+/** The zones tried when matching a file's own zone, in order: the user's, the common ones, then every one the runtime knows. */
+function* candidates(userZone) {
     const seen = new Set(['UTC']);
     for (const tz of [userZone, ...COMMON_ZONES, ...zoneIds()]) {
         if (!tz || seen.has(tz)) continue;
         seen.add(tz);
-        if (!isZone(tz)) continue;
-        if (samples.every((ms, i) => offsetAt(tz, ms) === want[i])) return tz;
+        if (isZone(tz)) yield tz;
+    }
+}
+
+/** Mid-winter and mid-summer of each year: where a zone's standard and daylight offsets show. */
+const seasons = (years) => years.flatMap((y) => [Date.UTC(y, 0, 15, 12), Date.UTC(y, 6, 15, 12)]);
+
+/** Instants to compare zones at, in the years given: the 1st and the 15th of each month, and each change the rules make there (and the minute before it). */
+function samplesOf(rules, years) {
+    const out = [];
+    for (const y of years) for (let m = 0; m < 12; m++) out.push(Date.UTC(y, m, 1, 12), Date.UTC(y, m, 15, 12));
+    for (const [at] of rules.onsets) if (years.includes(new Date(at).getUTCFullYear())) out.push(at - MINUTE, at);
+    return out;
+}
+
+/** Whether a zone keeps the rules' offsets at every sample in the years given. */
+function sameAs(zone, rules, years) {
+    return samplesOf(rules, years).every((ms) => offsetAt(zone, ms) === rules.offsetAt(ms));
+}
+
+/**
+ * The IANA zone with the rule zone's offsets and changes all through the
+ * years given, or undefined. A fixed offset is the user's zone when that
+ * has it all along, else the offset's own id (Etc/GMT-1).
+ */
+function matchZone(rules, years, userZone) {
+    const samples = samplesOf(rules, years);
+    const want = samples.map((ms) => rules.offsetAt(ms));
+    const fits = (tz) => samples.every((ms, i) => offsetAt(tz, ms) === want[i]);
+    if (want.every((o) => o === want[0])) {
+        if (want[0] === 0) return 'UTC';
+        if (userZone && isZone(userZone) && fits(userZone)) return userZone;
+        const fixed = fixedZone(want[0]);
+        if (fixed !== undefined) return fixed;
+    }
+    for (const tz of candidates(userZone)) if (fits(tz)) return tz;
+    return undefined;
+}
+
+/**
+ * When none matches exactly: the zone with the rule zone's standard and
+ * daylight offsets in every year given that agrees with it most often
+ * (three samples in four at least): the same zone, its changes on other
+ * days, as when the file has rules that changed since it was written.
+ */
+function nearZone(rules, years, userZone) {
+    const must = seasons(years);
+    const mustWant = must.map((ms) => rules.offsetAt(ms));
+    if (mustWant.every((o) => o === mustWant[0])) return undefined;
+    const samples = samplesOf(rules, years);
+    const want = samples.map((ms) => rules.offsetAt(ms));
+    let best;
+    let bestScore = Math.ceil(samples.length * 0.75) - 1;
+    for (const tz of candidates(userZone)) {
+        if (!must.every((ms, i) => offsetAt(tz, ms) === mustWant[i])) continue;
+        const score = samples.reduce((n, ms, i) => n + (offsetAt(tz, ms) === want[i] ? 1 : 0), 0);
+        if (score > bestScore) {
+            best = tz;
+            bestScore = score;
+        }
+    }
+    return best;
+}
+
+/** A rule zone that keeps one offset (minutes east). */
+const fixedRules = (minutes) => ({ onsets: [], offsetAt: () => minutes });
+
+/**
+ * A zone with a fixed offset: its IANA id (Etc/GMT-1), else for an offset
+ * that isn't whole hours a zone that kept it all through the years given,
+ * else a rule zone.
+ */
+function fixedOf(minutes, years, userZone) {
+    const rules = fixedRules(minutes);
+    return matchZone(rules, years, userZone) ?? rules;
+}
+
+/**
+ * A VTIMEZONE's standard offset: its STANDARD observance's (the last to
+ * start before `before`, wall-clock ms), else the offset its DAYLIGHT one
+ * changes from; undefined when it gives neither.
+ */
+function standardOffset(vtimezone, before) {
+    const standards = vtimezone.subs
+        .filter((part) => part.name === 'STANDARD')
+        .map((part) => ({ wall: onsetWall(part), to: readOffset(propOf(part, 'TZOFFSETTO')?.value) }))
+        .filter((s) => s.to !== undefined)
+        .sort((a, b) => a.wall - b.wall);
+    const standard = standards.filter((s) => s.wall <= before).at(-1) ?? standards[0];
+    if (standard !== undefined) return standard.to;
+    for (const part of vtimezone.subs) {
+        const from = part.name === 'DAYLIGHT' ? readOffset(propOf(part, 'TZOFFSETFROM')?.value) : undefined;
+        if (from !== undefined) return from;
     }
     return undefined;
 }
 
+/** Matches already made, by the user's zone, the years and the VTIMEZONE's text. */
+const matches = new Map();
+
+/**
+ * The zone a VTIMEZONE defines, from its rules: the IANA zone that matches
+ * them over the years given, else the nearest one, else its standard offset.
+ */
+function definedZone(def, rules, years, userZone) {
+    const key = `${userZone}\n${years.join(',')}\n${writeIcs([def])}`;
+    if (matches.has(key)) return matches.get(key);
+    const end = Date.UTC(years.at(-1) + 1, 0, 1);
+    const zone = matchZone(rules, years, userZone) ?? nearZone(rules, years, userZone)
+        ?? fixedOf(standardOffset(def, end) ?? rules.offsetAt(end), years, userZone);
+    if (matches.size > 200) matches.clear();
+    matches.set(key, zone);
+    return zone;
+}
+
+/** How long a rule's periods last, in days, to tell how long a series with COUNT runs. */
+const PERIOD_DAYS = { YEARLY: 366, MONTHLY: 31, WEEKLY: 7, DAILY: 1 };
+
+/**
+ * The years each TZID's times fall in: the years written, and for a series
+ * that runs until now or on, the years around now too (where it's looked
+ * at). A zone the file defines is matched over these.
+ */
+function zoneYears(calendar, nowYear) {
+    const years = new Map();
+    const add = (tzid, year) => {
+        if (!Number.isInteger(year) || year < 1800 || year > 2999) return;
+        if (!years.has(tzid)) years.set(tzid, new Set());
+        years.get(tzid).add(year);
+    };
+    const walk = (c) => {
+        for (const prop of c.props) {
+            const tzid = zoneKey(paramOf(prop, 'TZID'));
+            if (tzid) for (const part of prop.value.split(',')) add(tzid, Number(part.trim().slice(0, 4)));
+        }
+        const start = propOf(c, 'DTSTART');
+        const tzid = zoneKey(paramOf(start, 'TZID'));
+        const rrule = propOf(c, 'RRULE')?.value ?? '';
+        if (tzid && rrule) {
+            const from = Number(start.value.trim().slice(0, 4));
+            const until = /UNTIL=(\d{4})/i.exec(rrule);
+            const count = /COUNT=(\d+)/i.exec(rrule);
+            const days = PERIOD_DAYS[/FREQ=([A-Z]+)/i.exec(rrule)?.[1].toUpperCase()] ?? 0;
+            const interval = Number(/INTERVAL=(\d+)/i.exec(rrule)?.[1] ?? 1);
+            const to = until ? Number(until[1]) : count ? from + Math.ceil((Number(count[1]) * interval * days) / 365) : nowYear + 1;
+            for (let y = Math.max(from, nowYear - 1); y <= Math.min(to, nowYear + 1); y++) add(tzid, y);
+        }
+        for (const sub of c.subs) if (sub.name !== 'VTIMEZONE') walk(sub);
+    };
+    walk(calendar);
+    return years;
+}
+
+/** Whether a zone has the rule zone's offsets in mid-winter and mid-summer of each year given. */
+const agrees = (zone, rules, years) => seasons(years).every((ms) => offsetAt(zone, ms) === rules.offsetAt(ms));
+
 /** How one VCALENDAR's times read: its zones by TZID, and the zone for floating times. */
 class ZoneBook {
-    constructor(calendar, userZone) {
+    constructor(calendar, userZone, now = Date.now()) {
         this.userZone = userZone;
+        this.nowYear = new Date(now).getUTCFullYear();
         this.defs = new Map();
         for (const sub of calendar.subs) {
             if (sub.name !== 'VTIMEZONE') continue;
-            const id = propOf(sub, 'TZID')?.value.trim();
-            if (id) this.defs.set(id, sub);
+            const id = tzidOf(sub);
+            if (id && !this.defs.has(id)) this.defs.set(id, sub);
         }
+        this.years = zoneYears(calendar, this.nowYear);
         // X-WR-TIMEZONE (Google's and Apple's exports): floating times in the file are in that zone.
         const wr = textOf(calendar, 'X-WR-TIMEZONE');
         this.floating = (wr ? ianaZone(wr) : undefined) ?? null;
         this.zones = new Map();
+        this.names = undefined;
     }
 
-    /** The zone for a TZID: an IANA id, 'UTC', null (floating) or a rule zone with no IANA match. */
-    resolve(tzid, year) {
+    /**
+     * The zone for a TZID: an IANA id, 'UTC', null (floating) or a rule
+     * zone (a fixed offset no IANA id has). In this order: an IANA id (as
+     * is, behind a prefix, or the VTIMEZONE's X-LIC-LOCATION); another name
+     * for one (Windows', Outlook's, Lotus Notes', a bare offset), unless
+     * the file's VTIMEZONE gives other offsets; the zone the VTIMEZONE's
+     * rules make (see definedZone); its standard offset when its rules can't
+     * be read. Floating only when nothing says what the TZID is.
+     */
+    resolve(tzid) {
         if (this.zones.has(tzid)) return this.zones.get(tzid);
-        let zone = ianaZone(tzid);
-        const def = this.defs.get(tzid);
-        if (zone === undefined && def !== undefined) {
-            const location = textOf(def, 'X-LIC-LOCATION');
-            zone = location ? ianaZone(location) : undefined;
-            if (zone === undefined) {
-                const key = `${year}\n${writeIcs([def])}`;
-                if (matched.has(key)) {
-                    zone = matched.get(key);
-                } else {
-                    const rules = ruleZone(def);
-                    zone = rules === undefined ? undefined : (matchZone(rules, year, this.userZone) ?? rules);
-                    if (matched.size > 200) matched.clear();
-                    matched.set(key, zone);
-                }
-            }
-        }
-        zone ??= null;
+        const zone = this.find(tzid);
         this.zones.set(tzid, zone);
         return zone;
+    }
+
+    find(tzid) {
+        const def = this.defs.get(tzid);
+        const years = [...(this.years.get(tzid) ?? [this.nowYear])].sort((a, b) => a - b);
+        const named = ianaZone(tzid);
+        if (named !== undefined && named !== 'UTC' && (tzid === named || tzid.endsWith(`/${named}`))) return named;
+        const location = def === undefined ? undefined : ianaZone(textOf(def, 'X-LIC-LOCATION'));
+        if (location !== undefined) return location;
+        const rules = def === undefined ? undefined : ruleZone(def);
+        if (named !== undefined && (rules === undefined || agrees(named, rules, years))) return named;
+        if (rules !== undefined) return definedZone(def, rules, years, this.userZone);
+        const standard = (def === undefined ? undefined : standardOffset(def, Date.UTC(years.at(-1) + 1, 0, 1))) ?? nameOffsets(tzid)?.[0];
+        if (standard !== undefined) return fixedOf(standard, years, this.userZone);
+        // A one-word id the runtime knows (CET, EST5EDT, Japan), with nothing else to go on.
+        return isZone(tzid) ? tzid : null;
+    }
+
+    /**
+     * The TZID this file writes a zone as: its own, from the first of its
+     * VTIMEZONEs that is that zone all through the years it's used in (an
+     * IANA-named one first), so a changed time keeps the file's names; else
+     * the zone's IANA id.
+     */
+    nameOf(tz) {
+        if (this.names === undefined) {
+            this.names = new Map();
+            for (const [tzid, def] of this.defs) {
+                const zone = this.resolve(tzid);
+                if (typeof zone !== 'string' || zone === 'UTC' || (this.names.has(zone) && tzid !== zone)) continue;
+                const rules = ruleZone(def);
+                if (rules !== undefined && sameAs(zone, rules, [...(this.years.get(tzid) ?? [this.nowYear])])) this.names.set(zone, tzid);
+            }
+        }
+        return this.names.get(tz) ?? tz;
     }
 
     /** The Times in a DATE or DATE-TIME property (EXDATE and RDATE hold lists; a PERIOD gives its start). */
     times(prop) {
         const out = [];
-        const tzid = paramOf(prop, 'TZID');
+        const tzid = zoneKey(paramOf(prop, 'TZID'));
         const dateOnly = /^DATE$/i.test(paramOf(prop, 'VALUE') ?? '');
         for (const part of prop.value.split(',')) {
             const stamp = readStamp(part.split('/')[0]);
@@ -433,7 +625,7 @@ class ZoneBook {
             } else if (!tzid) {
                 out.push({ local: stamp.local, tz: this.floating });
             } else {
-                const zone = this.resolve(tzid.trim(), Number(stamp.local.slice(0, 4)));
+                const zone = this.resolve(tzid);
                 if (zone === null) out.push({ local: stamp.local, tz: this.floating });
                 else if (typeof zone === 'string') out.push({ local: stamp.local, tz: zone });
                 else out.push({ local: toLocal(toInstant(stamp.local, zone), 'UTC'), tz: 'UTC' });
@@ -574,7 +766,7 @@ function syncZones(calendar) {
     const used = new Map();
     const walk = (c) => {
         for (const prop of c.props) {
-            const tzid = paramOf(prop, 'TZID')?.trim();
+            const tzid = zoneKey(paramOf(prop, 'TZID'));
             if (!tzid) continue;
             const year = Number(prop.value.slice(0, 4));
             used.set(tzid, Math.min(used.get(tzid) ?? 9999, Number.isInteger(year) && year > 1800 ? year : 9999));
@@ -582,8 +774,8 @@ function syncZones(calendar) {
         for (const sub of c.subs) if (sub.name !== 'VTIMEZONE') walk(sub);
     };
     walk(calendar);
-    calendar.subs = calendar.subs.filter((c) => c.name !== 'VTIMEZONE' || used.has(propOf(c, 'TZID')?.value.trim()));
-    const have = new Set(calendar.subs.filter((c) => c.name === 'VTIMEZONE').map((c) => propOf(c, 'TZID')?.value.trim()));
+    calendar.subs = calendar.subs.filter((c) => c.name !== 'VTIMEZONE' || used.has(tzidOf(c)));
+    const have = new Set(calendar.subs.filter((c) => c.name === 'VTIMEZONE').map(tzidOf));
     const add = [];
     for (const [tzid, year] of used) {
         if (!have.has(tzid) && isZone(tzid) && tzid.includes('/')) add.push(vtimezone(tzid, year < 9999 ? year : new Date().getUTCFullYear()));
@@ -692,8 +884,13 @@ function readEvent(event, book, warnings) {
     if (rdates.length > 0) record.rdates = rdates;
     const exdates = propsOf(event, 'EXDATE').flatMap((p) => book.times(p));
     if (exdates.length > 0) record.exdates = exdates;
-    const recurrenceId = book.time(propOf(event, 'RECURRENCE-ID'));
-    if (recurrenceId !== undefined) record.recurrenceId = recurrenceId;
+    const recurrence = propOf(event, 'RECURRENCE-ID');
+    const recurrenceId = book.time(recurrence);
+    if (recurrenceId !== undefined) {
+        record.recurrenceId = recurrenceId;
+        // RANGE=THISANDFUTURE: the change holds for every later occurrence of the series too (expand.js).
+        if (/^THISANDFUTURE$/i.test(paramOf(recurrence, 'RANGE')?.trim() ?? '')) record.thisAndFuture = true;
+    }
     const conference = propOf(event, 'CONFERENCE') ?? propOf(event, 'X-GOOGLE-CONFERENCE')
         ?? propOf(event, 'X-MICROSOFT-SKYPETEAMSMEETINGURL') ?? propOf(event, 'X-MICROSOFT-ONLINEMEETINGEXTERNALLINK');
     if (conference !== undefined && /^https?:\/\//i.test(unescapeText(conference.value).trim())) record.conference = unescapeText(conference.value).trim();
@@ -726,7 +923,8 @@ function calendarInfo(calendar) {
  * The events in a calendar file, as records. A series and its changed
  * occurrences come out as separate records with the same uid.
  * @param {string} text
- * @param {{zone?: string}} [opts] - the user's zone, tried first when matching a zone the file defines.
+ * @param {{zone?: string, now?: number}} [opts] - the user's zone, tried first when matching a zone the
+ *   file defines; now, for the years a series that goes on is matched over.
  * @returns {{events: import('./model.js').Record[], calendar: {name?: string, description?: string, color?: string, timeZone?: string}, warnings: string[]}}
  */
 export function readIcs(text, opts = {}) {
@@ -737,7 +935,7 @@ export function readIcs(text, opts = {}) {
     for (const root of parseIcs(text)) {
         if (root.name !== 'VCALENDAR') continue;
         calendar = { ...calendarInfo(root), ...calendar };
-        const book = new ZoneBook(root, zone);
+        const book = new ZoneBook(root, zone, opts.now);
         for (const sub of root.subs) {
             if (sub.name !== 'VEVENT') continue;
             const record = readEvent(sub, book, warnings);
@@ -815,19 +1013,25 @@ function writeAlarms(event, minutes) {
 /**
  * Write a record into a VEVENT. Only the fields that differ from `before`
  * (the record the VEVENT held) are rewritten, so the rest stays as the
- * file had it; without `before`, everything is written.
+ * file had it; without `before`, everything is written. Times keep the
+ * file's own name for their zone (`book`).
  */
-function writeEvent(event, record, before, now) {
+function writeEvent(event, record, before, now, book) {
     const changed = (key) => before === undefined || !same(record[key], before[key]);
     const text = (name, value) => setProps(event, name, value ? [textProp(name, value)] : []);
+    const time = (name, value) => timeProp(name, value, (tz) => book?.nameOf(tz) ?? tz);
     if (changed('uid')) text('UID', record.uid);
     setProps(event, 'DTSTAMP', [{ name: 'DTSTAMP', params: {}, value: utcValue(now) }]);
     if (changed('start') || changed('end')) {
-        setProps(event, 'DTSTART', [timeProp('DTSTART', record.start)]);
+        setProps(event, 'DTSTART', [time('DTSTART', record.start)]);
         setProps(event, 'DURATION', []);
-        setProps(event, 'DTEND', [timeProp('DTEND', record.end)]);
+        setProps(event, 'DTEND', [time('DTEND', record.end)]);
     }
-    if (changed('recurrenceId')) setProps(event, 'RECURRENCE-ID', record.recurrenceId ? [timeProp('RECURRENCE-ID', record.recurrenceId)] : []);
+    if (changed('recurrenceId') || changed('thisAndFuture')) {
+        const prop = record.recurrenceId ? time('RECURRENCE-ID', record.recurrenceId) : undefined;
+        if (prop !== undefined && record.thisAndFuture) prop.params = { RANGE: ['THISANDFUTURE'], ...prop.params };
+        setProps(event, 'RECURRENCE-ID', prop ? [prop] : []);
+    }
     if (changed('title')) text('SUMMARY', record.title);
     if (changed('description')) {
         text('DESCRIPTION', record.description);
@@ -848,8 +1052,8 @@ function writeEvent(event, record, before, now) {
     if (changed('attendees')) writePeople(event, 'ATTENDEE', record.attendees ?? []);
     if (changed('alarms')) writeAlarms(event, record.alarms);
     if (changed('rrule')) setProps(event, 'RRULE', record.rrule ? [{ name: 'RRULE', params: {}, value: record.rrule }] : []);
-    if (changed('rdates')) setProps(event, 'RDATE', (record.rdates ?? []).map((t) => timeProp('RDATE', t)));
-    if (changed('exdates')) setProps(event, 'EXDATE', (record.exdates ?? []).map((t) => timeProp('EXDATE', t)));
+    if (changed('rdates')) setProps(event, 'RDATE', (record.rdates ?? []).map((t) => time('RDATE', t)));
+    if (changed('exdates')) setProps(event, 'EXDATE', (record.exdates ?? []).map((t) => time('EXDATE', t)));
     if (changed('conference')) {
         setProps(event, 'CONFERENCE', record.conference ? [{ name: 'CONFERENCE', params: { VALUE: ['URI'] }, value: record.conference }] : []);
     }
@@ -893,7 +1097,7 @@ export function editIcs(raw, edits, opts = {}) {
         calendar = newCalendar();
         roots.splice(0, roots.length, calendar);
     }
-    const book = new ZoneBook(calendar, zone);
+    const book = new ZoneBook(calendar, zone, now);
     for (const edit of edits) {
         const index = calendar.subs.findIndex((c) => c.name === 'VEVENT'
             && textOf(c, 'UID') === edit.uid
@@ -903,10 +1107,10 @@ export function editIcs(raw, edits, opts = {}) {
         if (edit.record === null) {
             if (index >= 0) calendar.subs.splice(index, 1);
         } else if (index >= 0) {
-            writeEvent(calendar.subs[index], edit.record, readEvent(calendar.subs[index], book, []), now);
+            writeEvent(calendar.subs[index], edit.record, readEvent(calendar.subs[index], book, []), now, book);
         } else {
             const event = { name: 'VEVENT', props: [], subs: [] };
-            writeEvent(event, edit.record, undefined, now);
+            writeEvent(event, edit.record, undefined, now, book);
             calendar.subs.push(event);
         }
     }

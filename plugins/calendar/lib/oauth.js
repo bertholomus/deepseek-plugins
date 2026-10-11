@@ -39,10 +39,54 @@ export function randomState() {
     return randomBytes(24).toString('base64url');
 }
 
+/** The addresses the loopback listens on for each redirect host: localhost can mean either loopback address. */
+const LISTEN_ON = { '127.0.0.1': ['127.0.0.1'], localhost: ['127.0.0.1', '::1'] };
+
+/** Listen on a port (0: a free one) of one address; rejects with the listen error. */
+function listen(server, port, address) {
+    return new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(port, address, () => {
+            server.off('error', reject);
+            resolve();
+        });
+    });
+}
+
 /**
- * Starts a sign-in: listens on 127.0.0.1 on a free port and builds the
- * address to open in the browser. The server answers one redirect, then
- * closes; it also closes on timeout and on cancel.
+ * Servers on one free port at each of `addresses`, the same port at all of
+ * them. The first address must work. A later one this computer doesn't have
+ * (no IPv6) is left out; one whose port is taken means another port, a few
+ * times, and then it is left out too.
+ * @param {string[]} addresses
+ * @returns {Promise<{servers: import('node:http').Server[], port: number}>}
+ */
+async function listenAll(addresses) {
+    for (let attempt = 1; ; attempt++) {
+        const first = createServer();
+        await listen(first, 0, addresses[0]);
+        const { port } = first.address();
+        const servers = [first];
+        let taken = false;
+        for (const address of addresses.slice(1)) {
+            const server = createServer();
+            try {
+                await listen(server, port, address);
+                servers.push(server);
+            } catch (error) {
+                taken = error?.code === 'EADDRINUSE' && attempt < 5;
+                if (taken) break;
+            }
+        }
+        if (!taken) return { servers, port };
+        for (const server of servers) server.close();
+    }
+}
+
+/**
+ * Starts a sign-in: listens on this computer's loopback on a free port and
+ * builds the address to open in the browser. The server answers one
+ * redirect, then closes; it also closes on timeout and on cancel.
  * @param {object} options
  * @param {string} options.authorizeUrl - the provider's authorization endpoint.
  * @param {string} options.tokenUrl - the provider's token endpoint.
@@ -53,13 +97,18 @@ export function randomState() {
  * @param {Function} options.request - lib/http.js `request`.
  * @param {number} [options.timeoutMs] - how long to wait for the browser (10 minutes).
  * @param {() => number} [options.now] - epoch ms.
+ * @param {'127.0.0.1'|'localhost'} [options.redirectHost] - the host the redirect address names: 127.0.0.1 (the
+ *   default), or localhost for a provider whose app registrations take only that (Microsoft's). With localhost
+ *   the loopback listens on 127.0.0.1 and ::1 at one port, so the browser gets there whichever one localhost means.
+ * @param {string} [options.redirectPath] - the redirect address's path: '/' (the default), or '' for an address
+ *   that ends with its port, as the app has it registered (http://localhost; Microsoft ignores a localhost port).
  * @returns {Promise<{url: string, redirectUri: string, done: Promise<object>, finish: (pastedUrl: string) => Promise<object>, cancel: () => void}>}
  *   `done` settles with the grant (or a SourceError); `finish` completes the
- *   sign-in from a pasted redirect address and settles the same way.
+ *   sign-in from a pasted redirect address (with any host) and settles the same way.
  */
 export async function loopbackSignIn({
     authorizeUrl, tokenUrl, clientId, clientSecret, scopes = [], extraParams = {}, request,
-    timeoutMs = 600_000, now = Date.now,
+    timeoutMs = 600_000, now = Date.now, redirectHost = '127.0.0.1', redirectPath = '/',
 }) {
     let url;
     try {
@@ -67,17 +116,15 @@ export async function loopbackSignIn({
     } catch {
         throw new SourceError('config', 'The sign-in address is not a valid URL.');
     }
+    const host = redirectHost === 'localhost' ? 'localhost' : '127.0.0.1';
+    const path = typeof redirectPath === 'string' ? redirectPath : '/';
+    if (path !== '' && !/^\/[\w./~-]*$/.test(path)) throw new SourceError('config', 'The sign-in\'s redirect path is not a path.');
     const { verifier, challenge, method } = pkce();
     const state = randomState();
-    const server = createServer();
-    await new Promise((resolve, reject) => {
-        server.once('error', reject);
-        server.listen(0, '127.0.0.1', () => {
-            server.off('error', reject);
-            resolve();
-        });
-    });
-    const redirectUri = `http://127.0.0.1:${server.address().port}/`;
+    const { servers, port } = await listenAll(LISTEN_ON[host]);
+    const redirectUri = `http://${host}:${port}${path}`;
+    // The path the browser asks for: an address without one comes back with '/'.
+    const callbackPath = new URL(redirectUri).pathname;
     // The extra parameters can't replace the ones the exchange depends on.
     const params = {
         ...extraParams,
@@ -107,10 +154,12 @@ export async function loopbackSignIn({
         if (ended) return;
         ended = true;
         clearTimeout(timer);
-        server.close();
-        // An answer still being written finishes first (it says Connection: close).
-        if (force) server.closeAllConnections?.();
-        else server.closeIdleConnections?.();
+        for (const server of servers) {
+            server.close();
+            // An answer still being written finishes first (it says Connection: close).
+            if (force) server.closeAllConnections?.();
+            else server.closeIdleConnections?.();
+        }
         if (error) rejectDone(error);
         else resolveDone(grant);
     }
@@ -147,11 +196,11 @@ export async function loopbackSignIn({
         return { promise: exchange };
     }
 
-    server.on('request', (req, res) => {
+    const onRequest = (req, res) => {
         let answer;
         try {
             const target = new URL(req.url ?? '/', redirectUri);
-            if (req.method === 'GET' && target.pathname === '/') answer = target.searchParams;
+            if (req.method === 'GET' && target.pathname === callbackPath) answer = target.searchParams;
         } catch {
             answer = undefined;
         }
@@ -168,7 +217,8 @@ export async function loopbackSignIn({
             () => page(res, 200, 'You\'re signed in. You can close this tab.'),
             (error) => page(res, 400, `The sign-in didn't finish: ${error.message} You can close this tab.`),
         );
-    });
+    };
+    for (const server of servers) server.on('request', onRequest);
 
     /** Completes the sign-in from the redirect address the user pasted. */
     async function finish(pastedUrl) {

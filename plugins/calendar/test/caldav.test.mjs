@@ -237,8 +237,12 @@ function fakeServer(routes) {
     return { fetch, calls };
 }
 
-const stubEnv = (fetch, extra = {}) => ({
-    request: (url, init) => request(url, { ...init, fetch }),
+/**
+ * An env for the stand-in server. Names resolve to an address on the
+ * internet (TEST-NET-1) unless `names` says otherwise: no test asks DNS.
+ */
+const stubEnv = (fetch, { names = {}, ...extra } = {}) => ({
+    request: (url, init) => request(url, { ...init, fetch, lookup: async (host) => names[host] ?? ['192.0.2.10'] }),
     secret: { get: async () => ({ password: 'app-password' }) },
     log: () => {},
     now: () => Date.UTC(2026, 9, 11),
@@ -272,12 +276,14 @@ function multigetAnswer(body, files) {
 }
 
 describe('the source, against a stand-in server', () => {
-    test('iCloud: discovery follows the move to a pNN host with the password, and lists event calendars by order', async () => {
+    test('iCloud: discovery follows the move to a pNN host with the password, and lists event calendars by order, the default primary', async () => {
         const { fetch, calls } = fakeServer({
             'PROPFIND https://caldav.icloud.com/': { body: fixture('icloud-root.xml') },
             'PROPFIND https://caldav.icloud.com/1234567890/principal/': { status: 301, headers: { location: 'https://p52-caldav.icloud.com/1234567890/principal/' } },
-            // The principal answers what is asked: its calendar home, or whether the server schedules and the user's addresses.
+            // The principal answers what is asked: its calendar home, or whether the server schedules, the user's addresses and the inbox.
             'PROPFIND https://p52-caldav.icloud.com/1234567890/principal/': (call) => ({ body: fixture(/schedule-outbox-URL/.test(call.body) ? 'icloud-scheduling.xml' : 'icloud-principal.xml') }),
+            // The default calendar is the scheduling Inbox's (RFC 6638 9.2).
+            'PROPFIND https://p52-caldav.icloud.com/1234567890/calendars/inbox/': { body: fixture('icloud-inbox.xml') },
             'PROPFIND https://p52-caldav.icloud.com/1234567890/calendars/': { body: fixture('icloud-home.xml') },
         });
         const account = { id: 'icloud-1', kind: 'caldav', name: 'iCloud', preset: 'icloud', username: 'alice' };
@@ -293,7 +299,7 @@ describe('the source, against a stand-in server', () => {
             },
             {
                 remoteId: 'https://p52-caldav.icloud.com/1234567890/calendars/home/',
-                name: 'Home', color: '#FF2968', readOnly: false, timeZone: 'America/Los_Angeles', ...about,
+                name: 'Home', color: '#FF2968', readOnly: false, timeZone: 'America/Los_Angeles', primary: true, ...about,
             },
         ]);
         assert.deepEqual(calls.map((c) => [c.method, c.url, header(c, 'depth')]), [
@@ -302,41 +308,102 @@ describe('the source, against a stand-in server', () => {
             ['PROPFIND', 'https://p52-caldav.icloud.com/1234567890/principal/', '0'],
             ['PROPFIND', 'https://caldav.icloud.com/1234567890/principal/', '0'],
             ['PROPFIND', 'https://p52-caldav.icloud.com/1234567890/principal/', '0'],
+            ['PROPFIND', 'https://p52-caldav.icloud.com/1234567890/calendars/inbox/', '0'],
             ['PROPFIND', 'https://p52-caldav.icloud.com/1234567890/calendars/', '1'],
         ]);
         assert.ok(calls.every((c) => header(c, 'authorization') === BASIC), 'the password stays with every icloud.com host');
         assert.ok(calls.every((c) => /<d:propfind [^>]*xmlns:d="DAV:"/.test(c.body)));
+        // One request asks the principal for the scheduling properties and the inbox; the inbox, for its default calendar.
+        assert.match(calls[3].body, /<c:schedule-outbox-URL\/><c:calendar-user-address-set\/><c:schedule-inbox-URL\/><c:schedule-default-calendar-URL\/>/);
+        assert.match(calls[5].body, /<d:prop><c:schedule-default-calendar-URL\/><\/d:prop>/);
 
         // calendars() on a new source object finds them again from scratch.
         const again = await caldav.create(account, stubEnv(fetch)).calendars();
         assert.deepEqual(again, found.calendars);
     });
 
-    test('a home on another site gets no request and no password', async () => {
-        const { fetch, calls } = fakeServer({
-            'PROPFIND https://dav.example.com/': {
-                body: `<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:c="${CALDAV}"><d:response><d:href>/</d:href><d:propstat><d:prop>`
-                    + '<c:calendar-home-set><d:href>https://collector.example.net/homes/alice/</d:href></c:calendar-home-set>'
-                    + '</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>',
-            },
-        });
-        const account = { id: 'x', kind: 'caldav', url: 'https://dav.example.com', username: 'alice' };
-        await assert.rejects(caldav.discover(account, stubEnv(fetch)), (e) => isCode('config')(e) && /collector\.example\.net/.test(e.message) && !/app-password/.test(e.message));
-        assert.ok(calls.every((c) => new URL(c.url).hostname === 'dav.example.com'));
+    /** A Depth 0 answer about `href` naming a calendar home. */
+    const homeAt = (href, home) => multistatus([{ href, props: `<c:calendar-home-set><d:href>${home}</d:href></c:calendar-home-set>` }]);
+
+    test('a home on another host gets no request and no password, even on the same domain', async () => {
+        for (const [start, home, place] of [
+            ['https://dav.example.com', 'https://collector.example.net/homes/alice/', 'collector.example.net'],
+            ['https://dav.example.com', 'https://www.example.com/homes/alice/', 'www.example.com'],
+            // A shared domain: other.co.uk is anyone's.
+            ['https://dav.example.co.uk', 'https://other.co.uk/homes/alice/', 'other.co.uk'],
+            ['https://dav.example.com', 'http://dav.example.com/homes/alice/', 'dav.example.com over http'],
+            ['https://dav.example.com', 'https://dav.example.com:8443/homes/alice/', 'dav.example.com:8443'],
+        ]) {
+            const { fetch, calls } = fakeServer({ [`PROPFIND ${start}/`]: { body: homeAt('/', home) } });
+            const account = { id: 'x', kind: 'caldav', url: start, username: 'alice' };
+            await assert.rejects(caldav.discover(account, stubEnv(fetch)), (e) => isCode('config')(e)
+                && e.message === `The server pointed to ${place}, which isn't the server this account names. `
+                    + 'The plugin doesn\'t send the password there; if it is your CalDAV server, give its address instead.', home);
+            assert.ok(calls.every((c) => new URL(c.url).origin === start), home);
+        }
     });
 
-    test('a redirect to another site drops the password, and what that site names gets no request', async () => {
+    test('a redirect to another host drops the password, its answer isn\'t used, and discovery says where it led', async () => {
         const { fetch, calls } = fakeServer({
-            'PROPFIND https://dav.example.com/': { status: 307, headers: { location: 'https://other.example.org/dav/' } },
-            'PROPFIND https://other.example.org/dav/': {
+            'PROPFIND https://dav.example.com/': { status: 307, headers: { location: 'https://other.example.com/dav/' } },
+            'PROPFIND https://other.example.com/dav/': {
                 body: multistatus([{ href: '/dav/', props: '<d:current-user-principal><d:href>/dav/principals/alice/</d:href></d:current-user-principal>' }]),
             },
         });
         const account = { id: 'x', kind: 'caldav', url: 'https://dav.example.com/', username: 'alice' };
-        await assert.rejects(caldav.discover(account, stubEnv(fetch)), isCode('config'));
-        const elsewhere = calls.filter((c) => new URL(c.url).hostname === 'other.example.org');
+        await assert.rejects(caldav.discover(account, stubEnv(fetch)), (e) => isCode('config')(e)
+            && e.message === 'dav.example.com sent the request on to other.example.com, which isn\'t the server this account names. '
+                + 'The plugin doesn\'t send the password there; if it is your CalDAV server, give its address instead.');
+        const elsewhere = calls.filter((c) => new URL(c.url).hostname === 'other.example.com');
         assert.equal(elsewhere.length, 1);
         assert.equal(header(elsewhere[0], 'authorization'), undefined);
+        assert.ok(!calls.some((c) => c.url.includes('/dav/principals/')), 'what it named gets no request');
+    });
+
+    test('a domain whose /.well-known/caldav leads to its CalDAV host: discovery names that host to give instead', async () => {
+        const { fetch, calls } = fakeServer({
+            'PROPFIND https://example.com/': { status: 301, headers: { location: 'https://www.example.com/' } },
+            'PROPFIND https://www.example.com/': { status: 405, body: 'Method not allowed' },
+            'PROPFIND https://example.com/.well-known/caldav': { status: 301, headers: { location: 'https://dav.example.com/caldav/' } },
+            'PROPFIND https://dav.example.com/caldav/': { status: 401, headers: { 'www-authenticate': 'Basic realm="dav"' } },
+        });
+        const account = { id: 'x', kind: 'caldav', preset: 'other', url: 'example.com', username: 'alice' };
+        await assert.rejects(caldav.discover(account, stubEnv(fetch)), (e) => isCode('config')(e) && e.message.startsWith('example.com sent the request on to dav.example.com,'));
+        assert.deepEqual(calls.map((c) => [c.url, header(c, 'authorization') === BASIC]), [
+            ['https://example.com/', true],
+            ['https://www.example.com/', false],
+            ['https://example.com/.well-known/caldav', true],
+            ['https://dav.example.com/caldav/', false],
+        ]);
+    });
+
+    test('a redirect or an address that leads to this computer or its network gets no request, from a server elsewhere', async () => {
+        const local = 'an address on this computer or its network, which isn\'t allowed.';
+        const account = { id: 'x', kind: 'caldav', url: 'https://dav.example.com/', username: 'alice' };
+        for (const location of ['http://127.0.0.1:8080/dav/', 'https://192.168.1.20/dav/', 'https://[::1]/dav/', 'https://localhost/dav/', 'https://sneaky.example.net/dav/']) {
+            const { fetch, calls } = fakeServer({ 'PROPFIND https://dav.example.com/': { status: 302, headers: { location } } });
+            // sneaky.example.net is a name that resolves to an address on the user's network.
+            const env = stubEnv(fetch, { names: { 'sneaky.example.net': ['203.0.113.5', '10.0.0.7'] } });
+            await assert.rejects(caldav.discover(account, env), (e) => isCode('config')(e) && e.message === `dav.example.com sent the request on to ${local}`, location);
+            assert.ok(calls.every((c) => new URL(c.url).hostname === 'dav.example.com'), location);
+        }
+        // A home on such an address, named in an answer.
+        const named = fakeServer({ 'PROPFIND https://dav.example.com/': { body: homeAt('/', 'http://192.168.1.20/homes/alice/') } });
+        await assert.rejects(caldav.discover(account, stubEnv(named.fetch)), (e) => isCode('config')(e) && e.message === `dav.example.com pointed to ${local}`);
+        assert.ok(named.calls.every((c) => new URL(c.url).hostname === 'dav.example.com'));
+    });
+
+    test('a Location on another host isn\'t taken as a new event\'s address', async () => {
+        const collection = 'https://dav.example.com/cal/home/';
+        const located = { 'a.ics': 'https://elsewhere.example.org/cal/home/a.ics', 'b.ics': '/cal/home/b-renamed.ics' };
+        const { fetch } = fakeServer({});
+        const routed = async (url, init) => {
+            if (init.method !== 'PUT') return fetch(url, init);
+            return new Response(null, { status: 201, headers: { etag: '"1"', location: located[String(url).split('/').pop()] } });
+        };
+        const source = caldav.create({ id: 'd', kind: 'caldav', url: 'https://dav.example.com/', username: 'alice' }, stubEnv(routed));
+        assert.equal((await source.put({ remoteId: collection }, null, ics('a', 'A'), 'a')).remoteId, `${collection}a.ics`);
+        assert.equal((await source.put({ remoteId: collection }, null, ics('b', 'B'), 'b')).remoteId, `${collection}b-renamed.ics`);
     });
 
     test('Nextcloud: the preset starts at /remote.php/dav; /.well-known/caldav with a 303 works too', async () => {
@@ -655,6 +722,81 @@ describe('the source, against a stand-in server', () => {
         assert.equal(header(quiet[1], 'schedule-reply'), 'F');
     });
 
+    test('a create repeated after a timeout: the event already there with its uid counts as made; another one there is a conflict', async () => {
+        const collection = 'https://dav.example.com/cal/home/';
+        const uid = '6f1c2b7e-0d4a-4c3e-9a51-2b8f0e7d6c5a';
+        const { fetch, calls } = fakeServer({
+            // The first try was stored, but its answer never came: the same uid is put again.
+            [`PUT ${collection}${uid}.ics`]: { status: 412 },
+            [`GET ${collection}${uid}.ics`]: { status: 200, body: ics(uid, 'Lunch'), headers: { etag: '"stored-1"' } },
+            // Another event under the name a uid gives.
+            [`PUT ${collection}taken.ics`]: { status: 412 },
+            [`GET ${collection}taken.ics`]: { status: 200, body: ics('someone-else', 'Not ours'), headers: { etag: '"x"' } },
+            // Gone again by the time it is read.
+            [`PUT ${collection}vanished.ics`]: { status: 412 },
+            // Stored, and the server sends no etag with it.
+            [`PUT ${collection}quiet.ics`]: { status: 412 },
+            [`GET ${collection}quiet.ics`]: { status: 200, body: ics('quiet', 'Quiet') },
+            [`PROPFIND ${collection}quiet.ics`]: { body: multistatus([{ href: '/cal/home/quiet.ics', etag: '"q1"' }]) },
+            [`PUT ${collection}changed.ics`]: { status: 412 },
+        });
+        const source = caldav.create({ id: 'd', kind: 'caldav', url: 'https://dav.example.com/', username: 'alice' }, stubEnv(fetch));
+        const calendar = { remoteId: collection };
+
+        assert.deepEqual(await source.put(calendar, null, ics(uid, 'Lunch'), uid), { remoteId: `${collection}${uid}.ics`, etag: '"stored-1"' });
+        assert.deepEqual(calls.map((c) => [c.method, c.url, header(c, 'if-none-match')]), [
+            ['PUT', `${collection}${uid}.ics`, '*'],
+            ['GET', `${collection}${uid}.ics`, undefined],
+        ]);
+        assert.equal(header(calls[1], 'authorization'), BASIC);
+
+        await assert.rejects(source.put(calendar, null, ics('taken', 'Mine'), 'taken'), isCode('conflict'));
+        await assert.rejects(source.put(calendar, null, ics('vanished', 'V'), 'vanished'), isCode('conflict'));
+        assert.deepEqual(await source.put(calendar, null, ics('quiet', 'Quiet'), 'quiet'), { remoteId: `${collection}quiet.ics`, etag: '"q1"' });
+
+        // A change (If-Match) refused is a conflict as before, and nothing is read back.
+        const before = calls.length;
+        await assert.rejects(source.put(calendar, { remoteId: `${collection}changed.ics`, etag: '"old"' }, ics('changed', 'C'), 'changed'), isCode('conflict'));
+        assert.deepEqual(calls.slice(before).map((c) => c.method), ['PUT']);
+    });
+
+    test('the default calendar: Nextcloud names it on the principal; a server without one marks none', async () => {
+        const principal = 'https://cloud.example.com/remote.php/dav/principals/users/alice/';
+        const routes = (scheduling, inbox) => ({
+            'PROPFIND https://cloud.example.com/remote.php/dav/': {
+                body: multistatus([{ href: '/remote.php/dav/', props: '<d:current-user-principal><d:href>/remote.php/dav/principals/users/alice/</d:href></d:current-user-principal>' }]),
+            },
+            [`PROPFIND ${principal}`]: (call) => (/schedule-outbox-URL/.test(call.body) ? scheduling
+                : { body: homeAt('/remote.php/dav/principals/users/alice/', '/remote.php/dav/calendars/alice/') }),
+            'PROPFIND https://cloud.example.com/remote.php/dav/calendars/alice/inbox/': inbox,
+            'PROPFIND https://cloud.example.com/remote.php/dav/calendars/alice/': { body: fixture('nextcloud-home.xml') },
+        });
+        const account = { id: 'nc', kind: 'caldav', preset: 'nextcloud', url: 'https://cloud.example.com', username: 'alice' };
+        const primaryOf = (calendars) => calendars.filter((c) => c.primary).map((c) => c.remoteId);
+
+        const nextcloud = fakeServer(routes({ body: fixture('nextcloud-principal.xml') }, { status: 500 }));
+        const found = await caldav.discover(account, stubEnv(nextcloud.fetch));
+        assert.deepEqual(primaryOf(found.calendars), ['https://cloud.example.com/remote.php/dav/calendars/alice/personal/']);
+        assert.deepEqual(found.calendars.map((c) => [c.name, c.scheduling, c.addresses]), [
+            ['Personal', true, ['alice@example.com']], ['Contact birthdays', true, ['alice@example.com']], ['Work stuff (Bob)', true, ['alice@example.com']],
+        ]);
+        assert.ok(!nextcloud.calls.some((c) => c.url.endsWith('/inbox/')), 'the principal said it: no request to the inbox');
+
+        // The inbox names none (an empty property means no default), fails, or there is no inbox: no calendar is primary.
+        const noOutbox = '<c:schedule-inbox-URL><d:href>/remote.php/dav/calendars/alice/inbox/</d:href></c:schedule-inbox-URL>';
+        const empty = multistatus([{ href: '/remote.php/dav/calendars/alice/inbox/', props: '<c:schedule-default-calendar-URL/>' }]);
+        for (const [scheduling, inbox] of [
+            [{ body: multistatus([{ href: '/remote.php/dav/principals/users/alice/', props: noOutbox }]) }, { body: empty }],
+            [{ body: multistatus([{ href: '/remote.php/dav/principals/users/alice/', props: noOutbox }]) }, { status: 500 }],
+            [{ body: multistatus([{ href: '/remote.php/dav/principals/users/alice/' }]) }, undefined],
+        ]) {
+            const server = fakeServer(routes(scheduling, inbox));
+            const none = await caldav.discover(account, stubEnv(server.fetch));
+            assert.deepEqual(primaryOf(none.calendars), []);
+            assert.equal(none.calendars.length, 3);
+        }
+    });
+
     test('scheduling: a server without an outbox doesn\'t schedule; one that doesn\'t say is unknown', async () => {
         const principal = '<d:current-user-principal><d:href>/dav/principals/alice/</d:href></d:current-user-principal>';
         const routes = (scheduling) => ({
@@ -904,7 +1046,7 @@ END:VCALENDAR&#13;
         await assert.rejects(caldav.create(account(), wrong).sync({ remoteId: `${base}${user}/work/` }, undefined, {}), isCode('auth'));
     });
 
-    test('put creates and changes events, and refuses a stale etag or an existing name', async () => {
+    test('put creates and changes events, refuses a stale etag or a name another event has, and finds a repeated create made', async () => {
         const work = { remoteId: `${base}${user}/work/` };
         const uid = 'put-1@example.com';
         const created = await fresh().put(work, null, ics(uid, 'First'), uid);
@@ -921,8 +1063,13 @@ END:VCALENDAR&#13;
         assert.match((await dav('GET', `${user}/work/${uid}.ics`)).text, /SUMMARY:Second/);
 
         await assert.rejects(fresh().put(work, { remoteId: created.remoteId, etag: created.etag }, ics(uid, 'Third'), uid), isCode('conflict'));
-        await assert.rejects(fresh().put(work, null, ics(uid, 'Again'), uid), isCode('conflict'));
-        assert.match((await dav('GET', `${user}/work/${uid}.ics`)).text, /SUMMARY:Second/, 'neither refused write landed');
+        // A create repeated with the same uid (its first try timed out after the server stored it): made, not stored twice.
+        assert.deepEqual(await fresh().put(work, null, ics(uid, 'Again'), uid), { remoteId: created.remoteId, etag: changed.etag });
+        assert.match((await dav('GET', `${user}/work/${uid}.ics`)).text, /SUMMARY:Second/, 'neither write landed');
+        // Another event under the name a uid gives: a conflict, and it stays as it was.
+        await putFile(`${user}/work/clash@example.com.ics`, ics('someone-else@example.com', 'Theirs'));
+        await assert.rejects(fresh().put(work, null, ics('clash@example.com', 'Mine'), 'clash@example.com'), isCode('conflict'));
+        assert.match((await dav('GET', `${user}/work/clash@example.com.ics`)).text, /SUMMARY:Theirs/);
 
         const odd = 'odd/uid with spaces?#1';
         const made = await fresh().put(work, null, ics(odd, 'Odd'), odd);
