@@ -1089,14 +1089,15 @@ try {
     try {
         const deploy = { command: `curl -sS -X POST --data '{"v":1}' http://${sinkAt}/deploy`, description: 'Deploy the build' };
         const sends = `sends a POST to ${sinkAt}/deploy (curl)`;
-        const ofDeploy = (r) => r.toolName === 'bash' && r.reason === `the command ${sends}`;
+        const ofDeploy = (r) => r.toolName === 'bash' && r.reason === `the command ${sends}. The thread says: "Deploy the build"`;
         mark = model.requests.length;
         await say(coord, call('project_thread_start', { ask: 'Deploy the build to staging.', title: 'Send', brief: call('bash', deploy) }));
         const first = await prompts.next('the Send prompt', ofDeploy);
         saw = await coordinatorSaw(mark, 'SAW-APPROVAL', 'the Send approval note');
         const sendId = Object.entries(project().threads ?? {}).find(([, t]) => t.title === 'Send')?.[0];
         const asks = () => readText(logFile).split('\n').filter((line) => line.endsWith(` send-ask ${PROJECT_ID}/${sendId} request curl`)).length;
-        check('a thread\'s command that sends waits for the user in DSH\'s prompt, which says what it sends', first.request.displayReason?.en === `This command ${sends}. A thread asks you before each command that sends outside the workspace.`
+        check('a thread\'s command that sends waits for the user in DSH\'s prompt, which says what it sends, then the thread\'s own words for it',
+            first.request.displayReason?.en === `This command ${sends}. A thread asks you before each command that sends outside the workspace.\nThe thread says: "Deploy the build"`
             && posted() === 0 && asks() === 1, JSON.stringify(first.request));
         check('its coordinator hears what it waits on', saw.fresh.includes(`[Thread waiting for approval: ${sendId} · "Send"]`)
             && saw.fresh.includes(`It asked to use bash: the command ${sends}`), saw.fresh.slice(0, 400));

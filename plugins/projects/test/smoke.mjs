@@ -5743,15 +5743,19 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     await coord.ctx.call('project_thread_start', { ask: 'Get the staging deploy working.', title: 'Deploy', brief: 'Fix deploy.sh.' });
     const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Deploy');
 
-    // A thread's send asks the user, saying what it sends; the same send again asks again.
+    // A thread's send asks the user, saying what it sends, then what the thread says it is for, as its words; the same send
+    // again asks again.
     const post = { command: 'curl -sS -X POST --data @build.json http://127.0.0.1:8787/deploy', description: 'Deploy' };
     const asked = {
         kind: 'ask',
-        reason: 'the command sends a POST to 127.0.0.1:8787/deploy (curl)',
-        displayReason: { en: 'This command sends a POST to 127.0.0.1:8787/deploy (curl). A thread asks you before each command that sends outside the workspace.' },
+        reason: 'the command sends a POST to 127.0.0.1:8787/deploy (curl). The thread says: "Deploy"',
+        displayReason: { en: 'This command sends a POST to 127.0.0.1:8787/deploy (curl). A thread asks you before each command that sends outside the workspace.\nThe thread says: "Deploy"' },
     };
     assert.deepEqual(await gate(t1, 'bash', post), asked);
     assert.deepEqual(await gate(t1, 'bash', post), asked);
+    // The thread's words are one line, without a URL's token, and with why it wants a wider sandbox when it asks for one.
+    const wider = await gate(t1, 'bash', { command: 'git push', description: 'Push the fix\n  to https://bot:ghp_secret@github.com/acme/web', sandbox_permissions: 'danger-full-access', justification: 'The sandbox blocks the network.' });
+    assert.equal(wider.displayReason.en, 'This command pushes to its remote (git push). A thread asks you before each command that sends outside the workspace.\nThe thread says: "Push the fix to https://github.com/acme/web" and, for wider access, "The sandbox blocks the network."');
     // A script in the workspace by what it runs, a package script, a push; and each send that went through
     // without asking in the send detection review, with what the prompt says about it.
     const commit = (then) => `git add -A && git commit -m "$(cat <<'EOF'\nFix the login redirect\n\nThe callback didn't keep the next= parameter.\nEOF\n)" && ${then}`;

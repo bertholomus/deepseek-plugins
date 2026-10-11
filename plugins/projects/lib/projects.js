@@ -144,6 +144,19 @@ const SEND_REASONS = {
     never: (what) => `Not run: the command ${what}. A thread asks the user before each command that sends outside the workspace, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would send; the user can put this thread on Workspace Write so it can ask. Don't send it another way.`,
 };
 
+/**
+ * What the thread says its call is for, for the prompt: its description and,
+ * when it asks for a wider sandbox, its justification, each one line, quoted
+ * and without credentials. The plugin's own line comes before it.
+ */
+function threadWords(args) {
+    const line = (value, max) => (typeof value === 'string' ? cardSummary(withoutCredentials(value).replace(/\s+/g, ' ').trim(), max) : '');
+    const said = line(args?.description, 160);
+    const why = typeof args?.sandbox_permissions === 'string' ? line(args.justification, 200) : '';
+    if (!why) return said && `"${said}"`;
+    return said ? `"${said}" and, for wider access, "${why}"` : `for wider access, "${why}"`;
+}
+
 /** DSH's tools that reach an MCP server named in their `server` argument, not in their own name. */
 const SERVER_TOOLS = new Set(['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource']);
 
@@ -785,11 +798,13 @@ export class ProjectManager {
      * read, a push, a publish, a deploy, a command on another machine, an
      * email, or a script or task that does one) waits for the user. A
      * thread's asks them in DSH's approval prompt, every time, so a retry
-     * or a check asks again; a thread whose approvals never ask, a
-     * coordinator and a subagent are refused. Called for every session's
-     * calls (index.js) once DSH's own checks let one run. Undefined lets it
-     * run: any other call, a session outside the projects, and any error
-     * (a check against a mistake, not a sandbox). Never logs the command.
+     * or a check asks again; the prompt says what it sends, then what the
+     * thread says it is for, as the thread's words. A thread whose
+     * approvals never ask, a coordinator and a subagent are refused.
+     * Called for every session's calls (index.js) once DSH's own checks
+     * let one run. Undefined lets it run: any other call, a session
+     * outside the projects, and any error (a check against a mistake, not
+     * a sandbox). Never logs the command.
      */
     holdSend(exec) {
         try {
@@ -823,10 +838,11 @@ export class ProjectManager {
             }
             this.log(`send-ask ${label}`);
             const said = described(found);
+            const words = threadWords(args);
             return {
                 kind: 'ask',
-                reason: `the command ${said}`,
-                displayReason: { en: `This command ${said}. A thread asks you before each command that sends outside the workspace.` },
+                reason: `the command ${said}${words ? `. The thread says: ${words}` : ''}`,
+                displayReason: { en: `This command ${said}. A thread asks you before each command that sends outside the workspace.${words ? `\nThe thread says: ${words}` : ''}` },
             };
         } catch (error) {
             this.log(`error send-check ${String(error?.message ?? error).slice(0, 200)}`);
