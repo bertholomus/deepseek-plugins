@@ -55,7 +55,7 @@ import {
 } from './prompts.js';
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
 import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS } from './changes.js';
-import { sendOf, codeSendOf } from './sends.js';
+import { sendOf, codeSendOf, withoutCredentials } from './sends.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
 const SECTION_ORDER = 9500;
@@ -2231,7 +2231,9 @@ export class ProjectManager {
         // The user is talking to the thread directly, so the prompt is in front of them.
         if (!turn.fromProject || !this.allowHandback(projectId, threadId)) return;
         if (id !== '') this.store.putThread(projectId, threadId, { approvalsNoted: [...(this.store.thread(projectId, threadId)?.approvalsNoted ?? []), id].slice(-20) });
-        await this.deliver(projectId, approvalMessage(threadId, t.title, t.title, String(data.toolName ?? 'a tool'), data.reason), undefined, { kind: 'approval', thread: threadId });
+        // What it waits on goes to the coordinator without a password or token a URL in it carries.
+        const reason = typeof data.reason === 'string' ? withoutCredentials(data.reason) : data.reason;
+        await this.deliver(projectId, approvalMessage(threadId, t.title, t.title, String(data.toolName ?? 'a tool'), reason), undefined, { kind: 'approval', thread: threadId });
         this.log(`approval-note ${projectId}/${threadId} tool=${String(data.toolName ?? '').slice(0, 60)}`);
     }
 

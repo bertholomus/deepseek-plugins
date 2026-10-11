@@ -420,6 +420,11 @@ export function placeOf(url) {
     return s.length > 60 ? `${s.slice(0, 59)}…` : s;
 }
 
+/** Text with the user and password taken out of each URL in it: `https://bot:TOKEN@host/x` reads `https://host/x`. */
+export function withoutCredentials(text) {
+    return String(text ?? '').replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]+@/gi, '$1');
+}
+
 const looksLikeUrl = (a) => /^(https?|ftps?|sftp|scp|smtps?|wss?|tftp|dict|ldaps?|telnet|mqtt|gopher):\/\//i.test(a) || /^(localhost|\d{1,3}(\.\d{1,3}){3}|\[[0-9a-f:]+\]|[a-z0-9-]+(\.[a-z0-9-]+)+)(:\d+)?(\/|$)/i.test(a);
 
 function request(method, url, program) {
@@ -539,7 +544,9 @@ function git(args) {
     if (sub === 'push') {
         if (dryRun(rest) || rest.includes('-n')) return null;
         const remote = positionals(rest, new Set(['o', '--push-option', '--repo', '--receive-pack', '--exec', '--signed', '--force-with-lease']))[0];
-        return { kind: 'push', program: 'git', what: `pushes to ${remote ?? 'its remote'} (git push)` };
+        // A remote given as a URL is shown as a place, so a token in it isn't.
+        const where = remote === undefined ? 'its remote' : /^[a-z][a-z0-9+.-]*:\/\//i.test(remote) ? placeOf(remote) : remote;
+        return { kind: 'push', program: 'git', what: `pushes to ${where} (git push)` };
     }
     if (sub === 'send-email') return { kind: 'email', program: 'git', what: 'sends patches by email (git send-email)' };
     if ((sub === 'svn' && rest[0] === 'dcommit') || (sub === 'lfs' && rest[0] === 'push')) return { kind: 'push', program: 'git', what: `pushes to its remote (git ${sub} ${rest[0]})` };
@@ -798,7 +805,10 @@ const SPAWNS = /\b(?:subprocess|os\.system|os\.popen|os\.exec\w*|pexpect|child_p
  * @returns {{kind: string, what: string, program: string}|null}
  */
 export function codeSendOf(code, ctx = { depth: 0 }, program = 'code') {
-    const text = String(code ?? '');
+    return shown(codeFound(String(code ?? ''), ctx, program));
+}
+
+function codeFound(text, ctx, program) {
     for (const [re, said] of CODE_SENDS) {
         const m = re.exec(text);
         if (m) return { kind: 'request', program, what: `runs code that sends ${said(m)} (${program})` };
@@ -1171,5 +1181,10 @@ function lineSendOf(text, ctx) {
  */
 export function sendOf(command, options = {}) {
     if (typeof command !== 'string' || command.trim() === '') return null;
-    return lineSendOf(command, { depth: 0, shell: options.shell ?? 'bash', cwd: options.cwd, read: options.read });
+    return shown(lineSendOf(command, { depth: 0, shell: options.shell ?? 'bash', cwd: options.cwd, read: options.read }));
+}
+
+/** A send as the user and the coordinator read it: no password or token from a URL. */
+function shown(found) {
+    return found && { ...found, program: withoutCredentials(found.program), what: withoutCredentials(found.what) };
 }

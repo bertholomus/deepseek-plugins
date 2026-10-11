@@ -3379,12 +3379,12 @@ test('a permission prompt left unanswered tells the coordinator', async () => {
     await wait();
     assert.equal(host.sessions.get(coord.id).prompts.length, 0);
 
-    // Left waiting: the coordinator hears which thread and what it wants.
-    thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'a2', toolName: 'bash', reason: 'runs ./deploy.sh' } });
+    // Left waiting: the coordinator hears which thread and what it wants, without a token a URL in it carries.
+    thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'a2', toolName: 'bash', reason: 'runs ./deploy.sh to https://bot:ghp_xxxxxxxx@deploy.example.com/hook' } });
     await wait();
     const cp = host.sessions.get(coord.id).prompts;
     assert.equal(cp.length, 1);
-    assert.equal(cp[0].text, '[Thread waiting for approval: t1 · "Deploy"]\n\nIt asked to use bash: runs ./deploy.sh\n\nThe user approves or rejects it in the "Deploy" session.\n\n(Tell the user in one line, starting with [Deploy](.dsh-thread/t1), what it wants to do and that they approve or reject it in its chat. Never approve it yourself or do the work another way, and do not start another thread for it.)');
+    assert.equal(cp[0].text, '[Thread waiting for approval: t1 · "Deploy"]\n\nIt asked to use bash: runs ./deploy.sh to https://deploy.example.com/hook\n\nThe user approves or rejects it in the "Deploy" session.\n\n(Tell the user in one line, starting with [Deploy](.dsh-thread/t1), what it wants to do and that they approve or reject it in its chat. Never approve it yourself or do the work another way, and do not start another thread for it.)');
 
     // The user is in the thread directly: the prompt is in front of them.
     userSays(host, thread.id, 'Go ahead and deploy.');
@@ -5755,6 +5755,10 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         [commit('npm publish'), 'publishes (npm publish)'],
         [commit('curl -X POST https://api.example.com/x'), 'sends a POST to api.example.com/x (curl)'],
         ['git commit -m "$(cat <<\'EOF\'\nRename the `--dry flag\n\nEOF\n)" && git push', 'pushes to its remote (git push)'],
+        // A token in a remote's URL is shown nowhere: not in the prompt, nor in the reason its coordinator hears.
+        ['git push https://acme-bot:ghp_xxxxxxxx@github.com/acme/web.git HEAD:main', 'pushes to github.com/acme/web.git (git push)'],
+        ['git push https://ghp_xxxxxxxx@github.com/acme/web.git', 'pushes to github.com/acme/web.git (git push)'],
+        ['git -c credential.helper= push "https://x-access-token:$GH_TOKEN@github.com/acme/web.git" HEAD:main', 'pushes to github.com/acme/web.git (git push)'],
     ]) {
         const decision = await gate(t1, shell, { command });
         assert.deepEqual([decision.kind, decision.reason, decision.displayReason?.en], ['ask', `the command ${what}`, `This command ${what}. A thread asks you before each command that sends outside the workspace.`], command);
