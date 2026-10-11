@@ -65,10 +65,11 @@
  *   host refuses ('calendar/drops-changes'), Don't move it keeps it, Move
  *   anyway moves it without that occurrence;
  * - a Microsoft meeting changed while the question before its email waits:
- *   a guest added on Microsoft's side meanwhile, its yes makes nothing
- *   ('calendar/changed') and the question comes again naming both, the new
- *   one marked; Don't save keeps it with Look at it again; saved again, it
- *   goes to both;
+ *   a guest added on Microsoft's side meanwhile, which DSH doesn't read, its
+ *   yes makes nothing (Graph refuses the change sent with the meeting's old
+ *   etag: 412; 'calendar/changed') and the question comes again naming
+ *   both, the new one marked; Don't save keeps it with Look at it again;
+ *   saved again, it goes to both;
  * - the Microsoft account removed, with the page to withdraw DSH's access
  *   there; "Sign in with a code instead", showing the code; the Google
  *   account removed, its access withdrawn at Google;
@@ -1641,24 +1642,31 @@ try {
             JSON.stringify({ changedOne: changedOne.ok, question, kept, after: after.map((o) => [o.title, o.calendarId]), posted: posted.length, patches }));
     });
 
-    // 14. A Microsoft meeting that changes on Microsoft's side while the question before its email waits: its yes makes
-    // nothing, and the question comes again naming everyone it reaches now.
+    /** Graph's reads of its calendar view (the delta query): DSH syncing it. */
+    const graphSyncs = () => providers.graph.store.requests.filter((r) => r.method === 'GET' && r.path.includes('/delta')).length;
+
+    // 14. A Microsoft meeting that changes on Microsoft's side while the question before its email waits, without DSH
+    // reading it: its yes makes nothing (Graph refuses the change made on the meeting as DSH had it, 412), and the question
+    // comes again naming everyone it reaches now.
     await step('a change held to the people it named: the meeting changed meanwhile, so it asks again', async () => {
         const graph = providers.graph;
         const day = addDays(today, 4);
         const person = (address, name) => ({ emailAddress: { address, name }, type: 'required' });
+        const synced = graphSyncs();
         const made = await createAsked({
             calendarId: msCalendar.id, title: 'E2E Review', start: `${day}T11:00`, end: `${day}T11:30`, timeZone: ZONE,
             attendees: [{ email: 'ann@example.com', name: 'Ann Example' }], notify: true,
         });
         const graphId = [...graph.store.events.values()].find((e) => e.subject === 'E2E Review')?.id;
-        const patches = () => graph.store.requestsTo(`/v1.0/me/events/${graphId}`, 'PATCH').length;
+        // DSH reads the calendar once soon after making it; nothing tells it of what changes there after that.
+        await waitFor(() => graphSyncs() > synced, 'the read after it was made', 15000);
+        const patches = () => graph.store.requestsTo(`/v1.0/me/events/${graphId}`, 'PATCH');
         let first = {};
         let again = {};
         let third = {};
+        let refused = {};
         let note = '';
         let look = false;
-        let sentNothing = false;
         let still = '';
         let toast = '';
         const calls = await callsTo('updateEvent', async () => {
@@ -1671,16 +1679,16 @@ try {
             await form.locator('[data-calendar-title]').fill('E2E Review (agenda)');
             await page.locator('[data-calendar-save]').click();
             first = await consent();
-            // Meanwhile Bob is added on Microsoft's side, and DSH reads it.
+            // Meanwhile Bob is added on Microsoft's side, which DSH doesn't read.
+            const held = graph.store.json(graphId)?.['@odata.etag'];
             graph.store.updateEvent(graphId, { attendees: [person('ann@example.com', 'Ann Example'), person('bob@example.com', 'Bob Example')] });
-            await api('syncNow', { accountId: msAccount.id });
-            await waitFor(async () => (await events(day, day)).find((o) => o.title === 'E2E Review')?.attendees?.some((a) => a.email === 'bob@example.com'), 'Bob on the meeting', 15000);
-            const before = patches();
+            const before = patches().length;
             await first.answer(true);
-            // Asked again, naming both, Bob as new: nothing went to Microsoft.
+            // Asked again, naming both, Bob as new: the one change sent went with the meeting's old etag, and Microsoft refused it.
             again = await consent();
             await shot(page, 'changed-meanwhile');
-            sentNothing = patches() === before;
+            const sent = patches().slice(before);
+            refused = { count: sent.length, status: sent[0]?.status, stale: sent[0]?.ifMatch !== undefined && sent[0].ifMatch === held, title: graph.store.json(graphId)?.subject };
             await again.answer(false);
             const alert = form.locator('.dshcal-alert', { hasText: 'it changed meanwhile' });
             await alert.waitFor({ state: 'visible', timeout: 10000 });
@@ -1696,10 +1704,10 @@ try {
         });
         const now = (await events(day, day)).find((o) => o.title.startsWith('E2E Review'));
         const names = (q) => JSON.stringify(q.people);
-        check('a Microsoft meeting that gained a guest while the question waited: its yes makes nothing and asks again, naming both with the new one marked; Don\'t save keeps it with a way to look again; saved again, it goes to both',
+        check('a Microsoft meeting that gained a guest while the question waited, unread by DSH: its yes makes nothing (Microsoft refuses the change sent with the meeting\'s old etag) and asks again, naming both with the new one marked; Don\'t save keeps it with a way to look again; saved again, it goes to both',
             made.ok && first.title === 'Email an update to ann@example.com?' && names(first) === '["ann@example.com"]' && first.yes === 'Save and email'
             && again.title === 'Email an update to 2 guests?' && names(again) === '["ann@example.com","bob@example.com"]' && JSON.stringify(again.fresh) === '["bob@example.com"]'
-            && again.text.includes('It changed meanwhile') && sentNothing
+            && again.text.includes('It changed meanwhile') && refused.count === 1 && refused.status === 412 && refused.stale && refused.title === 'E2E Review'
             && /^Not saved: it changed meanwhile/.test(note) && look && still === 'E2E Review'
             && names(third) === '["ann@example.com","bob@example.com"]' && third.fresh.length === 0
             && calls.length === 4 && calls[0]?.patch?.notify === undefined && calls[0]?.patch?.approved === undefined
@@ -1707,8 +1715,8 @@ try {
             && calls[2]?.patch?.notify === undefined && calls[2]?.patch?.approved === undefined
             && calls[3]?.patch?.notify === true && JSON.stringify(calls[3]?.patch?.approved) === '["ann@example.com","bob@example.com"]'
             && now?.title === 'E2E Review (agenda)' && /Emailed an update to ann@example\.com and bob@example\.com\./.test(toast),
-            JSON.stringify({ made: made.ok, first: first.title, again: { title: again.title, people: again.people, fresh: again.fresh }, third: third.people,
-                calls: calls.map((c) => c?.patch), note, look, sentNothing, still, now: now?.title, toast }));
+            JSON.stringify({ made: made.ok, first: first.title, again: { title: again.title, people: again.people, fresh: again.fresh }, third: third.people, refused,
+                calls: calls.map((c) => c?.patch), note, look, still, now: now?.title, toast }));
     });
 
     // 15. The Microsoft account removed, with the page to withdraw DSH's access there; then a sign-in with a code instead.
