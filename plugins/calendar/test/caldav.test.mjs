@@ -765,7 +765,7 @@ describe('the source, against a stand-in server', () => {
         assert.equal(writes(), before);
     });
 
-    test('no etag held: the event is read first, and a change goes on only while it names the same people as the plugin\'s copy', async () => {
+    test('no etag held: the event is read first, and a change or a delete goes on only while it names the same people as the plugin\'s copy', async () => {
         const collection = 'https://dav.example.com/cal/home/';
         const meeting = (people) => [
             'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//DSH calendar tests//EN', 'BEGIN:VEVENT', 'UID:standup', 'DTSTAMP:20261011T000000Z',
@@ -787,17 +787,17 @@ describe('the source, against a stand-in server', () => {
         server = meeting(['ann@example.com', 'bob@example.com', 'cy@example.com']);
         await assert.rejects(source.put(calendar, item, item.raw.replace('Standup', 'Standup!'), 'standup'), isCode('conflict'));
         await assert.rejects(source.remove(calendar, item), isCode('conflict'));
-        // Someone taken off there: writing the plugin's copy would invite them again.
+        // Someone taken off there: writing the plugin's copy would invite them again, and a delete would be said to cancel it for them.
         server = meeting(['ann@example.com']);
         await assert.rejects(source.put(calendar, item, item.raw.replace('Standup', 'Standup!'), 'standup'), isCode('conflict'));
+        await assert.rejects(source.remove(calendar, item), isCode('conflict'));
         assert.equal(writes().length, 0);
-        // A delete only cancels for those still on it.
-        await source.remove(calendar, item);
-        assert.equal(header(writes().at(-1), 'if-match'), '"s1"');
-        // The same people (in another order, by another case): the change goes, on the version read.
+        // The same people (in another order, by another case): the change goes, on the version read, and so does a delete.
         server = meeting(['BOB@example.com', 'ann@example.com']);
         assert.deepEqual(await source.put(calendar, item, item.raw.replace('Standup', 'Standup!'), 'standup'), { remoteId: item.remoteId, etag: '"s2"' });
         assert.equal(header(writes().at(-1), 'if-match'), '"s1"');
+        await source.remove(calendar, item);
+        assert.deepEqual([writes().at(-1).method, header(writes().at(-1), 'if-match')], ['DELETE', '"s1"']);
     });
 
     test('a create repeated after a timeout: the event already there with its uid counts as made; another one there is a conflict', async () => {

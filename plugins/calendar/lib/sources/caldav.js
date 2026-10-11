@@ -15,12 +15,11 @@
  *   calendar-multiget batches, or one GET each where multiget fails.
  * - Writes are conditional: If-None-Match: * for a new resource, If-Match
  *   with the last etag for a change or a delete; a 412 is a conflict. When
- *   the plugin holds none, the event is read from the server first, and
- *   the change goes on only while it names the same people as the plugin's
- *   copy (a change whose version can't be read isn't made). A new resource
- *   is named after its UID, so a create
- *   repeated after a timeout finds the one the first try made instead of
- *   adding a second.
+ *   the plugin holds none, the event is read from the server first, and a
+ *   change or a delete goes on only while it names the same people as the
+ *   plugin's copy (one whose version can't be read isn't made). A new
+ *   resource is named after its UID, so a create repeated after a timeout
+ *   finds the one the first try made instead of adding a second.
  * - The password goes only to the host the account names (sameService;
  *   iCloud's other icloud.com hosts too, as it moves clients from
  *   caldav.icloud.com to pNN-caldav.icloud.com): an address a server hands
@@ -1196,9 +1195,9 @@ class CalDavSource {
      * The etag a change to `item` (at `target`) goes under: the one stored,
      * else the server's own, read now with the event; null when the server
      * keeps none for it. Read now, the event must name the same people as
-     * the plugin's copy (item.raw), or for a delete (`deleting`) nobody
-     * more: the server emails them, and a change worked out on the copy
-     * would otherwise go over theirs with no 412 to say so ('conflict').
+     * the plugin's copy (item.raw), for a delete (`deleting`) too: the
+     * server emails them, and a change worked out on the copy would
+     * otherwise go over theirs with no 412 to say so ('conflict').
      * A read that fails stops the change, since a write without one would
      * go over whatever is there; 'not-found' when it is gone.
      */
@@ -1220,7 +1219,7 @@ class CalDavSource {
         const zone = this.env.zone;
         const mine = readIcs(item.raw ?? '', { zone }).events;
         const theirs = readIcs(now.raw, { zone }).events;
-        if (newPeople(mine, theirs).length > 0 || (!deleting && newPeople(theirs, mine).length > 0)) {
+        if (newPeople(mine, theirs).length > 0 || newPeople(theirs, mine).length > 0) {
             this.env.log?.(`caldav ${this.account.id}: the event names other people since the change was worked out`);
             throw peopleConflict(deleting ? 'Deleting the event' : 'Saving the event');
         }
@@ -1234,8 +1233,9 @@ class CalDavSource {
 
     /**
      * Deletes a resource, only while its etag is item.etag (without one, the
-     * server's own, read first; a server that keeps none for it, without a
-     * condition). Gone already counts as done.
+     * server's own, read first with the event, which must name the same
+     * people; a server that keeps none for it, without a condition). Gone
+     * already counts as done.
      * opts.scheduleReply false: the server doesn't tell the organizer
      * (RFC 6638's Schedule-Reply), so taking out someone else's invitation
      * doesn't decline it.

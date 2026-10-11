@@ -65,7 +65,7 @@
  *       item.raw: see newPeople).
  *   remove(calendar, item) → undefined
  *       Delete a resource (only if its etag is still item.etag; without
- *       one, only while the server's copy names nobody item.raw doesn't).
+ *       one, only while the server's copy names the same people as item.raw).
  *
  * An 'events' source also has:
  *
