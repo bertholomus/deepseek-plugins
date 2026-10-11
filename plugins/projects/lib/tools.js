@@ -111,7 +111,7 @@ export function projectTools(manager, who) {
             parameters: {
                 title: { type: 'string', required: true, description: 'A few plain words naming the task, in the user\'s words' },
                 ask: { type: 'string', required: true, description: 'The user\'s request, copied word for word from their message. The thread reads it as "The user asked: …".' },
-                brief: { type: 'string', required: true, description: 'What the thread needs beyond the ask: facts from project memory, and the default you picked where the ask is unclear. No deliverables the user did not ask for.' },
+                brief: { type: 'string', required: true, description: 'What the thread needs beyond the ask: the goal, the scope, what done looks like and what not to touch; facts from project memory; and the default you picked where the ask is unclear. No deliverables the user did not ask for.' },
                 model: { type: 'string', description: `A model for this thread only, as "provider:model" or a bare model id. ${ONLY_ASKED} Leave it out otherwise.` },
                 effort: { type: 'string', description: `An effort for this thread only, one the model offers. ${ONLY_ASKED} Leave it out otherwise.` },
             },
