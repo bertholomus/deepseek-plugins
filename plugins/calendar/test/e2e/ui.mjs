@@ -1420,6 +1420,9 @@ try {
             await shot(page, 'keys-move-question');
             await question.answer(true);
             const moved = await waitFor(async () => (await events(day1, day1)).find((o) => o.id === made?.id && o.startLocal === `${day1}T09:30`), 'the meeting at 9:30', 10000);
+            // The page has its answer once it says so: the played call is done before the next one (and before the route goes).
+            const saidMoved = (at) => page.locator('.dshcal-toast', { hasText: new RegExp(`Moved “E2E Key meeting” to .*${at}`) }).first().waitFor({ state: 'visible', timeout: 10000 });
+            await saidMoved('9:30');
             const twice = sent.splice(0);
             // Enter saves at once, without opening the event.
             await ev.focus();
@@ -1430,6 +1433,7 @@ try {
             const opened = await page.locator('[data-calendar-details]').count();
             await again.answer(true);
             const back = await waitFor(async () => (await events(day1, day1)).find((o) => o.id === made?.id && o.startLocal === `${day1}T09:15`), 'the meeting at 9:15', 10000);
+            await saidMoved('9:15');
             const at = (o) => new Date(o.start).toISOString();
             check('Alt and an arrow key pressed twice on a meeting: shown where it goes, then one question naming it and one save there; Escape drops a move, Enter saves at once; the keys in its tooltip',
                 /Alt/.test(tip) && /9:15/.test(first) && dropped && /E2E Key meeting/.test(ghost) && /9:30/.test(ghost) && /9:30/.test(live)
