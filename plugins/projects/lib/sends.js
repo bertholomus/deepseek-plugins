@@ -989,6 +989,8 @@ function aws(args) {
         if (to) return { kind: 'deploy', program: 'aws', what: `copies to S3 (aws s3 ${op} → ${placeOf(to)})` };
         return op === 'mv' && s3(pos[2]) ? { kind: 'deploy', program: 'aws', what: `changes S3 (aws s3 mv ${placeOf(pos[2])})` } : null;
     }
+    // `aws eks update-kubeconfig` writes this machine's kubeconfig only.
+    if (service === 'eks' && op === 'update-kubeconfig') return null;
     return AWS_VERBS.test(op ?? '') ? { kind: 'deploy', program: 'aws', what: `makes a change in AWS (aws ${service} ${op})` } : null;
 }
 
@@ -1029,7 +1031,9 @@ const remotePath = (a) => /^[a-z][a-z0-9+.-]*:\/\//i.test(a) || (/^[^/\s:]+:/.te
 function remote(name, args, label = name) {
     if (name === 'ssh' || name === 'mosh' || name === 'autossh' || name === 'rsh') {
         if (has(args, '-G', '-V', '-Q')) return null;
-        const host = positionals(args, SSH_TAKES)[0];
+        const [host, ...command] = positionals(args, SSH_TAKES);
+        // A git host's shell only greets: `ssh -T git@github.com` checks a key.
+        if (command.length === 0 && /^git@/.test(host ?? '')) return null;
         return { kind: 'remote', program: name, what: `runs commands on ${placeOf(host) || 'another machine'} (${name})` };
     }
     if (name === 'scp' || name === 'rsync') {
@@ -1596,7 +1600,8 @@ function wordsSendOf(rawWords, ctx, inputs = []) {
         case 'make': case 'gmake': case 'bmake': return make(args, ctx);
         case 'mvn': case 'mvnw': return args.some((a) => /^(deploy|release:perform|site-deploy|deploy:deploy-file|jib:build)$/.test(a)) ? { kind: 'publish', program: name, what: 'publishes (mvn deploy)' } : null;
         case 'gradle': case 'gradlew': {
-            const task = args.find((a) => /^(:[\w-]+)*:?(publish|upload|deploy|release|jib|pushImage|bintrayUpload|artifactoryPublish)\w*$/i.test(a));
+            // publishToMavenLocal publishes to this machine's own repository.
+            const task = args.find((a) => /^(:[\w-]+)*:?(publish|upload|deploy|release|jib|pushImage|bintrayUpload|artifactoryPublish)\w*$/i.test(a) && !/ToMavenLocal$/i.test(a));
             return task ? { kind: 'publish', program: name, what: `publishes (gradle ${task})` } : null;
         }
         case 'twine': case 'poetry': case 'flit': case 'hatch': case 'pdm': case 'uv': case 'gem': case 'cargo': case 'dotnet': case 'pod': case 'vsce': case 'ovsx':

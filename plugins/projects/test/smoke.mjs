@@ -5906,7 +5906,9 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
         // A cloud command that reads, though its group or its resource is named like a change.
         'gcloud run services list', 'gcloud run services describe api --region us-central1', 'gcloud run services logs read api --limit 50',
         'gcloud deploy releases list --delivery-pipeline web --region us-central1', 'gcloud functions describe send-welcome-email --region us-central1',
-        'az functionapp show --name sync-orders --resource-group rg']) {
+        'az functionapp show --name sync-orders --resource-group rg',
+        // What changes only this machine, or checks a key.
+        'aws eks update-kubeconfig --name prod --region us-east-1', './gradlew publishToMavenLocal', 'ssh -T git@github.com']) {
         assert.deepEqual(await gate(t1, 'bash', { command }), { kind: 'allow' }, command);
     }
     for (const command of ['Invoke-RestMethod -Uri https://api.example.com/v1/items', 'Get-Content .\\scripts\\deploy.ps1', "Write-Host 'Invoke-RestMethod -Method Post is what it does'",
