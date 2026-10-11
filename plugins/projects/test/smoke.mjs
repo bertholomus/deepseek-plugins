@@ -1100,8 +1100,8 @@ test('browser half: the Projects page is headed Categories, each row says what i
         [1, 'category', '', 'DSH Plugins', 'Category · 1 workspace'],
         [2, 'workspace', '', 'deepseek-plugins', '~/deepseek-plugins'],
         [3, 'project', '◆', 'DSH Plugins', 'Project · 1 open thread · 1 resolved'],
-        [4, 'thread', '', 'Fix the page', ''],
-        [4, 'thread', '', 'Old fix', ''],
+        [4, 'thread', '', 'Fix the page', 'Idle'],
+        [4, 'thread', '', 'Old fix', 'Resolved'],
         [3, 'session', '', 'A chat', ''],
         [1, 'category', '', 'General', 'Category · 1 workspace'],
         [2, 'workspace', '', 'notes', '~/notes'],
@@ -1148,7 +1148,7 @@ test('browser half: the Projects page is headed Categories, each row says what i
     listed = null;
     assert.equal(newButton(draw()), undefined);
 
-    // The entry in DSH's sidebar keeps its name.
+    // The entry in DSH's sidebar is named as the page is headed.
     const registered = [];
     const ctx = {
         effect: (fn) => fn(),
@@ -1161,9 +1161,122 @@ test('browser half: the Projects page is headed Categories, each row says what i
         sidebarRight: {},
     };
     client.apply(ctx);
-    assert.equal(registered.find((r) => r.name === 'sidebar.panellist')?.label, 'Projects');
+    assert.equal(registered.find((r) => r.name === 'sidebar.panellist')?.label, 'Categories');
     // The note on imported names lists them as a sentence does.
     assert.deepEqual([listText([]), listText(['A']), listText(['A', 'B']), listText(['A', 'B', 'C'])], ['', 'A', 'A and B', 'A, B and C']);
+});
+
+test('browser half: the Categories page gives each thread its state, marks a paused project and its news, and a chevron folds a project', () => {
+    const { client, react } = loadClient();
+    const { ProjectsPage, PageTree } = client.internals;
+    const value = (v) => ({ values: { projectSession: v } });
+    const at = (minutes) => new Date(Date.UTC(2026, 9, 11, 2, minutes)).toISOString();
+    const thread = (id) => value({ role: 'thread', coordinator: 'c', thread: { id } });
+    const titles = { run: 'Upgrade the payments SDK', wait: 'Write outside', fail: 'Bad request', stop: 'Stopped one', block: 'Blocked one', ask: 'Pick a colour', done: 'Hero images', idle: 'Not started' };
+    const sessions = {
+        phase: 'ready',
+        byId: { c: { id: 'c', title: '◆ Storefront' }, d: { id: 'd', title: '◆ Data Pipeline' }, dt: { id: 'dt', title: 'Nightly load' }, x: { id: 'x', title: 'A chat' },
+            ...Object.fromEntries(Object.entries(titles).map(([id, title]) => [id, { id, title }])) },
+        projectionsBySession: {
+            c: value({ role: 'coordinator', project: { id: 'storefront', name: 'Storefront' }, threads: [
+                { id: 't1', session: 'fail', handback: { status: 'done', at: at(1) } },
+                { id: 't2', session: 'stop' },
+                { id: 't3', session: 'block', handback: { status: 'blocked', at: at(3) } },
+                { id: 't4', session: 'ask', handback: { status: 'needs_decision', at: at(4) } },
+                { id: 't5', session: 'done', handback: { status: 'done', at: at(5) } },
+                { id: 't6', session: 'idle' }, { id: 't7', session: 'run' }, { id: 't8', session: 'wait' },
+            ] }),
+            fail: value({ role: 'thread', coordinator: 'c', thread: { id: 't1' }, ending: { state: 'failed', at: at(2), kind: 'error', message: 'HTTP 400' } }),
+            stop: value({ role: 'thread', coordinator: 'c', thread: { id: 't2' }, ending: { state: 'stopped', at: at(2) } }),
+            ...Object.fromEntries(['block', 'ask', 'done', 'idle', 'run', 'wait'].map((id) => [id, thread(id)])),
+            d: value({ role: 'coordinator', project: { id: 'data-pipeline', name: 'Data Pipeline' }, threads: [{ id: 't1', session: 'dt', handback: { status: 'done', at: at(6) } }] }),
+            dt: value({ role: 'thread', coordinator: 'd', thread: { id: 't1' } }),
+        },
+    };
+    const workspaces = {
+        phase: 'ready', archivedSessionIds: [],
+        items: [
+            { workspaceId: 'w-sf', title: 'storefront', path: '/home/u/storefront', sessionIds: ['c', ...Object.keys(titles), 'x'] },
+            { workspaceId: 'w-dp', title: 'data-pipeline', path: '/home/u/data-pipeline', sessionIds: ['d', 'dt'] },
+        ],
+    };
+    // Two categories the old sidebar's import made, and one made since.
+    const categories = [
+        { id: 'shop', name: 'Shop', source: 'import', workspaces: [{ id: 'w-sf' }] },
+        { id: 'data', name: 'Data', source: 'import', workspaces: [{ id: 'w-dp' }] },
+        { id: 'later', name: 'Later', source: 'page', workspaces: [] },
+    ];
+    const listed = [{ id: 'storefront', name: 'Storefront', coordinator: 'c', home: 'w-sf' }, { id: 'data-pipeline', name: 'Data Pipeline', coordinator: 'd', home: 'w-dp', paused: false }];
+    let news = { c: { unread: [{ kind: 'handback', status: 'blocked', title: 'Blocked one' }] } };
+    const facts = {
+        subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {}, list: async () => {},
+        projects: () => listed, categories: () => categories, listFailed: () => false, act: async () => ({ ok: true }),
+        // Data Pipeline was paused since the list was read: the newer word wins.
+        paused: (coordinator) => (coordinator === 'd' ? true : undefined), newsOf: (coordinator) => news[coordinator],
+    };
+    // DSH's own status: one thread runs, one waits on the user's approval.
+    const statuses = new Map([['run', { running: true }], ['wait', { running: true, pendingInteraction: { kind: 'approval' } }]]);
+    const opened = [];
+    const props = {
+        useSessions: (select) => select(sessions), useSessionStatus: (select) => select(statuses), useWorkspaces: (select) => select(workspaces),
+        projects: { facts, openSession: (id) => opened.push(id) },
+    };
+    const page = mount(react, () => ProjectsPage(props))();
+    // The note names the imported categories, and says what didn't come with them.
+    const note = elementsOf(page).find((e) => e.props?.['data-projects-imported'] !== undefined);
+    assert.equal(textIn(note), 'Imported from your old sidebar: Shop and Data, with their workspaces. Their old instructions, files and defaults for new sessions weren\'t carried over.');
+    assert.doesNotMatch(textIn(page), /project/i);
+    const treeEl = elementsOf(page).find((e) => e.type === PageTree);
+    const drawTree = mount(react, () => PageTree(treeEl.props));
+    const items = (tree) => elementsOf(tree).filter((e) => e.props?.role === 'treeitem');
+    const row = (tree, id) => items(tree).find((li) => li.props['data-projects-id'] === id);
+    let tree = drawTree();
+    // Each thread in the Threads menu's words and dots: what DSH says of its session first, then a failed or stopped
+    // last turn after its handback, then the handback.
+    const states = Object.keys(titles).map((id) => {
+        const state = byClass(row(tree, id).children[0], 'dshp-tree-state')[0];
+        return [titles[id], state.props['data-projects-state'], textIn(state)];
+    });
+    assert.deepEqual(plain(states), [
+        ['Upgrade the payments SDK', 'ongoing', 'Running'], ['Write outside', 'warning', 'Needs you'], ['Bad request', 'error', 'Failed'],
+        ['Stopped one', 'idle', 'Stopped'], ['Blocked one', 'warning', 'Blocked'], ['Pick a colour', 'warning', 'Needs a decision'],
+        ['Hero images', 'done', 'Done'], ['Not started', 'idle', 'Idle'],
+    ]);
+    // A paused project says so where it says what it is; one with news reads bold, its dot named for screen readers.
+    const dp = row(tree, 'd');
+    assert.equal(dp.props['data-projects-paused'], '');
+    assert.equal(textIn(byClass(dp.children[0], 'dshp-tree-meta')), 'Project · Paused · 1 open thread');
+    const sf = row(tree, 'c');
+    assert.equal(sf.props['data-projects-paused'], undefined);
+    assert.equal(sf.props['data-projects-unread'], 1);
+    const mark = elementsOf(sf.children[0]).find((e) => e.props?.['data-projects-news-mark'] !== undefined);
+    assert.deepEqual([mark.props.role, mark.props['aria-label']], ['img', 'New: “Blocked one” is blocked']);
+    // A chat's dot says what it means too: DSH's own, running or waiting.
+    statuses.set('x', { running: true });
+    tree = drawTree();
+    assert.equal(elementsOf(row(tree, 'x').children[0]).find((e) => e.props?.role === 'img')?.props['aria-label'], 'Running');
+    // Seen: no mark, and the project's own dot is DSH's again (none while it is idle).
+    news = {};
+    tree = mount(react, () => PageTree(elementsOf(mount(react, () => ProjectsPage(props))()).find((e) => e.type === PageTree).props))();
+    assert.equal(row(tree, 'c').props['data-projects-unread'], undefined);
+    assert.equal(elementsOf(row(tree, 'c').children[0]).some((e) => e.props?.role === 'img'), false);
+    // The chevron folds a project's threads and stays on the page; the rest of its row opens the coordinator.
+    tree = drawTree();
+    const chevron = (li) => elementsOf(li.children[0]).find((e) => e.props?.['data-projects-chevron'] !== undefined);
+    assert.equal(row(tree, 'c').props['aria-expanded'], true);
+    let stopped = 0;
+    chevron(row(tree, 'c')).props.onClick({ stopPropagation: () => { stopped += 1; } });
+    tree = drawTree();
+    assert.equal(row(tree, 'c').props['aria-expanded'], false);
+    assert.equal(row(tree, 'run'), undefined);
+    assert.deepEqual([opened, stopped], [[], 1]);
+    chevron(row(tree, 'c')).props.onClick({ stopPropagation: () => {} });
+    tree = drawTree();
+    assert.equal(row(tree, 'c').props['aria-expanded'], true);
+    row(tree, 'c').props.onClick({ stopPropagation: () => {} });
+    assert.deepEqual(opened, ['c']);
+    // A row that holds nothing has no chevron to click.
+    assert.equal(chevron(row(drawTree(), 'x')), undefined);
 });
 
 test('browser half: a session DSH lists without the plugin\'s value is placed by what the plugin\'s store knows, not by its title', async () => {
@@ -2042,7 +2155,7 @@ test('browser half: each session list row says its place in a project, and the C
     // The coordinator's and threads' own orders come after the rule for what follows them, so they win.
     assert.ok(rules.indexOf(`${list}>${C}{order:1}`) > rules.indexOf(`${list}>:nth-child(n+5){order:3}`));
     assert.ok(rules.indexOf(`${list}>${T}{order:2}`) > rules.indexOf(`${list}>:nth-child(n+5){order:3}`));
-    assert.ok(rules.includes(`${list}>${T}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,30px) + var(--dsh-workspace-indent,0px))}`));
+    assert.ok(rules.includes(`${list}>${T}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,24px) + var(--dsh-workspace-indent,0px))}`));
     // The corner is drawn in the indent, not in the row's leading seat; the branch mark leaves the seat but is still read aloud.
     assert.ok(rules.some((rule) => rule.startsWith(`${list}>${T}::before{content:"";position:absolute;`)));
     assert.ok(rules.includes(`${list}>${T} .dshp-t-mark[data-projects-thread-mark=""]{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}`));
@@ -2056,7 +2169,7 @@ test('browser half: each session list row says its place in a project, and the C
         `${L2}>${has(['a'])}{order:1}`, `${L2}>${has(['at1', 'at2'])}{order:2}`,
         `${L2}>${has(['b'])}{order:4}`, `${L2}>${has(['bt'])}{order:5}`,
     ]);
-    assert.ok(two.includes(`${L2}>${has(['at1', 'at2', 'bt'])}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,30px) + var(--dsh-workspace-indent,0px))}`));
+    assert.ok(two.includes(`${L2}>${has(['at1', 'at2', 'bt'])}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,24px) + var(--dsh-workspace-indent,0px))}`));
     for (const rule of [...rules, ...two]) {
         // A :has() inside another makes a browser drop the whole rule; a descendant step inside one, or a
         // sibling selector after one, is what made the old rules slow.

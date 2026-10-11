@@ -450,7 +450,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-ps-reach{display:inline-flex;align-items:flex-start;gap:5px;min-width:0}',
             '.dshp-ps-reach>.dshp-perm-glyph{margin-top:3px}',
             '.dshp-ps-reach>span:last-child{min-width:0}',
-            // The Projects page (the Projects entry in the sidebar), headed Categories: DSH's page layout, as on
+            // The Categories page (its entry in DSH's sidebar): DSH's page layout, as on
             // Automation tasks, with the whole tree: categories, their workspaces, each one's ◆ projects and chats.
             '.dshp-pg{display:flex;width:100%;min-width:0;height:100%;min-height:0;overflow:hidden;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);font-size:14px;line-height:1.6}',
             '.dshp-pg-scroll{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;container-type:inline-size;--dsh-scrollbar-width:9px;--dsh-scrollbar-thumb-border:2px}',
@@ -463,13 +463,19 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-tree-row{display:flex;align-items:center;gap:6px;min-height:30px;padding-inline-end:10px;border-radius:6px;cursor:default}',
             '.dshp-tree-row:hover{background:var(--dsh-color-bg-hover,rgba(127,127,127,.08))}',
             '.dshp-tree-item:focus-visible>.dshp-tree-row{outline:2px solid var(--dsw-focus-ring-color,Highlight);outline-offset:-2px}',
-            '.dshp-tree-chevron{display:inline-flex;width:12px;flex:none;opacity:.7}',
+            // The chevron's target is wider than it looks (20 px), and takes no more room in the row.
+            '.dshp-tree-chevron{display:inline-flex;align-items:center;justify-content:center;width:20px;align-self:stretch;margin-inline:-4px;flex:none;opacity:.7}',
             '.dshp-tree-diamond{width:14px;text-align:center;flex:none;font-size:12px}',
             '.dshp-tree-title{flex:0 1 auto;min-width:4em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshp-tree-category>.dshp-tree-row .dshp-tree-title{font-weight:500}',
             // What follows a title (a level and its count, a path) gives way before the title does.
             '.dshp-tree-meta{margin-left:auto;padding-left:12px;flex:0 100 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12px;opacity:.65;white-space:nowrap}',
             '.dshp-tree-dot{display:inline-flex;flex:none}',
+            // A thread's state: its dot in full colour, then its word.
+            '.dshp-tree-state{display:flex;align-items:center;gap:6px;opacity:1;color:var(--dsw-alias-label-secondary)}',
+            '.dshp-tree-state-word{min-width:0;overflow:hidden;text-overflow:ellipsis}',
+            // A ◆ project with news the user hasn't seen reads bold, as its row in the session list does.
+            '.dshp-tree-item[data-projects-unread]>.dshp-tree-row .dshp-tree-title{font-weight:600}',
             '.dshp-tree-glyph{display:inline-flex;width:14px;flex:none;opacity:.75}',
             '.dshp-pg-count{font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
             '.dshp-pg-heading .dshp-pg-new{margin-left:auto;align-self:center}',
@@ -1313,7 +1319,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const OPTIONS = {
             heading: 'Threads',
             beside: 'Open threads beside their coordinator',
-            besideHint: 'A thread you open from the sidebar, a card or the Projects page shows in the right panel, beside its coordinator\'s chat, when the window has room for both. Off, a thread opens on its own, and "Open beside its coordinator" in its menus still pairs them.',
+            besideHint: 'A thread you open from the sidebar, a card or the Categories page shows in the right panel, beside its coordinator\'s chat, when the window has room for both. Off, a thread opens on its own, and "Open beside its coordinator" in its menus still pairs them.',
         };
 
         /** The plugin page's switches, which this window keeps (no Save). */
@@ -1416,6 +1422,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             noticeReplyWhy: 'The answer to the message this coordinator sent at your request.',
             noticeOther: 'Message received',
             needsYou: 'Needs you',
+            running: 'Running',
             // What a coordinator's row and the window's notice say about news from its threads.
             news: {
                 handback: (title, status) => (status === 'blocked' ? `“${title}” is blocked` : status === 'needs_decision' ? `“${title}” needs a decision` : `“${title}” handed back`),
@@ -1914,7 +1921,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     if (result.ok) put(target, result.value);
                 });
             };
-            /** Take every project and category as the plugin listed them (list, or a change from the sidebar or the Projects page). */
+            /** Take every project and category as the plugin listed them (list, or a change from the sidebar or the Categories page). */
             const take = (value) => {
                 const projects = Array.isArray(value?.projects) ? value.projects : EMPTY;
                 listFailed = false;
@@ -2088,7 +2095,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     return result;
                 },
                 /**
-                 * A change from the sidebar or the Projects page (remote.js
+                 * A change from the sidebar or the Categories page (remote.js
                  * `create`, `rename`, `remove`, `addCoordinator`, and the
                  * category calls); the projects and categories it answers with
                  * update every view.
@@ -3829,7 +3836,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             list.forEach((g, k) => rules.push(`${S}>${holding([g.coordinator])}{order:${3 * k + 1}}`, `${S}>${holding(g.threads)}{order:${3 * k + 2}}`));
             const T = `${S}>${holding(list.flatMap((g) => g.threads))}`;
             rules.push(
-                `${T}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,30px) + var(--dsh-workspace-indent,0px))}`,
+                // A thread's title 16 px in from its project's: enough to show the tree, and the thread keeps room for its title.
+                `${T}>[data-row-key]{padding-inline-start:calc(var(--dshp-nest,24px) + var(--dsh-workspace-indent,0px))}`,
                 `${T}::before{${NEST_CORNER}}`,
                 // The branch mark gives way to the corner; screen readers still hear "Project thread".
                 `${T} .dshp-t-mark[data-projects-thread-mark=""]{${HIDDEN}}`,
@@ -4327,7 +4335,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.slots.inject('shell.overlay', () => ctx.slots.register({
                 name: 'shell.overlay', id: IDS.sidebar, inject: withApi,
             }, SidebarTree));
-            // The Projects entry in DSH's sidebar, after Plugins, and the page it opens.
+            // The Categories entry in DSH's sidebar, after Plugins, and the page it opens.
             ctx.slots.inject('main', () => ctx.slots.register({
                 name: 'main', key: IDS.page, inject: withApi,
             }, ProjectsPage));
@@ -4381,8 +4389,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         // ── Projects page ──────────────────────────────────────────────────
 
         const PAGE = {
-            /** The entry in DSH's sidebar that opens the page. */
-            entry: 'Projects',
+            /** The entry in DSH's sidebar that opens the page, named as the page is headed. */
+            entry: 'Categories',
             title: 'Categories',
             loading: 'Loading categories…',
             emptyTitle: 'No workspaces yet',
@@ -4396,12 +4404,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             cancel: 'Cancel',
             close: 'Close',
             newChat: 'New chat',
-            imported: (names) => `Imported from your old sidebar: ${listText(names)}.`,
+            imported: (names) => `Imported from your old sidebar: ${listText(names)}, with ${names.length === 1 ? 'its' : 'their'} workspaces. ${names.length === 1 ? 'Its' : 'Their'} old instructions, files and defaults for new sessions weren't carried over.`,
             dismiss: 'Dismiss',
         };
 
         /**
-         * The Projects entry's icon, drawn like DSH's own (a 16 px grid and a
+         * The Categories entry's icon, drawn like DSH's own (a 16 px grid and a
          * 1 px stroke): a project's ◆ coordinator branching into its threads.
          */
         function ProjectsIcon({ size = 16 }) {
@@ -4552,28 +4560,37 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * sessions in DSH's order, every one of them (no "Show more"). A
          * thread is drawn under its project wherever it works, never apart
          * from it (the user's rule); workspaces in no category come last,
-         * under Other workspaces.
-         * @returns {Array<{kind, id, title, children, row?, project?, path?, resolved?}>}
+         * under Other workspaces. A thread carries what its coordinator's
+         * roster and its own session say of it (its state, as the Threads
+         * menu gives it), and a project whether it is paused and its news.
+         * @param pausedOf - coordinator => whether its project is paused, else the list's word.
+         * @param newsOf - coordinator => its unread news ({unread}), or undefined.
+         * @returns {Array<{kind, id, title, children, row?, project?, path?, resolved?, handback?, ending?, paused?, news?}>}
          */
-        function pageModel({ categories, listed, items, sessions, archived }) {
+        function pageModel({ categories, listed, items, sessions, archived, pausedOf, newsOf }) {
             const byId = sessions?.byId ?? {};
             const hidden = (id) => { const row = byId[id]; return !row || row.blank === true || archived.has(id); };
             const titleOf = (row) => (typeof row?.title === 'string' && row.title.trim() !== '' ? row.title : PAGE.newChat);
             const coordOf = new Map(listed.filter((p) => typeof p?.coordinator === 'string' && p.coordinator !== '').map((p) => [p.coordinator, p]));
             const threadsOf = new Map();
             const threadIds = new Set();
-            // The threads each coordinator's roster calls resolved, so a project's count reads as its Threads menu does.
-            const resolvedOf = (coordinator) => new Set((Array.isArray(valueIn(sessions, coordinator)?.threads) ? valueIn(sessions, coordinator).threads : EMPTY)
-                .filter((t) => isObject(t) && t.resolved === true && typeof t.session === 'string').map((t) => t.session));
-            const resolvedBy = new Map();
+            // Each coordinator's roster by thread session: what it calls resolved (so a project's count reads as its
+            // Threads menu does) and each thread's last handback.
+            const rosterOf = (coordinator) => new Map((Array.isArray(valueIn(sessions, coordinator)?.threads) ? valueIn(sessions, coordinator).threads : EMPTY)
+                .filter((t) => isObject(t) && typeof t.session === 'string').map((t) => [t.session, t]));
+            const rosters = new Map();
             for (const ws of items) {
                 for (const id of Array.isArray(ws?.sessionIds) ? ws.sessionIds : EMPTY) {
                     if (hidden(id) || coordOf.has(id) || !isThreadRow(sessions, id)) continue;
                     const parent = valueIn(sessions, id)?.coordinator ?? known.map.get(id)?.coordinator;
                     if (typeof parent !== 'string' || !coordOf.has(parent)) continue;
                     if (!threadsOf.has(parent)) threadsOf.set(parent, []);
-                    if (!resolvedBy.has(parent)) resolvedBy.set(parent, resolvedOf(parent));
-                    threadsOf.get(parent).push({ kind: 'thread', id, title: titleOf(byId[id]), row: byId[id], resolved: resolvedBy.get(parent).has(id), children: EMPTY });
+                    if (!rosters.has(parent)) rosters.set(parent, rosterOf(parent));
+                    const entry = rosters.get(parent).get(id);
+                    threadsOf.get(parent).push({
+                        kind: 'thread', id, title: titleOf(byId[id]), row: byId[id], resolved: entry?.resolved === true,
+                        handback: isObject(entry?.handback) ? entry.handback : undefined, ending: endingIn(sessions, id), children: EMPTY,
+                    });
                     threadIds.add(id);
                 }
             }
@@ -4581,6 +4598,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const ids = Array.isArray(ws.sessionIds) ? ws.sessionIds : EMPTY;
                 const projects = listed.filter((p) => p.home === ws.workspaceId && coordOf.get(p.coordinator) === p).map((p) => ({
                     kind: 'project', id: p.coordinator, title: p.name || p.id, project: p, row: byId[p.coordinator], children: threadsOf.get(p.coordinator) ?? EMPTY,
+                    paused: (pausedOf?.(p.coordinator) ?? p.paused) === true, news: newsOf?.(p.coordinator),
                 }));
                 // A thread the list can't tie to its project yet stays out of the chats; it shows once its project is known.
                 const chats = ids.filter((id) => !hidden(id) && !coordOf.has(id) && !threadIds.has(id) && !isThreadRow(sessions, id))
@@ -4628,14 +4646,40 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 // Open threads as the hover card and the plugin's page count them, then the resolved ones drawn with them.
                 const resolved = node.children.filter((child) => child.resolved === true).length;
                 const open = n - resolved;
-                if (n === 0) return `${PAGE.project} · ${PAGE.noThreads}`;
-                return `${PAGE.project} · ${plural(open, 'open thread')}${resolved > 0 ? ` · ${resolved} resolved` : ''}`;
+                const what = node.paused === true ? `${PAGE.project} · ${TEXT.paused}` : PAGE.project;
+                if (n === 0) return `${what} · ${PAGE.noThreads}`;
+                return `${what} · ${plural(open, 'open thread')}${resolved > 0 ? ` · ${resolved} resolved` : ''}`;
             }
             return node.kind === 'workspace' && node.path ? shortPath(node.path) : null;
         }
 
+        /** A thread's state on the page, in the Threads menu's words and dots, live from DSH's own status of its session. */
+        function treeThreadState(node, statuses) {
+            const status = statuses?.get?.(node.id);
+            const state = rowState({
+                resolved: node.resolved === true, running: (status?.running ?? node.row?.running) === true,
+                pending: status?.pendingInteraction ?? undefined, hb: node.handback, ending: node.ending,
+            });
+            return { dot: state.dot, label: state.label };
+        }
+
         /**
-         * The Projects page's tree, as a screen reader and the keys expect:
+         * The dot after a chat's or a ◆ project's title, with what it means:
+         * a coordinator's news the user hasn't seen, as its row in the
+         * session list shows it, else DSH's own dot (running, or waiting on
+         * the user). null for none.
+         */
+        function treeDot(node, statuses) {
+            const unread = node.news?.unread;
+            if (Array.isArray(unread) && unread.length > 0) {
+                return { dot: newsDot(unread), label: TEXT.newsMark(unread.length, newsLine(unread[unread.length - 1])) };
+            }
+            const dot = node.row ? chatDot(node.row, statuses) : null;
+            return dot ? { dot, label: dot === 'warning' ? TEXT.needsYou : TEXT.running } : null;
+        }
+
+        /**
+         * The Categories page's tree, as a screen reader and the keys expect:
          * one tab stop, Up and Down in drawn order, Right opens or goes in,
          * Left closes or goes to the parent, Home and End, Enter opens a
          * session or opens and closes a group.
@@ -4681,29 +4725,45 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const Icon = ui[TREE_GLYPHS[node.kind]];
                 const glyph = node.kind === 'project' ? h('span', { className: 'dshp-tree-diamond', 'aria-hidden': true }, '◆')
                     : Icon ? h('span', { className: 'dshp-tree-glyph', 'aria-hidden': true }, h(Icon, { size: 14 })) : h('span', { className: 'dshp-tree-glyph', 'aria-hidden': true });
-                const dot = node.row ? chatDot(node.row, statuses) : null;
+                const thread = node.kind === 'thread' ? treeThreadState(node, statuses) : null;
+                const dot = thread ? null : treeDot(node, statuses);
                 const meta = treeMeta(node);
+                const unread = node.news?.unread?.length ?? 0;
                 return h('li', {
                     key: x.key, role: 'treeitem', 'aria-level': x.level, 'aria-setsize': x.size, 'aria-posinset': x.pos,
                     'aria-expanded': node.children.length > 0 ? x.open : undefined, tabIndex: x === shown[at] ? 0 : -1,
                     className: `dshp-tree-item dshp-tree-${node.kind}`, 'data-projects-node': node.kind, 'data-projects-id': node.id,
+                    'data-projects-paused': node.paused === true ? '' : undefined, 'data-projects-unread': unread > 0 ? unread : undefined,
                     ref: (el) => { if (el) refs.current.set(x.key, el); else refs.current.delete(x.key); },
                     onFocus: (event) => { if (event.target === event.currentTarget) setCurrent(x.key); },
                     onClick: (event) => { event.stopPropagation(); setCurrent(x.key); activate(x); },
                 },
                 h('div', { className: 'dshp-tree-row', style: { paddingInlineStart: `${8 + (x.level - 1) * 20}px` } },
-                    h('span', { className: 'dshp-tree-chevron', 'aria-hidden': true }, node.children.length > 0 ? h(x.open ? ui.IconChevronDownOutlineRegular : ui.IconChevronRightOutlineRegular, { size: 12 }) : null),
+                    // The chevron opens and closes what the item holds, a project's threads too; a click on the rest of
+                    // a project's row opens its coordinator.
+                    h('span', {
+                        className: 'dshp-tree-chevron', 'aria-hidden': true, 'data-projects-chevron': node.children.length > 0 ? '' : undefined,
+                        onClick: node.children.length > 0 ? (event) => { event.stopPropagation(); setCurrent(x.key); toggleClosed(x.key, x.open); } : undefined,
+                    }, node.children.length > 0 ? h(x.open ? ui.IconChevronDownOutlineRegular : ui.IconChevronRightOutlineRegular, { size: 12 }) : null),
                     glyph,
                     h('span', { className: 'dshp-tree-title', 'data-projects-title': node.title }, node.title),
-                    dot && ui.StateDot ? h('span', { className: 'dshp-tree-dot', 'aria-hidden': true }, h(ui.StateDot, { state: dot })) : null,
-                    meta ? h('span', { className: 'dshp-tree-meta' }, meta) : null),
+                    // A paused project's sign, as on its row in the session list; its row says Paused in words.
+                    node.paused === true ? h('span', { className: 'dshp-tree-dot dshp-t-paused-mark', 'aria-hidden': true }, h(ui.IconPauseOutlineRegular, { size: 12 })) : null,
+                    dot ? h('span', {
+                        className: 'dshp-tree-dot', role: 'img', 'aria-label': dot.label, title: dot.label, 'data-projects-news-mark': unread > 0 ? unread : undefined,
+                    }, ui.StateDot ? h(ui.StateDot, { state: dot.dot }) : null) : null,
+                    // A thread's state, in the Threads menu's words; any other row says what it is.
+                    thread ? h('span', { className: 'dshp-tree-meta dshp-tree-state', 'data-projects-state': thread.dot },
+                        ui.StateDot ? h('span', { className: 'dshp-tree-dot', 'aria-hidden': true }, h(ui.StateDot, { state: thread.dot })) : null,
+                        h('span', { className: 'dshp-tree-state-word' }, thread.label))
+                        : meta ? h('span', { className: 'dshp-tree-meta' }, meta) : null),
                 kids.length > 0 ? h('ul', { role: 'group', className: 'dshp-tree-group' }, ...kids.map(item)) : null);
             };
             return h('ul', { role: 'tree', 'aria-label': label, className: 'dshp-tree', onKeyDown }, ...shown.filter((x) => x.level === 1).map(item));
         }
 
         /**
-         * The page the Projects entry in DSH's sidebar opens, headed
+         * The page the Categories entry in DSH's sidebar opens, headed
          * Categories: the whole tree, with New category. A project shows
          * only as a ◆ row inside its workspace, and each row says what it is
          * (treeMeta), so a category never reads as a project.
@@ -4725,10 +4785,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const announce = (text) => setSaid((prev) => (prev === text ? `${text} ` : text));
             const all = Array.isArray(listed) ? listed : EMPTY;
             const archived = React.useMemo(() => new Set(Array.isArray(archivedIds) ? archivedIds : EMPTY), [archivedIds]);
-            const tree = pageModel({ categories: projects.facts.categories?.() ?? EMPTY, listed: all, items: Array.isArray(items) ? items : EMPTY, sessions, archived });
+            const categories = projects.facts.categories?.() ?? EMPTY;
+            const tree = pageModel({
+                categories, listed: all, items: Array.isArray(items) ? items : EMPTY, sessions, archived,
+                pausedOf: (coordinator) => projects.facts.paused?.(coordinator), newsOf: (coordinator) => projects.facts.newsOf?.(coordinator),
+            });
             // Other workspaces comes last in the tree, but it is no category.
             const count = tree.filter((node) => node.id !== OTHERS).length;
-            const imported = all.filter((p) => p.source === 'import').map((p) => p.name || p.id);
+            // The categories the one-time import made from the old sidebar's groups.
+            const imported = (Array.isArray(categories) ? categories : EMPTY).filter((c) => isObject(c) && c.source === 'import').map((c) => c.name || c.id);
             let content;
             if (listed === null && failed) {
                 content = h('div', { className: 'dshp-pg-state dshp-t-error', role: 'alert' }, SETTINGS.unreachable, ' ',
@@ -4766,7 +4831,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                 variant: 'outline', size: 'sm', className: 'dshp-pg-new', icon: h(ui.IconPlusOutlineRegular, { size: 14 }),
                                 onClick: () => setNaming(true), 'data-projects-new': '',
                             }, SIDEBAR.newTitle) : null),
-                        // Where the old sidebar's projects went, said once, until dismissed.
+                        // What came from the old sidebar, and what didn't, said once, until dismissed.
                         imported.length > 0 && !notes.has('imported') ? h('div', { className: 'dshp-pg-note', 'data-projects-imported': '' },
                             h(ui.IconInfoOutlineRegular, { size: 14, 'aria-hidden': true }),
                             h('span', null, PAGE.imported(imported)),
