@@ -8,6 +8,7 @@ Each plugin is a normal DSH plugin package. You add it to a DSH profile's bundle
 | --- | --- |
 | [`dsh-site`](plugins/dsh-site) | Serves the running DSH Desktop GUI to other devices on a private network (for example a Tailscale tailnet). Same sessions, same workspaces, same tools as the machine itself. |
 | [`discord`](plugins/discord) | Connects a Discord bot to DSH sessions. Each Discord thread is one persistent agent session, and the agent answers through Discord tools. Full bot setup steps are in its README. |
+| [`categories`](plugins/categories) | Categories of workspaces in DSH's session list: a header per category over its workspaces, Other workspaces for the rest, made and arranged from the list or the Categories page. |
 | [`projects`](plugins/projects) | Projects. A coordinator session per project starts thread sessions for focused work, threads hand results back to it, and each project has default models and effort levels for the coordinator and for threads. |
 | [`session-bridge`](plugins/session-bridge) | A local JSON API on a Unix socket that drives the Host's own session controller. Scripts and other agents can create, prompt, steer, cancel and read DSH sessions, and you watch them live in the DSH window. |
 
@@ -21,6 +22,7 @@ DSH loads a plugin only when the profile lists its package in `dsh.profile.bundl
 | --- | --- | --- |
 | dsh-site | `dsh-plugin-dsh-site` | `dsh-site` |
 | discord | `dsh-plugin-discord` | `discord` |
+| categories | `dsh-plugin-categories` | `categories` |
 | projects | `dsh-plugin-projects` | `projects` |
 | session-bridge | `dsh-plugin-session-bridge` | `session-bridge` |
 
@@ -81,10 +83,14 @@ npm test                                  # dsh-site, session-bridge, projects (
 npm install --no-save @deepseek-ai/schemastery @deepseek-ai/dsh-llm@next @deepseek-ai/dsh-brand@next @deepseek-ai/dsh-tools@next
 node plugins/discord/test/smoke.mjs       # discord (no token needed)
 node plugins/projects/test/smoke.mjs      # projects (fake DSH host)
+node plugins/categories/test/smoke.mjs    # categories (fake DSH host)
 
 # projects + session-bridge on a real DSH, with a scripted model server
 npm install --prefix /tmp/dsh @deepseek-ai/dsh
 DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js npm run test:e2e
+
+# categories + session-bridge on a real DSH
+DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js npm run test:e2e:categories
 ```
 
 ## License
