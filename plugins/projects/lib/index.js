@@ -50,7 +50,7 @@ const Project = z.object({
     threadModel: z.string(),
     /** Default effort for new threads; empty uses the plugin default. */
     threadEffort: z.string(),
-    /** "asked" or "always": who in this project may use the user's own tools (guardedTools); empty uses the plugin default. */
+    /** "asked" or "always": which of this project's threads may use the user's own tools (guardedTools); empty uses the plugin default. A coordinator never does. */
     yourTools: z.string(),
     /** The coordinator's DSH permission preset, or "default" for DSH's default; empty uses the plugin default. */
     coordinatorPermission: z.string(),
@@ -83,11 +83,12 @@ export const Config = z.object({
     /** Plugin-wide default effort for new threads. */
     threadEffort: live(z.string()),
     /**
-     * Who may use the user's own tools (guardedTools) in projects. "asked"
-     * (the default): no coordinator has them, and a thread has only the
-     * ones the user's own words for it name. "always": every project
-     * session has them, and only the prompts' rule and the thread checks
-     * stand between them and the model.
+     * Which threads may use the user's own tools (guardedTools, and the
+     * ones other plugins mark as the user's own) in projects. A coordinator
+     * never has them. "asked" (the default): a thread has only the ones the
+     * user's own words for it name. "always": every thread has them, and
+     * only the prompts' rule and the thread checks stand between them and
+     * the model.
      */
     yourTools: live(z.string()),
     /** Plugin-wide coordinator permission: a DSH permission preset (read-only, workspace-write, danger-full-access), or "default" for DSH's default for new sessions. Empty means read-only: the coordinator reads, its threads change files, and what would need approval is refused without asking. */
@@ -118,7 +119,9 @@ export const Config = z.object({
      * prompts name them, a thread start or message that names one is
      * refused unless the user's words or the project's goal name it, and
      * under yourTools "asked" sessions don't have them at all. Live, so an
-     * edit doesn't restart the plugin.
+     * edit doesn't restart the plugin. A tool another plugin registers with
+     * `personal` on its definition is guarded too, without being listed
+     * (see the README's "Tools other plugins mark as yours").
      */
     guardedTools: live(z.union([z.array(z.string()), z.dict(z.array(z.string()))]).default([])),
     /** Action log, mode 600, never prompt text. Empty turns it off. */

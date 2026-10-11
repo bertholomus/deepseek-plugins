@@ -216,7 +216,11 @@ const profile = join(home, 'profiles', 'web');
 
 function writeProfile(modelPort) {
     mkdirSync(join(profile, 'node_modules'), { recursive: true });
-    const plugins = { 'dsh-plugin-projects': join(pluginsDir, 'projects'), 'dsh-plugin-session-bridge': join(pluginsDir, 'session-bridge') };
+    const plugins = {
+        'dsh-plugin-projects': join(pluginsDir, 'projects'), 'dsh-plugin-session-bridge': join(pluginsDir, 'session-bridge'),
+        // A tool another plugin marks as the user's own, which no guardedTools entry names.
+        'dsh-e2e-personal-tool': join(here, 'personal-tool'),
+    };
     writeFileSync(join(profile, 'package.json'), `${JSON.stringify({
         name: 'dsh-profile-web',
         private: true,
@@ -734,7 +738,7 @@ try {
     reqs = await say(coord, call('project_thread_start', { ask: 'Write a haiku about rain.', title: 'Lanes', brief: 'Use mcp__lane-catalog__lanes_status to list the lanes.' }));
     check('a start that would use a guarded tool the user did not ask for is refused', resultOf(reqs).startsWith('TOOL-RESULT: Failed: this would use lane-catalog, and the user\'s words do not ask for it.')
         && readText(logFile).includes(`guard ${PROJECT_ID} start lane-catalog`), resultOf(reqs));
-    check('the coordinator\'s rules name the user\'s tools it doesn\'t have', reqs.some((r) => r.system.includes('\n   You don\'t have these here: lane-catalog. When the user\'s words ask for work that needs one, start a thread with their words in `ask`; the thread gets the ones their words name.\n')),
+    check('the coordinator\'s rules name the user\'s tools it doesn\'t have', reqs.some((r) => r.system.includes('\n   You don\'t have these here: lane-catalog, notes-app. When the user\'s words ask for work that needs one, start a thread with their words in `ask`; the thread gets the ones their words name.\n')),
         reqs.at(-1)?.system.split('\n').filter((l) => /these here|include/.test(l)).join(' | '));
     reqs = await say(coord, call('project_thread_start', { title: 'No ask', brief: 'Just answer.' }));
     check('a start without the user\'s words is rejected before it runs', resultOf(reqs) !== '' && /\bask\b/.test(resultOf(reqs))
@@ -1029,9 +1033,14 @@ try {
     await waitIdle(plainId);
     const plainReq = model.requests.find((r) => r.fresh.includes('Hello plain session.'));
     check('the user\'s MCP server reaches an ordinary session', plainReq?.tools.includes(LANES) === true, plainReq?.tools.join(','));
+    // notes_read comes from a plugin that marks it as the user's own (personal-tool/), and no list names it.
+    const NOTES = 'notes_read';
+    check('a tool another plugin marks as the user\'s own reaches an ordinary session too', plainReq?.tools.includes(NOTES) === true, plainReq?.tools.join(','));
     reqs = await say(coord, `E2E:force ${LANES} {}`);
     check('a coordinator is never offered the user\'s tool', reqs[0]?.tools.includes('bash') && !reqs[0].tools.includes(LANES)
         && model.requests.filter((r) => whoOf(r) === 'coordinator').every((r) => !r.tools.includes(LANES)), reqs[0]?.tools.join(','));
+    check('nor one another plugin marks as the user\'s own, read from DSH\'s registry', model.requests.filter((r) => whoOf(r) === 'coordinator').every((r) => !r.tools.includes(NOTES))
+        && reqs[0]?.system.includes('You don\'t have these here: lane-catalog, notes-app.'), reqs[0]?.system.split('\n').find((l) => l.includes('have these here')));
     check('its call to it anyway is refused before it reaches the server, with what to do instead', resultOf(reqs).includes('which this project keeps out of the coordinator. When the user asks for work that needs it, start a thread')
         && readText(mcpCalls) === '', resultOf(reqs));
     // Made Here's coordinator is new: the user has written nothing to it yet. The start's arguments go as JSON with every "l"
@@ -1051,6 +1060,17 @@ try {
     const lanesReqs = since(mark).filter((r) => /You are thread t\d+, "Lanes up", in the DSH project "Made Here"/.test(r.system));
     check('the thread is offered the tool the user\'s words name, and its call reaches the server', lanesReqs[0]?.tools.includes(LANES) && resultOf(lanesReqs).includes('alpha up, beta up')
         && readText(mcpCalls).trim().split('\n').length === 1 && readText(logFile).includes(` wall ${madeId}/coordinator `), `${lanesReqs[0]?.tools.filter((t) => t.startsWith('mcp__')).join(',')} | ${resultOf(lanesReqs)}`);
+    check('and not the marked tool its words don\'t ask for', lanesReqs.length > 0 && lanesReqs.every((r) => !r.tools.includes(NOTES)), lanesReqs[0]?.tools.join(','));
+    // The user's own words give the marked tool's group to a thread, by the words its plugin set ("my notes app").
+    const notesAsk = 'Read my notes app and tell me the first line.';
+    await say(madeCoord, notesAsk);
+    mark = model.requests.length;
+    reqs = await say(madeCoord, call('project_thread_start', { ask: notesAsk, title: 'Notes', brief: `Read them. E2E:force ${NOTES} {}` }));
+    await waitFor(() => since(mark).some((r) => r.system.includes('the DSH project "Made Here"') && whoOf(r) === 'coordinator' && r.action.text === 'SAW-IDLE'), 'the Notes idle note');
+    await waitIdle(madeCoord);
+    const notesReqs = since(mark).filter((r) => /You are thread t\d+, "Notes", in the DSH project "Made Here"/.test(r.system));
+    check('the user\'s own words give a thread the marked tool, and its call reaches it', /The user's words give it notes-app\./.test(resultOf(reqs))
+        && notesReqs[0]?.tools.includes(NOTES) && resultOf(notesReqs).includes('NOTES: buy milk'), `${resultOf(reqs).slice(0, 200)} | ${resultOf(notesReqs).slice(0, 200)}`);
     // The user writes to a thread directly: the tools their words there name are its own from that turn on.
     mark = model.requests.length;
     await say(t2, `Please ask lane-catalog which are up. E2E:force ${LANES} {}`);

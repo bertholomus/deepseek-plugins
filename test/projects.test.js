@@ -94,7 +94,7 @@ test('plugins and docs carry no third-party assistant branding', () => {
             if (skip.has(e.name)) continue;
             const p = join(dir, e.name);
             if (e.isDirectory()) walk(p);
-            else if (/\.(m?js|json|md|ya?ml|css|html)$/.test(e.name) && !p.endsWith(join('test', 'projects.test.js'))) {
+            else if (/\.(m?js|json|md|ya?ml|css|html|svg|xml|sh|txt|ics)$/.test(e.name) && !p.endsWith(join('test', 'projects.test.js'))) {
                 if (/claude|anthropic/i.test(readFileSync(p, 'utf8'))) hits.push(p);
             }
         }

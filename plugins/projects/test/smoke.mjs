@@ -16,7 +16,7 @@ import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
 import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol';
 import * as plugin from '../lib/index.js';
 import { effectiveSettings, effectiveAccess, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
-import { slugify, timing, clipTitle, guardList, guardedIn, unsaidPart } from '../lib/projects.js';
+import { slugify, timing, clipTitle, guardList, guardedIn, personalMark, withPersonal, unsaidPart } from '../lib/projects.js';
 import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS, lineDelta, editOf, editsIn, editSummary, hunksOf, subagentsIn, diffFiles, placeIn, MAX_HUNK_CHARS, MAX_VIEW_CHARS } from '../lib/changes.js';
 import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, cardSummary, threadMarkdown, outsideMessage, replyMessage, NUDGE } from '../lib/prompts.js';
 import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
@@ -270,7 +270,7 @@ function fakePresets(sessions, live) {
  * Host's tools (DSH's own and the MCP servers'), which a project may keep
  * from a session; `presets: true` adds DSH's permission presets.
  */
-function fakeHost({ selection = false, hostListener = selection, gateway = false, workspaces = [], tools = [], presets = false } = {}) {
+function fakeHost({ selection = false, hostListener = selection, gateway = false, workspaces = [], tools = [], marks = {}, presets = false } = {}) {
     const listeners = new Map();
     const effects = [];
     const sessions = new Map(); // id → {events, prompts, title, cwd}
@@ -291,9 +291,14 @@ function fakeHost({ selection = false, hostListener = selection, gateway = false
         sessions, live, effects, selections, services, projections, provided,
         /** The Host's tool names; a test adds one and emits `tools/change`, as an MCP server connecting does. */
         toolNames: [...tools],
-        /** DSH's tool registry as the plugin's context reads it: every tool a session could be offered. */
+        /** What other plugins set on a tool's definition besides its schema, by tool name: its `personal` mark. */
+        toolMarks: { ...marks },
+        /** DSH's tool registry as the plugin's context reads it: every tool a session could be offered, with its definition. */
         tools: {
-            view: () => ({ restrictableNames: new Set(host.toolNames) }),
+            view: () => ({
+                restrictableNames: new Set(host.toolNames),
+                visible: new Map(host.toolNames.map((name) => [name, { name, ...host.toolMarks[name] }])),
+            }),
             schemas: () => host.toolNames.map((name) => ({ name })),
         },
         logger: { info() {}, warn() {} },
@@ -3899,17 +3904,17 @@ test('your tools: a coordinator never has the user\'s tools, and a thread has on
         [[], [['t1', ['lane-catalog', 'family_1password']], ['t2', ['cua']]], ['lane-catalog', 'family_1password', 'cua']]);
     assert.deepEqual(plain((await remote.list()).guarded), ['lane-catalog', 'family_1password', 'cua']);
 
-    // "Always", set in Project settings: every session has them, and the coordinator's prompt keeps only the rule.
+    // "Always", set in Project settings: every thread has them, and the coordinator still none; its prompt says threads have them.
     read = await remote.update(coord.id, { yourTools: 'always' });
     assert.deepEqual(plain(read.access.yourTools), { value: 'always', source: 'project setting', inherited: { value: 'asked', source: 'plugin default' } });
-    assert.deepEqual([coord.ctx.offered(), t2.ctx.offered()], [host.toolNames, host.toolNames]);
-    assert.deepEqual([read.project.tools, read.threads[1].tools], ['all', 'all']);
-    assert.match(coord.ctx.section(), /\n   Here those include: lane-catalog, family_1password, cua\.\n3\. /);
-    assert.equal(coord.ctx.refusal('mcp__lane-catalog__lanes_status'), undefined);
+    assert.deepEqual([coord.ctx.offered(), t2.ctx.offered()], [[...OTHERS], host.toolNames]);
+    assert.deepEqual(plain([read.project.tools, read.threads[1].tools]), [[], 'all']);
+    assert.match(coord.ctx.section(), /\n   You don't have these here: lane-catalog, family_1password, cua\. When the user's words ask for work that needs one, start a thread with their words in `ask`; every thread has them\.\n3\. /);
+    assert.match(coord.ctx.refusal('mcp__lane-catalog__lanes_status'), /^This is one of the user's own tools, which this project keeps out of the coordinator\./);
     // The coordinator can see the setting, and can't change it.
     const shown = await coord.ctx.call('project_settings', {});
     // Without the tools' names: the coordinator mentions them only when asked.
-    assert.match(shown, /\nThe user's tools: every session has them\nThe user changes these and the goal in Project settings; project_settings can't\.$/);
+    assert.match(shown, /\nThe user's tools: you don't have them; every thread has them\nThe user changes these and the goal in Project settings; project_settings can't\.$/);
     assert.equal(coord.ctx.registered.get('project_settings').parameters.your_tools, undefined);
     // Back to the default, and only the two words are settings.
     read = await remote.update(coord.id, { yourTools: null });
@@ -3925,6 +3930,77 @@ test('your tools: a coordinator never has the user\'s tools, and a thread has on
     saveDefaults(host, config, { guardedTools: [] });
     await tick();
     assert.deepEqual([coord.ctx.offered(), coord.ctx.restrictions.length], [host.toolNames, 0]);
+});
+
+test('your tools: tools another plugin marks as the user\'s own are guarded unlisted, and only the user\'s own words give them', async () => {
+    // A mark names its group and the words that ask for it; the short form's word is "my <name>"; one without a name is a group of its own.
+    assert.deepEqual(personalMark({ name: 'Apple Notes', words: [' my notes ', ''] }, 'x'), { name: 'apple-notes', words: ['my notes'] });
+    assert.deepEqual(personalMark('calendar', 'x'), { name: 'calendar', words: ['my calendar'] });
+    assert.deepEqual(personalMark(true, 'notes_read'), { name: 'notes_read', words: ['my notes_read'] });
+    assert.equal(personalMark(undefined, 'x'), undefined);
+    // Merged with the list: a marked group counts only by its words, never its bare name, and covers only the tools that carry its mark.
+    const merged = withPersonal(guardList({ calendar: ['agenda'], cua: [] }), [['calendar_list_events', personalMark('calendar')], ['notes_read', personalMark('notes-app')]]);
+    assert.deepEqual(merged.map(([name, words, mark]) => [name, words, mark ? [...mark.tools] : null]),
+        [['calendar', ['agenda', 'my calendar'], ['calendar_list_events']], ['cua', [], null], ['notes-app', ['my notes app'], ['notes_read']]]);
+    assert.deepEqual([guardedIn('Fix the calendar date picker.', merged), guardedIn('Check my calendar and the agenda.', merged), guardedIn('use cua', merged)], [[], ['calendar'], ['cua']]);
+
+    const CAL = { personal: { name: 'calendar', words: ['my calendar', 'my schedule'] } };
+    const MARKED = ['calendar_list_events', 'calendar_add_event', 'notes_read'];
+    const { host, dir, config } = setup({
+        guardedTools: { 'lane-catalog': ['lanes'] },
+        projects: [{ name: 'DSH Plugins', goal: 'Keep my calendar tidy, and ship good DSH plugins', workspacePath: '/work/dsh', coordinatorEffort: 'max' }],
+    }, undefined, { gateway: true, tools: [...HOST_TOOLS, ...MARKED], marks: { calendar_list_events: CAL, calendar_add_event: { personal: 'calendar' }, notes_read: { personal: 'notes-app' } } });
+    await tick();
+    const coord = coordinatorOf(host);
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    const say = userTyping(host);
+    const log = () => readFileSync(join(dir, 'projects.log'), 'utf8');
+    const threadNamed = (title) => [...host.live.values()].find((a) => host.sessions.get(a.id).title === title);
+    const has = (agent) => agent.ctx.offered().filter((name) => name.startsWith('calendar_') || name === 'notes_read');
+
+    // Guarded without being listed: the coordinator is offered none of them, its prompt names them, and a call is refused.
+    assert.deepEqual(has(coord), []);
+    assert.match(coord.ctx.section(), /\n   You don't have these here: lane-catalog, calendar, notes-app\. /);
+    assert.match(coord.ctx.refusal('calendar_add_event'), /which this project keeps out of the coordinator\./);
+    // The goal says "my calendar", but only the user's own words give a marked group: the goal gives no thread one.
+    let read = await remote.describe(coord.id);
+    assert.deepEqual(plain([read.guarded, read.goal.tools]), [['lane-catalog', 'calendar', 'notes-app'], []]);
+    // A brief about a date picker that says "calendar" isn't refused, and its thread gets none of them.
+    await say(coord, 'Fix the date picker in the calendar widget.');
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Fix the date picker in the calendar widget.', title: 'Picker', brief: 'Fix the calendar date picker.' }), /^Started t1 "Picker"\./);
+    assert.deepEqual(has(threadNamed('Picker')), []);
+    assert.match(threadNamed('Picker').ctx.refusal('calendar_list_events'), /the user's words for this thread don't name it/);
+    // One that uses a group by its words when the user's don't is refused, and an ask that quotes the goal into one too.
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Fix the date picker in the calendar widget.', title: 'Peek', brief: 'Check my calendar for test dates.' }), /^Failed: this would use calendar, and the user's words do not ask for it\./);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: 'Keep my calendar tidy.', title: 'Tidy', brief: 'Tidy it.' }), /^Failed: ask names calendar, but the user's messages don't\./);
+    assert.match(log(), / guard dsh-plugins ask-unsaid calendar\n/);
+    // The user's own words give the group to that thread: every tool marked with it, and not the notes.
+    const ask = 'What is on my schedule tomorrow?';
+    await say(coord, ask);
+    assert.match(await coord.ctx.call('project_thread_start', { ask, title: 'Tomorrow', brief: 'List tomorrow\'s events.' }), /^Started t2 "Tomorrow"\. It reports back when done\. The user's words give it calendar\. /);
+    const t2 = threadNamed('Tomorrow');
+    assert.deepEqual(has(t2), ['calendar_list_events', 'calendar_add_event']);
+    assert.equal(t2.ctx.refusal('calendar_add_event'), undefined);
+    // What the user types in the thread counts too.
+    await say(t2, 'Also check my notes app for the agenda.');
+    t2.ctx.sessionEvent(host.sessions.get(t2.id).events.at(-1));
+    assert.deepEqual(has(t2), MARKED);
+    assert.match(log(), / tools dsh-plugins\/t2 \+notes-app from the user in the thread\n/);
+    // A plugin that marks another tool later: the walls follow.
+    host.toolNames.push('calendar_delete_event');
+    host.toolMarks.calendar_delete_event = CAL;
+    host.emit('tools/change');
+    await new Promise((r) => setTimeout(r, 80));
+    assert.deepEqual([has(coord), has(threadNamed('Picker')), has(t2).includes('calendar_delete_event')], [[], [], true]);
+    // A listed entry of the same name adds its words, and no longer counts by its bare name either.
+    saveDefaults(host, config, { guardedTools: { 'lane-catalog': ['lanes'], calendar: ['agenda'] } });
+    const agenda = 'Put the standup on the agenda for Friday.';
+    await say(coord, agenda);
+    assert.match(await coord.ctx.call('project_thread_start', { ask: agenda, title: 'Standup', brief: 'Add the standup.' }), /The user's words give it calendar\. /);
+    assert.deepEqual(has(threadNamed('Standup')), ['calendar_list_events', 'calendar_add_event', 'calendar_delete_event']);
+    // "Always": every thread has them, and the coordinator still none.
+    read = await remote.update(coord.id, { yourTools: 'always' });
+    assert.deepEqual([has(coord), has(threadNamed('Picker')).length], [[], 4]);
 });
 
 test('your tools: a reload attaches to loaded coordinators without reading their logs, and puts every wall back', async () => {

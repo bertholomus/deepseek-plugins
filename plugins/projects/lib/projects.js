@@ -228,11 +228,62 @@ export function questionAnswers(events) {
  * The guarded tools a text names: by name, also inside a tool id such as
  * mcp__lane-catalog__lanes_status, and with `aliases`, by the words the
  * user may call one by. A brief uses a tool when it names it; the user's
- * words ask for one when they name it or an alias.
+ * words ask for one when they name it or an alias. A group another plugin
+ * marks as the user's own (withPersonal) is named only by its words, never
+ * by its bare name: a brief about a date picker doesn't use "calendar".
  */
 export function guardedIn(text, guard, { aliases = false } = {}) {
     const words = wordsOf(text);
-    return guard.filter(([name, alias]) => holds(words, name) || (aliases && alias.some((a) => holds(words, a)))).map(([name]) => name);
+    return guard.filter(([name, alias, mark]) => (mark
+        ? alias.some((a) => holds(words, a))
+        : holds(words, name) || (aliases && alias.some((a) => holds(words, a))))).map(([name]) => name);
+}
+
+/**
+ * A tool's `personal` mark, as the plugin that registers the tool sets it
+ * on its definition: the group of the user's own tools it belongs to, and
+ * the words that count as the user asking for them. `personal: 'calendar'`
+ * is `{ name: 'calendar' }`, whose word is "my calendar". A mark that names
+ * no group puts the tool in a group of its own.
+ * @returns {{name: string, words: string[]}|undefined}
+ */
+export function personalMark(value, toolName) {
+    if (value === undefined || value === null || value === false) return undefined;
+    const given = typeof value === 'string' ? value : isObject(value) && typeof value.name === 'string' ? value.name : '';
+    const name = wordsOf(given).trim().replace(/ /g, '-') || String(toolName ?? '').trim();
+    if (name === '') return undefined;
+    const listed = isObject(value) && Array.isArray(value.words) ? value.words.map((w) => String(w ?? '').trim()).filter(Boolean) : [];
+    return { name, words: listed.length > 0 ? listed : [`my ${name.replace(/-/g, ' ')}`] };
+}
+
+/**
+ * The guard list with the tools other plugins mark as the user's own
+ * (personalMark), whether or not guardedTools lists them. Each group
+ * covers the tools that carry its mark and is named only by its words; a
+ * guardedTools entry of the same name adds its words, and keeps covering
+ * the tools its name names.
+ * @param {Array} guard - guardList's [name, aliases] pairs.
+ * @param {Array} marked - [tool name, mark] pairs.
+ * @returns {Array} [name, words, {tools, listed}?] entries; the third only for a marked group.
+ */
+export function withPersonal(guard, marked) {
+    if (marked.length === 0) return guard;
+    const groups = new Map();
+    for (const [tool, mark] of marked) {
+        const group = groups.get(mark.name) ?? { words: [], tools: new Set() };
+        for (const word of mark.words) if (!group.words.includes(word)) group.words.push(word);
+        group.tools.add(tool);
+        groups.set(mark.name, group);
+    }
+    const out = guard.map(([name, aliases]) => {
+        const key = wordsOf(name).trim().replace(/ /g, '-');
+        const group = groups.get(key);
+        if (!group) return [name, aliases];
+        groups.delete(key);
+        return [name, [...new Set([...aliases, ...group.words])], { tools: group.tools, listed: true }];
+    });
+    for (const [name, group] of groups) out.push([name, group.words, { tools: group.tools, listed: false }]);
+    return out;
 }
 
 /** A thread's latest tool calls, newest last, each with the argument that says what it touched: 'bash "npm test"; read "src/a.js"'. */
@@ -299,8 +350,14 @@ export const NEWS_KINDS = ['handback', 'finished', 'approval', 'failed', 'stoppe
 const MAX_NEWS = 20;
 const AWAIT_MS = 24 * 60 * 60 * 1000;
 
-/** The guarded names (guardList) a tool's name holds: mcp__lane-catalog__lanes_status holds lane-catalog. */
-const guardsOfTool = (name, guard) => (typeof name === 'string' && !OWN_TOOLS.has(name) ? guardedIn(name, guard) : []);
+/**
+ * The guarded names a tool falls under: the ones its name holds
+ * (mcp__lane-catalog__lanes_status holds lane-catalog), and the group its
+ * own `personal` mark puts it in.
+ */
+const guardsOfTool = (name, guard) => (typeof name === 'string' && !OWN_TOOLS.has(name)
+    ? guard.filter(([g, , mark]) => mark?.tools.has(name) || ((!mark || mark.listed) && holds(wordsOf(name), g))).map(([g]) => g)
+    : []);
 
 /** What a session's call to one of the user's tools it may not use returns, before the call reaches the tool. */
 const WALL_REASONS = {
@@ -627,29 +684,55 @@ export class ProjectManager {
         return effectiveAccess(pluginDefaults(this.config), this.project(projectId), this.store.project(projectId).settings);
     }
 
-    /** config.guardedTools as [name, aliases] pairs, read now: it is live config. */
+    /**
+     * The user's tools as guard entries, read now: config.guardedTools
+     * (live config) and the tools other plugins mark as the user's own.
+     */
     guards() {
-        return guardList(liveValue(this.config.guardedTools));
+        return withPersonal(guardList(liveValue(this.config.guardedTools)), this.personalTools());
+    }
+
+    /**
+     * The tools other plugins mark as the user's own (`personal` on the
+     * definition they register), as [tool name, mark]. Read from DSH's
+     * registry as it is before any session's restriction, so a wall never
+     * hides one from the next check.
+     */
+    personalTools() {
+        let visible;
+        try { visible = this.ctx.tools?.view?.()?.visible; } catch { return []; }
+        if (!(visible instanceof Map)) return [];
+        const out = [];
+        for (const [name, definition] of visible) {
+            const mark = personalMark(definition?.personal, name);
+            if (mark) out.push([name, mark]);
+        }
+        return out;
+    }
+
+    /** The user's tools a project's goal names, which every thread has: never a group another plugin marks, which only the user's own words give. */
+    goalTools(projectId, guard = this.guards()) {
+        return guardedIn(this.goalOf(projectId), guard.filter(([, , mark]) => !mark), { aliases: true });
     }
 
     // ── the user's own tools ──────────────────────────────────────────────
 
     /**
-     * The user's tools (guarded names) one project session may use. Under
-     * "always" every one. Under "asked" none for the coordinator; a thread
-     * has the ones the user's own words for it named (its `tools`: checked
-     * against what the user wrote when it started or got a message, or
-     * typed in the thread itself) and the ones the project's goal names.
+     * The user's tools (guarded names) one project session may use. A
+     * coordinator never has one. Under "always" a thread has every one;
+     * under "asked" the ones the user's own words for it named (its
+     * `tools`: checked against what the user wrote when it started or got a
+     * message, or typed in the thread itself) and the ones the project's
+     * goal names.
      * @param {{projectId: string, role: string, threadId?: string}} who
      * @returns {Set<string>|'all'}
      */
     toolsFor(who) {
-        if (!this.projects.has(who.projectId)) return new Set();
+        if (!this.projects.has(who.projectId) || who.role !== 'thread') return new Set();
         if (this.access(who.projectId).yourTools.value === 'always') return 'all';
-        if (who.role !== 'thread') return new Set();
         const guard = this.guards();
         const known = new Set(guard.map(([name]) => name));
-        const names = new Set(guardedIn(this.goalOf(who.projectId), guard, { aliases: true }));
+        const names = new Set(this.goalTools(who.projectId, guard));
         const t = this.store.thread(who.projectId, who.threadId);
         for (const name of Array.isArray(t?.tools) ? t.tools : []) if (known.has(name)) names.add(name);
         return names;
@@ -906,8 +989,9 @@ export class ProjectManager {
     /**
      * The user's tools an `ask` names, checked against what the user wrote:
      * each must also be named in the user's own messages to the coordinator
-     * or in the project's goal. An ask that names one the user never wrote
-     * is not the user's words, so it is refused.
+     * or in the project's goal (never a group another plugin marks, for the
+     * goal). An ask that names one the user never wrote is not the user's
+     * words, so it is refused.
      * @returns {Promise<string[]>} the guarded names the ask gives its thread.
      */
     async askedTools(projectId, ask) {
@@ -915,7 +999,7 @@ export class ProjectManager {
         if (guard.length === 0 || !ask) return [];
         const named = guardedIn(ask, guard, { aliases: true });
         if (named.length === 0) return [];
-        const said = new Set(guardedIn(`${this.goalOf(projectId)}\n${await this.userText(projectId)}`, guard, { aliases: true }));
+        const said = new Set([...this.goalTools(projectId, guard), ...guardedIn(await this.userText(projectId), guard, { aliases: true })]);
         const unsaid = named.filter((name) => !said.has(name));
         if (unsaid.length > 0) {
             this.log(`guard ${projectId} ask-unsaid ${unsaid.join(',')}`);
@@ -2543,16 +2627,17 @@ export class ProjectManager {
 
     /**
      * Refuse a thread start or message that would use a guarded tool
-     * (config.guardedTools) the user's words don't call for: `allowed` (the
-     * user's tools their checked words give the thread) or the project's
-     * goal must name it. The first real run drifted from a test task the
+     * (config.guardedTools, or a tool another plugin marks as the user's
+     * own) the user's words don't call for: `allowed` (the user's tools
+     * their checked words give the thread) or the project's goal must name
+     * it, and only the user's words give a marked one. The first real run drifted from a test task the
      * coordinator picked itself into the user's model lanes; this holds
      * whatever the model makes of its prompt, under either yourTools.
      */
     guard(projectId, what, text, allowed) {
         const guard = this.guards();
         if (guard.length === 0) return;
-        const ok = new Set([...allowed, ...guardedIn(this.goalOf(projectId), guard, { aliases: true })]);
+        const ok = new Set([...allowed, ...this.goalTools(projectId, guard)]);
         const blocked = guardedIn(text, guard).filter((name) => !ok.has(name));
         if (blocked.length === 0) return;
         this.log(`guard ${projectId} ${what} ${blocked.join(',')}`);
@@ -3063,7 +3148,7 @@ export class ProjectManager {
         return [
             // Without their names: the coordinator mentions the user's tools only when asked (its rule 2 names them).
             guarded.length === 0 ? null
-                : `The user's tools: ${a.yourTools.value === 'always' ? 'every session has them' : 'you don\'t have them; a thread has the ones the user\'s words for it name'}`,
+                : `The user's tools: you don't have them; ${a.yourTools.value === 'always' ? 'every thread has them' : 'a thread has the ones the user\'s words for it name'}`,
             this.presets() ? `Permissions: coordinator ${permission(a.coordinatorPermission.value)}, new threads ${permission(a.threadPermission.value)}` : null,
             'The user changes these and the goal in Project settings; project_settings can\'t.',
         ].filter((line) => line !== null);
@@ -3500,7 +3585,7 @@ export class ProjectManager {
                 value: this.goalOf(projectId),
                 source: typeof stored.settings.goal === 'string' ? 'project setting' : typeof project.goal === 'string' && project.goal.trim() !== '' ? 'project config' : 'none',
                 inherited: typeof project.goal === 'string' ? project.goal.trim() : '',
-                tools: guardedIn(this.goalOf(projectId), this.guards(), { aliases: true }),
+                tools: this.goalTools(projectId),
                 max: GOAL_CHARS,
             },
             threads: rosterIds(stored.threads).map((id) => {

@@ -108,7 +108,7 @@ export function rosterLines(threads, liveStatus) {
  * models too. Each automatic message carries its own instruction, so the
  * rules don't have to explain them. It names no model or effort: those are
  * settings, and project_settings shows them when the user asks.
- * @param {object} p - {name, goal, workspacePath, home?: the workspace is the user's home folder, readOnly?: it is on Read Only, guarded?: config.guardedTools names, yourTools?: 'asked'|'always', paused, threads, memory, liveStatus}
+ * @param {object} p - {name, goal, workspacePath, home?: the workspace is the user's home folder, readOnly?: it is on Read Only, guarded?: the user's tools' names (guardedTools and the ones other plugins mark), yourTools?: 'asked'|'always', paused, threads, memory, liveStatus}
  */
 export function coordinatorPolicy(p) {
     return [
@@ -123,10 +123,10 @@ export function coordinatorPolicy(p) {
         '## Rules',
         '1. Do only what the user asks. When they leave the choice of work to you, pick one small task that only reads and writes files in the workspace, start it now, and say what you picked; don\'t ask them to choose.',
         `2. Never use the user's personal or infrastructure tools (${OFF_LIMITS}), yourself or in a thread, ${ANY_ROUTE}. Only the user's own words (a message, an answer they picked or typed, or the goal) can call for one.`,
-        // Under "asked" the coordinator doesn't have them, so the rule says where such work goes.
-        p.guarded?.length && p.yourTools !== 'always'
-            ? `   You don't have these here: ${p.guarded.join(', ')}. When the user's words ask for work that needs one, start a thread with their words in \`ask\`; the thread gets the ones their words name.`
-            : p.guarded?.length ? `   Here those include: ${p.guarded.join(', ')}.` : null,
+        // The coordinator never has them, so the rule says where such work goes.
+        p.guarded?.length
+            ? `   You don't have these here: ${p.guarded.join(', ')}. When the user's words ask for work that needs one, start a thread with their words in \`ask\`; ${p.yourTools === 'always' ? 'every thread has them' : 'the thread gets the ones their words name'}.`
+            : null,
         '3. All work goes to a thread, however small: counting, listing, searching, running tests or commands, editing, deleting. Start one with project_thread_start, not with DSH\'s subagent or workflow tools. One thread per distinct ask ("Two things: A and B" is two asks); put the user\'s words in `ask`, word for word, and in `brief` the goal, the scope, what done looks like and what not to touch. A follow-up on a thread\'s work goes to that thread with project_thread_send. Something the user wants sent to another chat or project goes with project_message.',
         `4. Name a thread to the user only as a link: [Fix the login bug](${threadLink('t3')}) for thread t3.`,
         '5. Answer yourself only from what you already know: thread status, project memory, this conversation. You may read a file to write a brief or a question; you run no commands and change no files. Keep your replies short.',

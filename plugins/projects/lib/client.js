@@ -5730,8 +5730,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             threadAccess: 'Thread access',
             yourTools: 'Your tools',
             toolsAsked: 'The coordinator never has them. A thread has only the ones your words for it name.',
-            toolsAlways: 'Every coordinator and thread in this project has them.',
-            toolsAlwaysAll: 'Every coordinator and thread has them, in every project that doesn\'t choose its own.',
+            toolsAlways: 'Every thread in this project has them. The coordinator never does.',
+            toolsAlwaysAll: 'Every thread has them, in every project that doesn\'t choose its own. Coordinators never do.',
             noTools: 'None are listed yet, so no session is kept from any. List your personal and infrastructure tools under guardedTools in this plugin\'s config.',
             coordinatorPermission: 'Coordinator permission',
             coordinatorPermissionHint: 'Where the ◆ session can write, and what it asks you first. On Read Only it writes nothing and asks you nothing; its threads do the changing. A permission you pick in its chat lands here too.',
@@ -5756,9 +5756,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             thread: 'Full access reduces confirmation steps and lets the agent perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust the current task.',
             allCoordinators: 'Full access lets the coordinator of every project that doesn\'t choose its own reduce confirmation steps and perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust what they do.',
             allThreads: 'Full access lets new threads in every project that doesn\'t choose its own reduce confirmation steps and perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust the tasks they get.',
-            toolsTitle: 'Give every session your tools?',
-            tools: (names) => `Every coordinator and thread in this project can then use ${listText(names)} on its own, even when your words don't ask for them. Only use it when you trust what runs here.`,
-            allTools: (names) => `Every coordinator and thread in projects that don't choose their own can then use ${listText(names)} on its own, even when your words don't ask for them. Only use it when you trust what runs there.`,
+            toolsTitle: 'Give every thread your tools?',
+            tools: (names) => `Every thread in this project can then use ${listText(names)} on its own, even when your words don't ask for them. Only use it when you trust what runs here.`,
+            allTools: (names) => `Every thread in projects that don't choose their own can then use ${listText(names)} on its own, even when your words don't ask for them. Only use it when you trust what runs there.`,
             toolsConfirm: 'Use always',
         };
         /** Archiving a project from its ◆ row, and bringing it back. */
