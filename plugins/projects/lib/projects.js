@@ -117,6 +117,8 @@ const READ_ONLY_REASON = 'You are on Read Only, so you don\'t change files. Star
 /** DSH's tools that reach an MCP server named in their `server` argument, not in their own name. */
 const SERVER_TOOLS = new Set(['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource']);
 
+const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
 /** A stored project's name, trimmed; '' when the store holds none. */
 const storedName = (stored) => (typeof stored?.name === 'string' ? stored.name.trim() : '');
 
@@ -235,6 +237,14 @@ const wordsKey = (text) => String(text ?? '').toLowerCase().replace(/[^\p{L}\p{N
 
 /** Messages to chats outside a project that wait for their reply: at most this many per project, for this long. */
 const MAX_AWAITING = 20;
+/**
+ * What the user hears about from anywhere in the window (the ◆ row's mark
+ * and a notice): a thread handed back, finished its turn without one, waits
+ * on the user's approval, or failed or stopped after its nudge. The newest
+ * are kept per project.
+ */
+export const NEWS_KINDS = ['handback', 'finished', 'approval', 'failed', 'stopped'];
+const MAX_NEWS = 20;
 const AWAIT_MS = 24 * 60 * 60 * 1000;
 
 /** The guarded names (guardList) a tool's name holds: mcp__lane-catalog__lanes_status holds lane-catalog. */
@@ -1878,7 +1888,8 @@ export class ProjectManager {
         const ended = Boolean(endingStateOf(turn.ending));
         const nudge = ended && !t.nudged && !userMustFix(turn.ending);
         this.store.putThread(projectId, threadId, { nudged: nudge ? true : undefined });
-        await this.deliver(projectId, idleMessage(threadId, t.title, turn.reply, turn.ending, { nudge, again: ended && t.nudged === true }));
+        const news = nudge ? undefined : { kind: ended ? endingStateOf(turn.ending) : 'finished', thread: threadId };
+        await this.deliver(projectId, idleMessage(threadId, t.title, turn.reply, turn.ending, { nudge, again: ended && t.nudged === true }), undefined, news);
         this.log(`idle-note ${projectId}/${threadId} chars=${turn.reply.length}${turn.ending ? ` ended=${turn.endKind}${nudge ? ' nudge' : ''}` : ''}`);
     }
 
@@ -2025,7 +2036,7 @@ export class ProjectManager {
         const turn = await this.readTurn(agent.id, { current: true });
         // The user is talking to the thread directly, so the prompt is in front of them.
         if (!turn.fromProject || !this.allowHandback(projectId, threadId)) return;
-        await this.deliver(projectId, approvalMessage(threadId, t.title, t.title, String(data.toolName ?? 'a tool'), data.reason));
+        await this.deliver(projectId, approvalMessage(threadId, t.title, t.title, String(data.toolName ?? 'a tool'), data.reason), undefined, { kind: 'approval', thread: threadId });
         this.log(`approval-note ${projectId}/${threadId} tool=${String(data.toolName ?? '').slice(0, 60)}`);
     }
 
@@ -2093,12 +2104,14 @@ export class ProjectManager {
      * held while the project is paused, and retried when the coordinator
      * cannot take it.
      * @param {string} [from] - the thread session it comes from; none for the plugin's own notes.
+     * @param {{kind: string, thread: string, status?: string}} [news] - what the user hears about once the coordinator has it (noteNews).
      * @returns {Promise<'delivered'|'held'>}
      */
-    deliver(projectId, text, from = undefined) {
+    deliver(projectId, text, from = undefined, news = undefined) {
         return this.serial(projectId, async () => {
             const pending = this.store.project(projectId).pendingHandbacks;
-            this.store.putProject(projectId, { pendingHandbacks: [...pending, from ? { text, from } : text] });
+            const item = from || news ? { text, ...(from ? { from } : {}), ...(news ? { news } : {}) } : text;
+            this.store.putProject(projectId, { pendingHandbacks: [...pending, item] });
             if (this.paused(projectId)) return 'held';
             return (await this.sendHeld(projectId)) === 0 ? 'delivered' : 'held';
         });
@@ -2121,7 +2134,7 @@ export class ProjectManager {
         // No coordinator yet: the next start makes one and sends them.
         if (!sessionId) return this.store.project(projectId).pendingHandbacks.length;
         while (this.store.project(projectId).pendingHandbacks.length > 0 && !this.paused(projectId)) {
-            // A held message is its text (the plugin's own note) or {text, from} (a thread's handback).
+            // A held message is its text (the plugin's own note) or {text, from?, news?} (a thread's handback, or a note the user hears about).
             const next = this.store.project(projectId).pendingHandbacks[0];
             const text = typeof next === 'string' ? next : typeof next?.text === 'string' ? next.text : '';
             try {
@@ -2132,6 +2145,7 @@ export class ProjectManager {
                 break;
             }
             this.store.putProject(projectId, { pendingHandbacks: this.store.project(projectId).pendingHandbacks.slice(1) });
+            if (text.trim() !== '' && next?.news) this.noteNews(projectId, next.news);
         }
         const left = this.store.project(projectId).pendingHandbacks.length;
         if (left === 0) {
@@ -2156,6 +2170,53 @@ export class ProjectManager {
         }, delay);
         retry.timer.unref?.();
         this.retries.set(projectId, retry);
+    }
+
+    /**
+     * Something the user should hear about wherever they are in the window,
+     * kept once the coordinator has it: the ◆ row shows it unread and the
+     * window shows a notice, until the user opens the coordinator (seeNews).
+     * @param {{kind: string, thread: string, status?: string}} news - kind from NEWS_KINDS.
+     */
+    noteNews(projectId, news) {
+        if (!NEWS_KINDS.includes(news?.kind) || typeof news.thread !== 'string') return;
+        const stored = this.store.project(projectId);
+        const old = isObject(stored.news) ? stored.news : {};
+        const seq = (Number.isInteger(old.seq) ? old.seq : 0) + 1;
+        const item = {
+            seq, kind: news.kind, thread: news.thread, title: this.store.thread(projectId, news.thread)?.title ?? news.thread,
+            ...(typeof news.status === 'string' ? { status: news.status } : {}), at: new Date().toISOString(),
+        };
+        const items = [...(Array.isArray(old.items) ? old.items : []), item].slice(-MAX_NEWS);
+        this.store.putProject(projectId, { news: { seq, seen: Number.isInteger(old.seen) ? old.seen : 0, items } });
+        this.log(`news ${projectId}/${news.thread} ${news.kind}${item.status ? ` ${item.status}` : ''} seq=${seq}`);
+    }
+
+    /** The user has seen a project's news up to `seq` (all of it when omitted): they opened its coordinator. */
+    seeNews(projectId, seq = undefined) {
+        const news = this.store.project(projectId).news;
+        if (!isObject(news) || !Number.isInteger(news.seq)) return;
+        const upTo = Number.isInteger(seq) ? Math.min(seq, news.seq) : news.seq;
+        if (upTo <= (news.seen ?? 0)) return;
+        this.store.putProject(projectId, { news: { ...news, seen: upTo } });
+    }
+
+    /**
+     * Every project with a coordinator and its news the user hasn't seen:
+     * [{project, name, coordinator, seq, seen, unread: [{seq, kind, thread, title, status?, at}]}].
+     */
+    listNews() {
+        const out = [];
+        for (const projectId of this.projects.keys()) {
+            const stored = this.store.project(projectId);
+            if (typeof stored.coordinatorSessionId !== 'string') continue;
+            const news = isObject(stored.news) ? stored.news : {};
+            const seq = Number.isInteger(news.seq) ? news.seq : 0;
+            const seen = Number.isInteger(news.seen) ? news.seen : 0;
+            const unread = (Array.isArray(news.items) ? news.items : []).filter((item) => isObject(item) && item.seq > seen);
+            out.push({ project: projectId, name: this.project(projectId).name, coordinator: stored.coordinatorSessionId, seq, seen, unread });
+        }
+        return out;
     }
 
     // ── what the DSH window draws ──────────────────────────────────────────
@@ -3061,7 +3122,8 @@ export class ProjectManager {
         // With no other thread at work, the reply to this one also closes what the user asked for.
         const others = Object.entries(this.store.project(projectId).threads).filter(([id, o]) => id !== threadId && !o.resolved);
         const last = status !== 'progress' && !others.some(([, o]) => this.liveStatus(o.sessionId) !== 'idle');
-        const outcome = await this.deliver(projectId, handbackMessage(threadId, t.title, status, text, { last }), t.sessionId);
+        const news = status === 'progress' ? undefined : { kind: 'handback', thread: threadId, status };
+        const outcome = await this.deliver(projectId, handbackMessage(threadId, t.title, status, text, { last }), t.sessionId, news);
         this.log(`handback ${projectId}/${threadId} status=${status} chars=${text.length} ${outcome}`);
         if (outcome === 'delivered') return HANDBACK_SENT;
         return this.paused(projectId) ? HANDBACK_HELD : HANDBACK_RETRY;

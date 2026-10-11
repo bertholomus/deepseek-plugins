@@ -8,8 +8,9 @@
  * project_settings tool does, through the same manager methods, and its
  * access settings (the user's tools, permissions), which only it does, the
  * plugin's page lists every project with its models, a failed or stopped
- * thread runs again from its card (Retry, Resume), and the session list and
- * the Projects page make projects and arrange workspaces in categories.
+ * thread runs again from its card (Retry, Resume), the session list and
+ * the Projects page make projects and arrange workspaces in categories, and
+ * the window hears what the user hasn't seen yet (news, seeNews).
  *
  * The gateway finds a Remote service by its `typertRemote` binding and the
  * method markers on its prototype; DSH's own services get both from
@@ -85,6 +86,35 @@ export class ProjectsRemote {
     async sessions() {
         try {
             return { sessions: this.manager.knownSessions() };
+        } catch (error) {
+            throw failure(error);
+        }
+    }
+
+    /**
+     * What the user hasn't seen yet, per project with a coordinator: threads
+     * that handed back, finished, wait on the user's approval, or failed or
+     * stopped (the ◆ row's mark and the window's notice).
+     * @returns {news: [{project, name, coordinator, seq, seen, unread}]}
+     */
+    async news() {
+        try {
+            return { news: this.manager.listNews() };
+        } catch (error) {
+            throw failure(error);
+        }
+    }
+
+    /**
+     * The user opened a coordinator: its project's news up to `seq` is seen.
+     * @param target - a project id, or the id of its coordinator or one of its threads.
+     * @param seq - the newest news the window showed them; omitted, all of it.
+     * @returns as news.
+     */
+    async seeNews(target, seq) {
+        try {
+            this.manager.seeNews(this.manager.projectFor(target), Number.isInteger(seq) ? seq : undefined);
+            return { news: this.manager.listNews() };
         } catch (error) {
             throw failure(error);
         }
@@ -249,6 +279,6 @@ function markRemote(Class, names) {
     }
 }
 markRemote(ProjectsRemote, [
-    'describe', 'list', 'sessions', 'update', 'continueThread', 'create', 'rename', 'remove', 'addCoordinator',
+    'describe', 'list', 'sessions', 'news', 'seeNews', 'update', 'continueThread', 'create', 'rename', 'remove', 'addCoordinator',
     'createCategory', 'renameCategory', 'removeCategory', 'moveCategory', 'fileWorkspace',
 ]);

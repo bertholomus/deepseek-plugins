@@ -390,6 +390,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // Threads: session list rows. A thread row under its coordinator is indented, with a corner in the
             // indent (nestingRules); a thread row anywhere else keeps a branch mark in the leading seat.
             '.dshp-t-mark{flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;height:20px;color:var(--dsw-alias-label-tertiary)}',
+            // A coordinator with news the user hasn't seen reads bold, like unread mail (RowPlace marks it).
+            '[data-row-key^="session:"]:has([data-projects-unread]){font-weight:600}',
             // The seat is 16 px: when the plugin's mark shares it with DSH's or another plugin's, it widens
             // instead of letting the marks run over the title.
             `[data-row-key^="session:"]>:has(${['', '>[data-slot]'].flatMap((at) => [`${at}>.dshp-t-mark+*`, `${at}>*+.dshp-t-mark`]).join(',')}){width:auto;min-width:16px;gap:2px}`,
@@ -1469,6 +1471,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             place: `${BUNDLE}/row-place`,
             page: `${BUNDLE}/projects`,
             sidebar: `${BUNDLE}/sidebar-groups`,
+            news: `${BUNDLE}/news-notice`,
         };
         /** The conversation inside a thread's sidebar chat; its tab body declares it. */
         const CONVERSATION_SLOT = 'projects.thread.conversation';
@@ -1502,6 +1505,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             noticeReplyWhy: 'The answer to the message this coordinator sent at your request.',
             noticeOther: 'Message received',
             needsYou: 'Needs you',
+            // What a coordinator's row and the window's notice say about news from its threads.
+            news: {
+                handback: (title, status) => (status === 'blocked' ? `“${title}” is blocked` : status === 'needs_decision' ? `“${title}” needs a decision` : `“${title}” handed back`),
+                finished: (title) => `“${title}” finished its turn`,
+                approval: (title) => `“${title}” is waiting for your approval`,
+                failed: (title) => `“${title}” failed`,
+                stopped: (title) => `“${title}” stopped`,
+            },
+            newsMore: (n) => (n === 1 ? ', and one more' : `, and ${n} more`),
+            newsOpen: 'Open',
+            newsMark: (n, line) => (n === 1 ? `New: ${line}` : `${n} new, latest: ${line}`),
             threads: 'Threads',
             thread: 'Thread',
             coordinator: 'Coordinator',
@@ -1940,6 +1954,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             let listedAccess = { guarded: EMPTY, permissions: null };
             /** The categories as list (or a change) last answered, in their order; null until one did. */
             let listedCategories = null;
+            /** What the user hasn't seen, by coordinator (remote.js `news`), and the notice the window shows for the newest. */
+            let newsBy = new Map();
+            let newsKnown = false;
+            let newsReading = null;
+            let newsAgain = false;
+            /** The newest news each coordinator had when this window last read it: only what comes after earns a notice. */
+            const announced = new Map();
+            let notice = null;
             const emit = () => {
                 version += 1;
                 for (const listener of [...listeners]) listener();
@@ -2002,6 +2024,56 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (guarded.join('\n') !== listedAccess.guarded.join('\n') || JSON.stringify(permissions) !== JSON.stringify(listedAccess.permissions)) listedAccess = { guarded, permissions };
                 take(result.value);
             });
+            /**
+             * Take the news as the plugin answered; with `open` (whether a
+             * coordinator is the main chat), the newest that came since the
+             * last read, for a coordinator the user isn't looking at, becomes
+             * the window's notice. The first read only learns where each is.
+             */
+            const takeNews = (value, open) => {
+                if (!Array.isArray(value?.news)) return;
+                const first = !newsKnown;
+                const next = new Map();
+                let fresh = null;
+                for (const raw of value.news) {
+                    if (!isObject(raw) || typeof raw.coordinator !== 'string') continue;
+                    const unread = (Array.isArray(raw.unread) ? raw.unread : EMPTY).filter((item) => isObject(item) && Number.isInteger(item.seq) && typeof item.kind === 'string');
+                    const entry = { project: raw.project, name: typeof raw.name === 'string' ? raw.name : '', coordinator: raw.coordinator, seq: Number.isInteger(raw.seq) ? raw.seq : 0, unread };
+                    next.set(entry.coordinator, entry);
+                    // A coordinator the window hasn't seen before (a new project) has had all its news since.
+                    const before = announced.has(entry.coordinator) ? announced.get(entry.coordinator) : first ? entry.seq : 0;
+                    // An answer to seeNews only updates the marks: what it brings is announced by the next read.
+                    if (first || typeof open === 'function') announced.set(entry.coordinator, Math.max(before, entry.seq));
+                    if (first || typeof open !== 'function' || open(entry.coordinator)) continue;
+                    const newer = unread.filter((item) => item.seq > before);
+                    const item = newer[newer.length - 1];
+                    if (item && (!fresh || String(item.at ?? '') > String(fresh.item.at ?? ''))) {
+                        fresh = { key: `${entry.coordinator}:${item.seq}`, coordinator: entry.coordinator, name: entry.name, item, more: newer.length - 1 };
+                    }
+                }
+                newsBy = next;
+                newsKnown = true;
+                if (fresh) notice = fresh;
+                emit();
+            };
+            /** Read the news; a read asked for while one runs runs again after it, so nothing that came meanwhile is missed. */
+            const news = (open) => {
+                if (newsReading) {
+                    newsAgain = true;
+                    return newsReading;
+                }
+                newsReading = Promise.resolve(link.call('news', {}))
+                    .then((result) => { if (result?.ok) takeNews(result.value, open); })
+                    .catch(() => {})
+                    .finally(() => {
+                        newsReading = null;
+                        if (newsAgain) {
+                            newsAgain = false;
+                            void news(open);
+                        }
+                    });
+                return newsReading;
+            };
             /** The sessions the plugin's store knows (remote.js `sessions`), once per window; again a minute after a failed read. */
             let knownRead = false;
             const sessions = () => (knownRead ? Promise.resolve() : once('sessions', 60000, async () => {
@@ -2042,6 +2114,31 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 describe,
                 list,
                 sessions,
+                news,
+                /** A coordinator's news the user hasn't seen: {project, name, coordinator, seq, unread}; undefined when it has none. */
+                newsOf(coordinator) {
+                    const entry = newsBy.get(coordinator);
+                    return entry && entry.unread.length > 0 ? entry : undefined;
+                },
+                /** The notice the window shows: {key, coordinator, name, item, more}, or null. */
+                notice: () => notice,
+                /** The notice is gone (it faded, or the user opened it). */
+                dropNotice(key) {
+                    if (notice === null || (key !== undefined && notice.key !== key)) return;
+                    notice = null;
+                    emit();
+                },
+                /** The user has the coordinator open: its news is seen (remote.js `seeNews`), here at once. */
+                async seeNews(coordinator) {
+                    const entry = newsBy.get(coordinator);
+                    if (!entry || entry.unread.length === 0) return;
+                    newsBy = new Map(newsBy);
+                    newsBy.set(coordinator, { ...entry, unread: EMPTY });
+                    if (notice?.coordinator === coordinator) notice = null;
+                    emit();
+                    const result = await link.call('seeNews', { target: coordinator, seq: entry.seq });
+                    if (result?.ok) takeNews(result.value);
+                },
                 /**
                  * Keep reading `d:<session>` (its project) or `list` while
                  * the returned function has not been called.
@@ -2089,6 +2186,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /** Re-render when anything the plugin says about projects changes. */
         const useFacts = (facts) => React.useSyncExternalStore(facts.subscribe, facts.getSnapshot);
+        /** Facts that never change, for a view drawn without the plugin's (a test's). */
+        const NO_FACTS = Object.freeze({ subscribe: () => () => {}, getSnapshot: () => 0 });
         /** Watch a facts key (`d:<session>` or `list`) while `on`. */
         function useWatch(facts, key, on = true) {
             React.useEffect(() => (on && key ? facts.watch(key) : undefined), [facts, key, on]);
@@ -3552,14 +3651,54 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return row.dot === 'error' || row.dot === 'warning' ? `${row.dot}:${row.label}` : '';
         }
 
+        /** One piece of news as a line: “Fix the tests” handed back. */
+        function newsLine(item) {
+            const say = TEXT.news[item?.kind];
+            const title = typeof item?.title === 'string' && item.title !== '' ? item.title : item?.thread ?? '';
+            return say ? say(title, item.status) : '';
+        }
+
+        /** The dot a coordinator's news earns: a thread waiting on the user or failing outranks one that handed back. */
+        function newsDot(unread) {
+            const kinds = new Set(unread.map((item) => (item.kind === 'handback' && item.status !== 'done' ? 'stuck' : item.kind)));
+            if (kinds.has('failed')) return 'error';
+            return kinds.has('approval') || kinds.has('stopped') || kinds.has('stuck') ? 'warning' : 'done';
+        }
+
+        /**
+         * The window's notice when a thread hands back or needs the user and
+         * its coordinator isn't the chat they're looking at: DSH's own
+         * banner at the top, with Open, wherever they are. The ◆ row keeps
+         * the news (ThreadMark, RowPlace) until they open the coordinator.
+         */
+        function NewsNotice({ projects }) {
+            useFacts(projects.facts);
+            const notice = projects.facts.notice?.() ?? null;
+            if (notice === null || typeof ui.Toast !== 'function') return null;
+            const needsYou = newsDot([notice.item]) !== 'done';
+            const text = `◆ ${notice.name || TABLE.project}: ${newsLine(notice.item)}${notice.more > 0 ? TEXT.newsMore(notice.more) : ''}.`;
+            return h(ui.Toast, {
+                key: notice.key, text, holdMs: 8000,
+                ...(needsYou ? { icon: h(ui.IconWarningOutlineRegular, { size: 16 }) } : { tone: 'success' }),
+                actions: [{
+                    prefix: ' ', label: TEXT.newsOpen,
+                    onClick: () => { projects.facts.dropNotice(notice.key); projects.openSession(notice.coordinator); },
+                }],
+                onDone: () => projects.facts.dropNotice(notice.key),
+            });
+        }
+
         /**
          * A row's mark in its leading seat: a branch on a thread (while it
          * nests under its coordinator, nestingRules draws a corner in its
          * indent instead), or the thread's state dot when it failed or waits
-         * on the user; a pause sign on a paused project's coordinator.
+         * on the user; a pause sign on a paused project's coordinator, and a
+         * dot on a coordinator with news the user hasn't seen (DSH's own dot
+         * takes the seat while the coordinator runs or waits).
          */
         function ThreadMark({ sessionId, useSessions, projects }) {
             useKnown();
+            useFacts(projects.facts);
             // The sessions the plugin's store knows, for rows DSH lists without the plugin's value.
             React.useEffect(() => { void projects.facts.sessions?.(); }, [projects]);
             const thread = useSessions((state) => isThreadRow(state, sessionId));
@@ -3575,6 +3714,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             if (paused) {
                 return h('span', { className: 'dshp-t-mark dshp-t-paused-mark', role: 'img', 'aria-label': TEXT.projectPaused, title: TEXT.projectPaused, 'data-projects-paused-mark': '' },
                     h(ui.IconPauseOutlineRegular, { size: 12 }));
+            }
+            const news = coordinator ? projects.facts.newsOf?.(sessionId) : undefined;
+            if (news) {
+                const label = TEXT.newsMark(news.unread.length, newsLine(news.unread[news.unread.length - 1]));
+                return h('span', { className: 'dshp-t-mark', role: 'img', 'aria-label': label, title: label, 'data-projects-news-mark': news.unread.length },
+                    h(ui.StateDot, { state: newsDot(news.unread) }));
             }
             if (!thread) return null;
             if (mark !== '') {
@@ -3733,15 +3878,19 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * drags from taking a thread out of its project or a chat into one
          * (useSessionDragGuard). Nothing of DSH's own is changed.
          */
-        function RowPlace({ sessionId, useSessions }) {
+        function RowPlace({ sessionId, useSessions, projects }) {
             useKnown();
+            useFacts(projects?.facts ?? NO_FACTS);
             const place = useSessions((state) => rowPlace(state, sessionId));
             if (place === '') return null;
             const at = place.indexOf(':');
             const role = place.slice(0, at);
+            // A coordinator with news the user hasn't seen: its row's title reads bold (CSS), like unread mail.
+            const unread = role === 'coordinator' ? projects?.facts.newsOf?.(sessionId)?.unread.length ?? 0 : 0;
             return h('span', {
                 hidden: true, 'data-projects-row': role, 'data-projects-of': place.slice(at + 1),
                 'data-projects-node': role === 'coordinator' ? 'project' : 'thread', 'data-projects-id': sessionId,
+                ...(unread > 0 ? { 'data-projects-unread': unread } : {}),
             });
         }
 
@@ -3991,6 +4140,50 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     };
                     return store.subscribe(() => { if (!busy) check(); });
                 },
+                /**
+                 * Keep the news current: read it at start and whenever a
+                 * coordinator's row in DSH's session list changes (a note
+                 * from a thread starts its turn and moves its time), and
+                 * mark a coordinator's news seen while it is the main chat.
+                 * @returns the unsubscribe.
+                 */
+                followNews() {
+                    const store = ctx.sessions?.list;
+                    const facts = this.facts;
+                    if (typeof store?.subscribe !== 'function' || typeof facts?.news !== 'function') return () => {};
+                    const open = (id) => mainViews(list()).includes(id);
+                    let seen = null;
+                    let timer;
+                    const read = () => {
+                        timer = undefined;
+                        void facts.news(open).then(() => {
+                            const main = mainChat();
+                            if (main !== undefined) void facts.seeNews(main);
+                        });
+                    };
+                    const check = () => {
+                        const state = store.getSnapshot();
+                        const main = mainChat();
+                        if (main !== undefined) void facts.seeNews(main);
+                        const rows = [];
+                        for (const id of Object.keys(state?.byId ?? {})) {
+                            if (!rowPlace(state, id).startsWith('coordinator:')) continue;
+                            const row = state.byId[id];
+                            rows.push(`${id}:${row?.updatedAt ?? ''}:${row?.running === true ? 1 : 0}`);
+                        }
+                        const key = rows.sort().join('|');
+                        if (key === seen) return;
+                        seen = key;
+                        clearTimeout(timer);
+                        timer = setTimeout(read, 600);
+                    };
+                    check();
+                    const off = store.subscribe(check);
+                    return () => {
+                        off();
+                        clearTimeout(timer);
+                    };
+                },
                 /** The Project settings dialog, for the entry points. */
                 settings: dialog,
                 /** DSH's model catalog, to name the models sessions run on. */
@@ -4123,7 +4316,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, ThreadMark));
             // Threads under their coordinator in the session list: a mark inside each row, read by CSS.
             ctx.slots.inject('sidebar.workspaces.session.row.action', () => ctx.slots.register({
-                name: 'sidebar.workspaces.session.row.action', id: IDS.place, order: 900,
+                name: 'sidebar.workspaces.session.row.action', id: IDS.place, order: 900, inject: withApi,
             }, RowPlace));
             ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
                 name: 'conversation.input.dock', id: IDS.paused, order: 15, inject: withApi,
@@ -4140,6 +4333,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // A thread opened anywhere lands beside its coordinator; from DSH's session list, straight there.
             ctx.effect(() => projects.followRowClicks(), 'projects: thread rows open beside their coordinator');
             ctx.effect(() => projects.followOpens(), 'projects: threads beside their coordinator');
+            // What threads hand back, or need the user for: a mark on the ◆ row and a notice wherever the user is.
+            ctx.effect(() => projects.followNews(), 'projects: news from threads');
+            ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+                name: 'shell.overlay', id: IDS.news, inject: withApi,
+            }, NewsNotice));
             // DSH's session list by project: a header over each project's workspaces.
             ctx.slots.inject('shell.overlay', () => ctx.slots.register({
                 name: 'shell.overlay', id: IDS.sidebar, inject: withApi,
@@ -6664,6 +6862,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             roomFor, besidePref, sidebarGroups, sidebarRules, placeHeaders, describeWorkspaces, sectionWorkspace, sectionAt, placeWorkspaces, chatsIn, pulseOf, pulseText, listText, OTHERS, clockOf, againText, ThreadCard, EndingBar,
             noticeOf, noticeView, TriggerNotice, ProjectNotice,
             permissionName, permissionShown, permissionIn, toolsText, accessOf, accessSummary, PermissionPicker, ToolsControl, ModelsSummary,
+            NewsNotice, newsLine, newsDot, ThreadMark, RowPlace,
         };
         return module.exports;
     },

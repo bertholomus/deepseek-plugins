@@ -706,6 +706,15 @@ try {
         && row.settings.threadModel.value === 'fake:fake-mini' && row.settings.threadEffort.source === 'plugin default'
         && row.live?.model === 'fake-model' && row.live?.reasoningEffort === 'max' && row.threads.open > 0, JSON.stringify(answer).slice(0, 600));
 
+    // 21b. News: what threads hand back or finish waits for the user, from anywhere in the window, until they open the coordinator.
+    answer = await webApi(web, 'dsh-plugin-projects/news', {});
+    const newsHere = answer.ok ? answer.value.news.find((n) => n.coordinator === coord) : undefined;
+    check('the window hears what threads finished, newest last, until the user opens the coordinator', newsHere?.project === PROJECT_ID && newsHere.unread.length > 0
+        && newsHere.unread.at(-1).thread === 't10' && newsHere.unread.at(-1).kind === 'finished' && newsHere.unread.at(-1).title === 'Kappa'
+        && readText(logFile).includes(`news ${PROJECT_ID}/t10 finished`), JSON.stringify(answer).slice(-600));
+    answer = await webApi(web, 'dsh-plugin-projects/seeNews', { target: coord, seq: newsHere?.seq });
+    check('opening the coordinator sees its news', answer.ok && answer.value.news.find((n) => n.coordinator === coord)?.unread.length === 0, JSON.stringify(answer).slice(0, 300));
+
     // 22. Code changes: a thread's edits show as +a -d · N files, as DSH's own
     // "Edited N files" card counts them, with the turn DSH's Review tab opens.
     // The totals outlive a DSH restart; DSH's diff of them does not.

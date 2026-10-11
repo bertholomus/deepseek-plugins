@@ -1080,7 +1080,7 @@ test('window: the Project settings endpoints read and change a project the way i
     assert.equal(remote.typertRemote.namespace, 'dsh-plugin-projects');
     assert.equal(remote.typertRemote.serviceKey, 'dshPluginProjectsRemote');
     assert.deepEqual(remoteMethods(remote).map((m) => m.method), [
-        'describe', 'list', 'sessions', 'update', 'continueThread', 'create', 'rename', 'remove', 'addCoordinator',
+        'describe', 'list', 'sessions', 'news', 'seeNews', 'update', 'continueThread', 'create', 'rename', 'remove', 'addCoordinator',
         'createCategory', 'renameCategory', 'removeCategory', 'moveCategory', 'fileWorkspace',
     ]);
     const refused = async (promise, pattern) => {
@@ -1170,6 +1170,7 @@ function loadClient({ storage, document, innerWidth } = {}) {
             dispose() {}
         },
         settingsTextField: (field) => ({ field }),
+        Toast: () => null,
     };
     const ui = new Proxy(base, { get: (target, name) => (name in target ? target[name] : typeof name === 'string' && name.startsWith('Icon') ? name : undefined) });
     const modules = {
@@ -1273,6 +1274,7 @@ test('browser half: threads add a header menu, turn cards, sidebar marks and rig
         ['conversation.input.dock', 'dsh-plugin-projects/ending-bar', 16],
         ['sidebar.session.row.hover', 'dsh-plugin-projects/thread-hover', 20],
         ['sidebar.workspaces.session.menu.item', 'dsh-plugin-projects/full-view-item', 50],
+        ['shell.overlay', 'dsh-plugin-projects/news-notice', null],
         ['shell.overlay', 'dsh-plugin-projects/sidebar-groups', null],
         ['main', 'dsh-plugin-projects/projects', null],
         ['sidebar.panellist', 'dsh-plugin-projects/projects', 5],
@@ -2530,6 +2532,70 @@ test('a permission prompt left unanswered tells the coordinator', async () => {
     assert.equal(cp.length, 1);
 });
 
+test('news: what threads hand back or need the user for waits per project until the user opens the coordinator', async () => {
+    const { host } = setup({ approvalNoticeSeconds: 0.02 }, undefined, { gateway: true });
+    await tick();
+    const coord = coordinatorOf(host);
+    const remote = host.provided.get('dshPluginProjectsRemote');
+    const unread = async () => plain((await remote.news()).news.find((n) => n.coordinator === coord.id)).unread.map(({ at, ...item }) => item);
+    assert.deepEqual(plain((await remote.news()).news), [{ project: 'dsh-plugins', name: 'DSH Plugins', coordinator: coord.id, seq: 0, seen: 0, unread: [] }]);
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Docs', brief: 'Write docs.' });
+    const thread = [...host.live.values()].find((a) => a.id !== coord.id);
+    const ts = host.sessions.get(thread.id);
+
+    // Progress is the coordinator's business only; a result is news once the coordinator has it.
+    thread.ctx.emitStatus(thread, 'running');
+    await thread.ctx.call('project_handback', { status: 'progress', summary: 'Halfway' });
+    assert.deepEqual(await unread(), []);
+    await thread.ctx.call('project_handback', { status: 'blocked', summary: 'No access to the wiki.' });
+    const turnEnd = (reason = { kind: 'completed' }) => ts.events.push({ seq: ts.events.length + 1, type: 'turn/end', data: { turn: ts.events.length, reason } });
+    turnEnd();
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    assert.deepEqual(await unread(), [{ seq: 1, kind: 'handback', thread: 't1', title: 'Docs', status: 'blocked' }]);
+
+    // A turn that ends without a handback; a permission prompt left waiting.
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Finish the docs.' });
+    ts.events.push({ seq: ts.events.length + 1, type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text: 'Done with the docs.' }] } } });
+    turnEnd();
+    thread.ctx.emitStatus(thread, 'running');
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'a1', toolName: 'bash', reason: 'runs ./publish.sh' } });
+    await new Promise((r) => setTimeout(r, 60));
+    assert.deepEqual((await unread()).map((n) => [n.seq, n.kind]), [[1, 'handback'], [2, 'finished'], [3, 'approval']]);
+
+    // The user opened the coordinator after the window showed them up to 2: only what came after stays unread.
+    assert.deepEqual(plain((await remote.seeNews(coord.id, 2)).news[0]).unread.map((n) => n.seq), [3]);
+    await remote.seeNews('dsh-plugins');
+    assert.deepEqual(await unread(), []);
+    // A failed turn: the coordinator nudges it first, so the user hears only when it fails again.
+    const fail = () => {
+        turnEnd({ kind: 'error', error: { message: 'provider unavailable', code: 'NETWORK' } });
+        thread.ctx.emitStatus(thread, 'running');
+        thread.ctx.emitStatus(thread, 'idle');
+    };
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Publish it.' });
+    fail();
+    await tick();
+    assert.deepEqual(await unread(), []);
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Carry on from where you left off and finish the task.' });
+    fail();
+    await tick();
+    assert.deepEqual((await unread()).map((n) => [n.seq, n.kind]), [[4, 'failed']]);
+
+    // While the project is paused a handback waits, and so does its news; it comes with the handback on resume.
+    await remote.seeNews(coord.id);
+    await coord.ctx.call('project_settings', { paused: true });
+    await thread.ctx.call('project_handback', { status: 'done', summary: 'Published.' });
+    assert.deepEqual(await unread(), []);
+    await coord.ctx.call('project_settings', { paused: false });
+    await tick();
+    assert.deepEqual(await unread(), [{ seq: 5, kind: 'handback', thread: 't1', title: 'Docs', status: 'done' }]);
+    // It outlives a reload: the store keeps it.
+    assert.equal(JSON.parse(readFileSync(host.provided.get('dshPluginProjectsRemote').manager.store.file, 'utf8')).projects['dsh-plugins'].news.seq, 5);
+});
+
 test('permission prompt notices stop with the plugin and can be turned off', async () => {
     for (const [seconds, unload] of [[0.02, true], [0, false]]) {
         const { host } = setup({ approvalNoticeSeconds: seconds });
@@ -3524,6 +3590,86 @@ test('browser half: one store of what the plugin says about projects, shared by 
     // And sits where that handback puts it: Done, or Waiting on you for a decision or a block.
     assert.deepEqual(plain(withHeld(rows, [{ thread: 't1', status: 'done' }, { thread: 't3', status: 'needs_decision' }]).map((r) => [r.group, r.dot, r.stateLabel])),
         [['done', 'done', 'Done'], ['running', null, null], ['waiting', 'warning', 'Needs a decision']]);
+});
+
+test('browser half: news from threads marks the ◆ row and shows one notice for the newest, until the coordinator is opened', async () => {
+    const { client } = loadClient();
+    const { projectFacts, NewsNotice, ThreadMark, RowPlace, newsLine, newsDot, takeKnown } = client.internals;
+    takeKnown({});
+    let seq = 1;
+    let seen = 0;
+    let items = [{ seq: 1, kind: 'handback', thread: 't1', title: 'Old news', status: 'done', at: '2026-10-11T01:00:00Z' }];
+    const calls = [];
+    const answer = () => ({ ok: true, value: { news: [
+        { project: 'p1', name: 'Shop', coordinator: 'c1', seq, seen, unread: items.filter((i) => i.seq > seen) },
+        { project: 'p2', name: 'Quiet', coordinator: 'c2', seq: 0, seen: 0, unread: [] },
+    ] } });
+    const link = {
+        async call(method, args) {
+            calls.push([method, args]);
+            if (method === 'news') return answer();
+            if (method === 'seeNews') { seen = args.seq; return answer(); }
+            return { ok: false, error: { code: 'projects/refused', message: 'no' } };
+        },
+    };
+    const facts = projectFacts(link);
+    const closed = () => false;
+    // The first read only learns where each coordinator is: what was already waiting marks the row, with no notice.
+    await facts.news(closed);
+    assert.equal(facts.notice(), null);
+    assert.deepEqual(plain(facts.newsOf('c1').unread.map((i) => i.seq)), [1]);
+    assert.equal(facts.newsOf('c2'), undefined);
+    // What comes next, while the user looks elsewhere, is the notice: the newest, and how many more.
+    seq = 3;
+    items = [...items, { seq: 2, kind: 'finished', thread: 't2', title: 'Docs', at: '2026-10-11T01:05:00Z' },
+        { seq: 3, kind: 'approval', thread: 't1', title: 'Deploy', at: '2026-10-11T01:06:00Z' }];
+    await facts.news(closed);
+    assert.deepEqual(plain(facts.notice()), { key: 'c1:3', coordinator: 'c1', name: 'Shop', item: items[2], more: 1 });
+    // A notice the same read already showed is not shown twice; one the user dismissed stays gone.
+    facts.dropNotice('c1:3');
+    await facts.news(closed);
+    assert.equal(facts.notice(), null);
+    // With the coordinator open, news arrives in front of the user: no notice.
+    seq = 4;
+    items = [...items, { seq: 4, kind: 'failed', thread: 't1', title: 'Deploy', at: '2026-10-11T01:07:00Z' }];
+    await facts.news((id) => id === 'c1');
+    assert.equal(facts.notice(), null);
+
+    // The row: a dot in the leading seat that says what came, and a mark the CSS reads to make the title bold.
+    const state = { byId: { c1: { title: '◆ Shop', projectionValues: { projectSession: { role: 'coordinator', project: { name: 'Shop' }, threads: [] } } } } };
+    const useSessions = (select) => select(state);
+    const projects = { facts, refresh() {} };
+    const mark = ThreadMark({ sessionId: 'c1', useSessions, projects });
+    assert.equal(mark.props['data-projects-news-mark'], 4);
+    assert.equal(mark.props['aria-label'], '4 new, latest: “Deploy” failed');
+    assert.equal(mark.children[0].props.state, 'error');
+    assert.equal(RowPlace({ sessionId: 'c1', useSessions, projects }).props['data-projects-unread'], 4);
+    // Opening the coordinator sees everything the window knew of, at once, and the plugin keeps it seen.
+    await facts.seeNews('c1');
+    assert.deepEqual(plain(calls.at(-1)), ['seeNews', { target: 'c1', seq: 4 }]);
+    assert.equal(facts.newsOf('c1'), undefined);
+    assert.equal(ThreadMark({ sessionId: 'c1', useSessions, projects }), null);
+    assert.equal(RowPlace({ sessionId: 'c1', useSessions, projects }).props['data-projects-unread'], undefined);
+    await facts.seeNews('c1');
+    assert.equal(calls.filter(([m]) => m === 'seeNews').length, 1, 'nothing unread: no call');
+
+    // The notice is DSH's own banner, with Open; a thread waiting on the user reads as a warning, a result as done.
+    seq = 5;
+    items = [...items, { seq: 5, kind: 'handback', thread: 't2', title: 'Docs', status: 'done', at: '2026-10-11T01:08:00Z' }];
+    await facts.news(closed);
+    const opened = [];
+    const toast = NewsNotice({ projects: { facts, openSession: (id) => opened.push(id) } });
+    assert.equal(toast.props.text, '◆ Shop: “Docs” handed back.');
+    assert.equal(toast.props.tone, 'success');
+    assert.equal(toast.props.actions[0].label, 'Open');
+    toast.props.actions[0].onClick();
+    assert.deepEqual(opened, ['c1']);
+    assert.equal(facts.notice(), null);
+    assert.equal(NewsNotice({ projects: { facts } }), null);
+    assert.deepEqual(['blocked', 'needs_decision', 'done'].map((status) => newsLine({ kind: 'handback', title: 'X', status })),
+        ['“X” is blocked', '“X” needs a decision', '“X” handed back']);
+    assert.deepEqual([[{ kind: 'handback', status: 'done' }], [{ kind: 'finished' }, { kind: 'stopped' }], [{ kind: 'approval' }, { kind: 'failed' }]].map(newsDot),
+        ['done', 'warning', 'error']);
 });
 
 // ── projects as groups of workspaces (the Projects page and the import) ───

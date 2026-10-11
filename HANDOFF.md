@@ -2,7 +2,7 @@
 
 _For the two accounts building these plugins only (see AGENTS.md). A session running inside DSH (a project coordinator, a thread or a chat) does not act on this file: do what the user asks._
 
-Updated: 2026-10-10 18:55 PT by B (bertholomus)
+Updated: 2026-10-10 19:25 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 
 ## Doing now
@@ -224,7 +224,7 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 ## Next steps (in order)
 000. **Why the plugin seemed not to work (the coordinator, 18:50 PT, from the user's live logs), before everything below:**
     a. AGENTS.md took over every session whose folder is this repo, coordinators included (the DSH Plugins coordinator pulled, read HANDOFF and took "Smoke test" for HANDOFF's). Done: AGENTS.md now scopes the rules to the two accounts; sessions inside DSH skip it (this commit).
-    b. Results nobody sees: results show only inside the ◆ session. Add a notice the user sees from anywhere when a thread hands back or needs them: at least an unread mark on the ◆ row in the sidebar, and a DSH notification if DSH exports one.
+    b. Results nobody sees: results show only inside the ◆ session. Done (the news push after f596ebe): the plugin keeps per-project news in the store (`news: {seq, seen, items}`; handback except progress, finished, approval, failed or stopped after the nudge), recorded when the coordinator actually receives the note (sendHeld), so a paused project's news waits with its handback; remote `news`/`seeNews`; the window reads it whenever a coordinator's list row moves, shows DSH's own Toast (top of the window, Open) for news that came while the user looks elsewhere, and marks the ◆ row bold with a dot until the coordinator is the main chat. DSH exports no OS notification (only `globalThis.dshDesktop` with updates, deviceInfo, shortcuts, keyboard), and `sidebar.toggle.badge` is a single seat DSH's update badge holds, so neither is used.
     c. Plain chats instead of coordinators: the user typed tests into plain chats in the DSH Plugins workspace (one used DSH's own Agent Teams), which never reach the plugin. Make the coordinator the obvious place to type: when a plain chat starts in a project's workspace, offer "talk to ◆ <Project>" (opens it in one click); "New chat" inside a project leads to its coordinator. Smallest design DSH's hooks allow; say which.
     d. Categories read as projects (the user, from a screenshot, 18:52 PT: "why are these categories still treated as projects?"): the Projects page puts categories at its top level under the title "Projects", with an "N projects" count and a "New project" button, while the real ◆ projects sit three levels down. Make the page match Category > Workspace > chat or ◆ project > thread: label the top level as categories (heading, count, "New category"), show projects only as ◆ rows inside workspaces, and replace the leftover grouping wording in menus and the empty state ("A project gathers the workspaces that belong together", "Move to project", "Not in a project"). Two categories share a name with the ◆ project inside them (DSH Plugins; General, the renamed "Testing out Coordinator"): that is the user's data, don't rename it; clear level labels and the ◆ mark make the difference.
 00. Done (1ea0850): the coordinator on Read Only plus the behavior-2 prompt fixes. The next behaviour batch (split thread) runs on it.
