@@ -40,7 +40,7 @@
  *
  * @module dsh-plugin-projects/projects
  */
-import { appendFileSync, existsSync, readFileSync, writeFileSync, statSync, realpathSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync, statSync, lstatSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
@@ -58,7 +58,7 @@ import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, F
 import { NetTexts, changedPath, canonicalPath, notKept, expectedAfter, NET_SWEEP_MS } from './net.js';
 import { sendOf, codeSendOf, described, withoutCredentials } from './sends.js';
 import { grantsIn, asksFor as asksToDo, doing } from './grants.js';
-import { deletesOf, codeDeletesOf, deletesWhat, isFree, madeDirsOf } from './deletes.js';
+import { deletesOf, codeDeletesOf, deletesWhat, isFree, madeDirsOf, identityOf, isSame, bornOf, CLOCK_SLACK_MS } from './deletes.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
 const SECTION_ORDER = 9500;
@@ -633,8 +633,16 @@ export class ProjectManager {
         this.subCalls = new Map();
         /** A subagent's sessionId → the thread session it works for, or null when none. */
         this.subThreads = new Map();
-        /** Thread sessionId → the files it and its subagents created with DSH's file tools, as absolute paths (holdDelete). */
-        this.created = new Map();
+        /**
+         * Thread sessionId → what it and its subagents made since DSH started: the files they created with DSH's file
+         * tools and the folders their commands made, by absolute path, each as the file it was then (deletes.js
+         * identityOf), for the delete check (holdDelete).
+         */
+        this.made = new Map();
+        /** Thread sessionId → when it or its subagents ran calls: {running, since, list: [[start, end]]} (whileRunning). */
+        this.spans = new Map();
+        /** Absolute path → the thread session that wrote it with DSH's file tools, or '' once any other session did too. */
+        this.writers = new Map();
         /** A session's id → the project session it works for as a subagent ({projectId, role, threadId?}), or null. */
         this.subProjects = new Map();
         /** How long a thread turn's changes wait for DSH's announcement before they are kept without it. */
@@ -942,9 +950,10 @@ export class ProjectManager {
      * to widen a call's sandbox later, in the tool itself, once this prompt
      * is answered. Undefined leaves DSH's decision: any other call, a
      * session outside the projects, and any error (a check against a
-     * mistake, not a sandbox). Never logs the command.
+     * mistake, not a sandbox). `out`, when given, gets what it sends
+     * (holdCommand). Never logs the command.
      */
-    holdSend(exec, asked) {
+    holdSend(exec, asked, out = undefined) {
         try {
             if (this.disposed || !SEND_TOOLS.has(exec?.name) || !exec.agent) return undefined;
             const session = exec.agent.session;
@@ -987,6 +996,7 @@ export class ProjectManager {
             this.log(`send-ask ${label}`);
             const said = described(found);
             const words = threadWords(args);
+            if (out) Object.assign(out, { what: found.what, said, words });
             const theirs = asked?.kind === 'ask' ? asked : undefined;
             const also = withoutCredentials(theirs?.displayReason?.en ?? theirs?.reason).trim();
             return {
@@ -1005,16 +1015,19 @@ export class ProjectManager {
      * deletes files (lib/deletes.js) its thread didn't create waits for the
      * user in DSH's approval prompt, every time; a thread whose approvals
      * never ask, a coordinator and a subagent are refused. Free to delete:
-     * the files the thread's change records and this turn's edits show it
-     * (or its subagents) created, a folder of only those, and what is in the
-     * OS temp folder outside the workspace or made by mktemp. The
-     * workspace's .git never is, and what can't be told (a variable, a
-     * pattern, a list on the input, a cleaning script) asks. A script the
-     * thread created is read for what it deletes. Undefined lets it run, as
-     * in holdSend, and an ask DSH's own checks made (`asked`) keeps its words
-     * after the plugin's. Never logs the command or a path.
+     * what the thread (or its subagents) can be shown to have made (mineOf):
+     * a file it created, a folder its command made with what was born there
+     * while it ran, a folder of only those; and what is in the OS temp
+     * folder outside the workspace or made by mktemp. The workspace's .git
+     * never is, and what can't be told (a variable, a pattern, a list on the
+     * input, a cleaning script, something moved into its folder or reached
+     * through a link) asks. A script the thread created is read for what it
+     * deletes. Undefined lets it run, as in holdSend, and an ask DSH's own
+     * checks made (`asked`) keeps its words after the plugin's; `out`, when
+     * given, gets what it deletes (holdCommand). Never logs the command or a
+     * path.
      */
-    holdDelete(exec, asked) {
+    holdDelete(exec, asked, out = undefined) {
         try {
             if (this.disposed || !SEND_TOOLS.has(exec?.name) || !exec.agent) return undefined;
             const session = exec.agent.session;
@@ -1027,21 +1040,18 @@ export class ProjectManager {
             const folder = t?.folder ?? project.workspacePath;
             const first = typeof session?.header?.cwd === 'string' ? session.header.cwd : folder;
             const work = [first, folder, project.workspacePath].filter((root) => typeof root === 'string' && root !== '').map((root) => resolve(expand(root)));
-            // Where the command runs: on DSH 0.2.1, the session's working directory, which can be outside them.
+            // Where the command runs: on DSH 0.2.1, the session's working directory, which can be outside them; in a shell
+            // that keeps its folder from one command to the next (DSH's persistent bash), a relative path can't be told.
             const cwd = this.cwdOf(session) ?? first;
             const here = typeof args.workdir === 'string' && args.workdir.trim() !== '' ? resolve(expand(cwd), expand(args.workdir.trim())) : expand(cwd);
-            // What the thread created: its change records (paths as they keep them, from its folder) and this turn's edits.
-            const created = new Set(t ? this.created.get(t.sessionId) ?? [] : []);
-            for (const r of Array.isArray(t?.changes) ? t.changes : []) {
-                for (const f of Array.isArray(r?.files) ? r.files : []) {
-                    if (f?.created === true && typeof f.path === 'string') created.add(resolve(expand(first), expand(f.path)));
-                }
-            }
-            const read = (path) => (created.has(path) ? textInside([dirname(path)], path) : undefined);
-            const found = exec.name === 'run_code' ? codeDeletesOf(String(args.code ?? ''), { cwd: here, read }) : deletesOf(String(args.command ?? ''), { shell: exec.name, cwd: here, read });
-            const held = found.filter((d) => !isFree(d, { work, created }));
+            const mine = this.mineOf(t?.sessionId, t, first);
+            const read = (path) => (mine.made.has(path) ? textInside([dirname(path)], path) : undefined);
+            const found = exec.name === 'run_code' ? codeDeletesOf(String(args.code ?? ''), { cwd: here, read })
+                : deletesOf(String(args.command ?? ''), { shell: exec.name, cwd: this.keepsFolder(exec) ? undefined : here, read });
+            const held = found.filter((d) => !isFree(d, { work, mine }));
             if (held.length === 0) return undefined;
             const what = deletesWhat(held);
+            if (out) out.what = what;
             const programs = [...new Set(held.map((d) => String(d.program).replace(/\s+/g, '-')))].join(',').slice(0, 40);
             const label = `${who.projectId}/${who.threadId ?? 'coordinator'}${own ? '' : ' subagent'} ${programs}`;
             if (!own) {
@@ -1068,6 +1078,79 @@ export class ProjectManager {
         } catch (error) {
             this.log(`error delete-check ${String(error?.message ?? error).slice(0, 200)}`);
             return undefined;
+        }
+    }
+
+    /**
+     * Rule 6 for one command (index.js): holdSend, then holdDelete. A
+     * refusal of either stands; a command that both sends and deletes asks
+     * once, saying both (batch 5 review m2: it said only the send, and one
+     * Allow ran both). Undefined leaves DSH's decision.
+     */
+    holdCommand(exec, asked) {
+        const sent = {};
+        const send = this.holdSend(exec, asked, sent);
+        if (send?.kind === 'deny') return send;
+        const gone = {};
+        const del = this.holdDelete(exec, asked, gone);
+        if (send === undefined || del === undefined) return send ?? del;
+        if (del.kind !== 'ask') return del;
+        try {
+            this.noteAsked(exec, `${sent.what} and ${gone.what}`);
+            const theirs = asked?.kind === 'ask' ? asked : undefined;
+            const also = withoutCredentials(theirs?.displayReason?.en ?? theirs?.reason).trim();
+            return {
+                kind: 'ask',
+                reason: `the command ${sent.said} and ${gone.what}${sent.words ? `. The thread says: ${sent.words}` : ''}; if the user doesn't allow it, hand back with status needs_decision${theirs?.reason ? `; ${withoutCredentials(theirs.reason)}` : ''}`,
+                displayReason: { en: `This command ${sent.said} and ${gone.what}. A thread asks you before each command that sends outside the workspace or deletes files it didn't create.${sent.words ? `\nThe thread says: ${sent.words}` : ''}${also ? `\n${also}` : ''}` },
+            };
+        } catch (error) {
+            this.log(`error delete-check ${String(error?.message ?? error).slice(0, 200)}`);
+            return send;
+        }
+    }
+
+    /**
+     * What a thread can be shown to have made, for the delete check
+     * (deletes.js isFree): the files it and its subagents created and the
+     * folders their commands made since DSH started, and the files its
+     * change records say it created, each as the file it was then; when it
+     * ran calls; and which paths other sessions wrote with DSH's file tools.
+     * @param {string} [thread] - the thread's session id; none for a subagent's own check.
+     * @param {object} [t] - its store record, for its change records.
+     * @param {string} [first] - the folder its change records' paths are from.
+     * @returns {import('./deletes.js').Mine}
+     */
+    mineOf(thread, t, first) {
+        const made = new Map(typeof thread === 'string' ? this.made.get(thread) ?? [] : []);
+        for (const r of Array.isArray(t?.changes) ? t.changes : []) {
+            for (const f of Array.isArray(r?.files) ? r.files : []) {
+                if (f?.created !== true || typeof f.path !== 'string' || !isObject(f.identity) || typeof first !== 'string') continue;
+                const path = resolve(expand(first), expand(f.path));
+                if (!made.has(path)) made.set(path, f.identity);
+            }
+        }
+        const s = typeof thread === 'string' ? this.spans.get(thread) : undefined;
+        const spans = s ? [...s.list, ...(s.running > 0 ? [[s.since, Infinity]] : [])] : [];
+        const foreign = (path) => {
+            const by = this.writers.get(path);
+            return by !== undefined && by !== thread;
+        };
+        return { made, spans, foreign };
+    }
+
+    /**
+     * Whether a call's shell keeps its folder from one command to the next
+     * (DSH's persistent bash and pwsh, in its Minimal agent: no `workdir`),
+     * so where a relative path is can't be told from the session.
+     */
+    keepsFolder(exec) {
+        if (exec?.name !== 'bash' && exec?.name !== 'pwsh') return false;
+        try {
+            const props = this.ctx.tools?.view?.(exec.agent)?.visible?.get?.(exec.name)?.parameters?.properties;
+            return isObject(props) && Object.hasOwn(props, 'command') && !Object.hasOwn(props, 'workdir');
+        } catch {
+            return false;
         }
     }
 
@@ -2421,6 +2504,13 @@ export class ProjectManager {
             return;
         }
         const seq = announced ?? (Number.isSafeInteger(endSeq) ? endSeq : undefined) ?? own.at(-1)?.seq ?? was?.seq ?? 0;
+        // A created file keeps which file it was (noteCreated), so after a restart the delete check still knows it is the thread's.
+        const base = folder ?? this.ctx.agents.get(sessionId)?.session?.header?.cwd;
+        const made = this.made.get(sessionId);
+        for (const f of summary?.files ?? []) {
+            const id = f.created === true && typeof base === 'string' ? made?.get(resolve(expand(base), expand(f.path))) : undefined;
+            if (id) f.identity = id;
+        }
         const record = summary ? changeRecord(seq, summary) : { turn, seq, added: 0, deleted: 0, total: 0, files: [] };
         if (!record) return;
         const changes = withChange(t.changes, record);
@@ -2473,12 +2563,12 @@ export class ProjectManager {
             if (typeof id !== 'string') return;
             if (type === 'tool/call') {
                 if (!FILE_TOOLS.has(event.data?.name) || typeof event.data.callId !== 'string') return;
-                // A thread's own calls too, only for the files it creates (its edits are read from its log).
+                // A thread's own calls too, for the files it creates (its edits are read from its log); any other
+                // session's for who wrote what, which the delete check never counts as a thread's.
                 const self = this.store.lookup(id)?.role === 'thread';
                 const thread = self ? id : this.threadAbove(session);
-                if (!thread) return;
                 this.subCalls.set(`${id}\n${event.data.callId}`, { name: event.data.name, args: event.data.arguments, thread, self, cwd: this.cwdOf(session) });
-                for (const key of [...this.subCalls.keys()].slice(0, -200)) this.subCalls.delete(key);
+                for (const key of [...this.subCalls.keys()].slice(0, -500)) this.subCalls.delete(key);
                 return;
             }
             const message = event.data?.message;
@@ -2490,8 +2580,9 @@ export class ProjectManager {
             let args = call.args;
             if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
             const edit = editOf(call.name, args, event.data?.meta);
-            if (!edit || !(edit.added + edit.deleted > 0 || edit.created)) return;
-            if (edit.created) this.noteCreated(call.thread, edit.path, call.cwd);
+            if (!edit) return;
+            this.noteWritten(call.thread, edit.path, call.cwd, edit.created === true);
+            if (!call.thread || !(edit.added + edit.deleted > 0 || edit.created)) return;
             if (call.self) return;
             const list = this.subEdits.get(call.thread) ?? [];
             list.push({ turn: this.threadTurns.get(call.thread) ?? null, seq: event.seq, ...edit });
@@ -2579,56 +2670,118 @@ export class ProjectManager {
      * keeping either never fails a call.
      */
     aroundTool(exec, next) {
+        let thread = null;
         let target = null;
         let made = null;
         try {
-            target = this.netTarget(exec);
-            if (!target) made = this.madeTarget(exec);
+            thread = this.threadOfCall(exec);
+            if (thread) {
+                target = this.netTarget(exec, thread);
+                if (!target) made = this.madeTarget(exec, thread);
+            }
         } catch (error) {
             this.log(`error net-target ${String(error?.message ?? error).slice(0, 200)}`);
         }
-        if (made) return this.aroundMade(made, next);
-        return target ? this.net.around(target.thread, target.file, next, typeof exec.callId === 'string' ? exec.callId : undefined, target.expect) : next();
+        if (!thread) return next();
+        return this.whileRunning(thread, () => (made ? this.aroundMade(made, next)
+            : target ? this.net.around(target.thread, target.file, next, typeof exec.callId === 'string' ? exec.callId : undefined, target.expect)
+            : next()));
+    }
+
+    /** The thread session a call works for: a thread's own call, or a subagent's of one; null for any other. */
+    threadOfCall(exec) {
+        if (this.disposed || !exec?.agent) return null;
+        const session = exec.agent.session;
+        const id = session?.id ?? exec.agent.id;
+        const own = this.store.lookup(id);
+        return own?.role === 'thread' ? id : own ? null : this.threadAbove(session);
+    }
+
+    /**
+     * Run one of a thread's calls (or its subagent's), keeping when the
+     * thread ran calls: what is born in a folder it made while it ran is its
+     * own, for the delete check (mineOf). The call's outcome as it is.
+     */
+    async whileRunning(thread, run) {
+        let s = this.spans.get(thread);
+        if (!s) {
+            s = { running: 0, since: 0, list: [] };
+            this.spans.set(thread, s);
+            for (const key of [...this.spans.keys()].slice(0, -200)) {
+                if (this.spans.get(key).running === 0) this.spans.delete(key);
+            }
+        }
+        if (s.running++ === 0) s.since = Date.now();
+        try {
+            return await run();
+        } finally {
+            if (--s.running === 0) {
+                const end = Date.now();
+                const last = s.list.at(-1);
+                if (last && s.since - last[1] <= CLOCK_SLACK_MS) last[1] = end;
+                else s.list.push([s.since, end]);
+                if (s.list.length > 2000) s.list.splice(0, s.list.length - 2000);
+            }
+        }
     }
 
     /**
      * The folders a thread's (or its subagent's) bash or pwsh command
-     * makes (deletes.js madeDirsOf) that aren't there yet: {thread, dirs},
-     * or null.
+     * makes (deletes.js madeDirsOf) that aren't there yet, not even as a
+     * link: {thread, dirs}, or null. In a shell that keeps its folder
+     * between commands, only those named by full path.
      */
-    madeTarget(exec) {
-        if (this.disposed || (exec?.name !== 'bash' && exec?.name !== 'pwsh') || !exec.agent) return null;
+    madeTarget(exec, thread) {
+        if (exec?.name !== 'bash' && exec?.name !== 'pwsh') return null;
         const args = argsOf(exec.arguments);
         const command = typeof args.command === 'string' ? args.command : '';
         if (!/\b(?:mkdir|md|new-item|ni)\b/i.test(command)) return null;
         const session = exec.agent.session;
-        const id = session?.id ?? exec.agent.id;
-        const own = this.store.lookup(id);
-        const thread = own?.role === 'thread' ? id : own ? null : this.threadAbove(session);
-        if (!thread) return null;
-        const who = own ?? this.store.lookup(thread);
+        const who = this.store.lookup(thread);
         const t = who?.role === 'thread' ? this.store.thread(who.projectId, who.threadId) : null;
         const cwd = [this.cwdOf(session), t?.folder, this.projects.get(who?.projectId)?.workspacePath].find((p) => typeof p === 'string' && p !== '');
         if (cwd === undefined) return null;
         const here = typeof args.workdir === 'string' && args.workdir.trim() !== '' ? resolve(expand(cwd), expand(args.workdir.trim())) : resolve(expand(cwd));
-        const dirs = madeDirsOf(command, { shell: exec.name, cwd: here }).filter((dir) => !existsSync(dir));
+        const absent = (dir) => {
+            try {
+                lstatSync(dir);
+                return false;
+            } catch (error) {
+                return error?.code === 'ENOENT';
+            }
+        };
+        const dirs = madeDirsOf(command, { shell: exec.name, cwd: this.keepsFolder(exec) ? undefined : here }).filter(absent);
         return dirs.length > 0 ? { thread, dirs } : null;
     }
 
-    /** Run a command, then keep the folders it made as its thread's own (noteCreated). */
+    /**
+     * Run a command, then keep the folders it made as its thread's own
+     * (noteCreated), whether or not it failed: each that is there now as a
+     * real folder born while it ran. Not a link (`ln -s ~/Documents d &&
+     * mkdir -p d`), nor a folder from before that it renamed or moved there
+     * (`mv src d && mkdir -p d/sub`): batch 5 review M1, B5 and B2.
+     */
     async aroundMade({ thread, dirs }, next) {
-        const result = await next();
+        const start = Date.now();
         try {
-            if (!result?.isError) {
-                const made = dirs.filter((dir) => { try { return statSync(dir).isDirectory(); } catch { return false; } });
-                for (const dir of made) this.noteCreated(thread, dir);
+            return await next();
+        } finally {
+            try {
+                let n = 0;
+                for (const dir of dirs) {
+                    let stat;
+                    try { stat = lstatSync(dir); } catch { continue; }
+                    const birth = bornOf(stat);
+                    if (!stat.isDirectory() || birth === undefined || birth < start - CLOCK_SLACK_MS) continue;
+                    this.noteCreated(thread, dir, undefined, stat);
+                    n += 1;
+                }
                 const who = this.store.lookup(thread);
-                if (made.length > 0) this.log(`made-dirs ${who?.projectId}/${who?.threadId} ${made.length}`);
+                if (n > 0) this.log(`made-dirs ${who?.projectId}/${who?.threadId} ${n}`);
+            } catch (error) {
+                this.log(`error made-dirs ${String(error?.message ?? error).slice(0, 200)}`);
             }
-        } catch (error) {
-            this.log(`error made-dirs ${String(error?.message ?? error).slice(0, 200)}`);
         }
-        return result;
     }
 
     /**
@@ -2637,17 +2790,13 @@ export class ProjectManager {
      * expectedAfter): {thread, file, expect}, or null, as for a file whose
      * texts aren't kept (notKept: outside the thread's folders, or a secret).
      */
-    netTarget(exec) {
-        if (this.disposed || !FILE_TOOLS.has(exec?.name) || !exec.agent) return null;
+    netTarget(exec, thread) {
+        if (!FILE_TOOLS.has(exec?.name)) return null;
         const args = argsOf(exec.arguments);
         const named = changedPath(exec.name, args);
         if (!named) return null;
         const session = exec.agent.session;
-        const id = session?.id ?? exec.agent.id;
-        const own = this.store.lookup(id);
-        const thread = own?.role === 'thread' ? id : own ? null : this.threadAbove(session);
-        if (!thread) return null;
-        const who = own ?? this.store.lookup(thread);
+        const who = this.store.lookup(thread);
         const t = who?.role === 'thread' ? this.store.thread(who.projectId, who.threadId) : null;
         const cwd = [this.cwdOf(session), t?.folder, this.projects.get(who?.projectId)?.workspacePath].find((p) => typeof p === 'string' && p !== '');
         const path = expand(named);
@@ -2657,31 +2806,74 @@ export class ProjectManager {
         return { thread, file, expect: expectedAfter(exec.name, args) };
     }
 
-    /** A file a thread (or its subagent) created, kept for the delete check: it may delete it without asking. */
-    noteCreated(thread, path, cwd) {
+    /** A path as an absolute one, relative paths from `cwd` or else the thread's folder; undefined when it can't be told. */
+    fullPath(thread, path, cwd) {
         const base = typeof cwd === 'string' ? cwd : this.ctx.agents.get(thread)?.session?.header?.cwd;
-        if (typeof path !== 'string' || path === '' || (!isAbsolute(expand(path)) && typeof base !== 'string')) return;
-        const files = this.created.get(thread) ?? new Set();
-        files.add(resolve(expand(base ?? '/'), expand(path)));
-        for (const old of [...files].slice(0, -500)) files.delete(old);
-        this.created.delete(thread);
-        this.created.set(thread, files);
-        for (const key of [...this.created.keys()].slice(0, -200)) this.created.delete(key);
+        if (typeof path !== 'string' || path === '' || (!isAbsolute(expand(path)) && typeof base !== 'string')) return undefined;
+        return resolve(expand(base ?? '/'), expand(path));
     }
 
-    /** The thread session a subagent's session works for: its nearest ancestor that is a thread, or null. */
+    /**
+     * A file a thread (or its subagent) created, or a folder its command
+     * made, kept for the delete check as the file it is now (`stat`, or
+     * read), so one made again in its place later isn't its own: it may
+     * delete it without asking. Nothing where the file system keeps no
+     * birth time.
+     */
+    noteCreated(thread, path, cwd, stat = undefined) {
+        const full = this.fullPath(thread, path, cwd);
+        if (full === undefined) return;
+        let id;
+        try { id = identityOf(stat ?? lstatSync(full)); } catch {}
+        if (id === undefined) return;
+        const files = this.made.get(thread) ?? new Map();
+        files.delete(full);
+        files.set(full, id);
+        for (const old of [...files.keys()].slice(0, -500)) files.delete(old);
+        this.made.delete(thread);
+        this.made.set(thread, files);
+        for (const key of [...this.made.keys()].slice(0, -200)) this.made.delete(key);
+    }
+
+    /**
+     * A file a session wrote with DSH's file tools (`thread`: the thread it
+     * works for, or null for any other): who wrote it, so the delete check
+     * never counts what another session wrote as a thread's, the user's own
+     * chats included; and, for a thread, the file it made as DSH wrote it
+     * again (DSH writes a new file in its place).
+     */
+    noteWritten(thread, path, cwd, created) {
+        const full = this.fullPath(thread, path, cwd);
+        if (full === undefined) return;
+        const by = thread ?? '';
+        const was = this.writers.get(full);
+        this.writers.delete(full);
+        this.writers.set(full, was === undefined || was === by ? by : '');
+        for (const old of [...this.writers.keys()].slice(0, -5000)) this.writers.delete(old);
+        if (!thread) return;
+        if (created || (this.made.get(thread)?.has(full) && this.writers.get(full) === thread)) this.noteCreated(thread, full);
+        else this.made.get(thread)?.delete(full);
+    }
+
+    /**
+     * The thread session a subagent's session works for: its nearest
+     * ancestor that is a thread, through subagents of subagents, or null.
+     * A chat the user forked from a thread is the user's own (batch 5
+     * review M1, B6), as in projectAbove.
+     */
     threadAbove(session) {
         const id = session?.id;
         if (this.subThreads.has(id)) return this.subThreads.get(id);
-        let parent = session?.header?.parentSession;
+        let header = session?.header;
         let found = null;
-        for (let depth = 0; depth < 8 && typeof parent === 'string' && parent !== ''; depth++) {
+        for (let depth = 0; depth < 8 && header?.origin === 'subagent' && typeof header.parentSession === 'string' && header.parentSession !== ''; depth++) {
+            const parent = header.parentSession;
             const who = this.store.lookup(parent);
             if (who) {
                 if (who.role === 'thread') found = parent;
                 break;
             }
-            parent = this.ctx.agents.get(parent)?.session?.header?.parentSession;
+            header = this.ctx.agents.get(parent)?.session?.header;
         }
         this.subThreads.set(id, found);
         for (const key of [...this.subThreads.keys()].slice(0, -500)) this.subThreads.delete(key);

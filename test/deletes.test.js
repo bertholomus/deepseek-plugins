@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdtempSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { deletesOf, codeDeletesOf, deletesWhat, isFree, madeDirsOf } from '../plugins/projects/lib/deletes.js';
+import { deletesOf, codeDeletesOf, deletesWhat, isFree, madeDirsOf, identityOf } from '../plugins/projects/lib/deletes.js';
 
 // What a project thread's command deletes (plugins/projects/lib/deletes.js): the plugin asks the user before one that
 // deletes files the thread didn't create. Scripts the thread created are read through `read`, here from this table.
@@ -125,6 +125,9 @@ test('deletes: where each thing is, when that can be told', () => {
     assert.deepEqual(where('rm -rf build', { cwd: undefined }), [null]);
 });
 
+/** What a thread made, as the plugin keeps it (projects.js mineOf): each path as the file it is now. */
+const mineOf = (paths, spans = []) => ({ made: new Map(paths.map((p) => [p, identityOf(lstatSync(p))])), spans });
+
 test('deletes: free are the files the thread created, a folder of only those, the temp folder outside the workspace and mktemp\'s; never .git', () => {
     const work = mkdtempSync(join(tmpdir(), 'deletes-work-'));
     mkdirSync(join(work, 'build'));
@@ -133,20 +136,80 @@ test('deletes: free are the files the thread created, a folder of only those, th
     writeFileSync(join(work, 'scratch', 'n.txt'), 'x');
     writeFileSync(join(work, 'mine.txt'), 'x');
     mkdirSync(join(work, 'empty'));
-    const created = new Set([join(work, 'mine.txt'), join(work, 'scratch', 'n.txt')]);
-    const free = (command) => deletesOf(command, { cwd: work }).every((d) => isFree(d, { work: [work], created }));
+    const mine = mineOf([join(work, 'mine.txt'), join(work, 'scratch', 'n.txt')]);
+    const free = (command, m = mine) => deletesOf(command, { cwd: work }).every((d) => isFree(d, { work: [work], mine: m }));
     for (const command of ['rm mine.txt', 'rm -rf scratch', 'rm scratch/*.txt', 'rm -rf gone/', 'rm -rf /tmp/x', 'd=$(mktemp -d) && rm -rf "$d"', 'rm -f /tmp/foo-*']) assert.ok(free(command), command);
     for (const command of ['rm -rf build', 'rm -rf .', 'rmdir empty', 'rm -f .git/index.lock', 'rm -rf build/*.o', 'rm -rf /tmp/*', 'rm -rf "$X"', `rm -rf ${work}`, 'git clean -fd', 'ls | xargs rm']) assert.ok(!free(command), command);
+    // A file made again in its place isn't the thread's (it deleted its own, and the user saved one there).
+    writeFileSync(join(work, 'again.txt'), 'x');
+    const before = mineOf([join(work, 'again.txt')]);
+    renameSync(join(work, 'again.txt'), join(work, 'kept.txt'));
+    writeFileSync(join(work, 'again.txt'), 'the user\'s');
+    assert.ok(!free('rm again.txt', before));
+    // Nor is what another session wrote with DSH's file tools.
+    assert.ok(!free('rm mine.txt', { ...mine, foreign: (path) => path === join(work, 'mine.txt') }));
     // The temp folder doesn't make a workspace inside it free, nor a folder that holds one.
     assert.equal(isFree({ program: 'rm', path: 'x', full: join(work, 'build') }, { work: [work] }), false);
     assert.equal(isFree({ program: 'rm', path: 'x', full: '/tmp' }, { work: ['/w'] }), false);
-    // A folder the thread made (madeDirsOf) is its own with what is in it, even empty; not a .git in it.
+});
+
+test('deletes: a folder the thread made is its own with what was born there while it ran; not what was moved in, linked or made by anyone else (batch 5 review M1)', () => {
+    const work = mkdtempSync(join(tmpdir(), 'deletes-made-'));
+    const outside = mkdtempSync(join(tmpdir(), 'deletes-docs-'));
+    writeFileSync(join(outside, 'report.txt'), 'the user\'s');
+    mkdirSync(join(outside, 'sub'));
+    // The user's folder, from before the thread ran.
+    mkdirSync(join(work, 'legacy'));
+    writeFileSync(join(work, 'legacy', 'notes.txt'), 'the user\'s');
+    const ran = [Date.now() + 5000, Infinity];
+    // What the thread's command made, born now; the thread "runs" from a moment later, so what is here now was born before.
     mkdirSync(join(work, '_qa', 'profile', '.git'), { recursive: true });
     writeFileSync(join(work, '_qa', 'profile', 'Cookies'), 'x');
-    const made = new Set([...created, join(work, '_qa')]);
-    const freeMade = (command) => deletesOf(command, { cwd: work }).every((d) => isFree(d, { work: [work], created: made }));
-    for (const command of ['rm -rf _qa', 'rm -rf _qa/profile', 'rm _qa/profile/Cookies', 'rm -rf _qa/*']) assert.ok(freeMade(command), command);
-    for (const command of ['rm -rf _qa/profile/.git', 'rm -rf build']) assert.ok(!freeMade(command), command);
+    const made = mineOf([join(work, '_qa')], [[Date.now() - 1000, Date.now() + 1000]]);
+    const free = (command, m) => deletesOf(command, { cwd: work }).every((d) => isFree(d, { work: [work], mine: m }));
+    // Behaviour review 5, S1 r1: a headless browser's profile in a folder the thread made goes without asking, with a
+    // .git born there (a clone of its own); a .git named on its own still asks.
+    for (const command of ['rm -rf _qa', 'rm -rf _qa/profile', 'rm _qa/profile/Cookies', 'rm -rf _qa/*', 'find _qa -name Cookies -delete']) assert.ok(free(command, made), command);
+    assert.ok(!free('rm -rf _qa/profile/.git', made));
+    assert.ok(!free('rm -rf _qa', { ...made, spans: [] }), 'not once when it ran is gone (a restart)');
+    // B1: mkdir old && mv legacy old/, then rm -rf old: what was moved in was born before the thread ran.
+    mkdirSync(join(work, 'old'));
+    const old = mineOf([join(work, 'old')], [ran]);
+    renameSync(join(work, 'legacy'), join(work, 'old', 'legacy'));
+    assert.ok(!free('rm -rf old', old));
+    assert.ok(!free('rm -rf old/legacy/notes.txt', old));
+    // B2: mv src lib2 && mkdir -p lib2/sub: lib2 was there before (the plugin keeps only a folder born while the
+    // command ran: projects.js aroundMade), so only lib2/sub is the thread's.
+    mkdirSync(join(work, 'src'));
+    writeFileSync(join(work, 'src', 'main.js'), 'x');
+    renameSync(join(work, 'src'), join(work, 'lib2'));
+    mkdirSync(join(work, 'lib2', 'sub'));
+    const lib2 = mineOf([join(work, 'lib2', 'sub')], [[Date.now() - 1000, Date.now() + 1000]]);
+    assert.ok(free('rm -rf lib2/sub', lib2));
+    assert.ok(!free('rm -rf lib2', lib2));
+    // B3: mkdir -p out; the user saves a file there between the thread's calls; rm -rf out.
+    mkdirSync(join(work, 'out'));
+    const out = mineOf([join(work, 'out')], [[0, 1]]);
+    writeFileSync(join(work, 'out', 'theirs.txt'), 'the user\'s');
+    assert.ok(!free('rm -rf out', out));
+    // B4: a link in a folder the thread made leads anywhere: deleting through it, or following it, asks.
+    mkdirSync(join(work, 'scratch'));
+    symlinkSync(outside, join(work, 'scratch', 'docs'));
+    const scratch = mineOf([join(work, 'scratch')], [[Date.now() - 1000, Date.now() + 1000]]);
+    for (const command of ['rm -rf scratch/docs/sub', 'rm scratch/docs/report.txt', 'find -L scratch -name "*.txt" -delete', 'rm -rf scratch/docs', 'rm -rf scratch/docs/*', 'rm -rf scratch']) {
+        assert.ok(!free(command, scratch), command);
+    }
+    assert.ok(!codeDeletesOf("import shutil\nshutil.rmtree('scratch/docs/sub')", { cwd: work }).every((d) => isFree(d, { work: [work], mine: scratch })));
+    // A made folder replaced since (the thread removed it and the user made one there) isn't the thread's.
+    mkdirSync(join(work, 'tmp1'));
+    const tmp1 = mineOf([join(work, 'tmp1')], [[Date.now() - 1000, Date.now() + 1000]]);
+    renameSync(join(work, 'tmp1'), join(work, 'tmp1-gone'));
+    mkdirSync(join(work, 'tmp1'));
+    assert.ok(!free('rm -rf tmp1', tmp1));
+    // m1: a `..` out of a link is beside where the link leads, so it can't be told from the words.
+    symlinkSync(join(outside, 'sub'), join(work, 'link'));
+    assert.deepEqual(deletesOf('rm -rf link/../report.txt', { cwd: work }).map((d) => d.full), [null]);
+    assert.deepEqual(deletesOf('rm -rf build/../x', { cwd: work }).map((d) => d.full), [join(work, 'x')]);
 });
 
 test('deletes: the folders a command makes, for the thread\'s own', () => {

@@ -157,7 +157,29 @@ function target(word, ctx, program) {
         if (ctx.tempCwd && !path.split('/').includes('..')) return { program, path: shown, full: null, temp: true };
         if (typeof ctx.cwd !== 'string') return unknown;
     }
+    if (path.split(/[\\/]/).includes('..') && backThroughLink(path, ctx.cwd)) return unknown;
     return checked({ program, path: shown }, isAbsolute(path) ? path : resolve(ctx.cwd, path));
+}
+
+/**
+ * Whether a path's `..` steps back out of a link: `link/../x` is beside
+ * where the link leads, not beside the link, so where it is can't be told
+ * from its words.
+ */
+function backThroughLink(path, cwd) {
+    let at = isAbsolute(path) ? sep : cwd;
+    for (const part of path.split(/[\\/]+/)) {
+        if (part === '' || part === '.') continue;
+        if (part !== '..') {
+            at = join(at, part);
+            continue;
+        }
+        try {
+            if (lstatSync(at).isSymbolicLink()) return true;
+        } catch {}
+        at = dirname(at);
+    }
+    return false;
 }
 
 /** A path, or for a pattern the part of it before the first wildcard, which every match starts with. */
@@ -545,36 +567,101 @@ function tempRoots() {
 /** Whether a path is inside a folder (not the folder itself). */
 const inside = (path, root) => path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
 
-/** Whether a path is in a folder from `created`: one the thread made itself, with what it put there. */
-function madeAbove(path, created) {
+/** How far a file's times may be from the clock that read them: a file system stamps them with a coarse clock (FAT's is 2 s). */
+export const CLOCK_SLACK_MS = 2000;
+/** How many things on the disk the check reads for one thing a command deletes, at most; past that it asks. */
+const MAX_ENTRIES = 2000;
+
+/** When lstat says a file was made, or undefined where the file system doesn't keep that. */
+export function bornOf(stat) {
+    const birth = stat?.birthtimeMs;
+    return Number.isFinite(birth) && birth > 0 ? birth : undefined;
+}
+
+/**
+ * Which file lstat shows, as the delete check keeps it: {dev, ino, birth},
+ * or undefined where the file system keeps no birth time, so a file made
+ * again in its place couldn't be told from it.
+ */
+export function identityOf(stat) {
+    const birth = bornOf(stat);
+    return birth === undefined || !Number.isSafeInteger(stat.ino) || !Number.isSafeInteger(stat.dev) ? undefined : { dev: stat.dev, ino: stat.ino, birth };
+}
+
+/** Whether lstat shows the file `id` names (identityOf), not another made in its place. */
+export function isSame(stat, id) {
+    return id !== null && typeof id === 'object' && stat.dev === id.dev && stat.ino === id.ino && bornOf(stat) === id.birth;
+}
+
+/**
+ * What a thread can be shown to have made, for the delete check.
+ * @typedef {object} Mine
+ * @property {Map<string, {dev: number, ino: number, birth: number}>} [made] - by absolute path, the files it created and
+ *   the folders its commands made, each as the file it was then (identityOf): one removed and made again, or saved over
+ *   by someone else, isn't its own.
+ * @property {number[][]} [spans] - when it was running calls, as [start, end] (end Infinity while one runs): what was
+ *   born in a folder it made while it ran is its own; what was born there at another time (moved in, or someone
+ *   else's) isn't.
+ * @property {(path: string) => boolean} [foreign] - whether another session wrote the path with DSH's file tools: then it never is.
+ */
+
+/** Whether a birth time falls while the thread ran (`spans`). */
+function whileRan(birth, spans) {
+    return birth !== undefined && spans.some(([start, end]) => birth >= start - CLOCK_SLACK_MS && birth <= end + CLOCK_SLACK_MS);
+}
+
+/**
+ * Whether a path is in a folder the thread made, still that folder, and
+ * reached from it through real folders only: a link on the way leads
+ * anywhere (`ln -s ~/Documents made/docs`, then `rm made/docs/report.txt`).
+ */
+function inMadeFolder(path, mine) {
     for (let up = dirname(path); up !== dirname(up); up = dirname(up)) {
-        if (created.has(up)) return true;
+        const id = mine.made.get(up);
+        if (id === undefined) continue;
+        try {
+            for (let at = dirname(path); at !== up; at = dirname(at)) {
+                if (!lstatSync(at).isDirectory()) return false;
+            }
+            return isSame(lstatSync(up), id);
+        } catch {
+            return false;
+        }
     }
     return false;
 }
 
 /**
- * Whether a path holds only files from `created`, read from the disk: a
- * file in the list, a folder whose files all are (at most `budget` of
- * them), a folder the thread made itself (in the list too: madeDirsOf)
- * or anything in one, or nothing at all. Any other empty folder, a link
- * and anything in a .git folder are not: who made them can't be told.
+ * Whether a path holds only what the thread can be shown to have made,
+ * read from the disk: a file or folder it made, still the same one; in a
+ * folder it made, what was born there while it ran (a clone's .git
+ * included); a folder of only those; or nothing at all. Never a link, any
+ * other .git, what another session wrote with DSH's file tools, an empty
+ * folder it didn't make, or anything past MAX_ENTRIES: who made them
+ * can't be told.
+ * @param {boolean} [within] - whether the path is in a folder the thread made, as the walk found it.
  */
-function owned(path, created, budget = { left: 500 }) {
+function owned(path, mine, budget = { left: MAX_ENTRIES }, within = undefined) {
     let stat;
     try {
         stat = lstatSync(path);
     } catch (error) {
         return error?.code === 'ENOENT' || error?.code === 'ENOTDIR';
     }
-    if (path.split(sep).includes('.git') || stat.isSymbolicLink()) return false;
-    if (created.has(path) || madeAbove(path, created)) return true;
-    if (!stat.isDirectory()) return false;
+    if (--budget.left < 0 || stat.isSymbolicLink() || mine.foreign?.(path)) return false;
+    // Its own: a file or folder it made, still that one; or, in a folder it made, born while it ran.
+    let own = isSame(stat, mine.made.get(path));
+    if (!own && (within ?? inMadeFolder(path, mine))) {
+        if (!whileRan(bornOf(stat), mine.spans)) return false;
+        own = true;
+    }
+    if (!own && basename(path) === '.git') return false;
+    if (!stat.isDirectory()) return own;
     let names;
     try { names = readdirSync(path); } catch { return false; }
-    if (names.length === 0) return false;
+    if (names.length === 0) return own;
     for (const name of names) {
-        if (--budget.left < 0 || !owned(join(path, name), created, budget)) return false;
+        if (!owned(join(path, name), mine, budget, own)) return false;
     }
     return true;
 }
@@ -582,16 +669,17 @@ function owned(path, created, budget = { left: 500 }) {
 /**
  * Whether one thing a command deletes is free to delete without asking:
  * something mktemp made; something in the OS temp folder, outside the
- * workspace and not holding it; or what the thread created (`created`,
- * absolute paths), all of a folder's files for a folder. Nothing in the
+ * workspace and not holding it; or what the thread can be shown to have
+ * made (`mine`, owned): for a folder, all of what is in it. Nothing in the
  * workspace's .git is, and nothing that can't be told (a variable, what
  * the input names, a pattern outside the temp folder over files the
- * thread didn't all create).
+ * thread didn't all make).
  * @param {Deleted} d
- * @param {{work?: string[], created?: Set<string>}} [where] - `work`: the workspace's folders, absolute.
+ * @param {{work?: string[], mine?: Mine}} [where] - `work`: the workspace's folders, absolute.
  */
-export function isFree(d, { work = [], created = new Set() } = {}) {
+export function isFree(d, { work = [], mine: given = {} } = {}) {
     if (d.temp) return true;
+    const mine = { made: given.made ?? new Map(), spans: Array.isArray(given.spans) ? given.spans : [], foreign: given.foreign };
     const roots = tempRoots();
     const inWork = (path) => work.some((w) => path === w || inside(path, w));
     const holdsWork = (path) => work.some((w) => w === path || inside(w, path));
@@ -601,13 +689,13 @@ export function isFree(d, { work = [], created = new Set() } = {}) {
         const start = d.glob.endsWith('/') || d.glob.endsWith(sep) ? '' : basename(resolve(d.glob));
         const mayMatchWork = work.some((w) => w === folder || inside(w, folder) && (start === '' || resolve(w).slice(folder.length + 1).startsWith(start)));
         if (!inWork(folder) && !mayMatchWork && roots.some((r) => inside(folder, r) || (folder === r && start !== ''))) return true;
-        return !folder.split(sep).includes('.git') && owned(folder, created);
+        return !folder.split(sep).includes('.git') && owned(folder, mine);
     }
     if (typeof d.full !== 'string') return false;
     const path = d.full;
-    if (inWork(path)) return !path.split(sep).includes('.git') && owned(path, created);
+    if (inWork(path)) return !path.split(sep).includes('.git') && owned(path, mine);
     if (roots.some((r) => inside(path, r))) return !holdsWork(path);
-    return owned(path, created);
+    return owned(path, mine);
 }
 
 // ── Saying it ─────────────────────────────────────────────────────────────
@@ -672,12 +760,12 @@ function madePath(word, here) {
  * The folders a shell command line makes: mkdir in bash, and New-Item
  * -ItemType Directory, md and mkdir in PowerShell, as absolute paths, with
  * their parents when the command makes those too (`mkdir -p`; PowerShell
- * always does). The caller keeps the ones missing before the command and
- * there after it: the folders the thread made itself, which the delete
- * check lets it delete with what it put in them (behaviour review 5, S1
- * r1: a scratch folder of a headless browser's profile was held). A path
- * that can't be told is left out, and so is what comes after a `cd` it
- * can't follow.
+ * always does). The caller keeps the ones missing before the command and,
+ * after it, a real folder born while it ran: the folders the thread made
+ * itself, which the delete check lets it delete with what it put in them
+ * (behaviour review 5, S1 r1: a scratch folder of a headless browser's
+ * profile was held). A path that can't be told is left out, and so is what
+ * comes after a `cd` it can't follow.
  * @param {string} command - the command line, as the shell tool gets it.
  * @param {{shell?: 'bash'|'pwsh', cwd?: string}} [options] - which shell, and the folder it runs in.
  * @returns {string[]}

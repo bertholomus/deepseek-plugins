@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
@@ -22,7 +22,7 @@ import { describeEnding, endingStateOf, continueMessage, readableError, welcomeM
 import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
 import { NetTexts, canonicalPath } from '../lib/net.js';
 import { grantsIn, asksFor } from '../lib/grants.js';
-import { deletesOf, codeDeletesOf, isFree } from '../lib/deletes.js';
+import { deletesOf, codeDeletesOf, isFree, identityOf, CLOCK_SLACK_MS } from '../lib/deletes.js';
 
 const CATALOG = {
     default: { provider: 'deepseek', model: 'deepseek-v4' },
@@ -6443,7 +6443,7 @@ test('changes: a thread\'s Changes tab shows one diff per file, what its edits a
         { path: code, diffs: [{ oldText: 'a\nB\nc', newText: 'a\nb\nc' }] });
     // A subagent working for the thread edits notes.md too: its edit goes into the thread's net diff.
     host.sessions.set('sub-n', { events: [], prompts: [], title: null });
-    const sub = { id: 'sub-n', session: { id: 'sub-n', header: { cwd: work, parentSession: t1.id } } };
+    const sub = { id: 'sub-n', session: { id: 'sub-n', header: { cwd: work, parentSession: t1.id, origin: 'subagent' } } };
     await run(sub, 'str_replace_editor', { command: 'str_replace', path: notes, old_str: 'three', new_str: 'three\nfour' }, () => writeFileSync(notes, 'one\nTWO\nthree\nfour\n'));
     log(t1.id).push({ seq: log(t1.id).length + 1, type: 'subagent/catalog', data: { version: 1, childId: 'sub-n', mode: 'local', label: 'Helper' } });
     // The coordinator's own call, and a call that isn't a file edit, are run as they are and keep nothing.
@@ -7636,6 +7636,10 @@ test('rule 6, held for deletes: a thread\'s command that deletes files it didn\'
     writeFileSync(join(work, 'build', 'app.o'), 'object\n');
     writeFileSync(join(work, 'build.sh'), '#!/bin/sh\nrm -rf dist && tsc\n');
     writeFileSync(join(work, 'old-scratch.txt'), 'x\n');
+    // The user's src, from before the thread's commands run (more than the clock's slack before).
+    mkdirSync(join(work, 'src'));
+    writeFileSync(join(work, 'src', 'main.js'), 'x\n');
+    const srcBorn = Date.now();
     const { host, dir } = setup({ projects: [{ name: 'DSH Plugins', goal: 'Ship good DSH plugins', workspacePath: work }] }, undefined, { presets: true, gateway: true });
     const policies = new Map();
     host.services.approval = { effectivePolicy: (session) => policies.get(session.id) ?? 'ask' };
@@ -7670,7 +7674,8 @@ test('rule 6, held for deletes: a thread\'s command that deletes files it didn\'
     for (const command of ['rm -rf /tmp/x', 'd=$(mktemp -d) && rm -rf "$d"', 'rm -f "$(mktemp)"', 'rm -rf build/gone.o', 'git clean -n', 'git rm --cached build/app.o', 'echo rm -rf build', './build.sh', 'npm run build']) {
         assert.deepEqual(await gate(t1, 'bash', { command }), allowed, command);
     }
-    // A file the thread created with DSH's file tools is free, this turn and from its change records; so is a folder of only those.
+    // A file the thread created with DSH's file tools is free, this turn and, as the same file, from its change records;
+    // so is a folder of only those.
     const made = join(work, 'scratch', 'probe.txt');
     mkdirSync(join(work, 'scratch'));
     writeFileSync(made, 'x\n');
@@ -7682,8 +7687,14 @@ test('rule 6, held for deletes: a thread\'s command that deletes files it didn\'
     assert.deepEqual(await gate(t1, 'bash', { command: `rm ${made}` }), allowed);
     assert.deepEqual(await gate(t1, 'bash', { command: 'rm -rf scratch' }), allowed);
     assert.equal((await gate(t1, 'bash', { command: 'rm old-scratch.txt' })).kind, 'ask');
-    manager.store.putThread('dsh-plugins', 't1', { changes: [{ turn: 1, seq: 9, added: 1, deleted: 0, total: 1, files: [{ path: 'old-scratch.txt', added: 1, deleted: 0, created: true }] }] });
+    const recorded = (identity) => manager.store.putThread('dsh-plugins', 't1', { changes: [{ turn: 1, seq: 9, added: 1, deleted: 0, total: 1, files: [{ path: 'old-scratch.txt', added: 1, deleted: 0, created: true, ...(identity ? { identity } : {}) }] }] });
+    recorded();
+    assert.equal((await gate(t1, 'bash', { command: 'rm old-scratch.txt' })).kind, 'ask', 'a record that can\'t say which file it was');
+    recorded(identityOf(lstatSync(join(work, 'old-scratch.txt'))));
     assert.deepEqual(await gate(t1, 'bash', { command: 'rm old-scratch.txt' }), allowed);
+    renameSync(join(work, 'old-scratch.txt'), join(work, 'old-scratch.bak'));
+    writeFileSync(join(work, 'old-scratch.txt'), 'the user\'s\n');
+    assert.equal((await gate(t1, 'bash', { command: 'rm old-scratch.txt' })).kind, 'ask', 'one made again in its place');
     // A script it created is read for what it deletes; one that was there runs as it is (above).
     const own = join(work, 'tidy.sh');
     writeFileSync(own, '#!/bin/sh\nrm -rf build\n');
@@ -7705,6 +7716,87 @@ test('rule 6, held for deletes: a thread\'s command that deletes files it didn\'
     writeFileSync(join(work, 'failed', 'kept.txt'), 'x\n');
     assert.equal((await gate(t1, 'bash', { command: 'rm -rf failed' })).kind, 'ask');
     assert.match(log(), / made-dirs dsh-plugins\/t1 1\n/);
+    // Batch 5 review M1: a folder it made vouches only for what was born there while the thread ran.
+    // B1: mkdir old && mv legacy old/, then rm -rf old.
+    // The test moves when the thread ran back a minute, so what was born just now was born while it didn't run.
+    const ago = (ms) => { for (const span of manager.spans.get(t1.id).list) { span[0] -= ms; span[1] -= ms; } };
+    mkdirSync(join(work, 'legacy'));
+    writeFileSync(join(work, 'legacy', 'notes.txt'), 'the user\'s\n');
+    await run(t1, 'mkdir old && mv legacy old/', async () => {
+        mkdirSync(join(work, 'old'));
+        renameSync(join(work, 'legacy'), join(work, 'old', 'legacy'));
+        return { content: [] };
+    });
+    ago(60000);
+    assert.equal((await gate(t1, 'bash', { command: 'rm -rf old' })).kind, 'ask', 'B1');
+    assert.equal((await gate(t1, 'bash', { command: 'rmdir old/legacy/../legacy' })).kind, 'ask');
+    // B2: mv src lib2 && mkdir -p lib2/sub: lib2 is the user's src, born before the command, so only lib2/sub is the thread's.
+    await new Promise((r) => setTimeout(r, Math.max(0, srcBorn + CLOCK_SLACK_MS + 100 - Date.now())));
+    await run(t1, 'mv src lib2 && mkdir -p lib2/sub', async () => {
+        renameSync(join(work, 'src'), join(work, 'lib2'));
+        mkdirSync(join(work, 'lib2', 'sub'));
+        return { content: [] };
+    });
+    assert.equal((await gate(t1, 'bash', { command: 'rm -rf lib2' })).kind, 'ask', 'B2');
+    assert.deepEqual(await gate(t1, 'bash', { command: 'rm -rf lib2/sub' }), allowed);
+    // B3: mkdir -p out; the user saves a file there while the thread isn't running; rm -rf out.
+    await run(t1, 'mkdir -p out', async () => { mkdirSync(join(work, 'out')); return { content: [] }; });
+    ago(60000);
+    writeFileSync(join(work, 'out', 'theirs.txt'), 'the user\'s\n');
+    assert.equal((await gate(t1, 'bash', { command: 'rm -rf out' })).kind, 'ask', 'B3');
+    // B4: a link in a folder it made leads anywhere.
+    const docs = mkdtempSync(join(tmpdir(), 'projects-docs-'));
+    writeFileSync(join(docs, 'report.txt'), 'the user\'s\n');
+    mkdirSync(join(docs, 'sub'));
+    await run(t1, `mkdir scratch2 && ln -s ${docs} scratch2/docs`, async () => {
+        mkdirSync(join(work, 'scratch2'));
+        symlinkSync(docs, join(work, 'scratch2', 'docs'));
+        return { content: [] };
+    });
+    for (const command of ['rm -rf scratch2/docs/sub', 'rm scratch2/docs/report.txt', 'find -L scratch2 -name "*.txt" -delete', 'rm -rf scratch2']) {
+        assert.equal((await gate(t1, 'bash', { command })).kind, 'ask', `B4: ${command}`);
+    }
+    assert.equal((await gate(t1, 'run_code', { code: "import shutil\nshutil.rmtree('scratch2/docs/sub')" })).kind, 'ask', 'B4 in code');
+    // B5: ln -s ~/Documents docs && mkdir -p docs: a link there after the command is no folder the thread made.
+    await run(t1, `ln -s ${docs} docs && mkdir -p docs`, async () => { symlinkSync(docs, join(work, 'docs')); return { content: [] }; });
+    assert.equal((await gate(t1, 'bash', { command: 'rm docs/report.txt' })).kind, 'ask', 'B5');
+    // B6: a chat the user forked from the thread is the user's own: its folders and files are never the thread's.
+    const forked = host.wake('fork-d');
+    forked.session.header = { parentSession: t1.id };
+    await run(forked, 'mkdir reports', async () => { mkdirSync(join(work, 'reports')); writeFileSync(join(work, 'reports', 'q3.md'), 'x\n'); return { content: [] }; });
+    assert.equal((await gate(t1, 'bash', { command: 'rm -rf reports' })).kind, 'ask', 'B6');
+    // What another chat writes with DSH's file tools in a folder the thread made isn't the thread's either.
+    await run(t1, 'mkdir -p shared', async () => { mkdirSync(join(work, 'shared')); return { content: [] }; });
+    assert.deepEqual(await gate(t1, 'bash', { command: 'rm -rf shared' }), allowed);
+    wrote(forked.session, 'w-f', join(work, 'shared', 'theirs.md'));
+    writeFileSync(join(work, 'shared', 'theirs.md'), 'x\n');
+    assert.equal((await gate(t1, 'bash', { command: 'rm -rf shared' })).kind, 'ask');
+    // m1: a `..` out of a link is beside where the link leads, so it asks.
+    symlinkSync(join(docs, 'sub'), join(work, 'into-docs'));
+    assert.equal((await gate(t1, 'bash', { command: 'rm -f into-docs/../report.txt' })).kind, 'ask', 'm1');
+    // M2: on DSH 0.2.1 a relative path is from the thread's working directory (working_directory), not where it started.
+    mkdirSync(join(work, 'packages', 'web', 'src'), { recursive: true });
+    writeFileSync(join(work, 'packages', 'web', 'src', 'main.js'), 'x\n');
+    const header = t1.session.header;
+    t1.session.header = { ...header, cwd: work };
+    host.services.workingDirectory = { get: (session) => (session === t1.session ? join(work, 'packages', 'web') : undefined) };
+    assert.equal((await gate(t1, 'bash', { command: 'rm -rf src' })).reason, 'the command deletes src (rm); if the user doesn\'t allow it, hand back with status needs_decision', 'M2');
+    delete host.services.workingDirectory;
+    t1.session.header = header;
+    // A shell that keeps its folder between commands (DSH's persistent bash, which takes no workdir): a relative path
+    // can't be told, so it asks; a full path is judged as before.
+    host.toolMarks.bash = { parameters: { type: 'object', properties: { command: { type: 'string' } } } };
+    host.toolNames.push('bash');
+    assert.equal((await gate(t1, 'bash', { command: 'rm -rf lib2/sub' })).kind, 'ask', 'persistent shell');
+    assert.deepEqual(await gate(t1, 'bash', { command: `rm -rf ${join(work, 'lib2', 'sub')}` }), allowed);
+    host.toolNames.pop();
+    delete host.toolMarks.bash;
+    // m2: a command that sends and deletes asks once, saying both.
+    assert.deepEqual(await gate(t1, 'bash', { command: 'curl -sS -X POST http://127.0.0.1:9/hook && rm -rf build' }), {
+        kind: 'ask',
+        reason: 'the command sends a POST to 127.0.0.1:9/hook (curl) and deletes build (rm); if the user doesn\'t allow it, hand back with status needs_decision',
+        displayReason: { en: 'This command sends a POST to 127.0.0.1:9/hook (curl) and deletes build (rm). A thread asks you before each command that sends outside the workspace or deletes files it didn\'t create.' },
+    });
     // DSH's own refusals stand, and a prompt DSH asks itself (a hook's) names the delete first, then says what DSH said.
     assert.deepEqual(await gate(t1, 'bash', { command: 'rm -rf build' }, { kind: 'deny', reason: 'sandbox' }), { kind: 'deny', reason: 'sandbox' });
     assert.deepEqual(await gate(t1, 'bash', { command: 'rm -rf build' }, { kind: 'ask', reason: 'wider' }), {

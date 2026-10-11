@@ -159,12 +159,12 @@ export function apply(ctx, config) {
         manager.onToolsChanged();
     });
     // A project session's command that sends outside the workspace, or deletes files its thread didn't create, waits
-    // for the user (manager.holdSend, manager.holdDelete), for every session, since a subagent has no project scope. It
-    // wraps DSH's own checks: their refusals stand, and when one asks without passing the call on (a hook's ask), the
-    // send or delete is named on that same prompt.
+    // for the user (manager.holdCommand: one prompt that says both), for every session, since a subagent has no project
+    // scope. It wraps DSH's own checks: their refusals stand, and when one asks without passing the call on (a hook's
+    // ask), the send or delete is named on that same prompt.
     ctx.on('tools/pre-execute', async (exec, next) => {
         const decision = await next();
-        return decision?.kind === 'allow' || decision?.kind === 'ask' ? manager.holdSend(exec, decision) ?? manager.holdDelete(exec, decision) ?? decision : decision;
+        return decision?.kind === 'allow' || decision?.kind === 'ask' ? manager.holdCommand(exec, decision) ?? decision : decision;
     }, { prepend: true });
     // A thread's call the user rejected at the prompt: its result says what they declined and to hand back
     // needs_decision, unless another listener already changed it (manager.declined).

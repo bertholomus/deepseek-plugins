@@ -1296,6 +1296,51 @@ try {
         check('a thread whose approvals never ask can\'t send, and hears what the user can do', changed.ok && resultOf(neverReqs).includes('this thread\'s permission never asks')
             && resultOf(neverReqs).includes('the user can put this thread on Workspace Write') && posted() === 1 && new RegExp(` send-refused ${madeId}/t\\d+ request curl never-asks`).test(readText(logFile)), resultOf(neverReqs));
         await webApi(webAgain, 'dsh-plugin-projects/update', { target: madeCoord, changes: { threadPermission: 'read-only' } });
+
+        // 25c. Deletes (batch 5 review M1, M2): a folder a thread's command made is its own with what it put there, but
+        // not with the user's folder moved into it (B1); on DSH 0.2.1 a relative path is from the thread's working
+        // directory (M2). The project is at its threads-per-hour limit by now, so the threads above do these. The test
+        // rejects each prompt, so nothing goes.
+        const deleteAsks = (id) => readText(logFile).split('\n').filter((line) => line.endsWith(` delete-ask ${PROJECT_ID}/${id} rm`)).length;
+        mkdirSync(join(ws, 'legacy'), { recursive: true });
+        writeFileSync(join(ws, 'legacy', 'notes.txt'), 'the user\'s notes\n');
+        // The user's folder is from before the thread's command, past the clock's slack the plugin allows.
+        await sleep(2500);
+        const tidyId = sendId;
+        mark = model.requests.length;
+        await say(coord, call('project_thread_send', { thread: tidyId, text: call('bash', { command: `cd ${ws} && mkdir old && mv legacy old/ && mkdir -p scratch && echo hi > scratch/a.txt`, description: 'Move the old notes' }) }));
+        await coordinatorSaw(mark, 'SAW-IDLE', 'the Tidy idle note');
+        check('a thread\'s command that makes folders keeps them as its own', existsSync(join(ws, 'old', 'legacy', 'notes.txt')) && readText(logFile).includes(`made-dirs ${PROJECT_ID}/${tidyId} 2`),
+            readText(logFile).split('\n').filter((line) => line.includes('made-dirs')).join(' | '));
+        mark = model.requests.length;
+        await say(coord, call('project_thread_send', { thread: tidyId, text: call('bash', { command: `cd ${ws} && rm -rf scratch`, description: 'Clean up the scratch folder' }) }));
+        await coordinatorSaw(mark, 'SAW-IDLE', 'the scratch idle note');
+        check('what a thread\'s command made, it deletes without asking', !existsSync(join(ws, 'scratch')) && deleteAsks(tidyId) === 0, `${deleteAsks(tidyId)}`);
+        mark = model.requests.length;
+        await say(coord, call('project_thread_send', { thread: tidyId, text: call('bash', { command: `cd ${ws} && rm -rf old`, description: 'Remove the old folder' }) }));
+        const tidyAsk = await prompts.next('the Tidy delete prompt', (r) => r.toolName === 'bash' && r.reason?.startsWith('the command deletes old (rm)'));
+        await prompts.answer(tidyAsk, 'rejected');
+        await coordinatorSaw(mark, 'SAW-IDLE', 'the Tidy delete idle note');
+        check('B1: the user\'s folder moved into one the thread made still asks before it goes, and a Reject keeps it',
+            existsSync(join(ws, 'old', 'legacy', 'notes.txt')) && deleteAsks(tidyId) === 1
+            && tidyAsk.request.displayReason?.en === 'This command deletes old (rm). A thread asks you before each command that deletes files it didn\'t create.', JSON.stringify(tidyAsk.request));
+        mkdirSync(join(ws, 'packages', 'web', 'src'), { recursive: true });
+        writeFileSync(join(ws, 'packages', 'web', 'src', 'main.js'), 'console.log(1);\n');
+        const webId = readId;
+        if (model.requests.some((r) => whoOf(r) === webId && r.system.includes(`in the DSH project "${PROJECT}"`) && r.tools.includes('working_directory'))) {
+            mark = model.requests.length;
+            await say(coord, call('project_thread_send', { thread: webId, text: call('working_directory', { cd: join(ws, 'packages', 'web') }) }));
+            await coordinatorSaw(mark, 'SAW-IDLE', 'the working directory idle note');
+            mark = model.requests.length;
+            await say(coord, call('project_thread_send', { thread: webId, text: call('bash', { command: 'rm -rf src', description: 'Remove the old sources' }) }));
+            const webAsk = await prompts.next('the Web delete prompt', (r) => r.toolName === 'bash' && r.reason?.startsWith('the command deletes src (rm)'));
+            await prompts.answer(webAsk, 'rejected');
+            await coordinatorSaw(mark, 'SAW-IDLE', 'the Web delete idle note');
+            check('M2: after working_directory, a relative delete is judged where it runs: it asks, and a Reject keeps it',
+                existsSync(join(ws, 'packages', 'web', 'src', 'main.js')) && deleteAsks(webId) === 1, `${deleteAsks(webId)}`);
+        } else {
+            console.log('  (this DSH has no working_directory tool: the M2 check is for DSH 0.2.1)');
+        }
     } finally {
         prompts.close();
         sink.close();

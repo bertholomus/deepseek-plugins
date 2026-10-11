@@ -32,8 +32,19 @@ export function changeRecord(seq, summary) {
         ...(f?.binary === true ? { binary: true } : {}),
         ...(f?.oversized === true ? { oversized: true } : {}),
         ...(f?.created === true ? { created: true } : {}),
+        ...(f?.created === true && identityOf(f?.identity) ? { identity: identityOf(f.identity) } : {}),
     }));
     return { turn: summary.turn, seq, added: count(summary.added), deleted: count(summary.deleted), total: Math.max(count(summary.total), files.length), files };
+}
+
+/**
+ * Which file a created file was when its turn was kept ({dev, ino, birth},
+ * deletes.js identityOf), so the delete check knows it is still the one
+ * the thread made; undefined for anything else.
+ */
+function identityOf(value) {
+    if (!isObject(value) || !Number.isSafeInteger(value.dev) || !Number.isSafeInteger(value.ino) || !Number.isFinite(value.birth)) return undefined;
+    return { dev: value.dev, ino: value.ino, birth: value.birth };
 }
 
 /**
@@ -55,7 +66,10 @@ function folded(a, b) {
     const byPath = new Map();
     for (const f of [...(Array.isArray(a.files) ? a.files : []), ...(Array.isArray(b.files) ? b.files : [])]) {
         const was = byPath.get(f?.path);
-        byPath.set(f?.path, was ? { ...was, added: count(was.added) + count(f.added), deleted: count(was.deleted) + count(f.deleted), ...(f?.created === true ? { created: true } : {}) } : f);
+        byPath.set(f?.path, was ? {
+            ...was, added: count(was.added) + count(f.added), deleted: count(was.deleted) + count(f.deleted), ...(f?.created === true ? { created: true } : {}),
+            ...(identityOf(f?.identity) ? { identity: f.identity } : {}),
+        } : f);
     }
     const files = [...byPath.values()].slice(0, MAX_FILES);
     const unlisted = (r) => Math.max(0, count(r.total) - (Array.isArray(r.files) ? r.files.length : 0));
