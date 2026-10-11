@@ -44,7 +44,8 @@
  *   until then: 'calendar/needs-approval'), and each toast says whose
  *   calendars it was put on, changed on or taken off (Google told
  *   sendUpdates=none); and a meeting there an agent deletes without asking
- *   (askBeforeEmails off);
+ *   (askBeforeEmails off); someone else's invitation there, whose
+ *   organizer's fields the dialog keeps as they are, and Show me as saved;
  * - a series with an occurrence changed on its own moved to Microsoft: the
  *   host refuses ('calendar/drops-changes'), Don't move it keeps it, Move
  *   anyway moves it without that occurrence;
@@ -1228,6 +1229,41 @@ try {
         const last = google.store.requests.filter((r) => r.method === 'DELETE').at(-1);
         check('with askBeforeEmails off, an agent deletes a meeting on a Google calendar, taking it off its guest\'s, without asking first',
             lunch?.calendarId === googleCalendar.id && !left && last?.query?.sendUpdates === 'none', JSON.stringify({ lunch: lunch?.calendarId, left, last }));
+    });
+
+    // 12b. Someone else's invitation: its organizer's fields can't be changed in the dialog; the user's own can.
+    await step('someone else\'s invitation: the organizer\'s fields read-only, Show me as the user\'s own', async () => {
+        const google = providers.google;
+        const day = addDays(today, 2);
+        google.store.insert('sam@example.com', {
+            summary: 'E2E Vendor review', description: 'Bring the plans.', location: 'Room 4', iCalUID: 'e2e-vendor-review@example.com',
+            start: { dateTime: `${day}T15:00:00`, timeZone: ZONE }, end: { dateTime: `${day}T16:00:00`, timeZone: ZONE },
+            organizer: { email: 'olga@example.com', displayName: 'Olga Example' },
+            attendees: [{ email: 'olga@example.com', organizer: true, responseStatus: 'accepted' }, { email: 'sam@example.com', responseStatus: 'needsAction' }],
+        });
+        await api('syncNow', { accountId: googleAccount?.id });
+        await waitFor(async () => (await events(day, day)).find((o) => o.title === 'E2E Vendor review'), 'the invitation', 15000);
+        await showDay(day);
+        await eventOnPage('E2E Vendor review').click();
+        await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+        await page.locator('[data-calendar-edit]').click();
+        const form = page.locator('[data-calendar-event-form="edit"]');
+        await form.waitFor({ state: 'visible' });
+        const locked = {};
+        for (const key of ['title', 'start-day', 'start-time', 'location', 'url', 'notes']) locked[key] = await form.locator(`[data-calendar-${key}]`).isDisabled();
+        const own = { busy: await form.locator('[data-calendar-busy]').isEnabled(), private: await form.locator('[data-calendar-private]').isEnabled() };
+        const note = (await form.locator('[data-calendar-invitation-note]').textContent()) ?? '';
+        await shot(page, 'invitation-dialog');
+        const patches = () => google.store.requests.filter((r) => r.method === 'PATCH').length;
+        const before = patches();
+        await form.locator('[data-calendar-busy]').selectOption('free');
+        await page.locator('[data-calendar-save]').click();
+        await dialogGone();
+        const now = (await events(day, day)).find((o) => o.title === 'E2E Vendor review');
+        check('someone else\'s invitation: title, time, place, link and notes can\'t be changed in the dialog, which says why; Show me as and Private can, and saving Free goes to Google',
+            Object.values(locked).every(Boolean) && own.busy && own.private && /its organizer sets its title, time, place, link and notes/.test(note)
+            && patches() === before + 1 && now?.busy === false && now.title === 'E2E Vendor review' && now.location === 'Room 4',
+            JSON.stringify({ locked, own, note, patches: patches() - before, now: now && { busy: now.busy, title: now.title, location: now.location } }));
     });
 
     // 13. A series with an occurrence changed on its own, moved to Microsoft, which would drop that occurrence: asked first.

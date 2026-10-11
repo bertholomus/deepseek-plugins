@@ -311,6 +311,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-pop-guests{display:flex;flex-direction:column;gap:3px;margin-top:4px}',
             '.dshcal-guest{display:flex;align-items:center;gap:7px;min-width:0;font-size:12.5px}',
             '.dshcal-guest>span:nth-child(2){flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshcal-fields{display:contents;margin:0;padding:0;border:0;min-width:0}',
             '.dshcal-people{list-style:none;margin:0;padding:4px;display:flex;flex-direction:column;gap:1px;max-height:244px;overflow-y:auto;border:1px solid var(--cal-line);border-radius:10px;background:var(--cal-fill);scrollbar-width:thin}',
             '.dshcal-people:focus-visible{outline:2px solid var(--cal-accent);outline-offset:2px}',
             '.dshcal-people>li{display:flex;align-items:center;flex-wrap:wrap;gap:2px 8px;box-sizing:border-box;min-height:28px;padding:3px 6px;font-size:12.5px}',
@@ -1831,8 +1832,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * none (nothing chosen, and no main calendar stands out), and the user
          * picks one.
          */
-        function writableCalendars(state) {
-            const list = (state?.calendars ?? EMPTY).filter((c) => !c.readOnly);
+        function writableCalendars(state, keep = EMPTY) {
+            const writable = (state?.calendars ?? EMPTY).filter((c) => !c.readOnly);
+            // A hidden calendar would hide what's saved to it: offered only as the event's own or the default,
+            // or when no shown calendar can be written.
+            const shown = writable.filter((c) => !c.hidden || keep.includes(c.id) || c.id === state?.defaultCalendar);
+            const list = shown.length > 0 ? shown : writable;
             const chosen = list.find((c) => c.id === state?.defaultCalendar);
             return { list, defaultId: chosen?.id ?? '' };
         }
@@ -1907,6 +1912,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return dot < 0 ? moved : { ...moved, id: `${eventId}.${before.id.slice(dot + 1)}` };
         }
 
+        /** What the user may change on someone else's invitation: their reminders, whether it shows them as busy, whether it's private (and the box to tell). */
+        const OWN_FIELDS = ['alarms', 'busy', 'private', 'notify'];
+
         /** Whether a change's answer is an occurrence the page can show and follow (one the host lost sight of is its id alone). */
         const placed = (o) => isObject(o) && typeof o.id === 'string' && (o.allDay === true ? isDay(o.startDay) : Number.isFinite(o.start));
 
@@ -1944,7 +1952,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * are wall clocks in the event's own zone.
          */
         function draftFrom({ occurrence, preset, state, zone, duplicate = false }) {
-            const { list, defaultId } = writableCalendars(state);
+            const { list, defaultId } = writableCalendars(state, occurrence && !duplicate ? [occurrence.calendarId] : EMPTY);
             if (occurrence) {
                 const o = occurrence;
                 const tz = o.allDay ? zone : (isZone(o.timeZone) || o.timeZone === 'UTC' ? o.timeZone : zone);
@@ -2260,7 +2268,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const alive = useAlive();
             const formRef = React.useRef(null);
             const weekStart = weekStartFrom(state?.prefs);
-            const { list: calendars } = writableCalendars(state);
+            const { list: calendars } = writableCalendars(state, editing ? [initial.calendarId] : EMPTY);
             const homeId = movedRef.current?.calendarId ?? (editing ? initial.calendarId : d.calendarId);
             // Who saving emails: a change is made in the calendar the event is in (a move to another one goes first, on its own).
             const home = store.calendar(homeId) ?? store.calendar(d.calendarId);
@@ -2279,7 +2287,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const reachHow = !editing || othersOf(initial.guests).length === 0 ? 'puts it on'
                 : (d.calendarId !== homeId && store.calendar(d.calendarId)?.kind !== 'google') || othersOf(d.guests).length === 0 ? 'removes it from' : 'changes it on';
             const reachHint = reaches ? `Unticked, Google still ${reachHow} the guests' Google calendars, without an email.` : '';
-            const set = (patch) => {
+            const set = (given) => {
+                // Someone else's invitation: its organizer's fields stay as they are; the user's own reminders, busy or free and privacy change.
+                const patch = invitation ? Object.fromEntries(Object.entries(given).filter(([k]) => OWN_FIELDS.includes(k))) : given;
+                if (Object.keys(patch).length === 0) return;
                 setD((current) => ({ ...current, ...patch }));
                 setErrors((current) => {
                     const next = { ...current };
@@ -2453,6 +2464,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         }
                     },
                 },
+                invitation ? h('p', { className: 'dshcal-hint', style: { margin: 0 }, 'data-calendar-invitation-note': '' },
+                    'Someone else\'s invitation: its organizer sets its title, time, place, link and notes. Your reminders, Show me as and Private are yours to change.') : null,
+                h('fieldset', { className: 'dshcal-fields', disabled: invitation, 'data-calendar-organizer-fields': '' },
                 h(Field, { id: 'dshcal-title', error: errors.title },
                     h('input', {
                         id: 'dshcal-title', className: 'dshcal-input dshcal-title-input', value: d.title, placeholder: 'Add a title', 'aria-label': 'Title', maxLength: 500,
@@ -2524,7 +2538,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         onChange: (event) => set({ url: event.target.value }),
                     })),
                 h(Field, { label: 'Notes', id: 'dshcal-notes' },
-                    h('textarea', { id: 'dshcal-notes', className: 'dshcal-textarea', value: d.description, rows: 3, 'data-calendar-notes': '', onChange: (event) => set({ description: event.target.value }) })),
+                    h('textarea', { id: 'dshcal-notes', className: 'dshcal-textarea', value: d.description, rows: 3, 'data-calendar-notes': '', onChange: (event) => set({ description: event.target.value }) }))),
                 h(RemindersField, { alarms: d.alarms, onChange: (alarms) => set({ alarms }) }),
                 h(GuestsField, {
                     guests: d.guests, onChange: (guests) => set({ guests }), readOnly: invitation,
@@ -2719,7 +2733,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         h('div', { className: 'dshcal-inline' },
                             isUrl(o.conference) ? h('a', { className: 'dshcal-btn dshcal-btn-primary dshcal-btn-sm', href: o.conference, target: '_blank', rel: 'noopener noreferrer', 'data-calendar-join': '' }, 'Join call') : null,
                             h('span', { className: 'dshcal-pop-sub', style: { overflowWrap: 'anywhere' } }, linkLabel(o.conference)))) : null,
-                    o.url ? h(DetailRow, { glyph: icon('IconLinkOutlineRegular') }, h('a', { className: 'dshcal-link', href: o.url, target: '_blank', rel: 'noopener noreferrer' }, linkLabel(o.url))) : null,
+                    o.url ? h(DetailRow, { glyph: icon('IconLinkOutlineRegular') }, isUrl(o.url)
+                        ? h('a', { className: 'dshcal-link', href: o.url.trim(), target: '_blank', rel: 'noopener noreferrer', 'data-calendar-url-link': '' }, linkLabel(o.url))
+                        : h('span', { style: { overflowWrap: 'anywhere' }, 'data-calendar-url-text': '' }, String(o.url))) : null,
                     o.description ? h(DetailRow, { glyph: h(NotesGlyph) }, h('div', { className: 'dshcal-pop-notes' }, h(Linked, { text: o.description }))) : null,
                     guests.length || o.organizer ? h(DetailRow, { glyph: icon('IconUsersOutlineRegular') },
                         guests.length ? h('div', null, plural(guests.length, 'guest'),

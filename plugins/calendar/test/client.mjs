@@ -474,6 +474,16 @@ test('a new event goes to the default calendar, or to one the user picks when th
     assert.deepEqual(plain(I.draftProblems(titled, 2)), { calendarId: 'Choose the calendar it goes to.' });
     assert.match(I.draftProblems(titled, 0).calendarId, /^There is no calendar that can be written/);
     assert.deepEqual(plain(I.draftProblems({ ...titled, calendarId: 'c-work' }, 2)), {});
+    // A hidden calendar isn't offered for a new event, unless it's the default, the event's own, or all there is.
+    const hidden = calendars.map((c) => (c.id === 'c-work' ? { ...c, hidden: true } : c));
+    assert.deepEqual(plain(I.writableCalendars({ calendars: hidden }).list.map((c) => c.id)), ['c-home']);
+    assert.deepEqual(plain(I.writableCalendars({ calendars: hidden, defaultCalendar: 'c-work' }).list.map((c) => c.id)), ['c-work', 'c-home']);
+    assert.deepEqual(plain(I.writableCalendars({ calendars: hidden }, ['c-work']).list.map((c) => c.id)), ['c-work', 'c-home']);
+    const allHidden = calendars.map((c) => ({ ...c, hidden: true }));
+    assert.deepEqual(plain(I.writableCalendars({ calendars: allHidden }).list.map((c) => c.id)), ['c-work', 'c-home']);
+    // Editing an event in a hidden calendar keeps that calendar in the choice.
+    const inHidden = I.draftFrom({ occurrence: { id: 'ev-1', calendarId: 'c-work', title: 'Plan', allDay: true, startDay: '2026-10-12', lastDay: '2026-10-12' }, state: { calendars: hidden }, zone: LA });
+    assert.equal(inHidden.calendarId, 'c-work');
 });
 
 test('after removing an account: DSH\'s access withdrawn, or the page to withdraw it on', () => {
