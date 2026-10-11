@@ -476,13 +476,13 @@ Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 
 _Its own section, kept by the "Calendar plugin" project thread; "Doing now" above stays the projects plugin's._
 
-Updated: 2026-10-11 07:37 PT by B (bertholomus)
+Updated: 2026-10-11 08:56 PT by B (bertholomus)
 Branch: the PR branch named at the top (PR #1), fast-forwarded from a local branch, never forced.
 
 The user's goal (2026-10-11, relayed from the project chat): "create a sane calendar plugin that agents and user can use - allows syncing apple, google, exchange, other popular calendar syncing.  works with our wallpaper and glass plugin".
 
 ### Doing now (calendar)
-- Nothing in flight. Round 3 of the review (/mnt/project-files/calendar/review/round-3.md for the host, round-3-window.md for the window) is fixed and pushed (below); a look at those fixes comes next.
+- Round 4's minors, on a local branch: E (an occurrence that starts a `RANGE=THISANDFUTURE` change, changed or deleted alone), F (a move asked again after 'half-moved'), G (a CalDAV server that keeps no tags), D's CalDAV part (a delete stops on someone taken off too), `notify` in the window's yes, and run.mjs's cleanup. Major C and D for Google and Microsoft are pushed (below) for round 4's re-check; the window's round 4 is still running.
 
 ### Done (calendar)
 - Host half: `ical.js` (RFC 5545, keeps lines it doesn't know), `recur.js` (RRULE expansion and its words), `zones.js` (IANA through Intl, Windows names for Graph), `expand.js` (series with moved and cancelled occurrences), `store.js` (`~/.dsh/calendar`, 700/600, follows DSH_HOME), `manager.js` (accounts, sync every `syncMinutes`, every change to the server first, scope one/following/all, moves, import/export, search, free time), `http.js` (Authorization dropped when a redirect leaves the site; no secret or query in an error), `oauth.js` (loopback with PKCE, or a pasted address), `remote.js` (the window's endpoints, `/api/dsh-plugin-calendar/<method>`).
@@ -505,17 +505,21 @@ The user's goal (2026-10-11, relayed from the project chat): "create a sane cale
   - The window's yes (`approved`) counts only for the change it was asked about (same event, scope and fields), once, for 30 minutes (`lib/asked.js`, used by `remote.js`): the review's one-time token, without a token to carry.
   - A Google meeting whose guests may change it (`guestsMayChange`): a busy or private change reaches its organizer and guests, so it asks; other fields of anyone's invitation are refused. One occurrence under `RANGE=THISANDFUTURE` starts from that change. A move that copied but couldn't take the event out says so (`half-moved`; tools: "Done in part", don't move it again). The askBeforeEmails-off texts name Google's reaches; a series move names cancelled occurrences that come back; an unplaced CalDAV meeting deleted with notify names its organizer; the README's promises match.
 - Round 3 of the review, window (round-3-window.md), all of it but part of m13 (Undo, week numbers, hiding weekends): B1, the question before an email or a reach names everyone and what each gets ("Email an update to 7 guests?", Don't save / Save and email), and Send repeats the very change it asked about with `approved`, asking again (five calls at most) when the host names anyone new; M1, a chat call that didn't work says what it didn't do and why, in the plugin's own row ("Moved in part" for a half-done move); M2, cards for moves and for who was emailed or reached; M3, drag to move or resize (Week, Day, Month; Alt and an arrow key) and search (`/`); M4, the Google steps keep the sign-in past a week; M5, a Google meeting says that unticked still reaches its guests' calendars; m1-m12 (the side column folds below about 1100 px, Week opens at the earlier of 7:30 and the first event, motion stops with `wp-still`, a tint for small text on glass, a line when a refresh fails, invitations keep their organizer's fields, links only when they are web addresses, keyboard focus, the pane's details beside it, one note rule each, polling `version()` and reading state only when it moved). A half-done move shows a notice until closed and isn't made again; popovers take the focus. Host side: a window change that would email or reach anyone is refused until it names them (`needs-approval`), a failed tool change is an error (c09e7c3), and a moved event is found by the uid its new server gave it (Graph's).
-- Tests: 177 unit tests with Radicale and 32 for the window's helpers (`test/client.mjs`), in `npm test` (294 in all) through `test/calendar.test.js`; on DSH 0.2.0-rc.2 and 0.2.1-alpha.2, `npm run test:e2e:calendar` 47/47 and `npm run test:e2e:calendar-ui` 41/41 (needs Playwright and Chromium).
+- Round 4 of the review, host (round-4.md):
+  - Major C: a change or delete of a whole series, or from an occurrence on, is worked out on everyone on the parts it reaches (`manager.recordOf`, `partsReached`): the series and its occurrences changed on their own (for "this and following", those from the occurrence on, and any range reaching past it); a move counts them too. Before such a write, Microsoft reads the series' occurrences in the synced window (`occurrencesNow`) and Google the series' changed occurrences (`seriesNow`, by uid), even with the series' etag held. The manager hands the sources `planned` and, for a change from an occurrence on, `from`.
+  - D (Google and Microsoft): where a source reads the event before writing, it stops on anyone added or taken off since the change was worked out (`otherPeople`), so a change never puts back a guest another app removed, or says they were told.
+- Window prefs (m13's rest but Undo): Show weekends and Show week numbers in the settings menu (`hideWeekends`, `weekNumbers` in `setPrefs` and `state().prefs`); Week and Month without Saturday and Sunday, ISO week numbers in Month, the small month and beside the title.
+- Tests: 181 unit tests with Radicale and 35 for the window's helpers (`test/client.mjs`), in `npm test` (317 in all with Radicale) through `test/calendar.test.js`; on DSH 0.2.0-rc.2 and 0.2.1-alpha.2, `npm run test:e2e:calendar` 47/47 and `npm run test:e2e:calendar-ui` 46/46 (needs Playwright and Chromium).
 
 ### Next steps (calendar)
-1. A look at round 3's fixes, host and window. The calendar isn't loaded into the live DSH before B1-B3 and N1-N3 are confirmed fixed, and then only with the user's OK.
+1. Round 4's re-check of Major C, and the window's round 4. The calendar isn't loaded into the live DSH before the reviews say the host side meets the bar, and then only with the user's OK.
 2. iCalendar ranges in changes: a split ("this and following") from inside a `RANGE=THISANDFUTURE` change (reading them, and a change to one occurrence under one, are done).
 3. Native moves within one account (Google `events.move`, WebDAV MOVE), so a moved meeting isn't a new one for its guests.
 4. Real accounts only when the user wants them, and they give what each needs: Google, their own OAuth client (Desktop app) id and secret; Microsoft, their own Entra app's client id (redirect `http://localhost` under Mobile and desktop applications); iCloud, Fastmail and Yahoo, app passwords. One iCloud meeting made on an iPhone would confirm N1 on a real server.
 5. Calendars only on the Mac (EventKit) need Mac work, through the split thread.
 6. Microsoft: status, link, conference, extra and skipped dates aren't written; only the first reminder.
 7. Google's sign-in page could say so when the user unticks a permission it asked for.
-8. Window prefs to hide weekends and show week numbers: `setPrefs` keeps only the keys it knows, so the host needs them first.
+8. Undo in the window (m13): held, since undoing a change that emailed guests emails them again, so it needs the same question as Send.
 
 ### Open questions (calendar)
 - Which accounts the user wants connected first.
@@ -531,6 +535,7 @@ The user's goal (2026-10-11, relayed from the project chat): "create a sane cale
 - UTC and floating times show on the user's clock; only a named zone keeps its own.
 - Google's `sendUpdates: none` still puts a meeting on its guests' Google calendars, changes it there and takes it off: that is contact, counted as `reaches`, not as nobody.
 - The ToolExecution object itself is the same in the `tools/pre-execute` gate and in the tool's `execute(args, exec)` (dsh-tools' prepareExecution): `ShownPlans` keys the prompt's recipient list by it in a WeakMap. A provider can leave `callId` empty or repeat it.
-- Graph gives no etag the plugin holds for a series it keeps only as occurrences, and Google none for an occurrence found by its start: a change there reads the event first and compares its people (`newPeople`), since no 412 would catch a guest added meanwhile.
+- Graph gives no etag the plugin holds for a series it keeps only as occurrences, and Google none for an occurrence found by its start: a change there reads the event first and compares its people both ways (`otherPeople`), since no 412 would catch a guest added meanwhile.
+- A change to one occurrence doesn't change the series' etag, on Google or Microsoft: a whole-series write reads the occurrences too (Google by uid, Microsoft's instances in the synced window), held etag or not. Compare like with like: the plan's records and the server's read must cover the same occurrences, or a change can stop again and again.
 - The window's yes counts only for the same change (`asked.js` keys it by event, scope and fields, `notify` and `approved` aside): a Send must repeat the refused call's patch exactly, or the host asks again.
 - A CalDAV server names the user by several addresses (mailto, `urn:uuid:`, the principal's URL or path); compare them with `addressKey`, never by mailto alone.
