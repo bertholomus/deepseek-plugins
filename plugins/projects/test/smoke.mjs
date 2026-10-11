@@ -21,6 +21,7 @@ import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS, lineDel
 import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, cardSummary, threadMarkdown, outsideMessage, replyMessage, NUDGE } from '../lib/prompts.js';
 import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
 import { grantsIn, asksFor } from '../lib/grants.js';
+import { deletesOf, codeDeletesOf, isFree } from '../lib/deletes.js';
 
 const CATALOG = {
     default: { provider: 'deepseek', model: 'deepseek-v4' },
@@ -5212,7 +5213,7 @@ test('changes: a thread counts its own edits (and its subagents\'), never what o
     assert.deepEqual(plain(of(t1)), { added: 4, deleted: 1, files: 2, turns: 1, last: { seq: seq1, turn: 1 }, reviewable: true });
     assert.equal(of(t2), null, 'the thread that only waited changed nothing, whatever DSH says of its folder');
     assert.deepEqual(plain(host.store?.thread?.('dsh-plugins', 't1')?.changes ?? JSON.parse(readFileSync(join(dir, 'projects.json'), 'utf8')).projects['dsh-plugins'].threads.t1.changes), [
-        { turn: 1, seq: seq1, added: 4, deleted: 1, total: 2, files: [{ path: 'a.md', added: 3, deleted: 0 }, { path: 'b.js', added: 1, deleted: 1 }] },
+        { turn: 1, seq: seq1, added: 4, deleted: 1, total: 2, files: [{ path: 'a.md', added: 3, deleted: 0, created: true }, { path: 'b.js', added: 1, deleted: 1 }] },
     ]);
     // Another turn edits a.md again (str_replace_editor), and t1's subagent creates c.txt: lines add up, a.md counts once.
     await turn(t1, 2, () => {
@@ -6271,4 +6272,113 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     const broken = { ...t1, get session() { throw new Error('gone'); } };
     assert.deepEqual(await gate(broken, 'bash', post), { kind: 'allow' });
     assert.match(log(), / error send-check gone\n/);
+});
+
+test('rule 6, held for deletes: a thread\'s command that deletes files it didn\'t create waits for the user, every time; its own files, the temp folder and mktemp\'s are free; a coordinator\'s, a subagent\'s and one that can\'t ask are refused', async () => {
+    const work = mkdtempSync(join(tmpdir(), 'projects-work-'));
+    mkdirSync(join(work, 'build'));
+    writeFileSync(join(work, 'build', 'app.o'), 'object\n');
+    writeFileSync(join(work, 'build.sh'), '#!/bin/sh\nrm -rf dist && tsc\n');
+    writeFileSync(join(work, 'old-scratch.txt'), 'x\n');
+    const { host, dir } = setup({ projects: [{ name: 'DSH Plugins', goal: 'Ship good DSH plugins', workspacePath: work }] }, undefined, { presets: true, gateway: true });
+    const policies = new Map();
+    host.services.approval = { effectivePolicy: (session) => policies.get(session.id) ?? 'ask' };
+    await tick();
+    const coord = coordinatorOf(host);
+    const manager = host.provided.get('dshPluginProjectsRemote').manager;
+    const log = () => readFileSync(join(dir, 'projects.log'), 'utf8');
+    const gate = (agent, name, args, own = { kind: 'allow' }) => host.waterfall('tools/pre-execute', { name, arguments: args, agent, callId: `pre-${++toolCalls}` }, () => Promise.resolve(own));
+    await coord.ctx.call('project_thread_start', { ask: 'Clean up this folder.', title: 'Clean', brief: 'List what looks like junk, with sizes, and hand back needs_decision with the list.' });
+    const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Clean');
+    const allowed = { kind: 'allow' };
+
+    // Behaviour review 4, S10 r2: rm -rf build/ asks, saying what it deletes; the same command again asks again.
+    const asked = {
+        kind: 'ask',
+        reason: 'the command deletes build/ (rm); if the user doesn\'t allow it, hand back with status needs_decision',
+        displayReason: { en: 'This command deletes build/ (rm). A thread asks you before each command that deletes files it didn\'t create.' },
+    };
+    assert.deepEqual(await gate(t1, 'bash', { command: 'rm -rf build/' }), asked);
+    assert.deepEqual(await gate(t1, 'bash', { command: 'rm -rf build/' }), asked);
+    assert.equal((await gate(t1, 'bash', { command: 'git clean -fdx' })).displayReason.en, 'This command deletes untracked and ignored files (git clean). A thread asks you before each command that deletes files it didn\'t create.');
+    assert.equal((await gate(t1, 'bash', { command: 'find . -name "*.o" -delete' })).reason, 'the command deletes what it finds in . (find -delete); if the user doesn\'t allow it, hand back with status needs_decision');
+    assert.equal((await gate(t1, 'bash', { command: 'rm -f .git/index.lock' })).kind, 'ask', 'the workspace\'s .git is never free');
+    // Quoting and here-documents don't hide an rm, nor code, PowerShell or a cleaning script.
+    for (const command of ["'r''m' -rf build", 'r\\m -rf build', "bash -c 'rm -rf build'", "sh <<'EOF'\nrm -rf build\nEOF", 'cat <<EOF | sh\nrm -rf build\nEOF', 'echo "rm -rf build" | bash',
+        'sudo rm -rf build', 'eval "rm -rf build"', 'ls build | xargs rm', "python3 -c \"import shutil; shutil.rmtree('build')\"", "node -e \"require('fs').rmSync('build', { recursive: true })\"", 'npm run clean', 'make clean']) {
+        assert.equal((await gate(t1, 'bash', { command })).kind, 'ask', command);
+    }
+    assert.equal((await gate(t1, 'pwsh', { command: 'Remove-Item -Recurse -Force build' })).reason, 'the command deletes build (Remove-Item); if the user doesn\'t allow it, hand back with status needs_decision');
+    assert.equal((await gate(t1, 'run_code', { code: "from pathlib import Path\nPath('build/app.o').unlink()" })).kind, 'ask');
+    // Free: the OS temp folder outside the workspace, what mktemp made, what isn't there, and commands that delete nothing.
+    for (const command of ['rm -rf /tmp/x', 'd=$(mktemp -d) && rm -rf "$d"', 'rm -f "$(mktemp)"', 'rm -rf build/gone.o', 'git clean -n', 'git rm --cached build/app.o', 'echo rm -rf build', './build.sh', 'npm run build']) {
+        assert.deepEqual(await gate(t1, 'bash', { command }), allowed, command);
+    }
+    // A file the thread created with DSH's file tools is free, this turn and from its change records; so is a folder of only those.
+    const made = join(work, 'scratch', 'probe.txt');
+    mkdirSync(join(work, 'scratch'));
+    writeFileSync(made, 'x\n');
+    const wrote = (session, callId, path) => {
+        host.emit('session/event', session, { seq: 1, type: 'tool/call', data: { turn: 1, callId, name: 'write', arguments: { file_path: path, content: 'x\n' } } });
+        host.emit('session/event', session, { seq: 2, type: 'tool/result', data: { turn: 1, message: { toolCallId: callId }, meta: { operation: 'create', path, diffs: [] } } });
+    };
+    wrote(t1.session, 'w-1', made);
+    assert.deepEqual(await gate(t1, 'bash', { command: `rm ${made}` }), allowed);
+    assert.deepEqual(await gate(t1, 'bash', { command: 'rm -rf scratch' }), allowed);
+    assert.equal((await gate(t1, 'bash', { command: 'rm old-scratch.txt' })).kind, 'ask');
+    manager.store.putThread('dsh-plugins', 't1', { changes: [{ turn: 1, seq: 9, added: 1, deleted: 0, total: 1, files: [{ path: 'old-scratch.txt', added: 1, deleted: 0, created: true }] }] });
+    assert.deepEqual(await gate(t1, 'bash', { command: 'rm old-scratch.txt' }), allowed);
+    // A script it created is read for what it deletes; one that was there runs as it is (above).
+    const own = join(work, 'tidy.sh');
+    writeFileSync(own, '#!/bin/sh\nrm -rf build\n');
+    wrote(t1.session, 'w-2', own);
+    assert.equal((await gate(t1, 'bash', { command: 'sh tidy.sh' })).reason, 'the command runs tidy.sh, which deletes build (rm); if the user doesn\'t allow it, hand back with status needs_decision');
+    // DSH's own refusals and prompts stand.
+    assert.deepEqual(await gate(t1, 'bash', { command: 'rm -rf build' }, { kind: 'deny', reason: 'sandbox' }), { kind: 'deny', reason: 'sandbox' });
+    assert.deepEqual(await gate(t1, 'bash', { command: 'rm -rf build' }, { kind: 'ask', reason: 'wider' }), { kind: 'ask', reason: 'wider' });
+
+    // A thread whose approvals never ask can't delete, and hears how the user can let it ask.
+    policies.set(t1.id, 'never');
+    assert.deepEqual(await gate(t1, 'bash', { command: 'rm -rf build/' }), {
+        kind: 'deny',
+        reason: "Not run: the command deletes build/ (rm). A thread asks the user before each command that deletes files it didn't create, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would delete; the user can put this thread on Workspace Write so it can ask. Don't delete it another way.",
+    });
+    assert.deepEqual(await gate(t1, 'bash', { command: `rm ${made}` }), allowed, 'its own files stay free');
+    policies.delete(t1.id);
+    // The coordinator is refused, and nobody is asked; the temp folder is free for it too.
+    assert.deepEqual(await gate(coord, 'bash', { command: 'rm -rf build/' }), {
+        kind: 'deny',
+        reason: "Not run: the command deletes build/ (rm). You don't delete files yourself: start a thread with the user's words in `ask`; it asks the user before each command that deletes files it didn't create.",
+    });
+    assert.deepEqual(await gate(coord, 'bash', { command: 'rm -rf /tmp/x' }), allowed);
+    // A thread's subagent is refused what its thread didn't create, and may delete what it did; any other chat runs as DSH decides.
+    const sub = host.wake('sub-1');
+    sub.session.header = { origin: 'subagent', parentSession: t1.id };
+    assert.match((await gate(sub, 'bash', { command: 'rm -rf build' })).reason, /^Not run: the command deletes build \(rm\)\. A subagent doesn't delete files its thread didn't create: say in your result what you would delete, and the thread you work for asks the user first\.$/);
+    assert.deepEqual(await gate(sub, 'bash', { command: `rm ${made}` }), allowed);
+    assert.deepEqual(await gate(host.wake('plain-1'), 'bash', { command: 'rm -rf build' }), allowed);
+    // A send asks first, as before.
+    assert.equal((await gate(t1, 'bash', { command: 'git push origin main' })).reason, 'the command pushes to origin (git push)');
+
+    // The log says who and which program, never the command or a path.
+    assert.match(log(), / delete-ask dsh-plugins\/t1 rm\n/);
+    assert.match(log(), / delete-ask dsh-plugins\/t1 git-clean\n/);
+    assert.match(log(), / delete-refused dsh-plugins\/t1 rm never-asks\n/);
+    assert.match(log(), / delete-refused dsh-plugins\/coordinator rm\n/);
+    assert.match(log(), / delete-refused dsh-plugins\/t1 subagent rm\n/);
+    assert.doesNotMatch(log(), /build|scratch|tidy|\/tmp\/x/);
+    // A check that throws lets the call run, logged.
+    const broken = { ...t1, get session() { throw new Error('gone'); } };
+    assert.deepEqual(await gate(broken, 'bash', { command: 'rm -rf build' }), allowed);
+    assert.match(log(), / error delete-check gone\n/);
+
+    // The detector alone: what each names, and where.
+    assert.deepEqual(deletesOf('rm -rf build dist', { cwd: '/w' }).map((d) => d.full), ['/w/build', '/w/dist']);
+    assert.deepEqual(deletesOf('cd /tmp/x && rm -rf y', { cwd: '/w' }).map((d) => d.full), ['/tmp/x/y']);
+    assert.deepEqual(deletesOf('rm -rf $DIR build/*.o', { cwd: '/w' }).map((d) => [d.full, d.glob]), [[null, undefined], [null, '/w/build/']]);
+    assert.deepEqual(codeDeletesOf("import os\nos.remove(path)", { cwd: '/w' }).map((d) => d.path), ['a path the code works out']);
+    assert.equal(isFree({ program: 'rm', path: '/tmp', full: '/tmp' }, { work: ['/w'] }), false, 'the temp folder itself is not');
+    assert.equal(isFree({ program: 'rm', path: '/tmp/w', full: '/tmp/w' }, { work: ['/tmp/w/project'] }), false, 'nor one that holds the workspace');
+    assert.equal(isFree({ program: 'rm', path: '/tmp/foo-*', full: null, glob: '/tmp/foo-' }, { work: ['/w'] }), true);
+    assert.equal(isFree({ program: 'rm', path: '/tmp/*', full: null, glob: '/tmp/' }, { work: ['/w'] }), false);
 });

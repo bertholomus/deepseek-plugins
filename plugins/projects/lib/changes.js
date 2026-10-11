@@ -19,8 +19,9 @@ const count = (n) => (Number.isSafeInteger(n) && n >= 0 ? n : 0);
 /**
  * One turn's summary as the store keeps it.
  * @param {number} seq - the `workspace/changes` event that announced it.
- * @param {object} summary - DSH's summary: {turn, files: [{path, display, added, deleted, binary?, oversized?}], total, added, deleted}.
- * @returns {{turn, seq, added, deleted, total, files: Array<{path, added, deleted, binary?, oversized?}>}|null}
+ * @param {object} summary - DSH's summary: {turn, files: [{path, display, added, deleted, binary?, oversized?}], total, added, deleted};
+ *   or the plugin's own (editSummary), whose files say which the thread `created`, for the delete check.
+ * @returns {{turn, seq, added, deleted, total, files: Array<{path, added, deleted, binary?, oversized?, created?}>}|null}
  */
 export function changeRecord(seq, summary) {
     if (!Number.isSafeInteger(seq) || summary === null || typeof summary !== 'object' || !Number.isSafeInteger(summary.turn)) return null;
@@ -30,6 +31,7 @@ export function changeRecord(seq, summary) {
         deleted: count(f?.deleted),
         ...(f?.binary === true ? { binary: true } : {}),
         ...(f?.oversized === true ? { oversized: true } : {}),
+        ...(f?.created === true ? { created: true } : {}),
     }));
     return { turn: summary.turn, seq, added: count(summary.added), deleted: count(summary.deleted), total: Math.max(count(summary.total), files.length), files };
 }
@@ -53,7 +55,7 @@ function folded(a, b) {
     const byPath = new Map();
     for (const f of [...(Array.isArray(a.files) ? a.files : []), ...(Array.isArray(b.files) ? b.files : [])]) {
         const was = byPath.get(f?.path);
-        byPath.set(f?.path, was ? { ...was, added: count(was.added) + count(f.added), deleted: count(was.deleted) + count(f.deleted) } : f);
+        byPath.set(f?.path, was ? { ...was, added: count(was.added) + count(f.added), deleted: count(was.deleted) + count(f.deleted), ...(f?.created === true ? { created: true } : {}) } : f);
     }
     const files = [...byPath.values()].slice(0, MAX_FILES);
     const unlisted = (r) => Math.max(0, count(r.total) - (Array.isArray(r.files) ? r.files.length : 0));
@@ -235,9 +237,10 @@ export function editsIn(events, { hunks = false } = {}) {
 /**
  * Edits as one summary in the shape of DSH's per-turn summary, which
  * `changeRecord` keeps: each file once, its lines summed over its edits,
- * a path inside the folder written relative to it.
+ * a path inside the folder written relative to it, and `created` when an
+ * edit created it.
  * @param {string} [folder] - the thread's folder.
- * @returns {{turn, files: Array<{path, added, deleted}>, total, added, deleted}|null} null when nothing changed.
+ * @returns {{turn, files: Array<{path, added, deleted, created?}>, total, added, deleted}|null} null when nothing changed.
  */
 export function editSummary(turn, edits, folder = '') {
     const byPath = new Map();
@@ -245,7 +248,7 @@ export function editSummary(turn, edits, folder = '') {
         if (typeof e?.path !== 'string' || e.path === '') continue;
         const path = placeIn(folder, e.path);
         const was = byPath.get(path) ?? { path, added: 0, deleted: 0 };
-        byPath.set(path, { path, added: was.added + count(e.added), deleted: was.deleted + count(e.deleted) });
+        byPath.set(path, { path, added: was.added + count(e.added), deleted: was.deleted + count(e.deleted), ...(was.created || e.created ? { created: true } : {}) });
     }
     if (byPath.size === 0) return null;
     const files = [...byPath.values()];
