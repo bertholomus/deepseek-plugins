@@ -24,7 +24,8 @@
  *
  * Who the user was told of goes to the tool with the call (ShownPlans): the
  * event can change on its server while the prompt waits, and a change that
- * would by then email or reach someone else stops instead.
+ * would by then email or reach someone else stops instead. A call the gate
+ * kept no list for is held to nobody.
  *
  * @module dsh-plugin-calendar/policy
  */
@@ -225,27 +226,28 @@ function cantAsk(mail) {
 }
 
 /**
- * Who the gate told the user a call's change emails or reaches, kept by the
- * call's id until its tool runs (take()), which then stops the change
- * rather than email or reach anyone else. Kept six hours at most.
+ * Who the gate told the user a call's change emails or reaches, kept with
+ * the call itself (the ToolExecution DSH hands both the gate and the tool)
+ * until its tool runs (take()), which then stops the change rather than
+ * email or reach anyone else. Kept as long as the call is, however long a
+ * prompt waits, whatever id the provider gave the call.
  */
 export class ShownPlans {
-    constructor(now = () => Date.now()) {
-        this.now = now;
-        this.plans = new Map();
+    constructor() {
+        this.plans = new WeakMap();
     }
 
-    set(callId, mail) {
-        if (typeof callId !== 'string' || callId === '') return;
-        for (const [id, plan] of this.plans) if (this.now() - plan.at > 6 * 3_600_000) this.plans.delete(id);
-        this.plans.set(callId, { people: peopleOf(mail), at: this.now() });
+    /** Keep who `mail` names for this call; none for a call whose change reaches no one, or that the gate showed nobody for. */
+    set(exec, mail) {
+        if (exec !== null && typeof exec === 'object') this.plans.set(exec, peopleOf(mail));
     }
 
-    /** The people shown for this call, once; undefined when the gate showed nothing for it. */
-    take(callId) {
-        const plan = this.plans.get(callId);
-        this.plans.delete(callId);
-        return plan?.people;
+    /** The people shown for this call, once; undefined when the gate kept nothing for it. */
+    take(exec) {
+        if (exec === null || typeof exec !== 'object') return undefined;
+        const people = this.plans.get(exec);
+        this.plans.delete(exec);
+        return people;
     }
 }
 
@@ -259,7 +261,11 @@ export function changeGate({ presets, approval = () => undefined, manager, mode,
     return async (exec, next) => {
         if (!CHANGE_TOOLS.has(exec?.name)) return next();
         const downstream = await next();
-        if (downstream?.kind !== 'allow') return downstream;
+        if (downstream?.kind !== 'allow') {
+            // Another gate's question names nobody this change reaches: allowed, it reaches no one.
+            if (downstream?.kind === 'ask') shown?.set(exec, undefined);
+            return downstream;
+        }
         const session = exec.agent?.session;
         const access = accessOf(presets(), session);
         let decision = decide(mode(), access);
@@ -272,8 +278,8 @@ export function changeGate({ presets, approval = () => undefined, manager, mode,
         }
         if (decision === 'ask' && !canAsk(approval(), session)) decision = { deny: cantAsk(mail) };
         log(`policy ${exec.name} access=${access}${mail?.to?.length > 0 ? ` mail=${mail.to.length}` : ''}${mail?.reaches?.length > 0 ? ` reach=${mail.reaches.length}` : ''} ${typeof decision === 'string' ? decision : 'deny'}`);
-        // The tool holds the change to who this said it reaches.
-        if (typeof decision === 'string' && mail !== undefined) shown?.set(exec.callId, mail);
+        // The tool holds the change to who this said it reaches (nobody, when it couldn't tell).
+        if (typeof decision === 'string') shown?.set(exec, mail);
         if (decision === 'allow') return { kind: 'allow' };
         if (decision === 'ask') {
             const text = describeChange(manager, exec.name, exec.arguments, mail);

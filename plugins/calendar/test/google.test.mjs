@@ -488,7 +488,7 @@ test('a full sync, then only what changed', async (t) => {
         hangoutLink: 'https://meet.google.com/abc-defg-hij', transparency: 'transparent', visibility: 'private',
         reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 10 }, { method: 'email', minutes: 60 }] },
     });
-    const holiday = store.insert(cal, { summary: 'Holiday', start: { date: '2026-10-13' }, end: { date: '2026-10-14' } });
+    const holiday = store.insert(cal, { summary: 'Holiday', start: { date: '2026-10-13' }, end: { date: '2026-10-14' }, guestsCanModify: true });
     store.insert(cal, { summary: 'Desk', eventType: 'workingLocation', start: { date: '2026-10-14' }, end: { date: '2026-10-15' } });
 
     const first = await source.sync(calendar, undefined);
@@ -504,6 +504,8 @@ test('a full sync, then only what changed', async (t) => {
         busy: false, privacy: 'private', organizer: { email: store.user.email, self: true }, alarms: [10],
         conference: 'https://meet.google.com/abc-defg-hij', created: standup.created, updated: standup.updated, sequence: 0,
     });
+    // An event whose guests may change it says so: a guest's change to it is made for everyone on it.
+    assert.equal(titled(first.items, 'Holiday').events[0].guestsMayChange, true);
     assert.ok(first.state.syncToken);
     const list = requestsOf(store, 'GET', '/events')[0].query;
     assert.equal(list.singleEvents, 'false');
@@ -1008,6 +1010,40 @@ test('a change with no etag held reads the event first and sends If-Match; a cha
         (e) => e instanceof SourceError && e.code === 'conflict' && e.status === 412);
     ctx.env.request = plain;
     assert.deepEqual([store.get(cal, gym.id).location, store.get(cal, gym.id).status], ['Gym hall', 'confirmed']);
+});
+
+test('an occurrence found by its start, or a series found from its occurrence, with someone added at Google since: nothing is written', async (t) => {
+    const ctx = await signedIn(t);
+    const { store, source, calendar, cal } = ctx;
+    const standup = store.insert(cal, {
+        summary: 'Standup', start: at('2026-10-05T09:30:00'), end: at('2026-10-05T09:45:00'), recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=10'],
+        attendees: [{ email: 'ann@example.com' }],
+    });
+    store.patch(cal, `${standup.id}_20261026T163000Z`, { summary: 'Standup (late)', start: at('2026-10-26T10:00:00'), end: at('2026-10-26T10:15:00') });
+    const { items } = await source.sync(calendar, undefined);
+    const master = items.find((i) => i.remoteId === standup.id);
+    const late = items.find((i) => i.remoteId === `${standup.id}_20261026T163000Z`);
+    const conflict = (e) => e instanceof SourceError && e.code === 'conflict';
+    const writes = () => store.requests.filter((r) => r.method === 'PATCH' || r.method === 'DELETE');
+
+    // Bob joins the series at Google. One occurrence is found with events.instances, as Google has it now: it names
+    // Bob, whom the change wasn't worked out with and Google would put the change before. Nothing is written.
+    store.patch(cal, standup.id, { attendees: [{ email: 'ann@example.com' }, { email: 'bob@example.com' }] });
+    store.requests.length = 0;
+    const monday = { item: master, record: master.events[0], occurrence: wall('2026-10-19T09:30:00') };
+    await assert.rejects(source.update(calendar, monday, { start: wall('2026-10-19T10:00:00'), end: wall('2026-10-19T10:15:00') }, 'one'), conflict);
+    await assert.rejects(source.remove(calendar, monday, 'one'), conflict);
+    // The whole series through a changed occurrence (the plugin holds no etag of the series'): the same.
+    await assert.rejects(source.update(calendar, { item: late, record: late.events[0] }, { title: 'Daily' }, 'all'), conflict);
+    await assert.rejects(source.remove(calendar, { item: late, record: late.events[0] }, 'all'), conflict);
+    assert.equal(writes().length, 0);
+    assert.equal(store.get(cal, standup.id).summary, 'Standup');
+
+    // Worked out with Bob on it, the occurrence moves.
+    const bob = { ...master.events[0], attendees: [...master.events[0].attendees, { email: 'bob@example.com' }] };
+    const [moved] = await source.update(calendar, { ...monday, planned: bob }, { start: wall('2026-10-19T10:00:00'), end: wall('2026-10-19T10:15:00') }, 'one');
+    assert.deepEqual(moved.events[0].start, wall('2026-10-19T10:00:00'));
+    assert.deepEqual(writes().map((r) => r.method), ['PATCH']);
 });
 
 test('respond: the account\'s own answer, the rest of the guest list untouched', async (t) => {

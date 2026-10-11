@@ -65,6 +65,7 @@ import { isDay, isZone, normalLocal, toInstant, toLocal } from './zones.js';
  * @property {boolean} [thisAndFuture] - on a changed occurrence: it changes the later occurrences too (above).
  * @property {string} [seriesRemoteId] - instances mode: the series' remote id.
  * @property {string} [conference] - a meeting link.
+ * @property {boolean} [guestsMayChange] - Google: its guests may change it (guestsCanModify), so a guest's change is made for everyone on it.
  * @property {string[]} [categories]
  * @property {string} [created] - ISO time.
  * @property {string} [updated] - ISO time.
@@ -179,7 +180,7 @@ export function addressKey(value) {
 export const RECORD_FIELDS = [
     'uid', 'remoteId', 'title', 'description', 'location', 'url', 'start', 'end', 'allDay', 'status', 'busy', 'privacy',
     'organizer', 'attendees', 'alarms', 'rrule', 'rdates', 'exdates', 'recurrenceId', 'thisAndFuture', 'seriesRemoteId', 'conference',
-    'categories', 'created', 'updated', 'sequence',
+    'guestsMayChange', 'categories', 'created', 'updated', 'sequence',
 ];
 
 /** A record without empty fields, so stored records compare equal when they mean the same. */

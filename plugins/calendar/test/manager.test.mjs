@@ -496,18 +496,29 @@ test('a subscribed feed is read only, follows its ETag, survives a restart, and 
  * ('ics': iCalendar text, put and remove) or Google/Microsoft-like
  * ('events': create, update, remove, respond). Every call is noted.
  */
+/**
+ * A source for one account, in memory: `calls` keeps what it was asked to
+ * do. calls.fail: errors its next changes throw, one each; calls.syncItems:
+ * items its next sync brings (a change made on the server).
+ */
 function standIn(m, account, calendar, style) {
     const calls = [];
     let n = 0;
+    const failing = () => {
+        if (calls.fail?.length) throw calls.fail.shift();
+    };
+    const sync = async (_calendar, state) => ({ reset: false, items: calls.syncItems?.splice(0) ?? [], removed: [], state: state ?? {} });
     const source = style === 'ics' ? {
         async put(_calendar, item, raw, uid) {
             calls.push({ op: 'put', raw, item: item?.remoteId });
+            failing();
             return { remoteId: item?.remoteId ?? `${calendar.remoteId}${uid}.ics`, etag: `"e${++n}"` };
         },
         async remove(_calendar, item, opts = {}) {
             calls.push({ op: 'remove', item: item?.remoteId, ...opts });
+            failing();
         },
-        async sync(_calendar, state) { return { reset: false, items: [], removed: [], state: state ?? {} }; },
+        sync,
     } : {
         async create(_calendar, record) {
             calls.push({ op: 'create', record });
@@ -516,18 +527,20 @@ function standIn(m, account, calendar, style) {
             return [{ remoteId: uid, events: [{ ...kept, uid, organizer: { email: account.email, self: true } }] }];
         },
         async update(_calendar, target, patch, scope) {
-            calls.push({ op: 'update', patch, scope });
+            calls.push({ op: 'update', patch, scope, planned: target.planned });
+            failing();
             return [];
         },
         async remove(_calendar, target, scope) {
-            calls.push({ op: 'remove', notify: target.notify === true, scope });
+            calls.push({ op: 'remove', notify: target.notify === true, scope, planned: target.planned });
+            failing();
             return { removed: [target.item.remoteId], items: [] };
         },
         async respond(_calendar, target, status, scope) {
             calls.push({ op: 'respond', status, scope });
             return [];
         },
-        async sync(_calendar, state) { return { reset: false, items: [], removed: [], state: state ?? {} }; },
+        sync,
     };
     m.store.accounts[account.id] = { calendarsAt: NOW, ...account };
     m.store.calendars[calendar.id] = { readOnly: false, mode: 'masters', color: '#4f7cff', ...calendar, accountId: account.id };
@@ -1022,7 +1035,9 @@ test('CalDAV: the user organizes a meeting by any address the server names them 
         assert.equal(unplaced.canRespond, true);
         await assert.rejects(m.updateEvent(unplaced.id, { title: 'Standup!' }),
             refusedFor('needs-notify', /\(its organizer may be you under another address, and then the server emails its guests itself\)/));
-        await assert.rejects(m.deleteEvent(unplaced.id), refusedFor('needs-notify', /a cancellation to ann@example\.com and bob@example\.com/));
+        // Taken out, it is cancelled for its guests, or, if it is someone else's after all, declined to its organizer: both are named.
+        await assert.rejects(m.deleteEvent(unplaced.id), refusedFor('needs-notify',
+            /^This would email a cancellation or a decline to ann@example\.com, bob@example\.com and urn:uuid:77 \(its organizer may be you under another address, and then the server emails its guests; or someone else, who then gets your decline\)/));
         // Answering goes to its organizer, as an invitation's does.
         assert.deepEqual((await m.respond(unplaced.id, 'tentative')).emailed, { what: 'the answer', to: ['urn:uuid:77'] });
     } finally {
@@ -1104,7 +1119,9 @@ test('Google: guests are put on or taken off their calendars without email; that
         const gate = (presets, policy) => changeGate({ presets: () => presets, approval: () => ({ effectivePolicy: () => policy }), manager: m, mode: () => 'preset', shown, log: () => {} });
         const allow = async () => ({ kind: 'allow' });
         const dinner = { calendar_id: 'cal-g', title: 'Dinner', start: '2026-10-16T19:00', guests: ['ann@example.com'] };
-        const asked = await gate(workspace, 'ask')({ callId: 'c1', name: 'calendar_create_event', arguments: dinner, agent: { session: {} } }, allow);
+        // DSH hands the gate and the tool the same call object.
+        const c1 = { callId: 'c1', name: 'calendar_create_event', arguments: dinner, agent: { session: {} } };
+        const asked = await gate(workspace, 'ask')(c1, allow);
         assert.equal(asked.kind, 'ask');
         assert.match(asked.displayReason.en, /^Add “Dinner” \(2026-10-16T19:00\) to Me, and put it on the calendars of ann@example\.com without emailing them\?$/);
         const refused = await gate(full, 'never')({ callId: 'c2', name: 'calendar_create_event', arguments: dinner, agent: { session: {} } }, allow);
@@ -1114,19 +1131,20 @@ test('Google: guests are put on or taken off their calendars without email; that
         assert.match(gone.reason, /^This would take it off the calendars of ann@example\.com/);
         // Who the prompt named goes to the tool, which says what it did.
         const tools = Object.fromEntries(calendarTools(m, { shown }).map((t) => [t.name, t]));
-        const made = await tools.calendar_create_event.execute(dinner, { callId: 'c1' });
+        const made = await tools.calendar_create_event.execute(dinner, c1);
         assert.match(made.text, /\nPut on the calendars of ann@example\.com, without emailing anyone\.$/);
         assert.deepEqual(made.view.reached, { how: 'add', to: ['ann@example.com'] });
         // Meanwhile a guest was added elsewhere: the prompt named Ann alone, so the change stops.
-        const renamed = await gate(workspace, 'ask')({ callId: 'c4', name: 'calendar_update_event', arguments: { id: lunch.id, title: 'Lunch at 1', notify_guests: true }, agent: { session: {} } }, allow);
+        const c4 = { callId: 'c4', name: 'calendar_update_event', arguments: { id: lunch.id, title: 'Lunch at 1', notify_guests: true }, agent: { session: {} } };
+        const renamed = await gate(workspace, 'ask')(c4, allow);
         assert.match(renamed.displayReason.en, /, and email an update to ann@example\.com\?$/);
         const held = Object.values(m.store.itemsOf('cal-g')).find((i) => i.events[0].title === 'Lunch');
         held.events[0].attendees = [...held.events[0].attendees, { email: 'cy@example.com', status: 'needs-action', role: 'required' }];
         m.changed();
-        await assert.rejects(tools.calendar_update_event.execute({ id: lunch.id, title: 'Lunch at 1', notify_guests: true }, { callId: 'c4' }),
+        await assert.rejects(tools.calendar_update_event.execute(c4.arguments, c4),
             /^Error: Not done: The event changed since this change was looked at .*: it would now also email an update to cy@example\.com, so nothing was done\. Look at it again first\. Read the event again/);
-        // A call the gate showed no one for reaches no one: it stops rather than reach Ann.
-        await assert.rejects(tools.calendar_update_event.execute({ id: lunch.id, title: 'Lunch at 2' }, { callId: 'never-asked' }),
+        // A call the gate kept no one for (another call with the same id, or none) reaches no one: it stops rather than reach Ann.
+        await assert.rejects(tools.calendar_update_event.execute({ id: lunch.id, title: 'Lunch at 2' }, { callId: 'c4' }),
             /^Error: Not done: The event changed since this change was looked at .*: it would now also change it on the calendars of ann@example\.com and cy@example\.com/);
     } finally {
         m.dispose();
@@ -1245,8 +1263,10 @@ test('the calendar list tells agents when ask-before-emails is off, and when the
     try {
         await m.start();
         const quiet = Object.fromEntries(calendarTools(m, { askEmails: false }).map((t) => [t.name, t]));
-        assert.match((await quiet.calendar_list_calendars.execute({})).text, /\n- "Ask before emails" is off in the calendar plugin's settings: a change with notify_guests: true emails guests without asking the user\./);
-        assert.match(quiet.calendar_create_event.description, /the user has turned off being asked before emails, so a change with notify_guests: true sends them at once/);
+        assert.match((await quiet.calendar_list_calendars.execute({})).text,
+            /\n- "Ask before emails" is off in the calendar plugin's settings: a change with notify_guests: true emails guests, and a change to a Google event with guests shows on their calendars, without asking the user\./);
+        assert.match(quiet.calendar_create_event.description,
+            /the user has turned off being asked before emails, so a change with notify_guests: true sends them at once, and a change to a Google event with guests shows on their calendars without asking/);
         const asking = Object.fromEntries(calendarTools(m).map((t) => [t.name, t]));
         assert.doesNotMatch((await asking.calendar_list_calendars.execute({})).text, /Notes:/);
         assert.match(asking.calendar_create_event.description, /the user is asked before anything is emailed/);
@@ -1256,6 +1276,239 @@ test('the calendar list tells agents when ask-before-emails is off, and when the
         await m.start();
         const after = Object.fromEntries(calendarTools(m).map((t) => [t.name, t]));
         assert.match((await after.calendar_list_calendars.execute({})).text, /\n- The calendar plugin's list of accounts couldn't be read at this start, so it was set aside \(kept, not deleted\)/);
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
+test('a series kept as its occurrences (Microsoft): a change to all of it is worked out on everyone on any of them; someone new on the server stops it, naming them', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        const { SourceError } = await import('../lib/sources/index.js');
+        const ms = standIn(m, { id: 'ms', kind: 'microsoft', name: 'Outlook', email: 'me@outlook.com' }, { id: 'cal-ms', remoteId: 'AAA', name: 'Calendar', mode: 'instances' }, 'events');
+        const person = (email) => ({ email, status: 'needs-action', role: 'required' });
+        const occurrence = (day, people, extra = {}) => ({
+            remoteId: `S1-${day}`, etag: `"${day}"`,
+            events: [{
+                uid: 'sync-series', title: 'Team sync', start: { local: `${day}T09:30:00`, tz: ZONE }, end: { local: `${day}T10:00:00`, tz: ZONE }, allDay: false,
+                recurrenceId: { local: `${day}T09:30:00`, tz: ZONE }, seriesRemoteId: 'S1', organizer: { email: 'me@outlook.com', self: true },
+                attendees: [{ email: 'me@outlook.com', self: true, status: 'accepted', role: 'chair' }, ...people.map(person)], ...extra,
+            }],
+        });
+        const items = m.store.itemsOf('cal-ms');
+        for (const item of [occurrence('2026-10-12', ['ann@example.com', 'bob@example.com']), occurrence('2026-10-14', ['ann@example.com'])]) items[item.remoteId] = item;
+        m.changed();
+        const wednesday = () => week(m).find((o) => o.startLocal === '2026-10-14T09:30');
+
+        // Bob was taken off Wednesday's alone. The series still has him, so a change to all of it emails him too.
+        await assert.rejects(m.updateEvent(wednesday().id, { title: 'Weekly sync' }, 'all'),
+            refusedFor('needs-notify', /^This would email an update to ann@example\.com and bob@example\.com \(Microsoft emails/));
+        const told = ['ann@example.com', 'bob@example.com'];
+        const renamed = await m.updateEvent(wednesday().id, { title: 'Weekly sync', notify: true }, 'all', 'window', { approved: told, confirm: true });
+        assert.deepEqual(renamed.emailed, { what: 'an update', to: told });
+        // The source holds the series as Microsoft has it to everyone the change was worked out with.
+        assert.deepEqual(ms.at(-1).planned.attendees.map((p) => p.email), ['me@outlook.com', 'ann@example.com', 'bob@example.com']);
+
+        // Cy was added to the series at Microsoft: the source, reading it just before, stops the change (a conflict).
+        // The sync brings Cy in, and the change worked out again names him: nothing was done, and the window asks again.
+        const conflict = () => new SourceError('conflict', 'Saving the event on Microsoft: on the server it names people it didn\'t when the change was worked out, so nothing was changed.');
+        ms.fail = [conflict()];
+        ms.syncItems = [occurrence('2026-10-12', ['ann@example.com', 'bob@example.com', 'cy@example.com']), occurrence('2026-10-14', ['ann@example.com'])];
+        const writes = ms.length;
+        await assert.rejects(m.updateEvent(wednesday().id, { location: 'Room 4', notify: true }, 'all', 'window', { approved: told, confirm: true }), (error) => {
+            assert.equal(error.code, 'changed');
+            assert.match(error.message, /it would now also email an update to cy@example\.com, so nothing was done/);
+            assert.deepEqual(error.people, ['ann@example.com', 'bob@example.com', 'cy@example.com']);
+            return true;
+        });
+        assert.equal(ms.length, writes + 1, 'one try, stopped by the source');
+        // So does a delete, and an agent's change held to what its prompt named.
+        ms.fail = [conflict()];
+        ms.syncItems = [occurrence('2026-10-12', ['ann@example.com', 'bob@example.com', 'cy@example.com', 'dee@example.com'])];
+        await assert.rejects(m.deleteEvent(wednesday().id, 'all', 'agent', { notify: true, approved: [...told, 'cy@example.com'] }),
+            refusedFor('changed', /it would now also email a cancellation to dee@example\.com/));
+        // A change the server's copy agrees with goes.
+        await m.deleteEvent(wednesday().id, 'all', 'agent', { notify: true, approved: [...told, 'cy@example.com', 'dee@example.com'] });
+        assert.equal(ms.at(-1).op, 'remove');
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
+test('one occurrence that a "this and following" change reaches is changed from that change, not from the series', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        const dav = standIn(m, { id: 'dav', kind: 'caldav', name: 'Work', url: 'https://dav.example.org/', username: 'me', email: 'me@example.org' },
+            { id: 'cal-dav', remoteId: 'https://dav.example.org/cal/', name: 'Work', scheduling: false }, 'ics');
+        await holdIcs(m, 'cal-dav', 'https://dav.example.org/cal/plan.ics', ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//test//EN',
+            'BEGIN:VEVENT', 'UID:plan', 'DTSTAMP:20261001T000000Z', 'DTSTART;TZID=Europe/Berlin:20261012T100000', 'DURATION:PT1H',
+            'RRULE:FREQ=WEEKLY;COUNT=6', 'SUMMARY:Planning', 'ATTENDEE;PARTSTAT=ACCEPTED:mailto:ann@example.com', 'END:VEVENT',
+            'BEGIN:VEVENT', 'UID:plan', 'DTSTAMP:20261001T000000Z', 'RECURRENCE-ID;RANGE=THISANDFUTURE;TZID=Europe/Berlin:20261019T100000',
+            'DTSTART;TZID=Europe/Berlin:20261019T140000', 'DURATION:PT1H', 'SUMMARY:Planning (afternoons)',
+            'ATTENDEE;PARTSTAT=ACCEPTED:mailto:ann@example.com', 'ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:cy@example.com', 'END:VEVENT',
+            'END:VCALENDAR', ''].join('\r\n'));
+        const later = week(m, '2026-10-26T00:00', '2026-11-02T00:00').find((o) => o.title.startsWith('Planning'));
+        assert.deepEqual([later.title, later.startLocal], ['Planning (afternoons)', '2026-10-26T14:00']);
+        // Its record is the range's: Cy is on it.
+        assert.deepEqual(m.planChange('update', { id: later.id, input: { location: 'Room 2' }, scope: 'one' }).mail, { to: [], what: '', forced: false });
+        await m.updateEvent(later.id, { location: 'Room 2' }, 'one');
+        const written = unfold(dav.at(-1).raw);
+        const own = written.split('BEGIN:VEVENT').find((part) => /RECURRENCE-ID;TZID=Europe\/Berlin:20261026T100000/.test(part));
+        assert.ok(own, 'an occurrence of its own');
+        assert.match(own, /SUMMARY:Planning \(afternoons\)/);
+        assert.match(own, /DTSTART;TZID=Europe\/Berlin:20261026T140000/);
+        assert.match(own, /LOCATION:Room 2/);
+        assert.match(own, /mailto:cy@example\.com/);
+        assert.doesNotMatch(own, /RANGE=THISANDFUTURE/);
+        const after = week(m, '2026-10-26T00:00', '2026-11-02T00:00').find((o) => o.title.startsWith('Planning'));
+        assert.deepEqual([after.title, after.startLocal, after.location], ['Planning (afternoons)', '2026-10-26T14:00', 'Room 2']);
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
+test('a move whose second step fails says it was copied, and what to do, rather than "nothing was done"', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        const { SourceError } = await import('../lib/sources/index.js');
+        const personal = m.state().calendars.find((c) => c.name === 'Personal');
+        const dav = standIn(m, { id: 'dav', kind: 'caldav', name: 'Work', url: 'https://dav.example.org/', username: 'me', email: 'me@example.org' },
+            { id: 'cal-dav', remoteId: 'https://dav.example.org/cal/', name: 'Work', scheduling: false }, 'ics');
+        const lunch = await m.createEvent({ calendarId: 'cal-dav', title: 'Lunch', start: '2026-10-14T12:00' });
+        dav.fail = [new SourceError('forbidden', 'Deleting the event: the server doesn\'t allow this.')];
+        await assert.rejects(m.updateEvent(lunch.id, { calendarId: personal.id }), (error) => {
+            assert.equal(error.code, 'half-moved');
+            assert.equal(error.message, 'It was copied to Personal, but not taken out of Work, which stopped: Deleting the event: the server doesn\'t allow this. '
+                + 'Delete it from Work to finish the move; moving it again would make a second copy.');
+            return true;
+        });
+        assert.deepEqual(week(m).filter((o) => o.title === 'Lunch').map((o) => o.calendarId).sort(), ['cal-dav', personal.id].sort());
+        // An agent is told it is done in part, and not to move it again.
+        const tools = Object.fromEntries(calendarTools(m).map((t) => [t.name, t]));
+        const copy = week(m).find((o) => o.title === 'Lunch' && o.calendarId === personal.id);
+        dav.fail = [new SourceError('forbidden', 'Deleting the event: the server doesn\'t allow this.')];
+        const work = week(m).find((o) => o.title === 'Lunch' && o.calendarId === 'cal-dav');
+        await assert.rejects(tools.calendar_update_event.execute({ id: work.id, calendar_id: personal.id }),
+            /^Error: Done in part: It was copied to Personal, .* Don't move it again: tell the user, and delete it from the calendar it came from only if they say so\.$/);
+        assert.ok(copy);
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
+test('a series moved into Google: an occurrence cancelled on its own comes back, and the move says so', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        standIn(m, { id: 'dav', kind: 'caldav', name: 'Work', url: 'https://dav.example.org/', username: 'me', email: 'me@example.org' },
+            { id: 'cal-dav', remoteId: 'https://dav.example.org/cal/', name: 'Work', scheduling: false }, 'ics');
+        standIn(m, { id: 'g', kind: 'google', name: 'Google', email: 'me@gmail.com' }, { id: 'cal-g', remoteId: 'primary', name: 'Me' }, 'events');
+        await holdIcs(m, 'cal-dav', 'https://dav.example.org/cal/run.ics', ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//test//EN',
+            'BEGIN:VEVENT', 'UID:run', 'DTSTAMP:20261001T000000Z', 'DTSTART;TZID=Europe/Berlin:20261012T070000', 'DURATION:PT1H',
+            'RRULE:FREQ=DAILY;COUNT=5', 'SUMMARY:Run', 'END:VEVENT',
+            'BEGIN:VEVENT', 'UID:run', 'DTSTAMP:20261001T000000Z', 'RECURRENCE-ID;TZID=Europe/Berlin:20261013T070000',
+            'DTSTART;TZID=Europe/Berlin:20261013T070000', 'DURATION:PT1H', 'SUMMARY:Run', 'STATUS:CANCELLED', 'END:VEVENT',
+            'BEGIN:VEVENT', 'UID:run', 'DTSTAMP:20261001T000000Z', 'RECURRENCE-ID;TZID=Europe/Berlin:20261014T070000',
+            'DTSTART;TZID=Europe/Berlin:20261014T080000', 'DURATION:PT1H', 'SUMMARY:Run (late)', 'END:VEVENT',
+            'END:VCALENDAR', ''].join('\r\n'));
+        const run = week(m).find((o) => o.title === 'Run');
+        await assert.rejects(m.updateEvent(run.id, { calendarId: 'cal-g' }, 'all'),
+            refusedFor('drops-changes', /^Moving this series to Me would drop 1 occurrence changed on its own and the cancellation of 1 occurrence \(it comes back\): Google takes/));
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
+test('the window\'s yes counts only for the change it was asked about, once, and only for the people it named', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        const { WindowChanges } = await import('../lib/asked.js');
+        const calls = standIn(m, { id: 'dav', kind: 'caldav', name: 'iCloud', url: 'https://caldav.icloud.com/', username: 'me@icloud.com', email: 'me@icloud.com', addresses: ['me@icloud.com'] },
+            { id: 'cal-dav', remoteId: 'https://p52-caldav.icloud.com/1/calendars/home/', name: 'Home', scheduling: true }, 'ics');
+        const told = ['ann@example.com', 'bob@example.com'];
+        let clock = NOW;
+        const window = new WindowChanges(m, { now: () => clock });
+        // A new meeting that invites its guests: asked about, then made with the yes.
+        const input = { calendarId: 'cal-dav', title: 'Planning', start: '2026-10-15T10:00', attendees: told, notify: true };
+        await assert.rejects(window.create(input), (error) => error.code === 'needs-approval' && error.people.join() === told.join());
+        assert.equal(calls.length, 0);
+        const meeting = await window.create({ ...input, approved: told });
+        assert.deepEqual(meeting.emailed, { what: 'invitations', to: told });
+        const writes = () => calls.filter((c) => c.op === 'put' || c.op === 'remove').length;
+
+        // Asked about moving it to 11:00. A yes sent with another time, or for another scope, counts for nothing: asked again.
+        await assert.rejects(window.update(meeting.id, { start: '2026-10-15T11:00' }, 'all'), refusedFor('needs-notify', /an update to ann@example\.com and bob@example\.com/));
+        const before = writes();
+        await assert.rejects(window.update(meeting.id, { start: '2026-10-15T12:00', notify: true, approved: told }, 'all'), refusedFor('needs-approval', /ann@example\.com and bob@example\.com/));
+        assert.equal(writes(), before);
+        // The yes for the change asked about: made, once.
+        await assert.rejects(window.update(meeting.id, { start: '2026-10-15T11:00' }, 'all'), refusedFor('needs-notify', /ann@example\.com/));
+        const moved = await window.update(meeting.id, { start: '2026-10-15T11:00', notify: true, approved: told }, 'all');
+        assert.deepEqual([moved.startLocal, moved.emailed], ['2026-10-15T11:00', { what: 'an update', to: told }]);
+        await assert.rejects(window.update(meeting.id, { title: 'Planning!', notify: true, approved: told }, 'all'), refusedFor('needs-approval', /ann@example\.com/));
+
+        // A yes names only who its question did: Cy, added since, isn't covered by naming him in it.
+        await assert.rejects(window.delete(meeting.id, 'all', false), refusedFor('needs-notify', /a cancellation to ann@example\.com and bob@example\.com/));
+        const held = Object.values(m.store.itemsOf('cal-dav')).find((i) => i.events[0].title === 'Planning');
+        held.events[0].attendees.push({ email: 'cy@example.com', status: 'needs-action', role: 'required' });
+        m.changed();
+        await assert.rejects(window.delete(meeting.id, 'all', true, [...told, 'cy@example.com']), refusedFor('changed', /also email a cancellation to cy@example\.com/));
+        // Asked again (the refusal named all three), and then half an hour passes: the yes counts for nothing.
+        clock += 31 * 60_000;
+        await assert.rejects(window.delete(meeting.id, 'all', true, [...told, 'cy@example.com']), (error) => error.code === 'needs-approval' && error.people.length === 3);
+        // Answered in time, it goes.
+        await window.delete(meeting.id, 'all', true, [...told, 'cy@example.com']);
+        assert.equal(week(m).filter((o) => o.title === 'Planning').length, 0);
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
+test('someone else\'s Google meeting that lets its guests change it: a change to it reaches everyone on it, so it is asked about', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        const google = standIn(m, { id: 'g', kind: 'google', name: 'Google', email: 'me@gmail.com' }, { id: 'cal-g', remoteId: 'primary', name: 'Me' }, 'events');
+        const invitation = (id, extra = {}) => ({
+            remoteId: id, etag: `"${id}"`,
+            events: [{
+                uid: `${id}@google.com`, title: 'Offsite', start: { local: '2026-10-15T09:00:00', tz: ZONE }, end: { local: '2026-10-15T12:00:00', tz: ZONE }, allDay: false,
+                organizer: { email: 'boss@example.com' },
+                attendees: [{ email: 'boss@example.com', status: 'accepted', role: 'chair' }, { email: 'me@gmail.com', self: true, status: 'needs-action', role: 'required' },
+                    { email: 'ann@example.com', status: 'accepted', role: 'required' }],
+                ...extra,
+            }],
+        });
+        const items = m.store.itemsOf('cal-g');
+        for (const item of [invitation('open', { guestsMayChange: true }), invitation('closed', { title: 'Review' })]) items[item.remoteId] = item;
+        m.changed();
+        const open = week(m).find((o) => o.title === 'Offsite');
+        const closed = week(m).find((o) => o.title === 'Review');
+        assert.deepEqual(m.planChange('update', { id: open.id, input: { busy: false } }).mail, { to: [], what: '', forced: false, reaches: ['boss@example.com', 'ann@example.com'], reach: 'change' });
+        await assert.rejects(m.updateEvent(open.id, { privacy: 'private' }, 'all', 'window', { confirm: true }),
+            refusedFor('needs-approval', /^This would change it on the calendars of boss@example\.com and ann@example\.com without emailing them/));
+        assert.equal(google.length, 0);
+        // The user's own reminders stay theirs; so does a meeting whose guests can't change it.
+        assert.equal((await m.updateEvent(open.id, { alarms: [30] }, 'all', 'window', { confirm: true })).reached, undefined);
+        assert.equal((await m.updateEvent(closed.id, { busy: false }, 'all', 'window', { confirm: true })).reached, undefined);
+        const changed = await m.updateEvent(open.id, { busy: false }, 'all', 'window', { approved: ['boss@example.com', 'ann@example.com'], confirm: true });
+        assert.deepEqual(changed.reached, { how: 'change', to: ['boss@example.com', 'ann@example.com'] });
     } finally {
         m.dispose();
         done();

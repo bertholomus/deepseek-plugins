@@ -17,7 +17,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { appendFileSync, chmodSync, existsSync } from 'node:fs';
-import { occurrences } from './expand.js';
+import { occurrences, rangeRecord } from './expand.js';
 import { request, safeHost } from './http.js';
 import { editIcs, newUid, readIcs } from './ical.js';
 import { addressKey, cleanRecord, instantOf, isEmailAddress, sameTime } from './model.js';
@@ -1280,6 +1280,12 @@ export class CalendarManager {
             return (role === 'guest' || role === 'unplaced') && mailer !== 'never' ? { to: [organizer], what: 'the answer', forced: true, why: 'an answer is sent to the organizer' } : nobody;
         }
         if (role === 'guest') {
+            // Someone else's Google meeting that lets its guests change it: Google makes a change to it for everyone
+            // on it (the user's own reminders aside), so it reaches its organizer and the other guests.
+            if (kind === 'update' && record?.guestsMayChange === true && Object.keys(patch).some((k) => k !== 'alarms' && k !== 'notify' && patch[k] !== undefined)) {
+                const reaches = peopleOf({ reaches: [organizer, ...this.guestsOf(record, account)].filter((p) => typeof p === 'string' && p !== '') });
+                if (reaches.length > 0) return { ...nobody, reaches, reach: 'change' };
+            }
             // Someone else's invitation: only taking it out of the calendar can tell its organizer (a decline).
             if (kind !== 'delete' || mailer === 'never' || account.kind === 'microsoft') return nobody;
             // A CalDAV server can be told not to decline a whole invitation, but declines one occurrence taken out.
@@ -1337,6 +1343,13 @@ export class CalendarManager {
             : account.kind !== 'microsoft' ? 'this calendar\'s server emails a meeting\'s guests itself'
             : kind === 'create' ? 'Microsoft invites the guests as soon as an event with them is saved'
             : kind === 'delete' ? 'Microsoft emails a meeting\'s guests when it is cancelled' : 'Microsoft emails a meeting\'s guests about each change to it';
+        if (role === 'unplaced' && kind === 'delete' && organizer && !people.some((p) => p.toLowerCase() === organizer.toLowerCase())) {
+            // Someone else's after all, it is declined: told, the server sends its organizer the answer.
+            return {
+                to: [...people, organizer], what: 'a cancellation or a decline', forced: true,
+                why: 'its organizer may be you under another address, and then the server emails its guests; or someone else, who then gets your decline',
+            };
+        }
         return { to: people, what, forced: true, why };
     }
 
@@ -1502,9 +1515,12 @@ export class CalendarManager {
         const kind = this.store.accounts[target.accountId]?.kind;
         if (kind !== 'google' && kind !== 'microsoft') return undefined;
         const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-        const changed = at.records.filter((r) => r !== at.master && r.recurrenceId).length;
+        const own = at.records.filter((r) => r !== at.master && r.recurrenceId);
+        const cancelled = own.filter((r) => r.status === 'cancelled').length;
+        const changed = own.length - cancelled;
         const parts = [];
         if (changed > 0) parts.push(count(changed, 'occurrence changed on its own', 'occurrences changed on their own'));
+        if (cancelled > 0) parts.push(`the cancellation of ${count(cancelled, 'occurrence', 'occurrences')} (${cancelled === 1 ? 'it comes' : 'they come'} back)`);
         if (kind === 'microsoft') {
             const skipped = at.master.exdates?.length ?? 0;
             const extra = at.master.rdates?.length ?? 0;
@@ -1516,14 +1532,15 @@ export class CalendarManager {
         return `Moving this series to ${this.calendarName(target)} would drop ${list}: ${KIND_NAMES[kind]} takes a new repeating event as its rule alone.`;
     }
 
-    /** A delete: the event as it is, the scope, and who it emails or reaches. */
+    /** A delete: the event as it is, the scope, the record it is worked out on, and who it emails or reaches. */
     planDelete(id, scope = 'all', { notify = false } = {}) {
         const at = this.locate(id);
         this.writable(at.calendar);
         const which = this.scopeOf(at, scope);
-        const mail = this.mailOf({ kind: 'delete', calendar: at.calendar, before: this.recordOf(at, which), scope: which, notify });
+        const before = this.recordOf(at, which);
+        const mail = this.mailOf({ kind: 'delete', calendar: at.calendar, before, scope: which, notify });
         this.checkMail(mail, notify);
-        return { at, which, notify, mail };
+        return { at, which, notify, before, mail };
     }
 
     /** An answer to an invitation: the event as it is, the scope, and who hears it. */
@@ -1539,9 +1556,17 @@ export class CalendarManager {
         return { at, which, mail: this.mailOf({ kind: 'respond', calendar: at.calendar, before }) };
     }
 
-    /** The record a change with this scope starts from: the occurrence for 'one', else the series' (or the event's). */
+    /**
+     * The record a change with this scope is worked out on: the occurrence
+     * for 'one', else the series' (or the event's). A series kept as its
+     * occurrences (Microsoft) has no record of its own here: a change to all
+     * of it is worked out on the occurrence it was asked on, with everyone
+     * on any of them as its guests, since it reaches them all.
+     */
     recordOf(at, which) {
-        return which === 'one' ? this.occurrenceRecord(at) : (at.master ?? at.override);
+        if (which === 'one') return this.occurrenceRecord(at);
+        if (at.master || at.records.length < 2) return at.master ?? at.override;
+        return { ...at.override, attendees: everyoneOn([at.override, ...at.records]) };
     }
 
     /** A record as an update's guest list leaves it (the record itself when the update doesn't give one). */
@@ -1667,10 +1692,13 @@ export class CalendarManager {
 
     /**
      * Run a change; when the server says the event changed meanwhile, sync
-     * and try once more. With retry false (a deletion, a new time: decided
-     * on the event as it was), sync and say so instead.
+     * and try once more. With retry false (a deletion, a new time, a change
+     * that emails or reaches people: decided on the event as it was), sync
+     * and say so instead; `recheck` first works the change out again on the
+     * event as the sync left it, so one that would now email or reach
+     * someone the user wasn't told of says who ('changed').
      */
-    async changing(calendarId, run, { retry = true } = {}) {
+    async changing(calendarId, run, { retry = true, recheck } = {}) {
         return this.locked(`sync:${calendarId}`, async () => {
             try {
                 return await run();
@@ -1682,7 +1710,10 @@ export class CalendarManager {
         }).then(async (result) => {
             if (result !== CONFLICT) return result;
             await this.syncCalendar(calendarId);
-            if (!retry) throw new CalendarError('The event changed on its server meanwhile (in another app, or by someone else), so nothing was done. Look at it again first.');
+            if (!retry) {
+                recheck?.();
+                throw new CalendarError('The event changed on its server meanwhile (in another app, or by someone else), so nothing was done. Look at it again first.');
+            }
             return this.locked(`sync:${calendarId}`, async () => {
                 try {
                     return await run();
@@ -1820,7 +1851,7 @@ export class CalendarManager {
                 if (style === 'ics') {
                     await this.putIcs(calendar, at.item, [{ uid: at.uid, recurrenceId: changed.recurrenceId, record: { ...changed, sequence: (current.sequence ?? 0) + 1 } }], at.uid);
                 } else {
-                    this.takeItems(calendar, await source.update({ ...calendar }, { item: at.overrideItem ?? at.item, record: at.override ?? at.master, occurrence: at.recurrenceId }, { ...diffOf(current, changed), ...tell }, 'one'));
+                    this.takeItems(calendar, await source.update({ ...calendar }, { item: at.overrideItem ?? at.item, record: at.override ?? at.master, occurrence: at.recurrenceId, planned: now.before }, { ...diffOf(current, changed), ...tell }, 'one'));
                 }
                 return;
             }
@@ -1856,11 +1887,11 @@ export class CalendarManager {
                 }
                 await this.putIcs(calendar, at.item, edits, at.uid);
             } else {
-                this.takeItems(calendar, await source.update({ ...calendar }, { item: at.item, record: master }, { ...diffOf(master, changed), ...tell }, 'all'));
+                this.takeItems(calendar, await source.update({ ...calendar }, { item: at.item, record: master, planned: now.before }, { ...diffOf(master, changed), ...tell }, 'all'));
             }
             // The occurrence that was asked about, where it is now.
             after = { uid: at.uid, near: at.series ? at.originalStart + delta : startOfTime(changed.start, zone) };
-        }, { retry });
+        }, { retry, recheck: () => this.checkKnown(this.planUpdate(id, patchIn, scope).mail, known) });
         this.log(`update ${first.calendar.id} ${first.eventId} scope=${which} by=${by}${mailLog(mail)}`);
         let view;
         try {
@@ -1890,11 +1921,17 @@ export class CalendarManager {
         return s;
     }
 
-    /** The record an occurrence of a series stands for: its changed record, or the series' at that start. */
+    /**
+     * The record an occurrence of a series stands for: its changed record;
+     * else, where a "this and following" change reaches it, that change at
+     * its place (rangeRecord); else the series' at that start.
+     */
     occurrenceRecord(at) {
         if (at.override) return at.override;
-        const master = at.master;
         const zone = this.zone();
+        const ranged = rangeRecord(at.records, at.recurrenceId, zone);
+        if (ranged !== undefined) return ranged;
+        const master = at.master;
         const record = structuredClone(master);
         delete record.rrule;
         delete record.rdates;
@@ -2038,20 +2075,30 @@ export class CalendarManager {
                 return copy;
             });
         };
+        const recheck = () => this.checkKnown(this.planMove(id, calendarId, { notify, dropChanges }).mail, known);
         if (toStyle === 'ics') {
             await this.changing(target.id, () => {
                 const copies = copiesNow();
                 return this.putIcs(target, null, copies.map((r) => ({ uid, recurrenceId: r.recurrenceId, record: r })), uid);
-            }, { retry: false });
+            }, { retry: false, recheck });
         } else {
             await this.changing(target.id, async () => {
                 const copies = copiesNow();
                 const copy = copies.find((r) => !r.recurrenceId) ?? copies[0];
                 this.takeItems(target, await to.create({ ...target }, { ...copy, ...(mail.invites ? { notify: true } : {}) }));
-            }, { retry: false });
+            }, { retry: false, recheck });
         }
         // Out of here, with the cancellation the move said it sends (none when it sends none).
-        await this.deleteEvent(at.master ? at.eventId : id, 'all', by, { notify: mail.cancels === true, approved: known });
+        try {
+            await this.deleteEvent(at.master ? at.eventId : id, 'all', by, { notify: mail.cancels === true, approved: known });
+        } catch (error) {
+            // The copy is made, with its invitations: "nothing was done" would have the move made again, and a second copy.
+            const from = this.calendarName(at.calendar);
+            const sent = mail.invites && mail.to.length > 0 ? ` (invitations sent to ${peopleWords(mail.to)})` : '';
+            this.log(`move ${at.calendar.id} ${target.id} by=${by} copied, not taken out`);
+            throw new CalendarError(`It was copied to ${this.calendarName(target)}${sent}, but not taken out of ${from}, which stopped: ${asCalendarError(error).message} `
+                + `Delete it from ${from} to finish the move; moving it again would make a second copy.`, 'half-moved');
+        }
         this.log(`move ${at.calendar.id} ${target.id} by=${by}${mailLog(mail)}`);
         const startMs = startOfTime(master.start, zone);
         const found = this.find({ from: startMs - DAY, to: startMs + 2 * DAY, calendars: [target.id] }).find(({ o }) => o.record.uid === uid);
@@ -2088,7 +2135,7 @@ export class CalendarManager {
                 if (style === 'ics') {
                     await this.putIcs(calendar, at.item, at.records.map((r) => ({ uid: at.uid, recurrenceId: r.recurrenceId, record: null })), at.uid, quiet);
                 } else {
-                    const out = await source.remove({ ...calendar }, { item: at.item, record: at.master ?? at.override, occurrence: at.recurrenceId, ...tell }, 'all');
+                    const out = await source.remove({ ...calendar }, { item: at.item, record: at.master ?? at.override, occurrence: at.recurrenceId, planned: now.before, ...tell }, 'all');
                     this.takeItems(calendar, out?.items, out?.removed ?? [at.item.remoteId]);
                 }
                 return;
@@ -2106,7 +2153,7 @@ export class CalendarManager {
                     if (at.override) edits.push({ uid: at.uid, recurrenceId: at.override.recurrenceId, record: null });
                     await this.putIcs(calendar, at.item, edits, at.uid);
                 } else {
-                    const out = await source.remove({ ...calendar }, { item: at.overrideItem ?? at.item, record: at.override ?? at.master, occurrence: at.recurrenceId, ...tell }, 'one');
+                    const out = await source.remove({ ...calendar }, { item: at.overrideItem ?? at.item, record: at.override ?? at.master, occurrence: at.recurrenceId, planned: now.before, ...tell }, 'one');
                     this.takeItems(calendar, out?.items, out?.removed);
                 }
                 return;
@@ -2134,7 +2181,7 @@ export class CalendarManager {
             } else {
                 this.takeItems(calendar, await source.update({ ...calendar }, { item: at.item, record: master }, { rrule: older.rrule, ...tell }, 'all'));
             }
-        }, { retry: false });
+        }, { retry: false, recheck: () => this.checkKnown(this.planDelete(id, scope, { notify }).mail, known) });
         this.log(`delete ${first.calendar.id} ${first.eventId} scope=${which} by=${by}${mailLog(mail)}`);
         return withMail({}, mail);
     }
@@ -2260,6 +2307,16 @@ export function peopleOf(mail) {
     return [...out.values()];
 }
 
+/** Everyone on any of these records as guests, each once (by addressKey), the first record's first. */
+function everyoneOn(records) {
+    const out = new Map();
+    for (const person of records.flatMap((r) => r?.attendees ?? [])) {
+        const key = addressKey(person?.address ?? person?.email);
+        if (key !== '' && !out.has(key)) out.set(key, person);
+    }
+    return [...out.values()];
+}
+
 /** What a change emails or reaches, for a refusal's details: {emailed?: {what, to}, reached?: {how, to}, why?}. */
 export const mailDetails = (mail) => ({ ...withMail({}, mail), ...(mail?.forced && mail?.why ? { why: mail.why } : {}) });
 
@@ -2297,8 +2354,8 @@ function maybeMade(error) {
     return error.code === 'network' || (error.code === 'server' && (error.status === undefined || error.status >= 500));
 }
 
-/** JSON with its keys in order, so the same create reads the same however its fields came. */
-function stableJson(value) {
+/** JSON with its keys in order, so the same change reads the same however its fields came. */
+export function stableJson(value) {
     if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
     if (value !== null && typeof value === 'object') {
         return `{${Object.keys(value).sort().filter((k) => value[k] !== undefined).map((k) => `${JSON.stringify(k)}:${stableJson(value[k])}`).join(',')}}`;

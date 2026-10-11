@@ -666,6 +666,7 @@ describe('the source, against a stand-in server', () => {
         };
         const { fetch, calls } = fakeServer({
             [`PROPFIND ${collection}no-etag.ics`]: { body: multistatus([{ href: '/cal/home/no-etag.ics', etag: '"e2"' }]) },
+            [`GET ${collection}no-etag.ics`]: { status: 200, body: ics('n', 'N'), headers: { etag: '"e2"' } },
             [`DELETE ${collection}gone.ics`]: { status: 404 },
             [`DELETE ${collection}new.ics`]: (call) => (header(call, 'if-match') === '"e1"' ? { status: 204 } : { status: 412 }),
             [`DELETE ${collection}locked.ics`]: { status: 403 },
@@ -703,8 +704,8 @@ describe('the source, against a stand-in server', () => {
         const plain = await source.put(calendar, null, ics('x', 'X'), 'abc-123@example.com');
         assert.equal(plain.remoteId, `${collection}abc-123@example.com.ics`);
 
-        // No stored etag: the server's own is read first, so a change made elsewhere meanwhile is a conflict, not lost.
-        await source.put(calendar, { remoteId: `${collection}no-etag.ics` }, ics('n', 'N2'), 'n');
+        // No stored etag: the event is read first, so a change made elsewhere meanwhile is a conflict, not lost.
+        await source.put(calendar, { remoteId: `${collection}no-etag.ics`, raw: ics('n', 'N') }, ics('n', 'N2'), 'n');
         assert.equal(header(puts.at(-1), 'if-match'), '"e2"');
 
         await source.remove(calendar, { remoteId: `${collection}new.ics`, etag: '"e1"' });
@@ -716,9 +717,9 @@ describe('the source, against a stand-in server', () => {
 
         // Taking out an invitation without telling its organizer: Schedule-Reply: F (RFC 6638), and the etag read first.
         const before = calls.length;
-        await source.remove(calendar, { remoteId: `${collection}no-etag.ics` }, { scheduleReply: false });
+        await source.remove(calendar, { remoteId: `${collection}no-etag.ics`, raw: ics('n', 'N') }, { scheduleReply: false });
         const quiet = calls.slice(before);
-        assert.deepEqual(quiet.map((c) => c.method), ['PROPFIND', 'DELETE']);
+        assert.deepEqual(quiet.map((c) => c.method), ['GET', 'DELETE']);
         assert.equal(header(quiet[1], 'if-match'), '"e2"');
         assert.equal(header(quiet[1], 'schedule-reply'), 'F');
     });
@@ -726,12 +727,14 @@ describe('the source, against a stand-in server', () => {
     test('a change whose etag can\'t be read isn\'t made; a server that keeps none for it gets If-Match: *; one gone meanwhile is a conflict, or done for a delete', async () => {
         const collection = 'https://dav.example.com/cal/home/';
         const { fetch, calls } = fakeServer({
-            [`PROPFIND ${collection}flaky.ics`]: { status: 500 },
-            [`PROPFIND ${collection}offline.ics`]: new TypeError('fetch failed'),
+            [`GET ${collection}flaky.ics`]: { status: 500 },
+            [`GET ${collection}offline.ics`]: new TypeError('fetch failed'),
+            [`GET ${collection}refused.ics`]: { status: 403 },
+            [`GET ${collection}bare.ics`]: { status: 200, body: ics('b', 'B') },
             [`PROPFIND ${collection}bare.ics`]: { body: multistatus([{ href: '/cal/home/bare.ics', props: '' }]) },
             [`PUT ${collection}bare.ics`]: { status: 204, headers: { etag: '"b2"' } },
             [`DELETE ${collection}bare.ics`]: { status: 204 },
-            [`PROPFIND ${collection}gone.ics`]: { status: 404 },
+            [`GET ${collection}gone.ics`]: { status: 404 },
         });
         const source = caldav.create({ id: 'd', kind: 'caldav', url: 'https://dav.example.com/', username: 'alice' }, stubEnv(fetch));
         const calendar = { remoteId: collection };
@@ -741,12 +744,13 @@ describe('the source, against a stand-in server', () => {
             (e) => isCode('server')(e) && e.message === 'The event\'s version on the server couldn\'t be read, so nothing was changed. Try again.');
         await assert.rejects(source.remove(calendar, { remoteId: `${collection}flaky.ics` }), isCode('server'));
         await assert.rejects(source.put(calendar, { remoteId: `${collection}offline.ics` }, ics('o', 'O'), 'o'), isCode('network'));
+        await assert.rejects(source.put(calendar, { remoteId: `${collection}refused.ics` }, ics('r', 'R'), 'r'), isCode('server'));
         assert.equal(writes(), 0, 'no unconditional write');
 
-        // A server that keeps no etag for it: it must at least still be there.
-        await source.put(calendar, { remoteId: `${collection}bare.ics` }, ics('b', 'B'), 'b');
+        // A server that keeps no etag for it: it must at least still be there, naming the same people.
+        await source.put(calendar, { remoteId: `${collection}bare.ics`, raw: ics('b', 'B') }, ics('b', 'B2'), 'b');
         assert.equal(header(calls.at(-1), 'if-match'), '*');
-        await source.remove(calendar, { remoteId: `${collection}bare.ics` });
+        await source.remove(calendar, { remoteId: `${collection}bare.ics`, raw: ics('b', 'B') });
         assert.equal(header(calls.at(-1), 'if-match'), undefined);
 
         // Deleted on the server meanwhile: a change to it is a conflict (the manager syncs); a delete has nothing left to do.
@@ -754,6 +758,41 @@ describe('the source, against a stand-in server', () => {
         const before = writes();
         await source.remove(calendar, { remoteId: `${collection}gone.ics` });
         assert.equal(writes(), before);
+    });
+
+    test('no etag held: the event is read first, and a change goes on only while it names the same people as the plugin\'s copy', async () => {
+        const collection = 'https://dav.example.com/cal/home/';
+        const meeting = (people) => [
+            'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//DSH calendar tests//EN', 'BEGIN:VEVENT', 'UID:standup', 'DTSTAMP:20261011T000000Z',
+            'DTSTART:20261012T090000Z', 'DTEND:20261012T093000Z', 'SUMMARY:Standup', 'ORGANIZER:mailto:alice@example.com',
+            ...people.map((p) => `ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:${p}`), 'END:VEVENT', 'END:VCALENDAR', '',
+        ].join('\r\n');
+        let server = meeting(['ann@example.com', 'bob@example.com']);
+        const { fetch, calls } = fakeServer({
+            [`GET ${collection}standup.ics`]: () => ({ status: 200, body: server, headers: { etag: '"s1"' } }),
+            [`PUT ${collection}standup.ics`]: { status: 204, headers: { etag: '"s2"' } },
+            [`DELETE ${collection}standup.ics`]: { status: 204 },
+        });
+        const source = caldav.create({ id: 'd', kind: 'caldav', url: 'https://dav.example.com/', username: 'alice' }, stubEnv(fetch));
+        const calendar = { remoteId: collection };
+        const item = { remoteId: `${collection}standup.ics`, raw: meeting(['ann@example.com', 'bob@example.com']) };
+        const writes = () => calls.filter((c) => c.method === 'PUT' || c.method === 'DELETE');
+
+        // Someone added on the server since the plugin read it: the server would email them, so nothing is written.
+        server = meeting(['ann@example.com', 'bob@example.com', 'cy@example.com']);
+        await assert.rejects(source.put(calendar, item, item.raw.replace('Standup', 'Standup!'), 'standup'), isCode('conflict'));
+        await assert.rejects(source.remove(calendar, item), isCode('conflict'));
+        // Someone taken off there: writing the plugin's copy would invite them again.
+        server = meeting(['ann@example.com']);
+        await assert.rejects(source.put(calendar, item, item.raw.replace('Standup', 'Standup!'), 'standup'), isCode('conflict'));
+        assert.equal(writes().length, 0);
+        // A delete only cancels for those still on it.
+        await source.remove(calendar, item);
+        assert.equal(header(writes().at(-1), 'if-match'), '"s1"');
+        // The same people (in another order, by another case): the change goes, on the version read.
+        server = meeting(['BOB@example.com', 'ann@example.com']);
+        assert.deepEqual(await source.put(calendar, item, item.raw.replace('Standup', 'Standup!'), 'standup'), { remoteId: item.remoteId, etag: '"s2"' });
+        assert.equal(header(writes().at(-1), 'if-match'), '"s1"');
     });
 
     test('a create repeated after a timeout: the event already there with its uid counts as made; another one there is a conflict', async () => {

@@ -109,10 +109,11 @@ const HINTS = {
     'drops-changes': 'If the user agrees to lose them, call again with drop_changes: true; otherwise leave it where it is.',
     'choose-calendar': 'Give calendar_id (calendar_list_calendars lists the calendars), and ask the user which one if they didn\'t say.',
     changed: 'Read the event again (calendar_get_event) and tell the user what changed before trying again.',
+    'half-moved': 'Don\'t move it again: tell the user, and delete it from the calendar it came from only if they say so.',
 };
 
-/** A refusal in words for the model: what wasn't done and why, and what to do about it. */
+/** A refusal in words for the model: what wasn't done (or, for a move that stopped halfway, what was) and why, and what to do about it. */
 export function refusalText({ message, code }) {
-    return `Not done: ${message}${HINTS[code] ? ` ${HINTS[code]}` : ''}`;
+    return `${code === 'half-moved' ? 'Done in part' : 'Not done'}: ${message}${HINTS[code] ? ` ${HINTS[code]}` : ''}`;
 }
 

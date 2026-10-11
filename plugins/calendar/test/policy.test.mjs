@@ -358,28 +358,35 @@ test('policy: whether the chat can ask', () => {
     assert.equal(canAsk({ effectivePolicy: () => { throw new Error('x'); } }, {}), true);
 });
 
-test('policy: who the gate named goes to the call\'s tool, once; a refused call names no one', async () => {
-    let clock = 0;
-    const shown = new ShownPlans(() => clock);
+test('policy: who the gate named goes with the call itself to its tool, once; a refused call names no one', async () => {
+    const shown = new ShownPlans();
     const gate = (preset, approval) => changeGate({
         presets: () => presetsWith(preset), approval: () => approval, manager: mailingManager(), mode: () => 'preset', shown, log: () => {},
     });
     const allow = async () => ({ kind: 'allow' });
     const asks = { effectivePolicy: () => 'ask' };
     const call = (callId, name, args) => ({ callId, name, arguments: args, agent: { session: {} } });
-    assert.equal((await gate('workspace-write', asks)(call('c1', 'calendar_update_event', { id: 'sync', start: '2026-10-16 11:00', notify_guests: true }), allow)).kind, 'ask');
-    assert.deepEqual(shown.take('c1'), ['ann@example.com', 'bob@example.com', 'cy@example.com']);
-    assert.equal(shown.take('c1'), undefined, 'once');
+    const c1 = call('c1', 'calendar_update_event', { id: 'sync', start: '2026-10-16 11:00', notify_guests: true });
+    assert.equal((await gate('workspace-write', asks)(c1, allow)).kind, 'ask');
+    // Kept with the call, not its id: another call with the same id (or none) gets nothing.
+    assert.equal(shown.take({ ...c1 }), undefined);
+    assert.deepEqual(shown.take(c1), ['ann@example.com', 'bob@example.com', 'cy@example.com']);
+    assert.equal(shown.take(c1), undefined, 'once');
+    // A provider that sends no call id: the list still goes with the call.
+    const bare = call('', 'calendar_delete_event', { id: 'sync', notify_guests: true });
+    await gate('workspace-write', asks)(bare, allow);
+    assert.equal(shown.take(bare).length, 3);
     // Nobody to tell: an empty list, which holds the change to nobody.
-    assert.equal((await gate('danger-full-access', asks)(call('c2', 'calendar_update_event', { id: 'sync', reminders: [10] }), allow)).kind, 'allow');
-    assert.deepEqual(shown.take('c2'), []);
+    const c2 = call('c2', 'calendar_update_event', { id: 'sync', reminders: [10] });
+    assert.equal((await gate('danger-full-access', asks)(c2, allow)).kind, 'allow');
+    assert.deepEqual(shown.take(c2), []);
     // Refused: nothing kept.
-    assert.equal((await gate('workspace-write', asks)(call('c3', 'calendar_update_event', { id: 'sync', title: 'Sync' }), allow)).kind, 'deny');
-    assert.equal(shown.take('c3'), undefined);
-    // Kept six hours at most.
-    await gate('workspace-write', asks)(call('c4', 'calendar_delete_event', { id: 'sync', notify_guests: true }), allow);
-    clock += 7 * 3_600_000;
-    await gate('workspace-write', asks)(call('c5', 'calendar_delete_event', { id: 'sync', notify_guests: true }), allow);
-    assert.equal(shown.take('c4'), undefined);
-    assert.equal(shown.take('c5').length, 3);
+    const c3 = call('c3', 'calendar_update_event', { id: 'sync', title: 'Sync' });
+    assert.equal((await gate('workspace-write', asks)(c3, allow)).kind, 'deny');
+    assert.equal(shown.take(c3), undefined);
+    // Another gate's question names no one this change reaches: allowed, the change reaches no one.
+    const c4 = call('c4', 'calendar_delete_event', { id: 'sync', notify_guests: true });
+    const theirs = { kind: 'ask', reason: 'Another gate asks.' };
+    assert.deepEqual(await gate('workspace-write', asks)(c4, async () => theirs), theirs);
+    assert.deepEqual(shown.take(c4), []);
 });
