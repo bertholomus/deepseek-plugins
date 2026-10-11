@@ -3827,6 +3827,43 @@ test('a config reload while a thread runs still reports its turn and its permiss
     assert.match(cp[1].text, /^\[Thread idle without a handback: t1 · "Busy"\]\n\nIts last reply:\n\nThe deploy was rejected\./);
 });
 
+test('a permission prompt the coordinator heard about isn\'t sent again when the plugin reloads or is switched off and on', async () => {
+    const { host, config, dir } = setup({ approvalNoticeSeconds: 0.02 });
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Busy', brief: 'Deploy it.' });
+    const thread = threadOf(host, coord);
+    thread.ctx.emitStatus(thread, 'running');
+    const log = host.sessions.get(thread.id).events;
+    const ask = (id, reason) => {
+        const asked = { seq: log.length + 1, type: 'approval/asked', data: { id, toolName: 'bash', reason } };
+        log.push(asked);
+        thread.ctx.sessionEvent(asked);
+    };
+    const wait = () => new Promise((r) => setTimeout(r, 80));
+    const cp = host.sessions.get(coord.id).prompts;
+    ask('a1', 'runs ./deploy.sh');
+    await wait();
+    assert.equal(cp.length, 1);
+
+    // Each new instance watches the prompt the turn still waits on, but the coordinator already heard about it:
+    // another note would start another turn of the coordinator's.
+    await reload(host, config);
+    await wait();
+    await reload(host, config);
+    await wait();
+    assert.equal(cp.length, 1, 'told once across two reloads');
+    // A new prompt in the same turn is news.
+    ask('a2', 'runs ./publish.sh');
+    await wait();
+    assert.equal(cp.length, 2);
+    assert.match(cp[1].text, /runs \.\/publish\.sh/);
+    await reload(host, config);
+    await wait();
+    assert.equal(cp.length, 2);
+    assert.equal((readFileSync(join(dir, 'projects.log'), 'utf8').match(/approval-note /g) ?? []).length, 2);
+});
+
 test('a turn that ends during a reload is reported by the new instance', async () => {
     const { host, config } = setup();
     await tick();

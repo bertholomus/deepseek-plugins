@@ -2016,9 +2016,14 @@ export class ProjectManager {
     async noticeApproval(projectId, threadId, agent, data) {
         const t = this.store.thread(projectId, threadId);
         if (!t || t.resolved || !this.projects.has(projectId) || this.archived(projectId)) return;
+        // Told once: a reload or a restart watches the prompts a turn still waits on again, but the
+        // coordinator already heard about this one, and each note would start a turn of its own.
+        const id = String(data.id ?? '');
+        if (id !== '' && t.approvalsNoted?.includes(id)) return;
         const turn = await this.readTurn(agent.id, { current: true });
         // The user is talking to the thread directly, so the prompt is in front of them.
         if (!turn.fromProject || !this.allowHandback(projectId, threadId)) return;
+        if (id !== '') this.store.putThread(projectId, threadId, { approvalsNoted: [...(this.store.thread(projectId, threadId)?.approvalsNoted ?? []), id].slice(-20) });
         await this.deliver(projectId, approvalMessage(threadId, t.title, t.title, String(data.toolName ?? 'a tool'), data.reason), undefined, { kind: 'approval', thread: threadId });
         this.log(`approval-note ${projectId}/${threadId} tool=${String(data.toolName ?? '').slice(0, 60)}`);
     }
