@@ -18,7 +18,7 @@ import * as plugin from '../lib/index.js';
 import { effectiveSettings, effectiveAccess, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
 import { slugify, timing, clipTitle, guardList, guardedIn } from '../lib/projects.js';
 import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS, lineDelta, editOf, editsIn, editSummary } from '../lib/changes.js';
-import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, cardSummary, threadMarkdown, outsideMessage, replyMessage } from '../lib/prompts.js';
+import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, cardSummary, threadMarkdown, outsideMessage, replyMessage, NUDGE } from '../lib/prompts.js';
 import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
 
 const CATALOG = {
@@ -534,7 +534,7 @@ test('coordinator is created, titled and gets coordinator tools', async () => {
     assert.deepEqual(text.match(/^\d+\. /gm), ['1. ', '2. ', '3. ', '4. ', '5. ', '6. ', '7. ', '8. ', '9. ', '10. ', '11. ']);
     assert.match(text, /\n1\. Do only what the user asks\. When they leave the choice of work to you, pick one small task that only reads and writes files in the workspace, start it now, and say what you picked; don't ask them to choose\./);
     assert.match(text, /\n2\. Never use the user's personal or infrastructure tools \(password managers and vaults, note apps, email and messaging, home or household services, control of the user's screen, model lanes and gateways\), yourself or in a thread, in any way \(tool, command line, script or web API\)\. Only the user's own words \(a message, an answer they picked or typed, or the goal\) can call for one\./);
-    assert.match(text, /\n3\. All work goes to a thread, however small: counting, listing, searching, running tests or commands, editing, deleting\. Start one with project_thread_start, not with DSH's subagent or workflow tools\. One thread per distinct ask; put the user's words in `ask`, word for word, and in `brief` the goal, the scope, what done looks like and what not to touch\./);
+    assert.match(text, /\n3\. All work goes to a thread, however small: counting, listing, searching, running tests or commands, editing, deleting\. Start one with project_thread_start, not with DSH's subagent or workflow tools\. One thread per distinct ask \("Two things: A and B" is two asks\); put the user's words in `ask`, word for word, and in `brief` the goal, the scope, what done looks like and what not to touch\./);
     assert.match(text, /\n5\. Answer yourself only from what you already know: thread status, project memory, this conversation\. You may read a file to write a brief or a question; you run no commands and change no files\./);
     assert.match(text, /\n7\. Guide your threads\. Check each handback against the ask before you tell the user; if it falls short or its approach is wrong, tell the thread what to fix and why[^\n]*When the user's wishes or priorities change, redirect a running thread/);
     // "Everything" is the workspace, never DSH or the project's settings.
@@ -2850,11 +2850,81 @@ test('the idle note says when a thread turn failed', async () => {
     await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Flaky', brief: 'Call the lane.' });
     const thread = [...host.live.values()].find((a) => a.id !== coord.id);
     const ts = host.sessions.get(thread.id);
-    ts.events.push({ seq: ts.events.length + 1, type: 'turn/end', data: { turn: 1, reason: { kind: 'error', error: { message: 'provider unavailable', code: 'NETWORK' } } } });
-    thread.ctx.emitStatus(thread, 'running');
-    thread.ctx.emitStatus(thread, 'idle');
+    const fail = () => {
+        thread.ctx.emitStatus(thread, 'running');
+        ts.events.push({ seq: ts.events.length + 1, type: 'turn/start', data: { turn: ts.events.length } });
+        ts.events.push({ seq: ts.events.length + 1, type: 'turn/end', data: { turn: ts.events.length, reason: { kind: 'error', error: { message: 'provider unavailable', code: 'NETWORK' } } } });
+        thread.ctx.emitStatus(thread, 'idle');
+    };
+    // The plugin nudges it first; the coordinator hears when that didn't help.
+    fail();
+    await tick();
+    assert.equal(host.sessions.get(coord.id).prompts.length, 0);
+    fail();
     await tick();
     assert.match(host.sessions.get(coord.id).prompts[0].text, /^\[Thread idle without a handback: t1 · "Flaky"\]\n\nThe turn failed: provider unavailable\n\nIt produced no reply text\./);
+});
+
+test('a thread that ends its turn again without a handback after its one message goes to the user; failures count apart', async () => {
+    const { host, dir } = setup();
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('project_thread_start', { ask: 'Please do this.', title: 'Stall', brief: 'Write the notes.' });
+    const thread = threadOf(host, coord);
+    const ts = host.sessions.get(thread.id);
+    const cp = host.sessions.get(coord.id).prompts;
+    const log = () => readFileSync(join(dir, 'projects.log'), 'utf8');
+    const marks = turnMarks(host, thread.id);
+    const stall = (reply) => {
+        thread.ctx.emitStatus(thread, 'running');
+        marks.start();
+        assistantSays(host, thread.id, reply);
+        marks.end();
+        thread.ctx.emitStatus(thread, 'idle');
+    };
+    const first = /\n\n\(If its last reply is a result, check it against the ask[^]*\. Send nothing more if it ends this way again: you will be told to tell the user\.\)$/;
+    const again = (reply) => `[Thread idle without a handback: t1 · "Stall"]\n\nIts last reply:\n\n${reply}\n\n(It ended its turn again without a handback after it was nudged. Tell the user in one line, starting with [Stall](.dsh-thread/t1), what its last reply says. Send it nothing more unless the user asks.)`;
+
+    // The first time, the coordinator sends it one message.
+    stall('Which file?');
+    await tick();
+    assert.match(cp.at(-1).text, first);
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'The README.' });
+    // A failure in between gets the plugin's own nudge and leaves the count alone.
+    thread.ctx.emitStatus(thread, 'running');
+    marks.start();
+    marks.end('error', 'provider unavailable');
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    assert.equal(ts.prompts.at(-1).text, '[From the coordinator]\n\nCarry on from where you left off and finish the task.');
+    // It ends again without a handback: the coordinator tells the user, and sends it nothing more.
+    const notes = cp.length;
+    stall('Still reading.');
+    await tick();
+    assert.equal(cp.length, notes + 1);
+    assert.equal(cp.at(-1).text, again('Still reading.'));
+    stall('Reading more.');
+    await tick();
+    assert.equal(cp.at(-1).text, again('Reading more.'), 'still the user\'s, until something new');
+    assert.match(log(), / idle-note dsh-plugins\/t1 chars=11\n[^]* nudge dsh-plugins\/t1 ended=error\n[^]* idle-note dsh-plugins\/t1 chars=14 again\n/);
+
+    // The user's words start the count again, and so does a handback.
+    userSays(host, coord.id, 'Write the notes in NOTES.md.');
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Write them in NOTES.md.', ask: 'Write the notes in NOTES.md.' });
+    stall('Which heading?');
+    await tick();
+    assert.match(cp.at(-1).text, first);
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Finish the task and call project_handback.' });
+    thread.ctx.emitStatus(thread, 'running');
+    marks.start();
+    await thread.ctx.call('project_handback', { status: 'done', summary: 'Wrote NOTES.md.' });
+    marks.end();
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Now the changelog.' });
+    stall('Which version?');
+    await tick();
+    assert.match(cp.at(-1).text, first);
 });
 
 test('a failed or stopped thread shows in the roster until a turn finishes; Retry and Resume send it on from its coordinator', async () => {
@@ -2981,11 +3051,15 @@ test('a stop the coordinator asks for, or a person makes, does not come back as 
     assert.match(coord.ctx.section(), /A thread the user stopped stays stopped/);
     assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /user-stop dsh-plugins\/t1/);
 
-    // Any other stop (a plugin's hook, a closed session) is still reported, and the coordinator decides.
+    // Any other stop (a plugin's hook, a closed session) gets the one nudge; when it stops again, the coordinator hears.
     await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Try again.' });
     stopBy({ kind: 'hook', reason: 'budget' });
     await tick();
     const cp = host.sessions.get(coord.id).prompts;
+    assert.equal(cp.length, 0);
+    assert.equal(ts.prompts.at(-1).text, '[From the coordinator]\n\nCarry on from where you left off and finish the task.');
+    stopBy({ kind: 'hook', reason: 'budget' });
+    await tick();
     assert.equal(cp.length, 1);
     assert.match(cp[0].text, /^\[Thread idle without a handback: t1 · "Long"\]\n\nThe turn was stopped before it finished\./);
 });
@@ -3055,7 +3129,7 @@ test('news: what threads hand back or need the user for waits per project until 
     assert.deepEqual(plain((await remote.seeNews(coord.id, 2)).news[0]).unread.map((n) => n.seq), [3]);
     await remote.seeNews('dsh-plugins');
     assert.deepEqual(await unread(), []);
-    // A failed turn: the coordinator nudges it first, so the user hears only when it fails again.
+    // A failed turn: the plugin nudges it first, so the user hears only when it fails again.
     const fail = () => {
         turnEnd({ kind: 'error', error: { message: 'provider unavailable', code: 'NETWORK' } });
         thread.ctx.emitStatus(thread, 'running');
@@ -3065,7 +3139,7 @@ test('news: what threads hand back or need the user for waits per project until 
     fail();
     await tick();
     assert.deepEqual(await unread(), []);
-    await coord.ctx.call('project_thread_send', { thread: 't1', text: 'Carry on from where you left off and finish the task.' });
+    assert.equal(host.sessions.get(thread.id).prompts.at(-1).text, '[From the coordinator]\n\nCarry on from where you left off and finish the task.');
     fail();
     await tick();
     assert.deepEqual((await unread()).map((n) => [n.seq, n.kind]), [[4, 'failed']]);
@@ -3122,7 +3196,7 @@ function restart(sessions, config) {
     return host;
 }
 
-test('a queued coordinator message that fails after a handback still gets its note', async () => {
+test('a queued coordinator message that fails after a handback still gets its nudge', async () => {
     const { host } = setup();
     await tick();
     const coord = coordinatorOf(host);
@@ -3141,9 +3215,9 @@ test('a queued coordinator message that fails after a handback still gets its no
     thread.ctx.emitStatus(thread, 'idle');
     await tick();
     const cp = host.sessions.get(coord.id).prompts;
-    assert.equal(cp.length, 2, 'the handback, then a note for B');
+    assert.equal(cp.length, 1, 'the handback; B\'s failure gets the plugin\'s nudge');
     assert.match(cp[0].text, /status: done\]\n\nA is done\./);
-    assert.match(cp[1].text, /^\[Thread idle without a handback: t1 · "Two"\]\n\nThe turn failed: provider unavailable/);
+    assert.equal(host.sessions.get(thread.id).prompts.at(-1).text, '[From the coordinator]\n\nCarry on from where you left off and finish the task.');
 
     // A last turn that hands back sends no note, even after one that did not.
     await coord.ctx.call('project_thread_send', { thread: 't1', text: 'And C.' });
@@ -3155,8 +3229,8 @@ test('a queued coordinator message that fails after a handback still gets its no
     turn.end();
     thread.ctx.emitStatus(thread, 'idle');
     await tick();
-    assert.equal(cp.length, 3);
-    assert.match(cp[2].text, /C is done\./);
+    assert.equal(cp.length, 2);
+    assert.match(cp[1].text, /C is done\./);
 });
 
 test('a new coordinator introduces itself once, so DSH lists it', async () => {
@@ -3195,7 +3269,11 @@ test('model-facing text: a project without a goal asks for one; a handback\'s no
     assert.match(idleMessage('t3', 'Long', '', 'The turn was stopped before it finished.'), /that its turn stopped and why; its card has Resume\./);
     assert.equal(userMustFix('The turn failed: the user signed out of DeepSeek.'), true);
     assert.equal(userMustFix('The turn failed (HTTP 500): boom'), false);
-    assert.match(idleMessage('t3', 'Chat', 'Which file?'), /\n\n\(If its last reply is a result, check it against the ask and pass it on as you would a handback, starting with \[Chat\]\(\.dsh-thread\/t3\)\. If it asks something, answer it with project_thread_send thread="t3" when the user's words, the brief or project memory answer it, and ask the user only what is theirs to decide\. If it stopped partway, send it "Finish the task and call project_handback\." with project_thread_send thread="t3"; if it seems stuck, ask it what is blocking it\.\)$/);
+    // A turn that just ended without a handback: one message (the answer, or the nudge), then the user hears of the next
+    // such turn in one line (behaviour review 3: a stalled thread got three messages, then the coordinator did the work).
+    assert.match(idleMessage('t3', 'Chat', 'Which file?'), /\n\n\(If its last reply is a result, check it against the ask and pass it on as you would a handback, starting with \[Chat\]\(\.dsh-thread\/t3\)\. Otherwise send it one message with project_thread_send thread="t3": the answer to its question when the user's words, the brief or project memory answer it \(ask the user only what is theirs to decide\), else "Finish the task and call project_handback\."\. Send nothing more if it ends this way again: you will be told to tell the user\.\)$/);
+    assert.match(idleMessage('t3', 'Chat', 'Still reading.', '', { again: true }), /\n\n\(It ended its turn again without a handback after it was nudged\. Tell the user in one line, starting with \[Chat\]\(\.dsh-thread\/t3\), what its last reply says\. Send it nothing more unless the user asks\.\)$/);
+    assert.equal(NUDGE, 'Carry on from where you left off and finish the task.');
     assert.match(approvalMessage('t4', 'Deploy', 'Deploy', 'shell', 'rm -rf build'), /\n\n\(Tell the user in one line, starting with \[Deploy\]\(\.dsh-thread\/t4\), what it wants to do and that they approve or reject it in its chat\. Never approve it yourself or do the work another way, and do not start another thread for it\.\)$/);
     // A card or roster line is cut at a sentence end, or a word end, never inside a name (the first real run's card ended
     // "…deepseek-v41-a7 (DeepSeek-V4.1-Flash-T").
@@ -3308,11 +3386,19 @@ test('a coordinator on Read Only reads and directs; threads ask it, get nudged, 
     assert.equal(coord.ctx.refusal('read', { path: 'a.txt' }), undefined);
     assert.equal(await coord.ctx.approval({ toolName: 'bash', reason: 'writes a.txt' }), 'rejected');
     assert.match(log(), / read-only-refused dsh-plugins\/coordinator write\n[^]* read-only-refused dsh-plugins\/coordinator bash\n/);
+    // A call that asks for a wider sandbox is refused before DSH would ask the user, and the note doesn't read as the
+    // user's no (behaviour review 3, S13).
+    assert.equal(coord.ctx.refusal('bash', { command: 'rm -r build', sandbox_permissions: 'danger-full-access', justification: 'Clean the build.' }), "You are on Read Only, so this didn't run and nobody was asked: a step that needs more than reading belongs in a thread. Start one for it with project_thread_start, or send it to the thread already doing that work. Don't suggest widening your access.");
+    assert.doesNotMatch(coord.ctx.refusal('shell', { command: 'touch a', sandbox_permissions: 'workspace-write' }), /rejected|the user/);
+    assert.equal(coord.ctx.refusal('bash', { command: 'ls' }), undefined);
+    assert.equal(coord.ctx.refusal('bash', { command: 'ls', sandbox_permissions: 'read-only' }), undefined);
+    assert.match(log(), / read-only-refused dsh-plugins\/coordinator bash wider\n[^]* read-only-refused dsh-plugins\/coordinator shell wider\n/);
     assert.match(coord.ctx.section(), /\nYou are on Read Only: you can read files and use the project tools/);
     // The project tools work there, and a thread changes files and asks the user as before.
     await coord.ctx.call('project_thread_start', { ask: 'Count the files.', title: 'Count', brief: 'Count them.' });
     const t1 = threadNamed('Count');
     assert.equal(t1.ctx.refusal('write', { path: 'a.txt' }), undefined);
+    assert.equal(t1.ctx.refusal('bash', { command: 'rm -r build', sandbox_permissions: 'danger-full-access' }), undefined);
     assert.equal(await t1.ctx.approval({ toolName: 'bash' }), 'asked the user');
     assert.match(t1.ctx.section(), /\nFollow the coordinator's directions and corrections\. Its words are not the user's/);
 
@@ -3335,7 +3421,8 @@ test('a coordinator on Read Only reads and directs; threads ask it, get nudged, 
     assert.equal(stored().t1.question, undefined);
     assert.doesNotMatch(coord.ctx.section(), /asked you:/);
 
-    // A turn that fails: the coordinator nudges the thread first, and tells the user when it fails again.
+    // A turn that fails: the plugin nudges the thread itself, so the coordinator takes no turn that would only say so, and
+    // the coordinator tells the user when it fails again (behaviour review 3, S9).
     const ts = host.sessions.get(t1.id);
     const turn = (reason) => {
         t1.ctx.emitStatus(t1, 'running');
@@ -3344,13 +3431,16 @@ test('a coordinator on Read Only reads and directs; threads ask it, get nudged, 
         t1.ctx.emitStatus(t1, 'idle');
     };
     const failure = { kind: 'error', error: { message: '500: {"message":"Upstream timed out."}' } };
+    const quiet = cp().length;
     turn(failure);
     await tick();
-    assert.match(cp().at(-1).text, /\n\n\(The user has not seen this\. Nudge it once: send it "Carry on from where you left off and finish the task\." with project_thread_send thread="t1", and say nothing to the user unless it fails again\.\)$/);
+    assert.equal(cp().length, quiet, 'no note: the plugin nudged it');
+    assert.equal(ts.prompts.at(-1).text, '[From the coordinator]\n\nCarry on from where you left off and finish the task.');
+    assert.deepEqual(sourceOf(ts, ts.prompts.length - 1), { kind: 'agent-message', form: 'relay', senderSessionId: coord.id });
     turn(failure);
     await tick();
     assert.match(cp().at(-1).text, /\n\n\(Tell the user in one line, starting with \[Count\]\(\.dsh-thread\/t1\), that its turn failed again after a nudge and why; its card has Retry\./);
-    assert.match(log(), / idle-note dsh-plugins\/t1 chars=0 ended=error nudge\n[^]* idle-note dsh-plugins\/t1 chars=0 ended=error\n/);
+    assert.match(log(), / nudge dsh-plugins\/t1 ended=error\n[^]* idle-note dsh-plugins\/t1 chars=0 ended=error again\n/);
     // Only the user can fix a sign-in: they hear of it at once.
     turn({ kind: 'aborted', reason: { kind: 'hook', reason: 'deepseek-account/signed-out' } });
     await tick();
@@ -3790,14 +3880,15 @@ test('a thread turn cut off by a DSH stop is reported at the next start, once', 
     // DSH stops mid-turn; the next process reads the open turn as interrupted.
     const second = restart(first.host.sessions, first.config);
     await tick();
-    const cp = second.sessions.get(coord.id).prompts;
-    assert.equal(cp.length, 1);
-    assert.equal(cp[0].text, '[Thread idle without a handback: t1 · "Long"]\n\nThe turn was cut off because DSH stopped while it ran.\n\nIts last reply:\n\nStarting the job.\n\n(The user has not seen this. Nudge it once: send it "Carry on from where you left off and finish the task." with project_thread_send thread="t1", and say nothing to the user unless it stops again.)');
-    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), /idle-note dsh-plugins\/t1 chars=17 ended=interrupted nudge/);
+    // The plugin nudges the thread itself; the coordinator hears only if it stops again.
+    assert.equal(second.sessions.get(coord.id).prompts.length, 0);
+    assert.deepEqual(second.sessions.get(thread.id).prompts.map((p) => p.text), ['[From the coordinator]\n\nCarry on from where you left off and finish the task.']);
+    assert.match(readFileSync(join(dir, 'projects.log'), 'utf8'), / nudge dsh-plugins\/t1 ended=interrupted\n/);
 
     const third = restart(first.host.sessions, first.config);
     await tick();
     assert.equal(third.sessions.get(coord.id).prompts.length, 0, 'reported once');
+    assert.equal(third.sessions.get(thread.id).prompts.length, 0, 'nudged once');
 });
 
 test('a long thread title is cut once, after a whole word, with "…", and fits DSH\'s 80-byte session titles', () => {

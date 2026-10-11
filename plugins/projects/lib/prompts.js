@@ -127,7 +127,7 @@ export function coordinatorPolicy(p) {
         p.guarded?.length && p.yourTools !== 'always'
             ? `   You don't have these here: ${p.guarded.join(', ')}. When the user's words ask for work that needs one, start a thread with their words in \`ask\`; the thread gets the ones their words name.`
             : p.guarded?.length ? `   Here those include: ${p.guarded.join(', ')}.` : null,
-        '3. All work goes to a thread, however small: counting, listing, searching, running tests or commands, editing, deleting. Start one with project_thread_start, not with DSH\'s subagent or workflow tools. One thread per distinct ask; put the user\'s words in `ask`, word for word, and in `brief` the goal, the scope, what done looks like and what not to touch. A follow-up on a thread\'s work goes to that thread with project_thread_send. Something the user wants sent to another chat or project goes with project_message.',
+        '3. All work goes to a thread, however small: counting, listing, searching, running tests or commands, editing, deleting. Start one with project_thread_start, not with DSH\'s subagent or workflow tools. One thread per distinct ask ("Two things: A and B" is two asks); put the user\'s words in `ask`, word for word, and in `brief` the goal, the scope, what done looks like and what not to touch. A follow-up on a thread\'s work goes to that thread with project_thread_send. Something the user wants sent to another chat or project goes with project_message.',
         `4. Name a thread to the user only as a link: [Fix the login bug](${threadLink('t3')}) for thread t3.`,
         '5. Answer yourself only from what you already know: thread status, project memory, this conversation. You may read a file to write a brief or a question; you run no commands and change no files. Keep your replies short.',
         '6. Before you or a thread delete files, push, publish, send or post anything, spend money, or change settings outside the workspace, ask the user, unless their words asked for exactly that. A request to a service outside the workspace that does more than read counts as sending, and so does one with a made-up or placeholder credential; a brief never allows either. Ask only in these cases and for the user\'s tools (rule 2); otherwise pick and say what you assumed.',
@@ -265,14 +265,20 @@ export function handbackSummary(text) {
  */
 export const userMustFix = (ending) => /^The turn (was blocked|failed: the user signed out)\b/.test(String(ending ?? ''));
 
+/** What a thread is sent once after a turn that failed or stopped without a handback: the plugin sends it itself. */
+export const NUDGE = 'Carry on from where you left off and finish the task.';
+
 /**
- * The automatic note when a thread goes idle without a handback. A turn
- * that failed or stopped gets a nudge from the coordinator first; the user
- * hears of it when the nudge didn't help or only they can fix it.
+ * The automatic note when a thread goes idle without a handback. Each such
+ * turn gets one nudge in a row: after a failed or stopped turn the plugin
+ * sends NUDGE itself (a coordinator turn would only say so), and after one
+ * that just ended the coordinator answers it, nudges it or passes on its
+ * result. When the thread ends that way again, or only the user can fix
+ * it, the coordinator tells the user in one line and sends nothing more.
  * @param {string} ending - how the turn ended when it did not complete, or ''.
  * @param {object} [options]
- * @param {boolean} [options.nudge] - ask the coordinator to nudge it (the plugin's call: once in a row).
- * @param {boolean} [options.again] - it ended this way again after a nudge.
+ * @param {boolean} [options.nudge] - ask the coordinator to nudge a failed or stopped turn (when the plugin can't send it).
+ * @param {boolean} [options.again] - it ended without a handback again after its nudge.
  */
 export function idleMessage(threadId, title, lastText, ending = '', { nudge = false, again = false } = {}) {
     const body = lastText ? `Its last reply:\n\n${clip(lastText, 1500)}` : 'It produced no reply text.';
@@ -280,9 +286,10 @@ export function idleMessage(threadId, title, lastText, ending = '', { nudge = fa
     const failed = endingStateOf(ending) === 'failed';
     const send = `project_thread_send thread="${threadId}"`;
     let next;
-    if (ending && nudge) next = `(The user has not seen this. Nudge it once: send it "Carry on from where you left off and finish the task." with ${send}, and say nothing to the user unless it ${failed ? 'fails' : 'stops'} again.)`;
+    if (ending && nudge) next = `(The user has not seen this. Nudge it once: send it "${NUDGE}" with ${send}, and say nothing to the user unless it ${failed ? 'fails' : 'stops'} again.)`;
     else if (ending) next = `(Tell the user in one line, starting with ${link}, that its turn ${failed ? 'failed' : 'stopped'}${again ? ' again after a nudge' : ''} and why; its card has ${failed ? 'Retry' : 'Resume'}. Send it nothing more unless the user asks.)`;
-    else next = `(If its last reply is a result, check it against the ask and pass it on as you would a handback, starting with ${link}. If it asks something, answer it with ${send} when the user's words, the brief or project memory answer it, and ask the user only what is theirs to decide. If it stopped partway, send it "Finish the task and call project_handback." with ${send}; if it seems stuck, ask it what is blocking it.)`;
+    else if (again) next = `(It ended its turn again without a handback after it was nudged. Tell the user in one line, starting with ${link}, what its last reply says. Send it nothing more unless the user asks.)`;
+    else next = `(If its last reply is a result, check it against the ask and pass it on as you would a handback, starting with ${link}. Otherwise send it one message with ${send}: the answer to its question when the user's words, the brief or project memory answer it (ask the user only what is theirs to decide), else "Finish the task and call project_handback.". Send nothing more if it ends this way again: you will be told to tell the user.)`;
     return `${TAGS.idle}: ${threadId} · "${title}"]\n\n${ending ? `${ending}\n\n` : ''}${body}\n\n${next}`;
 }
 

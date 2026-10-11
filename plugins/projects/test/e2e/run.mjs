@@ -475,13 +475,19 @@ try {
     const t2Msgs = await messagesOf(t2);
     check('the user\'s own words stay the user\'s', startingWith(t2Msgs, 'Hello from the user.')?.source?.kind === 'user', sourcesText(t2Msgs));
 
-    // 5. A failed turn: the note says so. The roster now notes the direct talk.
+    // 5. A failed turn: the plugin nudges it once, from its coordinator; when it fails again, the note says so.
+    // The roster now notes the direct talk.
     mark = model.requests.length;
     await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Gamma', brief: 'E2E:fail' }));
     check('roster notes the direct talk', since(mark, 'coordinator')[0]?.system.includes('- t2 · "Beta" · idle · no handback yet · the user talked to it directly; its reply: "Plain reply."'),
         since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => l.startsWith('- t')).join(' | '));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Gamma failure note');
     check('failure note says the turn failed, in the provider\'s words', saw.fresh.includes('[Thread idle without a handback: t3 · "Gamma"]') && saw.fresh.includes('The turn failed (HTTP 400): fake model rejected the request'), saw.fresh.slice(0, 300));
+    const gamma = since(mark, 't3');
+    check('a failed turn gets one nudge from its coordinator, sent by the plugin, and the note comes when it fails again', gamma.length >= 2
+        && gamma.at(-1).fresh.includes('[From the coordinator]\n\nCarry on from where you left off and finish the task.') && readText(logFile).includes(`nudge ${PROJECT_ID}/t3 ended=error`)
+        && saw.fresh.includes('that its turn failed again after a nudge') && !since(mark, 'coordinator').some((r) => r.fresh.includes('Nudge it once'))
+        && fromSession(startingWith(await messagesOf(threadSession('t3')), '[From the coordinator]'), coord), describe(since(mark)));
 
     // 6. A thread waiting on a permission prompt, then stopped.
     mark = model.requests.length;
@@ -600,8 +606,9 @@ try {
     check('the first turn handed back', since(mark, 'coordinator').some((r) => r.fresh.includes('Eta part one done.')));
     check('the queued turn that failed gets its note', saw.fresh.includes('[Thread idle without a handback: t7 · "Eta"]') && saw.fresh.includes('The turn failed (HTTP 400):'), saw.fresh.slice(0, 300));
 
-    // 16. DSH dies mid-turn. At the next start the coordinator hears the thread
-    // was cut off. Then: same coordinator, routes kept, threads still wired.
+    // 16. DSH dies mid-turn. At the next start the plugin nudges the thread that
+    // was cut off, and the coordinator hears how that went. Then: same
+    // coordinator, routes kept, threads still wired.
     mark = model.requests.length;
     await say(coord, call('project_thread_start', { ask: 'Please do this.', title: 'Theta', brief: 'E2E:slow 120000\nWork for a long time.' }));
     await waitFor(() => since(mark, 't8').length > 0, 'the Theta request');
@@ -614,9 +621,12 @@ try {
     await waitFor(() => readText(logFile).includes(`coordinator ${PROJECT_ID} ${coord} resumed`), 'the plugin to resume the coordinator');
     check('restart keeps the coordinator', project().coordinatorSessionId === coord);
     check('a restart does not welcome the coordinator again', model.requests.filter((r) => r.fresh.includes('[Project created')).length === 1);
-    saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Theta cut-off note');
-    check('a turn cut off by the crash is reported', saw.fresh.includes('[Thread idle without a handback: t8 · "Theta"]')
-        && saw.fresh.includes('The turn was cut off because DSH stopped while it ran.'), saw.fresh.slice(0, 300));
+    saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Theta idle note after its nudge');
+    const theta = since(mark, 't8')[0];
+    check('a turn cut off by the crash gets the nudge at the next start, and the coordinator hears how it went', readText(logFile).includes(`nudge ${PROJECT_ID}/t8 ended=interrupted`)
+        && theta?.fresh.includes('[From the coordinator]\n\nCarry on from where you left off and finish the task.') && theta.action.text === 'NUDGED'
+        && saw.fresh.includes('[Thread idle without a handback: t8 · "Theta"]') && saw.fresh.includes('NUDGED')
+        && !since(mark, 'coordinator').some((r) => r.fresh.includes('The turn was cut off because DSH stopped while it ran.')), `${theta?.fresh.slice(0, 300)} | ${saw.fresh.slice(0, 300)}`);
     mark = model.requests.length;
     await say(coord, call('project_thread_send', { thread: 't1', text: 'After the restart.' }));
     saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the t1 idle note after restart');
@@ -844,8 +854,9 @@ try {
         && lambdaLine.endsWith(' · changed 1 file (+4 -1)'), lambdaLine);
 
     // 23. Failed and stopped threads: each thread's own view says how its
-    // last turn ended (read cold after the restart), the roster tells the
-    // coordinator, and Retry and Resume from the window send the thread on.
+    // last turn ended (read cold after the restart; Theta's nudge finished it),
+    // the roster tells the coordinator, and Retry and Resume from the window
+    // send the thread on.
     const viewOf = async (sessionId) => {
         const read = await webApi(webAgain, 'session/projections', { request: { sessionId } });
         const value = read.ok ? read.value?.values?.projectSession : undefined;
@@ -855,7 +866,7 @@ try {
     for (const id of ['t1', 't3', 't4', 't6', 't7', 't8']) endings[id] = (await viewOf(threadSession(id)))?.ending;
     const shape = (e) => (e ? [e.state, e.kind, e.cause ?? null] : null);
     check('a thread\'s own view says how its last turn ended', JSON.stringify(['t1', 't3', 't4', 't6', 't7', 't8'].map((id) => shape(endings[id])))
-        === JSON.stringify([null, ['failed', 'error', null], ['stopped', 'aborted', 'user'], ['stopped', 'aborted', 'user'], ['failed', 'error', null], ['stopped', 'interrupted', null]]),
+        === JSON.stringify([null, ['failed', 'error', null], ['stopped', 'aborted', 'user'], ['stopped', 'aborted', 'user'], ['failed', 'error', null], null]),
         JSON.stringify(endings));
     check('a failure reads as the provider\'s message', endings.t3?.message === 'fake model rejected the request' && typeof endings.t3?.code === 'string', JSON.stringify(endings.t3));
     mark = model.requests.length;
@@ -863,7 +874,7 @@ try {
     const roster = since(mark, 'coordinator')[0]?.system.split('\n').filter((l) => l.startsWith('- t')) ?? [];
     const lineOf = (id) => roster.find((l) => l.startsWith(`- ${id} · `)) ?? '';
     check('the roster tells the coordinator which threads failed or stopped', lineOf('t3').includes('· its last turn failed (HTTP 400): fake model rejected the request')
-        && lineOf('t4').includes('· stopped by the user (they can resume it) ·') && lineOf('t8').includes('· its last turn was cut off because DSH stopped while it ran.')
+        && lineOf('t4').includes('· stopped by the user (they can resume it) ·') && lineOf('t8') !== '' && !lineOf('t8').includes('its last turn')
         && lineOf('t7').includes('last handback: done') && lineOf('t7').includes('its last turn failed') && !lineOf('t1').includes('its last turn'), roster.join('\n'));
     check('the coordinator is told to leave a thread the user stopped stopped', since(mark, 'coordinator')[0]?.system.includes('A thread the user stopped stays stopped: when you mention it, say the user stopped it and it can be resumed.'));
     // Retry: the thread hears it from its coordinator, runs, and its failure clears.
@@ -996,6 +1007,16 @@ try {
     check('a coordinator on Read Only writes nothing, and asks the user nothing', !existsSync(coordinatorFile)
         && pending.filter((e) => e.type === 'approval/decided').every((e) => e.data?.outcome !== 'allowed-once'),
         `${existsSync(coordinatorFile)} ${JSON.stringify(pending.map((e) => [e.type, e.data?.outcome]))} ${resultOf(since(mark).filter((r) => whoOf(r) === 'coordinator')).slice(0, 300)}`);
+    // A call asking for a wider sandbox is refused before DSH would ask anyone, in words that aren't the user's no.
+    const wideFile = join(dirA, 'coordinator-wide.txt');
+    mark = model.requests.length;
+    const wide = await say(madeCoord, call('bash', { command: `touch ${JSON.stringify(wideFile)}`, description: 'Touch a file', sandbox_permissions: 'danger-full-access', justification: 'E2E coordinator check.' }));
+    await waitFor(() => readText(logFile).includes(` read-only-refused ${madeId}/coordinator bash wider`), 'the coordinator\'s refused wider call');
+    const asked = (await bridge('GET', `/sessions/${madeCoord}/events?types=approval/asked&limit=20`)).events ?? [];
+    const wideResult = resultOf(wide.filter((r) => whoOf(r) === 'coordinator'));
+    check('a coordinator on Read Only asking for a wider sandbox is refused before anyone is asked, and not as the user\'s no', !existsSync(wideFile)
+        && wideResult.includes('You are on Read Only, so this didn\'t run and nobody was asked') && !/rejected/.test(wideResult) && asked.length === pending.filter((e) => e.type === 'approval/asked').length,
+        `${existsSync(wideFile)} ${asked.length} ${wideResult.slice(0, 300)}`);
     const readOnlyFile = join(dirA, 'read-only-probe.txt');
     mark = model.requests.length;
     await say(madeCoord, call('project_thread_start', { ask: 'Please do this.', title: 'Read only', brief: call('write', { file_path: readOnlyFile, content: 'x' }) }));

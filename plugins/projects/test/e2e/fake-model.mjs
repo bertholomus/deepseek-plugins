@@ -7,6 +7,8 @@
  *   E2E:force <tool> <json args>  call it even if the session is not offered it
  *   E2E:fail                      answer HTTP 400, so the turn fails
  *   …asked you to try again/continue  (Retry or Resume from the window) reply RESUMED
+ *   Carry on from where you left off and finish the task.  (the plugin's nudge) reply NUDGED at once,
+ *                                 unless E2E:fail is there too
  *   E2E:slow <ms>                 on a line of its own: answer after that long
  *   [Handback from thread …       reply SAW-HANDBACK
  *   [Thread idle without …        reply SAW-IDLE
@@ -53,6 +55,8 @@ function decide(body, text) {
     const force = /E2E:force (\S+) (.*)$/m.exec(text);
     if (force) return { tool: force[1], args: JSON.parse(force[2]) };
     if (text.includes('E2E:fail')) return { fail: true };
+    // The plugin's nudge after a failed or stopped turn: it carries on at once, whatever made the turn slow.
+    if (text.includes('Carry on from where you left off and finish the task.')) return { text: 'NUDGED', nudge: true };
     if (text.includes('[Handback from thread')) return { text: 'SAW-HANDBACK' };
     if (text.includes('[Thread idle without a handback')) return { text: 'SAW-IDLE' };
     if (text.includes('[Thread waiting for approval')) return { text: 'SAW-APPROVAL' };
@@ -101,7 +105,7 @@ export async function startFakeModel({ port = 0, models = ['fake-model', 'fake-f
             action,
             at: Date.now(),
         });
-        const slow = /^E2E:slow (\d+)$/m.exec(fresh);
+        const slow = action.nudge ? null : /^E2E:slow (\d+)$/m.exec(fresh);
         if (slow) {
             await new Promise((resolve) => {
                 const timer = setTimeout(resolve, Number(slow[1]));

@@ -50,7 +50,7 @@ import {
 } from './settings.js';
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage, cardSummary,
-    handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, welcomeMessage, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS, STOPPED_BY_USER,
+    handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, welcomeMessage, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS, STOPPED_BY_USER, NUDGE,
     outsideMessage, replyMessage,
 } from './prompts.js';
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
@@ -116,6 +116,16 @@ const ARCHIVED = 'the project is archived; restore it first';
 /** DSH's tools that change files, which a coordinator on Read Only is refused (str_replace_editor's view only reads). */
 const WRITE_TOOLS = new Set(['write', 'edit', 'str_replace_editor']);
 const READ_ONLY_REASON = 'You are on Read Only, so you don\'t change files. Start a thread for this change with project_thread_start, or send it to the thread already doing that work.';
+/**
+ * A coordinator on Read Only asking for a wider sandbox (DSH's shell, file and code tools take `sandbox_permissions`):
+ * refused before DSH asks anyone, so it never reads as the user's refusal and isn't taken for a reason to widen its access.
+ */
+const READ_ONLY_WIDER = 'You are on Read Only, so this didn\'t run and nobody was asked: a step that needs more than reading belongs in a thread. Start one for it with project_thread_start, or send it to the thread already doing that work. Don\'t suggest widening your access.';
+/** Whether a call asks for a sandbox wider than reading. */
+const asksWider = (exec) => {
+    const mode = isObject(exec?.arguments) ? exec.arguments.sandbox_permissions : undefined;
+    return typeof mode === 'string' && mode.trim() !== '' && mode.trim() !== 'read-only';
+};
 /** DSH's tools that reach an MCP server named in their `server` argument, not in their own name. */
 const SERVER_TOOLS = new Set(['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource']);
 
@@ -690,6 +700,10 @@ export class ProjectManager {
             && this.readOnlyCoordinator(who.projectId)) {
             this.log(`read-only-refused ${who.projectId}/coordinator ${name}`);
             return READ_ONLY_REASON;
+        }
+        if (who.role === 'coordinator' && asksWider(exec) && this.readOnlyCoordinator(who.projectId)) {
+            this.log(`read-only-refused ${who.projectId}/coordinator ${name} wider`);
+            return READ_ONLY_WIDER;
         }
         const byName = this.wallReason(who, name);
         if (byName !== undefined || !SERVER_TOOLS.has(name)) return byName;
@@ -1719,13 +1733,35 @@ export class ProjectManager {
             return;
         }
         if (this.config.autoHandback !== 'idle' || !this.allowHandback(projectId, threadId)) return;
-        // A failed or stopped turn: the coordinator nudges it first, once in a row; the user hears when that didn't help.
+        // One nudge in a row for a turn that ended without a handback, counted apart for a turn that failed or stopped
+        // and one that just ended, so each note says what happened; the user hears when it didn't help, or when only they
+        // can fix it, and the coordinator sends nothing more. A failed or stopped turn's nudge the plugin sends itself,
+        // since a coordinator turn would only say so; while the project is paused its note waits like any other, and the
+        // coordinator nudges it on resume. A handback, the user's words or their Retry start the count again.
         const ended = Boolean(endingStateOf(turn.ending));
-        const nudge = ended && !t.nudged && !userMustFix(turn.ending);
-        this.store.putThread(projectId, threadId, { nudged: nudge ? true : undefined });
-        const news = nudge ? undefined : { kind: ended ? endingStateOf(turn.ending) : 'finished', thread: threadId };
-        await this.deliver(projectId, idleMessage(threadId, t.title, turn.reply, turn.ending, { nudge, again: ended && t.nudged === true }), undefined, news);
-        this.log(`idle-note ${projectId}/${threadId} chars=${turn.reply.length}${turn.ending ? ` ended=${turn.endKind}${nudge ? ' nudge' : ''}` : ''}`);
+        const again = ended ? t.nudged === true : t.stalled === true;
+        const nudge = !again && !(ended && userMustFix(turn.ending));
+        this.store.putThread(projectId, threadId, ended ? { nudged: nudge ? true : undefined } : { nudged: undefined, stalled: true });
+        if (nudge && ended && !this.held(projectId) && await this.nudgeThread(projectId, threadId, turn)) return;
+        const news = nudge && ended ? undefined : { kind: ended ? endingStateOf(turn.ending) : 'finished', thread: threadId };
+        await this.deliver(projectId, idleMessage(threadId, t.title, turn.reply, turn.ending, { nudge: nudge && ended, again }), undefined, news);
+        this.log(`idle-note ${projectId}/${threadId} chars=${turn.reply.length}${turn.ending ? ` ended=${turn.endKind}` : ''}${nudge && ended ? ' nudge' : ''}${again ? ' again' : ''}`);
+    }
+
+    /**
+     * The one nudge after a turn that failed or stopped without a handback, sent to the thread as from its
+     * coordinator (the next turn's end is reviewed as the coordinator's).
+     * @returns whether it went; when it didn't, the coordinator gets the note and nudges it.
+     */
+    async nudgeThread(projectId, threadId, turn) {
+        try {
+            await this.sendToThread(projectId, threadId, NUDGE, false);
+        } catch (error) {
+            this.log(`error nudge ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
+            return false;
+        }
+        this.log(`nudge ${projectId}/${threadId} ended=${turn.endKind}`);
+        return true;
     }
 
     /**
@@ -2398,6 +2434,8 @@ export class ProjectManager {
         this.addThreadTools(projectId, id, tools, 'from the user\'s words in a message');
         // Whatever the coordinator sends answers the thread's open question, if it had one.
         if (t.question) this.store.putThread(projectId, id, { question: undefined });
+        // The user's words make it new work: a turn that then ends without a handback gets its own nudge.
+        if (userWords !== '' && (t.nudged || t.stalled)) this.store.putThread(projectId, id, { nudged: undefined, stalled: undefined });
         await this.prompt(t.sessionId, coordinatorMessage(text.trim(), userWords), steer ? 'steer' : 'queue', this.store.project(projectId).coordinatorSessionId);
         this.log(`thread-send ${projectId}/${id} mode=${steer ? 'steer' : 'queue'} chars=${text.length}`);
         return `${steer ? 'Steered' : 'Sent to'} ${id}${t.resolved ? ' (reopened)' : ''}.`;
@@ -2629,6 +2667,8 @@ export class ProjectManager {
         if (!state) throw new ProjectError(`${id}'s last turn finished, so there is nothing to retry`);
         // As the roster tells it (a person's stop says so), once that turn was reviewed.
         const ending = t.seenTurn === turn.key && t.lastEnding?.text ? t.lastEnding.text : turn.ending;
+        // The user asked for it, so a turn that then ends without a handback gets its own nudge.
+        if (t.nudged || t.stalled) this.store.putThread(projectId, id, { nudged: undefined, stalled: undefined });
         await this.sendToThread(projectId, id, continueMessage(ending, state === 'failed'), false);
         this.log(`thread-continue ${projectId}/${id} after=${turn.endKind}`);
         return this.describeProject(projectId);
@@ -3359,7 +3399,7 @@ export class ProjectManager {
         if (!this.allowHandback(projectId, threadId)) {
             throw new ProjectError(`handback limit reached (${this.config.maxHandbacksPerHour} per hour); finish the work and hand back once`);
         }
-        this.store.putThread(projectId, threadId, { lastHandback: { status, summary: cardSummary(text, 500), at: new Date().toISOString() }, nudged: undefined, question: undefined });
+        this.store.putThread(projectId, threadId, { lastHandback: { status, summary: cardSummary(text, 500), at: new Date().toISOString() }, nudged: undefined, stalled: undefined, question: undefined });
         // With no other thread at work, the reply to this one also closes what the user asked for.
         const others = Object.entries(this.store.project(projectId).threads).filter(([id, o]) => id !== threadId && !o.resolved);
         const last = status !== 'progress' && !others.some(([, o]) => this.liveStatus(o.sessionId) !== 'idle');
