@@ -313,6 +313,60 @@ test('after a move, the other changes go to the same occurrence in the moved eve
     assert.equal(I.sameOccurrence(undefined, before), before);
 });
 
+test('a new event goes to the default calendar, or to one the user picks when there is none', () => {
+    const calendars = [
+        { id: 'c-work', account: 'Work', kind: 'google', name: 'Work', readOnly: false },
+        { id: 'c-home', account: 'Home', kind: 'caldav', name: 'Home', readOnly: false },
+        { id: 'c-feed', account: 'Holidays', kind: 'ics', name: 'Holidays', readOnly: true },
+    ];
+    const chosen = I.writableCalendars({ calendars, defaultCalendar: 'c-home' });
+    assert.deepEqual(plain(chosen.list.map((c) => c.id)), ['c-work', 'c-home']);
+    assert.equal(chosen.defaultId, 'c-home');
+    // No default (nothing chosen, and no main calendar stands out): none is picked for the user.
+    for (const defaultCalendar of [undefined, null, '', 'c-feed', 'c-gone']) assert.equal(I.writableCalendars({ calendars, defaultCalendar }).defaultId, '');
+    const draft = I.draftFrom({ preset: { startDay: '2026-10-12', startTime: '09:00' }, state: { calendars }, zone: LA });
+    assert.equal(draft.calendarId, '');
+    assert.equal(I.draftFrom({ preset: { calendarId: 'c-work' }, state: { calendars }, zone: LA }).calendarId, 'c-work');
+    assert.equal(I.draftFrom({ preset: {}, state: { calendars, defaultCalendar: 'c-work' }, zone: LA }).calendarId, 'c-work');
+    // Saving asks for one, or, when none can be written, says so.
+    const titled = { ...draft, title: 'Planning' };
+    assert.deepEqual(plain(I.draftProblems(titled, 2)), { calendarId: 'Choose the calendar it goes to.' });
+    assert.match(I.draftProblems(titled, 0).calendarId, /^There is no calendar that can be written/);
+    assert.deepEqual(plain(I.draftProblems({ ...titled, calendarId: 'c-work' }, 2)), {});
+});
+
+test('after removing an account: DSH\'s access withdrawn, or the page to withdraw it on', () => {
+    const google = { id: 'a-1', kind: 'google', name: 'ann@gmail.com' };
+    const microsoft = { id: 'a-2', kind: 'microsoft', name: 'pat@outlook.com' };
+    const caldav = { id: 'a-3', kind: 'caldav', name: 'Fastmail' };
+    assert.deepEqual(plain(I.removalNotice(google, { revoked: true })), { toast: 'Removed ann@gmail.com. DSH\'s access was withdrawn at Google.' });
+    // Google couldn't be reached: its page.
+    const unreached = I.removalNotice(google, { revoked: false, manageUrl: 'https://myaccount.google.com/linkedapps' });
+    assert.equal(unreached.toast, 'Removed ann@gmail.com.');
+    assert.equal(unreached.manageUrl, 'https://myaccount.google.com/linkedapps');
+    assert.match(unreached.text, /^Google couldn't be reached to withdraw DSH's access to ann@gmail\.com\./);
+    // Microsoft: always its page, as an app can't withdraw its own access there.
+    const ms = I.removalNotice(microsoft, { revoked: false, manageUrl: 'https://account.live.com/consent/Manage' });
+    assert.equal(ms.manageUrl, 'https://account.live.com/consent/Manage');
+    assert.match(ms.text, /^Microsoft doesn't let an app withdraw its own access/);
+    // Neither: nothing more is said. A page only on https.
+    assert.deepEqual(plain(I.removalNotice(caldav, {})), { toast: 'Removed Fastmail.' });
+    assert.deepEqual(plain(I.removalNotice(caldav, undefined)), { toast: 'Removed Fastmail.' });
+    assert.deepEqual(plain(I.removalNotice(microsoft, { manageUrl: 'http://account.live.com/consent/Manage' })), { toast: 'Removed pat@outlook.com.' });
+    assert.deepEqual(plain(I.removalNotice(microsoft, { manageUrl: 'javascript:alert(1)' })), { toast: 'Removed pat@outlook.com.' });
+});
+
+test('a sign-in\'s way back to DSH, for the address to paste', () => {
+    const ms = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=x&redirect_uri=http%3A%2F%2Flocalhost%3A53122&response_type=code';
+    assert.equal(I.returnAddress(ms), 'http://localhost:53122');
+    const google = 'https://accounts.google.com/o/oauth2/v2/auth?redirect_uri=http%3A%2F%2F127.0.0.1%3A4100%2F&client_id=y';
+    assert.equal(I.returnAddress(google), 'http://127.0.0.1:4100');
+    // Only an address on the computer DSH runs on.
+    assert.equal(I.returnAddress('https://login.example.com/authorize?redirect_uri=https%3A%2F%2Fexample.com%2F'), '');
+    assert.equal(I.returnAddress('not an address'), '');
+    assert.equal(I.returnAddress(undefined), '');
+});
+
 test('a call\'s arguments for its card, as far as they have streamed', () => {
     assert.deepEqual({ ...I.callArgs({ argsRaw: '{"title":"Dentist","start":"2026-10-13T09:30","calendarId":"c"}' }) }, { title: 'Dentist', start: '2026-10-13T09:30' });
     assert.deepEqual({ ...I.callArgs({}, '{"title":"Dent') }, { title: 'Dent' });

@@ -13,7 +13,7 @@
  * - The Accounts dialog (AccountsDialog): each account and how its sync
  *   stands, and adding one: iCloud, Google, Microsoft 365 / Outlook.com /
  *   Exchange Online, Fastmail, Nextcloud, Yahoo and other CalDAV servers, a
- *   subscribed feed, or a calendar on this computer.
+ *   subscribed feed, or a calendar kept in DSH.
  * - The Agenda pane beside chats (AgendaPane), in DSH's right sidebar: today
  *   and the next days, the event on now and the next one, with Join for a
  *   call.
@@ -136,6 +136,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-seg>button:hover{color:var(--cal-text)}',
             '.dshcal-seg>button[aria-checked=true]{background:var(--cal-press);color:var(--cal-text)}',
             '.dshcal-dot{display:inline-block;flex:none;width:9px;height:9px;border-radius:50%;background:var(--dot,var(--cal-accent))}',
+            '.dshcal-dot[data-none]{background:none;box-shadow:inset 0 0 0 1.5px var(--cal-meta)}',
             '.dshcal-tag{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:9px;background:var(--cal-hover);font-size:11px;font-weight:500;color:var(--cal-meta);white-space:nowrap}',
             '.dshcal-warn{color:var(--cal-warn)}',
             '.dshcal-meta{color:var(--cal-meta)}',
@@ -1638,10 +1639,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const EMAIL = /^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$/;
         const isTime = (text) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(text ?? ''));
 
-        /** The calendars a new event can go to, and the one it goes to unless the user picks another. */
+        /**
+         * The calendars a new event can go to, and the one it goes to unless
+         * the user picks another: the host's default, or '' when there is
+         * none (nothing chosen, and no main calendar stands out), and the user
+         * picks one.
+         */
         function writableCalendars(state) {
             const list = (state?.calendars ?? EMPTY).filter((c) => !c.readOnly);
-            const chosen = list.find((c) => c.id === state?.defaultCalendar) ?? list[0];
+            const chosen = list.find((c) => c.id === state?.defaultCalendar);
             return { list, defaultId: chosen?.id ?? '' };
         }
 
@@ -1792,8 +1798,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const draftStart = (d) => (d.allDay ? d.startDay : `${d.startDay}T${d.startTime}`);
         const draftEnd = (d) => (d.allDay ? d.endDay : `${d.endDay}T${d.endTime}`);
 
-        /** What's wrong with a draft: {field: message}, empty when nothing is. */
-        function draftProblems(d) {
+        /**
+         * What's wrong with a draft: {field: message}, empty when nothing is.
+         * @param writable - how many calendars it can go to, when known.
+         */
+        function draftProblems(d, writable) {
             const out = {};
             if (d.title.trim() === '') out.title = 'Give the event a title.';
             if (!isDay(d.startDay)) out.start = 'Pick the day it starts.';
@@ -1809,7 +1818,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             if (d.url.trim() !== '' && !isUrl(d.url.trim())) out.url = 'A link starts with https:// or http://.';
             const repeat = repeatProblem(d.repeat, d.startDay);
             if (repeat) out.repeat = repeat;
-            if (!d.calendarId) out.calendarId = 'There is no calendar that can be written. Add an account or a calendar first.';
+            if (!d.calendarId) out.calendarId = writable === 0 ? 'There is no calendar that can be written. Add an account or a calendar first.' : 'Choose the calendar it goes to.';
             return out;
         }
 
@@ -2041,7 +2050,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const invitation = editing && roleOf(occurrence) === 'guest';
             const others = new Set([...othersOf(d.guests), ...(editing ? othersOf(initial.guests) : EMPTY)].map((g) => g.email.toLowerCase())).size;
             const mailKind = editing ? 'update' : 'create';
-            const mail = mailMode({ kind: mailKind, calendar: home, occurrence: editing ? occurrence : undefined, guests: others });
+            // No calendar chosen yet: nothing to say about emails until there is one.
+            const mail = home ? mailMode({ kind: mailKind, calendar: home, occurrence: editing ? occurrence : undefined, guests: others }) : { mode: 'none', to: 'guests' };
             // Ticked only by the user: unticked, nobody is told (or, where the server emails anyway, the user is asked).
             const tell = mail.mode === 'ask' && d.notify === true;
             const tellLabel = !editing || (home?.kind === 'caldav' && roleOf(occurrence) === 'own') ? 'Send invitations by email' : 'Send updates to guests by email';
@@ -2126,7 +2136,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
             const save = async () => {
                 if (busy) return;
-                const problems = draftProblems(d);
+                const problems = draftProblems(d, calendars.length);
                 if (guestError) problems.guests = guestError;
                 if (Object.keys(problems).length) {
                     setErrors(problems);
@@ -2245,14 +2255,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 h(Field, {
                     label: 'Calendar', id: 'dshcal-calendar', error: errors.calendarId,
                     hint: invitation ? 'An invitation stays in the calendar it was sent to.'
-                        : editing && d.calendarId !== homeId && occurrence.recurring ? 'The whole series moves to this calendar, and the changes made here go to all of it.' : undefined,
+                        : editing && d.calendarId !== homeId && occurrence.recurring ? 'The whole series moves to this calendar, and the changes made here go to all of it.'
+                        : !calendar && calendars.length > 1 ? 'To skip this next time, pick “Use for new events” in a calendar\'s menu in the list of calendars.' : undefined,
                 },
                     h('div', { className: 'dshcal-inline', style: { flexWrap: 'nowrap' } },
-                        h('span', { className: 'dshcal-dot', style: { '--dot': colorOf(calendar?.color) } }),
+                        h('span', { className: 'dshcal-dot', 'data-none': calendar ? undefined : '', style: calendar ? { '--dot': colorOf(calendar.color) } : undefined }),
                         h('select', {
                             id: 'dshcal-calendar', className: 'dshcal-select dshcal-grow', value: d.calendarId, disabled: invitation, 'data-calendar-calendar': '', 'aria-invalid': errors.calendarId ? true : undefined,
                             onChange: (event) => set({ calendarId: event.target.value }),
-                        }, [...byAccount].map(([account, list]) => h('optgroup', { key: account, label: account || 'Calendars' },
+                        },
+                        // No calendar chosen yet (no default): the user picks one before saving.
+                        calendar ? null : h('option', { value: '', disabled: true }, calendars.length ? 'Choose a calendar' : 'No calendar can be written'),
+                        [...byAccount].map(([account, list]) => h('optgroup', { key: account, label: account || 'Calendars' },
                             list.map((c) => h('option', { key: c.id, value: c.id }, c.name))))))),
                 h(Field, { label: 'Place', id: 'dshcal-location' },
                     h('input', { id: 'dshcal-location', className: 'dshcal-input', value: d.location, placeholder: 'An address, a room, or a link', 'data-calendar-location': '', onChange: (event) => set({ location: event.target.value }) })),
@@ -3026,7 +3040,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             { id: 'zoho', name: 'Zoho Calendar', text: 'With your password or an application-specific password.' },
             { id: 'other', name: 'Other CalDAV server', text: 'Radicale, Baïkal, SOGo, Synology and any other server that speaks CalDAV.' },
             { id: 'subscribe', name: 'Subscribe by address', text: 'A published calendar (.ics or webcal://): holidays, sports, a school. Read only.' },
-            { id: 'local', name: 'New calendar on this computer', text: 'Kept by DSH on this computer, synced nowhere.' },
+            { id: 'local', name: 'New calendar kept in DSH', text: 'Kept in DSH, synced nowhere.' },
         ];
         const PRESET_BADGES = { icloud: 'iC', fastmail: 'F', nextcloud: 'N', yahoo: 'Y', 'mailbox.org': 'mb', zoho: 'Z' };
         function accountBadge(account) {
@@ -3056,10 +3070,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * A Google or Microsoft sign-in from start to end: start it (Google:
-         * its page opens in a new tab; Microsoft: a code to enter on its
-         * page), then ask how it stands every 2 s until it's done or failed.
-         * Leaving it cancels it.
+         * A Google or Microsoft sign-in from start to end: start it (its page
+         * opens in a new tab; a Microsoft sign-in with method 'code' has a
+         * code to enter on Microsoft's page instead), then ask how it stands
+         * every 2 s until it's done or failed. Leaving it cancels it.
          */
         function useSignIn(store, kind, accountId) {
             const [flow, setFlow] = React.useState(null);
@@ -3087,13 +3101,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 }, 2000);
                 return () => clearInterval(timer);
             }, [waiting, store, alive]);
-            const start = async () => {
+            /** method: '' for the provider's page in the browser, 'code' for a Microsoft sign-in with a code. */
+            const start = async (method = '') => {
                 const current = flowRef.current;
                 if (current?.status === 'waiting') void store.link.call('cancelSignIn', { flow: current.flow });
                 setFlow(null);
                 setBusy(true);
                 setError('');
-                const result = await store.link.call('startSignIn', { kind, accountId: accountId ?? '' });
+                const result = await store.link.call('startSignIn', { kind, accountId: accountId ?? '', ...(method ? { method } : {}) });
                 if (!alive.current) return;
                 setBusy(false);
                 if (!result.ok) {
@@ -3101,27 +3116,75 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     return;
                 }
                 setFlow(result.value);
-                if (kind === 'google' && result.value?.url) {
+                if (isUrl(result.value?.url)) {
                     try { window.open(result.value.url, '_blank', 'noopener,noreferrer'); } catch {}
                 }
             };
             const finish = async (address) => {
-                if (!flow) return;
+                if (!flow) return false;
                 setBusy(true);
                 setError('');
                 const result = await store.link.call('finishSignIn', { flow: flow.flow, url: address });
-                if (!alive.current) return;
+                if (!alive.current) return false;
                 setBusy(false);
-                if (!result.ok) setError(errorText(result.error));
-                else {
-                    setFlow(result.value);
-                    if (result.value?.status === 'done') void store.refresh();
+                if (!result.ok) {
+                    setError(errorText(result.error));
+                    return false;
                 }
+                setFlow(result.value);
+                if (result.value?.status === 'done') void store.refresh();
+                return true;
             };
             return { flow, error, busy, start, finish };
         }
 
         const outLink = (href, text) => h('a', { className: 'dshcal-link', href, target: '_blank', rel: 'noopener noreferrer' }, text);
+        const smallLink = { alignSelf: 'flex-start', fontSize: 12 };
+
+        /** Where a sign-in's page sends the browser back to (the redirect_uri of its address), without the last '/', or ''. */
+        function returnAddress(url) {
+            try {
+                const back = new URL(String(url ?? '')).searchParams.get('redirect_uri') ?? '';
+                return /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/[^\s?#]*)?$/i.test(back) ? back.replace(/\/$/, '') : '';
+            } catch {
+                return '';
+            }
+        }
+
+        /**
+         * A sign-in on the provider's page in another tab: open it again, and
+         * when DSH runs on another computer (the page can't come back to it),
+         * finish it with the address the browser ended on.
+         * @param who - 'Google' or 'Microsoft'.
+         * @param prefix - the fields' names: 'google' or 'microsoft'.
+         */
+        function SignInWait({ who, prefix, flow, busy, onFinish, fallback }) {
+            const [address, setAddress] = React.useState('');
+            const back = returnAddress(flow.url) || fallback;
+            const id = `dshcal-${prefix}-paste`;
+            const finish = async () => {
+                const value = address.trim();
+                if (value === '' || busy) return;
+                if (await onFinish(value)) setAddress('');
+            };
+            return h(React.Fragment, null,
+                h('div', { className: 'dshcal-wait', role: 'status' }, h(Spinner), `Waiting for you to finish on ${who}'s page…`),
+                isUrl(flow.url) ? h('a', { className: 'dshcal-btn', href: flow.url, target: '_blank', rel: 'noopener noreferrer', style: { alignSelf: 'flex-start' }, [`data-calendar-${prefix}-open`]: '' },
+                    icon('IconRightUpOutlineRegular'), `Open ${who}'s page again`) : null,
+                h(Field, { label: 'Did the page end on an address that didn\'t load?', id, hint: `When DSH runs on another computer, ${who} can't come back to it: copy that address (it starts with ${back}) and paste it here.` },
+                    h('div', { className: 'dshcal-inline', style: { flexWrap: 'nowrap' } },
+                        h('input', {
+                            id, className: 'dshcal-input', style: { flex: 1 }, value: address, placeholder: `${back}/?code=…`, spellCheck: false, autoComplete: 'off', [`data-calendar-${prefix}-paste`]: '',
+                            onChange: (e) => setAddress(e.target.value),
+                            onKeyDown: (e) => {
+                                if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                                    e.preventDefault();
+                                    void finish();
+                                }
+                            },
+                        }),
+                        h(Btn, { disabled: address.trim() === '' || busy, onClick: () => void finish(), [`data-calendar-${prefix}-finish`]: '' }, busy ? h(Spinner) : null, 'Finish'))));
+        }
 
         /** The steps to make the Google OAuth client the sign-in needs, and its id and secret. */
         function GoogleSetup({ store, signIn, onReady, slot }) {
@@ -3183,14 +3246,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 if (!result.ok) setError(errorText(result.error));
                 else onReady();
             };
+            const code = (text) => h('code', null, text);
             return h('form', { className: 'dshcal-form', 'data-calendar-microsoft-setup': '', onSubmit: (e) => { e.preventDefault(); void save(); } },
                 h('div', { className: 'dshcal-note' }, icon('IconInfoOutlineRegular'),
                     h('span', null, 'Microsoft lets an app like this sign in through an app registration of your own, or your organization\'s. Making one takes a few minutes, once.')),
                 h('ol', { className: 'dshcal-steps' },
                     h('li', null, 'In the ', outLink('https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade', 'Microsoft Entra admin center'), ', App registrations → New registration. For who can use it, pick accounts in any organizational directory and personal Microsoft accounts.'),
-                    h('li', null, 'Under Authentication, turn on ', h('b', null, 'Allow public client flows'), '.'),
-                    h('li', null, 'Under API permissions, add the Microsoft Graph delegated permissions ', h('code', null, 'Calendars.ReadWrite'), ', ', h('code', null, 'User.Read'), ' and ', h('code', null, 'offline_access'), '.'),
+                    h('li', null, 'Under Authentication, Add a platform → ', h('b', null, 'Mobile and desktop applications'), ', with the redirect URI ', code('http://localhost'),
+                        '. Exactly that, with no port: Microsoft lets the sign-in come back to any port on localhost.'),
+                    h('li', null, 'Under API permissions, add the Microsoft Graph delegated permissions ', code('Calendars.ReadWrite'), ', ', code('User.Read'), ' and ', code('offline_access'), '.'),
                     h('li', null, 'Copy its Application (client) ID here.')),
+                h('p', { className: 'dshcal-hint', style: { margin: 0 }, 'data-calendar-microsoft-code-note': '' },
+                    'Only to sign in with a code (from another device), also turn on ', h('b', null, 'Allow public client flows'), ' under Authentication. The sign-in in the browser doesn\'t need it.'),
                 h(Field, { label: 'Application (client) ID', id: 'dshcal-ms-id' },
                     h('input', { id: 'dshcal-ms-id', className: 'dshcal-input', value: clientId, placeholder: '00000000-0000-0000-0000-000000000000', spellCheck: false, autoComplete: 'off', 'data-modal-autofocus': true, 'data-calendar-microsoft-id': '', onChange: (e) => setClientId(e.target.value) })),
                 h(Field, { label: 'Tenant', id: 'dshcal-ms-tenant', hint: 'common takes any account; your organization\'s tenant ID or domain takes only its accounts.' },
@@ -3204,32 +3271,37 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** Signing in to Google: its page in a new tab, and a way to finish by its address when it can't come back here. */
         function GoogleSignIn({ store, accountId, onDone, onSetup, slot }) {
             const signIn = useSignIn(store, 'google', accountId);
-            const [address, setAddress] = React.useState('');
             const flow = signIn.flow;
             React.useEffect(() => { if (flow?.status === 'done') onDone(flow.account); }, [flow?.status]);
             return h('div', { className: 'dshcal-form', 'data-calendar-google-signin': '' },
                 !flow ? h('p', { className: 'dshcal-hint', style: { margin: 0 } }, 'Google\'s sign-in page opens in a new tab. Pick your account there and allow DSH to see and change your calendars; this dialog notices by itself when you\'re done.') : null,
-                flow?.status === 'waiting' ? h(React.Fragment, null,
-                    h('div', { className: 'dshcal-wait', role: 'status' }, h(Spinner), 'Waiting for you to finish on Google\'s page…'),
-                    flow.url ? h('a', { className: 'dshcal-btn', href: flow.url, target: '_blank', rel: 'noopener noreferrer', style: { alignSelf: 'flex-start' } }, icon('IconRightUpOutlineRegular'), 'Open Google\'s page again') : null,
-                    h(Field, { label: 'Did the page end on an address that didn\'t load?', id: 'dshcal-google-paste', hint: 'When DSH runs on another computer, Google can\'t come back to it: copy that address (it starts with http://127.0.0.1 or http://localhost) and paste it here.' },
-                        h('div', { className: 'dshcal-inline', style: { flexWrap: 'nowrap' } },
-                            h('input', { id: 'dshcal-google-paste', className: 'dshcal-input', style: { flex: 1 }, value: address, placeholder: 'http://127.0.0.1:…/?code=…', spellCheck: false, autoComplete: 'off', onChange: (e) => setAddress(e.target.value) }),
-                            h(Btn, { disabled: address.trim() === '' || signIn.busy, onClick: () => void signIn.finish(address.trim()) }, 'Finish')))) : null,
+                flow?.status === 'waiting' ? h(SignInWait, { key: flow.flow, who: 'Google', prefix: 'google', flow, busy: signIn.busy, onFinish: signIn.finish, fallback: 'http://127.0.0.1' }) : null,
                 flow?.status === 'failed' ? h(Alert, { text: flow.error || 'The sign-in didn\'t finish.' }) : null,
                 h(Alert, { text: signIn.error }),
-                h('button', { type: 'button', className: 'dshcal-link', style: { alignSelf: 'flex-start', fontSize: 12 }, onClick: onSetup }, 'Use another Google client'),
+                h('button', { type: 'button', className: 'dshcal-link', style: smallLink, onClick: onSetup }, 'Use another Google client'),
                 h(FooterSlot, { target: slot }, flow?.status === 'waiting' ? null
                     : h(ui.Button, { variant: 'primary', disabled: signIn.busy, onClick: () => void signIn.start(), 'data-calendar-google-start': '' },
                         signIn.busy ? h(Spinner) : null, flow ? 'Start again' : 'Sign in with Google')));
         }
 
-        /** Signing in to Microsoft: a code to enter on Microsoft's page, from any device. */
+        /**
+         * Signing in to Microsoft: its page in a new tab, as Google's, and a
+         * way to finish by its address when it can't come back here. Or, when
+         * asked, a code to enter on Microsoft's page from any device.
+         */
         function MicrosoftSignIn({ store, accountId, onDone, onSetup, slot }) {
             const signIn = useSignIn(store, 'microsoft', accountId);
+            const [method, setMethod] = React.useState('browser');
             const [copied, setCopied] = React.useState(false);
             const flow = signIn.flow;
+            const withCode = method === 'code';
+            const waiting = flow?.status === 'waiting';
             React.useEffect(() => { if (flow?.status === 'done') onDone(flow.account); }, [flow?.status]);
+            const begin = (next) => {
+                setMethod(next);
+                setCopied(false);
+                void signIn.start(next === 'code' ? 'code' : '');
+            };
             const copy = async () => {
                 try {
                     await navigator.clipboard.writeText(flow.userCode);
@@ -3237,22 +3309,29 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     setTimeout(() => setCopied(false), 2000);
                 } catch {}
             };
-            return h('div', { className: 'dshcal-form', 'data-calendar-microsoft-signin': '' },
-                !flow ? h('p', { className: 'dshcal-hint', style: { margin: 0 } }, 'You get a code to enter on Microsoft\'s sign-in page, on this computer or any other. Then sign in and allow DSH to see and change your calendars; this dialog notices by itself when you\'re done.') : null,
-                flow?.status === 'waiting' && flow.userCode ? h(React.Fragment, null,
+            return h('div', { className: 'dshcal-form', 'data-calendar-microsoft-signin': method },
+                !flow ? h('p', { className: 'dshcal-hint', style: { margin: 0 } }, withCode
+                    ? 'You get a code to enter on Microsoft\'s sign-in page, on this device or any other. Then sign in and allow DSH to see and change your calendars; this dialog notices by itself when you\'re done.'
+                    : 'Microsoft\'s sign-in page opens in a new tab. Pick your account there and allow DSH to see and change your calendars; this dialog notices by itself when you\'re done.') : null,
+                waiting && flow.userCode ? h(React.Fragment, null,
                     h('div', { className: 'dshcal-usercode' },
                         h('b', { 'data-calendar-user-code': '' }, flow.userCode),
                         h(Btn, { size: 'sm', onClick: () => void copy() }, icon(copied ? 'IconCheckOutlineRegular' : 'IconCopyOutlineRegular'), copied ? 'Copied' : 'Copy')),
-                    flow.verificationUri ? h('div', { className: 'dshcal-inline' },
+                    isUrl(flow.verificationUri) ? h('div', { className: 'dshcal-inline' },
                         h('span', null, 'Enter it at'),
-                        h('a', { className: 'dshcal-btn dshcal-btn-primary dshcal-btn-sm', href: flow.verificationUri, target: '_blank', rel: 'noopener noreferrer' }, linkLabel(flow.verificationUri), icon('IconRightUpOutlineRegular', { size: 12 }))) : null,
+                        h('a', { className: 'dshcal-btn dshcal-btn-primary dshcal-btn-sm', href: flow.verificationUri, target: '_blank', rel: 'noopener noreferrer', 'data-calendar-verification': '' }, linkLabel(flow.verificationUri), icon('IconRightUpOutlineRegular', { size: 12 }))) : null,
                     h('div', { className: 'dshcal-wait', role: 'status' }, h(Spinner), flow.expiresAt ? `Waiting for you… The code works until ${timeText(flow.expiresAt, browserZone())}.` : 'Waiting for you…')) : null,
+                waiting && !flow.userCode ? h(SignInWait, { key: flow.flow, who: 'Microsoft', prefix: 'microsoft', flow, busy: signIn.busy, onFinish: signIn.finish, fallback: 'http://localhost' }) : null,
                 flow?.status === 'failed' ? h(Alert, { text: flow.error || 'The sign-in didn\'t finish.' }) : null,
                 h(Alert, { text: signIn.error }),
-                h('button', { type: 'button', className: 'dshcal-link', style: { alignSelf: 'flex-start', fontSize: 12 }, onClick: onSetup }, 'Use another app registration'),
-                h(FooterSlot, { target: slot }, flow?.status === 'waiting' ? null
-                    : h(ui.Button, { variant: 'primary', disabled: signIn.busy, onClick: () => void signIn.start(), 'data-calendar-microsoft-start': '' },
-                        signIn.busy ? h(Spinner) : null, flow ? 'Start again' : 'Get a code')));
+                h('div', { className: 'dshcal-inline', style: { gap: 16 } },
+                    withCode
+                        ? h('button', { type: 'button', className: 'dshcal-link', style: smallLink, disabled: signIn.busy, onClick: () => begin('browser'), 'data-calendar-microsoft-browser': '' }, 'Sign in on Microsoft\'s page instead')
+                        : h('button', { type: 'button', className: 'dshcal-link', style: smallLink, disabled: signIn.busy, onClick: () => begin('code'), 'data-calendar-microsoft-code': '' }, 'Sign in with a code instead'),
+                    h('button', { type: 'button', className: 'dshcal-link', style: smallLink, onClick: onSetup }, 'Use another app registration')),
+                h(FooterSlot, { target: slot }, waiting ? null
+                    : h(ui.Button, { variant: 'primary', disabled: signIn.busy, onClick: () => begin(method), 'data-calendar-microsoft-start': '' },
+                        signIn.busy ? h(Spinner) : null, flow ? 'Start again' : withCode ? 'Get a code' : 'Sign in with Microsoft')));
         }
 
         /** A CalDAV account: the server (where the preset has none), the user name and an app password. */
@@ -3329,7 +3408,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h(ui.Button, { variant: 'primary', disabled: busy || url.trim() === '', onClick: () => void add(), 'data-calendar-subscribe-add': '' }, busy ? h(Spinner) : null, busy ? 'Reading it…' : 'Subscribe')));
         }
 
-        /** A calendar on this computer: its name and color. */
+        /** A calendar kept in DSH: its name and color. */
         function LocalForm({ store, onDone, slot }) {
             const [name, setName] = React.useState('');
             const [color, setColor] = React.useState(() => PALETTE[(store.state()?.calendars?.length ?? 0) % PALETTE.length]);
@@ -3388,6 +3467,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
+         * What a removal says about DSH's access to the account, from
+         * removeAccount's answer ({revoked?: true, manageUrl?}): {toast} and,
+         * when the user withdraws that access on the provider's page (always
+         * Microsoft's, which doesn't let an app withdraw its own; Google's when
+         * it couldn't be reached), {text, manageUrl} for a notice to link it.
+         */
+        function removalNotice(account, value) {
+            const name = String(account?.name || 'the account');
+            const provider = account?.kind === 'google' ? 'Google' : account?.kind === 'microsoft' ? 'Microsoft' : '';
+            if (value?.revoked === true) return { toast: `Removed ${name}. DSH's access was withdrawn at ${provider || 'its provider'}.` };
+            const manageUrl = typeof value?.manageUrl === 'string' && /^https:\/\/[^\s"<>]+$/i.test(value.manageUrl) ? value.manageUrl : '';
+            if (manageUrl === '') return { toast: `Removed ${name}.` };
+            let text = `To withdraw DSH's access to ${name}, go to`;
+            if (account?.kind === 'microsoft') text = `Microsoft doesn't let an app withdraw its own access to an account. To withdraw DSH's access to ${name}, go to`;
+            else if (provider) text = `${provider} couldn't be reached to withdraw DSH's access to ${name}. To withdraw it yourself, go to`;
+            return { toast: `Removed ${name}.`, text, manageUrl };
+        }
+
+        /**
          * The Accounts dialog: the accounts and how each one's sync stands
          * (sync now, rename, a new password, sign in again, remove), and Add
          * account with each kind's way in.
@@ -3403,6 +3501,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [syncing, setSyncing] = React.useState('');
             const [error, setError] = React.useState('');
             const [slot, setSlot] = React.useState(null);
+            // After a removal: where to withdraw DSH's access, while the dialog is open ({text, manageUrl}).
+            const [removed, setRemoved] = React.useState(null);
             const bodyRef = React.useRef(null);
             const alive = useAlive();
             const first = React.useRef(true);
@@ -3457,14 +3557,20 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 });
             }
             if (page.page === 'remove') {
+                const kind = page.account.kind;
                 return h(ConfirmDialog, {
                     title: `Remove ${page.account.name}?`,
-                    text: 'Its calendars leave DSH, with what this computer keeps of them. Nothing changes on the server: the account and its events stay as they are there, and you can add the account again.',
+                    text: ['Its calendars leave DSH, with the copy DSH keeps of them. The account and its events stay as they are on its server, and you can add the account again.',
+                        kind === 'google' ? 'DSH\'s access to it is withdrawn at Google too.' : '',
+                        kind === 'microsoft' ? 'Microsoft doesn\'t let an app withdraw its own access, so DSH then shows you where to withdraw it.' : ''].filter(Boolean).join(' '),
                     action: 'Remove',
                     onSubmit: async () => {
                         const result = await store.act('removeAccount', { id: page.account.id });
-                        if (result.ok) store.toast(`Removed ${page.account.name}.`);
-                        return result.ok ? '' : errorText(result.error);
+                        if (!result.ok) return errorText(result.error);
+                        const notice = removalNotice(page.account, result.value);
+                        store.toast(notice.toast);
+                        setRemoved(notice.manageUrl ? { ...notice, key: page.account.id } : null);
+                        return '';
                     },
                     onClose: () => go({ page: 'list' }),
                 });
@@ -3480,6 +3586,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 body = h('div', { className: 'dshcal-state' }, store.stateError() ? h('span', { className: 'dshcal-error' }, store.stateError()) : h(Spinner));
             } else if (page.page === 'list') {
                 body = h('div', { className: 'dshcal-form' },
+                    removed ? h('div', { key: removed.key, className: 'dshcal-note', role: 'status', 'data-calendar-removed': '' },
+                        icon('IconInfoOutlineRegular'),
+                        h('span', null, removed.text, ' ', outLink(removed.manageUrl, linkLabel(removed.manageUrl)), '.'),
+                        h(IconBtn, { label: 'Close this notice', glyph: icon('IconCloseOutlineRegular', { size: 12 }), size: 'sm', onClick: () => setRemoved(null) })) : null,
                     h('div', { className: 'dshcal-accts', 'data-calendar-accounts': '' }, accounts.map((a) => {
                         const count = calendars.filter((c) => c.accountId === a.id).length;
                         const items = [
@@ -3535,7 +3645,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 title = 'Subscribe to a calendar';
                 body = h('div', { className: 'dshcal-form' }, back, h(SubscribeForm, { store, slot, onDone: (account) => added(`Subscribed to ${account?.name ?? 'the calendar'}.`) }));
             } else if (page.page === 'local') {
-                title = 'New calendar on this computer';
+                title = 'New calendar kept in DSH';
                 body = h('div', { className: 'dshcal-form' }, home === 'local' ? null : back, h(LocalForm, { store, slot, onDone: (calendar) => added(`Created ${calendar?.name ?? 'the calendar'}.`) }));
             } else if (page.page === 'google' || page.page === 'microsoft') {
                 const google = page.page === 'google';
@@ -4008,7 +4118,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }) : null,
             dialog?.kind === 'delete-calendar' ? h(ConfirmDialog, {
                 title: `Delete “${dialog.calendar.name}”?`,
-                text: 'It is kept on this computer only, so its events go with it, and that can\'t be undone. Export it first to keep a copy.',
+                text: 'It is kept only in DSH, so its events go with it, and that can\'t be undone. Export it first to keep a copy.',
                 action: 'Delete calendar', onClose: closeDialog,
                 onSubmit: async () => {
                     const result = await store.act('deleteCalendar', { id: dialog.calendar.id });
@@ -4474,7 +4584,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             parseRule, untilValue, untilDay, repeatChoices, repeatFromRule, ruleFromRepeat, repeatProblem,
             columnsOf, lanesOf, fitLanes, daySegments, barItems, agendaDays, rangeOf, stepFrom, dayList,
             draftFrom, draftProblems, createInput, changePatch, writableCalendars,
-            roleOf, othersOf, mailMode, peopleText, sameOccurrence, emailedText, withConsent,
+            roleOf, othersOf, mailMode, peopleText, sameOccurrence, emailedText, withConsent, removalNotice, returnAddress,
             callArgs, argWhen, runningTitle, doneTitle, resultText,
             CalendarPage, AgendaPane, ToolView, EventDialog, EventPopover, AccountsDialog,
         };

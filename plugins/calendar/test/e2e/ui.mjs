@@ -16,14 +16,26 @@
  * - Month, Day and Agenda views, the choice kept by the plugin, N and T;
  * - a calendar hidden and shown again from the side column;
  * - a change the host says would email people ('calendar/needs-notify',
- *   played here, as the calendars on this computer email no one): asked
+ *   played here, as the calendars kept in DSH email no one): asked
  *   first with the host's words, nothing sent on Don't change it, notify
  *   only after Send, and who was emailed in the toast;
  * - an event moved to another calendar with other changes: the move on its
  *   own first, the rest on the moved event; no email offered for a guest on
  *   a calendar that can't send it;
+ * - no default calendar (the host's state played without one): the event
+ *   dialog shows none chosen and asks for one before it saves;
  * - Accounts: the account list and every Add account choice up to its form
- *   (no real sign-ins), and a new calendar on this computer;
+ *   (no real sign-ins), and a new calendar kept in DSH;
+ * - Microsoft, against a stand-in for its sign-in service and Graph on this
+ *   computer (the plugin's microsoftLoginBase and microsoftGraphBase): the
+ *   app registration's steps, its sign-in page opened in a new tab, the
+ *   wait with the page to open again, the sign-in finished by the address
+ *   the page ended on, pasted (as when DSH runs on another computer); the
+ *   account removed, with the page to withdraw DSH's access there; and
+ *   "Sign in with a code instead", showing the code;
+ * - Google, against a stand-in for its sign-in page (googleAuthorizeUrl):
+ *   its page opened in a new tab too, the wait with the page to open again
+ *   and the address to paste (not finished: no stand-in for its API here);
  * - chat cards for an agent's calendar_events and calendar_create_event
  *   calls, and the card's button that opens the event on the page;
  * - the Agenda pane in DSH's right sidebar, and an event opened from it;
@@ -38,14 +50,15 @@
  * playwright-core package; skipped without). CHROMIUM: a Chromium to launch
  * (else Playwright's own). SHOTS: a folder outside this repository for
  * screenshots (week and month, light and dark, with and without a stand-in
- * wallpaper; the event dialog, the question before an email, Accounts, the
- * Agenda pane, chat cards, a narrow window; and the window whenever a step
- * fails). KEEP=1 keeps the temporary folder.
+ * wallpaper; the event dialog, with no calendar chosen too, the question
+ * before an email, Accounts, Microsoft's and Google's sign-ins, a removal's
+ * notice, the Agenda pane, chat cards, a narrow window; and the window
+ * whenever a step fails). KEEP=1 keeps the temporary folder.
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
-import { request } from 'node:http';
+import { createHash, randomUUID } from 'node:crypto';
+import { createServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -193,6 +206,88 @@ function httpGet(url, headers = {}) {
     });
 }
 
+/** The application (client) id the Microsoft stand-in knows. */
+const MS_CLIENT = '0e2e0000-0000-4000-8000-00000000c1d5';
+
+/**
+ * Stand-ins on 127.0.0.1 for Microsoft's sign-in service and Graph, and for
+ * Google's sign-in page. A sign-in page doesn't send the browser back: it
+ * shows the address it would go to, as the browser does when DSH runs on
+ * another computer. Microsoft's code is traded once, with PKCE; a sign-in
+ * with a code stays pending; Graph has one account with one calendar and
+ * no events.
+ */
+async function startProviders() {
+    const seen = { authorize: [], grants: [], devicecodes: 0 };
+    const codes = new Map();
+    let origin = '';
+    const tokens = { token_type: 'Bearer', access_token: 'e2e-access', refresh_token: 'e2e-refresh', expires_in: 3600, scope: 'Calendars.ReadWrite User.Read' };
+    const server = createServer((req, res) => {
+        let raw = '';
+        req.setEncoding('utf8');
+        req.on('data', (c) => { raw += c; });
+        req.on('end', () => {
+            const url = new URL(req.url ?? '/', origin);
+            const form = new URLSearchParams(raw);
+            const json = (status, body) => {
+                res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify(body));
+            };
+            const login = '/login/common/oauth2/v2.0';
+            if (req.method === 'GET' && (url.pathname === `${login}/authorize` || url.pathname === '/google/authorize')) {
+                const asked = Object.fromEntries(url.searchParams);
+                seen.authorize.push(asked);
+                const code = `e2e-code-${seen.authorize.length}`;
+                codes.set(code, { challenge: asked.code_challenge, redirect: asked.redirect_uri });
+                const back = new URL(asked.redirect_uri);
+                back.searchParams.set('code', code);
+                back.searchParams.set('state', asked.state ?? '');
+                res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+                res.end(`<!doctype html><meta charset="utf-8"><title>Sign in</title><p>Signed in. The browser goes back to:</p><p id="back">${back.href.replaceAll('&', '&amp;').replaceAll('<', '&lt;')}</p>`);
+                return;
+            }
+            if (req.method === 'POST' && url.pathname === `${login}/token`) {
+                const grant = form.get('grant_type');
+                seen.grants.push(grant);
+                if (grant === 'authorization_code') {
+                    const known = codes.get(form.get('code') ?? '');
+                    codes.delete(form.get('code') ?? '');
+                    const verifier = createHash('sha256').update(form.get('code_verifier') ?? '', 'ascii').digest('base64url');
+                    if (!known || verifier !== known.challenge || form.get('redirect_uri') !== known.redirect || form.get('client_id') !== MS_CLIENT) {
+                        return json(400, { error: 'invalid_grant', error_description: 'AADSTS70000: The code is not valid.' });
+                    }
+                    return json(200, tokens);
+                }
+                if (grant === 'refresh_token') return json(200, tokens);
+                return json(400, { error: 'authorization_pending', error_description: 'AADSTS70016: Authorization is pending.' });
+            }
+            if (req.method === 'POST' && url.pathname === `${login}/devicecode`) {
+                seen.devicecodes += 1;
+                return json(200, {
+                    device_code: 'e2e-device', user_code: 'E2ECODE42', verification_uri: 'https://microsoft.com/devicelogin', expires_in: 900, interval: 5,
+                    message: 'To sign in, open https://microsoft.com/devicelogin and enter the code E2ECODE42.',
+                });
+            }
+            if (req.headers.authorization !== `Bearer ${tokens.access_token}`) return json(401, { error: { code: 'InvalidAuthenticationToken', message: 'No token.' } });
+            if (url.pathname === '/v1.0/me') return json(200, { displayName: 'Pat Example', mail: 'pat@example.com', userPrincipalName: 'pat@example.com' });
+            if (url.pathname === '/v1.0/me/calendars') return json(200, { value: [{ id: 'e2e-ms-cal', name: 'Calendar', color: 'auto', hexColor: '#2f6fd6', canEdit: true, isDefaultCalendar: true }] });
+            if (url.pathname === '/v1.0/me/calendars/e2e-ms-cal/calendarView/delta') {
+                return json(200, { value: [], '@odata.deltaLink': `${origin}/v1.0/me/calendars/e2e-ms-cal/calendarView/delta?$deltatoken=e2e` });
+            }
+            return json(404, { error: { code: 'NotFound', message: 'Nothing here.' } });
+        });
+    });
+    await new Promise((done) => server.listen(0, '127.0.0.1', done));
+    origin = `http://127.0.0.1:${server.address().port}`;
+    return {
+        seen, loginBase: `${origin}/login`, graphBase: `${origin}/v1.0`, googleAuthorizeUrl: `${origin}/google/authorize`,
+        close: () => new Promise((done) => {
+            server.closeAllConnections?.();
+            server.close(() => done());
+        }),
+    };
+}
+
 const readText = (file) => { try { return readFileSync(file, 'utf8'); } catch { return ''; } };
 const signInLink = () => [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].at(-1)?.[1] ?? '';
 
@@ -226,7 +321,7 @@ function webApi(web, endpoint, args) {
 
 const profile = join(home, 'profiles', 'web');
 
-function writeProfile(modelPort) {
+function writeProfile(modelPort, providers) {
     rmSync(join(profile, 'node_modules'), { recursive: true, force: true });
     mkdirSync(join(profile, 'node_modules'), { recursive: true });
     const plugins = { 'dsh-plugin-calendar': join(pluginsDir, 'calendar'), 'dsh-plugin-session-bridge': join(pluginsDir, 'session-bridge') };
@@ -262,6 +357,9 @@ function writeProfile(modelPort) {
 - id: calendar
   config:
     timeZone: ${q(ZONE)}
+    microsoftLoginBase: ${q(providers.loginBase)}
+    microsoftGraphBase: ${q(providers.graphBase)}
+    googleAuthorizeUrl: ${q(providers.googleAuthorizeUrl)}
 `);
 }
 
@@ -303,6 +401,7 @@ if (!pw) {
 mkdirSync(ws, { recursive: true });
 if (shots) mkdirSync(shots, { recursive: true });
 const model = await startFakeModel();
+const providers = await startProviders();
 let child;
 let browser;
 let page;
@@ -377,7 +476,7 @@ try {
     // A settings file the plugin can't read: it sets the file aside, starts without it, and the page says so.
     mkdirSync(join(home, 'calendar'), { recursive: true, mode: 0o700 });
     writeFileSync(join(home, 'calendar', 'calendar.json'), '{"version": 1, "accounts": ', { mode: 0o600 });
-    writeProfile(model.port);
+    writeProfile(model.port, providers);
     child = startDsh(dsh);
     await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge', 90000);
     await waitFor(() => signInLink(), 'the web sign-in link', 30000);
@@ -686,7 +785,59 @@ try {
         }
     });
 
-    // 8. Accounts.
+    // 8. No default calendar: nothing chosen, and no main calendar stands out (the host's state played without one).
+    await step('with no default calendar, the event dialog asks for one', async () => {
+        const stateCalls = '**/api/dsh-plugin-calendar/state';
+        const creates = [];
+        const onRequest = (request) => {
+            if (request.url().endsWith('/api/dsh-plugin-calendar/createEvent')) creates.push(JSON.parse(request.postData() ?? '{}').payload?.args?.input);
+        };
+        const tagged = () => page.locator('[data-calendar-side] .dshcal-tag', { hasText: 'default' }).count();
+        await page.route(stateCalls, async (route) => {
+            const response = await route.fetch();
+            const real = await response.json();
+            if (real.result?.ok) {
+                real.result.value.defaultCalendar = null;
+                for (const c of real.result.value.calendars ?? []) c.isDefault = false;
+            }
+            return route.fulfill({ response, body: JSON.stringify(real) });
+        });
+        page.on('request', onRequest);
+        let made;
+        try {
+            await waitFor(async () => (await tagged()) === 0, 'the page to read state without a default', 15000);
+            await page.locator('[data-calendar-side-new]').click();
+            const form = page.locator('[data-calendar-event-form="new"]');
+            await form.waitFor({ state: 'visible' });
+            const select = form.locator('[data-calendar-calendar]');
+            const before = { value: await select.inputValue(), shown: await select.evaluate((el) => el.options[el.selectedIndex]?.textContent ?? ''), dot: await form.locator('.dshcal-dot[data-none]').count() };
+            await form.locator('[data-calendar-title]').fill('E2E No default');
+            await page.locator('[data-calendar-save]').click();
+            await form.locator('.dshcal-field-error', { hasText: 'Choose the calendar it goes to.' }).waitFor({ state: 'visible', timeout: 5000 });
+            const invalid = await select.getAttribute('aria-invalid');
+            await shot(page, 'no-default');
+            const refusedLocally = creates.length === 0;
+            await select.selectOption(defaultCalendar);
+            const after = { dot: await form.locator('.dshcal-dot[data-none]').count(), placeholder: await select.locator('option[value=""]').count() };
+            await page.locator('[data-calendar-save]').click();
+            await dialogGone();
+            made = await waitFor(async () => {
+                const list = await events(today, addDays(today, 1));
+                return list.find((o) => o.title === 'E2E No default');
+            }, 'the event', 10000);
+            check('with no default calendar the event dialog shows none chosen, asks for one before saving, and saves to the one picked',
+                before.value === '' && before.shown === 'Choose a calendar' && before.dot === 1 && invalid === 'true' && refusedLocally
+                && after.dot === 0 && after.placeholder === 0 && creates.length === 1 && creates[0]?.calendarId === defaultCalendar && made?.calendarId === defaultCalendar,
+                JSON.stringify({ before, invalid, after, creates: creates.map((c) => c?.calendarId), made: made?.calendarId }));
+        } finally {
+            page.off('request', onRequest);
+            await page.unroute(stateCalls);
+            if (made) await api('deleteEvent', { id: made.id, scope: 'all' });
+            await waitFor(async () => (await tagged()) === 1, 'the default calendar back', 15000).catch(() => {});
+        }
+    });
+
+    // 9. Accounts.
     await step('Accounts and the Add account choices', async () => {
         await page.locator('[data-calendar-accounts-open]').click();
         await page.locator('[data-calendar-accounts]').waitFor({ state: 'visible' });
@@ -720,7 +871,128 @@ try {
         JSON.stringify({ local, ids, forms, trips: trips?.name }));
     });
 
-    // 9. Chat cards, and the page opened at an event from one.
+    // 10. Microsoft, against the stand-in: its page in a new tab, finished by the pasted address; removed; a code instead.
+    await step('Microsoft: sign in on its page, finish by the address, remove, and a code instead', async () => {
+        await page.locator('[data-calendar-accounts-open]').click();
+        await page.locator('[data-calendar-accounts]').waitFor({ state: 'visible' });
+        await page.locator('[data-calendar-add-account]').click();
+        await page.locator('[data-calendar-provider="microsoft"]').click();
+        const setup = page.locator('[data-calendar-microsoft-setup]');
+        await setup.waitFor({ state: 'visible' });
+        const steps = (await setup.locator('.dshcal-steps').textContent()) ?? '';
+        const codeNote = (await setup.locator('[data-calendar-microsoft-code-note]').textContent()) ?? '';
+        await shot(page, 'microsoft-setup');
+        await page.locator('[data-calendar-microsoft-id]').fill(MS_CLIENT);
+        await page.locator('[data-calendar-microsoft-save]').click();
+        const start = page.locator('[data-calendar-microsoft-start]');
+        await start.waitFor({ state: 'visible' });
+        const signIn = page.locator('[data-calendar-microsoft-signin]');
+        const method = await signIn.getAttribute('data-calendar-microsoft-signin');
+        const label = (await start.textContent())?.trim();
+
+        // Start: Microsoft's page opens in a new tab. It ends on an address that can't come back, as on another computer.
+        const [tab] = await Promise.all([page.context().waitForEvent('page', { timeout: 15000 }), start.click()]);
+        await tab.waitForLoadState('domcontentloaded');
+        const tabUrl = tab.url();
+        const asked = new URL(tabUrl);
+        const back = ((await tab.locator('#back').textContent()) ?? '').trim();
+        await tab.close();
+        const paste = page.locator('[data-calendar-microsoft-paste]');
+        await paste.waitFor({ state: 'visible' });
+        const again = await page.locator('[data-calendar-microsoft-open]').getAttribute('href');
+        const waiting = (await signIn.textContent()) ?? '';
+        const placeholder = await paste.getAttribute('placeholder');
+        const redirect = asked.searchParams.get('redirect_uri') ?? '';
+        await shot(page, 'microsoft-waiting');
+        const startedRight = method === 'browser' && label === 'Sign in with Microsoft' && asked.pathname === '/login/common/oauth2/v2.0/authorize'
+            && asked.searchParams.get('client_id') === MS_CLIENT && /^http:\/\/localhost:\d+$/.test(redirect) && asked.searchParams.get('code_challenge_method') === 'S256'
+            && (asked.searchParams.get('code_challenge') ?? '').length >= 43 && asked.searchParams.get('prompt') === 'select_account'
+            && (asked.searchParams.get('scope') ?? '').split(' ').includes('Calendars.ReadWrite') && again === tabUrl;
+        const waitShown = /Waiting for you to finish on Microsoft's page/.test(waiting) && /Open Microsoft's page again/.test(waiting)
+            && waiting.includes(`it starts with ${redirect}`) && placeholder === `${redirect}/?code=…` && back.startsWith(`${redirect}/?code=`)
+            && (await page.locator('[data-calendar-microsoft-code]').isVisible());
+        await paste.fill(back);
+        await page.locator('[data-calendar-microsoft-finish]').click();
+        const account = await waitFor(async () => (await api('state')).value?.accounts?.find((a) => a.kind === 'microsoft'), 'the Microsoft account', 20000).catch(() => undefined);
+        const row = page.locator(`[data-calendar-account="${account?.id}"]`);
+        await row.waitFor({ state: 'visible', timeout: 10000 });
+        const traded = providers.seen.grants.includes('authorization_code');
+        check('Microsoft signs in on its page in a new tab, with PKCE and http://localhost to come back to; the wait offers the page again and the address to paste, which finishes it',
+            startedRight && waitShown && traded && account?.email === 'pat@example.com' && steps.includes('Mobile and desktop applications') && steps.includes('http://localhost')
+            && !steps.includes('Allow public client flows') && /Only to sign in with a code/.test(codeNote) && codeNote.includes('Allow public client flows'),
+            JSON.stringify({ method, label, asked: asked.href, again, waiting, placeholder, back, traded, account: account?.email, steps, codeNote }));
+
+        // Removed: Microsoft doesn't let an app withdraw its own access, so the notice links the page to withdraw it.
+        await page.locator(`[data-calendar-account-menu="${account?.id}"]`).click();
+        await page.locator('.dshcal-menu').getByText('Remove…', { exact: true }).click();
+        const confirm = page.locator('[data-calendar-submit]');
+        await confirm.waitFor({ state: 'visible' });
+        const question = (await confirm.locator('xpath=ancestor::*[@role="dialog"][1]').textContent()) ?? '';
+        await confirm.click();
+        const notice = page.locator('[data-calendar-removed]');
+        await notice.waitFor({ state: 'visible', timeout: 10000 });
+        const noticeText = (await notice.textContent()) ?? '';
+        const manage = await notice.locator('a').getAttribute('href');
+        const gone = !((await api('state')).value?.accounts ?? []).some((a) => a.kind === 'microsoft');
+        await shot(page, 'microsoft-removed');
+        check('a removed Microsoft account leaves, and a notice links the page where DSH\'s access is withdrawn',
+            gone && manage === 'https://account.live.com/consent/Manage' && /Microsoft doesn't let an app withdraw its own access/.test(noticeText)
+            && /with the copy DSH keeps of them/.test(question), JSON.stringify({ gone, manage, noticeText, question }));
+        await notice.getByRole('button', { name: 'Close this notice' }).click();
+        await notice.waitFor({ state: 'detached' });
+
+        // A code instead: no new tab, the code to enter, and the way back to the browser.
+        await page.locator('[data-calendar-add-account]').click();
+        await page.locator('[data-calendar-provider="microsoft"]').click();
+        const tabs = page.context().pages().length;
+        await page.locator('[data-calendar-microsoft-code]').click();
+        const code = page.locator('[data-calendar-user-code]');
+        await code.waitFor({ state: 'visible', timeout: 10000 });
+        const codeText = await code.textContent();
+        const enterAt = await page.locator('[data-calendar-verification]').getAttribute('href');
+        const browserWay = await page.locator('[data-calendar-microsoft-browser]').isVisible();
+        const codeMethod = await signIn.getAttribute('data-calendar-microsoft-signin');
+        await shot(page, 'microsoft-code');
+        check('"Sign in with a code instead" starts a sign-in with a code: the code, where to enter it, and the way back to the page in the browser',
+            codeText === 'E2ECODE42' && enterAt === 'https://microsoft.com/devicelogin' && browserWay && codeMethod === 'code' && providers.seen.devicecodes === 1
+            && page.context().pages().length === tabs, JSON.stringify({ codeText, enterAt, browserWay, codeMethod, devicecodes: providers.seen.devicecodes }));
+        await page.keyboard.press('Escape');
+        await page.locator('[data-calendar-accounts-page]').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    });
+
+    // 11. Google, against a stand-in for its sign-in page: its page in a new tab too, and the address to paste (not finished here).
+    await step('Google: sign in on its page, with the address to paste', async () => {
+        await page.locator('[data-calendar-accounts-open]').click();
+        await page.locator('[data-calendar-accounts]').waitFor({ state: 'visible' });
+        await page.locator('[data-calendar-add-account]').click();
+        await page.locator('[data-calendar-provider="google"]').click();
+        await page.locator('[data-calendar-google-id]').fill('e2e-client.apps.googleusercontent.com');
+        await page.locator('[data-calendar-google-secret]').fill('e2e-client-secret');
+        await page.locator('[data-calendar-google-save]').click();
+        const start = page.locator('[data-calendar-google-start]');
+        await start.waitFor({ state: 'visible' });
+        const [tab] = await Promise.all([page.context().waitForEvent('page', { timeout: 15000 }), start.click()]);
+        await tab.waitForLoadState('domcontentloaded');
+        const tabUrl = tab.url();
+        await tab.close();
+        const paste = page.locator('[data-calendar-google-paste]');
+        await paste.waitFor({ state: 'visible' });
+        const redirect = new URL(tabUrl).searchParams.get('redirect_uri') ?? '';
+        const back = redirect.replace(/\/$/, '');
+        const again = await page.locator('[data-calendar-google-open]').getAttribute('href');
+        const text = (await page.locator('[data-calendar-google-signin]').textContent()) ?? '';
+        const placeholder = await paste.getAttribute('placeholder');
+        const secretShown = (await page.content()).includes('e2e-client-secret');
+        await shot(page, 'google-waiting');
+        await page.keyboard.press('Escape');
+        await page.locator('[data-calendar-accounts-page]').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+        check('Google signs in on its page in a new tab too; the wait offers the page again and the address to paste, and the client secret is nowhere on the page',
+            tabUrl.startsWith(providers.googleAuthorizeUrl) && /^http:\/\/127\.0\.0\.1:\d+\/$/.test(redirect) && again === tabUrl && placeholder === `${back}/?code=…`
+            && /Waiting for you to finish on Google's page/.test(text) && /Open Google's page again/.test(text) && text.includes(`it starts with ${back}`) && !secretShown,
+            JSON.stringify({ tabUrl, again, text, placeholder, secretShown }));
+    });
+
+    // 12. Chat cards, and the page opened at an event from one.
     /** A session's title in DSH's list (DSH names a session once its first turn is done). */
     const titleOf = (sessionId) => waitFor(async () => (await bridge('GET', '/sessions')).find((s) => s.sessionId === sessionId)?.projections?.values?.title,
         'the session\'s title', 30000);
@@ -759,7 +1031,7 @@ try {
         await page.keyboard.press('Escape');
     });
 
-    // 10. The Agenda pane.
+    // 13. The Agenda pane.
     await step('the Agenda pane in the right sidebar', async () => {
         await page.getByText(await titleOf(listCall.sessionId), { exact: false }).first().click();
         await page.waitForTimeout(1200);
@@ -781,7 +1053,7 @@ try {
         await page.keyboard.press('Escape');
     });
 
-    // 11. Light and dark, with and without a wallpaper.
+    // 14. Light and dark, with and without a wallpaper.
     await step('light and dark, with and without a wallpaper', async () => {
         await openPage();
         await page.locator('[data-calendar-view="week"]').click();
@@ -813,7 +1085,7 @@ try {
             && /blur/.test(light.blur) && /blur/.test(dark.blur) && light.background !== dark.background && dark.dark === true, JSON.stringify({ light, dark }));
     });
 
-    // 12. A narrow window.
+    // 15. A narrow window.
     await step('a narrow window', async () => {
         await page.setViewportSize({ width: 420, height: 820 });
         await page.waitForTimeout(600);
@@ -841,6 +1113,7 @@ try {
     await browser?.close().catch(() => {});
     await stopDsh(child);
     await model.close?.();
+    await providers.close();
     if (process.env.KEEP === '1') console.log(`kept ${root}`);
     else rmSync(root, { recursive: true, force: true });
     if (sockDir !== root) rmSync(sockDir, { recursive: true, force: true });
