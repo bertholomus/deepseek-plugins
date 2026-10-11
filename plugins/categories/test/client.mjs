@@ -1117,12 +1117,13 @@ test('browser half: a category\'s header folds, moves, and its ⋯ adds, renames
     fleet.menu().props.onSelect('new');
     assert.equal(dialog().props.title, 'New category');
 
-    // A move the plugin refuses shows DSH's toast with the reason, over the list; nothing is said.
+    // A move the plugin refuses shows DSH's toast with the reason; nothing is said.
     answer = () => ({ ok: false, error: { code: 'categories/refused', message: 'that workspace is in another category' } });
     open('shop').menu().props.onSelect('w:w-a');
     await tick();
     const toast = elementsOf(side.draw()).find((e) => e.type === 'Toast');
-    assert.deepEqual([toast.props.text, toast.props.anchor, toast.props.holdMs], ['That workspace is in another category.', side.tree, 4000]);
+    // At the top of the window: anchored to the narrow list, it would run off the window's left edge.
+    assert.deepEqual([toast.props.text, toast.props.anchor, toast.props.holdMs], ['That workspace is in another category.', undefined, 4000]);
     toast.props.onDone();
     assert.equal(elementsOf(side.draw()).some((e) => e.type === 'Toast'), false);
     // An unreachable plugin says so.

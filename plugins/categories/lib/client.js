@@ -1566,8 +1566,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 })), tree) : null,
                 // Moves made here, said to screen readers.
                 h('div', { className: 'dshc-sr', role: 'status', 'aria-live': 'polite', 'data-categories-sidebar-said': '' }, said),
+                // A change that didn't go through, in DSH's banner at the top of the window: anchored to the list,
+                // narrower than the sentence, the banner would run off the window's left edge.
                 toast ? h(ui.Toast, {
-                    key: toast.seq, text: toast.text, icon: h(ui.IconInfoOutlineRegular, { size: 16 }), anchor: tree, holdMs: 4000,
+                    key: toast.seq, text: toast.text, icon: h(ui.IconInfoOutlineRegular, { size: 16 }), holdMs: 4000,
                     onDone: () => setToast((prev) => (prev?.seq === toast.seq ? null : prev)),
                 }) : null,
                 overlay);
