@@ -13,9 +13,10 @@
  * window's endpoints (list, make, file, move, rename, delete, refusals), the
  * browser half DSH serves, and a restart that changes nothing.
  *
- * With PROJECTS=1 the projects plugin runs beside it, on the same store
- * file: its own categories and placements stay as they were (rollback data),
- * neither answers for the other, and DSH's order stays the categories'.
+ * With COORDINATOR=1 the coordinator plugin runs beside it: neither answers
+ * for the other, the projects store stays as it was (rollback data), the
+ * coordinator logs nothing about categories, and DSH's order stays the
+ * categories'.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/categories/test/e2e/run.mjs
  *
@@ -32,7 +33,7 @@ import { Script } from 'node:vm';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pluginsDir = resolve(here, '../../..');
-const WITH_PROJECTS = process.env.PROJECTS === '1';
+const WITH_COORDINATOR = process.env.COORDINATOR === '1';
 
 function findDsh() {
     const bin = process.env.DSH_BIN;
@@ -192,13 +193,7 @@ function writeProfile(names) {
   config:
     socketPath: ${q(sock)}
     logFile: ${q(join(root, 'bridge.log'))}
-${names.includes('projects') ? `- id: projects
-  config:
-    welcome: false
-    projects:
-      - name: E2E Project
-        workspacePath: ${q(ws)}
-` : ''}`);
+`);
 }
 
 function startDsh(dsh) {
@@ -291,7 +286,7 @@ try {
     const oldText = readText(oldFile);
 
     // 3. The plugin's first start: the categories move over once, exactly as they are; the old sidebar isn't read.
-    writeProfile(WITH_PROJECTS ? ['categories', 'session-bridge', 'projects'] : ['categories', 'session-bridge']);
+    writeProfile(WITH_COORDINATOR ? ['categories', 'session-bridge', 'coordinator'] : ['categories', 'session-bridge']);
     child = await boot(dsh, 'categories\' first start');
     await waitFor(() => readText(logFile).includes('move from projects'), 'the move from the projects store', 30000);
     const web = await signInWeb();
@@ -310,7 +305,7 @@ try {
     check('the move is logged once, with a copy of the projects store', readText(logFile).split('\n').filter((l) => l.includes(' move from projects ')).length === 1
         && readText(logFile).includes('move from projects from=categories categories=4 workspaces=6 backup=') && readText(join(categoriesDir, 'from-projects.json')) === projectsText,
     readText(logFile));
-    if (!WITH_PROJECTS) check('the projects store is only read', readText(projectsFile) === projectsText);
+    check('the projects store is only read', readText(projectsFile) === projectsText);
     check('the old sidebar isn\'t read: nothing deleted comes back', !readText(logFile).includes('fleet-shell') && store.imports?.fleetShell === undefined
         && !['DSH Plugins', 'Project Testing', 'Security'].some((name) => category(name)) && readText(oldFile) === oldText && !/not read|agentOverride/.test(readText(storeFile)),
     readText(logFile));
@@ -364,17 +359,15 @@ try {
     lists = await api('fileWorkspace', { workspace: wsId.d, category: 'fleet-services' });
     check('a workspace goes back into a moved-over category', lists.ok && holds('Fleet Services').join() === wsId.d, JSON.stringify(lists.value?.categories));
 
-    if (WITH_PROJECTS) {
-        // Beside the projects plugin: each answers for its own, and the categories it kept stay in its store as they were.
-        const projects = await webApi(web, 'dsh-plugin-projects/list', {});
-        check('the projects plugin answers for its projects only', projects.ok && Array.isArray(projects.value?.projects) && projects.value.categories === undefined,
-            JSON.stringify(projects).slice(0, 300));
-        const kept = readJson(projectsFile);
-        check('the projects store keeps its categories and placements as they were', JSON.stringify(kept.categories) === JSON.stringify(projectsStore.categories)
-            && JSON.stringify(kept.categoryOf) === JSON.stringify(projectsStore.categoryOf) && JSON.stringify(kept.workspaceOf) === JSON.stringify(projectsStore.workspaceOf),
-        JSON.stringify({ categories: kept.categories, categoryOf: kept.categoryOf }));
-        check('the projects plugin no longer logs categories or DSH\'s workspace order', !/category|workspace-order|import fleet-shell/.test(readText(join(home, 'projects', 'projects.log'))),
-            readText(join(home, 'projects', 'projects.log')).split('\n').filter((l) => /category|workspace-order|import/.test(l)).join('\n'));
+    if (WITH_COORDINATOR) {
+        // Beside the coordinator plugin: each answers for its own, and the projects store stays as it was.
+        const coordinating = await webApi(web, 'dsh-plugin-coordinator/list', {});
+        check('the coordinator plugin answers for its coordinating chats only', coordinating.ok && Array.isArray(coordinating.value?.projects)
+            && coordinating.value.categories === undefined, JSON.stringify(coordinating).slice(0, 300));
+        check('the projects store is still only read', readText(projectsFile) === projectsText);
+        const coordinatorLog = readText(join(home, 'coordinator', 'coordinator.log'));
+        check('the coordinator plugin logs nothing about categories or DSH\'s workspace order', !/categor|workspace-order|fleet-shell/.test(coordinatorLog),
+            coordinatorLog.split('\n').filter((l) => /categor|workspace-order|fleet-shell/.test(l)).join('\n'));
     }
 
     // 5. A restart: nothing moves or comes in again; the categories and DSH's order are as they were.
