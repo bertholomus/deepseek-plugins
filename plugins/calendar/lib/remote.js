@@ -130,12 +130,14 @@ export class CalendarRemote {
         return this.run(async () => ({ account: await this.manager.updateAccount(text(id), object(patch)) }));
     }
 
-    /** Remove an account from this plugin (nothing changes on its server): {}. */
+    /**
+     * Remove an account from this plugin (its events stay on its server):
+     * {revoked?, manageUrl?}. revoked: the provider withdrew the plugin's
+     * access (Google); manageUrl: the page where the user withdraws it
+     * (Microsoft).
+     */
     async removeAccount(id) {
-        return this.run(async () => {
-            await this.manager.removeAccount(text(id));
-            return {};
-        });
+        return this.run(async () => this.manager.removeAccount(text(id)));
     }
 
     /** Sync one account now (its calendar list too), or every account: {}. */

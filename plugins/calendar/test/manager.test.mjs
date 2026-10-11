@@ -782,3 +782,129 @@ test('the tools: each is marked as the user\'s own, and says who a change emaile
         done();
     }
 });
+
+test('new events go to the user\'s choice, else an account\'s main calendar, never a pick among its calendars', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        const here = m.defaultCalendarId();
+        assert.equal(m.store.calendars[here].accountId, 'local');
+        // An account with one calendar: that one.
+        standIn(m, { id: 'dav', kind: 'caldav', name: 'Fastmail', url: 'https://caldav.fastmail.com/', username: 'me@fastmail.com', createdAt: NOW - 1000 },
+            { id: 'cal-family', remoteId: 'https://caldav.fastmail.com/dav/calendars/user/me/Family/', name: 'Family' }, 'ics');
+        assert.equal(m.defaultCalendarId(), 'cal-family');
+        // Two, and the server names neither its main one: still the one on this computer.
+        m.store.calendars['cal-home'] = { id: 'cal-home', accountId: 'dav', remoteId: 'https://caldav.fastmail.com/dav/calendars/user/me/Default/', name: 'Default', readOnly: false, mode: 'masters', color: '#30a46c' };
+        m.store.itemsOf('cal-home');
+        assert.equal(m.defaultCalendarId(), here);
+        // The main calendar, as the server says, and only while it does.
+        const found = [{ remoteId: 'https://caldav.fastmail.com/dav/calendars/user/me/Family/', name: 'Family' },
+            { remoteId: 'https://caldav.fastmail.com/dav/calendars/user/me/Default/', name: 'Default', primary: true }];
+        const previous = m.source.bind(m);
+        m.source = async (a) => (a.id === 'dav' ? { style: 'ics', source: { calendars: async () => found } } : previous(a));
+        await m.refreshCalendars('dav');
+        const main = calendarIdOf('dav', found[1].remoteId);
+        assert.equal(m.store.calendars[main].primary, true);
+        assert.equal(m.defaultCalendarId(), main);
+        // A second account's main calendar doesn't take over from the first account's.
+        m.store.accounts.g = { id: 'g', kind: 'google', name: 'Google', createdAt: NOW };
+        m.store.calendars['cal-g'] = { id: 'cal-g', accountId: 'g', remoteId: 'primary', name: 'Me', readOnly: false, mode: 'masters', color: '#e5484d', primary: true };
+        m.store.itemsOf('cal-g');
+        assert.equal(m.defaultCalendarId(), main);
+        delete found[1].primary;
+        await m.refreshCalendars('dav');
+        assert.equal(m.store.calendars[main].primary, undefined);
+        assert.equal(m.defaultCalendarId(), 'cal-g');
+        // The user's choice wins.
+        await m.setDefaultCalendar(calendarIdOf('dav', found[0].remoteId));
+        assert.equal(m.defaultCalendarId(), calendarIdOf('dav', found[0].remoteId));
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
+test('a create whose answer was lost goes again with the same uid, so the server makes it once', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        standIn(m, { id: 'g', kind: 'google', name: 'Google', email: 'me@gmail.com' }, { id: 'cal-g', remoteId: 'primary', name: 'Me' }, 'events');
+        const { SourceError } = await import('../lib/sources/index.js');
+        const source = (await m.source(m.store.accounts.g)).source;
+        const create = source.create;
+        const uids = [];
+        let fail;
+        source.create = async (calendar, record) => {
+            uids.push(record.uid);
+            if (fail) {
+                const error = fail;
+                fail = undefined;
+                throw error;
+            }
+            return create(calendar, record);
+        };
+        const dentist = { calendarId: 'cal-g', title: 'Dentist', start: '2026-10-14T09:00' };
+        fail = new SourceError('network', 'www.googleapis.com didn\'t answer within 30 s.');
+        await assert.rejects(m.createEvent({ ...dentist }),
+            /^CalendarError: www\.googleapis\.com didn't answer within 30 s\. It may have been made anyway: asking again with the same details won't make a second one\.$/);
+        const made = await m.createEvent({ ...dentist });
+        assert.equal(made.title, 'Dentist');
+        assert.equal(uids[1], uids[0], 'the same uid again');
+        // Once made, the same details again are a new event.
+        await m.createEvent({ ...dentist });
+        assert.notEqual(uids[2], uids[0]);
+        // Other details are another event.
+        fail = new SourceError('server', 'www.googleapis.com answered HTTP 502.', { status: 502 });
+        await assert.rejects(m.createEvent({ ...dentist, start: '2026-10-14T10:00' }), /may have been made anyway/);
+        await m.createEvent({ ...dentist, start: '2026-10-14T11:00' });
+        assert.notEqual(uids[4], uids[3]);
+        // A refusal isn't a lost answer: nothing to repeat.
+        fail = new SourceError('forbidden', 'www.googleapis.com doesn\'t allow this.');
+        await assert.rejects(m.createEvent({ ...dentist, title: 'Dentist (again)' }), (error) => !/may have been made/.test(error.message));
+        await m.createEvent({ ...dentist, title: 'Dentist (again)' });
+        assert.notEqual(uids[6], uids[5]);
+    } finally {
+        m.dispose();
+        done();
+    }
+});
+
+test('removing an account withdraws its access where the provider can, and says where to otherwise', async () => {
+    const { make, done, vault } = setup();
+    const m = make();
+    try {
+        await m.start();
+        const { SourceError } = await import('../lib/sources/index.js');
+        const seen = [];
+        const add = (id, kind, module) => {
+            standIn(m, { id, kind, name: id }, { id: `cal-${id}`, remoteId: 'primary', name: id }, 'events');
+            vault.set(id, { refreshToken: `token-${id}` });
+            const previous = m.source.bind(m);
+            m.source = async (a) => (a.id === id ? { ...(await previous(a)), module } : previous(a));
+        };
+        add('g', 'google', { revoke: async (_env, secret) => { seen.push(secret.refreshToken); return { revoked: true }; } });
+        add('ms', 'microsoft', { revoke: async () => ({ revoked: false, manageUrl: 'https://account.live.com/consent/Manage' }) });
+        add('down', 'google', { revoke: async () => { throw new SourceError('network', 'oauth2.googleapis.com can\'t be reached.'); }, MANAGE_URL: 'https://myaccount.google.com/connections' });
+        add('odd', 'google', { revoke: async () => ({ revoked: false, manageUrl: 'http://example.com/consent' }) });
+        add('plain', 'caldav', {});
+        assert.deepEqual(await m.removeAccount('g'), { revoked: true });
+        assert.deepEqual(seen, ['token-g']);
+        assert.deepEqual(await m.removeAccount('ms'), { revoked: false, manageUrl: 'https://account.live.com/consent/Manage' });
+        assert.deepEqual(await m.removeAccount('down'), { revoked: false, manageUrl: 'https://myaccount.google.com/connections' });
+        assert.deepEqual(await m.removeAccount('odd'), { revoked: false }, 'a page only on https');
+        assert.deepEqual(await m.removeAccount('plain'), {});
+        for (const id of ['g', 'ms', 'down', 'odd', 'plain']) {
+            assert.equal(m.store.accounts[id], undefined);
+            assert.equal(vault.has(id), false);
+        }
+        const log = readFileSync(m.logFile, 'utf8');
+        assert.match(log, /account removed g google revoked/);
+        assert.match(log, /revoke failed google network/);
+        assert.doesNotMatch(log, /token-/);
+    } finally {
+        m.dispose();
+        done();
+    }
+});

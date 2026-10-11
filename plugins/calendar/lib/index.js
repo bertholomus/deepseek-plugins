@@ -19,6 +19,7 @@
  * @module dsh-plugin-calendar
  */
 import z from '@deepseek-ai/schemastery';
+import { isLoopback } from './http.js';
 import { CalendarManager } from './manager.js';
 import { MODES, changeGate } from './policy.js';
 import { CalendarRemote, SERVICE } from './remote.js';
@@ -64,16 +65,17 @@ export const Config = z.object({
     microsoftClientId: z.string().default(''),
     /** Microsoft tenant: 'common' for work, school and personal accounts, or a tenant id. */
     microsoftTenant: z.string().default('common'),
-    /** Test servers in place of Google's and Microsoft's (tests only). */
+    /** Test servers in place of Google's and Microsoft's: tests only, and only on this computer. */
     googleApiBase: z.string(),
     googleAuthorizeUrl: z.string(),
     googleTokenUrl: z.string(),
     googleUserinfoUrl: z.string(),
+    googleRevokeUrl: z.string(),
     microsoftGraphBase: z.string(),
     microsoftLoginBase: z.string(),
 });
 
-const TEST_ENDPOINTS = ['googleApiBase', 'googleAuthorizeUrl', 'googleTokenUrl', 'googleUserinfoUrl', 'microsoftGraphBase', 'microsoftLoginBase'];
+const TEST_ENDPOINTS = ['googleApiBase', 'googleAuthorizeUrl', 'googleTokenUrl', 'googleUserinfoUrl', 'googleRevokeUrl', 'microsoftGraphBase', 'microsoftLoginBase'];
 
 /** The credential record that holds one account's password or sign-in. */
 const recordOf = (accountId) => `calendar/${accountId}`;
@@ -96,6 +98,8 @@ export function apply(ctx, config) {
     };
 
     let manager;
+    /** Test server settings that point elsewhere, warned about once. */
+    const ignored = new Set();
     /** What Google's and Microsoft's sign-ins need, read each time one starts or a token refreshes. */
     const clientSettings = async () => {
         const prefs = manager?.store.prefs ?? {};
@@ -111,7 +115,16 @@ export function apply(ctx, config) {
             microsoftClientId: String(prefs.microsoftClientId || config.microsoftClientId || '').trim(),
             microsoftTenant: String(prefs.microsoftTenant || config.microsoftTenant || 'common').trim(),
         };
-        for (const key of TEST_ENDPOINTS) if (typeof config[key] === 'string' && config[key].trim() !== '') out[key] = config[key].trim();
+        // A test server stands in only on this computer: no setting sends the client secret or a sign-in anywhere else.
+        for (const key of TEST_ENDPOINTS) {
+            const value = typeof config[key] === 'string' ? config[key].trim() : '';
+            if (value === '') continue;
+            if (isLoopback(value)) out[key] = value;
+            else if (!ignored.has(key)) {
+                ignored.add(key);
+                ctx.logger?.warn?.('calendar: %s is ignored: a test server must be on this computer', key);
+            }
+        }
         return out;
     };
 

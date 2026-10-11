@@ -101,6 +101,8 @@ export class CalendarManager {
         this.disposed = false;
         this.indexVersion = 0;
         this.eventIndex = new Map();
+        /** Creates whose answer was lost, by what they asked for: a repeat reuses the uid, so the server makes it once. */
+        this.lostCreates = new Map();
     }
 
     // ── Lifecycle ──────────────────────────────────────────────────────
@@ -327,13 +329,24 @@ export class CalendarManager {
         };
     }
 
-    /** The calendar new events go to: the user's choice, else the first one that can be written. */
+    /**
+     * The calendar new events go to: the user's choice; else the main
+     * calendar of the first account added that names one (Google's primary,
+     * Microsoft's default, a CalDAV server's default); else the accounts'
+     * only writable calendar; else the one on this computer. Never a pick
+     * among an account's calendars, where one can be shared with a team or a
+     * family.
+     */
     defaultCalendarId() {
         const chosen = this.store.prefs.defaultCalendar;
         if (chosen && this.store.calendars[chosen] && !this.store.calendars[chosen].readOnly) return chosen;
         const writable = Object.values(this.store.calendars).filter((c) => !c.readOnly && !c.hidden);
-        const local = writable.find((c) => c.accountId === 'local');
-        return (writable.find((c) => c.accountId !== 'local') ?? local ?? writable[0])?.id;
+        const remote = writable.filter((c) => c.accountId !== 'local');
+        const added = (c) => this.store.accounts[c.accountId]?.createdAt ?? 0;
+        const main = remote.filter((c) => c.primary === true).sort((a, b) => added(a) - added(b))[0];
+        if (main) return main.id;
+        if (remote.length === 1) return remote[0].id;
+        return (writable.find((c) => c.accountId === 'local') ?? remote[0])?.id;
     }
 
     /** Read the account's calendars from its server; add new ones, drop gone ones. */
@@ -348,12 +361,16 @@ export class CalendarManager {
             seen.add(id);
             const had = this.store.calendars[id];
             const color = c.color || had?.color || PALETTE[(Object.keys(this.store.calendars).length + i) % PALETTE.length];
-            this.store.calendars[id] = {
+            const next = {
                 ...had, id, accountId: account.id, remoteId: c.remoteId, name: c.name || had?.name || 'Calendar', color,
                 readOnly: c.readOnly === true, mode: c.mode ?? 'masters',
                 ...(c.timeZone ? { timeZone: c.timeZone } : {}), ...(c.description ? { description: c.description } : {}),
                 ...(typeof c.scheduling === 'boolean' ? { scheduling: c.scheduling } : {}),
             };
+            // The account's main calendar, while its server says so.
+            if (c.primary === true) next.primary = true;
+            else delete next.primary;
+            this.store.calendars[id] = next;
             if (had === undefined) {
                 added++;
                 this.store.itemsOf(id);
@@ -474,15 +491,40 @@ export class CalendarManager {
         return this.accountView(account);
     }
 
-    /** Remove an account: its calendars and their events leave this plugin (nothing on the server changes). */
+    /**
+     * Remove an account: its calendars and their events leave this plugin
+     * (the events on the server stay). The plugin's access is withdrawn where
+     * the provider lets it (Google): {revoked: true}; else manageUrl is the
+     * page where the user withdraws it (Microsoft).
+     */
     async removeAccount(id) {
         const account = this.account(id);
         if (account.kind === 'local') throw new CalendarError('The calendars on this computer stay; delete a calendar instead.');
+        const withdrawn = await this.withdraw(account);
         this.forgetAccount(id);
         await this.secrets.clear(id).catch(() => {});
-        this.log(`account removed ${id} ${account.kind}`);
+        this.log(`account removed ${id} ${account.kind}${withdrawn.revoked ? ' revoked' : ''}`);
         this.saveState();
         this.changed();
+        return withdrawn;
+    }
+
+    /** Withdraw the plugin's access at the provider, where its source can. Never stops a removal. */
+    async withdraw(account) {
+        let module;
+        try {
+            module = (await this.source(account)).module ?? await sourceModule(account.kind);
+            if (typeof module.revoke !== 'function') return {};
+            const secret = await this.secrets.get(account.id);
+            if (secret === undefined) return {};
+            let timer;
+            const late = new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), 10_000); });
+            const out = await Promise.race([module.revoke(await this.envFor(account), secret), late]).finally(() => clearTimeout(timer));
+            return withdrawal(out?.revoked === true, out?.manageUrl ?? module.MANAGE_URL);
+        } catch (error) {
+            this.log(`revoke failed ${account.kind} ${error?.code ?? ''}`);
+            return withdrawal(false, module?.MANAGE_URL);
+        }
     }
 
     forgetAccount(id) {
@@ -1477,18 +1519,33 @@ export class CalendarManager {
         const emails = mail.to.length > 0;
         // A CalDAV server invites the guests of an event that names its organizer.
         if (emails && account.kind === 'caldav') record.organizer = { email: this.selfAddress(account) };
-        record.uid = newUid();
+        // A create whose answer was lost goes again with the same uid: the server knows it, and makes it once.
+        const key = hex(stableJson([calendar.id, record]), 32);
+        this.pruneLostCreates();
+        record.uid = this.lostCreates.get(key)?.uid ?? newUid();
+        let lost;
         const created = await this.changing(calendar.id, async () => {
-            const { source, style } = await this.source(account);
-            if (style === 'ics') {
-                const item = await this.putIcs(calendar, null, [{ uid: record.uid, record }], record.uid);
-                return { remoteId: item.remoteId, uid: record.uid };
+            try {
+                const { source, style } = await this.source(account);
+                if (style === 'ics') {
+                    const item = await this.putIcs(calendar, null, [{ uid: record.uid, record }], record.uid);
+                    return { remoteId: item.remoteId, uid: record.uid };
+                }
+                const items = await source.create({ ...calendar }, { ...record, ...(emails ? { notify: true } : {}) });
+                this.takeItems(calendar, items);
+                const first = items?.[0];
+                return { remoteId: first?.remoteId, uid: first?.events?.[0]?.uid ?? record.uid };
+            } catch (error) {
+                if (maybeMade(error)) lost = error;
+                throw error;
             }
-            const items = await source.create({ ...calendar }, { ...record, ...(emails ? { notify: true } : {}) });
-            this.takeItems(calendar, items);
-            const first = items?.[0];
-            return { remoteId: first?.remoteId, uid: first?.events?.[0]?.uid ?? record.uid };
+        }).catch((error) => {
+            if (lost === undefined) throw error;
+            this.lostCreates.set(key, { uid: record.uid, at: this.now() });
+            this.log(`create ${calendar.id} answer lost`);
+            throw new CalendarError(`${asCalendarError(lost).message} It may have been made anyway: asking again with the same details won't make a second one.`);
         });
+        this.lostCreates.delete(key);
         this.log(`create ${calendar.id} by=${by}${record.rrule ? ' repeats' : ''}${record.attendees ? ` people=${record.attendees.length}` : ''}${emails ? ` mail=${mail.to.length}` : ''}`);
         const eventId = eventIdOf(calendar.id, created.uid);
         const zone = this.zone();
@@ -1496,6 +1553,11 @@ export class CalendarManager {
         const first = this.find({ from: startMs - DAY, to: startMs + 2 * DAY + spanLength(record, zone), calendars: [calendar.id] })
             .find(({ o }) => o.record.uid === created.uid);
         return withMail(first ? this.view(first) : { id: eventId, eventId, calendarId: calendar.id, title: record.title }, mail);
+    }
+
+    /** Lost creates are kept for half an hour: long enough for a second try, not for a new event much later. */
+    pruneLostCreates() {
+        for (const [key, lost] of this.lostCreates) if (this.now() - lost.at > 30 * MINUTE) this.lostCreates.delete(key);
     }
 
     /**
@@ -1966,6 +2028,28 @@ export function peopleWords(list) {
     const more = people.length - shown.length;
     if (more > 0) return `${shown.join(', ')} and ${more} more`;
     return shown.length === 1 ? shown[0] : `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)}`;
+}
+
+/** What withdrawing an account's access came to; a page to manage it only on https. */
+function withdrawal(revoked, manageUrl) {
+    if (revoked) return { revoked: true };
+    return { revoked: false, ...(typeof manageUrl === 'string' && /^https:\/\/[^\s]+$/.test(manageUrl) ? { manageUrl } : {}) };
+}
+
+/** Whether a failed request may have reached the server anyway: no answer, or the server's own failure. */
+function maybeMade(error) {
+    if (error?.name === 'HttpError') return true;
+    if (!(error instanceof SourceError)) return false;
+    return error.code === 'network' || (error.code === 'server' && (error.status === undefined || error.status >= 500));
+}
+
+/** JSON with its keys in order, so the same create reads the same however its fields came. */
+function stableJson(value) {
+    if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+    if (value !== null && typeof value === 'object') {
+        return `{${Object.keys(value).sort().filter((k) => value[k] !== undefined).map((k) => `${JSON.stringify(k)}:${stableJson(value[k])}`).join(',')}}`;
+    }
+    return JSON.stringify(value) ?? 'null';
 }
 
 function asCalendarError(error) {

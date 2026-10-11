@@ -11,6 +11,12 @@
  *            source only stores and fetches it. 'events': it maps events
  *            to and from the server's own JSON (Google, Microsoft, EventKit).
  *   create(account, env) → a source for one account (below).
+ *   revoke(env, secret) → {revoked, manageUrl?}   (optional)
+ *            Withdraw the plugin's access when the user removes the
+ *            account, before its secret is cleared. revoked: the provider
+ *            took it back; otherwise manageUrl is the page where the user
+ *            does it. MANAGE_URL (optional): that page, for when revoke
+ *            fails.
  *
  * `account` is what the plugin stores about an account, never a secret:
  *   {id, kind, name, url?, host?, username?, email?, preset?, allowHttp?}.
@@ -35,9 +41,11 @@
  * Every source has:
  *
  *   calendars() → [{remoteId, name, color?, readOnly?, timeZone?, description?,
- *                   mode?: 'masters' | 'instances'}]
+ *                   mode?: 'masters' | 'instances', primary?}]
  *       The account's calendars that hold events. 'instances': the source
  *       hands each occurrence of a series over on its own (see model.js).
+ *       primary: the account's main calendar, as its server says (new
+ *       events go there unless the user chose another).
  *
  *   sync(calendar, state, {from, to, signal}) → {reset, items, removed, state}
  *       What changed in one calendar since `state` (opaque JSON this source
@@ -51,13 +59,16 @@
  *
  *   put(calendar, item | null, raw, uid) → {remoteId, etag}
  *       Store iCalendar text: a new resource (item null; it must not exist
- *       yet), or a changed one (only if its etag is still item.etag).
+ *       yet, and one already there with this uid is this create made
+ *       before), or a changed one (only if its etag is still item.etag).
  *   remove(calendar, item) → undefined
  *       Delete a resource (only if its etag is still item.etag).
  *
  * An 'events' source also has:
  *
  *   create(calendar, record) → Item[]
+ *       record.uid is new, and the same when the manager asks again after
+ *       an answer was lost: the server must make the event once.
  *   update(calendar, target, patch, scope) → Item[]
  *       target: {item, record, occurrence?}: the item and record changed, and
  *       for one occurrence of a series its original start (a Time). patch:
