@@ -56,6 +56,7 @@ import {
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
 import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS, diffFiles, subagentsIn, placeIn } from './changes.js';
 import { sendOf, codeSendOf } from './sends.js';
+import { grantsIn, asksFor, doing } from './grants.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
 const SECTION_ORDER = 9500;
@@ -2646,6 +2647,25 @@ export class ProjectManager {
         throw new ProjectError(`this would use ${blocked.join(', ')}, and the user's words do not ask for ${them}. Keep the work inside the workspace, or ask the user first. If the user did ask, ${how}. If the text only says not to use ${them}, leave that out: threads already have that rule`);
     }
 
+    /**
+     * Refuse a brief or message that gives a thread leave for what rule 6
+     * holds back ("delete only clearly safe junk", "so that is authorized":
+     * grants.js), unless the user's words in `asks` name that action. In
+     * behaviour review 4 a thread deleted build/ because its brief said it
+     * could; only the user's words allow that, so the thread lists what it
+     * would do and the coordinator asks.
+     */
+    guardGrants(projectId, what, text, asks) {
+        const granted = grantsIn(text).filter(({ action }) => !asks.some((ask) => asksFor(ask, action)));
+        if (granted.length === 0) return;
+        const actions = granted.map((g) => g.action);
+        this.log(`grant ${projectId} ${what} ${actions.join(',')}`);
+        const { sentence } = granted[0];
+        const said = sentence.length > 80 ? `${sentence.slice(0, 80).replace(/[\s,;:]*\S*$/, '') || sentence.slice(0, 79)}…` : sentence;
+        const where = what === 'start' ? 'the brief' : 'the text';
+        throw new ProjectError(`${where} allows ${doing(actions)} ("${said}"), and only the user's words can allow that (rule 6). If they asked for it, put their words in ask. If not, take it out of ${where}: have the thread list what it would do and hand back needs_decision, then ask the user`);
+    }
+
     async startThread(projectId, { title, ask, brief, model, effort }) {
         const project = this.project(projectId);
         if (this.archived(projectId)) throw new ProjectError(ARCHIVED);
@@ -2662,6 +2682,7 @@ export class ProjectManager {
         const tools = await this.askedTools(projectId, userWords);
         this.guard(projectId, 'start', `${cleanTitle}\n${userWords}\n${brief}`, tools);
         await this.requireUserWords(projectId, userWords, 'start');
+        this.guardGrants(projectId, 'start', `${cleanTitle}\n${brief}`, [userWords]);
         const access = this.access(projectId);
         // Its permission preset; one DSH doesn't offer (any more) is not one to start a thread on.
         const preset = this.presets() ? this.presetOf(access.threadPermission.value) : undefined;
@@ -2748,6 +2769,7 @@ export class ProjectManager {
             tools = await this.askedTools(projectId, userWords);
             this.guard(projectId, 'send', `${userWords}\n${text}`, [...(Array.isArray(t.tools) ? t.tools : []), ...tools]);
             if (userWords !== '') await this.requireUserWords(projectId, userWords, 'send');
+            this.guardGrants(projectId, 'send', text, [userWords, t.ask ?? '']);
         }
         if (t.resolved) this.store.putThread(projectId, id, { resolved: false });
         await this.attach(t.sessionId);

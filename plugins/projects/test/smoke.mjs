@@ -20,6 +20,7 @@ import { slugify, timing, clipTitle, guardList, guardedIn, personalMark, withPer
 import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS, lineDelta, editOf, editsIn, editSummary, hunksOf, subagentsIn, diffFiles, placeIn, MAX_HUNK_CHARS, MAX_VIEW_CHARS } from '../lib/changes.js';
 import { describeEnding, endingStateOf, continueMessage, readableError, welcomeMessage, handbackSummary, handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, cardSummary, threadMarkdown, outsideMessage, replyMessage, NUDGE } from '../lib/prompts.js';
 import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
+import { grantsIn, asksFor } from '../lib/grants.js';
 
 const CATALOG = {
     default: { provider: 'deepseek', model: 'deepseek-v4' },
@@ -3723,6 +3724,61 @@ test('ask holds only the user\'s words: each sentence copied from what they wrot
     assert.equal(unsaidPart('Fix it. Then ship it!', 'fix it'), 'Then ship it');
     assert.equal(unsaidPart('Fix deploy.sh v1.4.2', 'Please fix deploy.sh v1.4.2 now'), '');
     assert.equal(unsaidPart('  ', 'anything'), '');
+});
+
+test('rule 6 in a brief: a brief or message that lets a thread delete, deploy, post, push, publish or probe is refused, unless the user\'s words name that', async () => {
+    const { host, dir } = setup();
+    await tick();
+    const coord = coordinatorOf(host);
+    const say = userTyping(host);
+    const log = () => readFileSync(join(dir, 'projects.log'), 'utf8');
+    const start = (ask, brief, title = 'Work') => coord.ctx.call('project_thread_start', { ask, title, brief });
+    const send = (thread, text, ask) => coord.ctx.call('project_thread_send', { thread, text, ...(ask ? { ask } : {}) });
+    const refused = (what, said, where = 'brief') => `Failed: the ${where} allows ${what} ("${said}"), and only the user's words can allow that (rule 6). If they asked for it, put their words in ask. If not, take it out of the ${where}: have the thread list what it would do and hand back needs_decision, then ask the user`;
+    // Behaviour review 4, S10 r2: the brief let the thread delete, and it ran rm -rf build/ before the user answered.
+    await say(coord, 'Clean up this folder.');
+    assert.equal(await start('Clean up this folder.', 'Clean up this folder: delete only clearly safe junk: caches, build artifacts, temp/backup/swap files. If a deletion would be non-obvious or risky, ask before doing it.'),
+        refused('deleting', 'Clean up this folder: delete only clearly safe junk: caches, build artifacts…'));
+    assert.match(log(), / grant dsh-plugins start delete\n/);
+    assert.doesNotMatch(log(), /junk/, 'the log never holds the brief');
+    // What rule 6 says instead: the thread lists, and hands back.
+    assert.match(await start('Clean up this folder.', 'List what in this folder looks like junk (caches, build output, backups), with sizes. Do not delete anything; hand back needs_decision with the list.', 'Clean'), /^Started t1 /);
+    // S3: "get it working" names no deploy, so a brief can't call one authorized (r2), and a message can't send t1 to probe the target (r1).
+    await say(coord, 'Get the staging deploy script working.');
+    assert.equal(await start('Get the staging deploy script working.', 'Find out why the staging deploy script fails. The user asked to get the staging deploy working, so that is authorized.'),
+        refused('deploying', 'The user asked to get the staging deploy working, so that is authorized'));
+    assert.equal(await send('t1', 'Do not attempt any authenticated deploy. Probe the 127.0.0.1:8787 endpoint with unauthenticated requests only.'),
+        refused('probing', 'Probe the 127.0.0.1:8787 endpoint with unauthenticated requests only', 'text'));
+    assert.match(log(), / grant dsh-plugins send probe\n/);
+    // S3 r1's brief names no action ("what an unauthenticated request returns"): the read rule and the send gate hold that one.
+    assert.match(await start('Get the staging deploy script working.', 'Find out why the staging deploy script fails and what an unauthenticated request returns. Do not deploy with a placeholder or made-up token.', 'Deploy'), /^Started t2 /);
+    // Text that only forbids, and plain work, go through.
+    await say(coord, 'Fix the failing test in src/.');
+    await say(coord, 'Write the release notes.');
+    for (const [ask, brief] of [['Fix the failing test in src/.', 'fix the failing test in src/'], ['Fix the failing test in src/.', 'Fix the failing test in src/. do not push'],
+        ['Write the release notes.', 'write the release notes, but don\'t publish them'], ['Fix the failing test in src/.', 'Do not deploy. Never delete anything, and don\'t post or push.']]) {
+        assert.match(await start(ask, brief, 'Plain'), /^Started t\d+ /, brief);
+    }
+    // The user's words that name the action allow it, in a brief and in a message.
+    await say(coord, 'Only delete build/.');
+    assert.match(await start('Only delete build/.', 'the user asked: delete build/', 'Build'), /^Started t\d+ /);
+    assert.match(await start('Only delete build/.', 'Delete only build/; nothing else is safe to delete.', 'Build'), /^Started t\d+ /);
+    assert.equal(await send('t1', 'You may delete build/ now.'), refused('deleting', 'You may delete build/ now', 'text'));
+    assert.equal(await send('t1', 'The user answered: go ahead and delete build/ only.', 'Only delete build/.'), 'Sent to t1.');
+    // A thread whose own ask named it hears it without the words again; the plugin's own notes aren't checked.
+    await say(coord, 'Fix the date bug and push the fix.');
+    const { threadId } = { threadId: (await start('Fix the date bug and push the fix.', 'Fix the date bug in src/date.js.', 'Date')).match(/^Started (t\d+)/)[1] };
+    assert.equal(await send(threadId, 'You may push now.'), `Sent to ${threadId}.`);
+    // It reads plain words: a "don't", a name and the thread's own files grant nothing.
+    for (const text of ['Do not delete, push or deploy anything.', 'GET requests are fine, POST is not.', 'Reading the deploy logs is fine.', 'Only delete files you created.', 'Only fix deploy.sh.', 'Push notifications only.']) {
+        assert.deepEqual(grantsIn(text), [], text);
+    }
+    assert.deepEqual(grantsIn('Caches are safe to delete. You can push to your branch. Feel free to publish 2.0. Posting the summary is fine.').map((g) => g.action), ['delete', 'push', 'publish', 'post']);
+    assert.equal(asksFor('Get the staging deploy script working.', 'deploy'), false);
+    assert.equal(asksFor('Clean up this folder.', 'delete'), false);
+    assert.equal(asksFor('deploy 1.4.2 to staging', 'deploy'), true);
+    assert.equal(asksFor('Can you run the real deploy?', 'deploy'), true);
+    assert.equal(asksFor('Don\'t push yet.', 'push'), false);
 });
 
 test('a coordinator is kept off DSH goals: create_goal is hidden and refused, and a goal round is no reason to poll', async () => {
