@@ -1827,6 +1827,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             });
         }
 
+        /** Before an event's dialog closes with changes not saved: Keep editing (the first focus) or Discard. */
+        function DiscardDialog({ onDiscard, onClose }) {
+            return h(Dialog, {
+                title: 'Discard your changes?', narrow: true, onClose,
+                footer: h(React.Fragment, null,
+                    h(ui.Button, { variant: 'outline', onClick: onClose, 'data-modal-autofocus': true, 'data-calendar-keep-editing': '' }, 'Keep editing'),
+                    h(ui.Button, { variant: 'outline', className: 'dshcal-btn-danger', onClick: onDiscard, 'data-calendar-discard': '' }, 'Discard')),
+            });
+        }
+
         /**
          * The questions a change can need before it's made, for a view to
          * show: {ask(question) → Promise<boolean: yes>, drop(text) →
@@ -2262,6 +2272,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return patch;
         }
 
+        /** Whether a draft differs from how the dialog opened, in anything saving would keep: closing it then asks first. */
+        function draftChanged(initial, d) {
+            return d.calendarId !== initial.calendarId || JSON.stringify(d.repeat) !== JSON.stringify(initial.repeat)
+                || Object.keys(changePatch(initial, d, { repeatTouched: false })).length > 0;
+        }
+
         /** A labelled field with its problem under it. */
         function Field({ label, id, error, hint, children, className }) {
             return h('div', { className: `dshcal-field${className ? ` ${className}` : ''}` },
@@ -2419,7 +2435,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * event from an occurrence). A change to a repeating event asks which
          * occurrences it reaches; a change that would email people asks
          * first; the host's refusal shows at the top of the form, where the
-         * focus goes.
+         * focus goes. Closed with changes not saved, it asks first.
          */
         function EventDialog({ cal, mode, occurrence, preset, onClose, onSaved }) {
             const store = cal.store;
@@ -2439,6 +2455,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [lost, setLost] = React.useState(false);
             const [busy, setBusy] = React.useState(false);
             const [ask, setAsk] = React.useState(null);
+            // Closing with changes not saved: '' (open), 'ask' (Discard your changes?), 'go' (discarded: it closes).
+            const [leaving, setLeaving] = React.useState('');
             const sending = useSendQuestion();
             // A move a Save made before its other changes failed: the event is in that calendar now.
             const movedRef = React.useRef(null);
@@ -2494,6 +2512,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 el.scrollIntoView?.({ block: 'nearest' });
                 el.focus({ preventScroll: true });
             });
+            // Discarded: the question closes first (its focus goes back into this dialog), then the dialog.
+            React.useEffect(() => {
+                if (leaving === 'go') onClose();
+            }, [leaving]);
+            const close = () => {
+                if (draftChanged(initial, d)) setLeaving('ask');
+                else onClose();
+            };
 
             /** A new start keeps the event's length. */
             const moveStart = (startDay, startTime) => {
@@ -2657,9 +2683,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const errorId = (key) => (errors[key] ? `${FIELD_IDS[key] ?? `dshcal-${key}`}-error` : undefined);
             return h(React.Fragment, null,
                 h(Dialog, {
-                    title, onClose, busy, wide: true,
+                    title, onClose: close, busy, wide: true,
                     footer: h(React.Fragment, null,
-                        h(ui.Button, { variant: 'outline', disabled: busy, onClick: onClose }, TEXT.cancel),
+                        h(ui.Button, { variant: 'outline', disabled: busy, onClick: close, 'data-calendar-cancel': '' }, TEXT.cancel),
                         h(ui.Button, { variant: 'primary', disabled: busy || lost, onClick: () => void save(), 'data-calendar-save': '' }, busy ? h(Spinner) : null, editing ? TEXT.save : 'Add event')),
                 },
                 h('form', {
@@ -2782,7 +2808,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     title: 'Change repeating event', scopes: ask.scopes, action: TEXT.save,
                     onSubmit: (scope) => ask.run(scope), onClose: () => setAsk(null),
                 }) : null,
-                sending.dialog);
+                sending.dialog,
+                leaving === 'ask' ? h(DiscardDialog, { onDiscard: () => setLeaving('go'), onClose: () => setLeaving('') }) : null);
         }
 
         // ── Popovers: an event's details, a day's events ───────────────────
@@ -5957,7 +5984,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             parseRule, untilValue, untilDay, repeatChoices, repeatFromRule, ruleFromRepeat, repeatProblem,
             columnsOf, lanesOf, fitLanes, daySegments, barItems, agendaDays, rangeOf, stepFrom, dayList,
             SNAP, snapTo, canDrag, movedTo, resizedTo, shiftedBy, coveredDays, placedAt, dropPatch, consentArgs, movedWords, ghostWords, openingMinute, clockText, clockRangeText, searchGroups,
-            draftFrom, draftProblems, createInput, changePatch, writableCalendars,
+            draftFrom, draftProblems, createInput, changePatch, draftChanged, writableCalendars,
             roleOf, othersOf, mailMode, peopleText, sameOccurrence, placed, emailedText, contactText, CHOOSE_CALENDAR, withConsent, consentQuestion, consentWords, asked, removalNotice, returnAddress,
             callArgs, argWhen, runningTitle, doneTitle, resultText, failureText, saysNotDone, saysPartly, NOT_DONE,
             CalendarPage, AgendaPane, ToolView, EventDialog, EventPopover, AccountsDialog,

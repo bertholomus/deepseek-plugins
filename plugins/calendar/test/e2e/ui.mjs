@@ -73,7 +73,9 @@
  *   to both; changed there so that it reaches nobody new, its yes makes
  *   nothing and Look at it again shows it as it is now;
  * - a save Microsoft answers with 500, said at the top of the dialog, in
- *   view and with the focus, at 1280 px and at 420 px;
+ *   view and with the focus, at 1280 px and at 420 px; an edited event
+ *   asks before Escape, Cancel or the close button drops it (Keep editing,
+ *   or Discard), an unchanged one closes at once;
  * - a change whose every yes comes back naming someone new (played): four
  *   questions, then it stops, saying it keeps changing, with Look at it
  *   again;
@@ -108,12 +110,13 @@
  * wallpaper; the event dialog, with no calendar chosen too, the question
  * before an email, the one before a move that drops part of a series, a
  * change stopped because the event changed, a save refused at the top of
- * the dialog (changed, nobody new, failed, narrow, stopped), Accounts,
- * Microsoft's and Google's sign-ins, a removal's notice, the Agenda pane
- * and an event's details beside it, chat cards, the side column folded, a
- * drag, search results, a narrow window; Week and Month with weekends
- * hidden and week numbers, light, dark and narrow, and the settings menu;
- * and the window whenever a step fails). KEEP=1 keeps the temporary folder.
+ * the dialog (changed, nobody new, failed, narrow, stopped), the question
+ * before changes are discarded, Accounts, Microsoft's and Google's
+ * sign-ins, a removal's notice, the Agenda pane and an event's details
+ * beside it, chat cards, the side column folded, a drag, search results, a
+ * narrow window; Week and Month with weekends hidden and week numbers,
+ * light, dark and narrow, and the settings menu; and the window whenever a
+ * step fails). KEEP=1 keeps the temporary folder.
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -208,9 +211,11 @@ async function step(name, run) {
         check(name, false, error?.stack ?? error);
         // What the window showed when the step failed.
         if (shots && page) await page.screenshot({ path: join(shots, `failed-${++failedShots}.png`) }).catch(() => {});
-        // A dialog left open would cover the page for the steps after this one.
-        for (let i = 0; page && i < 3 && (await page.locator('[role="dialog"]').count().catch(() => 0)) > 0; i++) {
-            await page.keyboard.press('Escape').catch(() => {});
+        // A dialog left open would cover the page for the steps after this one (an edited event's asks first: Discard).
+        for (let i = 0; page && i < 4 && (await page.locator('[role="dialog"]').count().catch(() => 0)) > 0; i++) {
+            const discard = page.locator('[data-calendar-discard]');
+            if (await discard.count().catch(() => 0)) await discard.click().catch(() => {});
+            else await page.keyboard.press('Escape').catch(() => {});
             await sleep(400);
         }
     }
@@ -1815,20 +1820,29 @@ try {
     });
 
     // 14c. A save that fails for another reason (Microsoft answers 500): said at the top of the dialog, in view and with the
-    // focus, at 1280 px and at 420 px.
-    await step('a save that didn\'t work, said at the top of the dialog', async () => {
+    // focus, at 1280 px and at 420 px. Then the edited dialog asks before it drops the changes; unchanged, it closes at once.
+    await step('a save that didn\'t work, and an edited event that asks before it is dropped', async () => {
         const graph = providers.graph;
         const day = addDays(today, 4);
         await api('createEvent', { input: { calendarId: msCalendar.id, title: 'E2E Dentist', start: `${day}T16:00`, end: `${day}T16:30`, timeZone: ZONE } });
         const graphId = [...graph.store.events.values()].find((e) => e.subject === 'E2E Dentist')?.id;
         const path = `/v1.0/me/events/${graphId}`;
         const form = page.locator('[data-calendar-event-form="edit"]');
-        await showDay(day);
-        await eventOnPage('E2E Dentist').click();
-        await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
-        await page.locator('[data-calendar-edit]').click();
-        await form.waitFor({ state: 'visible' });
+        const discard = page.locator('[data-calendar-discard]');
+        const open = async () => {
+            await showDay(day);
+            await eventOnPage('E2E Dentist').click();
+            await page.locator('[data-calendar-details]').waitFor({ state: 'visible' });
+            await page.locator('[data-calendar-edit]').click();
+            await form.waitFor({ state: 'visible' });
+        };
+        // Unchanged: Escape closes it at once.
+        await open();
+        await page.keyboard.press('Escape');
+        await dialogGone();
+        const askedUnchanged = await discard.count();
         // Show me as changed at the end of the form, and Microsoft answers 500.
+        await open();
         await form.locator('[data-calendar-busy]').selectOption('free');
         const endScroll = await toFormEnd(form);
         graph.store.failNext({ method: 'PATCH', path, status: 500 });
@@ -1851,12 +1865,39 @@ try {
             await page.waitForTimeout(600);
         }
         const tries = graph.store.requestsTo(path, 'PATCH').map((r) => r.status);
+        // Escape asks first, Keep editing has the focus; Escape there keeps editing.
         await page.keyboard.press('Escape');
+        await discard.waitFor({ state: 'visible', timeout: 5000 });
+        const question = await discard.locator('xpath=ancestor::*[@role="dialog"][1]').evaluate((el) => ({
+            title: el.getAttribute('aria-label'),
+            buttons: [...el.querySelectorAll('button')].map((b) => b.textContent.trim()).filter(Boolean),
+            focus: el.ownerDocument.activeElement?.hasAttribute('data-calendar-keep-editing') === true,
+        }));
+        await shot(page, 'discard-question');
+        await page.keyboard.press('Escape');
+        await discard.waitFor({ state: 'detached' });
+        const keptByEscape = { open: await form.isVisible(), busy: await form.locator('[data-calendar-busy]').inputValue() };
+        // Cancel asks too; Enter on Keep editing keeps it.
+        await page.locator('[data-calendar-cancel]').click();
+        await discard.waitFor({ state: 'visible', timeout: 5000 });
+        await page.keyboard.press('Enter');
+        await discard.waitFor({ state: 'detached' });
+        const keptByEnter = { open: await form.isVisible(), busy: await form.locator('[data-calendar-busy]').inputValue() };
+        // So does the close button; Discard closes the dialog, nothing saved.
+        await form.locator('xpath=ancestor::*[@role="dialog"][1]').getByRole('button', { name: 'Close', exact: true }).click();
+        await discard.waitFor({ state: 'visible', timeout: 5000 });
+        await discard.click();
         await dialogGone();
+        const now = (await events(day, day)).find((o) => o.title === 'E2E Dentist');
         check('a save that didn\'t work says why at the top of the dialog, in view with the focus, at 1280 px and at 420 px',
             /^Saving the event on Microsoft: the server answered HTTP 500\b/.test(wide.text) && endScroll > 0 && wide.note && wide.focus && wide.look === null
             && narrow.text === wide.text && narrowEnd > 0 && narrow.note && narrow.focus && JSON.stringify(narrow.viewport) === '[420,820]'
             && JSON.stringify(tries) === '[500,500]', JSON.stringify({ endScroll, wide, narrowEnd, narrow, tries }));
+        check('an edited event asks before Escape, Cancel or the close button drops it: Keep editing first, keeping the edits; Discard closes it unsaved; unchanged, it closes at once',
+            askedUnchanged === 0 && question.title === 'Discard your changes?' && JSON.stringify(question.buttons) === '["Keep editing","Discard"]' && question.focus
+            && keptByEscape.open && keptByEscape.busy === 'free' && keptByEnter.open && keptByEnter.busy === 'free'
+            && now?.busy !== false && graph.store.json(graphId)?.showAs !== 'free' && graph.store.requestsTo(path, 'PATCH').length === 2,
+            JSON.stringify({ askedUnchanged, question, keptByEscape, keptByEnter, busy: now?.busy, showAs: graph.store.json(graphId)?.showAs }));
     });
 
     // 14d. A host whose every yes comes back naming someone new (the event keeps changing): asked four times, then it stops,

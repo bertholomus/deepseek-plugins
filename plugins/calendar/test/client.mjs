@@ -656,6 +656,34 @@ test('a new event goes to the default calendar, or to one the user picks when th
     assert.equal(inHidden.calendarId, 'c-work');
 });
 
+test('an event dialog closed with changes not saved asks first: anything saving would keep, not the box to tell the guests alone', () => {
+    const calendars = [{ id: 'c-work', account: 'Work', kind: 'google', name: 'Work', readOnly: false }, { id: 'c-home', account: 'Home', kind: 'caldav', name: 'Home', readOnly: false }];
+    const state = { calendars, defaultCalendar: 'c-work' };
+    const occurrence = {
+        id: 'ev-1', eventId: 'ev-1', calendarId: 'c-work', title: 'Review', allDay: false, start: Date.parse('2026-10-12T16:00:00Z'), end: Date.parse('2026-10-12T17:00:00Z'),
+        startLocal: '2026-10-12T09:00', endLocal: '2026-10-12T10:00', timeZone: LA, attendees: [{ email: 'ann@example.com', name: 'Ann' }], alarms: [10], busy: true,
+        repeat: 'FREQ=WEEKLY;BYDAY=MO', recurring: true,
+    };
+    for (const initial of [
+        I.draftFrom({ occurrence, state, zone: LA }),
+        I.draftFrom({ occurrence, state, zone: LA, duplicate: true }),
+        I.draftFrom({ preset: { startDay: '2026-10-12', startTime: '09:00' }, state, zone: LA }),
+    ]) {
+        const changed = (patch) => I.draftChanged(initial, { ...initial, ...patch });
+        // As it opened, or only the box ticked, or a title with spaces around it: closed at once.
+        assert.equal(I.draftChanged(initial, { ...initial }), false);
+        assert.equal(changed({ notify: true }), false);
+        assert.equal(changed({ title: ` ${initial.title} ` }), false);
+        // Anything else saving would keep: asked first.
+        for (const patch of [
+            { title: 'Review (moved)' }, { startTime: '09:30' }, { endDay: '2026-10-13' }, { allDay: !initial.allDay }, { timeZone: BERLIN },
+            { location: 'Room 4' }, { url: 'https://example.com/r' }, { description: 'Bring the plans.' }, { alarms: [30] },
+            { guests: [...initial.guests, { email: 'bob@example.com' }] }, { busy: false }, { private: true }, { calendarId: 'c-home' },
+            { repeat: { ...initial.repeat, mode: initial.repeat.mode === 'daily' ? 'weekly' : 'daily' } },
+        ]) assert.equal(changed(patch), true, JSON.stringify(patch));
+    }
+});
+
 test('after removing an account: DSH\'s access withdrawn, or the page to withdraw it on', () => {
     const google = { id: 'a-1', kind: 'google', name: 'ann@gmail.com' };
     const microsoft = { id: 'a-2', kind: 'microsoft', name: 'pat@outlook.com' };
