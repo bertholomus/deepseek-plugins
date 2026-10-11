@@ -597,6 +597,8 @@ test('what was emailed, in a sentence', () => {
     assert.equal(I.emailedText({ what: 'the invitation', to: ['a@x.org', 'b@x.org', 'c@x.org', 'd@x.org', 'e@x.org'] }), 'Emailed the invitation to a@x.org, b@x.org, c@x.org and 2 others.');
     assert.equal(I.emailedText({ to: [] }), '');
     assert.equal(I.emailedText(undefined), '');
+    // A chat's record names everyone.
+    assert.equal(I.emailedText({ what: 'the invitation', to: ['a@x.org', 'b@x.org', 'c@x.org', 'd@x.org', 'e@x.org'] }, true), 'Emailed the invitation to a@x.org, b@x.org, c@x.org, d@x.org and e@x.org.');
 });
 
 test('who a change emailed, and whose calendars it reached without email', () => {
@@ -610,6 +612,12 @@ test('who a change emailed, and whose calendars it reached without email', () =>
         'Emailed a cancellation to ann@example.com. Put on the calendars of bob@example.com.');
     assert.equal(I.contactText({ emailed: { what: 'an update', to: ann } }), 'Emailed an update to ann@example.com.');
     for (const nothing of [undefined, {}, { reached: { how: 'add', to: [] } }, { reached: { how: 'add', to: [1, ''] } }, { reached: 'ann' }]) assert.equal(I.contactText(nothing), '');
+    // A toast names three and a number; a chat's card, everyone.
+    const five = ['a@x.org', 'b@x.org', 'c@x.org', 'd@x.org', 'e@x.org'];
+    assert.equal(I.contactText({ emailed: { what: 'an update', to: five }, reached: { how: 'change', to: five } }),
+        'Emailed an update to a@x.org, b@x.org, c@x.org and 2 others. Changed on the calendars of a@x.org, b@x.org, c@x.org and 2 others.');
+    assert.equal(I.contactText({ emailed: { what: 'an update', to: five }, reached: { how: 'change', to: five } }, { all: true }),
+        'Emailed an update to a@x.org, b@x.org, c@x.org, d@x.org and e@x.org. Changed on the calendars of a@x.org, b@x.org, c@x.org, d@x.org and e@x.org.');
 });
 
 test('after a move, the other changes go to the same occurrence in the moved event', () => {
@@ -763,6 +771,27 @@ test('a call that didn\'t work says what it didn\'t do, and why, without what it
     for (const text of ['Not done: no', 'Failed: timeout', 'Error: Failed: timeout', '  not done: x']) assert.equal(I.saysNotDone(text), true, text);
     for (const text of ['Added: Lunch', 'Changed.', '', undefined]) assert.equal(I.saysNotDone(text), false, String(text));
     assert.deepEqual(plain(I.NOT_DONE), { calendar_create_event: 'Not added', calendar_update_event: 'Not changed', calendar_delete_event: 'Not deleted', calendar_respond: 'Not answered' });
+});
+
+test('a chat call refused for its email says so in the window\'s words: who, why, and what to do', async () => {
+    // The host's own words, as the tool gives them to the agent.
+    const { refusalText } = await import('../lib/args.js');
+    const { peopleWords } = await import('../lib/manager.js');
+    const why = 'Microsoft emails a meeting\'s guests about each change to it';
+    const refused = (what, to) => `Error: ${refusalText({ code: 'needs-notify', message: `This would email ${what} to ${peopleWords(to)} (${why}), so it's made only when they are to be told.` })}`;
+    const twelve = Array.from({ length: 12 }, (_, i) => `p${i + 1}@example.com`);
+    assert.equal(I.refusedEmailText('calendar_update_event', refused('an update', twelve)),
+        `It would email an update to 12 guests (${why}). Ask again to send it, or change it in Calendar.`);
+    assert.equal(I.refusedEmailText('calendar_update_event', refused('an update', ['ann@example.com', 'bob@example.com'])),
+        `It would email an update to ann@example.com and bob@example.com (${why}). Ask again to send it, or change it in Calendar.`);
+    assert.equal(I.refusedEmailText('calendar_create_event', refused('invitations', twelve.slice(0, 3))),
+        `It would email invitations to p1@example.com, p2@example.com and p3@example.com (${why}). Ask again to send them, or add it in Calendar.`);
+    assert.equal(I.refusedEmailText('calendar_delete_event', refused('a cancellation', twelve.slice(0, 6))),
+        `It would email a cancellation to 6 guests (${why}). Ask again to send it, or delete it in Calendar.`);
+    assert.equal(I.refusedEmailText('calendar_respond', refused('the answer', ['olga@example.com'])),
+        `It would email the answer to olga@example.com (${why}). Ask again to send it, or answer it in Calendar.`);
+    // Anything else is said as the host said it.
+    for (const other of ['Error: Not done: No event ev-1.', '', undefined]) assert.equal(I.refusedEmailText('calendar_update_event', other), '');
 });
 
 test('a dragged event: a quarter hour at a time on the page\'s clock, its length kept', () => {

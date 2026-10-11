@@ -1811,6 +1811,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     'It changed meanwhile, on its server or in another app, so nothing was done yet. This is everyone it reaches now.') : null,
                 q.people.length ? h('ul', {
                     className: 'dshcal-people', 'data-calendar-people': '', 'aria-label': 'Who it reaches', tabIndex: long ? 0 : undefined,
+                    // Home and End go to the list's ends, whatever the browser does with them.
+                    onKeyDown: long ? (event) => {
+                        if (event.key !== 'Home' && event.key !== 'End') return;
+                        event.preventDefault();
+                        event.currentTarget.scrollTop = event.key === 'Home' ? 0 : event.currentTarget.scrollHeight;
+                    } : undefined,
                 }, q.people.map((p) => h('li', { key: p.email, 'data-calendar-person': p.email },
                     h('span', { className: 'dshcal-person' }, p.email),
                     p.fresh ? h('span', { className: 'dshcal-tag', 'data-calendar-person-new': '' }, 'New') : null,
@@ -2078,9 +2084,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /** People in words: up to three addresses, then how many more. */
-        function peopleText(list) {
+        function peopleText(list, all = false) {
             const people = (list ?? EMPTY).filter((v) => typeof v === 'string' && v !== '');
-            const shown = people.slice(0, 3);
+            const shown = all ? people : people.slice(0, 3);
             const more = people.length - shown.length;
             if (more > 0) return `${shown.join(', ')} and ${plural(more, 'other')}`;
             return shown.length <= 1 ? (shown[0] ?? 'no one') : `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)}`;
@@ -2103,10 +2109,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** Whether a change's answer is an occurrence the page can show and follow (one the host lost sight of is its id alone). */
         const placed = (o) => isObject(o) && typeof o.id === 'string' && (o.allDay === true ? isDay(o.startDay) : Number.isFinite(o.start));
 
-        /** Who a change emailed, as a sentence ('Emailed an update to ann@example.com.'), or ''. */
-        function emailedText(emailed) {
+        /** Who a change emailed, as a sentence ('Emailed an update to ann@example.com.'), or ''. all: everyone by name, not three and a number. */
+        function emailedText(emailed, all = false) {
             if (!isObject(emailed) || !Array.isArray(emailed.to) || emailed.to.length === 0) return '';
-            return `Emailed ${String(emailed.what || 'them')} to ${peopleText(emailed.to)}.`;
+            return `Emailed ${String(emailed.what || 'them')} to ${peopleText(emailed.to, all)}.`;
         }
 
         const REACHED_WORDS = { add: 'Put on', remove: 'Taken off', change: 'Changed on' };
@@ -2116,12 +2122,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * (Google puts a meeting on its guests' calendars, changes it there and
          * takes it off them by itself), as sentences, or ''.
          * @param result - a change's result: {emailed?: {what, to}, reached?: {how: 'add'|'remove'|'change', to}}.
+         * @param [options] - all: name everyone (a chat's record), not three and a number (a toast).
          */
-        function contactText(result) {
-            const emailed = emailedText(result?.emailed);
+        function contactText(result, { all = false } = {}) {
+            const emailed = emailedText(result?.emailed, all);
             const r = result?.reached;
             const to = isObject(r) && Array.isArray(r.to) ? r.to.filter((p) => typeof p === 'string' && p !== '') : EMPTY;
-            const reached = to.length ? `${REACHED_WORDS[r.how] ?? 'Changed on'} the calendars of ${peopleText(to)}${emailed ? '' : ', without emailing anyone'}.` : '';
+            const reached = to.length ? `${REACHED_WORDS[r.how] ?? 'Changed on'} the calendars of ${peopleText(to, all)}${emailed ? '' : ', without emailing anyone'}.` : '';
             return [emailed, reached].filter(Boolean).join(' ');
         }
 
@@ -5697,6 +5704,26 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return out.length > 400 ? `${out.slice(0, 399)}…` : out;
         }
 
+        /**
+         * A call refused because it would email people and didn't say to tell
+         * them (the host's "This would email … to … (why), so it's made only
+         * when they are to be told."), in the window's words: who (by name
+         * for a few, by number for more), why, and what the user can do. ''
+         * for any other text.
+         */
+        function refusedEmailText(toolName, text) {
+            const m = /This would email (.+?) to (.+?) \(([^()]*)\), so it's made only when they are to be told\./.exec(String(text ?? '').replace(/\s+/g, ' '));
+            if (m === null) return '';
+            const [, what, people, why] = m;
+            const more = /^(.*) and (\d+) more$/.exec(people);
+            const named = (more ? more[1] : people).split(/, | and /).filter(Boolean);
+            const count = named.length + (more ? Number(more[2]) : 0);
+            const who = count > 3 ? `${count} ${/decline/.test(what) ? 'people' : 'guests'}` : named.length === 1 ? named[0] : `${named.slice(0, -1).join(', ')} and ${named.at(-1)}`;
+            const it = /^invitations\b/.test(what) ? 'them' : 'it';
+            const verb = { calendar_create_event: 'add it', calendar_delete_event: 'delete it', calendar_respond: 'answer it' }[toolName] ?? 'change it';
+            return `It would email ${what} to ${who} (${why}). Ask again to send ${it}, or ${verb} in Calendar.`;
+        }
+
         /** Whether a call's text says it wasn't done (a host that answers a failure as text rather than as the call's error). */
         const saysNotDone = (text) => /^(error:\s*)?(not done|failed|done in part):/i.test(String(text ?? '').trim());
         /** Whether it says a move stopped halfway ("Done in part: …"): copied to its new calendar, still in its old one. */
@@ -5813,7 +5840,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const deleted = view.kind === 'deleted';
             const when = Number.isFinite(o.start) || isDay(o.startDay) ? whenText(o, zone) : '';
             // A change: who it emailed, and whose calendars it reached without email.
-            const told = view.kind === 'event' ? '' : contactText(view);
+            // A chat keeps the record: everyone emailed or reached, by name.
+            const told = view.kind === 'event' ? '' : contactText(view, { all: true });
             return h('div', { className: 'dshcal-chat-line', 'data-kind': view.kind, 'data-calendar-chat-card': view.kind, style: evStyle(o.color) },
                 deleted ? icon('IconTrashOutlineRegular') : view.kind === 'event' ? h('span', { className: 'dshcal-dot', style: { '--dot': colorOf(o.color) } }) : icon('IconCheckCircleOutlineRegular'),
                 h('span', { className: 'dshcal-chat-text' },
@@ -5829,7 +5857,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * ("Moved in part: …"), with what is left to do.
          */
         function FailedRow({ toolName, title, text }) {
-            const why = failureText(text);
+            const why = refusedEmailText(toolName, text) || failureText(text);
             const partly = saysPartly(text);
             return h('div', { className: 'dshcal-chat', 'data-calendar-chat': toolName, 'data-phase': 'result', 'data-calendar-failed': partly ? 'partly' : '' },
                 h(ToolHead, { title, glyph: icon('IconWarningOutlineRegular') }),
@@ -5986,7 +6014,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             SNAP, snapTo, canDrag, movedTo, resizedTo, shiftedBy, coveredDays, placedAt, dropPatch, consentArgs, movedWords, ghostWords, openingMinute, clockText, clockRangeText, searchGroups,
             draftFrom, draftProblems, createInput, changePatch, draftChanged, writableCalendars,
             roleOf, othersOf, mailMode, peopleText, sameOccurrence, placed, emailedText, contactText, CHOOSE_CALENDAR, withConsent, consentQuestion, consentWords, asked, removalNotice, returnAddress,
-            callArgs, argWhen, runningTitle, doneTitle, resultText, failureText, saysNotDone, saysPartly, NOT_DONE,
+            callArgs, argWhen, runningTitle, doneTitle, resultText, failureText, refusedEmailText, saysNotDone, saysPartly, NOT_DONE,
             CalendarPage, AgendaPane, ToolView, EventDialog, EventPopover, AccountsDialog,
         };
         return module.exports;
