@@ -57,9 +57,14 @@ export class CalendarRemote {
     /**
      * Accounts, calendars, the user's zone and choices, and what the account
      * dialog offers: {version, zone, accounts, calendars, defaultCalendar,
-     * prefs, syncing, presets (CalDAV), signIn: {google: {ready, clientId?},
-     * microsoft: {ready, clientId?}}}. `version` changes whenever anything
-     * the window shows changed: poll this and refetch events when it moves.
+     * prefs, syncing, storeIssue?, presets (CalDAV), signIn: {google: {ready,
+     * clientId?}, microsoft: {ready, clientId?}}}. `version` changes whenever
+     * anything the window shows changed: poll this and refetch events when it
+     * moves. storeIssue {file, at, held?}: calendar.json couldn't be read at
+     * this start, and is kept beside it as `file` (held: it couldn't be moved
+     * and is left as it is); the plugin started without it. A calendar whose
+     * events file couldn't be read has its own, naming the file in the events
+     * folder.
      */
     async state() {
         return this.run(async () => ({ ...this.manager.state(), presets: PRESETS, signIn: await this.setup.signInReady() }));

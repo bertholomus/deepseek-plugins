@@ -89,8 +89,8 @@ export class CalendarManager {
         this.fetch = fetch;
         this.now = now ?? Date.now;
         this.logger = logger;
-        this.store = new CalendarStore(config.storeFile);
         this.logFile = config.logFile ? dataPath(config.logFile) : '';
+        this.store = new CalendarStore(config.storeFile, { now: this.now, log: (line) => this.log(`store ${line}`) });
         /** Bumped on every change the window should redraw for. */
         this.version = 1;
         this.sources = new Map();
@@ -106,7 +106,6 @@ export class CalendarManager {
     // ── Lifecycle ──────────────────────────────────────────────────────
 
     async start() {
-        this.store.sweep();
         if (!Object.values(this.store.accounts).some((a) => a.kind === 'local')) {
             this.store.accounts.local = {
                 id: 'local', kind: 'local', name: KIND_NAMES.local, createdAt: this.now(),
@@ -115,6 +114,8 @@ export class CalendarManager {
             this.log('account added local');
         }
         await this.refreshCalendars('local');
+        // Once Personal is known: leftover temporary files go, other calendars' events files stay.
+        this.store.sweep();
         this.saveState();
         const minutes = Math.max(5, Number(this.config.syncMinutes) || 15);
         this.later(() => this.syncAll(), 3000);
@@ -231,6 +232,8 @@ export class CalendarManager {
 
     calendarView(calendar) {
         const account = this.store.accounts[calendar.accountId];
+        const synced = this.store.syncOf(calendar.id);
+        const issue = this.store.issues.get(calendar.id);
         return {
             id: calendar.id,
             accountId: calendar.accountId,
@@ -246,7 +249,9 @@ export class CalendarManager {
             ...(calendar.timeZone ? { timeZone: calendar.timeZone } : {}),
             ...(calendar.description ? { description: calendar.description } : {}),
             ...(calendar.error ? { error: calendar.error.message } : {}),
-            ...(calendar.syncedAt ? { syncedAt: calendar.syncedAt } : {}),
+            ...(synced?.at ? { syncedAt: synced.at } : {}),
+            // Its events file couldn't be read at this start: the name it is kept under in the events folder.
+            ...(issue ? { storeIssue: { ...issue } } : {}),
         };
     }
 
@@ -699,10 +704,13 @@ export class CalendarManager {
             if (account === undefined) return false;
             try {
                 const { source, style } = await this.source(account);
-                const result = await source.sync({ ...calendar, remoteId: calendar.remoteId }, calendar.sync, this.syncWindow());
+                const items = this.store.itemsOf(calendar.id);
+                const result = await source.sync({ ...calendar, remoteId: calendar.remoteId }, this.store.syncOf(calendar.id)?.state, this.syncWindow());
+                // The calendar went meanwhile (its account removed, or gone from its server): what came is for nothing.
+                if (this.store.items.get(calendar.id) !== items) return false;
                 this.applySync(calendar, style, result);
-                calendar.sync = result.state;
-                calendar.syncedAt = this.now();
+                // The new state goes into the events file with the items it describes, never ahead of them.
+                this.store.setSync(calendar.id, result.state, this.now());
                 delete calendar.error;
                 if (result.calendar) {
                     if (result.calendar.name && !calendar.own?.name && account.kind === 'ics') calendar.name = result.calendar.name;
@@ -1886,6 +1894,8 @@ export class CalendarManager {
                 ...(this.store.prefs.view ? { view: this.store.prefs.view } : {}),
             },
             syncing: this.syncing.size > 0,
+            // calendar.json couldn't be read at this start: the name it is kept under beside it (held: it couldn't be moved, and isn't written over).
+            ...(this.store.issue ? { storeIssue: { ...this.store.issue } } : {}),
         };
     }
 }

@@ -3,6 +3,7 @@
 // against a real Radicale server run when RADICALE_VENV or RADICALE_PYTHON points at one.
 // Its test on a real DSH is `npm run test:e2e:calendar`.
 import '../plugins/calendar/test/manager.test.mjs';
+import '../plugins/calendar/test/store.test.mjs';
 import '../plugins/calendar/test/policy.test.mjs';
 import '../plugins/calendar/test/caldav.test.mjs';
 import '../plugins/calendar/test/google.test.mjs';
