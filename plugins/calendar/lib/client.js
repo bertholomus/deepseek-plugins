@@ -118,6 +118,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-head-nav{display:flex;align-items:center;gap:4px;min-width:0;flex:1 1 280px}',
             '.dshcal-head-tools{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:8px;min-width:0;margin-left:auto}',
             '.dshcal-title{margin:0 0 0 6px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:18px;font-weight:600;line-height:26px;color:var(--cal-strong)}',
+            '.dshcal-title-ruler{position:absolute;visibility:hidden;pointer-events:none}',
             // The week's number by the title (under it on a narrow page).
             '.dshcal-titles{display:flex;align-items:center;gap:6px;min-width:0}',
             '.dshcal-wknum{flex:none;font-variant-numeric:tabular-nums}',
@@ -4771,23 +4772,30 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * The days a view shows around a day, the span of time it reads, and
-         * its title. A narrow page's week is three days from the day. While
-         * weekends are hidden, Week and Month show the weekdays alone (a
-         * narrow week the three from the day, a weekend's day going on to
-         * Monday, and a month without a row whose weekdays are all in the
-         * months beside it); the span read, from spanFirst to spanLast, still
-         * holds the days left out, so details opened on one have its events.
+         * its title, with its shorter forms after it (titles, longest first,
+         * for a header short of room). A narrow page's week is three days
+         * from the day. While weekends are hidden, Week and Month show the
+         * weekdays alone (a narrow week the three from the day, a weekend's
+         * day going on to Monday, and a month without a row whose weekdays
+         * are all in the months beside it); the span read, from spanFirst to
+         * spanLast, still holds the days left out, so details opened on one
+         * have its events.
          */
         function rangeOf(view, anchor, weekStart, zone, { compact = false, agendaDays = AGENDA_DAYS, hideWeekends = false } = {}) {
             let first = anchor;
             let last = anchor;
-            let title;
+            let titles;
             let days;
+            // Days from one to another, with their year, then without it where it is this one.
+            const spanTitles = (a, b) => [
+                dayRangeText(a, b, { month: 'short', day: 'numeric', year: 'numeric' }),
+                ...(a.slice(0, 4) === thisYear(zone) && b.slice(0, 4) === thisYear(zone) ? [dayRangeText(a, b, { month: 'short', day: 'numeric' })] : []),
+            ];
             if (view === 'month') {
                 const start = monthStart(anchor);
                 first = weekStartOf(start, weekStart);
                 last = addDays(weekStartOf(addDays(addMonths(start, 1), -1), weekStart), 6);
-                title = dayText(start, { month: 'long', year: 'numeric' });
+                titles = [dayText(start, { month: 'long', year: 'numeric' }), dayText(start, { month: 'short', year: 'numeric' })];
                 days = visibleDays(daySpan(first, last), hideWeekends);
                 if (hideWeekends) {
                     const month = start.slice(0, 7);
@@ -4805,17 +4813,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     last = addDays(first, 6);
                     days = visibleDays(daySpan(first, last), hideWeekends);
                 }
-                title = dayRangeText(days[0], days[days.length - 1], { month: 'short', day: 'numeric', year: 'numeric' });
+                titles = spanTitles(days[0], days[days.length - 1]);
             } else if (view === 'agenda') {
                 last = addDays(anchor, agendaDays - 1);
-                title = dayRangeText(first, last, { month: 'short', day: 'numeric', year: 'numeric' });
+                titles = spanTitles(first, last);
             } else {
-                title = longDay(anchor, zone);
+                titles = [longDay(anchor, zone), dayText(anchor, { weekday: 'short', month: 'short', day: 'numeric', ...(anchor.slice(0, 4) !== thisYear(zone) ? { year: 'numeric' } : {}) })];
             }
             if (!days) days = daySpan(first, last);
+            titles = titles.filter((t, i) => titles.indexOf(t) === i);
             return {
                 view, first: days[0], last: days[days.length - 1], days, spanFirst: first, spanLast: last,
-                from: startOfDay(first, zone), to: startOfDay(addDays(last, 1), zone), title,
+                from: startOfDay(first, zone), to: startOfDay(addDays(last, 1), zone), title: titles[0], titles,
             };
         }
 
@@ -4969,6 +4978,61 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
+         * The header's title, as long as its room allows: the longest of its
+         * forms (longest first) that fits beside the row's buttons (and the
+         * week's number), measured from hidden copies of them in the title,
+         * again whenever the page draws or the row's width changes; and the
+         * least width the row needs with the shortest form, so the header
+         * goes to two rows only where even that one wouldn't fit beside the
+         * search and the views.
+         */
+        function useFitTitle(titles) {
+            const navRef = React.useRef(null);
+            const key = titles.join('\n');
+            const [fit, setFit] = React.useState({ key: '', level: 0, need: 0 });
+            const measure = () => {
+                const nav = navRef.current;
+                const title = nav?.querySelector('[data-calendar-range]');
+                const rulers = [...(title?.querySelectorAll('.dshcal-title-ruler') ?? EMPTY)].map((el) => el.getBoundingClientRect().width);
+                if (rulers.length === 0) return null;
+                const css = (el) => window.getComputedStyle(el);
+                const gap = (el) => parseFloat(css(el).columnGap) || 0;
+                const box = title.parentElement === nav ? title : title.parentElement;
+                const parts = [...nav.children].filter((el) => el.getBoundingClientRect().width > 0);
+                const others = parts.reduce((sum, el) => sum + (el === box ? 0 : el.getBoundingClientRect().width), 0) + gap(nav) * Math.max(0, parts.length - 1)
+                    + (parseFloat(css(title).marginLeft) || 0);
+                const tag = box === title ? null : box.querySelector('[data-calendar-week-tag]');
+                const tagWidth = tag ? tag.getBoundingClientRect().width : 0;
+                // The week's number beside the title takes from its room; under it (a narrow page), only the row's least width.
+                const under = tag !== null && css(box).flexDirection === 'column';
+                const beside = tag && !under ? gap(box) + tagWidth : 0;
+                const room = nav.getBoundingClientRect().width - others - beside;
+                const found = rulers.findIndex((width) => width <= room + 0.5);
+                const shortest = rulers[rulers.length - 1];
+                return { level: found < 0 ? rulers.length - 1 : found, need: Math.ceil(others + (under ? Math.max(shortest, tagWidth) : shortest + beside)) };
+            };
+            React.useLayoutEffect(() => {
+                const next = measure();
+                if (next && (fit.key !== key || fit.level !== next.level || fit.need !== next.need)) setFit({ key, ...next });
+            });
+            React.useEffect(() => {
+                const nav = navRef.current;
+                if (!nav || typeof ResizeObserver === 'undefined') return undefined;
+                let width = nav.clientWidth;
+                // Wider or narrower: the form chosen again before the page shows it.
+                const observer = new ResizeObserver(() => {
+                    if (Math.abs(nav.clientWidth - width) < 1) return;
+                    width = nav.clientWidth;
+                    const next = measure();
+                    if (next) ReactDOM.flushSync(() => setFit((f) => (f.level === next.level && f.need === next.need ? f : { ...f, ...next })));
+                });
+                observer.observe(nav);
+                return () => observer.disconnect();
+            }, []);
+            return { navRef, shown: titles[fit.key === key ? Math.min(fit.level, titles.length - 1) : 0], need: fit.need };
+        }
+
+        /**
          * The Calendar page: the header (the side column's button, Today, back
          * and on, the range, search, the views, New event), the side column (a
          * small month, the calendars, Accounts; beside the view on a roomy
@@ -5028,6 +5092,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const weekNumbers = state?.prefs?.weekNumbers === true;
             const rangeOptions = { compact, agendaDays: agendaSpan, hideWeekends };
             const range = rangeOf(view, anchor, weekStart, zone, rangeOptions);
+            const fitTitle = useFitTitle(range.titles);
             // A day the view is on: one it shows, or one it leaves out (a hidden weekend's) where going to it shows these same days.
             const inView = (day) => range.days.includes(day) || rangeOf(view, day, weekStart, zone, rangeOptions).first === range.first;
             const entry = state ? store.events(range.from, range.to) : null;
@@ -5375,10 +5440,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     onClick: () => { setQuery(''); searchRef.current?.focus(); },
                 }, icon('IconCloseOutlineRegular', { size: 12 })) : null);
 
-            const heading = h('h1', { className: 'dshcal-title', 'aria-live': 'polite', 'data-calendar-range': '' }, range.title);
+            // The title in the form that fits (see useFitTitle), whole for screen readers and as its tooltip.
+            const heading = h('h1', { className: 'dshcal-title', 'aria-live': 'polite', 'data-calendar-range': '', title: fitTitle.shown === range.title ? undefined : range.title },
+                h('span', { 'aria-hidden': true }, fitTitle.shown),
+                h('span', { className: 'dshcal-sr' }, range.title),
+                range.titles.map((t) => h('span', { key: t, className: 'dshcal-title-ruler', 'aria-hidden': true }, t)));
             const weekTag = weekNumbers && (view === 'week' || view === 'day') ? weekWords(range.days, weekStart) : '';
             const header = h('div', { className: 'dshcal-head' },
-                h('div', { className: 'dshcal-head-nav' },
+                h('div', { ref: fitTitle.navRef, className: 'dshcal-head-nav', style: fitTitle.need > 0 ? { minWidth: `min(${fitTitle.need}px, 100%)` } : undefined },
                     h(IconBtn, {
                         label: sideShows ? 'Hide the calendars' : 'Show the calendars', className: 'dshcal-side-toggle', glyph: icon('IconPanelLeftOutlineRegular'),
                         'aria-expanded': sideShows, 'aria-controls': 'dshcal-side', onClick: toggleSide, 'data-calendar-side-toggle': '',

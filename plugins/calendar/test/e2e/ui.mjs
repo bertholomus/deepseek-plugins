@@ -54,6 +54,8 @@
  * - Google, against its stand-in (standins/google.mjs): its sign-in page in
  *   a new tab, the wait with the address to paste, then the browser back to
  *   DSH on this computer, which the dialog notices by itself;
+ * - the title never cut, at 1280 px (side column folded and shown) and 420
+ *   px, in every view, with week numbers on and the sync button there;
  * - a Google meeting made, changed and deleted without emailing its guest:
  *   the dialog says it still reaches their calendars, each is made only
  *   once the user has seen whose calendar it reaches (the host refuses it
@@ -1566,6 +1568,57 @@ try {
         } finally {
             await page.context().unroute(isAuthorize);
             await closeAccounts();
+        }
+    });
+
+    // 11b. The title in its room, never cut: at 1280 px with the side column folded and shown, and at 420 px; every view (Day for a
+    // week of days); with week numbers on and, as accounts elsewhere are added now, the sync button in the header.
+    await step('the title has its room in every view', async () => {
+        const side = page.locator('[data-calendar-side]');
+        const toggle = page.locator('[data-calendar-side-toggle]');
+        const cut = [];
+        let measured = 0;
+        try {
+            await api('setPrefs', { patch: { weekNumbers: true } });
+            await page.locator('[data-calendar-view="week"]').click();
+            await page.locator('[data-calendar-week-tag]').waitFor({ state: 'visible', timeout: 10000 });
+            const sync = await page.locator('[data-calendar-sync]').isVisible();
+            for (const [width, folded] of [[1280, true], [1280, false], [420, true]]) {
+                await page.setViewportSize({ width, height: width === 420 ? 820 : 800 });
+                await page.waitForTimeout(500);
+                if (width === 1280 && (await side.isVisible()) === folded) {
+                    await toggle.click();
+                    await page.waitForTimeout(400);
+                }
+                for (const view of ['month', 'week', 'day', 'agenda']) {
+                    await page.locator(`[data-calendar-view="${view}"]`).click();
+                    await page.locator(`[data-calendar-grid="${view}"]`).waitFor({ state: 'visible' });
+                    for (let i = 0; i < (view === 'day' ? 7 : 1); i++) {
+                        if (i > 0) await page.locator('[data-calendar-next]').click();
+                        await page.waitForTimeout(300);
+                        const now = await page.evaluate(() => {
+                            const title = document.querySelector('[data-calendar-range]');
+                            const root = document.querySelector('[data-calendar-page]');
+                            return {
+                                shown: title.firstElementChild?.textContent ?? '', full: title.querySelector('.dshcal-sr')?.textContent ?? '', tip: title.getAttribute('title'),
+                                sw: title.scrollWidth, cw: title.clientWidth, overflow: root.scrollWidth - root.clientWidth,
+                            };
+                        });
+                        measured += 1;
+                        if (now.shown === '' || now.sw > now.cw || now.overflow > 1 || (now.shown !== now.full && now.tip !== now.full)) cut.push({ width, folded, view, ...now });
+                    }
+                    if (view === 'day' || view === 'agenda') await shot(page, `${width === 420 ? 'narrow-' : ''}title-${view}${width === 1280 && !folded ? '-side' : ''}`);
+                    if (view === 'day') await page.locator('[data-calendar-today]').click();
+                }
+            }
+            check('the title is never cut, a shorter form where the long one doesn\'t fit (all of it in its tooltip): at 1280 px with the side column folded and shown and at 420 px, in every view, with week numbers on and the sync button there',
+                sync && measured === 30 && cut.length === 0, JSON.stringify({ sync, measured, cut }));
+        } finally {
+            await api('setPrefs', { patch: { weekNumbers: false } });
+            await page.setViewportSize({ width: 1280, height: 800 });
+            await page.waitForTimeout(400);
+            if (!(await side.isVisible())) await toggle.click();
+            await page.locator('[data-calendar-view="week"]').click();
         }
     });
 

@@ -122,6 +122,32 @@ test('what each view shows', () => {
     assert.equal(I.stepFrom('month', '2026-10-31', 1), '2026-11-01');
 });
 
+test('a view\'s title, then shorter forms for a header short of room', () => {
+    // As the browser's language writes them; this year's days without their year.
+    const words = (day, options) => new Intl.DateTimeFormat(undefined, { ...options, timeZone: 'UTC' }).format(new Date(`${day}T12:00:00Z`));
+    const span = (a, b, options) => new Intl.DateTimeFormat(undefined, { ...options, timeZone: 'UTC' }).formatRange(new Date(`${a}T12:00:00Z`), new Date(`${b}T12:00:00Z`));
+    const year = I.dayIn(Date.now(), LA).slice(0, 4);
+    const day = `${year}-06-17`;
+    const titles = (view, anchor) => plain(I.rangeOf(view, anchor, 1, LA).titles);
+    assert.deepEqual(titles('day', day), [words(day, { weekday: 'long', month: 'long', day: 'numeric' }), words(day, { weekday: 'short', month: 'short', day: 'numeric' })]);
+    assert.deepEqual(titles('month', day), [words(day, { month: 'long', year: 'numeric' }), words(day, { month: 'short', year: 'numeric' })]);
+    const week = I.rangeOf('week', day, 1, LA);
+    assert.deepEqual(plain(week.titles), [span(week.first, week.last, { month: 'short', day: 'numeric', year: 'numeric' }), span(week.first, week.last, { month: 'short', day: 'numeric' })]);
+    const agenda = I.rangeOf('agenda', day, 1, LA);
+    assert.deepEqual(plain(agenda.titles), [span(agenda.first, agenda.last, { month: 'short', day: 'numeric', year: 'numeric' }), span(agenda.first, agenda.last, { month: 'short', day: 'numeric' })]);
+    // Another year's keep it; the title is the longest, and each form is shorter than the one before.
+    const later = `${Number(year) + 2}-06-17`;
+    assert.deepEqual(titles('day', later), [words(later, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }), words(later, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })]);
+    assert.equal(I.rangeOf('week', later, 1, LA).titles.length, 1);
+    for (const view of I.VIEWS) {
+        for (const anchor of [day, later, `${year}-05-01`]) {
+            const r = I.rangeOf(view, anchor, 1, LA);
+            assert.equal(r.title, r.titles[0]);
+            assert.ok(r.titles.every((t, i) => i === 0 || t.length < r.titles[i - 1].length), `${view} ${anchor}: ${r.titles}`);
+        }
+    }
+});
+
 test('week numbers: ISO 8601\'s, and a row\'s for each first day of the week', () => {
     // Week 1 has the year's first Thursday: 2026 starts on one, so it has 53 weeks; 2021 started in 2020's week 53.
     const iso = (days) => days.map((day) => I.isoWeek(day));
