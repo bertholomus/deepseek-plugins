@@ -6,5 +6,6 @@ import '../plugins/calendar/test/manager.test.mjs';
 import '../plugins/calendar/test/store.test.mjs';
 import '../plugins/calendar/test/policy.test.mjs';
 import '../plugins/calendar/test/caldav.test.mjs';
+import '../plugins/calendar/test/http.test.mjs';
 import '../plugins/calendar/test/google.test.mjs';
 import '../plugins/calendar/test/microsoft.test.mjs';
