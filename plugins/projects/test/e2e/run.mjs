@@ -1034,6 +1034,55 @@ try {
     await waitIdle(coord);
     check('that coordinator can\'t send one on in a turn the message started, and its answer comes back', back.fresh.includes('TOOL-RESULT: Failed: a message goes out of the project only in a turn the user started')
         && readText(logFile).includes(` guard ${madeId} message-not-asked`) && !readText(logFile).includes(`message ${madeId} `), back.fresh.slice(0, 400));
+
+    // 27. Archive: the project goes with its coordinator and threads, and comes back with them. A new start leaves
+    // it archived without making a coordinator, and DSH's own Archive and Unarchive on the ◆ row take the threads too.
+    const webArchive = await signInWeb();
+    // DSH's archive set, read through its own endpoint: unarchiving an id it doesn't hold changes nothing and answers with the set.
+    const archivedNow = async () => (await webApi(webArchive, 'workspace/unarchiveSession', { request: { sessionId: 'e2e-none' } })).value?.archivedSessionIds ?? [];
+    const projectSessions = [coord, ...Object.values(project().threads ?? {}).map((t) => t.sessionId).filter(Boolean)];
+    let archiveAnswer = await webApi(webArchive, 'dsh-plugin-projects/archive', { project: coord });
+    let inArchive = await archivedNow();
+    check('Archive project archives the coordinator and every thread in DSH', archiveAnswer.ok && archiveAnswer.value.archived === projectSessions.length
+        && projectSessions.every((id) => inArchive.includes(id)), `${JSON.stringify(archiveAnswer).slice(0, 200)} ${projectSessions.length} ${inArchive.length}`);
+    check('the list says the project is archived', archiveAnswer.value?.projects?.find((p) => p.id === PROJECT_ID)?.archived === true
+        && project().archived?.via === 'window', JSON.stringify(project().archived));
+    mark = model.requests.length;
+    await stopDsh(child);
+    const logBefore = readText(logFile).length;
+    child = startDsh(dsh);
+    await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge after the archive', 90000);
+    // The other project's coordinator resumes as usual: the plugin's start is past this project by then.
+    await waitFor(() => readText(logFile).slice(logBefore).includes(`coordinator ${madeId} `), 'the plugin to start again', 60000);
+    await new Promise((r) => setTimeout(r, 1500));
+    const webAfter = await signInWeb();
+    const heldAfter = (await webApi(webAfter, 'workspace/unarchiveSession', { request: { sessionId: 'e2e-none' } })).value?.archivedSessionIds ?? [];
+    check('a new start keeps it archived, wakes nothing of it and makes no coordinator', project().coordinatorSessionId === coord && project().archived
+        && projectSessions.every((id) => heldAfter.includes(id)) && !readText(logFile).slice(logBefore).includes(`coordinator ${PROJECT_ID} `)
+        && since(mark).every((r) => !r.system.includes(`You are the coordinator of the DSH project "${PROJECT}"`)), readText(logFile).slice(logBefore).slice(0, 600));
+    archiveAnswer = await webApi(webAfter, 'dsh-plugin-projects/restore', { project: PROJECT_ID });
+    inArchive = (await webApi(webAfter, 'workspace/unarchiveSession', { request: { sessionId: 'e2e-none' } })).value?.archivedSessionIds ?? [];
+    check('Restore project brings the coordinator and every thread back', archiveAnswer.ok && archiveAnswer.value.restored === projectSessions.length
+        && projectSessions.every((id) => !inArchive.includes(id)) && project().archived === undefined
+        && readText(logFile).includes(`coordinator ${PROJECT_ID} ${coord} resumed`), JSON.stringify(archiveAnswer).slice(0, 200));
+    // DSH's own Archive on the idle ◆ row, as its menu or shortcut does it: the plugin takes the threads.
+    let own = await webApi(webAfter, 'workspace/archiveSession', { request: { sessionId: coord } });
+    if (!own.ok && own.error?.code === 'workspace/session-active') {
+        // Something of the project still runs, so DSH asks first; its dialog's Stop and archive does this.
+        own = await webApi(webAfter, 'workspace/archiveSession', { request: { sessionId: coord, stopActivity: true } });
+    }
+    const followed = await waitFor(async () => {
+        const ids = (await webApi(webAfter, 'workspace/unarchiveSession', { request: { sessionId: 'e2e-none' } })).value?.archivedSessionIds ?? [];
+        return projectSessions.every((id) => ids.includes(id)) ? ids : null;
+    }, 'the threads following the ◆ row into the archive', 15000).catch(() => null);
+    check('DSH\'s own Archive on the ◆ row archives the project\'s threads too', own.ok && followed !== null && project().archived?.via === 'dsh', JSON.stringify(own).slice(0, 200));
+    await webApi(webAfter, 'workspace/unarchiveSession', { request: { sessionId: coord } });
+    const cameBack = await waitFor(async () => {
+        const ids = (await webApi(webAfter, 'workspace/unarchiveSession', { request: { sessionId: 'e2e-none' } })).value?.archivedSessionIds ?? [];
+        return projectSessions.every((id) => !ids.includes(id)) ? true : null;
+    }, 'the threads coming back with the ◆ row', 15000).catch(() => false);
+    check('DSH\'s own Unarchive on the ◆ row brings them back', cameBack === true && project().archived === undefined
+        && /archive e2e-project via=dsh sessions=\d+\n[^]*restore e2e-project via=dsh sessions=\d+/.test(readText(logFile)), readText(logFile).split('\n').filter((l) => /archive|restore/.test(l)).join('\n'));
     check('no errors in the projects log', !/ error /.test(readText(logFile)), readText(logFile).split('\n').filter((l) => / error /.test(l)).join('\n'));
 } catch (error) {
     failed += 1;
