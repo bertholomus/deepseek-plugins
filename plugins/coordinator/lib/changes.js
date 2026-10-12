@@ -119,7 +119,8 @@ export function changesLine(totals) {
  * threads sharing a folder would be credited with each other's edits: the
  * plugin counts a thread's changes from its own file-tool records (and its
  * subagents') instead, and keeps them in the records above, one per turn.
- * A shell command's edits aren't in its records, so they don't count yet.
+ * A shell command's edits leave no record; they are counted from a folder
+ * snapshot instead (shell.js), and folded in here like the rest.
  */
 
 /** DSH's file tools whose records say what they changed. */
@@ -132,7 +133,7 @@ const isObject = (value) => value !== null && typeof value === 'object' && !Arra
 const textOf = (value) => (typeof value === 'string' ? value : '');
 
 /** A file's text as lines, the way git counts them: '' has none, and a final newline ends the last line. */
-function fileLines(text) {
+export function fileLines(text) {
     if (typeof text !== 'string' || text === '') return [];
     const body = text.replace(/\r\n?/g, '\n');
     return (body.endsWith('\n') ? body.slice(0, -1) : body).split('\n');
@@ -262,7 +263,14 @@ export function editSummary(turn, edits, folder = '') {
         if (typeof e?.path !== 'string' || e.path === '') continue;
         const path = placeIn(folder, e.path);
         const was = byPath.get(path) ?? { path, added: 0, deleted: 0 };
-        byPath.set(path, { path, added: was.added + count(e.added), deleted: was.deleted + count(e.deleted), ...(was.created || e.created ? { created: true } : {}) });
+        byPath.set(path, {
+            path,
+            added: was.added + count(e.added),
+            deleted: was.deleted + count(e.deleted),
+            ...(was.created || e.created ? { created: true } : {}),
+            ...(was.binary === true || e.binary === true ? { binary: true } : {}),
+            ...(was.oversized === true || e.oversized === true ? { oversized: true } : {}),
+        });
     }
     if (byPath.size === 0) return null;
     const files = [...byPath.values()];
