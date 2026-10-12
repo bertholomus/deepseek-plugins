@@ -3133,17 +3133,18 @@ test('changes: a thread\'s shell-command edits count, without git, and survive a
     const log = (id) => host.sessions.get(id).events;
     const push = (t, type, data) => { const e = { seq: log(t.id).length + 1, type, data }; log(t.id).push(e); t.ctx.sessionEvent(e); return e; };
     let calls = 0;
-    /** One shell command as DSH runs it: the plugin's window around `body`, which does what the command wrote. */
-    const run = async (t, command, body, isError = false) => {
+    /** One call as DSH runs it: the plugin's window around `body`, which does what the command wrote. */
+    const run = async (t, turn, name, args, body, meta, isError = false) => {
         const callId = `sh-${++calls}`;
-        await host.waterfall('tools/execute', { name: 'bash', arguments: { command }, agent: t, callId, signal: new AbortController().signal }, async () => {
+        await host.waterfall('tools/execute', { name, arguments: args, agent: t, callId, signal: new AbortController().signal }, async () => {
             body();
             return { content: [{ type: 'text', text: 'ok' }] };
         });
         const events = log(t.id);
-        events.push({ seq: events.length + 1, type: 'tool/call', data: { turn: 1, callId, name: 'bash', arguments: { command } } });
-        events.push({ seq: events.length + 1, type: 'tool/result', data: { turn: 1, message: { role: 'tool', toolCallId: callId, isError, content: [] } } });
+        events.push({ seq: events.length + 1, type: 'tool/call', data: { turn, callId, name, arguments: args } });
+        events.push({ seq: events.length + 1, type: 'tool/result', data: { turn, message: { role: 'tool', toolCallId: callId, isError, content: [] }, ...(meta ? { meta } : {}) } });
     };
+    const shell = (t, turn, command, body, isError = false) => run(t, turn, 'bash', { command }, body, undefined, isError);
     const until = async (probe, what) => {
         for (let i = 0; i < 500; i++) {
             if (await probe()) return;
@@ -3158,11 +3159,11 @@ test('changes: a thread\'s shell-command edits count, without git, and survive a
     writeFileSync(join(work, '.git', 'HEAD'), 'ref: refs/heads/main\n');
     t1.ctx.emitStatus(t1, 'running');
     push(t1, 'turn/start', { turn: 1 });
-    await run(t1, 'printf one > new.txt', () => writeFileSync(join(work, 'new.txt'), 'one\ntwo\n'));
-    await run(t1, 'printf THREE >> notes.md', () => writeFileSync(join(work, 'notes.md'), 'a\nb\nTHREE\n'));
-    await run(t1, 'git status', () => writeFileSync(join(work, '.git', 'HEAD'), 'changed'));
+    await shell(t1, 1, 'printf one > new.txt', () => writeFileSync(join(work, 'new.txt'), 'one\ntwo\n'));
+    await shell(t1, 1, 'printf THREE >> notes.md', () => writeFileSync(join(work, 'notes.md'), 'a\nb\nTHREE\n'));
+    await shell(t1, 1, 'git status', () => writeFileSync(join(work, '.git', 'HEAD'), 'changed'));
     // A command that fails may still have written; its edits count too.
-    await run(t1, 'false', () => writeFileSync(join(work, 'partial.log'), 'p\n'), true);
+    await shell(t1, 1, 'false', () => writeFileSync(join(work, 'partial.log'), 'p\n'), true);
     push(t1, 'turn/end', { turn: 1, reason: { kind: 'completed' } });
     t1.ctx.emitStatus(t1, 'idle');
     const endSeq = log(t1.id).findLast((e) => e.type === 'turn/end').seq;
@@ -3176,13 +3177,25 @@ test('changes: a thread\'s shell-command edits count, without git, and survive a
         { path: 'partial.log', added: 1, deleted: 0, created: true },
     ], 'the folder counted, .git skipped, a failed command\'s write too');
     assert.deepEqual(await of(), { added: 4, deleted: 0, files: 3, turns: 1, last: { seq: endSeq, turn: 1 }, reviewable: false });
+    // In turn 2 the same file a shell command and a file tool both changed counts under the file-tool record alone.
+    t1.ctx.emitStatus(t1, 'running');
+    push(t1, 'turn/start', { turn: 2 });
+    await shell(t1, 2, 'printf s1 >> both.md', () => writeFileSync(join(work, 'both.md'), 's1\ns2\n'));
+    await run(t1, 2, 'write', { file_path: 'both.md', content: 'one\ntwo\nthree\n' }, () => writeFileSync(join(work, 'both.md'), 'one\ntwo\nthree\n'),
+        { path: 'both.md', diffs: [{ oldText: 's1\ns2\n', newText: 'one\ntwo\nthree\n' }] });
+    push(t1, 'turn/end', { turn: 2, reason: { kind: 'completed' } });
+    t1.ctx.emitStatus(t1, 'idle');
+    const endOf2 = log(t1.id).findLast((e) => e.type === 'turn/end').seq;
+    await until(() => { try { return (recordOf() ?? []).some((r) => r?.turn === 2); } catch { return false; } }, 'the second turn\'s record');
+    assert.deepEqual(filesOf(recordOf().find((r) => r?.turn === 2)), [{ path: 'both.md', added: 3, deleted: 2 }], 'the shell part of a file the file tools counted is left to them');
+    assert.deepEqual(await of(), { added: 7, deleted: 2, files: 4, turns: 2, last: { seq: endOf2, turn: 2 }, reviewable: false });
     // The record on disk is the whole count: a new DSH process over the same logs and store says the same.
     const second = fakeHost({ ...SELECTING, gateway: true });
     for (const [id, s] of host.sessions) second.sessions.set(id, { ...s, prompts: [] });
     plugin.apply(second, config);
     await tick();
     const again = plain(await second.provided.get('dshPluginCoordinatorRemote').describe(coord.id));
-    assert.deepEqual(again.threads[0].changes, { added: 4, deleted: 0, files: 3, turns: 1, last: { seq: endSeq, turn: 1 }, reviewable: false });
+    assert.deepEqual(again.threads[0].changes, { added: 7, deleted: 2, files: 4, turns: 2, last: { seq: endOf2, turn: 2 }, reviewable: false });
 });
 
 test('changes: a turn counts its shell edits only when no other session was changing the folder', async () => {
