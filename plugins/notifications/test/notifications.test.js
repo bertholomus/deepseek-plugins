@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Notifier, EVENT_FIELDS, BROWSER_TTL_MS, MAX_QUEUED } from '../lib/notifier.js';
-import { oneLine, cliCommand, cliSend, desktopSend } from '../lib/backends.js';
+import { oneLine, cliCommand, cliSend, desktopSend, iconFor } from '../lib/backends.js';
 import { NotificationsRemote, SERVICE } from '../lib/remote.js';
 import * as plugin from '../lib/index.js';
 import { ProjectManager } from '../../coordinator/lib/projects.js';
@@ -54,11 +54,20 @@ test('notifications: one line', () => {
 test('notifications: the platform command and its quoting', () => {
     assert.deepEqual(cliCommand('darwin', { title: 'He said "hi"', body: 'a\\b' }),
         { command: 'osascript', args: ['-e', 'display notification "a\\\\b" with title "He said \\"hi\\""'] });
+    // macOS's osascript has no icon of its own: given one, it is ignored.
+    assert.deepEqual(cliCommand('darwin', { title: 'T', body: 'B' }, { path: '/i/whale.png' }),
+        { command: 'osascript', args: ['-e', 'display notification "B" with title "T"'] });
     assert.deepEqual(cliCommand('linux', { title: 'T', body: 'B' }),
         { command: 'notify-send', args: ['--app-name=DSH', 'T', 'B'] });
+    assert.deepEqual(cliCommand('linux', { title: 'T', body: 'B' }, { path: '/i/whale.svg' }),
+        { command: 'notify-send', args: ['--app-name=DSH', '--icon=/i/whale.svg', 'T', 'B'] });
     const win = cliCommand('win32', { title: "it's", body: 'B' });
     assert.equal(win.command, 'powershell.exe');
     assert.match(win.args[3], /CreateTextNode\('it''s'\)/);
+    assert.doesNotMatch(win.args[3], /ToastImageAndText02/);
+    const winIcon = cliCommand('win32', { title: 'T', body: 'B' }, { path: 'C:\\icons\\whale.png' });
+    assert.match(winIcon.args[3], /ToastImageAndText02/);
+    assert.match(winIcon.args[3], /file:\/\/\/C:\/icons\/whale\.png/);
     assert.equal(cliCommand('sunos', { title: 'T', body: 'B' }), null);
 });
 
@@ -70,6 +79,22 @@ test('notifications: the cli sender reports a missing command, never throws', ()
     assert.equal(failed, false);
     assert.match(String(errors[0]), /notify-send/);
     assert.equal(cliSend('sunos', { title: 'T', body: 'B' }, {}), false);
+});
+
+test('notifications: iconFor picks what each platform can show', () => {
+    assert.match(iconFor('linux').path, /icon\.svg$/);
+    assert.match(iconFor('win32').path, /icon\.png$/);
+    assert.equal(iconFor('darwin'), undefined);
+    assert.equal(iconFor('sunos'), undefined);
+});
+
+test('notifications: the cli sender hands the icon to the command', () => {
+    let seen;
+    cliSend('linux', { title: 'T', body: 'B' }, {
+        spawnImpl: (command, args) => { seen = { command, args }; return { on() {}, kill() {} }; },
+        icon: { path: '/i/whale.svg' },
+    });
+    assert.deepEqual(seen.args, ['--app-name=DSH', '--icon=/i/whale.svg', 'T', 'B']);
 });
 
 test('notifications: the desktop sender is DSH\'s own call shape', () => {

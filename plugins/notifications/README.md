@@ -27,14 +27,21 @@ Everywhere else it picks the smallest sender that works:
 The browser half stands down by itself when the host answers that the Desktop
 app sends natively, so nothing ever sends twice.
 
+**The icon.** The plugin's icon is the DeepSeek whale (`icon.svg`, with a
+256 px `icon.png` beside it). `notify-send` shows it on Linux (`--icon`), and
+a Windows toast carries the PNG as its logo; macOS's `osascript` cannot set a
+per-notification icon, so there the notification shows the posting app's own
+— DSH's, when the Desktop app is the one sending.
+
 **Proven and guessed.** Proven by reading DSH's source: the desktop path is
 the app's own (`lib/notifications.js`, `host-process-entry.js` — a plugin
 injects `desktopRuntime` the same way DSH's own notifications plugin does).
 **Proven on this machine:** the macOS `osascript` command and the
 `desktopRuntime` call shape. **Untested (guess):** the Windows PowerShell
-toast, `notify-send` on Linux, the browser profile end to end in a real
-browser, and the Web Notification click-to-focus. None of it has run on
-Windows or Linux, and the web profile was not driven in a real browser.
+toast and its logo image, `notify-send` on Linux and its `--icon`, the
+browser profile end to end in a real browser, and the Web Notification
+click-to-focus. None of it has run on Windows or Linux, and the web profile
+was not driven in a real browser.
 
 ## For other plugins
 

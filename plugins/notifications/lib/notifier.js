@@ -15,7 +15,7 @@
  *
  * @module dsh-plugin-notifications/notifier
  */
-import { desktopSend, cliSend, oneLine } from './backends.js';
+import { desktopSend, cliSend, iconFor, oneLine } from './backends.js';
 
 /** How long after a browser half's last poll the queue is still used for it. */
 export const BROWSER_TTL_MS = 90_000;
@@ -48,6 +48,7 @@ export class Notifier {
         this.logger = logger;
         this.platform = platform;
         this.send = send ?? ((notification) => cliSend(platform, notification, {
+            icon: iconFor(platform),
             onError: (error) => this.logger.warn?.('notifications: %s', String(error?.message ?? error)),
         }));
         this.now = now;
