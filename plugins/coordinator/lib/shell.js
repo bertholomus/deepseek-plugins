@@ -39,7 +39,7 @@ export const MUTATING_TOOLS = new Set([...SHELL_TOOLS, 'write', 'edit', 'str_rep
 /** Folders the walk never enters: git's own store, and the caches installs and builds leave. */
 export const SKIPPED_DIRS = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv']);
 
-/** Most files one walk visits; past it the walk is partial and counts only what it covered. */
+/** Most entries one walk visits, folders and files alike; past it the walk is partial and counts only what it covered. */
 export const MAX_WALK_FILES = 20_000;
 /** Largest file captured whole; a bigger one counts only that it changed. */
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -69,6 +69,7 @@ export async function snapshotFolder(root) {
     const files = new Map();
     let partial = false;
     let total = 0;
+    let visited = 0;
     const queue = [root];
     for (let head = 0; head < queue.length; head++) {
         const dir = queue[head];
@@ -80,6 +81,11 @@ export async function snapshotFolder(root) {
         }
         entries.sort((a, b) => byName(a.name, b.name));
         for (const entry of entries) {
+            if (++visited > MAX_WALK_FILES) {
+                partial = true;
+                queue.length = 0;
+                break;
+            }
             if (entry.isDirectory()) {
                 if (!SKIPPED_DIRS.has(entry.name)) queue.push(join(dir, entry.name));
                 continue;
@@ -148,8 +154,9 @@ async function captureAt(at, kept) {
 export async function diffFolder(root, before) {
     const edits = [];
     const seen = new Set();
-    const queue = [root];
     let partial = false;
+    let visited = 0;
+    const queue = [root];
     for (let head = 0; head < queue.length; head++) {
         const dir = queue[head];
         let entries;
@@ -160,6 +167,11 @@ export async function diffFolder(root, before) {
         }
         entries.sort((a, b) => byName(a.name, b.name));
         for (const entry of entries) {
+            if (++visited > MAX_WALK_FILES) {
+                partial = true;
+                queue.length = 0;
+                break;
+            }
             if (entry.isDirectory()) {
                 if (!SKIPPED_DIRS.has(entry.name)) queue.push(join(dir, entry.name));
                 continue;
