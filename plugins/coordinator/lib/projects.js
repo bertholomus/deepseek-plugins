@@ -59,6 +59,7 @@ import { NetTexts, changedPath, canonicalPath, notKept, expectedAfter, NET_SWEEP
 import { sendOf, codeSendOf, described, withoutCredentials } from './sends.js';
 import { grantsIn, asksFor as asksToDo, doing } from './grants.js';
 import { deletesOf, codeDeletesOf, deletesWhat, isFree, madeDirsOf, identityOf, isSame, bornOf, CLOCK_SLACK_MS } from './deletes.js';
+import { SHELL_TOOLS, MUTATING_TOOLS, snapshotFolder, diffFolder, Mutations } from './shell.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
 const SECTION_ORDER = 9500;
@@ -582,6 +583,10 @@ export class ProjectManager {
         // A store file of another name keeps its own (net-<name>/), so it never sweeps away another store's threads.
         const storeName = basename(this.storeFile, '.json');
         this.net = NetTexts.open(join(dirname(this.storeFile), storeName === 'coordinator' ? 'net' : `net-${storeName}`), (line) => this.log(line));
+        /** Thread sessionId → its turn's folder snapshot (shell.js), taken before the turn's first shell command. */
+        this.shellSnaps = new Map();
+        /** Every session's mutating calls in flight, so a shell window knows whose changes it may hold (shell.js). */
+        this.mutations = new Mutations();
     }
 
     /** One action line, mode 600. Sizes and ids only, never prompt text. */
@@ -2166,6 +2171,13 @@ export class ProjectManager {
             events = ownEvents(inspected);
             folder = inspected?.meta?.cwd;
         }
+        // The turn's shell edits, computed here once per turn (shell.js), before anything waits on DSH's announcement.
+        let shell = [];
+        try {
+            shell = (await this.shellEdits(sessionId, turn)) ?? [];
+        } catch (error) {
+            this.log(`error shell ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
+        }
         // From here on nothing waits, so what was announced meanwhile and the stored records are read as they are now.
         const t = this.store.thread(projectId, threadId);
         if (!t) return;
@@ -2174,7 +2186,11 @@ export class ProjectManager {
         // Subagent edits of turns long over are no longer needed.
         if (this.subEdits.has(sessionId)) this.subEdits.set(sessionId, this.subEdits.get(sessionId).filter((e) => Number.isSafeInteger(e.turn) && e.turn >= turn - 2));
         const was = (Array.isArray(t.changes) ? t.changes : []).find((r) => r?.turn === turn);
-        const summary = editSummary(turn, [...own, ...sub], folder ?? this.ctx.agents.get(sessionId)?.session?.header?.cwd);
+        // A file the turn's file tools already counted is left to their records, so a file a shell command and a file
+        // tool both changed counts once, under the record that has its hunks.
+        const cwd = folder ?? this.ctx.agents.get(sessionId)?.session?.header?.cwd;
+        const counted = new Set([...own, ...sub].map((e) => resolve(expand(typeof cwd === 'string' ? cwd : '/'), expand(e.path))));
+        const summary = editSummary(turn, [...own, ...sub, ...shell.filter((e) => !counted.has(e.path))], cwd);
         if (!summary && !was) return;
         const announced = this.announced.get(sessionId)?.get(turn);
         // DSH announces a turn's changes a moment after the turn ends: wait for that, so the record
@@ -2208,7 +2224,7 @@ export class ProjectManager {
             this.log(`error changes ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);
             return;
         }
-        this.log(`changes ${projectId}/${threadId} turn=${turn} files=${record.total} +${record.added} -${record.deleted}${sub.length > 0 ? ` subagents=${sub.length}` : ''}`);
+        this.log(`changes ${projectId}/${threadId} turn=${turn} files=${record.total} +${record.added} -${record.deleted}${sub.length > 0 ? ` subagents=${sub.length}` : ''}${shell.length > 0 ? ` shell=${shell.length}` : ''}`);
     }
 
     /**
@@ -2363,15 +2379,21 @@ export class ProjectManager {
      * after each that succeeds (net.js), for the one diff per file its
      * Changes tab shows; their bash or pwsh command
      * that makes folders keeps the ones it made as the thread's own, for
-     * the delete check (madeTarget). Any other call runs as it is, and
-     * keeping either never fails a call.
+     * the delete check (madeTarget). A thread's first shell command of a
+     * turn snapshots its folder first, for that turn's shell counts
+     * (shell.js); and every session's command or file edit is kept as
+     * running while it is, so a shell window knows whose changes it may
+     * hold. Any other call runs as it is, and keeping either never fails a
+     * call.
      */
     aroundTool(exec, next) {
         let thread = null;
         let target = null;
         let made = null;
+        let owner = null;
         try {
             thread = this.threadOfCall(exec);
+            owner = thread ?? this.callerOf(exec);
             if (thread) {
                 target = this.netTarget(exec, thread);
                 if (!target) made = this.madeTarget(exec, thread);
@@ -2379,10 +2401,101 @@ export class ProjectManager {
         } catch (error) {
             this.log(`error net-target ${String(error?.message ?? error).slice(0, 200)}`);
         }
-        if (!thread) return next();
-        return this.whileRunning(thread, () => (made ? this.aroundMade(made, next)
-            : target ? this.net.around(target.thread, target.file, next, typeof exec.callId === 'string' ? exec.callId : undefined, target.expect)
-            : next()));
+        const run = () => {
+            if (!thread) return next();
+            return this.whileRunning(thread, () => (made ? this.aroundMade(made, next)
+                : target ? this.net.around(target.thread, target.file, next, typeof exec.callId === 'string' ? exec.callId : undefined, target.expect)
+                : next()));
+        };
+        // A call that cannot write holds no window; one whose owner can't be told is nobody's to attribute.
+        if (owner === null || !MUTATING_TOOLS.has(exec?.name)) return run();
+        return this.whileMutating(owner, thread, async () => {
+            if (thread && SHELL_TOOLS.has(exec?.name)) await this.shellSnapshot(thread, exec);
+            return run();
+        });
+    }
+
+    /** The session a call belongs to, when no thread does: its own agent's, or null when there is none. */
+    callerOf(exec) {
+        const id = exec?.agent?.session?.id ?? exec?.agent?.id;
+        return typeof id === 'string' && id !== '' ? id : null;
+    }
+
+    /** One mutating call as its owner runs it (shell.js Mutations): counted while it is, outcome as it is. */
+    async whileMutating(owner, thread, run) {
+        this.mutations.begin(owner, thread !== null ? this.threadTurns.get(thread) ?? null : null);
+        try {
+            return await run();
+        } finally {
+            this.mutations.end(owner);
+        }
+    }
+
+    /**
+     * The thread's folder as its turn's first shell command is about to run
+     * (shell.js snapshotFolder): the side its shell edits are counted
+     * against. A turn without a shell command never snapshots, a second
+     * command of the same turn keeps the first one's, and this never fails
+     * the call. The snapshot lives in memory only — a turn that spans a
+     * restart counts no shell edits.
+     */
+    async shellSnapshot(thread, exec) {
+        try {
+            const turn = this.threadTurns.get(thread) ?? null;
+            if (turn === null) return;
+            const was = this.shellSnaps.get(thread);
+            if (was && was.turn === turn) return;
+            const root = this.shellFolder(thread);
+            if (root === undefined) return;
+            const files = await snapshotFolder(resolve(expand(root)));
+            this.shellSnaps.set(thread, { turn, root: resolve(expand(root)), at: Date.now(), files, edits: null });
+            for (const key of [...this.shellSnaps.keys()].slice(0, -200)) this.shellSnaps.delete(key);
+        } catch (error) {
+            this.log(`error shell-snap ${String(error?.message ?? error).slice(0, 200)}`);
+        }
+    }
+
+    /**
+     * The folder a thread's snapshot walks: its working directory (as DSH's
+     * tools resolve it, cwdOf), else the folder it started in, else its
+     * chat's workspace; undefined without one.
+     */
+    shellFolder(thread) {
+        const who = this.store.lookup(thread);
+        const t = who?.role === 'thread' ? this.store.thread(who.projectId, who.threadId) : null;
+        const agent = this.ctx.agents.get(thread);
+        return [agent ? this.cwdOf(agent.session) : undefined, t?.folder, this.projects.get(who?.projectId)?.workspacePath]
+            .find((p) => typeof p === 'string' && p !== '');
+    }
+
+    /**
+     * A turn's shell-command edits (shell.js diffFolder): the folder now
+     * against the snapshot its first shell command took, counted only when
+     * no other session's mutating call ran in the window, and the thread's
+     * own in no turn but this one. Computed once per turn; a turn without a
+     * snapshot (no shell command, or a restart) has none.
+     * @returns {Promise<Array<{path: string, added: number, deleted: number, created?: true, binary?: true, oversized?: true}>>}
+     */
+    shellEdits(thread, turn) {
+        const snap = this.shellSnaps.get(thread);
+        if (!snap || snap.turn !== turn) return Promise.resolve([]);
+        if (snap.edits === null) {
+            const { root, at, turn: countedTurn } = snap;
+            snap.edits = (async () => {
+                try {
+                    const before = snap.files;
+                    snap.files = null;
+                    const edits = await diffFolder(root, before);
+                    if (!this.mutations.overlapped(thread, at, Date.now(), countedTurn)) return edits;
+                    this.log(`shell-window ${thread} turn=${countedTurn} shared`);
+                    return [];
+                } catch (error) {
+                    this.log(`error shell-diff ${thread} ${String(error?.message ?? error).slice(0, 200)}`);
+                    return [];
+                }
+            })();
+        }
+        return snap.edits;
     }
 
     /** The thread session a call works for: a thread's own call, or a subagent's of one; null for any other. */
