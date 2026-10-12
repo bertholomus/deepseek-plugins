@@ -514,6 +514,8 @@ export class ProjectManager {
         managers.set(this.storeFile, this);
         this.disposed = false;
         this.logFile = config.logFile ? dataPath(config.logFile) : '';
+        /** Set by apply when the notifications plugin is around: one news item, for a system notification (noteNews). */
+        this.newsSink = undefined;
         if (this.logFile) {
             try { ensurePrivateDir(dirname(this.logFile)); } catch {}
         }
@@ -2995,6 +2997,9 @@ export class ProjectManager {
         const items = [...(Array.isArray(old.items) ? old.items : []), item].slice(-MAX_NEWS);
         this.store.putProject(projectId, { news: { seq, seen: Number.isInteger(old.seen) ? old.seen : 0, items } });
         this.log(`news ${projectId}/${news.thread} ${news.kind}${item.status ? ` ${item.status}` : ''} seq=${seq}`);
+        // The notifications plugin's sink (apply sets it), for a system notification while no window
+        // is looking. That plugin gates the kinds on its own settings; absent, nothing sends.
+        this.newsSink?.({ ...item, session: this.store.thread(projectId, news.thread)?.sessionId, projectId });
     }
 
     /** The user has seen a coordinating chat's news up to `seq` (all of it when omitted): they opened the chat. */

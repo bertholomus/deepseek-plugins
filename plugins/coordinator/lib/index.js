@@ -95,6 +95,19 @@ export function apply(ctx, config) {
     if (!(config.approvalNoticeSeconds >= 0)) throw new Error('coordinator: approvalNoticeSeconds must be 0 or more');
     const manager = new ProjectManager({ ctx, config, buildTools: projectTools });
 
+    // System notifications for its news (plugins/notifications), while no window is looking: that
+    // plugin gates the kinds on its own settings, and is absent when it is off or not installed.
+    ctx.inject(['notifications'], (notifications) => {
+        const sink = (item) => notifications.notify({
+            title: coordinatorNewsLine(item),
+            kind: item.kind,
+            sessionId: item.session,
+        });
+        sink.notifications = notifications;
+        manager.newsSink = sink;
+        return () => { if (manager.newsSink === sink) manager.newsSink = undefined; };
+    });
+
     ctx.on('agent/created', ({ agent }) => {
         manager.maybeInstall(agent);
     });
@@ -180,4 +193,17 @@ export function apply(ctx, config) {
     }, (error) => {
         ctx.logger.warn('coordinator: startup failed: %s', error?.message ?? error);
     });
+}
+
+/**
+ * The system notification's one line for a news item, in the window notice's
+ * words (lib/client.js TEXT.news and the notice kinds).
+ * @param {{kind: string, status?: string, title: string}} item - a noteNews item.
+ */
+export function coordinatorNewsLine({ kind, status, title }) {
+    if (kind === 'handback') return status === 'blocked' ? `“${title}” is blocked` : status === 'needs_decision' ? `“${title}” needs a decision` : `“${title}” handed back`;
+    if (kind === 'finished') return `“${title}” ended without a handback`;
+    if (kind === 'approval') return `“${title}” is waiting for approval`;
+    if (kind === 'failed') return `“${title}” failed`;
+    return `“${title}” stopped`;
 }
