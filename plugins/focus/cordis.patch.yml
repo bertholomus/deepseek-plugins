@@ -1,0 +1,5 @@
+# The plugin's own bundle row. Your profile's cordis.patch.yml can address the
+# same id ("focus") to give it a config (see README.md).
+- insert:
+    - id: focus
+      name: dsh-plugin-focus

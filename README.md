@@ -10,6 +10,7 @@ Each plugin is a normal DSH plugin package. You add it to a DSH profile's bundle
 | [`discord`](plugins/discord) | Connects a Discord bot to DSH sessions. Each Discord thread is one persistent agent session, and the agent answers through Discord tools. Full bot setup steps are in its README. |
 | [`projects`](plugins/projects) | Projects. A coordinator session per project starts thread sessions for focused work, threads hand results back to it, and each project has default models and effort levels for the coordinator and for threads. |
 | [`session-bridge`](plugins/session-bridge) | A local JSON API on a Unix socket that drives the Host's own session controller. Scripts and other agents can create, prompt, steer, cancel and read DSH sessions, and you watch them live in the DSH window. |
+| [`focus`](plugins/focus) | Focus. A pomodoro and countdown timer behind frosted glass. State is kept host-side with an absolute end time, so the countdown survives page reloads and DSH restarts. |
 
 These plugins are independent work. They are not made or endorsed by DeepSeek.
 
