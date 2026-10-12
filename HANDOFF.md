@@ -627,3 +627,36 @@ The user's goal (2026-10-11, relayed from the project chat): "create a sane cale
 - A CalDAV server names the user by several addresses (mailto, `urn:uuid:`, the principal's URL or path); compare them with `addressKey`, never by mailto alone.
 - A blank DSH window with the page error "scope 'session-maybe' rendered without an installed adapter" is DSH's own hot reload: when one of DSH's browser files (its session part, its sessions service or its renderer) changes on disk while it runs, even only its mtime or ctime, DSH swaps it in place and its root throws in the gap. The calendar never writes there. Don't write or touch a DSH install a test run is using; give each run its own (/mnt/project-files/calendar/blank-window/ has the trace and a repro). A hard-linked copy of an install (`cp -al`), or deleting one, changes the ctime of every file it shares, which is enough: make real copies (`cp -a`).
 - The e2e's scripted model names every session after the tool it calls ("MISSING TOOL calendar_update_event"), so two calls of one tool share a title: ui.mjs renames a session it has to find again (the session bridge's `/sessions/:id/rename`).
+
+## Design rules (DESIGN.md)
+
+_Its own section, kept by the "Design rules for DSH plugins" project thread; "Doing now" above stays the projects plugin's._
+
+Updated: 2026-10-11 21:54 PT by B (bertholomus)
+Branch: the PR branch named at the top (PR #1), fast-forwarded, never forced.
+
+The user's ask (2026-10-11 21:09 PT, in the project): "I need to extrapolate a design-structure or design-rules for developing plugins and modifications to DSH.  This probably means particular attention to glass/wallpaper plugin and how that persist through other plugins and the native deepseek harness".
+
+### Doing now (design rules)
+- Nothing in progress. DESIGN.md is pushed, and AGENTS.md points every builder of a plugin or mod at it, DSH chats included.
+
+### Done (design rules)
+- DESIGN.md at the repo root: how the window is built (ground, wall, frame, DSH's surfaces, content, a plugin's own surface, floating layers) and how Wallpaper's glass reaches DSH and every plugin; two kinds of plugin surface (inside DSH's surfaces: no ground, DSH's parts and tokens; a surface the plugin owns: unpainted root, glass cards); the glass contract with CSS recipes; text on glass; DSH's colour tokens, corners, type and motion; slots with the orders in use; names, isolation and the rules for mods; words, keyboard and states; how to check the look; where each plugin stands; open questions.
+- The one call made without the user: on glass, colours stay DSH's (Wallpaper itself changes only DSH's grounds), with secondary text and icons deepened toward DSH's label colour (`color-mix` 80% and 75%). Computed over a mid-grey picture at the default tint + .2, that reads 5.5:1 light and 9.9:1 dark, against 4.7 and 6.1 for Wallpaper's own palette, which Fleet and the calendar copy. Chromium renders the recipe as written (checked on a static page).
+- Checked in real DSH windows of 0.2.0-rc.2 and 0.2.1-alpha.2 (npm installs in the cloud, Wallpaper's rules copied over a test picture): Wallpaper's dock rule (`irMxjq_panel`) matches nothing there (the panel is `P3OORG_panel`); its composer rule works by its slot half; the categories page paints DSH's background over the wall; DSH's Plugins page shows its text on the bare wall; the session list's bottom fade (`--dsw-specific-sidebar-fill` gradient) shows as a band on glass. `[class*="_frame"]` matches 11 classes in 7 DSH packages.
+- `npm test` 330/330 at this push.
+
+### Next steps (design rules)
+1. The user reads DESIGN.md and answers its open questions: colours on glass, Wallpaper deepening DSH's labels through `ctx.theme.overrideTokens`, a tint floor, DSH's own pages under Wallpaper, touch.
+2. Each plugin comes in line in its own change, by its owner (DESIGN.md "Where things stand"): the categories page's ground first (the one visible at a glance), then `wp-still` and reduced motion in the coordinator and categories, then the calendar's colours, toasts and popover.
+3. Wallpaper's selector fixes need the Mac (Wallpaper isn't in this repository): the dock and composer anchors, `[class*="_frame"]` kept to the frame, the session list's fade.
+
+### Open questions (design rules)
+- The open questions at the end of DESIGN.md.
+
+### Gotchas (design rules)
+- DSH's CSS-module hashes differ between the Desktop app and the npm builds (`irMxjq_panel` and `P3OORG_panel` for one panel), so a cloud check of Wallpaper's selectors can't stand in for the Desktop app. Slot keys and token names are the same everywhere checked.
+- DESIGN.md's contrast numbers are computed over a flat grey picture (a blur averages the picture, and `saturate` leaves grey alone). Real pictures still need a look.
+- Wallpaper and Fleet weren't read again for this: the Mac thread was parked, so DESIGN.md relies on the glass note read from c14deb5.
+- `--dsh-font-mono` and `--dsh-color-bg-hover` aren't DSH tokens in either version, so the plugins' fallbacks always apply.
+- DESIGN.md is scanned by the naming test like every other text file: no branch names or paths that carry a third-party assistant's name.
