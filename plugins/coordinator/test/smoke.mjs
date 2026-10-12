@@ -9,7 +9,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
@@ -23,6 +23,12 @@ import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
 import { NetTexts, canonicalPath } from '../lib/net.js';
 import { grantsIn, asksFor } from '../lib/grants.js';
 import { deletesOf, codeDeletesOf, isFree, identityOf, CLOCK_SLACK_MS } from '../lib/deletes.js';
+
+// No test reads or writes the real ~/.dsh: DSH's data folder is this run's own, as a DSH
+// started with DSH_HOME has. Set before anything resolves a default path; removed at exit.
+const tempDshHome = mkdtempSync(join(tmpdir(), 'dsh-home-'));
+process.env.DSH_HOME = tempDshHome;
+process.on('exit', () => { try { rmSync(tempDshHome, { recursive: true, force: true }); } catch {} });
 
 const CATALOG = {
     default: { provider: 'deepseek', model: 'deepseek-v4' },
@@ -3112,6 +3118,131 @@ test('changes: a thread counts its own edits (and its subagents\'), never what o
     push(t1, 'workspace/changes', { turn: 2 });
     await tick();
     assert.equal((await remote.describe(coord.id)).threads.find((x) => x.session === t1.id).changes.turns, 3);
+});
+
+test('changes: a thread\'s shell-command edits count, without git, and survive a restart', async () => {
+    const { host, config, dir } = setup({}, undefined, { ...SELECTING, gateway: true });
+    await tick();
+    const coord = coordinatorOf(host);
+    const remote = host.provided.get('dshPluginCoordinatorRemote');
+    await coord.ctx.call('thread_start', { ask: 'Please do this.', title: 'Shell', brief: 'Go.' });
+    const t1 = threadOf(host, coord);
+    const work = mkdtempSync(join(tmpdir(), 'shell-work-'));
+    host.sessions.get(t1.id).folder = work;
+    t1.session.header = { cwd: work };
+    const log = (id) => host.sessions.get(id).events;
+    const push = (t, type, data) => { const e = { seq: log(t.id).length + 1, type, data }; log(t.id).push(e); t.ctx.sessionEvent(e); return e; };
+    let calls = 0;
+    /** One shell command as DSH runs it: the plugin's window around `body`, which does what the command wrote. */
+    const run = async (t, command, body, isError = false) => {
+        const callId = `sh-${++calls}`;
+        await host.waterfall('tools/execute', { name: 'bash', arguments: { command }, agent: t, callId, signal: new AbortController().signal }, async () => {
+            body();
+            return { content: [{ type: 'text', text: 'ok' }] };
+        });
+        const events = log(t.id);
+        events.push({ seq: events.length + 1, type: 'tool/call', data: { turn: 1, callId, name: 'bash', arguments: { command } } });
+        events.push({ seq: events.length + 1, type: 'tool/result', data: { turn: 1, message: { role: 'tool', toolCallId: callId, isError, content: [] } } });
+    };
+    const until = async (probe, what) => {
+        for (let i = 0; i < 500; i++) {
+            if (await probe()) return;
+            await new Promise((r) => setTimeout(r, 10));
+        }
+        assert.fail(`never settled: ${what}`);
+    };
+    const of = async () => (await remote.describe(coord.id)).threads[0].changes ?? null;
+    // A plain folder: no repository, and a .git of its own that a command touching must not count.
+    writeFileSync(join(work, 'notes.md'), 'a\nb\n');
+    mkdirSync(join(work, '.git'), { recursive: true });
+    writeFileSync(join(work, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+    t1.ctx.emitStatus(t1, 'running');
+    push(t1, 'turn/start', { turn: 1 });
+    await run(t1, 'printf one > new.txt', () => writeFileSync(join(work, 'new.txt'), 'one\ntwo\n'));
+    await run(t1, 'printf THREE >> notes.md', () => writeFileSync(join(work, 'notes.md'), 'a\nb\nTHREE\n'));
+    await run(t1, 'git status', () => writeFileSync(join(work, '.git', 'HEAD'), 'changed'));
+    // A command that fails may still have written; its edits count too.
+    await run(t1, 'false', () => writeFileSync(join(work, 'partial.log'), 'p\n'), true);
+    push(t1, 'turn/end', { turn: 1, reason: { kind: 'completed' } });
+    t1.ctx.emitStatus(t1, 'idle');
+    const endSeq = log(t1.id).findLast((e) => e.type === 'turn/end').seq;
+    const recordOf = () => JSON.parse(readFileSync(join(dir, 'coordinator.json'), 'utf8')).projects['dsh-plugins'].threads.t1.changes;
+    await until(() => { try { return (recordOf() ?? []).some((r) => r?.turn === 1); } catch { return false; } }, 'the turn\'s record');
+    const filesOf = (changes) => [...changes.files].sort((a, b) => (a.path < b.path ? -1 : 1));
+    const record = recordOf().find((r) => r?.turn === 1);
+    assert.deepEqual(filesOf(record), [
+        { path: 'new.txt', added: 2, deleted: 0, created: true },
+        { path: 'notes.md', added: 1, deleted: 0 },
+        { path: 'partial.log', added: 1, deleted: 0, created: true },
+    ], 'the folder counted, .git skipped, a failed command\'s write too');
+    assert.deepEqual(await of(), { added: 4, deleted: 0, files: 3, turns: 1, last: { seq: endSeq, turn: 1 }, reviewable: false });
+    // The record on disk is the whole count: a new DSH process over the same logs and store says the same.
+    const second = fakeHost({ ...SELECTING, gateway: true });
+    for (const [id, s] of host.sessions) second.sessions.set(id, { ...s, prompts: [] });
+    plugin.apply(second, config);
+    await tick();
+    const again = plain(await second.provided.get('dshPluginCoordinatorRemote').describe(coord.id));
+    assert.deepEqual(again.threads[0].changes, { added: 4, deleted: 0, files: 3, turns: 1, last: { seq: endSeq, turn: 1 }, reviewable: false });
+});
+
+test('changes: a turn counts its shell edits only when no other session was changing the folder', async () => {
+    const { host } = setup({}, undefined, { ...SELECTING, gateway: true });
+    await tick();
+    const coord = coordinatorOf(host);
+    const remote = host.provided.get('dshPluginCoordinatorRemote');
+    await coord.ctx.call('thread_start', { ask: 'Please do this.', title: 'First', brief: 'Go.' });
+    const t1 = threadOf(host, coord);
+    await coord.ctx.call('thread_start', { ask: 'Please do this.', title: 'Second', brief: 'Go.' });
+    const t2 = [...host.live.values()].find((a) => a.id !== coord.id && a.id !== t1.id);
+    const work = mkdtempSync(join(tmpdir(), 'shell-shared-'));
+    for (const t of [t1, t2]) {
+        host.sessions.get(t.id).folder = work;
+        t.session.header = { cwd: work };
+    }
+    const log = (id) => host.sessions.get(id).events;
+    const push = (t, type, data) => { const e = { seq: log(t.id).length + 1, type, data }; log(t.id).push(e); t.ctx.sessionEvent(e); return e; };
+    let calls = 0;
+    /** A shell call of `agent` whose body the test holds or releases, as an overlapping command needs. */
+    const shell = (agent, body) => host.waterfall('tools/execute', { name: 'bash', arguments: { command: 'the command' }, agent, callId: `sh-${++calls}`, signal: new AbortController().signal }, body);
+    const until = async (probe, what) => {
+        for (let i = 0; i < 500; i++) {
+            if (await probe()) return;
+            await new Promise((r) => setTimeout(r, 10));
+        }
+        assert.fail(`never settled: ${what}`);
+    };
+    const of = async (t) => (await remote.describe(coord.id)).threads.find((x) => x.session === t.id)?.changes ?? null;
+    // Overlapping windows: t1's command in flight while t2's runs, and while the coordinating chat writes one.
+    let open;
+    const gate = new Promise((r) => { open = r; });
+    t1.ctx.emitStatus(t1, 'running');
+    push(t1, 'turn/start', { turn: 1 });
+    const slow = shell(t1, async () => {
+        await gate;
+        writeFileSync(join(work, 'slow.txt'), 's\n');
+        return { content: [] };
+    });
+    await until(() => remote.manager.shellSnaps.get(t1.id)?.turn === 1, 't1\'s snapshot');
+    t2.ctx.emitStatus(t2, 'running');
+    push(t2, 'turn/start', { turn: 1 });
+    await shell(t2, () => { writeFileSync(join(work, 'second.txt'), '2\n'); return { content: [] }; });
+    await shell(coord, () => { writeFileSync(join(work, 'coord.txt'), 'c\n'); return { content: [] }; });
+    open();
+    await slow;
+    push(t1, 'turn/end', { turn: 1, reason: { kind: 'completed' } });
+    t1.ctx.emitStatus(t1, 'idle');
+    push(t2, 'turn/end', { turn: 1, reason: { kind: 'completed' } });
+    t2.ctx.emitStatus(t2, 'idle');
+    // In turn 2, with nothing else running, the same count lands — and turn 1's never does.
+    t2.ctx.emitStatus(t2, 'running');
+    push(t2, 'turn/start', { turn: 2 });
+    await shell(t2, () => { writeFileSync(join(work, 'alone.txt'), 'a\nb\n'); return { content: [] }; });
+    push(t2, 'turn/end', { turn: 2, reason: { kind: 'completed' } });
+    t2.ctx.emitStatus(t2, 'idle');
+    await until(async () => (await of(t2)) !== null, 't2\'s own turn');
+    assert.equal(await of(t1), null, 'its window held another session\'s writes');
+    const read = plain(await of(t2));
+    assert.deepEqual([read.added, read.deleted, read.files, read.turns], [2, 0, 1, 1], 'only what its own command wrote, alone');
 });
 
 test('changes: own edits count lines as a diff does', () => {

@@ -7,10 +7,17 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { handbackMessage, idleMessage, approvalMessage, outsideMessage, replyMessage, briefMessage, coordinatorMessage } from '../lib/prompts.js';
+
+// No test reads or writes the real ~/.dsh: DSH's data folder is this run's own, as a DSH
+// started with DSH_HOME has. Set before anything resolves a default path; removed at exit.
+const tempDshHome = mkdtempSync(join(tmpdir(), 'dsh-home-'));
+process.env.DSH_HOME = tempDshHome;
+process.on('exit', () => { try { rmSync(tempDshHome, { recursive: true, force: true }); } catch {} });
 
 const tick = () => new Promise((r) => setTimeout(r, 10));
 /** Values made inside the script's context, copied so they compare as plain data. */
