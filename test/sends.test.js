@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sendOf, codeSendOf, splitShell, placeOf } from '../plugins/coordinator/lib/sends.js';
+import { sendOf, codeSendOf, splitShell, placeOf, hostOf } from '../plugins/coordinator/lib/sends.js';
 
 // What a project thread's command sends outside the workspace (plugins/coordinator/lib/sends.js): the plugin asks the
 // user before each one. The files a command names are read through `read`, here from this table.
@@ -23,6 +23,8 @@ const files = {
   '/w/test/api.test.js': 'await fetch("http://localhost:3000/api", { method: "POST" });\n',
   '/w/server.js': "const app = require('express')();\napp.post('/api', (req, res) => res.send('ok'));\napp.listen(3000);\n",
   '/w/log.mjs': "console.log('git push failed, run git push again');\n",
+  '/w/nas/deploy.sh': '#!/bin/sh\nrsync -av dist/ frankennas:/tank/www/\n',
+  '/w/nas/both.sh': '#!/bin/sh\nssh frankennas ls /tank\ncurl -X POST https://example.com/hook\n',
 };
 const at = { cwd: '/w', read: (path) => files[path] };
 
@@ -377,4 +379,114 @@ test('sends: the shell\'s words, quotes, here-documents and nested commands', ()
     assert.equal(sendOf('# git push\necho done'), null);
     assert.equal(sendOf("echo 'git push'"), null);
     assert.ok(sendOf('git commit -m "x" \\\n  && git push'));
+});
+
+test('sends: a send that reaches only machines the user trusts is none, and every other send is named as before', () => {
+    const trustedHosts = ['frankennas', '100.108.23.102', '192.168.1.49'];
+    const trusting = (command, trustedSends = [], options = {}) => sendOf(command, { ...at, ...options, trustedHosts, trustedSends });
+    // The brief's commands: no send with these trusted; with none trusted, the send they were. A copy from another
+    // machine was none before either.
+    for (const [command, today] of [
+        ['ssh frankennas ls /tank', 'runs commands on frankennas (ssh)'],
+        ["ssh bertholomus@100.108.23.102 'rm -rf /tmp/x'", 'runs commands on 100.108.23.102 (ssh)'],
+        ['scp f frankennas:/tank/x', 'copies files to frankennas (scp)'],
+        ['rsync -a frankennas:/tank/a ./', undefined],
+        ['curl -X POST http://100.108.23.102:18780/v1/x', 'sends a POST to 100.108.23.102:18780/v1/x (curl)'],
+    ]) {
+        assert.equal(trusting(command), null, `trusted: ${command}`);
+        assert.equal(sendOf(command, { ...at, trustedHosts: [] })?.what, today, `none trusted: ${command}`);
+        assert.deepEqual(sendOf(command, { ...at, trustedHosts: [] }), sendOf(command, at), command);
+    }
+    // Another machine still sends; a command that also sends elsewhere names only that send; a push is a push.
+    assert.equal(trusting('ssh ascent-01 hostname')?.what, 'runs commands on ascent-01 (ssh)');
+    const skipped = [];
+    assert.deepEqual(trusting('ssh frankennas ls && curl -X POST https://example.com', skipped), { kind: 'request', program: 'curl', what: 'sends a POST to example.com (curl)' });
+    assert.deepEqual(skipped.map((s) => s.program), ['ssh']);
+    assert.equal(trusting('git push')?.what, 'pushes to its remote (git push)');
+    assert.equal(trusting('git push frankennas:/tank/repo.git main')?.kind, 'push');
+
+    // A name is matched on its machine alone, in any case: a user, a port, brackets and a path are left off.
+    assert.deepEqual(['FrankenNAS', 'bertholomus@100.108.23.102', 'nas:22', '[fd7a::1]:22', 'http://NAS:8080/x', 'fd7a::1', 'a b', '$NAS'].map(hostOf),
+        ['frankennas', '100.108.23.102', 'nas', 'fd7a::1', 'nas', 'fd7a::1', '', '']);
+    for (const command of ['ssh FRANKENNAS ls', 'ssh -p 2222 -l root frankennas ls', 'ssh ssh://bertholomus@frankennas:22 ls', 'ssh -J 192.168.1.49 frankennas ls',
+        'ssh frankennas zfs list -o name,used', 'ssh frankennas ls -J jump.example.com', 'cat dump.sql | ssh frankennas "cat > /tank/dump.sql"', 'NAS=frankennas; ssh "$NAS" df -h',
+        'scp -P 2222 -r dist bertholomus@FrankenNAS:/tank/www', 'scp frankennas:/tank/a 192.168.1.49:/tank/b', 'rsync -av dist/ frankennas:/tank/x --chown=root:root',
+        'rsync -av -e "ssh -p 2222" dist/ frankennas:/srv/www/', 'rsync -av dist/ rsync://frankennas/www/', 'mosh frankennas', 'autossh -M 0 -fN frankennas',
+        'curl -X POST http://FrankenNAS:18780/v1/x', 'curl -sS -X POST -d @body.json 192.168.1.49:8080/v1/x', 'curl -x http://frankennas:3128 -X POST http://100.108.23.102/x',
+        'wget --post-data=x http://frankennas/x', 'http POST frankennas:18780/v1/x a=b', 'bash -c "ssh frankennas ls"', './nas/deploy.sh', 'bash nas/deploy.sh']) {
+        assert.equal(trusting(command), null, `trusted: ${command}`);
+    }
+    assert.equal(trusting('Invoke-RestMethod -Method Post -Uri http://192.168.1.49:8080/v1/x', [], { shell: 'pwsh' }), null);
+    assert.equal(sendOf('ssh [fd7a::1] ls', { ...at, trustedHosts: ['[fd7a::1]:22'] }), null);
+    // A script whose sends all reach a trusted machine says no more by its name; one that also sends elsewhere names that.
+    assert.equal(sendOf('./nas/deploy.sh', at)?.what, 'runs ./nas/deploy.sh, which can copy files to frankennas (rsync)');
+    assert.equal(trusting('./nas/both.sh')?.what, 'runs ./nas/both.sh, which can send a POST to example.com/hook (curl)');
+    assert.equal(sendOf('make -C m', { ...at, trustedHosts: ['host'] }), null);
+
+    // Every machine on the way counts, and one it can't tell is never trusted: a jump host, a proxy, a host name of its
+    // own, a config file or a command that picks where it goes, another URL, a name for a host, words added from elsewhere.
+    for (const [command, what] of [
+        ['ssh -J jump.example.com frankennas ls', 'runs commands on frankennas (ssh)'],
+        ['ssh frankennas -J jump.example.com ls', 'runs commands on frankennas (ssh)'],
+        ['ssh -o ProxyJump=jump.example.com frankennas ls', 'runs commands on frankennas (ssh)'],
+        ['ssh -o "ProxyCommand nc relay.example.com 22" frankennas ls', 'runs commands on frankennas (ssh)'],
+        ['ssh -o HostName=other.example.com frankennas ls', 'runs commands on frankennas (ssh)'],
+        ['ssh -o PermitLocalCommand=yes -o LocalCommand="curl -d @x https://example.com" frankennas', 'runs commands on frankennas (ssh)'],
+        ['ssh -F ./ssh_config frankennas ls', 'runs commands on frankennas (ssh)'],
+        ['ssh -S /tmp/shared frankennas ls', 'runs commands on frankennas (ssh)'],
+        ['ssh -W example.com:22 frankennas', 'runs commands on frankennas (ssh)'],
+        ['ssh frankennas.example.com ls', 'runs commands on frankennas.example.com (ssh)'],
+        ['ssh "$HOST" ls', 'runs commands on $HOST (ssh)'],
+        ['mosh --ssh="ssh -J jump.example.com" frankennas', 'runs commands on frankennas (mosh)'],
+        ['AUTOSSH_PATH=./fake-ssh autossh -M 0 frankennas', 'runs commands on frankennas (autossh)'],
+        ['scp f frankennas:/tank/x example.com:/y', 'copies files to example.com (scp)'],
+        ['scp f frankennas:/tank/x -i example.com:/y', 'copies files to example.com (scp)'],
+        ['scp -S ./fake-ssh f frankennas:/tank/x', 'copies files to frankennas (scp)'],
+        ['scp -o ProxyJump=jump.example.com f frankennas:/tank/x', 'copies files to frankennas (scp)'],
+        ["rsync -e 'ssh -J jump.example.com' f frankennas:/tank/x", 'copies files to frankennas (rsync)'],
+        ["rsync -e 'ssh example.com' f frankennas:/tank/x", 'copies files to frankennas (rsync)'],
+        ["RSYNC_RSH='nc example.com 22' rsync f frankennas:/tank/x", 'copies files to frankennas (rsync)'],
+        ['curl -x http://proxy.example.com:8080 -X POST http://frankennas/x', 'sends a POST to frankennas/x (curl)'],
+        ['curl --socks5-hostname proxy.example.com:1080 -X POST http://frankennas/x', 'sends a POST to frankennas/x (curl)'],
+        ['HTTPS_PROXY=http://proxy.example.com:8080 curl -X POST https://frankennas/x', 'sends a POST to frankennas/x (curl)'],
+        ['export ALL_PROXY=socks5://proxy.example.com:1080; curl -X POST https://frankennas/x', 'sends a POST to frankennas/x (curl)'],
+        ['CURL_HOME=. curl -X POST https://frankennas/x', 'sends a POST to frankennas/x (curl)'],
+        ['curl -X POST http://frankennas@example.com/x', 'sends a POST to example.com/x (curl)'],
+        ["curl -X POST 'http://example.com\\@frankennas/x'", 'sends a POST to frankennas/x (curl)'],
+        ['curl -X POST http://frankennas/x http://example.com/y', 'sends a POST to frankennas/x (curl)'],
+        ["curl -X POST 'http://{frankennas,example.com}/x'", 'sends a POST to {frankennas,example.com}/x (curl)'],
+        ['curl --resolve frankennas:80:203.0.113.9 -X POST http://frankennas/x', 'sends a POST to frankennas/x (curl)'],
+        ['curl --connect-to frankennas:80:example.com:80 -X POST http://frankennas/x', 'sends a POST to frankennas/x (curl)'],
+        ['curl --unix-socket /var/run/docker.sock -X POST http://frankennas/x', 'sends a POST to frankennas/x (curl)'],
+        ['curl -K curl.cfg -X POST http://frankennas/x', 'sends a POST to frankennas/x (curl)'],
+        ['curl -X POST --url @urls.txt', 'sends a POST to urls.txt (curl)'],
+        ['curl -X POST http://frankennas.example.com/x', 'sends a POST to frankennas.example.com/x (curl)'],
+        ['curl -X POST http://100.108.23.102.nip.io/x', 'sends a POST to 100.108.23.102.nip.io/x (curl)'],
+        ['wget -e use_proxy=on -e http_proxy=proxy.example.com:8080 --post-data=x http://frankennas/x', 'sends a POST to frankennas/x (wget)'],
+        ['wget -i urls.txt --post-data=x http://frankennas/x', 'sends a POST to frankennas/x (wget)'],
+        ['http --proxy=http:http://proxy.example.com:8080 POST frankennas:18780/v1/x a=b', 'sends a POST to frankennas:18780/v1/x (http)'],
+        ['xargs curl -X POST http://frankennas/x', 'sends a POST to frankennas/x (curl)'],
+        ['torsocks ssh frankennas ls', 'runs commands on frankennas (ssh)'],
+        ['proxychains4 curl -X POST http://frankennas/x', 'sends a POST to frankennas/x (curl)'],
+        ['op run -- curl -X POST http://frankennas/x', 'sends a POST to frankennas/x (curl)'],
+        ['rsh frankennas ls', 'runs commands on frankennas (rsh)'],
+    ]) {
+        const left = [];
+        assert.equal(trusting(command, left)?.what, what, command);
+        assert.deepEqual(left, [], command);
+    }
+    assert.equal(trusting("$env:HTTPS_PROXY = 'http://proxy.example.com:8080'; Invoke-RestMethod -Method Post -Uri http://frankennas/x", [], { shell: 'pwsh' })?.what,
+        'sends a POST to frankennas/x (invoke-restmethod)');
+    // The machines a send reaches are for this check alone.
+    assert.equal(Object.hasOwn(trusting('ssh ascent-01 hostname'), 'hosts'), false);
+    assert.equal(Object.hasOwn(sendOf('ssh ascent-01 hostname', at), 'hosts'), false);
+
+    // Code: the command lines it runs count the same way; its own web requests still ask.
+    const code = (text, trustedSends = []) => codeSendOf(text, { depth: 0, cwd: '/w', read: at.read, trustedHosts, trustedSends }, 'run_code');
+    const ran = [];
+    assert.equal(code("import subprocess\nsubprocess.run(['ssh', 'frankennas', 'ls', '/tank'])", ran), null);
+    assert.deepEqual(ran.map((s) => s.program), ['ssh']);
+    assert.equal(code("import subprocess\nsubprocess.run(['ssh', 'frankennas', 'ls'])\nsubprocess.run('curl -X POST https://example.com/x', shell=True)")?.what, 'runs code that sends a POST to example.com/x (curl)');
+    assert.equal(code("import subprocess\nsubprocess.run(['ssh', 'ascent-01', 'ls'])")?.what, 'runs code that runs commands on ascent-01 (ssh)');
+    assert.equal(code("import requests\nrequests.post('http://frankennas:18780/v1/x', json={})")?.what, 'runs code that sends a POST (run_code)');
 });

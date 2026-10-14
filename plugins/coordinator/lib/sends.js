@@ -12,6 +12,11 @@
  * a sandbox: a program it doesn't know, or a send inside a library the
  * command runs, goes through.
  *
+ * A send that reaches only machines the user trusts (`trustedHosts`, such as
+ * their own NAS) is left out: ssh, mosh or autossh to one, scp or rsync whose
+ * other side is one, a web request to one. It counts every machine on the
+ * way, a jump host or a proxy too, and one it can't tell is never trusted.
+ *
  * @module dsh-plugin-coordinator/sends
  */
 import { dirname, isAbsolute, resolve } from 'node:path';
@@ -576,8 +581,9 @@ function afterRunner(name, args) {
 /**
  * The command a line runs once what only wraps it is taken off: `sudo env X=1 timeout 5 curl …` runs curl.
  * @param {Map<string, string|null>} [assigned] - gets the variables set for it (`X=1 cmd`, `env X=1 cmd`; null: `env -u X`).
+ * @param {string[]} [wraps] - gets the names of the WRAP commands taken off (`sudo`, `xargs`).
  */
-function commandOf(words, assigned) {
+function commandOf(words, assigned, wraps) {
     let w = words;
     for (let guard = 0; guard < 16 && w.length > 0; guard++) {
         const first = w[0];
@@ -624,6 +630,7 @@ function commandOf(words, assigned) {
             continue;
         }
         if (!(name in WRAP)) break;
+        wraps?.push(name);
         const args = w.slice(1);
         if (WRAP[name] === null) {
             w = afterRunner(name, args);
@@ -683,9 +690,111 @@ export function withoutCredentials(text) {
 
 const looksLikeUrl = (a) => /^(https?|ftps?|sftp|scp|smtps?|wss?|tftp|dict|ldaps?|telnet|mqtt|gopher):\/\//i.test(a) || /^(localhost|\d{1,3}(\.\d{1,3}){3}|\[[0-9a-f:]+\]|[a-z0-9-]+(\.[a-z0-9-]+)+)(:\d+)?(\/|$)/i.test(a);
 
-function request(method, url, program) {
+/** A host name or an IP address, as a machine is written (an IPv6 one with its zone). */
+const HOST_NAME = /^[a-z0-9_](?:[a-z0-9_.-]*[a-z0-9_])?$/;
+const IPV6 = /^[0-9a-f]*:[0-9a-f]*:[0-9a-f:.]*(?:%[\w.-]+)?$/;
+
+/**
+ * The machine in `host`, `host:port`, `host:path`, `[v6]:port` or a bare IPv6
+ * address, in lower case; '' for anything that isn't a plain name or address
+ * (a variable, a pattern, a quote), which is never a machine the user trusts.
+ */
+function machine(text) {
+    const s = String(text ?? '').toLowerCase();
+    const bracketed = /^\[([^\]]*)\](?::.*)?$/s.exec(s);
+    if (bracketed) return IPV6.test(bracketed[1]) ? bracketed[1] : '';
+    if (IPV6.test(s)) return s;
+    const name = s.replace(/:.*$/s, '');
+    return HOST_NAME.test(name) ? name : '';
+}
+
+/** The machine a URL reaches, read as curl reads one (`http://` when it names no scheme): its host, without a user or a port. */
+function urlHost(url) {
+    const authority = String(url ?? '').trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/[/?#].*$/s, '');
+    // A character no URL's authority has (a backslash, a space, a `{` of curl's lists) leaves where it goes to the program.
+    return /^[\w.~%!$&'()*+,;=:@[\]-]*$/.test(authority) ? machine(authority.slice(authority.lastIndexOf('@') + 1)) : '';
+}
+
+/**
+ * The machine ssh reaches for a destination: `[user@]host`, or an `ssh://`
+ * URL. A trustedHosts entry is read the same way, so `bertholomus@nas`,
+ * `NAS:22` and `[fd7a::1]` name `nas` and `fd7a::1`.
+ */
+export function hostOf(place) {
+    const s = String(place ?? '').trim();
+    return /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? urlHost(s) : machine(s.slice(s.lastIndexOf('@') + 1));
+}
+
+/** The machine of a place on another machine, as scp and rsync read it: `[user@]host:path`, `host::module`, or a URL. */
+function pathHost(place) {
+    const s = String(place ?? '');
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return urlHost(s);
+    // The machine ends at the first `:` outside brackets, and its user at the last `@` before that.
+    const m = /^(?:[^:[/]*@)?(\[[^\]/]*\]|[^:/]*):/.exec(s);
+    return m ? machine(m[1]) : '';
+}
+
+/**
+ * The machines a send reaches, kept on it only when every one is known and
+ * nothing around the command sends it elsewhere (ctx.unrouted): a send
+ * without them is never a trusted one.
+ */
+const reaching = (hosts, ctx) => (!ctx?.unrouted && Array.isArray(hosts) && hosts.length > 0 && hosts.every((h) => h !== '') ? { hosts: [...new Set(hosts)] } : {});
+
+/**
+ * A command's options and its other words, as getopt reads them: short ones
+ * together (`-avz`), one in `takes` taking the rest of its word or the next
+ * word, long ones as `--name=value` or, in `takes`, `--name value`.
+ * `more(n)` says whether options still come once n other words have (getopt
+ * stops at the first; ssh reads them again after its destination).
+ * @returns {{options: [string, string|undefined][], words: string[]}}
+ */
+function optionsOf(args, takes, more = () => true) {
+    const options = [];
+    const words = [];
+    for (let i = 0; i < args.length; i++) {
+        const a = String(args[i]);
+        if (!more(words.length)) { words.push(a); continue; }
+        if (a === '--') { words.push(...args.slice(i + 1)); break; }
+        if (!a.startsWith('-') || a === '-') { words.push(a); continue; }
+        if (a.startsWith('--')) {
+            const eq = a.indexOf('=');
+            const name = eq > 0 ? a.slice(0, eq) : a;
+            options.push([name, eq > 0 ? a.slice(eq + 1) : takes.has(name) ? args[++i] : undefined]);
+            continue;
+        }
+        for (let k = 1; k < a.length; k++) {
+            if (!takes.has(a[k])) { options.push([`-${a[k]}`, undefined]); continue; }
+            options.push([`-${a[k]}`, k + 1 < a.length ? a.slice(k + 1) : args[++i]]);
+            break;
+        }
+    }
+    return { options, words };
+}
+
+/** A long option that only starts one of `names` (`--prox` for `--proxy`): a program that takes a shortened name reads it as that one. */
+const shortens = (option, names) => option.startsWith('--') && option.length > 2 && !names.includes(option) && names.some((name) => name.startsWith(option));
+
+/** Variables that point a web client at a config file of their own, where a proxy or more URLs can be. */
+const CONFIG_VARS = /^(?:home|xdg_config_home|curl_home|wgetrc|system_wgetrc|httpie_config_dir|xh_config_dir)$/i;
+
+/**
+ * The machines a web request reaches: its URLs', its proxies' (`-x`, and
+ * the ones the command line sets in variables, `HTTPS_PROXY=… curl …`);
+ * null when they can't be told (`unsure`: an option that sends it elsewhere
+ * or reads more from a file).
+ */
+function webHosts(urls, proxies, unsure, ctx) {
+    const env = [...(ctx?.env ?? [])];
+    if (unsure || env.some(([name]) => CONFIG_VARS.test(name))) return null;
+    const inEnv = env.filter(([name, value]) => /^(?:https?|all|ftp)_proxy$/i.test(name) && value).map(([, value]) => value);
+    return [...urls, ...proxies, ...inEnv].map(urlHost);
+}
+
+/** A web request; `hosts`, the machines it reaches (webHosts), or null when they can't be told. */
+function request(method, url, program, hosts, ctx) {
     const where = placeOf(url);
-    return { kind: 'request', program, what: `sends a ${method} to ${where || 'a server'} (${program})` };
+    return { kind: 'request', program, what: `sends a ${method} to ${where || 'a server'} (${program})`, ...reaching(hosts, ctx) };
 }
 
 const CURL_TAKES = new Set([...'AbcCdDeEFHKmoPQrtTuUwxXyYz',
@@ -699,7 +808,12 @@ const CURL_TAKES = new Set([...'AbcCdDeEFHKmoPQrtTuUwxXyYz',
     '--socks5-hostname', '--login-options', '--service-name', '--telnet-option', '--keepalive-time', '--expect100-timeout', '--speed-limit', '--speed-time',
     '--rate', '--parallel-max', '--request-target', '--doh-url', '--etag-save', '--etag-compare', '--create-file-mode', '--ftp-port', '--ftp-method']);
 
-function curl(args) {
+/** curl's options that send through another machine: a proxy. */
+const CURL_PROXIES = ['--proxy', '--preproxy', '--proxy1.0', '--socks4', '--socks4a', '--socks5', '--socks5-hostname'];
+/** And the ones after which where it goes can't be told: its own names for hosts, a socket, options or URLs from a file. */
+const CURL_ELSEWHERE = ['--resolve', '--connect-to', '--doh-url', '--dns-servers', '--unix-socket', '--abstract-unix-socket', '--config'];
+
+function curl(args, ctx) {
     let method;
     let body = false;
     let upload = false;
@@ -707,9 +821,13 @@ function curl(args) {
     let get = false;
     let mail = false;
     let url;
+    // Every URL it is given, and its proxies, for the machines it reaches.
+    const urls = [];
+    const proxies = [];
+    let unsure = false;
     for (let i = 0; i < args.length; i++) {
         const a = args[i];
-        if (a === '--') { url ??= args[i + 1]; break; }
+        if (a === '--') { url ??= args[i + 1]; urls.push(...args.slice(i + 1)); break; }
         if (a.startsWith('--')) {
             const eq = a.indexOf('=');
             const name = eq > 0 ? a.slice(0, eq) : a;
@@ -720,8 +838,13 @@ function curl(args) {
             else if (name === '--head') head = true;
             else if (name === '--get') get = true;
             else if (name === '--mail-rcpt' || name === '--mail-from') { value(); mail = true; }
-            else if (name === '--url') url ??= value();
-            else if (eq < 0 && CURL_TAKES.has(name)) i++;
+            else if (name === '--url') { const u = value(); url ??= u; urls.push(u); }
+            else if (CURL_PROXIES.includes(name)) proxies.push(value());
+            else if (CURL_ELSEWHERE.includes(name) || name.startsWith('--expand-') || shortens(name, [...CURL_PROXIES, ...CURL_ELSEWHERE])) {
+                unsure = true;
+                // `--expand-url` takes a value as `--url` does, its variables filled in.
+                if (eq < 0 && CURL_TAKES.has(name.replace(/^--expand-/, '--'))) i++;
+            } else if (eq < 0 && CURL_TAKES.has(name)) i++;
             continue;
         }
         if (a.startsWith('-') && a.length > 1) {
@@ -734,15 +857,20 @@ function curl(args) {
                 if (f === 'X') method = value;
                 else if (f === 'd' || f === 'F') body = true;
                 else if (f === 'T') upload = true;
+                else if (f === 'x') proxies.push(value);
+                else if (f === 'K') unsure = true;
                 break;
             }
             continue;
         }
         url ??= a;
+        urls.push(a);
     }
     if (mail || /^smtps?:/i.test(url ?? '')) return mail || upload ? { kind: 'email', program: 'curl', what: 'sends email (curl)' } : null;
     const verb = method ? String(method).toUpperCase() : body ? (get ? 'GET' : 'POST') : upload ? 'PUT' : head ? 'HEAD' : 'GET';
-    return READ_METHODS.has(verb) ? null : request(verb, url, 'curl');
+    if (READ_METHODS.has(verb)) return null;
+    // `--url @file` reads its URLs from the file.
+    return request(verb, url, 'curl', webHosts(urls, proxies, unsure || urls.some((u) => String(u ?? '').startsWith('@')), ctx), ctx);
 }
 
 const WGET_TAKES = new Set([...'OoaiBtTwQPUelARDIX', '--output-document', '--output-file', '--append-output', '--input-file', '--base', '--tries', '--timeout',
@@ -750,18 +878,25 @@ const WGET_TAKES = new Set([...'OoaiBtTwQPUelARDIX', '--output-document', '--out
     '--exclude-directories', '--header', '--user', '--password', '--http-user', '--http-password', '--load-cookies', '--save-cookies', '--post-data',
     '--post-file', '--body-data', '--body-file', '--method', '--referer', '--ca-certificate', '--certificate', '--private-key', '--limit-rate']);
 
-function wget(args) {
+/** wget's options after which where it goes can't be told: URLs from a file, its own settings (a proxy), other hosts' links. */
+const WGET_ELSEWHERE = ['--input-file', '--input-metalink', '--config', '--span-hosts'];
+
+function wget(args, ctx) {
     const method = optionValue(args, ['--method']);
     const body = has(args, '--post-data', '--post-file', '--body-data', '--body-file');
     const verb = method ? method.toUpperCase() : body ? 'POST' : 'GET';
-    return READ_METHODS.has(verb) ? null : request(verb, positionals(args, WGET_TAKES)[0], 'wget');
+    if (READ_METHODS.has(verb)) return null;
+    const urls = positionals(args, WGET_TAKES);
+    const unsure = optionsOf(args, WGET_TAKES).options.some(([name, value]) => name === '-i' || name === '-H' || WGET_ELSEWHERE.includes(name)
+        || shortens(name, [...WGET_ELSEWHERE, '--execute']) || ((name === '-e' || name === '--execute') && /proxy|input/i.test(value ?? '')));
+    return request(verb, urls[0], 'wget', webHosts(urls, [], unsure, ctx), ctx);
 }
 
 const HTTPIE_TAKES = new Set([...'aAovs', '--auth', '--auth-type', '--output', '--verify', '--cert', '--cert-key', '--timeout', '--proxy', '--session',
     '--session-read-only', '--style', '--print', '--pretty', '--format-options', '--max-redirects', '--max-headers', '--boundary', '--raw', '--ssl', '--ciphers', '--default-scheme']);
 
 /** HTTPie (`http`, `https`) and xh: `http [METHOD] URL [items]`; a data item makes it a POST. */
-function httpie(args, program) {
+function httpie(args, program, ctx) {
     const pos = positionals(args, HTTPIE_TAKES);
     let at = 0;
     let method;
@@ -772,11 +907,16 @@ function httpie(args, program) {
         return m !== null && m[1] !== '==' && m[1] !== ':';
     }) || has(args, '--raw') || has(args, '-f', '--form', '--multipart');
     const verb = method ?? (data ? 'POST' : 'GET');
-    return READ_METHODS.has(verb) ? null : request(verb, url, program);
+    if (READ_METHODS.has(verb)) return null;
+    // `:3000/x` is localhost's; a proxy is `--proxy=http:http://host:port`; xh has its own names for hosts and sockets.
+    const options = optionsOf(args, HTTPIE_TAKES).options;
+    const proxies = options.filter(([name]) => name === '--proxy').map(([, value]) => String(value ?? '').replace(/^[a-z]+:(?!\/\/)/i, ''));
+    const unsure = options.some(([name]) => name === '--resolve' || name === '--unix-socket' || shortens(name, ['--proxy', '--resolve', '--unix-socket']));
+    return request(verb, url, program, webHosts([String(url ?? '').startsWith(':') ? `localhost${url}` : url], proxies, unsure, ctx), ctx);
 }
 
 /** PowerShell's web cmdlets: `-Method Post`, or a body. */
-function webCmdlet(args, program) {
+function webCmdlet(args, program, ctx) {
     const lower = args.map((a) => a.toLowerCase());
     const valueOf = (name) => {
         const at = lower.findIndex((a) => a === name || a.startsWith(`${name}:`));
@@ -788,7 +928,9 @@ function webCmdlet(args, program) {
     const verb = method ? method.toUpperCase() : body ? 'POST' : 'GET';
     if (READ_METHODS.has(verb)) return null;
     const url = valueOf('-uri') ?? args.find((a) => looksLikeUrl(a));
-    return request(verb, url, program);
+    const proxy = valueOf('-proxy');
+    // `-UnixSocket` (PowerShell 7.4) sends to a socket here, not to the URL's host.
+    return request(verb, url, program, webHosts([url], proxy === undefined ? [] : [proxy], lower.some((a) => a.startsWith('-un')), ctx), ctx);
 }
 
 const GIT_TAKES = new Set(['C', 'c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env', '--super-prefix', '--list-cmds']);
@@ -1023,27 +1165,143 @@ function deployTool(name, args) {
 }
 
 const SSH_TAKES = new Set([...'bcDEeFIiJLlmOoPpQRSWw', 'B']);
+const AUTOSSH_TAKES = new Set([...SSH_TAKES, 'M']);
+const SCP_TAKES = new Set([...'cDFiJlMPoSX']);
+const RSYNC_TAKES = new Set(['e', 'f', 'T', 'B', 'M', '@', '--rsh', '--rsync-path', '--exclude', '--include', '--filter', '--exclude-from', '--include-from', '--files-from', '--password-file',
+    '--log-file', '--partial-dir', '--temp-dir', '--backup-dir', '--suffix', '--chmod', '--chown', '--timeout', '--contimeout', '--port', '--bwlimit',
+    '--usermap', '--groupmap', '--out-format', '--log-file-format', '--remote-option', '--address', '--sockopts', '--info', '--debug', '--compare-dest', '--copy-dest',
+    '--link-dest', '--block-size', '--modify-window', '--max-size', '--min-size', '--max-delete', '--max-alloc', '--checksum-choice', '--compress-choice',
+    '--compress-level', '--skip-compress', '--iconv', '--outbuf', '--write-batch', '--only-write-batch', '--read-batch', '--protocol', '--copy-as', '--early-input',
+    '--stop-after', '--stop-at', '--checksum-seed']);
+const MOSH_TAKES = new Set(['p', '--port', '--ssh', '--server', '--client', '--predict', '--family', '--bind-server', '--experimental-remote-ip']);
+/** mosh's options that leave where it connects as it is. */
+const MOSH_PLAIN = new Set(['-a', '-n', '-4', '-6', '-p', '--port', '--predict', '--family', '--bind-server', '--experimental-remote-ip', '--server', '--ssh-pty', '--no-ssh-pty', '--init', '--no-init']);
 
 /** `[user@]host:path`, `host::module`, `scp://…`: a place on another machine. */
 const remotePath = (a) => /^[a-z][a-z0-9+.-]*:\/\//i.test(a) || (/^[^/\s:]+:/.test(a) && !/^[a-z]:[\\/]/i.test(a));
 
+/** `-J`, `ProxyJump`: jump hosts, by commas, into `via`; `none` is none, and no value can't be told. */
+function jumps(value, via) {
+    const list = String(value ?? '').trim();
+    if (list === '') return false;
+    if (list.toLowerCase() !== 'none') via.push(...list.split(',').map(hostOf));
+    return true;
+}
+
+/**
+ * One `-o` option (`Key=value`, `Key value`): a jump host or a host name
+ * goes into `via`; false when where ssh goes can't be told (a proxy, local
+ * or known-hosts command, a shared connection, names it completes itself).
+ */
+function sshOption(text, via) {
+    const m = /^\s*([A-Za-z]+)\s*(?:=\s*|\s+)(.*?)\s*$/s.exec(String(text ?? ''));
+    if (!m) return false;
+    const value = m[2].replace(/^"(.*)"$/s, '$1').toLowerCase();
+    switch (m[1].toLowerCase()) {
+        case 'proxyjump': return jumps(value, via);
+        case 'hostname': via.push(hostOf(value)); return true;
+        case 'proxycommand': case 'controlpath': case 'knownhostscommand': return value === 'none';
+        case 'permitlocalcommand': case 'canonicalizehostname': return value === 'no' || value === 'false' || value === 'none';
+        case 'localcommand': case 'canonicaldomains': case 'host': case 'match': case 'include': return false;
+        default: return true;
+    }
+}
+
+/**
+ * The machines an ssh connection reaches besides its destination, from its
+ * options (ssh's, autossh's, scp's): jump hosts, a host name given for it,
+ * where `-W` forwards to. Null when they can't be told: a config file of
+ * its own (`-F`), a shared connection (`-S`), another program run as ssh
+ * or as the server (scp's `-S` and `-D`), or an `-o` that can't be told.
+ */
+function sshVia(options, program) {
+    const via = [];
+    for (const [name, value] of options) {
+        const known = name === '-J' ? jumps(value, via)
+            : name === '-o' ? sshOption(value, via)
+            : name === '-F' ? value === 'none'
+            : name === '-S' ? value === 'none' && program !== 'scp'
+            : name !== '-D' || program !== 'scp';
+        if (!known) return null;
+        if (name === '-W' && program !== 'scp') via.push(machine(value));
+    }
+    return via;
+}
+
+/** Where a remote shell given as a command line goes besides the destination (rsync's `-e`, mosh's `--ssh`): ssh's options; null for another program, or a destination of its own. */
+function shellRoute(command) {
+    const [first, ...rest] = splitWords(String(command ?? ''));
+    if (programOf(first) !== 'ssh') return null;
+    const { options, words } = optionsOf(rest, SSH_TAKES);
+    return words.length === 0 ? sshVia(options, 'ssh') : null;
+}
+
+/**
+ * The machines ssh, autossh or mosh reaches: its destination and what its
+ * options send it through; null when they can't be told. ssh reads options
+ * before its destination and again after it, up to the command; autossh
+ * may read them anywhere, and mosh takes only the ones it knows.
+ */
+function shellHosts(name, args, env) {
+    if (name === 'ssh' || name === 'autossh') {
+        if (name === 'autossh' && env?.has('AUTOSSH_PATH')) return null;
+        const { options, words } = name === 'ssh' ? optionsOf(args, SSH_TAKES, (n) => n < 2) : optionsOf(args, AUTOSSH_TAKES);
+        const via = sshVia(options, name);
+        return via && [hostOf(words[0]), ...via];
+    }
+    if (name !== 'mosh') return null;
+    const { options, words } = optionsOf(args, MOSH_TAKES);
+    const via = [];
+    for (const [option, value] of options) {
+        const more = option === '--ssh' ? shellRoute(value) : MOSH_PLAIN.has(option) ? [] : null;
+        if (!more) return null;
+        via.push(...more);
+    }
+    return [hostOf(words[0]), ...via];
+}
+
+/**
+ * The machines scp or rsync reaches: each place on another machine it names
+ * (it copies from or to it), and what its remote shell goes through; null
+ * when they can't be told. scp reads options only before its first path,
+ * so a word after it counts as a path too; rsync reads them anywhere, and
+ * takes its remote shell from `-e` or RSYNC_RSH.
+ */
+function copyHosts(name, args, env) {
+    if (name === 'scp') {
+        const loose = optionsOf(args, SCP_TAKES);
+        const via = sshVia(loose.options, name);
+        return via && [...[...loose.words, ...optionsOf(args, SCP_TAKES, (n) => n === 0).words].filter(remotePath).map(pathHost), ...via];
+    }
+    if (env?.get('RSYNC_PROXY') || env?.get('RSYNC_CONNECT_PROG')) return null;
+    const { options, words } = optionsOf(args, RSYNC_TAKES);
+    const shells = options.filter(([option]) => option === '-e' || option === '--rsh').map(([, value]) => value);
+    const via = [];
+    for (const shell of shells.length > 0 ? shells : env?.get('RSYNC_RSH') ? [env.get('RSYNC_RSH')] : []) {
+        const more = shellRoute(shell);
+        if (!more) return null;
+        via.push(...more);
+    }
+    return [...words.filter(remotePath).map(pathHost), ...via];
+}
+
 /** ssh and the programs that copy files to another machine or a bucket; `label` names the command (`gcloud storage`). */
-function remote(name, args, label = name) {
+function remote(name, args, label = name, ctx = {}) {
     if (name === 'ssh' || name === 'mosh' || name === 'autossh' || name === 'rsh') {
         if (has(args, '-G', '-V', '-Q')) return null;
-        const [host, ...command] = positionals(args, SSH_TAKES);
+        const [host, ...command] = positionals(args, name === 'autossh' ? AUTOSSH_TAKES : name === 'mosh' ? MOSH_TAKES : SSH_TAKES);
         // A git host's shell only greets: `ssh -T git@github.com` checks a key.
         if (command.length === 0 && /^git@/.test(host ?? '')) return null;
-        return { kind: 'remote', program: name, what: `runs commands on ${placeOf(host) || 'another machine'} (${name})` };
+        return { kind: 'remote', program: name, what: `runs commands on ${placeOf(host) || 'another machine'} (${name})`, ...reaching(shellHosts(name, args, ctx.env), ctx) };
     }
     if (name === 'scp' || name === 'rsync') {
         // A dry run copies nothing: `rsync -n`, `--dry-run`.
         if (name === 'rsync' && (dryRun(args) || hasShort(args, 'n'))) return null;
-        const pos = positionals(args, name === 'scp' ? new Set([...'cDFiJlPoSX']) : new Set(['e', 'f', 'T', '--rsh', '--rsync-path', '--exclude', '--include', '--filter', '--exclude-from', '--include-from', '--files-from', '--password-file',
-            '--log-file', '--partial-dir', '--temp-dir', '--backup-dir', '--suffix', '--chmod', '--chown', '--timeout', '--contimeout', '--port', '--bwlimit']));
-        // A place on another machine after the first path is where the files go: an option's value after it is not.
-        const dest = pos.slice(1).find(remotePath);
-        return dest ? { kind: 'remote', program: name, what: `copies files to ${placeOf(dest.replace(/:.*$/, '')) || 'another machine'} (${name})` } : null;
+        // scp's paths as it reads them, its options all before them; rsync's options can come anywhere.
+        const pos = name === 'scp' ? optionsOf(args, SCP_TAKES, (n) => n === 0).words : positionals(args, RSYNC_TAKES);
+        // The last place on another machine after the first path is where the files go: an option's value after it is not.
+        const dest = pos.slice(1).filter(remotePath).at(-1);
+        return dest ? { kind: 'remote', program: name, what: `copies files to ${placeOf(dest.replace(/:.*$/, '')) || 'another machine'} (${name})`, ...reaching(copyHosts(name, args, ctx.env), ctx) } : null;
     }
     if (name === 'rclone') {
         const pos = positionals(args, new Set(['--config', '--include', '--exclude', '--filter', '--transfers', '--checkers', '--bwlimit', '--log-file', '--log-level', '--max-age', '--min-age']));
@@ -1112,11 +1370,12 @@ const SPAWNS = /\b(?:subprocess|os\.system|os\.popen|os\.exec\w*|pexpect|child_p
 /**
  * What code sends: a web request with a method that changes something, or
  * an email; or a command line it runs (a string that starts with a known
- * program, or a list of its words) that sends.
+ * program, or a list of its words) that sends. `ctx.trustedHosts` and
+ * `ctx.trustedSends` are sendOf's options of those names.
  * @returns {{kind: string, what: string, program: string}|null}
  */
 export function codeSendOf(code, ctx = { depth: 0 }, program = 'code') {
-    return shown(codeFound(String(code ?? ''), ctx, program));
+    return shown(codeFound(String(code ?? ''), trusting(ctx, ctx), program));
 }
 
 function codeFound(text, ctx, program) {
@@ -1307,8 +1566,11 @@ function scriptSendOf(path, how, ctx) {
     const file = (ctx.depth ?? 0) < MAX_DEPTH ? readScript(ctx, shown) : undefined;
     if (file) {
         const deeper = { ...ctx, depth: (ctx.depth ?? 0) + 1, cwd: dirname(file.full) };
+        const trusted = ctx.trustedSends?.length ?? 0;
         const inside = contentSendOf(file.text, how, deeper, shown);
         if (inside) return runs(shown, inside);
+        // Its sends all reach machines the user trusts: they are what its name says it does.
+        if ((ctx.trustedSends?.length ?? 0) > trusted) return null;
     }
     return sendingName(name, file !== undefined) ? byName(shown, name, file !== undefined, name) : null;
 }
@@ -1356,8 +1618,10 @@ function packageScript(program, name, ctx, prefix, label = `${program} run ${nam
         const deeper = { ...ctx, depth: (ctx.depth ?? 0) + 1, cwd: dirname(pkg.full) };
         // The script runs with the words given after it: `npm run release -- --dry-run`.
         const line = (key) => (key === name && extra.length > 0 ? `${scripts[key]} ${extra.map(shellWord).join(' ')}` : scripts[key]);
+        const trusted = ctx.trustedSends?.length ?? 0;
         const inside = combined([`pre${name}`, name, `post${name}`].map((key) => (typeof scripts[key] === 'string' ? lineSendOf(line(key), deeper) : null)));
         if (inside) return runs(label, inside);
+        if ((ctx.trustedSends?.length ?? 0) > trusted) return null;
     }
     const known = scripts !== undefined && typeof scripts?.[name] === 'string';
     return sendingName(name, known) ? byName(label, name, known, program) : null;
@@ -1447,8 +1711,10 @@ function make(args, ctx) {
     const vars = makefile ? makeVars(makefile.text, words.filter((w) => /^[A-Za-z_][A-Za-z0-9_.-]*=/.test(w))) : undefined;
     return combined(wanted.map((target) => {
         if (makefile && (ctx.depth ?? 0) < MAX_DEPTH) {
+            const trusted = ctx.trustedSends?.length ?? 0;
             const inside = makeSendOf(makefile, target, { ...where, depth: (ctx.depth ?? 0) + 1, cwd: dirname(makefile.full) }, vars);
             if (inside) return runs(`make ${target}`, inside);
+            if ((ctx.trustedSends?.length ?? 0) > trusted) return null;
         }
         return sendingName(target, makefile !== undefined) ? byName(`make ${target}`, target, makefile !== undefined, 'make') : null;
     }));
@@ -1547,11 +1813,30 @@ function interpreter(name, args, ctx, inputs) {
 
 // ── One command, one line ─────────────────────────────────────────────────
 
-/** What one simple command (its words) sends, or null. */
+/** What runs a command and adds words to it or sends what it sends through a proxy: `xargs curl …`, `torsocks ssh …`. */
+const UNROUTED = new Set(['xargs', 'torsocks', 'proxychains', 'proxychains4', 'tsocks']);
+
+/**
+ * What one simple command (its words) sends, or null. A send that reaches
+ * only machines the user trusts (ctx.trusted, from trustedHosts) is none:
+ * it goes on ctx.trustedSends, for the log.
+ */
 function wordsSendOf(rawWords, ctx, inputs = []) {
+    const found = commandSendOf(rawWords, ctx, inputs);
+    if (!found?.hosts || !(ctx.trusted instanceof Set) || !found.hosts.every((host) => ctx.trusted.has(host))) return found;
+    ctx.trustedSends?.push(found);
+    return null;
+}
+
+/** What one simple command sends, with the machines it reaches (`hosts`) where they can be told. */
+function commandSendOf(rawWords, ctx, inputs) {
     const assigned = new Map();
-    const words = commandOf(rawWords, assigned);
+    const wraps = [];
+    const words = commandOf(rawWords, assigned, wraps);
     if (words.length === 0) return null;
+    // Run by something that adds words to it, sends it through a proxy or sets variables from elsewhere (`op run --`):
+    // the machines what it runs reaches can't be told, so none is trusted.
+    if (wraps.some((name) => UNROUTED.has(name) || WRAP[name] === null)) ctx = { ...ctx, unrouted: true };
     // A script it runs sees the variables set for it: `DEPLOY_URL=http://… ./deploy.sh`.
     if (assigned.size > 0) {
         const env = new Map(ctx.env ?? []);
@@ -1597,10 +1882,10 @@ function wordsSendOf(rawWords, ctx, inputs = []) {
         return null;
     }
     switch (name) {
-        case 'curl': return ctx.shell === 'pwsh' && args.some((a) => /^-(method|body|uri|infile)(:|$)/i.test(a)) ? webCmdlet(args, 'curl') : curl(args);
-        case 'wget': return ctx.shell === 'pwsh' && args.some((a) => /^-(method|body|uri|infile)(:|$)/i.test(a)) ? webCmdlet(args, 'wget') : wget(args);
-        case 'http': case 'https': case 'xh': case 'xhs': return httpie(args, name);
-        case 'invoke-webrequest': case 'invoke-restmethod': case 'iwr': case 'irm': return webCmdlet(args, name);
+        case 'curl': return ctx.shell === 'pwsh' && args.some((a) => /^-(method|body|uri|infile)(:|$)/i.test(a)) ? webCmdlet(args, 'curl', ctx) : curl(args, ctx);
+        case 'wget': return ctx.shell === 'pwsh' && args.some((a) => /^-(method|body|uri|infile)(:|$)/i.test(a)) ? webCmdlet(args, 'wget', ctx) : wget(args, ctx);
+        case 'http': case 'https': case 'xh': case 'xhs': return httpie(args, name, ctx);
+        case 'invoke-webrequest': case 'invoke-restmethod': case 'iwr': case 'irm': return webCmdlet(args, name, ctx);
         case 'send-mailmessage': return { kind: 'email', program: name, what: 'sends email (Send-MailMessage)' };
         case 'git': return git(args);
         case 'gh': case 'glab': case 'hub': return forge(args, name);
@@ -1619,7 +1904,7 @@ function wordsSendOf(rawWords, ctx, inputs = []) {
             return table(PUBLISH[name], args, name, 'publish');
         case 'ssh': case 'mosh': case 'autossh': case 'rsh': case 'scp': case 'rsync': case 'rclone': case 's3cmd': case 'gsutil': case 'azcopy':
         case 'sftp': case 'ftp': case 'lftp': case 'tftp': case 'nc': case 'socat': case 'telnet': case 'websocat': case 'wscat': case 'grpcurl':
-            return remote(name, args);
+            return remote(name, args, name, ctx);
         case 'sendmail': case 'mail': case 'msmtp': case 'swaks': case 'ssmtp': case 'esmtp': return mail(name, args);
         case 'heroku': case 'fly': case 'vercel': case 'firebase': case 'stripe': case 'goreleaser': case 'semantic-release': case 'releaseIt':
         case 'ansible-playbook': case 'ansible':
@@ -1710,6 +1995,9 @@ function pwshLineSendOf(text, outer) {
             k += 2;
         }
         if (/^\$\w+$/.test(target ?? '') && k === all.length - 1 && all[k].startsWith('@{')) tables.set(target.slice(1).toLowerCase(), splatted(all[k]));
+        // `$env:HTTPS_PROXY = '…'`: a variable what it runs next sees (a proxy, for the trusted-host check); a value that isn't one word is unknown.
+        const variable = /^\$(?:\{env:([^}]+)\}|env:(\w+))$/i.exec(target ?? '');
+        if (variable) here = { ...here, env: new Map([...(here.env ?? []), [variable[1] ?? variable[2], k === all.length - 1 && marks[k] !== '$' ? all[k] : '$?']]) };
         while (k < all.length && PWSH_KEYWORDS.has(all[k].toLowerCase())) {
             k += ['function', 'filter', 'workflow', 'configuration', 'class', 'enum', 'data'].includes(all[k].toLowerCase()) ? 2 : 1;
             // Its condition, its types, its switches (`switch -Regex`) and its blocks.
@@ -1786,21 +2074,34 @@ function listOf(items) {
  * @param {'bash'|'pwsh'} [options.shell] - which shell runs it.
  * @param {string} [options.cwd] - the folder it runs in, for the files it names.
  * @param {(path: string) => string|undefined} [options.read] - a file's text by its full path, or undefined (only files the caller lets it read).
+ * @param {string[]} [options.trustedHosts] - machines the user trusts (`nas`, `user@nas`, `100.64.0.7`, `[fd7a::1]:22`): a send
+ *   that reaches only these is none (the user's config.trustedHosts).
+ * @param {object[]} [options.trustedSends] - gets each send left out for that, for the caller's log.
  * @returns {{kind: string, what: string, program: string, unread?: string[]}|null} what it sends, said after "it": "sends a POST to
  *   127.0.0.1:8787/deploy (curl)"; `unread` names what it runs that the plugin couldn't see into, when the send rests on a name.
  */
 export function sendOf(command, options = {}) {
     if (typeof command !== 'string' || command.trim() === '') return null;
-    const ctx = { depth: 0, cwd: options.cwd, read: options.read };
+    const ctx = trusting({ depth: 0, cwd: options.cwd, read: options.read }, options);
     return shown(options.shell === 'pwsh' ? pwshLineSendOf(command, ctx) : lineSendOf(command, ctx));
 }
 
-/** A send as the user and the coordinator read it: no password or token from a URL. */
+/** A context that knows the machines the user trusts (trustedHosts, read as hostOf reads them) and keeps the sends to them (trustedSends). */
+function trusting(ctx, { trustedHosts, trustedSends } = {}) {
+    if (ctx.trusted || !Array.isArray(trustedHosts)) return ctx;
+    const trusted = new Set(trustedHosts.map(hostOf).filter(Boolean));
+    return trusted.size === 0 ? ctx : { ...ctx, trusted, trustedSends: Array.isArray(trustedSends) ? trustedSends : [] };
+}
+
+/** A send as the user and the coordinator read it: no password or token from a URL, and not the machines it reaches. */
 function shown(found) {
-    return found && {
+    if (!found) return found;
+    const send = {
         ...found, program: withoutCredentials(found.program), what: withoutCredentials(found.what),
         ...(found.unread ? { unread: found.unread.map(withoutCredentials) } : {}),
     };
+    delete send.hosts;
+    return send;
 }
 
 /**
