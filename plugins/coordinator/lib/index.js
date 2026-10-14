@@ -83,6 +83,16 @@ export const Config = z.object({
      * as yours").
      */
     guardedTools: live(z.union([z.array(z.string()), z.dict(z.array(z.string()))]).default([])),
+    /**
+     * Machines the user trusts, such as their own NAS: host names or
+     * addresses (`nas`, `100.64.0.7`; a user, a port or brackets are left
+     * off), matched without regard to case. A thread's command whose only
+     * sends reach these (ssh, mosh or autossh to one, scp or rsync to or
+     * from one, a web request to one) runs without asking; one that also
+     * sends elsewhere asks about the rest. Live, so an edit doesn't restart
+     * the plugin.
+     */
+    trustedHosts: live(z.array(z.string()).default([])),
     /** Action log, mode 600, never prompt text. Empty turns it off. */
     logFile: z.string().default('~/.dsh/coordinator/coordinator.log'),
 });

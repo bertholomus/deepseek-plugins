@@ -4372,6 +4372,70 @@ test('rule 6, held: a thread\'s command that sends waits for the user in DSH\'s 
     assert.match(log(), / error send-check gone\n/);
 });
 
+test('rule 6, trusted hosts: a thread\'s command whose sends reach only machines in trustedHosts runs without a prompt, a subagent\'s and one that never asks too, logged; one that also sends elsewhere asks about that alone; the list is live', async () => {
+    const work = mkdtempSync(join(tmpdir(), 'projects-work-'));
+    writeFileSync(join(work, 'backup.sh'), '#!/bin/sh\nrsync -av dist/ frankennas:/tank/www/\n');
+    writeFileSync(join(work, 'package.json'), JSON.stringify({ scripts: { deploy: 'scp -r dist bertholomus@100.108.23.102:/tank/www' } }));
+    const { host, dir, config } = setup({ trustedHosts: ['frankennas', '100.108.23.102', '192.168.1.49'] }, undefined, { presets: true }, { folder: work });
+    const policies = new Map();
+    host.services.approval = { effectivePolicy: (session) => policies.get(session.id) ?? 'ask' };
+    await tick();
+    const coord = coordinatorOf(host);
+    const log = () => readFileSync(join(dir, 'coordinator.log'), 'utf8');
+    let step = 0;
+    const gate = (agent, name, args, own = { kind: 'allow' }, inStep = ++step) => {
+        const callId = `pre-${++toolCalls}`;
+        agent.ctx.sessionEvent({ type: 'tool/call', data: { turn: 1, step: inStep, callId, name, arguments: args } });
+        return host.waterfall('tools/pre-execute', { name, arguments: args, agent, callId }, () => Promise.resolve(own));
+    };
+    await coord.ctx.call('thread_start', { ask: 'Back up the build.', title: 'Backup', brief: 'Copy dist to the backup machine.' });
+    const t1 = [...host.live.values()].find((a) => host.sessions.get(a.id).title === 'Backup');
+    const allowed = { kind: 'allow' };
+
+    // The brief's commands run without a prompt: a command, a remote delete, a copy each way, a POST.
+    for (const command of ['ssh frankennas ls /tank', "ssh bertholomus@100.108.23.102 'rm -rf /tmp/x'", 'scp f frankennas:/tank/x', 'rsync -a frankennas:/tank/a ./',
+        'curl -X POST http://100.108.23.102:18780/v1/x', 'ssh FrankenNAS zfs list -o name,used', './backup.sh', 'npm run deploy']) {
+        assert.deepEqual(await gate(t1, 'bash', { command }), allowed, command);
+    }
+    assert.deepEqual(await gate(t1, 'run_code', { code: "import subprocess\nsubprocess.run(['ssh', 'frankennas', 'ls', '/tank'])" }), allowed);
+    assert.deepEqual(await gate(t1, 'pwsh', { command: 'Invoke-RestMethod -Method Post -Uri http://192.168.1.49:8080/v1/x' }), allowed);
+    // Another machine still asks, and a command that also sends elsewhere asks about that send alone.
+    assert.deepEqual(await gate(t1, 'bash', { command: 'ssh ascent-01 hostname' }), {
+        kind: 'ask',
+        reason: 'the command runs commands on ascent-01 (ssh)',
+        displayReason: { en: 'This command runs commands on ascent-01 (ssh). A thread asks you before each command that sends outside the workspace.' },
+    });
+    assert.equal((await gate(t1, 'bash', { command: 'ssh frankennas ls && curl -X POST https://example.com' })).reason, 'the command sends a POST to example.com (curl)');
+    assert.equal((await gate(t1, 'bash', { command: 'git push' })).reason, 'the command pushes to its remote (git push)');
+    assert.equal((await gate(t1, 'bash', { command: 'ssh -J jump.example.com frankennas ls' })).kind, 'ask');
+    assert.equal((await gate(t1, 'bash', { command: 'HTTPS_PROXY=http://proxy.example.com:8080 curl -X POST https://frankennas/x' })).kind, 'ask');
+    // A delete on this machine keeps its own check.
+    assert.equal((await gate(t1, 'bash', { command: 'scp f frankennas:/tank/x && rm -f .git/index.lock' })).reason,
+        'the command deletes .git/index.lock (rm); if the user doesn\'t allow it, hand back with status needs_decision');
+
+    // A thread whose approvals never ask, and a thread's subagent, run a trusted send too; any other send is refused as before.
+    policies.set(t1.id, 'never');
+    assert.deepEqual(await gate(t1, 'bash', { command: 'ssh frankennas ls /tank' }), allowed);
+    assert.equal((await gate(t1, 'bash', { command: 'ssh ascent-01 hostname' })).kind, 'deny');
+    policies.delete(t1.id);
+    const sub = host.wake('sub-1');
+    sub.session.header = { origin: 'subagent', parentSession: t1.id };
+    assert.deepEqual(await gate(sub, 'bash', { command: 'scp f frankennas:/tank/x' }), allowed);
+    assert.match((await gate(sub, 'bash', { command: 'scp f ascent-01:/tmp/x' })).reason, /^Not run: the command copies files to ascent-01 \(scp\)\. A subagent doesn't send/);
+
+    // The list is live: emptied, the same command asks; another machine added, it runs.
+    saveDefaults(host, config, { trustedHosts: [] });
+    assert.equal((await gate(t1, 'bash', { command: 'ssh frankennas ls /tank' })).reason, 'the command runs commands on frankennas (ssh)');
+    saveDefaults(host, config, { trustedHosts: ['ascent-01'] });
+    assert.deepEqual(await gate(t1, 'bash', { command: 'ssh ascent-01 hostname' }), allowed);
+
+    // The log says whose and which program, never the command, a host or a path.
+    for (const program of ['ssh', 'scp', 'rsync', 'curl', 'invoke-restmethod']) assert.match(log(), new RegExp(` send-trusted dsh-plugins/t1 ${program}\n`), program);
+    assert.match(log(), / send-trusted dsh-plugins\/t1 subagent scp\n/);
+    assert.match(log(), / send-ask dsh-plugins\/t1 request curl\n/);
+    assert.doesNotMatch(log(), /frankennas|100\.108|192\.168|tank|example\.com|ascent/i);
+});
+
 test('rule 6, held for deletes: a thread\'s command that deletes files it didn\'t create waits for the user, every time; its own files, the temp folder and mktemp\'s are free; a subagent\'s and one that can\'t ask are refused, and the coordinating chat keeps the user\'s access', async () => {
     const work = mkdtempSync(join(tmpdir(), 'projects-work-'));
     mkdirSync(join(work, 'build'));

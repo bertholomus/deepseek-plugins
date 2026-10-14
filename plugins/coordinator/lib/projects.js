@@ -858,15 +858,20 @@ export class ProjectManager {
      * second send from the step of one already asked is refused, unasked,
      * and the thread sees the answer before it sends again (settleSend).
      * A thread whose approvals never ask and a thread's subagent are
-     * refused. Called for every session's calls (index.js) once DSH's own
-     * checks let one run, or ask about it (`asked`: a hook's or a review's
-     * ask): then DSH's words follow the plugin's on the one prompt. DSH asks
-     * to widen a call's sandbox later, in the tool itself, once this prompt
-     * is answered. Undefined leaves DSH's decision: any other call, a
-     * coordinating chat and its subagents (they keep the user's own
-     * access), any session outside them, and any error (a check against a
-     * mistake, not a sandbox). `out`, when given, gets what it sends
-     * (holdCommand). Never logs the command.
+     * refused. A send that reaches only machines the user trusts
+     * (config.trustedHosts: ssh to one, scp or rsync to or from one, a web
+     * request to one) is none, for them too: a command that also sends
+     * elsewhere asks about the rest alone, and one with no other send
+     * runs, logged as send-trusted. Called for every session's calls
+     * (index.js) once DSH's own checks let one run, or ask about it
+     * (`asked`: a hook's or a review's ask): then DSH's words follow the
+     * plugin's on the one prompt. DSH asks to widen a call's sandbox later,
+     * in the tool itself, once this prompt is answered. Undefined leaves
+     * DSH's decision: any other call, a coordinating chat and its
+     * subagents (they keep the user's own access), any session outside
+     * them, and any error (a check against a mistake, not a sandbox).
+     * `out`, when given, gets what it sends (holdCommand). Never logs the
+     * command.
      */
     holdSend(exec, asked, out = undefined) {
         try {
@@ -883,11 +888,19 @@ export class ProjectManager {
             // Where the command runs: on DSH 0.2.1, the session's working directory.
             const cwd = this.cwdOf(session) ?? first;
             const here = typeof args.workdir === 'string' && args.workdir.trim() !== '' ? resolve(expand(cwd), expand(args.workdir.trim())) : expand(cwd);
+            // The machines the user trusts (config.trustedHosts, read now): a send that reaches only these is no send.
+            const trustedHosts = liveValue(this.config.trustedHosts);
+            const trustedSends = [];
             const found = exec.name === 'run_code'
-                ? codeSendOf(String(args.code ?? ''), { depth: 0, cwd: here, read: (path) => textInside(roots, path) }, 'run_code')
-                : sendOf(String(args.command ?? ''), { shell: exec.name, cwd: here, read: (path) => textInside(roots, path) });
-            if (!found) return undefined;
-            const label = `${who.projectId}/${who.threadId}${own ? '' : ' subagent'} ${found.kind} ${String(found.program).slice(0, 40)}`;
+                ? codeSendOf(String(args.code ?? ''), { depth: 0, cwd: here, read: (path) => textInside(roots, path), trustedHosts, trustedSends }, 'run_code')
+                : sendOf(String(args.command ?? ''), { shell: exec.name, cwd: here, read: (path) => textInside(roots, path), trustedHosts, trustedSends });
+            const whose = `${who.projectId}/${who.threadId}${own ? '' : ' subagent'}`;
+            if (!found) {
+                // Its sends reach only trusted machines: it runs, a subagent's and one whose approvals never ask too.
+                if (trustedSends.length > 0) this.log(`send-trusted ${whose} ${[...new Set(trustedSends.map((s) => s.program))].join('+').slice(0, 40)}`);
+                return undefined;
+            }
+            const label = `${whose} ${found.kind} ${String(found.program).slice(0, 40)}`;
             if (!own) {
                 this.log(`send-refused ${label}`);
                 return { kind: 'deny', reason: SEND_REASONS.subagent(found.what) };
