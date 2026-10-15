@@ -4651,3 +4651,50 @@ test('rule 6, held for deletes: a thread\'s command that deletes files it didn\'
     assert.equal(isFree({ program: 'rm', path: '/tmp/foo-*', full: null, glob: '/tmp/foo-' }, { work: ['/w'] }), true);
     assert.equal(isFree({ program: 'rm', path: '/tmp/*', full: null, glob: '/tmp/' }, { work: ['/w'] }), false);
 });
+
+test('news: the notifications sink reads the service off its scope, and a throwing sink never fails a handback', async () => {
+    // cordis hands inject's callback a scope that throws on a property it did not inject. The live bug read `notify`
+    // off that scope ("cannot get property "notify" without inject"), which failed every thread_handback after its
+    // delivery, so threads handed back in a loop and each idle review nudged them again.
+    let notified = 0;
+    const host = fakeHost();
+    host.services.notifications = { notify: () => { notified += 1; } };
+    const inject = host.inject;
+    host.inject = (names, fn) => inject.call(host, names, (scope) => fn(new Proxy(scope, {
+        get(target, key) {
+            if (key === 'notify') throw new Error('cannot get property "notify" without inject');
+            return target[key];
+        },
+    })));
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    plugin.apply(host, plugin.Config({ threadEffort: 'high', storeFile: join(dir, 'coordinator.json'), memoryDir: join(dir, 'memory'), logFile: join(dir, 'coordinator.log') }));
+    host.coordinated = coordinateIn(host, openChat(host, CHAT, { title: 'DSH Plugins', folder: '/work/dsh' }));
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('thread_start', { ask: 'Add CI that runs our tests.', title: 'Add CI', brief: 'Add a workflow.' });
+    const thread = [...host.live.values()].find((a) => a.id !== coord.id);
+    thread.ctx.emitStatus(thread, 'running');
+    assert.equal(await thread.ctx.call('thread_handback', { status: 'done', summary: 'CI added in .github/workflows/test.yml' }), 'Handback delivered to the coordinator.');
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    assert.equal(notified, 1, 'the system notification went out through the service');
+    assert.equal(host.sessions.get(coord.id).prompts.length, 1, 'one handback, no idle note');
+});
+
+test('news: a sink that throws is logged, and the handback still reads as delivered', async () => {
+    const host = fakeHost();
+    host.services.notifications = { notify: () => { throw new Error('notifier down'); } };
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    plugin.apply(host, plugin.Config({ threadEffort: 'high', storeFile: join(dir, 'coordinator.json'), memoryDir: join(dir, 'memory'), logFile: join(dir, 'coordinator.log') }));
+    host.coordinated = coordinateIn(host, openChat(host, CHAT, { title: 'DSH Plugins', folder: '/work/dsh' }));
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('thread_start', { ask: 'Add CI that runs our tests.', title: 'Add CI', brief: 'Add a workflow.' });
+    const thread = [...host.live.values()].find((a) => a.id !== coord.id);
+    thread.ctx.emitStatus(thread, 'running');
+    assert.equal(await thread.ctx.call('thread_handback', { status: 'done', summary: 'CI added in .github/workflows/test.yml' }), 'Handback delivered to the coordinator.');
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    assert.equal(host.sessions.get(coord.id).prompts.length, 1, 'one handback, no idle note');
+    assert.match(readFileSync(join(dir, 'coordinator.log'), 'utf8'), /error news-sink .*notifier down/);
+});

@@ -3012,7 +3012,12 @@ export class ProjectManager {
         this.log(`news ${projectId}/${news.thread} ${news.kind}${item.status ? ` ${item.status}` : ''} seq=${seq}`);
         // The notifications plugin's sink (apply sets it), for a system notification while no window
         // is looking. That plugin gates the kinds on its own settings; absent, nothing sends.
-        this.newsSink?.({ ...item, session: this.store.thread(projectId, news.thread)?.sessionId, projectId });
+        try {
+            this.newsSink?.({ ...item, session: this.store.thread(projectId, news.thread)?.sessionId, projectId });
+        } catch (error) {
+            // The message is already with the coordinator: a failed notification must not fail it.
+            this.log(`error news-sink ${projectId}/${news.thread} ${String(error?.message ?? error).slice(0, 200)}`);
+        }
     }
 
     /** The user has seen a coordinating chat's news up to `seq` (all of it when omitted): they opened the chat. */

@@ -107,7 +107,12 @@ export function apply(ctx, config) {
 
     // System notifications for its news (plugins/notifications), while no window is looking: that
     // plugin gates the kinds on its own settings, and is absent when it is off or not installed.
-    ctx.inject(['notifications'], (notifications) => {
+    // The callback gets a scope, not the service: read the service off it (cordis throws on a property the scope
+    // didn't inject). A notification is a side effect and never fails the delivery that raised it: a thrown sink used
+    // to fail thread_handback after the coordinator already had the handback, so the thread handed back again and
+    // again, and the idle review nudged it each time.
+    ctx.inject(['notifications'], (scope) => {
+        const notifications = scope.notifications;
         const sink = (item) => notifications.notify({
             title: coordinatorNewsLine(item),
             kind: item.kind,
