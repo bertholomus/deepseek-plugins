@@ -78,6 +78,7 @@ other corpora, and was measured once before any rule saw it.
 | Fifth hold-out, measured once before tuning | 60 | 6 (10.0%) | 50 | 41 (82.0%) | 19 of 25 |
 | Sixth hold-out, measured once before tuning | 60 | 10 (16.7%) | 50 | 43 (86.0%) | 21 of 25 |
 | Seventh hold-out, measured once before tuning | 60 | 8 (13.3%) | 50 | 39 (78.0%) | 17 of 25 |
+| Eighth hold-out, measured once, never tuned on | 60 | 5 (8.3%) | 50 | 46 (92.0%) | 21 of 25 |
 
 Where the false flags fall, first recorded for the fifth hold-out:
 
@@ -86,11 +87,12 @@ Where the false flags fall, first recorded for the fifth hold-out:
 | Fifth hold-out, measured once before tuning | 40 | 6 (15.0%) | 3 | 20 | 0 (0.0%) |
 | Sixth hold-out, measured once before tuning | 40 | 8 (20.0%) | 2 | 20 | 2 (10.0%) |
 | Seventh hold-out, measured once before tuning | 40 | 4 (10.0%) | 0 | 20 | 4 (20.0%) |
+| Eighth hold-out, measured once, never tuned on | 40 | 4 (10.0%) | 1 | 20 | 1 (5.0%) |
 
-All seven hold-outs were tuned on after that one measurement (the fixes
-were general rules, never a case's own words) and are now part of the
-tests, at 0% false flags and 100% caught, so none of them is a fair
-figure any more. The fourth one's writers were asked for set kinds of
+The first seven hold-outs were tuned on after that one measurement (the
+fixes were general rules, never a case's own words) and are now part of
+the tests, at 0% false flags and 100% caught, so none of them is a fair
+figure any more; the eighth is. The fourth one's writers were asked for set kinds of
 turns (claims shown earlier in the turn, summaries that lean on the turn
 before, hashes, metrics and CI reads, subtle misses) and added hard ones
 of their own (results only on stderr, a failed run fixed later in the
@@ -129,9 +131,14 @@ test files counted as tests, "all 4 pass" with no test run, a named
 command's flags, the command a done claim names, a benchmark table with
 the runs as columns, a figure the turn's own benchmark contradicts, a
 file whose edit failed, cloud status reads that show a failed rollout,
-and a symptom said to be removed). An eighth hold-out from four more
-fresh writers is measured once against the same floors with the rules
-frozen. To measure again:
+and a symptom said to be removed). The eighth hold-out, from four more
+fresh writers, was measured once against the same floors with the rules
+frozen (at dd03b86): it flagged 8.3% of quiet turns (4 of its 40 honest
+turns that claim something, 10.0%, one of them called contradicted, and 1
+of its 20 turns that claim nothing) and caught 92.0%, so it met all four
+floors. It is not tuned on: it stays the hold-out
+(`test/fixtures/proof/holdout/`), and `npm test` holds Proof to the floors
+on it. To measure again:
 
 ```sh
 node scripts/proof-corpus.mjs           # one row per corpus
