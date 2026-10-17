@@ -10,6 +10,16 @@ import { openWork } from './notes.js';
 /** How many sessions the page lists. */
 const MAX_SESSIONS = 80;
 
+/** A log entry in a few words, for its session's row ("last: …"). */
+export function lastWords(entry) {
+    if (entry.kind === 'ask') return 'asked you';
+    const text = String(entry.text ?? '').trim().replace(/\.$/, '');
+    return text ? `${text[0].toLowerCase()}${text.slice(1)}` : '';
+}
+
+/** The sessions the page lists: not a subagent's, not a blank one. */
+const listed = (row) => !row.parentSessionId && row.origin !== 'subagent' && !row.blank;
+
 /** The page's view of everything Autopilot knows. */
 export async function pageState({ pilot, watch, journal, config }) {
     const rows = await watch.list();
@@ -18,7 +28,7 @@ export async function pageState({ pilot, watch, journal, config }) {
     for (const entry of journal.list({ limit: 400 })) if (entry.sessionId && !latest.has(entry.sessionId)) latest.set(entry.sessionId, entry);
     const sessions = [];
     for (const row of rows) {
-        if (row.parentSessionId || row.origin === 'subagent' || row.blank) continue;
+        if (!listed(row)) continue;
         if (sessions.length >= MAX_SESSIONS) break;
         const s = pilot.data.sessions[row.sessionId] ?? {};
         const last = latest.get(row.sessionId);
@@ -34,7 +44,7 @@ export async function pageState({ pilot, watch, journal, config }) {
             ...(pending[row.sessionId] ? { next: pending[row.sessionId] } : {}),
             ...(s.backedOff ? { backedOff: s.backedOff } : {}),
             ...(s.gaveUp ? { gaveUp: s.gaveUp } : {}),
-            ...(last ? { last: { text: last.text, state: last.state, at: last.at } } : {}),
+            ...(last ? { last: { text: lastWords(last), state: last.state, at: last.at } } : {}),
         });
     }
     const hourAgo = Date.now() - 3600000;
@@ -50,7 +60,7 @@ export async function pageState({ pilot, watch, journal, config }) {
             resumeAfterRestart: config.resumeAfterRestart !== false,
         },
         notesLastHour: pilot.data.notes.filter((at) => at > hourAgo).length,
-        watching: rows.filter((row) => !row.parentSessionId && row.origin !== 'subagent').length,
+        watching: rows.filter(listed).length,
         sessions,
         asks: (watch.asks?.() ?? []).filter((ask) => ask.source === 'Autopilot'),
         log: journal.list({ limit: 150 }),

@@ -6,6 +6,25 @@
  * @module suite/shared/words
  */
 
+/**
+ * A model or provider error in plain words: DSH passes on the provider's
+ * answer as it came (`400: {"error":{"message":"…"}}`), and a person needs
+ * its message, not its JSON.
+ * @param {unknown} text
+ */
+export function plainError(text) {
+    const raw = String(text ?? '').trim();
+    const json = /^(?:(\d{3})\s*:?\s*)?(\{[\s\S]*\})$/.exec(raw);
+    if (json) {
+        try {
+            const body = JSON.parse(json[2]);
+            const message = body?.error?.message ?? body?.message ?? (typeof body?.error === 'string' ? body.error : undefined);
+            if (typeof message === 'string' && message.trim() !== '') return json[1] ? `${json[1]}: ${message.trim()}` : message.trim();
+        } catch {}
+    }
+    return raw;
+}
+
 /** Whether a turn end means DSH stopped under a running turn (a restart, a crash, a reload). */
 export function cutOff(end) {
     return Boolean(end) && (end.kind === 'interrupted' || (end.kind === 'aborted' && end.cause === 'disposed'));

@@ -11,7 +11,7 @@
  *
  * @module dsh-plugin-session-watch/remote
  */
-import { bindTypertRemote } from '@deepseek-ai/dsh-typert-protocol';
+import { Remote, bindTypertRemote } from '@deepseek-ai/dsh-typert-protocol';
 
 /** Wire namespace: the window calls `/api/dsh-plugin-session-watch/<method>`. */
 export const NAMESPACE = 'dsh-plugin-session-watch';
@@ -32,10 +32,13 @@ export class SessionWatchRemote {
         this.typertRemote = bindTypertRemote(this, SERVICE, { namespace: NAMESPACE });
     }
 
-    /** Answer when a channel moves past `since`, or after `timeoutMs` (at most 25 s). */
-    async wait(since, timeoutMs) {
+    /**
+     * Answer when a channel moves past `since`, or after `timeoutMs` (at most
+     * 25 s). DSH aborts `signal` when the window goes away, which ends the wait.
+     */
+    async wait(since, timeoutMs, signal) {
         const ms = Number.isFinite(timeoutMs) ? Math.min(Math.max(timeoutMs, 0), MAX_WAIT_MS) : MAX_WAIT_MS;
-        return this.hub.wait(since, ms);
+        return this.hub.wait(since, ms, signal);
     }
 
     /** Every session DSH lists, with the watcher's state and its state word. */
@@ -43,3 +46,14 @@ export class SessionWatchRemote {
         return { items: await this.watch.list() };
     }
 }
+
+/** Mark methods the way the `@Remote` decorator does in DSH's TypeScript: DSH's gateway serves only marked methods. */
+function markRemote(Class, names) {
+    for (const name of names) {
+        Remote(Class.prototype[name], {
+            kind: 'method', name, static: false, private: false,
+            addInitializer(init) { init.call(Object.create(Class.prototype)); },
+        });
+    }
+}
+markRemote(SessionWatchRemote, ['wait', 'sessions']);

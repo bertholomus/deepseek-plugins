@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { asksSomeone, count, cutOff, decisionIn, spanWords, stateWord, timeWords } from '../shared/host/words.js';
+import { asksSomeone, count, cutOff, decisionIn, plainError, spanWords, stateWord, timeWords } from '../shared/host/words.js';
 import { Hub } from '../shared/host/hub.js';
 import { Journal } from '../shared/host/journal.js';
 import { JsonStore, dshHome, ensurePrivateDir, pluginDir, readJson, writeAtomic } from '../shared/host/files.js';
@@ -65,6 +65,16 @@ test('words: whether a reply ends by asking a person, read from its last lines',
         undefined,
     ]) assert.equal(asksSomeone(statement), false, String(statement));
     assert.equal(asksSomeone(`Should I start?\n${'line\n'.repeat(10)}All done.`), false, 'only the end of the reply counts');
+});
+
+test('words: a provider\'s error in plain words, its JSON reduced to the message', () => {
+    assert.equal(plainError('400: {"message":"The model refused this request.","type":"invalid_request_error"}'), '400: The model refused this request.');
+    assert.equal(plainError('429 {"error":{"message":"Rate limit reached for requests","type":"requests"}}'), '429: Rate limit reached for requests');
+    assert.equal(plainError('{"error":"overloaded"}'), 'overloaded');
+    assert.equal(plainError('500 Internal Server Error'), '500 Internal Server Error', 'plain text stays as it is');
+    assert.equal(plainError('503: {not json}'), '503: {not json}', 'broken JSON stays as it came');
+    assert.equal(plainError('{"code":7}'), '{"code":7}', 'JSON without a message stays as it came');
+    assert.equal(plainError(undefined), '');
 });
 
 test('words: times and spans in plain words', () => {
@@ -225,6 +235,25 @@ test('guards: nothing a handler throws reaches DSH; errors read as one short lin
 
 // ── Copies ────────────────────────────────────────────────────────────
 
+test('endpoints: every suite plugin marks each window endpoint, since DSH\'s gateway serves only marked methods', () => {
+    let seen = 0;
+    for (const plugin of SUITE) {
+        let text;
+        try {
+            text = readFileSync(new URL(`../plugins/${plugin}/lib/remote.js`, import.meta.url), 'utf8');
+        } catch {
+            continue;
+        }
+        seen += 1;
+        const methods = [...text.matchAll(/^ {4}async (\w+)\(/gm)].map((m) => m[1]).filter((name) => name !== 'run').sort();
+        const marked = /markRemote\(\w+, \[([^\]]*)\]\)/.exec(text)?.[1];
+        assert.ok(marked, `${plugin}: remote.js marks its methods with markRemote`);
+        const names = [...marked.matchAll(/'(\w+)'/g)].map((m) => m[1]).sort();
+        assert.deepEqual(names, methods, `${plugin}: every endpoint is marked, and only endpoints`);
+    }
+    assert.ok(seen >= 2, 'session-watch and autopilot have endpoints');
+});
+
 test('copies: every suite plugin carries the current shared code', () => {
     assert.doesNotThrow(() => execFileSync(process.execPath, ['scripts/sync-shared.mjs', '--check'], { stdio: 'pipe' }));
     const copies = plannedCopies();
@@ -304,6 +333,13 @@ test('kit: times, tones and the parts every page uses', () => {
     assert.equal(kit.agoText(now - 5 * 60000, now), '5 min ago');
     assert.equal(kit.agoText(now - 3 * 3600000, now), '3 h ago');
     assert.equal(kit.timeText(0), '');
+    assert.equal(kit.spanText(5), '5 seconds');
+    assert.equal(kit.spanText(1), '1 second');
+    assert.equal(kit.spanText(60), '1 minute');
+    assert.equal(kit.spanText(600), '10 minutes');
+    assert.equal(kit.spanText(7200), '2 hours');
+    assert.equal(kit.spanText(5400), '1.5 hours');
+    assert.equal(kit.spanText(-1), '');
     const card = kit.Card({ title: 'Title', sub: 'Sub', actions: 'Act', main: true, children: 'Body' });
     assert.equal(card.props.className, 'dshx-card dshx-main');
     assert.equal(textIn(card), 'TitleSubActBody');

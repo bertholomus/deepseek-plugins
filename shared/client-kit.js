@@ -302,6 +302,17 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         return timeText(at, now);
     }
 
+    /** A length of time in words: "5 seconds", "1 minute", "10 minutes", "2 hours", "1.5 hours". */
+    function spanText(seconds) {
+        const n = Number(seconds);
+        if (!Number.isFinite(n) || n < 0) return '';
+        const unit = (value, word) => `${value} ${word}${value === 1 ? '' : 's'}`;
+        if (n < 60) return unit(Math.round(n), 'second');
+        if (n < 3600) return unit(Math.round(n / 60), 'minute');
+        const hours = Math.round(n / 360) / 10;
+        return unit(hours, 'hour');
+    }
+
     /** DSH's tag tone for one of the suite's state words. */
     function toneOf(word) {
         switch (word) {
@@ -364,7 +375,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
 
     return {
         P, css, injectStyle, removeStyle, setConnection, whenConnected, link, hub, useLive,
-        timeText, agoText, toneOf, isRecord,
+        timeText, agoText, spanText, toneOf, isRecord,
         Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText,
     };
 }

@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Pilot, RULES, hasOpenWork, markOf, parseData, progressed } from '../plugins/autopilot/lib/pilot.js';
 import { actionLabel, answerNote, carryOnNote, errorNote, nudgeNote, openWork, question, whyBackOff, whyResume } from '../plugins/autopilot/lib/notes.js';
-import { pageState } from '../plugins/autopilot/lib/page.js';
+import { lastWords, pageState } from '../plugins/autopilot/lib/page.js';
 import { JsonStore } from '../plugins/autopilot/lib/shared/files.js';
 import { Journal } from '../plugins/autopilot/lib/shared/journal.js';
 import { Hub } from '../plugins/autopilot/lib/shared/hub.js';
@@ -195,7 +195,7 @@ test('after a restart: a cut-off session gets a carry-on note, and its goal star
     assert.match(notes[0], /Still open: 2 open todos \(next: “Write the parser”\) and the goal “Cut the release” \(round 0 of 20\)\./);
     const [resume] = entries(after.journal, 'resume');
     assert.equal(resume.state, 'delivered');
-    assert.match(resume.why, /DSH stopped without closing it \(a crash or a forced quit\)\. Nobody has written in the session since\.$/);
+    assert.match(resume.why, /DSH stopped before it finished \(a quit, a restart or a crash\)\. Nobody has written in the session since\.$/);
     // The goal waits for the carry-on turn to end, then goes on by itself.
     const [rearm] = entries(after.journal, 'rearm');
     assert.equal(rearm.state, 'waiting for a round');
@@ -305,6 +305,7 @@ test('Ask first: Autopilot asks in Decisions and on its page, and acts only on t
     assert.deepEqual(ask.options.map((option) => option.id), ['go', 'skip']);
     assert.equal(ask.freeText, true);
     assert.equal(entries(journal, 'ask')[0].state, 'asked you');
+    assert.equal(entries(journal, 'ask')[0].text, 'Asked you whether to tell it to carry on', 'the log says what was asked; its row names the session');
     assert.equal(notified.at(-1).kind, 'decision');
     // Looking again while the question waits asks nothing new.
     assert.equal((await pilot.check('a', 'idle')).again, true);
@@ -452,10 +453,11 @@ test('page view: sessions with their rule, work, next check and last action; que
     assert.equal(row.work, '2 open todos (next: “Write the parser”)');
     assert.equal(row.rule, 'ask');
     assert.equal(row.own, true);
-    assert.equal(row.last.text, view.log[0].text);
+    assert.equal(row.last.text, 'asked you', 'a question reads as two words in its row');
+    assert.equal(row.last.state, 'asked you');
     assert.equal(view.asks.length, 1);
     assert.equal(view.asks[0].onAnswer, undefined);
-    assert.equal(view.watching, 2);
+    assert.equal(view.watching, 1, 'the count matches the sessions listed');
     assert.deepEqual(Object.keys(view.settings).sort(), ['idleSeconds', 'maxNotesPerHour', 'maxNudges', 'resumeAfterRestart', 'resumeWindowHours']);
     assert.ok(view.log.length >= 2);
     JSON.stringify(view);
@@ -507,7 +509,7 @@ test('browser half: the page\'s cards say what to do next, in plain words', () =
     // Loading, before the first read.
     assert.match(textIn(AutopilotPage({ autopilot: {} })), /Reading the sessions/);
     const head = HeaderCard({ data: base, busy: false, act });
-    assert.match(textIn(head), /Watching 4 sessions · 3 of 20 notes used this hour · a session gets a note after 10 quiet minutes with work open/);
+    assert.match(textIn(head), /Watching 4 sessions · 3 of 20 notes used this hour · a session with open work gets a note after 10 minutes of quiet/);
     const toggle = elementsOf(head).find((e) => e.type === 'Switch');
     assert.equal(toggle.props.checked, true);
     toggle.props.onChange(false);
@@ -547,4 +549,11 @@ test('browser half: the page\'s cards say what to do next, in plain words', () =
     // No other product's name anywhere in what it shows.
     const words = JSON.stringify(TEXT) + CSS.join('');
     assert.doesNotMatch(words, OTHER_NAMES);
+});
+
+test('page: a session\'s last action in a few words, names kept as written', () => {
+    assert.equal(lastWords({ kind: 'rule', text: 'Rule set to Off.' }), 'rule set to Off');
+    assert.equal(lastWords({ kind: 'nudge', text: 'Told it to carry on with its todos' }), 'told it to carry on with its todos');
+    assert.equal(lastWords({ kind: 'ask', text: '“Config cleanup” stopped with 1 open todo. Tell it to carry on?' }), 'asked you');
+    assert.equal(lastWords({ kind: 'skip', text: '' }), '');
 });

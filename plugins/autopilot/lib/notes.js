@@ -61,7 +61,8 @@ export function answerNote(text) {
 // ── Why lines, for the event log ─────────────────────────────────────
 
 export function whyResume(end, now = Date.now()) {
-    const how = end.kind === 'interrupted' ? 'DSH stopped without closing it (a crash or a forced quit)' : 'DSH shut down under it';
+    // DSH closes a running turn as interrupted on its next start, after a quit, a restart or a crash alike.
+    const how = end.kind === 'interrupted' ? 'DSH stopped before it finished (a quit, a restart or a crash)' : 'DSH shut down under it';
     return `Turn ${end.turn} was cut off at ${timeWords(end.at, now)}: ${how}. Nobody has written in the session since.`;
 }
 

@@ -609,7 +609,8 @@ export class Pilot {
             freeText: plan.action === 'note',
             onAnswer: (answer, by) => this.answered(sessionId, plan, answer, by),
         });
-        this.journal.add({ kind: 'ask', sessionId, title, text: question(plan, title), why: `${plan.why} Its rule is Ask first.`, state: 'asked you', by: 'Autopilot', askId: id });
+        // The log row shows the session's name beside it: the entry says what was asked, the Why line why.
+        this.journal.add({ kind: 'ask', sessionId, title, text: `Asked you whether to ${label[0].toLowerCase()}${label.slice(1)}`, why: `${plan.why} Its rule is Ask first.`, state: 'asked you', by: 'Autopilot', askId: id });
         this.notify?.({ title: `Autopilot asks${title ? ` about ${clip(title, 50)}` : ''}`, body: question(plan, title), kind: 'decision', sessionId });
         this.changed();
         return { action: 'ask', id };

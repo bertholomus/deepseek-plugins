@@ -13,7 +13,7 @@
  *
  * @module dsh-plugin-session-watch/fold
  */
-import { cutOff } from './shared/words.js';
+import { cutOff, plainError } from './shared/words.js';
 
 export { cutOff };
 
@@ -80,7 +80,7 @@ export function endOf(data, time) {
     if (kind === 'aborted' && isRecord(reason.reason) && typeof reason.reason.kind === 'string') out.cause = reason.reason.kind;
     if (kind === 'error' && isRecord(reason.error)) {
         if (typeof reason.error.code === 'string') out.code = line(reason.error.code, 60);
-        const message = line(reason.error.message, LINE_MAX);
+        const message = line(plainError(reason.error.message), LINE_MAX);
         if (message) out.error = message;
     }
     return out;

@@ -302,6 +302,17 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         return timeText(at, now);
     }
 
+    /** A length of time in words: "5 seconds", "1 minute", "10 minutes", "2 hours", "1.5 hours". */
+    function spanText(seconds) {
+        const n = Number(seconds);
+        if (!Number.isFinite(n) || n < 0) return '';
+        const unit = (value, word) => `${value} ${word}${value === 1 ? '' : 's'}`;
+        if (n < 60) return unit(Math.round(n), 'second');
+        if (n < 3600) return unit(Math.round(n / 60), 'minute');
+        const hours = Math.round(n / 360) / 10;
+        return unit(hours, 'hour');
+    }
+
     /** DSH's tag tone for one of the suite's state words. */
     function toneOf(word) {
         switch (word) {
@@ -364,7 +375,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
 
     return {
         P, css, injectStyle, removeStyle, setConnection, whenConnected, link, hub, useLive,
-        timeText, agoText, toneOf, isRecord,
+        timeText, agoText, spanText, toneOf, isRecord,
         Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText,
     };
 }
@@ -458,7 +469,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 : paused ? TEXT.offLine
                     : [`Watching ${data.watching} session${data.watching === 1 ? '' : 's'}`,
                         `${data.notesLastHour} of ${data.settings.maxNotesPerHour} notes used this hour`,
-                        `a session gets a note after ${Math.round(data.settings.idleSeconds / 60) || 1} quiet minute${Math.round(data.settings.idleSeconds / 60) === 1 ? '' : 's'} with work open`].join(' · ');
+                        `a session with open work gets a note after ${kit.spanText(data.settings.idleSeconds)} of quiet`].join(' · ');
             return h(kit.Card, {
                 title: TEXT.title,
                 headingLevel: 1,
@@ -508,7 +519,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         }
 
         function SessionRow({ s, busy, act, onOpen }) {
-            const meta = [s.folder, s.work, s.next ? `next: ${nextText(s.next)}` : '', s.last ? `last: ${s.last.text.toLowerCase()} ${kit.agoText(s.last.at)}` : ''].filter(Boolean).join(' · ');
+            const meta = [s.folder, s.work, s.next ? `next: ${nextText(s.next)}` : '', s.last ? `last: ${s.last.text} (${kit.agoText(s.last.at)})` : ''].filter(Boolean).join(' · ');
             return h('li', { className: `${P}-item`, 'data-autopilot-session': s.sessionId },
                 h('div', { className: `${P}-item-main` },
                     h(SessionTitle, { title: s.title, sessionId: s.sessionId, onOpen }),
