@@ -32,3 +32,9 @@ The repo is the only shared memory. Chat history is NOT shared.
 - Next steps, in order
 - Open questions / blockers
 - Gotchas: things that broke, decisions made and why
+
+# UPDATE 2026-10-17 (MiniMe, tag SUITE1-1017): DSH Plugin Suite v1
+This worktree (branch suite/v1) is owned by account A (gmail) in the Claude app project "DSH Plugin Suite (gmail)".
+Its brief is briefs/SUITE-BRIEF.md; it carries Albert's standing approvals (publish to main of this private repo after
+an independent judge scores >= 8.5, no human approval gate) and the hard rule: test only in DSH Test instances, never the
+live DSH. If you are a DSH chat running here, the "skip the rest of this file" rule above still applies to you.
