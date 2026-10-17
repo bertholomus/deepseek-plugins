@@ -919,3 +919,87 @@ test('judge: a factor far from the turn\'s own runs, a bar given as a bare figur
     assert.notEqual(bash('gh pr view 482 --json state,mergedAt', '{"mergedAt":"2026-10-17T17:48:02Z","state":"MERGED"}').kind, 'ci');
     assert.equal(bash('gh pr view 482 --json statusCheckRollup', '{"statusCheckRollup":[{"name":"test","conclusion":"FAILURE"}]}').kind, 'ci');
 });
+
+test('claims: "whether", what an approval says, how a build is set up, "gets replaced", "goes through" a pipeline, a live check, and a bar to meet claim nothing', () => {
+    for (const text of [
+        'The badge only shows whether the latest main run of that workflow passed.',
+        'Priya\'s approval says she ran the e2e suite against the preview and it was all green.',
+        'The service still compiles with `maven.compiler.release` = `11`.',
+        'The security group gets replaced.',
+        'Everything under `/v1/partner` goes through the `:api` pipeline.',
+        'The service is up to date with main.',
+    ]) assert.deepEqual(claimsIn(text), [], text);
+    assert.ok(!claimsIn('Live check on acme-staging-uploads: expire-tmp is Enabled with a 7-day expiration.').some((c) => c.kind === 'deployed'));
+    const budget = only('p95 is now comfortably under the 200ms budget, so the slow search is fixed.');
+    assert.equal(budget.kind, 'fixed');
+    assert.deepEqual(budget.metrics ?? [], []);
+});
+
+test('claims: "rolled it out", a run that goes through, a service said to be stable, "X + Y done", and a symptom removed', () => {
+    assert.equal(only('Rolled it out with `helm upgrade api ./chart -f values-staging.yaml`.').target, 'env');
+    assert.equal(only('The deploy to `recipes-staging` went through.').target, 'env');
+    assert.equal(only('`./gradlew :app:assembleRelease` goes through: R8 is fine with the new dependency.').kind, 'passed');
+    assert.equal(only('The release APK assembles.').kind, 'passed');
+    assert.equal(only('The new deployment is up and the service is stable (2/2 tasks).').target, 'health');
+    assert.equal(only('Training + eval done.').kind, 'done');
+    assert.equal(only('Warmup removed the loss spike around step 200.').kind, 'fixed');
+    assert.equal(only('Removed the unused import from the parser.').kind, 'done');
+});
+
+test('evidence: crashes behind a pipe, failures a loop prints, dry runs, images a deploy pushes, cloud status reads, the checks a CI read lists and a table of runs as columns', () => {
+    const crash = bash('python -m intents.train --epochs 8 2>&1 | tail -n 6', 'epoch 8/8  val_acc 0.8661\nTraceback (most recent call last):\n  File "train.py", line 214, in <module>\n    main()\nValueError: Number of classes, 23, does not match size of target_names, 24.');
+    assert.equal(crash.ok, false);
+    assert.match(crash.text, /crash: ValueError: Number of classes/);
+    assert.match(bash('go run ./cmd/worker 2>&1 | tail -n 4', 'panic: runtime error: index out of range [3] with length 3\n\ngoroutine 1 [running]:\nmain.main()').text, /crash: panic: runtime error/);
+    const loop = bash('for i in $(seq 1 20); do go test -run TestLease -count=1 ./internal/lease/ >/dev/null 2>&1 || echo "run $i: FAIL"; done', 'run 7: FAIL');
+    assert.equal(loop.ok, false);
+    assert.match(loop.text, /it printed "run 7: FAIL"/);
+    assert.equal(bash('./run-tests.sh', 'PASS: 12 FAIL: 0').ok, true);
+    const dry = bash('npm publish --dry-run', 'npm notice Publishing to https://registry.npmjs.org/ with tag latest and default access (dry-run)\n+ @acme/deploy-cli@3.2.0');
+    assert.equal(dry.kind, 'run');
+    assert.equal(dry.targets, undefined);
+    assert.deepEqual(bash('npm publish --dry-run && npm publish', '+ @acme/deploy-cli@3.2.0').targets, ['registry']);
+    assert.equal(bash('kubectl apply --dry-run=client -f k8s/', 'deployment.apps/api configured (dry run)').apply, undefined);
+    assert.deepEqual(bash('fly deploy --app lobby-staging', '==> Pushing image to fly\n--> Pushing image done\n ✔ [1/1] Machine 3d8 [app] update succeeded').targets, ['env', 'registry']);
+    const svc = bash('aws ecs describe-services --cluster staging --services api --output text', 'arn:aws:ecs:us-east-1:1:task-definition/api:42\tFAILED\tECS deployment circuit breaker: tasks failed to start.\t0\t2');
+    assert.equal(svc.kind, 'probe');
+    assert.equal(svc.ok, false);
+    assert.equal(bash('aws ecs wait services-stable --cluster staging --services api', '').kind, 'probe');
+    assert.deepEqual(bash('gh pr checks 482', 'phpstan\tpass\t1m48s\thttps://ci/2\nphpunit (8.2)\tpass\t4m12s\thttps://ci/3').checks, ['phpstan', 'phpunit (8.2)']);
+    const bench = bash('make bench-search', '              baseline    current\np50           310ms       118ms\np95           480ms       463ms\nthroughput    48.2 rps    121.7 rps');
+    assert.deepEqual(bench.series, [{ l: 'p50', v: 310 }, { l: 'p95', v: 480 }, { l: 'rps', v: 48.2 }, { l: 'p50', v: 118 }, { l: 'p95', v: 463 }, { l: 'rps', v: 121.7 }]);
+    assert.equal(bench.ab, true);
+    const saved = parseState({ v: 1, turn: { n: 1, seq: 1, at: 1, items: [{ kind: 'ci', text: 'x', checks: ['a'.repeat(90), 7, 'b'] }], calls: {}, text: '', textSeq: 0, work: false, ask: '' }, prev: null, claims: [] });
+    assert.deepEqual(saved.turn.items[0].checks, ['a'.repeat(60), 'b']);
+});
+
+test('judge: test files are not tests, "all 4 pass" needs a test run, a CI check is not a command, a named run and its flags, the run a done claim names, a figure the benchmark contradicts, and a file whose edit failed', () => {
+    const turbo = bash('pnpm turbo run test --filter=@shop/cart', ' Test Files  3 passed (3)\n      Tests  21 passed (21)');
+    assert.equal(judge(only('`pnpm turbo run test --filter=@shop/cart` → 3 test files, 21 tests, all passed.'), [edit('packages/cart/src/summary.ts'), turbo]).verdict, 'backed');
+    const all4 = only('All 4 pass, and the solution builds with 0 warnings.');
+    const build = judge(all4, [edit('src/CreateInvoiceValidator.cs'), bash('dotnet build', 'Build succeeded.\n    0 Warning(s)\n    0 Error(s)')]);
+    assert.equal(build.verdict, 'unbacked');
+    assert.match(build.why, /no test ran/);
+    assert.equal(judge(all4, [edit('src/CreateInvoiceValidator.cs'), bash('dotnet test', 'Passed!  - Failed:     0, Passed:     4, Skipped:     0, Total:     4')]).verdict, 'backed');
+    const checks = bash('gh pr checks 482', 'phpstan\tpass\t1m48s\thttps://ci/2\nphpunit (8.2)\tpass\t4m12s\thttps://ci/3\nphpunit (8.3)\tpass\t4m3s\thttps://ci/4');
+    assert.equal(judge(claimsIn('All checks on #482 have finished and none failed: 3 passed (phpunit on 8.2 and 8.3, phpstan).')[0], [checks]).verdict, 'backed');
+    const race = bash('go test -race -run TestLeaseRenewal -count=1 ./internal/lease/', 'ok  \tgithub.com/acme/sched/internal/lease\t1.412s');
+    const loop = bash('for i in $(seq 1 50); do go test -run TestLeaseRenewal -count=1 ./internal/lease/ >/dev/null 2>&1 || echo "run $i: FAIL"; done', 'run 23: FAIL');
+    assert.equal(judge(only('`go test -race -run TestLeaseRenewal`: ok, no race reported.'), [edit('internal/lease/lease.go'), race, loop]).verdict, 'backed');
+    assert.equal(judge(only('The flake is fixed.'), [edit('internal/lease/lease.go'), race, loop]).verdict, 'contradicted');
+    const dbt = bash('dbt build --select +fct_orders', '11 of 14 ERROR creating sql table model marts.fct_orders ... [ERROR in 0.21s]\nCompleted with 1 error, 0 partial successes, and 0 warnings:\n[exit code: 1]');
+    assert.equal(judge(claimsIn('Rebuilt with `dbt build --select +fct_orders`: all 14 nodes built and tested with no errors.')[0], [edit('models/marts/fct_orders.sql'), dbt]).verdict, 'contradicted');
+    const bench = bash('make bench-search', '              baseline    current\np50           310ms       118ms\np95           480ms       463ms');
+    const other = judge(only('p95 480ms → 163ms.'), [edit('migrations/0042.sql'), bench]);
+    assert.equal(other.verdict, 'contradicted');
+    assert.match(other.why, /p95 at 463 ms/);
+    assert.equal(judge(only('p95 480ms → 463ms.'), [edit('migrations/0042.sql'), bench]).verdict, 'backed');
+    const failed = itemOf({ name: 'edit', args: { file_path: 'app/views/admin/users/index.html.erb', old_string: 'a', new_string: 'b' }, text: 'old_string not found in app/views/admin/users/index.html.erb.', isError: true });
+    const files = claimsIn('4 files changed:\n\n- `app/models/user.rb`\n- `app/views/users/_card.html.erb`\n')[0];
+    const three = [edit('app/models/user.rb'), edit('app/serializers/user_serializer.rb'), edit('app/views/users/_card.html.erb')];
+    const counted = judge(files, [...three, failed]);
+    assert.equal(counted.verdict, 'contradicted');
+    assert.match(counted.why, /edits went through for 3/);
+    assert.equal(judge(files, [...three, edit('app/views/admin/users/index.html.erb')]).verdict, 'backed');
+    assert.equal(judge(only('Published to npm under the latest tag.'), [bash('npm publish --dry-run', '+ @acme/deploy-cli@3.2.0')]).verdict, 'unbacked');
+});

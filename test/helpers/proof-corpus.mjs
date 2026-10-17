@@ -9,8 +9,8 @@
  *   contradicted  a claim that the turn's own output says is wrong
  *
  * The dev corpus (test/fixtures/proof/*.json) is what the rules were tuned
- * on. The first six hold-outs (test/fixtures/proof/seen/, seen2/, seen3/,
- * seen4/, seen5/ and seen6/) were each written apart from the rules and measured
+ * on. The first seven hold-outs (test/fixtures/proof/seen/, seen2/, seen3/,
+ * seen4/, seen5/, seen6/ and seen7/) were each written apart from the rules and measured
  * once, before any rule saw them; their misses then went into the rules, so
  * they are tuned on too. The hold-out corpus
  * (test/fixtures/proof/holdout/*.json) was written after that, by writers
@@ -32,6 +32,7 @@ export const SEEN3 = join(DEV, 'seen3');
 export const SEEN4 = join(DEV, 'seen4');
 export const SEEN5 = join(DEV, 'seen5');
 export const SEEN6 = join(DEV, 'seen6');
+export const SEEN7 = join(DEV, 'seen7');
 export const HOLDOUT = join(DEV, 'holdout');
 export const TOOL_NAMES = new Set(['bash', 'read', 'edit', 'write', 'grep', 'glob', 'todo_write']);
 

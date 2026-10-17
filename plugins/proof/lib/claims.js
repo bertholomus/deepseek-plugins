@@ -167,7 +167,7 @@ function clausesOf(sentence) {
 /** A "when …" part, up to a comma or the clause's end: when something happens, not what this turn did ("423 when the order is shipped"). */
 const WHEN_PART = /\bwhen\b[^,;]*(?:,\s*|$)/gi;
 /** A plan, a condition or a hope: success not yet had. */
-const NOT_YET = /\b(if|once|until|unless|whenever|should|shall|will|would|could|might|may|must|need(s)? to|needed to|has to|have to|going to|gonna|want(s)? to|try(ing)? to|plan(ned|s)? to|hope(fully)?|expect(ed)? to|supposed to|let me|let['’]s|i['’]ll|we['’]ll|you'?ll|it['’]ll|that['’]ll|they'?ll|i['’]d|we['’]d|next,? i|to be (done|fixed|deployed|tested)|can then|in order to|so that|ready to|safe to|good to|able to|in case|(?:you|we|they) can|suggests?|suggesting|seems?|seemingly|appears?|apparently|probably|likely|presumably|perhaps|maybe|i think|i suspect|i believe|i guess|looks like)\b/i;
+const NOT_YET = /\b(if|whether|once|until|unless|whenever|should|shall|will|would|could|might|may|must|need(s)? to|needed to|has to|have to|going to|gonna|want(s)? to|try(ing)? to|plan(ned|s)? to|hope(fully)?|expect(ed)? to|supposed to|let me|let['’]s|i['’]ll|we['’]ll|you'?ll|it['’]ll|that['’]ll|they'?ll|i['’]d|we['’]d|next,? i|to be (done|fixed|deployed|tested)|can then|in order to|so that|ready to|safe to|good to|able to|in case|(?:you|we|they) can|suggests?|suggesting|seems?|seemingly|appears?|apparently|probably|likely|presumably|perhaps|maybe|i think|i suspect|i believe|i guess|looks like)\b/i;
 /** A sentence that says the opposite of success, or reports a failure. */
 const NEGATED = /\b(not|n't|never|neither|nor|nothing|yet|without (?:running|testing|checking|verifying)|yet to|still (?:fail|failing|broken|red|erroring|crash)|fail(s|ed|ing|ure|ures)?|broken|break(s|ing)?|red\b|error(s|ed)?\b|regress(ed|ion)?|flak(y|iness)|skipped|cannot|unable|couldn'?t|didn'?t|doesn'?t|isn'?t|aren'?t|wasn'?t|weren'?t|haven'?t|hasn'?t|won'?t|\w+n't|instead of|rejected|denied|timed out|stalled|crashloop\w*|pending|in progress|queued)\b/i;
 /** "No failures", "zero errors", "nothing left to fix": words that back a claim up, not negations. */
@@ -197,13 +197,15 @@ const CLAIM_WORDS = /\b(pass(es|ed|ing)?|green|deployed|released|published|shipp
 /** "no longer fails", "doesn't crash any more": a negation that claims a fix. */
 const FIX_BY_NEGATION = /\bno longer\s+(fails?|failing|crash(es)?|errors?|throws?|breaks?|hangs?|panics?|leaks?|times? out|overruns?|drops?|loses?|happens?|reproduces?|deadlocks?|races?|blocks?)\b|\b(doesn'?t|does not|won'?t|will not|can'?t|cannot)\s+(fail|crash|error|throw|break|hang|panic|leak|time out|happen|reproduce|deadlock|race)\s+(any ?more|now|again)\b|\bno (more|longer any) (errors|failures|crashes|warnings|panics|races)\b|\b(the )?(bug|issue|error|problem|crash|regression|failure|leak|warning|panic|race|npe|exception)s? (is|are) (now )?(gone|fixed|resolved)\b/i;
 /** A deploy's state read back: "rollout `COMPLETED`", "4/4 tasks running". */
-const ROLLED = /\b(?:rollouts?|deployments?)\b[^.;]{0,40}?\b(?:complete[d]?|finished|succeeded|successful)\b|\b\d+\s*\/\s*\d+\s+(?:tasks?|pods?|replicas?|instances?|containers?)\b(?:\s+on\s+[^.;,]{0,40}?)?\s+(?:are\s+)?(?:running|ready|available|healthy|up|live)\b/i;
+const ROLLED = /\b(?:rollouts?|deployments?|deploys?)\b[^.;]{0,40}?\b(?:complete[d]?|finished|succeeded|successful|went through|goes through(?=\s*$|\s*[.,;:!)]|\s+(?:now|again|fine|cleanly|clean|ok|okay|without|green|successfully)\b))|\b\d+\s*\/\s*\d+\s+(?:tasks?|pods?|replicas?|instances?|containers?)\b(?:\s+on\s+[^.;,]{0,40}?)?\s+(?:are\s+)?(?:running|ready|available|healthy|up|live)\b/i;
 /** "Tested it by pointing DEST at a dead host": something was run to try it. */
 const TRIED = /\b(?:tested|tried|exercised|smoke[- ]tested|re-?tested)\s+(?:it|this|that|them|the\s+(?:fix|change|script|endpoint|flow|patch|command|binary|cli|tool|function|migration|hook|job))\b/i;
 /** A question. */
 const ASKED = /\?\s*$|^(do|does|did|is|are|was|were|can|could|should|would|will|shall|have|has)\s+(you|we|i|it|they|the)\b/i;
 /** What a document or a person says, not this turn's work: "the README says it is done". */
-const REPORTED = /\b(the|this|that|its|their|your|his|her|our|[a-z]+'s)\s+(readme|docs?|documentation|changelog|pr|pull request|description|ticket|issue|comment|commit message|author|reviewer|team|user|checklist|wiki|spec|plan|notes?|release notes)\b[^.;]{0,50}\b(says?|said|claims?|claimed|states?|stated|reports?|reported|mentions?|mentioned|promises?|promised|lists?|listed)\b|\baccording to\b|\b(claims?|claimed|allegedly|supposedly|reportedly)\b/i;
+const REPORTED = /\b(the|this|that|its|their|your|his|her|our|[a-z]+'s)\s+(readme|docs?|documentation|changelog|pr|pull request|description|ticket|issue|comment|commit message|author|reviewer|team|user|checklist|wiki|spec|plan|notes?|release notes|approvals?|reviews?|messages?|reply|replies|summary|email|handoff|thread)\b[^.;]{0,50}\b(says?|said|claims?|claimed|states?|stated|reports?|reported|mentions?|mentioned|promises?|promised|lists?|listed)\b|\baccording to\b|\b(claims?|claimed|allegedly|supposedly|reportedly)\b/i;
+/** How a build is set up, not how it went: "still compiles with `maven.compiler.release` = `11`", "builds against a target set to es2019". */
+const CONFIGURED = /\b(?:builds?|compiles?)\s+(?:with|against|for)\s+(?:[^.;=]|\.(?=\S)){1,60}?(?:\s*=\s*\S|\s+set\s+to\s)/i;
 /** Deploy words used as adjectives: "the published checksum" claims nothing. */
 const ADJECTIVE = /\b(the|a|an|its|our|their|this|that|these|those|every|each|any|your|my|his|her|previously|last|earlier)\s+(\w+\s+)?$|\b(that|which|who)('s|\s+(is|was|are|were|has been|had been|have been|got))\s+(already\s+|just\s+|been\s+)?$/i;
 /**
@@ -219,8 +221,8 @@ const TRANSITIVE = new RegExp(String.raw`\bpass(?:es|ed|ing)?\s+(?:${OPEN}?(?:tr
 // ── What makes a clause a claim ────────────────────────────────────
 
 const SUBJECT = String.raw`(?:(?:the\s+)?pr(?:\s*#?\d+)?|pull request(?:\s*#?\d+)?|checksums?|sha-?\d*sums?|md5sums?|digests?|signatures?|tests?|pytest|jest|vitest|mocha|rspec|phpunit|ctest|specs?|test ?suites?|suites?|e2e|checks?|assertions?|examples?|cases?|builds?|bundle|lint(?:ing|er|ers)?|ci|pipelines?|workflows?|(?:ci|deploy|build|test|lint|release|e2e|nightly)\s+jobs?|runs?|type ?checks?|typecheck(?:s|ing)?|types|tsc|clippy|eslint|ruff|mypy|flake8|rubocop|pylint|golangci-lint|prettier|vet|go vet|webpack|vite|esbuild|rollup|everything|${OPEN}[^${CLOSE}]{1,80}${CLOSE})`;
-const PASS_VERB = String.raw`(?:(?<!-)pass(?:es|ed|ing)?|green|(?<!\b(?:stops?|stopped|exits?|exited|shuts?\s+down|shut\s+down|terminates?|terminated|closes?|closed|cancels?|cancell?ed|unmounts?|unmounted|disconnects?|disconnected|tears?\s+down|tore\s+down|recovers?|recovered|restarts?|restarted|handles?|handled|separates?|separated|splits?|applies|applied|merges?|merged|rebases?|rebased|reverts?|reverted|drains?|drained|unwinds?|unwound|rolls?\s+back|rolled\s+back)\s)clean(?:ly)?|ok|okay|successful(?:ly)?|succeed(?:s|ed)?|went through|(?:finished|completed|ran|went|exited|exits)\s+(?:successfully|green|clean(?:ly)?|fine|ok|with 0|0|with (?:an? )?exit(?: code| status)? (?:of )?0)|complete[sd]?(?:\s+successfully)?|compiles?(?:\s+(?:cleanly|fine|successfully))?)`;
-const PASS_WORD = /\b(0 (?:failures?|failed|errors?)|pass(es|ed|ing)?|green|succeed(s|ed)?|success(ful(ly)?)?|clean(ly)?|ok|okay|good|compiles?|builds|went through|complete[sd]?|verified|verif(y|ies)|match(es|ed)?|exit(?: code| status)? (?:of )?0)\b/i;
+const PASS_VERB = String.raw`(?:(?<!-)pass(?:es|ed|ing)?|green|(?<!\b(?:stops?|stopped|exits?|exited|shuts?\s+down|shut\s+down|terminates?|terminated|closes?|closed|cancels?|cancell?ed|unmounts?|unmounted|disconnects?|disconnected|tears?\s+down|tore\s+down|recovers?|recovered|restarts?|restarted|handles?|handled|separates?|separated|splits?|applies|applied|merges?|merged|rebases?|rebased|reverts?|reverted|drains?|drained|unwinds?|unwound|rolls?\s+back|rolled\s+back)\s)clean(?:ly)?|ok|okay|successful(?:ly)?|succeed(?:s|ed)?|went through|goes through(?=\s*$|\s*[.,;:!)]|\s+(?:now|again|fine|cleanly|clean|ok|okay|without|green|successfully)\b)|(?:finished|completed|ran|went|exited|exits)\s+(?:successfully|green|clean(?:ly)?|fine|ok|with 0|0|with (?:an? )?exit(?: code| status)? (?:of )?0)|complete[sd]?(?:\s+successfully)?|compiles?(?:\s+(?:cleanly|fine|successfully))?)`;
+const PASS_WORD = /\b(0 (?:failures?|failed|errors?)|pass(es|ed|ing)?|green|succeed(s|ed)?|success(ful(ly)?)?|clean(ly)?|ok|okay|good|compiles?|builds|assembles|went through|goes through(?=\s*$|\s*[.,;:!)]|\s+(?:now|again|fine|cleanly|clean|ok|okay|without|green|successfully)\b)|complete[sd]?|verified|verif(y|ies)|match(es|ed)?|exit(?: code| status)? (?:of )?0)\b/i;
 
 const PASSED = [
     // "Still green: `./mvnw test` → 67 tests", "All passing."
@@ -238,11 +240,11 @@ const PASSED = [
     // "`SlugTest`: OK", "`go vet`: clean"
     new RegExp(String.raw`${OPEN}[^${CLOSE}]{1,80}${CLOSE}\s*:\s*(all\s+)?(\d+\s*(\/\s*\d+\s+)?(tests?\s+)?)?(ok|okay|pass(es|ed)?|passing|green|clean|success(ful)?)\b`, 'i'),
     // "`ansible-playbook site.yml` ran clean", "`make check` finished successfully"
-    new RegExp(String.raw`${OPEN}[^${CLOSE}]{2,160}${CLOSE}\s+(?:now\s+|also\s+|then\s+)?(?:ran|runs|finished|completed|went through|exited|exits)\s+(?:clean(?:ly)?|successfully|green|ok|okay|with (?:exit (?:code |status )?)?0)\b`, 'i'),
+    new RegExp(String.raw`${OPEN}[^${CLOSE}]{2,160}${CLOSE}\s+(?:now\s+|also\s+|then\s+)?(?:ran|runs|finished|completed|went through|exited|exits)\s+(?:clean(?:ly)?|successfully|green|ok|okay|with (?:exit (?:code |status )?)?0)\b|${OPEN}[^${CLOSE}]{2,160}${CLOSE}\s+(?:now\s+|also\s+|still\s+)?goes through(?=\s*$|\s*[.,;:!)]|\s+(?:now|again|fine|cleanly|clean|ok|okay|without|green|successfully)\b)`, 'i'),
     // "tests: 101/101 passed", "Tests = 12 ok"
     /\b(\d+\s+)?(tests?|checks?)\s*[:=]\s*\d+\s*(\/\s*\d+\s*)?(pass(ed)?|ok|green)\b/i,
     // "builds cleanly", "the bundle builds", "the crate compiles"
-    /\b(builds?|built|compiles?|compiled)\s+(cleanly|successfully|fine|without (errors|warnings))\b|\b(build|bundle|app|project|crate|package|module|code|binary|site|image|service|tree)\s+(now\s+|still\s+|also\s+)?(builds|compiles)\b/i,
+    /\b(builds?|built|compiles?|compiled)\s+(cleanly|successfully|fine|without (errors|warnings))\b|\b(build|bundle|app|project|crate|package|module|code|binary|site|image|service|tree|apk|aab|ipa|jar|archive|artifact)\s+(now\s+|still\s+|also\s+)?(builds|compiles|assembles)\b/i,
     // "everything is green", "all green"
     /\b(everything|all)\s+(is\s+|are\s+)?(green|passing|passes)\b/i,
     // "9 examples, 0 failures", "OK (36 tests", "BUILD SUCCESSFUL", "lints clean"
@@ -262,9 +264,9 @@ const PASSED = [
 const ALL_PASS = new RegExp(String.raw`(?:^|\b)${SUBJECT}(?!\w)\s+(?:is|are|was|were|stays?|stayed|remains?|remained)\s+(?:still\s+|now\s+|back\s+(?:to|at)\s+|at\s+)?(\d+)\s*\/\s*\1(?![\d/])`, 'i');
 
 // "Uploaded build 213 to App Store Connect": an upload to a place ships it.
-const DEPLOY_WORD = /\b(deployed|redeployed|released|shipped|rolled out|rolled back|promoted|published|pushed|merged|tagged|provisioned|uploaded(?=[^.;]{0,80}?\bto\s))\b/gi;
+const DEPLOY_WORD = /\b(deployed|redeployed|released|shipped|rolled out|rolled\s+(?:it|them|this|that|these|those|everything)\s+out|rolled back|promoted|published|pushed|merged|tagged|provisioned|uploaded(?=[^.;]{0,80}?\bto\s))\b/gi;
 const DEPLOYED_OTHER = [
-    /\b(is|are)\s+(now\s+)?live\b|\bgo(es)? live\b|\bwent live\b|\b(and|now)\s+live\b|^live\b|\blive\s+(on|in)\s+(staging|production|prod)\b/i,
+    /\b(is|are)\s+(now\s+)?live\b|\bgo(es)? live\b|\bwent live\b|\b(and|now)\s+live\b|^live\b(?![\s-]+(?:check|query|read|test|look|probe|smoke|run|lookup|request|call|curl|verification|validation)s?\b)|\blive\s+(on|in)\s+(staging|production|prod)\b/i,
     /\b(is|are)\s+(now\s+)?((built|pushed|published|up) and\s+)?(on|in)\s+(the\s+)?(registry|npm|pypi|crates\.io|docker ?hub|ghcr|ecr|gcr|rubygems|packagist|origin|production|prod|staging)\b/i,
     /\b(is|are)\s+(now\s+)?(on|at)\s+(v?\d+\.\d+(\.\d+)?|release v?\d+|the new (version|release|build|image))\b/i,
     /\b(created|cut)\s+the\s+(tag|release)\b/i,
@@ -277,6 +279,8 @@ const LIVES_IN = /\b(?:now\s+)?lives?\s+(?:in|under|inside|within|alongside|next
 
 const HEALTH = [
     /\b(is|are)\s+(now\s+)?(healthy|up and running|serving)\b|\bserving (traffic|requests|the new (build|version|release))\b/i,
+    // "the service is stable (2/2 tasks)", "the new deployment is up": not "is up to date", "up next", "up for review" or "up on a preview" (a place)
+    /\b(?:services?|deployments?|deploys?|rollouts?|apps?|clusters?|pods?|tasks?|nodes?|sites?|servers?|instances?|containers?)\s+(?:is|are)\s+(?:now\s+)?(?:stable|steady|up(?![\s-]+(?:on|at|in|with|and)\b))\b(?!\s+(?:to|for|next|against|front|in the air)\b)/i,
     /\b(returns?|answers?|responds?|responded|came back|comes back)\s+(with\s+)?(an?\s+)?(http\s+)?(\d{3}|ok)\b/i,
     /\bhealth\s*(checks?|endpoint|probe)?\s+(pass(es|ed)?|is ok|ok|is green|returns? ok|came back ok)\b|\bhealth checks? (are )?(passing|green)\b/i,
     // "/healthz is ok and reports 2.7.0", "`/ready` came back healthy"
@@ -291,6 +295,8 @@ const FIXED = [
     /\bworks\s+(now|again|correctly|as expected|fine)\b/i,
     /\b(is|are)\s+(now\s+)?working( again| correctly| as expected)?\b/i,
     /\brenders? again\b|\bhandles? (it|them|this) (now|correctly)\b/i,
+    // "removed the loss spike around step 200", "got rid of the deadlock": not "removed the error handling"
+    /\b(?:removed|eliminated|got rid of|killed|cured|stopped)\s+(?:the|a|an|that|this|those|these|its|their|both|all|any)\s+(?:[\w-]+\s+){0,2}?(?:spikes?|leaks?|crash(?:es)?|races?|race conditions?|flakes?|flakiness|deadlocks?|ooms?|oomkills?|regressions?|slowdowns?|stalls?|hangs?|panics?|retry storms?|segfaults?)(?=\s*(?:$|[.,;:)!])|\s+(?:around|at|in|on|when|that|which|from|for|after|during|under|with|seen|caused|reported)\b)/i,
     // "The fix is in and verified" claims it works; "The fix is in" alone is a change (done).
     /\bthe fix(?:es)?\s+(?:is|are|was|were|has been|have been)\s+(?:now\s+)?(?:in\s+(?:place\s+)?and\s+)?(?:verified|tested|working|confirmed)\b/i,
 ];
@@ -363,14 +369,14 @@ const DONE = [
     /^(?:i\s+|we\s+)?(?:have\s+|'ve\s+|just\s+|also\s+|then\s+)?(?:re-?trained|fine-?tuned|trained)\s+(?:it|them|the|a|an|on|for|with|both|all|our|your|\w+\s+(?:on|for|with))\b/i,
     /\b(?:i|we)\s+(?:have\s+|'ve\s+|just\s+|also\s+|then\s+)?(?:re-?trained|fine-?tuned)\b/i,
     // "Backfill complete", "Index rebuild done", "Training finished for v7"
-    /^(?:the\s+)?[\w-]+(?:\s+[\w-]+){0,2}\s+(?:is\s+|are\s+|has\s+|have\s+)?(?:now\s+|all\s+)?(?:done|complete|completed|finished)\b/i,
+    /^(?:the\s+)?[\w-]+(?:\s+(?:[\w-]+|[+&])){0,3}\s+(?:is\s+|are\s+|has\s+|have\s+)?(?:now\s+|all\s+)?(?:done|complete|completed|finished)\b/i,
     new RegExp(String.raw`\b(is|are|it'?s|that'?s|everything'?s|all)\s+(now\s+|also\s+)?(done|complete|completed|finished|in place|implemented|${IS_IN}|registered|wired( up)?|exported|added|configured|enabled|pinned|updated|documented|set|cleaned up|ported|migrated|bumped|merged|committed|built|rebuilt|generated|regenerated|compiled|bundled|packaged)\b`, 'i'),
     new RegExp(String.raw`\b(i'?ve|i have|we'?ve|we have|i|we)\s+(now\s+|also\s+|just\s+|then\s+)?(${CHANGE_VERBS})\b`, 'i'),
     new RegExp(String.raw`^(${CHANGE_VERBS})\b`, 'i'),
     /\b(task|work|change|changes|refactor|migration|implementation|feature|fix|rename|update|upgrade|bump|backfill|patch)\s+(is|are)\s+(now\s+)?(done|complete|finished|in place|applied|in(?=\s*(?:$|[.,;:!)]|now\b|on\s+(?:main|master))))/i,
     // "Report regenerated at docs/api.md", "Dev image rebuilt as app-dev:latest", "1,834 rows updated";
     // not "the rule is replaced" (how a plan or the code behaves) or "worth keeping that split" (a noun).
-    new RegExp(String.raw`^(?!(?:which|that|who|so|and|but|because|since|while|as|if|when|where|whether|although|though)\b)(?:the\s+|a\s+|an\s+|all\s+)?[\w.,/${OPEN}${CLOSE}-]+(?:\s+[\w.,/${OPEN}${CLOSE}-]+){0,3}\s+(?:now\s+|also\s+)?(?<!\b(?:is|are)\s+)(?:${SUBJECT_VERBS})\b(?!\s+(?:to\s+be|by\s+the\s+user))`, 'i'),
+    new RegExp(String.raw`^(?!(?:which|that|who|so|and|but|because|since|while|as|if|when|where|whether|although|though)\b)(?:the\s+|a\s+|an\s+|all\s+)?[\w.,/${OPEN}${CLOSE}-]+(?:\s+[\w.,/${OPEN}${CLOSE}-]+){0,3}\s+(?:now\s+|also\s+)?(?<!\b(?:is|are|gets?|getting)\s+)(?:${SUBJECT_VERBS})\b(?!\s+(?:to\s+be|by\s+the\s+user))`, 'i'),
     // "Worker config now points at redis-2", ".env.example documents CACHE_URL now"
     /\bnow\s+(points|uses|returns|reads|lists|documents|leads|has|includes|contains|imports|exports|calls|sets|defaults|handles|accepts|supports|logs|retries|throws|falls back|guards|checks|skips|validates|redirects|caches)\b/i,
     /\b(points|uses|returns|reads|lists|documents|leads|has|includes|contains|imports|exports|calls|sets|defaults|handles|accepts|supports|logs|retries|throws|validates|caches)\b[^.;]{0,50}\bnow\b/i,
@@ -389,7 +395,7 @@ const SUBJECT_WORDS = {
     lint: /\b(lint(s|er|ers|ing)?|eslint|ruff|flake8|pylint|clippy|prettier|rubocop|golangci-lint|stylelint|mypy|pyright|shellcheck)\b/i,
     tests: /\b(tests?|specs?|test ?suites?|suites?|e2e|end-to-end|assertions?|examples?|cases?|pytest|jest|vitest|mocha|rspec|phpunit|go test|cargo test|node --test)\b/i,
     ci: /\b(ci|pipelines?|workflows?|github actions|actions run|(?<!type[\s-]?)checks|(ci|deploy|build|test|lint|release|e2e|nightly)\s+jobs?|pr|pull request|pr \d+|pr #?\d+|#\d+)\b/i,
-    build: /\b(build(s)?|bundle|compil(e|es|ed|ation)|tsc|type ?check(s|ing)?|typecheck(s|ing)?|types|go vet|vet)\b/i,
+    build: /\b(build(s)?|bundle|compil(e|es|ed|ation)|assembl(e|es|ed)|apk|aab|tsc|type ?check(s|ing)?|typecheck(s|ing)?|types|go vet|vet)\b/i,
 };
 
 /** Every kind of run a `passed` clause names ("lint, tests and the build pass"): which runs must back it. */
@@ -407,7 +413,7 @@ function targetOf(text, healthy) {
     if (place.test(text) && /\b(deployed|redeployed|rolled out|rollout|released to|shipped to|promoted to|live|provisioned)\b/i.test(text)) return 'env';
     // A bare "Published." names no place: a post, a site or a package.
     if (/\b(npm|pypi|crates\.io|registry|docker ?hub|ghcr|ecr|gcr|rubygems|packagist|maven central|nuget|image|container|package|app\s+store|testflight|play\s+store|google\s+play|play\s+console)\b|@\d+\.\d+/i.test(text) && !/\b(docs|site|pages)\b/i.test(text)) return 'registry';
-    if (place.test(text) || /\b(live|deployed|redeployed|rolled out|rollout|released to|shipped|provisioned)\b/i.test(text)) return 'env';
+    if (place.test(text) || /\b(live|deployed|redeployed|rolled out|rolled\s+(?:it|them|this|that)\s+out|rollout|released to|shipped|provisioned)\b/i.test(text)) return 'env';
     // A bare "Pushed" may be a git push or an image push.
     if (/\b(merged|tagged|origin|main|master|branch|remote|github|gitlab|gh-pages|tag)\b/i.test(text)) return 'repo';
     return 'any';
@@ -438,6 +444,9 @@ const METRIC = new RegExp(String.raw`(?<![\w.])(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?
 /** Words that make a figure in a claim a result to show, not a setting. */
 const METRIC_CONTEXT = /\b(coverage|p\d{2}|latency|throughput|faster|slower|quicker|speed(up)?|benchmark|bench|memory|rss|cpu|heap|bundle|size|smaller|larger|halved|reduced|dropped|down from|up from|improved|took|runtime|duration)\b|→|->|=>|⟶|\d\s*(x|×)\b/i;
 
+/** A figure named as a bar to meet ("the 200ms budget", "a 5% threshold"), not a result. */
+const BAR_NOUN = /^\s*(?:budget|target|limit|slo|sla|threshold|goal|bar|cap|ceiling|deadline)s?\b/i;
+
 /** The figures a clause quotes as results: `[{ value, unit, text }]`. */
 function metricsIn(text) {
     const plainText = shown(text);
@@ -445,6 +454,7 @@ function metricsIn(text) {
     const out = [];
     for (const m of plainText.matchAll(METRIC)) {
         const raw = m[1] ?? m[3] ?? m[4];
+        if (BAR_NOUN.test(plainText.slice(m.index + m[0].length))) continue;
         const value = Number(String(raw).replace(/,/g, ''));
         if (!Number.isFinite(value)) continue;
         const unit = (m[2] ?? m[5] ?? '').toLowerCase();
@@ -463,7 +473,7 @@ function claimOf(clause) {
     const s = clause.trim().replace(WHEN_PART, ' ').replace(QUOTED_CLAIM, (q) => (CLAIM_WORDS.test(q) ? ' ' : q)).replace(/\s+/g, ' ').trim();
     const words = shown(s);
     const said = prose(s).replace(LIVES_IN, ' ');
-    if (words === '' || ASKED.test(words) || REPORTED.test(words) || NOT_YET.test(words) || DESCRIBED.test(words) || HISTORY.test(words)) return undefined;
+    if (words === '' || ASKED.test(words) || REPORTED.test(words) || NOT_YET.test(words) || DESCRIBED.test(words) || HISTORY.test(words) || CONFIGURED.test(words)) return undefined;
     // A search said to come back empty is checked against the turn's last search, before the "nothing" in it reads as a negation.
     if (SEARCH_EMPTY.some((re) => re.test(words))) return { kind: 'passed', subject: 'search', term: searchTermOf(s) };
     const fixedByNegation = FIX_BY_NEGATION.test(words);
@@ -475,7 +485,7 @@ function claimOf(clause) {
     const healthy = HEALTH.some((re) => re.test(words)) && !/\b(returns?|answers?|responds?|responded|came back|comes back)\b[^.;]*\b(but|however|although|though|except)\b/i.test(words);
     // "both health checks pass" is about a running service, not a test run.
     // "/healthz is ok" alone is a health check; "Deployed to staging and GET /health returns 200" is both (below).
-    const ships = /\b(deployed|redeployed|released|shipped|rolled (out|back)|promoted|published|pushed|merged|tagged|provisioned)\b/i.test(said);
+    const ships = /\b(deployed|redeployed|released|shipped|rolled (out|back)|rolled\s+(?:it|them|this|that)\s+out|promoted|published|pushed|merged|tagged|provisioned)\b/i.test(said);
     if (healthy && (/\bhealth\s*(checks?|endpoints?|probes?)\b/i.test(words) || (HEALTH_PATH.test(words) && !ships))) return { kind: 'deployed', target: 'health' };
     // Pods, tasks and rollouts run somewhere: the claim is about that environment, whatever image it names.
     if (ROLLED.test(words) && !/\b(tests?|specs?|suites?|lint|builds?)\b/i.test(words)) return { kind: 'deployed', target: 'env' };

@@ -236,10 +236,11 @@ function parseClaim(c) {
 function parseItems(items) {
     if (!Array.isArray(items)) return [];
     return items.filter((i) => isRecord(i) && typeof i.kind === 'string' && typeof i.text === 'string').slice(-MAX_ITEMS).map((i) => {
-        const { lines, pairs, ...rest } = i;
+        const { lines, pairs, checks, ...rest } = i;
         const kept = Array.isArray(lines) ? lines.filter((l) => typeof l === 'string').slice(0, 8).map((l) => l.slice(0, 120)) : [];
         const hashes = Array.isArray(pairs) ? pairs.filter((p) => isRecord(p) && typeof p.h === 'string' && typeof p.f === 'string').slice(0, 8) : [];
-        return { ...rest, ...(kept.length ? { lines: kept } : {}), ...(hashes.length ? { pairs: hashes } : {}) };
+        const names = Array.isArray(checks) ? checks.filter((c) => typeof c === 'string').slice(0, 16).map((c) => c.slice(0, 60)) : [];
+        return { ...rest, ...(kept.length ? { lines: kept } : {}), ...(hashes.length ? { pairs: hashes } : {}), ...(names.length ? { checks: names } : {}) };
     });
 }
 

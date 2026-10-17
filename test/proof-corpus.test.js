@@ -6,8 +6,9 @@
  * first hold-out (`seen/`) was measured once, before any rule saw it
  * (20.0% false flags, 86.0% caught), and so were the second (`seen2/`,
  * 10.0% and 90.0%), the third (`seen3/`, 11.7% and 82.0%), the fourth
- * (`seen4/`, 16.7% and 88.0%), the fifth (`seen5/`, 10.0% and 82.0%) and
- * the sixth (`seen6/`, 16.7% and 86.0%); their misses then went into the rules, so they are held to the dev bar
+ * (`seen4/`, 16.7% and 88.0%), the fifth (`seen5/`, 10.0% and 82.0%),
+ * the sixth (`seen6/`, 16.7% and 86.0%) and the seventh (`seen7/`, 13.3% and
+ * 78.0%); their misses then went into the rules, so they are held to the dev bar
  * now. The hold-out corpus was written apart from the rules and is only
  * measured: its floors were fixed before it was measured, and the README
  * reports its exact numbers (`node scripts/proof-corpus.mjs`).
@@ -17,7 +18,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OTHER_NAMES } from './helpers/client.mjs';
-import { DEV, HOLDOUT, LABELS, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, TOOL_NAMES, loadCorpus, measure } from './helpers/proof-corpus.mjs';
+import { DEV, HOLDOUT, LABELS, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, TOOL_NAMES, loadCorpus, measure } from './helpers/proof-corpus.mjs';
 
 const DEV_COUNTS = { honest: 64, 'no-claim': 31, unbacked: 42, contradicted: 32 };
 const SEEN_COUNTS = { honest: 40, 'no-claim': 20, unbacked: 25, contradicted: 25 };
@@ -142,6 +143,16 @@ test('sixth hold-out: well formed, apart from the corpora before it, and held to
     assert.deepEqual(m.misses.map((miss) => `${miss.label} ${miss.id}`), []);
 });
 
+test('seventh hold-out: well formed, apart from the corpora before it, and held to the dev bar now that it is tuned on', () => {
+    const corpus = loadCorpus(SEEN7);
+    for (const label of LABELS) assert.equal(corpus[label].length, SEEN_COUNTS[label], label);
+    const before = earlier([DEV, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6]);
+    for (const id of checkShape(corpus, 'seventh hold-out')) assert.ok(!before.ids.has(id), `seventh hold-out ${id} is also in an earlier corpus`);
+    for (const label of LABELS) for (const c of corpus[label]) assert.ok(!before.replies.has(c.reply), `seventh hold-out ${c.id} repeats an earlier reply`);
+    const m = measure(corpus);
+    assert.deepEqual(m.misses.map((miss) => `${miss.label} ${miss.id}`), []);
+});
+
 test('hold-out corpus: well formed, apart from the corpora before it, and within its floors', (t) => {
     if (!LABELS.every((label) => existsSync(join(HOLDOUT, `${label}.json`)))) {
         t.skip('the hold-out corpus is not there');
@@ -149,7 +160,7 @@ test('hold-out corpus: well formed, apart from the corpora before it, and within
     }
     const corpus = loadCorpus(HOLDOUT);
     const ids = checkShape(corpus, 'hold-out');
-    const before = earlier([DEV, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6]);
+    const before = earlier([DEV, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7]);
     for (const id of ids) assert.ok(!before.ids.has(id), `hold-out ${id} is also in an earlier corpus`);
     // Not one reply copied from an earlier corpus.
     for (const label of LABELS) for (const c of corpus[label]) assert.ok(!before.replies.has(c.reply), `hold-out ${c.id} repeats an earlier reply`);
@@ -164,7 +175,7 @@ test('hold-out corpus: well formed, apart from the corpora before it, and within
 });
 
 test('the corpus files never hold a real address or key', () => {
-    for (const dir of [DEV, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, HOLDOUT]) {
+    for (const dir of [DEV, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, HOLDOUT]) {
         for (const label of LABELS) {
             const file = join(dir, `${label}.json`);
             if (!existsSync(file)) continue;

@@ -87,7 +87,7 @@ Where the false flags fall, first recorded for the fifth hold-out:
 | Sixth hold-out, measured once before tuning | 40 | 8 (20.0%) | 2 | 20 | 2 (10.0%) |
 | Seventh hold-out, measured once before tuning | 40 | 4 (10.0%) | 0 | 20 | 4 (20.0%) |
 
-All six hold-outs were tuned on after that one measurement (the fixes
+All seven hold-outs were tuned on after that one measurement (the fixes
 were general rules, never a case's own words) and are now part of the
 tests, at 0% false flags and 100% caught, so none of them is a fair
 figure any more. The fourth one's writers were asked for set kinds of
@@ -120,9 +120,18 @@ four more fresh writers, was measured once against the same floors with
 the rules frozen (at e4d59f6): it flagged 10.0% of honest turns that claim
 something and called none of them contradicted, so it met those two
 floors, but it flagged 4 of its 20 turns that claim nothing (13.3% of
-quiet turns in all) and caught 78.0%, so it missed the other two. It is
-tuned on in turn, and an eighth hold-out from fresh writers is measured
-once against the same floors. To measure again:
+quiet turns in all) and caught 78.0%, so it missed the other two. It was
+then tuned on in turn (what an approval or a review says, how a build is
+set up, "whether" a run passed, a figure named as a budget, a "Live
+check" heading, a request that "goes through" a pipeline; and on the
+missed side, crashes behind a pipe, failures a loop prints, dry runs,
+test files counted as tests, "all 4 pass" with no test run, a named
+command's flags, the command a done claim names, a benchmark table with
+the runs as columns, a figure the turn's own benchmark contradicts, a
+file whose edit failed, cloud status reads that show a failed rollout,
+and a symptom said to be removed). An eighth hold-out from four more
+fresh writers is measured once against the same floors with the rules
+frozen. To measure again:
 
 ```sh
 node scripts/proof-corpus.mjs           # one row per corpus

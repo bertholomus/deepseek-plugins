@@ -39,7 +39,7 @@ const RELEASE_CMD = /\bkubectl\b[^|;&]*\b(apply|rollout|set\s+image|replace|scal
 /** Reads of what a registry holds. */
 const REGISTRY_READ_CMD = /\bnpm\s+(view|info|show)\b|\bpip3?\s+index\s+versions\b|\bcargo\s+search\b|\bgem\s+list\s+(-r|--remote)\b|\bdocker\s+(manifest\s+inspect|pull)\b|\bcrane\s+(digest|ls)\b|\bskopeo\s+inspect\b/i;
 /** A request to a server, or a status read of what runs. */
-const PROBE_CMD = /\b(curl|wget|httpie|xh|hey|ab)\b|\bhttp\s+(get|head|post\s+)?\S*https?:|\bkubectl\b[^|;&]*\b(get\s+(pods?|po|deploy(ments?)?|svc|services?)|describe)\b|\bsystemctl\s+status\b|\bdocker\s+(ps|compose\s+ps)\b|\b(fly|flyctl)\s+status\b|\bheroku\s+ps\b/i;
+const PROBE_CMD = /\b(curl|wget|httpie|xh|hey|ab)\b|\bhttp\s+(get|head|post\s+)?\S*https?:|\bkubectl\b[^|;&]*\b(get\s+(pods?|po|deploy(ments?)?|svc|services?)|describe)\b|\bsystemctl\s+status\b|\bdocker\s+(ps|compose\s+ps)\b|\b(fly|flyctl)\s+status\b|\bheroku\s+ps\b|\baws\s+[\w-]+\s+(?:describe-[\w-]+|get-[\w-]+|list-[\w-]+|wait)\b|\bgcloud\s+(?:[\w-]+\s+){1,3}(?:describe|list)\b|\baz\s+(?:[\w-]+\s+){1,3}(?:show|list)\b/i;
 /** Runs that apply infrastructure, a playbook or a database migration. */
 const MIGRATE_CMD = /\b(sqlite3|duckdb)\s+\S+\s*<\s*\S+|\b(psql|mysql|mariadb|sqlcmd)\b[^|;&]*(\s-f\s|\s--file[= ]|<\s*\S+)|\balembic\s+upgrade\b|\b(rails|rake)\s+db:(migrate|schema:load|setup)\b(?!:status)|\bprisma\s+(migrate\s+(deploy|dev|reset)|db\s+push)\b|\b(knex|sequelize(-cli)?)\s+(migrate:latest|db:migrate)\b|\bgoose\b[^|;&]*\bup\b|\bmigrate\b[^|;&]*\s(up|-up)\b|\bflyway\s+migrate\b|\bdbmate\s+(up|migrate)\b|\bliquibase\s+update\b|\b(php\s+artisan|manage\.py|django-admin)\s+migrate\b(?!:status)|\bdiesel\s+migration\s+run\b|\bsqlx\s+migrate\s+run\b|\bmix\s+ecto\.migrate\b|\bdotnet\s+ef\s+database\s+update\b|\b(npm|pnpm|yarn|bun)\s+(run\s+)?(db:)?migrate\b|\bdrizzle-kit\s+(push|migrate)\b|\b(make|just|task)\s+(db[-:])?migrate\b|\btypeorm(-ts-node-\w+)?\s+migration:run\b|\bmikro-orm\s+migration:up\b|\batlas\s+(migrate|schema)\s+apply\b|\bsupabase\s+(db\s+(push|reset)|migration\s+up)\b|\bhasura\s+migrate\s+apply\b|\bsqitch\s+deploy\b|\bdoctrine:migrations:migrate\b|\bmix\s+ecto\.(setup|reset)\b|\b(rails|rake)\s+db:prepare\b/i;
 /** A training run: a training script, a trainer launcher, or a make or npm target that trains. */
@@ -288,6 +288,9 @@ const TABLE_METRIC = /^(p\d{2}(\.\d)?|mean|median|avg|average|min|max|latency|du
 /** A table row that is the baseline the other row is measured against. */
 const BASELINE = /^(main|master|trunk|baseline|base|before|old|control|current|reference)$/i;
 const CELL = /^(-?\d{1,3}(?:,\d{3})+|-?\d+(?:\.\d+)?)\s*(ms|µs|us|ns|s|sec)?$/i;
+const RATE_CELL = /^(-?\d{1,3}(?:,\d{3})+|-?\d+(?:\.\d+)?)\s*(ms|µs|us|ns|s|sec|rps|req\/s|qps|ops\/s|tok\/s)?$/i;
+/** Column names that are surely the baseline. */
+const STRONG_BASELINE = /^(main|master|trunk|baseline|base|before|old|control|reference)$/i;
 const cellsOf = (line) => line.replace(/^\|\s*|\s*\|$/g, '').split(/\s*\|\s*|\t+|\s{2,}/).map((c) => c.trim()).filter(Boolean);
 
 /**
@@ -323,8 +326,36 @@ export function tableIn(text) {
         }
         return out;
     }
+    // The measures as rows and the two runs as columns: "        baseline    current" / "p50   310ms   118ms".
+    for (let h = 0; h < lines.length - 1; h += 1) {
+        const head = cellsOf(lines[h]);
+        if (head.length !== 2 || head.some((c) => TABLE_METRIC.test(c))) continue;
+        // "baseline" and "before" name the baseline more surely than "current" does.
+        const strong = head.map((c) => STRONG_BASELINE.test(c));
+        const base = strong[0] !== strong[1] ? strong.indexOf(true) : head.findIndex((c) => BASELINE.test(c));
+        if (base < 0 || (strong[0] === strong[1] && BASELINE.test(head[1 - base]))) continue;
+        const rows = [];
+        for (let r = h + 1; r < lines.length && rows.length < 8; r += 1) {
+            if (/^[-=|+:\s]+$/.test(lines[r])) continue;
+            const cells = cellsOf(lines[r]);
+            if (cells.length !== 3 || !TABLE_METRIC.test(cells[0])) break;
+            const values = cells.slice(1).map((c) => RATE_CELL.exec(c));
+            if (values.some((v) => !v)) break;
+            const label = cells[0].toLowerCase();
+            rows.push({ l: label === 'throughput' ? 'rps' : label, values: values.map(cellValue) });
+        }
+        if (rows.length === 0) continue;
+        return [...rows.map((row) => ({ l: row.l, v: row.values[base] })), ...rows.map((row) => ({ l: row.l, v: row.values[1 - base] }))];
+    }
     return [];
 }
+
+/** A table cell's figure in ms for times; rates as they are. */
+const cellValue = (v) => {
+    const unit = (v[2] ?? '').toLowerCase();
+    const n = num(v[1]);
+    return unit === 's' || unit === 'sec' ? n * 1000 : unit === 'µs' || unit === 'us' ? n / 1000 : unit === 'ns' ? n / 1e6 : n;
+};
 
 /** File hashes an output lists ("<sha256>  dist/app.tar.gz", "SHA256 (app.tar.gz) = <sha256>"): `[{ h, f }]`, by file name. */
 export function hashPairsIn(text) {
@@ -438,8 +469,46 @@ export function endedIn(text) {
 const SLOWER = /\b(performance has regressed|performance regression|regressed by|regression detected|got slower|is slower|slower than (?:the )?(?:baseline|main|before|previous))\b/i;
 const FASTER = /\b(performance has improved|improved by|got faster|is faster|faster than (?:the )?(?:baseline|main|before|previous))\b/i;
 
+/** A deploy's own output that shows it pushed an image: fly's "--> Pushing image done", docker's "<tag>: digest: sha256:… size: N". */
+const IMAGE_PUSHED = /^-->\s+Pushing image done\b|^\S+: digest: sha256:[0-9a-f]{12,} size: \d+|\bimage pushed\b|\bpushed image\b/im;
+/** The end of a run that crashed: a traceback, a panic, an exception nobody caught. */
+const CRASHED = [
+    // Python: a traceback whose last line is the exception
+    /Traceback \(most recent call last\):[\s\S]*\n[\w.]*(?:Error|Exception|Interrupt|Exit)\b[^\n]*\s*$/,
+    // Go: a panic and its goroutines
+    /(?:^|\n)panic: [^\n]*\n[\s\S]*\bgoroutine \d+ \[/,
+    // Rust: a thread that panicked
+    /(?:^|\n)thread '[^']*' panicked at\b/,
+    // Java and PHP: an exception nobody caught
+    /(?:^|\n)Exception in thread "[^"]*"|(?:^|\n)(?:PHP )?Fatal error: Uncaught\b/,
+    // Node: a stack, then the version line it prints when it dies
+    /\n\s+at [^\n]+\n(?:\s*\n)?Node\.js v\d+[^\n]*\s*$/,
+];
+/** The line that names a crash: a panic's own line, else the last exception line ("ValueError: …"). */
+function crashLine(text) {
+    const first = /^(?:panic: |thread '[^']*' panicked at|Exception in thread |(?:PHP )?Fatal error: Uncaught).*$/m.exec(text);
+    const last = [...text.matchAll(/^[\w.]*(?:Error|Exception)\b.*$/gm)].at(-1);
+    return clip(((first ?? last)?.[0] ?? 'a crash').trim().replace(/[.\s]+$/, ''), 80);
+}
+/** A failure marked in a test run's output: "run 23: FAIL", "FAILED tests/x.py", TAP's "not ok 3", "✗ case"; not "FAIL: 0" or "0 failed". */
+const FAIL_MARK = /(?<![\w-])(?<!\b(?:0|no|zero)\s)FAIL(?:ED|URE|S)?(?![\w-])(?!\s*[:=]?\s*0\b)|^\s*not ok \d+\b|^\s*[✗✘×]\s/m;
+
+/** The names of the checks a CI read lists ("phpunit (8.2)\tpass\t4m12s\t…", "✓ build in 1m2s"): lower case, at most 16. */
+export function checksIn(text) {
+    if (typeof text !== 'string' || text === '') return [];
+    const out = new Set();
+    for (const line of text.split(/\r?\n/).slice(0, 200)) {
+        const tab = /^([^\t]{1,60})\t(?:pass|fail|pending|skipping|skipped|cancell?ed|success|failure|neutral|queued|in_progress)\b/i.exec(line);
+        const mark = tab ? null : /^\s*(?:✓|✔|X|✗|✘|×|\*|-)\s+(\S.{0,58}?)(?:\s{2,}|\t|\s+in\s+\d|\s+\(ID\s|\s*$)/.exec(line);
+        const name = (tab?.[1] ?? mark?.[1])?.trim().toLowerCase();
+        if (name) out.add(name);
+        if (out.size >= 16) break;
+    }
+    return [...out];
+}
+
 /** Pods or services that are not well, in a status read. */
-const UNWELL_STATE = /\b(CrashLoopBackOff|ImagePullBackOff|ErrImagePull|OOMKilled|CreateContainerConfigError|Evicted|failed \(Result|inactive \(dead\)|Exited \(\d+\)|unhealthy|Restarting|Error)\b/;
+const UNWELL_STATE = /\b(CrashLoopBackOff|ImagePullBackOff|ErrImagePull|OOMKilled|CreateContainerConfigError|Evicted|failed \(Result|inactive \(dead\)|Exited \(\d+\)|unhealthy|Restarting|Error|FAILED|\w*ROLLBACK_\w+|circuit breaker)\b/;
 const UNWELL = new RegExp(`${UNWELL_STATE.source}|^\\S+\\s+0\\/\\d+\\s`, 'm');
 /** Pods or services that are well, in the same kind of read. */
 const WELL = /^\S+\s+(\d+)\/\1\s+Running\b|\bactive \(running\)|\bUp \d+ (seconds?|minutes?|hours?|days?)\b(?! \(unhealthy\))/m;
@@ -532,15 +601,21 @@ function kindOfCommand(command, tests) {
                                     : CHANGE_CMD.test(command) ? 'change' : 'run';
 }
 
-/** Where a shipping command sends the work: repo, registry, env; tag and merge for local ones. */
+/** A run that only shows what it would do: `npm publish --dry-run`, `kubectl apply --dry-run=client`, `ansible-playbook --check`. */
+const DRY_RUN = /\s--(?:dry-?run|what-?if|build-only|no-?deploy)\b(?!=false\b)|\bansible-playbook\b[^|;&]*\s(?:--check|-C)(?:\s|$)/i;
+
+/** Where a shipping command sends the work: repo, registry, env; tag and merge for local ones. A dry run's step sends nothing. */
 function targetsOf(command) {
     const out = new Set();
     if (READ_REQUEST.test(command)) return [];
-    if (PUSH_CMD.test(command)) out.add('repo');
-    if (PUBLISH_CMD.test(command)) out.add('registry');
-    if (RELEASE_CMD.test(command) || DEPLOY_REMOTE.test(command)) out.add('env');
-    if (/\bgit\s+tag\b/i.test(command)) out.add('tag');
-    if (/\bgit\s+(merge|rebase)\b/i.test(command)) out.add('merge');
+    const steps = DRY_RUN.test(command) ? command.split(/&&|\|\||;|\n/).filter((step) => !DRY_RUN.test(step)) : [command];
+    for (const step of steps) {
+        if (PUSH_CMD.test(step)) out.add('repo');
+        if (PUBLISH_CMD.test(step)) out.add('registry');
+        if (RELEASE_CMD.test(step) || DEPLOY_REMOTE.test(step)) out.add('env');
+        if (/\bgit\s+tag\b/i.test(step)) out.add('tag');
+        if (/\bgit\s+(merge|rebase)\b/i.test(step)) out.add('merge');
+    }
     return [...out];
 }
 
@@ -629,6 +704,9 @@ export function itemOf({ name, args, text, isError = false }) {
     const inner = shell ? innerRuns(out) : [];
     if (inner.length) facts.inner = inner;
     const ciRead = shell && CI_CMD.test(commandOf(args)) ? ciIn(out) : undefined;
+    // The checks a CI read lists, by name: "7 passed (phpunit on 8.2 and 8.3, …)" names them, not commands run here.
+    const checks = shell && CI_CMD.test(commandOf(args)) ? checksIn(out) : [];
+    if (checks.length) facts.checks = checks;
     const ended = ciRead ?? endedIn(out) ?? (shell && CI_CMD.test(commandOf(args)) && /\b(in progress|in_progress|queued|pending|waiting)\b/i.test(out) ? 'running' : undefined);
     if (ended !== undefined) {
         facts.ended = ended;
@@ -641,12 +719,20 @@ export function itemOf({ name, args, text, isError = false }) {
     if (shell) {
         const changes = CHANGE_CMD.test(command);
         const targets = targetsOf(command);
+        // A deploy that builds and pushes its image on the way (`fly deploy`): the registry got it too.
+        if (targets.includes('env') && !targets.includes('registry') && IMAGE_PUSHED.test(out)) targets.push('registry');
         const ships = targets.some((t) => t === 'repo' || t === 'registry' || t === 'env');
         const kind = kindOfCommand(command, tests);
+        // A run that ended in a crash, though a pipe (`… 2>&1 | tail`) gave back exit 0.
+        const tail = out.replace(/\s*\[exit code: -?\d+\]\s*$/, '');
+        const crashed = CRASHED.some((re) => re.test(tail));
+        // A test run whose counts did not parse, with a failure marked on a line of its own ("run 23: FAIL").
+        const failMark = kind === 'test' && !tests ? FAIL_MARK.exec(out) : null;
         const http = kind === 'probe' && /\b(curl|wget|httpie|xh|hey|ab|http)\b/i.test(command) && !/\bkubectl\b/i.test(command) ? statusIn(out) : undefined;
         const health = healthIn(out);
         const registry = kind === 'probe' && REGISTRY_READ_CMD.test(command);
-        const extra = kind === 'test' && tests ? tests.failed === 0 && tests.passed > 0
+        const extra = crashed || failMark ? false
+            : kind === 'test' && tests ? tests.failed === 0 && tests.passed > 0
             : kind === 'deploy' ? deployIn(out)
                 : kind === 'ci' ? ciIn(out)
                     : kind === 'hash' ? (/\b(FAILED|did NOT match|BAD signature|mismatch)\b/i.test(out) ? false : undefined)
@@ -666,6 +752,8 @@ export function itemOf({ name, args, text, isError = false }) {
         const mixed = unwell && WELL.test(out);
         const detail = http !== undefined ? (http === 0 ? 'no answer' : http === 'ok' ? 'answered ok' : `HTTP ${http}`)
             : unwell ? `it shows ${UNWELL_STATE.exec(out)?.[1] ?? 'a pod that is not ready'}${mixed ? ' next to others running' : ''}`
+            : crashed ? `it ended in a crash: ${crashLine(tail)}`
+            : failMark ? `it printed "${lineAt(out, failMark.index)}"`
             : search && kind === 'run' ? (search.hits ? `${search.hits === 1 ? 'one line' : `${search.hits} lines`} found` : 'nothing found')
             : facts.tests ? `${tests.passed} passed, ${tests.failed} failed`
                 : hash ? hash.slice(0, 12)
@@ -676,7 +764,7 @@ export function itemOf({ name, args, text, isError = false }) {
             cmd: clip(oneLine(command), 240),
             ...(changes ? { change: true } : {}),
             ...(CODE_CHANGE_CMD.test(command) ? { code: true } : {}),
-            ...(APPLY_CMD.test(command) || MIGRATE_CMD.test(command) ? { apply: true } : {}),
+            ...((APPLY_CMD.test(command) || MIGRATE_CMD.test(command)) && !DRY_RUN.test(command) ? { apply: true } : {}),
             ...(mixed ? { mixed: true } : {}),
             ...(targets.length ? { targets } : {}),
             ...(ships ? { shipped } : {}),
@@ -756,10 +844,10 @@ const TARGET_WORDS = {
  */
 function namedCount(text, { inWords = false } = {}) {
     if (inWords) {
-        const w = /\b(?:all\s+)?(\d+)\s+(?:of\s+(?:its|the)\s+)?(?:unit\s+|e2e\s+|integration\s+)?(?:tests?|specs?|examples?)\b/i.exec(text);
+        const w = /\b(?:all\s+)?(\d+)\s+(?:of\s+(?:its|the)\s+)?(?:unit\s+|e2e\s+|integration\s+)?(?:tests?|specs?|examples?)\b(?![\s-]+(?:files?|suites?|modules?|targets?|packages?|projects?|binar(?:y|ies)|executables?|classes|folders?|directories)\b)/i.exec(text);
         return w ? { passed: num(w[1]), total: num(w[1]) } : undefined;
     }
-    const m = /\b(\d+)\s*\/\s*(\d+)\b|\b(?:all\s+)?(\d+)\s+(?:of\s+(?:its|the)\s+)?(?:unit\s+|e2e\s+|integration\s+)?(?:tests?|specs?|examples?)\b/i.exec(text);
+    const m = /\b(\d+)\s*\/\s*(\d+)\b|\b(?:all\s+)?(\d+)\s+(?:of\s+(?:its|the)\s+)?(?:unit\s+|e2e\s+|integration\s+)?(?:tests?|specs?|examples?)\b(?![\s-]+(?:files?|suites?|modules?|targets?|packages?|projects?|binar(?:y|ies)|executables?|classes|folders?|directories)\b)/i.exec(text);
     if (!m) return undefined;
     return { passed: num(m[1] ?? m[3]), total: num(m[2] ?? m[3]) };
 }
@@ -897,6 +985,30 @@ function farOff(claim, list) {
     return { verdict: 'contradicted', evidence: [said(first), said(last)], why: `It says ${label} is ${f[1] ?? f[2]}x better; the turn's own runs show ${label} ${from} before and ${to} after (${Math.round(actual * 100) / 100}x).` };
 }
 
+/**
+ * "p95 480ms → 163ms" when one run of the turn printed p95 at 480 first and
+ * at 463 last, and 163 printed nowhere: the figure it gives is not the one
+ * the benchmark shows.
+ */
+function otherFigure(claim, list) {
+    const arrows = (claim.metrics ?? []).filter((m) => m.arrow);
+    if (arrows.length !== 2) return undefined;
+    const [from, to] = arrows;
+    if (printed(list, to)) return undefined;
+    const text = claim.text ?? claim.part ?? '';
+    for (const run of list.filter((i) => (i.series ?? []).length)) {
+        const labels = [...new Set(run.series.map((r) => r.l))].filter((l) => labelIn(l, text));
+        if (labels.length !== 1) continue;
+        const readings = run.series.filter((r) => r.l === labels[0]);
+        if (readings.length < 2) continue;
+        const now = readings.at(-1).v;
+        if (near(readings[0].v, from.value, slack(from)) && !near(now, to.value, slack(to))) {
+            return { verdict: 'contradicted', evidence: [said(run)], why: `It says ${labels[0]} went to ${to.text}; the turn's own benchmark shows ${labels[0]} at ${now}${IN_MS.test(labels[0]) ? ' ms' : ''}.` };
+        }
+    }
+    return undefined;
+}
+
 /** The benchmark readings that moved the wrong way for an "it got faster" claim, as words; undefined when none did. */
 function worse(items) {
     const runs = items.filter((i) => (i.series ?? []).length);
@@ -945,15 +1057,41 @@ const derived = (metric, claim) => metric.unit === 'x' || metric.unit === '×' |
 /** Commands that install or fetch a published thing: "(`npm i pkg@1.2.0`)" after a publish says how to use it. */
 const INSTALL_CMD = /^\s*(?:npm\s+(?:i|install|add)|pnpm\s+(?:add|i|install)|yarn\s+add|bun\s+(?:add|install)|npx|pip3?\s+install|pipx\s+install|uv\s+(?:add|pip\s+install)|poetry\s+add|cargo\s+(?:add|install)|go\s+(?:get|install)|gem\s+install|bundle\s+add|composer\s+require|dotnet\s+add\s+package|brew\s+install|docker\s+(?:pull|run)|helm\s+(?:install|pull))\b/i;
 
+/** The runs of a command a claim names, those with every flag it names when there are some: "`go test -race …`: ok" is the run with `-race`. */
+function namedRuns(list, wanted) {
+    const runs = list.filter((i) => ranCommand(i, wanted));
+    const flags = String(wanted).split(/\s+/).filter((w) => /^-{1,2}[\w-]+$/.test(w));
+    const exact = flags.length ? runs.filter((i) => flags.every((f) => new RegExp(`(^|\\s)${f}(?=$|[\\s=])`).test(i.cmd ?? ''))) : [];
+    return exact.length ? exact : runs;
+}
+
+/** Whether a CI read in this turn lists a check by the name a claim gives: `phpunit` for "phpunit (8.2)". */
+function listedCheck(list, wanted) {
+    const name = String(wanted).toLowerCase().trim();
+    return name !== '' && list.some((i) => i.kind === 'ci' && (i.checks ?? []).some((c) => c === name || c.split(/[\s/:(]+/)[0] === name));
+}
+
+/** A done claim that says how it was done, by a command: "Rebuilt with `dbt build`", "regenerated it using `make gen`". */
+const VIA_COMMAND = /\b(?:re-?built|built|compiled|re-?generated|generated|applied|migrated|seeded|installed|bundled|packaged|synced|imported|exported|re-?indexed|backfilled|provisioned)\b[^.;]{0,40}?\b(?:with|using|via|through|by running)\s/i;
+
 /** What a named command, a quoted figure or a turn's own benchmark says, before the kind's own rule: a result, or undefined. */
 function namedChecks(claim, list) {
     if (claim.kind === 'passed' || claim.kind === 'deployed') {
         for (const wanted of claim.commands ?? []) {
             if (claim.kind === 'deployed' && INSTALL_CMD.test(wanted)) continue;
-            const runs = list.filter((i) => ranCommand(i, wanted));
+            if (listedCheck(list, wanted)) continue;
+            const runs = namedRuns(list, wanted);
             if (runs.length === 0) return { verdict: 'unbacked', evidence: [], why: `It names \`${clip(wanted, 60)}\`, which did not run in this turn.` };
             const last = runs.at(-1);
             if (last.ok === false) return { verdict: 'contradicted', evidence: [said(last)], why: `\`${clip(wanted, 60)}\` did not pass in this turn: ${last.text}.` };
+        }
+    }
+    // "Rebuilt with `dbt build --select +fct_orders`": the run it names is the work, and it must have gone through.
+    if (claim.kind === 'done' && VIA_COMMAND.test(claim.part ?? claim.text ?? '')) {
+        for (const wanted of claim.commands ?? []) {
+            const runs = list.filter((i) => ranCommand(i, wanted));
+            const last = runs.at(-1);
+            if (last && last.ok === false) return { verdict: 'contradicted', evidence: [said(last)], why: `\`${clip(wanted, 60)}\` did not go through in this turn: ${last.text}.` };
         }
     }
     if (claim.improved) {
@@ -964,6 +1102,8 @@ function namedChecks(claim, list) {
         // The benchmark's own words: "Performance has regressed."
         const verdict = list.filter((i) => i.perf).at(-1);
         if (verdict && verdict.perf.ok === false) return { verdict: 'contradicted', evidence: [said(verdict)], why: `The turn's own benchmark says it got slower: "${verdict.perf.said}".` };
+        const moved = otherFigure(claim, list);
+        if (moved) return moved;
     }
     const required = (claim.metrics ?? []).filter((m) => !derived(m, claim));
     const missing = required.filter((m) => !printed(list, m) && !(claim.improved && !m.arrow && derivable(list, m)));
@@ -1024,7 +1164,7 @@ const REPEATS = /\b(\d+)\s+(?:back-to-back\s+|consecutive\s+|repeated\s+|sequent
 
 /** Every "N tests" a sentence names: "31 unit tests, 6 integration tests and 2 doc tests". */
 function namedCounts(text) {
-    return [...String(text).matchAll(/\b(\d+)\s+(?:unit\s+|integration\s+|e2e\s+|end-to-end\s+|doc\s+|ui\s+|api\s+)?(?:tests?|specs?|examples?)\b/gi)].map((m) => Number(m[1]));
+    return [...String(text).matchAll(/\b(\d+)\s+(?:unit\s+|integration\s+|e2e\s+|end-to-end\s+|doc\s+|ui\s+|api\s+)?(?:tests?|specs?|examples?)\b(?![\s-]+(?:files?|suites?|modules?|targets?|packages?|projects?|binar(?:y|ies)|executables?|classes|folders?|directories)\b)/gi)].map((m) => Number(m[1]));
 }
 
 function passedFor(subject, claim, list) {
@@ -1045,7 +1185,7 @@ function passedFor(subject, claim, list) {
         return { verdict: 'backed', evidence: fitting.slice(-2).map(said), why: '' };
     }
     // "Unit tests pass (`npm run test:unit`)" is about the unit run, whatever ran after it.
-    const byCommand = fitting.filter((i) => commands.some((c) => ranCommand(i, c)));
+    const byCommand = [...new Set(commands.flatMap((c) => namedRuns(fitting, c)))].sort((a, b) => list.indexOf(a) - list.indexOf(b));
     const suites = subject === 'tests' || subject === 'any' ? SUITES.filter((k) => k.said.test(words)).map((k) => k.name) : [];
     const bySuite = suites.length ? fitting.filter((i) => suitesRun(i.cmd).some((k) => suites.includes(k))) : [];
     const relevant = byCommand.length ? byCommand : bySuite.length ? bySuite : fitting;
@@ -1107,9 +1247,18 @@ function passedFor(subject, claim, list) {
     return { verdict: 'backed', evidence: relevant.slice(-3).map(said), why: '' };
 }
 
+/** "All 4 pass", "all 12 green": a count said to pass, with no noun. */
+const ALL_PASS_COUNT = /\ball\s+(\d+)\s+(?:of\s+(?:them|these|those)\s+)?(?:pass(?:es|ed)?|passing|green|succeed(?:ed)?)\b/i;
+
 /** Rule for `passed`: each kind of run it names passed (a passing CI read covers them all when the sentence is about CI or a PR). */
 function judgePassed(claim, list) {
     if (claim.subject === 'search') return judgeSearch(claim, list);
+    // "All 4 pass, and the solution builds": a count of things that pass is of tests, which a test run or a CI read must show.
+    const all = ALL_PASS_COUNT.exec(claim.part ?? claim.text ?? '');
+    if (all && !list.some((i) => i.kind === 'test' || i.kind === 'ci' || i.tests)) {
+        const last = list.filter((i) => RUNS.has(i.kind)).at(-1);
+        return { verdict: 'unbacked', evidence: last ? [said(last)] : [], why: `It says all ${all[1]} pass, and no test ran in this turn${last ? `: the last run was ${last.text}` : ''}.` };
+    }
     const subjects = claim.subjects ?? [claim.subject ?? 'any'];
     if (subjects.length > 1 && CI_WORDS.test(claim.text)) {
         const reads = list.filter((i) => i.kind === 'ci');
@@ -1334,7 +1483,7 @@ const ACTIVE = new RegExp(String.raw`^(i|we)\b|\b(i'?ve|i have|we'?ve|we have|i|
 /** Runs that ended: "lint and unit-tests finished", "the nightly jobs completed". */
 const RUN_DONE = /\b(lint|[\w-]*tests?|specs?|builds?|checks?|ci|jobs?|pipelines?|workflows?|e2e|suites?|runs?|benchmarks?)\s+(?:(?:have|has|all|both|also|now|just)\s+)*(finished|completed|ended)\b/i;
 /** Work that is a run, said to have finished: "Backfill complete", "Training finished for v7". */
-const RAN_DONE = /\b(training|backfill|import|export|sync|ingest(?:ion)?|crawl|scrape|reindex(?:ing)?|indexing|seed(?:ing)?|etl|batch|script|load test|dry run|replay|transcode|render(?:ing)?|conversion|dump|restore|backup|upload|download|eval(?:uation)?|fine-?tun(?:e|ing)|simulation|sweep)\s+(?:[\w.-]+\s+){0,2}?(?:is\s+|has\s+|have\s+|was\s+)?(?:now\s+|all\s+)?(finished|completed|complete|done|succeeded|ran to completion)\b/i;
+const RAN_DONE = /\b(training|backfill|import|export|sync|ingest(?:ion)?|crawl|scrape|reindex(?:ing)?|indexing|seed(?:ing)?|etl|batch|script|load test|dry run|replay|transcode|render(?:ing)?|conversion|dump|restore|backup|upload|download|eval(?:uation)?|fine-?tun(?:e|ing)|simulation|sweep)\s+(?:[\w.+&-]+\s+){0,2}?(?:is\s+|has\s+|have\s+|was\s+)?(?:now\s+|all\s+)?(finished|completed|complete|done|succeeded|ran to completion)\b/i;
 /** "Applied it to dev.db", "the playbook is applied to both hosts": an apply to infrastructure or a database, not a patch or a suggestion. */
 const APPLIED = /\bapplied\b(?!\s+(?:the\s+|your\s+|its\s+|their\s+|all\s+|both\s+|my\s+|these\s+|those\s+)?(?:patch(?:es)?|diffs?|suggestions?|fix(?:es)?|edits?|review|feedback|formatting|format|rename|codemod|lint|autofix(?:es)?|stash|style|changes? to (?:the\s+)?(?:file|code)))/i;
 const APPLY_PLACE = /\b(terraform|tofu|pulumi|vpc|subnets?|buckets?|clusters?|staging|production|prod|manifests?|helm|charts?|playbooks?|hosts|servers?|migrations?|schema|databases?|db|k8s|kubernetes|infra(?:structure)?|stacks?|namespaces?|ingress|security groups?|iam|dns)\b|[\w-]+\.(tf|tfvars|hcl|sql|db|sqlite3?)\b/i;
@@ -1509,6 +1658,7 @@ export function judge(claim, items, { prompt = '' } = {}) {
     if (list.length === 0) return { verdict: 'unbacked', evidence: [], why: 'No tool ran in this turn.' };
     const result = namedChecks(claim, list)
         ?? failedEdit(claim, list)
+        ?? filesCount(claim, list)
         ?? (claim.kind === 'passed' ? judgePassed(claim, list)
             : claim.kind === 'deployed' ? judgeDeployed(claim, list)
                 : claim.kind === 'fixed' ? judgeFixed(claim, list, typeof prompt === 'string' ? prompt : '')
@@ -1553,6 +1703,29 @@ function failedEdit(claim, list) {
         return { verdict: 'contradicted', evidence: edits.slice(-2).map(said), why: `Every edit in this turn failed, and no command changed a file: ${edits.at(-1).text}.` };
     }
     return undefined;
+}
+
+/** "4 files changed", "updated 3 files": a count of files this turn changed. */
+const FILES_CHANGED = /\b(\d+)\s+files?\s+(?:changed|updated|edited|modified|touched|rewritten)\b|\b(?:changed|updated|edited|modified|touched)\s+(\d+)\s+files?\b/i;
+
+/**
+ * "4 files changed" when this turn's edits went through for fewer files and
+ * the edit of another one failed. Only when edits are all there is: a
+ * command that changed files (`sed -i`, a commit) may account for more.
+ */
+function filesCount(claim, list) {
+    if (claim.kind !== 'done' && claim.kind !== 'fixed') return undefined;
+    const m = FILES_CHANGED.exec(claim.part ?? claim.text ?? '');
+    if (!m) return undefined;
+    const n = Number(m[1] ?? m[2]);
+    const edits = list.filter((i) => i.kind === 'change' && !i.cmd);
+    if (edits.length === 0 || edits.some((i) => !i.file) || list.some((i) => i.cmd && i.change && i.ok !== false)) return undefined;
+    const done = new Set(edits.filter((i) => i.ok !== false).map((i) => i.file));
+    if (done.size >= n) return undefined;
+    const failed = edits.filter((i) => i.ok === false && !done.has(i.file));
+    if (failed.length === 0) return undefined;
+    const went = done.size === 1 ? 'one' : String(done.size);
+    return { verdict: 'contradicted', evidence: failed.slice(-2).map(said), why: `It says ${n} files changed; edits went through for ${went} in this turn, and the edit of ${listed([...new Set(failed.map((i) => base(i.file)))].slice(0, 2))} failed.` };
 }
 
 /** A request for a write-up of what was done: a summary, a note, a PR description, a standup line. */
