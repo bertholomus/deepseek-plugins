@@ -318,7 +318,7 @@ node --test test/agent-terminals.test.js test/agent-terminals-client.test.js   #
 node scripts/e2e.mjs agent-terminals                                           # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test (101 checks, about 100 seconds a build) starts DSH from
+The real-DSH test (117 checks, about 150 seconds a build) starts DSH from
 each `.e2e/dsh-<version>` install and from the installed app's own DSH, each in a throwaway home with a throwaway
 home folder for its shell, with Session Watch, Decisions, Agent Terminals
 and a stand-in neighbour plugin that draws in the same places. Stand-in
@@ -329,18 +329,30 @@ after it, listed by one turn of its model) and proves its first message
 from its transcript; holds the next message while the agent works and
 takes one back; pastes two lines as one message; presses Enter again for a
 program that swallows it; carries a question to Decisions and types the
-recommendation and an answer in your words back in; types to a program
-with no transcript (typed in, not proven); and says how to fix a program
-the shell cannot find. In a browser, light and dark, wide and narrow, it
+recommendation and an answer in your words back in (Decisions turns the
+answer *delivered* from the transcript's proof); types to a program with no
+transcript (typed in, not proven); refuses a program path that is not
+there before any session is made, and says how to fix a program name the
+shell cannot find (*Could not start*, no first turn). With
+`typeWhileWorking` on and a job that asks for approval after the message
+went in, it presses no Enter into the prompt, and the message is read once
+the prompt is answered in the terminal. In a browser, light and dark, wide
+and narrow, it
 checks the page, the row's mark, hover line and menu beside a neighbour's
 (which keeps its seat), the terminal tab beside the session, a tool call
 answered in that tab (the held message goes in after), a start from the
-page with a found program, Stop, Start again, Start anew and Forget,
+page with a found program, Stop, Start again, Start anew and Forget (it
+asks first; Keep it changes nothing),
 closing a tab (the agent ends; Start again brings it back), **Start a
-coding agent here**, and a setting saved in Plugins that applies at once.
-It restarts DSH (agents resume under the same terminal id; a `plain` one
-says why it was not started again; the window's tab shows the resumed
-agent), types through DSH's terminal input on 0.2.0 and checks the words
+coding agent here**, a setting saved in Plugins that applies at once, and
+a wrong value saved while DSH runs (the agents keep running, read *not
+followed*, offer only **Open its terminal**, and are picked up where they
+are once it is fixed). It restarts DSH (agents resume under the same
+terminal id; a `plain` one says why it was not started again; the window's
+tab shows the resumed agent), restarts it again in the middle of a job and
+of an approval prompt (both agents come back idle, each cut job is logged
+once, the held messages go in once and are proven, no question is left in
+Decisions), types through DSH's terminal input on 0.2.0 and checks the words
 on later builds, sets a wrong value and fixes it in the form (the agents
 come back), switches Session Watch off in the profile, checks `enabled:
 false` and the file modes, and ends every process it started. It reads the
