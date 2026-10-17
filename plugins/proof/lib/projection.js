@@ -37,7 +37,7 @@
  * @module dsh-plugin-proof/projection
  */
 import { claimsIn } from './claims.js';
-import { asksForWork, itemOf, judge } from './evidence.js';
+import { asksForWork, itemOf, judge, quotedBy } from './evidence.js';
 
 /** The projection key; the browser half reads the same name. */
 export const KEY = 'proofClaims';
@@ -100,6 +100,14 @@ function judged(turn, prev, at) {
             const earlier = judge(claim, prev.items, { prompt: prev.ask ?? '' });
             if (earlier.verdict !== 'unbacked') {
                 result = { ...earlier, evidence: earlier.evidence.map((e) => `turn ${prev.n}: ${e}`) };
+                from = prev.n;
+            }
+        }
+        // A write-up of the last turn ("write the update for the channel") that restates its output word for word.
+        if (result.verdict === 'unbacked' && turn.items.length === 0 && prev && prev.items.length > 0) {
+            const quoted = quotedBy(claim, prev.items);
+            if (quoted) {
+                result = { ...quoted, evidence: quoted.evidence.map((e) => `turn ${prev.n}: ${e}`) };
                 from = prev.n;
             }
         }
@@ -208,7 +216,13 @@ function parseClaim(c) {
 }
 
 function parseItems(items) {
-    return Array.isArray(items) ? items.filter((i) => isRecord(i) && typeof i.kind === 'string' && typeof i.text === 'string').slice(-MAX_ITEMS) : [];
+    if (!Array.isArray(items)) return [];
+    return items.filter((i) => isRecord(i) && typeof i.kind === 'string' && typeof i.text === 'string').slice(-MAX_ITEMS).map((i) => {
+        const { lines, pairs, ...rest } = i;
+        const kept = Array.isArray(lines) ? lines.filter((l) => typeof l === 'string').slice(0, 8).map((l) => l.slice(0, 120)) : [];
+        const hashes = Array.isArray(pairs) ? pairs.filter((p) => isRecord(p) && typeof p.h === 'string' && typeof p.f === 'string').slice(0, 8) : [];
+        return { ...rest, ...(kept.length ? { lines: kept } : {}), ...(hashes.length ? { pairs: hashes } : {}) };
+    });
 }
 
 /** Saved state back from DSH's cache: anything unknown becomes the empty ledger. Never throws. */

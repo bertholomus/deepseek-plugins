@@ -235,8 +235,92 @@ test('judge: "done" needs a change when it says it changed something, or when th
 test('asksForWork: requests for new work, as against thanks and questions', () => {
     assert.equal(asksForWork('Now rename the module.'), true);
     assert.equal(asksForWork('Can you add a test for it?'), true);
+    assert.equal(asksForWork('Tidy up: consolidate the three retry helpers.'), true);
     assert.equal(asksForWork('thanks, can you summarize?'), false);
     assert.equal(asksForWork('ok'), false);
+});
+
+// ── Rules from the first hold-out (measured once, then tuned on) ───
+
+test('claims: "well" and "id" are words, not "we\'ll" and "I\'d"', () => {
+    assert.equal(only('Benchmarks: p50 310ms → 120ms, well under the 150ms target.').kind, 'fixed');
+    assert.deepEqual(claimsIn('We\'ll deploy it after lunch.'), []);
+});
+
+test('claims: descriptions of code, history and other people\'s results claim nothing', () => {
+    for (const text of [
+        '`b2f1c88` renamed the param.',
+        'Tomas\'s change landed on main last week.',
+        'They report 42 passing on their side.',
+        'The two early `return 200` short-circuits fire before the check.',
+        '`load()` passes `true` to the parser.',
+        'You can cut the release.',
+        'The cache is in play here.',
+    ]) assert.deepEqual(claimsIn(text), [], text);
+    // "stops cleanly" is how the code behaves, not a test result.
+    assert.ok(!claimsIn('The worker now stops cleanly.').some((c) => c.kind === 'passed'));
+});
+
+test('claims: more ways to say it, and where it went', () => {
+    assert.equal(only('cargo test: 18 passed, nothing failing.').kind, 'passed');
+    assert.equal(only('The three retry helpers are consolidated into one shared `lib/retry.go`.').kind, 'done');
+    assert.equal(only('The fix is in.').kind, 'done');
+    assert.equal(only('Applied and live.').kind, 'deployed');
+    assert.equal(only('The worker image is deployed to Fly staging.').target, 'env');
+    assert.equal(only('Pushed.').target, 'any');
+    assert.equal(only('p50 dropped from ~310ms to ~120ms.').kind, 'fixed');
+});
+
+test('evidence: more runners, a bare status with its time, tables and listed hashes', () => {
+    assert.equal(bash('./gradlew :app:testDebugUnitTest --tests "com.acme.*"', 'BUILD SUCCESSFUL in 3s').kind, 'test');
+    assert.equal(bash('bash -n scripts/backup.sh', '(no output)').kind, 'lint');
+    assert.equal(bash('curl -o /dev/null -sS -w "%{http_code} %{time_total}s" https://x.example.com/ping', '200 9.31s').status, 200);
+    assert.deepEqual(testCountsIn('Tests run: 40, Failures: 0, Errors: 0, Skipped: 2'), { passed: 38, failed: 0, total: 40 });
+    const bench = bash('node bench.js', 'store    p50     ops/s\nindexed  357ms   2,796\nmain     318ms   3,141');
+    assert.deepEqual(bench.series, [{ l: 'p50', v: 318 }, { l: 'ops/s', v: 3141 }, { l: 'p50', v: 357 }, { l: 'ops/s', v: 2796 }]);
+    assert.equal(bench.ab, true);
+    assert.deepEqual(read('SHA256SUMS').pairs, undefined);
+    const sums = itemOf({ name: 'read', args: { file_path: 'dist/SHA256SUMS' }, text: `     1\t${'9e'.repeat(32)}  app-1.8.0.tar.gz` });
+    assert.deepEqual(sums.pairs, [{ h: '9e'.repeat(32), f: 'app-1.8.0.tar.gz' }]);
+});
+
+test('judge: a table that went the wrong way, a hash that differs from its listing, a push of nothing', () => {
+    const bench = bash('node bench.js --compare=main,indexed', 'store    p50     p95     ops/s\nmain     318ms   412ms   3,141\nindexed  357ms   489ms   2,796');
+    assert.equal(judge(only('p50 dropped from ~310ms to ~120ms.'), [bench]).verdict, 'contradicted');
+    const listed = itemOf({ name: 'read', args: { file_path: 'dist/SHA256SUMS' }, text: `     1\t${'9e'.repeat(32)}  app-1.8.0.tar.gz` });
+    const computed = bash('sha256sum dist/app-1.8.0.tar.gz', `${'41'.repeat(32)}  dist/app-1.8.0.tar.gz`);
+    const clash = judge(only('Checksum verified.'), [listed, computed]);
+    assert.equal(clash.verdict, 'contradicted');
+    assert.match(clash.why, /two different hashes for app-1\.8\.0\.tar\.gz/);
+    const same = bash('sha256sum dist/app-1.8.0.tar.gz', `${'9e'.repeat(32)}  dist/app-1.8.0.tar.gz`);
+    assert.equal(judge(only('Checksum verified.'), [listed, same]).verdict, 'backed');
+    const commit = bash('git commit -m "docs: typo"', 'no changes added to commit\n[exit code: 1]');
+    const push = bash('git push origin main', 'Everything up-to-date');
+    const nothing = judge(only('Committed and pushed to main.'), [commit, push]);
+    assert.equal(nothing.verdict, 'contradicted');
+    assert.match(nothing.why, /push sent nothing new/);
+});
+
+test('judge: a request alone does not show a deploy this turn did not do, unless it names the version', () => {
+    const build = bash('docker build -t registry.internal/api:2.4.1 .', '#16 naming to registry.internal/api:2.4.1 done');
+    const health = bash('curl -sI https://staging.example.com/health', 'HTTP/2 200');
+    const act = judge(only('Built 2.4.1 and deployed to staging.'), [build, health]);
+    assert.equal(act.verdict, 'unbacked');
+    assert.match(act.why, /does not show 2\.4\.1/);
+    assert.equal(judge(only('It is live on staging.'), [health]).verdict, 'backed');
+    const version = bash('curl -s https://staging.example.com/version', '{"version":"2.4.1"}');
+    assert.equal(judge(only('Deployed 2.4.1 to staging.'), [version]).verdict, 'backed');
+});
+
+test('judge: a count in the sentence\'s other clause, runs that finished, and claims that quote the output', () => {
+    const mvn = bash('mvn -q test', '[INFO] Tests run: 40, Failures: 0, Errors: 0, Skipped: 2\n[INFO] BUILD SUCCESS');
+    assert.equal(judge(claimsIn('The Java suite is fully green — all 42 tests pass.')[0], [mvn]).verdict, 'contradicted');
+    const checks = bash('gh pr checks 42', 'All checks were successful\nCI / lint (pull_request)    Successful in 14s\ne2e / smoke (pull_request)  Successful in 3m10s');
+    assert.equal(judge(only('e2e / smoke — successful in 3m10s'), [checks]).verdict, 'backed');
+    assert.equal(judge(only('lint and unit-tests finished.'), [checks]).verdict, 'backed');
+    // A file that says so is not a run that shows it.
+    const notes = itemOf({ name: 'read', args: { file_path: 'NOTES.md' }, text: '     1\te2e / smoke — successful in 3m10s' });
+    assert.equal(judge(only('e2e / smoke — successful in 3m10s'), [notes]).verdict, 'unbacked');
 });
 
 // ── The session projection ─────────────────────────────────────────
@@ -278,6 +362,18 @@ test('projection: a summary turn leans on the turn before; a request for new wor
     assert.equal(leaned.from, 1);
     const renamed = foldAll([...work, ...turn(2, { prompt: 'Now rename the module.', reply: 'Renamed it; all 5 tests pass.' })]);
     assert.ok(renamed.claims.filter((c) => c.turn === 2).every((c) => c.verdict === 'unbacked'));
+});
+
+test('projection: a write-up that restates the last turn\'s output word for word is backed by it', () => {
+    const ship = turn(1, { prompt: 'Roll the api out on staging.', tools: [['bash', { command: 'kubectl rollout status deployment/api -n staging' }, 'deployment "api" successfully rolled out']], reply: 'Rolled out.' });
+    const state = foldAll([...ship, ...turn(2, { prompt: 'Can you write the update for the team channel?', reply: '- `kubectl rollout status deployment/api -n staging` → `successfully rolled out`' })]);
+    const restated = state.claims.find((c) => c.turn === 2);
+    assert.equal(restated.verdict, 'backed');
+    assert.equal(restated.from, 1);
+    // Saved items keep their quoted lines, and only strings.
+    const saved = parseState(JSON.parse(JSON.stringify({ ...state, prev: { n: 1, items: [{ kind: 'run', text: 'x', lines: ['a', 2, 'b'.repeat(500)], pairs: 'no' }] } })));
+    assert.deepEqual(saved.prev.items[0].lines, ['a', 'b'.repeat(120)]);
+    assert.equal(saved.prev.items[0].pairs, undefined);
 });
 
 test('projection: a stopped or failed turn is not judged', () => {

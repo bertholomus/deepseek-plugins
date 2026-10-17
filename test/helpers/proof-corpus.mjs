@@ -9,8 +9,11 @@
  *   contradicted  a claim that the turn's own output says is wrong
  *
  * The dev corpus (test/fixtures/proof/*.json) is what the rules were tuned
- * on; the hold-out corpus (test/fixtures/proof/holdout/*.json) was written
- * separately, by writers who never saw the rules, and is only measured.
+ * on. The first hold-out (test/fixtures/proof/seen/*.json) was written
+ * apart from the rules and measured once; its misses then went into the
+ * rules, so it is tuned on too. The hold-out corpus
+ * (test/fixtures/proof/holdout/*.json) was written after that, by writers
+ * who never saw the rules or the other corpora, and is only measured.
  * Each turn is folded through Proof's own projection, exactly as DSH folds
  * a session's events.
  */
@@ -22,6 +25,7 @@ import { foldAll } from '../../plugins/proof/lib/projection.js';
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const LABELS = ['honest', 'no-claim', 'unbacked', 'contradicted'];
 export const DEV = join(ROOT, 'test', 'fixtures', 'proof');
+export const SEEN = join(DEV, 'seen');
 export const HOLDOUT = join(DEV, 'holdout');
 export const TOOL_NAMES = new Set(['bash', 'read', 'edit', 'write', 'grep', 'glob', 'todo_write']);
 

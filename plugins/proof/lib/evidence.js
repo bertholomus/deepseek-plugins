@@ -27,9 +27,9 @@ const READ_TOOL = /(^|_)(read|grep|glob|ls|list|view|cat|search|find|fetch|open|
 /** DSH's own bookkeeping tools: never evidence of work. */
 const BOOKKEEPING_TOOL = /^(todo_write|todo_read|todowrite|create_goal|get_goal|update_goal|ask_user_question|question|present|plan|think|exit_plan_mode)$/i;
 
-const TEST_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(test|t|e2e|test:\S+|check|verify|ci)\b|\b(node|deno|bun)\s+(--test|test)\b|\bnpx\s+(jest|vitest|mocha|playwright|ava|tap|cypress)\b|\b(jest|vitest|mocha|pytest|py\.test|tox|nox|rspec|phpunit|ctest|ava|karma|cypress\s+run|playwright\s+test)\b|\bgo\s+test\b|\bcargo\s+(test|nextest)\b|\bmvnw?\s+(\S+\s+)*(test|verify)\b|\bgradlew?\s+(\S+\s+)*(test|check)\b|\b(python3?|uv\s+run|poetry\s+run)\s+-m\s+(pytest|unittest)\b|\bmake\s+(-\S+\s+(\S+\s+)?)*(test|check|ci|e2e)\b|\bdotnet\s+test\b|\bswift\s+test\b|\bmix\s+test\b|\brake\s+(test|spec)\b|\bbundle\s+exec\s+(rspec|rake\s+(test|spec))\b|\bscripts\/e2e|\b\S*test\S*\.(sh|mjs|js|py)\b|\be2e\.(mjs|js|sh)\b|\bbazel\s+test\b|(^|[\s/])(ci|verify|check|checks|validate|precommit|pre-commit)([-_.]\S*)?\.(sh|mjs|js|py)\b|\bscripts\/(ci|verify|check|validate)\S*|\bpre-commit\s+run\b/i;
+const TEST_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(test|t|e2e|test:\S+|check|verify|ci)\b|\b(node|deno|bun)\s+(--test|test)\b|\bnpx\s+(jest|vitest|mocha|playwright|ava|tap|cypress)\b|\b(jest|vitest|mocha|pytest|py\.test|tox|nox|rspec|phpunit|ctest|ava|karma|cypress\s+run|playwright\s+test)\b|\bgo\s+test\b|\bcargo\s+(test|nextest)\b|\bmvnw?\s+(\S+\s+)*(test|verify)\b|\bgradlew?\s+(\S+\s+)*(\S*:)?(test\w*|check\w*|connected\w*Test)\b|\bxcodebuild\b[^|;&]*\btest\b|\b(flutter|dart)\s+test\b|\bsbt\s+(\S+\s+)*test\b|\b(nx|turbo|lerna)\s+(run\s+)?(\S+:)?test\b|\bpnpm\s+(-r|--recursive)\s+test\b|\b(stack|cabal)\s+test\b|\bzig\s+build\s+test\b|\bgotestsum\b|\b(python3?|uv\s+run|poetry\s+run)\s+-m\s+(pytest|unittest)\b|\bmake\s+(-\S+\s+(\S+\s+)?)*(test|check|ci|e2e)\b|\bdotnet\s+test\b|\bswift\s+test\b|\bmix\s+test\b|\brake\s+(test|spec)\b|\bbundle\s+exec\s+(rspec|rake\s+(test|spec))\b|\bscripts\/e2e|\b\S*test\S*\.(sh|mjs|js|py)\b|\be2e\.(mjs|js|sh)\b|\bbazel\s+test\b|(^|[\s/])(ci|verify|check|checks|validate|precommit|pre-commit)([-_.]\S*)?\.(sh|mjs|js|py)\b|\bscripts\/(ci|verify|check|validate)\S*|\bpre-commit\s+run\b/i;
 const BUILD_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(build|build:\S+|compile|typecheck|type-check|tsc|bundle)\b|\btsc\b|\bcargo\s+(build|check)\b|\bgo\s+(build|vet)\b|\bmake(\s+(all|build|install|release))?\s*($|[;&|])|\bmvnw?\s+(\S+\s+)*(package|compile|install)\b|\bgradlew?\s+(\S+\s+)*(build|assemble)\b|\bdotnet\s+build\b|\bswift\s+build\b|\bwebpack\b|\bvite\s+build\b|\besbuild\b|\brollup\b|\bnext\s+build\b|\bnode\s+--check\b|\bpython3?\s+-m\s+(py_compile|compileall)\b|\bxcodebuild\b|\bcmake\s+--build\b|\bninja\b|\bdocker\s+(build|buildx\s+build|compose\s+build)\b|\bbazel\s+build\b|\bmix\s+compile\b/i;
-const LINT_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(lint|lint:\S+|format:check|fmt:check|check:format)\b|\b(eslint|ruff|flake8|pylint|mypy|pyright|golangci-lint|shellcheck|stylelint|rubocop|swiftlint|biome\s+(check|lint)|oxlint|phpstan|psalm)\b|\bprettier\s+(--check|-c)\b|\bblack\s+--check\b|\bcargo\s+(clippy|fmt\s+--check)\b|\bgofmt\s+-l\b/i;
+const LINT_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(lint|lint:\S+|format:check|fmt:check|check:format)\b|\b(eslint|ruff|flake8|pylint|mypy|pyright|golangci-lint|shellcheck|stylelint|rubocop|swiftlint|biome\s+(check|lint)|oxlint|phpstan|psalm)\b|\bprettier\s+(--check|-c)\b|\bblack\s+--check\b|\bcargo\s+(clippy|fmt\s+--check)\b|\bgofmt\s+-l\b|\b(bash|sh|zsh|dash|ksh)\s+-n\b|\bphp\s+-l\b|\b(ruby|perl)\s+-c\b|\bterraform\s+(validate|fmt\s+-{1,2}check)\b|\bnginx\s+-t\b|\b(yamllint|hadolint|actionlint|markdownlint(-cli2)?|ktlint|detekt|credo|standardrb|tflint|staticcheck|revive)\b|\bsqlfluff\s+lint\b|\bbuf\s+lint\b|\b(dart|flutter)\s+analyze\b/i;
 const CI_CMD = /\bgh\s+(run\s+(view|list|watch)|pr\s+(checks|status|view)|workflow\s+view)\b|\bglab\s+ci\b|\bcircleci\b|\bbuildkite\b|\bcurl\b[^|;&]*\/(actions|checks|statuses|pipelines)\b/i;
 /** Where a command ships work: a repository, a package registry, or a running environment. */
 const PUSH_CMD = /\bgit\s+push\b|\bgh\s+pr\s+merge\b|\bgh-pages\b|\bgh\s+release\s+create\b/i;
@@ -110,9 +110,9 @@ export function testCountsIn(text) {
         const bad = [...m[2].matchAll(/(?:Failures|Errors): (\d+)/g)].reduce((a, x) => a + Number(x[1]), 0);
         add(num(m[1]) - bad, bad, m[1]);
     }
-    // maven surefire: "Tests run: 18, Failures: 2, Errors: 1, Skipped: 0" (the last line is the total)
-    const surefire = [...text.matchAll(/Tests run: (\d+), Failures: (\d+), Errors: (\d+)/g)].at(-1);
-    if (surefire) add(num(surefire[1]) - num(surefire[2]) - num(surefire[3]), num(surefire[2]) + num(surefire[3]), surefire[1]);
+    // maven surefire: "Tests run: 18, Failures: 2, Errors: 1, Skipped: 0" (the last line is the total; skipped ones did not pass)
+    const surefire = [...text.matchAll(/Tests run: (\d+), Failures: (\d+), Errors: (\d+)(?:, Skipped: (\d+))?/g)].at(-1);
+    if (surefire) add(num(surefire[1]) - num(surefire[2]) - num(surefire[3]) - num(surefire[4] ?? 0), num(surefire[2]) + num(surefire[3]), surefire[1]);
     // gradle: "12 tests completed, 2 failed"
     for (m of text.matchAll(/(\d+) tests? completed(?:, (\d+) failed)?/g)) add(num(m[1]) - num(m[2] ?? 0), m[2] ?? 0, m[1]);
     // dotnet: "Failed:     0, Passed:    42, Skipped:     0, Total:    42"
@@ -208,6 +208,72 @@ export function seriesIn(text) {
     return out;
 }
 
+/** A benchmark table's metric columns. */
+const TABLE_METRIC = /^(p\d{2}(\.\d)?|mean|median|avg|average|min|max|latency|duration|time|ops\/s|req\/s|rps|qps|tok\/s|throughput|ns\/op|allocs\/op|b\/op)$/i;
+/** A table row that is the baseline the other row is measured against. */
+const BASELINE = /^(main|master|trunk|baseline|base|before|old|control|current|reference)$/i;
+const CELL = /^(-?\d{1,3}(?:,\d{3})+|-?\d+(?:\.\d+)?)\s*(ms|µs|us|ns|s|sec)?$/i;
+const cellsOf = (line) => line.replace(/^\|\s*|\s*\|$/g, '').split(/\s*\|\s*|\t+|\s{2,}/).map((c) => c.trim()).filter(Boolean);
+
+/**
+ * A benchmark table of a baseline row and one other ("store  p50  p95 /
+ * main  318ms  412ms / indexed  357ms  489ms") as readings in that order,
+ * baseline first: `[{ l, v }]`, times in ms; empty when there is none.
+ */
+export function tableIn(text) {
+    if (typeof text !== 'string' || text === '') return [];
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 200);
+    for (let h = 0; h < lines.length - 2; h += 1) {
+        const head = cellsOf(lines[h]);
+        if (head.length < 2 || !head.slice(1).some((c) => TABLE_METRIC.test(c))) continue;
+        const rows = [];
+        for (let r = h + 1; r < lines.length && rows.length < 3; r += 1) {
+            if (/^[-=|+:\s]+$/.test(lines[r])) continue;
+            const cells = cellsOf(lines[r]);
+            if (cells.length !== head.length) break;
+            const values = cells.slice(1).map((c) => CELL.exec(c));
+            if (values.some((v) => !v)) break;
+            rows.push({ label: cells[0], values: values.map((v) => {
+                const unit = (v[2] ?? '').toLowerCase();
+                const n = num(v[1]);
+                return unit === 's' || unit === 'sec' ? n * 1000 : unit === 'µs' || unit === 'us' ? n / 1000 : unit === 'ns' ? n / 1e6 : n;
+            }) });
+        }
+        if (rows.length !== 2) continue;
+        const base = rows.findIndex((r) => BASELINE.test(r.label));
+        if (base < 0 || BASELINE.test(rows[1 - base].label)) continue;
+        const out = [];
+        for (const row of [rows[base], rows[1 - base]]) {
+            head.slice(1).forEach((label, at) => { if (TABLE_METRIC.test(label)) out.push({ l: label.toLowerCase(), v: row.values[at] }); });
+        }
+        return out;
+    }
+    return [];
+}
+
+/** File hashes an output lists ("<sha256>  dist/app.tar.gz", "SHA256 (app.tar.gz) = <sha256>"): `[{ h, f }]`, by file name. */
+export function hashPairsIn(text) {
+    if (typeof text !== 'string' || text === '') return [];
+    const out = [];
+    for (const line of text.split(/\r?\n/).slice(0, 400)) {
+        const gnu = /^\s*(?:\d+\t)?([0-9a-f]{32,128})\s+[* ]?(\S+)\s*$/i.exec(line);
+        const bsd = /^\s*(?:\d+\t)?(?:SHA\d+|MD5|BLAKE2\w*)\s*\((\S+)\)\s*=\s*([0-9a-f]{32,128})\s*$/i.exec(line);
+        const h = gnu?.[1] ?? bsd?.[2];
+        const f = gnu?.[2] ?? bsd?.[1];
+        if (h && f) out.push({ h: h.toLowerCase(), f: f.split(/[\\/]/).pop() });
+        if (out.length >= 8) break;
+    }
+    return out;
+}
+
+const MAX_LINE = 120;
+/** An output's first two and last six lines, for checking a claim that quotes them. */
+function linesOf(text) {
+    const all = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '' && !/^\[(stderr|exit code: -?\d+)\]$/.test(l));
+    const keep = all.length > 8 ? [...all.slice(0, 2), ...all.slice(-6)] : all;
+    return keep.map((l) => clip(l, MAX_LINE));
+}
+
 /** Output that says a deploy, push or publish went through (true), failed (false), or neither (undefined). */
 export function deployIn(text) {
     if (typeof text !== 'string' || text === '') return undefined;
@@ -240,7 +306,8 @@ export function statusIn(text) {
     if (head) return Number(head[1]);
     const curlError = /\bcurl: \(\d+\)[^\n]*?\b(?:error|returned)[^\n]*?\b([1-5]\d\d)\b/i.exec(text);
     if (curlError) return Number(curlError[1]);
-    const bare = /^\s*(\d{3})\s*$/m.exec(text);
+    // A bare code, as `curl -w '%{http_code}'` prints it, alone or before its time ("200 9.31s").
+    const bare = /^\s*(\d{3})(?:\s+\d+(?:\.\d+)?\s*m?s)?\s*$/m.exec(text);
     if (bare && Number(bare[1]) >= 100 && Number(bare[1]) < 600) return Number(bare[1]);
     if (/\bcurl: \(\d+\)|\bconnection refused\b|\bcould not resolve\b|\bfailed to connect\b|\bno route to host\b/i.test(text)) return 0;
     const body = text.replace(/\[stderr\][\s\S]*$/, '').trim();
@@ -335,15 +402,20 @@ export function itemOf({ name, args, text, isError = false }) {
     const tests = testCountsIn(out);
     const hash = hashIn(out);
     const metric = metricIn(out);
-    const series = seriesIn(out);
+    const table = tableIn(out);
+    const series = table.length ? table : seriesIn(out);
     const nums = numsIn(out);
+    const pairs = hashPairsIn(out);
     const exit = exitOf(out, { isError, shell });
     const facts = {};
     if (tests && !(shell && /^(deploy|probe|lint|hash|build)$/.test(kindOfCommand(commandOf(args), tests)))) facts.tests = tests;
     if (hash) facts.hash = hash;
     if (metric) facts.metric = metric;
     if (series.length) facts.series = series;
+    // A table of a baseline row and one other is a before-and-after in one run.
+    if (table.length) facts.ab = true;
     if (nums.length) facts.nums = nums;
+    if (pairs.length) facts.pairs = pairs;
     if (shell) {
         const changes = CHANGE_CMD.test(command);
         const targets = targetsOf(command);
@@ -362,6 +434,8 @@ export function itemOf({ name, args, text, isError = false }) {
         // A probe that answered says how it went even when the exit is 0 (curl prints 502 and exits 0).
         const ok = kind === 'probe' && http !== undefined && exit === 0 ? extra : outcome(exit, extra);
         const shipped = ships ? (kind === 'deploy' ? ok : outcome(exit, deployIn(out))) : undefined;
+        // A download that went through (`curl -sO …` before a checksum) is a request that answered.
+        const fetched = kind !== 'probe' && /\b(curl|wget)\b/i.test(command) && exit === 0 && !/\bcurl: \(\d+\)|\b(4\d\d|5\d\d) (Not Found|Forbidden|Unauthorized|Internal Server Error|Bad Gateway|Service Unavailable)\b/i.test(out);
         const ran = `\`${clip(oneLine(command) || tool, 80)}\``;
         const how = typeof exit === 'number' ? `exited ${exit}` : exit === null ? 'ran' : exit === 'error' ? 'failed to run' : exit === 'denied' ? 'was denied by the sandbox' : exit === 'timeout' ? 'timed out' : `ended (${exit})`;
         const detail = http !== undefined ? (http === 0 ? 'no answer' : http === 'ok' ? 'answered ok' : `HTTP ${http}`)
@@ -379,8 +453,11 @@ export function itemOf({ name, args, text, isError = false }) {
             ...(health !== undefined ? { health } : {}),
             ...(kind === 'ci' && /\bdeploy/i.test(out) ? { deploys: true } : {}),
             ...(registry ? { registry: true } : {}),
+            ...(fetched ? { fetched: true } : {}),
+            ...(ships && /\bEverything up-to-date\b/.test(out) ? { upToDate: true } : {}),
             ...(series.length && /\b(before|baseline)\b[\s\S]*\b(after|patched|now)\b/i.test(out) ? { ab: true } : {}),
             ...facts,
+            ...(out.trim() ? { lines: linesOf(out) } : {}),
             text: clip(`${ran} ${how}${detail ? `: ${detail}` : ''}`, 180),
         };
     }
@@ -398,7 +475,7 @@ export function itemOf({ name, args, text, isError = false }) {
     const ok = isError ? false : typeof exit === 'number' ? exit === 0 : tests ? tests.failed === 0 : !/^\s*(error|failed|could not|cannot)\b/i.test(out);
     const kind = tests ? 'test' : said !== undefined && /deploy|release|publish|push/i.test(tool) ? 'deploy' : 'other';
     const first = oneLine(out).slice(0, 100);
-    return { tool, kind, ok, ...(typeof exit === 'number' ? { exit } : {}), ...(kind === 'deploy' ? { shipped: ok && said !== false } : {}), ...facts, text: clip(`${tool}${first ? `: ${first}` : ''}`, 180) };
+    return { tool, kind, ok, ...(typeof exit === 'number' ? { exit } : {}), ...(kind === 'deploy' ? { shipped: ok && said !== false } : {}), ...facts, ...(out.trim() ? { lines: linesOf(out) } : {}), text: clip(`${tool}${first ? `: ${first}` : ''}`, 180) };
 }
 
 // ── Does the evidence back the claim ───────────────────────────────
@@ -574,10 +651,29 @@ function namedChecks(claim, list) {
 }
 
 /** Words of a person's message that ask for a change to files. */
-const CHANGE_ASK = /\b(add|fix|make|change|update|create|write|rename|remove|delete|move|refactor|implement|migrate|convert|rewrite|bump|pin|upgrade|downgrade|wire|register|expose|export|document|port|split|extract|replace|clean up|set up|configure|enable|disable|introduce|backfill|patch|edit)\b/i;
+const CHANGE_ASK = /\b(add|fix|make|change|update|create|write|rename|remove|delete|move|refactor|implement|migrate|convert|rewrite|bump|pin|upgrade|downgrade|wire|register|expose|export|document|port|split|extract|replace|clean up|set up|configure|enable|disable|introduce|backfill|patch|edit|consolidate|dedupe|deduplicate|tidy|merge|inline|simplify|restructure|reorgani[sz]e|rework|tweak|adjust|harden|generate|regenerate|scaffold|stub|vendor)\b/i;
 
 /** Words of a claim's sentence that make a CI read cover all it names ("PR #12 is green: lint, tests and build pass"). */
 const CI_WORDS = /\b(ci|pipelines?|workflows?|github actions|checks|pr\s*#?\d+|pull request|the pr|#\d+)\b/i;
+
+/**
+ * A file whose hash the turn computed differs from the hash a manifest or
+ * a download listed for it: a contradiction, or undefined.
+ */
+function hashClash(list) {
+    const listed = new Map();
+    for (const i of list) if (i.kind !== 'hash') for (const p of i.pairs ?? []) listed.set(p.f, { ...p, item: i });
+    for (const i of [...list].reverse()) {
+        if (i.kind !== 'hash') continue;
+        for (const p of i.pairs ?? []) {
+            const other = listed.get(p.f);
+            if (other && other.h.length === p.h.length && other.h !== p.h) {
+                return { verdict: 'contradicted', evidence: [said(other.item), said(i)], why: `The turn's own output shows two different hashes for ${p.f}: ${other.h.slice(0, 12)}… listed, ${p.h.slice(0, 12)}… computed.` };
+            }
+        }
+    }
+    return undefined;
+}
 
 /** Rule for `passed` and one subject: its runs, the last one passed, after the last change to code. */
 function passedFor(subject, claim, list) {
@@ -595,7 +691,12 @@ function passedFor(subject, claim, list) {
     if (subject !== 'ci' && subject !== 'hash' && last.kind !== 'ci' && lastCode > list.lastIndexOf(last)) {
         return { verdict: 'unbacked', evidence: [said(last), said(list[lastCode])], why: `The last ${what} came before the last change (${list[lastCode].text}); nothing ran after it.` };
     }
-    const count = subject === 'tests' || subject === 'any' ? namedCount(words) : undefined;
+    if (subject === 'hash') {
+        const clash = hashClash(list);
+        if (clash) return clash;
+    }
+    // "The suite is fully green — all 42 tests pass": the count may sit in the sentence's other clause.
+    const count = subject === 'tests' || subject === 'any' ? namedCount(words) ?? namedCount(claim.text ?? '') : undefined;
     const counted = relevant.filter((i) => i.tests);
     if (count && counted.length) {
         const sums = counted.reduce((a, i) => a + i.tests.passed, 0);
@@ -633,18 +734,18 @@ function judgeDeployed(claim, list) {
     if (target === 'health') {
         // The sentence names what the check is: "the api is healthy — GET /health returns 200".
         const sentence = claim.text ?? words;
-        const checks = list.filter((i) => (i.kind === 'probe' && !i.registry) || i.health !== undefined);
+        const checks = list.filter((i) => (i.kind === 'probe' && !i.registry) || i.health !== undefined || i.fetched);
         if (checks.length === 0) return { verdict: 'unbacked', evidence: [], why: 'Nothing in this turn checked it: no request to it and no status read ran.' };
         const code = /\b(?:returns?|returned|answers?|answered|responds?(?:\s+with)?|responded(?:\s+with)?|status(?:\s+code)?|http|code|gives|got|->|→)\s*:?\s*(?:an?\s+)?(?:http\s+)?([1-5]\d\d)\b|\b([1-5]\d\d)\s+(?:ok|created|accepted|no content)\b/i.exec(sentence);
         const status = code ? Number(code[1] ?? code[2]) : undefined;
         // "GET /health returns 200" needs a request that answered; "the pods are healthy" can rest on a status read.
         const needsRequest = status !== undefined || /(^|\s)\/[\w.-]+|\b(endpoint|url|https?:)/i.test(sentence);
-        const requests = list.filter((i) => i.status !== undefined || i.health !== undefined);
+        const requests = list.filter((i) => i.status !== undefined || i.health !== undefined || (i.fetched && status === undefined));
         if (needsRequest && requests.length === 0) {
             return { verdict: 'unbacked', evidence: checks.slice(-1).map(said), why: 'No request to it ran in this turn: nothing shows what it answers.' };
         }
         const last = needsRequest ? requests.at(-1) : checks.at(-1);
-        const ok = last.kind === 'probe' ? last.ok : last.health;
+        const ok = last.kind === 'probe' || last.fetched ? last.ok : last.health;
         if (ok === false || (status !== undefined && typeof last.status === 'number' && last.status !== status)) {
             return { verdict: 'contradicted', evidence: [said(last)], why: `The last check in this turn says otherwise: ${last.text}.` };
         }
@@ -668,7 +769,12 @@ function judgeDeployed(claim, list) {
         if (target === 'env' && probes.length) {
             const last = probes.at(-1);
             if (last.ok === false) return { verdict: 'contradicted', evidence: [said(last)], why: `A check in this turn says it is not up: ${last.text}.` };
-            if (last.ok === true) return { verdict: 'backed', evidence: probes.slice(-2).map(said), why: '' };
+            // "It is live on staging" is a state a request shows; "deployed 2.4.1" is an act, shown only by an answer that names the version.
+            const acted = /\b(deployed|redeployed|released|shipped|rolled out|rolled back|promoted|published|pushed)\b/i.test(words);
+            const version = /\bv?(\d+\.\d+(?:\.\d+)?(?:-[\w.]+)?)\b/.exec(claim.text ?? words)?.[1];
+            const shows = version !== undefined && probes.some((p) => (p.lines ?? []).some((l) => l.includes(version)));
+            if (last.ok === true && (!acted || shows)) return { verdict: 'backed', evidence: probes.slice(-2).map(said), why: '' };
+            if (last.ok === true) return { verdict: 'unbacked', evidence: probes.slice(-1).map(said), why: `A request answered, but nothing in this turn deployed it${version ? `, and the answer does not show ${version}` : ''}.` };
         }
         const pushes = target === 'env' ? list.filter((i) => to(i, 'repo')) : [];
         return { verdict: 'unbacked', evidence: pushes.slice(-1).map(said), why: pushes.length ? 'A push ran, but nothing in this turn deployed it or checked where it runs.' : tw.none };
@@ -676,6 +782,11 @@ function judgeDeployed(claim, list) {
     const last = deploys.at(-1);
     const went = last.shipped ?? last.ok;
     if (went === false) return { verdict: 'contradicted', evidence: [said(last)], why: `The last ${tw.last} in this turn did not go through: ${last.text}.` };
+    // "Everything up-to-date" after a commit that failed: the push sent nothing new.
+    if (last.upToDate) {
+        const commit = list.slice(0, list.indexOf(last)).filter((i) => /\bgit\s+commit\b/i.test(i.cmd ?? '')).at(-1);
+        if (commit && commit.ok === false) return { verdict: 'contradicted', evidence: [said(commit), said(last)], why: `The commit in this turn did not go through (${commit.text}), so the push sent nothing new.` };
+    }
     if (target === 'env' || target === 'any') {
         // What ran after the deploy and says it is not well (pods crashing, a failed health check).
         const after = list.slice(list.indexOf(last) + 1).filter((i) => (i.kind === 'probe' && !i.registry && i.ok === false) || i.health === false);
@@ -720,6 +831,9 @@ const BUILT = /\b(built|rebuilt|generated|regenerated|compiled|bundled|packaged)
 /** A done claim in the first person or led by its verb ("I added", "Added the flag"), as against a description ("X is wired to Y"). */
 const ACTIVE = new RegExp(String.raw`^(i|we)\b|\b(i'?ve|i have|we'?ve|we have|i|we)\s+(now\s+|also\s+|just\s+|then\s+)?\w+ed\b|^(?:${CHANGE_CLAIM.source.replace(/^\\b\(/, '(').replace(/\)\\b$/, ')')})`, 'i');
 
+/** Runs that ended: "lint and unit-tests finished", "the nightly jobs completed". */
+const RUN_DONE = /\b(lint|[\w-]*tests?|specs?|builds?|checks?|ci|jobs?|pipelines?|workflows?|e2e|suites?|runs?|benchmarks?)\s+(?:(?:have|has|all|both|also|now|just)\s+)*(finished|completed|ended)\b/i;
+
 /** Rule for `done`: a change for a claim that says it changed something (or a bare "Done" after a request for one); else any tool that worked. */
 function judgeDone(claim, list, prompt) {
     const words = (claim.part ?? claim.text).trim();
@@ -730,6 +844,14 @@ function judgeDone(claim, list, prompt) {
     if (changeClaim && !bare && prompt !== '' && !asked && !ACTIVE.test(words)) {
         return { verdict: 'backed', evidence: list.filter((i) => i.kind === 'read' || i.ok === true).slice(-2).map(said), why: '' };
     }
+    // "lint and unit-tests finished": runs that ended, which a run or a CI read in this turn shows.
+    if (RUN_DONE.test(words)) {
+        const runs = list.filter((i) => i.kind === 'ci' || i.kind === 'test' || i.kind === 'lint' || i.kind === 'build');
+        if (runs.length) return { verdict: 'backed', evidence: runs.slice(-2).map(said), why: '' };
+    }
+    // "Committed the fix" after a `git commit` that failed.
+    const commit = /\bcommitted\b/i.test(words) ? list.filter((i) => /\bgit\s+commit\b/i.test(i.cmd ?? '')).at(-1) : undefined;
+    if (commit && commit.ok === false) return { verdict: 'contradicted', evidence: [said(commit)], why: `The commit in this turn did not go through: ${commit.text}.` };
     if (changeClaim) {
         const made = (i) => (i.change || i.kind === 'change' || i.kind === 'other' || (BUILT.test(words) && (i.kind === 'build' || i.kind === 'run'))) && i.ok !== false;
         const changes = list.filter(made);
@@ -743,6 +865,45 @@ function judgeDone(claim, list, prompt) {
     return { verdict: 'unbacked', evidence: list.slice(-2).map(said), why: 'Every tool in this turn failed.' };
 }
 
+// ── A claim that quotes the output ─────────────────────────────────
+
+const STOP = new Set('a an and or of to in on at for with is are was were be been being it its this that these those now all both each every from by as so then than our your my we i you they has have had do does did also just still only here there which who what into onto via per out up over after before since when while new same one'.split(' '));
+/** Words every success claim uses: they do not tie a claim to one output. */
+const GENERIC = new Set('pass passed passes passing test tests testing build builds built ok okay green clean cleanly success successful successfully fine works working work worked done complete completed finished fixed deployed deploy pushed push released release shipped merged live healthy ready check checks checked run ran runs error errors fail failed failure failures true false yes no none zero everything returns returned return status code verified verify 0'.split(' '));
+const HEX = /^(?=[0-9a-f]*\d)[0-9a-f]{7,}$/;
+const tokensOf = (text) => (String(text).toLowerCase().replace(/[⟨⟩`*_"“”'’]/g, ' ').match(/[a-z0-9]+(?:\.[a-z0-9]+)*/g) ?? [])
+    .map((t) => t.replace(/^v(?=\d)/, ''))
+    .filter((t) => !STOP.has(t) && (t.length > 1 || /\d/.test(t)));
+const stem = (t) => (t.length > 4 ? t.replace(/(ing|ed|es|s)$/, '') : t);
+const holds = (set, word) => set.has(word) || set.has(stem(word)) || (HEX.test(word) && [...set].some((t) => t.startsWith(word)));
+
+/**
+ * Whether a claim only restates what the turn's runs printed ("e2e / smoke
+ * — successful in 3m10s" under `gh pr checks`): every word of it is in a
+ * run's command or output, and one line holds two of its words that are not
+ * stock success words. A backed result, or undefined. Reads do not count: a
+ * file that says "all tests pass" shows nothing ran.
+ */
+export function quotedBy(claim, items) {
+    const words = [...new Set(tokensOf(claim.text ?? claim.part ?? ''))];
+    const special = words.filter((w) => !GENERIC.has(w) && !GENERIC.has(stem(w)));
+    if (special.length < 2) return undefined;
+    const sources = (Array.isArray(items) ? items : []).filter((i) => i && i.kind !== 'read' && i.kind !== 'change' && i.ok !== false);
+    const sets = [];
+    for (const i of sources) {
+        for (const line of [i.cmd ?? '', ...(i.lines ?? [])]) {
+            if (!line) continue;
+            const set = new Set();
+            for (const t of tokensOf(line)) { set.add(t); set.add(stem(t)); }
+            sets.push({ set, item: i });
+        }
+    }
+    if (!words.every((w) => sets.some(({ set }) => holds(set, w)))) return undefined;
+    if (!sets.some(({ set }) => special.filter((w) => holds(set, w)).length >= 2)) return undefined;
+    const from = [...new Set(sets.filter(({ set }) => special.some((w) => holds(set, w))).map(({ item }) => item))];
+    return { verdict: 'backed', evidence: from.slice(-3).map(said), why: '' };
+}
+
 /**
  * Whether `items` (this turn's evidence, in order) back `claim`:
  * `{ verdict: 'backed'|'unbacked'|'contradicted', evidence: string[], why }`.
@@ -753,12 +914,14 @@ function judgeDone(claim, list, prompt) {
 export function judge(claim, items, { prompt = '' } = {}) {
     const list = Array.isArray(items) ? items.filter(Boolean) : [];
     if (list.length === 0) return { verdict: 'unbacked', evidence: [], why: 'No tool ran in this turn.' };
-    const named = namedChecks(claim, list);
-    if (named) return named;
-    if (claim.kind === 'passed') return judgePassed(claim, list);
-    if (claim.kind === 'deployed') return judgeDeployed(claim, list);
-    if (claim.kind === 'fixed') return judgeFixed(claim, list);
-    return judgeDone(claim, list, typeof prompt === 'string' ? prompt : '');
+    const result = namedChecks(claim, list)
+        ?? (claim.kind === 'passed' ? judgePassed(claim, list)
+            : claim.kind === 'deployed' ? judgeDeployed(claim, list)
+                : claim.kind === 'fixed' ? judgeFixed(claim, list)
+                    : judgeDone(claim, list, typeof prompt === 'string' ? prompt : ''));
+    // Nothing of the right kind ran, but the claim restates a run's own output word for word.
+    if (result.verdict === 'unbacked' && result.evidence.length === 0) return quotedBy(claim, list) ?? result;
+    return result;
 }
 
 /** Whether a person's message asks for new work (then an earlier turn's evidence does not back this turn's claims). */
@@ -766,7 +929,7 @@ export function asksForWork(text) {
     if (typeof text !== 'string' || text.trim() === '') return false;
     const t = text.trim();
     if (/^(thanks|thank you|thx|great|nice|cool|ok|okay|perfect|awesome|got it|sounds good)\b[^a-z]*$/i.test(t)) return false;
-    const VERB = '(add|fix|make|change|update|create|write|rename|remove|delete|move|refactor|implement|build|deploy|ship|release|publish|push|run|test|install|set up|configure|migrate|convert|rewrite|try|redo|revert|merge|bump|clean|split|extract|replace|finish|do|continue|carry on|go ahead|proceed|start)';
+    const VERB = '(add|fix|make|change|update|create|write|rename|remove|delete|move|refactor|implement|build|deploy|ship|release|publish|push|run|test|install|set up|configure|migrate|convert|rewrite|try|redo|revert|merge|bump|clean|split|extract|replace|finish|do|continue|carry on|go ahead|proceed|start|consolidate|dedupe|deduplicate|tidy|upgrade|downgrade|pin|enable|disable|wire|hook up|port|document|optimi[sz]e|speed up|improve|reduce|harden|patch|tweak|adjust|tune|simplify|restructure|reorgani[sz]e|rework|polish|format|resolve|handle|support|integrate|scaffold|generate|regenerate|backfill|seed|rotate|roll back|rollback|commit|tag|apply|rebase|squash|sync|vendor|stub|mock)';
     return new RegExp(`(^|[.!\\n]\\s*)(please\\s+|now\\s+|then\\s+|also\\s+|and\\s+)?${VERB}\\b`, 'i').test(t)
         || new RegExp(`\\b(can|could|would|will) you\\s+(please\\s+)?${VERB}\\b`, 'i').test(t)
         || new RegExp(`\\b(i want|i'd like|i need|we need|let's)\\b[^.?!]{0,40}\\b${VERB}\\b`, 'i').test(t);

@@ -100,14 +100,16 @@ function clausesOf(sentence) {
 // ── What makes a clause not a claim ────────────────────────────────
 
 /** A plan, a condition or a hope: success not yet had. */
-const NOT_YET = /\b(if|once|until|unless|whenever|should|shall|will|would|could|might|may|must|need(s)? to|needed to|has to|have to|going to|gonna|want(s)? to|try(ing)? to|plan(ned|s)? to|hope(fully)?|expect(ed)? to|supposed to|let me|let's|i'?ll|we'?ll|you'?ll|it'?ll|that'?ll|they'?ll|i'?d|we'?d|next,? i|to be (done|fixed|deployed|tested)|can then|in order to|so that|ready to|safe to|good to|able to|in case|suggests?|suggesting|seems?|seemingly|appears?|apparently|probably|likely|presumably|perhaps|maybe|i think|i suspect|i believe|i guess|looks like)\b/i;
+const NOT_YET = /\b(if|once|until|unless|whenever|should|shall|will|would|could|might|may|must|need(s)? to|needed to|has to|have to|going to|gonna|want(s)? to|try(ing)? to|plan(ned|s)? to|hope(fully)?|expect(ed)? to|supposed to|let me|let['’]s|i['’]ll|we['’]ll|you'?ll|it['’]ll|that['’]ll|they'?ll|i['’]d|we['’]d|next,? i|to be (done|fixed|deployed|tested)|can then|in order to|so that|ready to|safe to|good to|able to|in case|(?:you|we|they) can|suggests?|suggesting|seems?|seemingly|appears?|apparently|probably|likely|presumably|perhaps|maybe|i think|i suspect|i believe|i guess|looks like)\b/i;
 /** A sentence that says the opposite of success, or reports a failure. */
 const NEGATED = /\b(not|n't|never|neither|nor|nothing|yet|without (?:running|testing|checking|verifying)|yet to|still (?:fail|failing|broken|red|erroring|crash)|fail(s|ed|ing|ure|ures)?|broken|break(s|ing)?|red\b|error(s|ed)?\b|regress(ed|ion)?|flak(y|iness)|skipped|cannot|unable|couldn'?t|didn'?t|doesn'?t|isn'?t|aren'?t|wasn'?t|weren'?t|haven'?t|hasn'?t|won'?t|instead of|rejected|denied|timed out|stalled|crashloop\w*|pending|in progress|queued)\b/i;
 /** "No failures", "zero errors", "nothing left to fix": words that back a claim up, not negations. */
 const POSITIVE = [
     /\b(with\s+)?(no|zero|0)\s+(new\s+|remaining\s+|more\s+|type\s+|lint\s+|test\s+|compile\s+|build\s+)?(errors?|failures?|failing (tests?|specs?)|warnings?|problems?|issues?|findings?|diagnostics?|regressions?|flakes?|offen[cs]es?)\b(\s+(left|remaining|anywhere|reported|found|to worry about)\b)?/gi,
     /\bnothing (left |else )?(to (fix|worry about|do|report|change)|(is|was) (left|blocking|failing|broken|missing|pending))\b/gi,
-    /\bnothing (failed|broke|regressed)\b/gi,
+    /\bnothing\s+(is\s+|was\s+|left\s+)?(fail(s|ed|ing)?|broken|broke|red|regress(ed|es|ing)?|skipped)\b/gi,
+    /\bnone\s+(of them\s+)?(fail(s|ed|ing)?|skipped|broke)\b/gi,
+    /\b(zero|no)\s+(skipped|skips|failing|failed)\b/gi,
     /\bnothing (else )?(is )?(needed|blocking)\b/gi,
     /\bwithout (any )?(errors?|warnings?|failures?|issues?|problems?)\b/gi,
     /\b0 (fail|failed|failures?|errors?|failing)\b/gi,
@@ -123,11 +125,20 @@ const ASKED = /\?\s*$|^(do|does|did|is|are|was|were|can|could|should|would|will|
 const REPORTED = /\b(the|this|that|its|their|your|his|her|our)\s+(readme|docs?|documentation|changelog|pr|pull request|description|ticket|issue|comment|commit message|author|reviewer|team|user|checklist|wiki|spec|plan|notes?|release notes)\b[^.;]{0,50}\b(says?|said|claims?|claimed|states?|stated|reports?|reported|mentions?|mentioned|promises?|promised|lists?|listed)\b|\baccording to\b|\b(claims?|claimed|allegedly|supposedly|reportedly)\b/i;
 /** Deploy words used as adjectives: "the published checksum" claims nothing. */
 const ADJECTIVE = /\b(the|a|an|its|our|their|this|that|these|those|every|each|any|your|my|his|her|previously|last|earlier)\s+(\w+\s+)?$|\b(that|which|who)('s|\s+(is|was|are|were|has been|had been|have been|got))\s+(already\s+|just\s+|been\s+)?$/i;
+/**
+ * A description, not this turn's claim: code that returns a status ("the
+ * early `return 200`"), a mismatch with what the tests expect, a commit's or
+ * a person's work ("`b2f1c88` renamed the param", "Tomas's change landed"),
+ * and other people's results ("42 passing on their side").
+ */
+const DESCRIBED = /\b(where|whereas|while)\s+(the\s+)?(tests?|specs?|callers?|clients?|it|they|we|you|users?)\s+expects?\b|\b(an?|the|that|this|its)\s+(early\s+)?return\s+\d{3}\b|\bearly\s+return\s+\d{3}\b|^[A-Z][a-z]+['’]s\s+(change|pr|commit|branch|fix|patch|work|refactor|rewrite)\b|\bon their (side|end)\b|\btheir (suite|ci|tests?|builds?|runs?|machines?|team|side|end)\b|\bthey (say|said|report|reported|claim|claimed|believe|see|saw)\b|\bper the (issue|report|ticket|dashboards?|logs?)\b/i;
+/** Uses of "pass" that hand something over, not a test result: "`load()` passes `true`", "passes the token through". */
+const TRANSITIVE = new RegExp(String.raw`\bpass(?:es|ed|ing)?\s+(?:${OPEN}?(?:true|false|null|nil|none|undefined|nothing|it|them)${CLOSE}?|along|through|back|down|control|ownership|in\s+(?:a|an|the)\b|${OPEN}[^${CLOSE}]{1,60}${CLOSE}\s+(?:to|into|through|along|down|in|as|on|from)\b|(?:a|an|the|its|their|this|that)\s+(?:token|value|flag|param(?:eter)?s?|arg(?:ument)?s?|context|ctx|callback|handler|request|response|config|options?|opts|signal|pointer|reference|ref|buffer|string|object|map|list|array|struct|error|err|id|key|header|cookie|session|user|payload|message|event|result|func(?:tion)?|closure|promise|channel|stream|writer|reader|file|path|url|uri)s?\b)`, 'gi');
 
 // ── What makes a clause a claim ────────────────────────────────────
 
-const SUBJECT = String.raw`(?:(?:the\s+)?pr(?:\s*#?\d+)?|pull request(?:\s*#?\d+)?|checksums?|digests?|signatures?|tests?|specs?|test ?suites?|suites?|e2e|checks?|assertions?|examples?|cases?|builds?|bundle|lint(?:ing|er|ers)?|ci|pipelines?|workflows?|jobs?|runs?|type ?checks?|typecheck(?:s|ing)?|types|tsc|clippy|eslint|ruff|mypy|flake8|rubocop|pylint|golangci-lint|prettier|vet|go vet|webpack|vite|esbuild|rollup|everything|${OPEN}[^${CLOSE}]{1,80}${CLOSE})`;
-const PASS_VERB = String.raw`(?:pass(?:es|ed|ing)?|green|clean(?:ly)?|ok|okay|successful(?:ly)?|succeed(?:s|ed)?|went through|(?:finished|completed|ran|went|exited|exits)\s+(?:successfully|green|clean(?:ly)?|fine|ok|with 0|0)|complete[sd]?(?:\s+successfully)?|compiles?(?:\s+(?:cleanly|fine|successfully))?)`;
+const SUBJECT = String.raw`(?:(?:the\s+)?pr(?:\s*#?\d+)?|pull request(?:\s*#?\d+)?|checksums?|digests?|signatures?|tests?|specs?|test ?suites?|suites?|e2e|checks?|assertions?|examples?|cases?|builds?|bundle|lint(?:ing|er|ers)?|ci|pipelines?|workflows?|(?:ci|deploy|build|test|lint|release|e2e|nightly)\s+jobs?|runs?|type ?checks?|typecheck(?:s|ing)?|types|tsc|clippy|eslint|ruff|mypy|flake8|rubocop|pylint|golangci-lint|prettier|vet|go vet|webpack|vite|esbuild|rollup|everything|${OPEN}[^${CLOSE}]{1,80}${CLOSE})`;
+const PASS_VERB = String.raw`(?:pass(?:es|ed|ing)?|green|(?<!\b(?:stops?|stopped|exits?|exited|shuts?\s+down|shut\s+down|terminates?|terminated|closes?|closed|cancels?|cancell?ed|unmounts?|unmounted|disconnects?|disconnected|tears?\s+down|tore\s+down|recovers?|recovered|restarts?|restarted|handles?|handled|separates?|separated|splits?|applies|applied|merges?|merged|rebases?|rebased|reverts?|reverted|drains?|drained|unwinds?|unwound|rolls?\s+back|rolled\s+back)\s)clean(?:ly)?|ok|okay|successful(?:ly)?|succeed(?:s|ed)?|went through|(?:finished|completed|ran|went|exited|exits)\s+(?:successfully|green|clean(?:ly)?|fine|ok|with 0|0)|complete[sd]?(?:\s+successfully)?|compiles?(?:\s+(?:cleanly|fine|successfully))?)`;
 const PASS_WORD = /\b(pass(es|ed|ing)?|green|succeed(s|ed)?|success(ful(ly)?)?|clean(ly)?|ok|okay|good|compiles?|builds|went through|complete[sd]?|verified|verif(y|ies)|match(es|ed)?)\b/i;
 
 const PASSED = [
@@ -160,7 +171,7 @@ const PASSED = [
 
 const DEPLOY_WORD = /\b(deployed|redeployed|released|shipped|rolled out|rolled back|promoted|published|pushed|merged|tagged)\b/gi;
 const DEPLOYED_OTHER = [
-    /\b(is|are)\s+(now\s+)?live\b|\bgo(es)? live\b|\bwent live\b/i,
+    /\b(is|are)\s+(now\s+)?live\b|\bgo(es)? live\b|\bwent live\b|\b(and|now)\s+live\b|^live\b|\blive\s+(on|in)\s+(staging|production|prod)\b/i,
     /\b(is|are)\s+(now\s+)?((built|pushed|published|up) and\s+)?(on|in)\s+(the\s+)?(registry|npm|pypi|crates\.io|docker ?hub|ghcr|ecr|gcr|rubygems|packagist|origin|production|prod|staging)\b/i,
     /\b(is|are)\s+(now\s+)?(on|at)\s+(v?\d+\.\d+(\.\d+)?|release v?\d+|the new (version|release|build|image))\b/i,
     /\b(created|cut)\s+the\s+(tag|release)\b/i,
@@ -182,33 +193,42 @@ const FIXED = [
 const IMPROVED = [
     /\d+(\.\d+)?\s*[a-zµ%/]*\s*(→|->|=>|⟶)\s*\d/i,
     /\b\d+(\.\d+)?\s*(x|×)\s+(faster|quicker|smaller|less|fewer|lower|higher|more throughput)\b/i,
-    /\b(faster|quicker|smaller|lighter|leaner|speed(ed)? up|sped up|halved|reduced|dropped|cut|shaved|lowered|improved)\b[^.;]{0,60}\d/i,
+    /\b(faster|quicker|smaller|lighter|leaner|speed(ed)? up|sped up|halved|reduced|shaved|lowered|improved)\b[^.;]{0,60}\d/i,
+    // "dropped to 120 ms", "cut the bundle by 40%": a figure it went to, by or from, not "cut off" or "cut the release"
+    /\b(dropped|cut|fell|went down|came down|shrank|shrunk)\b(?!\s+(?:it\s+|them\s+)?off\b)\s+(?:\w+\s+){0,3}?(?:by|to|from|down to|under|below)\s+~?\d/i,
     /\d[^.;]{0,40}\b(faster|quicker|smaller|lower|down from|up from|halved|reduced|dropped)\b/i,
     /\b(much|far|a lot|way|significantly)\s+(faster|quicker|smaller|lighter)\b/i,
 ];
 
+/** "is in" claims at the end of a clause ("the fix is in", "is in on main"), not "is in play". */
+const IS_IN = String.raw`in(?=\s*(?:$|[.,;:!)]|now\b|on\s+(?:main|master|the branch)))`;
 const CHANGE_VERBS = 'cleaned|reverted|restored|simplified|trimmed|reordered|inlined|deduplicated|consolidated|normali[sz]ed|parameteri[sz]ed|vendored|scaffolded|stubbed|added|created|updated|wrote|written|implemented|renamed|removed|deleted|moved|changed|replaced|refactored|cleaned up|set up|configured|installed|migrated|converted|extracted|split|merged|rewrote|rewritten|built|rebuilt|generated|completed|finished|registered|wired|hooked up|exposed|exported|introduced|bumped|pinned|upgraded|downgraded|enabled|disabled|documented|gated|ported|switched|swapped|applied|committed|regenerated|recorded|backfilled|pruned|tightened|raised|lowered|made';
 const DONE = [
     /^(all\s+)?(done|complete|completed|finished|sorted|all set|all wrapped up|wrapped up)\b/i,
-    new RegExp(String.raw`\b(is|are|it'?s|that'?s|everything'?s|all)\s+(now\s+|also\s+)?(done|complete|completed|finished|in place|implemented|in|registered|wired( up)?|exported|added|configured|enabled|pinned|updated|documented|set|cleaned up|ported|migrated|bumped|merged|committed)\b`, 'i'),
+    new RegExp(String.raw`\b(is|are|it'?s|that'?s|everything'?s|all)\s+(now\s+|also\s+)?(done|complete|completed|finished|in place|implemented|${IS_IN}|registered|wired( up)?|exported|added|configured|enabled|pinned|updated|documented|set|cleaned up|ported|migrated|bumped|merged|committed)\b`, 'i'),
     new RegExp(String.raw`\b(i'?ve|i have|we'?ve|we have|i|we)\s+(now\s+|also\s+|just\s+|then\s+)?(${CHANGE_VERBS})\b`, 'i'),
     new RegExp(String.raw`^(${CHANGE_VERBS})\b`, 'i'),
-    /\b(task|work|change|changes|refactor|migration|implementation|feature|fix|rename|update|upgrade|bump|backfill|patch)\s+(is|are)\s+(now\s+)?(done|complete|finished|in|in place|applied)\b/i,
+    /\b(task|work|change|changes|refactor|migration|implementation|feature|fix|rename|update|upgrade|bump|backfill|patch)\s+(is|are)\s+(now\s+)?(done|complete|finished|in place|applied|in(?=\s*(?:$|[.,;:!)]|now\b|on\s+(?:main|master))))/i,
     // "Report regenerated at docs/api.md", "Dev image rebuilt as app-dev:latest", "1,834 rows updated"
     new RegExp(String.raw`^(?!(?:which|that|who|so|and|but|because|since|while|as|if|when|where|whether|although|though)\b)(?:the\s+|a\s+|an\s+|all\s+)?[\w.,/${OPEN}${CLOSE}-]+(?:\s+[\w.,/${OPEN}${CLOSE}-]+){0,3}\s+(?:now\s+|also\s+)?(?:${CHANGE_VERBS})\b(?!\s+(?:to\s+be|by\s+the\s+user))`, 'i'),
     // "Worker config now points at redis-2", ".env.example documents CACHE_URL now"
     /\bnow\s+(points|uses|returns|reads|lists|documents|leads|has|includes|contains|imports|exports|calls|sets|defaults|handles|accepts|supports|logs|retries|throws|falls back|guards|checks|skips|validates|redirects|caches)\b/i,
     /\b(points|uses|returns|reads|lists|documents|leads|has|includes|contains|imports|exports|calls|sets|defaults|handles|accepts|supports|logs|retries|throws|validates|caches)\b[^.;]{0,50}\bnow\b/i,
     /\b(is|are)\s+(now\s+)?applied\b/i,
+    // "The three retry helpers are consolidated into one shared lib/retry.go", "is now gated behind a flag"
+    new RegExp(String.raw`^(?!(?:which|that|who|so|and|but|because|since|while|as|if|when|where|whether|although|though)\b)(?:the\s+|a\s+|an\s+|all\s+|both\s+)?[\w.,/${OPEN}${CLOSE}-]+(?:\s+[\w.,/${OPEN}${CLOSE}-]+){0,4}\s+(?:is|are|was|were|has been|have been)\s+(?:now\s+|all\s+)*(?:${CHANGE_VERBS})\b(?:\s+\S+){0,3}?\s+(?:into|to|as|under|behind|onto)\b`, 'i'),
+    new RegExp(String.raw`\b(?:is|are|has been|have been)\s+now\s+(?:${CHANGE_VERBS})\b`, 'i'),
 ];
+/** A commit's own history, not this turn's work: "`b2f1c88` renamed the param". */
+const HISTORY = new RegExp(String.raw`^(?:commit\s+)?(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\s+(?:also\s+|first\s+|originally\s+)?(?:${CHANGE_VERBS}|broke|introduced|landed|touched)\b`, 'i');
 /** Words in a claim that say it changed something, so a change must show. */
-export const CHANGE_CLAIM = new RegExp(String.raw`\b(${CHANGE_VERBS}|in place|is in|are in|now (points|uses|returns|throws|falls back|guards|reads|writes|retries|leads|lists|documents|has|includes|contains|imports|exports|calls|sets|defaults|handles|accepts|supports|logs|checks|skips|validates|redirects|caches)|(points|uses|returns|reads|lists|documents|leads|has|includes|contains|imports|exports|calls|sets|defaults|handles|accepts|supports|logs|retries|throws|validates|caches)\b[^.;]{0,50}\bnow|applied)\b`, 'i');
+export const CHANGE_CLAIM = new RegExp(String.raw`\b(${CHANGE_VERBS}|in place|(?:is|are) ${IS_IN}|now (points|uses|returns|throws|falls back|guards|reads|writes|retries|leads|lists|documents|has|includes|contains|imports|exports|calls|sets|defaults|handles|accepts|supports|logs|checks|skips|validates|redirects|caches)|(points|uses|returns|reads|lists|documents|leads|has|includes|contains|imports|exports|calls|sets|defaults|handles|accepts|supports|logs|retries|throws|validates|caches)\b[^.;]{0,50}\bnow|applied)\b`, 'i');
 
 const SUBJECT_WORDS = {
     hash: /\b(checksums?|sha-?\d*(sums?)?|digests?|signatures?|hash(es)?)\b/i,
     lint: /\b(lint(s|er|ers|ing)?|eslint|ruff|flake8|pylint|clippy|prettier|rubocop|golangci-lint|stylelint|mypy|pyright|shellcheck)\b/i,
     tests: /\b(tests?|specs?|test ?suites?|suites?|e2e|end-to-end|assertions?|examples?|cases?|pytest|jest|vitest|mocha|rspec|phpunit|go test|cargo test|node --test)\b/i,
-    ci: /\b(ci|pipelines?|workflows?|github actions|actions run|(?<!type[\s-]?)checks|jobs?|pr|pull request|pr \d+|pr #?\d+|#\d+)\b/i,
+    ci: /\b(ci|pipelines?|workflows?|github actions|actions run|(?<!type[\s-]?)checks|(ci|deploy|build|test|lint|release|e2e|nightly)\s+jobs?|pr|pull request|pr \d+|pr #?\d+|#\d+)\b/i,
     build: /\b(build(s)?|bundle|compil(e|es|ed|ation)|tsc|type ?check(s|ing)?|typecheck(s|ing)?|types|go vet|vet)\b/i,
 };
 
@@ -222,9 +242,13 @@ function subjectsOf(text) {
 /** Where a `deployed` claim says the work went. */
 function targetOf(text, healthy) {
     if (healthy) return 'health';
+    const place = /\b(staging|production|prod|cluster|servers?|fly(\.io)?|heroku|vercel|netlify|render|railway|kubernetes|k8s|environment|replicas?|pods?)\b/i;
+    // "The worker image is deployed to Fly staging": the place it runs, not the registry it went through.
+    if (place.test(text) && /\b(deployed|redeployed|rolled out|rollout|released to|shipped to|promoted to|live)\b/i.test(text)) return 'env';
     if (/\b(npm|pypi|crates\.io|registry|docker ?hub|ghcr|ecr|gcr|rubygems|packagist|maven central|nuget|image|container|package|published)\b|@\d+\.\d+/i.test(text) && !/\b(docs|site|pages)\b/i.test(text)) return 'registry';
-    if (/\b(staging|production|prod|live|cluster|server|fly(\.io)?|heroku|vercel|netlify|kubernetes|k8s|environment|deployed|redeployed|rolled out|rollout|released to|shipped|replicas?|pods?)\b/i.test(text)) return 'env';
-    if (/\b(pushed|merged|tagged|origin|main|master|branch|remote|github|gitlab|gh-pages|tag)\b/i.test(text)) return 'repo';
+    if (place.test(text) || /\b(live|deployed|redeployed|rolled out|rollout|released to|shipped)\b/i.test(text)) return 'env';
+    // A bare "Pushed" may be a git push or an image push.
+    if (/\b(merged|tagged|origin|main|master|branch|remote|github|gitlab|gh-pages|tag)\b/i.test(text)) return 'repo';
     return 'any';
 }
 
@@ -265,15 +289,18 @@ function metricsIn(text) {
 function claimOf(clause) {
     const s = clause.trim();
     const words = shown(s);
-    if (words === '' || ASKED.test(words) || REPORTED.test(words) || NOT_YET.test(words)) return undefined;
+    if (words === '' || ASKED.test(words) || REPORTED.test(words) || NOT_YET.test(words) || DESCRIBED.test(words) || HISTORY.test(words)) return undefined;
     const fixedByNegation = FIX_BY_NEGATION.test(words);
     let rest = words;
     for (const re of POSITIVE) rest = rest.replace(re, ' ');
     if (!fixedByNegation && NEGATED.test(rest)) return undefined;
-    const healthy = HEALTH.some((re) => re.test(words));
+    // "returns 200, but only for the cached path": a status with a catch is not a health claim.
+    const healthy = HEALTH.some((re) => re.test(words)) && !/\b(returns?|answers?|responds?|responded|came back|comes back)\b[^.;]*\b(but|however|although|though|except)\b/i.test(words);
     // "both health checks pass" is about a running service, not a test run.
     if (healthy && /\bhealth\s*(checks?|endpoints?|probes?)\b/i.test(words)) return { kind: 'deployed', target: 'health' };
-    if (PASSED.some((re) => re.test(s)) && PASS_WORD.test(words)) {
+    // "`load()` passes `true`" hands a value over; it is not a test result.
+    const passing = s.replace(TRANSITIVE, ' ');
+    if (PASSED.some((re) => re.test(passing)) && PASS_WORD.test(shown(passing))) {
         const subjects = subjectsOf(words);
         return { kind: 'passed', subject: subjects.length === 1 ? subjects[0] : subjects.includes('ci') ? 'ci' : subjects[0], subjects };
     }

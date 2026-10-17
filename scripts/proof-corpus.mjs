@@ -2,16 +2,16 @@
 /**
  * Proof's measured rates on its labelled corpora, as the README reports them:
  *
- *     node scripts/proof-corpus.mjs          # dev and hold-out tables
+ *     node scripts/proof-corpus.mjs          # one row per corpus
  *     node scripts/proof-corpus.mjs --misses # and each case it got wrong
  */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { DEV, HOLDOUT, LABELS, loadCorpus, measure, table } from '../test/helpers/proof-corpus.mjs';
+import { DEV, HOLDOUT, LABELS, SEEN, loadCorpus, measure, table } from '../test/helpers/proof-corpus.mjs';
 
 const rows = [];
 const all = [];
-for (const [name, dir] of [['Dev (tuned on)', DEV], ['Hold-out (never tuned on)', HOLDOUT]]) {
+for (const [name, dir] of [['Dev (tuned on)', DEV], ['First hold-out (measured once, then tuned on)', SEEN], ['Hold-out (never tuned on)', HOLDOUT]]) {
     if (!LABELS.every((label) => existsSync(join(dir, `${label}.json`)))) continue;
     const m = measure(loadCorpus(dir));
     rows.push(table(name, m));
