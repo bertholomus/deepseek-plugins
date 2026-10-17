@@ -6,8 +6,11 @@
  *   claim nothing in the turn shows, or whose own output says otherwise, a
  *   card like DSH's own cards in a chat says which claim and why, with
  *   Check (the independent check, when it is on) and a way to the ledger.
- *   A turn whose claims are shown gets nothing: Proof is quiet then. In one
- *   of Proof's own check threads, the first turn says what it checks.
+ *   A turn whose claims are shown gets nothing: Proof is quiet then. Once a
+ *   check verifies a claim, its flag says so. In one of Proof's own check
+ *   threads, the first turn says what it checks and how it ended.
+ * - Above the message box of a check thread while its check waits or runs
+ *   (`conversation.input.dock`, order 17): what it checks.
  * - The entry in DSH's panel list (`sidebar.panellist`, order 5) and the
  *   page in `main`: the sessions with claims, one session's whole ledger
  *   (claim, evidence, verdict, check) with export as Markdown, CSV or JSON,
@@ -1054,6 +1057,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             ledger: 'Ledger',
             noFlagged: 'Every claim here is shown by its turn',
             noFlaggedText: 'Nothing to look at: each claim in this session has a test count, an exit code, a hash or other output in its turn that shows it. Choose All claims to see them.',
+            noneFlagged: 'Nothing flagged now',
+            noneFlaggedText: 'Each claim in this session is shown by its turn or was verified by an independent check. Choose All claims to see them.',
             noClaims: 'This session has made no claim yet',
             noClaimsText: 'When one of its turns says something is done, passing, fixed or deployed, the claim shows here with what the turn ran.',
             checks: 'Independent checks',
@@ -1063,7 +1068,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             noHistory: 'Nothing yet',
             noHistoryText: 'Checks you ask for, exports and setting changes show here.',
             settings: 'Settings',
+            openSettings: 'Open Proof\'s settings',
             ran: 'What the turn ran',
+            checkThread: 'It can read and run commands, but nothing it runs can write a file.',
         };
 
         /** One set of words for a claim's verdict and a check's state, on every surface. */
@@ -1075,7 +1082,6 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             shown: 'success', 'no evidence': 'warning', contradicted: 'danger',
             'waiting to check': 'info', checking: 'info', verified: 'success', 'not verified': 'danger', unclear: 'warning', 'could not check': 'danger',
         });
-        const KIND_WORD = Object.freeze({ passed: 'passed', deployed: 'deployed', fixed: 'fixed', done: 'done' });
 
         /** Proof's settings on its page in Plugins: the same names and ranges as its config (lib/config.js). */
         const ROUTE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,119}$/;
@@ -1090,9 +1096,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 options: [{ value: 'off', label: 'Off' }, { value: 'ask', label: 'When I press Check' }, { value: 'auto', label: 'By itself' }],
                 group: 'Independent check',
             },
-            { name: 'verifierProvider', kind: 'text', title: 'Check with the model from', hint: 'The provider, as DSH\'s model list names it.', default: 'owner-ascents', accepts: (t) => ROUTE.test(t), invalid: 'A provider name as DSH\'s model list shows it: letters, digits and . _ - : / @ +, such as owner-ascents.' },
-            { name: 'verifierModel', kind: 'text', title: 'Check with the model', hint: 'A cheap local model is enough: it re-runs a command or reads a file. Only the check thread uses it; DSH\'s default model stays as it is.', default: 'GLM-5.3-Flash-EXL3', accepts: (t) => ROUTE.test(t), invalid: 'A model name as DSH\'s model list shows it, such as GLM-5.3-Flash-EXL3.' },
-            { name: 'verifierMinutes', kind: 'number', title: 'Minutes a check may take', hint: 'From 1 to 30. A check still running then is stopped, and its answer is unclear.', default: 5, min: 1, max: 30 },
+            { name: 'verifierProvider', kind: 'text', title: 'Check with the model from', hint: 'The provider\'s id in DSH\'s profile, such as owner-ascents. Proof\'s page names it as DSH\'s model menu does.', default: 'owner-ascents', accepts: (t) => ROUTE.test(t), invalid: 'A provider id as DSH\'s profile has it: letters, digits and . _ - : / @ +, such as owner-ascents.' },
+            { name: 'verifierModel', kind: 'text', title: 'Check with the model', hint: 'The model\'s id in DSH\'s profile. A cheap local model is enough: a check re-runs a command or reads a file, and Proof asks it for low effort when the model offers that. Only the check thread uses it; DSH\'s default model stays as it is.', default: 'GLM-5.3-Flash-EXL3', accepts: (t) => ROUTE.test(t), invalid: 'A model id as DSH\'s profile has it, such as GLM-5.3-Flash-EXL3.' },
+            { name: 'verifierMinutes', kind: 'number', title: 'Minutes a check may take', hint: 'From 1 to 60. A check still running then is stopped, and its answer is unclear. A quiet local model answers in a minute or two; on a busy shared gateway, where each answer can wait several minutes, allow 30.', default: 15, min: 1, max: 60 },
             { name: 'verifierPerHour', kind: 'number', title: 'Checks an hour, at most', hint: 'From 1 to 120. More wait their turn and start when the hour allows.', default: 12, min: 1, max: 120 },
         ];
         const SETTINGS_SUMMARY = 'Whether Proof flags claims on their turn, and how the independent check runs.';
@@ -1104,7 +1110,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-flag{box-sizing:border-box;margin:6px 0 2px;padding:10px 12px;max-width:100%;min-width:0;background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-lg);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xs-13)}`,
             `.${P}-flag-head{display:flex;align-items:center;gap:6px;min-width:0;font:var(--dsw-font-xs-strong-13);color:var(--dsw-alias-label-secondary)}`,
             `.${P}-flag-glyph{flex:0 0 auto;display:inline-flex;color:var(--dsw-alias-state-warn-primary)}`,
-            `.${P}-flag[data-proof-flag=contradicted] .${P}-flag-glyph{color:var(--dsw-alias-state-error-primary)}`,
+            `.${P}-flag[data-proof-flag=contradicted] .${P}-flag-glyph,.${P}-flag[data-proof-flag=not-verified] .${P}-flag-glyph{color:var(--dsw-alias-state-error-primary)}`,
+            `.${P}-flag[data-proof-flag=verified] .${P}-flag-glyph{color:var(--dsw-alias-state-success-primary)}`,
             `.${P}-flag-list{list-style:none;margin:0;padding:0}`,
             `.${P}-flag-item{padding:6px 0 0}`,
             `.${P}-flag-item+.${P}-flag-item{margin-top:6px;border-top:.5px solid var(--dsw-alias-border-l4)}`,
@@ -1112,7 +1119,19 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-flag-why{margin:2px 0 0;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}`,
             `.${P}-flag-line{margin:4px 0 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}`,
             `.${P}-flag-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px}`,
-            `.${P}-code{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:.95em;overflow-wrap:anywhere}`,
+            // Inline code in a why, a reason or a claim (the words keep Markdown's backquotes): drawn as code, as DSH draws it.
+            `.${P}-code{font-family:var(--ds-font-family-code);font-size:1em;padding:0 3px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-xs);background-color:var(--dsw-alias-markdown-inline-code);-webkit-box-decoration-break:clone;box-decoration-break:clone;overflow-wrap:anywhere}`,
+            // A check line takes the focus after Check (it is not a tab stop): the ring shows only from the keyboard.
+            `.${P}-flag-line[tabindex]:focus,.${P}-check[tabindex]:focus{outline:none}`,
+            `.${P}-flag-line[tabindex]:focus-visible,.${P}-check[tabindex]:focus-visible{outline:2px solid var(--${P}-ring);outline-offset:1px;border-radius:var(--dsw-radius-xs)}`,
+            // A running check, above the message box of its thread (as DSH docks a goal there).
+            `.${P}-dock{box-sizing:border-box;width:calc(100% - 2 * var(--dsh-composer-side-clearance,0px) - 4 * var(--dsh-composer-dock-inset,0px));margin:0 auto;container:${P}-dock/inline-size}`,
+            `.${P}-dock-bar{isolation:isolate;position:relative;box-sizing:border-box;display:flex;align-items:center;gap:10px;width:100%;max-width:calc(var(--dsh-composer-card-max-width,760px) - 4 * var(--dsh-composer-dock-inset,0px));min-height:36px;margin:0 auto;padding:4px 5px 4px 12px;border-radius:var(--dsw-radius-md);box-shadow:var(--dsw-elevation-panel);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);color:var(--dsw-alias-label-primary)}`,
+            `.${P}-dock-bar::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:inherit;background:var(--dsw-specific-menu);backdrop-filter:var(--dsw-menu-backdrop-filter);pointer-events:none}`,
+            `.${P}-dock-glyph{flex:none;display:inline-flex;color:var(--dsw-alias-label-tertiary)}`,
+            `.${P}-dock-label{flex:none;font-size:13px;font-weight:500;line-height:24px}`,
+            `.${P}-dock-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary-dimmed,var(--dsw-alias-label-secondary))}`,
+            `@container ${P}-dock (max-width:600px){.${P}-dock-bar{flex-wrap:wrap;row-gap:0;padding-bottom:7px}.${P}-dock-label{flex:1 1 auto}.${P}-dock-text{order:1;box-sizing:border-box;flex:1 1 100%;padding-inline:24px 7px;white-space:normal}}`,
             // The page.
             `.${P}-status{margin:10px 0 0;font:var(--dsw-font-xs-13);color:var(--${P}-text-2)}`,
             `.${P}-lines{margin:8px 0 0;display:flex;flex-direction:column;gap:4px;font:var(--dsw-font-xs-13);color:var(--${P}-text-2)}`,
@@ -1135,7 +1154,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-ran{margin:6px 0 0;padding:0 0 0 18px;font:var(--dsw-font-xs-13);color:var(--${P}-text-2)}`,
             `.${P}-ran li{margin:2px 0;overflow-wrap:anywhere}`,
             `.${P}-tools{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:10px}`,
-            `.${P}-log-time{flex:0 0 auto;min-width:64px;font:var(--dsw-font-xs-13);color:var(--${P}-text-2)}`,
+            // One width for every time in a list, so each row's text starts at the same place.
+            `.${P}-log-time{flex:0 0 8.5em;width:8.5em;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:var(--dsw-font-xs-13);font-variant-numeric:tabular-nums;color:var(--${P}-text-2)}`,
             `.${P}-alert[tabindex]:focus{outline:none}`,
             `.${P}-alert[tabindex]:focus-visible{outline:2px solid var(--${P}-ring);outline-offset:1px}`,
             `@media (max-width:560px){.${P}-item{flex-wrap:wrap}.${P}-item-side{justify-content:flex-start;width:100%}}`,
@@ -1150,12 +1170,39 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return t && !/[.!?…]$/.test(t) ? `${t}.` : t;
         };
 
+        /**
+         * Words with Markdown's inline code (`npm test`) drawn as code, as DSH
+         * draws it in a reply: the backquotes go, the command shows in code
+         * type. A lone backquote stays as it is.
+         */
+        function richText(text) {
+            const s = String(text ?? '');
+            if (!s.includes('`')) return s;
+            const parts = [];
+            const re = /`([^`\n]+)`/g;
+            let last = 0;
+            let m;
+            while ((m = re.exec(s)) !== null) {
+                if (m.index > last) parts.push(s.slice(last, m.index));
+                parts.push(h('code', { key: `c${m.index}`, className: `${P}-code` }, m[1]));
+                last = m.index + m[0].length;
+            }
+            if (parts.length === 0) return s;
+            if (last < s.length) parts.push(s.slice(last));
+            return parts;
+        }
+        /** A claim in quotes, its inline code drawn as code. */
+        const quotedRich = (text) => {
+            const inner = richText(String(text ?? '').trim());
+            return Array.isArray(inner) ? ['“', ...inner, '”'] : `“${inner}”`;
+        };
+
         /** A state word as DSH's tag, in the tone its meaning has. */
         function Tag({ word }) {
             return h(ui.Tag, { tone: TONE[word] ?? 'quiet', className: `${P}-tag` }, word);
         }
 
-        /** What the flag's head says for a turn's flagged claims. */
+        /** What the flag's head says for a turn's flagged claims (Proof's own reading). */
         function flagHead(claims) {
             if (claims.length === 1) return claims[0].verdict === 'contradicted' ? 'This turn\'s own output says otherwise' : 'Nothing in this turn shows this';
             const against = claims.filter((c) => c.verdict === 'contradicted').length;
@@ -1164,25 +1211,91 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     : `${claims.length} claims this turn does not show`;
         }
 
-        /** How checks run, in a sentence for the page. */
+        /**
+         * The flag's one state, from Proof's reading and the claims' checks: a
+         * check's verdict outranks Proof's reading. `{ head, flag, says }`:
+         * `flag` is its data-proof-flag (and glyph colour), `says` the check
+         * verdict the head already gives (its line then needs no tag).
+         */
+        function flagState(claims, checks) {
+            const verdictOf = (c) => checks.get(c.id)?.state;
+            const verified = claims.filter((c) => verdictOf(c) === 'verified');
+            const open = claims.filter((c) => verdictOf(c) !== 'verified');
+            if (claims.length === 1) {
+                const state = verdictOf(claims[0]);
+                if (state === 'verified') return { head: 'Verified by an independent check', flag: 'verified', says: 'verified' };
+                if (state === 'not-verified') return { head: 'Not verified by an independent check', flag: 'not-verified', says: 'not-verified' };
+            }
+            if (open.length === 0) return { head: `An independent check verified all ${claims.length} claims`, flag: 'verified', says: 'verified' };
+            const flag = open.some((c) => c.verdict === 'contradicted') ? 'contradicted' : 'unbacked';
+            if (verified.length === 0) return { head: flagHead(claims), flag, says: '' };
+            // Some verified, some not: how many of each, so "this" never points at the wrong claim.
+            const against = open.filter((c) => c.verdict === 'contradicted').length;
+            const lead = against === open.length ? `This turn's own output contradicts ${plural(open.length, 'claim')}`
+                : `${plural(open.length, 'claim')} this turn does not show${against ? ` (${against} contradicted)` : ''}`;
+            return { head: `${lead} · ${verified.length} verified by an independent check`, flag, says: '' };
+        }
+
+        /** How checks run, in a sentence for the page: the model named as DSH's model menu names it. */
         function verifierText(v) {
             if (!v || v.mode === 'off') return 'The independent check is off.';
             const how = v.mode === 'auto' ? 'Each new flagged claim is checked by itself' : 'A flagged claim is checked when you press Check';
             const used = Number.isFinite(v.used) && Number.isFinite(v.perHour) ? ` ${v.used} of ${v.perHour} this hour.` : '';
-            return `${how}: a fresh read-only thread on ${v.model} from ${v.provider}, for at most ${plural(v.minutes, 'minute')}.${used}`;
+            return `${how}: a fresh read-only thread on ${v.modelName || v.model} from ${v.providerName || v.provider}, for at most ${plural(v.minutes, 'minute')}.${used}`;
         }
 
-        /** A check's state and reason in one line. */
-        function checkLine(check) {
+        /** A check's reason, or what it is doing: its state is its tag's word, so the line never says it again. */
+        function checkWords(check) {
             if (!check) return '';
-            const word = CHECK_WORD[check.state] ?? check.state;
-            if (check.state === 'running') return `Checking in a read-only thread on ${check.model || 'the check model'}.`;
-            if (check.state === 'queued') return sentence(check.reason) || 'Waiting for the check before it to finish.';
-            return `${word[0].toUpperCase()}${word.slice(1)}: ${sentence(check.reason) || 'no reason given.'}`;
+            if (check.state === 'running') {
+                const effort = typeof check.effort === 'string' && check.effort ? ` at ${check.effort.toLowerCase()} effort` : '';
+                const limit = Number.isSafeInteger(check.minutes) ? `, for up to ${plural(check.minutes, 'minute')}` : '';
+                return `In a read-only thread on ${check.model || 'the check model'}${effort}${limit}.`;
+            }
+            if (check.state === 'queued') return sentence(check.reason) || 'It starts when the check before it ends.';
+            return sentence(check.reason) || 'It gave no reason.';
         }
-
         const canCheck = (verifier) => verifier === 'ask' || verifier === 'auto';
         const active = (check) => check?.state === 'queued' || check?.state === 'running';
+        const isVerified = (claim) => claim?.verdict !== 'backed' && claim?.check?.state === 'verified';
+
+        /** Words with their Markdown and spacing taken out, to tell whether two say the same thing. */
+        const bare = (text) => String(text ?? '').replace(/`/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+        /** The evidence a why does not already give (a contradicted claim's why quotes the run that contradicts it). */
+        const newEvidence = (claim) => {
+            const why = bare(claim.why);
+            return (claim.evidence ?? []).filter((e) => e && !why.includes(bare(e)));
+        };
+
+        /**
+         * After Check: the focus goes to the check's line once it is drawn (or
+         * to what went wrong), instead of falling to the page when the button
+         * goes. The line stays in place while its check waits, runs and ends,
+         * and Tab from it reaches Open the check. Returns a ref for the
+         * element that takes the focus, while it is owed.
+         */
+        function focusRef(owed, done) {
+            if (!owed) return undefined;
+            return (el) => {
+                if (!el) return;
+                try { el.focus?.(); } catch { /* the page keeps the focus */ }
+                done();
+            };
+        }
+
+        /** A check's line: its state's tag (unless the card already says it), its reason, and the way into its thread. */
+        function CheckLine({ check, className, tag = true, onOpen, takeFocus, onFocused }) {
+            return h('div', {
+                className,
+                role: 'status',
+                tabIndex: -1,
+                'data-proof-check': check.state,
+                ref: focusRef(takeFocus, onFocused ?? (() => {})),
+            },
+            tag ? h(Tag, { word: CHECK_WORD[check.state] ?? check.state }) : null,
+            h('span', null, richText(checkWords(check))),
+            check.checkSessionId && onOpen ? h('button', { type: 'button', className: `${P}-link`, onClick: () => onOpen(check.checkSessionId) }, 'Open the check') : null);
+        }
 
         // ── Shared state ──────────────────────────────────────────────
 
@@ -1229,23 +1342,25 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
 
         // ── The flag after a turn ─────────────────────────────────────
 
-        function ShieldGlyph({ crossed }) {
+        function ShieldGlyph({ crossed, ticked }) {
             return h('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.9, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': 'true' },
                 h('path', { d: 'M12 3 19.5 5.8v5.6c0 4.7-3.1 8.3-7.5 10C7.6 19.7 4.5 16.1 4.5 11.4V5.8Z' }),
-                crossed ? h('path', { d: 'm9.5 9.5 5 5m0-5-5 5' }) : h('path', { d: 'M12 8v4.5m0 3.2v.1' }));
+                crossed ? h('path', { d: 'm9.5 9.5 5 5m0-5-5 5' }) : ticked ? h('path', { d: 'm8.8 12.2 2.2 2.2 4.3-4.5' }) : h('path', { d: 'M12 8v4.5m0 3.2v.1' }));
         }
 
-        /** One flagged claim in the flag, with its check. */
-        function FlagItem({ claim, check, verifier, busy, onCheck, onOpenCheck }) {
-            const evidence = claim.verdict === 'contradicted' && claim.evidence?.length ? claim.evidence[0] : '';
+        /**
+         * One flagged claim in the flag, with its check. A claim its check
+         * verified shows the check's reason instead of Proof's reading; the
+         * evidence shows only what the why does not already say.
+         */
+        function FlagItem({ claim, check, verifier, busy, onCheck, onOpenCheck, headSays, takeFocus, onFocused }) {
+            const verified = check?.state === 'verified';
+            const evidence = claim.verdict === 'contradicted' && !verified ? newEvidence(claim) : [];
             return h('li', { className: `${P}-flag-item`, 'data-proof-claim': claim.id, 'data-proof-verdict': claim.verdict },
-                h('p', { className: `${P}-flag-claim` }, quoted(claim.text)),
-                claim.why ? h('p', { className: `${P}-flag-why` }, sentence(claim.why)) : null,
-                evidence ? h('p', { className: `${P}-flag-why` }, 'What the turn shows: ', h('span', { className: `${P}-code` }, evidence)) : null,
-                check ? h('div', { className: `${P}-flag-line`, role: 'status', 'data-proof-check': check.state },
-                    h(Tag, { word: CHECK_WORD[check.state] ?? check.state }),
-                    h('span', null, checkLine(check)),
-                    check.checkSessionId ? h('button', { type: 'button', className: `${P}-link`, onClick: () => onOpenCheck(check.checkSessionId) }, 'Open the check') : null) : null,
+                h('p', { className: `${P}-flag-claim` }, quotedRich(claim.text)),
+                claim.why && !verified ? h('p', { className: `${P}-flag-why` }, richText(sentence(claim.why))) : null,
+                evidence.length ? h('p', { className: `${P}-flag-why` }, 'What the turn shows: ', richText(evidence.join('; '))) : null,
+                check ? h(CheckLine, { check, className: `${P}-flag-line`, tag: headSays !== check.state, onOpen: onOpenCheck, takeFocus, onFocused }) : null,
                 canCheck(verifier) && !active(check)
                     ? h('div', { className: `${P}-flag-actions` },
                         h(ui.Button, { variant: 'outline', size: 'sm', disabled: busy, onClick: () => onCheck(claim) }, check ? 'Check again' : 'Check it')) : null);
@@ -1256,6 +1371,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const live = kit.useLive(() => api.read('session', { sessionId }), ['proof', 'settings'], { delayMs: 300 });
             const [busy, setBusy] = React.useState(false);
             const [problem, setProblem] = React.useState('');
+            // The claim whose check line takes the focus once it is drawn ("!" for the problem line).
+            const [owed, setOwed] = React.useState(undefined);
             const data = live.data;
             // Until Proof says whether flags show, nothing: a flag that appears and goes would flash.
             if (!data || !data.flags || data.isCheck) return null;
@@ -1263,21 +1380,31 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const onCheck = async (claim) => {
                 setBusy(true);
                 setProblem('');
+                setOwed(claim.id);
                 const { problem: no } = await run('check', { sessionId, claimId: claim.id });
                 setBusy(false);
-                if (no) setProblem(no);
+                if (no) {
+                    setProblem(no);
+                    setOwed('!');
+                }
                 void live.refresh();
             };
-            const contradicted = claims.some((c) => c.verdict === 'contradicted');
-            return h('section', { className: `${P}-pane ${P}-flag`, 'aria-label': 'Proof', 'data-proof-flag': contradicted ? 'contradicted' : 'unbacked' },
+            const state = flagState(claims, checks);
+            const single = claims.length === 1;
+            return h('section', { className: `${P}-pane ${P}-flag`, 'aria-label': 'Proof', 'data-proof-flag': state.flag },
                 h('div', { className: `${P}-flag-head` },
-                    h('span', { className: `${P}-flag-glyph` }, h(ShieldGlyph, { crossed: contradicted })),
-                    h('span', null, `Proof · ${flagHead(claims)}`)),
+                    h('span', { className: `${P}-flag-glyph` }, h(ShieldGlyph, { crossed: state.flag === 'contradicted' || state.flag === 'not-verified', ticked: state.flag === 'verified' })),
+                    h('span', null, `Proof · ${state.head}`)),
                 h('ul', { className: `${P}-flag-list` }, ...claims.map((claim) => h(FlagItem, {
                     key: claim.id, claim, check: checks.get(claim.id), verifier: data.verifier, busy,
                     onCheck, onOpenCheck: (id) => views.openSession(id),
+                    headSays: single || state.says === 'verified' ? state.says : '',
+                    takeFocus: owed === claim.id, onFocused: () => setOwed(undefined),
                 }))),
-                problem ? h('p', { className: `${P}-flag-why ${P}-error`, role: 'alert' }, `Not checked: ${problem}`) : null,
+                problem ? h('p', {
+                    className: `${P}-flag-why ${P}-error ${P}-alert`, role: 'alert', tabIndex: -1,
+                    ref: focusRef(owed === '!', () => setOwed(undefined)),
+                }, `Not checked: ${problem}`) : null,
                 h('div', { className: `${P}-flag-actions` },
                     h('button', {
                         type: 'button',
@@ -1289,7 +1416,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     }, 'Open in Proof')));
         }
 
-        /** In one of Proof's check threads: what it checks, from where. */
+        /** What a check thread checks, in one sentence. */
+        const checksWhat = (of) => `This thread checks ${quoted(of.claim)} from turn ${of.turn}${of.title ? ` of “${of.title}”` : ''}.`;
+
+        /** In one of Proof's check threads, after its turn: what it checks, from where, and how it ended. */
         function CheckNote({ sessionId }) {
             const live = kit.useLive(() => api.read('session', { sessionId }), ['proof'], { delayMs: 300 });
             const of = live.data?.checkOf;
@@ -1298,12 +1428,36 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 h('div', { className: `${P}-flag-head` },
                     h('span', { className: `${P}-flag-glyph` }, h(ShieldGlyph, {})),
                     h('span', null, 'Proof · An independent check')),
-                h('p', { className: `${P}-flag-why` }, `This thread checks ${quoted(of.claim)} from turn ${of.turn}${of.title ? ` of “${of.title}”` : ''}. It can read and run commands, but nothing it runs can write a file.`),
-                h('div', { className: `${P}-flag-line`, role: 'status' },
-                    h(Tag, { word: CHECK_WORD[of.state] ?? of.state }),
-                    h('span', null, checkLine(of))),
+                h('p', { className: `${P}-flag-why` }, `${checksWhat(of)} ${TEXT.checkThread}`),
+                h(CheckLine, { check: of, className: `${P}-flag-line` }),
                 h('div', { className: `${P}-flag-actions` },
                     h('button', { type: 'button', className: `${P}-link`, onClick: () => views.openSession(of.sessionId) }, 'Open the checked session')));
+        }
+
+        /** Above the message box of a check thread while its check waits or runs: what it checks (its turn shows it only once it ends). */
+        function CheckDock({ sessionId, useProjection }) {
+            let isCheck = false;
+            try {
+                if (typeof useProjection === 'function') isCheck = useProjection(KEY, (view) => kit.isRecord(view) && view.check === true, Object.is) === true;
+            } catch {
+                isCheck = false;
+            }
+            if (!isCheck || typeof sessionId !== 'string' || sessionId === '') return null;
+            return h(CheckDockBar, { sessionId });
+        }
+
+        function CheckDockBar({ sessionId }) {
+            const live = kit.useLive(() => api.read('session', { sessionId }), ['proof'], { delayMs: 300 });
+            const of = live.data?.checkOf;
+            if (!of || !active(of)) return null;
+            const text = `${checksWhat(of)} ${TEXT.checkThread}`;
+            return h('div', { className: `${P}-dock ${P}-pane`, 'data-proof-dock': of.state },
+                h('div', { className: `${P}-dock-bar`, role: 'status', title: text },
+                    h('span', { className: `${P}-dock-glyph` }, h(ShieldGlyph, {})),
+                    h('span', { className: `${P}-dock-label` }, 'Proof check'),
+                    h('span', { className: `${P}-dock-text` }, text),
+                    h(Tag, { word: CHECK_WORD[of.state] ?? of.state }),
+                    h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => views.openSession(of.sessionId) }, 'Open the checked session')));
         }
 
         const NONE = Object.freeze([]);
@@ -1343,9 +1497,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         function HeaderCard({ data }) {
             const canOpen = kit.canOpenPlugin();
             const flagged = data.sessions.reduce((n, s) => n + s.flagged, 0);
+            const verified = data.sessions.reduce((n, s) => n + (s.verified ?? 0), 0);
             const status = !data.enabled ? TEXT.disabled
                 : data.sessions.length === 0 ? ''
-                    : `${plural(data.sessions.length, 'session')} with claims · ${flagged ? `${plural(flagged, 'claim')} flagged` : 'none flagged'}`;
+                    : `${plural(data.sessions.length, 'session')} with claims · ${flagged ? `${plural(flagged, 'claim')} flagged` : 'none flagged'}${verified ? ` · ${verified} verified by an independent check` : ''}`;
             return h(kit.Card, {
                 title: TEXT.title,
                 headingLevel: 1,
@@ -1355,12 +1510,15 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 attrs: { 'data-proof-header': data.enabled ? 'on' : 'off' },
             },
             status ? h('p', { className: `${P}-status` }, status) : null,
+            // How checks run is said once, on Independent checks.
             data.enabled ? h('div', { className: `${P}-lines` },
                 h('div', { className: `${P}-line`, 'data-proof-flags': data.flags ? 'on' : 'off' }, data.flags
                     ? 'Flags are on: a turn whose claim nothing in it shows gets a short card after it.'
-                    : 'Flags are off: claims are judged and kept in the ledger, but turns show no card.'),
-                h('div', { className: `${P}-line`, 'data-proof-verifier': data.verifier.mode }, verifierText(data.verifier))) : null);
+                    : 'Flags are off: claims are judged and kept in the ledger, but turns show no card.')) : null);
         }
+
+        /** A session's one state on its row: its flagged claims, else verified, else shown. */
+        const rowWord = (s) => (s.flagged > 0 ? (s.contradicted > 0 ? 'contradicted' : 'no evidence') : (s.verified ?? 0) > 0 ? 'verified' : 'shown');
 
         function SessionsCard({ data, selected, onSelect }) {
             return h(kit.Card, { title: TEXT.sessions, sub: data.sessions.length ? TEXT.sessionsSub : undefined, attrs: { 'data-proof-sessions': String(data.sessions.length) } },
@@ -1376,32 +1534,38 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         },
                         h('span', { className: `${P}-row-main` },
                             h('span', { className: `${P}-title ${P}-clip`, title: s.title || 'Untitled session' }, s.title || 'Untitled session'),
-                            h('span', { className: `${P}-meta ${P}-clip` }, `${plural(s.total, 'claim')}`, s.latest ? ` · latest flagged: ${quoted(s.latest.text)}` : '')),
+                            h('span', { className: `${P}-meta ${P}-clip` }, `${plural(s.total, 'claim')}`, s.latest ? ` · latest flagged: ${quoted(String(s.latest.text ?? '').replace(/`/g, ''))}` : '')),
                         h('span', { className: `${P}-row-side` },
-                            s.flagged > 0 ? h(Tag, { word: s.contradicted > 0 ? 'contradicted' : 'no evidence' }) : h(Tag, { word: 'shown' }),
+                            h(Tag, { word: rowWord(s) }),
                             h('span', { className: `${P}-meta` }, h(kit.TimeText, { at: s.updatedAt }))))))));
         }
 
-        function ClaimRow({ claim, verifier, busy, onCheck }) {
-            const word = VERDICT_WORD[claim.verdict] ?? claim.verdict;
+        /**
+         * One claim in a ledger. Its tag is its one state: Proof's verdict, or
+         * the independent check's answer once it gave one (verified or not
+         * verified; its line then gives only the reason). A verified claim
+         * shows the check's reason instead of Proof's reading. No kind beside
+         * the time: next to a tag it read as a verdict.
+         */
+        function ClaimRow({ claim, verifier, busy, onCheck, takeFocus, onFocused }) {
             const check = claim.check;
             const flagged = claim.verdict !== 'backed';
-            return h('li', { className: `${P}-item`, 'data-proof-claim': claim.id, 'data-proof-verdict': claim.verdict },
+            const answered = flagged && (check?.state === 'verified' || check?.state === 'not-verified') ? check.state : '';
+            const verified = answered === 'verified';
+            const word = answered ? CHECK_WORD[answered] : VERDICT_WORD[claim.verdict] ?? claim.verdict;
+            const evidence = verified ? [] : flagged ? newEvidence(claim) : claim.evidence ?? [];
+            return h('li', { className: `${P}-item`, 'data-proof-claim': claim.id, 'data-proof-verdict': claim.verdict, 'data-proof-state': word },
                 h('div', { className: `${P}-item-main` },
                     h('div', { className: `${P}-claim-top` },
                         h('span', { className: `${P}-num` }, `Turn ${claim.turn}`),
-                        claim.at ? h(kit.TimeText, { at: claim.at }) : null,
-                        h('span', null, `· ${KIND_WORD[claim.kind] ?? claim.kind}`)),
-                    h('p', { className: `${P}-claim` }, quoted(claim.text)),
-                    claim.why ? h('p', { className: `${P}-why` }, sentence(claim.why)) : null,
-                    claim.evidence?.length ? h('p', { className: `${P}-why` }, flagged ? 'What the turn shows: ' : 'Shown by: ', h('span', { className: `${P}-code` }, claim.evidence.join('; '))) : null,
+                        claim.at ? h(kit.TimeText, { at: claim.at }) : null),
+                    h('p', { className: `${P}-claim` }, quotedRich(claim.text)),
+                    claim.why && !verified ? h('p', { className: `${P}-why` }, richText(sentence(claim.why))) : null,
+                    evidence.length ? h('p', { className: `${P}-why` }, flagged ? 'What the turn shows: ' : 'Shown by: ', richText(evidence.join('; '))) : null,
                     claim.ran?.length ? h('details', { className: `${P}-details` },
                         h('summary', null, `${claim.from !== undefined ? `What turn ${claim.from} ran` : TEXT.ran} (${claim.ran.length})`),
-                        h('ul', { className: `${P}-ran` }, ...claim.ran.map((r, i) => h('li', { key: i, className: `${P}-code` }, r)))) : null,
-                    check ? h('div', { className: `${P}-check`, 'data-proof-check': check.state },
-                        h(Tag, { word: CHECK_WORD[check.state] ?? check.state }),
-                        h('span', null, checkLine(check)),
-                        check.checkSessionId ? h('button', { type: 'button', className: `${P}-link`, onClick: () => views.openSession(check.checkSessionId) }, 'Open the check') : null) : null),
+                        h('ul', { className: `${P}-ran` }, ...claim.ran.map((r, i) => h('li', { key: i }, richText(r))))) : null,
+                    check ? h(CheckLine, { check, className: `${P}-check`, tag: !answered, onOpen: (id) => views.openSession(id), takeFocus, onFocused }) : null),
                 h('div', { className: `${P}-item-side` },
                     h(Tag, { word }),
                     flagged && canCheck(verifier) && !active(check)
@@ -1413,6 +1577,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const [filter, setFilter] = React.useState('flagged');
             const [busy, setBusy] = React.useState(false);
             const [said, setSaid] = React.useState({ text: '', bad: false });
+            const [owed, setOwed] = React.useState(undefined);
             const data = live.data;
             const title = data?.session?.title || row?.title || 'Untitled session';
             const act = async (fn) => {
@@ -1420,40 +1585,51 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 setSaid({ text: '', bad: false });
                 try { await fn(); } finally { setBusy(false); }
             };
+            // What went wrong shows under the buttons and takes the focus.
+            const fail = (text) => {
+                setSaid({ text, bad: true });
+                setOwed('!');
+            };
+            // The check's own line says it started (and takes the focus): nothing to say here as well.
             const onCheck = (claim) => act(async () => {
+                setOwed(claim.id);
                 const { problem } = await run('check', { sessionId, claimId: claim.id });
-                setSaid(problem ? { text: `Not checked: ${problem}`, bad: true } : { text: `Checking ${quoted(claim.text)} in a fresh read-only thread.`, bad: false });
+                if (problem) fail(`Not checked: ${problem}`);
                 void live.refresh();
             });
             const onExport = (format) => act(async () => {
                 const { problem, value } = await run('exportLedger', { sessionId, format });
-                if (problem) return setSaid({ text: `Not exported: ${problem}`, bad: true });
+                if (problem) return fail(`Not exported: ${problem}`);
                 try {
                     download(value);
                     setSaid({ text: `Downloaded ${value.name}.`, bad: false });
                 } catch (error) {
-                    setSaid({ text: `Not exported: this window could not save the file (${String(error?.message ?? error)}).`, bad: true });
+                    fail(`Not exported: this window could not save the file (${String(error?.message ?? error)}).`);
                 }
                 return undefined;
             });
+            // A copy is logged as a copy, once it is on the clipboard (no file is saved).
             const onCopy = () => act(async () => {
-                const { problem, value } = await run('exportLedger', { sessionId, format: 'md' });
-                if (problem) return setSaid({ text: `Not copied: ${problem}`, bad: true });
+                const { problem, value } = await run('exportLedger', { sessionId, format: 'md', copy: true });
+                if (problem) return fail(`Not copied: ${problem}`);
                 try {
                     await navigator.clipboard.writeText(value.text);
-                    setSaid({ text: 'Copied the ledger as Markdown.', bad: false });
                 } catch {
-                    setSaid({ text: 'Not copied: this window may not use the clipboard. Download it as Markdown instead.', bad: true });
+                    return fail('Not copied: this window may not use the clipboard. Download it as Markdown instead.');
                 }
+                setSaid({ text: 'Copied the ledger as Markdown.', bad: false });
+                await run('copied', { sessionId, claims: data?.claims?.length ?? 0 });
                 return undefined;
             });
             const claims = data?.claims ?? [];
-            const shown = (filter === 'flagged' ? claims.filter((c) => c.verdict !== 'backed') : claims).slice().reverse();
+            const open = (c) => c.verdict !== 'backed' && !isVerified(c);
+            const shown = (filter === 'flagged' ? claims.filter(open) : claims).slice().reverse();
             const counts = data?.counts;
+            const verifiedCount = counts?.verified ?? 0;
             return h(kit.Card, {
                 title: `${TEXT.ledger}: ${title}`,
                 main: true,
-                sub: counts ? `${plural(counts.total, 'claim')}: ${counts.backed} shown by their turn, ${counts.unbacked} with no evidence, ${counts.contradicted} contradicted.` : undefined,
+                sub: counts ? `${plural(counts.total, 'claim')}: ${counts.backed} shown by their turn, ${verifiedCount ? `${verifiedCount} verified by an independent check, ` : ''}${counts.unbacked} with no evidence, ${counts.contradicted} contradicted.` : undefined,
                 actions: h('span', { className: `${P}-actions` }, h(SessionLink, { title: 'Open the session', sessionId })),
                 attrs: { 'data-proof-ledger': sessionId },
             },
@@ -1475,36 +1651,60 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             h(ui.Button, { variant: 'ghost', size: 'sm', disabled: busy || claims.length === 0, onClick: () => void onExport('csv') }, 'CSV'),
                             h(ui.Button, { variant: 'ghost', size: 'sm', disabled: busy || claims.length === 0, onClick: () => void onExport('json') }, 'JSON'),
                             h(ui.Button, { variant: 'ghost', size: 'sm', disabled: busy || claims.length === 0, onClick: () => void onCopy() }, 'Copy'))),
-                    h('p', { key: 's', className: said.text ? `${P}-note ${said.bad ? `${P}-error` : `${P}-ok`}` : `${P}-sr`, role: said.bad ? 'alert' : 'status', 'aria-live': 'polite', 'data-proof-said': '' }, said.text),
+                    h('p', {
+                        key: 's',
+                        className: said.text ? `${P}-note ${said.bad ? `${P}-error ${P}-alert` : `${P}-ok`}` : `${P}-sr`,
+                        role: said.bad ? 'alert' : 'status',
+                        'aria-live': 'polite',
+                        tabIndex: said.bad ? -1 : undefined,
+                        ref: focusRef(owed === '!' && said.bad, () => setOwed(undefined)),
+                        'data-proof-said': '',
+                    }, said.text),
                     claims.length === 0
                         ? h(kit.Empty, { key: 'n', title: TEXT.noClaims, text: TEXT.noClaimsText })
                         : shown.length === 0
-                            ? h(kit.Empty, { key: 'n', title: TEXT.noFlagged, text: TEXT.noFlaggedText, action: h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => setFilter('all') }, 'Show all claims') })
-                            : h('ul', { key: 'l', className: `${P}-list` }, ...shown.map((claim) => h(ClaimRow, { key: claim.id, claim, verifier, busy, onCheck }))),
+                            ? h(kit.Empty, {
+                                key: 'n',
+                                title: verifiedCount ? TEXT.noneFlagged : TEXT.noFlagged,
+                                text: verifiedCount ? TEXT.noneFlaggedText : TEXT.noFlaggedText,
+                                action: h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => setFilter('all') }, 'Show all claims'),
+                            })
+                            : h('ul', { key: 'l', className: `${P}-list` }, ...shown.map((claim) => h(ClaimRow, {
+                                key: claim.id, claim, verifier, busy, onCheck,
+                                takeFocus: owed === claim.id, onFocused: () => setOwed(undefined),
+                            }))),
                 ]);
         }
+
+        /** When a check last moved: the time its row shows, and the order the host lists them in (newest first). */
+        const checkTime = (c) => c.endedAt ?? c.startedAt ?? c.queuedAt;
 
         function ChecksCard({ data, titles }) {
             const v = data.verifier;
             const canOpen = kit.canOpenPlugin();
             const off = v.mode === 'off';
-            return h(kit.Card, { title: TEXT.checks, sub: verifierText(v), attrs: { 'data-proof-checks': String(data.checks.length) } },
-                data.checks.length === 0
-                    ? h(kit.Empty, {
-                        title: off ? 'The independent check is off' : TEXT.noChecks,
-                        text: off ? 'Turn it on in Proof\'s settings to have a fresh read-only thread on a local model re-run or re-read a flagged claim\'s evidence.'
-                            : v.mode === 'auto' ? 'Each new flagged claim is checked by itself. Checks show here with VERIFIED or NOT VERIFIED and the reason.'
-                                : 'Press Check on a flagged claim, in its flag or in a ledger here. The check shows here with VERIFIED or NOT VERIFIED and the reason.',
-                        action: off && canOpen ? h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => kit.openPlugin(BUNDLE, { focus: 'verifier' }) }, 'Open Proof\'s settings') : null,
-                    })
-                    : h('ul', { className: `${P}-list` }, ...data.checks.slice(0, 30).map((c) => h('li', { key: c.key, className: `${P}-item`, 'data-proof-check-row': c.state },
-                        h('span', { className: `${P}-log-time` }, h(kit.TimeText, { at: c.endedAt ?? c.startedAt ?? c.queuedAt })),
-                        h('div', { className: `${P}-item-main` },
-                            h('div', null, quoted(c.claim)),
-                            h('div', { className: `${P}-meta` }, `Turn ${c.turn} of `, h(SessionLink, { title: titles.get(c.sessionId) || 'a session', sessionId: c.sessionId }), c.by === 'auto' ? ' · checked by itself' : ' · you asked'),
-                            h('div', { className: `${P}-why` }, checkLine(c)),
-                            c.checkSessionId ? h('button', { type: 'button', className: `${P}-link`, onClick: () => views.openSession(c.checkSessionId) }, 'Open the check') : null),
-                        h('div', { className: `${P}-item-side` }, h(Tag, { word: CHECK_WORD[c.state] ?? c.state }))))));
+            return h(kit.Card, {
+                title: TEXT.checks,
+                sub: verifierText(v),
+                // While the check is off, the way to turn it on, whether or not checks were made before.
+                actions: off && canOpen ? h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => kit.openPlugin(BUNDLE, { focus: 'verifier' }) }, TEXT.openSettings) : null,
+                attrs: { 'data-proof-checks': String(data.checks.length), 'data-proof-verifier': v.mode },
+            },
+            data.checks.length === 0
+                ? h(kit.Empty, {
+                    title: off ? 'The independent check is off' : TEXT.noChecks,
+                    text: off ? 'Turn it on in Proof\'s settings to have a fresh read-only thread on a local model re-run or re-read a flagged claim\'s evidence.'
+                        : v.mode === 'auto' ? 'Each new flagged claim is checked by itself. Checks show here with VERIFIED or NOT VERIFIED and the reason.'
+                            : 'Press Check on a flagged claim, in its flag or in a ledger here. The check shows here with VERIFIED or NOT VERIFIED and the reason.',
+                })
+                : h('ul', { className: `${P}-list` }, ...data.checks.slice(0, 30).map((c) => h('li', { key: c.key, className: `${P}-item`, 'data-proof-check-row': c.state },
+                    h('span', { className: `${P}-log-time` }, h(kit.TimeText, { at: checkTime(c) })),
+                    h('div', { className: `${P}-item-main` },
+                        h('div', null, quotedRich(c.claim)),
+                        h('div', { className: `${P}-meta` }, `Turn ${c.turn} of `, h(SessionLink, { title: c.title || titles.get(c.sessionId) || 'a session', sessionId: c.sessionId }), c.by === 'auto' ? ' · checked by itself' : ' · you asked'),
+                        h('div', { className: `${P}-why` }, richText(checkWords(c))),
+                        c.checkSessionId ? h('button', { type: 'button', className: `${P}-link`, onClick: () => views.openSession(c.checkSessionId) }, 'Open the check') : null),
+                    h('div', { className: `${P}-item-side` }, h(Tag, { word: CHECK_WORD[c.state] ?? c.state }))))));
         }
 
         function HistoryCard({ data, titles }) {
@@ -1517,10 +1717,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             h('span', { className: `${P}-log-time` }, h(kit.TimeText, { at: entry.at })),
                             h('div', { className: `${P}-item-main` },
                                 h('div', null,
-                                    entry.sessionId ? h(SessionLink, { title: titles.get(entry.sessionId) || 'A session', sessionId: entry.sessionId }) : null,
+                                    entry.sessionId ? h(SessionLink, { title: entry.title || titles.get(entry.sessionId) || 'A session', sessionId: entry.sessionId }) : null,
                                     entry.sessionId ? h('span', { className: `${P}-meta` }, ' · ') : null,
-                                    h('span', null, entry.text)),
-                                entry.why ? h('div', { className: `${P}-why` }, entry.why) : null)))),
+                                    h('span', null, richText(entry.text))),
+                                entry.why ? h('div', { className: `${P}-why` }, richText(entry.why)) : null)))),
                         data.history.length > shown.length ? h('div', { key: 'm', style: { marginTop: '8px' } }, h(ui.Button, { variant: 'ghost', size: 'sm', onClick: () => setAll(true) }, `Show all ${data.history.length}`)) : null,
                     ]);
         }
@@ -1617,12 +1817,18 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PAGE, order: 5, label: TEXT.entry }, ProofIcon));
             // After the coordinator's thread cards (30).
             ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({ name: 'conversation.chat.turnTail', id: `${BUNDLE}:flag`, order: 40, label: 'Proof' }, ProofFlag));
+            // A running check's note, above its thread's message box: after DSH's to-do list (0), its goal (10) and the
+            // coordinator's bars (15, 16), before DSH's queued messages (20), which stay next to the box.
+            ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({ name: 'conversation.input.dock', id: `${BUNDLE}:check`, order: 17, label: 'Proof check' }, CheckDock));
         }
 
         module.exports.inject = inject;
         module.exports.apply = apply;
         // For the plugin's own tests.
-        module.exports.internals = { kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, VERDICT_WORD, CHECK_WORD, TONE, flagHead, verifierText, checkLine, flagOf, sameFlag, spotlight, views, ProofFlag, FlagCard, CheckNote, ProofPage, ProofIcon, HeaderCard, SessionsCard, LedgerCard, ChecksCard, HistoryCard, ClaimRow };
+        module.exports.internals = {
+            kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, VERDICT_WORD, CHECK_WORD, TONE, flagHead, flagState, verifierText, checkWords, richText,
+            flagOf, sameFlag, spotlight, views, ProofFlag, FlagCard, CheckNote, CheckDock, ProofPage, ProofIcon, HeaderCard, SessionsCard, LedgerCard, ChecksCard, HistoryCard, ClaimRow,
+        };
         return module.exports;
     },
 });

@@ -45,15 +45,21 @@ export function titleOf(item) {
 /**
  * The sessions with claims, newest first, from DSH's session list (its
  * `items`): each with how many claims it made and how many are flagged.
- * Proof's own check threads are left out.
+ * Proof's own check threads are left out. `checkOf(sessionId, claimId)`
+ * gives a claim's independent check: a flagged claim a check verified is
+ * counted as verified, not flagged.
  */
-export function sessionRows(items, { limit = 300 } = {}) {
+export function sessionRows(items, { limit = 300, checkOf } = {}) {
     const rows = [];
     for (const item of Array.isArray(items) ? items : []) {
         if (!isRecord(item) || typeof item.sessionId !== 'string') continue;
         const view = parseView(item.projections?.values?.[KEY]);
         if (view.check || view.total === 0) continue;
-        const last = view.flagged.at(-1);
+        const verifiedNow = (c) => {
+            try { return checkOf?.(item.sessionId, c.id)?.state === 'verified'; } catch { return false; }
+        };
+        const open = view.flagged.filter((c) => !verifiedNow(c));
+        const last = open.at(-1);
         rows.push({
             sessionId: item.sessionId,
             title: titleOf(item),
@@ -61,8 +67,9 @@ export function sessionRows(items, { limit = 300 } = {}) {
             updatedAt: Number.isFinite(item.updatedAt) ? item.updatedAt : 0,
             running: item.running === true,
             total: view.total,
-            flagged: view.flagged.length,
-            contradicted: view.flagged.filter((c) => c.verdict === 'contradicted').length,
+            flagged: open.length,
+            contradicted: open.filter((c) => c.verdict === 'contradicted').length,
+            verified: view.flagged.length - open.length,
             ...(last ? { latest: { id: last.id, turn: last.turn, verdict: last.verdict, text: last.text } } : {}),
         });
     }
@@ -97,16 +104,27 @@ export function ledgerOf(events) {
     return { check: state.check === true, claims };
 }
 
-/** How many claims of each verdict. */
+/**
+ * How many claims of each verdict. A flagged claim an independent check
+ * verified is counted apart (`verified`), not as no evidence, contradicted
+ * or flagged, so the counts add up to the total.
+ */
 export function countsOf(claims) {
-    const counts = { total: 0, backed: 0, unbacked: 0, contradicted: 0, flagged: 0 };
+    const counts = { total: 0, backed: 0, verified: 0, unbacked: 0, contradicted: 0, flagged: 0 };
     for (const c of claims ?? []) {
         counts.total += 1;
-        if (Object.hasOwn(counts, c.verdict)) counts[c.verdict] += 1;
+        if (isVerified(c)) {
+            counts.verified += 1;
+            continue;
+        }
+        if (c.verdict === 'backed' || c.verdict === 'unbacked' || c.verdict === 'contradicted') counts[c.verdict] += 1;
         if (flagged(c)) counts.flagged += 1;
     }
     return counts;
 }
+
+/** A claim Proof flagged that its independent check verified. */
+export const isVerified = (claim) => flagged(claim) && claim?.check?.state === 'verified';
 
 /** One claim with its check (by claim id), as the page and the export list it. */
 export function withChecks(claims, checks) {
@@ -156,7 +174,7 @@ function markdown(session, claims, now) {
         '',
         `Session \`${session.id}\`${session.cwd ? ` in \`${session.cwd}\`` : ''}. Exported ${when(now)}.`,
         '',
-        `${counts.total} claim${counts.total === 1 ? '' : 's'}: ${counts.backed} shown by their turn, ${counts.unbacked} with no evidence, ${counts.contradicted} contradicted by their turn's own output.`,
+        `${counts.total} claim${counts.total === 1 ? '' : 's'}: ${counts.backed} shown by their turn, ${counts.verified ? `${counts.verified} verified by an independent check, ` : ''}${counts.unbacked} with no evidence, ${counts.contradicted} contradicted by their turn's own output.`,
         '',
     ];
     if (claims.length === 0) {

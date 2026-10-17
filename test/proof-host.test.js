@@ -1,15 +1,17 @@
 /**
  * Proof's host half around the projection: the claims ledger and its
  * export (ledger.js), the independent check (verifier.js) with DSH and
- * time stood in for, and what its page and flags read (page.js).
+ * time stood in for, what its page and flags read (page.js), its endpoints
+ * (remote.js), and the host half as DSH loads it (index.js) with DSH's
+ * services stood in for.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
-import { CHECK_WORDS, EXPORT_FORMATS, VERDICT_WORDS, countsOf, csvField, exportLedger, exportName, ledgerOf, sessionRows, titleOf, withChecks } from '../plugins/proof/lib/ledger.js';
+import { CHECK_WORDS, EXPORT_FORMATS, VERDICT_WORDS, countsOf, csvField, exportLedger, exportName, isVerified, ledgerOf, sessionRows, titleOf, withChecks } from '../plugins/proof/lib/ledger.js';
 import { CHECK_LINE, KEY, foldAll, viewOf } from '../plugins/proof/lib/projection.js';
-import { CHECK_TOOLS, Verifier, parseChecks, promptFor, refusalOf, verdictIn } from '../plugins/proof/lib/verifier.js';
+import { CHECK_TOOLS, Verifier, checkTime, effortFor, endWords, parseChecks, promptFor, refusalOf, verdictIn } from '../plugins/proof/lib/verifier.js';
 import { ledgerState, pageState, sessionState, working } from '../plugins/proof/lib/page.js';
 import { JsonStore } from '../plugins/proof/lib/shared/files.js';
 import { Journal } from '../plugins/proof/lib/shared/journal.js';
@@ -95,6 +97,16 @@ test('ledger: counts, checks by claim, titles and the sessions with claims', () 
     const joined = withChecks(claims, [check]);
     assert.equal(joined.at(-1).check, check);
     assert.equal(joined[0].check, undefined);
+    // A flagged claim its check verified is counted apart: not flagged, not "no evidence", and the counts still add up.
+    const counted = countsOf(joined);
+    assert.equal(counted.verified, 1);
+    assert.equal(counted.unbacked, counts.unbacked - 1);
+    assert.equal(counted.flagged, counts.flagged - 1);
+    assert.equal(counted.backed + counted.verified + counted.unbacked + counted.contradicted, counted.total);
+    assert.equal(isVerified(joined.at(-1)), true);
+    assert.equal(isVerified({ verdict: 'backed', check: { state: 'verified' } }), false, 'a shown claim is shown, whatever a check said');
+    assert.equal(isVerified({ verdict: 'unbacked', check: { state: 'not-verified' } }), false);
+    assert.equal(countsOf(withChecks(claims, [{ ...check, state: 'not-verified' }])).flagged, counts.flagged, 'not verified stays flagged');
     assert.equal(titleOf({ projections: { values: { title: 'A' } } }), 'A');
     assert.equal(titleOf({ projections: { values: { title: { title: 'B' } } } }), 'B');
     assert.equal(titleOf({}), '');
@@ -120,6 +132,19 @@ test('ledger: counts, checks by claim, titles and the sessions with claims', () 
     assert.equal(rows[1].latest, undefined);
     assert.equal(rows[2].cwd, '/w/old');
     assert.equal(sessionRows(items, { limit: 1 }).length, 1);
+    // With the checks: a verified claim leaves the flagged count and the latest flagged claim.
+    const newest = items[1].projections.values[KEY].flagged;
+    const lastId = newest.at(-1).id;
+    const checked = sessionRows(items, { checkOf: (sessionId, claimId) => (sessionId === 'new' && claimId === lastId ? { state: 'verified' } : sessionId === 'old' ? { state: 'not-verified' } : undefined) });
+    assert.equal(checked[0].flagged, rows[0].flagged - 1);
+    assert.equal(checked[0].verified, 1);
+    assert.notEqual(checked[0].latest.id, lastId, 'the latest flagged claim is one still open');
+    assert.equal(checked[2].flagged, rows[2].flagged, 'not verified stays flagged');
+    assert.equal(checked[2].verified, 0);
+    const all = sessionRows(items, { checkOf: (sessionId) => (sessionId === 'old' ? { state: 'verified' } : undefined) });
+    assert.deepEqual([all[2].flagged, all[2].verified, all[2].latest], [0, 1, undefined]);
+    const broken = sessionRows(items, { checkOf: () => { throw new Error('gone'); } });
+    assert.deepEqual(broken.map((r) => r.flagged), rows.map((r) => r.flagged), 'a check store that cannot be read counts nothing as verified');
 });
 
 // ── Export ─────────────────────────────────────────────────────────
@@ -141,6 +166,10 @@ test('export: Markdown, a table a person reads, its cells safe', () => {
     const rows = text.split('\n').filter((l) => /^\| \d/.test(l));
     assert.equal(rows.length, claims.length);
     for (const row of rows) assert.equal(row.split(/(?<!\\)\|/).length, 8, `six cells: ${row}`);
+    assert.match(text, /^\d+ claims: 1 shown by their turn, 1 with no evidence, \d+ contradicted by their turn's own output\.$/m, 'no verified clause while none is verified');
+    const verified = exportLedger({ id: 's', title: 'T' }, withChecks(claims, [{ claimId: claims.at(-1).id, state: 'verified', reason: 'It answers.' }]), 'md', NOW).text;
+    assert.match(verified, /^\d+ claims: 1 shown by their turn, 1 verified by an independent check, 0 with no evidence, \d+ contradicted by their turn's own output\.$/m);
+    assert.match(verified, /\| 3 \| Deployed to staging\. \| No evidence \| .* \| Verified: It answers\. \|$/m, 'the row keeps Proof\'s reading beside the check');
     const empty = exportLedger({ id: 'session-9' }, [], 'md', NOW).text;
     assert.match(empty, /0 claims: 0 shown by their turn/);
     assert.match(empty, /This session has made no claim of done, passed, fixed or deployed yet\./);
@@ -176,6 +205,7 @@ test('export: JSON with every field, and refusals in words', () => {
     assert.deepEqual(data.session, { id: 'session-abcdef0123', title: '', cwd: '/w' });
     assert.equal(data.exportedAt, '2026-10-17T17:30:00Z');
     assert.equal(data.counts.total, 1);
+    assert.equal(data.counts.verified, 0, 'a shown claim a check verified is still shown');
     assert.equal(data.claims[0].evidenceFromTurn, 1);
     assert.equal(data.claims[0].verdict, 'backed');
     assert.deepEqual(data.claims[0].check, { state: 'verified', reason: 'Re-ran: 5 pass.', model: 'Flash from owner-ascents', by: 'you', checkSession: 'session-c', startedAt: '2026-10-17T17:29:00Z', endedAt: '2026-10-17T17:30:00Z' });
@@ -293,10 +323,13 @@ function standInDsh(sessions = {}) {
             return { meta: { cwd: s.cwd ?? '' }, events: s.events ?? [] };
         },
         async titleOf(id) { return sessions[id]?.title ?? ''; },
+        async titles() { return new Map(Object.entries(sessions).map(([id, s]) => [id, s.title ?? ''])); },
+        async namesOf(provider, model) { return { provider: provider === 'owner-ascents' ? 'Owner Gateway' : provider, model: model === 'GLM-5.3-Flash-EXL3' ? 'GLM-5.3 Flash' : model }; },
+        // As lib/index.js resolves it: the lowest effort the model offers, and the names DSH's model menu shows.
         async resolveModel(wanted) {
             calls.push(['resolveModel', wanted]);
             if (dsh.noModel) throw new Error('no such model');
-            return { provider: wanted.provider, model: wanted.model, reasoningEffort: 'max' };
+            return { provider: wanted.provider, model: wanted.model, reasoningEffort: 'low', effortName: 'Low', providerName: 'Owner Gateway', modelName: 'GLM-5.3 Flash' };
         },
         async createNear(sessionId, id, cwd) {
             calls.push(['createNear', sessionId, id, cwd]);
@@ -364,7 +397,10 @@ test('check: a fresh read-only thread beside the session, on the check model, as
     assert.deepEqual(b.dsh.named('createNear')[0], ['createNear', 's', id, '/work/app']);
     assert.deepEqual(b.dsh.named('rename')[0], ['rename', id, 'Proof check · Deployed to staging.']);
     assert.deepEqual(b.dsh.named('prepare')[0], ['prepare', id, '/work/app'], 'made read-only before it is asked anything');
-    assert.deepEqual(b.dsh.named('select')[0], ['select', id, { provider: 'owner-ascents', model: 'GLM-5.3-Flash-EXL3', reasoningEffort: 'max' }]);
+    assert.deepEqual(b.dsh.named('select')[0], ['select', id, { provider: 'owner-ascents', model: 'GLM-5.3-Flash-EXL3', reasoningEffort: 'low' }], 'DSH is given ids and the effort, never names');
+    assert.equal(check.model, 'GLM-5.3 Flash from Owner Gateway', 'named as DSH\'s model menu names it');
+    assert.equal(check.effort, 'Low');
+    assert.equal(check.minutes, 5, 'the minutes it was given, kept on the check');
     const order = b.dsh.calls.map((c) => c[0]);
     assert.ok(order.indexOf('prepare') < order.indexOf('send') && order.indexOf('select') < order.indexOf('send'));
     const prompt = b.dsh.named('send')[0][2];
@@ -387,7 +423,7 @@ test('check: a fresh read-only thread beside the session, on the check model, as
     assert.equal(b.dsh.named('cancel').length, 0);
     const log = b.journal.list().map((e) => e.text);
     assert.deepEqual(log, ['Not verified: “Deployed to staging.”', 'Checking “Deployed to staging.”', 'Check asked for: “Deployed to staging.”']);
-    assert.equal(b.journal.list()[1].why, 'In a new read-only thread on GLM-5.3-Flash-EXL3 from owner-ascents, for at most 5 minutes.');
+    assert.equal(b.journal.list()[1].why, 'In a new read-only thread on GLM-5.3 Flash from Owner Gateway at low effort, for at most 5 minutes.');
     assert.ok(b.changes() >= 3);
     // The store on disk has it.
     b.store.flush();
@@ -460,19 +496,30 @@ test('check: one that takes too long is stopped and unclear; turns that end badl
     await b.verifier.request('s', claim.id);
     await settle();
     const check = b.verifier.data.checks[`s#${claim.id}`];
+    // The setting changes while it runs: it is still given the minutes it started with.
+    b.config.verifierMinutes = 30;
+    b.verifier.settingsChanged();
     await b.clock.advance(5 * 60_000 + 1);
     assert.equal(check.state, 'unclear');
-    assert.equal(check.reason, 'It took longer than 5 minutes, so Proof stopped it. Open the check to see how far it got.');
+    assert.equal(check.reason, 'It took longer than the 5 minutes it was given, so Proof stopped it.');
+    assert.equal(b.journal.list()[0].why, 'It took longer than the 5 minutes it was given, so Proof stopped it.');
     assert.deepEqual(b.dsh.named('cancel')[0], ['cancel', check.checkSessionId]);
     // Late events from the stopped thread change nothing.
     b.verifier.onEvent({ id: check.checkSessionId }, reply('VERIFIED: fine.'));
     b.verifier.onEvent({ id: check.checkSessionId }, ended());
     assert.equal(check.state, 'unclear');
 
+    // The reason only: the check's state is its tag's word, so no reason starts with it.
     const outcomes = [
-        [[ended('error', { message: 'model overloaded' })], 'failed', "The check's turn ended with an error: model overloaded."],
-        [[ended('cancelled')], 'unclear', 'The check was stopped before it answered.'],
-        [[reply('It looks fine to me.'), ended()], 'unclear', 'Its reply did not end with VERIFIED or NOT VERIFIED. Open the check to read it.'],
+        [[ended('error', { error: { message: 'model overloaded', code: 'overloaded' } })], 'failed', 'Its turn ended with an error: model overloaded.'],
+        [[ended('error', { message: 'model overloaded.' })], 'failed', 'Its turn ended with an error: model overloaded.'],
+        [[ended('cancelled')], 'unclear', 'It was stopped before it answered.'],
+        [[ended('aborted', { reason: { kind: 'user' } })], 'unclear', 'It was stopped before it answered.'],
+        [[ended('aborted', { reason: { kind: 'disposed' } })], 'unclear', 'DSH closed its thread while it ran, so it ended before it answered.'],
+        [[ended('aborted', { reason: { kind: 'hook', reason: 'Policy said no.' } })], 'unclear', 'A plugin stopped it before it answered: Policy said no.'],
+        [[ended('interrupted')], 'unclear', 'DSH restarted while it ran, so it ended before it answered.'],
+        [[ended('max-tokens')], 'unclear', 'Its reply ran past the model\'s length limit before it answered.'],
+        [[reply('It looks fine to me.'), ended()], 'unclear', 'Its reply did not end with VERIFIED or NOT VERIFIED.'],
         [[ended()], 'unclear', 'It ended without a reply.'],
         [[reply('VERIFIED')], 'running', ''],
     ];
@@ -513,7 +560,7 @@ test('check: when DSH cannot start it, the check says where it stopped, in words
     await settle();
     const b = noThread.verifier.data.checks[`s#${claim.id}`];
     assert.equal(b.state, 'failed');
-    assert.equal(b.reason, 'Could not start the check while opening the check thread: the disk is full.');
+    assert.equal(b.reason, 'It stopped while opening the check thread: the disk is full.');
     assert.equal(noThread.dsh.named('send').length, 0);
 
     // The claim left the log between the ask and the start.
@@ -536,27 +583,80 @@ test('check: switching the check off drops what waits; a restart finishes what i
     await settle();
     const waiting = b.verifier.data.checks[`s#${two.id}`];
     assert.equal(waiting.state, 'failed');
-    assert.equal(waiting.reason, 'Not checked: the independent check was switched off.');
+    assert.equal(waiting.reason, 'The independent check was switched off before it started.');
     assert.equal(b.verifier.data.checks[`s#${one.id}`].state, 'running', 'the one already running finishes');
 
     // Proof restarts with checks that were running.
-    const r = bench({ sessions: { s: { cwd: '/w', events }, 'session-done': { events: [reply('VERIFIED: the registry lists it.'), ended()] }, 'session-open': { events: [reply('Looking…')] } } });
+    const r = bench({
+        sessions: {
+            s: { cwd: '/w', events },
+            'session-done': { events: [reply('VERIFIED: the registry lists it.'), ended()] },
+            'session-open': { events: [reply('Looking…')] },
+            // DSH ended the cut turn as it started again ("interrupted"), or closed the thread as it stopped.
+            'session-cut': { events: [reply('Looking…'), ended('interrupted')] },
+            'session-closed': { events: [ended('aborted', { reason: { kind: 'disposed' } })] },
+            'session-slow': { events: [reply('Still reading…')] },
+        },
+    });
     const base = { sessionId: 's', turn: 1, claim: 'Deployed to staging.', verdict: 'unbacked', by: 'you', model: 'm', queuedAt: r.clock.now() - 1000, startedAt: r.clock.now() - 1000, reason: '' };
     r.verifier.data.checks['s#a'] = { ...base, key: 's#a', claimId: 'a', state: 'running' };
     r.verifier.data.checks['s#b'] = { ...base, key: 's#b', claimId: 'b', state: 'running', checkSessionId: 'session-done' };
     r.verifier.data.checks['s#c'] = { ...base, key: 's#c', claimId: 'c', state: 'running', checkSessionId: 'session-open' };
     r.verifier.data.checks['s#d'] = { ...base, key: 's#d', claimId: 'd', state: 'running', checkSessionId: 'session-lost' };
-    for (const k of ['b', 'c', 'd']) r.verifier.data.sessions[r.verifier.data.checks[`s#${k}`].checkSessionId] = `s#${k}`;
+    r.verifier.data.checks['s#e'] = { ...base, key: 's#e', claimId: 'e', state: 'running', checkSessionId: 'session-cut' };
+    r.verifier.data.checks['s#f'] = { ...base, key: 's#f', claimId: 'f', state: 'running', checkSessionId: 'session-closed' };
+    r.verifier.data.checks['s#g'] = { ...base, key: 's#g', claimId: 'g', state: 'running', checkSessionId: 'session-slow', minutes: 20 };
+    for (const k of ['b', 'c', 'd', 'e', 'f', 'g']) r.verifier.data.sessions[r.verifier.data.checks[`s#${k}`].checkSessionId] = `s#${k}`;
     r.verifier.start();
     await settle();
     assert.equal(r.verifier.data.checks['s#a'].state, 'failed');
-    assert.equal(r.verifier.data.checks['s#a'].reason, 'Proof restarted before this check began. Press Check to run it again.');
+    assert.equal(r.verifier.data.checks['s#a'].reason, 'Proof restarted before it began.');
     assert.equal(r.verifier.data.checks['s#b'].state, 'verified', 'its answer was already in its thread');
     assert.equal(r.verifier.data.checks['s#c'].state, 'running', 'still running: it waits for its answer again');
-    assert.match(r.verifier.data.checks['s#d'].reason, /^Proof restarted while this check ran, and its thread could not be read \(no session session-lost\)\./);
+    assert.match(r.verifier.data.checks['s#d'].reason, /^Proof restarted while it ran, and could not read its thread afterwards \(no session session-lost\)\.$/);
+    for (const k of ['e', 'f']) {
+        assert.equal(r.verifier.data.checks[`s#${k}`].state, 'unclear', k);
+        assert.equal(r.verifier.data.checks[`s#${k}`].reason, 'DSH restarted while it ran, so it ended before it answered.', k);
+    }
     r.verifier.onEvent({ id: 'session-open' }, reply('NOT VERIFIED: no such version.'));
     r.verifier.onEvent({ id: 'session-open' }, ended());
     assert.equal(r.verifier.data.checks['s#c'].state, 'not-verified');
+    // A check cut off by the restart keeps the minutes it was given (20), not the setting's (5).
+    await r.clock.advance(6 * 60_000);
+    assert.equal(r.verifier.data.checks['s#g'].state, 'running');
+    await r.clock.advance(14 * 60_000);
+    assert.equal(r.verifier.data.checks['s#g'].state, 'unclear');
+    assert.equal(r.verifier.data.checks['s#g'].reason, 'It took longer than the 20 minutes it was given, so Proof stopped it.');
+});
+
+test('check words: how a turn ended, in words a person reads; the effort a check asks for; the time a check is listed by', () => {
+    assert.equal(endWords({ kind: 'interrupted' }), 'DSH restarted while it ran, so it ended before it answered.');
+    assert.equal(endWords({ kind: 'aborted', reason: { kind: 'disposed' } }, { restarted: true }), 'DSH restarted while it ran, so it ended before it answered.', 'read after a restart: DSH closed it as it stopped');
+    assert.equal(endWords({ kind: 'aborted', reason: { kind: 'disposed' } }), 'DSH closed its thread while it ran, so it ended before it answered.');
+    assert.equal(endWords({ kind: 'aborted', reason: { kind: 'parent' } }), 'It was stopped before it answered.');
+    assert.equal(endWords({ kind: 'aborted', reason: { kind: 'hook' } }), 'A plugin stopped it before it answered.');
+    assert.equal(endWords({ kind: 'error', error: { message: `x${' y'.repeat(200)}` } }).length <= 240, true);
+    assert.equal(endWords({ kind: 'blocked' }), 'DSH did not let its turn run (an archived thread cannot run).');
+    assert.equal(endWords({ kind: 'forked' }), 'Its thread was forked before it answered.');
+    assert.equal(endWords('mystery'), 'Its turn ended before it answered.');
+    assert.equal(endWords(undefined), 'Its turn ended before it answered.');
+    for (const kind of ['interrupted', 'aborted', 'error', 'max-tokens', 'blocked', 'forked', 'cancelled']) {
+        const words = endWords({ kind, reason: { kind: 'user' } });
+        assert.doesNotMatch(words, /\((interrupted|aborted|cancelled|max-tokens|blocked|forked)\)|^(Unclear|Could not check|Checking)/, `${kind}: ${words}`);
+    }
+
+    const efforts = (...ids) => ({ reasoning: { efforts: ids.map((id) => ({ id, name: id.toUpperCase() })) } });
+    assert.equal(effortFor(efforts('high', 'medium', 'low')), 'low');
+    assert.equal(effortFor(efforts('minimal', 'high')), 'minimal');
+    assert.equal(effortFor(efforts('low', 'minimal')), 'low', 'low first: minimal can skip the thinking a check needs');
+    assert.equal(effortFor(efforts('high', 'max')), undefined, 'none of them: the model\'s own default');
+    assert.equal(effortFor({ reasoning: { efforts: 'low' } }), undefined);
+    assert.equal(effortFor(undefined), undefined);
+
+    assert.equal(checkTime({ queuedAt: 1, startedAt: 2, endedAt: 3 }), 3);
+    assert.equal(checkTime({ queuedAt: 1, startedAt: 2 }), 2);
+    assert.equal(checkTime({ queuedAt: 1 }), 1);
+    assert.equal(checkTime({}), 0);
 });
 
 test('check: "By itself" checks each new flagged claim once, and none made before it was on', async () => {
@@ -616,10 +716,16 @@ test('page: everything in one read; sessions only while Proof works; a check thr
     assert.equal(state.problem, undefined);
     assert.equal(state.enabled, true);
     assert.equal(state.flags, true);
-    assert.deepEqual(state.verifier, { mode: 'ask', provider: 'owner-ascents', model: 'GLM-5.3-Flash-EXL3', minutes: 5, perHour: 12, used: 1, nextAt: 0 });
+    assert.deepEqual(state.verifier, { mode: 'ask', provider: 'owner-ascents', model: 'GLM-5.3-Flash-EXL3', providerName: 'Owner Gateway', modelName: 'GLM-5.3 Flash', minutes: 5, perHour: 12, used: 1, nextAt: 0 });
     assert.deepEqual(state.sessions, [{ sessionId: 's', total: 4 }]);
     assert.equal(state.checks.length, 1);
+    assert.equal(state.checks[0].title, 'Release', 'each check names its session, listed with claims or not');
     assert.equal(state.history.length, 2);
+    assert.deepEqual(state.history.map((e) => e.title), ['Release', 'Release']);
+    // A DSH that cannot name them: the ids, as the settings have them.
+    const plainNames = await pageState({ ...parts, dsh: { ...b.dsh, namesOf: async () => { throw new Error('no model menu'); }, titles: undefined } });
+    assert.deepEqual([plainNames.verifier.providerName, plainNames.verifier.modelName], ['owner-ascents', 'GLM-5.3-Flash-EXL3']);
+    assert.equal(plainNames.checks[0].title, undefined);
     const problem = { key: 'verifierMinutes', text: 'x', live: true };
     const broken = await pageState({ ...parts, check: { ok: false, problem } });
     assert.equal(broken.problem, problem);
@@ -631,7 +737,9 @@ test('page: everything in one read; sessions only while Proof works; a check thr
     const id = b.verifier.data.checks[`s#${claim.id}`].checkSessionId;
     const thread = await sessionState(parts, id);
     assert.equal(thread.isCheck, true);
-    assert.deepEqual(thread.checkOf, { sessionId: 's', turn: 3, claim: 'Deployed to staging.', state: 'running', reason: '', model: 'GLM-5.3-Flash-EXL3 from owner-ascents', title: 'Release' });
+    const { startedAt, ...of } = thread.checkOf;
+    assert.deepEqual(of, { sessionId: 's', turn: 3, claim: 'Deployed to staging.', state: 'running', reason: '', model: 'GLM-5.3 Flash from Owner Gateway', title: 'Release', minutes: 5, effort: 'Low' });
+    assert.equal(startedAt, b.clock.now());
     const quiet = await sessionState({ ...parts, config: { ...b.config, flags: false } }, 's');
     assert.equal(quiet.flags, false);
     const down = await sessionState({ ...parts, check: { ok: false } }, 's');
@@ -643,4 +751,183 @@ test('page: everything in one read; sessions only while Proof works; a check thr
     assert.equal(ledger.counts.total, ledger.claims.length);
     assert.equal(ledger.claims.find((c) => c.id === claim.id).check.state, 'running');
     await assert.rejects(ledgerState(parts, 'missing'), /no session missing/);
+});
+
+test('checks are listed newest first by the time each row shows: when it ended, else started, else was asked for', () => {
+    const b = bench();
+    const put = (key, times) => { b.verifier.data.checks[key] = { key, sessionId: 's', claimId: key, turn: 1, claim: 'x', verdict: 'unbacked', state: times.endedAt ? 'verified' : times.startedAt ? 'running' : 'queued', reason: '', by: 'you', model: '', ...times }; };
+    put('asked', { queuedAt: 40 });
+    put('started-long-ago', { queuedAt: 1, startedAt: 2, endedAt: 50 });
+    put('running', { queuedAt: 10, startedAt: 30 });
+    put('ended-early', { queuedAt: 20, startedAt: 21, endedAt: 25 });
+    assert.deepEqual(b.verifier.recent().map((c) => c.key), ['started-long-ago', 'asked', 'running', 'ended-early']);
+    assert.deepEqual(b.verifier.recent().map(checkTime), [50, 40, 30, 25]);
+    assert.deepEqual(b.verifier.recent(2).map((c) => c.key), ['started-long-ago', 'asked']);
+});
+
+// ── Its endpoints, and the host half as DSH loads it ───────────────
+
+/** DSH's packages the host half imports, stood in for (the suite's test stand-ins, which live with Canon's tests). */
+async function dshStandIns() {
+    await import('./fixtures/canon/stubs/hooks.mjs');
+    return import('./fixtures/canon/stubs/dsh-typert-protocol.mjs');
+}
+
+test('endpoints: an export is logged with its file; a copy is logged as a copy once the window has it, and saves nothing', async () => {
+    const { marked } = await dshStandIns();
+    const { ProofRemote } = await import('../plugins/proof/lib/remote.js');
+    for (const name of ['state', 'session', 'ledger', 'exportLedger', 'copied', 'check']) assert.equal(marked.has(name), true, name);
+    const b = bench();
+    const remote = new ProofRemote({ config: b.config, check: { ok: true }, verifier: b.verifier, journal: b.journal, dsh: b.dsh, rows: async () => [] });
+    const n = ledgerOf(b.dsh.sessions.s.events).claims.length;
+    const file = await remote.exportLedger('s', 'md');
+    assert.match(file.name, /^proof-ledger-release-\d{4}-\d{2}-\d{2}\.md$/);
+    let entry = b.journal.list()[0];
+    assert.equal(entry.text, 'Ledger exported as Markdown');
+    assert.equal(entry.why, `${n} claims, as ${file.name}.`, 'the session is named once, by the entry');
+    assert.equal(entry.sessionId, 's');
+    // Copy: the Markdown comes back, and nothing is logged until the window says it is on the clipboard.
+    const copy = await remote.exportLedger('s', 'md', true);
+    assert.equal(copy.text, file.text);
+    assert.equal(b.journal.list().length, 1);
+    assert.deepEqual(await remote.copied('s', n), { ok: true });
+    entry = b.journal.list()[0];
+    assert.deepEqual([entry.kind, entry.text, entry.why, entry.sessionId], ['export', 'Ledger copied as Markdown', `${n} claims, onto the clipboard.`, 's']);
+    await remote.copied('s', 1);
+    assert.equal(b.journal.list()[0].why, '1 claim, onto the clipboard.');
+    await remote.copied('s', 'many');
+    assert.equal(b.journal.list()[0].why, 'Onto the clipboard.');
+    await assert.rejects(remote.copied('', 1), /Name the session\./);
+    await assert.rejects(remote.exportLedger('s', 'pdf'), /Export as Markdown, CSV or JSON\./);
+    const off = new ProofRemote({ config: { ...b.config, enabled: false }, check: { ok: true }, verifier: b.verifier, journal: b.journal, dsh: b.dsh, rows: async () => [] });
+    await assert.rejects(off.copied('s', 1), /Proof is switched off in DSH's profile/);
+});
+
+/**
+ * Proof's host half loaded as DSH loads it, with DSH's services stood in for:
+ * its session list (`items`), the logs `inspect` reads (`logs`), and its
+ * model service (`llm`). Gives the endpoints and what DSH was asked.
+ */
+async function hostHalf({ items, logs, llm, settings = {} }) {
+    await dshStandIns();
+    process.env.CANON_TEST_DSH_HOME = tempDir('proof-home');
+    const { apply } = await import('../plugins/proof/lib/index.js');
+    const asked = { inspected: [], created: [], selected: [], sent: [], appended: [] };
+    const cleanups = [];
+    let remote;
+    const agent = (id) => ({
+        id,
+        session: { id, header: { cwd: '/w' }, append: (type, data) => asked.appended.push([type, data]) },
+        ctx: { tools: { guard() {}, restrict() {} } },
+        followup: (message) => asked.sent.push(message),
+    });
+    const ctx = {
+        logger: { warn() {}, info() {} },
+        inject(names, fn) { if (names[0] === 'typertGateway') fn({ provide: (_name, value) => { remote = value; } }); },
+        get: (name) => (name === 'llm' ? llm : name === 'sessions' ? { get: () => undefined, flush: async () => true } : undefined),
+        sessionController: {
+            list: async () => ({ items }),
+            inspect: async (id) => {
+                asked.inspected.push(id);
+                if (!logs[id]) throw new Error(`no session ${id}`);
+                return { meta: { cwd: '/w' }, events: logs[id] };
+            },
+            create: async (options) => { asked.created.push(options); logs[options.sessionId] = []; },
+            rename: async () => {},
+            resolveAgent: async (id) => ({ agent: agent(id) }),
+            cancel: async () => {},
+            agents: { selectForNextRequest: (_agent, selection) => asked.selected.push(selection) },
+        },
+        sessionProjections: { register() {}, onChanged() {}, snapshot() {}, stateOf() {} },
+        on() {},
+        effect(fn) {
+            const cleanup = fn();
+            if (typeof cleanup === 'function') cleanups.push(cleanup);
+        },
+    };
+    apply(ctx, { enabled: true, flags: true, verifier: 'ask', verifierProvider: 'owner-ascents', verifierModel: 'GLM-5.3-Flash-EXL3', verifierMinutes: 15, verifierPerHour: 12, ...settings });
+    return { remote, asked, stop: () => { for (const fn of cleanups.splice(0)) fn(); } };
+}
+
+/** Wait (in real time) until `fn` gives something, for at most `ms`. */
+async function until(fn, ms = 3000) {
+    const end = Date.now() + ms;
+    for (;;) {
+        const value = await fn();
+        if (value || Date.now() > end) return value;
+        await new Promise((resolve) => { setTimeout(resolve, 20); });
+    }
+}
+
+const LLM = {
+    listProviders: () => [{ id: 'owner-ascents', name: 'Owner Gateway (DSH Test)' }, { id: 'other', name: 'Other' }],
+    resolveModelInfo: async (provider, model) => ({ provider, model, name: 'GLM-5.3 Flash', reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'medium', name: 'Medium' }, { id: 'high', name: 'High' }], defaultEffort: 'high' } }),
+    asked: [],
+    resolveCallConfig: async (wanted) => { LLM.asked.push(wanted); return { provider: wanted.provider, model: wanted.model, ...(wanted.reasoningEffort ? { reasoningEffort: wanted.reasoningEffort } : {}) }; },
+};
+
+test('host half: a session saved while Proof was off is listed again, its claims read from its log once', async (t) => {
+    const view = (events) => JSON.parse(JSON.stringify(viewOf(foldAll(events))));
+    const live = turn(1, { prompt: 'Deploy.', reply: 'Deployed to staging.' });
+    const cold = mixedSession();
+    const logs = { live, cold, quiet: turn(1, { prompt: 'Hello.', reply: 'Hi there.' }) };
+    const items = [
+        { sessionId: 'live', updatedAt: 30, projections: { values: { title: 'Live', [KEY]: view(live) } } },
+        // Saved while Proof was off: DSH's cache of its views has no claims for it.
+        { sessionId: 'cold', updatedAt: 20, projections: { values: { title: 'Saved while off' } } },
+        { sessionId: 'quiet', updatedAt: 10, projections: { values: { title: 'No claims' } } },
+        { sessionId: 'lost', updatedAt: 5, projections: { values: { title: 'Gone' } } },
+    ];
+    const proof = await hostHalf({ items, logs, llm: LLM });
+    t.after(() => proof.stop());
+    const first = await proof.remote.state();
+    assert.deepEqual(first.sessions.map((s) => s.sessionId), ['live'], 'at first, only what DSH\'s list gives');
+    const later = await until(async () => {
+        const state = await proof.remote.state();
+        return state.sessions.length > 1 ? state : undefined;
+    });
+    assert.ok(later, 'the folded session shows up');
+    assert.deepEqual(later.sessions.map((s) => [s.sessionId, s.title]), [['live', 'Live'], ['cold', 'Saved while off']]);
+    const row = later.sessions[1];
+    assert.equal(row.total, ledgerOf(cold).claims.length);
+    assert.equal(row.flagged, ledgerOf(cold).claims.filter((c) => c.verdict !== 'backed').length);
+    assert.deepEqual([...proof.asked.inspected].sort(), ['cold', 'lost', 'quiet'], 'each read once; the session DSH gives claims for is not read');
+    // The page again: nothing read again while the sessions stay as they were.
+    await new Promise((resolve) => { setTimeout(resolve, 2100); });
+    await proof.remote.state();
+    assert.equal(proof.asked.inspected.length, 3);
+    // The provider and model as DSH's model menu names them.
+    assert.deepEqual([later.verifier.providerName, later.verifier.modelName], ['Owner Gateway (DSH Test)', 'GLM-5.3 Flash']);
+});
+
+test('host half: a check runs at the lowest effort its model offers (low), named as DSH names it', async (t) => {
+    const logs = { s: mixedSession() };
+    const items = [{ sessionId: 's', updatedAt: 1, projections: { values: { title: 'Release', [KEY]: JSON.parse(JSON.stringify(viewOf(foldAll(logs.s)))) } } }];
+    const proof = await hostHalf({ items, logs, llm: LLM });
+    t.after(() => proof.stop());
+    const claim = ledgerOf(logs.s).claims.find((c) => c.verdict === 'unbacked');
+    LLM.asked.length = 0;
+    await proof.remote.check('s', claim.id);
+    const sent = await until(() => proof.asked.sent.length > 0);
+    assert.ok(sent, 'the check thread was asked');
+    assert.deepEqual(LLM.asked, [{ provider: 'owner-ascents', model: 'GLM-5.3-Flash-EXL3', reasoningEffort: 'low' }]);
+    assert.deepEqual(proof.asked.selected, [{ provider: 'owner-ascents', model: 'GLM-5.3-Flash-EXL3', reasoningEffort: 'low' }], 'for this thread only, at low effort');
+    assert.deepEqual(proof.asked.appended.map(([type]) => type), ['sandbox/mode', 'approval/policy'], 'read-only before it is asked anything');
+    const state = await proof.remote.state();
+    const check = state.checks[0];
+    assert.equal(check.model, 'GLM-5.3 Flash from Owner Gateway (DSH Test)');
+    assert.equal(check.effort, 'Low');
+    assert.equal(check.minutes, 15);
+    assert.equal(state.history[0].why, 'In a new read-only thread on GLM-5.3 Flash from Owner Gateway (DSH Test) at low effort, for at most 15 minutes.');
+
+    // A model with no efforts to choose from: its own default, and nothing asked for.
+    const plainLlm = { ...LLM, resolveModelInfo: async () => ({ name: 'Plain' }), asked: [] };
+    plainLlm.resolveCallConfig = async (wanted) => { plainLlm.asked.push(wanted); return { provider: wanted.provider, model: wanted.model }; };
+    const other = await hostHalf({ items, logs: { s: mixedSession() }, llm: plainLlm });
+    t.after(() => other.stop());
+    await other.remote.check('s', claim.id);
+    await until(() => other.asked.sent.length > 0);
+    assert.deepEqual(plainLlm.asked, [{ provider: 'owner-ascents', model: 'GLM-5.3-Flash-EXL3' }]);
+    assert.deepEqual(other.asked.selected, [{ provider: 'owner-ascents', model: 'GLM-5.3-Flash-EXL3' }]);
+    assert.equal((await other.remote.state()).checks[0].effort, '');
 });

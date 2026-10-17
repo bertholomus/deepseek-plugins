@@ -146,13 +146,44 @@ export function promptFor({ claim, title, cwd, minutes }) {
     return lines.join('\n');
 }
 
-/** A turn end that was not a finished turn, in words. */
-function endWords(reason) {
+/**
+ * A turn end that was not a finished turn, in words: the reason only (the
+ * check's state is said by its tag). DSH ends a turn `interrupted` when it
+ * starts again after a restart cut the turn off, and `aborted` with the
+ * cause when something stopped it. `restarted`: read from the thread's log
+ * after Proof started again, so a thread DSH closed was closed by its stop.
+ */
+export function endWords(reason, { restarted = false } = {}) {
     const kind = isRecord(reason) ? String(reason.kind ?? '') : String(reason ?? '');
-    const said = isRecord(reason) ? clip(String(reason.message ?? reason.error?.message ?? reason.reason ?? ''), 200) : '';
-    if (kind === 'cancelled' || kind === 'canceled' || kind === 'user') return 'The check was stopped before it answered.';
-    if (kind === 'error') return `The check's turn ended with an error${said ? `: ${said}` : ''}.`;
-    return `The check's turn ended (${kind || 'no reason given'}) before it answered.`;
+    const cause = isRecord(reason) && isRecord(reason.reason) ? String(reason.reason.kind ?? '') : '';
+    const said = (text) => clip(String(text ?? '').replace(/\s+/g, ' ').trim(), 200);
+    if (kind === 'interrupted' || (kind === 'aborted' && cause === 'disposed' && restarted)) return 'DSH restarted while it ran, so it ended before it answered.';
+    if (kind === 'aborted' && cause === 'disposed') return 'DSH closed its thread while it ran, so it ended before it answered.';
+    if (kind === 'aborted' && cause === 'hook') {
+        const why = said(reason.reason.reason);
+        return `A plugin stopped it before it answered${why ? `: ${why.replace(/[.!?]$/, '')}` : ''}.`;
+    }
+    if (kind === 'aborted' || kind === 'cancelled' || kind === 'canceled' || kind === 'user') return 'It was stopped before it answered.';
+    if (kind === 'error') {
+        const why = isRecord(reason) ? said(reason.error?.message ?? reason.message ?? reason.reason) : '';
+        return `Its turn ended with an error${why ? `: ${why.replace(/[.!?]$/, '')}` : ''}.`;
+    }
+    if (kind === 'max-tokens') return 'Its reply ran past the model\'s length limit before it answered.';
+    if (kind === 'blocked') return 'DSH did not let its turn run (an archived thread cannot run).';
+    if (kind === 'forked') return 'Its thread was forked before it answered.';
+    return 'Its turn ended before it answered.';
+}
+
+/**
+ * The effort a check asks for, given the model's reasoning efforts (DSH's
+ * `resolveModelInfo`): low, else minimal, else none (the model's default).
+ * A check re-runs a command or reads a file, so it needs little thought,
+ * and a busy gateway answers a low-effort request sooner.
+ */
+export const CHECK_EFFORTS = Object.freeze(['low', 'minimal']);
+export function effortFor(info) {
+    const offered = Array.isArray(info?.reasoning?.efforts) ? info.reasoning.efforts.map((e) => e?.id) : [];
+    return CHECK_EFFORTS.find((id) => offered.includes(id));
 }
 
 /** An assistant message's reply text. */
@@ -162,6 +193,9 @@ function replyOf(message) {
     if (!Array.isArray(content)) return '';
     return content.filter((p) => p && p.type === 'text' && typeof p.text === 'string').map((p) => p.text).join('\n').trim();
 }
+
+/** When a check last moved, the time its row shows and is ordered by: when it ended, else started, else was asked for. */
+export const checkTime = (c) => c?.endedAt ?? c?.startedAt ?? c?.queuedAt ?? 0;
 
 /** What the check store holds, made safe. */
 export function parseChecks(value) {
@@ -180,6 +214,8 @@ export function parseChecks(value) {
             reason: clip(String(c.reason ?? ''), 400),
             by: c.by === 'auto' ? 'auto' : 'you',
             model: clip(String(c.model ?? ''), 160),
+            ...(Number.isSafeInteger(c.minutes) && c.minutes > 0 && c.minutes <= 1440 ? { minutes: c.minutes } : {}),
+            ...(typeof c.effort === 'string' && c.effort ? { effort: clip(c.effort, 40) } : {}),
             ...(typeof c.checkSessionId === 'string' ? { checkSessionId: c.checkSessionId } : {}),
             queuedAt: Number.isFinite(c.queuedAt) ? c.queuedAt : 0,
             ...(Number.isFinite(c.startedAt) ? { startedAt: c.startedAt } : {}),
@@ -256,9 +292,9 @@ export class Verifier {
         return check?.checkSessionId === checkSessionId ? check : undefined;
     }
 
-    /** The latest checks, newest first. */
+    /** The latest checks, newest first by the time the page shows for each (checkTime). */
     recent(limit = 50) {
-        return Object.values(this.data.checks).sort((a, b) => (b.startedAt ?? b.queuedAt ?? 0) - (a.startedAt ?? a.queuedAt ?? 0)).slice(0, limit);
+        return Object.values(this.data.checks).sort((a, b) => checkTime(b) - checkTime(a)).slice(0, limit);
     }
 
     /**
@@ -279,7 +315,7 @@ export class Verifier {
         for (const check of Object.values(this.data.checks)) {
             if (check.state !== 'running') continue;
             if (!check.checkSessionId) {
-                this.finish(check, 'failed', 'Proof restarted before this check began. Press Check to run it again.');
+                this.finish(check, 'failed', 'Proof restarted before it began.');
                 continue;
             }
             void this.resume(check);
@@ -297,17 +333,19 @@ export class Verifier {
                 if (event?.type === 'assistant/message') reply = replyOf(event.data?.message) || reply;
                 else if (event?.type === 'turn/end') ended = event.data?.reason ?? { kind: 'completed' };
             }
-            if (ended) return this.settle(check, reply, ended);
+            if (ended) return this.settle(check, reply, ended, { restarted: true });
             this.replies.set(check.checkSessionId, reply);
-            const minutes = this.minutes();
+            // The minutes it was given when it started, whatever the setting says now.
+            const minutes = check.minutes ?? this.minutes();
             this.arm(check, Math.max(30_000, (check.startedAt ?? this.now()) + minutes * 60_000 - this.now()));
         } catch (error) {
-            this.finish(check, 'unclear', `Proof restarted while this check ran, and its thread could not be read (${errorText(error, 160)}). Open the check to see its answer, or press Check again.`);
+            this.finish(check, 'unclear', `Proof restarted while it ran, and could not read its thread afterwards (${errorText(error, 160)}).`);
         }
     }
 
+    /** The minutes a check starting now is given (the setting, else the default). */
     minutes() {
-        return Number.isSafeInteger(this.config.verifierMinutes) ? this.config.verifierMinutes : 5;
+        return Number.isSafeInteger(this.config.verifierMinutes) ? this.config.verifierMinutes : 15;
     }
 
     /** Why a check cannot be asked for now, or undefined. */
@@ -383,7 +421,7 @@ export class Verifier {
         const waiting = all.filter((c) => c.state === 'queued').sort((a, b) => a.queuedAt - b.queuedAt);
         if (waiting.length === 0) return;
         if (this.mode === 'off' || !this.working()) {
-            for (const check of waiting) this.finish(check, 'failed', this.mode === 'off' ? 'Not checked: the independent check was switched off.' : 'Not checked: Proof stopped working (see the top of its page).');
+            for (const check of waiting) this.finish(check, 'failed', this.mode === 'off' ? 'The independent check was switched off before it started.' : 'Proof stopped working before it started (see the top of its page).');
             return;
         }
         if (all.filter((c) => c.state === 'running').length >= AT_ONCE) return;
@@ -417,7 +455,14 @@ export class Verifier {
             } catch (error) {
                 return this.finish(check, 'failed', `DSH has no model ${model} from ${provider} to check with (${errorText(error, 160)}). Pick one DSH lists in Proof's settings ("Check with the model").`);
             }
-            check.model = `${selection.model ?? model} from ${selection.provider ?? provider}`;
+            // Named as DSH's model menu names them; the effort is the lowest the model offers (effortFor).
+            check.model = `${selection.modelName || selection.model || model} from ${selection.providerName || selection.provider || provider}`;
+            check.effort = selection.reasoningEffort ? String(selection.effortName || selection.reasoningEffort) : '';
+            const choice = {
+                provider: selection.provider ?? provider,
+                model: selection.model ?? model,
+                ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}),
+            };
             const id = `session-${randomUUID()}`;
             // Known as a check before DSH makes its agent, so the guard is on from the first call.
             this.data.sessions[id] = check.key;
@@ -435,24 +480,27 @@ export class Verifier {
             const agent = await this.dsh.agentOf(id);
             this.dsh.prepare(agent, { cwd: meta?.cwd });
             step.now = 'choosing the check model';
-            await this.dsh.select(agent, selection);
+            await this.dsh.select(agent, choice);
             step.now = 'asking the check model';
             this.replies.set(id, '');
+            // Kept on the check: a later change of the setting does not change the time this check was given.
             const minutes = this.minutes();
+            check.minutes = minutes;
+            this.store.change();
             this.journal.add({
                 kind: 'check',
                 sessionId: check.sessionId,
                 claimId: check.claimId,
                 checkSessionId: id,
                 text: `Checking “${clip(check.claim, 120)}”`,
-                why: `In a new read-only thread on ${check.model}, for at most ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+                why: `In a new read-only thread on ${check.model}${check.effort ? ` at ${check.effort.toLowerCase()} effort` : ''}, for at most ${minutes} minute${minutes === 1 ? '' : 's'}.`,
                 state: 'running',
             });
             this.arm(check, minutes * 60_000);
             await this.dsh.send(agent, promptFor({ claim, title, cwd: meta?.cwd, minutes }));
             this.changed();
         } catch (error) {
-            this.finish(check, 'failed', `Could not start the check while ${step.now}: ${errorText(error, 200)}.`);
+            this.finish(check, 'failed', `It stopped while ${step.now}: ${errorText(error, 200)}.`);
         }
     }
 
@@ -474,7 +522,8 @@ export class Verifier {
             if (live.checkSessionId) {
                 Promise.resolve().then(() => this.dsh.cancel(live.checkSessionId)).catch((error) => this.logger?.warn?.(`proof: could not stop a check: ${errorText(error)}`));
             }
-            this.finish(live, 'unclear', `It took longer than ${this.minutes()} minute${this.minutes() === 1 ? '' : 's'}, so Proof stopped it. Open the check to see how far it got.`);
+            const given = live.minutes ?? this.minutes();
+            this.finish(live, 'unclear', `It took longer than the ${given} minute${given === 1 ? '' : 's'} it was given, so Proof stopped it.`);
         }));
     }
 
@@ -492,13 +541,13 @@ export class Verifier {
         }
     }
 
-    /** The check's turn ended: read its verdict. */
-    settle(check, reply, reason) {
+    /** The check's turn ended: read its verdict. `restarted`: read from its log after Proof started again. */
+    settle(check, reply, reason, { restarted = false } = {}) {
         if (check.state !== 'running') return;
         const kind = isRecord(reason) ? reason.kind : reason;
-        if (kind !== 'completed') return this.finish(check, kind === 'error' ? 'failed' : 'unclear', endWords(reason), reply);
+        if (kind !== 'completed') return this.finish(check, kind === 'error' ? 'failed' : 'unclear', endWords(reason, { restarted }), reply);
         const verdict = verdictIn(reply);
-        if (!verdict) return this.finish(check, 'unclear', reply.trim() ? 'Its reply did not end with VERIFIED or NOT VERIFIED. Open the check to read it.' : 'It ended without a reply.', reply);
+        if (!verdict) return this.finish(check, 'unclear', reply.trim() ? 'Its reply did not end with VERIFIED or NOT VERIFIED.' : 'It ended without a reply.', reply);
         return this.finish(check, verdict.state, verdict.reason || 'It gave no reason.', reply);
     }
 

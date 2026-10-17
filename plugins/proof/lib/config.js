@@ -35,9 +35,12 @@ export const DEFAULTS = Object.freeze({
     verifier: 'ask',
     verifierProvider: 'owner-ascents',
     verifierModel: 'GLM-5.3-Flash-EXL3',
-    verifierMinutes: 5,
+    verifierMinutes: 15,
     verifierPerHour: 12,
 });
+
+/** The longest a check may be given, in minutes: a busy shared gateway can take half an hour to answer a short check. */
+export const MAX_MINUTES = 60;
 
 /** A provider or model name as DSH routes it: one line of letters, digits and . _ - : / @ +. */
 const ROUTE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,119}$/;
@@ -56,7 +59,7 @@ export function checkConfig(settings) {
     oneOf(settings, 'verifier', VERIFIER_CHOICES, t.verifier);
     routeName(settings, 'verifierProvider', t.verifierProvider, 'owner-ascents');
     routeName(settings, 'verifierModel', t.verifierModel, 'GLM-5.3-Flash-EXL3');
-    wholeNumber(settings, 'verifierMinutes', 1, 30, 'minutes', t.verifierMinutes);
+    wholeNumber(settings, 'verifierMinutes', 1, MAX_MINUTES, 'minutes', t.verifierMinutes);
     wholeNumber(settings, 'verifierPerHour', 1, 120, '', t.verifierPerHour);
 }
 

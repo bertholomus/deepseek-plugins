@@ -77,21 +77,43 @@ export class ProofRemote {
         });
     }
 
-    /** One session's ledger as a file to save: `{ name, type, text }`. */
-    async exportLedger(sessionId, format) {
+    /**
+     * One session's ledger as a file to save: `{ name, type, text }`. With
+     * `copy`, the window puts it on the clipboard instead, and logs that
+     * with `copied` once it has (no file is saved, so none is logged here).
+     */
+    async exportLedger(sessionId, format, copy) {
         return this.run(async () => {
             this.off();
             if (!EXPORT_FORMATS.includes(format)) throw new Error('Export as Markdown, CSV or JSON.');
             const { session, claims } = await ledgerState(this.parts, ProofRemote.sessionId(sessionId));
             const file = exportLedger(session, claims, format);
+            if (copy === true) return file;
             this.journal.add({
                 kind: 'export',
                 sessionId: session.id,
                 text: `Ledger exported as ${format === 'md' ? 'Markdown' : format.toUpperCase()}`,
-                why: `${claims.length} claim${claims.length === 1 ? '' : 's'} from “${session.title || session.id}”, as ${file.name}.`,
+                why: `${claims.length} claim${claims.length === 1 ? '' : 's'}, as ${file.name}.`,
                 state: 'done',
             });
             return file;
+        });
+    }
+
+    /** The window put a ledger on the clipboard as Markdown (`claims`: how many it held): logged as a copy. */
+    async copied(sessionId, claims) {
+        return this.run(async () => {
+            this.off();
+            const id = ProofRemote.sessionId(sessionId);
+            const n = Number.isSafeInteger(claims) && claims >= 0 ? claims : undefined;
+            this.journal.add({
+                kind: 'export',
+                sessionId: id,
+                text: 'Ledger copied as Markdown',
+                why: n === undefined ? 'Onto the clipboard.' : `${n} claim${n === 1 ? '' : 's'}, onto the clipboard.`,
+                state: 'done',
+            });
+            return { ok: true };
         });
     }
 
@@ -114,4 +136,4 @@ function markRemote(Class, names) {
         });
     }
 }
-markRemote(ProofRemote, ['state', 'session', 'ledger', 'exportLedger', 'check']);
+markRemote(ProofRemote, ['state', 'session', 'ledger', 'exportLedger', 'copied', 'check']);
