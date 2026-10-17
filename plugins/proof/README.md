@@ -70,7 +70,7 @@ other corpora, and was measured once before any rule saw it.
 | Dev (tuned on) | 90 | 0 (0.0%) | 70 | 70 (100.0%) | 30 of 30 |
 | First hold-out, measured once before tuning | 60 | 12 (20.0%) | 50 | 43 (86.0%) | — |
 | Second hold-out, measured once before tuning | 60 | 6 (10.0%) | 50 | 45 (90.0%) | 20 of 25 |
-| Third hold-out (never tuned on) | not measured yet | — | — | — | — |
+| Third hold-out (never tuned on), measured once | 60 | 7 (11.7%) | 50 | 41 (82.0%) | 19 of 25 |
 
 The first two hold-outs were tuned on after that one measurement (the
 fixes were general rules, never a case's own words) and are now part of
