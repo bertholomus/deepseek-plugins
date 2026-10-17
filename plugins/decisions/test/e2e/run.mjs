@@ -422,7 +422,7 @@ try {
             const icon = await page.locator('[data-decisions-icon]').first().getAttribute('data-decisions-icon');
             check('the sidebar icon shows the count', icon === String(s.waiting.length), icon);
             const blocked = page.locator(`[data-decisions-id="${cards.staging.id}"]`);
-            check('a card shows its state, its session, its wait and its question', /blocked/.test(await blocked.innerText()) && /Staging check/.test(await blocked.innerText()) && /waiting (since just now|\d+ (second|minute)s?)/.test(await blocked.innerText()) && /The staging database refuses my login\./.test(await blocked.innerText()),
+            check('a card shows its state, its session, its wait and its question', /blocked/.test(await blocked.innerText()) && /Staging check/.test(await blocked.innerText()) && /waiting (less than a minute|\d+ minutes?)/.test(await blocked.innerText()) && /The staging database refuses my login\./.test(await blocked.innerText()),
                 await blocked.innerText());
             await shot(page, shots, 'decisions-light');
             await shot(page, shots, 'waiting-light', page.locator('[data-decisions-waiting]'));
