@@ -50,19 +50,37 @@ export function stateWord(row) {
     return 'idle';
 }
 
+/**
+ * A line as a person reads it: the bold and code marks a model puts around
+ * words (`**DECISION NEEDED:**`, `*Monday*`, `\`main\``) dropped. Marks
+ * inside a word (`file_name`) stay.
+ */
+export function plainLine(line) {
+    return String(line)
+        .replace(/\*\*|__|`+/g, '')
+        .replace(/(^|\s)[*_](?=\S)/g, '$1')
+        .replace(/(?<=\S)[*_](?=\s|$|[.,:;!?)])/g, '');
+}
+
 /** A suite decision line: `DECISION NEEDED: <question> — recommend: <pick>` (a hyphen or "--" works too). */
-export const DECISION_LINE = /^[\s>*_`-]*DECISION NEEDED\s*[:：]\s*(.+?)\s*(?:(?:—|–|--|-)\s*recommend(?:ation)?\s*[:：]\s*(.+?))?\s*[*_`]*\s*$/im;
+export const DECISION_LINE = /^[\s>*_`-]*DECISION NEEDED\s*[:：]\s*(.+?)\s*(?:(?:—|–|--|-)\s*recommend(?:ation|ed)?\s*[:：]\s*(.+?))?\s*[*_`]*\s*$/im;
+
+/** A recommendation on the line after a decision line: `Recommend: <pick>`. */
+const RECOMMEND_LINE = /^[\s>*_`-]*recommend(?:ation|ed)?\s*[:：]\s*(.+?)\s*$/i;
 
 /** The question and recommendation of the last decision line in a text, or undefined. */
 export function decisionIn(text) {
     if (typeof text !== 'string' || !/DECISION NEEDED/i.test(text)) return undefined;
-    const lines = text.split('\n');
+    const lines = text.split('\n').map(plainLine);
     for (let i = lines.length - 1; i >= 0; i -= 1) {
         const match = DECISION_LINE.exec(lines[i]);
         if (match) {
             const question = match[1].trim();
             if (!question) continue;
-            return { question, ...(match[2] ? { recommendation: match[2].trim() } : {}) };
+            // Some write the recommendation on the next line.
+            const next = match[2] ? undefined : lines.slice(i + 1).find((line) => line.trim() !== '');
+            const recommendation = match[2]?.trim() || (next ? RECOMMEND_LINE.exec(next)?.[1]?.trim() : undefined);
+            return { question, ...(recommendation ? { recommendation } : {}) };
         }
     }
     return undefined;
@@ -74,7 +92,7 @@ export const BLOCKED_LINE = /^[\s>*_`-]*BLOCKED\s*[:：]\s*(.+?)\s*[*_`]*\s*$/m;
 /** The text of the last BLOCKED line in a text, or undefined. */
 export function blockedIn(text) {
     if (typeof text !== 'string' || !/BLOCKED/.test(text)) return undefined;
-    const lines = text.split('\n');
+    const lines = text.split('\n').map(plainLine);
     for (let i = lines.length - 1; i >= 0; i -= 1) {
         const match = BLOCKED_LINE.exec(lines[i]);
         if (match && match[1].trim()) return match[1].trim();

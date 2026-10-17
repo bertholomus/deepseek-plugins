@@ -64,6 +64,13 @@ test('words: decision lines, in every way agents write them', () => {
     assert.equal(decisionIn('No decision here.'), undefined);
     assert.equal(decisionIn(42), undefined);
     assert.equal(decisionIn('DECISION NEEDED:   '), undefined);
+    // Bold and code marks the way models write them, and a recommendation on its own line.
+    assert.deepEqual(decisionIn('**DECISION NEEDED:** Ship today or Monday? — recommend: Monday'), { question: 'Ship today or Monday?', recommendation: 'Monday' });
+    assert.deepEqual(decisionIn('**DECISION NEEDED**: Ship today or Monday? — **recommend:** *Monday*'), { question: 'Ship today or Monday?', recommendation: 'Monday' });
+    assert.deepEqual(decisionIn('DECISION NEEDED: keep `file_name.py`? — recommend: __keep it__'), { question: 'keep file_name.py?', recommendation: 'keep it' });
+    assert.deepEqual(decisionIn('DECISION NEEDED: Ship today or Monday?\n\n**Recommendation:** Monday'), { question: 'Ship today or Monday?', recommendation: 'Monday' });
+    assert.deepEqual(decisionIn('DECISION NEEDED: Ship today or Monday?\nThe rest of the notes.'), { question: 'Ship today or Monday?' });
+    assert.deepEqual(blockedIn('**BLOCKED:** the staging password expired'), 'the staging password expired');
 });
 
 test('words: whether a reply ends by asking a person, read from its last lines', () => {
