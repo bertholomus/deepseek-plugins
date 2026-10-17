@@ -61,6 +61,19 @@ mode 600:
 | --- | --- |
 | `session-watch/running.json` | Sessions with a turn running now, so the next start knows what a stop cut off. |
 
+## Setup
+
+Install it as in the [root README](../../README.md#install-a-plugin), before
+the plugins that use it, and restart DSH Desktop once:
+
+```bash
+dsh plugin --profile desktop add ~/.dsh-plugins/deepseek-plugins/plugins/session-watch
+```
+
+That adds `dsh-plugin-session-watch` to the profile's `package.json`
+(`dependencies` and `dsh.profile.bundles`); its bundle adds its row
+(`id: session-watch`).
+
 ## Switching it off
 
 Plugins → Session Watch → off. Autopilot, Decisions and Agent Terminals stop
@@ -69,13 +82,24 @@ saved values go when DSH drops them, and `running.json` can be deleted.
 
 ## Rollback
 
-Uninstall the package, or pin the previous version in your profile's
-`cordis.patch.yml`. The saved state carries a version number, so an older
-or newer copy folds again from the log instead of misreading it.
+DSH runs it from its folder in your clone. To go back to a release, restore
+that folder from the release's tag and restart DSH Desktop:
+
+```bash
+git -C ~/.dsh-plugins/deepseek-plugins restore --source session-watch-v1.0.0 -- plugins/session-watch
+```
+
+The saved state carries a version number, so an older or newer copy folds
+again from the log instead of misreading it. To remove it, remove the
+plugins that use it first, then follow
+[Remove a plugin](../../README.md#remove-a-plugin) for
+`dsh-plugin-session-watch` (row `session-watch`).
 
 ## Tests
 
+From the repository root:
+
 ```sh
 node --test test/session-watch.test.js   # the fold and the watcher over a stand-in DSH
-node scripts/e2e.mjs autopilot           # with Autopilot, in a real DSH Test window
+node scripts/e2e.mjs autopilot           # with Autopilot, in real DSH in a throwaway home
 ```

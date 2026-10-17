@@ -40,6 +40,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",
-    "@deepseek-ai/dsh-typert-protocol": "*"
+    "@deepseek-ai/dsh-typert-protocol": "*",
+    "@deepseek-ai/dsh-home-paths": "*"
   }
 }

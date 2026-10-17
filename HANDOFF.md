@@ -4,14 +4,16 @@ _For the two accounts building these plugins only (see AGENTS.md). A session run
 
 # Suite v1 (branch suite/v1): the DSH Plugin Suite
 
-Updated: 2026-10-16 10:30 PM PDT by A (gmail), thread "Suite v1 builder"
+Updated: 2026-10-16 10:40 PM PDT by A (gmail), thread "Suite v1 builder"
 Branch: `suite/v1` in the worktree `~/Projects/dsh-plugin-suite` (remote `gh` = github.com/bertholomus/deepseek-plugins, private). Main is at a18b87b.
 Goal: six plugins (Autopilot, Decisions, Agent Terminals, Proof, Canon, Recall) per `briefs/SUITE-BRIEF.md`, each judged >= 8.5/10 (no criterion below 8) by a fresh judge in DSH Test, merged to `main` and tagged `<plugin>-v1.0.0`, then `suite-v1.0.0`. Test only in DSH Test, never the live DSH.
 
 ## Doing now
-- Autopilot in a DSH Test named instance (`suite-autopilot`, GLM-5.3-Flash-EXL3), pictures light and dark into `review/autopilot-round-1/`; then judge round 1.
+- Autopilot judge round 1: re-running the real-DSH test on the head (both DSH versions), then a fresh judge in its own DSH Test instance (`suite-autopilot-j1`) scores it into `review/autopilot-round-1.md`.
 
 ## Done (newest first)
+- 10:39 PM PDT: READMEs: Autopilot and Session Watch gained Setup (`dsh plugin --profile desktop add …`, restart once), a true Rollback (restore the plugin folder from its tag; remove per the root README) and accurate Tests lines; the root README lists both plugins (tables and `npm run test:e2e:autopilot`). Both plugins take DSH's data folder from `dshHomePath` (`@deepseek-ai/dsh-home-paths`, a peer dependency) instead of building `~/.dsh` themselves; `test/suite-shared.test.js` fails if a suite plugin builds that path. `npm test` 408/408.
+- 10:37 PM PDT: DSH Test `suite-autopilot` (installed app, GLM-5.3-Flash-EXL3, workspace in the scratchpad): doctor 0 errors; a real chat with three todos got Autopilot's idle nudge after 60 s (delivered); a restart under two running turns (that chat and "Numbers to 300") got both resume notes delivered (Why: "Turn 1 was cut off at 10:32 PM: DSH stopped before it finished (a quit, a restart or a crash)…"); the model then finished the todos ("All three todos are complete — nothing is blocked, so no decision is needed.") and the count. Live fingerprint unchanged (pid 687, e04a0449ecfe8534).
 - 10:30 PM PDT: real-DSH bench: `test/e2e/harness.mjs` (DSH from `.e2e/` in a throwaway DSH_HOME, its own process group, bridge, window endpoints, Playwright window, pictures, live fingerprint), `test/e2e/fake-model.mjs` (scripted agent: `E2E:todos`, `E2E:goal <objective [rN=slow|fail]>`, `E2E:slow`, `E2E:fail`, `#note=…`, `#final=ask`), `scripts/e2e.mjs <plugin>` (every DSH under `.e2e/`, fingerprint before and after). `plugins/autopilot/test/e2e/run.mjs`: 47 checks (idle note proven in the log, back-off, progress, Ask first, Off, question left alone, goal restart after an error, switch, page buttons, narrow window, quit and crash under running turns, no repeats, file modes): 47/47 on 0.2.0-rc.2 and on 0.2.1-rc.1; live unchanged. It found and fixed: the window endpoints were not served (DSH's gateway serves only methods marked like `@Remote`: `markRemote` in both `remote.js`, guarded by a unit test), raw provider JSON in Why lines (`plainError`), "a crash or a forced quit" for a plain quit, the quiet time shown as "1 quiet minute" for 5 s (`kit.spanText`), names lowercased in a row's last action, header and list counting sessions differently. Endpoint errors now reach the window as their message (`RemoteError`).
 - 9:58 PM PDT: Session Watch (`plugins/session-watch`, the shared watcher core) and Autopilot (`plugins/autopilot`) written, with READMEs; shared code in `shared/` synced into each plugin by `scripts/sync-shared.mjs` (`npm test` fails on a stale copy). Unit tests: `test/session-watch.test.js` (16), `test/autopilot.test.js` (22), `test/suite-shared.test.js` (15), over a stand-in DSH (`test/helpers/fake-dsh.mjs`) and a hand-moved clock (`test/helpers/clock.mjs`). `npm test`: 389 pass.
 - 9:20 PM: `briefs/PLAN.md`: what DSH gives us, the watcher core's API, each plugin's design, tests and the gate.
@@ -20,10 +22,9 @@ Goal: six plugins (Autopilot, Decisions, Agent Terminals, Proof, Canon, Recall) 
 - 8:58 PM: first check: suite/v1 at e0bdda6; DSH Test stopped; live DSH pid 687, `cordis.patch.yml` sha256 e04a0449ecfe8534.
 
 ## Next steps (in order)
-1. DSH Test named instance `suite-autopilot` on GLM-5.3-Flash-EXL3: `dsh-test --name suite-autopilot up`, `load` session-watch then autopilot (config row: idleSeconds 60, startDelaySeconds 5), a real chat with todos left open, a restart under a running turn, pictures light and dark into `review/autopilot-round-1/`. Fingerprint before and after (PROGRESS.md). The scripted bench: `node scripts/e2e.mjs autopilot` (both DSH versions, about 3 minutes).
-2. Judge round 1 (fresh judge subagent) → `review/autopilot-round-1.md` + `review/SCOREBOARD.md`; fix and re-judge until >= 8.5 with no criterion below 8; merge `suite/v1` into `main` (no force), tag `autopilot-v1.0.0` (Session Watch ships with it), push.
-3. Then Decisions, Agent Terminals, Proof, Canon, Recall in that order (designs in `briefs/PLAN.md`), each through the same gate.
-4. After all six: suite README, `suite-v1.0.0`, final fingerprint check, `DONE:` line.
+1. Judge round 1 (fresh judge subagent): it checks out the pushed head into the scratchpad, runs `node scripts/e2e.mjs autopilot`, starts its own DSH Test instance `suite-autopilot-j1` (`up`, `load` session-watch then autopilot), exercises the page and a real chat, screenshots light and dark into `review/autopilot-round-1/`, and writes `review/autopilot-round-1.md`; then `review/SCOREBOARD.md`. Fix and re-judge (a new judge each round) until >= 8.5 with no criterion below 8; merge `suite/v1` into `main` (no force), tag `session-watch-v1.0.0` and `autopilot-v1.0.0`, push.
+2. Then Decisions, Agent Terminals, Proof, Canon, Recall in that order (designs in `briefs/PLAN.md`), each through the same gate.
+3. After all six: suite README, `suite-v1.0.0`, final fingerprint check, `DONE:` line.
 
 ## Open questions / blockers
 - See `OPEN-QUESTIONS.md` (one line each: question, pick, why). No blockers.

@@ -19,7 +19,8 @@ import { join } from 'node:path';
 import z from '@deepseek-ai/schemastery';
 import { Pilot, parseData } from './pilot.js';
 import { AutopilotRemote, SERVICE } from './remote.js';
-import { JsonStore, pluginDir } from './shared/files.js';
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
+import { JsonStore } from './shared/files.js';
 import { Journal } from './shared/journal.js';
 import { errorText } from './shared/safe.js';
 
@@ -74,7 +75,8 @@ export function apply(ctx, config) {
     checkConfig(config);
     const logger = ctx.logger;
     const watch = ctx.sessionWatch;
-    const dir = pluginDir('autopilot');
+    // Its folder in DSH's data folder, as DSH resolves it (DSH_HOME, else ~/.dsh).
+    const dir = dshHomePath('autopilot');
     const bump = () => watch.hub?.bump?.('autopilot');
     const store = new JsonStore(join(dir, 'state.json'), { parse: parseData, logger });
     const journal = new Journal(join(dir, 'events.jsonl'), { logger, onChange: bump });

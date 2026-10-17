@@ -29,7 +29,7 @@ is blocked, which Decisions picks up.
 
 ## The page
 
-**Autopilot** in DSH's sidebar (after Decisions):
+**Autopilot** in DSH's sidebar:
 
 - **The switch.** Off stops everything at once: nothing it scheduled runs.
   On again, it looks at every session.
@@ -79,6 +79,32 @@ mode 600:
 | `autopilot/state.json` | The switch, rules, what it already handled (so a restart never repeats an action), nudge and retry counts. |
 | `autopilot/events.jsonl` | The event log; it keeps the last 400 entries and rewrites itself past 1 MB. |
 
+## Setup
+
+1. Install Session Watch and Autopilot as in the
+   [root README](../../README.md#install-a-plugin):
+
+   ```bash
+   dsh plugin --profile desktop add ~/.dsh-plugins/deepseek-plugins/plugins/session-watch
+   dsh plugin --profile desktop add ~/.dsh-plugins/deepseek-plugins/plugins/autopilot
+   ```
+
+   That adds `dsh-plugin-session-watch` and `dsh-plugin-autopilot` to the
+   profile's `package.json` (`dependencies` and `dsh.profile.bundles`).
+   Their bundles add their rows (`id: session-watch`, `id: autopilot`).
+
+2. To change a default before the first start, address the row in the
+   profile's `cordis.patch.yml` (or change it later in Plugins → Autopilot):
+
+   ```yaml
+   - id: autopilot
+     config:
+       idleSeconds: 900
+       defaultRule: ask
+   ```
+
+3. Restart DSH Desktop once so it loads the new bundles.
+
 ## Switching it off
 
 - **For a moment**: the switch on its page. Nothing it scheduled runs.
@@ -88,14 +114,35 @@ mode 600:
 
 ## Rollback
 
-Uninstall the package, or pin the previous version in your profile's
-`cordis.patch.yml`. Delete `autopilot/` in DSH's data folder to forget its
-rules and log. It changes nothing in your sessions beyond the notes it
-sent, which stay in their logs, signed `[Autopilot]`.
+DSH runs Autopilot from its folder in your clone (the profile links it). To
+go back to a release, restore that folder from the release's tag and
+restart DSH Desktop:
+
+```bash
+git -C ~/.dsh-plugins/deepseek-plugins restore --source autopilot-v1.0.0 -- plugins/autopilot
+```
+
+To remove it, follow [Remove a plugin](../../README.md#remove-a-plugin) for
+`dsh-plugin-autopilot` (row `autopilot`), and delete `autopilot/` in DSH's
+data folder to forget its rules and log. Nothing else needs undoing: it
+changes nothing in your sessions beyond the notes it sent, which stay in
+their logs, signed `[Autopilot]`.
 
 ## Tests
 
+From the repository root:
+
 ```sh
 node --test test/autopilot.test.js   # the engine over the watcher and a stand-in DSH; the page; the browser half
-node scripts/e2e.mjs autopilot       # in a real DSH Test window, on both DSH versions
+node scripts/e2e.mjs autopilot       # real DSH in a throwaway home, on every DSH under .e2e/
 ```
+
+The real-DSH test (47 checks) starts DSH from each `.e2e/dsh-<version>`
+install (`npm i --prefix .e2e/dsh-0.2.1-rc.1 @deepseek-ai/dsh@0.2.1-rc.1`)
+in a throwaway home, with a scripted model playing the agent. It stops and
+kills DSH under running turns, lets sessions go quiet with work open, fails
+a goal round, and drives the page in a browser (`npm i --prefix .e2e/tools
+playwright-core`, with Playwright's Chrome), light and dark, wide and
+narrow. Every claim is checked in the session's own log. It reads the
+running DSH's fingerprint before and after and fails if it moved; pictures
+go to `.e2e/shots/autopilot/<version>/`.

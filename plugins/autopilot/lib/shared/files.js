@@ -1,6 +1,8 @@
 /**
- * Files for the suite's host halves: DSH's data folder, private folders,
- * and a small JSON store with atomic writes.
+ * Files for the suite's host halves: private folders and a small JSON
+ * store with atomic writes. A plugin's folder in DSH's data folder comes
+ * from DSH itself (`dshHomePath` from @deepseek-ai/dsh-home-paths), so
+ * DSH_HOME and DSH Test move it with everything else.
  *
  * Shared by the suite's plugins. The source lives in `shared/host/`, and
  * `scripts/sync-shared.mjs` copies it into each plugin's `lib/shared/`, so
@@ -9,28 +11,7 @@
  * @module suite/shared/files
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-
-/** Resolve a '~'-prefixed path. */
-export function expand(path) {
-    return path === '~' || path.startsWith('~/') ? `${homedir()}${path.slice(1)}` : path;
-}
-
-/** DSH's own data folder: `$DSH_HOME`, else ~/.dsh, as DSH resolves it. */
-export function dshHome() {
-    const env = typeof process.env.DSH_HOME === 'string' ? process.env.DSH_HOME.trim() : '';
-    return env === '' ? join(homedir(), '.dsh') : resolve(expand(env));
-}
-
-/**
- * A plugin's own folder in DSH's data folder. A DSH run with its own
- * DSH_HOME (a test copy) keeps its own files.
- * @param {string} name - the folder's name, the plugin's short name.
- */
-export function pluginDir(name) {
-    return join(dshHome(), name);
-}
+import { dirname } from 'node:path';
 
 /**
  * Create a folder (and missing parents) as mode 700, one level at a time,

@@ -20,12 +20,12 @@
  * @module dsh-plugin-session-watch
  */
 import z from '@deepseek-ai/schemastery';
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { sessionWatchProjection } from './fold.js';
 import { SessionWatch } from './watch.js';
 import { SessionWatchRemote, SERVICE } from './remote.js';
 import { Hub } from './shared/hub.js';
-import { pluginDir } from './shared/files.js';
 import { errorText, guard } from './shared/safe.js';
 
 export const name = 'session-watch';
@@ -58,7 +58,8 @@ export function apply(ctx, config) {
         config,
         logger,
         hub,
-        dir: pluginDir('session-watch'),
+        // Its folder in DSH's data folder, as DSH resolves it (DSH_HOME, else ~/.dsh).
+        dir: dshHomePath('session-watch'),
         makeMessage: (text) => createUserMessage({ content: [{ type: 'text', text }], source: PLUGIN_SOURCE }),
     });
 

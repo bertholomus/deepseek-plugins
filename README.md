@@ -12,6 +12,8 @@ Each plugin is a normal DSH plugin package. You add it to a DSH profile's bundle
 | [`coordinator`](plugins/coordinator) | Any chat can run its work in threads. The chat starts thread sessions for focused work, each thread reports back to it, and threads keep their own model, effort and permission. |
 | [`calendar`](plugins/calendar) | Your calendars, for you and your agents: iCloud, Google, Microsoft 365 and Exchange Online, Fastmail, Nextcloud and other CalDAV servers, subscribed `.ics` feeds, and calendars on this computer. Agents read them and, as their permission allows, change them. |
 | [`session-bridge`](plugins/session-bridge) | A local JSON API on a Unix socket that drives the Host's own session controller. Scripts and other agents can create, prompt, steer, cancel and read DSH sessions, and you watch them live in the DSH window. |
+| [`session-watch`](plugins/session-watch) | The shared watcher behind Autopilot, Decisions and Agent Terminals: every session's state from DSH's own events, and delivery of a message proven by the session's own log. No page of its own. |
+| [`autopilot`](plugins/autopilot) | Keeps sessions moving when nobody is watching: after a restart it tells cut-off sessions to carry on, nudges quiet sessions with open todos once and backs off, and restarts goals an error stopped. Every action has a Why line and a kill switch. |
 
 These plugins are independent work. They are not made or endorsed by DeepSeek.
 
@@ -27,6 +29,8 @@ DSH loads a plugin only when the profile lists its package in `dsh.profile.bundl
 | coordinator | `dsh-plugin-coordinator` | `coordinator` |
 | calendar | `dsh-plugin-calendar` | `calendar` |
 | session-bridge | `dsh-plugin-session-bridge` | `session-bridge` |
+| session-watch | `dsh-plugin-session-watch` | `session-watch` |
+| autopilot | `dsh-plugin-autopilot` | `autopilot` |
 
 1. Clone this repository:
 
@@ -97,6 +101,9 @@ DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js npm run test:e2e:categ
 
 # calendar + session-bridge on a real DSH (RADICALE_VENV, a virtualenv with radicale, adds a CalDAV account)
 DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js npm run test:e2e:calendar
+
+# autopilot + session-watch on a real DSH in a throwaway home, on every DSH under .e2e/ (see plugins/autopilot/README.md)
+npm run test:e2e:autopilot
 ```
 
 ## License

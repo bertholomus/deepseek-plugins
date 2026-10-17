@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { asksSomeone, count, cutOff, decisionIn, plainError, spanWords, stateWord, timeWords } from '../shared/host/words.js';
 import { Hub } from '../shared/host/hub.js';
 import { Journal } from '../shared/host/journal.js';
-import { JsonStore, dshHome, ensurePrivateDir, pluginDir, readJson, writeAtomic } from '../shared/host/files.js';
+import { JsonStore, ensurePrivateDir, readJson, writeAtomic } from '../shared/host/files.js';
 import { clip, errorText, guard, later } from '../shared/host/safe.js';
 import { SUITE, kitBlock, plannedCopies } from '../scripts/sync-shared.mjs';
 import { suiteKit } from '../shared/client-kit.js';
@@ -195,18 +195,24 @@ test('files: private folders and atomic writes; the store gathers changes into o
     assert.match(warnings[0], /could not save/);
 });
 
-test('files: a DSH run with its own DSH_HOME keeps its plugins\' files there', () => {
-    const saved = process.env.DSH_HOME;
-    try {
-        process.env.DSH_HOME = '/tmp/dsh-test-home';
-        assert.equal(dshHome(), '/tmp/dsh-test-home');
-        assert.equal(pluginDir('autopilot'), '/tmp/dsh-test-home/autopilot');
-        process.env.DSH_HOME = '  ';
-        assert.match(dshHome(), /\.dsh$/);
-    } finally {
-        if (saved === undefined) delete process.env.DSH_HOME;
-        else process.env.DSH_HOME = saved;
+test('files: no suite plugin builds DSH\'s data folder path itself; DSH\'s dshHomePath does, so DSH_HOME and DSH Test move it', () => {
+    let seen = 0;
+    for (const plugin of SUITE) {
+        let index;
+        try {
+            index = readFileSync(new URL(`../plugins/${plugin}/lib/index.js`, import.meta.url), 'utf8');
+        } catch {
+            continue;
+        }
+        seen += 1;
+        const libFiles = execFileSync('git', ['ls-files', `plugins/${plugin}/lib`], { cwd: new URL('..', import.meta.url), encoding: 'utf8' }).split('\n').filter((f) => f.endsWith('.js'));
+        for (const file of libFiles) {
+            const text = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+            assert.doesNotMatch(text, /homedir\(\)[^\n]*['"`]\.dsh['"`/]/, `${file} builds a ~/.dsh path`);
+        }
+        if (/pluginDir|dshHomePath/.test(index)) assert.match(index, /from '@deepseek-ai\/dsh-home-paths'/, `${plugin} takes its folder from DSH`);
     }
+    assert.ok(seen >= 2);
 });
 
 // ── Guards ────────────────────────────────────────────────────────────
