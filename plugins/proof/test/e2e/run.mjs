@@ -255,16 +255,26 @@ try {
         check('what each turn ran is kept with its claims', (claims.broken.ran ?? []).some((r) => r.includes('--test broken.test.mjs')) && (claims.deploy.ran ?? []).some((r) => r.includes('ls -1')), json([claims.broken.ran, claims.deploy.ran]));
         const question = await ledgerOf(ids.question);
         check('a reply that only asks makes no claim', question.claims.length === 0, json(question.claims));
-        const s = await pageState();
+        // DSH's session list is read at most every two seconds.
+        const four = [ids.tests, ids.subtract, ids.broken, ids.deploy].sort().join();
+        const listedAt = Date.now();
+        const s = await waitFor(async () => { const now = await pageState(); return now.sessions.map((r) => r.sessionId).sort().join() === four ? now : undefined; }, 'the four sessions on the page', 10000, 250).catch(() => pageState());
         const listed = s.sessions.map((r) => r.sessionId).sort().join();
+        console.log(`# the four sessions were on the page after ${Date.now() - listedAt} ms`);
         check('the page lists the four sessions with claims, with their flagged counts, and not the one without',
-            listed === [ids.tests, ids.subtract, ids.broken, ids.deploy].sort().join() && s.sessions.find((r) => r.sessionId === ids.tests)?.flagged === 0
+            listed === four && s.sessions.find((r) => r.sessionId === ids.tests)?.flagged === 0
             && s.sessions.find((r) => r.sessionId === ids.broken)?.contradicted === 1, json(s.sessions));
     });
 
     // ── A check from the flag, in its read-only thread ────────────────
     model.setPlan('Staging deploy', {
-        calls: [bash('git commit -am "proof was here"', 'Commit the work'), bash('touch proof-was-here.txt', 'Mark the folder'), bash('ls -1', 'List the files')],
+        calls: [
+            // DSH adds its own subagent tool to every thread, where no plugin can take it away: the guard must refuse it.
+            { tool: 'subagent', args: { description: 'Look for a deploy', prompt: 'Find where this was deployed.' }, optional: true },
+            bash('git commit -am "proof was here"', 'Commit the work'),
+            bash('touch proof-was-here.txt', 'Mark the folder'),
+            bash('ls -1', 'List the files'),
+        ],
         reply: 'Nothing here shows a deploy.\nNOT VERIFIED: no deploy command or staging address appears in the workspace.',
     });
     model.setPlan('Add subtract', { calls: [bash(`${NODE} --test calc.test.mjs`, 'Run the calculator tests')], reply: 'The tests ran again.\nVERIFIED: the calculator tests pass when run again (2 of 2).' });
@@ -399,8 +409,12 @@ try {
         const asked = model.requests.filter((r) => r.anchor.includes('Proof check.') && r.anchor.includes('Staging deploy'));
         const allowed = new Set(['read', 'read_image', 'grep', 'glob', 'bash', 'pwsh', 'job_output', 'job_list', 'todo_write', 'web_fetch', 'web_search']);
         const offered = [...new Set(asked.flatMap((r) => r.tools))];
-        check('every request of the check went to the check model, offering only tools that read or run',
-            asked.length >= 4 && asked.every((r) => r.model === 'fake-check') && offered.includes('bash') && offered.every((t) => allowed.has(t)), json({ models: asked.map((r) => r.model), offered }));
+        check('every request of the check went to the check model, offering only tools that read or run (and DSH\'s own subagent tool)',
+            asked.length >= 4 && asked.every((r) => r.model === 'fake-check') && offered.includes('bash') && offered.every((t) => allowed.has(t) || t === 'subagent') && !offered.includes('write') && !offered.includes('edit'),
+            json({ models: asked.map((r) => r.model), offered }));
+        if (offered.includes('subagent')) {
+            check('the guard refused DSH\'s subagent tool in the check thread, saying why', JSON.stringify(run.savedEvents(c.checkSessionId)).includes('Proof\'s check threads only read and run commands, so subagent is refused.'));
+        }
         const refusal = 'Refused: git commit changes the repository, and a check only reads and runs. Check without changing anything.';
         check('Proof\'s guard refused the commit, saying why, and the thread heard it', JSON.stringify(saved).includes(refusal), saved.filter((e) => /tool/.test(e.type)).map((e) => JSON.stringify(e.data).slice(0, 300)).join('\n'));
         check('DSH\'s read-only file policy stopped the write: no file was made', !existsSync(join(run.ws, 'proof-was-here.txt')));
@@ -416,13 +430,14 @@ try {
             const ledger = await openLedger(page, ids.subtract);
             const row = ledger.locator(`[data-proof-claim="${claims.subtract.id}"]`);
             await row.getByRole('button', { name: 'Check', exact: true }).click();
-            const said = (await ledger.locator('[data-proof-said]').textContent()) ?? '';
+            const said = await waitFor(async () => (await ledger.locator('[data-proof-said]').textContent()) || null, 'the page to say the check started', 15000, 200).catch(() => '');
             check('the page says the check started', said === 'Checking “All tests pass.” in a fresh read-only thread.', said);
             const done = await settled(ids.subtract, claims.subtract.id, 40000);
             check('the check settles as verified, with the reason', done.state === 'verified' && done.reason === 'the calculator tests pass when run again (2 of 2).', json(done));
             await waitFor(async () => (await row.locator('[data-proof-check]').getAttribute('data-proof-check')) === 'verified', 'the ledger row to show verified', 15000, 300);
             check('the ledger row shows verified, with the way to the check', /verified/.test(await row.innerText()) && (await row.getByRole('button', { name: 'Open the check' }).count()) === 1, await row.innerText());
             const checksCard = page.locator('[data-proof-checks]');
+            await waitFor(async () => (await checksCard.getAttribute('data-proof-checks')) === '2', 'Independent checks to list both checks', 15000, 300).catch(() => {});
             check('Independent checks lists both checks', (await checksCard.getAttribute('data-proof-checks')) === '2' && /not verified/.test(await checksCard.innerText()) && /you asked/.test(await checksCard.innerText()), await checksCard.innerText());
             check('What happened has each check asked for and its answer', await historyHas(/^Check asked for: “Deployed to staging\.”/) && await historyHas(/^Not verified: “Deployed to staging\.”/) && await historyHas(/^Verified: “All tests pass\.”/));
         }, async () => {
@@ -581,6 +596,7 @@ try {
             await restartWith(rowsWith({ proof: { verifier: 'off' } }), 'checks off');
         }
         const ended = await settled(ids.deploy, claims.deploy.id, 20000);
+        await waitFor(async () => (await pageState()).verifier.mode === 'off', 'checks to be off', 15000, 250).catch(() => {});
         check('switched Off, the waiting check ends, saying so', ended.state === 'failed' && ended.reason === 'Not checked: the independent check was switched off.', json(ended));
         const refused = await api('check', { sessionId: ids.deploy, claimId: claims.deploy.id });
         check('while checks are off, asking for one is refused in words', refused.ok === false && refused.error?.message === 'The independent check is off. Turn it on in Proof\'s settings ("Independent check").', json(refused.error));
@@ -589,7 +605,11 @@ try {
             await openProof(page);
             const card = page.locator('[data-proof-checks]');
             await waitFor(async () => (await page.locator('[data-proof-verifier]').getAttribute('data-proof-verifier')) === 'off', 'the page to say checks are off', 15000, 300);
-            check('the page says checks are off, and still lists the checks made', (await card.innerText()).includes('The independent check is off.') && (await card.locator('[data-proof-check-row]').count()) >= 5, (await card.innerText()).slice(0, 400));
+            // One row for each claim checked (four claims): asking again for the deploy claim replaced its first row.
+            const rows = card.locator('[data-proof-check-row]');
+            const deployRow = rows.filter({ hasText: 'Deployed to staging.' });
+            check('the page says checks are off, and still lists the checks made, one row for each claim', (await card.innerText()).includes('The independent check is off.') && (await rows.count()) === 4
+                && (await deployRow.count()) === 1 && (await deployRow.innerText()).includes('the independent check was switched off'), (await card.innerText()).slice(0, 600));
             await openChat(page, ids.deploy);
             await flagsShown(page).first().waitFor({ state: 'visible', timeout: 20000 });
             check('the flag stays, with no Check button while checks are off', (await flagsShown(page).first().getByRole('button', { name: /^Check/ }).count()) === 0);
@@ -612,6 +632,9 @@ try {
         const on = await run.api('pluginManager/setBundleEnabled', { name: 'dsh-plugin-proof', enabled: true });
         check('switched on again, DSH reports it applied, with no failure', on.ok === true && on.value?.application === 'applied' && !on.value?.error, json(on));
         await waitFor(async () => (await api('state')).ok, 'Proof to run again', 30000, 300);
+        // Switched back on, Proof works out the open sessions' claims again from their logs.
+        const back = await waitFor(async () => (await pageState()).sessions.some((r) => r.sessionId === ids.deploy), 'the flagged session back on the page', 15000, 300).catch(() => false);
+        check('switched on again, the page lists the sessions with claims again', back === true);
         if (window?.page) {
             const { page } = window;
             await page.getByRole('button', { name: 'Proof', exact: true }).first().waitFor({ state: 'visible', timeout: 20000 });

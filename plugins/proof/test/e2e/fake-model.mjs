@@ -6,7 +6,8 @@
  * does:
  *
  *   E2E:turn {"calls":[{"tool":"bash","args":{...}}, ...],"reply":"..."}
- *                      make each call in order (one per request), then reply
+ *                      make each call in order (one per request), then reply;
+ *                      a call with "optional": true only when its tool is offered
  *   E2E:say <text>     reply with that text at once (\n starts a new line)
  *
  * The model of one of Proof's check threads (its first message starts
@@ -38,7 +39,11 @@ function decide(body, plans) {
     const messages = body.messages ?? [];
     const tools = new Set((body.tools ?? []).map((t) => t.function?.name));
     const call = (c) => (tools.has(c.tool) ? { tool: c.tool, args: c.args } : { text: `MISSING TOOL ${c.tool}` });
-    const follow = (script, made) => (made < (script.calls?.length ?? 0) ? call(script.calls[made]) : { text: script.reply ?? 'Plain reply.' });
+    // A call marked optional is made only when the tool is offered (the same tools on each request of a thread).
+    const follow = (script, made) => {
+        const calls = (script.calls ?? []).filter((c) => !c.optional || tools.has(c.tool));
+        return made < calls.length ? call(calls[made]) : { text: script.reply ?? 'Plain reply.' };
+    };
     const check = anchorOf(messages, (t) => t.includes('Proof check.'));
     if (check) {
         const plan = plans.find((p) => check.text.includes(p.match));

@@ -98,9 +98,26 @@ export function apply(ctx, config) {
     const listItems = async () => {
         if (Date.now() - listed.at < 2000) return listed.items;
         const result = await sc.list({}, AbortSignal.timeout(20000));
-        const items = Array.isArray(result?.items) ? result.items : [];
+        const items = withClaims(Array.isArray(result?.items) ? result.items : []);
         listed = { at: Date.now(), items };
         return items;
+    };
+    // DSH's list gives an open session's claims only once they are worked out (after Proof is switched back on, not
+    // until the session's next event): worked out here for the open sessions still without them.
+    const withClaims = (items) => {
+        const sessions = ctx.get?.('sessions');
+        if (typeof sessions?.get !== 'function' || typeof ctx.sessionProjections?.snapshot !== 'function') return items;
+        return items.map((item) => {
+            if (!item || typeof item.sessionId !== 'string' || item.projections?.values?.[KEY] !== undefined) return item;
+            try {
+                const session = sessions.get(item.sessionId);
+                const value = session ? ctx.sessionProjections.snapshot(session, [KEY])?.values?.[KEY] : undefined;
+                if (value === undefined) return item;
+                return { ...item, projections: { ...item.projections, values: { ...item.projections?.values, [KEY]: value } } };
+            } catch {
+                return item;
+            }
+        });
     };
 
     /** The tool names DSH offers a session before any restriction. */
@@ -139,7 +156,11 @@ export function apply(ctx, config) {
     const dsh = {
         inspect: (sessionId) => sc.inspect(sessionId, AbortSignal.timeout(20000)),
         titleOf: async (sessionId) => {
-            const item = (await listItems()).find((i) => i?.sessionId === sessionId);
+            let item = (await listItems()).find((i) => i?.sessionId === sessionId);
+            if (!item) {
+                listed = { at: 0, items: [] };
+                item = (await listItems()).find((i) => i?.sessionId === sessionId);
+            }
             return item ? titleOf(item) : '';
         },
         async resolveModel(wanted) {
