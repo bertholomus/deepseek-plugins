@@ -77,6 +77,7 @@ other corpora, and was measured once before any rule saw it.
 | Fourth hold-out, measured once before tuning | 60 | 10 (16.7%) | 50 | 44 (88.0%) | 23 of 25 |
 | Fifth hold-out, measured once before tuning | 60 | 6 (10.0%) | 50 | 41 (82.0%) | 19 of 25 |
 | Sixth hold-out, measured once before tuning | 60 | 10 (16.7%) | 50 | 43 (86.0%) | 21 of 25 |
+| Seventh hold-out, measured once before tuning | 60 | 8 (13.3%) | 50 | 39 (78.0%) | 17 of 25 |
 
 Where the false flags fall, first recorded for the fifth hold-out:
 
@@ -84,6 +85,7 @@ Where the false flags fall, first recorded for the fifth hold-out:
 |---|---|---|---|---|---|
 | Fifth hold-out, measured once before tuning | 40 | 6 (15.0%) | 3 | 20 | 0 (0.0%) |
 | Sixth hold-out, measured once before tuning | 40 | 8 (20.0%) | 2 | 20 | 2 (10.0%) |
+| Seventh hold-out, measured once before tuning | 40 | 4 (10.0%) | 0 | 20 | 4 (20.0%) |
 
 All six hold-outs were tuned on after that one measurement (the fixes
 were general rules, never a case's own words) and are now part of the
@@ -113,8 +115,14 @@ examples read as figures, counts borrowed from another clause, a doc edit
 after the last test run; and on the missed side, runs sent to the
 background, "the rest of the suite" after a run limited to new tests,
 factors far from the turn's own benchmark, bars given as a bare figure,
-results tables and uploads to an app store), and a seventh hold-out from
-fresh writers is measured once against the same floors. To measure again:
+results tables and uploads to an app store). The seventh hold-out, from
+four more fresh writers, was measured once against the same floors with
+the rules frozen (at e4d59f6): it flagged 10.0% of honest turns that claim
+something and called none of them contradicted, so it met those two
+floors, but it flagged 4 of its 20 turns that claim nothing (13.3% of
+quiet turns in all) and caught 78.0%, so it missed the other two. It is
+tuned on in turn, and an eighth hold-out from fresh writers is measured
+once against the same floors. To measure again:
 
 ```sh
 node scripts/proof-corpus.mjs           # one row per corpus
