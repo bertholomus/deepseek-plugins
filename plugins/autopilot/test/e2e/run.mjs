@@ -24,12 +24,18 @@
  *   gets its note.
  * - The page, from DSH's sidebar: the question with its answer buttons, the
  *   backed-off session with Try again, the sessions with their rules, the
- *   log with a Why line for every action; light and dark pictures; the
- *   amber state words read at 4.5:1 or more over their panel, light and
- *   dark. Its buttons work: the answer sends the note, Try again nudges
- *   again, a rule changed to Auto acts, the switch goes off and on. On a
- *   rule, an arrow key only shows the choice, Enter applies it and Escape
- *   takes it back, and focus stays on the rule.
+ *   log with a Why line for every action; light and dark pictures; every
+ *   state word on the page reads at 4.5:1 or more over its panel, light and
+ *   dark; the Waiting card is glass at tint + .2, and at Wallpaper's tint .2
+ *   over a mid picture its small text still reads at 4.5:1 (where the plain
+ *   tint would not). Its buttons work: the answer sends the note and the
+ *   focus goes on to the next row; Try again while off is refused in words
+ *   in its row, which takes the focus, and sends nothing; Try again nudges
+ *   again and the focus stays in the page; a rule changed to Auto acts; the
+ *   switch goes off and on. On a rule, an arrow key only shows the choice,
+ *   Enter applies it and Escape takes it back, and focus stays on the rule.
+ * - A question open when DSH quits is set aside in the log as withdrawn (DSH
+ *   stopped), and asked again after the start under the same entry and time.
  * - DSH quit under four running turns: a plain one, a goal round, one
  *   whose tool waits for approval and one whose question waits in DSH's
  *   question box (a stand-in window gets their prompts; their rows say
@@ -160,9 +166,10 @@ async function readIntoTurn(sessionId, text) {
 
 /**
  * The contrast of an element's text over what is painted behind it: its own and its ancestors' backgrounds, stacked
- * as the window draws them (down to the first solid one), measured as WCAG does.
+ * as the window draws them (down to the first solid one), measured as WCAG does. With `ground`, the page stands on
+ * that colour instead of DSH's own ground, as over a picture with Wallpaper on (where DSH's grounds go clear).
  */
-const contrastOf = (locator) => locator.evaluate((el) => {
+const contrastOf = (locator, { ground } = {}) => locator.evaluate((el, ground) => {
     const canvas = document.createElement('canvas');
     canvas.width = 1;
     canvas.height = 1;
@@ -178,12 +185,11 @@ const contrastOf = (locator) => locator.evaluate((el) => {
     for (let node = el; node; node = node.parentElement) {
         const bg = getComputedStyle(node).backgroundColor;
         const alpha = alphaOf(bg);
-        if (alpha === 0) continue;
-        layers.push(bg);
-        if (alpha === 255) break;
+        if (alpha > 0) layers.push(bg);
+        if (alpha === 255 || (ground && node.matches('[data-autopilot-page]'))) break;
     }
     c.clearRect(0, 0, 1, 1);
-    c.fillStyle = '#ffffff';
+    c.fillStyle = ground ?? '#ffffff';
     c.fillRect(0, 0, 1, 1);
     for (const bg of [...layers].reverse()) {
         c.fillStyle = bg;
@@ -199,7 +205,27 @@ const contrastOf = (locator) => locator.evaluate((el) => {
     };
     const lum = ([r, g, b]) => 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
     const [hi, lo] = [lum(text), lum(back)].sort((a, b) => b - a);
-    return { word: el.textContent, ratio: Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100, text, back, layers };
+    return { word: el.textContent, tone: el.getAttribute('data-tone'), ratio: Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100, text, back, layers };
+}, ground ?? null);
+/** `contrastOf` for every element a locator matches. */
+const contrastsOf = async (locator, options) => {
+    const out = [];
+    for (let i = 0; i < await locator.count(); i++) out.push(await contrastOf(locator.nth(i), options));
+    return out;
+};
+/** Where the keyboard focus is, in the page's terms. */
+const focusOf = (page) => page.evaluate(() => {
+    const el = document.activeElement;
+    if (!el || el === document.body || el === document.documentElement) return { body: true };
+    const card = ['waiting', 'sessions', 'header', 'log'].find((name) => el.closest(`[data-autopilot-${name}]`));
+    return {
+        tag: el.tagName.toLowerCase(),
+        text: (el.textContent ?? '').trim().slice(0, 120),
+        inPage: Boolean(el.closest('[data-autopilot-page]')),
+        card: card ?? null,
+        backed: el.closest('[data-autopilot-backed]')?.getAttribute('data-autopilot-backed') ?? null,
+        refusal: el.getAttribute('data-autopilot-refusal'),
+    };
 });
 
 let window;
@@ -339,18 +365,57 @@ try {
             check('a held session says why on its row', hold === 'Waits for you: its last reply asks you something.', hold);
             const amber = page.locator(`[data-autopilot-backed="${ids.report}"] .dshap-tag[data-tone="warning"]`).first();
             const amberLight = await contrastOf(amber);
+            const tags = page.locator('[data-autopilot-page] .dshap-tag');
+            const tagsLight = await contrastsOf(tags);
+            const waitingMain = await page.locator('[data-autopilot-waiting]').evaluate((el) => el.classList.contains('dshap-main'));
+            check('the Waiting card is glass at tint + .2, like the other cards people read', waitingMain);
             await shot(page, shots, 'autopilot-light');
             await shot(page, shots, 'waiting-light', page.locator('[data-autopilot-waiting]'));
             await setDark(page, true);
             await page.waitForTimeout(400);
             const amberDark = await contrastOf(amber);
+            const tagsDark = await contrastsOf(tags);
             check('the amber state words read at 4.5:1 or more over their panel, light and dark', amberLight.ratio >= 4.5 && amberDark.ratio >= 4.5, JSON.stringify({ light: amberLight, dark: amberDark }));
+            // Every state word on the page, whatever its tone ("idle" was drawn in DSH's glyph colour at 3.6:1).
+            const allTags = [...tagsLight.map((t) => ({ ...t, mode: 'light' })), ...tagsDark.map((t) => ({ ...t, mode: 'dark' }))];
+            const tones = [...new Set(allTags.map((t) => t.tone))].sort();
+            const weakTags = allTags.filter((t) => t.ratio < 4.5).map(({ word, tone, mode, ratio }) => ({ word, tone, mode, ratio }));
+            const lowest = (list) => Math.min(...list.map((t) => t.ratio));
+            console.log(`# state words: ${allTags.length} measured, tones ${tones.join(', ')}; lowest ${lowest(tagsLight)}:1 light, ${lowest(tagsDark)}:1 dark`);
+            check('every state word on the page reads at 4.5:1 or more over its panel, in every tone shown, light and dark', ['quiet', 'success', 'warning'].every((tone) => tones.includes(tone)) && weakTags.length === 0, JSON.stringify({ tones, weakTags }));
             await shot(page, shots, 'autopilot-dark');
             await shot(page, shots, 'waiting-dark', page.locator('[data-autopilot-waiting]'));
             await page.locator('[data-autopilot-log]').evaluate((el) => el.scrollIntoView({ block: 'start' }));
             await shot(page, shots, 'log-dark');
             await setDark(page, false);
             await shot(page, shots, 'log-light');
+            // Wallpaper on at a low tint (.2): the page stands on a picture, here its local colour. A mid grey (lighter
+            // in dark mode, darker in light mode) is where tint + .2 carries small text and the plain tint does not; the
+            // extremes at this tint are DESIGN's open question about a floor for the tint slider.
+            const small = (card) => ['why', 'meta', 'hold', 'status'].map((c) => `[data-autopilot-${card}] .dshap-${c}`).join(', ');
+            const lowTint = {};
+            await page.evaluate(() => document.documentElement.style.setProperty('--wp-tint', '.2'));
+            try {
+                for (const [mode, ground] of [['light', 'rgb(180, 180, 180)'], ['dark', 'rgb(140, 140, 140)']]) {
+                    await setDark(page, mode === 'dark');
+                    await page.waitForTimeout(300);
+                    const waiting = await contrastsOf(page.locator(small('waiting')), { ground });
+                    const sessions = await contrastsOf(page.locator(small('sessions')), { ground });
+                    const tagsHere = await contrastsOf(page.locator('[data-autopilot-waiting] .dshap-tag'), { ground });
+                    // The same text on the plain tint, to show the ground is one where the glass matters.
+                    await page.locator('[data-autopilot-waiting]').evaluate((el) => el.classList.remove('dshap-main'));
+                    const plain = await contrastsOf(page.locator(small('waiting')), { ground });
+                    await page.locator('[data-autopilot-waiting]').evaluate((el) => el.classList.add('dshap-main'));
+                    lowTint[mode] = { ground, waiting: lowest(waiting), sessions: lowest(sessions), plain: lowest(plain), tags: lowest(tagsHere), count: waiting.length };
+                }
+            } finally {
+                await page.evaluate(() => document.documentElement.style.removeProperty('--wp-tint'));
+                await setDark(page, false);
+            }
+            console.log(`# at tint .2: ${JSON.stringify(lowTint)}`);
+            check('at Wallpaper\'s tint .2 over a mid picture, the small text on the Waiting and Sessions cards (amber "waits for you" lines too) reads at 4.5:1 or more, light and dark',
+                ['light', 'dark'].every((mode) => lowTint[mode].count > 0 && lowTint[mode].waiting >= 4.5 && lowTint[mode].sessions >= 4.5), JSON.stringify(lowTint));
+            check('on the plain tint the same text would read under 4.5:1 there, so the check can fail', ['light', 'dark'].every((mode) => lowTint[mode].plain < 4.5), JSON.stringify(lowTint));
             await page.locator('[data-autopilot-page]').evaluate((el) => el.scrollIntoView({ block: 'start' }));
             // A narrow window: the page reflows, nothing spills sideways.
             await page.setViewportSize({ width: 760, height: 900 });
@@ -370,11 +435,45 @@ try {
             check('the question\'s first button sends the note, delivered', answered.state === 'delivered' && answered.by === 'you', JSON.stringify(answered));
             await page.locator('[data-autopilot-ask]').waitFor({ state: 'detached', timeout: 15000 });
             check('the question leaves the page once answered', (await page.locator('[data-autopilot-ask]').count()) === 0);
+            /** The focus once it settles where `wanted` says (or where it is after `ms`). */
+            const focusSettles = async (wanted, ms = 5000) => waitFor(async () => {
+                const where = await focusOf(page);
+                return wanted(where) ? where : null;
+            }, 'the focus', ms, 100).catch(() => focusOf(page));
+            const afterAnswer = await focusSettles((f) => f.backed === ids.report && f.text === 'Try again');
+            check('after the answer, the focus goes on to the row now in its place (its Try again), not the page body', afterAnswer.backed === ids.report && afterAnswer.text === 'Try again', JSON.stringify(afterAnswer));
+            // Try again while Autopilot is off: refused in words in its row, which takes the focus; nothing is sent.
+            const backedRow = page.locator(`[data-autopilot-backed="${ids.report}"]`);
+            const switchOf = () => page.locator('[data-autopilot-header] [role="switch"]');
+            await switchOf().click();
+            await page.locator('[data-autopilot-header="off"]').waitFor({ timeout: 15000 });
+            const notesOff = await count(ids.report, 'nudge');
+            await backedRow.getByRole('button', { name: 'Try again' }).click();
+            const refusal = backedRow.locator(`[data-autopilot-refusal="backed:${ids.report}"]`);
+            await refusal.waitFor({ state: 'visible', timeout: 10000 });
+            const refusalWords = await refusal.textContent();
+            const onRefusal = await focusSettles((f) => f.refusal === `backed:${ids.report}`);
+            const elsewhere = await page.locator('[data-autopilot-refusal]').count();
+            check('Try again while off: "Not changed." and why, in its row, as an alert that takes the focus',
+                refusalWords === 'Not changed. Autopilot is off: switch it on at the top of its page first.' && (await refusal.getAttribute('role')) === 'alert' && onRefusal.refusal === `backed:${ids.report}` && elsewhere === 1,
+                JSON.stringify({ refusalWords, onRefusal, elsewhere }));
+            const refusalContrast = await contrastOf(refusal);
+            check('the refusal reads at 4.5:1 or more on its card', refusalContrast.ratio >= 4.5, JSON.stringify(refusalContrast));
+            await sleep(1500);
+            check('nothing is sent while off', (await count(ids.report, 'nudge')) === notesOff, `${await count(ids.report, 'nudge')} notes, ${notesOff} before`);
+            await shot(page, shots, 'try-again-refused-light', page.locator('[data-autopilot-waiting]'));
+            await switchOf().click();
+            await page.locator('[data-autopilot-header="on"]').waitFor({ timeout: 15000 });
+            await refusal.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+            check('switched on with the switch the refusal names, the refusal goes', (await page.locator('[data-autopilot-refusal]').count()) === 0);
             // Try again on the backed-off session.
             const before = await count(ids.report, 'nudge');
-            await page.locator(`[data-autopilot-backed="${ids.report}"]`).getByRole('button', { name: 'Try again' }).click();
+            await backedRow.getByRole('button', { name: 'Try again' }).click();
             await waitFor(async () => (await count(ids.report, 'nudge', 'delivered')) > before, 'the note after Try again', 30000, 300);
             check('Try again nudges the backed-off session again', true);
+            const left = await backedRow.waitFor({ state: 'detached', timeout: 10000 }).then(() => true, () => false);
+            const afterTry = await focusSettles((f) => f.inPage && !f.body);
+            check('once its row leaves, the focus stays in the page (the next row, else the card\'s heading)', left && afterTry.inPage === true && !afterTry.body, JSON.stringify({ left, afterTry }));
             // A rule changed on the page: the session left alone under Off gets its note under Auto.
             await page.locator('[data-autopilot-sessions]').getByRole('tab', { name: 'All', exact: true }).click();
             const row = page.locator(`[data-autopilot-session="${ids.off}"]`);
@@ -462,6 +561,11 @@ try {
         check('the session whose question waits in DSH\'s question box: its row says so, and why Autopilot leaves it to you',
             question?.word === 'waiting for your answer' && question.hold === 'waits for you: a question in DSH\'s question box', JSON.stringify(question));
     });
+    // A question open when DSH quits (Ask first): set aside in the log, then back under the same entry and time.
+    ids.askQuit = await run.newSession(`E2E:todos ${todos(['Tidy the imports', 'in_progress'])}`, 'Import tidy');
+    await api('setRule', { sessionId: ids.askQuit, rule: 'ask' });
+    const openAsk = await entryReaches(ids.askQuit, 'ask', 'asked you', 1, 40000);
+    const openAskAt = (await state()).asks.find((a) => a.sessionId === ids.askQuit)?.at;
     ids.cut = await run.newSession('E2E:slow', 'Long migration');
     ids.cutGoal = await run.newSession('E2E:goal Write the summary [r1=slow]', 'Summary goal');
     await waitFor(async () => (await run.session(ids.cut)).status === 'running', 'the long turn to run', 30000);
@@ -499,6 +603,19 @@ try {
             (question.note ?? '').includes('When DSH stopped, your question in DSH\'s question box (“Which environment should I deploy to?”) had no answer yet: ask it again if you still need the answer.'), question.note);
         check('its Why line says so too', /Its question in DSH's question box had no answer; the note says to ask again\./.test(question.why ?? ''), question.why);
         check('both notes are read into a turn', await readIntoTurn(ids.cutApproval, '[Autopilot] DSH stopped while you were working') && await readIntoTurn(ids.cutQuestion, '[Autopilot] DSH stopped while you were working'));
+    });
+    await step('a question open at the quit: set aside in the log as DSH stopped, then asked again under the same entry and time', async () => {
+        const rows = readFileSync(join(run.home, 'autopilot', 'events.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+        const aside = rows.find((row) => row.set === openAsk.id && row.patch?.stopped === true);
+        check('when DSH quit, its log entry was marked withdrawn, with why, before DSH exited',
+            aside?.patch.state === 'withdrawn' && /^withdrawn: Autopilot stopped \(DSH quit, or Autopilot or Session Watch was switched off\); it asks again when it runs, if this still applies$/.test(aside.patch.reason ?? ''), JSON.stringify(aside));
+        const back = await waitFor(async () => (await state()).asks.find((a) => a.sessionId === ids.askQuit) ?? null, 'the question to come back', 40000, 300);
+        const entriesNow = await entriesOf(ids.askQuit, 'ask');
+        check('after the start it is asked again: one entry, open again, the stop no longer on it', entriesNow.length === 1 && entriesNow[0].id === openAsk.id && entriesNow[0].state === 'asked you' && !entriesNow[0].reason,
+            JSON.stringify(entriesNow));
+        check('it keeps the time it was first asked, so its wait counts from then', back.at === openAskAt && typeof openAskAt === 'number', `${back.at} vs ${openAskAt}`);
+        const row = (await state()).sessions.find((x) => x.sessionId === ids.askQuit);
+        check('its row\'s last words follow the question: asked you', row?.last?.text === 'asked you', JSON.stringify(row?.last));
     });
     await step('a restart never repeats what was handled', async () => {
         await sleep((IDLE * 2 + 2) * 1000);

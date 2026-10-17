@@ -38,7 +38,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     const doc = typeof document === 'undefined' ? undefined : document;
 
     const css = [
-        `:is(.${P}-page,.${P}-pane,.${P}-pop){--${P}-glass:rgba(14,18,17,var(--wp-tint,.55));--${P}-conv:rgba(10,13,12,calc(var(--wp-tint,.55) + .2));--${P}-fill:rgba(255,255,255,.04);--${P}-text-2:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary));--${P}-glyph:color-mix(in srgb,var(--dsw-alias-label-tertiary) 75%,var(--dsw-alias-label-primary));--${P}-error:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary));--${P}-link:color-mix(in srgb,var(--dsw-alias-link,var(--dsw-alias-state-business-primary)) 85%,var(--dsw-alias-label-primary));--${P}-ok:color-mix(in srgb,var(--dsw-alias-state-success-primary) 60%,var(--dsw-alias-label-primary));--${P}-warn:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 55%,var(--dsw-alias-label-primary));--${P}-ring:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}`,
+        `:is(.${P}-page,.${P}-pane,.${P}-pop){--${P}-glass:rgba(14,18,17,var(--wp-tint,.55));--${P}-conv:rgba(10,13,12,calc(var(--wp-tint,.55) + .2));--${P}-fill:rgba(255,255,255,.04);--${P}-text-2:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary));--${P}-glyph:color-mix(in srgb,var(--dsw-alias-label-tertiary) 75%,var(--dsw-alias-label-primary));--${P}-error:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary));--${P}-link:color-mix(in srgb,var(--dsw-alias-link,var(--dsw-alias-state-business-primary)) 85%,var(--dsw-alias-label-primary));--${P}-ok:color-mix(in srgb,var(--dsw-alias-state-success-primary) 60%,var(--dsw-alias-label-primary));--${P}-warn:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 40%,var(--dsw-alias-label-primary));--${P}-ring:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}`,
         `body:not([data-ds-dark-theme]) :is(.${P}-page,.${P}-pane,.${P}-pop){--${P}-glass:rgba(250,250,246,var(--wp-tint,.55));--${P}-conv:rgba(250,250,246,calc(var(--wp-tint,.55) + .2));--${P}-fill:rgba(20,26,22,.035)}`,
         `@media (prefers-reduced-transparency:reduce){:is(.${P}-page,.${P}-pane,.${P}-pop){--${P}-glass:rgba(14,18,17,.9);--${P}-conv:rgba(10,13,12,.95)}body:not([data-ds-dark-theme]) :is(.${P}-page,.${P}-pane,.${P}-pop){--${P}-glass:rgba(250,250,246,.9);--${P}-conv:rgba(250,250,246,.95)}}`,
         `.${P}-page{box-sizing:border-box;height:100%;overflow:auto;padding:12px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-14)}`,
@@ -102,6 +102,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="danger"]{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 75%,var(--dsw-alias-label-primary))}`,
         `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="success"]{color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 50%,var(--dsw-alias-label-primary))}`,
         `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="info"]{color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 65%,var(--dsw-alias-label-primary))}`,
+        // Quiet and neutral words ("idle", "stopped") would be drawn in DSH's glyph colour, which is for glyphs, not small text.
+        `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag:is([data-tone="quiet"],[data-tone="neutral"]){color:var(--${P}-text-2)}`,
         `.${P}-choice{display:inline-flex;flex-direction:column;align-items:inherit;gap:4px;min-width:0}`,
         `.${P}-choice-hint{font:var(--dsw-font-xxs-12);color:var(--${P}-text-2)}`,
         `.${P}-choice[aria-busy="true"]{cursor:progress}`,
@@ -1118,6 +1120,20 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
 
         // ── Parts ─────────────────────────────────────────────────────
 
+        /** A refusal in words: "Not changed." and why (the host's words may already begin with "Not changed:"). */
+        function notChanged(text) {
+            const why = String(text ?? '').replace(/^Not changed:\s*/i, '').trim();
+            return `Not changed. ${why || 'Autopilot did not answer.'}`;
+        }
+
+        /** A refusal under the control that was pressed, in its card; it takes the focus, so the next Tab goes on from there. */
+        function Refusal({ failure, at }) {
+            const ref = React.useRef(null);
+            const shown = failure?.where === at;
+            React.useEffect(() => { if (shown) ref.current?.focus?.(); }, [shown, failure?.n]);
+            return shown ? h('p', { className: `${P}-alert`, role: 'alert', tabIndex: -1, ref, 'data-autopilot-refusal': at }, notChanged(failure.text)) : null;
+        }
+
         function useOpener(openSession) {
             return React.useCallback((sessionId) => {
                 try { openSession?.(sessionId); } catch (error) { console?.warn?.('dsh-plugin-autopilot: could not open the session', error); }
@@ -1146,7 +1162,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         }
 
         /** The kill switch, the summary and the default rule. */
-        function HeaderCard({ data, busy, act, decisions }) {
+        function HeaderCard({ data, busy, act, decisions, failure, refresh }) {
             const paused = data.paused;
             const enabled = data.enabled;
             const status = !enabled ? TEXT.disabled
@@ -1161,39 +1177,50 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 sub: TEXT.summary,
                 actions: enabled ? h('div', { className: `${P}-switch` },
                     h('span', { 'aria-hidden': 'true' }, paused ? 'Off' : 'On'),
-                    h(ui.Switch, { checked: !paused, label: paused ? TEXT.off : TEXT.on, onChange: (next) => act('setPaused', { paused: !next }) })) : null,
-                attrs: { 'data-autopilot-header': paused ? 'off' : 'on' },
+                    h(ui.Switch, { checked: !paused, label: paused ? TEXT.off : TEXT.on, onChange: (next) => act('setPaused', { paused: !next }, 'head') })) : null,
+                attrs: { 'data-autopilot-header': !enabled ? 'disabled' : paused ? 'off' : 'on' },
             },
             h('p', { className: `${P}-status`, role: 'status' }, status),
             enabled ? h('div', { className: `${P}-rule-row`, 'data-autopilot-rule-row': paused ? 'off' : 'on' },
                 h('span', { className: `${P}-rule-label`, id: `${P}-default-rule-label` }, TEXT.defaultRule),
-                h(kit.Choice, { id: `${P}-default-rule`, label: TEXT.defaultRule, value: data.defaultRule, options: RULES, busy, onChoose: (rule) => act('setDefaultRule', { rule }) }),
+                h(kit.Choice, { id: `${P}-default-rule`, label: TEXT.defaultRule, value: data.defaultRule, options: RULES, busy, onChoose: (rule) => act('setDefaultRule', { rule }, 'head') }),
                 h('span', { className: `${P}-rule-label` }, ruleHint(data.defaultRule, { paused, decisions }))) : null,
-            data.watchProblem ? h('p', { className: `${P}-note`, 'data-autopilot-watch-problem': '' }, `Session Watch uses its default for a wrong setting: ${String(data.watchProblem.text).replace(/\.$/, '')}. Change it in Session Watch's settings in Plugins.`) : null);
+            data.watchProblem ? h('p', { className: `${P}-note`, 'data-autopilot-watch-problem': '' }, `Session Watch uses its default for a wrong setting: ${String(data.watchProblem.text).replace(/\.$/, '')}. Change it in Session Watch's settings in Plugins.`) : null,
+            refresh?.error ? h(kit.ErrorLine, { text: refresh.error, onRetry: refresh.retry }) : null,
+            h(Refusal, { failure, at: 'head' }));
         }
 
         /** Questions Autopilot waits on, and sessions it backed off from. */
-        function WaitingCard({ data, busy, act, onOpen }) {
+        // Its buttons are never disabled while a change runs (a disabled button drops the focus to the page body):
+        // `act` takes one change at a time and ignores the rest.
+        function WaitingCard({ data, act, onOpen, failure, leaving }) {
             const backed = data.sessions.filter((s) => s.backedOff || s.gaveUp);
             if (data.asks.length === 0 && backed.length === 0) return null;
-            return h(kit.Card, { title: TEXT.waiting, sub: data.paused ? 'Autopilot is off: switch it on to act on these.' : 'Autopilot holds these until you choose.', attrs: { 'data-autopilot-waiting': '' } },
+            /** An answer or Try again that may take its row away: the page moves the focus on once it is gone. */
+            const press = (method, args, where, index) => {
+                leaving?.(where, index);
+                return act(method, args, where);
+            };
+            return h(kit.Card, { title: TEXT.waiting, main: true, sub: data.paused ? 'Autopilot is off: switch it on to act on these.' : 'Autopilot holds these until you choose.', attrs: { 'data-autopilot-waiting': '' } },
                 h('ul', { className: `${P}-list` },
-                    ...data.asks.map((ask) => h('li', { key: ask.id, className: `${P}-item`, 'data-autopilot-ask': ask.id },
+                    ...data.asks.map((ask, index) => h('li', { key: ask.id, className: `${P}-item`, 'data-autopilot-ask': ask.id, 'data-autopilot-spot': `ask:${ask.id}` },
                         h('div', { className: `${P}-item-main` },
                             h('div', { className: `${P}-title` }, ask.question),
                             ask.why ? h('div', { className: `${P}-why` }, ask.why) : null,
-                            h('div', { className: `${P}-meta` }, 'Asked ', h(kit.TimeText, { at: ask.at }))),
+                            h('div', { className: `${P}-meta` }, 'Asked ', h(kit.TimeText, { at: ask.at })),
+                            h(Refusal, { failure, at: `ask:${ask.id}` })),
                         h('div', { className: `${P}-item-side` },
-                            h(ui.Button, { variant: 'primary', size: 'sm', disabled: busy, onClick: () => act('answer', { id: ask.id, answer: 'go' }) }, ask.recommendation || 'Go ahead'),
-                            h(ui.Button, { variant: 'ghost', size: 'sm', disabled: busy, onClick: () => act('answer', { id: ask.id, answer: 'skip' }) }, 'Leave it'),
+                            h(ui.Button, { variant: 'primary', size: 'sm', onClick: () => press('answer', { id: ask.id, answer: 'go' }, `ask:${ask.id}`, index) }, ask.recommendation || 'Go ahead'),
+                            h(ui.Button, { variant: 'ghost', size: 'sm', onClick: () => press('answer', { id: ask.id, answer: 'skip' }, `ask:${ask.id}`, index) }, 'Leave it'),
                             ask.sessionId ? h(ui.Button, { variant: 'ghost', size: 'sm', onClick: () => onOpen(ask.sessionId) }, TEXT.open) : null))),
-                    ...backed.map((s) => h('li', { key: `b-${s.sessionId}`, className: `${P}-item`, 'data-autopilot-backed': s.sessionId },
+                    ...backed.map((s, at) => h('li', { key: `b-${s.sessionId}`, className: `${P}-item`, 'data-autopilot-backed': s.sessionId, 'data-autopilot-spot': `backed:${s.sessionId}` },
                         h('div', { className: `${P}-item-main` },
                             h(SessionTitle, { title: s.title, sessionId: s.sessionId, onOpen }),
-                            h('div', { className: `${P}-why` }, s.gaveUp ? 'Autopilot stopped retrying: it kept failing.' : 'Autopilot backed off: its notes brought no progress.')),
+                            h('div', { className: `${P}-why` }, s.gaveUp ? 'Autopilot stopped retrying: it kept failing.' : 'Autopilot backed off: its notes brought no progress.'),
+                            h(Refusal, { failure, at: `backed:${s.sessionId}` })),
                         h('div', { className: `${P}-item-side` },
                             h(kit.StateTag, { word: 'backed off' }),
-                            h(ui.Button, { variant: 'outline', size: 'sm', disabled: busy, onClick: () => act('retry', { sessionId: s.sessionId }) }, TEXT.tryAgain))))));
+                            h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => press('retry', { sessionId: s.sessionId }, `backed:${s.sessionId}`, data.asks.length + at) }, TEXT.tryAgain))))));
         }
 
         function nextText(next) {
@@ -1203,21 +1230,22 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return next.at <= Date.now() + 5000 ? `${what} now` : `${what} at ${at}`;
         }
 
-        function SessionRow({ s, busy, act, onOpen }) {
+        function SessionRow({ s, busy, act, onOpen, failure }) {
             const meta = [s.folder, s.work, s.next ? `next: ${nextText(s.next)}` : '', s.last ? `last: ${s.last.text} (${kit.agoText(s.last.at)})` : ''].filter(Boolean).join(' · ');
             return h('li', { className: `${P}-item`, 'data-autopilot-session': s.sessionId },
                 h('div', { className: `${P}-item-main` },
                     h(SessionTitle, { title: s.title, sessionId: s.sessionId, onOpen }),
                     meta ? h('div', { className: `${P}-meta` }, meta) : null,
-                    s.hold ? h('div', { className: `${P}-hold`, 'data-autopilot-hold': '' }, `${s.hold[0].toUpperCase()}${s.hold.slice(1)}.`) : null),
+                    s.hold ? h('div', { className: `${P}-hold`, 'data-autopilot-hold': '' }, `${s.hold[0].toUpperCase()}${s.hold.slice(1)}.`) : null,
+                    h(Refusal, { failure, at: `session:${s.sessionId}` })),
                 h('div', { className: `${P}-item-side` },
                     h(kit.StateTag, { word: s.word }),
                     h('div', { className: `${P}-session-rule` },
-                        h(kit.Choice, { id: `${P}-rule-${s.sessionId}`, label: `Rule for ${s.title}`, value: s.rule, options: RULES, busy, onChoose: (rule) => act('setRule', { sessionId: s.sessionId, rule }) }),
-                        h('span', { className: `${P}-session-rule-note` }, s.own ? h('button', { type: 'button', className: `${P}-link`, onClick: () => act('setRule', { sessionId: s.sessionId, rule: null }) }, 'Use the default') : 'The default'))));
+                        h(kit.Choice, { id: `${P}-rule-${s.sessionId}`, label: `Rule for ${s.title}`, value: s.rule, options: RULES, busy, onChoose: (rule) => act('setRule', { sessionId: s.sessionId, rule }, `session:${s.sessionId}`) }),
+                        h('span', { className: `${P}-session-rule-note` }, s.own ? h('button', { type: 'button', className: `${P}-link`, onClick: () => act('setRule', { sessionId: s.sessionId, rule: null }, `session:${s.sessionId}`) }, 'Use the default') : 'The default'))));
         }
 
-        function SessionsCard({ data, busy, act, onOpen }) {
+        function SessionsCard({ data, busy, act, onOpen, failure }) {
             const [filter, setFilter] = React.useState('work');
             const withWork = data.sessions.filter((s) => s.work || s.next || s.word === 'cut off' || s.word === 'failed');
             const shown = filter === 'work' ? withWork : data.sessions;
@@ -1230,7 +1258,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             },
             data.sessions.length === 0 ? h(kit.Empty, { title: TEXT.noSessions, text: TEXT.noSessionsText })
                 : shown.length === 0 ? h(kit.Empty, { title: TEXT.noWork, text: TEXT.noWorkText, action: h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => setFilter('all') }, 'Show all sessions') })
-                    : h('ul', { className: `${P}-list` }, ...shown.map((s) => h(SessionRow, { key: s.sessionId, s, busy, act, onOpen }))));
+                    : h('ul', { className: `${P}-list` }, ...shown.map((s) => h(SessionRow, { key: s.sessionId, s, busy, act, onOpen, failure }))));
         }
 
         const BY_WORDS = { you: 'You', Autopilot: 'Autopilot' };
@@ -1263,11 +1291,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const [busy, setBusy] = React.useState(false);
             const busyRef = React.useRef(false);
             const [failure, setFailure] = React.useState(undefined);
+            const tries = React.useRef(0);
+            const gone = React.useRef(undefined);
             const onOpen = useOpener(autopilot?.openSession);
             // "4 min ago" and "next: check at" stay current.
             kit.useMinute();
-            /** One change at a time; resolves to whether it went through. */
-            const act = React.useCallback(async (method, args) => {
+            /** One change at a time; resolves to whether it went through. A refusal shows where it was asked for (`where`). */
+            const act = React.useCallback(async (method, args, where = 'head') => {
                 if (busyRef.current) return false;
                 busyRef.current = true;
                 setBusy(true);
@@ -1275,15 +1305,43 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 let problem;
                 try {
                     problem = await run(method, args);
+                    if (problem && gone.current?.where === where) gone.current = undefined;
                     await live.refresh();
                 } finally {
                     busyRef.current = false;
                     setBusy(false);
                 }
-                if (problem) setFailure(problem);
+                if (problem) setFailure({ where, text: problem, n: ++tries.current });
                 return !problem;
             }, [live.refresh]);
+            const leaving = React.useCallback((where, index) => { gone.current = { where, index, at: Date.now() }; }, []);
             const data = live.data;
+            // A row that held the focus left (its question answered, its session no longer backed off): the focus goes to
+            // the row now in its place, else the Waiting card's heading, else the Sessions card's, never the page body.
+            React.useEffect(() => {
+                const was = gone.current;
+                const doc = globalThis.document;
+                if (!was || !doc?.querySelector) return;
+                // Only right after the press: a row that leaves much later never pulls the focus.
+                if (Date.now() - was.at > 10000) {
+                    gone.current = undefined;
+                    return;
+                }
+                const page = doc.querySelector('[data-autopilot-page]');
+                if (!page) return;
+                if ([...page.querySelectorAll('[data-autopilot-spot]')].some((el) => el.getAttribute('data-autopilot-spot') === was.where)) return;
+                gone.current = undefined;
+                const active = doc.activeElement;
+                if (active && active !== doc.body && page.contains(active)) return;
+                const rows = [...page.querySelectorAll('[data-autopilot-waiting] [data-autopilot-spot]')];
+                const row = rows[Math.min(was.index, rows.length - 1)];
+                const target = row?.querySelector(`.${P}-item-side button`)
+                    ?? page.querySelector('[data-autopilot-waiting] h2')
+                    ?? page.querySelector('[data-autopilot-sessions] h2');
+                if (!target) return;
+                if (target.tagName !== 'BUTTON') target.setAttribute('tabindex', '-1');
+                target.focus?.();
+            }, [data]);
             // Not running (or Session Watch is off): old data would mislead, so the page says why and what to do.
             const down = live.code === 'not-running' || (data === undefined && live.error);
             return h(kit.Page, { label: TEXT.title, attrs: { 'data-autopilot-page': '' } },
@@ -1299,11 +1357,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                                 h(LogCard, { key: 'log', data, onOpen }),
                             ]
                             : [
-                                h(HeaderCard, { key: 'head', data, busy, act, decisions }),
-                                live.error ? h(kit.ErrorLine, { key: 'refresh', text: live.error, onRetry: live.refresh }) : null,
-                                failure ? h(kit.ErrorLine, { key: 'act', lead: 'Not changed', text: failure }) : null,
-                                data.enabled ? h(WaitingCard, { key: 'waiting', data, busy, act, onOpen }) : null,
-                                data.enabled ? h(SessionsCard, { key: 'sessions', data, busy, act, onOpen }) : null,
+                                h(HeaderCard, { key: 'head', data, busy, act, decisions, failure, refresh: { error: live.error, retry: live.refresh } }),
+                                data.enabled ? h(WaitingCard, { key: 'waiting', data, act, onOpen, failure, leaving }) : null,
+                                data.enabled ? h(SessionsCard, { key: 'sessions', data, busy, act, onOpen, failure }) : null,
                                 h(LogCard, { key: 'log', data, onOpen }),
                             ]);
         }

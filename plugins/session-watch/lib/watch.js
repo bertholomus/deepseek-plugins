@@ -506,12 +506,15 @@ export class SessionWatch {
      * Raise a question for a person. Decisions shows it; the raising plugin
      * may show it too. `onAnswer` gets the chosen option id or the person's
      * own words; what it throws is logged.
-     * @param {{ id: string, sessionId?: string, source: string, question: string, recommendation?: string, options?: Array<{ id: string, label: string }>, freeText?: boolean, onAnswer?: Function }} ask
+     * @param {{ id: string, sessionId?: string, source: string, question: string, recommendation?: string, options?: Array<{ id: string, label: string }>, freeText?: boolean, at?: number, onAnswer?: Function }} ask
+     *   `at`: when it was first asked, for a question raised again after a restart.
      */
     raiseAsk(ask) {
         if (!isRecord(ask) || typeof ask.id !== 'string' || typeof ask.question !== 'string') throw new Error('an ask needs an id and a question');
         const existing = this.asksById.get(ask.id);
-        const item = { ...ask, at: existing?.at ?? this.now() };
+        // A question asked before a restart keeps the time it was first asked (never a time still to come).
+        const first = Number.isFinite(ask.at) && ask.at > 0 && ask.at <= this.now() ? ask.at : undefined;
+        const item = { ...ask, at: existing?.at ?? first ?? this.now() };
         this.asksById.set(ask.id, item);
         this.emit({ type: 'ask', change: existing ? 'updated' : 'raised', ask: publicAsk(item) });
         this.hub?.bump('asks');

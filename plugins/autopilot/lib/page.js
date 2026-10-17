@@ -12,7 +12,7 @@ const MAX_SESSIONS = 80;
 
 /** A log entry in a few words, for its session's row ("last: …"). */
 export function lastWords(entry) {
-    if (entry.kind === 'ask') return 'asked you';
+    if (entry.kind === 'ask') return entry.state === 'answered' ? 'you answered its question' : entry.state === 'withdrawn' ? 'its question was withdrawn' : 'asked you';
     const text = String(entry.text ?? '').trim().replace(/\.$/, '');
     return text ? `${text[0].toLowerCase()}${text.slice(1)}` : '';
 }

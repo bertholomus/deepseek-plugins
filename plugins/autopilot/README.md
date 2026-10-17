@@ -42,7 +42,8 @@ note, or read it on Autopilot's page under *What it sent*.
 
 - **The switch.** Off stops everything at once: nothing it scheduled runs,
   and its questions are withdrawn. On again, it looks at every session.
-  While it is off, Try again and answers are refused with what to do first.
+  While it is off, Try again and answers are refused with what to do first,
+  in the row you pressed, and the cursor moves to that line.
   The line beside it says how many sessions it watches, how many notes it
   sent this hour and the limit, and how long a session waits for a note.
 - **The rule for sessions without their own**: Auto (act), Ask first, or
@@ -53,7 +54,9 @@ note, or read it on Autopilot's page under *What it sent*.
 - **Waiting for you**: its questions (under Ask first), with the action, Leave
   it, and Open; and sessions it backed off from or stopped retrying, with
   Try again. When Decisions runs, the same questions show there too, and an
-  answer in either place counts once.
+  answer in either place counts once. A row you answered or tried again
+  leaves, and the cursor moves to the row now in its place (else the card's
+  heading), never off the page.
 - **Sessions**: each with its state, its open work, when Autopilot looks
   next or why it leaves the session to you (*Waits for you: its last reply
   asks you something.*), its last action, and its own rule. *Open work*
@@ -64,8 +67,11 @@ note, or read it on Autopilot's page under *What it sent*.
   outcome (*in the queue*, *delivered*, *started*, *not delivered* with the
   reason), and *What it sent*. A question ends *answered*, or *withdrawn*
   with the reason (you switched Autopilot off, set the session's rule to
-  Off, or wrote in the session). Times such as *4 min ago* keep up while
-  the page is open.
+  Off, or wrote in the session). A question still open when DSH quits, or
+  when Autopilot or Session Watch is switched off in Plugins, is marked
+  *withdrawn* with that reason; if it still applies when Autopilot runs
+  again, it is asked again under the same entry, with the time it was first
+  asked. Times such as *4 min ago* keep up while the page is open.
 
 When Autopilot cannot work, the page says why and what to do, with a button
 to the place to do it: *Autopilot needs Session Watch, which is not
@@ -182,7 +188,7 @@ node --test test/autopilot.test.js   # the engine over the watcher and a stand-i
 node scripts/e2e.mjs autopilot       # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test (87 checks) starts DSH from each `.e2e/dsh-<version>`
+The real-DSH test (101 checks) starts DSH from each `.e2e/dsh-<version>`
 install (`npm i --prefix .e2e/dsh-0.2.1-rc.1 @deepseek-ai/dsh@0.2.1-rc.1`)
 and from the installed app's own DSH (run as Node by the app's binary, as a
 separate process), each in a throwaway home, with a scripted model playing
@@ -192,8 +198,10 @@ Off, a question left alone), fails a goal round, stops and kills DSH under
 running turns (one of them waiting for approval and one with a question in
 the question box), and drives the page in a browser (`npm i --prefix
 .e2e/tools playwright-core`, with Playwright's Chrome), light and dark,
-wide and narrow: the buttons, the rule keys, the contrast of its state
-words, a wrong setting fixed through DSH's form in Plugins with the cursor
+wide and narrow: the buttons, the rule keys, where the cursor goes after
+an answer and after Try again, a refusal in its row, the contrast of every
+state word on the page, the cards' small text at Wallpaper's tint .2 over a
+mid picture, a question open across a quit, a wrong setting fixed through DSH's form in Plugins with the cursor
 in it, and Session Watch switched off and on in Plugins with no error from
 DSH. It also runs with Session Watch off in the profile and with
 `enabled: false`, and checks the file modes. Every claim is checked in the

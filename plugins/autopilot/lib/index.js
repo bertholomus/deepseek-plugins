@@ -126,9 +126,9 @@ export function apply(ctx, config) {
 
         scope.effect(() => () => {
             if (onSaved === saved) onSaved = undefined;
+            // Its open questions leave the cards and are marked in the log before the store closes (see Pilot.setAsksAside).
             pilot.stop();
             store.close();
-            for (const ask of watch.asks?.() ?? []) if (ask.source === 'Autopilot') watch.dropAsk(ask.id);
         }, 'autopilot: pilot');
     });
 }

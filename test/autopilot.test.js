@@ -55,6 +55,8 @@ function setup({ config = {}, dir = tempDir('autopilot'), clock = manualClock(),
 /** The notes Autopilot put into a session, as the session's own log shows them. */
 const notesIn = (dsh, id) => dsh.sessions.get(id).events.filter((event) => event.type === 'user/message' && event.data.source?.kind === 'cordis-host-runner').map((event) => event.data.content[0].text);
 const entries = (journal, kind) => journal.list({ limit: 400 }).filter((entry) => !kind || entry.kind === kind);
+/** The elements of a drawn tree that carry an attribute. */
+const withAttr = (tree, name) => elementsOf(tree).filter((e) => e.props?.[name] !== undefined);
 
 /** A session the person started, whose turn ended with open todos. */
 function idleWithTodos(dsh, id = 's', { reply = 'Lexer done; the parser is next.', title = 'Build the parser' } = {}) {
@@ -202,6 +204,7 @@ test('after a restart: a cut-off session gets a carry-on note, and its goal star
     // The goal waits for the carry-on turn to end, then goes on by itself.
     const [rearm] = entries(after.journal, 'rearm');
     assert.equal(rearm.state, 'waiting for a round');
+    assert.equal(after.pilot.data.notes.length, 2, 'the goal start after the note counts toward the hour too, as the setting says');
     dsh.end('r', { kind: 'completed' }, { reply: 'Checked; the build had finished. Tests next.' });
     await settle();
     assert.equal(after.journal.get(rearm.id).state, 'started');
@@ -279,6 +282,54 @@ test('Ask first: a withdrawn question says so in the log, with why; an answer ma
     assert.equal(again.sessionId, 'c');
     await watch.answerAsk(again.id, 'skip', 'you');
     assert.deepEqual(entries(journal, 'ask').filter((entry) => entry.sessionId === 'c').map((entry) => entry.state), ['answered', 'withdrawn']);
+});
+
+test('Ask first across stops: an open question is set aside in the log when Autopilot stops, and comes back under the same entry and time if it still applies', async () => {
+    const dir = tempDir('autopilot');
+    const clock = manualClock();
+    const dsh = fakeDsh({ now: clock.now });
+    const config = { defaultRule: 'ask' };
+    const first = setup({ dir, clock, dsh, config });
+    idleWithTodos(dsh, 'q', { title: 'Parser' });
+    idleWithTodos(dsh, 'gone', { title: 'Lexer' });
+    await clock.advance(10 * MIN);
+    const asked = first.watch.asks();
+    assert.equal(asked.length, 2);
+    const askedAt = asked.find((ask) => ask.sessionId === 'q').at;
+    assert.equal(first.notified.length, 2);
+    // Autopilot stops (DSH quits, or Autopilot or Session Watch is switched off): the questions leave the cards, and the log says why, at once.
+    first.watch.running.flush();
+    first.pilot.stop();
+    first.store.close();
+    assert.equal(first.watch.asks().length, 0, 'nothing left on the cards');
+    const stopped = new Journal(join(dir, 'autopilot', 'events.jsonl'), { now: clock.now });
+    for (const entry of entries(stopped, 'ask')) {
+        assert.equal(entry.state, 'withdrawn', 'saved before DSH exits');
+        assert.equal(entry.reason, 'withdrawn: Autopilot stopped (DSH quit, or Autopilot or Session Watch was switched off); it asks again when it runs, if this still applies');
+        assert.equal(lastWords(entry), 'its question was withdrawn');
+    }
+    dsh.stop({ crash: false });
+    await clock.advance(5 * MIN);
+    // While it was stopped, the person took one session over themselves.
+    dsh.commit('gone', 'user/message', dsh.message('I will finish the lexer myself.'));
+    const second = setup({ dir, clock, dsh, config });
+    await clock.advance(MIN);
+    const back = second.watch.asks();
+    assert.deepEqual(back.map((ask) => ask.sessionId), ['q'], 'only the question that still applies comes back');
+    assert.equal(back[0].at, askedAt, 'it keeps the time it was first asked, so its wait counts from then');
+    const forQ = entries(second.journal, 'ask').filter((entry) => entry.sessionId === 'q');
+    assert.equal(forQ.length, 1, 'one entry for one question, across the stop');
+    assert.equal(forQ[0].state, 'asked you');
+    assert.equal(forQ[0].reason, '', 'the stop no longer shows on it');
+    assert.equal(lastWords(forQ[0]), 'asked you');
+    assert.equal(second.notified.length, 0, 'no second notification for the same question');
+    const forGone = entries(second.journal, 'ask').filter((entry) => entry.sessionId === 'gone');
+    assert.deepEqual(forGone.map((entry) => entry.state), ['withdrawn'], 'one that no longer applies stays withdrawn, with why');
+    // Answered after the restart: its one entry says so.
+    await second.watch.answerAsk(back[0].id, 'skip', 'you');
+    assert.deepEqual(entries(second.journal, 'ask').filter((entry) => entry.sessionId === 'q').map((entry) => entry.state), ['answered']);
+    assert.equal(lastWords(entries(second.journal, 'ask').find((entry) => entry.sessionId === 'q')), 'you answered its question');
+    second.pilot.stop();
 });
 
 test('after a restart: sessions cut off too long ago, ones someone wrote in since, and Off sessions are left alone', async () => {
@@ -618,6 +669,28 @@ test('browser half: the page\'s cards say what to do next, in plain words', () =
     assert.deepEqual(acts.at(-1), ['retry', { sessionId: 's' }]);
     elementsOf(waiting).find((e) => e.type === 'Button' && textIn(e) === 'Leave it').props.onClick();
     assert.deepEqual(acts.at(-1), ['answer', { id: 'q', answer: 'skip' }]);
+    // The card people act on is the main glass, and its buttons stay focusable while a change runs.
+    assert.match(waiting.props.className, /dshap-main/);
+    assert.ok(elementsOf(waiting).filter((e) => e.type === 'Button').every((e) => e.props.disabled === undefined), 'no button is disabled (that drops the focus)');
+    // A refusal shows under the control that was pressed, in its card, as one alert that takes the focus.
+    const refused = WaitingCard({ data, act, onOpen: () => {}, failure: { where: 'backed:s', text: 'Autopilot is off: switch it on at the top of its page first.', n: 1 } });
+    const alert = withAttr(refused, 'data-autopilot-refusal');
+    assert.equal(alert.length, 1);
+    assert.equal(alert[0].props['data-autopilot-refusal'], 'backed:s');
+    assert.equal(alert[0].props.role, 'alert');
+    assert.equal(alert[0].props.tabIndex, -1);
+    assert.equal(textIn(alert[0]), 'Not changed. Autopilot is off: switch it on at the top of its page first.');
+    const backedRow = elementsOf(refused).find((e) => e.props?.['data-autopilot-backed'] === 's');
+    assert.equal(withAttr(backedRow, 'data-autopilot-refusal').length, 1, 'inside the row whose button was pressed');
+    assert.equal(withAttr(WaitingCard({ data, act, onOpen: () => {}, failure: { where: 'head', text: 'x', n: 2 } }), 'data-autopilot-refusal').length, 0, 'not on another card');
+    // The host's own "Not changed:" is not said twice; the header holds its refusals and a failed refresh.
+    const headRefused = HeaderCard({ data: base, busy: false, act, failure: { where: 'head', text: 'Not changed: Autopilot is switched off in DSH\'s profile (enabled: false), so it watches nothing.', n: 3 }, refresh: { error: 'socket closed', retry: () => {} } });
+    assert.equal(textIn(withAttr(headRefused, 'data-autopilot-refusal')[0]), 'Not changed. Autopilot is switched off in DSH\'s profile (enabled: false), so it watches nothing.');
+    assert.match(textIn(headRefused), /Couldn't refresh: socket closedRetry/);
+    assert.equal(HeaderCard({ data: { ...base, enabled: false }, busy: false, act }).props['data-autopilot-header'], 'disabled');
+    // A rule change refused on a session's row says so on that row.
+    const rowRefused = SessionsCard({ data, busy: false, act, onOpen: () => {}, failure: { where: 'session:s', text: 'Name the session.', n: 4 } });
+    assert.equal(textIn(withAttr(rowRefused, 'data-autopilot-refusal')[0]), 'Not changed. Name the session.');
     const log = LogCard({ data, onOpen: () => {} });
     assert.match(textIn(log), /Why: It has been idle\./);
     assert.match(textIn(log), /What it sent\[Autopilot\] Carry on\./);

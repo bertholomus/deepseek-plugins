@@ -517,6 +517,44 @@ test('kit: state tags write their words at 4.5:1 or more on DSH\'s tag fill, in 
             if (mode === 'light' && tone !== 'danger') assert.ok(contrast(rgb(colours[tone]), fill) < 4.5, `DSH's own ${tone} words fall short in light`);
         }
     }
+    // Quiet and neutral words ("idle", "stopped", "withdrawn"): DSH draws them in its glyph colour (tertiary), 3.6:1 in
+    // light; the suite writes them in its secondary text colour (DSH's secondary label, 20% toward the primary).
+    const LABELS = { light: { secondary: '#61666b', tertiary: '#81858c' }, dark: { secondary: '#cfd3d6', tertiary: '#adb2b8' } };
+    const quiet = kit.css.find((r) => r.includes('.dshx-tag:is([data-tone="quiet"],[data-tone="neutral"])'));
+    assert.match(quiet ?? '', /\{color:var\(--dshx-text-2\)\}/);
+    const text2 = kit.css.find((r) => r.includes('--dshx-text-2:'));
+    const textShare = Number(/--dshx-text-2:color-mix\(in srgb,var\(--dsw-alias-label-secondary\) (\d+)%,var\(--dsw-alias-label-primary\)\)/.exec(text2)?.[1]) / 100;
+    assert.ok(textShare > 0 && textShare < 1, text2);
+    assert.equal(kit.toneOf('idle'), 'quiet');
+    for (const mode of ['light', 'dark']) {
+        const colours = DSH[mode];
+        const fill = mix(rgb(LABELS[mode].tertiary), rgb(colours.ground), 0.12);
+        const ours = contrast(mix(rgb(LABELS[mode].secondary), rgb(colours.label), textShare), fill);
+        assert.ok(ours >= 4.5, `quiet in ${mode}: ${ours.toFixed(2)}:1`);
+    }
+    assert.ok(contrast(rgb(LABELS.light.tertiary), rgb(DSH.light.ground)) < 4.5, 'DSH\'s glyph colour falls short for words in light');
+});
+
+test('kit: amber and secondary words on a card people read hold 4.5:1 at Wallpaper\'s tint .2 over a mid picture, light and dark', () => {
+    const kit = kitWith();
+    const tokens = kit.css.find((r) => r.includes('--dshx-warn:'));
+    const warnShare = Number(/--dshx-warn:color-mix\(in srgb,var\(--dsw-alias-state-warn-primary\) (\d+)%,var\(--dsw-alias-label-primary\)\)/.exec(tokens)?.[1]) / 100;
+    const textShare = Number(/--dshx-text-2:color-mix\(in srgb,var\(--dsw-alias-label-secondary\) (\d+)%,var\(--dsw-alias-label-primary\)\)/.exec(tokens)?.[1]) / 100;
+    assert.ok(warnShare > 0 && textShare > 0, tokens);
+    assert.match(kit.css.find((r) => r.includes(`.dshx-card.dshx-main{`)) ?? '', /background:var\(--dshx-conv\)/);
+    // The main card's glass at tint .2 is .4 of its colour; the picture under it here is a mid grey (DESIGN's check).
+    const SECONDARY = { light: '#61666b', dark: '#cfd3d6' };
+    const CARD = { light: { glass: '#fafaf6', ground: '#b4b4b4' }, dark: { glass: '#0a0d0c', ground: '#8c8c8c' } };
+    for (const mode of ['light', 'dark']) {
+        const card = mix(rgb(CARD[mode].glass), rgb(CARD[mode].ground), 0.4);
+        const warn = contrast(mix(rgb(DSH[mode].warning), rgb(DSH[mode].label), warnShare), card);
+        const text2 = contrast(mix(rgb(SECONDARY[mode]), rgb(DSH[mode].label), textShare), card);
+        assert.ok(warn >= 4.5, `amber words in ${mode}: ${warn.toFixed(2)}:1`);
+        assert.ok(text2 >= 4.5, `secondary words in ${mode}: ${text2.toFixed(2)}:1`);
+        // The plain tint (.2) there falls short: why dense text sits on the main card.
+        const plain = mix(rgb(CARD[mode].glass), rgb(CARD[mode].ground), 0.2);
+        assert.ok(contrast(mix(rgb(SECONDARY[mode]), rgb(DSH[mode].label), textShare), plain) < 4.5, `plain tint in ${mode}`);
+    }
 });
 
 test('kit: the sidebar badge writes its count at 4.5:1 or more in light and dark (DSH\'s red in dark read 3.3:1 under white)', () => {

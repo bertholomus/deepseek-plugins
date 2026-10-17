@@ -235,6 +235,25 @@ export class Pilot {
         this.offWatch?.();
         if (this.startTimer !== undefined) this.clearTimer(this.startTimer);
         for (const id of [...this.timers.keys()]) this.cancel(id);
+        this.setAsksAside();
+    }
+
+    /**
+     * Autopilot stops (DSH quits, Autopilot or Session Watch is switched off):
+     * its questions leave the cards, and their log entries say so. A question
+     * that still applies when Autopilot runs again comes back under the same
+     * entry; one that no longer applies stays withdrawn. Written at once, so
+     * it is saved before DSH exits.
+     */
+    setAsksAside() {
+        for (const ask of this.watch.asks?.() ?? []) {
+            if (ask.source !== 'Autopilot') continue;
+            try { this.watch.dropAsk(ask.id); } catch { /* already gone */ }
+        }
+        for (const entry of this.journal.list({ limit: 400 })) {
+            if (entry.kind !== 'ask' || entry.state !== 'asked you') continue;
+            this.journal.set(entry.id, { state: 'withdrawn', stopped: true, reason: 'withdrawn: Autopilot stopped (DSH quit, or Autopilot or Session Watch was switched off); it asks again when it runs, if this still applies' });
+        }
     }
 
     sessionData(sessionId) {
@@ -563,7 +582,12 @@ export class Pilot {
         delivery.onChange?.(show);
         if (plan.rearmAfter) {
             void delivery.done?.then((d) => {
-                if (d.state === 'delivered' && this.active()) return this.rearm(sessionId, { ...plan, why: 'Its goal was active when DSH stopped; the carry-on note is read, so the goal goes on after it.', summary: 'Started its goal again after the carry-on note' }, by, { quiet: true });
+                if (d.state === 'delivered' && this.active()) {
+                    // Part of the same resume, so never held back; it still counts toward the hour, as the setting says.
+                    this.data.notes.push(this.now());
+                    this.store.change();
+                    return this.rearm(sessionId, { ...plan, why: 'Its goal was active when DSH stopped; the carry-on note is read, so the goal goes on after it.', summary: 'Started its goal again after the carry-on note' }, by, { quiet: true });
+                }
                 return undefined;
             }).catch((error) => this.logger?.warn?.(`autopilot: could not start the goal of ${sessionId}: ${errorText(error)}`));
         }
@@ -648,20 +672,35 @@ export class Pilot {
         // question lost to a reload is asked again.
         if ((this.watch.asks?.() ?? []).some((ask) => ask.id === id)) return { action: 'ask', id, again: true };
         const label = actionLabel(plan);
-        this.watch.raiseAsk({
-            id,
-            sessionId,
-            source: 'Autopilot',
-            title,
-            question: question(plan, title),
-            recommendation: label,
-            why: plan.why,
-            options: [{ id: 'go', label }, { id: 'skip', label: 'Leave it' }],
-            freeText: plan.action === 'note',
-            onAnswer: (answer, by) => this.answered(sessionId, plan, answer, by),
-        });
-        // The log row shows the session's name beside it: the entry says what was asked, the Why line why.
-        this.journal.add({ kind: 'ask', sessionId, title, text: `Asked you whether to ${label[0].toLowerCase()}${label.slice(1)}`, why: `${plan.why} Its rule is Ask first.`, state: 'asked you', by: 'Autopilot', askId: id });
+        // The same question set aside when Autopilot last stopped: asked again under its first entry and time, without a second notification.
+        const earlier = this.journal.list({ limit: 400 }).find((e) => e.kind === 'ask' && e.askId === id);
+        const carried = earlier?.stopped === true && earlier.state === 'withdrawn' ? earlier : undefined;
+        // The log row shows the session's name beside it: the entry says what was asked, the Why line why. Logged
+        // first, so the question and its entry carry one time.
+        const entry = carried ? undefined : this.journal.add({ kind: 'ask', sessionId, title, text: `Asked you whether to ${label[0].toLowerCase()}${label.slice(1)}`, why: `${plan.why} Its rule is Ask first.`, state: 'asked you', by: 'Autopilot', askId: id });
+        try {
+            this.watch.raiseAsk({
+                id,
+                sessionId,
+                source: 'Autopilot',
+                title,
+                question: question(plan, title),
+                recommendation: label,
+                why: plan.why,
+                options: [{ id: 'go', label }, { id: 'skip', label: 'Leave it' }],
+                freeText: plan.action === 'note',
+                at: carried ? carried.at : entry.at,
+                onAnswer: (answer, by) => this.answered(sessionId, plan, answer, by),
+            });
+        } catch (error) {
+            if (entry) this.journal.set(entry.id, { state: 'withdrawn', reason: `withdrawn: it could not be listed (${errorText(error).replace(/\.$/, '')})` });
+            throw error;
+        }
+        if (carried) {
+            this.journal.set(carried.id, { state: 'asked you', stopped: false, reason: '', askedAgainAt: this.now() });
+            this.changed();
+            return { action: 'ask', id, again: true };
+        }
         this.notify?.({ title: `Autopilot asks${title ? ` about ${clip(title, 50)}` : ''}`, body: question(plan, title), kind: 'decision', sessionId });
         this.changed();
         return { action: 'ask', id };
