@@ -6,15 +6,18 @@
  *
  * Which notes fit a prompt: words about the vault and about answering from
  * it ("answer from the team's shared notes") are left out of the prompt; a
- * project's name counts as one word, however many parts it has; a note
- * fits when it shares two words with the prompt, at least one beyond a
- * project's name, and a single word beyond the name must be in its title,
- * aliases, tags, path or headings (one word in its body never makes a
- * match); a note that belongs to a project is left out when the session's
- * folder or the prompt points at other projects and not at its own. A note
- * is kept only above a floor and near the best match. A note that belongs
- * to the session's folder (its path, its `project` or `repo`, or a tag
- * names the folder's repo) is lifted, but never makes a match on its own.
+ * project's name counts as one word, however many parts it has, and a
+ * session in a known project's folder names that project for its notes; a
+ * note fits when it shares two words with the prompt, at least one beyond
+ * a project's name, and a single word beyond the name must be in its
+ * title, aliases, tags, path or headings (one word in its body never makes
+ * a match); a note that belongs to a project is left out when the
+ * session's folder or the prompt points at other projects and not at its
+ * own. A note is kept above a floor and near the best match, or as the
+ * best match of one of the questions a prompt asks, asked alone. A note
+ * that belongs to the session's folder (its path, its `project` or `repo`,
+ * or a tag names the folder's repo) is lifted, but never makes a match on
+ * its own.
  *
  * The index keeps terms and counts only, never a note's text: the passage
  * a turn gets is read from the file when it is needed (vault.js).
@@ -42,6 +45,8 @@ export const PARENT_BOOST = 1.2;
 export const SMALL_VAULT = 10;
 /** Prompt terms used, at most (the rest of a long prompt adds little). */
 const MAX_QUERY_TERMS = 48;
+/** The questions of a prompt that are each asked alone, at most. */
+const MAX_QUESTIONS = 4;
 /** A note's distinct terms kept, at most. */
 const MAX_NOTE_TERMS = 4000;
 
@@ -81,6 +86,19 @@ export function projectsOf(note) {
     const folders = note.path.split('/').slice(0, -1).map(nameKey);
     for (let i = 1; i < folders.length; i += 1) if (GENERIC.has(folders[i - 1]) && folders[i] && !GENERIC.has(folders[i])) out.add(folders[i]);
     return [...out];
+}
+
+/**
+ * The questions a prompt asks: its parts between question marks, and
+ * between clauses joined by "and" before a question word ("When does X,
+ * and why did we choose Y?").
+ * @param {string} prompt
+ */
+export function questionsOf(prompt) {
+    return String(prompt ?? '')
+        .split(/\?+(?:\s+|$)|[,;]\s*(?:and|or|also|plus)\s+(?=(?:why|what|when|where|which|who|whose|how)\b)/i)
+        .map((part) => part.trim())
+        .filter(Boolean);
 }
 
 export class Index {
@@ -267,20 +285,50 @@ export class Index {
      * out of the prompt. A project's name counts as one word, however many
      * parts it has, and a note needs a word beyond it: two words in common,
      * or one in its title, aliases, tags, path or headings; one word in its
-     * body alone never fits. A note that belongs to a project (its
-     * `project` or `repo`, or its folder under Projects/) is left out when
-     * the session's folder or the prompt points at other projects and not
-     * at its own.
+     * body alone never fits. A session in a known project's folder names
+     * that project for its own notes ("this service" in quartz-cache's
+     * folder). A note that belongs to a project (its `project` or `repo`,
+     * or its folder under Projects/) is left out when the session's folder
+     * or the prompt points at other projects and not at its own. A note is
+     * kept above a floor and near the best note; a prompt that asks two
+     * things also keeps the note that best answers each question asked
+     * alone ("When does on-call hand over, and why did we choose NATS?").
      * @param {string} prompt
      * @param {{ folder?: { repo: string, parent: string }, limit?: number }} [options]
      */
     search(prompt, { folder = { repo: '', parent: '' }, limit = 10 } = {}) {
+        const { query, scored } = this.rank(prompt, folder);
+        const best = scored.find((r) => r.fits)?.score ?? 0;
+        const leads = new Set();
+        const questions = questionsOf(prompt);
+        if (questions.length > 1) {
+            for (const question of questions.slice(0, MAX_QUESTIONS)) {
+                const lead = this.rank(question, folder).scored.find((r) => r.fits && r.score >= MIN_SCORE);
+                if (lead) leads.add(lead.path);
+            }
+        }
+        const keep = (r) => r.fits && r.score >= MIN_SCORE && (r.score >= best * NEAR_BEST || leads.has(r.path));
+        const kept = scored.filter(keep).map(({ why, ...r }) => r);
+        const results = kept.slice(0, limit);
+        const others = [...kept.slice(limit).map((r) => ({ ...r, why: 'less' })), ...scored.filter((r) => !keep(r))].slice(0, 5);
+        return { terms: query, results, others };
+    }
+
+    /**
+     * Every note that shares a word with a prompt, scored, best first, each
+     * with whether it fits the prompt and, when it does not, why (search()
+     * says the rules).
+     * @param {string} prompt
+     * @param {{ repo: string, parent: string }} folder
+     */
+    rank(prompt, folder) {
         const query = promptTerms(prompt, { max: 400 }).slice(0, MAX_QUERY_TERMS);
-        if (query.length === 0 || this.live === 0) return { terms: query, results: [], others: [] };
+        if (query.length === 0 || this.live === 0) return { query, scored: [] };
         const asked = new Set(query);
         const names = this.projectWords(folder.repo);
         const context = new Set(this.namedProjects(asked));
         if (folder.repo && this.projects.has(folder.repo)) context.add(folder.repo);
+        const here = folder.repo && this.projects.has(folder.repo) ? folder.repo : '';
         const topics = query.filter((t) => !names.has(t)).length;
         const need = Math.min(2, topics + (query.some((t) => names.has(t)) ? 1 : 0));
         const n = Math.max(this.live, SMALL_VAULT);
@@ -321,8 +369,9 @@ export class Index {
         for (const hit of found.values()) {
             const place = folder.repo && hit.doc.keys.has(folder.repo) ? 'repo' : folder.parent && hit.doc.keys.has(folder.parent) ? 'parent' : '';
             const boost = place === 'repo' ? REPO_BOOST : place === 'parent' ? PARENT_BOOST : 1;
-            const shared = hit.topics + (hit.name > 0 ? 1 : 0);
             const own = hit.doc.projects;
+            // The session's own project counts as named for its notes.
+            const shared = hit.topics + (hit.name > 0 || (here !== '' && own.includes(here)) ? 1 : 0);
             let why = '';
             if (hit.topics === 0) why = 'name';
             else if (shared < need || (hit.topics === 1 && hit.strong === 0)) why = 'few';
@@ -339,11 +388,6 @@ export class Index {
             });
         }
         scored.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
-        const best = scored.find((r) => r.fits)?.score ?? 0;
-        const keep = (r) => r.fits && r.score >= MIN_SCORE && r.score >= best * NEAR_BEST;
-        const kept = scored.filter(keep).map(({ why, ...r }) => r);
-        const results = kept.slice(0, limit);
-        const others = [...kept.slice(limit).map((r) => ({ ...r, why: 'less' })), ...scored.filter((r) => !keep(r))].slice(0, 5);
-        return { terms: query, results, others };
+        return { query, scored };
     }
 }

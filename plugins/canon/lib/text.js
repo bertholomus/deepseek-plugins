@@ -8,7 +8,10 @@
  * @module dsh-plugin-canon/text
  */
 
-/** Words that say nothing about what a note or a prompt is about. */
+/**
+ * Words that say nothing about what a note or a prompt is about ("called"
+ * and "named" only name a thing: "what is the mascot called?").
+ */
 export const STOP = new Set(`
 a about above after again against all almost also am an and another any anyone anything anyway are aren around as at
 away back be because been before being below between both but by can cannot could couldn did didn do does doesn doing
@@ -24,6 +27,7 @@ weren what whatever when where whether which while who whom whose why will with 
 yes yet you your yours yourself yourselves
 hi hello hey thx ty cool nice great good fine awesome perfect looks look looking sounds sound ahead carry continue
 proceed lgtm sorry wait hmm hm ah ugh anyway also again stuff bit lot lots really actually basically just
+called named
 `.split(/\s+/).filter(Boolean));
 
 /**

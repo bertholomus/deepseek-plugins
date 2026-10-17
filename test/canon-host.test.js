@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { ACCESS_CHOICES, DEFAULTS, LIVE_SETTINGS, RANGES, SETTING_TITLES, checkConfig, displayPath, folderIn, resolved, savedEntry, sessionFolder, vaultPath } from '../plugins/canon/lib/config.js';
 import { ABOUT_THE_VAULT, distinctTerms, promptTerms, stem, terms, wordsOf } from '../plugins/canon/lib/text.js';
 import { noteOf, parseNote, setFields, statusOf, yamlLines } from '../plugins/canon/lib/frontmatter.js';
-import { Index, MIN_SCORE, folderKeys, projectsOf } from '../plugins/canon/lib/search.js';
+import { Index, MIN_SCORE, folderKeys, projectsOf, questionsOf } from '../plugins/canon/lib/search.js';
 import { MAX_NOTE_BYTES, Vault, bestPassage, cut, folderProblem, paragraphs, plainText } from '../plugins/canon/lib/vault.js';
 import { HEADER, KIND, Recall, SUMMARY_MAX, buildBlock, entryBudget, notesThatFit, promptOf, summaryOf } from '../plugins/canon/lib/recall.js';
 import { KINDS, capture, cleanTags, cleanTitle, isDraftPath, promote, slugOf, writeRefusal } from '../plugins/canon/lib/drafts.js';
@@ -160,8 +160,9 @@ test('text: the words a prompt shares with a note, and chat filler that shares n
     assert.deepEqual(promptTerms('Check the team\'s shared notes in the canon vault, answer and cite the note: which ports?'), ['check', 'port']);
     assert.ok(['note', 'vault', 'canon', 'team'].every((t) => ABOUT_THE_VAULT.has(t)));
     assert.deepEqual(terms('The team\'s shared vault notes'), ['team', 'shar', 'vault', 'note']);
-    // "Who owns it" keeps its verb.
+    // "Who owns it" keeps its verb; "called" and "named" only name a thing.
     assert.deepEqual(distinctTerms('Who owns quartz-cache?'), ['own', 'quartz', 'cache'].map((w) => stem(w)));
+    assert.deepEqual(promptTerms('What is the mascot called? A service named quartz'), ['mascot', 'servic', 'quartz']);
     // The words as the prompt wrote them, by their terms.
     assert.deepEqual([...wordsOf('Rotating the certificates, rotated again').entries()], [['rotat', 'rotating'], ['certificat', 'certificates']]);
 });
@@ -507,8 +508,8 @@ test('search: a project\'s name is one word and a note needs another; words abou
     assert.deepEqual(renamed.results, []);
     assert.equal(renamed.others.find((o) => o.path === 'Decisions/2026-04 Lantern API versioning.md')?.why, 'few', 'its body says "renaming"');
     assert.ok(renamed.others.some((o) => o.why === 'name'), 'and others share only the name');
-    // With a word beyond the name in the title, it is.
-    assert.equal(paths('What is the lantern team\'s mascot called?')[0], 'Misc/Lantern mascot.md');
+    // With a word beyond the name in the title, it is ("called" is not On-call's "call").
+    assert.deepEqual(paths('What is the lantern team\'s mascot called?'), ['Misc/Lantern mascot.md']);
     // Words about the vault say where to look, not what about.
     assert.deepEqual(ask('Answer from the team\'s shared notes, and cite the note you used.', lantern), { terms: [], results: [], others: [], folder: { repo: 'lantern-api', parent: '' } });
     assert.deepEqual(paths('What ports does quartz use? Answer from the team\'s shared notes and cite the note you used.', '/Users/someone/work/quartz-cache'), ['Projects/quartz-cache/Quartz ports.md']);
@@ -526,6 +527,28 @@ test('search: a project\'s name is one word and a note needs another; words abou
     assert.deepEqual(projectsOf({ path: 'Runbooks/Paging.md', projects: ['harbor-gateway'] }), ['harbor-gateway']);
     assert.deepEqual(projectsOf({ path: 'Home.md', projects: [] }), []);
     assert.deepEqual([...vault.index.projects.keys()].sort(), ['harbor-gateway', 'lantern-api', 'lantern-web', 'quartz-cache', 'tide-ledger']);
+});
+
+test('search: a session in a project\'s folder names that project; a prompt that asks two things gets the best note for each', async () => {
+    const vault = await readVault(vaultCopy());
+    const ask = (prompt, folder = '') => vault.search(prompt, { folder, limit: 3 });
+    const paths = (prompt, folder) => ask(prompt, folder).results.map((r) => r.path);
+    // "This service" in quartz-cache's folder is quartz-cache, so its ports note fits on "ports" alone ...
+    assert.deepEqual(paths('Which ports does this service listen on?', '/Users/someone/work/quartz-cache'), ['Projects/quartz-cache/Quartz ports.md']);
+    // ... and not from a folder that is no project of the vault's.
+    assert.equal(ask('Which ports does this service listen on?', '/Users/someone/Elsewhere/scratch').others.find((o) => o.path === 'Projects/quartz-cache/Quartz ports.md')?.why, 'few');
+    // Two questions: each one's best note comes, though the queue decision scores far above On-call.
+    const two = 'When does the lantern on-call rotation hand over, and why did we choose NATS JetStream for the lantern job queue?';
+    assert.deepEqual(questionsOf(two), ['When does the lantern on-call rotation hand over', 'why did we choose NATS JetStream for the lantern job queue']);
+    assert.deepEqual(questionsOf('Which port? And the health check? Thanks.'), ['Which port', 'And the health check', 'Thanks.']);
+    assert.deepEqual(questionsOf('Restore the ledger, then tell me why it failed.'), ['Restore the ledger, then tell me why it failed.']);
+    const both = ask(two, '/Users/someone/Elsewhere/scratch').results;
+    assert.deepEqual(both.map((r) => r.path), ['Decisions/2026-03 Lantern job queue on NATS JetStream.md', 'People/On-call.md']);
+    assert.ok(both[1].score < both[0].score * 0.5, 'On-call is under half the best, kept as its question\'s best note');
+    // A question must fit on its own: "what must I run before one?" fits no note, so a note with "run" in a heading stays out.
+    const weekday = paths('On which weekday do lantern releases go out, and what must I run before one?', '/Users/someone/Projects/lantern-api');
+    assert.equal(weekday[0], 'Projects/lantern-api/Release checklist.md');
+    assert.ok(!weekday.includes('Projects/lantern-api/Lantern ports.md'));
 });
 
 test('search: the index forgets removed notes and compacts itself; scores never depend on removed ones', () => {

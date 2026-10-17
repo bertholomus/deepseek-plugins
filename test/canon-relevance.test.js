@@ -16,7 +16,7 @@ import { DEV, FLOORS, HOLDOUT, belowFloors, loadSet, measure, missText } from '.
  * The dev set's figures as reached (README, "How well it picks notes"):
  * held so a change that makes them worse fails here.
  */
-const DEV_REACHED = Object.freeze({ first: 43, inBlock: 45, extra: 16, noBlock: 25 });
+const DEV_REACHED = Object.freeze({ first: 43, inBlock: 45, extra: 15, noBlock: 25 });
 
 const kindOf = (id) => id.replace(/\d+$/, '');
 
