@@ -27,12 +27,19 @@
  *   { v: 1,
  *     turn: { n, seq, at, items: Item[], calls: { [callId]: { name, args } }, text, textSeq, work, ask } | null,
  *     prev: { n, items: Item[], ask } | null,
- *     claims: Claim[] }
+ *     claims: Claim[],
+ *     check?: true,
+ *     first?: number }
  *
  *   Claim: { id: "<turn>:<n>", turn, seq, at, kind, subject?, target?, text, part, verdict, evidence: string[], why, from? }
  *
  * `ask` is the person's message that started the turn (clipped): a bare
  * "Done" after "add the flag" needs a change to back it.
+ *
+ * `check` marks one of Proof's own check threads (its first message, from
+ * Proof, starts with CHECK_LINE): its replies are verdicts on another
+ * session's claim, so none of its turns is judged. `first` is that first
+ * turn's number: the window says what the thread checks under it.
  *
  * @module dsh-plugin-proof/projection
  */
@@ -53,6 +60,9 @@ const KEEP_TAIL = 12000;
 const MAX_ASK = 600;
 
 export const INITIAL = Object.freeze({ v: 1, turn: null, prev: null, claims: [] });
+
+/** How Proof's check threads start (lib/verifier.js writes it): such a session has no claims of its own. */
+export const CHECK_LINE = 'Proof check.';
 
 const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const str = (v, n = 400) => (typeof v === 'string' ? v.slice(0, n) : '');
@@ -133,7 +143,8 @@ function judged(turn, prev, at) {
 export function applyEvent(state, event) {
     try {
         const s = isRecord(state) && state.v === 1 ? state : INITIAL;
-        if (!isRecord(event) || typeof event.type !== 'string') return s;
+        // A check thread has nothing to judge, so nothing changes once it is marked.
+        if (!isRecord(event) || typeof event.type !== 'string' || s.check === true) return s;
         const data = isRecord(event.data) ? event.data : {};
         switch (event.type) {
             case 'turn/start': {
@@ -142,8 +153,12 @@ export function applyEvent(state, event) {
                 return { ...s, prev, turn: { n, seq: event.seq ?? 0, at: event.time ?? 0, items: [], calls: {}, text: '', textSeq: 0, work: false, ask: '' } };
             }
             case 'user/message': {
-                if (!s.turn) return s;
                 const kind = data.source?.kind;
+                // Only a session's start can make it a check thread: a ledger that has claims is never wiped.
+                if (kind === 'cordis-host-runner' && s.claims.length === 0 && replyText(data).startsWith(CHECK_LINE)) {
+                    return { v: 1, turn: null, prev: null, claims: [], check: true, ...(Number.isSafeInteger(s.turn?.n) ? { first: s.turn.n } : {}) };
+                }
+                if (!s.turn) return s;
                 if (CONTEXT_SOURCES.has(kind)) return s;
                 const said = kind === 'user' ? replyText(data) : '';
                 const work = kind === 'user' ? asksForWork(said) : true;
@@ -244,6 +259,7 @@ export function parseState(value) {
         const p = value.prev;
         const prev = isRecord(p) ? { n: Number.isSafeInteger(p.n) ? p.n : 0, items: parseItems(p.items), ask: str(p.ask, MAX_ASK) } : null;
         const claims = Array.isArray(value.claims) ? value.claims.map(parseClaim).filter(Boolean).slice(-MAX_CLAIMS) : [];
+        if (value.check === true) return { v: 1, turn: null, prev: null, claims: [], check: true, ...(Number.isSafeInteger(value.first) ? { first: value.first } : {}) };
         return { v: 1, turn, prev, claims };
     } catch {
         return INITIAL;
@@ -254,9 +270,21 @@ export function parseState(value) {
 /** Views by the claims list they came from: DSH sends a session's view to the window only when it is a new object. */
 const VIEWS = new WeakMap();
 const NO_CLAIMS = Object.freeze({ total: 0, flagged: Object.freeze([]) });
+const A_CHECK = Object.freeze({ total: 0, flagged: Object.freeze([]), check: true });
+/** A check thread's view, one per first turn so DSH sends it once. */
+const CHECK_VIEWS = new Map();
+function checkView(first) {
+    if (!Number.isSafeInteger(first)) return A_CHECK;
+    if (!CHECK_VIEWS.has(first)) {
+        if (CHECK_VIEWS.size >= 100) CHECK_VIEWS.clear();
+        CHECK_VIEWS.set(first, Object.freeze({ total: 0, flagged: Object.freeze([]), check: true, first }));
+    }
+    return CHECK_VIEWS.get(first);
+}
 
-/** What the window and DSH's session list get: how many claims, and the flagged ones. */
+/** What the window and DSH's session list get: how many claims, and the flagged ones (a check thread says only that it is one). */
 export function viewOf(state) {
+    if (isRecord(state) && state.check === true) return checkView(state.first);
     const claims = isRecord(state) && Array.isArray(state.claims) ? state.claims : undefined;
     if (!claims || claims.length === 0) return NO_CLAIMS;
     const known = VIEWS.get(claims);
@@ -268,7 +296,7 @@ export function viewOf(state) {
 
 function viewFrom(claims) {
     const shown = claims.filter(flagged).slice(-MAX_VIEW).map((c) => ({
-        id: c.id, turn: c.turn, seq: c.seq, kind: c.kind, verdict: c.verdict, text: c.text, part: c.part ?? c.text, why: c.why, evidence: c.evidence.slice(0, 2),
+        id: c.id, turn: c.turn, seq: c.seq, at: c.at, kind: c.kind, verdict: c.verdict, text: c.text, part: c.part ?? c.text, why: c.why, evidence: c.evidence.slice(0, 2),
         ...(c.from !== undefined ? { from: c.from } : {}),
     }));
     return { total: claims.length, flagged: shown };
@@ -277,6 +305,7 @@ function viewFrom(claims) {
 /** A view back from DSH: anything unknown is no claims. */
 export function parseView(value) {
     if (!isRecord(value) || !Array.isArray(value.flagged)) return { total: 0, flagged: [] };
+    if (value.check === true) return { total: 0, flagged: [], check: true, ...(Number.isSafeInteger(value.first) ? { first: value.first } : {}) };
     const shown = value.flagged.map(parseClaim).filter(Boolean).slice(-MAX_VIEW);
     return { total: Number.isSafeInteger(value.total) ? value.total : shown.length, flagged: shown };
 }

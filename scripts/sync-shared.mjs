@@ -5,7 +5,8 @@
  *
  * - shared/host/*.js → plugins/<plugin>/lib/shared/ (byte for byte);
  * - the block between the kit markers in shared/client-kit.js → the same
- *   markers in plugins/<plugin>/lib/client.js.
+ *   markers in plugins/<plugin>/lib/client.js;
+ * - a few files one plugin borrows from another (BORROWED), byte for byte.
  *
  * `--check` changes nothing and exits 1 when a copy differs (npm test runs it).
  */
@@ -16,6 +17,12 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 /** The suite's plugins, in build order; ones not written yet are skipped. */
 export const SUITE = ['session-watch', 'autopilot', 'decisions', 'agent-terminals', 'proof', 'canon', 'recall'];
+/**
+ * Files a suite plugin uses from another plugin of this repository, copied
+ * byte for byte: [source, plugin, target inside the plugin]. Proof's check
+ * threads refuse what the coordinator's send reader calls a send.
+ */
+export const BORROWED = [['plugins/coordinator/lib/sends.js', 'proof', 'lib/shared/sends.js']];
 export const KIT_START = '// <suite-kit>';
 export const KIT_END = '// </suite-kit>';
 
@@ -43,6 +50,10 @@ export function plannedCopies() {
             const current = kitBlock(text);
             if (current !== undefined) out.push({ target: client, text: text.replace(current, () => kit) });
         }
+    }
+    for (const [source, plugin, target] of BORROWED) {
+        const dir = join(root, 'plugins', plugin);
+        if (existsSync(join(dir, 'package.json'))) out.push({ target: join(dir, target), text: readFileSync(join(root, source), 'utf8') });
     }
     return out;
 }
