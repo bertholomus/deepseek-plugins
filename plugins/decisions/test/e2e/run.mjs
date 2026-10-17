@@ -262,6 +262,7 @@ try {
     ids.staging = await run.newSession('E2E:say I tried twice.\\nBLOCKED: The staging database refuses my login.', 'Staging check');
     ids.branch = await run.newSession('E2E:ask', 'Branch question');
     ids.done = await run.newSession('E2E:say All done: the tests pass.', 'Finished work');
+    ids.offer = await run.newSession("E2E:say The tests pass. Let me know if you'd like me to update the docs too.", 'Offer only');
     await step('replies that ask make one card each, with the question and the recommendation', async () => {
         cards.schema = await waitCard(ids.schema, 'decision');
         check('a DECISION NEEDED line makes a card with its question and recommendation', cards.schema.question === 'Drop the old tables?' && cards.schema.recommendation === 'Keep them a week' && cards.schema.title === 'Schema cleanup' && cards.schema.answer === 'text', json(cards.schema));
@@ -271,8 +272,10 @@ try {
         check('a reply that ends with a question makes a card', cards.branch.question === 'Which branch should I use for this?', json(cards.branch));
         cards.release = await waitCard(ids.release, 'decision');
         await idle(ids.done);
+        await idle(ids.offer);
         await sleep(1500);
         check('a reply that asks nothing makes no card', !(await state()).waiting.some((c) => c.sessionId === ids.done));
+        check('a reply that only offers more ("Let me know if you\'d like…") makes no card', !(await state()).waiting.some((c) => c.sessionId === ids.offer));
         const fresh = (await state()).history.filter((e) => e.kind === 'new');
         const once = [cards.schema, cards.staging, cards.branch, cards.release].every((c) => fresh.filter((e) => e.cardId === c.id).length === 1);
         check('each new card is logged once, with its headline', once && fresh.some((e) => e.title === 'Schema cleanup' && e.text === 'Needs a decision') && fresh.some((e) => e.title === 'Staging check' && e.text === 'Blocked'), json(fresh.map((e) => e.text)));
@@ -504,8 +507,11 @@ try {
             await waitFor(() => sink.got.length >= 1, 'the test message at the stand-in webhook', 15000, 200);
             const test = sink.got[0];
             check('Send a test reaches the webhook, with mentions off', test.method === 'POST' && /^Decisions can reach you here\./.test(test.body?.content ?? '') && json(test.body?.allowed_mentions) === json({ parse: [] }), json(test.body));
-            const testSaid = await page.locator('[data-decisions-test-said]').innerText();
-            check('the page says the test went, by host', testSaid === `Test message sent to ${hookHost}.`, testSaid);
+            // The stand-in webhook has the message before DSH's answer reaches the page.
+            const said = page.locator('[data-decisions-test-said]');
+            await waitFor(async () => /\S/.test(await said.innerText()), 'the page to say how the test went', 15000, 200).catch(() => {});
+            const testSaid = await said.innerText();
+            check('the page says the test went, by host', testSaid === `Test message sent to ${hookHost}.`, testSaid || '(nothing yet)');
             await shot(page, shots, 'mirror-light', page.locator('[data-decisions-header]'));
             // A new card goes out too.
             ids.hooked = await run.newSession('E2E:say DECISION NEEDED: Rotate the keys tonight? — recommend: Rotate them tonight', 'Key rotation');

@@ -31,9 +31,10 @@ also notifies you outside the window.
 
 A running turn's cards come first (a tool or a question holds it), then the
 oldest. A thread's handback and the thread's own last reply make one card,
-not two. A subagent's replies are left out: the session that started it
-reads them. A reply's question leaves the list after `windowHours`; the
-session still has it.
+not two. A reply that only offers more ("Let me know if you'd like me to
+update the docs") asks nothing, so it is not listed. A subagent's replies
+are left out: the session that started it reads them. A reply's question
+leaves the list after `windowHours`; the session still has it.
 
 **How answers reach the session.** Words go in as the session's next
 message, starting `[Decisions] The person answered …` and quoting the
@@ -226,8 +227,8 @@ node --test test/decisions.test.js test/decisions-client.test.js   # the card ru
 node scripts/e2e.mjs decisions                                     # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test starts DSH from each `.e2e/dsh-<version>` install and
-from the installed app's own DSH, each in a throwaway home, with Session
+The real-DSH test (85 checks) starts DSH from each `.e2e/dsh-<version>`
+install and from the installed app's own DSH, each in a throwaway home, with Session
 Watch, Autopilot and Decisions, a scripted model playing the agent, and a
 stand-in window that gets DSH's own prompts. It makes every kind of card
 from real sessions and answers each from Decisions: words and the
