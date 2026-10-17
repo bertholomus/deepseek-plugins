@@ -11,12 +11,13 @@
  * read-only file policy (nothing it runs can write a file, not even in
  * /tmp), approvals that never ask (an action that needs one is refused, so
  * a check never waits on the person), its model offered only tools that
- * read or run, and a guard that refuses any other tool and any command
- * that sends something elsewhere (a push, a publish, a deploy, a request
- * that does more than read, a command on another machine) or changes the
- * work (a commit, a reset, an install, a killed process). Its model is the
- * one Proof's settings name, for that thread only: DSH's default model is
- * never changed.
+ * read or run (DSH adds its own subagent tool to every thread, where no
+ * plugin can take it away), and a guard that refuses any other tool, that
+ * one included, and any command that sends something elsewhere (a push, a
+ * publish, a deploy, a request that does more than read, a command on
+ * another machine) or changes the work (a commit, a reset, an install, a
+ * killed process). Its model is the one Proof's settings name, for that
+ * thread only: DSH's default model is never changed.
  *
  * The reply's last line that starts with VERIFIED or NOT VERIFIED is the
  * verdict; a reply with neither, a turn that ended in an error, and a check
@@ -45,6 +46,8 @@ const SHELLS = new Set(['bash', 'pwsh']);
 const AT_ONCE = 1;
 /** Checks kept (the oldest finished ones go first). */
 const KEEP = 400;
+/** Start times kept for the hour's count (more than the most an hour allows). */
+const MAX_STARTS = 200;
 const HOUR = 3600_000;
 
 const STATES = new Set(['queued', 'running', 'verified', 'not-verified', 'unclear', 'failed']);
@@ -162,7 +165,7 @@ function replyOf(message) {
 
 /** What the check store holds, made safe. */
 export function parseChecks(value) {
-    const data = { v: 1, checks: {}, sessions: {}, autoSince: 0 };
+    const data = { v: 1, checks: {}, sessions: {}, autoSince: 0, starts: [] };
     if (!isRecord(value) || value.v !== 1) return data;
     for (const [key, c] of Object.entries(isRecord(value.checks) ? value.checks : {})) {
         if (!isRecord(c) || typeof c.sessionId !== 'string' || typeof c.claimId !== 'string' || !STATES.has(c.state)) continue;
@@ -188,6 +191,7 @@ export function parseChecks(value) {
         if (typeof key === 'string') data.sessions[id] = key;
     }
     data.autoSince = Number.isFinite(value.autoSince) ? value.autoSince : 0;
+    data.starts = (Array.isArray(value.starts) ? value.starts : []).filter((at) => Number.isFinite(at)).slice(-MAX_STARTS);
     return data;
 }
 
@@ -257,10 +261,14 @@ export class Verifier {
         return Object.values(this.data.checks).sort((a, b) => (b.startedAt ?? b.queuedAt ?? 0) - (a.startedAt ?? a.queuedAt ?? 0)).slice(0, limit);
     }
 
-    /** Checks started in the last hour, and when the next one may start (0 when one may now). */
+    /**
+     * Checks started in the last hour, and when the next one may start (0
+     * when one may now). Every start is counted, a check run again included:
+     * its new run replaces the old one in the store, but not in the count.
+     */
     budget(now = this.now()) {
         const limit = Number.isSafeInteger(this.config.verifierPerHour) ? this.config.verifierPerHour : 12;
-        const starts = Object.values(this.data.checks).map((c) => c.startedAt).filter((at) => Number.isFinite(at) && now - at < HOUR).sort((a, b) => a - b);
+        const starts = this.data.starts.filter((at) => now - at < HOUR).sort((a, b) => a - b);
         const used = starts.length;
         return { limit, used, nextAt: used < limit ? 0 : starts[used - limit] + HOUR };
     }
@@ -347,7 +355,10 @@ export class Verifier {
         this.trim();
         this.store.change();
         const { nextAt } = this.budget();
-        if (nextAt) check.reason = `Waits until ${timeWords(nextAt, this.now())}: ${this.config.verifierPerHour} checks have started in the last hour, the most Proof's settings allow.`;
+        if (nextAt) {
+            const n = this.config.verifierPerHour;
+            check.reason = `Waits until ${timeWords(nextAt, this.now())}: ${n} check${n === 1 ? ' has' : 's have'} started in the last hour, the most Proof's settings allow.`;
+        }
         this.journal.add({
             kind: 'check',
             sessionId,
@@ -389,6 +400,7 @@ export class Verifier {
         check.state = 'running';
         check.startedAt = this.now();
         check.reason = '';
+        this.data.starts = [...this.data.starts.filter((at) => check.startedAt - at < HOUR), check.startedAt].slice(-MAX_STARTS);
         this.store.change();
         this.changed();
         const step = { now: 'reading the session' };

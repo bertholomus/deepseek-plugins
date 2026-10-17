@@ -254,11 +254,12 @@ test('check prompt: the claim, the ask, what the turn ran, the limits and how to
 });
 
 test('check store: anything unknown is dropped, the rest kept', () => {
-    assert.deepEqual(parseChecks(undefined), { v: 1, checks: {}, sessions: {}, autoSince: 0 });
+    assert.deepEqual(parseChecks(undefined), { v: 1, checks: {}, sessions: {}, autoSince: 0, starts: [] });
     assert.deepEqual(parseChecks({ v: 2, checks: { a: {} } }).checks, {});
     const data = parseChecks({
         v: 1,
         autoSince: 5,
+        starts: [2, 'x', 9],
         sessions: { 'session-c': 's#1:0', bad: 3 },
         checks: {
             's#1:0': { sessionId: 's', claimId: '1:0', state: 'verified', turn: 1, claim: 'Done.', reason: 'Yes.', by: 'auto', model: 'm', checkSessionId: 'session-c', queuedAt: 1, startedAt: 2, endedAt: 3, reply: 'r'.repeat(900) },
@@ -271,6 +272,7 @@ test('check store: anything unknown is dropped, the rest kept', () => {
     assert.equal(data.checks['s#1:0'].by, 'auto');
     assert.deepEqual(data.sessions, { 'session-c': 's#1:0' });
     assert.equal(data.autoSince, 5);
+    assert.deepEqual(data.starts, [2, 9]);
 });
 
 // ── The independent check ──────────────────────────────────────────
@@ -436,7 +438,20 @@ test('check: one at a time, and at most the hour\'s budget; the rest wait their 
     await settle();
     late.verifier.onEvent({ id: late.verifier.data.checks[`s#${ids[0]}`].checkSessionId }, ended());
     const waiting = await late.verifier.request('s', ids[1]);
-    assert.match(waiting.reason, /^Waits until .+: 1 checks have started in the last hour, the most Proof's settings allow\.$/);
+    assert.match(waiting.reason, /^Waits until .+: 1 check has started in the last hour, the most Proof's settings allow\.$/);
+    // Checking the same claim again counts as a start too: its new run replaces the old one in the store, not in the hour.
+    const again = bench({ settings: { verifierPerHour: 2 }, sessions: { s: { cwd: '/w', events } } });
+    for (const n of [1, 2]) {
+        await again.verifier.request('s', ids[0]);
+        await settle();
+        again.verifier.onEvent({ id: again.verifier.data.checks[`s#${ids[0]}`].checkSessionId }, ended());
+        await settle();
+        assert.equal(again.verifier.budget().used, n);
+    }
+    const third = await again.verifier.request('s', ids[0]);
+    await settle();
+    assert.equal(third.state, 'queued', 'a third run of the same claim waits: two started this hour');
+    assert.match(third.reason, /^Waits until .+: 2 checks have started in the last hour/);
 });
 
 test('check: one that takes too long is stopped and unclear; turns that end badly say why', async () => {
