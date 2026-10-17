@@ -206,11 +206,25 @@ test('vault: only active notes are searched; drafts, other statuses, hidden fold
     const vault = await readVault(dir);
     const status = vault.status();
     assert.equal(status.state, 'ok');
-    assert.deepEqual(status.counts, { notes: 10, active: 6, drafts: 2, other: 2, unreadable: 0 });
+    assert.deepEqual(status.counts, { notes: 42, active: 35, drafts: 2, other: 5, unreadable: 0 });
     assert.deepEqual(vault.index.notes().map((n) => n.path).sort(), [
-        'Home.md', 'People/Glossary.md', 'Projects/harbor-gateway/Deploying the gateway.md', 'Projects/harbor-gateway/Gateway ports.md',
-        'Projects/tide-ledger/Ledger backups.md', 'Runbooks/Rotating TLS certificates.md',
+        'Decisions/2026-02 Ledger stays on Postgres.md', 'Decisions/2026-03 Lantern job queue on NATS JetStream.md', 'Decisions/2026-04 Lantern API versioning.md',
+        'Decisions/2026-06 Quartz eviction policy.md', 'Home.md', 'Ideas/Warming the quartz cache.md', 'Misc/Lantern mascot.md', 'Misc/Office.md',
+        'People/Glossary.md', 'People/On-call.md', 'People/Onboarding.md', 'People/Owners.md',
+        'Projects/harbor-gateway/Deploying the gateway.md', 'Projects/harbor-gateway/Gateway ports.md', 'Projects/harbor-gateway/Routing rules.md',
+        'Projects/lantern-api/Authentication.md', 'Projects/lantern-api/Lantern ports.md', 'Projects/lantern-api/Local development.md',
+        'Projects/lantern-api/Rate limits.md', 'Projects/lantern-api/Release checklist.md',
+        'Projects/lantern-web/Browser support.md', 'Projects/lantern-web/Deploying lantern-web.md', 'Projects/lantern-web/Feature flags.md',
+        'Projects/lantern-web/Running lantern-web locally.md',
+        'Projects/quartz-cache/Client settings.md', 'Projects/quartz-cache/Cluster layout.md', 'Projects/quartz-cache/Quartz ports.md',
+        'Projects/tide-ledger/Ledger backups.md', 'Projects/tide-ledger/Month-end close.md', 'Projects/tide-ledger/Schema migrations.md',
+        'Runbooks/Disk full on a build agent.md', 'Runbooks/Flushing the quartz cache.md', 'Runbooks/Restarting a quartz-cache node.md',
+        'Runbooks/Rolling back a lantern-api release.md', 'Runbooks/Rotating TLS certificates.md',
     ]);
+    // Superseded decisions, an idea with another status and the archived runbook are never searched.
+    for (const path of ['Decisions/2025-11 Lantern job queue on Redis lists.md', 'Decisions/2026-01 Quartz keys kept for an hour.md', 'Ideas/Lantern GraphQL endpoint.md']) {
+        assert.equal(vault.index.has(path), false, path);
+    }
     const { results, others } = vault.search('What port does the harbor gateway listen on?', { limit: 10 });
     const seen = [...results, ...others].map((r) => r.path);
     assert.equal(results[0].path, 'Projects/harbor-gateway/Gateway ports.md');
@@ -240,7 +254,7 @@ test('vault: the drafts folder\'s notes are listed for the page with their kind,
     assert.equal(drafts.find((d) => d.title === 'Port notes').status, 'draft');
     // Another drafts folder: those notes are notes again, and the old drafts folder's are searched.
     const other = await readVault(vaultCopy(), { draftsFolder: 'Ideas' });
-    assert.deepEqual(other.drafts().map((d) => d.path), ['Ideas/Gateway rewrite.md']);
+    assert.deepEqual(other.drafts().map((d) => d.path).sort(), ['Ideas/Gateway rewrite.md', 'Ideas/Lantern GraphQL endpoint.md', 'Ideas/Warming the quartz cache.md']);
     assert.ok(other.index.has('Drafts/Port notes.md'));
 });
 
@@ -284,7 +298,7 @@ test('vault: a changed, added or removed note is read again by its time and size
     now += 10_000;
     await vault.ready();
     assert.equal(vault.status().state, 'ok');
-    assert.equal(vault.status().counts.active, 6);
+    assert.equal(vault.status().counts.active, 35);
     assert.deepEqual(changes, ['changed', 'error', 'ok']);
     // The other folder problems, in words.
     assert.match(folderProblem({ code: 'EACCES' }, '~/Canon').text, /DSH may not read ~\/Canon\. Give DSH access to it/);
@@ -358,7 +372,7 @@ test('search: the session\'s folder lifts its project\'s notes; one shared body 
     assert.equal(ask('restore the ledger database from last night', '/work/Projects/tide-ledger').results[0].path, 'Projects/tide-ledger/Ledger backups.md');
     // Nothing for filler, for prompts about something else, and for one shared body word.
     assert.deepEqual(ask('Thanks, looks good! Please carry on.', '').results, []);
-    assert.deepEqual(ask('refactor the parser in src/lexer.ts', '/work/Projects/other-thing').results, []);
+    assert.deepEqual(ask('translate this paragraph into French', '/work/Projects/other-thing').results, []);
     const one = ask('what does bastion mean', '');
     assert.deepEqual(one.results, []);
     assert.equal(one.others[0]?.path, 'People/Glossary.md', 'listed as a near miss for the page');
@@ -440,8 +454,8 @@ test('recall: a person\'s new prompt gets the notes once, right after it, as one
     assert.equal(added.source.kind, KIND);
     assert.equal(added.source.form, 'notice');
     assert.equal(added.role, 'user');
-    assert.ok(added.source.summary.startsWith('2 notes from the canon vault: Gateway ports'));
-    assert.deepEqual(added.source.notes.map((n) => n.path), ['Projects/harbor-gateway/Gateway ports.md', 'Projects/harbor-gateway/Deploying the gateway.md']);
+    assert.ok(added.source.summary.startsWith('3 notes from the canon vault: Gateway ports'));
+    assert.deepEqual(added.source.notes.map((n) => n.path), ['Projects/harbor-gateway/Gateway ports.md', 'Projects/harbor-gateway/Routing rules.md', 'Projects/harbor-gateway/Deploying the gateway.md']);
     assert.equal(added.source.turn, 1);
     const text = added.content[0].text;
     assert.ok(text.startsWith(HEADER));
@@ -450,7 +464,7 @@ test('recall: a person\'s new prompt gets the notes once, right after it, as one
     assert.equal(decision.messages.length, 4, 'one message added, nothing else changed');
     assert.equal(decision.messages.at(-1).id, 'after', 'DSH\'s own context after the prompt stays after Canon\'s');
     assert.equal(found.length, 1);
-    assert.deepEqual(found[0].boosted, ['Projects/harbor-gateway/Gateway ports.md', 'Projects/harbor-gateway/Deploying the gateway.md']);
+    assert.deepEqual(found[0].boosted, ['Projects/harbor-gateway/Gateway ports.md', 'Projects/harbor-gateway/Routing rules.md', 'Projects/harbor-gateway/Deploying the gateway.md']);
     // The same prompt again (a retried step): nothing more.
     const again = step();
     assert.deepEqual((await recall.preStep(again.payload, again.next)).messages.map((m) => m.id), ['old', 'm-1', 'after']);
@@ -500,7 +514,7 @@ test('recall: switched off for the session, recall off, Canon not working or not
         [{ settings: { recall: false } }, {}],
         [{ settings: { vault: '' } }, {}],
         [{ working: () => false }, {}],
-        [{}, { text: 'refactor the parser in src/lexer.ts', cwd: '/work/other' }],
+        [{}, { text: 'translate this paragraph into French', cwd: '/work/other' }],
     ];
     for (const [options, stepOptions] of cases) {
         const { recall, found } = recallOver(vault, options);
@@ -524,7 +538,7 @@ test('recall: the page\'s try-out shows the notes, why each fits, the near misse
     const view = await recall.preview('What port does the harbor gateway listen on?', '/work/Projects/harbor-gateway');
     assert.deepEqual(view.terms, ['port', 'harbor', 'gateway', 'listen']);
     assert.deepEqual(view.folder, { repo: 'harbor-gateway', parent: '' });
-    assert.deepEqual(view.results.map((r) => [r.path, r.folder]), [['Projects/harbor-gateway/Gateway ports.md', 'repo'], ['Projects/harbor-gateway/Deploying the gateway.md', 'repo']]);
+    assert.deepEqual(view.results.map((r) => [r.path, r.folder]), [['Projects/harbor-gateway/Gateway ports.md', 'repo'], ['Projects/harbor-gateway/Routing rules.md', 'repo'], ['Projects/harbor-gateway/Deploying the gateway.md', 'repo']]);
     assert.ok(view.results.every((r) => typeof r.score === 'number' && r.matched.length > 0 && r.passage));
     assert.ok(view.others.some((o) => o.path === 'Projects/tide-ledger/Ledger backups.md'));
     assert.ok(view.block.text.startsWith(HEADER) && view.block.chars === view.block.text.length);
@@ -840,9 +854,9 @@ test('plugin: a prompt gets the cited block; per-session off stops it; capture a
     assert.match(added.content[0].text, /\[1\] Projects\/harbor-gateway\/Gateway ports\.md/);
     const page = await remote.state();
     assert.deepEqual(page.sessions.map((r) => [r.sessionId, r.title, r.count]), [['s-1', 'Gateway work', 1]]);
-    assert.deepEqual(page.vault.counts, { notes: 10, active: 6, drafts: 2, other: 2, unreadable: 0 });
+    assert.deepEqual(page.vault.counts, { notes: 42, active: 35, drafts: 2, other: 5, unreadable: 0 });
     const recallLog = readFileSync(join(dshHome, 'canon', 'recall.jsonl'), 'utf8');
-    assert.match(recallLog, /"text":"Added 2 notes to turn 1"/);
+    assert.match(recallLog, /"text":"Added 3 notes to turn 1"/);
 
     // Off for this session: the next prompt gets nothing, and it is logged.
     assert.deepEqual(await remote.setSession('s-1', false), { sessionId: 's-1', off: true, changed: true });
