@@ -20,7 +20,7 @@
 import { clip, errorText, isRecord, later } from './shared/safe.js';
 import { plainError } from './shared/words.js';
 import { APPROVAL_ANSWERS, Holds, approvalProof, approvalWords, lateAnswerProof, questionProof } from './holds.js';
-import { ANSWER_MAX, answerMessage, answerWords, askCard, byUrgency, checkAnswers, coordinatorView, headline, questionCards, readable, replyCard, threadCards } from './cards.js';
+import { ANSWER_MAX, answerMessage, answerWords, askCard, byUrgency, checkAnswers, coordinatorView, headline, lead, questionCards, readable, replyCard, threadCards } from './cards.js';
 
 /** Ids kept per list in the store (the newest). */
 const KEEP = 600;
@@ -301,7 +301,8 @@ export class Inbox {
                 cardId: card.id,
                 ...(card.sessionId ? { sessionId: card.sessionId } : {}),
                 title: card.title ?? '',
-                text: headline(card),
+                // The row links the session, so its title is not said twice.
+                text: card.sessionId ? lead(card) : headline(card),
                 question: clip(String(card.question ?? ''), 300),
                 ...(card.recommendation ? { recommendation: clip(card.recommendation, 200) } : {}),
             });
@@ -568,7 +569,7 @@ export class Inbox {
         this.store.data.dismissed = trimmed(this.store.data.dismissed);
         this.store.change();
         this.errors.delete(id);
-        this.journal.add({ kind: 'dismiss', cardId: id, ...(card.sessionId ? { sessionId: card.sessionId } : {}), title: card.title ?? '', text: `Dismissed: ${headline(card)}`, question: clip(String(card.question ?? ''), 300), by: 'you', ...(card.answer === 'approval' || card.live ? { why: `${sessionWords(card)} still waits for an answer in the session.` } : {}) });
+        this.journal.add({ kind: 'dismiss', cardId: id, ...(card.sessionId ? { sessionId: card.sessionId } : {}), title: card.title ?? '', text: card.sessionId ? 'Dismissed' : `Dismissed: ${headline(card)}`, question: clip(String(card.question ?? ''), 300), by: 'you', ...(card.answer === 'approval' || card.live ? { why: `${sessionWords(card)} still waits for an answer in the session.` } : {}) });
         this.soon(30);
         this.changed();
         return { ok: true };
@@ -576,9 +577,20 @@ export class Inbox {
 
     async undismiss(id) {
         if (!Object.hasOwn(this.store.data.dismissed, id)) throw new Error('This is not dismissed.');
+        // Which card, for the history: the list still has it while it waits.
+        let card;
+        try { card = (await this.list()).dismissed.find((c) => c.id === id); } catch { card = undefined; }
         delete this.store.data.dismissed[id];
         this.store.change();
-        this.journal.add({ kind: 'undismiss', cardId: id, text: 'Brought back a dismissed item', by: 'you' });
+        this.journal.add({
+            kind: 'undismiss',
+            cardId: id,
+            ...(card?.sessionId ? { sessionId: card.sessionId } : {}),
+            title: card?.title ?? '',
+            text: card ? (card.sessionId ? 'Brought back' : `Brought back: ${headline(card)}`) : 'Brought back a dismissed item',
+            ...(card?.question ? { question: clip(String(card.question), 300) } : {}),
+            by: 'you',
+        });
         this.soon(30);
         this.changed();
         return { ok: true };

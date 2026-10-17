@@ -422,7 +422,9 @@ test('inbox: new cards notify once, also across a restart; what waited before De
     assert.deepEqual(first.notified, [{ title: '“Release notes” needs a decision', body: 'Ship today or Monday?', kind: 'decision', sessionId: 'new' }]);
     assert.deepEqual(first.mirrored.map((c) => c.id), ['decision:new:1']);
     const [arrived] = entries(first.journal, 'new');
-    assert.equal(arrived.text, '“Release notes” needs a decision');
+    // The history row links the session, so the entry does not repeat its title.
+    assert.equal(arrived.text, 'Needs a decision');
+    assert.equal(arrived.title, 'Release notes');
     assert.equal(arrived.recommendation, 'Monday');
     first.inbox.stop();
     first.store.flush();
@@ -600,7 +602,8 @@ test('inbox: dismissed stays dismissed across a restart, and comes back on reque
     assert.equal(card.question, 'Shall I also update the changelog?');
     await first.inbox.dismiss(card.id);
     assert.deepEqual((await first.inbox.list()).waiting, []);
-    assert.equal(entries(first.journal, 'dismiss')[0].text, 'Dismissed: “Docs” asked you something');
+    assert.equal(entries(first.journal, 'dismiss')[0].text, 'Dismissed');
+    assert.equal(entries(first.journal, 'dismiss')[0].title, 'Docs');
     first.inbox.stop();
     first.store.flush();
     const second = setup({ dir, clock, dsh });
@@ -610,6 +613,9 @@ test('inbox: dismissed stays dismissed across a restart, and comes back on reque
     assert.deepEqual(listed.dismissed.map((c) => c.id), [card.id]);
     await second.inbox.undismiss(card.id);
     assert.deepEqual((await second.inbox.list()).waiting.map((c) => c.id), [card.id]);
+    // The history names what came back: its session, beside the words, and its question.
+    const back = entries(second.journal, 'undismiss')[0];
+    assert.deepEqual([back.text, back.title, back.sessionId, back.question], ['Brought back', 'Docs', 's', 'Shall I also update the changelog?']);
     await assert.rejects(second.inbox.undismiss(card.id), /not dismissed/);
     await assert.rejects(second.inbox.dismiss('nope'), /no longer waiting/);
 });

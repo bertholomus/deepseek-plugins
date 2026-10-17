@@ -1082,17 +1082,15 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const listWords = (items) => (items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`);
 
         /** What it lists, and what is switched off. */
+        /** What it does not list now, or '' when it lists everything (the summary above already says what that is). */
         function sourcesText(sources) {
-            const keys = Object.keys(SOURCE_WORDS);
-            const on = keys.filter((k) => sources?.[k] !== false).map((k) => SOURCE_WORDS[k]);
-            const off = keys.filter((k) => sources?.[k] === false).map((k) => SOURCE_WORDS[k]);
-            const lead = `It lists DECISION NEEDED and BLOCKED lines${on.length ? `, ${listWords(on)}` : ''}, and other plugins' questions.`;
-            return off.length ? `${lead} Switched off in its settings: ${listWords(off)}.` : lead;
+            const off = Object.keys(SOURCE_WORDS).filter((k) => sources?.[k] === false).map((k) => SOURCE_WORDS[k]);
+            return off.length ? `Not listed, as its settings say: ${listWords(off)}. DECISION NEEDED and BLOCKED lines and other plugins' questions always are.` : '';
         }
 
         function notifyText(data) {
             if (!data.notify) return 'Notifications are off in its settings.';
-            return data.notifications ? 'Each new card notifies you.' : 'Each new card would notify you, but DSH\'s notifications are not running.';
+            return data.notifications ? 'Each new card notifies you.' : 'Each new card would notify you, but the Notifications plugin is not running: switch it on in Plugins to get them.';
         }
 
         /** Where new cards also go, or why they cannot. */
@@ -1186,7 +1184,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             },
             h('p', { className: `${P}-status` }, status),
             data.enabled ? h('div', { className: `${P}-lines` },
-                h('div', { className: `${P}-line`, 'data-decisions-sources': '' }, sourcesText(data.sources)),
+                sourcesText(data.sources) ? h('div', { className: `${P}-line`, 'data-decisions-sources': '' }, sourcesText(data.sources)) : null,
                 h('div', { className: `${P}-line`, 'data-decisions-notify': '' }, notifyText(data)),
                 mirror ? h('div', { className: `${P}-line${data.mirror.problem ? ` ${P}-warn` : ''}`, 'data-decisions-mirror': data.mirror.problem ? 'problem' : data.mirror.mode },
                     h('span', null, mirror),

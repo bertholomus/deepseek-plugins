@@ -243,7 +243,7 @@ try {
         const s = await state();
         check('the state endpoint answers: on, every kind listed, nothing sent elsewhere', s.enabled === true && !s.problem && Object.values(s.sources).every(Boolean) && s.mirror.mode === 'off' && s.windowHours === 72,
             json({ enabled: s.enabled, problem: s.problem, sources: s.sources, mirror: s.mirror }));
-        check('it says DSH\'s notifications are not running here (no notifications plugin in this profile)', s.notify === true && s.notifications === false, json({ notify: s.notify, notifications: s.notifications }));
+        check('it says the Notifications plugin is not running here (none in this profile)', s.notify === true && s.notifications === false, json({ notify: s.notify, notifications: s.notifications }));
         const nothing = await api('answer', { id: 'decision:nobody:1', answer: { text: 'yes' } });
         const empty = await api('dismiss', { id: '' });
         const test = await api('testMirror');
@@ -275,7 +275,7 @@ try {
         check('a reply that asks nothing makes no card', !(await state()).waiting.some((c) => c.sessionId === ids.done));
         const fresh = (await state()).history.filter((e) => e.kind === 'new');
         const once = [cards.schema, cards.staging, cards.branch, cards.release].every((c) => fresh.filter((e) => e.cardId === c.id).length === 1);
-        check('each new card is logged once, with its headline', once && fresh.some((e) => e.text === '“Schema cleanup” needs a decision') && fresh.some((e) => e.text === '“Staging check” is blocked'), json(fresh.map((e) => e.text)));
+        check('each new card is logged once, with its headline', once && fresh.some((e) => e.title === 'Schema cleanup' && e.text === 'Needs a decision') && fresh.some((e) => e.title === 'Staging check' && e.text === 'Blocked'), json(fresh.map((e) => e.text)));
         const badge = await api('badge');
         check('the badge counts them', badge.ok && badge.value.waiting === 4, json(badge));
     });

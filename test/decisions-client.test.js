@@ -76,15 +76,17 @@ test('browser half: the header says what waits, what it lists, and where else ne
     assert.match(textIn(DecisionsPage({ decisions: {} })), /Reading what waits on you/);
     const quiet = textIn(HeaderCard({ data: base, busy: false, act }));
     assert.match(quiet, /Nothing waits on you\./);
-    assert.match(quiet, /It lists DECISION NEEDED and BLOCKED lines, tools waiting for approval, question-box questions, replies that ask you something and threads that need a decision, and other plugins' questions\./);
+    // Everything listed: the summary says what, once.
+    assert.doesNotMatch(quiet, /Not listed/);
+    assert.equal((quiet.match(/tools waiting for approval/g) ?? []).length, 1, quiet);
     assert.match(quiet, /Each new card notifies you\./);
     assert.doesNotMatch(quiet, /New cards also go/);
     const busy = textIn(HeaderCard({ data: { ...base, waiting: [CARDS.approval, CARDS.decision] }, busy: false, act }));
     assert.match(busy, /2 waiting on you · 1 holding a running turn/);
     const off = textIn(HeaderCard({ data: { ...base, sources: { ...base.sources, replies: false, threads: false }, notify: false }, busy: false, act }));
-    assert.match(off, /Switched off in its settings: replies that ask you something and threads that need a decision\./);
+    assert.match(off, /Not listed, as its settings say: replies that ask you something and threads that need a decision\. DECISION NEEDED and BLOCKED lines and other plugins' questions always are\./);
     assert.match(off, /Notifications are off in its settings\./);
-    assert.match(textIn(HeaderCard({ data: { ...base, notifications: false }, busy: false, act })), /DSH's notifications are not running/);
+    assert.match(textIn(HeaderCard({ data: { ...base, notifications: false }, busy: false, act })), /the Notifications plugin is not running: switch it on in Plugins to get them\./);
     assert.match(textIn(HeaderCard({ data: { ...base, enabled: false }, busy: false, act })), /Decisions is switched off in DSH's profile \(enabled: false in its entry in cordis\.patch\.yml\)/);
     // The mirror: where it sends, with a test; or what is missing, with the way to its settings.
     const hook = HeaderCard({ data: { ...base, mirror: { mode: 'webhook', place: 'hooks.example.com', perHour: 30, lastHour: 2 } }, busy: false, act });
@@ -218,7 +220,7 @@ test('browser half: what you dismissed comes back, and the history says what hap
             history: [
                 { id: 'e3', kind: 'answer', sessionId: 't', title: 'Schema', text: 'Answered: keep them', question: 'Drop the old tables?', note: '[Decisions] The person answered your DECISION NEEDED line', state: 'not delivered', reason: 'the session was closed', by: 'you', at: now },
                 { id: 'e2', kind: 'mirror', text: 'Sent to hooks.example.com', state: 'sent', at: now },
-                { id: 'e1', kind: 'new', sessionId: 't', title: 'Schema', text: '“Schema” needs a decision', question: 'Drop the old tables?', at: now },
+                { id: 'e1', kind: 'new', sessionId: 't', title: 'Schema', text: 'Needs a decision', question: 'Drop the old tables?', at: now },
             ],
         },
         onOpen: () => {},

@@ -1,0 +1,19 @@
+You are a reading helper for the DSH Plugin Suite builder. Workspace: ~/Projects/dsh-plugin-suite (a git worktree; do NOT commit, push, or switch branches).
+
+Rules:
+- Read only. The only file you write is the one output file named below. Do not edit any other file.
+- Never start, stop or restart DSH, never touch ~/.dsh or ~/.dsh-plugins, never load anything into DSH.
+- The DSH runtime packages to read are under ~/Projects/dsh-plugin-suite/.e2e/dsh-0.2.0-rc.2/node_modules/@deepseek-ai/ (and the newer copy in .e2e/dsh-0.2.1-rc.1/ to note differences). Use grep/rg and read files; files can be large, so read slices.
+- Cite every fact with a path relative to node_modules/@deepseek-ai and a line number (e.g. `dsh-terminal/lib/index.js:120`). Quote short code where it settles a question. If you could not confirm something, say "not found" rather than guessing.
+- Plain words. Do not write any third-party AI assistant or vendor names in the output file (a repository test rejects them).
+
+TASK: Follow-up on research/terminals.md (read it first): five questions a plugin that runs a coding-agent program in a session's terminal tab must settle. Answer each with citations, in both builds (note differences).
+
+1. Writing input from the host without stealing the window's control. In 0.2.0 `write` needs an attachment from `follow`; in 0.2.1 input goes up the `attach` stream. If a host plugin attaches while the window's tab is attached, which one can write (is there a "writable"/controller hand-over, and does the window's tab become read-only)? Is there any host-side path to write into a terminal (or its PTY) that does not take the input control away from the window: a method on BrowserTerminal or on the owners map that a plugin with `terminalController` could reach, an option on attach/follow (read-only follower vs writer), or `subprocess` APIs? Read how ~/.dsh-plugins/minime-bridge/lib/index.js writes (read only; do not change it) and say exactly what it does and what the window sees then.
+2. Reading the screen from the host: the `snapshot` frame's `screen` field. Its exact format (is it the emulator's serialized state with escape codes, or plain lines?), how to get the visible text lines of the screen from it, and whether a follower that only reads (never writes) is possible in each build.
+3. Status on a session row in the window's session list (dsh-client-ui-workspace and related): which slots or extension points a client plugin can use to add something to a session's row (a badge, a status dot, trailing text), with their names and props. Check how the coordinator plugin in this repo (plugins/coordinator/lib/client.js) adds anything to session rows, if it does.
+4. Blank sessions. A session stays `blank` (hidden in the sidebar unless selected) until its first `turn/start` event. Is there any way to make a session non-blank without a model request: a `turn/start` committed by something other than a model turn (a local slash command, `command/run`, a goal, a fork, a rename, `sessionController.prompt` with some flag), a session-controller method or option, or a list flag? Quote `applySessionListMetadata` and every place that commits `turn/start`.
+5. Opening a terminal tab from a client plugin: `ctx.sidebarRight.openTab('terminal', { params: { terminalId } })`. Confirm the kind name, the params type for kind `terminal` (dsh-client-ui-sidebar-right contract/params and dsh-client-ui-sidebar-terminal), what happens when the session is not on screen, how to tell whether a tab for that terminal id is already open (`tabsIn`, `openTabs`), how a client plugin gets `ctx.sidebarRight` (inject name), and how the tab's title is set (`rename` on the host?).
+
+OUTPUT: write ~/Projects/dsh-plugin-suite/research/terminals-2.md (at most 250 lines).
+Finish with a summary of 20 lines or fewer: result, files changed, open issues. End your reply with a line `DONE: <one-line result>` or `BLOCKED: <reason>`.

@@ -285,6 +285,22 @@ export function headline(card) {
     }
 }
 
+/**
+ * What a card is, without its session's title, for a history row (which
+ * links the session beside it): "Needs a decision", "Blocked".
+ */
+export function lead(card) {
+    switch (card.kind) {
+        case 'approval': return 'Waiting for your approval';
+        case 'question': return 'Asked you a question';
+        case 'decision': return 'Needs a decision';
+        case 'blocked': return 'Blocked';
+        case 'thread': return card.status === 'blocked' ? 'The thread is blocked' : 'The thread needs a decision';
+        case 'ask': return `${card.source ?? 'A plugin'} asked you`;
+        default: return 'Asked you something';
+    }
+}
+
 /** Cut text to `max` characters, keeping its lines. */
 export function cutLines(text, max) {
     const value = String(text ?? '').trim();
