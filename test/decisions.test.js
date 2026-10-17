@@ -12,8 +12,9 @@ import {
 } from '../plugins/decisions/lib/cards.js';
 import { Holds, approvalProof, approvalWords, callArguments, describeCall, lateAnswerProof, questionProof, reasonText } from '../plugins/decisions/lib/holds.js';
 import { Inbox, parseData } from '../plugins/decisions/lib/inbox.js';
-import { Mirror, checkCommand, checkWebhook, mirrorPlace } from '../plugins/decisions/lib/mirror.js';
-import { DEFAULTS, checkConfig } from '../plugins/decisions/lib/config.js';
+import { Mirror, NO_ADDRESS, checkCommand, checkWebhook } from '../plugins/decisions/lib/mirror.js';
+import { DEFAULTS, LIVE_SETTINGS, SETTING_TITLES, changedWords, checkConfig, savedEntry } from '../plugins/decisions/lib/config.js';
+import { SettingsCheck } from '../plugins/decisions/lib/shared/settings.js';
 import { pageState } from '../plugins/decisions/lib/page.js';
 import { JsonStore } from '../plugins/decisions/lib/shared/files.js';
 import { Journal } from '../plugins/decisions/lib/shared/journal.js';
@@ -467,7 +468,7 @@ test('inbox: a held approval is answered here, proven by DSH\'s decision in the 
     await clock.advance(1000);
     const [entry] = entries(journal, 'answer');
     assert.equal(entry.state, 'answered', 'DSH logged the decision');
-    assert.equal(entry.text, 'Allowed once: bash');
+    assert.equal(entry.text, 'Allowed once');
 
     const second = waitingApproval(dsh, 't', { callId: 'c2' });
     const win2 = windowStandIn();
@@ -640,16 +641,56 @@ test('inbox: the badge counts what waits and what holds a running turn; the page
     assert.deepEqual(page.sources, { approvals: true, questions: true, replies: true, threads: true });
     assert.equal(page.notifications, true);
     assert.equal(page.mirror.mode, 'off');
+    assert.equal(page.problem, undefined);
     assert.ok(Array.isArray(page.history));
     const off = await pageState({ inbox, journal, config: { ...config, enabled: false }, mirror, notifications: () => false });
     assert.equal(off.enabled, false);
     assert.deepEqual(off.waiting, []);
+    // A wrong setting: nothing listed, and the page says which.
+    const check = new SettingsCheck({ settings: { ...config, windowHours: 0 }, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'decisions' });
+    check.run();
+    const wrong = await pageState({ inbox, journal, config, check, mirror, watch: { settings: { problem: { text: 'x', live: true } } } });
+    assert.deepEqual(wrong.waiting, []);
+    assert.equal(wrong.problem.key, 'windowHours');
+    assert.equal(wrong.problem.live, true);
+    assert.match(wrong.problem.text, /^Keep a reply's question for \(windowHours\) must be a whole number of hours from 1 to 720 \(it is 0\)$/);
+    assert.deepEqual(wrong.watchProblem, { text: 'x', live: true });
     inbox.stop();
 });
 
 test('inbox: stored state is made safe when read', () => {
     assert.deepEqual(parseData(undefined), { version: 1, seeded: false, seen: {}, dismissed: {}, answered: {} });
     assert.deepEqual(parseData({ seeded: true, seen: { a: 1, b: 'x' }, dismissed: [], answered: { c: 2 } }), { version: 1, seeded: true, seen: { a: 1 }, dismissed: {}, answered: { c: 2 } });
+});
+
+test('holds: a kind switched off lets its held requests go back to DSH\'s own card; a stop holds nothing until resumed', async () => {
+    const dsh = fakeDsh();
+    const holds = new Holds({});
+    const approval = waitingApproval(dsh, 'a', { callId: 'c1' });
+    const question = { agent: { id: 'q', session: undefined }, questions: [{ id: 'q1', question: 'Which?', options: [{ label: 'A' }] }], wait: { callId: 'w1' } };
+    const winA = windowStandIn();
+    const winQ = windowStandIn();
+    const fromA = holds.approval(approval.request, () => winA.forward(approval.request));
+    const fromQ = holds.question(question, () => winQ.forward(question));
+    await settle();
+    assert.deepEqual(holds.cards().map((c) => c.kind).sort(), ['approval', 'question']);
+    holds.release('approval');
+    assert.deepEqual(holds.cards().map((c) => c.kind), ['question'], 'only approvals let go');
+    // Let go means DSH's own card still answers: the window's answer comes back as DSH's.
+    winA.answer('allowed-once');
+    assert.equal(await fromA, 'allowed-once');
+    holds.stop();
+    assert.deepEqual(holds.cards(), []);
+    winQ.answer({ answers: [] });
+    assert.deepEqual(await fromQ, { answers: [] });
+    let passed = false;
+    await holds.approval(waitingApproval(dsh, 'b', { callId: 'c2' }).request, () => { passed = true; return 'rejected'; });
+    assert.ok(passed, 'stopped: passed on untouched');
+    assert.deepEqual(holds.cards(), []);
+    holds.resume();
+    void holds.approval(waitingApproval(dsh, 'c', { callId: 'c3' }).request, () => new Promise(() => {}));
+    assert.equal(holds.cards().length, 1, 'held again after resume');
+    holds.release();
 });
 
 // ── The mirror ───────────────────────────────────────────────────────
@@ -672,22 +713,64 @@ async function sink(status = 204) {
 
 const CARD = { id: 'decision:s:1', kind: 'decision', title: 'Cache', question: 'Postgres or SQLite?', recommendation: 'SQLite', sessionId: 's' };
 
-test('mirror: a webhook gets the card as plain words with mentions off; the log names the host, never the address', async () => {
+/** The webhook address as DSH's key store gives it: read for each message. */
+const keyStore = (value) => {
+    const store = { value, reads: 0 };
+    store.read = async () => {
+        store.reads += 1;
+        return store.value;
+    };
+    return store;
+};
+
+test('mirror: a webhook gets the card as plain words with mentions off; the address comes from the key store and never reaches the log', async () => {
     const hook = await sink();
     try {
         const journal = new Journal(join(mkdtempSync(join(tmpdir(), 'decisions-')), 'events.jsonl'));
-        const mirror = new Mirror({ config: { ...DEFAULTS, mirror: 'webhook', mirrorUrl: hook.url }, journal });
+        const key = keyStore(hook.url);
+        const mirror = new Mirror({ config: { ...DEFAULTS, mirror: 'webhook' }, journal, readAddress: key.read });
         assert.deepEqual(await mirror.send(CARD), { ok: true });
         assert.deepEqual(hook.got, [{ method: 'POST', type: 'application/json', body: { content: mirrorText(CARD), allowed_mentions: { parse: [] } } }]);
         const [entry] = journal.list();
         assert.equal(entry.state, 'sent');
-        assert.equal(entry.text, `Mirrored to 127.0.0.1:${new URL(hook.url).port}`);
-        assert.ok(!JSON.stringify(journal.list()).includes('secret-token'), 'the address is a secret');
-        assert.equal(mirror.status().lastHour, 1);
-        assert.deepEqual(await mirror.test(), { ok: true });
+        assert.equal(entry.text, `Sent to 127.0.0.1:${new URL(hook.url).port}`);
+        const page = await mirror.describe();
+        assert.equal(page.mode, 'webhook');
+        assert.equal(page.place, `127.0.0.1:${new URL(hook.url).port}`);
+        assert.equal(page.key, 'DECISIONS_WEBHOOK_URL');
+        assert.equal(page.lastHour, 1);
+        assert.equal(page.problem, undefined);
+        assert.deepEqual(await mirror.test(), { ok: true, place: `127.0.0.1:${new URL(hook.url).port}` });
+        assert.ok(!JSON.stringify([journal.list(), page]).includes('secret-token'), 'the address is a secret');
+        assert.ok(key.reads >= 3, 'read again for each message, so a new address applies at once');
     } finally {
         await hook.close();
     }
+});
+
+test('mirror: no address, a wrong one or a key store that fails is said once an hour, in words that never repeat the address', async () => {
+    const clock = manualClock();
+    const journal = new Journal(join(mkdtempSync(join(tmpdir(), 'decisions-')), 'events.jsonl'), { now: clock.now });
+    const key = keyStore(undefined);
+    const mirror = new Mirror({ config: { ...DEFAULTS, mirror: 'webhook' }, journal, readAddress: key.read, now: clock.now });
+    assert.deepEqual(await mirror.send(CARD), { ok: false, reason: NO_ADDRESS });
+    assert.deepEqual(await mirror.send(CARD), { ok: false, reason: NO_ADDRESS });
+    const said = journal.list().filter((e) => e.text === 'Could not send new cards elsewhere');
+    assert.equal(said.length, 1, 'said once, not per card');
+    assert.equal(said[0].reason, NO_ADDRESS);
+    assert.equal((await mirror.describe()).problem, NO_ADDRESS);
+    key.value = 'http://example.com/hook/secret-token';
+    assert.match((await mirror.send(CARD)).reason, /^The webhook address must start with https:\/\/ \(http:\/\/ only to this machine\), not http:\/\/$/);
+    assert.equal(journal.list().filter((e) => e.text === 'Could not send new cards elsewhere').length, 2, 'a new reason is said');
+    key.value = 'not an address secret-token';
+    assert.match((await mirror.describe()).problem, /^The webhook address is not a web address/);
+    const broken = new Mirror({ config: { ...DEFAULTS, mirror: 'webhook' }, journal, readAddress: async () => { throw new Error('locked'); }, now: clock.now });
+    assert.equal((await broken.send(CARD)).reason, 'DSH\'s key store did not answer: locked');
+    const test = await mirror.test();
+    assert.equal(test.ok, false);
+    assert.equal(journal.list()[0].state, 'not sent');
+    assert.equal(journal.list()[0].by, 'you');
+    assert.ok(!JSON.stringify(journal.list()).includes('secret-token'));
 });
 
 test('mirror: a refusal or an unreachable webhook is logged with the reason; past the hourly limit it holds back once', async () => {
@@ -695,7 +778,7 @@ test('mirror: a refusal or an unreachable webhook is logged with the reason; pas
     const clock = manualClock();
     try {
         const journal = new Journal(join(mkdtempSync(join(tmpdir(), 'decisions-')), 'events.jsonl'), { now: clock.now });
-        const mirror = new Mirror({ config: { ...DEFAULTS, mirror: 'webhook', mirrorUrl: hook.url, mirrorPerHour: 2 }, journal, now: clock.now });
+        const mirror = new Mirror({ config: { ...DEFAULTS, mirror: 'webhook', mirrorPerHour: 2 }, journal, readAddress: keyStore(hook.url).read, now: clock.now });
         const refused = await mirror.send(CARD);
         assert.equal(refused.ok, false);
         assert.match(refused.reason, /answered 404 \(check the webhook address\)$/);
@@ -705,7 +788,7 @@ test('mirror: a refusal or an unreachable webhook is logged with the reason; pas
         assert.deepEqual(await mirror.send(CARD), { ok: false, reason: 'the hourly limit is reached' });
         assert.equal(journal.list().filter((e) => e.state === 'held').length, 1, 'said once');
         clock.advance(HOUR + 1000);
-        const gone = new Mirror({ config: { ...DEFAULTS, mirror: 'webhook', mirrorUrl: 'http://127.0.0.1:9/none' }, journal, now: clock.now });
+        const gone = new Mirror({ config: { ...DEFAULTS, mirror: 'webhook' }, journal, readAddress: keyStore('http://127.0.0.1:9/none').read, now: clock.now });
         const unreachable = await gone.send(CARD);
         assert.equal(unreachable.reason, '127.0.0.1:9: it could not be reached');
     } finally {
@@ -727,34 +810,62 @@ test('mirror: a command gets the card as JSON on stdin, without a shell; its fai
     assert.deepEqual(await mirror.send(CARD), { ok: true });
     const got = JSON.parse(readFileSync(out, 'utf8'));
     assert.deepEqual(got, { text: mirrorText(CARD), kind: 'decision', title: 'Cache', question: 'Postgres or SQLite?', recommendation: 'SQLite', sessionId: 's' });
-    assert.equal(journal.list()[0].text, 'Mirrored to sink.sh');
+    assert.equal(journal.list()[0].text, 'Sent to sink.sh');
+    assert.equal(mirror.place, 'sink.sh');
     const failing = new Mirror({ config: { ...DEFAULTS, mirror: 'command', mirrorCommand: [bad, '--loud'] }, journal });
     assert.deepEqual(await failing.send(CARD), { ok: false, reason: 'bad.sh exited with 3: no route to the pager' });
     const missing = new Mirror({ config: { ...DEFAULTS, mirror: 'command', mirrorCommand: [join(dir, 'nope')] }, journal });
-    assert.deepEqual(await missing.send(CARD), { ok: false, reason: 'nope could not start: no such program' });
+    assert.deepEqual(await missing.send(CARD), { ok: false, reason: `The command's program ${join(dir, 'nope')} does not exist` });
+    const none = new Mirror({ config: { ...DEFAULTS, mirror: 'command' }, journal });
+    assert.match((await none.describe()).problem, /^No command is set: add mirrorCommand/);
     const off = new Mirror({ config: DEFAULTS, journal });
     assert.equal(off.on, false);
-    assert.match((await off.test()).reason, /The mirror is off/);
+    assert.match((await off.test()).reason, /^Sending elsewhere is off\. Choose Webhook or Command/);
+    assert.equal((await off.describe()).mode, 'off');
 });
 
-test('mirror and config: wrong values stop the plugin with a sentence that names the setting', () => {
+test('mirror and config: wrong values are said in words that name the setting; a save logs what changed', () => {
     assert.equal(checkWebhook('https://discord.com/api/webhooks/1/abc').host, 'discord.com');
     assert.equal(checkWebhook('http://localhost:8080/x').host, 'localhost:8080');
-    assert.throws(() => checkWebhook('http://example.com/hook'), /mirrorUrl must start with https:\/\/ \(http:\/\/ only to this machine\)/);
-    assert.throws(() => checkWebhook('discord'), /mirrorUrl is not a web address/);
-    assert.throws(() => checkWebhook(''), /mirrorUrl is empty/);
-    assert.throws(() => checkCommand(['notify']), /must start with an absolute path/);
-    assert.throws(() => checkCommand('notify me'), /must list the program/);
-    assert.equal(mirrorPlace({ mirror: 'webhook', mirrorUrl: 'https://discord.com/api/webhooks/1/abc' }), 'discord.com');
-    assert.equal(mirrorPlace({ mirror: 'command', mirrorCommand: ['/usr/local/bin/notify', '-q'] }), 'notify');
-    assert.equal(mirrorPlace({ mirror: 'off' }), '');
+    assert.throws(() => checkWebhook('http://example.com/hook'), /^Error: The webhook address must start with https:\/\/ \(http:\/\/ only to this machine\), not http:\/\/$/);
+    assert.throws(() => checkWebhook('discord'), /^Error: The webhook address is not a web address/);
+    assert.throws(() => checkWebhook(''), new RegExp(`^Error: ${NO_ADDRESS}$`));
+    assert.throws(() => checkCommand(['notify']), /must start with the program's full path/);
+    assert.throws(() => checkCommand('notify me'), /^Error: No command is set/);
     assert.doesNotThrow(() => checkConfig({ ...DEFAULTS }));
-    assert.throws(() => checkConfig({ ...DEFAULTS, windowHours: 0 }), /^Error: decisions: windowHours must be a whole number from 1 to 720 \(got 0\)$/);
-    assert.throws(() => checkConfig({ ...DEFAULTS, mirrorPerHour: 1000 }), /mirrorPerHour must be a whole number from 1 to 500/);
-    assert.throws(() => checkConfig({ ...DEFAULTS, mirror: 'discord' }), /mirror must be "off", "webhook" or "command" \(got "discord"\)/);
-    assert.throws(() => checkConfig({ ...DEFAULTS, approvals: 'yes' }), /approvals must be true or false/);
-    assert.throws(() => checkConfig({ ...DEFAULTS, mirror: 'webhook' }), /mirrorUrl is empty/);
-    assert.throws(() => checkConfig({ ...DEFAULTS, mirror: 'command', mirrorCommand: ['/no/such/program'] }), /mirrorCommand's program "\/no\/such\/program" does not exist/);
+    const wrong = (patch) => {
+        try {
+            checkConfig({ ...DEFAULTS, ...patch });
+        } catch (error) {
+            return { key: error.key, text: error.message };
+        }
+        return undefined;
+    };
+    assert.deepEqual(wrong({ windowHours: 0 }), { key: 'windowHours', text: 'Keep a reply\'s question for (windowHours) must be a whole number of hours from 1 to 720 (it is 0)' });
+    assert.deepEqual(wrong({ mirrorPerHour: 1000 }), { key: 'mirrorPerHour', text: 'Messages sent an hour, at most (mirrorPerHour) must be a whole number from 1 to 500 (it is 1000)' });
+    assert.deepEqual(wrong({ mirror: 'discord' }), { key: 'mirror', text: 'Also send new cards to (mirror) must be "off", "webhook" or "command" (it is "discord")' });
+    assert.deepEqual(wrong({ approvals: 'yes' }), { key: 'approvals', text: 'Tools waiting for approval (approvals) must be true or false (it is "yes")' });
+    assert.match(wrong({ mirrorUrlEnv: 'https://discord.com/x' }).text, /^The key that holds the webhook address \(mirrorUrlEnv\) must be a name of letters, digits and _/);
+    assert.match(wrong({ mirrorCommand: ['notify'] }).text, /^The command \(mirrorCommand\) must start with the program's full path/);
+    assert.match(wrong({ mirrorCommand: 'notify' }).text, /^The command \(mirrorCommand\) must list the program and then its arguments/);
+    // A webhook or command without its address or program is not a wrong setting: the inbox works, and the page says what is missing.
+    assert.equal(wrong({ mirror: 'webhook' }), undefined);
+    assert.equal(wrong({ mirror: 'command' }), undefined);
+    assert.deepEqual(LIVE_SETTINGS.filter((key) => !Object.hasOwn(SETTING_TITLES, key)), []);
+    assert.equal(changedWords([['notify'], ['windowHours'], ['notify']]), 'A notification for each new card, Keep a reply\'s question for');
+    // The log entry for a save: what changed, that it fixed a wrong setting, or that one is still wrong.
+    const settings = { ...DEFAULTS, windowHours: 0 };
+    const check = new SettingsCheck({ settings, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'decisions' });
+    check.run();
+    assert.equal(check.problem.live, true);
+    const still = savedEntry(check, [['notify']]);
+    assert.equal(still.text, 'Settings changed: A notification for each new card; Decisions waits until a wrong one is fixed');
+    assert.equal(still.state, 'waiting on a setting');
+    settings.windowHours = 24;
+    const fixed = savedEntry(check, [['windowHours']]);
+    assert.deepEqual(fixed, { kind: 'settings', text: 'Settings fixed: Decisions is working again', why: 'You saved Keep a reply\'s question for in Plugins.', state: 'done', by: 'you' });
+    assert.equal(savedEntry(check, [['mirror']]).text, 'Settings changed: Also send new cards to');
+    assert.equal(savedEntry(check, []), undefined);
 });
 
 test('cards: a plugin\'s question keeps only well-formed choices', () => {

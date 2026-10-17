@@ -90,6 +90,34 @@ export function wholeNumbers(settings, key, { minItems = 1, maxItems = 10, min =
 }
 
 /**
+ * Throw unless `settings[key]` names a key in DSH's key store (a secret kept
+ * out of the settings file): letters, digits and _, not starting with a digit.
+ */
+export function keyName(settings, key, title = '') {
+    const value = settings?.[key];
+    if (typeof value === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) return value;
+    throw new SettingError(key, `${named(key, title)} must be a name of letters, digits and _ that does not start with a digit, such as MY_WEBHOOK_URL (it is ${shown(value)})`);
+}
+
+/**
+ * Throw unless `settings[key]` lists a program by its full path, then its
+ * arguments; an empty list passes when `optional`.
+ */
+export function commandLine(settings, key, { optional = false } = {}, title = '') {
+    const value = settings?.[key];
+    const example = '["/usr/local/bin/notify", "--to", "me"]';
+    if (!Array.isArray(value) || value.some((part) => typeof part !== 'string')) {
+        throw new SettingError(key, `${named(key, title)} must list the program and then its arguments, for example ${example} (it is ${shown(value)})`);
+    }
+    if (value.length === 0) {
+        if (optional) return value;
+        throw new SettingError(key, `${named(key, title)} is empty: list the program and then its arguments, for example ${example}`);
+    }
+    if (!value[0].startsWith('/')) throw new SettingError(key, `${named(key, title)} must start with the program's full path, such as /usr/local/bin/notify (it starts with ${shown(value[0])})`);
+    return value;
+}
+
+/**
  * The settings, checked when the plugin starts and each time the person
  * saves one: `problem` is undefined while every value is right, else what
  * is wrong, in words, with whether the person can fix it on the plugin's

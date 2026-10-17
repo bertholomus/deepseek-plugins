@@ -299,12 +299,27 @@ export class Holds {
         return true;
     }
 
-    /** Let every held request go back to the window alone (Decisions is stopping). */
-    stop() {
-        this.stopped = true;
+    /**
+     * Let held requests go back to the window alone: those of one kind
+     * ('approval' or 'question', when the person switches that kind off), or
+     * all of them. DSH's own card stays where it was and still takes the answer.
+     */
+    release(kind) {
         for (const [id, item] of [...this.items]) {
+            if (kind && item.card.kind !== kind) continue;
             this.items.delete(id);
             item.settle({ release: true });
         }
+    }
+
+    /** Hold again after a stop (Decisions works again). */
+    resume() {
+        this.stopped = false;
+    }
+
+    /** Hold nothing more, and let every held request go back to the window alone (Decisions is stopping). */
+    stop() {
+        this.stopped = true;
+        this.release();
     }
 }

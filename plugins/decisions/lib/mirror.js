@@ -1,22 +1,25 @@
 /**
  * The outbound mirror: a short message for each new card, sent where the
- * person is when they are away from DSH. Off unless the config turns it on.
+ * person is when they are away from DSH. Off unless the settings turn it on.
  *
- * - `webhook`: a POST of `{ content }` (Discord's webhook shape) to
- *   `mirrorUrl`, which must be https (or http to this machine, for a local
- *   sink). Mentions are switched off, so an agent's text can never ping
- *   anyone.
- * - `command`: `mirrorCommand` (an absolute path, then its arguments) run
- *   without a shell, with the card as JSON on stdin.
+ * - `webhook`: a POST of `{ content }` (Discord's webhook shape) to the
+ *   webhook address, which must be https (or http to this machine, for a
+ *   local sink). The address is a secret: it lives in DSH's key store under
+ *   `mirrorUrlEnv` (set on Decisions' page in Plugins), or in the
+ *   environment DSH starts in, and is read again for every message; it is
+ *   never in the settings file. Mentions are switched off, so an agent's
+ *   text can never ping anyone.
+ * - `command`: `mirrorCommand` (the program's full path, then its
+ *   arguments) run without a shell, with the card as JSON on stdin.
  *
  * At most `mirrorPerHour` messages an hour; past that it holds back and
  * says so once. Every send and every failure goes in the event log, which
- * names the host or the program, never the address (a webhook address is
- * a secret).
+ * names the host or the program, never the address.
  *
  * @module dsh-plugin-decisions/mirror
  */
 import { spawn as spawnProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { basename, isAbsolute } from 'node:path';
 import { clip, errorText } from './shared/safe.js';
 import { cutLines, mirrorText } from './cards.js';
@@ -27,58 +30,60 @@ const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
 /** Longest message a webhook gets (Discord takes 2000 characters). */
 const WEBHOOK_MAX = 1900;
 
+/** What the page and the log say when the webhook has no address. */
+export const NO_ADDRESS = 'No webhook address is set yet: add it in Decisions\' settings in Plugins';
+
 /**
  * Check a webhook address: https, or http to this machine. Returns the URL,
- * or throws in words that name the setting.
+ * or throws in words (which never repeat the address).
  */
 export function checkWebhook(text) {
-    if (typeof text !== 'string' || text.trim() === '') throw new Error('decisions: mirrorUrl is empty; give the webhook address (https://…), or set mirror to "off"');
+    if (typeof text !== 'string' || text.trim() === '') throw new Error(NO_ADDRESS);
     let url;
-    try { url = new URL(text.trim()); } catch { throw new Error('decisions: mirrorUrl is not a web address; give the full webhook address, starting with https://'); }
+    try { url = new URL(text.trim()); } catch { throw new Error('The webhook address is not a web address: give the whole address, starting with https://'); }
     if (url.protocol === 'https:') return url;
     if (url.protocol === 'http:' && LOOPBACK.has(url.hostname)) return url;
-    throw new Error(`decisions: mirrorUrl must start with https:// (http:// only to this machine), not ${url.protocol}//`);
+    throw new Error(`The webhook address must start with https:// (http:// only to this machine), not ${url.protocol}//`);
 }
 
-/** Check a command sink: an absolute program path, then plain arguments. Throws in words. */
+/** Check a command sink: the program's full path, then plain arguments. Throws in words. */
 export function checkCommand(command) {
     if (!Array.isArray(command) || command.length === 0 || command.some((part) => typeof part !== 'string')) {
-        throw new Error('decisions: mirrorCommand must list the program (an absolute path) and then its arguments, for example ["/usr/local/bin/notify", "--to", "me"]');
+        throw new Error('No command is set: add mirrorCommand (the program\'s full path, then its arguments) to Decisions\' entry in DSH\'s profile');
     }
-    if (!isAbsolute(command[0])) throw new Error(`decisions: mirrorCommand must start with an absolute path to the program (got ${JSON.stringify(command[0])})`);
+    if (!isAbsolute(command[0])) throw new Error(`The command must start with the program's full path (it starts with ${JSON.stringify(clip(command[0], 80))})`);
     return command;
-}
-
-/** Where the mirror sends, in words safe to show: a host or a program name, never a secret. */
-export function mirrorPlace(config) {
-    try {
-        if (config?.mirror === 'webhook') return checkWebhook(config.mirrorUrl).host;
-        if (config?.mirror === 'command') return basename(checkCommand(config.mirrorCommand)[0]);
-    } catch { /* checkConfig already said what is wrong */ }
-    return '';
 }
 
 export class Mirror {
     /**
      * @param {object} options
-     * @param {object} options.config - Decisions' config.
+     * @param {object} options.config - Decisions' settings (read when used).
      * @param {import('./shared/journal.js').Journal} options.journal
+     * @param {() => Promise<string | undefined>} [options.readAddress] - the webhook address from DSH's key store, read for each message.
      * @param {{ warn: Function }} [options.logger]
      * @param {typeof fetch} [options.fetch]
      * @param {typeof spawnProcess} [options.spawn]
+     * @param {(path: string) => boolean} [options.exists]
      * @param {() => number} [options.now]
      */
-    constructor({ config, journal, logger, fetch = globalThis.fetch, spawn = spawnProcess, now = Date.now }) {
+    constructor({ config, journal, readAddress = async () => undefined, logger, fetch = globalThis.fetch, spawn = spawnProcess, exists = existsSync, now = Date.now }) {
         this.config = config;
         this.journal = journal;
+        this.readAddress = readAddress;
         this.logger = logger;
         this.fetch = fetch;
         this.spawn = spawn;
+        this.exists = exists;
         this.now = now;
         /** When each message of the last hour went. */
         this.sent = [];
         /** The hour (ms) the limit was last reported for, so it is said once an hour. */
         this.heldReported = 0;
+        /** The last reason nothing could be sent, and when it was logged, so it is said once an hour. */
+        this.problemReported = { text: '', at: 0 };
+        /** The webhook's host the last time its address was read (never the address). */
+        this.host = '';
         /** The last send's outcome, for the page. */
         this.last = undefined;
     }
@@ -87,18 +92,56 @@ export class Mirror {
         return this.config.mirror === 'webhook' || this.config.mirror === 'command';
     }
 
+    /** Where it sends, in words safe to show: a host or a program name. */
     get place() {
-        return mirrorPlace(this.config);
+        if (this.config.mirror === 'webhook') return this.host;
+        if (this.config.mirror === 'command') {
+            try { return basename(checkCommand(this.config.mirrorCommand)[0]); } catch { return ''; }
+        }
+        return '';
     }
 
-    /** What the page shows about the mirror. */
-    status() {
+    /**
+     * Where a message would go now: the webhook (its address read from DSH's
+     * key store each time) or the command, or the reason it cannot go.
+     * @returns {Promise<{ kind: 'webhook', url: URL, place: string } | { kind: 'command', command: string[], place: string } | { problem: string }>}
+     */
+    async target() {
+        const mode = this.config.mirror;
+        if (mode === 'webhook') {
+            let raw;
+            try { raw = await this.readAddress(); } catch (error) { return { problem: `DSH's key store did not answer: ${errorText(error, 120)}` }; }
+            try {
+                const url = checkWebhook(raw);
+                this.host = url.host;
+                return { kind: 'webhook', url, place: url.host };
+            } catch (error) {
+                return { problem: errorText(error, 200) };
+            }
+        }
+        if (mode === 'command') {
+            try {
+                const command = checkCommand(this.config.mirrorCommand);
+                if (!this.exists(command[0])) return { problem: `The command's program ${clip(command[0], 120)} does not exist` };
+                return { kind: 'command', command, place: basename(command[0]) };
+            } catch (error) {
+                return { problem: errorText(error, 200) };
+            }
+        }
+        return { problem: 'The mirror is off' };
+    }
+
+    /** What the page shows about the mirror (reads the webhook address's host, never the address). */
+    async describe() {
         const hourAgo = this.now() - 3600000;
+        const target = this.on ? await this.target() : undefined;
         return {
             mode: this.on ? this.config.mirror : 'off',
-            place: this.place,
+            place: target?.place ?? this.place,
+            key: typeof this.config.mirrorUrlEnv === 'string' ? this.config.mirrorUrlEnv : '',
             perHour: this.config.mirrorPerHour,
             lastHour: this.sent.filter((at) => at > hourAgo).length,
+            ...(target?.problem ? { problem: target.problem } : {}),
             ...(this.last ? { last: this.last } : {}),
         };
     }
@@ -115,9 +158,19 @@ export class Mirror {
         if (this.sent.length >= this.config.mirrorPerHour) {
             if (now - this.heldReported > 3600000) {
                 this.heldReported = now;
-                this.journal.add({ kind: 'mirror', text: `Held back mirrored messages: ${this.config.mirrorPerHour} went out in the last hour`, why: 'mirrorPerHour caps them; Decisions still lists everything.', state: 'held' });
+                this.journal.add({ kind: 'mirror', text: `Held back sent messages: ${this.config.mirrorPerHour} went out in the last hour`, why: 'The hourly limit in Decisions\' settings caps them; Decisions still lists everything.', state: 'held' });
             }
             return { ok: false, reason: 'the hourly limit is reached' };
+        }
+        const target = await this.target();
+        if (target.problem) {
+            // Said once an hour, or when the reason changes: every card would say the same.
+            if (this.problemReported.text !== target.problem || now - this.problemReported.at > 3600000) {
+                this.problemReported = { text: target.problem, at: now };
+                this.journal.add({ kind: 'mirror', text: 'Could not send new cards elsewhere', reason: target.problem, state: 'not sent' });
+            }
+            this.last = { at: now, ok: false, reason: target.problem };
+            return { ok: false, reason: target.problem };
         }
         this.sent.push(now);
         const entry = this.journal.add({
@@ -125,10 +178,10 @@ export class Mirror {
             cardId: card.id,
             ...(card.sessionId ? { sessionId: card.sessionId } : {}),
             title: card.title ?? '',
-            text: `Mirrored to ${this.place || 'the mirror'}`,
+            text: `Sent to ${target.place}`,
             state: 'sending',
         });
-        const result = await this.deliver(mirrorText(card), card);
+        const result = await this.deliver(target, mirrorText(card), card);
         this.journal.set(entry.id, result.ok ? { state: 'sent' } : { state: 'not sent', reason: result.reason });
         this.last = { at: this.now(), ok: result.ok, ...(result.reason ? { reason: result.reason } : {}) };
         return result;
@@ -136,26 +189,26 @@ export class Mirror {
 
     /** Send a test message now (from the page), past the hourly limit. */
     async test() {
-        if (!this.on) return { ok: false, reason: 'The mirror is off. Set mirror to "webhook" or "command" in Plugins → Decisions.' };
-        const entry = this.journal.add({ kind: 'mirror', text: `Sent a test message to ${this.place || 'the mirror'}`, state: 'sending', by: 'you' });
-        const result = await this.deliver('Decisions can reach you here. When something waits on you in DSH, a short note comes here.', { kind: 'test', title: 'Test', question: 'Decisions can reach you here.' });
+        if (!this.on) return { ok: false, reason: 'Sending elsewhere is off. Choose Webhook or Command in Decisions\' settings in Plugins first.' };
+        const target = await this.target();
+        const entry = this.journal.add({ kind: 'mirror', text: `Sent a test message${target.place ? ` to ${target.place}` : ''}`, state: 'sending', by: 'you' });
+        const result = target.problem ? { ok: false, reason: target.problem }
+            : await this.deliver(target, 'Decisions can reach you here. When something waits on you in DSH, a short note comes here.', { kind: 'test', title: 'Test', question: 'Decisions can reach you here.' });
         this.journal.set(entry.id, result.ok ? { state: 'sent' } : { state: 'not sent', reason: result.reason });
         this.last = { at: this.now(), ok: result.ok, ...(result.reason ? { reason: result.reason } : {}) };
-        return result;
+        return { ...result, place: target.place ?? '' };
     }
 
-    async deliver(text, card) {
+    async deliver(target, text, card) {
         try {
-            if (this.config.mirror === 'webhook') return await this.post(text);
-            return await this.run(text, card);
+            if (target.kind === 'webhook') return await this.post(target.url, text);
+            return await this.run(target.command, text, card);
         } catch (error) {
             return { ok: false, reason: errorText(error, 200) };
         }
     }
 
-    async post(text) {
-        let url;
-        try { url = checkWebhook(this.config.mirrorUrl); } catch (error) { return { ok: false, reason: errorText(error).replace(/^decisions: /, '') }; }
+    async post(url, text) {
         if (typeof this.fetch !== 'function') return { ok: false, reason: 'this DSH has no way to make web requests' };
         let response;
         try {
@@ -175,9 +228,7 @@ export class Mirror {
         return { ok: false, reason: `${url.host} answered ${response.status}${response.status === 401 || response.status === 403 || response.status === 404 ? ' (check the webhook address)' : response.status === 429 ? ' (too many messages; it will take more later)' : ''}` };
     }
 
-    run(text, card) {
-        let command;
-        try { command = checkCommand(this.config.mirrorCommand); } catch (error) { return Promise.resolve({ ok: false, reason: errorText(error).replace(/^decisions: /, '') }); }
+    run(command, text, card) {
         const name = basename(command[0]);
         return new Promise((resolve) => {
             let child;

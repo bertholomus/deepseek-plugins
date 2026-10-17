@@ -1,14 +1,39 @@
 /**
- * Decisions' config check, apart from DSH's packages so it is tested
- * anywhere: every wrong value stops the plugin with a sentence that names
- * the setting and what it takes.
+ * Decisions' settings in words: their titles, which ones its page in
+ * Plugins can change while it runs, what each must be, and what its log
+ * says after a save. No DSH packages here, so the checks run in plain unit
+ * tests too.
+ *
+ * A wrong value never stops Decisions from starting: it lists and holds
+ * nothing, and its page says which setting is wrong, what it must be, and
+ * where to change it.
  *
  * @module dsh-plugin-decisions/config
  */
-import { existsSync } from 'node:fs';
-import { checkCommand, checkWebhook } from './mirror.js';
+import { commandLine, keyName, oneOf, onOff, wholeNumber } from './shared/settings.js';
 
-/** The defaults (lib/index.js Config). */
+/** The settings, in the words the page, the settings form and the errors use. */
+export const SETTING_TITLES = Object.freeze({
+    enabled: 'Decisions on',
+    approvals: 'Tools waiting for approval',
+    questions: 'Questions in the question box',
+    replies: 'Replies that end with a question',
+    threads: 'Threads that need a decision',
+    notify: 'A notification for each new card',
+    windowHours: 'Keep a reply\'s question for',
+    mirror: 'Also send new cards to',
+    mirrorUrlEnv: 'The key that holds the webhook address',
+    mirrorCommand: 'The command',
+    mirrorPerHour: 'Messages sent an hour, at most',
+});
+
+/** The settings its page in Plugins can change while it runs. */
+export const LIVE_SETTINGS = Object.freeze(['approvals', 'questions', 'replies', 'threads', 'notify', 'windowHours', 'mirror', 'mirrorUrlEnv', 'mirrorPerHour']);
+
+/** Where the webhook address is kept: a key in DSH's key store (or the environment DSH starts in), never the settings file. */
+export const WEBHOOK_KEY = 'DECISIONS_WEBHOOK_URL';
+
+/** What Decisions uses when the profile sets nothing (the defaults in lib/index.js Config). */
 export const DEFAULTS = Object.freeze({
     enabled: true,
     approvals: true,
@@ -18,27 +43,43 @@ export const DEFAULTS = Object.freeze({
     notify: true,
     windowHours: 72,
     mirror: 'off',
-    mirrorUrl: '',
+    mirrorUrlEnv: WEBHOOK_KEY,
     mirrorCommand: Object.freeze([]),
     mirrorPerHour: 30,
 });
 
-/** Check the config and say what is wrong in words (DSH shows this when the plugin cannot start). */
-export function checkConfig(config) {
-    for (const key of ['enabled', 'approvals', 'questions', 'replies', 'threads', 'notify']) {
-        if (typeof config?.[key] !== 'boolean') throw new Error(`decisions: ${key} must be true or false (got ${JSON.stringify(config?.[key])})`);
-    }
-    const whole = (key, min, max) => {
-        const value = config?.[key];
-        if (!Number.isInteger(value) || value < min || value > max) throw new Error(`decisions: ${key} must be a whole number from ${min} to ${max} (got ${JSON.stringify(value)})`);
-    };
-    whole('windowHours', 1, 720);
-    whole('mirrorPerHour', 1, 500);
-    if (!['off', 'webhook', 'command'].includes(config?.mirror)) throw new Error(`decisions: mirror must be "off", "webhook" or "command" (got ${JSON.stringify(config?.mirror)})`);
-    if (config.mirror === 'webhook') checkWebhook(config.mirrorUrl);
-    if (config.mirror === 'command') {
-        const command = checkCommand(config.mirrorCommand);
-        if (!existsSync(command[0])) throw new Error(`decisions: mirrorCommand's program ${JSON.stringify(command[0])} does not exist`);
-    }
+/** Check the settings and say what is wrong in words (a SettingError naming the setting). */
+export function checkConfig(settings) {
+    const t = SETTING_TITLES;
+    onOff(settings, 'enabled', t.enabled);
+    for (const key of ['approvals', 'questions', 'replies', 'threads', 'notify']) onOff(settings, key, t[key]);
+    wholeNumber(settings, 'windowHours', 1, 720, 'hours', t.windowHours);
+    oneOf(settings, 'mirror', ['off', 'webhook', 'command'], t.mirror);
+    keyName(settings, 'mirrorUrlEnv', t.mirrorUrlEnv);
+    commandLine(settings, 'mirrorCommand', { optional: true }, t.mirrorCommand);
+    wholeNumber(settings, 'mirrorPerHour', 1, 500, '', t.mirrorPerHour);
 }
 
+/** The settings a save changed, in words, from DSH's changed paths. */
+export function changedWords(paths) {
+    const keys = [...new Set((Array.isArray(paths) ? paths : []).map((path) => (Array.isArray(path) ? path[0] : path)).filter((key) => typeof key === 'string'))];
+    return keys.map((key) => SETTING_TITLES[key] ?? key).join(', ');
+}
+
+/**
+ * After a save in Plugins (DSH's `loader/volatile-update`): check again,
+ * and the log entry that says what changed, or undefined when nothing did.
+ * @param {import('./shared/settings.js').SettingsCheck} check
+ * @param {readonly (readonly string[])[]} paths - the settings DSH changed.
+ */
+export function savedEntry(check, paths) {
+    const was = check.problem?.text;
+    check.run();
+    const words = changedWords(paths);
+    if (!check.ok) {
+        return { kind: 'settings', text: `Settings changed${words ? `: ${words}` : ''}; Decisions waits until a wrong one is fixed`, why: `${check.problem.text}.`, state: 'waiting on a setting', by: 'you' };
+    }
+    if (was) return { kind: 'settings', text: 'Settings fixed: Decisions is working again', why: `You saved ${words || 'its settings'} in Plugins.`, state: 'done', by: 'you' };
+    if (words) return { kind: 'settings', text: `Settings changed: ${words}`, why: 'You saved them in Plugins. They apply now.', state: 'done', by: 'you' };
+    return undefined;
+}

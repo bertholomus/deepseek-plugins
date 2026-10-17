@@ -94,6 +94,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         `.${P}-set-reset:focus-visible{outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px;border-radius:var(--dsw-radius-xs)}`,
         `.${P}-set-note{margin:10px 0 0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary);max-width:72ch}`,
         `.${P}-set-group{margin:14px 0 2px;font:var(--dsw-font-xs-strong-13);color:var(--dsw-alias-label-secondary)}`,
+        `.${P}-set-error{margin:4px 0 0;font:var(--dsw-font-xs-13);color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary))}`,
         `@media (max-width:560px){.${P}-set-row{flex-wrap:wrap}.${P}-set-control{width:100%;justify-content:flex-start}}`,
         `body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop),body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop)::before,body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop)::after,body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop) *,body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop) *::before,body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop) *::after{animation:none!important;transition:none!important}`,
         `@media (prefers-reduced-motion:reduce){:is(.${P}-page,.${P}-pane,.${P}-pop),:is(.${P}-page,.${P}-pane,.${P}-pop)::before,:is(.${P}-page,.${P}-pane,.${P}-pop)::after,:is(.${P}-page,.${P}-pane,.${P}-pop) *,:is(.${P}-page,.${P}-pane,.${P}-pop) *::before,:is(.${P}-page,.${P}-pane,.${P}-pop) *::after{animation:none!important;transition:none!important}}`,
@@ -174,6 +175,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     function setNavigation(service) {
         nav.current = service;
     }
+    /** Whether this DSH can open a plugin's page in Plugins (draw a button for it only then). */
+    const canOpenPlugin = () => typeof nav.current?.openBundle === 'function';
     /** Open a plugin's page in DSH's Plugins page (its switch and its settings); false when this DSH cannot. */
     function openPlugin(packageName) {
         try {
@@ -367,7 +370,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     function toneOf(word) {
         switch (word) {
             case 'running': case 'working': case 'queued': case 'in the queue': case 'sending': case 'starting': case 'waiting for a round': return 'info';
-            case 'waiting for approval': case 'waiting on you': case 'needs a decision': case 'asked you': case 'cut off': case 'cut short': case 'backed off': case 'gave up': case 'held': case 'not confirmed': case 'waiting on a setting': return 'warning';
+            case 'waiting for approval': case 'waiting on you': case 'needs a decision': case 'asked you': case 'asks you': case 'cut off': case 'cut short': case 'backed off': case 'gave up': case 'held': case 'not confirmed': case 'waiting on a setting': return 'warning';
             case 'failed': case 'blocked': case 'not delivered': case 'not started': case 'not sent': return 'danger';
             case 'delivered': case 'started': case 'done': case 'answered': case 'read': case 'sent': return 'success';
             case 'stopped': case 'paused': return 'neutral';
@@ -546,6 +549,42 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         return 'This value does not fit here.';
     }
 
+    /**
+     * A secret's row (a webhook address, a token): DSH's own secret field,
+     * which shows whether one is set and where from, never the value. What is
+     * typed is checked as it is typed (`f.check(text)` gives the words for a
+     * value that does not fit, which then is not saved), stored in DSH's key
+     * store on Save, and removable here when it lives there.
+     */
+    function SecretRow({ f, state, disabled, actions, keeper }) {
+        const [draft, setDraft] = React.useState('');
+        const [problem, setProblem] = React.useState('');
+        const [removing, setRemoving] = React.useState(false);
+        // Saved or discarded: the form no longer holds the draft, so the field empties.
+        React.useEffect(() => { if (state.text === '' && draft !== '' && !problem) setDraft(''); }, [state.text]);
+        const info = state.key ?? {};
+        const fromEnvironment = info.configured && info.source === 'env';
+        const stateLabel = !info.configured ? (f.unsetLabel ?? 'Not set')
+            : fromEnvironment ? (f.envLabel ?? 'Set where DSH starts')
+                : (f.setLabel ?? 'Set');
+        const onEdit = (text) => {
+            setDraft(text);
+            const words = text.trim() === '' || typeof f.check !== 'function' ? '' : f.check(text.trim()) || '';
+            setProblem(words);
+            actions.edit(f.name, words ? '' : text);
+        };
+        const remove = async () => {
+            setRemoving(true);
+            try { await keeper?.remove(); } finally { setRemoving(false); }
+        };
+        return h('div', { className: `${P}-set-row`, 'data-suite-setting': f.name, 'data-suite-secret': info.configured ? (fromEnvironment ? 'env' : 'set') : 'unset' },
+            h('div', { className: `${P}-set-text` },
+                h(ui.SettingsSecretField, { id: `${P}-set-${f.name}`, label: f.title, hint: fromEnvironment ? (f.envHint ?? f.hint) : f.hint, disabled: disabled || info.writable === false, text: draft, configured: info.configured === true, stateLabel, onEdit }),
+                problem ? h('p', { className: `${P}-set-error`, role: 'alert' }, problem) : null,
+                info.configured && !fromEnvironment && info.writable !== false && keeper
+                    ? h('button', { type: 'button', className: `${P}-set-reset`, disabled: disabled || removing, onClick: () => void remove() }, f.removeLabel ?? 'Remove it') : null));
+    }
+
     /** One setting's row: a switch or a choice drawn here, anything typed in DSH's own field. */
     function SettingRow({ f, state, disabled, actions }) {
         const id = `${P}-set-${f.name}`;
@@ -594,7 +633,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const rows = [];
         for (const f of fields) {
             if (f.group) rows.push(h('h4', { key: `g-${f.name}`, className: `${P}-set-group` }, f.group));
-            rows.push(h(SettingRow, { key: f.name, f, state: snap[f.name] ?? { text: '', overridden: false, invalid: false }, disabled, actions: form.actions }));
+            const state = snap[f.name] ?? { text: '', overridden: false, invalid: false };
+            if (f.kind === 'secret') {
+                const keeper = form.keepers?.get(f.name);
+                if (keeper) rows.push(h(SecretRow, { key: f.name, f, state, disabled, actions: form.actions, keeper }));
+                continue;
+            }
+            rows.push(h(SettingRow, { key: f.name, f, state, disabled, actions: form.actions }));
         }
         return h('div', { className: `${P}-settings`, 'data-suite-settings': bundle },
             h(ui.SettingsForm, { labels, state: snap, onSave: form.actions.save, onDiscard: form.actions.discard },
@@ -603,27 +648,89 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     }
 
     /**
+     * A secret kept in DSH's key store (never the settings file), under the
+     * key name the setting `f.keyFrom` holds (else `f.defaultKey`): whether
+     * one is set and where from, storing what the person typed, removing it.
+     * Values only ever go to DSH; nothing here reads one back.
+     */
+    function keyKeeper(ctx, scope, f, changed) {
+        const credentials = ctx.remote.credentials;
+        const refOf = () => {
+            const named = scope.getSnapshot?.()?.value?.[f.keyFrom];
+            return typeof named === 'string' && named ? named : f.defaultKey;
+        };
+        const keeper = {
+            info: { ref: refOf(), configured: false, writable: true },
+            ref: refOf,
+            async read() {
+                const ref = refOf();
+                try {
+                    const response = await credentials.describe([ref]);
+                    if (response?.ok !== true || ref !== refOf()) return;
+                    const view = response.value?.[ref];
+                    keeper.info = { ref, configured: view?.configured === true, writable: view?.writable !== false, ...(typeof view?.source === 'string' ? { source: view.source } : {}) };
+                } catch {
+                    keeper.info = { ...keeper.info, ref };
+                }
+                changed();
+            },
+            async write(text) {
+                let response;
+                try { response = await credentials.set(refOf(), text); } catch { response = { ok: false }; }
+                await keeper.read();
+                return response?.ok !== false && keeper.info.configured;
+            },
+            async remove() {
+                try { await credentials.unset(refOf()); } catch { /* the read below shows what is stored */ }
+                await keeper.read();
+            },
+        };
+        return keeper;
+    }
+
+    /**
      * Put the plugin's settings on its page in Plugins: DSH's own settings
      * form (staged as typed, written on Save), registered only while DSH
      * serves them, which is while the plugin runs. Each field:
-     * `{ name, kind: 'switch'|'choice'|'number'|'numbers'|'text', title, hint, default, min?, max?, options?, group? }`.
+     * `{ name, kind: 'switch'|'choice'|'number'|'numbers'|'text'|'secret', title, hint, default, min?, max?, options?, group? }`;
+     * a secret also takes `keyFrom`, `defaultKey`, `check(text)`, and its
+     * labels (`setLabel`, `envLabel`, `unsetLabel`, `envHint`, `removeLabel`),
+     * and needs DSH's `remote.credentials`.
      * Does nothing on a DSH without settings forms.
      */
     function applySettings(ctx, { entry, name, summary, fields, note }) {
         if (typeof ui.SettingsFormModel !== 'function' || typeof ui.SettingsForm !== 'function' || typeof ctx.configForms?.get !== 'function') return;
-        const model = new ui.SettingsFormModel(ctx.configForms.get(entry), fields.map(fieldSpec));
-        const store = model.bind(() => ({ ...model.shell(), ...Object.fromEntries(fields.map((f) => [f.name, model.field(f.name)])) }));
-        const form = { subscribe: (fn) => store.subscribe(fn), getSnapshot: () => store.getSnapshot(), actions: model.actions() };
-        const View = (props) => (props?.view === 'summary' ? summary : h(SettingsBody, { form, name, fields, note }));
+        const scope = ctx.configForms.get(entry);
+        const canKeep = typeof ui.SettingsSecretField === 'function' && typeof ctx.remote?.credentials?.describe === 'function';
+        const plain = fields.filter((f) => f.kind !== 'secret');
+        const secrets = canKeep ? fields.filter((f) => f.kind === 'secret') : [];
+        let store;
+        const keepers = new Map(secrets.map((f) => [f.name, keyKeeper(ctx, scope, f, () => store?.set(projection()))]));
+        const model = new ui.SettingsFormModel(scope, plain.map(fieldSpec), secrets.map((f) => ({ field: f.name, write: (text) => keepers.get(f.name).write(text) })));
+        const projection = () => ({
+            ...model.shell(),
+            ...Object.fromEntries(plain.map((f) => [f.name, model.field(f.name)])),
+            ...Object.fromEntries(secrets.map((f) => [f.name, { ...model.field(f.name), key: keepers.get(f.name).info }])),
+        });
+        store = model.bind(projection);
+        const form = { subscribe: (fn) => store.subscribe(fn), getSnapshot: () => store.getSnapshot(), actions: model.actions(), keepers };
+        const View = (props) => (props?.view === 'summary' ? summary : h(SettingsBody, { form, name, fields: [...plain, ...secrets].sort((a, b) => fields.indexOf(a) - fields.indexOf(b)), note }));
         ctx.effect(() => () => model.dispose(), `${bundle}: settings form`);
+        if (keepers.size > 0) {
+            const readAll = () => { for (const keeper of keepers.values()) void keeper.read(); };
+            readAll();
+            // A key stored elsewhere (another page, another window) or a new key name: read again.
+            ctx.effect(() => scope.subscribe?.(() => { for (const keeper of keepers.values()) if (keeper.ref() !== keeper.info.ref) void keeper.read(); }) ?? (() => {}), `${bundle}: settings keys`);
+            if (typeof ctx.remote.$on === 'function') ctx.effect(() => ctx.remote.$on('credentials/reference-updated', (ref) => { for (const keeper of keepers.values()) if (keeper.info.ref === ref) void keeper.read(); }), `${bundle}: settings key changes`);
+        }
         ctx.effect(() => ctx.configForms.whileServed([entry], () => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({ name: 'plugins.bundle.config', key: bundle }, View))), `${bundle}: settings page`);
     }
 
     return {
         P, css, injectStyle, removeStyle, setConnection, whenConnected, link, hub, useLive,
-        setNavigation, openPlugin, fieldSpec, invalidWords, applySettings,
+        setNavigation, canOpenPlugin, openPlugin, fieldSpec, invalidWords, applySettings,
         timeText, agoText, spanText, toneOf, isRecord,
-        Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText, Trouble, SettingsProblem, SettingsBody, SettingRow,
+        Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText, Trouble, SettingsProblem, SettingsBody, SettingRow, SecretRow,
     };
 }
 // </suite-kit>

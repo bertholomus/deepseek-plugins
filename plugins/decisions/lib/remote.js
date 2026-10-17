@@ -7,17 +7,19 @@
  * @module dsh-plugin-decisions/remote
  */
 import { Remote, RemoteError, bindTypertRemote } from '@deepseek-ai/dsh-typert-protocol';
-import { pageState } from './page.js';
+import { pageState, working } from './page.js';
 
 export const NAMESPACE = 'dsh-plugin-decisions';
 export const SERVICE = 'dshPluginDecisionsRemote';
 
 export class DecisionsRemote {
-    constructor({ inbox, journal, config, mirror, notifications }) {
+    constructor({ inbox, journal, config, check, mirror, watch, notifications }) {
         this.inbox = inbox;
         this.journal = journal;
         this.config = config;
+        this.check = check;
         this.mirror = mirror;
+        this.watch = watch;
         this.notifications = notifications;
         this.typertRemote = bindTypertRemote(this, SERVICE, { namespace: NAMESPACE });
     }
@@ -31,8 +33,10 @@ export class DecisionsRemote {
         }
     }
 
+    /** Refuse, in words, while Decisions does not work: what to do first. */
     off() {
-        if (this.config.enabled === false) throw new Error('Decisions is switched off in its settings (Plugins → Decisions → enabled).');
+        if (this.config.enabled === false) throw new Error('Decisions is switched off in DSH\'s profile (enabled: false), so it answers nothing. Answer in the session instead.');
+        if (!working(this)) throw new Error('Decisions is waiting for a setting to be fixed: see the top of its page.');
     }
 
     /** Everything the page shows. */
@@ -42,7 +46,7 @@ export class DecisionsRemote {
 
     /** The panel icon's count: what waits, and how much of it holds a running turn. */
     async badge() {
-        return this.run(async () => (this.config.enabled === false ? { waiting: 0, urgent: 0, off: true } : this.inbox.badge()));
+        return this.run(async () => (working(this) ? this.inbox.badge() : { waiting: 0, urgent: 0, off: true }));
     }
 
     /** Answer one card; `answer`'s shape depends on the card (see Inbox.answer). */
@@ -76,8 +80,8 @@ export class DecisionsRemote {
         return this.run(async () => {
             this.off();
             const result = await this.mirror.test();
-            if (!result.ok) throw new Error(`Not sent: ${result.reason}`);
-            return { ok: true, place: this.mirror.place };
+            if (!result.ok) throw new Error(`Not sent: ${String(result.reason).replace(/\.$/, '')}.`);
+            return { ok: true, place: result.place || this.mirror.place };
         });
     }
 }

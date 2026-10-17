@@ -120,6 +120,7 @@ export class Inbox {
     start() {
         if (this.started) return;
         this.started = true;
+        this.holds.resume();
         this.off = this.watch.on((event) => this.onWatch(event));
         this.soon(0);
     }
@@ -409,7 +410,7 @@ export class Inbox {
     answerApproval(card, input) {
         const outcome = APPROVAL_ANSWERS[input.decision];
         if (!outcome) throw new Error('Choose Allow once or Reject.');
-        const entry = this.logAnswer(card, { text: input.decision === 'allow' ? `Allowed once: ${card.tool}` : `Rejected: ${card.tool}`, answer: input.decision === 'allow' ? 'Allow once' : 'Reject', state: 'sending' });
+        const entry = this.logAnswer(card, { text: input.decision === 'allow' ? 'Allowed once' : 'Rejected', answer: input.decision === 'allow' ? 'Allow once' : 'Reject', state: 'sending' });
         if (!this.holds.answer(card.id, outcome)) {
             const reason = 'the session answered it first, or its turn stopped';
             this.journal.set(entry.id, { state: 'not delivered', reason });
