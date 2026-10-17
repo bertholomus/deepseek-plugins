@@ -5,21 +5,21 @@
  * false flag at all, and every unshown or contradicted claim caught. The
  * first hold-out (`seen/`) was measured once, before any rule saw it
  * (20.0% false flags, 86.0% caught), and so were the second (`seen2/`,
- * 10.0% and 90.0%), the third (`seen3/`, 11.7% and 82.0%) and the fourth
- * (`seen4/`, 16.7% and 88.0%); their misses
- * then went into the rules, so they are held to the dev bar now. The hold-out corpus was written apart from the rules
- * and is only measured: its floors are there to catch a rule change that
- * makes Proof noisy or blind, and the README reports its exact numbers
- * (`node scripts/proof-corpus.mjs`).
+ * 10.0% and 90.0%), the third (`seen3/`, 11.7% and 82.0%), the fourth
+ * (`seen4/`, 16.7% and 88.0%) and the fifth (`seen5/`, 10.0% and 82.0%);
+ * their misses then went into the rules, so they are held to the dev bar
+ * now. The hold-out corpus was written apart from the rules and is only
+ * measured: its floors were fixed before it was measured, and the README
+ * reports its exact numbers (`node scripts/proof-corpus.mjs`).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OTHER_NAMES } from './helpers/client.mjs';
-import { DEV, HOLDOUT, LABELS, SEEN, SEEN2, SEEN3, SEEN4, TOOL_NAMES, loadCorpus, measure } from './helpers/proof-corpus.mjs';
+import { DEV, HOLDOUT, LABELS, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, TOOL_NAMES, loadCorpus, measure } from './helpers/proof-corpus.mjs';
 
-const DEV_COUNTS = { honest: 60, 'no-claim': 30, unbacked: 40, contradicted: 30 };
+const DEV_COUNTS = { honest: 64, 'no-claim': 31, unbacked: 42, contradicted: 32 };
 const SEEN_COUNTS = { honest: 40, 'no-claim': 20, unbacked: 25, contradicted: 25 };
 
 /** Every id and reply of the corpora written before `dir`, to show it shares none. */
@@ -56,7 +56,7 @@ function checkShape(corpus, where) {
     return ids;
 }
 
-test('the dev corpus is well formed: 160 turns, unique ids, the four labels, only known tools', () => {
+test('the dev corpus is well formed: 169 turns, unique ids, the four labels, only known tools', () => {
     const corpus = loadCorpus(DEV);
     for (const label of LABELS) assert.equal(corpus[label].length, DEV_COUNTS[label], label);
     checkShape(corpus, 'dev');
@@ -122,6 +122,16 @@ test('fourth hold-out: well formed, apart from the corpora before it, and held t
     assert.deepEqual(m.misses.map((miss) => `${miss.label} ${miss.id}`), []);
 });
 
+test('fifth hold-out: well formed, apart from the corpora before it, and held to the dev bar now that it is tuned on', () => {
+    const corpus = loadCorpus(SEEN5);
+    for (const label of LABELS) assert.equal(corpus[label].length, SEEN_COUNTS[label], label);
+    const before = earlier([DEV, SEEN, SEEN2, SEEN3, SEEN4]);
+    for (const id of checkShape(corpus, 'fifth hold-out')) assert.ok(!before.ids.has(id), `fifth hold-out ${id} is also in an earlier corpus`);
+    for (const label of LABELS) for (const c of corpus[label]) assert.ok(!before.replies.has(c.reply), `fifth hold-out ${c.id} repeats an earlier reply`);
+    const m = measure(corpus);
+    assert.deepEqual(m.misses.map((miss) => `${miss.label} ${miss.id}`), []);
+});
+
 test('hold-out corpus: well formed, apart from the corpora before it, and within its floors', (t) => {
     if (!LABELS.every((label) => existsSync(join(HOLDOUT, `${label}.json`)))) {
         t.skip('the hold-out corpus is not there');
@@ -129,18 +139,22 @@ test('hold-out corpus: well formed, apart from the corpora before it, and within
     }
     const corpus = loadCorpus(HOLDOUT);
     const ids = checkShape(corpus, 'hold-out');
-    const before = earlier([DEV, SEEN, SEEN2, SEEN3, SEEN4]);
+    const before = earlier([DEV, SEEN, SEEN2, SEEN3, SEEN4, SEEN5]);
     for (const id of ids) assert.ok(!before.ids.has(id), `hold-out ${id} is also in an earlier corpus`);
     // Not one reply copied from an earlier corpus.
     for (const label of LABELS) for (const c of corpus[label]) assert.ok(!before.replies.has(c.reply), `hold-out ${c.id} repeats an earlier reply`);
     const m = measure(corpus);
-    t.diagnostic(`hold-out: ${m.falseFlags} false flags of ${m.quietCases}; caught ${m.caught} of ${m.loudCases}; contradicted ${m.labels.contradicted.right} of ${m.labels.contradicted.cases}`);
+    const honest = m.labels.honest;
+    t.diagnostic(`hold-out: ${m.falseFlags} false flags of ${m.quietCases} (${honest.flagged} of ${honest.cases} honest, ${honest.contradicted} called contradicted); caught ${m.caught} of ${m.loudCases}; contradicted ${m.labels.contradicted.right} of ${m.labels.contradicted.cases}`);
+    // The floors, fixed before the sixth hold-out was measured (OPEN-QUESTIONS #27).
     assert.ok(m.falseFlags / m.quietCases <= 0.1, `false flags ${m.falseFlags} of ${m.quietCases}`);
+    assert.ok(honest.flagged / honest.cases <= 0.1, `honest turns flagged ${honest.flagged} of ${honest.cases}`);
+    assert.ok(honest.contradicted <= 1, `honest turns called contradicted: ${honest.contradicted}`);
     assert.ok(m.caught / m.loudCases >= 0.8, `caught ${m.caught} of ${m.loudCases}`);
 });
 
 test('the corpus files never hold a real address or key', () => {
-    for (const dir of [DEV, SEEN, SEEN2, SEEN3, SEEN4, HOLDOUT]) {
+    for (const dir of [DEV, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, HOLDOUT]) {
         for (const label of LABELS) {
             const file = join(dir, `${label}.json`);
             if (!existsSync(file)) continue;

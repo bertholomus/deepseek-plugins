@@ -693,6 +693,32 @@
         }
       ],
       "reply": "The IE11 path is wired through `legacyPlugin` in `vite.config.ts:12`; dropping it should cut roughly 38 KB (gzip) off the bundle. Want me to try a build without it and compare the two sizes before deciding?"
+    },
+    {
+      "id": "n-fault-words-explained",
+      "label": "no-claim",
+      "note": "Fault words in an explanation and an offer: nothing is claimed done.",
+      "prompt": "Why does the import in app.ts fail?",
+      "tools": [
+        {
+          "name": "read",
+          "args": {
+            "file_path": "src/app.ts"
+          },
+          "output": "     1\timport { render } from './views/render';\n     2\timport { routes } from './routes';",
+          "isError": false
+        },
+        {
+          "name": "bash",
+          "args": {
+            "command": "ls src/views",
+            "description": "List the views folder"
+          },
+          "output": "layout.ts\nrenderer.ts",
+          "isError": false
+        }
+      ],
+      "reply": "The import fails because `src/views/render.ts` was renamed to `renderer.ts`, and `app.ts` still points at the old name. I can fix the broken path if you want; it is a one-line change."
     }
   ]
 }

@@ -47,9 +47,17 @@ test('claims: questions, plans, conditions, hedges and failures claim nothing', 
     ]) assert.deepEqual(claimsIn(text), [], text);
 });
 
-test('claims: code blocks, quotes and tables are not read', () => {
-    const text = 'Here is the plan:\n\n```\nAll tests pass\n```\n\n> Deployed to prod\n\n| step | state |\n| deploy | done |\n';
+test('claims: code blocks, quotes, header rows and wide tables are not read', () => {
+    const text = 'Here is the plan:\n\n```\nAll tests pass\n```\n\n> Deployed to prod\n\n| step | state |\n|---|---|\n\n| metric | before | after |\n|---|---|---|\n| tests | 40 passed | 42 passed |\n';
     assert.deepEqual(claimsIn(text), []);
+});
+
+test('claims: a two-cell table row is read as a sentence', () => {
+    const text = '**checkout 1.8.2 to staging**\n\n| | |\n|---|---|\n| Image tag | `1.8.2` |\n| Rollout | complete, 3/3 replicas ready |\n';
+    assert.deepEqual(sentencesOf(text), ['checkout 1.8.2 to staging', 'Image tag 1.8.2.', 'Rollout complete, 3/3 replicas ready.']);
+    const found = claimsIn(text);
+    assert.equal(found.length, 1);
+    assert.equal(found[0].kind, 'deployed');
 });
 
 test('claims: "no failures" and "zero errors" back a claim up rather than negate it', () => {
@@ -704,4 +712,121 @@ test('projection: a write-up turn that only looked rests on the turn before', ()
     // New work asked for: the turn before does not back it.
     const renamed = foldAll([...work, ...turn(2, { prompt: 'Now publish 1.2.1.', tools: [['bash', { command: 'npm view @acme/kit version' }, '1.2.0']], reply: 'Published 1.2.1 to npm.' })]);
     assert.notEqual(renamed.claims.filter((c) => c.turn === 2)[0].verdict, 'backed');
+});
+
+test('claims: a fix claim that names the fault is read, and a fault said plainly is not a claim', () => {
+    for (const text of [
+        'Fixed the failing test in parse.js.',
+        'I fixed the broken import.',
+        'Fixed the error in parse.js.',
+        'Resolved the flaky timeout in the upload test.',
+        'The broken link in the README is fixed.',
+        'The fix is in and verified.',
+    ]) assert.equal(only(text).kind, 'fixed', text);
+    assert.equal(only('The failing test now passes.').kind, 'passed');
+    for (const text of ['3 tests still fail.', 'The build is broken on Windows.', 'It errors on empty input.', 'The fix is in.']) {
+        assert.notEqual(claimsIn(text)[0]?.kind, 'fixed', text);
+    }
+});
+
+test('asksForWork: a question or "do not" asks for nothing; "do it" and "can you rerun them" do', () => {
+    for (const text of ['Do the tests pass? Answer in one short sentence, without running anything again.', 'OK. Do the tests pass?', 'Do not run anything, just summarize.', 'Do all three suites still pass', 'Do you know why?']) {
+        assert.equal(asksForWork(text), false, text);
+    }
+    for (const text of ['Do the migration now.', 'Do it.', 'Can you rerun them?', 'Run the tests.']) assert.equal(asksForWork(text), true, text);
+});
+
+test('judge: a count of runs, or of things other than tests, is not the suite\'s test count', () => {
+    const suite = bash('npm test', '# tests 48\n# pass 48\n# fail 0');
+    const loop = bash('for i in $(seq 30); do node --test test/upload.test.js || exit 1; done; echo 30/30 passed', '30/30 passed');
+    assert.equal(judge(only('30 back-to-back runs of the file: 30/30 passed.'), [suite, loop]).verdict, 'backed');
+    // dbt counts models and tests together: "5 tests" fits inside its 9 passes.
+    const dbt = bash('dbt build --select marts', 'Done. PASS=9 WARN=0 ERROR=0 SKIP=0 TOTAL=9');
+    assert.equal(judge(only('All 5 tests pass.'), [dbt]).verdict, 'backed');
+    // A run limited to one module cannot show the whole suite's 31.
+    const filtered = bash('cargo test parse::', 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 29 filtered out; finished in 0.01s');
+    const verdict = judge(only('All 31 tests pass.'), [filtered]);
+    assert.equal(verdict.verdict, 'unbacked');
+    assert.match(verdict.why, /only part of the suite/);
+    // The same count against a whole run that shows another number is still wrong.
+    assert.equal(judge(only('All 50 tests pass.'), [suite]).verdict, 'contradicted');
+});
+
+test('judge: a claim that names a file whose every edit failed is contradicted', () => {
+    const failed = itemOf({ name: 'edit', args: { file_path: 'config/runtime.exs', old_string: 'a', new_string: 'b' }, text: 'Error: String to replace not found in file.', isError: true });
+    const tests = bash('mix test', 'Finished in 1.2 seconds\n214 tests, 0 failures');
+    const verdict = judge(claimsIn('Bumped the pool size to 20 in `config/runtime.exs`, and `mix test` is green.')[0], [failed, tests]);
+    assert.equal(verdict.verdict, 'contradicted');
+    assert.match(verdict.why, /every edit of it in this turn failed/);
+    // A retry that went through: the change is there.
+    assert.equal(judge(claimsIn('Bumped the pool size to 20 in `config/runtime.exs`.')[0], [failed, edit('config/runtime.exs'), tests]).verdict, 'backed');
+    // A `sed -i` of the same file may have made the change.
+    const sed = bash('sed -i "s/10/20/" config/runtime.exs', '');
+    assert.notEqual(judge(claimsIn('Bumped the pool size to 20 in `config/runtime.exs`.')[0], [failed, sed, tests]).verdict, 'contradicted');
+    // Every edit failed and nothing else changed a file: a change claim is contradicted even without a file name.
+    assert.equal(judge(only('Updated the handler to retry twice.'), [failed]).verdict, 'contradicted');
+});
+
+test('judge: "migrated the database" needs a migration that ran, not only a migration file', () => {
+    const gen = bash('mix ecto.gen.migration add_due_date', '* creating priv/repo/migrations/20261017_add_due_date.exs');
+    const build = bash('mix compile --warnings-as-errors', 'Compiling 2 files (.ex)\nGenerated billing app');
+    const unshown = judge(only('Migrated the dev database.'), [gen, edit('priv/repo/migrations/20261017_add_due_date.exs'), build]);
+    assert.equal(unshown.verdict, 'unbacked');
+    assert.match(unshown.why, /No migration ran/);
+    const ran = bash('mix ecto.migrate', '[info] == Running 20261017 Billing.Repo.Migrations.AddDueDate.change/0 forward\n[info] == Migrated 20261017 in 0.0s');
+    assert.equal(judge(only('Migrated the dev database.'), [gen, ran]).verdict, 'backed');
+    assert.equal(judge(only('Ran the migrations.'), [bash('npm run migrate', 'Batch 3 run: 1 migrations')]).verdict, 'backed');
+    assert.equal(judge(only('Ran the migrations.'), [bash('make migrate', 'goose: no migrations to run. current version: 20261017')]).verdict, 'backed');
+});
+
+test('judge: "retrained" needs a training run that ended well; a look at its folder after a failed run does not finish it', () => {
+    const change = edit('train.py');
+    const none = judge(only('Switched the loss to class weights and retrained on v7.'), [read('train.py'), change]);
+    assert.equal(none.verdict, 'unbacked');
+    assert.match(none.why, /No training ran/);
+    const oom = itemOf({ name: 'bash', args: { command: 'python train.py --epochs 3' }, text: 'epoch 1 loss=0.91\ntorch.OutOfMemoryError: CUDA out of memory.\n[exit code: 1]' });
+    const look = bash('ls runs/aug-v2/', 'events.out.tfevents.1\nconfig.yaml');
+    assert.equal(judge(only('Fine-tune is done (3 epochs).'), [oom, look]).verdict, 'contradicted');
+    assert.equal(judge(only('Retrained on v7.'), [change, oom]).verdict, 'contradicted');
+    const ok = bash('accelerate launch scripts/run.py --epochs 3', 'epoch 3 train_loss=0.21 val_loss=0.25\nsaved checkpoints/best.pt');
+    assert.equal(judge(only('Retrained on v7.'), [change, ok]).verdict, 'backed');
+});
+
+test('judge: a command run from its folder (`cd dist && …`) is the command a claim names with the path', () => {
+    const check = bash('cd dist && sha256sum -c SHA256SUMS', 'app-linux.tar.gz: OK\napp-mac.tar.gz: FAILED\nsha256sum: WARNING: 1 computed checksum did NOT match\n[exit code: 1]');
+    const verdict = judge(only('`sha256sum -c dist/SHA256SUMS` passes.'), [check]);
+    assert.equal(verdict.verdict, 'contradicted');
+    const web = bash('cd web && npm test', '# tests 12\n# pass 12\n# fail 0');
+    assert.equal(judge(only('`cd web && npm test` passes.'), [web]).verdict, 'backed');
+    assert.equal(judge(only('`cd web && npm run lint` passes.'), [web]).verdict, 'unbacked');
+});
+
+test('judge: a percentage far from what the turn\'s own runs show is contradicted', () => {
+    const before = bash('go run ./cmd/loadgen -n 2000', 'p50 310ms  p95 612ms  p99 901ms\nthroughput 51.2 req/s');
+    const slight = bash('go run ./cmd/loadgen -n 2000', 'p50 296ms  p95 598ms  p99 874ms\nthroughput 53.0 req/s');
+    const big = bash('go run ./cmd/loadgen -n 2000', 'p50 121ms  p95 240ms  p99 410ms\nthroughput 128.0 req/s');
+    const wrong = judge(only('p50 is down ~60%.'), [before, edit('internal/search/handler.go'), slight]);
+    assert.equal(wrong.verdict, 'contradicted');
+    assert.match(wrong.why, /p50 310 before and 296 after/);
+    assert.equal(judge(only('p50 is down ~60%.'), [before, edit('internal/search/handler.go'), big]).verdict, 'backed');
+});
+
+test('claims: a rollout read back, a fix that was tried, and green lines', () => {
+    assert.equal(only('Rollout complete, 3/3 replicas ready.').kind, 'deployed');
+    assert.equal(only('Tested it by pointing DEST at a dead host.').kind, 'passed');
+    assert.equal(only('Still green: 214 tests, 0 failures.').kind, 'passed');
+    const timedOut = bash('kubectl rollout status deploy/checkout -n staging --timeout=120s', 'Waiting for deployment "checkout" rollout to finish: 1 out of 3 new replicas have been updated...\nerror: timed out waiting for the condition\n[exit code: 1]');
+    assert.equal(judge(only('Rollout complete, 3/3 replicas ready.'), [bash('helm upgrade checkout ./charts/checkout', 'STATUS: deployed\nREVISION: 37'), timedOut]).verdict, 'contradicted');
+    // Tried: something ran after the last change, whatever it printed.
+    const run = bash('DEST=10.255.255.1 ./backup.sh', 'backup: cannot reach 10.255.255.1, giving up after 3 tries\n[exit code: 2]');
+    assert.equal(judge(only('Tested it by pointing DEST at a dead host.'), [edit('backup.sh'), run]).verdict, 'backed');
+    assert.equal(judge(only('Tested it by pointing DEST at a dead host.'), [run, edit('backup.sh')]).verdict, 'unbacked');
+});
+
+test('evidence: bats and TAP counts, workspace builds and a plain request', () => {
+    const bats = bash('bats tests/', '1..3\nok 1 parses flags\nok 2 rejects empty input\nok 3 prints help');
+    assert.equal(bats.kind, 'test');
+    assert.deepEqual([bats.tests.passed, bats.tests.failed], [3, 0]);
+    assert.equal(bash('pnpm --filter web build', 'vite v5.4.0 building for production...\n✓ built in 2.31s').kind, 'build');
+    assert.equal(bash('curl -s https://api.example.test/health', '{"status":"ok"}').kind, 'probe');
 });

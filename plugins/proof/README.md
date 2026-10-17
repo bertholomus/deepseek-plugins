@@ -67,26 +67,39 @@ other corpora, and was measured once before any rule saw it.
 
 | Corpus | Turns with evidence or no claim | Flagged anyway (false flags) | Turns with an unshown or wrong claim | Flagged (caught) | Wrong claims called contradicted |
 |---|---|---|---|---|---|
-| Dev (tuned on) | 90 | 0 (0.0%) | 70 | 70 (100.0%) | 30 of 30 |
+| Dev (tuned on) | 95 | 0 (0.0%) | 74 | 74 (100.0%) | 32 of 32 |
 | First hold-out, measured once before tuning | 60 | 12 (20.0%) | 50 | 43 (86.0%) | — |
 | Second hold-out, measured once before tuning | 60 | 6 (10.0%) | 50 | 45 (90.0%) | 20 of 25 |
 | Third hold-out, measured once before tuning | 60 | 7 (11.7%) | 50 | 41 (82.0%) | 19 of 25 |
 | Fourth hold-out, measured once before tuning | 60 | 10 (16.7%) | 50 | 44 (88.0%) | 23 of 25 |
-| Fifth hold-out (never tuned on), measured once | 60 | 6 (10.0%) | 50 | 41 (82.0%) | 19 of 25 |
+| Fifth hold-out, measured once before tuning | 60 | 6 (10.0%) | 50 | 41 (82.0%) | 19 of 25 |
 
-The first four hold-outs were tuned on after that one measurement (the fixes
+Where the false flags fall, first recorded for the fifth hold-out:
+
+| Corpus | Honest turns that claim something | Flagged | Called contradicted | Turns that claim nothing | Flagged |
+|---|---|---|---|---|---|
+| Fifth hold-out, measured once before tuning | 40 | 6 (15.0%) | 3 | 20 | 0 (0.0%) |
+
+All five hold-outs were tuned on after that one measurement (the fixes
 were general rules, never a case's own words) and are now part of the
 tests, at 0% false flags and 100% caught, so none of them is a fair
 figure any more. The fourth one's writers were asked for set kinds of
 turns (claims shown earlier in the turn, summaries that lean on the turn
 before, hashes, metrics and CI reads, subtle misses) and added hard ones
 of their own (results only on stderr, a failed run fixed later in the
-turn, success-looking output the reply never claims). The fifth hold-out
-is the honest figure: fresh writers who never saw the rules or the other
-corpora wrote it, and it was measured once with the rules frozen and never
-tuned on. It meets the floors Proof promises (at most 10% of quiet turns
-flagged, at least 80% of unshown or wrong claims caught), the first just.
-To measure again:
+turn, success-looking output the reply never claims). The fifth met the
+floors Proof promised then (at most 10% of quiet turns flagged, at least
+80% of unshown or wrong claims caught), the first just, but every one of
+its false flags fell on an honest turn that claims something: 6 of 40,
+and 3 of them were called contradicted, which accuses an honest agent of
+being wrong. An independent judge met the same shapes in live use (a fix
+claim that names the fault, a question read as a request for new work, a
+count of runs read as a test count). So the floors are now stricter and
+split: at most 10% of quiet turns flagged, at most 10% of honest turns
+that claim something flagged, at most one honest turn called
+contradicted, and at least 80% caught. The sixth hold-out, written by
+fresh writers who never saw the rules or the corpora, is measured once
+against them with the rules frozen. To measure again:
 
 ```sh
 node scripts/proof-corpus.mjs           # one row per corpus

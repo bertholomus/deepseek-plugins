@@ -9,10 +9,10 @@
  *   contradicted  a claim that the turn's own output says is wrong
  *
  * The dev corpus (test/fixtures/proof/*.json) is what the rules were tuned
- * on. The first four hold-outs (test/fixtures/proof/seen/, seen2/, seen3/
- * and seen4/) were each written apart from the rules and measured once,
- * before any rule saw them; their misses then went into the rules, so they
- * are tuned on too. The hold-out corpus
+ * on. The first five hold-outs (test/fixtures/proof/seen/, seen2/, seen3/,
+ * seen4/ and seen5/) were each written apart from the rules and measured
+ * once, before any rule saw them; their misses then went into the rules, so
+ * they are tuned on too. The hold-out corpus
  * (test/fixtures/proof/holdout/*.json) was written after that, by writers
  * who never saw the rules or the other corpora, and is only measured.
  * Each turn is folded through Proof's own projection, exactly as DSH folds
@@ -30,6 +30,7 @@ export const SEEN = join(DEV, 'seen');
 export const SEEN2 = join(DEV, 'seen2');
 export const SEEN3 = join(DEV, 'seen3');
 export const SEEN4 = join(DEV, 'seen4');
+export const SEEN5 = join(DEV, 'seen5');
 export const HOLDOUT = join(DEV, 'holdout');
 export const TOOL_NAMES = new Set(['bash', 'read', 'edit', 'write', 'grep', 'glob', 'todo_write']);
 
@@ -81,13 +82,15 @@ export function measure(corpus) {
         const cases = corpus[label] ?? [];
         let right = 0;
         let flagged = 0;
+        let contradicted = 0;
         for (const c of cases) {
             const result = judgeCase(c);
             if (result.flagged.length) flagged += 1;
+            if (result.contradicted) contradicted += 1;
             if (rightOn(label, result)) right += 1;
             else out.misses.push({ label, id: c.id, claims: result.claims.map((claim) => `${claim.verdict} ${claim.kind}: ${claim.part} (${claim.why || 'backed'})`) });
         }
-        out.labels[label] = { cases: cases.length, right, flagged };
+        out.labels[label] = { cases: cases.length, right, flagged, contradicted };
     }
     const quiet = ['honest', 'no-claim'].map((label) => out.labels[label]);
     const loud = ['unbacked', 'contradicted'].map((label) => out.labels[label]);
@@ -107,4 +110,11 @@ export function table(name, m) {
     return [
         `| ${name} | ${m.quietCases} | ${m.falseFlags} (${pct(m.falseFlags, m.quietCases)}) | ${m.loudCases} | ${m.caught} (${pct(m.caught, m.loudCases)}) | ${l.contradicted.right} of ${l.contradicted.cases} |`,
     ].join('\n');
+}
+
+/** Where the false flags fall: honest turns that claim something, and turns that claim nothing. */
+export function quietTable(name, m) {
+    const h = m.labels.honest;
+    const n = m.labels['no-claim'];
+    return `| ${name} | ${h.cases} | ${h.flagged} (${pct(h.flagged, h.cases)}) | ${h.contradicted} | ${n.cases} | ${n.flagged} (${pct(n.flagged, n.cases)}) |`;
 }
