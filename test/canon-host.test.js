@@ -7,10 +7,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ACCESS_CHOICES, DEFAULTS, LIVE_SETTINGS, RANGES, SETTING_TITLES, checkConfig, displayPath, folderIn, resolved, savedEntry, vaultPath } from '../plugins/canon/lib/config.js';
+import { ACCESS_CHOICES, DEFAULTS, LIVE_SETTINGS, RANGES, SETTING_TITLES, checkConfig, displayPath, folderIn, resolved, savedEntry, sessionFolder, vaultPath } from '../plugins/canon/lib/config.js';
 import { ABOUT_THE_VAULT, distinctTerms, promptTerms, stem, terms, wordsOf } from '../plugins/canon/lib/text.js';
 import { noteOf, parseNote, setFields, statusOf, yamlLines } from '../plugins/canon/lib/frontmatter.js';
 import { Index, MIN_SCORE, folderKeys, projectsOf } from '../plugins/canon/lib/search.js';
@@ -73,13 +74,19 @@ test('config: a vault is a full path or ~/…; the home folder, the disk and DSH
         assert.match(error.message, /^Vault folder \(vault\)/);
         return true;
     });
-    refused({ vault: 'Obsidian/Canon' }, /full path of your Obsidian vault's folder.*\(it is "Obsidian\/Canon"\)/);
+    refused({ vault: 'Obsidian/Canon' }, /full path of your Obsidian vault's folder.*\(it is “Obsidian\/Canon”\)/);
     refused({ vault: '~' }, /not your home folder/);
     refused({ vault: '/' }, /not the whole disk/);
     refused({ vault: '~/.dsh/canon' }, /must not be in DSH's data folder \(~\/\.dsh\)/);
     refused({ vault: '~/.dsh' }, /must not be in DSH's data folder/);
     assert.throws(() => ok({ vault: '/Users' }), /must not hold DSH's data folder/);
     refused({ vault: 42 }, /\(it is 42\)/);
+    // The try-out's session folder: a full path or ~/…, as a turn's session has it; '' for none; anything else is no place.
+    assert.equal(sessionFolder('~/Projects/app', HOME), `${HOME}/Projects/app`);
+    assert.equal(sessionFolder(' /work/Projects/app/ ', HOME), '/work/Projects/app');
+    assert.equal(sessionFolder('~', HOME), HOME);
+    for (const none of ['', '  ', undefined, null]) assert.equal(sessionFolder(none, HOME), '', String(none));
+    for (const bad of ['Projects/app', './app', '~user/app', 42, 'x'.repeat(1001)]) assert.equal(sessionFolder(bad, HOME), undefined, String(bad).slice(0, 20));
 });
 
 test('config: drafts and promoted folders stay inside the vault and apart; numbers in range; the log says what changed', () => {
@@ -99,6 +106,27 @@ test('config: drafts and promoted folders stay inside the vault and apart; numbe
     wrong({ maxNotes: 11 }, 'maxNotes', /1/);
     wrong({ maxChars: 399 }, 'maxChars', /Characters a turn, at most/);
     wrong({ maxChars: 2000.5 }, 'maxChars', /Characters/);
+    // A wrong type is said in words as a wrong range is; a number or true/false in quotes is text, and the words say so.
+    const said = (settings) => {
+        try {
+            ok(settings);
+            return '';
+        } catch (error) {
+            return `${error.key}: ${error.message}`;
+        }
+    };
+    assert.equal(said({ maxChars: '900' }), 'maxChars: Characters a turn, at most (maxChars) must be a whole number of characters from 400 to 8000, written without quotes (it is “900”, which is text)');
+    assert.equal(said({ maxNotes: ' 5 ' }), 'maxNotes: Notes a turn, at most (maxNotes) must be a whole number from 1 to 10, written without quotes (it is “ 5 ”, which is text)');
+    assert.equal(said({ maxNotes: 'five' }), 'maxNotes: Notes a turn, at most (maxNotes) must be a whole number from 1 to 10 (it is “five”)');
+    assert.equal(said({ maxChars: [900] }), 'maxChars: Characters a turn, at most (maxChars) must be a whole number of characters from 400 to 8000 (it is [900])');
+    assert.equal(said({ recall: 'false' }), 'recall: Add notes to turns (recall) must be true or false, written without quotes (it is “false”, which is text)');
+    assert.equal(said({ promote: 'yes' }), 'promote: Allow promoting drafts (promote) must be true or false (it is “yes”)');
+    assert.equal(said({ enabled: 'TRUE' }), 'enabled: Canon on (enabled) must be true or false, written without quotes (it is “TRUE”, which is text)');
+    assert.equal(said({ access: true }), 'access: What Canon may write (access) must be Read only (read-only) or Drafts (drafts) (it is true)');
+    assert.equal(said({ access: 'write' }), 'access: What Canon may write (access) must be Read only (read-only) or Drafts (drafts) (it is “write”)');
+    assert.equal(said({ draftsFolder: 7 }), 'draftsFolder: Drafts folder (draftsFolder) must be a folder inside the vault, such as Drafts or Canon/Drafts: letters, digits and spaces, no part starting with a dot, no .. (it is 7)');
+    assert.equal(said({ promoteFolder: 'Drafts/Kept' }), 'promoteFolder: Promoted notes go to (promoteFolder) must be outside the drafts folder (Drafts): notes there are never added to turns (it is “Drafts/Kept”)');
+    assert.equal(said({ vault: true }), 'vault: Vault folder (vault) must be the full path of your Obsidian vault\'s folder, such as ~/Obsidian/Canon or /Users/you/Canon (it is true)');
     assert.doesNotThrow(() => ok({ access: 'drafts', promote: true, promoteFolder: 'Notes/Promoted', maxNotes: 10, maxChars: 8000 }));
     assert.deepEqual(Object.keys(ACCESS_CHOICES), ['read-only', 'drafts']);
     assert.deepEqual(RANGES, { maxNotes: [1, 10], maxChars: [400, 8000] });
@@ -316,6 +344,78 @@ test('vault: a changed, added or removed note is read again by its time and size
     writeFileSync(file, '# not a folder');
     const notFolder = await readVault(file);
     assert.equal(notFolder.status().error.code, 'not-a-folder');
+});
+
+const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+test('vault: a vault folder Canon may not list is an error in words, logged once; access given, it reads as usual', async (t) => {
+    // The folder can be looked up but not listed: a copy made unreadable in this test's own temp folder.
+    const dir = vaultCopy('canon-locked');
+    chmodSync(dir, 0o000);
+    t.after(() => chmodSync(dir, 0o755));
+    const changes = [];
+    const vault = new Vault({ where: () => ({ vault: dir, draftsFolder: 'Drafts' }), home: HOME, onChange: (change) => changes.push(change) });
+    await vault.refresh();
+    const status = vault.status();
+    assert.equal(status.state, 'error');
+    assert.equal(status.error.code, 'no-access');
+    assert.equal(status.error.text, `DSH may not read ${dir}. Give DSH access to it (on a Mac: System Settings, Privacy & Security, Files and Folders), or choose another folder.`);
+    assert.deepEqual(status.counts, { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0 });
+    assert.deepEqual(changes.map((c) => [c.kind, c.after.state, c.after.error?.code]), [['error', 'error', 'no-access']]);
+    assert.deepEqual(vault.search('harbor gateway port').results, [], 'a turn gets nothing from it');
+    assert.equal(await vault.passage('Projects/harbor-gateway/Gateway ports.md', ['port'], 300), undefined);
+    // Read again while it still cannot be listed: the same words, and no second entry.
+    await vault.again();
+    assert.equal(vault.status().error.code, 'no-access');
+    assert.equal(changes.length, 1);
+    // Access given: read as usual, and the change is told once.
+    chmodSync(dir, 0o755);
+    await vault.again();
+    assert.deepEqual([vault.status().state, vault.status().counts.active, vault.status().error], ['ok', 35, undefined]);
+    assert.deepEqual(changes.map((c) => c.kind), ['error', 'ok']);
+    // A Mac's privacy rules refuse the listing with EPERM, any other system with EACCES: the same words for both.
+    for (const code of ['EPERM', 'EACCES']) {
+        class Refused extends Vault {
+            async walk() { throw Object.assign(new Error(`${code}: operation not permitted, scandir`), { code }); }
+        }
+        const refused = new Refused({ where: () => ({ vault: dir, draftsFolder: 'Drafts' }), home: dirname(dir) });
+        await refused.refresh();
+        assert.deepEqual([refused.status().state, refused.status().error.code], ['error', 'no-access'], code);
+        assert.equal(refused.status().error.text, 'DSH may not read ~/Canon. Give DSH access to it (on a Mac: System Settings, Privacy & Security, Files and Folders), or choose another folder.', code);
+    }
+});
+
+test('vault: when the vault folder changes, the earlier folder\'s words and counts go at once; the new folder is reading until its read ends', async (t) => {
+    const file = join(tempDir('canon-file'), 'vault.md');
+    writeFileSync(file, '# not a folder');
+    const locked = vaultCopy('canon-locked');
+    chmodSync(locked, 0o000);
+    t.after(() => chmodSync(locked, 0o755));
+    let where = { vault: file, draftsFolder: 'Drafts' };
+    const vault = new Vault({ where: () => where, home: HOME });
+    await vault.refresh();
+    assert.equal(vault.status().error.code, 'not-a-folder');
+    // Moved to a folder it may not list: the file's words are not shown under the new folder.
+    where = { vault: locked, draftsFolder: 'Drafts' };
+    let status = vault.status();
+    assert.deepEqual([status.state, status.error, status.path, status.reading], ['reading', undefined, locked, true]);
+    await vault.again();
+    status = vault.status();
+    assert.equal(status.error.code, 'no-access');
+    assert.match(status.error.text, new RegExp(`^DSH may not read ${escaped(locked)}\\.`));
+    // From a folder read well to another: its counts are not the new folder's.
+    chmodSync(locked, 0o755);
+    await vault.again();
+    assert.deepEqual([vault.status().state, vault.status().counts.active], ['ok', 35]);
+    const empty = tempDir('canon-empty');
+    where = { vault: empty, draftsFolder: 'Drafts' };
+    assert.deepEqual([vault.status().state, vault.status().counts.active], ['reading', 0]);
+    await vault.again();
+    assert.deepEqual([vault.status().state, vault.status().counts], ['ok', { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0 }]);
+    // No vault at all: unset, at once.
+    where = { vault: '', draftsFolder: '' };
+    await vault.again();
+    assert.equal(vault.status().state, 'unset');
 });
 
 test('vault: after Canon writes, the read that follows sees the write, even with a read under way that listed the folder before it', async () => {
@@ -878,6 +978,8 @@ test('plugin: a prompt gets the cited block; per-session off stops it; capture a
     assert.ok(LIVE_SETTINGS.every((key) => canon.Config.shape[key].live), 'every setting but enabled is live');
     assert.equal(canon.Config.shape.enabled.live, false);
     for (const [key, value] of Object.entries(DEFAULTS)) assert.equal(canon.Config.shape[key].value, value, key);
+    // Every setting takes any value, so a wrong type is said in words (checkConfig), never dropped or a failed start.
+    for (const key of Object.keys(DEFAULTS)) assert.equal(canon.Config.shape[key].type, 'any', key);
     assert.deepEqual([...marked].sort(), ['promote', 'refresh', 'search', 'session', 'setSession', 'state']);
 
     const dsh = standInDsh();
@@ -921,6 +1023,17 @@ test('plugin: a prompt gets the cited block; per-session off stops it; capture a
     const tried = await remote.search('How do I rotate the TLS certificates?', '');
     assert.equal(tried.results[0].path, 'Runbooks/Rotating TLS certificates.md');
     await assert.rejects(remote.search('   '), (error) => error.code === 'canon/refused' && /Type a prompt to try\./.test(error.message));
+    // Its folder: ~/ is the home folder, as a turn's session has it; a folder that is not a full path is refused in words.
+    const portPrompt = 'What port does the harbor gateway listen on?';
+    const typed = await remote.search(portPrompt, ' ~/Projects/harbor-gateway ');
+    assert.deepEqual(typed, await remote.search(portPrompt, join(homedir(), 'Projects', 'harbor-gateway')));
+    assert.equal(typed.place, '~/Projects/harbor-gateway');
+    assert.deepEqual([typed.results[0].path, typed.results[0].folder, typed.folder.repo], ['Projects/harbor-gateway/Gateway ports.md', 'repo', 'harbor-gateway']);
+    assert.equal((await remote.search(portPrompt, '')).place, '');
+    for (const folder of ['Projects/harbor-gateway', './harbor-gateway', '~someone/x']) {
+        await assert.rejects(remote.search(portPrompt, folder), (error) => error.code === 'canon/refused'
+            && error.message === `The session folder must be a full path, such as /Users/you/Projects/app, or start with ~/, such as ~/Projects/app (it is “${folder}”). Leave it empty for a session with no folder.`, folder);
+    }
 
     // Promote while read only: refused in words, logged, nothing changed.
     const draft = 'Drafts/2026-10-01 Gateway timeouts.md';
@@ -1012,6 +1125,64 @@ test('plugin: switched off in the profile, Canon reads no vault, offers no tool 
     assert.equal(page.enabled, false);
     assert.equal(page.vault.state, 'unset');
     await assert.rejects(remote.refresh(), /switched off in DSH's profile \(enabled: false\)/);
+    dsh.stop();
+});
+
+test('plugin: a vault folder Canon may not list: its page says so and what to do, What happened notes it once, Read again recovers', async (t) => {
+    await import('./fixtures/canon/stubs/hooks.mjs');
+    const canon = await import('../plugins/canon/lib/index.js');
+    process.env.CANON_TEST_DSH_HOME = tempDir('canon-dsh-locked');
+    // A copy made unreadable in this test's own temp folder; its access is given back when the test ends.
+    const locked = vaultCopy('canon-locked');
+    chmodSync(locked, 0o000);
+    t.after(() => chmodSync(locked, 0o755));
+    const dsh = standInDsh();
+    canon.apply(dsh.ctx, { ...DEFAULTS, vault: locked });
+    const remote = dsh.provided.get('dshPluginCanonRemote');
+    const failed = await remote.refresh();
+    assert.deepEqual([failed.state, failed.error.code], ['error', 'no-access']);
+    assert.match(failed.error.text, /^DSH may not read .+\. Give DSH access to it \(on a Mac: System Settings, Privacy & Security, Files and Folders\), or choose another folder\.$/);
+    let page = await remote.state();
+    assert.equal(page.vault.state, 'error');
+    assert.deepEqual(page.history.filter((e) => e.kind === 'vault').map((e) => [e.state, e.text, e.why]), [['failed', 'Couldn\'t read the vault', failed.error.text]]);
+    // Meanwhile a prompt gets nothing, and the card says why.
+    const s = step();
+    const decision = await s.next();
+    assert.equal(await dsh.preStep(s.payload, async () => decision), decision);
+    assert.equal((await remote.session('s-1')).why, 'Canon cannot read the vault now: see its page.');
+    // Read again while it still cannot: the same words, logged once.
+    await remote.refresh();
+    assert.equal((await remote.state()).history.filter((e) => e.kind === 'vault').length, 1);
+    // Access given: Read again reads it, and What happened says so.
+    chmodSync(locked, 0o755);
+    const back = await remote.refresh();
+    assert.deepEqual([back.state, back.counts.active], ['ok', 35]);
+    page = await remote.state();
+    assert.deepEqual([page.history[0].state, page.history[0].text, page.history[0].why], ['done', 'Reading the vault again', '35 active notes, 2 drafts.']);
+    const again = step({ id: 'm-2', turn: 2 });
+    assert.ok((await dsh.preStep(again.payload, again.next)).messages.some((m) => m.source?.kind === 'dsh-plugin-canon'));
+    dsh.stop();
+});
+
+test('plugin: a number in quotes in the profile never stops Canon: it starts, says which setting in words, and works once fixed', async () => {
+    await import('./fixtures/canon/stubs/hooks.mjs');
+    const canon = await import('../plugins/canon/lib/index.js');
+    process.env.CANON_TEST_DSH_HOME = tempDir('canon-dsh-quoted');
+    const dsh = standInDsh();
+    const config = { ...DEFAULTS, vault: vaultCopy(), maxChars: '900' };
+    assert.doesNotThrow(() => canon.apply(dsh.ctx, config));
+    const remote = dsh.provided.get('dshPluginCanonRemote');
+    const page = await remote.state();
+    assert.deepEqual(page.problem, { key: 'maxChars', text: 'Characters a turn, at most (maxChars) must be a whole number of characters from 400 to 8000, written without quotes (it is “900”, which is text)', live: true });
+    const s = step();
+    const decision = await s.next();
+    assert.equal(await dsh.preStep(s.payload, async () => decision), decision, 'no block while it is wrong');
+    config.maxChars = 900;
+    await dsh.emit('loader/volatile-update', [['maxChars']]);
+    const fixed = await remote.state();
+    assert.equal(fixed.problem, undefined);
+    assert.equal(fixed.settings.maxChars, 900);
+    assert.equal(fixed.history[0].text, 'Settings fixed: Canon is working again');
     dsh.stop();
 });
 

@@ -11,6 +11,7 @@
  * @module dsh-plugin-canon/remote
  */
 import { Remote, RemoteError, bindTypertRemote } from '@deepseek-ai/dsh-typert-protocol';
+import { sessionFolder } from './config.js';
 import { pageState, sessionState, working } from './page.js';
 
 export const NAMESPACE = 'dsh-plugin-canon';
@@ -65,14 +66,22 @@ export class CanonRemote {
         });
     }
 
-    /** What a prompt would get: the notes, why each, and the exact block. */
+    /**
+     * What a prompt would get: the notes, why each, and the exact block, for
+     * a session in `folder` (a full path, or one starting with ~/, as a
+     * turn's session has it; empty for a session with no folder).
+     */
     async search(text, folder) {
         return this.run(async () => {
             this.off();
             if (typeof text !== 'string' || text.trim() === '') throw new Error('Type a prompt to try.');
             if (text.length > 8000) throw new Error('Try a shorter prompt (at most 8,000 characters).');
-            if (folder !== undefined && folder !== null && (typeof folder !== 'string' || folder.length > 1000)) throw new Error('Give the folder as a full path, or leave it empty.');
-            return this.parts.preview(text, typeof folder === 'string' ? folder.trim() : '');
+            const where = sessionFolder(folder, this.parts.home);
+            if (where === undefined) {
+                const said = typeof folder === 'string' ? ` (it is “${folder.trim().slice(0, 120)}”)` : '';
+                throw new Error(`The session folder must be a full path, such as /Users/you/Projects/app, or start with ~/, such as ~/Projects/app${said}. Leave it empty for a session with no folder.`);
+            }
+            return this.parts.preview(text, where);
         });
     }
 

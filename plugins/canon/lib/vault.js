@@ -123,21 +123,31 @@ export class Vault {
         this.draftsByPath = new Map();
     }
 
-    /** The vault's state for the page: unset, reading, ok or error, with counts and when it was read. */
+    /**
+     * The vault's state for the page: unset, reading, ok or error, with
+     * counts and when it was read. A state belongs to the folder it was
+     * read from: after the vault folder changes, the earlier folder's words
+     * and counts are not shown for the new one, which is "reading" until
+     * its own read ends.
+     */
     status() {
         const where = this.where();
-        const counts = { notes: this.files.size, active: this.index.size, drafts: this.draftsByPath.size, other: 0, unreadable: 0 };
-        for (const f of this.files.values()) {
-            if (f.kind === 'other') counts.other += 1;
-            else if (f.kind === 'unreadable') counts.unreadable += 1;
+        const own = this.state.state === 'unset' ? !where.vault : this.state.vault === where.vault;
+        const counts = { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0 };
+        if (own) {
+            Object.assign(counts, { notes: this.files.size, active: this.index.size, drafts: this.draftsByPath.size });
+            for (const f of this.files.values()) {
+                if (f.kind === 'other') counts.other += 1;
+                else if (f.kind === 'unreadable') counts.unreadable += 1;
+            }
         }
         return {
-            ...this.state,
+            ...(own ? this.state : { state: 'reading' }),
             path: where.vault,
             display: displayPath(where.vault, this.home),
             draftsFolder: where.draftsFolder,
             counts,
-            reading: Boolean(this.running),
+            reading: Boolean(this.running) || !own,
         };
     }
 
@@ -206,22 +216,26 @@ export class Vault {
         const display = displayPath(where.vault, this.home);
         const started = this.now();
         let root;
+        let listed;
+        let truncated;
         try {
             root = await realpath(where.vault);
             const st = await stat(root);
             if (!st.isDirectory()) throw Object.assign(new Error('not a folder'), { code: 'ENOTDIR' });
+            // A folder that can be looked up may still refuse its listing (no access, a Mac's privacy rules).
+            ({ files: listed, truncated } = await this.walk(root));
         } catch (error) {
             if (generation !== this.generation) return;
             this.reset('');
-            this.state = { state: 'error', error: folderProblem(error, display), readAt: this.now() };
+            this.root = undefined;
+            this.state = { state: 'error', error: folderProblem(error, display), readAt: this.now(), vault: where.vault };
             if (before.state !== 'error' || before.error?.text !== this.state.error.text) this.changed('error', before);
             return;
         }
+        if (generation !== this.generation) return;
         const key = `${root}\0${where.draftsFolder}`;
         if (key !== this.key) this.reset(key);
         this.root = root;
-        const { files: listed, truncated } = await this.walk(root);
-        if (generation !== this.generation) return;
         const seen = new Set();
         const stale = [];
         await each(listed, 32, async (rel) => {
@@ -270,7 +284,7 @@ export class Vault {
             }
         });
         if (generation !== this.generation) return;
-        this.state = { state: 'ok', readAt: this.now(), took: this.now() - started, truncated, changed: stale.length };
+        this.state = { state: 'ok', readAt: this.now(), took: this.now() - started, truncated, changed: stale.length, vault: where.vault };
         if (before.state !== 'ok' || stale.length > 0 || before.truncated !== truncated) this.changed(before.state === 'ok' ? 'changed' : 'ok', before);
     }
 

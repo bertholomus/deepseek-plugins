@@ -10,5 +10,6 @@ const z = {
     boolean: () => field('boolean'),
     string: () => field('string'),
     number: () => field('number'),
+    any: () => field('any'),
 };
 export default z;

@@ -1121,6 +1121,43 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             { name: 'maxNotes', kind: 'number', title: 'Notes a turn, at most', hint: 'From 1 to 10.', default: 3, min: 1, max: 10 },
             { name: 'maxChars', kind: 'number', title: 'Characters a turn, at most', hint: 'From 400 to 8000: the whole block, notes and citations included.', default: 2000, min: 400, max: 8000 },
         ];
+        /** Whether a folder inside the vault is `folder` or inside it (without case, as Canon checks it). */
+        const insideOf = (inner, folder) => {
+            const a = inner.toLowerCase();
+            const b = folder.toLowerCase();
+            return a === b || a.startsWith(`${b}/`);
+        };
+        /**
+         * The form's fields, with the one rule that needs another setting: promoted notes go outside the drafts
+         * folder (as saved), refused in Canon's own words (lib/config.js checkConfig). Both changed at once, Canon
+         * still checks them on Save and its page says which to change.
+         * @param {() => unknown} draftsNow - the drafts folder as saved.
+         */
+        function settingsFields(draftsNow) {
+            const fallback = SETTINGS.find((f) => f.name === 'draftsFolder').default;
+            const drafts = () => {
+                const value = draftsNow();
+                const text = typeof value === 'string' ? value.trim().replace(/^\/+|\/+$/g, '') : '';
+                return text && folderOk(text) ? text : fallback;
+            };
+            let inside = '';
+            return SETTINGS.map((f) => (f.name !== 'promoteFolder' ? f : {
+                ...f,
+                accepts: (text) => {
+                    inside = '';
+                    if (!folderOk(text)) return false;
+                    const folder = drafts();
+                    if (insideOf(text, folder)) {
+                        inside = folder;
+                        return false;
+                    }
+                    return true;
+                },
+                get invalid() {
+                    return inside ? `Must be outside the drafts folder (${inside}): notes there are never added to turns. Leave it empty for the vault's top level.` : f.invalid;
+                },
+            }));
+        }
         const SETTINGS_SUMMARY = 'Which vault Canon reads, what it may write there, and how much it adds to a turn.';
         const SETTINGS_NOTE = 'Changes apply as soon as you save. Canon never promotes a draft by itself: a person presses Promote on its page.';
 
@@ -1193,11 +1230,11 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             if (!s.recall) return 'Adding notes to turns is off: no turn gets notes.';
             return `A turn that starts from your prompt gets at most ${plural(s.maxNotes, 'note')} and ${plural(s.maxChars, 'character')}.`;
         }
-        /** The vault's state in one sentence (without the time it was read). */
+        /** What the vault holds, in one sentence (without the time it was read). */
         function vaultText(v) {
             const c = v.counts ?? {};
             const parts = [plural(c.active ?? 0, 'active note'), plural(c.drafts ?? 0, 'draft')];
-            return `Reading ${v.display || 'the vault'}: ${listWords(parts)}.`;
+            return `${v.display ? `The vault ${v.display}` : 'The vault'} holds ${listWords(parts)}.`;
         }
         /** The vault's side notes: notes left out, cut short or unreadable. */
         function vaultNotes(v) {
@@ -1295,24 +1332,33 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         function HeaderCard({ data, onRead, reading }) {
             const s = data.settings;
             const v = data.vault;
+            // Read again stays the same button through a read and whatever it finds (an error, then the notes), so
+            // the focus stays on it; pressed again during a read, it changes nothing.
+            const readAgain = h(ui.Button, { key: 'read', variant: 'ghost', size: 'sm', onClick: onRead, 'aria-disabled': reading ? 'true' : undefined, 'data-canon-read': '' }, reading ? 'Reading…' : 'Read again');
             let body;
             if (!data.enabled) body = h('p', { className: `${P}-note` }, TEXT.disabled);
             else if (v.state === 'unset' || !s.vault) {
                 body = h(kit.Empty, { title: TEXT.noVault, text: TEXT.noVaultText, action: h(SettingsButton, { focus: 'vault', label: 'Open Canon\'s settings', variant: 'primary' }) });
+            } else if (v.state === 'reading') {
+                body = h('div', { className: `${P}-lines` },
+                    h('div', { key: 'vault', className: `${P}-line`, 'data-canon-vault': 'reading' },
+                        h('span', { key: 'text', className: `${P}-strong`, role: 'status' }, `Reading the vault ${v.display}…`)));
             } else if (v.state === 'error') {
-                body = h('div', { className: `${P}-alert`, role: 'alert', 'data-canon-vault': 'error' },
-                    h('span', null, v.error?.text ?? 'Canon cannot read the vault.'),
-                    h(ui.Button, { variant: 'ghost', size: 'sm', disabled: reading, onClick: onRead }, 'Read again'),
-                    h(SettingsButton, { focus: 'vault', label: 'Open Canon\'s settings', variant: 'ghost' }));
+                body = h('div', { className: `${P}-lines` },
+                    h('div', { key: 'vault', className: `${P}-line`, 'data-canon-vault': 'error' },
+                        h('span', { key: 'text', className: `${P}-error`, role: 'alert' }, v.error?.text ?? 'Canon cannot read the vault.'),
+                        v.readAt ? h('span', { key: 'time' }, 'Tried ', h(kit.TimeText, { at: v.readAt }), '.') : null,
+                        readAgain,
+                        h(SettingsButton, { key: 'settings', focus: 'vault', label: 'Open Canon\'s settings', variant: 'ghost' })));
             } else {
                 body = h('div', { className: `${P}-lines` },
-                    h('div', { className: `${P}-line`, 'data-canon-vault': 'ok' },
-                        h('span', { className: `${P}-strong` }, vaultText(v)),
-                        v.readAt ? h('span', null, 'Read ', h(kit.TimeText, { at: v.readAt }), '.') : null,
-                        h(ui.Button, { variant: 'ghost', size: 'sm', disabled: reading, onClick: onRead }, reading ? 'Reading…' : 'Read again')),
+                    h('div', { key: 'vault', className: `${P}-line`, 'data-canon-vault': 'ok' },
+                        h('span', { key: 'text', className: `${P}-strong` }, vaultText(v)),
+                        v.readAt ? h('span', { key: 'time' }, 'Read ', h(kit.TimeText, { at: v.readAt }), '.') : null,
+                        readAgain),
                     ...vaultNotes(v).map((text, i) => h('div', { key: `n${i}`, className: `${P}-line` }, text)),
-                    h('div', { className: `${P}-line`, 'data-canon-access': s.access }, writesText(s)),
-                    h('div', { className: `${P}-line`, 'data-canon-recall': s.recall ? 'on' : 'off' }, turnsText(s)));
+                    h('div', { key: 'access', className: `${P}-line`, 'data-canon-access': s.access }, writesText(s)),
+                    h('div', { key: 'recall', className: `${P}-line`, 'data-canon-recall': s.recall ? 'on' : 'off' }, turnsText(s)));
             }
             return h(kit.Card, {
                 title: TEXT.title,
@@ -1508,6 +1554,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const data = live.data;
             const down = live.code === 'not-running' || (data === undefined && live.error);
             const onRead = async () => {
+                if (reading) return;
                 setReading(true);
                 setReadProblem('');
                 const { problem } = await run('refresh', {});
@@ -1571,7 +1618,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             // Its settings on its page in Plugins, through DSH's own settings form.
             ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => {
                 try {
-                    kit.applySettings(scope, { entry: 'canon', name: 'Canon', summary: SETTINGS_SUMMARY, fields: SETTINGS, note: SETTINGS_NOTE });
+                    const saved = scope.configForms?.get?.('canon');
+                    const fields = settingsFields(() => saved?.getSnapshot?.()?.value?.draftsFolder);
+                    kit.applySettings(scope, { entry: 'canon', name: 'Canon', summary: SETTINGS_SUMMARY, fields, note: SETTINGS_NOTE });
                 } catch (error) {
                     console?.warn?.('dsh-plugin-canon: settings:', error);
                 }
@@ -1601,7 +1650,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         module.exports.apply = apply;
         // For the plugin's own tests.
         module.exports.internals = {
-            kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, KIND_WORD, views, notesOf, sameNotes, writesText, promoteText, turnsText, vaultText, vaultNotes, whyText, missText,
+            kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, KIND_WORD, settingsFields, views, notesOf, sameNotes, writesText, promoteText, turnsText, vaultText, vaultNotes, whyText, missText,
             CanonTurn, TurnCard, CanonPage, CanonIcon, HeaderCard, TryCard, TryResult, SessionsCard, DraftsCard, HistoryCard,
         };
         return module.exports;

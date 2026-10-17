@@ -207,7 +207,7 @@ test('the page: the vault, the try-out, the sessions with their switches, the dr
     const header = withAttr(page.tree, 'data-canon-header')[0];
     assert.equal(header.props['data-canon-header'], 'ok');
     let text = textIn(header);
-    assert.match(text, /Reading ~\/Canon: 6 active notes and 2 drafts\./);
+    assert.match(text, /The vault ~\/Canon holds 6 active notes and 2 drafts\./);
     assert.match(text, /Read just now\./);
     assert.match(text, /2 notes with another status \(archived, draft and the like\) are never added\./);
     assert.match(text, /Read only: Canon writes nothing to the vault\./);
@@ -311,7 +311,8 @@ test('the page: no vault, a vault it cannot read, empty lists, switched off, a w
     kit.setNavigation({ openBundle: (name) => asked.push(name) });
     t.after(() => kit.setNavigation(undefined));
     let state = { ...PAGE_STATE, settings: { ...SETTINGS, vault: '' }, vault: { state: 'unset', counts: { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0 } }, sessions: [], drafts: [], history: [] };
-    connect(kit, { state: () => state, refresh: () => VAULT });
+    let hang = false;
+    const calls = connect(kit, { state: () => state, refresh: () => (hang ? new Promise(() => {}) : VAULT) });
     t.after(() => kit.setConnection(undefined));
     const unset = mount(CanonPage, {});
     t.after(() => unset.unmount());
@@ -329,9 +330,37 @@ test('the page: no vault, a vault it cannot read, empty lists, switched off, a w
     const missing = mount(CanonPage, {});
     t.after(() => missing.unmount());
     await settle(5);
-    const alert = withAttr(missing.tree, 'data-canon-vault')[0];
-    assert.equal(alert.props.role, 'alert');
-    assert.match(textIn(alert), /^The vault folder ~\/Canon does not exist\. Check the folder in Canon's settings, or create it\.Read againOpen Canon's settings$/);
+    const line = withAttr(missing.tree, 'data-canon-vault')[0];
+    assert.equal(line.props['data-canon-vault'], 'error');
+    const alert = elementsOf(line).find((e) => e.props?.role === 'alert');
+    assert.equal(textIn(alert), 'The vault folder ~/Canon does not exist. Check the folder in Canon\'s settings, or create it.', 'only the words are the alert: the time beside them changes');
+    assert.match(textIn(line), /^The vault folder ~\/Canon does not exist\. Check the folder in Canon's settings, or create it\.Tried just now\.Read againOpen Canon's settings$/);
+    assert.doesNotMatch(textIn(missing.tree), /Read just now/, 'a read that failed is never "read"');
+    assert.equal(withAttr(missing.tree, 'data-canon-try').length, 0, 'nothing to try while the vault cannot be read');
+    // Read again during its read: the same button (its key), never disabled, so the focus stays on it; a second press waits.
+    hang = true;
+    assert.equal(button(line, 'Read again').props.key, 'read');
+    button(line, 'Read again').props.onClick();
+    await settle(5);
+    const busy = button(withAttr(missing.tree, 'data-canon-vault')[0], 'Reading…');
+    assert.equal(busy.props.key, 'read');
+    assert.equal(busy.props.disabled, undefined, 'a disabled button would drop the focus');
+    assert.equal(busy.props['aria-disabled'], 'true');
+    busy.props.onClick();
+    await settle(5);
+    assert.equal(calls.filter(([m]) => m === 'refresh').length, 1, 'pressed during its read, it reads once');
+    hang = false;
+
+    // The vault folder changed: its read is under way, and nothing of the earlier folder shows.
+    state = { ...PAGE_STATE, vault: { state: 'reading', path: `${HOME}/Other`, display: '~/Other', draftsFolder: 'Drafts', counts: { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0 }, reading: true } };
+    const reading = mount(CanonPage, {});
+    t.after(() => reading.unmount());
+    await settle(5);
+    const readingLine = withAttr(reading.tree, 'data-canon-vault')[0];
+    assert.equal(readingLine.props['data-canon-vault'], 'reading');
+    assert.equal(textIn(readingLine), 'Reading the vault ~/Other…');
+    assert.equal(elementsOf(readingLine).find((e) => e.props?.role === 'status') !== undefined, true);
+    assert.equal(withAttr(reading.tree, 'data-canon-try').length, 0);
 
     state = { ...PAGE_STATE, settings: { ...SETTINGS, access: 'read-only' }, drafts: [] };
     const empty = mount(CanonPage, {});
@@ -426,6 +455,24 @@ test('settings in Plugins: the form has every live setting, takes what the confi
             assert.throws(() => check({ [name]: value }), `${name} ${value}`);
         }
     }
+    // Promoted notes go outside the drafts folder (as saved): the form refuses it as Canon does, in the same words.
+    const { kit: formKit, settingsFields } = client.internals;
+    const promoteField = settingsFields(() => 'Drafts').find((f) => f.name === 'promoteFolder');
+    const promoteSpec = formKit.fieldSpec(promoteField);
+    for (const value of ['Drafts', 'Drafts/Kept', 'drafts/kept']) {
+        assert.equal(promoteSpec.parse(value), undefined, value);
+        assert.equal(formKit.invalidWords(promoteField), 'Must be outside the drafts folder (Drafts): notes there are never added to turns. Leave it empty for the vault\'s top level.', value);
+        assert.throws(() => check({ promoteFolder: value }), (error) => /must be outside the drafts folder \(Drafts\): notes there are never added to turns/.test(error.message), value);
+    }
+    assert.deepEqual(plain(promoteSpec.parse('Drafts old/Kept')), { kind: 'set', value: 'Drafts old/Kept' });
+    assert.equal(promoteSpec.parse('.trash'), undefined);
+    assert.equal(formKit.invalidWords(promoteField), field('promoteFolder').invalid, 'a folder that is not one gets the folder words');
+    // Another drafts folder as saved: Drafts/Kept fits there, and a folder inside Inbox does not.
+    const inbox = formKit.fieldSpec(settingsFields(() => ' Inbox/ ').find((f) => f.name === 'promoteFolder'));
+    assert.deepEqual(plain(inbox.parse('Drafts/Kept')), { kind: 'set', value: 'Drafts/Kept' });
+    assert.equal(inbox.parse('Inbox/Kept'), undefined);
+    // None saved (or not a folder): the default, Drafts.
+    assert.equal(formKit.fieldSpec(settingsFields(() => undefined).find((f) => f.name === 'promoteFolder')).parse('Drafts/Kept'), undefined);
     assert.doesNotMatch(JSON.stringify(TEXT) + CSS.join('') + JSON.stringify(FIELDS) + SETTINGS_NOTE + SETTINGS_SUMMARY, OTHER_NAMES);
 
     // Drawn through DSH's own settings form while DSH serves Canon's settings.
@@ -467,6 +514,10 @@ test('settings in Plugins: the form has every live setting, takes what the confi
     assert.deepEqual(withAttr(form, 'data-suite-setting').map((e) => e.props['data-suite-setting']), [...LIVE_SETTINGS]);
     // An empty vault (the default) shows empty, not as a value that does not fit.
     assert.equal(withAttr(form, 'data-suite-invalid').length, 0);
+    // The drafts folder as DSH has it saved: a promote folder typed inside it does not fit.
+    const drawnPromote = models[0].specs.find((spec) => spec.field === 'promoteFolder');
+    assert.equal(drawnPromote.parse('Drafts/Kept'), undefined);
+    assert.deepEqual(plain(drawnPromote.parse('Decisions')), { kind: 'set', value: 'Decisions' });
 });
 
 test('words: the page\'s sentences for each setting, and no other assistant\'s names anywhere in the window', () => {
@@ -477,7 +528,7 @@ test('words: the page\'s sentences for each setting, and no other assistant\'s n
     assert.equal(promoteText({ access: 'drafts', promote: false }), 'Promoting is off: Promote changes nothing until “Allow promoting drafts” is on in Canon\'s settings.');
     assert.equal(turnsText({ recall: false }), 'Adding notes to turns is off: no turn gets notes.');
     assert.equal(turnsText({ recall: true, maxNotes: 1, maxChars: 8000 }), 'A turn that starts from your prompt gets at most 1 note and 8,000 characters.');
-    assert.equal(vaultText({ display: '~/Canon', counts: { active: 1, drafts: 0 } }), 'Reading ~/Canon: 1 active note and 0 drafts.');
+    assert.equal(vaultText({ display: '~/Canon', counts: { active: 1, drafts: 0 } }), 'The vault ~/Canon holds 1 active note and 0 drafts.');
     assert.deepEqual(plain(vaultNotes({ truncated: true, counts: { other: 1, unreadable: 2 } })), ['1 note with another status (archived, draft and the like) is never added.', '2 notes could not be read.', 'Only the first 20,000 notes are read.']);
     assert.equal(whyText({ matched: ['tls'], folder: 'parent' }), 'Shares the word “tls”. It belongs to the folder above this one, so it counts a little more.');
     // The prompt's own words, never stems.

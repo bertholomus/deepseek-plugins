@@ -13,7 +13,7 @@
  */
 import { homedir } from 'node:os';
 import { isAbsolute, join, normalize, resolve, sep } from 'node:path';
-import { SettingError, changedEntry, changedTitles, oneOf, onOff, wholeNumber } from './shared/settings.js';
+import { SettingError, changedEntry, changedTitles } from './shared/settings.js';
 
 /** The settings, in the words the page, the settings form and the errors use. */
 export const SETTING_TITLES = Object.freeze({
@@ -50,13 +50,48 @@ export const DEFAULTS = Object.freeze({
 /** The ranges the numbers must be in (the settings form uses the same). */
 export const RANGES = Object.freeze({ maxNotes: [1, 10], maxChars: [400, 8000] });
 
+/** A value as Canon's words show it: text in quotes (“…”), anything else as the profile writes it. */
 const shown = (value) => {
     if (value === undefined) return 'empty';
+    if (typeof value === 'string') return `“${value.length > 120 ? `${value.slice(0, 119)}…` : value}”`;
     try { return JSON.stringify(value).slice(0, 120); } catch { return String(value).slice(0, 120); }
 };
 
 /** A setting as the person reads it: its title, then its name in the profile. */
 const named = (key) => `${SETTING_TITLES[key]} (${key})`;
+
+/**
+ * Whether a value is a number or true/false written in quotes: text in the
+ * profile, so its words say how to write it instead.
+ */
+const quoted = (value, looks) => typeof value === 'string' && looks.test(value.trim());
+const QUOTED_NUMBER = /^[+-]?\d+(?:\.\d+)?$/;
+const QUOTED_SWITCH = /^(?:true|false)$/i;
+
+/** Throw unless a setting is true or false; a "true" in quotes is said to be text. */
+function onOff(settings, key) {
+    const value = settings?.[key];
+    if (typeof value === 'boolean') return value;
+    const text = quoted(value, QUOTED_SWITCH);
+    throw new SettingError(key, `${named(key)} must be true or false${text ? ', written without quotes' : ''} (it is ${shown(value)}${text ? ', which is text' : ''})`);
+}
+
+/** Throw unless a setting is a whole number in its range (RANGES); a number in quotes is said to be text. */
+function wholeNumber(settings, key, unit = '') {
+    const value = settings?.[key];
+    const [min, max] = RANGES[key];
+    if (Number.isInteger(value) && value >= min && value <= max) return value;
+    const text = quoted(value, QUOTED_NUMBER);
+    throw new SettingError(key, `${named(key)} must be a whole number${unit ? ` of ${unit}` : ''} from ${min} to ${max}${text ? ', written without quotes' : ''} (it is ${shown(value)}${text ? ', which is text' : ''})`);
+}
+
+/** Throw unless a setting is one of its choices, named as the settings form names them. */
+function oneOf(settings, key, choices) {
+    const value = settings?.[key];
+    if (typeof value === 'string' && Object.hasOwn(choices, value)) return value;
+    const words = Object.entries(choices).map(([c, word]) => `${word} (${c})`);
+    throw new SettingError(key, `${named(key)} must be ${words.slice(0, -1).join(', ')} or ${words.at(-1)} (it is ${shown(value)})`);
+}
 
 /**
  * The vault folder a setting names, as a full path: `~/` is the home
@@ -73,6 +108,20 @@ export function vaultPath(value, home = homedir()) {
     const expanded = text === '~' ? home : text.startsWith('~/') ? join(home, text.slice(2)) : text;
     if (!isAbsolute(expanded)) return undefined;
     return resolve(normalize(expanded));
+}
+
+/**
+ * A session's folder as the page's try-out takes it, the way a turn's
+ * session has it: a full path, or one starting with ~/ (the home folder);
+ * '' for none. Undefined for anything else: a folder that is not a full
+ * path names no place.
+ * @param {unknown} value
+ * @param {string} [home]
+ */
+export function sessionFolder(value, home = homedir()) {
+    if (value === undefined || value === null) return '';
+    if (typeof value !== 'string' || value.length > 1000) return undefined;
+    return vaultPath(value, home);
 }
 
 /** A path as a person reads it: the home folder as ~. */
@@ -109,7 +158,7 @@ export const within = (inner, outer) => inner === outer || inner.startsWith(oute
  *   writes there).
  */
 export function checkConfig(settings, { home = homedir(), dshHome } = {}) {
-    onOff(settings, 'enabled', SETTING_TITLES.enabled);
+    onOff(settings, 'enabled');
     const raw = settings?.vault;
     const vault = vaultPath(raw, home);
     if (vault === undefined) {
@@ -125,12 +174,12 @@ export function checkConfig(settings, { home = homedir(), dshHome } = {}) {
             if (within(data, vault)) throw new SettingError('vault', `${named('vault')} must not hold DSH's data folder (${displayPath(data, home)}): choose the vault's own folder (it is ${shown(raw)})`);
         }
     }
-    oneOf(settings, 'access', ACCESS_CHOICES, SETTING_TITLES.access);
+    oneOf(settings, 'access', ACCESS_CHOICES);
     const drafts = folderIn(settings?.draftsFolder);
     if (drafts === undefined) {
         throw new SettingError('draftsFolder', `${named('draftsFolder')} must be a folder inside the vault, such as Drafts or Canon/Drafts: letters, digits and spaces, no part starting with a dot, no .. (it is ${shown(settings?.draftsFolder)})`);
     }
-    onOff(settings, 'promote', SETTING_TITLES.promote);
+    onOff(settings, 'promote');
     const target = folderIn(settings?.promoteFolder, { optional: true });
     if (target === undefined) {
         throw new SettingError('promoteFolder', `${named('promoteFolder')} must be empty (the vault's top level) or a folder inside the vault, such as Notes: letters, digits and spaces, no part starting with a dot, no .. (it is ${shown(settings?.promoteFolder)})`);
@@ -139,9 +188,9 @@ export function checkConfig(settings, { home = homedir(), dshHome } = {}) {
     if (target !== '' && (lower(target) === lower(drafts) || lower(target).startsWith(`${lower(drafts)}/`))) {
         throw new SettingError('promoteFolder', `${named('promoteFolder')} must be outside the drafts folder (${drafts}): notes there are never added to turns (it is ${shown(settings?.promoteFolder)})`);
     }
-    onOff(settings, 'recall', SETTING_TITLES.recall);
-    wholeNumber(settings, 'maxNotes', ...RANGES.maxNotes, '', SETTING_TITLES.maxNotes);
-    wholeNumber(settings, 'maxChars', ...RANGES.maxChars, 'characters', SETTING_TITLES.maxChars);
+    onOff(settings, 'recall');
+    wholeNumber(settings, 'maxNotes');
+    wholeNumber(settings, 'maxChars', 'characters');
 }
 
 /** The settings a change touched, by their titles in quotes, from DSH's changed paths. */

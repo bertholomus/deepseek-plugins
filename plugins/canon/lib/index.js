@@ -27,7 +27,7 @@ import { join } from 'node:path';
 import z from '@deepseek-ai/schemastery';
 import { dshHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
-import { LIVE_SETTINGS, checkConfig, resolved, savedEntry } from './config.js';
+import { LIVE_SETTINGS, checkConfig, displayPath, resolved, savedEntry } from './config.js';
 import { capture, promote } from './drafts.js';
 import { Switches, parseSwitches, working } from './page.js';
 import { KEY, canonProjection } from './projection.js';
@@ -48,30 +48,32 @@ export const name = 'canon';
 export const inject = ['sessionController', 'sessionProjections'];
 
 /**
- * Settings: types and defaults here, the rest in checkConfig (lib/config.js),
- * so a wrong value is said in words on Canon's page instead of stopping it
- * at start. The live ones are on its page in Plugins and apply as soon as
- * they are saved.
+ * Settings: their defaults here; their types and ranges in checkConfig
+ * (lib/config.js). Each takes any value, so a wrong type in the profile (a
+ * number in quotes, say) is said in words on Canon's page as a wrong range
+ * is, instead of stopping Canon at start or being dropped on a live edit.
+ * The live ones are on its page in Plugins and apply as soon as they are
+ * saved.
  */
 export const Config = z.object({
     /** Profile only. false keeps Canon loaded but idle: it reads no vault, and its page says so. */
-    enabled: z.boolean().default(true),
+    enabled: z.any().default(true),
     /** The Obsidian vault's folder: a full path, or one starting with ~/. Empty: Canon does nothing until it is set. */
-    vault: live(z.string().default('')),
+    vault: live(z.any().default('')),
     /** What Canon may write: "read-only" (nothing) or "drafts" (new draft notes in the drafts folder). */
-    access: live(z.string().default('read-only')),
+    access: live(z.any().default('read-only')),
     /** The folder inside the vault where drafts go; its notes are never added to turns. */
-    draftsFolder: live(z.string().default('Drafts')),
+    draftsFolder: live(z.any().default('Drafts')),
     /** Whether a person may promote a draft to an active note from Canon's page (needs access "drafts" too). */
-    promote: live(z.boolean().default(false)),
+    promote: live(z.any().default(false)),
     /** Where promoted notes go, inside the vault: empty for its top level. */
-    promoteFolder: live(z.string().default('')),
+    promoteFolder: live(z.any().default('')),
     /** Add the notes that fit to each turn that starts from a person's prompt. */
-    recall: live(z.boolean().default(true)),
+    recall: live(z.any().default(true)),
     /** The most notes a turn gets (1 to 10). */
-    maxNotes: live(z.number().default(3)),
+    maxNotes: live(z.any().default(3)),
     /** The most characters a turn's block may have (400 to 8000). */
-    maxChars: live(z.number().default(2000)),
+    maxChars: live(z.any().default(2000)),
 });
 
 export function apply(ctx, config) {
@@ -295,7 +297,9 @@ export function apply(ctx, config) {
             await vault.again();
             return result;
         },
-        preview: (text, folder) => recall.preview(text, folder),
+        home,
+        /** The try-out: what a turn in a session in `folder` (a full path, or '') gets, and the folder in words. */
+        preview: async (text, folder) => ({ ...(await recall.preview(text, folder)), place: displayPath(folder, home) }),
         async refresh() {
             await vault.again();
             return vault.status();
