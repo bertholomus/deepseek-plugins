@@ -71,6 +71,36 @@ export function folderProblem(error, display) {
 /** Whether a vault path is in the drafts folder (compared without case: a Mac's disk ignores it). */
 const inFolder = (rel, folder) => Boolean(folder) && (rel.toLowerCase() === folder.toLowerCase() || rel.toLowerCase().startsWith(`${folder.toLowerCase()}/`));
 
+/** How much of a draft's words the page shows. */
+const PREVIEW_CHARS = 240;
+
+/**
+ * Markdown as the plain words a person reads in a preview: no title line,
+ * heading signs, emphasis, code marks, fences, quote or list signs, link
+ * addresses or HTML tags; one line.
+ */
+export function plainText(markdown) {
+    return String(markdown ?? '')
+        .replace(/^\s*#{1,6}\s+.*$/m, '')
+        .replace(/^\s*(?:```|~~~).*$/gm, '')
+        .replace(/^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/gm, '')
+        .replace(/^\s*#{1,6}\s+/gm, '')
+        .replace(/^\s*>\s?/gm, '')
+        .replace(/^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/gm, '')
+        .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+        .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2')
+        .replace(/\[\[([^\]]+)\]\]/g, '$1')
+        .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+        .replace(/<[^>\n]+>/g, '')
+        .replace(/(\*\*|__|~~)(?=\S)([^\n]*?\S)\1/g, '$2')
+        .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/g, '$1$2')
+        .replace(/(^|[^\w])_(?=\S)([^_\n]*?\S)_(?!\w)/g, '$1$2')
+        .replace(/`+([^`\n]*)`+/g, '$1')
+        .replace(/\s*\|\s*/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
 /** A draft as the page lists it: title, kind, when, from which session, and its status. */
 function draftOf(rel, text, file) {
     const { data, body } = parseNote(text);
@@ -87,7 +117,7 @@ function draftOf(rel, text, file) {
         sessionId: typeof source.session === 'string' ? source.session.slice(0, 200) : '',
         turn: Number.isSafeInteger(source.turn) ? source.turn : undefined,
         folder: typeof source.folder === 'string' ? source.folder.slice(0, 400) : '',
-        preview: body.replace(/^#.*$/m, '').replace(/\s+/g, ' ').trim().slice(0, 240),
+        preview: cut(plainText(body), PREVIEW_CHARS),
         mtimeMs: file.mtimeMs,
     };
 }

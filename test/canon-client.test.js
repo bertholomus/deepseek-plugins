@@ -160,13 +160,21 @@ test('the card: names the notes and their folders, turns the session off and bac
     assert.match(text, /Canon vault · at the vault's top level/);
     assert.deepEqual(withAttr(card.tree, 'data-canon-note').map((e) => e.props['data-canon-note']), NOTES.map((n) => n.path));
     assert.equal(card.tree.props['data-canon-turn'], 'on');
-    await button(card.tree, 'Turn off for this session').props.onClick();
+    // The session's state is said in one live line that is there from the start.
+    const statusOf = (tree) => elementsOf(tree).find((e) => e.props?.role === 'status');
+    assert.equal(textIn(statusOf(card.tree)), '');
+    assert.equal(statusOf(card.tree).props.className, 'dshcn-sr');
+    const before = button(card.tree, 'Turn off for this session');
+    assert.equal(before.props.disabled, undefined, 'never disabled: the focus stays on it');
+    await before.props.onClick();
     await settle(5);
     assert.deepEqual(calls.find(([m]) => m === 'setSession'), ['setSession', { sessionId: 's', on: false }]);
     text = textIn(card.tree);
     assert.equal(card.tree.props['data-canon-turn'], 'off');
     assert.match(text, /Turned off for this session: its later turns get no notes\./);
+    assert.equal(textIn(statusOf(card.tree)), 'Turned off for this session: its later turns get no notes.');
     assert.ok(button(card.tree, 'Turn back on'));
+    assert.equal(button(card.tree, 'Turn back on').props.key, before.props.key, 'the same button, with its new words, keeps the focus');
     fail = true;
     await button(card.tree, 'Turn back on').props.onClick();
     await settle(5);
@@ -189,7 +197,7 @@ test('the page: the vault, the try-out, the sessions with their switches, the dr
     kit.setNavigation({ openBundle: () => {} });
     t.after(() => kit.setNavigation(undefined));
     let state = PAGE_STATE;
-    let promoteAnswer = refused('Not promoted: promoting is off ("Allow promoting drafts" in Canon\'s settings). Turn it on to promote drafts; until then Promote changes nothing.');
+    let promoteAnswer = refused('Not promoted: promoting is off (“Allow promoting drafts” in Canon\'s settings). Turn it on to promote drafts; until then Promote changes nothing.');
     const calls = connect(kit, {
         state: () => state,
         search: ({ text }) => (text.includes('thanks') ? { terms: [], folder: { repo: '', parent: '' }, results: [], others: [], block: null } : TRY),
@@ -247,7 +255,9 @@ test('the page: the vault, the try-out, the sessions with their switches, the dr
     assert.match(textIn(sessions[1]), /Untitled sessionNo notes added yet\./);
     const toggle = elementsOf(sessions[0]).find((e) => e.type === 'Switch');
     assert.equal(toggle.props.checked, true);
-    assert.equal(toggle.props.label, 'Add notes');
+    assert.equal(toggle.props.label, 'Add notes to Gateway work', 'each switch is named for its session');
+    assert.equal(elementsOf(sessions[1]).find((e) => e.type === 'Switch').props.label, 'Add notes to Untitled session');
+    assert.equal(toggle.props.disabled, undefined, 'never disabled: the focus stays on it');
     await toggle.props.onChange(false);
     await settle(5);
     assert.deepEqual(calls.find(([m]) => m === 'setSession'), ['setSession', { sessionId: 's', on: false }]);
@@ -259,13 +269,14 @@ test('the page: the vault, the try-out, the sessions with their switches, the dr
     const drafts = () => withAttr(page.tree, 'data-canon-drafts')[0];
     assert.equal(drafts().props['data-canon-promote'], 'off');
     text = textIn(drafts());
-    assert.match(text, /^DraftsDrafts in Drafts\. Canon is read only, so agents save none; none is ever added to a turn\./);
+    assert.match(text, /^DraftsThe notes in the drafts folder, Drafts\. Canon is read only, so agents save none there, and none is ever added to a turn\./);
     assert.match(text, /Promoting is off while Canon is read only: Promote changes nothing\./);
     assert.match(text, /Gateway timeouts/);
     assert.match(text, /Saved 1 h ago from Gateway work, turn 4 · Drafts\/2026-10-01 Gateway timeouts\.md/);
     assert.match(text, /gotcha/);
     const draftRow = withAttr(drafts(), 'data-canon-draft')[0];
     assert.equal(button(draftRow, 'Promote').props['aria-label'], 'Promote Gateway timeouts');
+    assert.equal(button(draftRow, 'Promote').props.disabled, undefined);
     await button(draftRow, 'Promote').props.onClick();
     await settle(5);
     assert.deepEqual(calls.find(([m]) => m === 'promote'), ['promote', { path: DRAFT.path }]);
@@ -280,11 +291,26 @@ test('the page: the vault, the try-out, the sessions with their switches, the dr
     said = withAttr(drafts(), 'data-canon-said')[0];
     assert.equal(said.props['data-canon-said'], 'done');
     assert.equal(textIn(said), 'Promoted “Gateway timeouts”: it is now an active note, Gateway timeouts.md, and turns can get it.');
+    assert.equal(said.props.tabIndex, -1, 'the promoted draft\'s row goes: the focus goes to what Promote did');
+    assert.equal(said.props.role, 'status');
 
     // What happened: newest first, refusals marked.
     text = textIn(withAttr(page.tree, 'data-canon-history')[0]);
     assert.match(text, /Gateway work · Draft saved: “Gateway timeouts”A gotcha note in Drafts\/2026-10-01 Gateway timeouts\.md\. It waits for a person to promote it\./);
     assert.match(text, /Not promotedDrafts\/x\.md: Promoting is off\.not changed/);
+    // Past 30 entries, "Show all": it goes, and the focus moves to the first entry it brought into view.
+    const many = Array.from({ length: 35 }, (_, i) => ({ id: `e${i}`, at: now - i * 1000, kind: 'session', state: 'done', text: `Entry ${i + 1}` }));
+    const long = mount(client.internals.HistoryCard, { data: { history: many }, titles: new Map() });
+    t.after(() => long.unmount());
+    assert.equal(withAttr(long.tree, 'data-canon-entry').length, 30);
+    button(long.tree, 'Show all 35').props.onClick();
+    const entries = withAttr(long.tree, 'data-canon-entry');
+    assert.equal(entries.length, 35);
+    assert.equal(button(long.tree, 'Show all 35'), undefined);
+    assert.deepEqual([entries[30].props.tabIndex, typeof entries[30].props.ref, entries.filter((e) => e.props.tabIndex !== undefined).length], [-1, 'object', 1]);
+    assert.match(textIn(entries[30]), /Entry 31/);
+    // Every entry's time in one column of the same width, so the words start at the same place.
+    assert.ok(client.internals.CSS.some((rule) => rule.startsWith('.dshcn-log-time{flex:0 0 7.5em;width:7.5em;')));
     // An entry from a session DSH no longer has names it without a link.
     const gone = mount(client.internals.HistoryCard, { data: { history: [{ id: 'h9', at: now, kind: 'session', state: 'done', sessionId: 'gone', sessionTitle: 'Old work', sessionKnown: false, text: 'Notes turned off for a session' }] }, titles: new Map() });
     t.after(() => gone.unmount());

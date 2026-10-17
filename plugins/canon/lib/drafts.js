@@ -38,14 +38,14 @@ const no = (reason) => ({ ok: false, reason });
 
 /** The words for why Canon may not write, or undefined when it may. */
 export function writeRefusal(settings, what) {
-    if (!settings.vault) return `no canon vault is set. A person sets one in Canon's settings ("Vault folder").`;
+    if (!settings.vault) return `no canon vault is set. A person sets one in Canon's settings (“Vault folder”).`;
     if (settings.access !== 'drafts') {
         return what === 'promote'
-            ? 'Canon is read only ("What Canon may write" is Read only). To promote drafts, set it to Drafts and turn on "Allow promoting drafts" in Canon\'s settings.'
-            : 'Canon is read only ("What Canon may write" is Read only in Canon\'s settings). A person can allow drafts there.';
+            ? 'Canon is read only (“What Canon may write” is Read only). To promote drafts, set it to Drafts and turn on “Allow promoting drafts” in Canon\'s settings.'
+            : 'Canon is read only (“What Canon may write” is Read only in Canon\'s settings). A person can allow drafts there.';
     }
     if (what === 'promote' && !settings.promote) {
-        return 'promoting is off ("Allow promoting drafts" in Canon\'s settings). Turn it on to promote drafts; until then Promote changes nothing.';
+        return 'promoting is off (“Allow promoting drafts” in Canon\'s settings). Turn it on to promote drafts; until then Promote changes nothing.';
     }
     return undefined;
 }

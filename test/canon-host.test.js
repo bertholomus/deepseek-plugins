@@ -15,7 +15,7 @@ import { ACCESS_CHOICES, DEFAULTS, LIVE_SETTINGS, RANGES, SETTING_TITLES, checkC
 import { ABOUT_THE_VAULT, distinctTerms, promptTerms, stem, terms, wordsOf } from '../plugins/canon/lib/text.js';
 import { noteOf, parseNote, setFields, statusOf, yamlLines } from '../plugins/canon/lib/frontmatter.js';
 import { Index, MIN_SCORE, folderKeys, projectsOf } from '../plugins/canon/lib/search.js';
-import { MAX_NOTE_BYTES, Vault, bestPassage, cut, folderProblem, paragraphs } from '../plugins/canon/lib/vault.js';
+import { MAX_NOTE_BYTES, Vault, bestPassage, cut, folderProblem, paragraphs, plainText } from '../plugins/canon/lib/vault.js';
 import { HEADER, KIND, Recall, SUMMARY_MAX, buildBlock, entryBudget, notesThatFit, promptOf, summaryOf } from '../plugins/canon/lib/recall.js';
 import { KINDS, capture, cleanTags, cleanTitle, isDraftPath, promote, slugOf, writeRefusal } from '../plugins/canon/lib/drafts.js';
 import { INITIAL, KEY, applyEvent, canonProjection, foldAll, parseState, parseView, viewOf } from '../plugins/canon/lib/projection.js';
@@ -288,6 +288,14 @@ test('vault: the drafts folder\'s notes are listed for the page with their kind,
     assert.match(timeouts.preview, /drops idle connections after 60 seconds/);
     // A note in the drafts folder without a status is still a draft.
     assert.equal(drafts.find((d) => d.title === 'Port notes').status, 'draft');
+    // A preview is the draft's plain words cut at a word: no Markdown marks, no link addresses, no title line.
+    const marked = vaultCopy();
+    writeFileSync(join(marked, 'Drafts', 'Body cap.md'), '---\ntitle: Body cap\nstatus: draft\n---\n# Lantern API request body cap\n\n**Decided 2026-10-17 (Pacific):** cap request bodies at 2 MB, because larger uploads go through the blob service (`blobctl put`). See [[Rate limits]] and [the limits file](https://example.com/limits).\n\n**Implications:**\n- clients send larger files to the blob service first and pass its id\n- the gateway answers 413 with a link to this note\n- the limit is checked again every quarter by the owners of the lantern API and its gateway\n');
+    const preview = (await readVault(marked)).drafts().find((d) => d.path === 'Drafts/Body cap.md').preview;
+    assert.equal(preview, 'Decided 2026-10-17 (Pacific): cap request bodies at 2 MB, because larger uploads go through the blob service (blobctl put). See Rate limits and the limits file. Implications: clients send larger files to the blob service first and pass…');
+    assert.ok(preview.length <= 240);
+    assert.equal(plainText('Plain words with snake_case_name, 2*3*4, *emphasis*, _this_, ~~that~~ and <b>tags</b>.'), 'Plain words with snake_case_name, 2*3*4, emphasis, this, that and tags.');
+    assert.equal(plainText('## Steps\n\n1. Run `make verify`\n2. Tag it\n\n> Quoted\n\n```sh\nmake tag\n```'), 'Run make verify Tag it Quoted make tag');
     // Another drafts folder: those notes are notes again, and the old drafts folder's are searched.
     const other = await readVault(vaultCopy(), { draftsFolder: 'Ideas' });
     assert.deepEqual(other.drafts().map((d) => d.path).sort(), ['Ideas/Gateway rewrite.md', 'Ideas/Lantern GraphQL endpoint.md', 'Ideas/Warming the quartz cache.md']);
@@ -735,7 +743,7 @@ test('drafts: capture refuses in words while Canon is read only, for a note it c
         assert.equal(result.ok, false);
         assert.match(result.reason, words);
     };
-    await refused(using(dir), NOTE, /Canon is read only \("What Canon may write" is Read only in Canon's settings\)\. A person can allow drafts there\./);
+    await refused(using(dir), NOTE, /Canon is read only \(“What Canon may write” is Read only in Canon's settings\)\. A person can allow drafts there\./);
     await refused(using(''), NOTE, /no canon vault is set/);
     const drafts = using(dir, { access: 'drafts' });
     await refused(drafts, { ...NOTE, title: '' }, /give the note a title/);
@@ -763,8 +771,8 @@ test('drafts: Promote changes nothing unless the settings allow it, then moves t
     const original = readFileSync(join(dir, draft), 'utf8');
     const before = filesIn(dir);
     for (const [settings, words] of [
-        [using(dir), /Canon is read only.*To promote drafts, set it to Drafts and turn on "Allow promoting drafts"/],
-        [using(dir, { access: 'drafts' }), /promoting is off \("Allow promoting drafts" in Canon's settings\)\. Turn it on to promote drafts; until then Promote changes nothing\./],
+        [using(dir), /Canon is read only.*To promote drafts, set it to Drafts and turn on “Allow promoting drafts”/],
+        [using(dir, { access: 'drafts' }), /promoting is off \(“Allow promoting drafts” in Canon's settings\)\. Turn it on to promote drafts; until then Promote changes nothing\./],
         [using(dir, { promote: true }), /Canon is read only/],
     ]) {
         const result = await promote({ settings, path: draft, now: AT });

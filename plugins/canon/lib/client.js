@@ -1192,7 +1192,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-details>summary{cursor:pointer;font:var(--dsw-font-xs-13);color:var(--${P}-link);width:max-content;max-width:100%;border-radius:var(--dsw-radius-xs)}`,
             `.${P}-details>summary:focus-visible{outline:2px solid var(--${P}-ring);outline-offset:1px}`,
             `.${P}-block{margin:6px 0 0;padding:8px 10px;border-radius:var(--dsw-radius-sm);background:var(--${P}-fill);font:12px/1.5 var(--ds-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace);color:var(--dsw-alias-label-primary);white-space:pre-wrap;overflow-wrap:anywhere;max-height:24em;overflow:auto}`,
-            `.${P}-log-time{flex:0 0 auto;min-width:64px;font:var(--dsw-font-xs-13);color:var(--${P}-text-2)}`,
+            // What happened's times in one column: every entry's words start at the same place.
+            `.${P}-log-time{flex:0 0 7.5em;width:7.5em;font:var(--dsw-font-xs-13);color:var(--${P}-text-2)}`,
+            `.${P}-item[tabindex]:focus{outline:none}`,
+            `.${P}-item[tabindex]:focus-visible{outline:2px solid var(--${P}-ring);outline-offset:-2px}`,
             `.${P}-said{margin:8px 0 0;font:var(--dsw-font-xs-13)}`,
             `.${P}-said[tabindex]:focus{outline:none}`,
             `.${P}-said[tabindex]:focus-visible{outline:2px solid var(--${P}-ring);outline-offset:1px}`,
@@ -1282,6 +1285,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const data = live.data;
             const off = data?.off === true;
             const toggle = async (on) => {
+                if (busy) return;
                 setBusy(true);
                 setProblem('');
                 const { problem: no } = await run('setSession', { sessionId, on });
@@ -1289,6 +1293,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 if (no) setProblem(no);
                 void live.refresh();
             };
+            // One line that says the session's state, there from the start so a change is read out where the focus is.
+            const line = off ? 'Turned off for this session: its later turns get no notes.' : data && data.on === false && data.why ? data.why : '';
             return h('section', { className: `${P}-pane ${P}-turn`, 'aria-label': 'Canon', 'data-canon-turn': off ? 'off' : 'on' },
                 h('div', { className: `${P}-turn-head` },
                     h('span', { className: `${P}-turn-glyph` }, h(BookGlyph, {})),
@@ -1296,12 +1302,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 h('ul', { className: `${P}-turn-notes` }, ...notes.map((note) => h('li', { key: note.path, className: `${P}-turn-note`, 'data-canon-note': note.path },
                     h('span', null, nameOf(note)),
                     h('span', { className: `${P}-turn-where` }, ` · ${where(note.path)}`)))),
-                off ? h('p', { className: `${P}-turn-line`, 'data-canon-off': '' }, 'Turned off for this session: its later turns get no notes.')
-                    : data && data.on === false && data.why ? h('p', { className: `${P}-turn-line` }, data.why) : null,
+                h('p', { className: line ? `${P}-turn-line` : `${P}-sr`, role: 'status', 'aria-live': 'polite', ...(off ? { 'data-canon-off': '' } : {}) }, line),
                 problem ? h('p', { className: `${P}-turn-line ${P}-error`, role: 'alert' }, `Not changed: ${problem}`) : null,
                 h('div', { className: `${P}-turn-actions` },
-                    data ? h(ui.Button, { variant: 'outline', size: 'sm', disabled: busy, onClick: () => void toggle(off) }, off ? 'Turn back on' : 'Turn off for this session') : null,
-                    h('button', { type: 'button', className: `${P}-link`, onClick: () => views.openPage() }, 'Open Canon')));
+                    // Never disabled while it works: the focus stays on it, and it names what pressing it does now.
+                    data ? h(ui.Button, { key: 'switch', variant: 'outline', size: 'sm', 'aria-disabled': busy ? 'true' : undefined, onClick: () => void toggle(off), 'data-canon-switch': '' }, off ? 'Turn back on' : 'Turn off for this session') : null,
+                    h('button', { key: 'open', type: 'button', className: `${P}-link`, onClick: () => views.openPage() }, 'Open Canon')));
         }
 
         /** After each completed turn: nothing unless it is the session's latest turn that got notes. */
@@ -1421,7 +1427,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         h('div', { className: `${P}-field` },
                             h('label', { className: `${P}-label`, htmlFor: ids.folder }, 'Session folder (optional)'),
                             h('input', { id: ids.folder, className: `${P}-input ${P}-code`, value: folder, autoComplete: 'off', spellCheck: false, placeholder: '~/Projects/app', onChange: (e) => setFolder(e.target.value), onKeyDown: onKey, 'data-canon-try-folder': '' })),
-                        h('div', { className: `${P}-actions` }, h(ui.Button, { variant: 'primary', size: 'sm', disabled: busy, onClick: () => void go() }, busy ? 'Trying…' : 'Try it')))),
+                        h('div', { className: `${P}-actions` }, h(ui.Button, { variant: 'primary', size: 'sm', 'aria-disabled': busy ? 'true' : undefined, onClick: () => void go() }, busy ? 'Trying…' : 'Try it')))),
                 problem ? h('p', { className: `${P}-said ${P}-error`, role: 'alert' }, problem) : null,
                 result ? h(TryResult, { result }) : null);
         }
@@ -1457,6 +1463,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const [busy, setBusy] = React.useState('');
             const [said, setSaid] = React.useState({ text: '', bad: false });
             const toggle = async (row, on) => {
+                if (busy) return;
                 setBusy(row.sessionId);
                 setSaid({ text: '', bad: false });
                 const { problem } = await run('setSession', { sessionId: row.sessionId, on });
@@ -1477,7 +1484,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                                     : h('div', { className: `${P}-meta` }, 'No notes added yet.'),
                                 row.count > 1 ? h('div', { className: `${P}-why` }, `${plural(row.count, 'turn')} got notes.`) : null),
                             h('div', { className: `${P}-item-side` },
-                                h(ui.Switch, { checked: !row.off, label: 'Add notes', disabled: busy === row.sessionId, onChange: (next) => void toggle(row, next) })));
+                                // Named for its session; never disabled while it works, so the focus stays on it.
+                                h(ui.Switch, { checked: !row.off, label: `Add notes to ${row.title || 'Untitled session'}`, onChange: (next) => void toggle(row, next) })));
                     })));
         }
 
@@ -1486,10 +1494,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const [busy, setBusy] = React.useState('');
             const [said, setSaid] = React.useState({ text: '', bad: false });
             const saidRef = React.useRef(null);
+            // After Promote the focus goes to what it did: a promoted draft's row (and its button) is gone.
             React.useEffect(() => {
-                if (said.bad) saidRef.current?.focus?.();
+                if (said.text) saidRef.current?.focus?.();
             }, [said]);
             const onPromote = async (draft) => {
+                if (busy) return;
                 setBusy(draft.path);
                 setSaid({ text: '', bad: false });
                 const { problem, value } = await run('promote', { path: draft.path });
@@ -1500,12 +1510,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             };
             const sub = s.access === 'drafts'
                 ? `Notes agents saved in ${s.draftsFolder}. None is added to a turn until a person promotes it.`
-                : `Drafts in ${s.draftsFolder}. Canon is read only, so agents save none; none is ever added to a turn.`;
+                : `The notes in the drafts folder, ${s.draftsFolder}. Canon is read only, so agents save none there, and none is ever added to a turn.`;
             return h(kit.Card, { title: TEXT.drafts, sub, attrs: { 'data-canon-drafts': String(data.drafts.length), 'data-canon-promote': s.access === 'drafts' && s.promote ? 'on' : 'off' } },
                 h('div', { className: `${P}-lines` }, h('div', { className: `${P}-line` }, promoteText(s), s.access === 'drafts' && s.promote ? null : h(SettingsButton, { focus: s.access === 'drafts' ? 'promote' : 'access', label: 'Open Canon\'s settings', variant: 'ghost' }))),
                 h('p', {
                     ref: saidRef,
-                    tabIndex: said.bad ? -1 : undefined,
+                    tabIndex: said.text ? -1 : undefined,
                     className: said.text ? `${P}-said ${said.bad ? `${P}-error` : `${P}-ok`}` : `${P}-sr`,
                     role: said.bad ? 'alert' : 'status',
                     'aria-live': 'polite',
@@ -1525,16 +1535,23 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             d.preview ? h('div', { className: `${P}-why` }, d.preview) : null),
                         h('div', { className: `${P}-item-side` },
                             d.kind ? h(ui.Tag, { tone: 'quiet', className: `${P}-tag` }, KIND_WORD[d.kind] ?? d.kind) : null,
-                            h(ui.Button, { variant: 'outline', size: 'sm', disabled: busy === d.path, onClick: () => void onPromote(d), 'aria-label': `Promote ${nameOf(d)}` }, busy === d.path ? 'Promoting…' : 'Promote'))))));
+                            h(ui.Button, { variant: 'outline', size: 'sm', 'aria-disabled': busy === d.path ? 'true' : undefined, onClick: () => void onPromote(d), 'aria-label': `Promote ${nameOf(d)}` }, busy === d.path ? 'Promoting…' : 'Promote'))))));
         }
 
+        /** What happened lists this many entries until "Show all". */
+        const SHOWN = 30;
         function HistoryCard({ data, titles }) {
             const [all, setAll] = React.useState(false);
-            const shown = all ? data.history : data.history.slice(0, 30);
+            const firstMore = React.useRef(null);
+            const shown = all ? data.history : data.history.slice(0, SHOWN);
+            // "Show all" goes once pressed: the focus moves to the first entry it brought into view.
+            React.useEffect(() => {
+                if (all) firstMore.current?.focus?.();
+            }, [all]);
             return h(kit.Card, { title: TEXT.history, sub: TEXT.historySub, attrs: { 'data-canon-history': '' } },
                 data.history.length === 0 ? h(kit.Empty, { title: TEXT.noHistory, text: TEXT.noHistoryText })
                     : [
-                        h('ul', { key: 'l', className: `${P}-list` }, ...shown.map((entry) => h('li', { key: entry.id, className: `${P}-item`, 'data-canon-entry': entry.kind, 'data-canon-state': entry.state ?? '' },
+                        h('ul', { key: 'l', className: `${P}-list` }, ...shown.map((entry, i) => h('li', { key: entry.id, className: `${P}-item`, 'data-canon-entry': entry.kind, 'data-canon-state': entry.state ?? '', ...(i === SHOWN ? { ref: firstMore, tabIndex: -1 } : {}) },
                             h('span', { className: `${P}-log-time` }, h(kit.TimeText, { at: entry.at })),
                             h('div', { className: `${P}-item-main` },
                                 h('div', null,
