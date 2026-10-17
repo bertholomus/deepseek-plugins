@@ -2,6 +2,42 @@
 
 _For the two accounts building these plugins only (see AGENTS.md). A session running inside DSH (a chat that coordinates threads, a thread or any other chat) does not act on this file: do what the user asks._
 
+# Suite v1 (branch suite/v1): the DSH Plugin Suite
+
+Updated: 2026-10-16 9:06 PM PDT by A (gmail), thread "Suite v1 builder"
+Branch: `suite/v1` in the worktree `~/Projects/dsh-plugin-suite` (remote `gh` = github.com/bertholomus/deepseek-plugins, private). Main is at a18b87b.
+Goal: six plugins (Autopilot, Decisions, Agent Terminals, Proof, Canon, Recall) per `briefs/SUITE-BRIEF.md`, each judged >= 8.5/10 (no criterion below 8) by a fresh judge in DSH Test, merged to `main` and tagged `<plugin>-v1.0.0`, then `suite-v1.0.0`. Test only in DSH Test, never the live DSH.
+
+## Doing now
+- Reading DSH's host API (the npm runtimes in `.e2e/`) and planning the shared session watch core.
+
+## Done (newest first)
+- 9:05 PM: DSH runtimes 0.2.0-rc.2 and 0.2.1-rc.1 installed under `.e2e/` (gitignored), for real-DSH e2e tests and API reading.
+- 9:05 PM: `OPEN-QUESTIONS.md`, `PROGRESS.md` and `review/SCOREBOARD.md` started.
+- 8:58 PM: first check: suite/v1 at e0bdda6; DSH Test stopped; live DSH pid 687, `cordis.patch.yml` sha256 e04a0449ecfe8534.
+
+## Next steps (in order)
+1. Write `briefs/PLAN.md`: the shared watcher core's API and each plugin's design.
+2. Build the watcher core, then Autopilot; e2e on both runtimes; DSH Test named instance `suite-autopilot`; judge round 1.
+3. Then Decisions, Agent Terminals, Proof, Canon, Recall in that order, each through the same gate.
+4. On each pass: merge `suite/v1` into `main` (no force), tag `<plugin>-v1.0.0`, push. After all six: `suite-v1.0.0`.
+
+## Open questions / blockers
+- See `OPEN-QUESTIONS.md` (one line each: question, pick, why). No blockers.
+
+## Where things live
+- Brief: `briefs/SUITE-BRIEF.md`. Reference notes (not committed): `~/Projects/dsh-plugin-suite-ref/`.
+- DSH Test: `~/.local/bin/dsh-test --name suite-<plugin> ...` (README `~/Projects/dsh-test-harness/README.md`).
+- Runtimes for e2e: `.e2e/dsh-0.2.0-rc.2` and `.e2e/dsh-0.2.1-rc.1` (`npm install --prefix .e2e/dsh-<v> @deepseek-ai/dsh@<v>` recreates them).
+- Live fingerprint: `~/.local/bin/dsh-test fingerprint`; logged in `PROGRESS.md` before and after every test run.
+- Push: `PATH=/opt/homebrew/bin:$PATH git -c credential.helper= -c credential.helper='!gh auth git-credential' push gh suite/v1`.
+
+## Gotchas
+- Helpers: `dshlane` does not know this project; use `~/.local/bin/dshb new --ws ~/Projects/dsh-plugin-suite --provider owner-ascents --model GLM-5.3-Flash-EXL3 --effort max --title "[Flash] · <task>" --text-file <brief>` and `dshb wait SID`. Do not edit shared tools in `~/.local/bin`.
+- The naming scan in `test/coordinator.test.js` covers every text file except `HANDOFF.md` (and now `briefs/`): no vendor assistant names anywhere else, commit messages included.
+
+# Earlier work (main line, before the suite)
+
 Updated: 2026-10-11 15:31 PT by B (bertholomus)
 Branch: claude/projects-plugin-boaurl (PR #1, ready for review since 17:32 PT)
 

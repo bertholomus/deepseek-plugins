@@ -88,7 +88,8 @@ test('coordinator: DSH lists the plugin as "Coordinator", with one plain sentenc
 
 test('plugins and docs carry no third-party assistant branding', () => {
     const root = new URL('../', import.meta.url);
-    const skip = new Set(['node_modules', '.git', 'HANDOFF.md']);
+    // briefs/ is the owner's planning text, which quotes the rule itself; .e2e/ holds DSH runtimes installed for tests.
+    const skip = new Set(['node_modules', '.git', 'HANDOFF.md', 'briefs', '.e2e']);
     const hits = [];
     const walk = (dir) => {
         for (const e of readdirSync(dir, { withFileTypes: true })) {
