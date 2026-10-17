@@ -9,10 +9,10 @@
  *   contradicted  a claim that the turn's own output says is wrong
  *
  * The dev corpus (test/fixtures/proof/*.json) is what the rules were tuned
- * on. The first, second and third hold-outs (test/fixtures/proof/seen/,
- * seen2/ and seen3/) were each written apart from the rules and measured
- * once, before any rule saw them; their misses then went into the rules,
- * so they are tuned on too. The hold-out corpus
+ * on. The first four hold-outs (test/fixtures/proof/seen/, seen2/, seen3/
+ * and seen4/) were each written apart from the rules and measured once,
+ * before any rule saw them; their misses then went into the rules, so they
+ * are tuned on too. The hold-out corpus
  * (test/fixtures/proof/holdout/*.json) was written after that, by writers
  * who never saw the rules or the other corpora, and is only measured.
  * Each turn is folded through Proof's own projection, exactly as DSH folds
@@ -29,6 +29,7 @@ export const DEV = join(ROOT, 'test', 'fixtures', 'proof');
 export const SEEN = join(DEV, 'seen');
 export const SEEN2 = join(DEV, 'seen2');
 export const SEEN3 = join(DEV, 'seen3');
+export const SEEN4 = join(DEV, 'seen4');
 export const HOLDOUT = join(DEV, 'holdout');
 export const TOOL_NAMES = new Set(['bash', 'read', 'edit', 'write', 'grep', 'glob', 'todo_write']);
 

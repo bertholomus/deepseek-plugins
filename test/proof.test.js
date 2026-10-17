@@ -616,3 +616,92 @@ test('judge: versions a run printed, CI runs that publish, the kind of tests nam
     assert.equal(judge(only('It beats the old model.'), [bash('python eval.py', 'test accuracy: 0.912')], { prompt: 'Beat 90% test accuracy.' }).verdict, 'backed');
     assert.equal(judge(only('It beats the old model.'), [bash('python eval.py', 'val_loss=0.52')], { prompt: 'Beat the old model\'s val loss of 0.5.' }).verdict, 'contradicted');
 });
+
+test('claims: searches said to come back empty, quoted claims, "fixed" as an adjective, commands that ran clean, two kinds of run in one sentence', () => {
+    const search = only('A final search for `OldClient` under `src/` comes back empty.');
+    assert.deepEqual([search.kind, search.subject, search.term], ['passed', 'search', 'OldClient']);
+    assert.equal(only('`rg -n "parseLegacy" lib/` now finds nothing.').term, 'parseLegacy');
+    assert.equal(only('No references to `TokenCache` remain.').subject, 'search');
+    assert.deepEqual(claimsIn('If the grep finds nothing, I will delete the file.'), []);
+    // What a bot or a person said, quoted, is not this turn's claim; a quoted name inside a claim stays.
+    assert.deepEqual(claimsIn('The notifier posts "all checks passed" whatever the status.'), []);
+    assert.equal(only('The "lint" job is green.').kind, 'passed');
+    assert.deepEqual(claimsIn('It is a fixed window: one counter per minute.'), []);
+    assert.deepEqual(claimsIn('Buffers are fixed-size, so nothing grows.'), []);
+    const ran = only('`make release-check` ran clean on both machines.');
+    assert.deepEqual([ran.kind, ran.commands], ['passed', ['make release-check']]);
+    assert.deepEqual(claimsIn('Lint is clean, and `pytest -q` passes.').map((c) => c.subject), ['lint', 'tests']);
+});
+
+test('claims: previews and places a change was applied, health paths, and clearing a bar', () => {
+    assert.deepEqual([only('The docs site is up on a Netlify preview.').kind, only('The docs site is up on a Netlify preview.').target], ['deployed', 'env']);
+    assert.equal(only('Wrote the migration and applied it to production.').target, 'env');
+    assert.equal(only('The production database is at head now.').target, 'env');
+    assert.equal(only('`/readyz` is ok.').target, 'health');
+    // A deploy and its check in one sentence stay two claims.
+    assert.deepEqual(claimsIn('Released 3.1.0 and /healthz returns 200.').map((c) => c.target), ['any', 'health']);
+    assert.equal(only('Recall is 0.91, comfortably over the 85% bar.').beats, true);
+    assert.equal(only('Yes, we clear it.').beats, true);
+});
+
+test('evidence: test counts of more runners, benchmark tools\' own comparisons, searches, and commands a tool ran itself', () => {
+    assert.deepEqual(testCountsIn('bun test v1.1\n\n 41 pass\n 0 fail\n 96 expect() calls\nRan 41 tests across 7 files.'), { passed: 41, failed: 0 });
+    assert.deepEqual(testCountsIn('ok | 12 passed | 0 failed (1s)'), { passed: 12, failed: 0 });
+    assert.deepEqual(testCountsIn('100% tests passed, 0 tests failed out of 12'), { passed: 12, failed: 0, total: 12 });
+    assert.deepEqual(testCountsIn('Executed 42 tests, with 1 failure (0 unexpected) in 1.2 (1.3) seconds'), { passed: 41, failed: 1, total: 42 });
+    assert.deepEqual(testCountsIn('00:07 +40 -2: Some tests failed.'), { passed: 40, failed: 2 });
+    assert.deepEqual(testCountsIn('Executed 3 out of 3 tests: 3 tests pass.'), { passed: 3, failed: 0, total: 3 });
+    assert.deepEqual(testCountsIn('[info] Passed: Total 42, Failed 0, Errors 0, Passed 42'), { passed: 42, failed: 0, total: 42 });
+    assert.deepEqual(testCountsIn('18:04:22  Done. PASS=4 WARN=0 ERROR=0 SKIP=0 TOTAL=4'), { passed: 4, failed: 0, total: 4 });
+    assert.equal(bash('dbt test --select orders', 'Done. PASS=4 WARN=0 ERROR=0 SKIP=0 TOTAL=4').kind, 'test');
+    assert.equal(bash('dbt run --select +orders', 'Done. PASS=3 WARN=0 ERROR=0 SKIP=0 TOTAL=3').kind, 'build');
+    assert.equal(bash('pnpm turbo run build test', 'Tasks:    8 successful, 8 total').kind, 'test');
+    assert.ok(bash('benchstat old.txt new.txt', 'Parse-8   1.243µ ± 2%   538.2n ± 1%  -56.70% (p=0.000 n=10)').metric);
+    assert.ok(bash('hyperfine ./old ./new', './new ran\n    2.31 ± 0.05 times faster than ./old').metric);
+    assert.deepEqual(seriesIn('BenchmarkParse-8   958414   1251 ns/op   384 B/op   6 allocs/op'), [{ l: 'ns/op', v: 1251 }]);
+    // grep's exit 1 with nothing printed is a search that found nothing; an echo after it is not a match.
+    const none = bash('grep -rn "OldClient" src/', '[exit code: 1]');
+    assert.deepEqual([none.ok, none.search], [true, { term: 'OldClient', hits: 0 }]);
+    assert.deepEqual(bash('grep -n oban mix.exs; echo done', 'done').search, { term: 'oban', hits: 0 });
+    assert.deepEqual(itemOf({ name: 'grep', args: { pattern: 'OldClient', path: 'src' }, text: 'src/a.ts:3:import { OldClient } from "./old";' }).search, { term: 'OldClient', hits: 1 });
+    assert.deepEqual(bash('fly deploy', 'Running api release_command: npm run migrate\n ✔ release_command 4d89 completed successfully').inner, ['npm run migrate']);
+});
+
+test('judge: searches, the runs a claim names, applies on the place named, install lines, and write-ups', () => {
+    const [claim] = claimsIn('A final search for `OldClient` under `src/` comes back empty.');
+    const before = itemOf({ name: 'grep', args: { pattern: 'OldClient', path: 'src' }, text: 'src/a.ts:3:import { OldClient } from "./old";\nsrc/b.ts:9:new OldClient()' });
+    const after = itemOf({ name: 'grep', args: { pattern: 'OldClient', path: 'src' }, text: 'No matches found' });
+    assert.equal(judge(claim, [before, edit('src/a.ts'), after]).verdict, 'backed');
+    assert.equal(judge(claim, [edit('src/a.ts'), before]).verdict, 'contradicted');
+    assert.equal(judge(claim, [edit('src/a.ts')]).verdict, 'unbacked');
+    // "Unit tests pass (`npm run test:unit`)" is about that run, though the integration run after it failed.
+    const [unit] = claimsIn('Unit tests pass: 143 passing (`npm run test:unit`).');
+    const units = bash('npm run test:unit', '  143 passing (1s)');
+    const integration = bash('npm run test:integration', '  0 passing\n  1 failing\n[exit code: 1]');
+    assert.equal(judge(unit, [units, integration]).verdict, 'backed');
+    assert.equal(judge(unit, [integration]).verdict, 'unbacked');
+    // "Applied it to staging": an apply whose command names staging, not one against a local database.
+    const [applied] = claimsIn('Wrote the migration and applied it to staging.');
+    assert.equal(judge(applied, [bash('psql "$STAGING_DATABASE_URL" -f db/migrations/0042.sql', 'UPDATE 1834')]).verdict, 'backed');
+    assert.equal(judge(applied, [bash('RAILS_ENV=staging bin/rails db:migrate', 'StandardError: An error has occurred\n[exit code: 1]')]).verdict, 'contradicted');
+    assert.equal(judge(applied, [bash('DATABASE_URL=postgresql://dev@localhost:5432/app_dev alembic upgrade head', 'INFO  Running upgrade a -> b')]).verdict, 'unbacked');
+    // "(`npm i pkg@1.2.0`)" after a publish says how to install it; the publish backs the claim.
+    const [published] = claimsIn('Published to npm (`npm i @acme/kit@1.2.0`).');
+    assert.equal(judge(published, [bash('npm publish', '+ @acme/kit@1.2.0')]).verdict, 'backed');
+    // A command a deploy ran itself: the release command named in the reply.
+    const [release] = claimsIn('The release command (`npm run migrate`) completed successfully.');
+    assert.equal(judge(release, [bash('fly deploy', 'Running api release_command: npm run migrate\n ✔ release_command 4d89 completed successfully')]).verdict, 'backed');
+    assert.equal(asksForWork('thanks, can you write that up as a PR description?'), false);
+    assert.equal(asksForWork('give me a one-liner for standup'), false);
+    assert.equal(asksForWork('Write a migration that adds the column.'), true);
+});
+
+test('projection: a write-up turn that only looked rests on the turn before', () => {
+    const work = turn(1, { prompt: 'Publish 1.2.0.', tools: [['bash', { command: 'npm test' }, '# tests 34\n# pass 34\n# fail 0'], ['bash', { command: 'npm publish' }, '+ @acme/kit@1.2.0']], reply: 'Published 1.2.0; all 34 tests pass.' });
+    const note = turn(2, { prompt: 'thanks! can you write a short note I can paste in #releases?', tools: [['bash', { command: 'npm view @acme/kit version' }, '1.2.0']], reply: 'It is published to npm (`npm i @acme/kit@1.2.0`). All 34 tests passed before the publish.' });
+    const state = foldAll([...work, ...note]);
+    assert.deepEqual(state.claims.filter((c) => c.turn === 2).map((c) => c.verdict), ['backed', 'backed']);
+    // New work asked for: the turn before does not back it.
+    const renamed = foldAll([...work, ...turn(2, { prompt: 'Now publish 1.2.1.', tools: [['bash', { command: 'npm view @acme/kit version' }, '1.2.0']], reply: 'Published 1.2.1 to npm.' })]);
+    assert.notEqual(renamed.claims.filter((c) => c.turn === 2)[0].verdict, 'backed');
+});

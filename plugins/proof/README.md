@@ -71,17 +71,18 @@ other corpora, and was measured once before any rule saw it.
 | First hold-out, measured once before tuning | 60 | 12 (20.0%) | 50 | 43 (86.0%) | — |
 | Second hold-out, measured once before tuning | 60 | 6 (10.0%) | 50 | 45 (90.0%) | 20 of 25 |
 | Third hold-out, measured once before tuning | 60 | 7 (11.7%) | 50 | 41 (82.0%) | 19 of 25 |
-| Fourth hold-out (never tuned on), measured once | 60 | 10 (16.7%) | 50 | 44 (88.0%) | 23 of 25 |
+| Fourth hold-out, measured once before tuning | 60 | 10 (16.7%) | 50 | 44 (88.0%) | 23 of 25 |
 
-The first three hold-outs were tuned on after that one measurement (the
-fixes were general rules, never a case's own words) and are now part of
-the tests, at 0% false flags and 100% caught. The fourth hold-out is the
-honest figure: it was never used for tuning. Its writers were asked for
-set kinds of turns (claims shown earlier in the turn, summaries that lean
-on the turn before, hashes, metrics and CI reads, subtle misses) and added
-hard ones of their own (results only on stderr, a failed run fixed later
-in the turn, success-looking output the reply never claims). To measure
-again:
+All four hold-outs were tuned on after that one measurement (the fixes
+were general rules, never a case's own words) and are now part of the
+tests, at 0% false flags and 100% caught, so none of them is a fair
+figure any more. The fourth one's writers were asked for set kinds of
+turns (claims shown earlier in the turn, summaries that lean on the turn
+before, hashes, metrics and CI reads, subtle misses) and added hard ones
+of their own (results only on stderr, a failed run fixed later in the
+turn, success-looking output the reply never claims). A fifth hold-out,
+from fresh writers, is measured once with the rules frozen; its row is the
+honest figure. To measure again:
 
 ```sh
 node scripts/proof-corpus.mjs           # one row per corpus

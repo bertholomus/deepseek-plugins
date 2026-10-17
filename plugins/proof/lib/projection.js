@@ -44,7 +44,7 @@
  * @module dsh-plugin-proof/projection
  */
 import { claimsIn } from './claims.js';
-import { asksForWork, itemOf, judge, quotedBy } from './evidence.js';
+import { asksForWork, itemOf, judge, looksOnly, quotedBy } from './evidence.js';
 
 /** The projection key; the browser half reads the same name. */
 export const KEY = 'proofClaims';
@@ -98,7 +98,8 @@ function turnOf(state) {
 function judged(turn, prev, at) {
     const claims = claimsIn(turn.text);
     if (claims.length === 0) return [];
-    const lean = turn.items.length === 0 && !turn.work && prev && prev.items.length > 0;
+    // A summary turn that ran nothing, or only looked (a registry read, a status read), rests on the turn before.
+    const lean = (turn.items.length === 0 || turn.items.every(looksOnly)) && !turn.work && prev && prev.items.length > 0;
     return claims.map((claim, index) => {
         let result = judge(claim, turn.items, { prompt: turn.ask });
         // No tool ran, and the person asked for new work: an earlier turn's runs do not show it.
@@ -106,10 +107,12 @@ function judged(turn, prev, at) {
             result = { ...result, why: 'No tool ran in this turn, and it was asked for new work, so the runs before it do not show this.' };
         }
         let from;
-        if (lean) {
-            const earlier = judge(claim, prev.items, { prompt: prev.ask ?? '' });
+        if (lean && result.verdict === 'unbacked') {
+            // The turn before, then this turn's own looks after it: each piece of evidence says which turn it came from.
+            const before = prev.items.map((i) => ({ ...i, text: `turn ${prev.n}: ${i.text}` }));
+            const earlier = judge(claim, [...before, ...turn.items], { prompt: prev.ask ?? '' });
             if (earlier.verdict !== 'unbacked') {
-                result = { ...earlier, evidence: earlier.evidence.map((e) => `turn ${prev.n}: ${e}`) };
+                result = earlier;
                 from = prev.n;
             }
         }
