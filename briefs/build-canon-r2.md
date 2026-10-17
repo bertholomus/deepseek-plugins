@@ -1,6 +1,6 @@
 # Canon round 2: builder's notes
 
-Updated: 2026-10-17 4:42 PM PDT (Canon round-2 builder)
+Updated: 2026-10-17 4:53 PM PDT (Canon round-2 builder)
 Branch: `suite/v1` in `~/Projects/dsh-plugin-suite`
 Status: findings 1, 3 to 7 and 9 fixed in code with unit tests; README and the real-DSH run next.
 Vault frozen at f7283b5: test/fixtures/canon/vault
@@ -17,6 +17,13 @@ Live DSH fingerprint before any work (3:40 PM PDT): pid 18756, started Sat Oct 1
 63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7.
 
 ## Done (newest first)
+- ef0a258: relevance, from round 1's real prompts (run through `scratchpad/canon-r2/block.mjs`, not added to dev): a
+  prompt that asks two things keeps the note that best answers each question asked alone (`questionsOf`, `rank` in
+  search.js), so "When does the lantern on-call rotation hand over, and why did we choose NATS JetStream …?" gets
+  both notes again; a session in a known project's folder names that project for its notes ("Which ports does this
+  service listen on?" in quartz-cache gets Quartz ports); "called" and "named" are stop words (the mascot prompt no
+  longer gets On-call). Dev: 43/47 first, 45/47 in the block, 0.33 (15 in 45), 25/30 no block; `DEV_REACHED` holds
+  15.
 - be89b6d: Findings 7 and 9. The card's switch, the page's switches, Try it and Read again are never disabled while
   they work (aria-disabled; a second press waits), so the focus stays; after Promote the focus goes to its status line
   (the promoted row goes); Show all moves the focus to the first entry it brings; each session's switch is named "Add
@@ -98,6 +105,16 @@ Live DSH fingerprint before any work (3:40 PM PDT): pid 18756, started Sat Oct 1
 - DSH's Trajectory names the block's source "Dsh-plugin-canon" (round-1 nit, not in this brief's list): DSH draws
   it from the message's source kind; Canon keeps its kind `dsh-plugin-canon`, which the card, the log and the
   tests key on.
+
+- Tried on dev and left out: a higher floor for a note matched only in its body (5 to 8: one more no block, but
+  the first-week prompt loses Onboarding); two body-only words never fitting (loses Onboarding); a note that has two
+  topic words the best lacks kept under the relative floor (brings Home.md into the capture prompts). A question
+  must fit on its own to keep its note: scoring each question inside the whole prompt let "what must I run before
+  one?" bring Lantern ports (a heading has "run").
+- Extra notes left on round 1's prompts, and why: the weekday prompt also gets the rollback runbook ("release" is in
+  both titles, 9.30 against 9.65); the quartz health-check prompt gets the TLS runbook (two body words, "service" and
+  "check"); "Write a unit test for the lantern API's pagination helper" gets Local development and the release
+  checklist (both say how to run the unit tests).
 
 ## Gotchas
 - Never create or read `test/fixtures/canon/relevance/holdout.json`: fresh writers write it. Before each `npm test`,
