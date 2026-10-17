@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { claimsIn, kindOf, sentencesOf } from '../plugins/proof/lib/claims.js';
-import { asksForWork, ciIn, deployIn, exitOf, hashIn, healthIn, itemOf, judge, numsIn, seriesIn, statusIn, testCountsIn } from '../plugins/proof/lib/evidence.js';
+import { asksForWork, ciIn, deployIn, endedIn, exitOf, hashIn, healthIn, itemOf, judge, numsIn, readingsIn, seriesIn, statusIn, testCountsIn } from '../plugins/proof/lib/evidence.js';
 import { INITIAL, KEY, STATE_VERSION, applyEvent, flagged, foldAll, parseState, parseView, proofProjection, viewOf } from '../plugins/proof/lib/projection.js';
 
 const bash = (command, output) => itemOf({ name: 'bash', args: { command }, text: output });
@@ -506,4 +506,113 @@ test('projection: the view is the same object while the claims do not change (DS
     state = applyEvent(state, { type: 'turn/start', seq: 1000, time: 1000, data: { turn: 2 } });
     state = applyEvent(state, { type: 'tool/call', seq: 1001, time: 1001, data: { callId: 'x', name: 'bash', arguments: { command: 'ls' } } });
     assert.equal(viewOf(state), before);
+});
+
+test('claims: whole-word subjects, "when" parts, people\'s comments and machines, any n\'t word', () => {
+    // "PRIMARY" is not a PR, and "running" is not a run.
+    assert.deepEqual(claimsIn('The service shows the new task set as PRIMARY with phase COMPLETED (2/2 running).'), []);
+    assert.deepEqual(claimsIn('404 for an unknown id, 409 when the invoice is already shipped.'), []);
+    assert.equal(only('When I ran the suite again, all 12 tests passed.').kind, 'passed');
+    assert.deepEqual(claimsIn("Dana's comment says the build passes."), []);
+    assert.deepEqual(claimsIn('The suite passes on her laptop.'), []);
+    assert.deepEqual(claimsIn('The theme key can’t be resolved at startup.'), []);
+    assert.deepEqual(claimsIn("The cache shouldn't be fixed here."), []);
+});
+
+test('claims: all of a count, built artifacts, a factor, a script that ran, beating a bar, and a heading\'s next sentence', () => {
+    assert.equal(only('The suite is still 48/48.').kind, 'passed');
+    assert.deepEqual(claimsIn('The suite is 47/48.'), []);
+    assert.equal(only('The release bundle is built.').kind, 'done');
+    const factor = only('Roughly 3x on the large input.');
+    assert.equal(factor.kind, 'fixed');
+    assert.equal(factor.improved, true);
+    assert.deepEqual(only('`scripts/load_demo.py` ran clean.').commands, ['scripts/load_demo.py']);
+    assert.deepEqual(only('`./tools/rebuild_index.sh` ran clean.').commands, ['./tools/rebuild_index.sh']);
+    // A file that is only named is not a run.
+    assert.equal(only('`calc.test.mjs` passes.').commands, undefined);
+    const beats = only('The new ranker beats the baseline.');
+    assert.equal(beats.kind, 'fixed');
+    assert.equal(beats.beats, true);
+    const [added] = claimsIn('## Added\n\n`POST /v1/invoices` creates an invoice.');
+    assert.equal(added.part, 'Added');
+    assert.equal(added.next, 'POST /v1/invoices creates an invoice.');
+});
+
+test('evidence: job states, model readings, routes, jobs and benchmarks that say they got slower', () => {
+    assert.equal(endedIn('Name: nightly\nStatus:   Pending'), 'running');
+    assert.equal(endedIn('Name: nightly\nPhase: Succeeded\nDuration: 4m'), true);
+    assert.equal(endedIn('{"jobId": "j-1", "status": "FAILED"}'), false);
+    assert.equal(endedIn('JobID    State\n812      COMPLETED'), true);
+    assert.equal(endedIn('success\n'), true);
+    assert.equal(endedIn('job.batch/reindex condition met'), true);
+    assert.equal(endedIn('NAME      COMPLETIONS   DURATION   AGE\nreindex   0/1           40s        40s'), 'running');
+    assert.equal(endedIn('nothing to see'), undefined);
+    assert.deepEqual(readingsIn('epoch 2  train_loss=0.41  val_acc=0.902\ntest accuracy: 0.897').map((r) => [r.l, r.m, r.s, r.v]), [['train_loss', 'loss', 'train', 0.41], ['val_acc', 'acc', 'val', 0.902], ['accuracy', 'acc', '', 0.897]]);
+    assert.equal(bash('sbatch jobs/reindex.sbatch', 'Submitted batch job 812').job, true);
+    assert.equal(bash('gh run view 77', '✓ main · Publish 2.0.0 #77\nJOBS\n✓ publish-npm in 40s').deploys, true);
+    const routes = itemOf({ name: 'write', args: { file_path: 'src/http/invoices.ts', content: 'export async function createInvoice(req, res) { res.status(201).json(x) }' }, text: 'Created file' });
+    assert.equal(routes.route, true);
+    const types = itemOf({ name: 'edit', args: { file_path: 'src/types/invoice.ts', old_string: 'a', new_string: 'export interface Invoice { id: string }' }, text: 'Updated' });
+    assert.equal(types.route, undefined);
+    assert.equal(bash('cargo bench -- --baseline main', 'parse/1k  time: [88.1 µs 88.9 µs 89.6 µs]\n  Performance has regressed.').perf.ok, false);
+});
+
+test('judge: a job started elsewhere is finished only when a status read after it says so', () => {
+    const submit = bash('argo submit flows/reindex.yaml', 'Name: reindex-q8\nStatus: Pending');
+    const finished = only('Started reindex-q8. It has since finished.');
+    assert.equal(judge(finished, [submit, bash('argo get reindex-q8', 'Status: Succeeded')], { prompt: 'Kick off the reindex.' }).verdict, 'backed');
+    const failed = judge(finished, [submit, bash('argo get reindex-q8', 'Status: Failed')], { prompt: 'Kick off the reindex.' });
+    assert.equal(failed.verdict, 'contradicted');
+    assert.match(failed.why, /did not finish well: `argo get reindex-q8` exited 0: status Failed/);
+    const going = judge(finished, [submit], { prompt: 'Kick off the reindex.' });
+    assert.equal(going.verdict, 'unbacked');
+    assert.match(going.why, /still going/);
+    // A bare "Done" after starting it is about starting it.
+    assert.equal(judge(only('Done.'), [submit], { prompt: 'Kick off the reindex.' }).verdict, 'backed');
+});
+
+test('judge: ran-it-on is the apply, finished runs quote printed counts, endpoints need a route, a failed build contradicts "built"', () => {
+    const write = itemOf({ name: 'write', args: { file_path: 'db/migrate/20261017_add_index.rb', content: 'add_index' }, text: 'Created file' });
+    const migrate = bash('RAILS_ENV=staging bin/rails db:migrate', 'PG::UniqueViolation\n[exit code: 1]');
+    const status = bash('RAILS_ENV=staging bin/rails db:migrate:status', ' down    20261017  Add index');
+    assert.equal(status.apply, undefined);
+    assert.equal(judge(only('Added the migration and ran it on staging.'), [write, migrate, status], { prompt: 'Add the index and run it on staging.' }).verdict, 'contradicted');
+    const load = bash('python -m etl load --day 2026-10-16', 'schema ok: 12 columns');
+    assert.equal(judge(only('Import complete: 48,210 rows loaded.'), [load], { prompt: 'Run the import for yesterday.' }).verdict, 'unbacked');
+    assert.equal(judge(only('Import complete: 48,210 rows loaded.'), [bash('python -m etl load --day 2026-10-16', 'loaded 48210 rows')], { prompt: 'Run the import for yesterday.' }).verdict, 'backed');
+    const types = itemOf({ name: 'edit', args: { file_path: 'src/types/invoice.ts', old_string: 'a', new_string: 'export interface Invoice { id: string }' }, text: 'Updated' });
+    const handler = itemOf({ name: 'edit', args: { file_path: 'src/routes/invoices.ts', old_string: 'a', new_string: "router.post('/', create)" }, text: 'Updated' });
+    const [added] = claimsIn('Added `POST /v1/invoices`, typed with `Invoice`.');
+    assert.equal(judge(added, [types], { prompt: 'We need a POST /v1/invoices endpoint.' }).verdict, 'unbacked');
+    assert.equal(judge(added, [types, handler], { prompt: 'We need a POST /v1/invoices endpoint.' }).verdict, 'backed');
+    const apk = judge(only('The release APK is built.'), [bash('./gradlew assembleRelease', 'BUILD FAILED in 40s\n[exit code: 1]')], { prompt: 'Cut the release APK for 3.1.' });
+    assert.equal(apk.verdict, 'contradicted');
+    assert.match(apk.why, /^The build in this turn did not go through/);
+    assert.equal(judge(only('The marts are rebuilt.'), [bash('dbt run --select +marts', 'Done. PASS=3 ERROR=1\n[exit code: 1]')], { prompt: 'Rebuild the marts.' }).verdict, 'contradicted');
+});
+
+test('judge: versions a run printed, CI runs that publish, the kind of tests named, slower benchmarks, and beating a bar', () => {
+    const add = bash('pnpm add zod@^4', '+ zod 4.1.2\nDone in 2.1s');
+    assert.equal(judge(only('zod is on 4.1.2.'), [add]).verdict, 'backed');
+    assert.equal(judge(only('zod is on 4.2.0.'), [add]).verdict, 'unbacked');
+    const run = bash('gh run view 91', '✓ main · Publish 2.0.0 #91\nCompleted · success\nJOBS\n✓ publish-npm in 40s');
+    assert.equal(judge(only('The 2.0.0 release is live.'), [run]).verdict, 'backed');
+    const docs = bash('cargo test --doc', 'test result: ok. 4 passed; 0 failed');
+    const integration = judge(only('The integration tests are green.'), [edit('src/pool.rs'), docs]);
+    assert.equal(integration.verdict, 'unbacked');
+    assert.match(integration.why, /limited to the doc tests/);
+    assert.equal(judge(only('The integration tests are green.'), [edit('src/pool.rs'), bash('cargo test', 'test result: ok. 31 passed; 0 failed')]).verdict, 'backed');
+    assert.equal(judge(only('The suite is still 48/48.'), [edit('src/a.ts')], { prompt: 'Rename the module.' }).verdict, 'unbacked');
+    const slower = judge(only('Roughly 3x on the large input.'), [bash('cargo bench -- --baseline main', 'parse/1k  time: [88.1 µs 88.9 µs 89.6 µs]\n  Performance has regressed.')]);
+    assert.equal(slower.verdict, 'contradicted');
+    assert.match(slower.why, /Performance has regressed/);
+    const train = bash('python train.py', 'epoch 1 val_acc=0.861\nepoch 2 val_acc=0.874');
+    const beats = only('The new ranker beats the baseline.');
+    const lost = judge(beats, [train], { prompt: 'Does it beat the baseline\'s 0.88 val accuracy?' });
+    assert.equal(lost.verdict, 'contradicted');
+    assert.match(lost.why, /beats 0\.88 val accuracy; the best val_acc this turn printed is 0\.874/);
+    assert.equal(judge(beats, [bash('python train.py', 'epoch 1 val_acc=0.861\nepoch 2 val_acc=0.893')], { prompt: 'Does it beat the baseline\'s 0.88 val accuracy?' }).verdict, 'backed');
+    // Loss is better lower; a percent bar reads against fractions.
+    assert.equal(judge(only('It beats the old model.'), [bash('python eval.py', 'test accuracy: 0.912')], { prompt: 'Beat 90% test accuracy.' }).verdict, 'backed');
+    assert.equal(judge(only('It beats the old model.'), [bash('python eval.py', 'val_loss=0.52')], { prompt: 'Beat the old model\'s val loss of 0.5.' }).verdict, 'contradicted');
 });
