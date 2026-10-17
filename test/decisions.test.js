@@ -135,6 +135,9 @@ test('cards: a reply\'s decision line, BLOCKED line or plain question is a card 
     const plain = row({ ask: { kind: 'question', question: 'Should I also drop the old table?', turn: 3 }, end });
     assert.equal(replyCard(plain, { now }).kind, 'reply');
     assert.equal(replyCard(plain, { now, replies: false }), undefined, 'plain questions can be switched off');
+    const offer = row({ ask: { kind: 'question', question: 'Let me know when you\'re ready to prep any of those.', soft: true, turn: 3 }, end });
+    assert.equal(replyCard(offer, { now }), undefined, 'an offer waits on nobody');
+    assert.equal(replyCard(row({ ask: { ...decision, soft: true }, end }), { now }).kind, 'decision', 'a decision line is a card whatever the words around it');
     assert.equal(readable({ sessionId: 's', origin: 'subagent' }), false);
 });
 

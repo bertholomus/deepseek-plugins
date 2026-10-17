@@ -34,7 +34,7 @@ export { cutOff };
 /** The projection's key in DSH (one name for the whole Host). */
 export const KEY = 'sessionWatch';
 /** Bump when the state's shape changes: DSH then drops saved states of the old shape and folds again. */
-export const STATE_VERSION = 2;
+export const STATE_VERSION = 3;
 
 /** DSH's question box, as a tool. */
 export const ASK_TOOL = 'ask_user_question';
@@ -324,6 +324,7 @@ export function parseState(value) {
             kind: value.ask.kind,
             question: value.ask.question.slice(0, 400),
             ...(typeof value.ask.recommendation === 'string' ? { recommendation: value.ask.recommendation.slice(0, 400) } : {}),
+            ...(value.ask.soft === true ? { soft: true } : {}),
             turn: Number.isSafeInteger(value.ask.turn) ? value.ask.turn : 0,
         };
     }

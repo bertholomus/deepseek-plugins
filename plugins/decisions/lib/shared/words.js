@@ -128,28 +128,52 @@ export function askIn(text) {
     const asking = [...tail].reverse().find((line) => line.includes('?')) ?? tail.at(-1) ?? '';
     const sentences = asking.match(/[^.!?]*\?/g);
     const question = sentences ? sentences.at(-1).trim() : asking;
-    return question ? { kind: 'question', question: cutAsk(question) } : undefined;
+    // "Let me know if you want the docs too." offers more without waiting on an answer.
+    const soft = !asksForAnswer(text);
+    return question ? { kind: 'question', question: cutAsk(question), ...(soft ? { soft: true } : {}) } : undefined;
 }
 
+/** Asks that wait on a person's answer. */
 const ASKS = [
     /\bDECISION NEEDED\b/i,
     /^\s*BLOCKED\s*:/im,
     /\b(?:waiting|wait) (?:for|on) (?:your|you)\b/i,
-    /\b(?:let me know|your call|your decision|need your|needs your|please confirm|can you confirm|could you confirm)\b/i,
+    /\b(?:your call|your decision|need your|needs your|please confirm|can you confirm|could you confirm)\b/i,
     /\b(?:should I|shall I|do you want|would you like|which (?:one|option) (?:do|would) you)\b/i,
 ];
 
+/** Offers that leave the next step to the person without waiting on them. */
+const OFFERS = [
+    /\b(?:let me know|if you(?:'d| would)? (?:like|want|prefer)|happy to|feel free)\b/i,
+];
+
+/** The last few lines of a reply, where an agent asks. */
+const tailOf = (text) => text.trim().split('\n').map((line) => line.trim()).filter(Boolean);
+
+/**
+ * Whether a reply's end waits on a person's answer: a decision line, a
+ * BLOCKED line, a question at the end, or a plain request for their word
+ * (not an offer such as "Let me know if you want more").
+ */
+export function asksForAnswer(text) {
+    if (typeof text !== 'string' || text.trim() === '') return false;
+    const lines = tailOf(text);
+    if (/\?\s*[*_`)\]]*\s*$/.test(lines.at(-1) ?? '')) return true;
+    const tail = lines.slice(-6).join('\n');
+    return ASKS.some((pattern) => pattern.test(tail));
+}
+
 /**
  * Whether a reply's end asks a person for something: a decision line, a
- * BLOCKED line, a question at the end, or a plain request for their word.
- * Read from the last few lines only, where an agent asks.
+ * BLOCKED line, a question at the end, a plain request for their word, or
+ * an offer that leaves the next step to them ("Let me know if…"). Read
+ * from the last few lines only, where an agent asks.
  */
 export function asksSomeone(text) {
+    if (asksForAnswer(text)) return true;
     if (typeof text !== 'string' || text.trim() === '') return false;
-    const lines = text.trim().split('\n').map((line) => line.trim()).filter(Boolean);
-    const tail = lines.slice(-6).join('\n');
-    if (/\?\s*[*_`)\]]*\s*$/.test(lines.at(-1) ?? '')) return true;
-    return ASKS.some((pattern) => pattern.test(tail));
+    const tail = tailOf(text).slice(-6).join('\n');
+    return OFFERS.some((pattern) => pattern.test(tail));
 }
 
 /** "9:41 PM" today, "yesterday 9:41 PM", or "Oct 3, 9:41 PM", in this machine's zone. */

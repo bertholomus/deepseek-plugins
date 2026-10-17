@@ -138,7 +138,9 @@ test('fold: a question waiting in DSH\'s question box is tracked until its resul
     assert.deepEqual(saved.asking, { call: 'q1', question: 'Which?', more: 2, at: 4 });
     assert.deepEqual(parseState({ end: { kind: 'interrupted', turn: 1, at: 3, left: { kind: 'question', question: 'Which?' } } }).end.left, { kind: 'question', question: 'Which?' });
     // States saved before this shape fold again from their logs.
-    assert.equal(STATE_VERSION, 2);
+    assert.equal(STATE_VERSION, 3);
+    // An offer is kept as one, so Decisions can leave it out.
+    assert.deepEqual(parseState({ ask: { kind: 'question', question: 'Let me know.', soft: true, turn: 2 } }).ask, { kind: 'question', question: 'Let me know.', soft: true, turn: 2 });
 });
 
 test('fold: a saved state is made safe; the projection is registered under one key', () => {

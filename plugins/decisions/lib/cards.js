@@ -61,7 +61,8 @@ export function replyCard(row, { replies = true, windowMs = 0, now = Date.now() 
     if (Math.max(Number(state.inAt) || 0, Number(state.userAt) || 0) > endAt) return undefined;
     if (windowMs > 0 && endAt > 0 && now - endAt > windowMs) return undefined;
     const kind = ask.kind === 'decision' ? 'decision' : ask.kind === 'blocked' ? 'blocked' : 'reply';
-    if (kind === 'reply' && !replies) return undefined;
+    // An offer ("Let me know if you want the docs too") waits on nobody: Autopilot still leaves the session alone.
+    if (kind === 'reply' && (!replies || ask.soft === true)) return undefined;
     return {
         id: `${kind}:${row.sessionId}:${end.turn}`,
         kind,

@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { askIn, asksSomeone, blockedIn, count, cutOff, decisionIn, plainError, spanWords, stateWord, timeWords } from '../shared/host/words.js';
+import { askIn, asksForAnswer, asksSomeone, blockedIn, count, cutOff, decisionIn, plainError, spanWords, stateWord, timeWords } from '../shared/host/words.js';
 import { Hub } from '../shared/host/hub.js';
 import { Journal } from '../shared/host/journal.js';
 import { JsonStore, ensurePrivateDir, readJson, writeAtomic } from '../shared/host/files.js';
@@ -90,6 +90,18 @@ test('words: whether a reply ends by asking a person, read from its last lines',
         undefined,
     ]) assert.equal(asksSomeone(statement), false, String(statement));
     assert.equal(asksSomeone(`Should I start?\n${'line\n'.repeat(10)}All done.`), false, 'only the end of the reply counts');
+});
+
+test('words: an offer leaves the next step to the person without waiting on them', () => {
+    const offer = 'Locked in: the release ships Monday. Let me know when you\'re ready to prep any of those.';
+    assert.equal(asksSomeone(offer), true, 'Autopilot still leaves the session to the person');
+    assert.equal(asksForAnswer(offer), false);
+    assert.deepEqual(askIn(offer), { kind: 'question', question: 'Locked in: the release ships Monday. Let me know when you\'re ready to prep any of those.', soft: true });
+    assert.equal(askIn('Done. If you want, I can also add the docs.').soft, true);
+    // A real question, or a request that waits on them, is not an offer.
+    assert.equal(askIn('Done. Let me know: should I push it?').soft, undefined);
+    assert.equal(askIn('Ready to migrate. Please confirm the window.').soft, undefined);
+    assert.equal(asksForAnswer('Waiting for your go before the migration.'), true);
 });
 
 test('words: what a reply asks a person: a decision line, then a BLOCKED line, then the last question', () => {
