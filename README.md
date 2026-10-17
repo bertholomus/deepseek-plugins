@@ -17,6 +17,8 @@ Each plugin is a normal DSH plugin package. You add it to a DSH profile's bundle
 | [`decisions`](plugins/decisions) | One inbox for everything waiting on you: decision lines, tools waiting for approval, questions in the question box, threads that need a decision. Each card shows the question, the recommendation, the session and the wait; an answer goes into the session, proven by its log. Optional note to a webhook or a command. |
 | [`agent-terminals`](plugins/agent-terminals) | Command-line coding agents as part of DSH: each in a terminal tab beside its own session, started again after a restart and resuming its conversation, with your messages typed in one at a time and proven read from its transcript, and what it is doing (working, idle, waiting on you) on its session's row and in Decisions. |
 | [`proof`](plugins/proof) | Checks every claim of done, passed, fixed or deployed against what its turn ran, flags the ones nothing shows, and keeps a ledger you can export. An independent read-only check on a local model, when you want one. |
+| [`canon`](plugins/canon) | Shared long-term memory: before a turn, the few active notes of your canon vault (an Obsidian folder) that fit the session's folder and prompt, as one short block that names each note's path. Reads the vault only, unless you allow draft notes; only you can promote a draft. |
+| [`recall`](plugins/recall) | Searches everything already done: a local full-text index of DSH sessions, transcript folders and handoff notes, with filters by folder, model, date and kind. A result opens its session at that exact turn, and agents search the same index with the `recall_search` tool. |
 
 Session Watch, Autopilot, Decisions, Agent Terminals, Proof, Canon and Recall make up the DSH Plugin Suite: how they fit together, how to install all of them, and how each was tested and judged are in [SUITE.md](SUITE.md).
 
@@ -39,6 +41,8 @@ DSH loads a plugin only when the profile lists its package in `dsh.profile.bundl
 | decisions | `dsh-plugin-decisions` | `decisions` |
 | agent-terminals | `dsh-plugin-agent-terminals` | `agent-terminals` |
 | proof | `dsh-plugin-proof` | `proof` |
+| canon | `dsh-plugin-canon` | `canon` |
+| recall | `dsh-plugin-recall` | `recall` |
 
 1. Clone this repository:
 
