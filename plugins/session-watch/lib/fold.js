@@ -16,6 +16,15 @@
  * stays in the view, so Decisions finds asks in sessions that are not
  * loaded without reading their logs.
  *
+ * `approvals` (tools waiting for approval) and `asking` (a question waiting
+ * in DSH's question box) belong to the open turn: a turn's start and end
+ * clear them, since nothing waits on a turn that is over. A turn that DSH
+ * cut off under one keeps what it left in `end.left`, so a note after the
+ * restart can say the tool did not run, or the question was not answered.
+ * A graceful stop cancels them first (`approval/decided` "cancelled", the
+ * question box's call ending in an error), so the turn keeps what a stop
+ * cancelled in `cancelled` until it ends.
+ *
  * @module dsh-plugin-session-watch/fold
  */
 import { askIn, cutOff, plainError } from './shared/words.js';
@@ -25,7 +34,10 @@ export { cutOff };
 /** The projection's key in DSH (one name for the whole Host). */
 export const KEY = 'sessionWatch';
 /** Bump when the state's shape changes: DSH then drops saved states of the old shape and folds again. */
-export const STATE_VERSION = 1;
+export const STATE_VERSION = 2;
+
+/** DSH's question box, as a tool. */
+export const ASK_TOOL = 'ask_user_question';
 
 /** Longest final reply text the state keeps (for "DECISION NEEDED" lines and the like). */
 export const TEXT_MAX = 1500;
@@ -91,6 +103,42 @@ export function endOf(data, time) {
     return out;
 }
 
+/** A question-box call as the watcher keeps it: its call id, its first question and how many more. */
+export function askingOf(data, time) {
+    let args = data?.arguments;
+    if (typeof args === 'string') {
+        try {
+            args = JSON.parse(args);
+        } catch {
+            args = undefined;
+        }
+    }
+    const questions = Array.isArray(args?.questions) ? args.questions.filter((q) => isRecord(q) && typeof q.question === 'string' && q.question.trim()) : [];
+    return {
+        ...(typeof data?.callId === 'string' ? { call: data.callId } : {}),
+        ...(questions.length ? { question: line(questions[0].question) } : {}),
+        ...(questions.length > 1 ? { more: questions.length - 1 } : {}),
+        at: isTime(time) ? time : 0,
+    };
+}
+
+/** What a turn left waiting when it ended: the newest approval, else the question box's question, else what the stop cancelled. */
+function leftOf(state) {
+    const approval = state.approvals?.at(-1);
+    if (approval) {
+        return {
+            kind: 'approval',
+            ...(approval.tool ? { tool: approval.tool } : {}),
+            ...(approval.reason ? { reason: approval.reason } : {}),
+            ...(state.approvals.length > 1 ? { more: state.approvals.length - 1 } : {}),
+        };
+    }
+    if (state.asking) return questionLeft(state.asking);
+    return state.cancelled;
+}
+
+const questionLeft = (asking) => ({ kind: 'question', ...(asking.question ? { question: asking.question } : {}), ...(asking.more ? { more: asking.more } : {}) });
+
 /** The goal as the watcher keeps it, from a `goal/change` payload. */
 export function goalOf(change, previous) {
     if (!isRecord(change)) return previous;
@@ -152,11 +200,24 @@ function step(state, event) {
                 open: true,
                 startedAt: at,
                 steps: 0,
+                approvals: undefined,
+                asking: undefined,
+                cancelled: undefined,
                 at,
             });
         case 'turn/end': {
             const end = endOf(data, at);
-            return patched(state, { open: false, end, errors: end.kind === 'error' ? (state.errors ?? 0) + 1 : end.kind === 'completed' ? undefined : state.errors, at });
+            const left = cutOff(end) ? leftOf(state) : undefined;
+            if (left) end.left = left;
+            return patched(state, {
+                open: false,
+                end,
+                approvals: undefined,
+                asking: undefined,
+                cancelled: undefined,
+                errors: end.kind === 'error' ? (state.errors ?? 0) + 1 : end.kind === 'completed' ? undefined : state.errors,
+                at,
+            });
         }
         case 'user/message': {
             const kind = typeof data?.source?.kind === 'string' ? data.source.kind : 'unknown';
@@ -179,8 +240,20 @@ function step(state, event) {
                 at,
             });
         }
-        case 'tool/call':
-            return patched(state, { tools: state.tools + 1, steps: (state.steps ?? 0) + 1, at });
+        case 'tool/call': {
+            const patch = { tools: state.tools + 1, steps: (state.steps ?? 0) + 1, at };
+            if (data?.name === ASK_TOOL) patch.asking = askingOf(data, at);
+            return patched(state, patch);
+        }
+        case 'tool/result': {
+            // The question box's result: the person answered (or it timed out), so nothing waits on it now. An error
+            // is a stop cancelling it (or the box going away): kept, in case the turn turns out to be cut off.
+            if (!state.asking) return state;
+            const id = data?.message?.toolCallId;
+            if (state.asking.call && id !== state.asking.call) return state;
+            const failed = data?.error !== undefined || data?.message?.isError === true;
+            return patched(state, { asking: undefined, ...(failed ? { cancelled: questionLeft(state.asking) } : {}), at });
+        }
         case 'todo/write':
             return patched(state, { todos: todoSummary(data?.todos), at });
         case 'goal/change':
@@ -198,9 +271,13 @@ function step(state, event) {
             return patched(state, { approvals: asked.slice(-20), at });
         }
         case 'approval/decided': {
-            if (!state.approvals?.some((item) => item.id === data?.id)) return state;
+            const decided = state.approvals?.find((item) => item.id === data?.id);
+            if (!decided) return state;
             const left = state.approvals.filter((item) => item.id !== data.id);
-            return patched(state, { approvals: left.length ? left : undefined, at });
+            // A stop cancels a waiting approval before the turn ends: kept, in case the turn turns out to be cut off.
+            const cancelled = data.outcome === 'cancelled'
+                ? { kind: 'approval', ...(decided.tool ? { tool: decided.tool } : {}), ...(decided.reason ? { reason: decided.reason } : {}) } : undefined;
+            return patched(state, { approvals: left.length ? left : undefined, ...(cancelled ? { cancelled } : {}), at });
         }
         case 'session/title':
             return patched(state, { title: line(data?.title, 120) || undefined });
@@ -253,6 +330,15 @@ export function parseState(value) {
     if (Array.isArray(value.approvals)) {
         const approvals = value.approvals.filter((item) => isRecord(item) && typeof item.id === 'string').slice(-20);
         if (approvals.length) out.approvals = approvals;
+    }
+    if (isRecord(value.cancelled) && ['approval', 'question'].includes(value.cancelled.kind)) out.cancelled = { ...value.cancelled };
+    if (isRecord(value.asking)) {
+        out.asking = {
+            ...(typeof value.asking.call === 'string' ? { call: value.asking.call } : {}),
+            ...(typeof value.asking.question === 'string' ? { question: value.asking.question.slice(0, LINE_MAX) } : {}),
+            ...(Number.isSafeInteger(value.asking.more) && value.asking.more > 0 ? { more: value.asking.more } : {}),
+            at: isTime(value.asking.at) ? value.asking.at : 0,
+        };
     }
     return out;
 }

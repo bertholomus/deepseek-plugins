@@ -223,7 +223,7 @@ test('holds: approvals read as plain questions; the call\'s own arguments say wh
     assert.deepEqual(approvalWords({ toolName: 'deploy', displayReason: { en: 'Deploy to staging?' } }), { question: 'Deploy to staging?' });
     assert.deepEqual(approvalWords({ toolName: 'deploy' }), { question: 'deploy asks to run with more access than the session allows.' });
     assert.equal(reasonText({ displayReason: 'Shown words', reason: 'raw' }), 'Shown words');
-    assert.deepEqual(describeCall({ command: 'rm -rf build', timeout: 30, sandbox_permissions: 'danger-full-access' }), { what: 'rm -rf build', lines: ['timeout: 30', 'sandbox_permissions: danger-full-access'] });
+    assert.deepEqual(describeCall({ command: 'rm -rf build', timeout: 30, sandbox_permissions: 'danger-full-access', justification: 'It cleans the build.' }), { what: 'rm -rf build', lines: ['timeout: 30'] }, 'the access asked for and why are on the card already');
     assert.deepEqual(describeCall({ path: '/tmp/a', content: 'x' }), { what: '/tmp/a', lines: ['content: x'] });
     assert.deepEqual(describeCall(undefined), { lines: [] });
     const dsh = fakeDsh();

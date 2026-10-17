@@ -10,7 +10,7 @@ import { SessionWatch } from '../plugins/session-watch/lib/watch.js';
 import { Hub } from '../plugins/session-watch/lib/shared/hub.js';
 import { DEFAULTS, LIVE_SETTINGS, checkConfig, usableSettings } from '../plugins/session-watch/lib/config.js';
 import { SettingsCheck, liveSettings } from '../plugins/session-watch/lib/shared/settings.js';
-import { loadClient, elementsOf, textIn } from './helpers/client.mjs';
+import { loadClient, elementsOf, strictRemote, textIn } from './helpers/client.mjs';
 import { fakeDsh } from './helpers/fake-dsh.mjs';
 import { manualClock, settle } from './helpers/clock.mjs';
 
@@ -81,6 +81,64 @@ test('fold: long replies keep their end, where agents ask; the window view leave
     assert.equal(view.text, undefined);
     assert.equal(view.turn, 1);
     assert.equal(viewOf(null), null);
+});
+
+test('fold: an approval belongs to its turn; a turn cut off under one keeps what it left', () => {
+    const asked = [
+        ev('turn/start', { turn: 1 }, 1000),
+        ev('approval/asked', { id: 'a1', toolName: 'bash', callId: 'c1', reason: 'escalate sandbox to danger-full-access: deploys' }, 1001),
+    ];
+    // DSH stopped under it: on its next start it closes the turn as interrupted. Nothing waits on the approval now.
+    const cut = foldAll([...asked, ev('turn/end', { turn: 1, reason: { kind: 'interrupted' } }, 1002)]);
+    assert.equal(cut.approvals, undefined);
+    assert.deepEqual(cut.end, { turn: 1, kind: 'interrupted', at: 1002, left: { kind: 'approval', tool: 'bash', reason: 'escalate sandbox to danger-full-access: deploys' } });
+    // A graceful stop (aborted, disposed) is a cut-off too; the person stopping it is not, and keeps no note.
+    assert.equal(foldAll([...asked, ev('turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'disposed' } } }, 1002)]).end.left.kind, 'approval');
+    const stopped = foldAll([...asked, ev('turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } }, 1002)]);
+    assert.equal(stopped.approvals, undefined);
+    assert.equal(stopped.end.left, undefined);
+    // Two waiting: the newest is named, with how many more.
+    const two = foldAll([...asked, ev('approval/asked', { id: 'a2', toolName: 'write' }, 1002), ev('turn/end', { turn: 1, reason: { kind: 'interrupted' } }, 1003)]);
+    assert.deepEqual(two.end.left, { kind: 'approval', tool: 'write', more: 1 });
+    // A turn that starts with an approval left over from a log without its end starts clean.
+    assert.equal(applyEvent(foldAll(asked), ev('turn/start', { turn: 2 }, 1005)).approvals, undefined);
+    // A graceful stop cancels the approval first, then ends the turn: the end still says what was left.
+    const graceful = foldAll([...asked, ev('approval/decided', { id: 'a1', outcome: 'cancelled' }, 1002), ev('turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'disposed' } } }, 1003)]);
+    assert.deepEqual(graceful.end.left, { kind: 'approval', tool: 'bash', reason: 'escalate sandbox to danger-full-access: deploys' });
+    assert.equal(graceful.cancelled, undefined, 'the turn is over: nothing is kept past its end');
+    // Answered (allowed or rejected) before the cut: nothing was left.
+    assert.equal(foldAll([...asked, ev('approval/decided', { id: 'a1', outcome: 'rejected' }, 1002), ev('turn/end', { turn: 1, reason: { kind: 'interrupted' } }, 1003)]).end.left, undefined);
+});
+
+test('fold: a question waiting in DSH\'s question box is tracked until its result, and named when a cut-off leaves it', () => {
+    const args = { questions: [{ question: '  Which   branch should I use? ', options: [{ label: 'main' }, { label: 'dev' }] }, { question: 'Tag it?', options: [] }] };
+    let s = foldAll([
+        ev('turn/start', { turn: 1 }, 1000),
+        ev('tool/call', { name: 'ask_user_question', callId: 'q1', arguments: JSON.stringify(args) }, 1001),
+    ]);
+    assert.deepEqual(s.asking, { call: 'q1', question: 'Which branch should I use?', more: 1, at: 1001 });
+    assert.equal(s.tools, 1, 'still a tool call');
+    // Another tool's result changes nothing; its own result means the person answered (or it timed out).
+    assert.equal(applyEvent(s, ev('tool/result', { message: { toolCallId: 'other' } }, 1002)), s);
+    assert.equal(applyEvent(s, ev('tool/result', { message: { toolCallId: 'q1' } }, 1002)).asking, undefined);
+    // Arguments as an object work too; unreadable ones keep the call without a question.
+    assert.equal(applyEvent(s, ev('tool/call', { name: 'ask_user_question', callId: 'q2', arguments: { questions: [{ question: 'Ship?' }] } }, 1003)).asking.question, 'Ship?');
+    assert.deepEqual(applyEvent(s, ev('tool/call', { name: 'ask_user_question', callId: 'q3', arguments: '{nope' }, 1003)).asking, { call: 'q3', at: 1003 });
+    // A stop cancels the box first (its call ends in an error), then ends the turn; answered, nothing was left.
+    const cancelled = applyEvent(s, ev('tool/result', { message: { toolCallId: 'q1', isError: true } }, 1002));
+    assert.equal(cancelled.asking, undefined);
+    assert.equal(applyEvent(cancelled, ev('turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'disposed' } } }, 1003)).end.left.question, 'Which branch should I use?');
+    assert.equal(foldAll([ev('turn/start', { turn: 1 }, 1000), ev('tool/call', { name: 'ask_user_question', callId: 'q1', arguments: JSON.stringify(args) }, 1001), ev('tool/result', { message: { toolCallId: 'q1' } }, 1002), ev('turn/end', { turn: 1, reason: { kind: 'interrupted' } }, 1003)]).end.left, undefined);
+    // DSH stopped before the answer: the end says what was asked.
+    s = applyEvent(s, ev('turn/end', { turn: 1, reason: { kind: 'interrupted' } }, 1004));
+    assert.equal(s.asking, undefined);
+    assert.deepEqual(s.end.left, { kind: 'question', question: 'Which branch should I use?', more: 1 });
+    // Saved and read back.
+    const saved = parseState({ turn: 1, open: true, tools: 1, at: 5, asking: { call: 'q1', question: 'Which?', more: 2, at: 4, junk: true } });
+    assert.deepEqual(saved.asking, { call: 'q1', question: 'Which?', more: 2, at: 4 });
+    assert.deepEqual(parseState({ end: { kind: 'interrupted', turn: 1, at: 3, left: { kind: 'question', question: 'Which?' } } }).end.left, { kind: 'question', question: 'Which?' });
+    // States saved before this shape fold again from their logs.
+    assert.equal(STATE_VERSION, 2);
 });
 
 test('fold: a saved state is made safe; the projection is registered under one key', () => {
@@ -408,13 +466,15 @@ test('settings in Plugins: Session Watch\'s page there has its one setting, in D
         actions() { return { edit: (field, text) => edits.push([field, text]), resetField: () => {}, save: () => {}, discard: () => {} }; }
         dispose() {}
     }
-    const ui = { SettingsFormModel, SettingsForm: (props) => ({ type: 'SettingsForm', props, children: props.children }) };
+    const ui = { SettingsFormModel, SettingsForm: (props) => ({ type: 'SettingsForm', props, children: props.children }), SettingsSecretField: () => null };
     const { id, client } = loadClient(new URL('../plugins/session-watch/lib/client.js', import.meta.url), { ui });
     assert.equal(id, 'dsh-plugin-session-watch');
     const registered = [];
     const effects = [];
     const scope = {
         configForms: { get: (entry) => ({ entry }), whileServed: (entries, fn) => (entries[0] === 'session-watch' ? fn() : undefined) },
+        // As in DSH: Session Watch injects no key store, and reading one it did not inject throws.
+        remote: strictRemote(),
         slots: { inject: (_name, fn) => fn(), register: (spec, component) => { registered.push({ spec, component }); return () => {}; } },
         effect: (fn) => { effects.push(fn); },
         inject: (names, fn) => { if (names[0] === 'configForms') fn(scope); },

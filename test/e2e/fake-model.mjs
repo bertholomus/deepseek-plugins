@@ -11,6 +11,8 @@
  *                            running until the test lets go or DSH stops)
  *   E2E:fail                 refuse the request (the turn ends in an error)
  *   E2E:ask                  reply with a question for the person
+ *   E2E:say <text>           reply with that text (\n in it starts a new line),
+ *                            such as a DECISION NEEDED or BLOCKED line
  *
  * Flags anywhere in the person's messages script later turns:
  *
@@ -133,6 +135,8 @@ function decide(body) {
     if (/E2E:slow/.test(fresh)) return { slow: true };
     if (/E2E:fail/.test(fresh)) return { fail: true };
     if (/E2E:ask/.test(fresh)) return { text: 'Which branch should I use for this?' };
+    m = /E2E:say (.*)$/m.exec(fresh);
+    if (m) return { text: m[1].replace(/\\n/g, '\n') };
     return { text: 'Plain reply.' };
 }
 

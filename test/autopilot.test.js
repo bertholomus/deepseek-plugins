@@ -17,7 +17,7 @@ import { Hub } from '../plugins/autopilot/lib/shared/hub.js';
 import { SessionWatch } from '../plugins/session-watch/lib/watch.js';
 import { fakeDsh } from './helpers/fake-dsh.mjs';
 import { manualClock, settle } from './helpers/clock.mjs';
-import { OTHER_NAMES, loadClient, elementsOf, textIn } from './helpers/client.mjs';
+import { OTHER_NAMES, loadClient, elementsOf, strictRemote, textIn } from './helpers/client.mjs';
 
 /** Autopilot's defaults (lib/index.js Config). */
 const DEFAULTS = Object.freeze({
@@ -123,10 +123,11 @@ test('idle: no note when the last reply asks the person, an approval waits, noth
     const { dsh, clock, pilot } = setup();
     idleWithTodos(dsh, 'asks', { reply: 'I can drop the old tables or migrate them.\nShould I drop them?' });
     idleWithTodos(dsh, 'decision', { reply: 'Blocked on the schema.\nDECISION NEEDED: drop the old tables? — recommend: migrate' });
+    // A tool waits for approval: its turn is still running until the person answers.
     dsh.add('approval');
     dsh.write('approval', 'Deploy it');
+    dsh.commit('approval', 'todo/write', { todos: TODOS });
     dsh.commit('approval', 'approval/asked', { id: 'ap1', toolName: 'bash', reason: 'pushes to production' });
-    dsh.end('approval', { kind: 'completed' }, { todos: TODOS });
     dsh.add('done');
     dsh.write('done', 'One thing');
     dsh.end('done', { kind: 'completed' }, { reply: 'Done.', todos: TODOS.map((t) => ({ ...t, status: 'completed' })) });
@@ -137,7 +138,7 @@ test('idle: no note when the last reply asks the person, an approval waits, noth
     await clock.advance(60 * MIN);
     for (const id of ['asks', 'decision', 'approval', 'done', 'paused']) assert.deepEqual(notesIn(dsh, id), [], id);
     assert.equal(pilot.plan('asks', 'idle', { force: true }).why, 'its last reply asks you something');
-    assert.equal(pilot.plan('approval', 'idle', { force: true }).why, 'it waits for an approval');
+    assert.equal(pilot.plan('approval', 'idle', { force: true }).why, 'it is working');
     assert.equal(pilot.plan('done', 'idle', { force: true }).why, 'nothing is open');
     assert.equal(pilot.plan('paused', 'idle', { force: true }).why, 'its goal is paused');
 });
@@ -212,6 +213,72 @@ test('after a restart: a cut-off session gets a carry-on note, and its goal star
     await clock.advance(MIN);
     assert.equal(notesIn(dsh, 'r').length, 1);
     again.pilot.stop();
+});
+
+test('after a restart: a turn cut off while a tool waited for approval, or a question waited in the question box, gets its note, which says what did not happen', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'autopilot-'));
+    const clock = manualClock();
+    const dsh = fakeDsh({ now: clock.now });
+    const before = setup({ dir, clock, dsh });
+    dsh.add('ap', { title: 'Deploy' });
+    dsh.write('ap', 'Deploy it.');
+    dsh.commit('ap', 'todo/write', { todos: TODOS });
+    dsh.commit('ap', 'tool/call', { name: 'bash', callId: 'c1' });
+    dsh.commit('ap', 'approval/asked', { id: 'a1', toolName: 'bash', callId: 'c1', reason: 'escalate sandbox to danger-full-access: deploys' });
+    dsh.add('qb', { title: 'Branch' });
+    dsh.write('qb', 'Pick a branch.');
+    dsh.commit('qb', 'tool/call', { name: 'ask_user_question', callId: 'q1', arguments: JSON.stringify({ questions: [{ question: 'Which branch should I use?', options: [{ label: 'main' }, { label: 'dev' }] }] }) });
+    // While DSH runs, the rows say who they wait on.
+    const live = Object.fromEntries((await before.watch.list(undefined, { maxAgeMs: 0 })).map((row) => [row.sessionId, row]));
+    assert.equal(live.ap.word, 'waiting for approval');
+    assert.equal(live.qb.word, 'waiting for your answer');
+    assert.equal(before.pilot.holdOf(live.ap), 'waits for you: a tool waits for you to allow or reject it');
+    assert.equal(before.pilot.holdOf(live.qb), 'waits for you: a question in DSH\'s question box');
+    before.watch.running.flush();
+    before.pilot.stop();
+    before.store.close();
+    dsh.stop({ crash: true });
+    await clock.advance(2 * MIN);
+    const after = setup({ dir, clock, dsh });
+    await clock.advance(20000);
+    const [ap] = notesIn(dsh, 'ap');
+    assert.match(ap, /When DSH stopped, your bash call was waiting for approval, so it did not run: make it again if you still need it, and DSH asks for approval again\./);
+    assert.match(ap, /Still open: 2 open todos/);
+    const [qb] = notesIn(dsh, 'qb');
+    assert.match(qb, /When DSH stopped, your question in DSH's question box \(“Which branch should I use\?”\) had no answer yet: ask it again if you still need the answer\./);
+    const why = Object.fromEntries(entries(after.journal, 'resume').map((entry) => [entry.sessionId, entry.why]));
+    assert.match(why.ap, /A tool was waiting for approval when it stopped; the note says it did not run\.$/);
+    assert.match(why.qb, /Its question in DSH's question box had no answer; the note says to ask again\.$/);
+    // Nothing waits on the old approval any more: once the note's turn ends, the session is Autopilot's to watch again.
+    dsh.end('ap', { kind: 'completed' }, { reply: 'Asked for the deploy again.', todos: TODOS });
+    await settle();
+    assert.equal(after.watch.stateOf('ap').approvals, undefined);
+    assert.equal(after.pilot.plan('ap', 'idle', { force: true }).action, 'note');
+    after.pilot.stop();
+});
+
+test('Ask first: a withdrawn question says so in the log, with why; an answer marks only the question it answers', async () => {
+    const { dsh, clock, pilot, watch, journal } = setup({ config: { defaultRule: 'ask' } });
+    idleWithTodos(dsh, 'a');
+    idleWithTodos(dsh, 'b');
+    idleWithTodos(dsh, 'c');
+    await clock.advance(10 * MIN);
+    assert.equal(watch.asks().length, 3);
+    pilot.setRule('a', 'off');
+    dsh.write('b', 'I am on it.');
+    await settle();
+    pilot.setPaused(true);
+    const asked = Object.fromEntries(entries(journal, 'ask').map((entry) => [entry.sessionId, entry]));
+    assert.deepEqual([asked.a.state, asked.a.reason], ['withdrawn', 'withdrawn: you set its rule to Off']);
+    assert.deepEqual([asked.b.state, asked.b.reason], ['withdrawn', 'withdrawn: you wrote in the session, so it no longer applies']);
+    assert.deepEqual([asked.c.state, asked.c.reason], ['withdrawn', 'withdrawn: you switched Autopilot off']);
+    // On again, it asks about c again; the answer marks that question, and the withdrawn one stays as it was.
+    pilot.setPaused(false);
+    await clock.advance(1000);
+    const [again] = watch.asks();
+    assert.equal(again.sessionId, 'c');
+    await watch.answerAsk(again.id, 'skip', 'you');
+    assert.deepEqual(entries(journal, 'ask').filter((entry) => entry.sessionId === 'c').map((entry) => entry.state), ['answered', 'withdrawn']);
 });
 
 test('after a restart: sessions cut off too long ago, ones someone wrote in since, and Off sessions are left alone', async () => {
@@ -378,7 +445,7 @@ test('the hourly limit holds notes back, says so once, and tries again later', a
     assert.equal(notesIn(dsh, 'a').length + notesIn(dsh, 'b').length, 1);
     const held = entries(journal, 'held');
     assert.equal(held.length, 1);
-    assert.match(held[0].why, /already sent 1 notes in the last hour/);
+    assert.match(held[0].why, /already sent 1 note in the last hour/);
     await clock.advance(60 * MIN);
     assert.equal(notesIn(dsh, 'a').length + notesIn(dsh, 'b').length, 2, 'the held one goes once the hour has room');
 });
@@ -511,13 +578,19 @@ test('browser half: the page\'s cards say what to do next, in plain words', () =
     // Loading, before the first read.
     assert.match(textIn(AutopilotPage({ autopilot: {} })), /Reading the sessions/);
     const head = HeaderCard({ data: base, busy: false, act });
-    assert.match(textIn(head), /Watching 4 sessions · 3 of 20 notes used this hour · a session with open work gets a note after 10 minutes of quiet/);
+    assert.match(textIn(head), /Watching 4 sessions · 3 notes this hour; the limit is 20 · a session with open work gets a note after 10 minutes of quiet/);
     const toggle = elementsOf(head).find((e) => e.type === 'Switch');
     assert.equal(toggle.props.checked, true);
     toggle.props.onChange(false);
     assert.deepEqual(acts.at(-1), ['setPaused', { paused: true }]);
+    // The default rule: an arrow key only moves (nothing is sent); a click on a value sends it.
     const rules = elementsOf(head).find((e) => e.type === 'SegmentedControl');
+    assert.equal(rules.props.disabled, undefined, 'never disabled, so focus stays on it');
+    const sent = acts.length;
     rules.props.onChange('ask');
+    assert.equal(acts.length, sent, 'an arrow key sends nothing');
+    const choice = elementsOf(head).find((e) => e.props?.['data-suite-choice'] === 'dshap-default-rule');
+    choice.props.onClickCapture({ target: { closest: () => ({ id: 'dshap-default-rule-ask' }) } });
     assert.deepEqual(acts.at(-1), ['setDefaultRule', { rule: 'ask' }]);
     assert.match(textIn(HeaderCard({ data: { ...base, paused: true }, busy: false, act })), /Off: no notes, no resumes, no goal starts/);
     assert.match(textIn(HeaderCard({ data: { ...base, enabled: false }, busy: false, act })), /Autopilot is switched off in DSH's profile \(enabled: false in its entry in cordis\.patch\.yml\), so it watches nothing\. To use it, set enabled to true there and restart DSH\./);
@@ -574,8 +647,12 @@ test('holds: a quiet session with open work that Autopilot leaves alone says why
     idleWithTodos(dsh, 'asks', { reply: 'Two ways to go.\nShould I drop the old tables?' });
     dsh.add('approval');
     dsh.write('approval', 'Deploy it');
+    dsh.commit('approval', 'todo/write', { todos: TODOS });
     dsh.commit('approval', 'approval/asked', { id: 'ap1', toolName: 'bash', reason: 'pushes to production' });
-    dsh.end('approval', { kind: 'completed' }, { todos: TODOS });
+    dsh.add('question');
+    dsh.write('question', 'Pick a branch');
+    dsh.commit('question', 'todo/write', { todos: TODOS });
+    dsh.commit('question', 'tool/call', { name: 'ask_user_question', callId: 'q1', arguments: JSON.stringify({ questions: [{ question: 'Which branch?', options: [{ label: 'main' }, { label: 'dev' }] }] }) });
     dsh.add('paused');
     dsh.setGoal('paused', 'Ship it', { phase: 'paused' });
     dsh.write('paused', 'Work');
@@ -598,7 +675,8 @@ test('holds: a quiet session with open work that Autopilot leaves alone says why
         'old-cut': 'cut off more than 6 h ago, so Autopilot leaves it to you',
         'old-quiet': 'quiet for over 2 h, longer than Autopilot looks back; it acts again after the session\'s next turn',
         asks: 'waits for you: its last reply asks you something',
-        approval: 'waits for you: a tool waits for approval',
+        approval: 'waits for you: a tool waits for you to allow or reject it',
+        question: 'waits for you: a question in DSH\'s question box',
         paused: 'waits for you: its goal is paused',
         'blocked-goal': 'waits for you: its goal is blocked',
         stopped: 'you stopped its last turn, so Autopilot leaves it to you',
@@ -782,7 +860,7 @@ function standInForm() {
         dispose() { this.disposed = true; }
     }
     const SettingsForm = (props) => ({ type: 'SettingsForm', props, children: props.children });
-    return { models, edits, ui: { SettingsFormModel, SettingsForm } };
+    return { models, edits, ui: { SettingsFormModel, SettingsForm, SettingsSecretField: () => null } };
 }
 
 test('settings in Plugins: Autopilot\'s page there has its live settings, drawn with DSH\'s own form, only while DSH serves them', () => {
@@ -810,6 +888,8 @@ test('settings in Plugins: Autopilot\'s page there has its live settings, drawn 
             whileServed: (entries, fn) => { served.push(entries); return fn(); },
         },
         slots: { inject: (_name, fn) => fn(), register: (spec, component) => { registered.push({ spec, component }); return () => {}; } },
+        // As in DSH: Autopilot injects no key store, and reading one it did not inject throws.
+        remote: strictRemote(),
         effect: (fn) => { effects.push(fn); },
         inject: (names, fn) => { if (names[0] === 'configForms') fn(scope); },
     };

@@ -4,9 +4,11 @@
  * page in a real window, and DSH quit and crashed under running turns.
  *
  * DSH runs from a throwaway DSH_HOME (test/e2e/harness.mjs) with the
- * session bridge, Session Watch and Autopilot, and a scripted model
- * (test/e2e/fake-model.mjs) that plays the agent. Autopilot's waits are
- * short here (idleSeconds 5, startDelaySeconds 1, errorRetrySeconds 2).
+ * session bridge, Session Watch and Autopilot, a scripted model
+ * (test/e2e/fake-model.mjs) that plays the agent, and new sessions on
+ * Workspace Write, so writing outside the workspace asks for approval.
+ * Autopilot's waits are short here (idleSeconds 5, startDelaySeconds 1,
+ * errorRetrySeconds 2).
  *
  * - The browser half is served and parses; the endpoints answer, and refuse
  *   bad input in words.
@@ -22,12 +24,19 @@
  *   gets its note.
  * - The page, from DSH's sidebar: the question with its answer buttons, the
  *   backed-off session with Try again, the sessions with their rules, the
- *   log with a Why line for every action; light and dark pictures. Its
- *   buttons work: the answer sends the note, Try again nudges again, a rule
- *   changed to Auto acts, the switch goes off and on.
- * - DSH quit under two running turns (one a goal round): after the start,
- *   each gets a carry-on note, read into a turn, and the goal's next round
- *   runs after it; nothing handled before the quit is done again.
+ *   log with a Why line for every action; light and dark pictures; the
+ *   amber state words read at 4.5:1 or more over their panel, light and
+ *   dark. Its buttons work: the answer sends the note, Try again nudges
+ *   again, a rule changed to Auto acts, the switch goes off and on. On a
+ *   rule, an arrow key only shows the choice, Enter applies it and Escape
+ *   takes it back, and focus stays on the rule.
+ * - DSH quit under four running turns: a plain one, a goal round, one
+ *   whose tool waits for approval and one whose question waits in DSH's
+ *   question box (a stand-in window gets their prompts; their rows say
+ *   what they wait for, and why Autopilot leaves them alone). After the
+ *   start each gets a carry-on note, read into a turn; the goal's next
+ *   round runs after it; the notes for the approval and the question say
+ *   what did not happen; nothing handled before the quit is done again.
  * - DSH crashed (SIGKILL to its process group) under a running turn: the
  *   watcher's record of running turns names it, and after the start it gets
  *   its note.
@@ -35,14 +44,19 @@
  * - A quiet session that Autopilot leaves to the person says why on its row.
  * - A wrong setting in the profile: Autopilot starts but does no work, and
  *   its page says which setting, what it must be and where to change it;
- *   its button opens Autopilot's settings in Plugins (DSH's own form),
- *   which refuses a value out of range; saving a good one fixes it, the log
- *   says who did, and the waiting session gets its note.
- * - Session Watch's own setting in Plugins.
- * - Session Watch off: Autopilot's page says it needs Session Watch, with a
- *   button that opens it in Plugins.
+ *   its button opens Autopilot's settings in Plugins (DSH's own form) with
+ *   the cursor in that setting, flagged at once; the form refuses a value
+ *   out of range; saving a good one fixes it, the log says who did, and the
+ *   waiting session gets its note.
+ * - Session Watch's own setting in Plugins. Session Watch switched off
+ *   there: DSH reports no failure, Autopilot stays on in Plugins and its
+ *   page says it needs Session Watch; switched on again (as from another
+ *   window), the page comes back by itself.
+ * - Session Watch off in the profile: Autopilot loads but does nothing
+ *   (DSH reports nothing waiting), and its page says it needs Session
+ *   Watch, with a button that opens it in Plugins.
  * - `enabled: false`: the page says Autopilot watches nothing, and how to
- *   change it.
+ *   change it; its actions are refused in words.
  *
  *   DSH_BIN=/path/to/@deepseek-ai/dsh/lib/bin.js node plugins/autopilot/test/e2e/run.mjs
  *
@@ -54,7 +68,7 @@
  * unless NO_WINDOW=1 says to run without the window checks (the summary
  * then says they were skipped).
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { Script } from 'node:vm';
 import { DshRun, checks, dshBin, findPlaywright, modeOf, openWindow, pluginsDir, repoRoot, setDark, shot, sleep, waitFor } from '../../../../test/e2e/harness.mjs';
@@ -74,8 +88,14 @@ const IDLE = 5;
 const tally = checks();
 const { check, step } = tally;
 const model = await startFakeModel();
-/** The profile's rows for the two plugins, with the e2e's short waits; `off` lists rows switched off in the profile. */
-const rowsWith = ({ off = [], idle = IDLE, enabled = true } = {}) => `- id: autopilot
+/**
+ * The profile's rows: new sessions on Workspace Write (writing outside the workspace asks for approval), and the two
+ * plugins with the e2e's short waits; `off` lists rows switched off in the profile.
+ */
+const rowsWith = ({ off = [], idle = IDLE, enabled = true } = {}) => `- id: permission
+  config:
+    defaultPreset: workspace-write
+- id: autopilot
 ${off.includes('autopilot') ? '  disabled: true\n' : ''}  config:
 ${enabled ? '' : '    enabled: false\n'}    idleSeconds: ${idle}
     startDelaySeconds: 1
@@ -95,6 +115,8 @@ const run = new DshRun({
     },
     rows: rowsWith(),
 });
+const outside = join(run.root, 'outside');
+mkdirSync(outside, { recursive: true });
 /** Start DSH again with other rows (the plugin settings a person would have in the profile). */
 async function restartWith(rows, what) {
     await run.stop();
@@ -119,6 +141,7 @@ const entryReaches = (sessionId, kind, wanted, n = 1, timeout = 60000) => waitFo
 }, `${kind} ${wanted} #${n} for ${sessionId}`, timeout, 300);
 
 const todos = (...items) => JSON.stringify(items.map(([content, status]) => ({ content, status })));
+const call = (tool, args) => `E2E:call ${tool} ${JSON.stringify(args)}`;
 const idleSession = async (sessionId) => waitFor(async () => {
     const s = await run.session(sessionId);
     return s.status !== 'running' && s.turns.started > 0 && s.turns.started === s.turns.ended ? s : null;
@@ -134,6 +157,50 @@ async function readIntoTurn(sessionId, text) {
     // Read into a turn: the message sits inside a turn (after its turn/start, with no turn/end between).
     return Boolean(turnBefore) && (!endBefore || endBefore.seq < turnBefore.seq);
 }
+
+/**
+ * The contrast of an element's text over what is painted behind it: its own and its ancestors' backgrounds, stacked
+ * as the window draws them (down to the first solid one), measured as WCAG does.
+ */
+const contrastOf = (locator) => locator.evaluate((el) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const c = canvas.getContext('2d', { willReadFrequently: true });
+    const pixel = () => [...c.getImageData(0, 0, 1, 1).data];
+    const alphaOf = (css) => {
+        c.clearRect(0, 0, 1, 1);
+        c.fillStyle = css;
+        c.fillRect(0, 0, 1, 1);
+        return pixel()[3];
+    };
+    const layers = [];
+    for (let node = el; node; node = node.parentElement) {
+        const bg = getComputedStyle(node).backgroundColor;
+        const alpha = alphaOf(bg);
+        if (alpha === 0) continue;
+        layers.push(bg);
+        if (alpha === 255) break;
+    }
+    c.clearRect(0, 0, 1, 1);
+    c.fillStyle = '#ffffff';
+    c.fillRect(0, 0, 1, 1);
+    for (const bg of [...layers].reverse()) {
+        c.fillStyle = bg;
+        c.fillRect(0, 0, 1, 1);
+    }
+    const back = pixel().slice(0, 3);
+    c.fillStyle = getComputedStyle(el).color;
+    c.fillRect(0, 0, 1, 1);
+    const text = pixel().slice(0, 3);
+    const channel = (v) => {
+        const s = v / 255;
+        return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    };
+    const lum = ([r, g, b]) => 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+    const [hi, lo] = [lum(text), lum(back)].sort((a, b) => b - a);
+    return { word: el.textContent, ratio: Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100, text, back, layers };
+});
 
 let window;
 let pw;
@@ -255,8 +322,8 @@ try {
             await page.locator('[data-autopilot-page]').waitFor({ state: 'visible', timeout: 20000 });
             await page.locator('[data-autopilot-log] [data-autopilot-entry]').first().waitFor({ state: 'visible' });
             const header = await page.locator('[data-autopilot-header]').getAttribute('data-autopilot-header');
-            const status = await page.locator('[data-autopilot-header] [role="status"]').textContent();
-            check('the page opens from DSH\'s sidebar, on, with what it watches in words', header === 'on' && /^Watching \d+ sessions · \d+ of 80 notes used this hour · a session with open work gets a note after 5 seconds of quiet$/.test(status ?? ''), `${header} | ${status}`);
+            const status = await page.locator('[data-autopilot-header] .dshap-status').textContent();
+            check('the page opens from DSH\'s sidebar, on, with what it watches in words', header === 'on' && /^Watching \d+ sessions · \d+ notes? this hour; the limit is 80 · a session with open work gets a note after 5 seconds of quiet$/.test(status ?? ''), `${header} | ${status}`);
             const anyAsk = page.locator('[data-autopilot-ask]');
             const backed = page.locator(`[data-autopilot-backed="${ids.report}"]`);
             check('Waiting for you: the question, with its answer buttons and Open', (await anyAsk.count()) === 1
@@ -270,9 +337,14 @@ try {
             check('the sidebar icon shows the question waiting', /1/.test(icon ?? ''), icon);
             const hold = await page.locator(`[data-autopilot-session="${ids.question}"] [data-autopilot-hold]`).textContent().catch(() => '');
             check('a held session says why on its row', hold === 'Waits for you: its last reply asks you something.', hold);
+            const amber = page.locator(`[data-autopilot-backed="${ids.report}"] .dshap-tag[data-tone="warning"]`).first();
+            const amberLight = await contrastOf(amber);
             await shot(page, shots, 'autopilot-light');
             await shot(page, shots, 'waiting-light', page.locator('[data-autopilot-waiting]'));
             await setDark(page, true);
+            await page.waitForTimeout(400);
+            const amberDark = await contrastOf(amber);
+            check('the amber state words read at 4.5:1 or more over their panel, light and dark', amberLight.ratio >= 4.5 && amberDark.ratio >= 4.5, JSON.stringify({ light: amberLight, dark: amberDark }));
             await shot(page, shots, 'autopilot-dark');
             await shot(page, shots, 'waiting-dark', page.locator('[data-autopilot-waiting]'));
             await page.locator('[data-autopilot-log]').evaluate((el) => el.scrollIntoView({ block: 'start' }));
@@ -310,6 +382,36 @@ try {
             await row.getByRole('tab', { name: 'Auto', exact: true }).click();
             const ruled = await entryReaches(ids.off, 'nudge', 'delivered', 1, 30000);
             check('a rule changed to Auto on the page acts at once', ruled.state === 'delivered', JSON.stringify(ruled));
+            // The keyboard: an arrow key only shows a choice, Enter applies it, Escape takes it back; focus stays on the rule.
+            const ruleOf = async () => (await state()).sessions.find((x) => x.sessionId === ids.off)?.rule;
+            const focusedTab = () => page.evaluate(() => {
+                const el = document.activeElement;
+                return el?.getAttribute('role') === 'tab'
+                    ? { session: el.closest('[data-autopilot-session]')?.getAttribute('data-autopilot-session'), name: el.textContent, selected: el.getAttribute('aria-selected') } : null;
+            });
+            await row.getByRole('tab', { name: 'Auto', exact: true }).focus();
+            await page.keyboard.press('ArrowRight');
+            const askHint = row.getByText('Press Enter to apply Ask first.');
+            await askHint.waitFor({ state: 'visible', timeout: 5000 });
+            await sleep(1500);
+            check('an arrow key on a rule only shows the choice and says how to apply it: nothing is sent', (await ruleOf()) === 'auto', await ruleOf());
+            await shot(page, shots, 'rule-keys-light', row);
+            await page.keyboard.press('Enter');
+            await waitFor(async () => (await ruleOf()) === 'ask', 'Enter to apply Ask first', 15000, 200);
+            await askHint.waitFor({ state: 'hidden', timeout: 5000 });
+            const kept = await focusedTab();
+            check('Enter applies it, and focus stays on the rule', kept?.session === ids.off && kept.name === 'Ask first' && kept.selected === 'true', JSON.stringify(kept));
+            await page.keyboard.press('ArrowRight');
+            const offHint = row.getByText('Press Enter to apply Off.');
+            await offHint.waitFor({ state: 'visible', timeout: 5000 });
+            await page.keyboard.press('Escape');
+            await offHint.waitFor({ state: 'hidden', timeout: 5000 });
+            await sleep(1000);
+            const back = await focusedTab();
+            check('Escape takes the shown choice back, and nothing is sent', (await ruleOf()) === 'ask' && back?.name === 'Ask first' && back.selected === 'true', JSON.stringify({ rule: await ruleOf(), back }));
+            await page.keyboard.press('ArrowLeft');
+            await page.keyboard.press('Enter');
+            await waitFor(async () => (await ruleOf()) === 'auto', 'the rule back to Auto', 15000, 200);
             await shot(page, shots, 'sessions-light', page.locator('[data-autopilot-sessions]'));
             // The switch.
             const toggle = page.locator('[data-autopilot-header] [role="switch"]');
@@ -334,6 +436,32 @@ try {
     // ── A quit under running turns ──────────────────────────────────────
     // The report session goes back to backed off (no progress after Try again) before the quit, so nothing is in flight.
     await entryReaches(ids.report, 'backoff', 'backed off', 2, 60000).catch(() => {});
+    // A tool waiting for approval and a question waiting in DSH's question box when DSH quits. A stand-in window gets
+    // their prompts, as an open DSH window would (with no window, DSH answers an approval "unavailable" at once).
+    const prompts = await run.prompts();
+    ids.cutApproval = await run.newSession(call('write', { file_path: join(outside, 'draft.txt'), content: 'The draft.', sandbox_permissions: 'danger-full-access', justification: 'It saves the draft next to the workspace.' }), 'Draft upload');
+    ids.cutQuestion = await run.newSession(call('ask_user_question', {
+        questions: [{ id: 'env', question: 'Which environment should I deploy to?', header: 'Target', options: [{ label: 'staging' }, { label: 'production' }] }],
+        timeout: -1,
+    }), 'Deploy target');
+    await step('a tool waiting for approval and a question in DSH\'s question box: their rows say so, and why Autopilot waits', async () => {
+        const prompt = await waitFor(() => prompts.find('approval/request', (r) => /the draft next to the workspace/.test(r.reason ?? '')), 'the window\'s prompt for the draft', 30000, 200);
+        check('DSH asks the window to allow the write', Boolean(prompt), JSON.stringify(prompts.asked.map((a) => a.event)));
+        const rowOf = async (sessionId, word) => {
+            let found;
+            await waitFor(async () => {
+                found = (await state()).sessions.find((x) => x.sessionId === sessionId);
+                return found?.word === word;
+            }, `${sessionId} to read ${word}`, 20000, 300).catch(() => {});
+            return found;
+        };
+        const approval = await rowOf(ids.cutApproval, 'waiting for approval');
+        check('the session whose tool waits for approval: its row says so, and why Autopilot leaves it to you',
+            approval?.word === 'waiting for approval' && approval.hold === 'waits for you: a tool waits for you to allow or reject it', JSON.stringify(approval));
+        const question = await rowOf(ids.cutQuestion, 'waiting for your answer');
+        check('the session whose question waits in DSH\'s question box: its row says so, and why Autopilot leaves it to you',
+            question?.word === 'waiting for your answer' && question.hold === 'waits for you: a question in DSH\'s question box', JSON.stringify(question));
+    });
     ids.cut = await run.newSession('E2E:slow', 'Long migration');
     ids.cutGoal = await run.newSession('E2E:goal Write the summary [r1=slow]', 'Summary goal');
     await waitFor(async () => (await run.session(ids.cut)).status === 'running', 'the long turn to run', 30000);
@@ -345,7 +473,8 @@ try {
     const reportNotes = await count(ids.report, 'nudge');
     const quitAt = Date.now();
     await run.stop();
-    check('DSH quits (SIGTERM) under two running turns', !run.alive(), `quit took ${Date.now() - quitAt} ms`);
+    check('DSH quits (SIGTERM) under four running turns', !run.alive(), `quit took ${Date.now() - quitAt} ms`);
+    prompts.close();
     await run.boot('after a quit');
     await waitFor(async () => (await api('state')).ok, 'Autopilot\'s endpoints after the quit', 30000);
     await step('after a quit: each cut-off session gets a carry-on note, read into a turn', async () => {
@@ -359,11 +488,23 @@ try {
         const rearm = await entryReaches(ids.cutGoal, 'rearm', 'started', 1, 40000);
         check('then its goal starts again, proven by the next round', rearm.reason === 'round 2 began', JSON.stringify(rearm));
     });
+    await step('after a quit: the notes for a tool that waited for approval and a question that waited say what did not happen', async () => {
+        const approval = await entryReaches(ids.cutApproval, 'resume', 'delivered', 1, 40000);
+        check('the approval\'s note names the call, says it did not run, and what to do',
+            /When DSH stopped, your \S+ call was waiting for approval, so it did not run: make it again if you still need it, and DSH asks for approval again\./.test(approval.note ?? ''), approval.note);
+        check('its Why line says so too', /A tool was waiting for approval when it stopped; the note says it did not run\./.test(approval.why ?? ''), approval.why);
+        check('the tool never ran: no file was written', !existsSync(join(outside, 'draft.txt')));
+        const question = await entryReaches(ids.cutQuestion, 'resume', 'delivered', 1, 40000);
+        check('the question\'s note quotes it, and says to ask again',
+            (question.note ?? '').includes('When DSH stopped, your question in DSH\'s question box (“Which environment should I deploy to?”) had no answer yet: ask it again if you still need the answer.'), question.note);
+        check('its Why line says so too', /Its question in DSH's question box had no answer; the note says to ask again\./.test(question.why ?? ''), question.why);
+        check('both notes are read into a turn', await readIntoTurn(ids.cutApproval, '[Autopilot] DSH stopped while you were working') && await readIntoTurn(ids.cutQuestion, '[Autopilot] DSH stopped while you were working'));
+    });
     await step('a restart never repeats what was handled', async () => {
         await sleep((IDLE * 2 + 2) * 1000);
         const s = await state();
         const fresh = s.log.slice(0, s.log.length - before);
-        const repeats = fresh.filter((e) => ![ids.cut, ids.cutGoal].includes(e.sessionId) && e.kind !== 'skip');
+        const repeats = fresh.filter((e) => ![ids.cut, ids.cutGoal, ids.cutApproval, ids.cutQuestion].includes(e.sessionId) && e.kind !== 'skip');
         check('nothing handled before the quit is done again', repeats.length === 0 && (await count(ids.report, 'nudge')) === reportNotes, JSON.stringify(repeats.map((e) => [e.kind, e.title, e.state])));
         check('the rules survive the quit', (await state()).sessions.find((x) => x.sessionId === ids.ask)?.rule === 'ask');
     });
@@ -425,6 +566,15 @@ try {
             await form.waitFor({ state: 'visible', timeout: 20000 });
             const labels = await form.locator('label').allTextContents();
             check('its button opens Autopilot\'s settings in Plugins, in DSH\'s own form', labels.includes('Quiet time before a note, in seconds') && labels.includes('Waits before each try after an error, in seconds') && (await form.getByRole('switch', { name: 'Resume after a restart' }).count()) === 1, labels.join(' | '));
+            const flagged = page.locator('[data-suite-setting="idleSeconds"][data-suite-invalid]');
+            await flagged.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+            const focused = await waitFor(() => page.evaluate(() => {
+                const el = document.activeElement;
+                return el?.tagName === 'INPUT' ? el.closest('[data-suite-setting]')?.getAttribute('data-suite-setting') : null;
+            }), 'the cursor in the setting', 5000, 100).catch(() => null);
+            const flaggedWords = (await flagged.count()) ? await flagged.innerText() : '';
+            check('the form opens with the cursor in the wrong setting, flagged at once with what fits', focused === 'idleSeconds' && /A whole number from 5 to 86400, or empty for the default \(600\)\./.test(flaggedWords), `${focused} | ${flaggedWords}`);
+            await shot(page, shots, 'settings-flagged-light');
             const field = page.getByLabel('Quiet time before a note, in seconds');
             await field.fill('3');
             const save = form.getByRole('button', { name: 'Save' });
@@ -459,15 +609,49 @@ try {
         }, async () => {
             if (window?.page) await shot(window.page, shots, 'failed-settings');
         });
+        await step('Session Watch switched off in Plugins: no failure from DSH, Autopilot stays on and says what it needs; switched on again, its page comes back by itself', async () => {
+            const { page } = window;
+            const failed = page.getByText(/Could not (disable|enable)/);
+            const watchSwitch = page.getByRole('switch', { name: 'Enable Session Watch' });
+            await watchSwitch.click();
+            await waitFor(async () => (await watchSwitch.getAttribute('aria-checked')) === 'false', 'Session Watch\'s switch to go off', 20000, 200);
+            await waitFor(async () => (await api('state')).ok === false, 'Autopilot to stop with Session Watch', 20000, 300);
+            await sleep(2500);
+            const offWords = (await failed.count()) ? await failed.first().innerText() : '';
+            check('switched off in Plugins, DSH reports no failure (no "Could not disable")', offWords === '', offWords);
+            await shot(page, shots, 'watch-switched-off-light');
+            await page.getByRole('button', { name: 'Back to plugins' }).click();
+            const autopilotSwitch = page.getByRole('switch', { name: 'Enable Autopilot' });
+            await autopilotSwitch.waitFor({ state: 'visible', timeout: 15000 });
+            check('Autopilot stays on in Plugins, waiting for Session Watch', (await autopilotSwitch.getAttribute('aria-checked')) === 'true', await autopilotSwitch.getAttribute('aria-checked'));
+            await page.getByRole('button', { name: 'Autopilot', exact: true }).first().click();
+            const trouble = page.locator('[data-suite-trouble="watch-off"]');
+            await trouble.waitFor({ state: 'visible', timeout: 20000 });
+            const words = (await trouble.innerText()).replace(/\n+/g, ' ');
+            check('Autopilot\'s page says it needs Session Watch, and what to do', /^Autopilot needs Session Watch, which is not running\. Switch Session Watch on in Plugins\. This page comes back by itself once it runs\./.test(words), words);
+            // On again from another window (DSH's own call, as its Plugins page makes it): this page comes back by itself.
+            const on = await run.api('pluginManager/setBundleEnabled', { name: 'dsh-plugin-session-watch', enabled: true });
+            check('switched on again, DSH reports it applied, with no failure', on.ok === true && on.value?.application === 'applied' && !on.value?.error, JSON.stringify(on));
+            const backAt = Date.now();
+            await page.locator('[data-autopilot-page]').waitFor({ state: 'visible', timeout: 30000 });
+            check('Autopilot\'s page comes back by itself', true, `after ${Math.round((Date.now() - backAt) / 1000)} s`);
+            const said = run.logText().split('\n').filter((line) => /did not activate autopilot/.test(line));
+            check('DSH never reports Autopilot as waiting for a service', said.length === 0, said.slice(-3).join('\n'));
+            await shot(page, shots, 'watch-back-light');
+        }, async () => {
+            if (window?.page) await shot(window.page, shots, 'failed-watch-switch');
+        });
         await window?.browser?.close().catch(() => {});
         window = undefined;
     }
 
     // ── Session Watch off ──────────────────────────────────────────────
     await restartWith(rowsWith({ off: ['session-watch'] }), 'Session Watch off');
-    await step('Session Watch off: Autopilot cannot start, and its page says what it needs', async () => {
+    await step('Session Watch off in the profile: Autopilot loads but does nothing, and its page says what it needs', async () => {
         const r = await api('state');
-        check('without Session Watch, Autopilot\'s host half does not run', r.ok === false, JSON.stringify(r));
+        check('without Session Watch, Autopilot does nothing: its endpoints are not there', r.ok === false, JSON.stringify(r));
+        const said = run.logText().split('\n').filter((line) => /did not activate autopilot/.test(line));
+        check('DSH reports nothing waiting: Autopilot itself is loaded', said.length === 0, said.slice(-3).join('\n'));
         if (!pw) return;
         window = await openWindow(run, pw, { entry: 'Autopilot' });
         const { page } = window;
@@ -497,6 +681,8 @@ try {
     await step('enabled: false: Autopilot watches nothing, and its page says so and how to change it', async () => {
         const s = await state();
         check('with enabled: false Autopilot is loaded but idle', s.enabled === false && !s.problem, JSON.stringify({ enabled: s.enabled, problem: s.problem }));
+        const refused = await api('setPaused', { paused: false });
+        check('its actions are refused, saying why', refused.ok === false && /Autopilot is switched off in DSH's profile \(enabled: false\), so it watches nothing\./.test(refused.error?.message ?? ''), JSON.stringify(refused));
         if (!pw) return;
         window = await openWindow(run, pw, { entry: 'Autopilot' });
         const { page } = window;

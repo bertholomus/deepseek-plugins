@@ -32,10 +32,11 @@ export class AutopilotRemote {
         }
     }
 
-    /** Refuse a change while a setting is wrong: the page says which. */
+    /** Refuse a change while a setting is wrong, or while the profile switches Autopilot off: the page says which. */
     ready() {
         const problem = this.check?.problem;
         if (problem) throw new Error(`Not changed: Autopilot is waiting for a setting to be fixed (${problem.text}).`);
+        if (this.config.enabled === false) throw new Error('Not changed: Autopilot is switched off in DSH\'s profile (enabled: false), so it watches nothing.');
     }
 
     /** Everything the page shows. */

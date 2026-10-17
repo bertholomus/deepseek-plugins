@@ -14,7 +14,7 @@ it, and its one setting is on its page in Plugins.
 | The last reply's closing text (for `DECISION NEEDED` lines and questions) | `assistant/message` |
 | Its todos: open, in progress, done, and the next one | `todo/write` |
 | Its goal: objective, phase, rounds | `goal/change` and goal-round messages |
-| Approvals it waits on | `approval/asked` and `approval/decided` |
+| What a running turn waits on you for: a tool waiting for approval, a question in DSH's question box (the state reads *waiting for approval* or *waiting for your answer*). Both end with their turn; a turn a stop cut off keeps what was left waiting, so Autopilot's carry-on note can say it did not run. | `approval/asked`, `approval/decided`, and the question box's `tool/call` and `tool/result` |
 | When a person last wrote, and when anything last went in | `user/message` |
 
 DSH folds every committed event into this state (a registered session
@@ -81,9 +81,12 @@ That adds `dsh-plugin-session-watch` to the profile's `package.json`
 
 ## Switching it off
 
-Plugins → Session Watch → off. Autopilot, Decisions and Agent Terminals stop
-with it (they need its service). It leaves nothing behind: its projection's
-saved values go when DSH drops them, and `running.json` can be deleted.
+Plugins → Session Watch → off. The plugins that use it stop their work with
+it, with no error from DSH: Autopilot and Decisions stay on in Plugins, do
+nothing, and their pages say they need Session Watch; they start again by
+themselves when it does (an open page comes back within about ten seconds).
+It leaves nothing behind: its projection's saved values go when DSH drops
+them, and `running.json` can be deleted.
 
 ## Rollback
 

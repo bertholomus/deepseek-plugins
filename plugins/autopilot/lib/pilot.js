@@ -142,7 +142,7 @@ export class Pilot {
         this.store.change();
         if (rule === 'off') {
             this.cancel(sessionId);
-            this.dropAsks((ask) => ask.sessionId === sessionId);
+            this.dropAsks((ask) => ask.sessionId === sessionId, 'you set its rule to Off');
         }
         this.journal.add({ kind: 'rule', sessionId, title: this.titleOf(sessionId), text: `Rule set to ${RULE_WORDS[rule ?? this.defaultRule()]}${rule === undefined ? ' (the default)' : ''}.`, why: 'You changed it on Autopilot\'s page.', state: 'done', by: 'you' });
         this.changed();
@@ -163,7 +163,7 @@ export class Pilot {
         this.store.change();
         if (this.data.paused) {
             for (const id of [...this.timers.keys()]) this.cancel(id);
-            const dropped = this.dropAsks(() => true);
+            const dropped = this.dropAsks(() => true, 'you switched Autopilot off');
             this.journal.add({ kind: 'switch', text: 'Autopilot is off: no notes, no resumes, no goal starts.', why: `You switched it off.${dropped ? ` Its ${dropped === 1 ? 'question is' : `${dropped} questions are`} withdrawn; it asks again when it is on.` : ''}`, state: 'done', by: 'you' });
         } else {
             this.journal.add({ kind: 'switch', text: 'Autopilot is on.', why: 'You switched it on. It looks at every session again now.', state: 'done', by: 'you' });
@@ -172,14 +172,27 @@ export class Pilot {
         this.changed();
     }
 
-    /** Withdraw Autopilot's questions that `which` picks; returns how many went. */
-    dropAsks(which) {
+    /**
+     * Withdraw Autopilot's questions that `which` picks, and mark each in the
+     * log as withdrawn, with why; returns how many went.
+     */
+    dropAsks(which, reason) {
         let n = 0;
         for (const ask of this.watch.asks?.() ?? []) {
             if (ask.source !== 'Autopilot' || !which(ask)) continue;
-            try { if (this.watch.dropAsk(ask.id)) n += 1; } catch { /* already gone */ }
+            let gone = false;
+            try { gone = this.watch.dropAsk(ask.id) !== false; } catch { /* already gone */ }
+            if (!gone) continue;
+            n += 1;
+            this.settleAsk(ask.id, { state: 'withdrawn', reason: `withdrawn: ${reason}` });
         }
         return n;
+    }
+
+    /** Give the log entry of a question still waiting its outcome (only the newest one: a question can come back). */
+    settleAsk(askId, patch) {
+        const entry = this.journal.list({ limit: 400 }).find((e) => e.kind === 'ask' && e.askId === askId && e.state === 'asked you');
+        if (entry) this.journal.set(entry.id, patch);
     }
 
     /** Why the person's own action cannot go now (the switch, the session's rule, a setting), or undefined. */
@@ -259,8 +272,7 @@ export class Pilot {
     /** The person wrote in a session: they are on it, so Autopilot starts fresh there. */
     onPersonWrote(sessionId) {
         const s = this.data.sessions[sessionId];
-        if (!s) return;
-        if (s.nudges || s.backedOff || s.errorTries || s.mark) {
+        if (s && (s.nudges || s.backedOff || s.errorTries || s.mark)) {
             s.nudges = 0;
             s.errorTries = 0;
             delete s.backedOff;
@@ -269,7 +281,7 @@ export class Pilot {
             this.store.change();
             this.changed();
         }
-        for (const ask of this.watch.asks?.() ?? []) if (ask.sessionId === sessionId && ask.source === 'Autopilot') this.watch.dropAsk(ask.id);
+        this.dropAsks((ask) => ask.sessionId === sessionId, 'you wrote in the session, so it no longer applies');
     }
 
     onTurnEnd(sessionId, state) {
@@ -400,7 +412,6 @@ export class Pilot {
         if (row.parentSessionId || row.origin === 'subagent') return none('a subagent\'s session; its parent carries it');
         if (row.status === 'running' || this.watch.statusOf?.(sessionId) === 'running') return none('it is working');
         if (state.open) return none('a turn is open');
-        if (state.approvals?.length) return none('it waits for an approval');
         const end = state.end;
         if (!end) return none('it has not ended a turn');
         const s = this.data.sessions[sessionId] ?? { done: {} };
@@ -662,9 +673,7 @@ export class Pilot {
         if (refused) throw Object.assign(new Error(refused), { refused: true });
         this.sessionData(sessionId).done[plan.key] = this.now();
         this.store.change();
-        for (const entry of this.journal.list({ sessionId, limit: 50 })) {
-            if (entry.kind === 'ask' && entry.askId === `autopilot:${sessionId}:${plan.key}`) this.journal.set(entry.id, { state: 'answered' });
-        }
+        this.settleAsk(`autopilot:${sessionId}:${plan.key}`, { state: 'answered' });
         if (answer === 'skip') {
             this.journal.add({ kind: 'answer', sessionId, title: this.titleOf(sessionId), text: 'Left it alone', why: 'You chose Leave it.', state: 'done', by });
             this.changed();
@@ -721,18 +730,25 @@ export class Pilot {
      * word already says it.
      */
     holdOf(row) {
-        if (!isRecord(row) || typeof row.sessionId !== 'string' || row.status === 'running' || row.parentSessionId || row.origin === 'subagent') return undefined;
+        if (!isRecord(row) || typeof row.sessionId !== 'string' || row.parentSessionId || row.origin === 'subagent') return undefined;
+        // Off, or a rule of Off, says it in the switch and the rule: no hold on top.
+        if (!this.active() || this.ruleOf(row.sessionId) === 'off') return undefined;
+        if (row.status === 'running') {
+            // A running turn is the session's own: say so only when it waits on the person, which Autopilot never answers.
+            if (row.state?.approvals?.length) return 'waits for you: a tool waits for you to allow or reject it';
+            if (row.state?.asking) return 'waits for you: a question in DSH\'s question box';
+            return undefined;
+        }
         // The row carries the watcher's view; its full state (the last reply's text) when the watcher has it.
         const full = this.watch.stateOf?.(row.sessionId);
         const state = isRecord(full) && full.end ? full : row.state;
         const end = state?.end;
-        if (!end || state.open || !this.active() || this.ruleOf(row.sessionId) === 'off') return undefined;
+        if (!end || state.open) return undefined;
         const cut = cutOff(end);
         // A cut-off turn gets a carry-on note with or without open work; any other, only with it.
         if (!cut && !hasOpenWork(state)) return undefined;
         const s = this.data.sessions[row.sessionId];
         if (s?.backedOff || s?.gaveUp) return undefined;
-        if (state.approvals?.length) return 'waits for you: a tool waits for approval';
         if (!cut && state.goal?.phase === 'paused') return 'waits for you: its goal is paused';
         if (!cut && state.goal?.phase === 'blocked') return 'waits for you: its goal is blocked';
         if (end.kind === 'aborted' && !cut) return 'you stopped its last turn, so Autopilot leaves it to you';

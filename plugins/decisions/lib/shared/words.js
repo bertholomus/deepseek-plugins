@@ -38,7 +38,7 @@ export function stateWord(row) {
     if (!row) return 'unknown';
     if (row.external?.status) return row.external.status;
     const state = row.state ?? {};
-    if (row.status === 'running') return state.approvals?.length ? 'waiting for approval' : 'running';
+    if (row.status === 'running') return state.approvals?.length ? 'waiting for approval' : state.asking ? 'waiting for your answer' : 'running';
     if (state.open) return 'cut off';
     const end = state.end;
     if (!end) return row.blank ? 'new' : 'idle';

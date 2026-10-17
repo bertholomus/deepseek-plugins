@@ -7,26 +7,34 @@ progress; when an error stops a goal it starts the goal again, after a
 wait, a few times. Every action says what it did and why, and is proven by
 the session's own log, never reported on hope.
 
-It needs Session Watch (it reads every session through it). With the
-notifications plugin running, it also tells you outside the window when it
-backs off, gives up or asks you something.
+It needs Session Watch (it reads every session through it). While Session
+Watch is off, Autopilot stays on but does nothing, and its page says so;
+switching Session Watch off in Plugins reports no error, and Autopilot
+carries on by itself once Session Watch runs again. With the notifications
+plugin running, it also tells you outside the window when it backs off,
+gives up or asks you something.
 
 ## What it does
 
 | When | It | Proven by |
 | --- | --- | --- |
-| DSH restarted, crashed or reloaded under a running turn | Puts a short carry-on note in: which turn was cut off and when its last step was, what is still open. An active goal starts again once that note is read. | The note read into a turn; the goal's next round |
+| DSH restarted, crashed or reloaded under a running turn | Puts a short carry-on note in: which turn was cut off and when its last step was, what is still open. If a tool was waiting for approval, the note says it did not run and to make the call again; if a question waited in DSH's question box, it quotes the question and says to ask again. An active goal starts again once that note is read. | The note read into a turn; the goal's next round |
 | A session went quiet (`idleSeconds`) with open todos, and its last reply asked you nothing | One nudge naming the next todo. Two nudges in a row with no progress (no todo done, no goal round) and it backs off until you write there. | The note read into a turn |
 | A session went quiet with an active goal that is not running (a restart or an error stops a goal) | Starts the goal again. | The goal's next round |
 | A turn failed with open work | After `errorRetrySeconds` (2, 10 and 30 minutes by default) it starts the goal again or tells the session to carry on; after the last try it stops and tells you. | As above |
 
-It leaves a session alone when its last reply asks you something (a
-question, `DECISION NEEDED`, `BLOCKED:`), when it waits for an approval,
-when you paused its goal or the agent marked it blocked, when you stopped
+It leaves a session alone while its turn waits on you (a tool waiting for
+approval, or a question in DSH's question box: its row says *waiting for
+approval* or *waiting for your answer*), when its last reply asks you
+something (a question, `DECISION NEEDED`, `BLOCKED:`), when you paused
+its goal or the agent marked it blocked, when you stopped
 its last turn, when anything was written in it since, and for subagents'
 sessions; the session's row on its page says which. Every note starts with
 `[Autopilot]` and asks the agent to end with a `DECISION NEEDED` line if it
-is blocked, which Decisions picks up when it runs.
+is blocked, which Decisions picks up when it runs. In the chat, DSH shows
+each note the way it shows any message a plugin sends: a collapsed *Plugin
+status updated* card above the reply it started. Open the card to read the
+note, or read it on Autopilot's page under *What it sent*.
 
 ## The page
 
@@ -35,9 +43,13 @@ is blocked, which Decisions picks up when it runs.
 - **The switch.** Off stops everything at once: nothing it scheduled runs,
   and its questions are withdrawn. On again, it looks at every session.
   While it is off, Try again and answers are refused with what to do first.
+  The line beside it says how many sessions it watches, how many notes it
+  sent this hour and the limit, and how long a session waits for a note.
 - **The rule for sessions without their own**: Auto (act), Ask first, or
   Off. While the switch is off the line says the rule applies when
-  Autopilot is on.
+  Autopilot is on. A click applies a rule at once. With the keyboard, the
+  arrow keys only show a choice (*Press Enter to apply Ask first.*): Enter
+  applies it, Escape takes it back, and the cursor stays on the rule.
 - **Waiting for you**: its questions (under Ask first), with the action, Leave
   it, and Open; and sessions it backed off from or stopped retrying, with
   Try again. When Decisions runs, the same questions show there too, and an
@@ -50,7 +62,10 @@ is blocked, which Decisions picks up when it runs.
   change and every time it held back for a reason you would want to know,
   each with a *Why* line that says who acted (Autopilot, or you), its
   outcome (*in the queue*, *delivered*, *started*, *not delivered* with the
-  reason), and *What it sent*.
+  reason), and *What it sent*. A question ends *answered*, or *withdrawn*
+  with the reason (you switched Autopilot off, set the session's rule to
+  Off, or wrote in the session). Times such as *4 min ago* keep up while
+  the page is open.
 
 When Autopilot cannot work, the page says why and what to do, with a button
 to the place to do it: *Autopilot needs Session Watch, which is not
@@ -68,7 +83,9 @@ Plugins → Autopilot shows the settings you can change while it runs, in
 DSH's own settings form: type a value, then **Save**. They apply at once,
 and the event log notes each save (*Settings changed: Quiet time before a
 note*). **Use the default** clears one. The form will not save a value out
-of range and says what fits instead.
+of range and says what fits instead; a value saved in the profile that does
+not fit is flagged the same way as soon as the form opens. **Open
+Autopilot's settings** on its page puts the cursor in the setting to fix.
 
 | Setting | Default | Range | Where | What it does |
 | --- | --- | --- | --- | --- |
@@ -134,7 +151,11 @@ mode 600:
 - **Entirely**: Plugins → Autopilot → off. Its sidebar entry and page go,
   and it leaves no marks in other plugins' views. (`enabled: false` in the
   profile instead keeps its page, which says it is off and how to turn it
-  back on.)
+  back on, and refuses its actions in words.)
+- **With Session Watch**: Plugins → Session Watch → off also stops
+  Autopilot's work, with no error from DSH: Autopilot stays on in Plugins,
+  its page says it needs Session Watch, and it starts again by itself when
+  Session Watch does.
 
 ## Rollback
 

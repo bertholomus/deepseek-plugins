@@ -10,8 +10,10 @@
  * page in DSH's sidebar (lib/client.js).
  *
  * It reads sessions through the session watcher (plugins/session-watch),
- * which must run too; with the notifications plugin it also says, outside
- * the window, when it backs off or asks something.
+ * which must run too: while Session Watch is switched off, Autopilot stays
+ * loaded and does nothing, and its page says what it needs. With the
+ * notifications plugin it also says, outside the window, when it backs off
+ * or asks something.
  *
  * @module dsh-plugin-autopilot
  */
@@ -30,8 +32,12 @@ export { SETTING_TITLES, LIVE_SETTINGS, checkConfig, changedWords } from './conf
 
 export const name = 'autopilot';
 
-/** The session watcher; DSH starts Autopilot only while it runs. */
-export const inject = ['sessionWatch'];
+/**
+ * Nothing at start: Autopilot waits for the session watcher inside apply, so
+ * switching Session Watch off leaves Autopilot loaded and idle (its page says
+ * why) instead of making DSH report it as waiting for a service.
+ */
+export const inject = [];
 
 /**
  * Settings: types and defaults here, ranges in checkConfig, so a wrong value
@@ -63,55 +69,66 @@ export const Config = z.object({
 
 export function apply(ctx, config) {
     const logger = ctx.logger;
-    const watch = ctx.sessionWatch;
     const settings = liveSettings(config);
-    // A wrong value never stops Autopilot from starting: it does no work, and its page says which setting to change.
-    const check = new SettingsCheck({ settings, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'autopilot', logger });
-    check.run();
-    // Its folder in DSH's data folder, as DSH resolves it (DSH_HOME, else ~/.dsh).
-    const dir = dshHomePath('autopilot');
-    const bump = () => watch.hub?.bump?.('autopilot');
-    const store = new JsonStore(join(dir, 'state.json'), { parse: parseData, logger });
-    const journal = new Journal(join(dir, 'events.jsonl'), { logger, onChange: bump });
+    // DSH tells only Autopilot's own entry when its settings are saved in Plugins, so the listener lives here and
+    // hands them to the pilot while one runs.
+    let onSaved;
+    ctx.on('loader/volatile-update', guard(logger, 'autopilot: settings', (paths) => onSaved?.(paths)));
 
-    // System notifications through the notifications plugin, when it runs; one that fails never stops Autopilot.
-    let notifications;
-    ctx.inject(['notifications'], (scope) => {
-        const service = scope.notifications;
-        notifications = service;
-        return () => { if (notifications === service) notifications = undefined; };
+    // Autopilot works only while Session Watch runs. Switched off, the pilot stops and the page says why;
+    // switched on again, a new pilot starts from what Autopilot saved.
+    ctx.inject(['sessionWatch'], (scope) => {
+        const watch = scope.sessionWatch;
+        // A wrong value never stops Autopilot from starting: it does no work, and its page says which setting to change.
+        const check = new SettingsCheck({ settings, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'autopilot', logger });
+        check.run();
+        // Its folder in DSH's data folder, as DSH resolves it (DSH_HOME, else ~/.dsh).
+        const dir = dshHomePath('autopilot');
+        const bump = () => watch.hub?.bump?.('autopilot');
+        const store = new JsonStore(join(dir, 'state.json'), { parse: parseData, logger });
+        const journal = new Journal(join(dir, 'events.jsonl'), { logger, onChange: bump });
+
+        // System notifications through the notifications plugin, when it runs; one that fails never stops Autopilot.
+        let notifications;
+        scope.inject(['notifications'], (inner) => {
+            const service = inner.notifications;
+            notifications = service;
+            return () => { if (notifications === service) notifications = undefined; };
+        });
+        const notify = (item) => {
+            try {
+                notifications?.notify?.(item);
+            } catch (error) {
+                logger?.warn?.(`autopilot: a notification failed: ${errorText(error)}`);
+            }
+        };
+
+        const pilot = new Pilot({ watch, config: settings, store, journal, logger, notify, changed: bump, settingsOk: () => check.ok });
+        const startIfReady = () => {
+            if (settings.enabled !== false && check.ok && !pilot.started) pilot.start();
+        };
+        startIfReady();
+
+        // Settings saved on Autopilot's page in Plugins: checked again, and they apply at once.
+        const saved = (paths) => {
+            const wasWrong = !check.ok;
+            const entry = savedEntry(check, paths);
+            if (entry) journal.add(entry);
+            if (pilot.started) pilot.settingsChanged({ fixed: wasWrong && check.ok });
+            else startIfReady();
+            bump();
+        };
+        onSaved = saved;
+
+        scope.inject(['typertGateway'], (inner) => {
+            inner.provide(SERVICE, new AutopilotRemote({ pilot, watch, journal, config: settings, check }));
+        });
+
+        scope.effect(() => () => {
+            if (onSaved === saved) onSaved = undefined;
+            pilot.stop();
+            store.close();
+            for (const ask of watch.asks?.() ?? []) if (ask.source === 'Autopilot') watch.dropAsk(ask.id);
+        }, 'autopilot: pilot');
     });
-    const notify = (item) => {
-        try {
-            notifications?.notify?.(item);
-        } catch (error) {
-            logger?.warn?.(`autopilot: a notification failed: ${errorText(error)}`);
-        }
-    };
-
-    const pilot = new Pilot({ watch, config: settings, store, journal, logger, notify, changed: bump, settingsOk: () => check.ok });
-    const startIfReady = () => {
-        if (settings.enabled !== false && check.ok && !pilot.started) pilot.start();
-    };
-    startIfReady();
-
-    // Settings saved on Autopilot's page in Plugins: checked again, and they apply at once.
-    ctx.on('loader/volatile-update', guard(logger, 'autopilot: settings', (paths) => {
-        const wasWrong = !check.ok;
-        const entry = savedEntry(check, paths);
-        if (entry) journal.add(entry);
-        if (pilot.started) pilot.settingsChanged({ fixed: wasWrong && check.ok });
-        else startIfReady();
-        bump();
-    }));
-
-    ctx.inject(['typertGateway'], (scope) => {
-        scope.provide(SERVICE, new AutopilotRemote({ pilot, watch, journal, config: settings, check }));
-    });
-
-    ctx.effect(() => () => {
-        pilot.stop();
-        store.close();
-        for (const ask of watch.asks?.() ?? []) if (ask.source === 'Autopilot') watch.dropAsk(ask.id);
-    }, 'autopilot: pilot');
 }

@@ -100,6 +100,9 @@ export function lateAnswerProof(session, callId) {
 /** Keys that say what a tool call does, in the order a person wants them. */
 const SAYS = ['command', 'cmd', 'script', 'path', 'file_path', 'filePath', 'paths', 'url', 'query', 'pattern', 'content', 'text', 'message'];
 
+/** Arguments the card already says in words (the access asked for, and why). */
+const SAID = new Set(['sandbox_permissions', 'justification']);
+
 /**
  * What a tool call does, as a person reads it: the command, the file, the
  * address. `lines` lists the other arguments as `name: value`, clipped.
@@ -113,7 +116,7 @@ export function describeCall(args) {
     const what = key ? words(args[key]).slice(0, 2000) : undefined;
     const lines = [];
     for (const [name, value] of Object.entries(args)) {
-        if (name === key || value === undefined || value === null || value === '') continue;
+        if (name === key || SAID.has(name) || value === undefined || value === null || value === '') continue;
         const text = words(value);
         if (text) lines.push(`${name}: ${clip(text, 200)}`);
         if (lines.length >= 8) break;

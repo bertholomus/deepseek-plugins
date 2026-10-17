@@ -20,13 +20,17 @@
  *   session watcher's `wait`), so windows read state only when it moved,
  *   and stop while hidden;
  * - `kit.useLive`: a React hook over both, which keeps the last good data
- *   when a refresh fails;
- * - parts: Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText, and
- *   the two states every suite page shares: `Trouble` (the plugin, or the
- *   Session Watch it needs, is not running) and `SettingsProblem` (a setting
- *   is wrong: which, what it must be, and where to change it);
+ *   when a refresh fails; `kit.useMinute` keeps "4 min ago" current;
+ * - parts: Page, Card, Empty, ErrorLine, Loading, StateTag (DSH's tag, its
+ *   words at 4.5:1 or more), TimeText, Choice (a few values, committed on a
+ *   click or on Enter, never on an arrow key), and the two states every
+ *   suite page shares: `Trouble` (the plugin, or the Session Watch it needs,
+ *   is not running) and `SettingsProblem` (a setting is wrong: which, what it
+ *   must be, and a button to it in the plugin's settings);
  * - `kit.applySettings`: the plugin's settings on its page in Plugins
- *   (DSH's `plugins.bundle.config`), saved through DSH's own settings form.
+ *   (DSH's `plugins.bundle.config`), saved through DSH's own settings form,
+ *   which flags a saved value that does not fit and brings into view the
+ *   setting a page sent the person to (`openPlugin(name, { focus })`).
  *
  * @module suite/shared/client-kit
  */
@@ -96,6 +100,15 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         `.${P}-set-group{margin:14px 0 2px;font:var(--dsw-font-xs-strong-13);color:var(--dsw-alias-label-secondary)}`,
         `.${P}-set-error{margin:4px 0 0;font:var(--dsw-font-xs-13);color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary))}`,
         `@media (max-width:560px){.${P}-set-row{flex-wrap:wrap}.${P}-set-control{width:100%;justify-content:flex-start}}`,
+        // DSH's tags write a state in its own colour on a 10–12% fill of it: amber, green and blue read at 2–3.5:1 on a
+        // light page. The suite's tags deepen the words toward the label colour (lighter in dark mode), 4.5:1 or more in both.
+        `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="warning"]{color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 45%,var(--dsw-alias-label-primary))}`,
+        `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="danger"]{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 75%,var(--dsw-alias-label-primary))}`,
+        `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="success"]{color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 50%,var(--dsw-alias-label-primary))}`,
+        `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="info"]{color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 65%,var(--dsw-alias-label-primary))}`,
+        `.${P}-choice{display:inline-flex;flex-direction:column;align-items:inherit;gap:4px;min-width:0}`,
+        `.${P}-choice-hint{font:var(--dsw-font-xxs-12);color:var(--${P}-text-2)}`,
+        `.${P}-choice[aria-busy="true"]{cursor:progress}`,
         `body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop),body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop)::before,body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop)::after,body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop) *,body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop) *::before,body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop) *::after{animation:none!important;transition:none!important}`,
         `@media (prefers-reduced-motion:reduce){:is(.${P}-page,.${P}-pane,.${P}-pop),:is(.${P}-page,.${P}-pane,.${P}-pop)::before,:is(.${P}-page,.${P}-pane,.${P}-pop)::after,:is(.${P}-page,.${P}-pane,.${P}-pop) *,:is(.${P}-page,.${P}-pane,.${P}-pop) *::before,:is(.${P}-page,.${P}-pane,.${P}-pop) *::after{animation:none!important;transition:none!important}}`,
     ];
@@ -177,10 +190,38 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     }
     /** Whether this DSH can open a plugin's page in Plugins (draw a button for it only then). */
     const canOpenPlugin = () => typeof nav.current?.openBundle === 'function';
-    /** Open a plugin's page in DSH's Plugins page (its switch and its settings); false when this DSH cannot. */
-    function openPlugin(packageName) {
+
+    // A setting to bring into view when a plugin's settings next show: one per plugin, for 15 seconds, shared by
+    // every suite plugin in the window (a page may open another plugin's settings).
+    const FOCUS_KEY = 'dsh-plugin-suite/focus/v1';
+    function focusBoard() {
+        const scope = win ?? globalThis;
+        if (!scope[FOCUS_KEY]) scope[FOCUS_KEY] = { asks: new Map(), subs: new Set() };
+        return scope[FOCUS_KEY];
+    }
+    /** The setting the person was sent to look at in `packageName`'s settings, once; undefined when none. */
+    function takeFocusAsk(packageName) {
+        const board = focusBoard();
+        const ask = board.asks.get(packageName);
+        board.asks.delete(packageName);
+        return ask && ask.until > Date.now() ? ask.key : undefined;
+    }
+
+    /**
+     * Open a plugin's page in DSH's Plugins page (its switch and its settings);
+     * false when this DSH cannot. `focus` names a setting to bring into view
+     * and put the cursor in (the one a problem is about).
+     */
+    function openPlugin(packageName, { focus } = {}) {
         try {
             if (typeof nav.current?.openBundle !== 'function') return false;
+            if (typeof focus === 'string' && focus) {
+                const board = focusBoard();
+                board.asks.set(packageName, { key: focus, until: Date.now() + 15000 });
+                for (const fn of [...board.subs]) {
+                    try { fn(packageName); } catch { /* one form never stops another */ }
+                }
+            }
             nav.current.openBundle(packageName);
             return true;
         } catch {
@@ -257,10 +298,11 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         }
                         continue;
                     }
-                    // The watcher is not running (or failed): read on a slow timer instead, and keep trying.
+                    // The watcher is not running (or failed): read again every few seconds (at most 10), so a page that
+                    // says so comes back soon after it runs again.
                     state.failures += 1;
                     notify('all');
-                    await sleep(Math.min(30000, 2000 * 2 ** Math.min(state.failures, 4)));
+                    await sleep(Math.min(10000, 2000 * 2 ** Math.min(state.failures, 3)));
                 }
             } finally {
                 state.running = false;
@@ -370,10 +412,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     function toneOf(word) {
         switch (word) {
             case 'running': case 'working': case 'queued': case 'in the queue': case 'sending': case 'starting': case 'waiting for a round': return 'info';
-            case 'waiting for approval': case 'waiting on you': case 'needs a decision': case 'asked you': case 'asks you': case 'cut off': case 'cut short': case 'backed off': case 'gave up': case 'held': case 'not confirmed': case 'waiting on a setting': return 'warning';
+            case 'waiting for approval': case 'waiting for your answer': case 'waiting on you': case 'needs a decision': case 'asked you': case 'asks you': case 'cut off': case 'cut short': case 'backed off': case 'gave up': case 'held': case 'not confirmed': case 'waiting on a setting': return 'warning';
             case 'failed': case 'blocked': case 'not delivered': case 'not started': case 'not sent': return 'danger';
             case 'delivered': case 'started': case 'done': case 'answered': case 'read': case 'sent': return 'success';
-            case 'stopped': case 'paused': return 'neutral';
+            case 'stopped': case 'paused': case 'withdrawn': return 'neutral';
             default: return 'quiet';
         }
     }
@@ -414,16 +456,145 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         return h('div', { className: `${P}-loading`, role: 'status', 'aria-live': 'polite' }, text);
     }
 
-    /** A state in words, in DSH's tag. */
+    /** A state in words, in DSH's tag (with the suite's deeper words, see the CSS above). */
     function StateTag({ word }) {
-        return h(ui.Tag, { tone: toneOf(word) }, word);
+        return h(ui.Tag, { tone: toneOf(word), className: `${P}-tag` }, word);
     }
 
-    /** A time as "4 min ago", with the full time on hover and for screen readers. */
+    // One clock for every "4 min ago" in the window: it ticks every 30 seconds while something shows a time and the
+    // window is in view, and once more when the window comes back into view.
+    const MINUTE_KEY = 'dsh-plugin-suite/minute/v1';
+    function minuteClock() {
+        const scope = win ?? globalThis;
+        if (scope[MINUTE_KEY]) return scope[MINUTE_KEY];
+        const state = { now: Date.now(), subs: new Set(), timer: undefined };
+        const hidden = () => Boolean(doc && doc.visibilityState === 'hidden');
+        const tick = () => {
+            state.now = Date.now();
+            for (const fn of [...state.subs]) {
+                try { fn(); } catch { /* one part never stops the others */ }
+            }
+        };
+        const start = () => { if (state.timer === undefined && !hidden()) state.timer = setInterval(tick, 30000); };
+        const stop = () => {
+            clearInterval(state.timer);
+            state.timer = undefined;
+        };
+        const onVisibility = () => {
+            if (hidden()) return stop();
+            tick();
+            start();
+        };
+        scope[MINUTE_KEY] = {
+            subscribe(fn) {
+                if (state.subs.size === 0) {
+                    state.now = Date.now();
+                    doc?.addEventListener?.('visibilitychange', onVisibility);
+                    start();
+                }
+                state.subs.add(fn);
+                return () => {
+                    state.subs.delete(fn);
+                    if (state.subs.size > 0) return;
+                    stop();
+                    doc?.removeEventListener?.('visibilitychange', onVisibility);
+                };
+            },
+            now: () => state.now,
+        };
+        return scope[MINUTE_KEY];
+    }
+
+    /** Draw the caller again every 30 seconds while the window is in view: for parts that write "4 min ago". */
+    function useMinute() {
+        const clock = minuteClock();
+        return React.useSyncExternalStore(clock.subscribe, clock.now);
+    }
+
+    /** A time as "4 min ago" (kept current), with the full time on hover and for screen readers. */
     function TimeText({ at, now }) {
+        useMinute();
         if (!Number.isFinite(at) || at <= 0) return null;
         const full = new Date(at).toLocaleString();
-        return h('time', { className: `${P}-num`, dateTime: new Date(at).toISOString(), title: full }, agoText(at, now));
+        return h('time', { className: `${P}-num`, dateTime: new Date(at).toISOString(), title: full }, agoText(at, now ?? Date.now()));
+    }
+
+    /**
+     * A choice between a few values that commits only when the person means
+     * it: a click commits at once; with the keyboard, the arrow keys move
+     * between the values and Enter or Space commits the one in focus (Escape,
+     * or leaving the control, goes back to the saved one). It is never
+     * disabled while a change is on its way, so focus stays where it was; a
+     * choice made meanwhile is applied next. `onChoose(value)` may return a
+     * promise of false when the change did not go through: the control then
+     * shows the saved value again.
+     */
+    function Choice({ id, label, value, options, busy = false, onChoose, className = '' }) {
+        const [shown, setShown] = React.useState(value);
+        const sent = React.useRef(undefined);
+        const queued = React.useRef(undefined);
+        const valueRef = React.useRef(value);
+        valueRef.current = value;
+        React.useEffect(() => {
+            setShown(value);
+            sent.current = undefined;
+        }, [value]);
+        const commit = (next) => {
+            if (!options.some((o) => o.value === next && o.disabled !== true)) return;
+            if (busy) {
+                queued.current = next;
+                setShown(next);
+                return;
+            }
+            if (next === valueRef.current || next === sent.current) return;
+            sent.current = next;
+            setShown(next);
+            void Promise.resolve(onChoose(next)).then((ok) => {
+                if (ok !== false || sent.current !== next) return;
+                sent.current = undefined;
+                setShown(valueRef.current);
+            }, () => {
+                sent.current = undefined;
+                setShown(valueRef.current);
+            });
+        };
+        React.useEffect(() => {
+            if (busy || queued.current === undefined) return;
+            const next = queued.current;
+            queued.current = undefined;
+            commit(next);
+        }, [busy]);
+        const pending = shown !== value && shown !== sent.current && shown !== queued.current;
+        const shownLabel = options.find((o) => o.value === shown)?.label ?? shown;
+        const tabValue = (target) => {
+            const tab = target?.closest?.('[role="tab"]');
+            return tab && typeof tab.id === 'string' && tab.id.startsWith(`${id}-`) ? tab.id.slice(id.length + 1) : undefined;
+        };
+        return h('div', {
+            className: `${P}-choice${className ? ` ${className}` : ''}`,
+            'aria-busy': busy ? 'true' : undefined,
+            'data-suite-choice': id,
+            ...(pending ? { 'data-suite-pending': shown } : {}),
+            // A click (or a key that clicks) on a value commits it; DSH's control ignores a click on the value it shows.
+            onClickCapture: (event) => {
+                const next = tabValue(event.target);
+                if (next !== undefined) commit(next);
+            },
+            onKeyDownCapture: (event) => {
+                if ((event.key === 'Enter' || event.key === ' ') && pending) {
+                    event.preventDefault();
+                    commit(shown);
+                } else if (event.key === 'Escape' && pending) {
+                    event.preventDefault();
+                    setShown(value);
+                }
+            },
+            onBlurCapture: (event) => {
+                if (pending && !event.currentTarget.contains(event.relatedTarget)) setShown(value);
+            },
+        },
+        h(ui.SegmentedControl, { id, label, value: shown, options, onChange: setShown }),
+        h('span', { className: pending ? `${P}-choice-hint` : `${P}-sr`, role: 'status', 'aria-live': 'polite' }, pending ? `Press Enter to apply ${shownLabel}.` : ''));
     }
 
     // ── States every suite page shares ────────────────────────────────
@@ -473,6 +644,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             h('div', { className: `${P}-actions` }, action, retry));
     }
 
+    /** A name's possessive as the suite writes it: Autopilot's, Decisions'. */
+    const whose = (name) => (/s$/.test(String(name)) ? `${name}'` : `${name}'s`);
+
     /**
      * A setting is wrong, so the plugin does no work: which setting, what it
      * must be, and where to change it (its settings in Plugins when the
@@ -480,14 +654,15 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
      */
     function SettingsProblem({ name, packageName, problem }) {
         const live = problem?.live === true;
+        const its = whose(name);
         return h('div', { className: `${P}-trouble`, role: 'alert', 'data-suite-trouble': 'setting' },
             h('p', { className: `${P}-trouble-title` }, `${name} is waiting for a setting to be fixed.`),
             h('p', { className: `${P}-trouble-text` }, `${String(problem?.text ?? 'A setting is wrong').replace(/\.$/, '')}.`),
             h('p', { className: `${P}-trouble-text` }, live
-                ? `Change it in ${name}'s settings in Plugins. ${name} starts working again as soon as you save.`
-                : `Change it in ${name}'s entry in DSH's profile (cordis.patch.yml), then restart DSH.`),
+                ? `Change it in ${its} settings in Plugins. ${name} starts working again as soon as you save.`
+                : `Change it in ${its} entry in DSH's profile (cordis.patch.yml), then restart DSH.`),
             live && typeof nav.current?.openBundle === 'function'
-                ? h('div', { className: `${P}-actions` }, h(ui.Button, { variant: 'primary', size: 'sm', onClick: () => openPlugin(packageName) }, `Open ${name}'s settings`)) : null);
+                ? h('div', { className: `${P}-actions` }, h(ui.Button, { variant: 'primary', size: 'sm', onClick: () => openPlugin(packageName, { focus: problem?.key }) }, `Open ${its} settings`)) : null);
     }
 
     // ── Settings on the plugin's page in Plugins ──────────────────────
@@ -500,15 +675,17 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     function fieldSpec(f) {
         const clear = { kind: 'clear' };
         const whole = (text) => (/^\d+$/.test(text) ? Number(text) : undefined);
+        // A stored value of the wrong kind shows as it is, so the form can flag it rather than show it as empty.
+        const raw = (v) => (v === undefined || v === null ? '' : typeof v === 'string' ? v : JSON.stringify(v));
         switch (f.kind) {
             case 'switch':
-                return { field: f.name, format: (v) => (v === true ? 'on' : v === false ? 'off' : ''), parse: (t) => (t === 'on' ? { kind: 'set', value: true } : t === 'off' ? { kind: 'set', value: false } : t === '' ? clear : undefined) };
+                return { field: f.name, format: (v) => (v === true ? 'on' : v === false ? 'off' : raw(v)), parse: (t) => (t === 'on' ? { kind: 'set', value: true } : t === 'off' ? { kind: 'set', value: false } : t === '' ? clear : undefined) };
             case 'choice':
-                return { field: f.name, format: (v) => (typeof v === 'string' ? v : ''), parse: (t) => (t === '' ? clear : f.options.some((o) => o.value === t) ? { kind: 'set', value: t } : undefined) };
+                return { field: f.name, format: raw, parse: (t) => (t === '' ? clear : f.options.some((o) => o.value === t) ? { kind: 'set', value: t } : undefined) };
             case 'number':
                 return {
                     field: f.name,
-                    format: (v) => (Number.isFinite(v) ? String(v) : ''),
+                    format: (v) => (Number.isFinite(v) ? String(v) : raw(v)),
                     parse: (t) => {
                         const text = String(t).trim();
                         if (text === '') return clear;
@@ -519,7 +696,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             case 'numbers':
                 return {
                     field: f.name,
-                    format: (v) => (Array.isArray(v) ? v.join(', ') : ''),
+                    format: (v) => (Array.isArray(v) ? v.join(', ') : raw(v)),
                     parse: (t) => {
                         const text = String(t).trim();
                         if (text === '') return clear;
@@ -531,7 +708,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             default:
                 return {
                     field: f.name,
-                    format: (v) => (typeof v === 'string' ? v : ''),
+                    format: raw,
                     parse: (t) => {
                         const text = String(t).trim();
                         if (text === '') return clear;
@@ -541,11 +718,17 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         }
     }
 
-    /** The words under a number that does not fit. */
+    /** The words under a value that does not fit: what does. */
     function invalidWords(f) {
         if (f.invalid) return f.invalid;
         if (f.kind === 'number') return `A whole number from ${f.min} to ${f.max}, or empty for the default (${f.default}).`;
         if (f.kind === 'numbers') return `Up to ${f.maxItems ?? 10} whole numbers from ${f.min} to ${f.max}, with commas between them, or empty for the default (${(f.default ?? []).join(', ')}).`;
+        if (f.kind === 'switch') return 'The saved value is neither on nor off. Switch it to the one you want, then save.';
+        if (f.kind === 'choice') {
+            const names = (f.options ?? []).map((o) => o.label);
+            const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} or ${names.at(-1)}` : names.join('');
+            return `The saved value is not one of the choices. Choose ${list}, then save.`;
+        }
         return 'This value does not fit here.';
     }
 
@@ -592,16 +775,17 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const reset = state.overridden
             ? h('button', { type: 'button', className: `${P}-set-reset`, disabled, onClick: () => actions.resetField(f.name), 'aria-label': `Use the default for ${f.title}` }, 'Use the default') : null;
         if (f.kind === 'switch' || f.kind === 'choice') {
-            return h('div', { className: `${P}-set-row`, 'data-suite-setting': f.name },
+            return h('div', { className: `${P}-set-row`, 'data-suite-setting': f.name, ...(state.invalid ? { 'data-suite-invalid': '' } : {}) },
                 h('div', { className: `${P}-set-text` },
                     h('div', { className: `${P}-set-title`, id: `${id}-label` }, f.title),
-                    h('div', { className: `${P}-set-hint` }, f.hint)),
+                    h('div', { className: `${P}-set-hint` }, f.hint),
+                    state.invalid ? h('p', { className: `${P}-set-error`, role: 'alert' }, invalidWords(f)) : null),
                 h('div', { className: `${P}-set-control` }, reset,
                     f.kind === 'switch'
                         ? h(ui.Switch, { checked: state.text === 'on', label: f.title, disabled, onChange: (next) => edit(next ? 'on' : 'off') })
                         : h(ui.SegmentedControl, { id, label: f.title, value: state.text || f.default, options: f.options, disabled, onChange: edit })));
         }
-        return h('div', { className: `${P}-set-row`, 'data-suite-setting': f.name },
+        return h('div', { className: `${P}-set-row`, 'data-suite-setting': f.name, ...(state.invalid ? { 'data-suite-invalid': '' } : {}) },
             h('div', { className: `${P}-set-text` },
                 h(ui.SettingsValueField, {
                     id,
@@ -620,9 +804,49 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 })));
     }
 
+    /** Bring a setting's row into view and put the cursor in its control. */
+    function focusSetting(root, key) {
+        const row = [...(root?.querySelectorAll?.('[data-suite-setting]') ?? [])].find((el) => el.getAttribute('data-suite-setting') === key);
+        // Not drawn yet, or on a page that is not in view: try again in a moment.
+        if (!row || row.getClientRects?.().length === 0) return false;
+        row.scrollIntoView?.({ block: 'center' });
+        // The value itself first: DSH's own field draws "Use the default" before its input.
+        const control = ['input:not([type="hidden"])', 'textarea', 'select', '[role="tab"][aria-selected="true"]', '[role="switch"]', 'button']
+            .map((selector) => row.querySelector(selector)).find(Boolean);
+        control?.focus?.({ preventScroll: true });
+        return true;
+    }
+
     function SettingsBody({ form, name, fields, note }) {
         const snap = React.useSyncExternalStore(form.subscribe, form.getSnapshot);
         const disabled = !snap.writable || snap.saving;
+        const root = React.useRef(null);
+        // Sent here to fix a setting ("Open Autopilot's settings"): bring it into view, now or when it is asked for.
+        React.useEffect(() => {
+            const timers = new Set();
+            const take = () => {
+                const key = takeFocusAsk(bundle);
+                if (!key) return;
+                // DSH draws the page around the form a moment after it opens.
+                let tries = 0;
+                const attempt = () => {
+                    timers.delete(timer);
+                    if (focusSetting(root.current, key) || ++tries >= 20) return;
+                    timer = setTimeout(attempt, 100);
+                    timers.add(timer);
+                };
+                let timer = setTimeout(attempt, 60);
+                timers.add(timer);
+            };
+            take();
+            const board = focusBoard();
+            const on = (packageName) => { if (packageName === bundle) take(); };
+            board.subs.add(on);
+            return () => {
+                board.subs.delete(on);
+                for (const t of timers) clearTimeout(t);
+            };
+        }, []);
         const labels = {
             unavailable: `${name} is not running, so its settings cannot be changed right now. Switch it on above.`,
             readOnly: 'This DSH keeps its settings read-only, so they cannot be changed here.',
@@ -639,9 +863,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 if (keeper) rows.push(h(SecretRow, { key: f.name, f, state, disabled, actions: form.actions, keeper }));
                 continue;
             }
-            rows.push(h(SettingRow, { key: f.name, f, state, disabled, actions: form.actions }));
+            // DSH's form checks only what is typed; a saved value that does not fit (typed into the profile) is
+            // flagged too, with what does fit.
+            const wrong = !state.invalid && state.text !== '' && fieldSpec(f).parse(state.text) === undefined;
+            rows.push(h(SettingRow, { key: f.name, f, state: wrong ? { ...state, invalid: true } : state, disabled, actions: form.actions }));
         }
-        return h('div', { className: `${P}-settings`, 'data-suite-settings': bundle },
+        return h('div', { className: `${P}-settings`, 'data-suite-settings': bundle, ref: root },
             h(ui.SettingsForm, { labels, state: snap, onSave: form.actions.save, onDiscard: form.actions.discard },
                 ...rows,
                 note ? h('p', { key: 'note', className: `${P}-set-note` }, note) : null));
@@ -701,7 +928,11 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     function applySettings(ctx, { entry, name, summary, fields, note }) {
         if (typeof ui.SettingsFormModel !== 'function' || typeof ui.SettingsForm !== 'function' || typeof ctx.configForms?.get !== 'function') return;
         const scope = ctx.configForms.get(entry);
-        const canKeep = typeof ui.SettingsSecretField === 'function' && typeof ctx.remote?.credentials?.describe === 'function';
+        // DSH's key store, only for a plugin with a secret: reading remote.credentials throws in a plugin that does not inject it.
+        let canKeep = false;
+        if (fields.some((f) => f.kind === 'secret') && typeof ui.SettingsSecretField === 'function') {
+            try { canKeep = typeof ctx.remote?.credentials?.describe === 'function'; } catch { canKeep = false; }
+        }
         const plain = fields.filter((f) => f.kind !== 'secret');
         const secrets = canKeep ? fields.filter((f) => f.kind === 'secret') : [];
         let store;
@@ -727,10 +958,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     }
 
     return {
-        P, css, injectStyle, removeStyle, setConnection, whenConnected, link, hub, useLive,
+        P, css, injectStyle, removeStyle, setConnection, whenConnected, link, hub, useLive, useMinute,
         setNavigation, canOpenPlugin, openPlugin, fieldSpec, invalidWords, applySettings,
         timeText, agoText, spanText, toneOf, isRecord,
-        Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText, Trouble, SettingsProblem, SettingsBody, SettingRow, SecretRow,
+        Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText, Choice, Trouble, SettingsProblem, SettingsBody, SettingRow, SecretRow,
     };
 }
 // </suite-kit>

@@ -13,7 +13,7 @@ import { JsonStore, ensurePrivateDir, readJson, writeAtomic } from '../shared/ho
 import { clip, errorText, guard, later } from '../shared/host/safe.js';
 import { SUITE, kitBlock, plannedCopies } from '../scripts/sync-shared.mjs';
 import { suiteKit } from '../shared/client-kit.js';
-import { OTHER_NAMES, standInReact, elementsOf, textIn } from './helpers/client.mjs';
+import { OTHER_NAMES, standInReact, statefulReact, elementsOf, textIn } from './helpers/client.mjs';
 import { settle } from './helpers/clock.mjs';
 
 const temp = () => mkdtempSync(join(tmpdir(), 'suite-shared-'));
@@ -39,6 +39,8 @@ function jsFilesUnder(relative) {
 test('words: a session\'s state in one set of words', () => {
     assert.equal(stateWord({ status: 'running', state: {} }), 'running');
     assert.equal(stateWord({ status: 'running', state: { approvals: [{ id: 'a' }] } }), 'waiting for approval');
+    assert.equal(stateWord({ status: 'running', state: { asking: { call: 'q1', question: 'Which branch?' } } }), 'waiting for your answer');
+    assert.equal(stateWord({ status: 'idle', state: { asking: { call: 'q1' }, end: { kind: 'completed' } } }), 'idle', 'only a running turn waits on the question box');
     assert.equal(stateWord({ status: 'cold', state: { open: true } }), 'cut off');
     assert.equal(stateWord({ status: 'cold', state: { end: { kind: 'interrupted' } } }), 'cut off');
     assert.equal(stateWord({ status: 'idle', state: { end: { kind: 'aborted', cause: 'disposed' } } }), 'cut off');
@@ -307,12 +309,12 @@ test('copies: every suite plugin carries the current shared code', () => {
 
 // ── The window kit ────────────────────────────────────────────────────
 
-function kitWith({ document, window = {} } = {}) {
+function kitWith({ document, window = {}, react } = {}) {
     const saved = { window: globalThis.window, document: globalThis.document };
     globalThis.window = window;
     if (document) globalThis.document = document;
     try {
-        const React = standInReact();
+        const React = react ?? standInReact();
         const ui = new Proxy({}, { get: (_t, name) => (typeof name === 'string' ? name : undefined) });
         return suiteKit({ prefix: 'dshx', bundle: 'dsh-plugin-x', React, ui, h: React.createElement });
     } finally {
@@ -409,4 +411,237 @@ test('kit: times, tones and the parts every page uses', () => {
     assert.ok(kit.css.some((rule) => rule.includes('body.wp-still')));
     assert.ok(kit.css.some((rule) => rule.includes('prefers-reduced-transparency')));
     assert.ok(kit.css.every((rule) => !OTHER_NAMES.test(rule)));
+});
+
+// DSH's own colours (dsh-client-ui-theme), light and dark, and the page grounds under a suite card.
+const DSH = {
+    light: { label: '#0f1115', warning: '#f59e0b', danger: '#ec1313', success: '#22c55e', info: '#4176e6', ground: '#fafaf6' },
+    dark: { label: '#f9fafb', warning: '#f59e0b', danger: '#f25a5a', success: '#22c55e', info: '#7aaaff', ground: '#0e1211' },
+};
+const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+const mix = (a, b, share) => a.map((v, i) => v * share + b[i] * (1 - share));
+const luminance = (c) => {
+    const [r, g, b] = c.map((v) => {
+        const x = v / 255;
+        return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const contrast = (a, b) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+};
+
+test('kit: state tags write their words at 4.5:1 or more on DSH\'s tag fill, in light and dark (DSH\'s own read 1.8 to 3.5)', () => {
+    const kit = kitWith();
+    const tag = kit.StateTag({ word: 'waiting for your answer' });
+    assert.equal(tag.props.className, 'dshx-tag');
+    assert.equal(tag.props.tone, 'warning');
+    assert.equal(kit.toneOf('withdrawn'), 'neutral');
+    const TOKEN = { warning: 'warn', danger: 'error', success: 'success', info: 'business' };
+    // DSH's fills: 12% of the state colour for warning, 10% for the others.
+    const FILL = { warning: 0.12, danger: 0.1, success: 0.1, info: 0.1 };
+    for (const tone of Object.keys(TOKEN)) {
+        const rule = kit.css.find((r) => r.includes(`.dshx-tag[data-tone="${tone}"]`));
+        assert.ok(rule, tone);
+        const share = Number(new RegExp(`--dsw-alias-state-${TOKEN[tone]}-primary\\) (\\d+)%,var\\(--dsw-alias-label-primary\\)`).exec(rule)?.[1]) / 100;
+        assert.ok(share > 0 && share < 1, rule);
+        for (const mode of ['light', 'dark']) {
+            const colours = DSH[mode];
+            const fill = mix(rgb(colours[tone]), rgb(colours.ground), FILL[tone]);
+            const ours = contrast(mix(rgb(colours[tone]), rgb(colours.label), share), fill);
+            assert.ok(ours >= 4.5, `${tone} in ${mode}: ${ours.toFixed(2)}:1`);
+            if (mode === 'light' && tone !== 'danger') assert.ok(contrast(rgb(colours[tone]), fill) < 4.5, `DSH's own ${tone} words fall short in light`);
+        }
+    }
+});
+
+test('kit: a choice commits on a click or on Enter, never on an arrow key; Escape and leaving go back; it is never disabled', async () => {
+    const { react, mount } = statefulReact();
+    const kit = kitWith({ react });
+    const OPTIONS = [{ value: 'auto', label: 'Auto' }, { value: 'ask', label: 'Ask first' }, { value: 'off', label: 'Off' }];
+    const chosen = [];
+    let answer = true;
+    const view = mount(kit.Choice, { id: 'rule', label: 'Rule', value: 'auto', options: OPTIONS, busy: false, onChoose: (value) => { chosen.push(value); return answer; } });
+    const control = () => elementsOf(view.tree).find((e) => e.type === 'SegmentedControl');
+    const root = () => view.tree;
+    const key = (k) => {
+        let prevented = false;
+        root().props.onKeyDownCapture({ key: k, preventDefault: () => { prevented = true; } });
+        return prevented;
+    };
+    const click = (value) => root().props.onClickCapture({ target: { closest: () => ({ id: `rule-${value}` }) } });
+    assert.equal(control().props.disabled, undefined);
+    // An arrow key: DSH's control moves to the next value; nothing is sent, and the line under it says how to apply it.
+    control().props.onChange('ask');
+    assert.equal(control().props.value, 'ask');
+    assert.deepEqual(chosen, []);
+    assert.equal(root().props['data-suite-pending'], 'ask');
+    assert.match(textIn(view.tree), /Press Enter to apply Ask first\./);
+    // Enter applies it.
+    assert.equal(key('Enter'), true);
+    assert.deepEqual(chosen, ['ask']);
+    view.update({ value: 'ask' });
+    assert.equal(root().props['data-suite-pending'], undefined);
+    assert.doesNotMatch(textIn(view.tree), /Press Enter/);
+    // Enter on the saved value sends nothing again; Space applies as Enter does.
+    assert.equal(key('Enter'), false);
+    control().props.onChange('off');
+    key(' ');
+    assert.deepEqual(chosen, ['ask', 'off']);
+    view.update({ value: 'off' });
+    // Escape, or leaving the control, goes back to the saved value.
+    control().props.onChange('auto');
+    key('Escape');
+    assert.equal(control().props.value, 'off');
+    control().props.onChange('auto');
+    root().props.onBlurCapture({ currentTarget: { contains: () => false }, relatedTarget: null });
+    assert.equal(control().props.value, 'off');
+    // Moving between its own values keeps the choice open.
+    control().props.onChange('auto');
+    root().props.onBlurCapture({ currentTarget: { contains: () => true }, relatedTarget: {} });
+    assert.equal(control().props.value, 'auto');
+    key('Escape');
+    // A click applies at once (DSH's control ignores a click on the value it shows, so the click is read here).
+    click('ask');
+    assert.deepEqual(chosen, ['ask', 'off', 'ask']);
+    view.update({ value: 'ask' });
+    // While a change is on its way the control stays as it is (busy, not disabled); a choice made then goes next.
+    view.update({ busy: true });
+    assert.equal(root().props['aria-busy'], 'true');
+    assert.equal(control().props.disabled, undefined);
+    click('off');
+    assert.deepEqual(chosen, ['ask', 'off', 'ask'], 'held while busy');
+    view.update({ busy: false });
+    assert.deepEqual(chosen, ['ask', 'off', 'ask', 'off'], 'sent once the last change is done');
+    // A change that did not go through: the saved value shows again.
+    answer = Promise.resolve(false);
+    control().props.onChange('auto');
+    key('Enter');
+    assert.equal(control().props.value, 'auto');
+    await settle();
+    assert.equal(control().props.value, 'ask');
+});
+
+test('kit: "4 min ago" stays current: one 30-second clock per window, running only while a time shows and the window is in view', (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    const listeners = new Map();
+    const document = { visibilityState: 'visible', addEventListener: (type, fn) => listeners.set(type, fn), removeEventListener: (type) => listeners.delete(type) };
+    const window = {};
+    const kitA = kitWith({ window, document });
+    const kitB = kitWith({ window, document });
+    kitA.useMinute();
+    kitB.useMinute();
+    const clock = window['dsh-plugin-suite/minute/v1'];
+    assert.ok(clock, 'one clock, on the window, for every suite plugin');
+    let ticks = 0;
+    const off = clock.subscribe(() => { ticks += 1; });
+    const offToo = clock.subscribe(() => {});
+    t.mock.timers.tick(30000);
+    assert.equal(ticks, 1);
+    t.mock.timers.tick(60000);
+    assert.equal(ticks, 3);
+    // Out of view: the clock stops; back in view: it reads the time at once, then goes on.
+    document.visibilityState = 'hidden';
+    listeners.get('visibilitychange')();
+    t.mock.timers.tick(120000);
+    assert.equal(ticks, 3);
+    document.visibilityState = 'visible';
+    listeners.get('visibilitychange')();
+    assert.equal(ticks, 4);
+    t.mock.timers.tick(30000);
+    assert.equal(ticks, 5);
+    // Nothing shows a time any more: no clock runs, nothing listens.
+    off();
+    offToo();
+    t.mock.timers.tick(90000);
+    assert.equal(ticks, 5);
+    assert.equal(listeners.size, 0);
+});
+
+test('kit: the settings form flags a saved value that does not fit, with what fits', () => {
+    const kit = kitWith();
+    const fields = [
+        { name: 'idle', kind: 'number', title: 'Quiet time', hint: '', default: 600, min: 5, max: 86400 },
+        { name: 'waits', kind: 'numbers', title: 'Waits', hint: '', default: [120, 600], min: 0, max: 86400 },
+        { name: 'mode', kind: 'choice', title: 'Mode', hint: '', default: 'a', options: [{ value: 'a', label: 'Auto' }, { value: 'b', label: 'Ask first' }, { value: 'c', label: 'Off' }] },
+        { name: 'resume', kind: 'switch', title: 'Resume', hint: '', default: true },
+        { name: 'fine', kind: 'number', title: 'Fine', hint: '', default: 2, min: 1, max: 10 },
+    ];
+    // What DSH's form shows for values typed into the profile: each stored value as text, wrong ones included.
+    assert.equal(kit.fieldSpec(fields[0]).format(2), '2');
+    assert.equal(kit.fieldSpec(fields[0]).format('soon'), 'soon');
+    assert.equal(kit.fieldSpec(fields[1]).format('120'), '120');
+    assert.equal(kit.fieldSpec(fields[2]).format(7), '7');
+    assert.equal(kit.fieldSpec(fields[3]).format('yes'), 'yes');
+    assert.equal(kit.fieldSpec(fields[3]).format(undefined), '');
+    const snap = {
+        writable: true, saving: false,
+        idle: { text: '2', overridden: true, invalid: false },
+        waits: { text: '1, x', overridden: true, invalid: false },
+        mode: { text: 'maybe', overridden: true, invalid: false },
+        resume: { text: 'yes', overridden: true, invalid: false },
+        fine: { text: '3', overridden: true, invalid: false },
+    };
+    const form = { subscribe: () => () => {}, getSnapshot: () => snap, actions: { edit() {}, resetField() {}, save() {}, discard() {} } };
+    const body = kit.SettingsBody({ form, name: 'X', fields });
+    const row = (name) => elementsOf(body).find((e) => e.props?.['data-suite-setting'] === name);
+    const field = (name) => elementsOf(row(name)).find((e) => e.type === 'SettingsValueField');
+    assert.equal(field('idle').props.invalid, true);
+    assert.equal(field('idle').props.invalidLabel, 'A whole number from 5 to 86400, or empty for the default (600).');
+    assert.equal(field('waits').props.invalid, true);
+    assert.equal(field('fine').props.invalid, false);
+    assert.equal(row('idle').props['data-suite-invalid'], '');
+    assert.equal(row('fine').props['data-suite-invalid'], undefined);
+    assert.match(textIn(row('mode')), /The saved value is not one of the choices\. Choose Auto, Ask first or Off, then save\./);
+    assert.match(textIn(row('resume')), /The saved value is neither on nor off\. Switch it to the one you want, then save\./);
+});
+
+test('kit: "Open X\'s settings" brings the setting the problem is about into view, with the cursor in it', async () => {
+    const { react, mount } = statefulReact();
+    const window = {};
+    const kit = kitWith({ react, window });
+    const opened = [];
+    kit.setNavigation({ openBundle: (name) => opened.push(name) });
+    const focused = [];
+    const fakeRow = (key) => {
+        // As DSH's own field draws it: "Use the default" comes before the input.
+        const children = [
+            { tag: 'button', focus: () => focused.push(`focus ${key} reset button`) },
+            { tag: 'input', focus: () => focused.push(`focus ${key}`) },
+        ];
+        const matches = (child, selector) => selector.split(',').some((one) => one.trim().split(/[:[]/)[0] === child.tag);
+        return {
+            getAttribute: () => key,
+            getClientRects: () => [{}],
+            scrollIntoView: () => focused.push(`scroll ${key}`),
+            // Like the DOM: the first child, in order, that any of the selectors matches.
+            querySelector: (selector) => children.find((child) => matches(child, selector)) ?? null,
+        };
+    };
+    const fakeRoot = { querySelectorAll: () => [fakeRow('mode'), fakeRow('idle')] };
+    const fields = [{ name: 'idle', kind: 'number', title: 'Quiet time', hint: '', default: 600, min: 5, max: 86400 }];
+    const form = { subscribe: () => () => {}, getSnapshot: () => ({ writable: true, saving: false, idle: { text: '2', overridden: true, invalid: false } }), actions: { edit() {}, resetField() {}, save() {}, discard() {} } };
+    // The form is already showing (DSH's Plugins page in view): the button's ask reaches it.
+    const view = mount(kit.SettingsBody, { form, name: 'X', fields });
+    elementsOf(view.tree).find((e) => e.props?.['data-suite-settings']).props.ref.current = fakeRoot;
+    const problem = kit.SettingsProblem({ name: 'X', packageName: 'dsh-plugin-x', problem: { text: 'Quiet time (idle) must be from 5 to 86400 (it is 2)', key: 'idle', live: true } });
+    elementsOf(problem).find((e) => e.type === 'Button' && textIn(e) === 'Open X\'s settings').props.onClick();
+    assert.deepEqual(opened, ['dsh-plugin-x']);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.deepEqual(focused, ['scroll idle', 'focus idle']);
+    view.unmount();
+    // Asked before the form shows: the form takes the ask when it comes, once.
+    kit.openPlugin('dsh-plugin-x', { focus: 'idle' });
+    focused.length = 0;
+    const later = mount(kit.SettingsBody, { form, name: 'X', fields });
+    elementsOf(later.tree).find((e) => e.props?.['data-suite-settings']).props.ref.current = fakeRoot;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.deepEqual(focused, ['scroll idle', 'focus idle']);
+    assert.equal(window['dsh-plugin-suite/focus/v1'].asks.size, 0, 'taken once');
+    later.unmount();
+    assert.equal(window['dsh-plugin-suite/focus/v1'].subs.size, 0, 'a form that left listens no more');
+    // Without DSH's Plugins page, there is no button to press.
+    const bare = kitWith();
+    assert.equal(bare.openPlugin('dsh-plugin-x', { focus: 'idle' }), false);
 });

@@ -393,6 +393,45 @@ ${this.rows}`);
         return this.web;
     }
 
+    /**
+     * DSH's prompts as an open window gets them: its events stream on
+     * /api/remote.mux brings each approval and question-box request, and
+     * $events/result answers one, as the window's own card does. With no
+     * window open, DSH answers an approval "unavailable" at once, so a test
+     * that needs one to wait opens this first.
+     */
+    async prompts() {
+        const web = await this.signIn();
+        const url = new URL('api/remote.mux', web.base);
+        url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+        const socket = new WebSocket(url, { headers: { cookie: web.cookie, origin: web.base.origin } });
+        const asked = [];
+        let clientId;
+        let failure;
+        socket.addEventListener('open', () => socket.send(JSON.stringify({ type: 'open', streamId: 'events', endpoint: '$events', payload: { args: {} } })));
+        socket.addEventListener('error', (event) => { failure = event.message ?? 'socket error'; });
+        socket.addEventListener('message', ({ data }) => {
+            let frame;
+            try { frame = JSON.parse(String(data)); } catch { return; }
+            if (frame.streamId !== 'events') return;
+            if (frame.type === 'error') failure = JSON.stringify(frame.error);
+            const value = frame.type === 'item' ? frame.value : undefined;
+            if (value?.type === 'ready') clientId = value.clientId;
+            else if (value?.type === 'waterfall') asked.push(value);
+        });
+        await waitFor(() => {
+            if (failure) throw new Error(failure);
+            return clientId;
+        }, 'the stand-in window\'s events stream');
+        return {
+            asked,
+            /** The window's prompt for a request that matches. */
+            find: (event, match) => asked.find((a) => a.event === event && match(a.request ?? {})),
+            answer: (prompt, outcome) => this.api('$events/result', { clientId, eventId: prompt.eventId, outcome: { kind: 'result', value: outcome } }),
+            close: () => socket.close(),
+        };
+    }
+
     /** Call a window endpoint (`<namespace>/<method>`) as the window does: `{ ok, value }` or `{ ok: false, error }`. */
     async api(endpoint, args = {}) {
         const web = await this.signIn();

@@ -21,11 +21,26 @@ export function openWork(state) {
     return parts.join(' and ');
 }
 
+/** What a cut-off turn left waiting, for the note: a tool that did not run, a question with no answer. */
+export function leftWords(left) {
+    if (left?.kind === 'approval') {
+        const what = left.tool ? `your ${clip(left.tool, 60)} call` : 'your tool call';
+        const more = left.more ? ` (and ${count(left.more, 'other call')})` : '';
+        return `When DSH stopped, ${what}${more} was waiting for approval, so it did not run: make it again if you still need it, and DSH asks for approval again.`;
+    }
+    if (left?.kind === 'question') {
+        const what = left.question ? `your question in DSH's question box (“${clip(left.question, 140)}”)` : 'your question in DSH\'s question box';
+        return `When DSH stopped, ${what} had no answer yet: ask it again if you still need the answer.`;
+    }
+    return '';
+}
+
 /** The note for a session whose turn DSH cut off when it stopped. */
 export function carryOnNote(end, state, now = Date.now()) {
     const work = openWork(state);
     return [
         `[Autopilot] DSH stopped while you were working: turn ${end.turn} was cut off (its last step was at ${timeWords(end.at, now)}).`,
+        leftWords(end.left),
         'Check what already finished (files, commands, todos), then carry on from where you stopped.',
         work ? `Still open: ${work}.` : '',
         DECISION_HINT,
@@ -64,7 +79,9 @@ export function whyResume(end, now = Date.now()) {
     // DSH closes a running turn as interrupted on its next start, after a quit, a restart or a crash alike.
     const how = end.kind === 'interrupted' ? 'DSH stopped before it finished (a quit, a restart or a crash)' : 'DSH shut down under it';
     // The time is DSH's stamp on the cut-off turn: its last step, not the moment DSH stopped.
-    return `Turn ${end.turn} was cut off: ${how}. Its last step was at ${timeWords(end.at, now)}, and nobody has written in the session since.`;
+    const left = end.left?.kind === 'approval' ? ' A tool was waiting for approval when it stopped; the note says it did not run.'
+        : end.left?.kind === 'question' ? ' Its question in DSH\'s question box had no answer; the note says to ask again.' : '';
+    return `Turn ${end.turn} was cut off: ${how}. Its last step was at ${timeWords(end.at, now)}, and nobody has written in the session since.${left}`;
 }
 
 export function whyNudge(state, idleMs) {
@@ -92,7 +109,7 @@ export function whyGiveUp(tries) {
 }
 
 export function whyHeld(limit) {
-    return `Autopilot already sent ${limit} notes in the last hour, the most it sends; it tries again when the hour has room.`;
+    return `Autopilot already sent ${count(limit, 'note')} in the last hour, the most it sends; it tries again when the hour has room.`;
 }
 
 // ── Questions, for the "Ask first" rule ───────────────────────────────
