@@ -32,6 +32,17 @@
  *   watcher's record of running turns names it, and after the start it gets
  *   its note.
  * - Autopilot's and the watcher's folders are 700 and their files 600.
+ * - A quiet session that Autopilot leaves to the person says why on its row.
+ * - A wrong setting in the profile: Autopilot starts but does no work, and
+ *   its page says which setting, what it must be and where to change it;
+ *   its button opens Autopilot's settings in Plugins (DSH's own form),
+ *   which refuses a value out of range; saving a good one fixes it, the log
+ *   says who did, and the waiting session gets its note.
+ * - Session Watch's own setting in Plugins.
+ * - Session Watch off: Autopilot's page says it needs Session Watch, with a
+ *   button that opens it in Plugins.
+ * - `enabled: false`: the page says Autopilot watches nothing, and how to
+ *   change it.
  *
  *   DSH_BIN=/path/to/@deepseek-ai/dsh/lib/bin.js node plugins/autopilot/test/e2e/run.mjs
  *
@@ -39,8 +50,9 @@
  * autopilot` runs it on each of those and on the installed app's own DSH
  * (under the app's binary as Node). SHOTS=<folder> keeps
  * the window's pictures there (default .e2e/shots/autopilot/<version>);
- * KEEP=1 keeps the throwaway DSH_HOME. Without Playwright the window checks
- * are skipped and said so.
+ * KEEP=1 keeps the throwaway DSH_HOME. Without Playwright the run fails,
+ * unless NO_WINDOW=1 says to run without the window checks (the summary
+ * then says they were skipped).
  */
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -62,6 +74,17 @@ const IDLE = 5;
 const tally = checks();
 const { check, step } = tally;
 const model = await startFakeModel();
+/** The profile's rows for the two plugins, with the e2e's short waits; `off` lists rows switched off in the profile. */
+const rowsWith = ({ off = [], idle = IDLE, enabled = true } = {}) => `- id: autopilot
+${off.includes('autopilot') ? '  disabled: true\n' : ''}  config:
+${enabled ? '' : '    enabled: false\n'}    idleSeconds: ${idle}
+    startDelaySeconds: 1
+    errorRetrySeconds: [2, 2]
+    maxNotesPerHour: 80
+- id: session-watch
+${off.includes('session-watch') ? '  disabled: true\n' : ''}  config:
+    deliveryTimeoutSeconds: 60
+`;
 const run = new DshRun({
     label: 'autopilot',
     bin,
@@ -70,17 +93,15 @@ const run = new DshRun({
         'dsh-plugin-session-watch': join(pluginsDir, 'session-watch'),
         'dsh-plugin-autopilot': join(pluginsDir, 'autopilot'),
     },
-    rows: `- id: autopilot
-  config:
-    idleSeconds: ${IDLE}
-    startDelaySeconds: 1
-    errorRetrySeconds: [2, 2]
-    maxNotesPerHour: 80
-- id: session-watch
-  config:
-    deliveryTimeoutSeconds: 60
-`,
+    rows: rowsWith(),
 });
+/** Start DSH again with other rows (the plugin settings a person would have in the profile). */
+async function restartWith(rows, what) {
+    await run.stop();
+    run.rows = rows;
+    run.writeProfile(model.port);
+    await run.boot(what);
+}
 
 const api = async (method, args = {}) => run.api(`dsh-plugin-autopilot/${method}`, args);
 const state = async () => {
@@ -115,6 +136,7 @@ async function readIntoTurn(sessionId, text) {
 }
 
 let window;
+let pw;
 const ids = {};
 try {
     run.writeProfile(model.port);
@@ -194,6 +216,8 @@ try {
         await idleSession(ids.question);
         check('Off: no note, no question', (await entriesOf(ids.off)).filter((e) => e.kind !== 'rule').length === 0, JSON.stringify(await entriesOf(ids.off)));
         check('a last reply that asks the person something is left alone', (await entriesOf(ids.question)).length === 0, JSON.stringify(await entriesOf(ids.question)));
+        const held = (await state()).sessions.find((x) => x.sessionId === ids.question);
+        check('its row says why Autopilot leaves it to the person', held?.hold === 'waits for you: its last reply asks you something', JSON.stringify(held));
     });
     await step('a goal stopped by a failed turn is started again, and its next round runs', async () => {
         const rearm = await entryReaches(ids.fix, 'rearm', 'started', 1, 40000);
@@ -220,9 +244,9 @@ try {
     });
 
     // ── The page ───────────────────────────────────────────────────────
-    const pw = await findPlaywright();
+    pw = await findPlaywright();
     if (!pw) {
-        console.log('# skipped the window checks: no Playwright (set PLAYWRIGHT_MODULE, or install playwright-core under .e2e/tools)');
+        check('Playwright is here for the window checks (NO_WINDOW=1 runs without them)', process.env.NO_WINDOW === '1', 'install it: npm i --prefix .e2e/tools playwright-core (or set PLAYWRIGHT_MODULE)');
     } else {
         await step('the page', async () => {
             window = await openWindow(run, pw, { entry: 'Autopilot' });
@@ -244,6 +268,8 @@ try {
             check('every entry in the log has its Why line', entries > 5 && whyLines >= entries - 2, `${whyLines} Why lines for ${entries} entries`);
             const icon = await page.locator('[data-autopilot-icon]').first().textContent();
             check('the sidebar icon shows the question waiting', /1/.test(icon ?? ''), icon);
+            const hold = await page.locator(`[data-autopilot-session="${ids.question}"] [data-autopilot-hold]`).textContent().catch(() => '');
+            check('a held session says why on its row', hold === 'Waits for you: its last reply asks you something.', hold);
             await shot(page, shots, 'autopilot-light');
             await shot(page, shots, 'waiting-light', page.locator('[data-autopilot-waiting]'));
             await setDark(page, true);
@@ -290,6 +316,8 @@ try {
             await toggle.click();
             await page.locator('[data-autopilot-header="off"]').waitFor({ timeout: 15000 });
             check('the switch turns Autopilot off', (await state()).paused === true);
+            const ruleLine = await page.locator('[data-autopilot-rule-row="off"]').textContent().catch(() => '');
+            check('while off, the rule line says the rule applies when Autopilot is on', /Applies when Autopilot is on\./.test(ruleLine ?? ''), ruleLine);
             await shot(page, shots, 'off-light', page.locator('[data-autopilot-header]'));
             await page.locator('[data-autopilot-header] [role="switch"]').click();
             await page.locator('[data-autopilot-header="on"]').waitFor({ timeout: 15000 });
@@ -363,6 +391,124 @@ try {
         const modes = [...dirs, ...files].map((p) => `${p.slice(run.home.length + 1)} ${modeOf(p).toString(8)}`);
         check('Autopilot\'s and the watcher\'s folders are 700 and their files 600', dirs.every((d) => modeOf(d) === 0o700) && files.every((f) => modeOf(f) === 0o600), modes.join(', '));
     });
+
+    // ── A wrong setting, fixed in Plugins ──────────────────────────────
+    await restartWith(rowsWith({ idle: 2 }), 'a wrong setting');
+    await waitFor(async () => (await api('state')).ok, 'Autopilot\'s endpoints with a wrong setting', 30000);
+    await step('a wrong setting: Autopilot starts, does no work, and says which setting and what it must be', async () => {
+        const s = await state();
+        check('a wrong value does not stop Autopilot from starting: its state names the setting, the range and the value',
+            s.problem?.text === 'Quiet time before a note (idleSeconds) must be a whole number of seconds from 5 to 86400 (it is 2)' && s.problem?.live === true, JSON.stringify(s.problem));
+        ids.waiting = await run.newSession(`E2E:todos ${todos(['Sort the inbox', 'in_progress'])}\n#note=progress`, 'Inbox');
+        await idleSession(ids.waiting);
+        await sleep(6000);
+        check('while a setting is wrong, Autopilot does no work', (await entriesOf(ids.waiting)).length === 0, JSON.stringify(await entriesOf(ids.waiting)));
+        const refused = await api('setPaused', { paused: true });
+        check('its page\'s actions say why they cannot go', refused.ok === false && /waiting for a setting to be fixed/.test(refused.error?.message ?? ''), JSON.stringify(refused));
+    });
+    if (pw) {
+        await step('a wrong setting, in the window: the page says what to change and opens Autopilot\'s settings in Plugins, which fix it', async () => {
+            window = await openWindow(run, pw, { entry: 'Autopilot' });
+            const { page } = window;
+            await page.getByRole('button', { name: 'Autopilot', exact: true }).first().click();
+            const problem = page.locator('[data-suite-trouble="setting"]');
+            await problem.waitFor({ state: 'visible', timeout: 20000 });
+            const words = (await problem.innerText()).replace(/\n+/g, ' ');
+            check('the page says which setting is wrong, what it must be, and where to change it',
+                /^Autopilot is waiting for a setting to be fixed\. Quiet time before a note \(idleSeconds\) must be a whole number of seconds from 5 to 86400 \(it is 2\)\. Change it in Autopilot's settings in Plugins\. Autopilot starts working again as soon as you save\./.test(words), words);
+            await shot(page, shots, 'setting-light');
+            await setDark(page, true);
+            await shot(page, shots, 'setting-dark');
+            await setDark(page, false);
+            await page.getByRole('button', { name: 'Open Autopilot\'s settings' }).click();
+            const form = page.locator('[data-suite-settings="dsh-plugin-autopilot"]');
+            await form.waitFor({ state: 'visible', timeout: 20000 });
+            const labels = await form.locator('label').allTextContents();
+            check('its button opens Autopilot\'s settings in Plugins, in DSH\'s own form', labels.includes('Quiet time before a note, in seconds') && labels.includes('Waits before each try after an error, in seconds') && (await form.getByRole('switch', { name: 'Resume after a restart' }).count()) === 1, labels.join(' | '));
+            const field = page.getByLabel('Quiet time before a note, in seconds');
+            await field.fill('3');
+            const save = form.getByRole('button', { name: 'Save' });
+            const refusedWords = await page.locator('[data-suite-setting="idleSeconds"]').innerText();
+            check('the form will not save a value out of range, and says what fits', await save.isDisabled() && /A whole number from 5 to 86400, or empty for the default \(600\)\./.test(refusedWords), refusedWords);
+            await shot(page, shots, 'settings-light');
+            await setDark(page, true);
+            await shot(page, shots, 'settings-dark');
+            await setDark(page, false);
+            await field.fill(String(IDLE));
+            await save.click();
+            const fixed = await waitFor(async () => {
+                const r = await api('state');
+                return r.ok && !r.value.problem ? r.value : null;
+            }, 'the setting to be fixed', 20000);
+            const entry = fixed.log.find((e) => e.kind === 'settings');
+            check('saving a good value fixes it at once, and the log says who did', fixed.settings.idleSeconds === IDLE && entry?.text === 'Settings fixed: Autopilot is working again' && entry?.by === 'you' && entry?.why === 'You saved Quiet time before a note in Plugins.', JSON.stringify(entry));
+            const note = await entryReaches(ids.waiting, 'nudge', 'delivered', 1, 30000);
+            check('once fixed, the session that waited gets its note', note.state === 'delivered', JSON.stringify(note));
+            // Session Watch's own setting, on its page in Plugins: back to the plugin list, then its card.
+            const viewWatch = page.getByRole('button', { name: 'View Session Watch' });
+            await page.getByRole('button', { name: 'Back to plugins' }).click();
+            await viewWatch.waitFor({ state: 'visible', timeout: 15000 });
+            await viewWatch.click();
+            const watchForm = page.locator('[data-suite-settings="dsh-plugin-session-watch"]');
+            await watchForm.waitFor({ state: 'visible', timeout: 20000 });
+            const watchField = await watchForm.getByLabel('How long a message may wait to be read, in seconds').inputValue();
+            check('Session Watch\'s page in Plugins has its one setting, with the profile\'s value', watchField === '60', watchField);
+            await shot(page, shots, 'watch-settings-light');
+            const ours = window.errors.filter((text) => /autopilot|session-watch/i.test(text));
+            check('no errors from the suite in the window', ours.length === 0, ours.join('\n'));
+        }, async () => {
+            if (window?.page) await shot(window.page, shots, 'failed-settings');
+        });
+        await window?.browser?.close().catch(() => {});
+        window = undefined;
+    }
+
+    // ── Session Watch off ──────────────────────────────────────────────
+    await restartWith(rowsWith({ off: ['session-watch'] }), 'Session Watch off');
+    await step('Session Watch off: Autopilot cannot start, and its page says what it needs', async () => {
+        const r = await api('state');
+        check('without Session Watch, Autopilot\'s host half does not run', r.ok === false, JSON.stringify(r));
+        if (!pw) return;
+        window = await openWindow(run, pw, { entry: 'Autopilot' });
+        const { page } = window;
+        await page.getByRole('button', { name: 'Autopilot', exact: true }).first().click();
+        const trouble = page.locator('[data-suite-trouble="watch-off"]');
+        await trouble.waitFor({ state: 'visible', timeout: 20000 });
+        const words = (await trouble.innerText()).replace(/\n+/g, ' ');
+        check('the page says Autopilot needs Session Watch, and what to do, with no HTTP status',
+            /^Autopilot needs Session Watch, which is not running\. Switch Session Watch on in Plugins\. This page comes back by itself once it runs\./.test(words) && !/404|HTTP|transport/.test(words), words);
+        await shot(page, shots, 'watch-off-light');
+        await setDark(page, true);
+        await shot(page, shots, 'watch-off-dark');
+        await setDark(page, false);
+        await trouble.getByRole('button', { name: 'Open Session Watch in Plugins' }).click();
+        await page.getByText('dsh-plugin-session-watch', { exact: true }).first().waitFor({ state: 'visible', timeout: 20000 });
+        check('its button opens Session Watch in Plugins', true);
+        await shot(page, shots, 'watch-off-plugins-light');
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-watch-off');
+    });
+    await window?.browser?.close().catch(() => {});
+    window = undefined;
+
+    // ── enabled: false ─────────────────────────────────────────────────
+    await restartWith(rowsWith({ enabled: false }), 'enabled: false');
+    await waitFor(async () => (await api('state')).ok, 'Autopilot\'s endpoints with enabled: false', 30000);
+    await step('enabled: false: Autopilot watches nothing, and its page says so and how to change it', async () => {
+        const s = await state();
+        check('with enabled: false Autopilot is loaded but idle', s.enabled === false && !s.problem, JSON.stringify({ enabled: s.enabled, problem: s.problem }));
+        if (!pw) return;
+        window = await openWindow(run, pw, { entry: 'Autopilot' });
+        const { page } = window;
+        await page.getByRole('button', { name: 'Autopilot', exact: true }).first().click();
+        const header = page.locator('[data-autopilot-header]');
+        await header.waitFor({ state: 'visible', timeout: 20000 });
+        const words = (await header.innerText()).replace(/\n+/g, ' ');
+        check('the page says it watches nothing, and how to change that', /Autopilot is switched off in DSH's profile \(enabled: false in its entry in cordis\.patch\.yml\), so it watches nothing\. To use it, set enabled to true there and restart DSH\./.test(words), words);
+        await shot(page, shots, 'disabled-light');
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-disabled');
+    });
 } catch (error) {
     check('the run finished', false, error?.stack ?? error);
     if (window?.page) await shot(window.page, shots, 'failed').catch(() => {});
@@ -375,5 +521,5 @@ try {
     if (warnings.length) console.log(`# DSH said about the suite:\n${warnings.slice(-20).map((l) => `#   ${l}`).join('\n')}`);
     run.cleanup();
 }
-console.log(`\n# DSH ${version}: ${tally.passed} passed, ${tally.failed} failed`);
+console.log(`\n# DSH ${version}: ${tally.passed} passed, ${tally.failed} failed${pw ? '' : ', window checks skipped (no Playwright)'}`);
 process.exit(tally.failed ? 1 : 0);

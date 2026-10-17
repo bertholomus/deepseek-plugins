@@ -3,7 +3,8 @@
 The shared watcher behind Autopilot, Decisions and Agent Terminals. It
 reads every session's state once, from DSH's own events, and serves it to
 the other suite plugins, so they never read session logs or poll on their
-own. It has no page of its own: you see it through the plugins that use it.
+own. It has no page of its own: you see it through the plugins that use
+it, and its one setting is on its page in Plugins.
 
 ## What it knows about every session
 
@@ -45,12 +46,16 @@ when a plugin needs the reply text of a session that is not loaded.
 
 ## Settings
 
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `deliveryTimeoutSeconds` | `600` | How long a message may wait to be read into a turn before its delivery is reported as not delivered (10 to 86400). |
+Plugins → Session Watch, in DSH's own settings form: type a value, then
+**Save**; it applies at once. The form will not save a value out of range.
 
-A value out of range stops the plugin with a message that names the setting
-and the allowed range.
+| Setting | Default | Range | What it does |
+| --- | --- | --- | --- |
+| `deliveryTimeoutSeconds` (How long a message may wait to be read) | `600` | 10 to 86400 seconds | How long a message from Autopilot, Decisions or Agent Terminals may wait to be read into a turn before it is reported as not delivered. |
+
+A wrong value set in the profile never stops the watcher, which every suite
+plugin needs: it uses the default and Autopilot's page says which setting to
+fix.
 
 ## Files
 
