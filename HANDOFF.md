@@ -4,15 +4,16 @@ _For the two accounts building these plugins only (see AGENTS.md). A session run
 
 # Suite v1 (branch suite/v1): the DSH Plugin Suite
 
-Updated: 2026-10-17 12:40 PM PDT by A (gmail), thread "Suite v1 builder"
+Updated: 2026-10-17 12:57 PM PDT by A (gmail), thread "Suite v1 builder"
 Branch: `suite/v1` in the worktree `~/Projects/dsh-plugin-suite` (remote `gh` = github.com/bertholomus/deepseek-plugins, private). Main is at 3290a42 (Agent Terminals' judged commit, a fast-forward). Tags: `autopilot-v1.0.0` and `session-watch-v1.0.0` at ea10517, `decisions-v1.0.0` at 15d8bf0, `agent-terminals-v1.0.0` at 3290a42.
 Goal: six plugins (Autopilot, Decisions, Agent Terminals, Proof, Canon, Recall) per `briefs/SUITE-BRIEF.md`, each judged >= 8.5/10 (no criterion below 8) by a fresh judge in DSH Test, merged to `main` and tagged `<plugin>-v1.0.0`, then `suite-v1.0.0`. Test only in DSH Test, never the live DSH.
 
 ## Doing now
-- Proof: tuned on the fourth hold-out (c33e2dc; all five tuned sets 0% false flags, 100% caught; `npm test` 661 pass, 1 skipped). Real-DSH e2e re-running on the three builds (log: scratchpad `proof-e2e-4.txt`; 88 checks a build).
-- Fifth hold-out (OPEN-QUESTIONS #23): four fresh subagent writers write `test/fixtures/proof/holdout5/{honest,no-claim,unbacked,contradicted}.json` (ids wh-/wn-/wu-/wc-, 40/20/25/25) without seeing Proof's rules or the corpora. Unbacked is in; three still writing. Do NOT read the cases before the measurement.
+- Proof judge round 1 (fresh subagent judge, brief `scratchpad/judge-proof-r1.md` = the AT r3 template with Proof's details) at commit 550c532: scorecard `review/proof-round-1.md`, pictures `review/proof-round-1/`, a SCOREBOARD row, DSH Test instance `suite-proof-j1`, judge folder `~/Projects/dsh-plugin-suite-judge/proof-r1`.
+- Canon and Recall are being built by two subagent builders (OPEN-QUESTIONS #25) in this worktree, on their own paths only (`plugins/canon/`, `test/canon*`, `test/fixtures/canon/`; `plugins/recall/`, `test/recall*`, `test/fixtures/recall/`, `scripts/recall-bench.mjs`). Each keeps `briefs/build-<plugin>.md` (state, picks, next steps) and commits only green states. Their shared rules: `scratchpad/brief-builder-common.md` (DSH Test only, fingerprint around every e2e, no branding, no trailers, push to `gh` only).
 
 ## Done (newest first)
+- 12:54 PM PDT: **Proof's fifth hold-out measured once** (550c532): 10.0% false flags, 82.0% caught, 19 of 25 contradicted, rules frozen at c33e2dc; meets both floors; not tuned on. Proof real-DSH e2e 88/88 on all three builds at c33e2dc (12:44 PM).
 - 12:40 PM PDT: Proof tuned on the fourth hold-out with general rules only (c33e2dc): searches said to come back empty, quoted claims, "a fixed X", commands said to run clean, two kinds of run in one sentence, previews and the place a change was applied, health paths, clearing a bar, more runners' test counts, benchmark tools' comparisons, commands a deploy ran itself, install lines after a publish, write-up prompts, look-only turns leaning on the turn before, test runners as subjects, registry reads that must show the claimed version. The fourth hold-out moved to `seen4/` and joins the tests at the dev bar. README: the fifth hold-out will be the honest figure.
 - 12:12 PM PDT: Proof's fourth hold-out measured once at fcc4423: 16.7% false flags, 88.0% caught, 23 of 25 contradicted (7c9a225).
 - 11:58 AM PDT: Proof's real-DSH e2e 88/88 on 0.2.0-rc.2, 0.2.1-rc.1 and the app's 0.2.1-rc.2 (9d13a9e).
@@ -65,11 +66,10 @@ Goal: six plugins (Autopilot, Decisions, Agent Terminals, Proof, Canon, Recall) 
 - 8:58 PM: first check: suite/v1 at e0bdda6; DSH Test stopped; live DSH pid 687, `cordis.patch.yml` sha256 e04a0449ecfe8534.
 
 ## Next steps (in order)
-1. When all four hold-out-5 writers are back: validate by script only (`scratchpad/validate-h4.mjs` with prefixes wh-/wn-/wu-/wc-: counts 40/20/25/25, unique ids, none shared with the 600 earlier ids, no banned names), `git mv`/`mv holdout5 holdout`, then measure ONCE: `node scripts/proof-corpus.mjs` with the rules frozen. Record the row in the README, PROGRESS and the commit before any change. Floors: <= 10% false flags, >= 80% caught. Miss: tune with general rules, move it to `seen5/`, sixth hold-out (#23) while Canon and Recall go ahead.
-2. Proof judge round 1 (fresh judge, `briefs/JUDGE.md`, template `scratchpad/judge-at-r3.md`; DESIGN.md open questions wait on Albert). Pass: gate the other plugins' e2e at the judged commit, fast-forward main, tag `proof-v1.0.0`.
-3. Canon, then Recall (designs in `briefs/PLAN.md`; DSH hooks in `research/turn-hooks.md`, `research/session-files.md`). Each: host half, unit tests, page, real-DSH e2e on three builds, README, judge.
-4. If time: Agent Terminals' and Decisions' round-3 minor findings.
-5. After all six: suite README, `suite-v1.0.0`, final fingerprint, `DONE:` line.
+1. Proof judge result: pass (>= 8.5, none below 8) → gate Autopilot, Decisions and Agent Terminals e2e at the judged commit (as at 11:08 AM), fast-forward main to it (`git push gh 550c532:refs/heads/main`, no force), tag `proof-v1.0.0`, push the tag, one reply in the thread. Not yet → fix the findings on suite/v1 (general rules only for reading; the fifth hold-out stays untouched unless a sixth is written per #23), new round with a fresh judge.
+2. Canon and Recall: when a builder reports done, check its work (npm test, `node scripts/e2e.mjs <plugin>`, README, DESIGN.md "Before you push"), then a fresh judge per plugin (copy `scratchpad/judge-proof-r1.md`, change plugin, commit, folder, instance `suite-<plugin>-j1`).
+3. If time: Agent Terminals' and Decisions' round-3 minor findings.
+4. After all six: suite README, `suite-v1.0.0`, final fingerprint, `DONE:` line.
 
 ## Open questions / blockers
 - See `OPEN-QUESTIONS.md` (one line each: question, pick, why). No blockers.
