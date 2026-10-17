@@ -493,7 +493,11 @@ test('check: one at a time, and at most the hour\'s budget; the rest wait their 
 test('check: one that takes too long is stopped and unclear; turns that end badly say why', async () => {
     const b = bench();
     const claim = claimOf(b.dsh.sessions.s.events, 'unbacked');
-    await b.verifier.request('s', claim.id);
+    const asked = await b.verifier.request('s', claim.id);
+    // Its minutes are on it from the moment it runs, before its thread is open.
+    assert.equal(asked.state, 'running');
+    assert.equal(asked.minutes, 5);
+    assert.equal(asked.checkSessionId, undefined);
     await settle();
     const check = b.verifier.data.checks[`s#${claim.id}`];
     // The setting changes while it runs: it is still given the minutes it started with.

@@ -8,40 +8,52 @@
  * bridge, Session Watch and Proof, and a scripted model (./fake-model.mjs)
  * that plays the agent: its turns run real `node --test`, `ls` and `write`
  * calls in the bench's workspace. The check model is a second model of the
- * same scripted provider (`fake-check`), so every request a check makes is
- * seen, and DSH's default model stays `fake-model`.
+ * same scripted provider (`fake-check`, named "Fake Check", with a low and a
+ * high effort), so every request a check makes is seen, and DSH's default
+ * model stays `fake-model`.
  *
- * - The browser half is served and parses; the endpoints answer, and refuse
- *   bad input in words.
+ * - The browser half is served and parses; the endpoints answer (the check
+ *   model named as DSH's model menu names it), and refuse bad input in words.
  * - Claims: a test count the run shows (quiet), a summary leaning on the turn
  *   before (quiet), "All tests pass" with no test run (flagged), "All tests
  *   pass" after a failing run (contradicted), "Deployed to staging" after an
  *   `ls` (flagged), a reply that only asks (no claim).
- * - The window: each flag on its turn, with its words; none where the turn
- *   shows its claims; light and dark pictures.
- * - A check from the flag: a new thread titled "Proof check · …", read-only
- *   before its first turn (DSH's read-only file policy and approvals that
- *   never ask, in its own log), on the check model for that thread only (the
- *   default model unchanged), offered only tools that read or run; Proof's
- *   guard refuses a commit, the file policy stops a write, and the checked
- *   session gets nothing. Its NOT VERIFIED and reason on the flag and the
- *   page; the check thread's own note; the way back.
- * - A check from the page's ledger (VERIFIED); By itself, set in Plugins,
- *   checks a new flagged claim and leaves the older ones; a check that runs
- *   past its minutes is stopped (its model request closed) and is unclear;
- *   past the hour's limit a check waits, and switching checks Off ends it.
+ * - The window: each flag on its turn, with its words, inline code drawn as
+ *   code and nothing said twice; none where the turn shows its claims; light
+ *   and dark pictures.
+ * - A check from the flag: the focus goes to the check's line; a new thread
+ *   titled "Proof check · …", read-only before its first turn (DSH's
+ *   read-only file policy and approvals that never ask, in its own log), on
+ *   the check model at low effort for that thread only (the default model
+ *   unchanged), offered only tools that read or run; Proof's guard refuses a
+ *   commit, the file policy stops a write, and the checked session gets
+ *   nothing. Its NOT VERIFIED heads the flag, with the reason on its line;
+ *   the check thread's own note, with no way into itself; the way back.
+ * - A check from the page's ledger (VERIFIED): the focus goes to its line,
+ *   and the claim stays in view with its answer; its flag is then headed
+ *   "Verified by an independent check", and the claim is counted apart on
+ *   the ledger, its session's row, the page's header and the exports.
+ * - While a check runs, its thread says above the message box what it
+ *   checks; its limit changed meanwhile, it still stops at the minutes it
+ *   was given, and says so.
+ * - By itself, set in Plugins, checks a new flagged claim and leaves the
+ *   older ones; past the hour's limit a check waits, and switching checks
+ *   Off ends it; the page then offers Proof's settings.
  * - The page: header, sessions, ledger filter, what the turn ran, the
- *   checks, What happened; export as Markdown, CSV and JSON (real
- *   downloads) and Copy; a narrow window.
+ *   checks (newest first, their times in one column), What happened; export
+ *   as Markdown, CSV and JSON (real downloads) and Copy (logged as a copy);
+ *   a narrow window.
  * - Its settings in Plugins (DSH's own form): a choice saved and noted, a
  *   value out of range refused.
- * - A restart under a running check: the check settles, in words.
+ * - A restart under a running check: the check settles at once, saying DSH
+ *   restarted while it ran.
  * - Proof switched off and on in Plugins: DSH reports no failure; its entry
  *   and flags go and come back.
  * - Without Session Watch, the page still follows new claims.
  * - A wrong setting: Proof starts, flags nothing, refuses checks, and its
  *   page says which setting; fixed through the form.
- * - `enabled: false`: idle, and its page says so.
+ * - `enabled: false`: idle, and its page says so; a session made and one
+ *   used while it was off are listed again once it is back on.
  * - Its folder is 700 and its files 600.
  *
  *   DSH_BIN=/path/to/@deepseek-ai/dsh/lib/bin.js node plugins/proof/test/e2e/run.mjs
@@ -119,13 +131,18 @@ const run = new DshRun({
 });
 run.rows = rowsWith();
 
-/** The bench's profile, with a second model in the scripted provider for the check threads. */
+/**
+ * The bench's profile, with a second model in the scripted provider for the
+ * check threads: one with reasoning efforts (low and high), so a check's
+ * request shows the effort Proof asked for.
+ */
 function writeProfile() {
     run.writeProfile(model.port);
     const file = join(run.profile, 'cordis.patch.yml');
     const text = readFileSync(file, 'utf8');
     const line = '            reasoningEfforts: false\n';
-    writeFileSync(file, text.replace(line, `${line}          - id: fake-check\n            name: Fake Check\n            contextWindow: 131072\n${line}`));
+    const checkModel = '          - id: fake-check\n            name: Fake Check\n            contextWindow: 131072\n            reasoningEfforts:\n              low: low\n              high: high\n';
+    writeFileSync(file, text.replace(line, `${line}${checkModel}`));
 }
 /** DSH's default model, as its profile keeps it. */
 const defaultModel = () => /- id: agent-default-model\n(?: {2}.*\n)*/.exec(readFileSync(join(run.profile, 'cordis.patch.yml'), 'utf8'))?.[0] ?? '';
@@ -208,8 +225,9 @@ try {
     });
     await step('the endpoints answer, and refuse bad input in words', async () => {
         const s = await pageState();
-        check('the state endpoint answers: on, flags on, checks when you press Check, on the check model, nothing yet',
+        check('the state endpoint answers: on, flags on, checks when you press Check, on the check model (named as DSH\'s model menu names it), nothing yet',
             s.enabled === true && !s.problem && s.flags === true && s.verifier.mode === 'ask' && s.verifier.model === 'fake-check' && s.verifier.provider === 'fake'
+            && s.verifier.modelName === 'Fake Check' && s.verifier.providerName === 'Fake'
             && s.verifier.minutes === 1 && s.verifier.perHour === PER_HOUR && s.sessions.length === 0 && s.checks.length === 0,
             json({ enabled: s.enabled, problem: s.problem, flags: s.flags, verifier: s.verifier, sessions: s.sessions.length }));
         const noClaim = await api('check', { sessionId: 'session-nobody', claimId: '' });
@@ -293,10 +311,12 @@ try {
         await page.getByRole('button', { name: 'Proof', exact: true }).first().click();
         await page.locator('[data-proof-page]').waitFor({ state: 'visible', timeout: 20000 });
     };
+    /** A session's ledger on the page, once it has read the session's claims. */
     const openLedger = async (page, sessionId) => {
         await page.locator(`[data-proof-session="${sessionId}"]`).click();
         const ledger = page.locator(`[data-proof-ledger="${sessionId}"]`);
         await ledger.waitFor({ state: 'visible', timeout: 15000 });
+        await ledger.locator('[data-proof-said]').waitFor({ state: 'attached', timeout: 15000 });
         return ledger;
     };
     /** A session's chat, opened from its ledger's "Open the session". */
@@ -307,6 +327,25 @@ try {
         await page.locator('[data-proof-page]').waitFor({ state: 'detached', timeout: 15000 }).catch(() => {});
     };
     const flagsShown = (page) => page.locator('[data-proof-flag]').filter({ visible: true });
+    /** Where the window's focus is: the element, and the check line, claim, flag and ledger it is in. */
+    const focusIn = (page) => page.evaluate(() => {
+        const el = document.activeElement;
+        const near = (selector, attr) => el?.closest?.(selector)?.getAttribute(attr) ?? null;
+        return {
+            tag: el?.tagName ?? '',
+            check: near('[data-proof-check]', 'data-proof-check'),
+            claim: near('[data-proof-claim]', 'data-proof-claim'),
+            flag: near('[data-proof-flag]', 'data-proof-flag'),
+            ledger: near('[data-proof-ledger]', 'data-proof-ledger'),
+        };
+    });
+    /** The focus once it is on a check's line (or where it is after 10 s). */
+    const focusOnLine = (page) => waitFor(async () => {
+        const at = await focusIn(page);
+        return at.check ? at : null;
+    }, 'the focus on the check\'s line', 10000, 100).catch(() => focusIn(page));
+    /** Words without Markdown's backquotes and with one space, to tell whether two say the same. */
+    const bare = (text) => String(text ?? '').replace(/`/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
     if (pw) {
         await step('each flag on its turn, with its words; none where the turn shows its claims', async () => {
             window = await openWindow(run, pw, { entry: 'Proof' });
@@ -331,9 +370,17 @@ try {
             const broken = flagsShown(page).first();
             await broken.waitFor({ state: 'visible', timeout: 20000 });
             const brokenText = (await broken.innerText()).replace(/\n+/g, ' ');
-            check('a claim the turn\'s own output contradicts says so, and quotes what the turn shows',
-                (await broken.getAttribute('data-proof-flag')) === 'contradicted' && /Proof · This turn's own output says otherwise/.test(brokenText) && /What the turn shows: /.test(brokenText) && brokenText.includes('“All tests pass.”'),
-                brokenText);
+            check('a claim the turn\'s own output contradicts says so, with what the turn shows',
+                (await broken.getAttribute('data-proof-flag')) === 'contradicted' && /Proof · This turn's own output says otherwise/.test(brokenText) && brokenText.includes('“All tests pass.”')
+                && bare(brokenText).includes(bare(claims.broken.why)), brokenText);
+            // The evidence the why already quotes is not given again; inline code is drawn as code, without its backquotes.
+            const fresh = claims.broken.evidence.filter((e) => !bare(claims.broken.why).includes(bare(e)));
+            const shows = /What the turn shows: (.*)$/.exec(brokenText)?.[1] ?? '';
+            const codeSpans = (`${claims.broken.why} ${fresh.join(' ')}`.match(/`[^`\n]+`/g) ?? []).length;
+            check('it says each thing once: "What the turn shows" only for what the why does not already give; commands drawn as code',
+                (fresh.length === 0 ? !brokenText.includes('What the turn shows') : fresh.every((e) => bare(shows).includes(bare(e))))
+                && !brokenText.includes('`') && (await broken.locator('code.dshpf-code').count()) === codeSpans,
+                `${brokenText} | why: ${claims.broken.why} | evidence: ${json(claims.broken.evidence)}`);
             await shot(page, shots, 'flag-contradicted-light', broken);
             await setDark(page, true);
             await shot(page, shots, 'flag-contradicted-dark', broken);
@@ -361,25 +408,37 @@ try {
             const deploy = flagsShown(page).first();
             await deploy.waitFor({ state: 'visible', timeout: 20000 });
             await deploy.getByRole('button', { name: 'Check it', exact: true }).click();
+            const focused = await focusOnLine(page);
+            check('after Check it the focus goes to the check\'s line in the flag, not back to the top of the page',
+                focused.check !== null && focused.claim === claims.deploy.id && focused.flag !== null, json(focused));
             const done = await settled(ids.deploy, claims.deploy.id, 40000);
-            check('the check settles as not verified, with the check model\'s reason', done.state === 'not-verified' && done.reason === 'no deploy command or staging address appears in the workspace.', json(done));
+            check('the check settles as not verified, with the check model\'s reason; it ran on the check model as DSH names it, at low effort, with its minutes',
+                done.state === 'not-verified' && done.reason === 'no deploy command or staging address appears in the workspace.'
+                && done.model === 'Fake Check from Fake' && /^low$/i.test(done.effort ?? '') && done.minutes === 1, json(done));
             const line = deploy.locator('[data-proof-check]');
             await waitFor(async () => (await line.getAttribute('data-proof-check')) === 'not-verified', 'the flag to show the verdict', 15000, 300);
             const lineText = (await line.innerText()).replace(/\n+/g, ' ');
-            check('the flag shows the verdict and the reason, with the way to the check, and offers to check again',
-                /not verified/.test(lineText) && lineText.includes('no deploy command or staging address appears in the workspace') && (await line.getByRole('button', { name: 'Open the check' }).count()) === 1
-                && (await deploy.getByRole('button', { name: 'Check again', exact: true }).count()) === 1, lineText);
+            const deployText = (await deploy.innerText()).replace(/\n+/g, ' ');
+            check('the verdict heads the flag, said once; its line gives the reason and the way to the check, and it offers to check again',
+                (await deploy.getAttribute('data-proof-flag')) === 'not-verified' && deployText.startsWith('Proof · Not verified by an independent check')
+                && deployText.match(/not verified/gi)?.length === 1 && lineText.startsWith('no deploy command or staging address appears in the workspace.')
+                && (await line.getByRole('button', { name: 'Open the check', exact: true }).count()) === 1
+                && (await deploy.getByRole('button', { name: 'Check again', exact: true }).count()) === 1, deployText);
+            check('the focus is still on the check\'s line now that it answered', (await focusIn(page)).claim === claims.deploy.id && (await focusIn(page)).check === 'not-verified', json(await focusIn(page)));
             await shot(page, shots, 'flag-checked-light', deploy);
             await setDark(page, true);
             await shot(page, shots, 'flag-checked-dark', deploy);
             await setDark(page, false);
             // The check thread: its own note, and the way back.
-            await line.getByRole('button', { name: 'Open the check' }).click();
+            await line.getByRole('button', { name: 'Open the check', exact: true }).click();
             const note = page.locator('[data-proof-flag="check"]').filter({ visible: true }).first();
             await note.waitFor({ state: 'visible', timeout: 20000 });
             const noteText = (await note.innerText()).replace(/\n+/g, ' ');
-            check('the check thread says what it checks and from where, that it cannot write, and how it ended',
-                /Proof · An independent check/.test(noteText) && noteText.includes('This thread checks “Deployed to staging.” from turn 1 of “Staging deploy”.') && /nothing it runs can write a file/.test(noteText) && /not verified/.test(noteText), noteText);
+            check('the check thread says what it checks and from where, that it cannot write, and how it ended, with no way into itself',
+                /Proof · An independent check/.test(noteText) && noteText.includes('This thread checks “Deployed to staging.” from turn 1 of “Staging deploy”. It can read and run commands, but nothing it runs can write a file.')
+                && /not verified\s*no deploy command or staging address appears in the workspace\./.test(noteText)
+                && (await note.getByRole('button', { name: 'Open the check', exact: true }).count()) === 0, noteText);
+            check('once its check has ended, nothing sits above the check thread\'s message box', (await page.locator('[data-proof-dock]').count()) === 0);
             check('the check thread\'s own replies are not judged: no flag in it', (await page.locator('[data-proof-flag="unbacked"], [data-proof-flag="contradicted"]').filter({ visible: true }).count()) === 0);
             await shot(page, shots, 'check-thread-light');
             await setDark(page, true);
@@ -412,6 +471,10 @@ try {
         check('every request of the check went to the check model, offering only tools that read or run (and DSH\'s own subagent tool)',
             asked.length >= 4 && asked.every((r) => r.model === 'fake-check') && offered.includes('bash') && offered.every((t) => allowed.has(t) || t === 'subagent') && !offered.includes('write') && !offered.includes('edit'),
             json({ models: asked.map((r) => r.model), offered }));
+        const agentAsked = model.requests.filter((r) => !r.anchor.includes('Proof check.'));
+        check('every request of the check asked for low effort (the lowest the check model offers); the sessions\' own requests asked for none',
+            asked.every((r) => r.effort === 'low') && agentAsked.length > 0 && agentAsked.every((r) => r.effort === undefined),
+            json({ check: asked.map((r) => r.effort), sessions: [...new Set(agentAsked.map((r) => String(r.effort)))] }));
         if (offered.includes('subagent')) {
             check('the guard refused DSH\'s subagent tool in the check thread, saying why', JSON.stringify(run.savedEvents(c.checkSessionId)).includes('Proof\'s check threads only read and run commands, so subagent is refused.'));
         }
@@ -430,18 +493,47 @@ try {
             const ledger = await openLedger(page, ids.subtract);
             const row = ledger.locator(`[data-proof-claim="${claims.subtract.id}"]`);
             await row.getByRole('button', { name: 'Check', exact: true }).click();
-            const said = await waitFor(async () => (await ledger.locator('[data-proof-said]').textContent()) || null, 'the page to say the check started', 15000, 200).catch(() => '');
-            check('the page says the check started', said === 'Checking “All tests pass.” in a fresh read-only thread.', said);
+            const focused = await focusOnLine(page);
+            check('after Check the focus goes to the claim\'s check line in the ledger', focused.check !== null && focused.claim === claims.subtract.id && focused.ledger === ids.subtract, json(focused));
             const done = await settled(ids.subtract, claims.subtract.id, 40000);
             check('the check settles as verified, with the reason', done.state === 'verified' && done.reason === 'the calculator tests pass when run again (2 of 2).', json(done));
-            await waitFor(async () => (await row.locator('[data-proof-check]').getAttribute('data-proof-check')) === 'verified', 'the ledger row to show verified', 15000, 300);
-            check('the ledger row shows verified, with the way to the check', /verified/.test(await row.innerText()) && (await row.getByRole('button', { name: 'Open the check' }).count()) === 1, await row.innerText());
+            await waitFor(async () => (await row.getAttribute('data-proof-state')) === 'verified', 'the ledger row to show verified', 15000, 300);
+            const rowText = (await row.innerText()).replace(/\n+/g, ' ');
+            const lineText = (await row.locator('[data-proof-check]').innerText()).replace(/\n+/g, ' ');
+            const said = (await ledger.locator('[data-proof-said]').textContent()) ?? '';
+            check('the claim stays where Check was pressed, its one tag now verified, its line the reason and the way to the check; nothing said twice',
+                rowText.match(/verified/g)?.length === 1 && lineText.startsWith('the calculator tests pass when run again (2 of 2).') && !rowText.includes('No test ran in this turn.')
+                && (await row.getByRole('button', { name: 'Open the check', exact: true }).count()) === 1 && said === '', `${rowText} | said: ${said}`);
+            check('the focus stayed on its line', (await focusIn(page)).claim === claims.subtract.id, json(await focusIn(page)));
             const checksCard = page.locator('[data-proof-checks]');
             await waitFor(async () => (await checksCard.getAttribute('data-proof-checks')) === '2', 'Independent checks to list both checks', 15000, 300).catch(() => {});
-            check('Independent checks lists both checks', (await checksCard.getAttribute('data-proof-checks')) === '2' && /not verified/.test(await checksCard.innerText()) && /you asked/.test(await checksCard.innerText()), await checksCard.innerText());
-            check('What happened has each check asked for and its answer', await historyHas(/^Check asked for: “Deployed to staging\.”/) && await historyHas(/^Not verified: “Deployed to staging\.”/) && await historyHas(/^Verified: “All tests pass\.”/));
+            const checkRows = checksCard.locator('[data-proof-check-row]');
+            check('Independent checks lists both checks, newest first, each said once', (await checksCard.getAttribute('data-proof-checks')) === '2'
+                && json(await checkRows.evaluateAll((els) => els.map((el) => el.getAttribute('data-proof-check-row')))) === json(['verified', 'not-verified'])
+                && /you asked/.test(await checksCard.innerText()) && (await checkRows.nth(1).innerText()).match(/not verified/gi)?.length === 1, await checksCard.innerText());
+            check('What happened has each check asked for, how it ran and its answer', await historyHas(/^Check asked for: “Deployed to staging\.”/) && await historyHas(/^Not verified: “Deployed to staging\.”/) && await historyHas(/^Verified: “All tests pass\.”/)
+                && await historyHas(/^Checking “Deployed to staging\.” In a new read-only thread on Fake Check from Fake at low effort, for at most 1 minute\./));
         }, async () => {
             if (window?.page) await shot(window.page, shots, 'failed-ledger-check');
+        });
+
+        await step('a verified claim: its flag is headed so, with the check\'s reason in place of Proof\'s reading', async () => {
+            const { page } = window;
+            await openChat(page, ids.subtract);
+            const flag = flagsShown(page).first();
+            await flag.waitFor({ state: 'visible', timeout: 20000 });
+            await waitFor(async () => (await flag.getAttribute('data-proof-flag')) === 'verified', 'the flag to say verified', 15000, 300).catch(() => {});
+            const text = (await flag.innerText()).replace(/\n+/g, ' ');
+            check('the flag of a claim its check verified says so in its head (not "Nothing in this turn shows this"), with the check\'s reason, said once',
+                (await flag.getAttribute('data-proof-flag')) === 'verified' && text.startsWith('Proof · Verified by an independent check') && text.includes('“All tests pass.”')
+                && text.includes('the calculator tests pass when run again (2 of 2).') && !text.includes('No test ran in this turn.') && !text.includes('Nothing in this turn shows this')
+                && text.match(/verified/gi)?.length === 1, text);
+            await shot(page, shots, 'flag-verified-light', flag);
+            await setDark(page, true);
+            await shot(page, shots, 'flag-verified-dark', flag);
+            await setDark(page, false);
+        }, async () => {
+            if (window?.page) await shot(window.page, shots, 'failed-verified-flag');
         });
     }
 
@@ -450,22 +542,81 @@ try {
     check('a check is asked for through the endpoint as the page asks for it', slowAsked.ok && ACTIVE.has(slowAsked.value?.state), json(slowAsked));
     const slowFrom = Date.now();
 
+    await step('while a check runs, its thread says above the message box what it checks; changing the limit meanwhile leaves its own', async () => {
+        const running = await waitFor(async () => {
+            const c = await checkOf(ids.broken, claims.broken.id);
+            return c?.state === 'running' && c.checkSessionId ? c : null;
+        }, 'the slow check to run', 20000, 250);
+        check('a running check keeps the minutes it was given, its effort and the check model\'s name', running.minutes === 1 && /^low$/i.test(running.effort ?? '') && running.model === 'Fake Check from Fake', json(running));
+        if (!pw) return;
+        const { page } = window;
+        await openProof(page);
+        const runningRow = page.locator('[data-proof-checks] [data-proof-check-row="running"]');
+        await runningRow.waitFor({ state: 'visible', timeout: 15000 });
+        await runningRow.getByRole('button', { name: 'Open the check', exact: true }).click();
+        const dock = page.locator('[data-proof-dock]').filter({ visible: true }).first();
+        await dock.waitFor({ state: 'visible', timeout: 20000 });
+        const dockText = (await dock.innerText()).replace(/\n+/g, ' ');
+        const input = page.getByRole('textbox').filter({ visible: true }).last();
+        const [dockBox, inputBox] = [await dock.boundingBox(), (await input.count()) ? await input.boundingBox() : null];
+        check('in the running check\'s thread, above its message box: what it checks and from where, that it cannot write, its state, and the way back',
+            (await dock.getAttribute('data-proof-dock')) === 'running' && dockText.startsWith('Proof check')
+            && dockText.includes('This thread checks “All tests pass.” from turn 1 of “Broken tests”. It can read and run commands, but nothing it runs can write a file.')
+            && /checking/.test(dockText) && (await dock.getByRole('button', { name: 'Open the checked session', exact: true }).count()) === 1
+            && Boolean(dockBox && inputBox && dockBox.y + dockBox.height <= inputBox.y + 1), `${dockText} | ${json({ dockBox, inputBox })}`);
+        await shot(page, shots, 'check-dock-light', dock);
+        await setDark(page, true);
+        await shot(page, shots, 'check-dock-dark', dock);
+        await setDark(page, false);
+        await dock.getByRole('button', { name: 'Open the checked session', exact: true }).click();
+        await flagsShown(page).first().waitFor({ state: 'visible', timeout: 20000 });
+        const flagText = (await flagsShown(page).first().innerText()).replace(/\n+/g, ' ');
+        check('"Open the checked session" goes to the claim, whose flag says its check runs, for how long and how',
+            flagText.includes('“All tests pass.”') && /checking\s*In a read-only thread on Fake Check from Fake at low effort, for up to 1 minute\./.test(flagText), flagText);
+
+        // The limit raised while it runs: this check keeps the minute it was given.
+        await openProof(page);
+        await page.locator('[data-proof-header]').getByRole('button', { name: 'Settings', exact: true }).click();
+        const form = page.locator('[data-suite-settings="dsh-plugin-proof"]');
+        await form.waitFor({ state: 'visible', timeout: 20000 });
+        await page.getByLabel('Minutes a check may take').fill('2');
+        await form.getByRole('button', { name: 'Save' }).click();
+        await waitFor(async () => (await pageState()).verifier.minutes === 2, 'the new limit to apply', 15000, 300);
+        await openProof(page);
+        const card = page.locator('[data-proof-checks]');
+        await waitFor(async () => /for at most 2 minutes/.test(await card.innerText()), 'the checks card to say the new limit', 15000, 300).catch(() => {});
+        const rowText = (await card.locator('[data-proof-check-row="running"]').innerText().catch(() => '')).replace(/\n+/g, ' ');
+        check('with the limit raised to 2 minutes, new checks get 2; the running one keeps the 1 it was given, and says so',
+            /for at most 2 minutes/.test(await card.innerText()) && rowText.includes('for up to 1 minute.') && (await checkOf(ids.broken, claims.broken.id))?.minutes === 1, rowText);
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-dock');
+    });
+
     if (pw) {
         await step('the page: header, sessions, the ledger and its filter, what the turn ran; light, dark and narrow', async () => {
             const { page } = window;
             await openProof(page);
             const header = page.locator('[data-proof-header]');
             const status = (await header.locator('.dshpf-status').textContent()) ?? '';
-            check('the header says how many sessions have claims and how many claims are flagged', status === '4 sessions with claims · 3 claims flagged', status);
-            check('the header says flags are on and how checks run', (await page.locator('[data-proof-flags]').getAttribute('data-proof-flags')) === 'on' && (await page.locator('[data-proof-verifier]').getAttribute('data-proof-verifier')) === 'ask');
+            check('the header says how many sessions have claims, how many claims are flagged, and how many a check verified (counted apart)',
+                status === '4 sessions with claims · 2 claims flagged · 1 verified by an independent check', status);
+            check('the header says flags are on; the checks card how checks run', (await page.locator('[data-proof-flags]').getAttribute('data-proof-flags')) === 'on' && (await page.locator('[data-proof-verifier]').getAttribute('data-proof-verifier')) === 'ask'
+                && !/read-only thread/.test(await header.innerText()), await header.innerText());
             const rows = await page.locator('[data-proof-session]').evaluateAll((els) => els.map((el) => el.getAttribute('data-proof-session')));
             check('the sessions list has the four sessions with claims, and no check thread', rows.length === 4 && [ids.tests, ids.subtract, ids.broken, ids.deploy].every((id) => rows.includes(id)), json(rows));
+            const subtractRow = (await page.locator(`[data-proof-session="${ids.subtract}"]`).innerText()).replace(/\n+/g, ' ');
+            const subtractData = (await pageState()).sessions.find((r) => r.sessionId === ids.subtract);
+            check('the session whose flagged claim was verified is counted apart: no flagged claim, one verified, and its row says verified',
+                subtractData?.flagged === 0 && subtractData?.verified === 1 && /\bverified\b/.test(subtractRow) && !/no evidence/.test(subtractRow), `${subtractRow} | ${json(subtractData)}`);
             const ledger = await openLedger(page, ids.subtract);
-            check('the ledger counts its claims in words', /2 claims: 1 shown by their turn, 1 with no evidence, 0 contradicted\./.test(await ledger.innerText()), (await ledger.innerText()).slice(0, 300));
-            check('it shows the flagged claims first', (await ledger.locator('[data-proof-claim]').count()) === 1);
+            check('the ledger counts its claims in words, the verified one apart', /2 claims: 1 shown by their turn, 1 verified by an independent check, 0 with no evidence, 0 contradicted\./.test(await ledger.innerText()), (await ledger.innerText()).slice(0, 300));
+            check('it shows the flagged claims first: none now, and says why', (await ledger.locator('[data-proof-claim]').count()) === 0 && /Nothing flagged now/.test(await ledger.innerText())
+                && (await ledger.getByText('Flagged (0)', { exact: true }).count()) === 1, (await ledger.innerText()).slice(0, 600));
             await ledger.getByText('All claims (2)', { exact: true }).click();
             await waitFor(async () => (await ledger.locator('[data-proof-claim]').count()) === 2, 'All claims to show both', 10000, 200);
             check('All claims shows the quiet one too', (await ledger.locator('[data-proof-verdict="backed"]').count()) === 1);
+            const tops = await ledger.locator('.dshpf-claim-top').allInnerTexts();
+            check('no claim kind beside a claim\'s tag (it read as a verdict)', tops.length === 2 && tops.every((t) => /^Turn 1\b/.test(t) && !/\b(passed|done|fixed|deployed)\b/.test(t)), json(tops));
             const ran = ledger.locator('details').first();
             await ran.locator('summary').click();
             check('"What the turn ran" lists the turn\'s runs', /subtract\.mjs/.test(await ran.innerText()), await ran.innerText());
@@ -498,9 +649,10 @@ try {
                 return { name: file.suggestedFilename(), text: readFileSync(path, 'utf8') };
             };
             const md = await download('Markdown');
-            check('Markdown downloads as a file named for the session, with every claim', /^proof-ledger-add-subtract-\d{4}-\d{2}-\d{2}\.md$/.test(md.name)
-                && md.text.startsWith('# Claims ledger: Add subtract\n') && md.text.includes('2 claims: 1 shown by their turn, 1 with no evidence, 0 contradicted by their turn\'s own output.')
-                && md.text.includes('| Turn | Claim | Verdict | Why | Evidence | Independent check |') && /\| 1 \| All tests pass\. \| No evidence \| No test ran in this turn\. \|/.test(md.text), `${md.name}\n${md.text.slice(0, 600)}`);
+            check('Markdown downloads as a file named for the session, with every claim, the verified one counted apart', /^proof-ledger-add-subtract-\d{4}-\d{2}-\d{2}\.md$/.test(md.name)
+                && md.text.startsWith('# Claims ledger: Add subtract\n') && md.text.includes('2 claims: 1 shown by their turn, 1 verified by an independent check, 0 with no evidence, 0 contradicted by their turn\'s own output.')
+                && md.text.includes('| Turn | Claim | Verdict | Why | Evidence | Independent check |')
+                && /\| 1 \| All tests pass\. \| No evidence \| No test ran in this turn\. \| — \| Verified: the calculator tests pass when run again \(2 of 2\)\. \|/.test(md.text), `${md.name}\n${md.text.slice(0, 900)}`);
             const said = (await ledger.locator('[data-proof-said]').textContent()) ?? '';
             check('the page says what it downloaded', said === `Downloaded ${md.name}.`, said);
             const csv = await download('CSV');
@@ -510,14 +662,19 @@ try {
             const file = await download('JSON');
             let parsed;
             try { parsed = JSON.parse(file.text); } catch {}
-            check('JSON downloads and parses: the session, the counts, each claim with its check', /\.json$/.test(file.name) && parsed?.session?.id === ids.subtract && parsed.counts?.total === 2
+            check('JSON downloads and parses: the session, the counts (the verified claim apart), each claim with its check', /\.json$/.test(file.name) && parsed?.session?.id === ids.subtract
+                && parsed.counts?.total === 2 && parsed.counts.verified === 1 && parsed.counts.unbacked === 0 && parsed.counts.flagged === 0
                 && parsed.claims.some((c) => c.verdict === 'unbacked' && c.check?.state === 'verified' && c.check.checkSession), file.text.slice(0, 600));
             await ledger.getByRole('button', { name: 'Copy', exact: true }).click();
             await waitFor(async () => /Copied|Not copied/.test((await ledger.locator('[data-proof-said]').textContent()) ?? ''), 'the copy to say how it went', 10000, 200);
             const copied = (await ledger.locator('[data-proof-said]').textContent()) ?? '';
             const clip = await page.evaluate(() => navigator.clipboard.readText()).catch(() => '');
             check('Copy puts the ledger on the clipboard as Markdown, and says so', copied === 'Copied the ledger as Markdown.' && clip.startsWith('# Claims ledger: Add subtract'), `${copied} | ${clip.slice(0, 80)}`);
-            check('What happened notes each export', await historyHas(/^Ledger exported as Markdown/) && await historyHas(/^Ledger exported as CSV/) && await historyHas(/^Ledger exported as JSON/));
+            await waitFor(() => historyHas(/^Ledger copied as Markdown 2 claims, onto the clipboard\./), 'the copy in What happened', 10000, 250).catch(() => {});
+            const exports = (await pageState()).history.filter((e) => e.kind === 'export' && e.sessionId === ids.subtract).map((e) => `${e.text} ${e.why}`);
+            check('What happened notes each export, and the copy as a copy (no file named for it)',
+                exports.filter((t) => /^Ledger exported as Markdown/.test(t)).length === 1 && exports.some((t) => /^Ledger exported as CSV/.test(t)) && exports.some((t) => /^Ledger exported as JSON/.test(t))
+                && exports.filter((t) => t === 'Ledger copied as Markdown 2 claims, onto the clipboard.').length === 1, json(exports));
             await shot(page, shots, 'exported-light', ledger);
         }, async () => {
             if (window?.page) await shot(window.page, shots, 'failed-export');
@@ -525,14 +682,31 @@ try {
 
     }
 
-    await step('a check past its minute is stopped, its model request closed, and its answer unclear', async () => {
+    await step('a check past its minute is stopped, its model request closed, and its answer unclear, naming the minute it was given', async () => {
         const done = await settled(ids.broken, claims.broken.id, Math.max(10000, 100000 - (Date.now() - slowFrom)));
-        check('it settles as unclear, saying it took too long', done.state === 'unclear' && done.reason === 'It took longer than 1 minute, so Proof stopped it. Open the check to see how far it got.', json(done));
+        const limitNow = (await pageState()).verifier.minutes;
+        check('it settles as unclear, saying it took longer than the minute it was given (the limit is 2 minutes now)',
+            done.state === 'unclear' && done.reason === 'It took longer than the 1 minute it was given, so Proof stopped it.' && done.minutes === 1 && limitNow === (pw ? 2 : 1), json({ done, limitNow }));
         const held = model.requests.find((r) => r.held && r.anchor.includes('Broken tests'));
         await waitFor(() => held?.closed, 'the held request to close', 15000, 200).catch(() => {});
         check('DSH stopped the check thread: the model\'s open reply was closed', Boolean(held?.closed), json(held));
         const end = (await run.events(done.checkSessionId)).filter((e) => e.type === 'turn/end').at(-1);
         check('the check thread\'s turn ended stopped, not finished', end && end.reason?.kind !== 'completed', json(end));
+        if (!pw) return;
+        // In the stopped check's own thread: how it ended, and no way into itself.
+        const { page } = window;
+        await openProof(page);
+        const row = page.locator('[data-proof-checks] [data-proof-check-row="unclear"]').filter({ hasText: 'All tests pass.' });
+        await row.waitFor({ state: 'visible', timeout: 15000 });
+        await row.getByRole('button', { name: 'Open the check', exact: true }).click();
+        const note = page.locator('[data-proof-flag="check"]').filter({ visible: true }).first();
+        await note.waitFor({ state: 'visible', timeout: 20000 });
+        const noteText = (await note.innerText()).replace(/\n+/g, ' ');
+        check('its thread\'s note says it was stopped after the minute it was given, and offers no way into itself',
+            /unclear\s*It took longer than the 1 minute it was given, so Proof stopped it\./.test(noteText) && !noteText.replace('Open the checked session', '').includes('Open the check')
+            && (await page.locator('[data-proof-dock]').count()) === 0, noteText);
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-stopped');
     });
 
     if (pw) {
@@ -551,14 +725,17 @@ try {
             await shot(page, shots, 'settings-dark');
             await setDark(page, false);
             const minutes = page.getByLabel('Minutes a check may take');
-            await minutes.fill('31');
+            const hint = (await page.locator('[data-suite-setting="verifierMinutes"]').innerText()).replace(/\n+/g, ' ');
+            check('the minutes\' help says what a busy shared gateway needs', /on a busy shared gateway, where each answer can wait several minutes, allow 30\./.test(hint), hint);
+            await minutes.fill('61');
             const refused = await page.locator('[data-suite-setting="verifierMinutes"]').innerText();
-            check('the form will not save a value out of range, and says what fits', await form.getByRole('button', { name: 'Save' }).isDisabled() && /A whole number from 1 to 30, or empty for the default \(5\)\./.test(refused), refused);
+            check('the form will not save a value out of range, and says what fits', await form.getByRole('button', { name: 'Save' }).isDisabled() && /A whole number from 1 to 60, or empty for the default \(15\)\./.test(refused), refused);
             await minutes.fill('1');
             await form.getByRole('tab', { name: 'By itself', exact: true }).click();
             await form.getByRole('button', { name: 'Save' }).click();
             await waitFor(async () => (await pageState()).verifier.mode === 'auto', 'By itself to apply', 15000, 300);
-            check('saved: it applies at once and What happened says which setting changed', await historyHas(/^Settings changed: “Independent check”/));
+            check('saved: it applies at once and What happened says which settings changed',
+                await historyHas(/^Settings changed: (?=.*“Independent check”)(?=.*“Minutes a check may take”)/) && (await pageState()).verifier.minutes === 1);
         }, async () => {
             if (window?.page) await shot(window.page, shots, 'failed-settings');
         });
@@ -597,7 +774,7 @@ try {
         }
         const ended = await settled(ids.deploy, claims.deploy.id, 20000);
         await waitFor(async () => (await pageState()).verifier.mode === 'off', 'checks to be off', 15000, 250).catch(() => {});
-        check('switched Off, the waiting check ends, saying so', ended.state === 'failed' && ended.reason === 'Not checked: the independent check was switched off.', json(ended));
+        check('switched Off, the waiting check ends, saying so (once: its tag says it was not checked)', ended.state === 'failed' && ended.reason === 'The independent check was switched off before it started.', json(ended));
         const refused = await api('check', { sessionId: ids.deploy, claimId: claims.deploy.id });
         check('while checks are off, asking for one is refused in words', refused.ok === false && refused.error?.message === 'The independent check is off. Turn it on in Proof\'s settings ("Independent check").', json(refused.error));
         if (pw) {
@@ -608,8 +785,26 @@ try {
             // One row for each claim checked (four claims): asking again for the deploy claim replaced its first row.
             const rows = card.locator('[data-proof-check-row]');
             const deployRow = rows.filter({ hasText: 'Deployed to staging.' });
-            check('the page says checks are off, and still lists the checks made, one row for each claim', (await card.innerText()).includes('The independent check is off.') && (await rows.count()) === 4
-                && (await deployRow.count()) === 1 && (await deployRow.innerText()).includes('the independent check was switched off'), (await card.innerText()).slice(0, 600));
+            const deployRowText = (await deployRow.innerText().catch(() => '')).replace(/\n+/g, ' ');
+            check('the page says checks are off, and still lists the checks made, one row for each claim, each state said once', (await card.innerText()).includes('The independent check is off.') && (await rows.count()) === 4
+                && (await deployRow.count()) === 1 && deployRowText.includes('The independent check was switched off before it started.') && deployRowText.match(/could not check|not checked/gi)?.length === 1,
+            (await card.innerText()).slice(0, 600));
+            // Newest first by the time each row shows, every time in one column.
+            const times = await rows.evaluateAll((els) => els.map((el) => {
+                const time = el.querySelector('.dshpf-log-time');
+                const at = Date.parse(time?.querySelector('time')?.getAttribute('datetime') ?? '');
+                const box = time?.getBoundingClientRect();
+                const next = time?.nextElementSibling?.getBoundingClientRect();
+                return { at, width: Math.round(box?.width ?? -1), left: Math.round(next?.left ?? -1) };
+            }));
+            check('the checks are newest first by the time each row shows, and their times sit in one fixed-width column',
+                times.length === 4 && times.every((t, i) => Number.isFinite(t.at) && (i === 0 || t.at <= times[i - 1].at)) && new Set(times.map((t) => t.width)).size === 1
+                && new Set(times.map((t) => t.left)).size === 1 && times[0].width > 0, json(times));
+            // While the check is off, the way to turn it on, though checks were made before.
+            await card.getByRole('button', { name: 'Open Proof\'s settings', exact: true }).click();
+            const form = page.locator('[data-suite-settings="dsh-plugin-proof"]');
+            await form.waitFor({ state: 'visible', timeout: 20000 }).catch(() => {});
+            check('while the check is off, the checks card offers Open Proof\'s settings, and it opens them', await form.isVisible());
             await openChat(page, ids.deploy);
             await flagsShown(page).first().waitFor({ state: 'visible', timeout: 20000 });
             check('the flag stays, with no Check button while checks are off', (await flagsShown(page).first().getByRole('button', { name: /^Check/ }).count()) === 0);
@@ -652,16 +847,19 @@ try {
     // ── A restart under a running check ────────────────────────────────
     await restartWith(rowsWith({ proof: { verifierPerHour: 20 } }), 'more checks an hour');
     await waitFor(async () => (await api('state')).ok, 'Proof\'s endpoints after the restart', 30000);
-    await step('a restart under a running check: the check settles afterwards, in words', async () => {
+    await step('a restart under a running check: the check settles as soon as Proof is back, saying DSH restarted while it ran', async () => {
         model.setPlan('Staging deploy', { slow: true });
         const asked = await api('check', { sessionId: ids.deploy, claimId: claims.deploy.id });
         check('a check starts', asked.ok, json(asked));
         await waitFor(async () => (await checkOf(ids.deploy, claims.deploy.id))?.state === 'running' && [...model.held].some((e) => e.record.anchor.includes('Staging deploy')), 'the check to be running', 20000, 300);
         await restart('a restart under a running check');
         await waitFor(async () => (await api('state')).ok, 'Proof\'s endpoints after the restart', 30000);
+        const upAt = Date.now();
         const done = await settled(ids.deploy, claims.deploy.id, 100000);
-        check('after the restart the check settles (not left checking), with why in words', (done.state === 'unclear' || done.state === 'failed') && done.reason.length > 20, json(done));
-        check('What happened says how it ended', await historyHas(/^(Check unclear|Could not check): “Deployed to staging\.”/));
+        console.log(`# the cut check settled ${Math.round(((done.endedAt ?? Date.now()) - upAt) / 100) / 10} s after Proof's endpoints answered again`);
+        check('after the restart the check settles at once (not when its minute runs out), as unclear, saying DSH restarted while it ran',
+            done.state === 'unclear' && done.reason === 'DSH restarted while it ran, so it ended before it answered.' && (done.endedAt ?? Infinity) <= upAt + 20000, json(done));
+        check('What happened says how it ended, in the same words', await historyHas(/^Check unclear: “Deployed to staging\.” DSH restarted while it ran, so it ended before it answered\.$/));
     });
 
     // ── Without Session Watch ──────────────────────────────────────────
@@ -695,7 +893,7 @@ try {
     await step('a wrong setting: Proof starts, flags nothing, refuses checks, and says which setting and what it must be', async () => {
         const s = await pageState();
         check('a wrong value does not stop Proof from starting: its state names the setting, the range and the value',
-            s.problem?.text === 'Minutes a check may take (verifierMinutes) must be a whole number of minutes from 1 to 30 (it is 0)' && s.problem?.live === true && s.sessions.length === 0, json(s.problem));
+            s.problem?.text === 'Minutes a check may take (verifierMinutes) must be a whole number of minutes from 1 to 60 (it is 0)' && s.problem?.live === true && s.sessions.length === 0, json(s.problem));
         check('while a setting is wrong, no flag shows', (await sessionOf(ids.deploy)).flags === false);
         const refused = await api('check', { sessionId: ids.deploy, claimId: claims.deploy.id });
         check('checks are refused, saying why', refused.ok === false && refused.error?.message === 'Proof is waiting for a setting to be fixed: see the top of its page.', json(refused.error));
@@ -707,7 +905,7 @@ try {
         await problem.waitFor({ state: 'visible', timeout: 20000 });
         const words = (await problem.innerText()).replace(/\n+/g, ' ');
         check('the page says which setting is wrong, what it must be, and where to change it',
-            /Proof is waiting for a setting to be fixed\. Minutes a check may take \(verifierMinutes\) must be a whole number of minutes from 1 to 30 \(it is 0\)\. Change it in Proof's settings in Plugins\. Proof starts working again as soon as you save\./.test(words), words);
+            /Proof is waiting for a setting to be fixed\. Minutes a check may take \(verifierMinutes\) must be a whole number of minutes from 1 to 60 \(it is 0\)\. Change it in Proof's settings in Plugins\. Proof starts working again as soon as you save\./.test(words), words);
         await shot(page, shots, 'setting-light');
         await setDark(page, true);
         await shot(page, shots, 'setting-dark');
@@ -757,6 +955,47 @@ try {
         await shot(page, shots, 'disabled-light');
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-disabled');
+    });
+    await window?.browser?.close().catch(() => {});
+    window = undefined;
+
+    // ── Sessions saved while Proof was off ─────────────────────────────
+    // While it is off, a new session makes a claim and an older one takes a turn: DSH saves both without Proof's view.
+    ids.offline = await run.newSession(`Ship the docs.\n${turn([bash('ls -1', 'List the files')], 'Deployed the docs to production.')}`, 'Docs while off');
+    await turnsEnded(ids.offline, 1);
+    await run.bridge('POST', `/sessions/${encodeURIComponent(ids.subtract)}/prompt`, { text: `Thanks.\n${say('Glad to help.')}` });
+    await turnsEnded(ids.subtract, 2);
+    await restartWith(rowsWith(), 'Proof on again');
+    await waitFor(async () => (await api('state')).ok, 'Proof\'s endpoints, on again', 30000);
+    await step('sessions saved while Proof was off are listed again once it is on, with their claims and their titles', async () => {
+        const backAt = Date.now();
+        const s = await waitFor(async () => {
+            const now = await pageState();
+            return [ids.offline, ids.subtract].every((id) => now.sessions.some((r) => r.sessionId === id)) ? now : null;
+        }, 'the sessions saved while Proof was off on its page', 30000, 500).catch(() => pageState());
+        console.log(`# the sessions saved while Proof was off were on its page ${Date.now() - backAt} ms after it answered again`);
+        const offline = s.sessions.find((r) => r.sessionId === ids.offline);
+        const subtract = s.sessions.find((r) => r.sessionId === ids.subtract);
+        check('a session made while Proof was off is listed, with its flagged claim and its title', offline?.total === 1 && offline.flagged === 1 && offline.title === 'Docs while off', json(offline));
+        check('a session that took a turn while Proof was off is listed again as before, its verified claim still counted apart',
+            subtract?.total === 2 && subtract.flagged === 0 && subtract.verified === 1, json(subtract));
+        const all = [ids.tests, ids.subtract, ids.broken, ids.deploy, ids.release, ids.late, ids.offline].filter(Boolean);
+        check('no session with claims is lost', all.every((id) => s.sessions.some((r) => r.sessionId === id)), json(s.sessions.map((r) => r.title)));
+        check('Independent checks name every checked session by its title', s.checks.length > 0 && s.checks.every((c) => typeof c.title === 'string' && c.title !== ''), json(s.checks.map((c) => c.title)));
+        if (!pw) return;
+        window = await openWindow(run, pw, { entry: 'Proof' });
+        const { page } = window;
+        await openProof(page);
+        const ledger = await openLedger(page, ids.offline);
+        check('its page lists the session made while it was off, and its ledger has the claim', (await ledger.locator('[data-proof-claim]').count()) === 1
+            && (await ledger.innerText()).includes('“Deployed the docs to production.”'), (await ledger.innerText()).slice(0, 400));
+        await openChat(page, ids.offline);
+        const flag = flagsShown(page).first();
+        await flag.waitFor({ state: 'visible', timeout: 20000 }).catch(() => {});
+        check('its turn has its flag', (await flag.innerText().catch(() => '')).includes('“Deployed the docs to production.”'));
+        check('no errors from the suite in the window', ours(window.errors).length === 0, ours(window.errors).join('\n'));
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-saved-while-off');
     });
 } catch (error) {
     check('the run finished', false, error?.stack ?? error);

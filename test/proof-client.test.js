@@ -456,6 +456,30 @@ test('the page: the header, the sessions, a ledger with its claims (verified cou
     line.props.ref(focusable('line', focused));
     assert.deepEqual(focused, ['line']);
 
+    // In the flagged view, a claim checked there stays when its check verifies it (the answer shows where Check was
+    // pressed, and the focus stays on it); choosing the view again leaves only the claims still flagged.
+    const choose = (value) => elementsOf(ledger()).find((e) => e.props?.['data-suite-choice']).props.onClickCapture({ target: { closest: () => ({ id: `${filter.props.id}-${value}` }) } });
+    choose('flagged');
+    await settle(5);
+    assert.deepEqual(withAttr(ledger(), 'data-proof-verdict').map((c) => c.props['data-proof-claim']), ['2:1', '2:0']);
+    ledgerNow = {
+        ...LEDGER,
+        counts: { ...LEDGER.counts, verified: 2, contradicted: 1, flagged: 1 },
+        claims: ledgerNow.claims.map((c) => (c.id === '2:0' ? { ...c, check: { key: 's#2:0', claimId: '2:0', state: 'verified', reason: 'It passes now.', checkSessionId: 'session-e' } } : c)),
+    };
+    await button(withAttr(ledger(), 'data-proof-verdict')[1], 'Check').props.onClick();
+    await settle(5);
+    claims = withAttr(ledger(), 'data-proof-verdict');
+    assert.deepEqual(claims.map((c) => c.props['data-proof-claim']), ['2:1', '2:0'], 'the verified claim stays in view');
+    assert.equal(claims[1].props['data-proof-state'], 'verified');
+    assert.match(textIn(claims[1]), /It passes now\.Open the checkverifiedCheck again$/);
+    assert.deepEqual(plain(elementsOf(ledger()).find((e) => e.type === 'SegmentedControl').props.options.map((o) => o.label)), ['Flagged (1)', 'All claims (4)']);
+    choose('all');
+    await settle(5);
+    choose('flagged');
+    await settle(5);
+    assert.deepEqual(withAttr(ledger(), 'data-proof-verdict').map((c) => c.props['data-proof-claim']), ['2:1'], 'chosen again: only the flagged one');
+
     // Independent checks: how they run (said once, here), newest first by the time each row shows, in one column.
     const checks = withAttr(page.tree, 'data-proof-checks')[0];
     assert.equal(checks.props['data-proof-verifier'], 'ask');

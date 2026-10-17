@@ -438,6 +438,8 @@ export class Verifier {
         check.state = 'running';
         check.startedAt = this.now();
         check.reason = '';
+        // The minutes it is given, kept on the check from its start: a later change of the setting does not change them.
+        check.minutes = this.minutes();
         this.data.starts = [...this.data.starts.filter((at) => check.startedAt - at < HOUR), check.startedAt].slice(-MAX_STARTS);
         this.store.change();
         this.changed();
@@ -483,10 +485,7 @@ export class Verifier {
             await this.dsh.select(agent, choice);
             step.now = 'asking the check model';
             this.replies.set(id, '');
-            // Kept on the check: a later change of the setting does not change the time this check was given.
-            const minutes = this.minutes();
-            check.minutes = minutes;
-            this.store.change();
+            const minutes = check.minutes;
             this.journal.add({
                 kind: 'check',
                 sessionId: check.sessionId,

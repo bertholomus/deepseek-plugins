@@ -126,43 +126,64 @@ node scripts/proof-corpus.mjs --misses  # and each case it got wrong
 A turn with a flagged claim gets a card after its reply: **Proof ·
 Nothing in this turn shows this**, **Proof · This turn's own output says
 otherwise**, or, for several, **Proof · 3 claims this turn does not show
-(1 contradicted)**. For each flagged claim it shows:
+(1 contradicted)**. Once the independent check has answered, its answer
+heads the card instead: **Proof · Verified by an independent check** (a
+green shield) or **Proof · Not verified by an independent check**. For
+each flagged claim it shows:
 
 - the claim, quoted, and why it was flagged ("No test ran in this turn.",
-  "The last push in this turn did not go through: … rejected …");
+  "The last push in this turn did not go through: … rejected …"), with
+  commands drawn as code; for a claim the check verified, the check's
+  reason instead;
 - for a contradiction, **What the turn shows**: the line of output that
-  says otherwise;
-- the independent check's state when there is one (*waiting to check*,
-  *checking*, *verified*, *not verified*, *unclear*, *could not check*),
-  with **Open the check**;
-- **Check it** (or **Check again**) when the independent check is on;
+  says otherwise, when the why does not quote it already;
+- the independent check's line when there is one: its state (*waiting to
+  check*, *checking*, *unclear*, *could not check*; *verified* and *not
+  verified* are said by the head), its reason, and **Open the check**;
+- **Check it** (or **Check again**) when the independent check is on.
+  The focus then moves to the check's line, which stays in place while
+  the check waits, runs and answers;
 - **Open in Proof**, which opens the page at that session.
 
-A turn whose claims are all shown gets no card. A check thread's own first
-turn gets a note instead: what it checks, from which turn of which session,
-that nothing it runs can write a file, and **Open the checked session**.
+A turn whose claims are all shown gets no card. In a check thread, while
+its check waits or runs, a bar above the message box (where DSH shows a
+goal) says what it checks, from which turn of which session, that nothing
+it runs can write a file, and offers **Open the checked session**. Once
+the check ends, the thread's first turn gets a note with the same words and
+how it ended (and no **Open the check**: you are in it).
 
 ## The page
 
 Proof has its own entry in the sidebar. Its page shows:
 
-- **The header**: how many sessions have claims and how many are flagged,
-  whether flags are on, how the independent check runs, and **Settings**.
-- **Sessions with claims**, newest first. Pick one to see its ledger.
-  Opening the page from a flag picks that session.
-- **Ledger**: the session's claims, **Flagged** or **All claims**. Each
-  shows its turn, time and kind, the claim, why, what showed it or what
-  says otherwise, **What the turn ran** (the commands and reads, folded),
-  the check, and **Check** when the check is on. **Export**: Markdown, CSV
+- **The header**: how many sessions have claims, how many claims are
+  flagged and how many an independent check verified, whether flags are
+  on, and **Settings**.
+- **Sessions with claims**, newest first, each with its one state
+  (*contradicted*, *no evidence*, *verified* or *shown*). Pick one to see
+  its ledger. Opening the page from a flag picks that session.
+- **Ledger**: the session's claims, **Flagged** or **All claims**, and
+  their counts. A flagged claim the independent check verified is counted
+  apart (*1 verified by an independent check*), here, on its session's
+  row, in the header and in the exports, and leaves **Flagged**; one you
+  check from **Flagged** stays there with its answer until you choose the
+  view again. Each claim shows its turn and time, the claim, why, what
+  showed it or what says otherwise, **What the turn ran** (the commands
+  and reads, folded), the check, and **Check** when the check is on; after
+  **Check** the focus moves to the check's line. **Export**: Markdown, CSV
   or JSON downloads the whole ledger (quiet claims too); **Copy** puts the
-  Markdown on the clipboard. CSV fields that a spreadsheet would read as a
-  formula get a leading apostrophe.
-- **Independent checks**: the latest checks over all sessions, each with
-  the claim, its turn and session, whether you asked or it ran by itself,
-  its state and reason, and **Open the check**. When the check is off, the
-  card says so, with **Open Proof's settings**.
-- **What happened**: checks asked for and their answers, exports and
-  setting changes, newest first.
+  Markdown on the clipboard, and What happened logs it as a copy. CSV
+  fields that a spreadsheet would read as a formula get a leading
+  apostrophe.
+- **Independent checks**: how checks run (the model as DSH's model menu
+  names it, and the minutes a check may take), then the latest checks over
+  all sessions, newest first by the time each row shows, each with the
+  claim, its turn and session, whether you asked or it ran by itself, its
+  state and reason, and **Open the check**. While the check is off, the
+  card says so and offers **Open Proof's settings**, whether or not checks
+  were made before.
+- **What happened**: checks asked for and their answers, exports, copies
+  and setting changes, newest first.
 
 Every empty state says what to do next, and every refusal says why in
 words ("The independent check is off. Turn it on in Proof's settings").
@@ -192,8 +213,11 @@ itself* are left for you). A check:
      commit, a reset, an install, a killed process, a container). The
      thread is told why, so it can check by reading instead.
 3. Picks the model Proof's settings name for that thread only (by default
-   GLM-5.3 Flash through the owner gateway). DSH's default model is never
-   changed.
+   GLM-5.3 Flash through the owner gateway), at low effort when the model
+   offers it (else minimal, else the model's own default), through DSH's
+   own model choice: a check re-runs a command or reads a file, and a busy
+   gateway answers a low-effort request sooner. DSH's default model is
+   never changed.
 4. Asks it to re-run or re-read what would show the claim (the same
    command, the file, git, the hash, the address) and to end with a line
    that starts with VERIFIED or NOT VERIFIED and the reason.
@@ -201,12 +225,19 @@ itself* are left for you). A check:
 The last such line is the verdict. A reply with neither is *unclear*; a
 turn that ended in an error, or a check still running after its minutes
 (it is stopped), is *could not check* or *unclear*, with the reason in
-words. One check runs at a time, and at most `verifierPerHour` start in an
-hour; the rest wait their turn ("Waits until 3:40 PM: 12 checks have
-started in the last hour, the most Proof's settings allow"). Turning the
-check off ends the ones still waiting as *could not check*.
-After a restart, a check that was running is read from its thread: its
-answer if it gave one, or it carries on until its minutes are up.
+words. A check keeps the minutes it was given when it started: change the
+setting while it runs and it still stops at its own ("It took longer than
+the 15 minutes it was given, so Proof stopped it."). One check runs at a
+time, and at most `verifierPerHour` start in an hour; the rest wait their
+turn ("Waits until 3:40 PM: 12 checks have started in the last hour, the
+most Proof's settings allow"). Turning the check off ends the ones still
+waiting as *could not check*.
+
+When DSH restarts while a check runs, DSH ends the thread's cut-off turn,
+and Proof reads the thread as soon as it starts again: an answer the
+thread gave before the restart counts, and a check it cut off settles at
+once as *unclear*: "DSH restarted while it ran, so it ended before it
+answered." **Check again** asks for a new one.
 
 ## Settings
 
@@ -220,9 +251,9 @@ of range and says what fits instead.
 | --- | --- | --- | --- | --- |
 | `flags` (Flag claims with no evidence on their turn) | `true` | on or off | Plugins | The card after a turn with a flagged claim. The ledger keeps every claim either way. |
 | `verifier` (Independent check) | `ask` | `off`, `ask` (When I press Check) or `auto` (By itself) | Plugins | When a check runs. |
-| `verifierProvider` (Check with the model from) | `owner-ascents` | a provider as DSH's model list names it | Plugins | Where the check model runs. |
-| `verifierModel` (Check with the model) | `GLM-5.3-Flash-EXL3` | a model as DSH's model list names it | Plugins | The check model: a cheap local one. |
-| `verifierMinutes` (Minutes a check may take) | `5` | 1 to 30 | Plugins | A check still running then is stopped, and its answer is unclear. |
+| `verifierProvider` (Check with the model from) | `owner-ascents` | a provider's id in DSH's profile | Plugins | Where the check model runs. The page names it as DSH's model menu does. |
+| `verifierModel` (Check with the model) | `GLM-5.3-Flash-EXL3` | a model's id in DSH's profile | Plugins | The check model: a cheap local one, asked for low effort when it offers that. |
+| `verifierMinutes` (Minutes a check may take) | `15` | 1 to 60 | Plugins | A check still running then is stopped, and its answer is unclear. A quiet local model answers in a minute or two; on a busy shared gateway, where each answer can wait several minutes, allow 30. |
 | `verifierPerHour` (Checks an hour, at most) | `12` | 1 to 120 | Plugins | More wait their turn and start when the hour allows. |
 | `enabled` | `true` | `true` or `false` | Profile | `false` keeps Proof loaded but idle: it reads no claims, and its page says so and how to change it. |
 
@@ -244,7 +275,11 @@ mode 600:
 The claims themselves live in each session's own state in DSH (the
 `proofClaims` projection, the last 60 claims a session made, the last 20
 flagged on its list row), and the page folds a whole ledger from the
-session's log when you open it, so nothing is lost when Proof is off.
+session's log when you open it. A session saved while Proof was off has no
+claims on DSH's list until Proof reads them: a few seconds after it starts,
+and as the list shows such sessions, Proof reads their logs (newest first,
+one at a time, at most 200 each time it starts), so they are listed again
+and nothing is lost while Proof is off.
 
 ## Setup
 
@@ -287,12 +322,13 @@ lists in Proof's settings (“Check with the model”)".
 
 ## Rollback
 
-DSH runs Proof from its folder in your clone (the profile links it). To go
-back to a release, restore that folder from the release's tag and restart
-DSH Desktop:
+DSH runs Proof from its folder in your clone (the profile links it). No
+release of Proof is tagged yet: to go back to an earlier version, find its
+commit (`git -C ~/.dsh-plugins/deepseek-plugins log --oneline --
+plugins/proof`), restore that folder from it and restart DSH Desktop:
 
 ```bash
-git -C ~/.dsh-plugins/deepseek-plugins restore --source proof-v1.0.0 -- plugins/proof
+git -C ~/.dsh-plugins/deepseek-plugins restore --source <commit> -- plugins/proof
 ```
 
 To remove it, follow [Remove a plugin](../../README.md#remove-a-plugin) for
@@ -312,6 +348,16 @@ writes into a session it judges.
   health check in the turn covers that.
 - Long outputs are kept by their head (4,000 characters) and tail (12,000),
   where runners print their summaries.
+- Check threads stay in DSH's session list as ordinary sessions, titled
+  **Proof check · …**. DSH can archive a session, but an archived thread
+  cannot be opened in the window any more, and DSH offers plugins no way to
+  group sessions, so Proof leaves them where they are; delete the ones you
+  no longer need.
+- The check model is named by its ids in DSH's profile: DSH's settings form
+  offers plugins no list to pick from. Proof's page names it as DSH's model
+  menu does.
+- Sessions saved while Proof was off are read from their logs at most 200
+  each time it starts; any more are listed once they are opened or used.
 
 ## Tests
 
@@ -322,28 +368,37 @@ node --test test/proof*.test.js       # claims, evidence, the ledger, the check,
 node scripts/e2e.mjs proof            # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test (88 checks, about two minutes a build) starts DSH from
+The real-DSH test (112 checks, about two minutes a build) starts DSH from
 each `.e2e/dsh-<version>` install and from the installed app's own DSH,
 each in a throwaway home, with Session Watch and Proof and a scripted model
-(`test/e2e/fake-model.mjs`) that plays both the agent and the check model.
+(`test/e2e/fake-model.mjs`) that plays both the agent and the check model
+(which offers a low and a high effort).
 From real sessions it shows that a claim its turn's run shows stays quiet
 (in a summary turn, the turn before shows it), that a claim with nothing
 behind it is flagged, that one the run's own output denies is called
-contradicted with the run's words, and that a reply that only asks makes
-no claim. It asks for checks from the page and the endpoint: each runs in
-a new "Proof check · …" thread on the check model alone, and DSH's own log
-shows the read-only file policy and approvals that never ask before its
-first message; its model is offered only tools that read or run (and DSH's
-`subagent`), Proof's guard refuses the subagent and a commit, DSH's file
-policy stops a write, the checked session gets nothing and DSH's default
-model is unchanged. A slow check is stopped by DSH and settles as unclear,
-a new flagged claim is checked by itself, a fifth check in the hour waits
-and says until when, and switching checks off ends it. It restarts DSH in
-the middle of a check (the check settles, with why), runs with Session
-Watch off, starts with a wrong setting (named with its range, and fixed by
-saving a good value), checks Proof's file modes and loads it with
-`enabled: false`. It drives the page and Proof's settings in Plugins in a
-browser, light and dark, wide and narrow: the header, the sessions, the
-ledger and its filter, What the turn ran, the exports to Markdown, CSV,
-JSON and the clipboard, and Proof switched off and on in Plugins, its
+contradicted with the run's words (said once, commands drawn as code), and
+that a reply that only asks makes no claim. It asks for checks from the
+flag, the page and the endpoint: the focus moves to the check's line; each
+runs in a new "Proof check · …" thread on the check model alone, at low
+effort, and DSH's own log shows the read-only file policy and approvals
+that never ask before its first message; its model is offered only tools
+that read or run (and DSH's `subagent`), Proof's guard refuses the
+subagent and a commit, DSH's file policy stops a write, the checked
+session gets nothing and DSH's default model is unchanged. A NOT VERIFIED
+and a VERIFIED head their cards, and the verified claim is counted apart on
+the ledger, its session's row, the header and the exports. While a slow
+check runs, its thread says what it checks above the message box; the
+limit is raised meanwhile, and the check is still stopped at the minute it
+was given, and says so. A new flagged claim is checked by itself, a fifth
+check in the hour waits and says until when, and switching checks off ends
+it. It restarts DSH in the middle of a check (it settles at once: "DSH
+restarted while it ran …"), runs with Session Watch off, starts with a
+wrong setting (named with its range, and fixed by saving a good value),
+checks Proof's file modes, loads it with `enabled: false`, and then shows
+that a session made and one used meanwhile are listed again once it is
+back on. It drives the page and Proof's settings in Plugins in a browser,
+light and dark, wide and narrow: the header, the sessions, the ledger and
+its filter, What the turn ran, the checks in time order with their times
+in one column, the exports to Markdown, CSV, JSON and the clipboard (a
+copy logged as a copy), and Proof switched off and on in Plugins, its
 entry and flags gone and back. Pictures go to `.e2e/shots/proof/<build>/`.

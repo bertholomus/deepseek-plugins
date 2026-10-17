@@ -1578,6 +1578,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const [busy, setBusy] = React.useState(false);
             const [said, setSaid] = React.useState({ text: '', bad: false });
             const [owed, setOwed] = React.useState(undefined);
+            // Claims checked from this ledger: they stay in the flagged view when their check verifies them, so the
+            // answer shows where Check was pressed (and the focus stays on it), until the view is chosen again.
+            const [kept, setKept] = React.useState(() => new Set());
             const data = live.data;
             const title = data?.session?.title || row?.title || 'Untitled session';
             const act = async (fn) => {
@@ -1593,6 +1596,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             // The check's own line says it started (and takes the focus): nothing to say here as well.
             const onCheck = (claim) => act(async () => {
                 setOwed(claim.id);
+                setKept((was) => (was.has(claim.id) ? was : new Set([...was, claim.id])));
                 const { problem } = await run('check', { sessionId, claimId: claim.id });
                 if (problem) fail(`Not checked: ${problem}`);
                 void live.refresh();
@@ -1622,7 +1626,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 return undefined;
             });
             const claims = data?.claims ?? [];
-            const open = (c) => c.verdict !== 'backed' && !isVerified(c);
+            const open = (c) => (c.verdict !== 'backed' && !isVerified(c)) || kept.has(c.id);
             const shown = (filter === 'flagged' ? claims.filter(open) : claims).slice().reverse();
             const counts = data?.counts;
             const verifiedCount = counts?.verified ?? 0;
@@ -1643,7 +1647,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             label: 'Show',
                             value: filter,
                             options: [{ value: 'flagged', label: `Flagged (${counts?.flagged ?? 0})` }, { value: 'all', label: `All claims (${counts?.total ?? 0})` }],
-                            onChoose: (next) => setFilter(next),
+                            onChoose: (next) => {
+                                setFilter(next);
+                                setKept(new Set());
+                            },
                         }),
                         h('div', { className: `${P}-actions`, role: 'group', 'aria-label': 'Export the ledger' },
                             h('span', { className: `${P}-meta` }, 'Export:'),

@@ -15,7 +15,8 @@
  * contains (`setPlan`), the same way: `{ calls, reply }`, or `{ slow: true }`
  * to hold the reply open until the test lets go or DSH stops the turn.
  *
- * Every request is recorded: its model, the tools it offered, and the first
+ * Every request is recorded: its model, the reasoning effort it asked for
+ * (none for a model without efforts), the tools it offered, and the first
  * words of the message it answers.
  *
  * @module plugins/proof/test/e2e/fake-model
@@ -92,6 +93,7 @@ export async function startProofModel({ models = ['fake-model', 'fake-check'] } 
             n: requests.length + 1,
             at: Date.now(),
             model: body.model,
+            effort: body.reasoning_effort ?? body.reasoning?.effort,
             tools: (body.tools ?? []).map((t) => t.function?.name),
             anchor: String(action.anchor ?? '').slice(0, 400),
             action: action.tool ? { tool: action.tool } : action.slow ? { slow: true } : { text: String(action.text ?? '').slice(0, 120) },
