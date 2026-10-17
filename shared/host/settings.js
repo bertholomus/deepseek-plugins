@@ -74,11 +74,16 @@ export function onOff(settings, key, title = '') {
     throw new SettingError(key, `${named(key, title)} must be true or false (it is ${shown(value)})`);
 }
 
-/** Throw unless `settings[key]` is one of `choices`. */
+/**
+ * Throw unless `settings[key]` is one of `choices`: a list of values, or the
+ * values with the words the settings form shows for them ({ off: 'Nowhere' }),
+ * so the error names the choice as the form does, with the value in brackets.
+ */
 export function oneOf(settings, key, choices, title = '') {
     const value = settings?.[key];
-    if (choices.includes(value)) return value;
-    const words = choices.map((c) => `"${c}"`);
+    const pairs = Array.isArray(choices) ? choices.map((c) => [c, '']) : Object.entries(choices);
+    if (pairs.some(([c]) => c === value)) return value;
+    const words = pairs.map(([c, word]) => (word ? `${word} ("${c}")` : `"${c}"`));
     throw new SettingError(key, `${named(key, title)} must be ${words.length > 1 ? `${words.slice(0, -1).join(', ')} or ${words.at(-1)}` : words[0]} (it is ${shown(value)})`);
 }
 

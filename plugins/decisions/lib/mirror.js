@@ -93,6 +93,28 @@ export class Mirror {
         this.last = undefined;
     }
 
+    /**
+     * When a once-an-hour note was last said ('held', 'problem'), kept in
+     * Decisions' state when there is one, so a restart does not say it again.
+     */
+    saidAt(note) {
+        const said = this.store?.data?.said;
+        if (said) return said[note] ?? { at: 0, text: '' };
+        return note === 'held' ? { at: this.heldReported, text: '' } : this.problemReported;
+    }
+
+    say(note, text, at) {
+        const said = this.store?.data?.said;
+        if (said) {
+            said[note] = { at, text };
+            this.store.change();
+        } else if (note === 'held') {
+            this.heldReported = at;
+        } else {
+            this.problemReported = { text, at };
+        }
+    }
+
     /** When the messages of the last hour went (only those that went). */
     recent(now = this.now()) {
         const list = Array.isArray(this.store?.data?.sent) ? this.store.data.sent : this.memory;
@@ -176,10 +198,12 @@ export class Mirror {
         if (!this.on) return { ok: false, reason: 'the mirror is off' };
         const now = this.now();
         if (this.recent(now).length + this.inFlight >= this.config.mirrorPerHour) {
-            if (now - this.heldReported > 3600000) {
-                this.heldReported = now;
-                this.journal.add({ kind: 'mirror', text: `Held back sent messages: ${this.config.mirrorPerHour} went out in the last hour`, why: 'The hourly limit in Decisions\' settings caps them; Decisions still lists everything.', state: 'held' });
+            if (now - this.saidAt('held').at > 3600000) {
+                this.say('held', '', now);
+                const where = this.config.mirror === 'webhook' ? (this.place ? `the webhook at ${this.place}` : 'the webhook') : (this.place || 'your command');
+                this.journal.add({ kind: 'mirror', text: `Held back new cards: ${this.config.mirrorPerHour} went to ${where} in the last hour`, why: 'The hourly limit in Decisions\' settings caps them; Decisions still lists every card. This is said once an hour.', state: 'held' });
             }
+            this.last = { at: now, ok: false, reason: 'the hourly limit is reached', held: true };
             return { ok: false, reason: 'the hourly limit is reached' };
         }
         // Its place in the hour is taken now, before anything is awaited, so a burst of new cards cannot pass the limit.
@@ -189,8 +213,9 @@ export class Mirror {
             const target = await this.target();
             if (target.problem) {
                 // Said once an hour, or when the reason changes: every card would say the same.
-                if (this.problemReported.text !== target.problem || now - this.problemReported.at > 3600000) {
-                    this.problemReported = { text: target.problem, at: now };
+                const said = this.saidAt('problem');
+                if (said.text !== target.problem || now - said.at > 3600000) {
+                    this.say('problem', target.problem, now);
                     this.journal.add({ kind: 'mirror', text: 'Could not send new cards elsewhere', reason: target.problem, state: 'not sent' });
                 }
                 this.last = { at: now, ok: false, reason: target.problem };
@@ -223,7 +248,7 @@ export class Mirror {
         const result = target.problem ? { ok: false, reason: target.problem }
             : await this.deliver(target, 'Decisions can reach you here. When something waits on you in DSH, a short note comes here.', { kind: 'test', title: 'Test', question: 'Decisions can reach you here.' });
         this.journal.set(entry.id, result.ok ? { text: `Sent a test message${to}`, state: 'sent' } : { text: `Test message not sent${to}`, state: 'not sent', reason: result.reason });
-        this.last = { at: this.now(), ok: result.ok, ...(result.reason ? { reason: result.reason } : {}) };
+        this.last = { at: this.now(), ok: result.ok, test: true, ...(result.reason ? { reason: result.reason } : {}) };
         return { ...result, place: target.place ?? '' };
     }
 

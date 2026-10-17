@@ -697,6 +697,110 @@ test('kit: a choice with no valid saved value can still be reached with Tab; onc
     assert.equal(control.props.className, undefined);
 });
 
+test('kit: with no valid value chosen, the arrows walk from the choice that has the cursor, as they do once one is chosen', () => {
+    const { react, mount } = statefulReact();
+    const kit = kitWith({ react });
+    const f = { name: 'mirror', title: 'Send to', options: [{ value: 'off', label: 'Nowhere' }, { value: 'webhook', label: 'Webhook' }, { value: 'command', label: 'Command' }] };
+    const tabs = [0, 1, 2].map(() => ({ tabIndex: -1, getAttribute: () => 'false' }));
+    for (const t of tabs) t.closest = () => t;
+    const chosen = [];
+    const part = mount(kit.ChoiceControl, { id: 'x', f, value: 'slack', disabled: false, onChange: (v) => chosen.push(v) });
+    part.tree.props.ref.current = { querySelectorAll: () => tabs };
+    const press = (key, target = tabs[0]) => {
+        const done = { prevented: false, stopped: false };
+        part.tree.props.onKeyDownCapture({ key, target, preventDefault: () => { done.prevented = true; }, stopPropagation: () => { done.stopped = true; } });
+        return done;
+    };
+    // DSH's control walks from "before the first" here: right picks Nowhere, left the one before the last.
+    assert.deepEqual(press('ArrowRight'), { prevented: true, stopped: true }, 'DSH\'s own walk does not run');
+    press('ArrowLeft');
+    press('ArrowDown', tabs[1]);
+    press('Home', tabs[2]);
+    press('End');
+    assert.deepEqual(chosen, ['webhook', 'command', 'command', 'off', 'command']);
+    assert.deepEqual(press('Tab'), { prevented: false, stopped: false }, 'other keys are left alone');
+    // Once a value is chosen, DSH's own walk does it.
+    part.update({ value: 'webhook' });
+    assert.deepEqual(press('ArrowRight'), { prevented: false, stopped: false });
+    assert.equal(chosen.length, 5);
+});
+
+test('kit: "Open X\'s settings" for a choice with no valid value puts the cursor on its first choice, not on "Use the default"', async () => {
+    const { react, mount } = statefulReact();
+    const window = {};
+    const kit = kitWith({ react, window });
+    kit.setNavigation({ openBundle: () => {} });
+    const focused = [];
+    // As the row draws it: "Use the default", then the choices, none selected, the first one taking the keys.
+    const children = [
+        { tag: 'button', focus: () => focused.push('Use the default') },
+        { tag: 'button', role: 'tab', tabindex: '0', focus: () => focused.push('Nowhere') },
+        { tag: 'button', role: 'tab', tabindex: '-1', focus: () => focused.push('Webhook') },
+    ];
+    const one = (child, selector) => {
+        const [, tag = '', attrs = ''] = /^([a-z]*)((?:\[[^\]]+\])*)/.exec(selector.trim()) ?? [];
+        if (tag && tag !== child.tag) return false;
+        if (!tag && !attrs) return false;
+        return [...attrs.matchAll(/\[([\w-]+)="([^"]*)"\]/g)].every(([, name, value]) => (name === 'role' ? child.role : name === 'tabindex' ? child.tabindex : name === 'aria-selected' ? String(child.selected === true) : undefined) === value);
+    };
+    const row = {
+        getAttribute: () => 'mirror',
+        getClientRects: () => [{}],
+        scrollIntoView: () => {},
+        querySelector: (selector) => children.find((child) => !/:not|type=/.test(selector) && one(child, selector)) ?? null,
+    };
+    const fields = [{ name: 'mirror', kind: 'choice', title: 'Send to', hint: '', default: 'off', options: [] }];
+    const form = { subscribe: () => () => {}, getSnapshot: () => ({ writable: true, saving: false, mirror: { text: 'slack', overridden: true, invalid: true } }), actions: { edit() {}, resetField() {}, save() {}, discard() {} } };
+    const view = mount(kit.SettingsBody, { form, name: 'X', fields });
+    elementsOf(view.tree).find((e) => e.props?.['data-suite-settings']).props.ref.current = { querySelectorAll: () => [row] };
+    kit.openPlugin('dsh-plugin-x', { focus: 'mirror' });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.deepEqual(focused, ['Nowhere']);
+    view.unmount();
+});
+
+test('kit: its style sheet is the one it marked itself; a sheet DSH marked with its name is neither taken nor removed', () => {
+    const sheets = [];
+    const style = () => {
+        const attrs = new Map();
+        const el = {
+            textContent: '',
+            setAttribute: (name, value) => attrs.set(name, String(value)),
+            getAttribute: (name) => attrs.get(name) ?? null,
+            remove: () => { const i = sheets.indexOf(el); if (i >= 0) sheets.splice(i, 1); },
+        };
+        return el;
+    };
+    const matching = (selector) => {
+        const m = /^style\[([\w-]+)="([^"]*)"\]$/.exec(selector);
+        return m ? sheets.filter((el) => el.getAttribute(m[1]) === m[2]) : [];
+    };
+    const document = {
+        head: { appendChild: (el) => { sheets.push(el); return el; } },
+        createElement: () => style(),
+        querySelector: (selector) => matching(selector)[0] ?? null,
+        querySelectorAll: (selector) => matching(selector),
+    };
+    // Another plugin's sheet, added while this plugin started: DSH gave it this plugin's name.
+    const nest = style();
+    nest.setAttribute('data-plugin', 'dsh-plugin-x');
+    nest.textContent = '.nest{}';
+    sheets.push(nest);
+    const kit = kitWith({ document });
+    kit.injectStyle(['.own{}']);
+    assert.equal(sheets.length, 2, 'its own sheet is added beside the other');
+    assert.equal(nest.textContent, '.nest{}', 'the other sheet is not written over');
+    const own = sheets.find((el) => el !== nest);
+    assert.equal(own.getAttribute('data-plugin'), 'dsh-plugin-x', 'marked as its own from the start, so DSH gives it to no one else');
+    assert.equal(own.getAttribute('data-plugin-css'), 'dsh-plugin-x/client.css');
+    assert.match(own.textContent, /\.own\{\}/);
+    kit.injectStyle(['.own2{}']);
+    assert.equal(sheets.length, 2, 'drawn again in place');
+    assert.match(own.textContent, /\.own2\{\}/);
+    kit.removeStyle();
+    assert.deepEqual(sheets, [nest], 'switched off: its own sheet goes, the other stays');
+});
+
 test('kit: "Open X\'s settings" brings the setting the problem is about into view, with the cursor in it', async () => {
     const { react, mount } = statefulReact();
     const window = {};

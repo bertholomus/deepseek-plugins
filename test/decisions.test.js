@@ -7,10 +7,10 @@ import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import {
-    KINDS, answerMessage, answerWords, askCard, byUrgency, checkAnswers, coordinatorView, headline, mirrorText, questionCards, questionOf, readable, replyCard, threadCards,
+    KINDS, answerMessage, answerWords, askCard, byUrgency, checkAnswers, coordinatorView, headline, holdsTurn, mirrorText, plainLinks, questionCards, questionOf, readable, replyCard, threadCards,
 } from '../plugins/decisions/lib/cards.js';
 import { Holds, approvalProof, approvalWords, callArguments, describeCall, lateAnswerProof, questionProof, reasonText } from '../plugins/decisions/lib/holds.js';
-import { Inbox, heldOutcome, notifyOutcome, parseData, relayedThread } from '../plugins/decisions/lib/inbox.js';
+import { Inbox, heldOutcome, notifyOutcome, parseData, relayedHandback, relayedThread } from '../plugins/decisions/lib/inbox.js';
 import { Mirror, NO_ADDRESS, checkCommand, checkWebhook } from '../plugins/decisions/lib/mirror.js';
 import { DEFAULTS, LIVE_SETTINGS, SETTING_TITLES, changedWords, checkConfig, savedEntry } from '../plugins/decisions/lib/config.js';
 import { SettingsCheck } from '../plugins/decisions/lib/shared/settings.js';
@@ -615,6 +615,71 @@ test('inbox: a coordinating chat\'s relay of a thread\'s decision is one card, t
     assert.deepEqual((await inbox.list()).waiting.map((c) => c.kind).sort(), ['decision', 'thread']);
 });
 
+test('inbox: answering a thread\'s card never brings the chat\'s relay of it back as a card, here, in the thread, or after a restart', async () => {
+    const { dir, dsh, clock, inbox, store, journal } = setup();
+    coordinated(dsh, clock);
+    await clock.advance(1000);
+    // The chat relays the handback with a markdown link to the thread, as the coordinator writes it.
+    chatTurn(dsh, '[Fix CI](.dsh-thread/t1): the thread needs your decision on the node version. Pin node 20 or move to 22?', { kind: 'agent-message', form: 'relay', senderSessionId: 'th' });
+    await clock.advance(1000);
+    const [card] = (await inbox.list()).waiting;
+    assert.equal(card.kind, 'thread');
+    const announced = entries(journal, 'new').length;
+    await inbox.answer(card.id, { text: 'Move to 22.' });
+    await clock.advance(1000);
+    let { waiting } = await inbox.list();
+    assert.deepEqual(waiting, [], 'the thread has the answer; the chat\'s relay of the same question is not a card');
+    assert.equal(entries(journal, 'new').length, announced, 'nothing new announced');
+    // DSH restarts while the thread works on the answer: the relay is still known for what it is.
+    inbox.stop();
+    store.flush();
+    const again = setup({ dir, clock, dsh });
+    await clock.advance(1000);
+    assert.deepEqual((await again.inbox.list()).waiting, [], 'after a restart too');
+    // The thread hands back again, done; the chat relays that and asks the person something new: that is a card.
+    dsh.extra.coordinatorSession = (s) => (s.id === 'c' ? {
+        turn: 2,
+        v: {
+            role: 'coordinator',
+            threads: [{ id: 't1', session: 'th', title: 'Fix CI', resolved: false, handback: { status: 'done', summary: 'Moved to 22.', at: new Date(clock.now()).toISOString() } }],
+            cards: [{ turn: 2, seq: 20, kind: 'handback', thread: 't1', status: 'done' }],
+        },
+    } : s.id === 'th' ? { turn: 2, v: { role: 'thread' } } : undefined);
+    await clock.advance(1000);
+    chatTurn(dsh, 'CI is on node 22 now. Should I merge it?', { kind: 'agent-message', form: 'relay', senderSessionId: 'th' });
+    await clock.advance(1000);
+    ({ waiting } = await again.inbox.list());
+    assert.deepEqual(waiting.map((c) => [c.kind, c.sessionId, c.question]), [['reply', 'c', 'Should I merge it?']], 'a relay of a handback that asked nothing is the chat\'s own question');
+});
+
+test('inbox: a thread answered in the thread itself takes the chat\'s relay of its question with it', async () => {
+    const { dsh, clock, inbox } = setup();
+    coordinated(dsh, clock);
+    await clock.advance(1000);
+    chatTurn(dsh, 'Thread “Fix CI” asks: pin node 20 or move to 22?', { kind: 'agent-message', form: 'relay', senderSessionId: 'th' });
+    await clock.advance(1000);
+    assert.deepEqual((await inbox.list()).waiting.map((c) => c.kind), ['thread']);
+    // The person answers in the thread's own session.
+    dsh.write('th', 'Move to 22.', { kind: 'user' });
+    await clock.advance(1000);
+    assert.deepEqual((await inbox.list()).waiting, [], 'the thread runs on the answer; the chat\'s relay is not listed');
+});
+
+test('cards: a markdown link in a question reads as its words', () => {
+    assert.equal(plainLinks('[Port pick](.dsh-thread/t1): the thread needs your decision.'), 'Port pick: the thread needs your decision.');
+    assert.equal(plainLinks('See [the docs](https://example.com/a b) and [x]'), 'See [the docs](https://example.com/a b) and [x]', 'not a link: kept');
+});
+
+test('inbox: a chat\'s relay is matched to its handback: the newest from its sender before it came, and only one that asked', () => {
+    const handbacks = [{ thread: 'th1', at: 50000, asks: true }, { thread: 'th1', at: 80000, asks: false }, { thread: 'th2', at: 90000, asks: true }];
+    assert.equal(relayedHandback({ inKind: 'agent-message', inFrom: 'th1', inAt: 52000 }, handbacks), handbacks[0]);
+    assert.equal(relayedHandback({ inKind: 'agent-message', inFrom: 'th1', inAt: 81000 }, handbacks), undefined, 'the newer handback asked nothing');
+    assert.equal(relayedHandback({ inKind: 'agent-message', inFrom: 'th2', inAt: 95000 }, handbacks), handbacks[2]);
+    assert.equal(relayedHandback({ inKind: 'agent-message', inAt: 91000 }, handbacks), handbacks[2], 'no sender kept: the one that came at the same time');
+    assert.equal(relayedHandback({ inKind: 'agent-message', inAt: 200000 }, handbacks), undefined);
+    assert.equal(relayedHandback({ inKind: 'user', inFrom: 'th1', inAt: 52000 }, handbacks), undefined, 'the person wrote last');
+});
+
 test('inbox: a chat\'s relay is matched to its thread by sender, or by time for a state saved before senders were kept', () => {
     const cards = [{ kind: 'thread', sessionId: 'th1', at: 50000 }, { kind: 'thread', sessionId: 'th2', at: 90000 }];
     assert.equal(relayedThread({ inKind: 'agent-message', inFrom: 'th2', inAt: 1 }, cards), cards[1]);
@@ -699,6 +764,9 @@ test('inbox: a held approval a restart cut off says so; one let go and answered 
     first.inbox.stop();
     first.store.flush();
     dsh.stop();
+    assert.deepEqual(entries(first.journal, 'released').map((e) => [e.cardId, e.text, e.why, e.state]), [
+        ['approval:s:c1', 'Handed back to the session\'s own card', 'Decisions stopped while it held this; answer it in the session.', 'handed back'],
+    ]);
     const second = setup({ dir, clock, dsh });
     await clock.advance(1000);
     const said = entries(second.journal, 'elsewhere');
@@ -715,16 +783,61 @@ test('inbox: a held approval a restart cut off says so; one let go and answered 
     const win3 = windowStandIn();
     const outcome = second.inbox.holds.approval(next.request, () => win3.forward(next.request));
     await clock.advance(1000);
-    second.inbox.holds.release('approval');
+    second.inbox.holds.release('approval', 'kind');
     await clock.advance(1000);
     assert.ok(second.store.data.held['approval:t:c3'], 'it still waits in the session: nothing to say yet');
     assert.equal(entries(second.journal, 'elsewhere').length, 1);
+    // What happened says it went back, and why; its card says so too, and still ranks as holding a turn.
+    const handed = entries(second.journal, 'released')[0];
+    assert.deepEqual([handed.cardId, handed.why], ['approval:t:c3', 'Approvals were switched off in Decisions\' settings while Decisions held this; answer it in the session.']);
+    assert.equal(second.store.data.held['approval:t:c3'].released, 'kind');
+    const back = (await second.inbox.list()).waiting.find((c) => c.id === 'approval:t:c3');
+    assert.deepEqual([back.answer, back.released], ['open', 'kind']);
+    assert.equal(back.hint, 'Decisions handed this back to the session\'s own card when approvals were switched off in its settings: answer it in the session.');
+    assert.equal(holdsTurn(back), true, 'it holds a running turn, so it ranks first');
     win3.answer('allowed-once');
     assert.equal(await outcome, 'allowed-once');
     dsh.commit('t', 'approval/decided', { id: 'ap-c3', outcome: 'allowed-once' });
     await clock.advance(1000);
     assert.deepEqual([entries(second.journal, 'elsewhere')[0].text, entries(second.journal, 'elsewhere')[0].state], ['Answered in the session', 'answered']);
     assert.deepEqual(second.store.data.held, {});
+});
+
+test('inbox: a held question on a DSH that names no call (0.2.0) takes the call from the session, so its answer is proven too', async () => {
+    const { dsh, clock, inbox, journal } = setup();
+    await clock.advance(1000);
+    dsh.add('s', { title: 'Release' });
+    dsh.write('s', 'Ship it.');
+    dsh.commit('s', 'tool/call', { name: 'ask_user_question', callId: 'q7', arguments: JSON.stringify({ questions: [{ question: 'Which environment?' }] }) });
+    const signal = new AbortController().signal;
+    // DSH 0.2.0's request: no wait.callId.
+    const request = { agent: dsh.agents.get('s'), questions: [{ id: 'env', question: 'Which environment?', options: [{ label: 'staging' }, { label: 'production' }] }], signal };
+    const win = windowStandIn();
+    const outcome = inbox.holds.question(request, () => win.forward(request));
+    await clock.advance(1000);
+    const card = (await inbox.list()).waiting.find((c) => c.kind === 'question');
+    assert.equal(card.callId, 'q7', 'the question-box call the session waits on');
+    await inbox.answer(card.id, { answers: [{ id: 'env', selected: ['staging'] }] });
+    assert.deepEqual(await outcome, { answers: [{ id: 'env', selected: ['staging'] }] });
+    assert.equal(entries(journal, 'answer')[0].state, 'sending', 'not proven yet');
+    dsh.commit('s', 'tool/result', { message: { toolCallId: 'q7', content: '{"answers":[]}' } });
+    await clock.advance(1000);
+    assert.equal(entries(journal, 'answer')[0].state, 'answered', 'proven by the session\'s own log');
+});
+
+test('cards: what holds a running turn ranks first: a held approval, a live question, a running session\'s approval', () => {
+    assert.equal(holdsTurn({ kind: 'approval', answer: 'approval' }), true);
+    assert.equal(holdsTurn({ kind: 'approval', answer: 'open', running: true }), true);
+    assert.equal(holdsTurn({ kind: 'question', answer: 'questions', live: true }), true);
+    assert.equal(holdsTurn({ kind: 'question', answer: 'questions', late: true, live: false }), false);
+    assert.equal(holdsTurn({ kind: 'decision', answer: 'text', running: true }), false, 'a reply\'s question waits, it does not hold the turn');
+    const cards = [
+        { id: 'd', kind: 'decision', at: 1 },
+        { id: 'o', kind: 'approval', answer: 'open', running: true, at: 5 },
+        { id: 'q', kind: 'question', live: true, at: 3 },
+    ];
+    assert.deepEqual([...cards].sort(byUrgency).map((c) => c.id).slice(0, 2).sort(), ['o', 'q']);
+    assert.equal([...cards].sort(byUrgency).at(-1).id, 'd');
 });
 
 test('inbox: what became of a held request, read from its session', () => {
@@ -833,8 +946,15 @@ test('inbox: the badge counts what waits and what holds a running turn; the page
 });
 
 test('inbox: stored state is made safe when read', () => {
-    assert.deepEqual(parseData(undefined), { version: 1, seeded: false, seen: {}, dismissed: {}, answered: {}, held: {}, sent: [] });
-    assert.deepEqual(parseData({ seeded: true, seen: { a: 1, b: 'x' }, dismissed: [], answered: { c: 2 } }), { version: 1, seeded: true, seen: { a: 1 }, dismissed: {}, answered: { c: 2 }, held: {}, sent: [] });
+    assert.deepEqual(parseData(undefined), { version: 1, seeded: false, seen: {}, dismissed: {}, answered: {}, held: {}, sent: [], handbacks: {}, said: {} });
+    assert.deepEqual(parseData({ seeded: true, seen: { a: 1, b: 'x' }, dismissed: [], answered: { c: 2 } }), { version: 1, seeded: true, seen: { a: 1 }, dismissed: {}, answered: { c: 2 }, held: {}, sent: [], handbacks: {}, said: {} });
+    // A thread's handbacks and the once-an-hour notes: only well-formed ones are kept.
+    const kept = parseData({
+        handbacks: { 't1:5': { thread: 't1', chat: 'c', at: 5, asks: true }, bad: { thread: 't2', at: 'x' }, worse: 'x' },
+        said: { unshown: { at: 7, text: 'Not shown' }, held: { at: 'x' }, problem: 3 },
+    });
+    assert.deepEqual(kept.handbacks, { 't1:5': { thread: 't1', chat: 'c', at: 5, asks: true } });
+    assert.deepEqual(kept.said, { unshown: { at: 7, text: 'Not shown' } });
     const held = parseData({
         held: {
             'approval:s1:c1': { sessionId: 's1', kind: 'approval', title: 'Fix CI', question: 'Run it?', at: 5, turn: 3 },
@@ -986,12 +1106,24 @@ test('mirror: a refusal or an unreachable webhook is logged with the reason; pas
         assert.deepEqual([journal.list()[0].text, journal.list()[0].state], [`Sent to ${new URL(hook.url).host}`, 'sent']);
         // The count is kept in Decisions' state: a restart (a new mirror on the same file) goes on from it.
         await store.flush?.();
-        const again = new Mirror({ config, journal, store: new JsonStore(join(dir, 'state.json'), { parse: parseData, delayMs: 5 }), readAddress: keyStore(hook.url).read, now: clock.now });
+        const store2 = new JsonStore(join(dir, 'state.json'), { parse: parseData, delayMs: 5 });
+        const again = new Mirror({ config, journal, store: store2, readAddress: keyStore(hook.url).read, now: clock.now });
         assert.equal((await again.describe()).lastHour, 1);
         assert.deepEqual(await again.send(CARD), { ok: true });
         assert.deepEqual(await again.send(CARD), { ok: false, reason: 'the hourly limit is reached' });
         assert.deepEqual(await again.send(CARD), { ok: false, reason: 'the hourly limit is reached' });
         assert.equal(journal.list().filter((e) => e.state === 'held').length, 1, 'said once');
+        assert.equal(journal.list().find((e) => e.state === 'held').text, `Held back new cards: 2 went to the webhook at ${new URL(hook.url).host} in the last hour`);
+        // The page knows the last one was held back (not a failure to report).
+        assert.deepEqual((await again.describe()).last, { at: clock.now(), ok: false, reason: 'the hourly limit is reached', held: true });
+        // Said once an hour across a restart too.
+        await store2.flush?.();
+        const third = new Mirror({ config, journal, store: new JsonStore(join(dir, 'state.json'), { parse: parseData, delayMs: 5 }), readAddress: keyStore(hook.url).read, now: clock.now });
+        assert.deepEqual(await third.send(CARD), { ok: false, reason: 'the hourly limit is reached' });
+        assert.equal(journal.list().filter((e) => e.state === 'held').length, 1, 'not said again after the restart');
+        // A test goes past the limit, and is marked as a test for the page.
+        assert.equal((await third.test()).ok, true);
+        assert.equal((await third.describe()).last.test, true);
         // Sends on their way count too, so a burst of new cards cannot pass the limit.
         await clock.advance(HOUR + 1000);
         const burst = await Promise.all([1, 2, 3, 4].map(() => again.send(CARD)));
@@ -1052,7 +1184,7 @@ test('mirror and config: wrong values are said in words that name the setting; a
     };
     assert.deepEqual(wrong({ windowHours: 0 }), { key: 'windowHours', text: 'Keep a reply\'s question for (windowHours) must be a whole number of hours from 1 to 720 (it is 0)' });
     assert.deepEqual(wrong({ mirrorPerHour: 1000 }), { key: 'mirrorPerHour', text: 'Messages sent an hour, at most (mirrorPerHour) must be a whole number from 1 to 500 (it is 1000)' });
-    assert.deepEqual(wrong({ mirror: 'discord' }), { key: 'mirror', text: 'Also send new cards to (mirror) must be "off", "webhook" or "command" (it is "discord")' });
+    assert.deepEqual(wrong({ mirror: 'discord' }), { key: 'mirror', text: 'Also send new cards to (mirror) must be Nowhere ("off"), Webhook ("webhook") or Command ("command") (it is "discord")' });
     assert.deepEqual(wrong({ approvals: 'yes' }), { key: 'approvals', text: 'Tools waiting for approval (approvals) must be true or false (it is "yes")' });
     assert.match(wrong({ mirrorUrlEnv: 'https://discord.com/x' }).text, /^The key that holds the webhook address \(mirrorUrlEnv\) must be a name of letters, digits and _/);
     assert.match(wrong({ mirrorCommand: ['notify'] }).text, /^The command \(mirrorCommand\) must start with the program's full path/);

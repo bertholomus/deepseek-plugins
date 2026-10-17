@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULTS, LIVE_SETTINGS, checkConfig } from '../plugins/decisions/lib/config.js';
-import { OTHER_NAMES, elementsOf, loadClient, textIn } from './helpers/client.mjs';
+import { OTHER_NAMES, elementsOf, loadClient, statefulReact, textIn } from './helpers/client.mjs';
 
 const CLIENT = new URL('../plugins/decisions/lib/client.js', import.meta.url);
 // What the client builds lives in its own realm: compared as plain data.
@@ -97,6 +97,20 @@ test('browser half: the header says what waits, what it lists, and where else ne
     const saidTest = HeaderCard({ data: { ...base, mirror: { mode: 'webhook', place: 'hooks.example.com', perHour: 30, lastHour: 3 } }, busy: false, act, said: { text: 'Test message sent to hooks.example.com.', where: 'mirror', n: 1 } });
     assert.equal(elementsOf(saidTest).find((e) => e.props?.['data-decisions-test-said'] !== undefined).props.role, 'status');
     assert.match(textIn(saidTest), /Test message sent to hooks\.example\.com\./);
+    // A newer send of a new card says more than the test did: the test line goes; a failed one is said, with why and when.
+    const failedAt = Date.now();
+    const failed = HeaderCard({ data: { ...base, mirror: { mode: 'webhook', place: 'hooks.example.com', perHour: 30, lastHour: 3, last: { at: failedAt, ok: false, reason: 'hooks.example.com answered 500.' } } }, busy: false, act, said: { text: 'Test message sent to hooks.example.com.', where: 'mirror', n: 1, at: failedAt - 1000 } });
+    assert.doesNotMatch(textIn(failed), /Test message sent/);
+    const failedLine = elementsOf(failed).find((e) => e.props?.['data-decisions-mirror-failed'] !== undefined);
+    assert.match(failedLine.props.className, /dshdc-warn/);
+    assert.match(textIn(failedLine), /^The last new card was not sent: hooks\.example\.com answered 500 \(/);
+    assert.equal(elementsOf(failedLine).find((e) => e.type === 'time')?.props.dateTime, new Date(failedAt).toISOString(), 'with when');
+    // A test's own failure, the hourly limit, or a send that worked: no such line.
+    for (const last of [{ at: failedAt, ok: false, test: true, reason: 'x' }, { at: failedAt, ok: false, held: true, reason: 'the hourly limit is reached' }, { at: failedAt, ok: true }]) {
+        assert.equal(elementsOf(HeaderCard({ data: { ...base, mirror: { mode: 'webhook', place: 'hooks.example.com', perHour: 30, lastHour: 3, last } }, busy: false, act })).find((e) => e.props?.['data-decisions-mirror-failed'] !== undefined), undefined, JSON.stringify(last));
+    }
+    // A test sent after the last new card still says so.
+    assert.match(textIn(HeaderCard({ data: { ...base, mirror: { mode: 'webhook', place: 'hooks.example.com', perHour: 30, lastHour: 3, last: { at: failedAt - 5000, ok: true } } }, busy: false, act, said: { text: 'Test message sent to hooks.example.com.', where: 'mirror', n: 1, at: failedAt } })), /Test message sent/);
     const opened = [];
     kit.setNavigation({ openBundle: (name) => opened.push(name) });
     const missing = HeaderCard({ data: { ...base, mirror: { mode: 'webhook', perHour: 30, lastHour: 0, problem: 'No webhook address is set yet: add it in Decisions\' settings in Plugins' } }, busy: false, act });
@@ -105,10 +119,65 @@ test('browser half: the header says what waits, what it lists, and where else ne
     elementsOf(missing).find((e) => e.type === 'Button' && textIn(e) === 'Open Decisions\' settings').props.onClick();
     elementsOf(missing).find((e) => e.type === 'Button' && textIn(e) === TEXT.settings).props.onClick();
     assert.deepEqual(opened, ['dsh-plugin-decisions', 'dsh-plugin-decisions']);
+    // Notifications not running: the way to switch them on.
+    const noNotes = HeaderCard({ data: { ...base, notifications: false }, busy: false, act });
+    assert.equal(elementsOf(noNotes).find((e) => e.props?.['data-decisions-notify'] !== undefined).props['data-decisions-notify'], 'not running');
+    elementsOf(noNotes).find((e) => e.type === 'Button' && textIn(e) === 'Open Notifications in Plugins').props.onClick();
+    assert.equal(opened.at(-1), 'dsh-plugin-notifications');
+    assert.equal(elementsOf(HeaderCard({ data: base, busy: false, act })).find((e) => e.type === 'Button' && textIn(e) === 'Open Notifications in Plugins'), undefined, 'not while they run');
     kit.setNavigation(undefined);
     assert.equal(elementsOf(HeaderCard({ data: base, busy: false, act })).find((e) => e.type === 'Button'), undefined, 'no settings button on a DSH that cannot open it');
     assert.match(textIn(HeaderCard({ data: { ...base, mirror: { mode: 'command', place: 'notify', perHour: 30, lastHour: 0 } }, busy: false, act })), /New cards also go to notify: 0 of 30 this hour\./);
     assert.match(textIn(HeaderCard({ data: { ...base, watchProblem: { text: 'How long a message may wait to be read (deliveryTimeoutSeconds) must be a whole number of seconds from 10 to 86400 (it is 5)' } }, busy: false, act })), /Session Watch uses its default for a wrong setting: .*\(it is 5\)\. Change it in Session Watch's settings in Plugins\./);
+});
+
+test('browser half: with notifications not running, the header offers Notifications in Plugins only when it is installed', async () => {
+    for (const [bundles, words, button] of [
+        [[{ name: 'dsh-plugin-notifications', installed: true, enabled: false }], /not running: switch it on in Plugins to get them\./, true],
+        [[{ name: 'dsh-plugin-decisions', installed: true, enabled: true }], /not installed: add it in Plugins to get them\./, false],
+    ]) {
+        const { react, mount } = statefulReact();
+        const { client } = loadClient(CLIENT, { react });
+        const { kit, HeaderCard } = client.internals;
+        const asked = [];
+        kit.setConnection({ rpc: { call: async (_path, method) => { asked.push(method); return { ok: true, value: bundles }; } } });
+        kit.setNavigation({ openBundle: () => {} });
+        const header = mount(HeaderCard, { data: { ...base, notifications: false }, busy: false, act() {} });
+        await settle();
+        const line = elementsOf(header.tree).find((e) => e.props?.['data-decisions-notify'] !== undefined);
+        assert.match(textIn(line), words);
+        assert.equal(elementsOf(line).some((e) => e.type === 'Button' && textIn(e) === 'Open Notifications in Plugins'), button);
+        assert.deepEqual(asked, ['pluginManager/listBundles'], 'DSH\'s own list, read once');
+        header.unmount();
+    }
+});
+
+test('browser half: the answer box is one line until you start answering, and what your last answer did stays true', () => {
+    const { react, mount } = statefulReact();
+    const { client } = loadClient(CLIENT, { react });
+    const { DecisionCard } = client.internals;
+    const { WaitingCard } = loadClient(CLIENT).client.internals;
+    const act = async () => undefined;
+    // One line, so a list of questions stays short; room to write once you are in it, and it stays open.
+    const card = mount(DecisionCard, { card: CARDS.decision, onOpen() {}, act, busyId: undefined, now: Date.now() });
+    const box = () => elementsOf(card.tree).find((e) => e.type === 'textarea');
+    assert.equal(box().props.rows, 1);
+    assert.match(box().props.className, /dshdc-textarea-closed/);
+    box().props.onFocus();
+    assert.equal(box().props.rows, 3);
+    assert.doesNotMatch(box().props.className, /closed/);
+    card.unmount();
+    assert.ok(client.internals.CSS.some((rule) => rule.includes('.dshdc-textarea.dshdc-textarea-closed{resize:none;min-height:0')), 'the closed box is one line high');
+
+    // "Waits in its queue" until the session has it, then says it reached it; a failure is said on the card instead.
+    const now = Date.now();
+    const said = { text: 'Your answer to “Schema” waits in its queue. What happened says when the session reads it.', where: 'list', n: 1, at: now, cardId: CARDS.decision.id, title: 'Schema' };
+    const line = (history, at = now) => textIn(elementsOf(WaitingCard({ data: { ...base, history }, onOpen() {}, act, busyId: undefined, now: at, said })).find((e) => e.props?.['data-decisions-said'] !== undefined) ?? '');
+    const entry = (state) => ({ id: 'j1', kind: 'answer', cardId: CARDS.decision.id, state, at: now });
+    assert.match(line([entry('in the queue')]), /waits in its queue/);
+    assert.equal(line([entry('delivered'), entry('in the queue')]), 'Your answer reached “Schema”.', 'the newest entry for the card counts');
+    assert.equal(line([entry('not delivered')]), '');
+    assert.equal(line([entry('in the queue')], now + 121000), '', 'gone after two minutes');
 });
 
 test('browser half: each card has the controls its kind takes, and sends what the host expects', async () => {
@@ -379,9 +448,14 @@ test('settings in Plugins: Decisions\' page there has its live settings, and the
     field.props.onEdit('http://hooks.example.com/x');
     field.props.onEdit('https://hooks.example.com/x');
     assert.deepEqual(form.edits, [['webhookAddress', ''], ['webhookAddress', 'https://hooks.example.com/x']]);
+    // What happened notes a set or removed address (never the address): the page's call to Decisions.
+    const told = [];
+    client.internals.kit.setConnection({ rpc: { call: async (_path, method, payload) => { told.push(plain([method, payload])); return { ok: true, value: { ok: true } }; } } });
     // Save writes it to the key store, under the key the settings name.
     assert.equal(await form.models[0].secrets[0].write('https://hooks.example.com/x'), true);
     assert.deepEqual(plain(keys.calls.at(-2)), ['set', 'DECISIONS_WEBHOOK_URL', 'https://hooks.example.com/x']);
+    await settle();
+    assert.deepEqual(told, [['dsh-plugin-decisions/addressChanged', { args: { change: 'set' } }]]);
     page = entry.component({});
     field = elementsOf(page).find((e) => e.type === 'SettingsSecretField');
     assert.equal(field.props.configured, true);
@@ -391,6 +465,10 @@ test('settings in Plugins: Decisions\' page there has its live settings, and the
     await settle();
     assert.deepEqual(plain(keys.calls.find((c) => c[0] === 'unset')), ['unset', 'DECISIONS_WEBHOOK_URL']);
     assert.equal(elementsOf(entry.component({})).find((e) => e.type === 'SettingsSecretField').props.configured, false);
+    await settle();
+    assert.deepEqual(told.at(-1), ['dsh-plugin-decisions/addressChanged', { args: { change: 'removed' } }]);
+    assert.ok(told.every(([, payload]) => !JSON.stringify(payload).includes('hooks.example.com')), 'the address never goes to Decisions');
+    client.internals.kit.setConnection(undefined);
     // The profile names another key, set where DSH starts: it says so and cannot be changed here.
     snapshot = { ...snapshot, value: { ...snapshot.value, mirrorUrlEnv: 'TEAM_HOOK' } };
     for (const fn of subscribers) fn();

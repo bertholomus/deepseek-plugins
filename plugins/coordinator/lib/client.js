@@ -5368,6 +5368,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const pass = React.useRef(() => {});
             pass.current = () => {
                 if (!tree?.isConnected || !sheet.current) return;
+                // Put back if something took it out of the page (it is drawn again from the rows below).
+                if (!sheet.current.isConnected) document.head.append(sheet.current);
                 const css = nestingCss(markNesting(tree));
                 if (sheet.current.textContent !== css) sheet.current.textContent = css;
                 readInOrder(tree);
@@ -5377,6 +5379,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             React.useLayoutEffect(() => {
                 if (!tree || typeof document === 'undefined') return undefined;
                 const style = document.createElement('style');
+                // Marked as the coordinator's from the start: DSH gives an unmarked sheet to whichever plugin is
+                // starting when it is added, and removes it when that plugin is switched off.
+                style.setAttribute('data-plugin', BUNDLE);
                 style.setAttribute('data-projects-nest', '');
                 document.head.append(style);
                 sheet.current = style;

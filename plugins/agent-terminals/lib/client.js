@@ -119,18 +119,34 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     ];
 
     /** Append the plugin's one style sheet to <head>, once: the kit's rules and the plugin's own. */
+    /*
+     * The plugin's own style sheet is found by the mark only this kit writes.
+     * DSH writes data-plugin="<bundle>" on every unmarked sheet added while a
+     * plugin starts, another plugin's included (and removes those with the
+     * plugin), so that mark cannot say which sheet is this one.
+     */
+    const SHEET = `style[data-plugin-css="${bundle}/client.css"]`;
     function injectStyle(own = [], target = doc) {
-        if (!target?.head || target.querySelector(`style[data-plugin="${bundle}"]`)) return;
+        if (!target?.head) return;
+        const text = [...css, ...own].join('\n');
+        const found = target.querySelector?.(SHEET);
+        if (found) {
+            if (found.textContent !== text) found.textContent = text;
+            return;
+        }
         const style = target.createElement('style');
+        // Marked as this plugin's from the start, so DSH never gives it to another plugin.
         style.setAttribute('data-plugin', bundle);
         style.setAttribute('data-plugin-css', `${bundle}/client.css`);
-        style.textContent = [...css, ...own].join('\n');
+        style.textContent = text;
         target.head.appendChild(style);
     }
 
-    /** Remove the plugin's style sheet (the plugin is switched off). */
+    /** Remove the plugin's style sheet (the plugin is switched off): its own only, never a sheet DSH marked with its name. */
     function removeStyle(target = doc) {
-        target?.querySelector?.(`style[data-plugin="${bundle}"]`)?.remove();
+        const all = target?.querySelectorAll?.(SHEET);
+        if (all) for (const el of [...all]) el.remove();
+        else target?.querySelector?.(SHEET)?.remove();
     }
 
     /** The window's DSH connection, as the plugin's parts receive it. */
@@ -787,7 +803,34 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const tabs = box.current?.querySelectorAll?.('[role="tab"]') ?? [];
             tabs.forEach((tab, i) => { tab.tabIndex = tab.getAttribute('aria-selected') === 'true' || (!known && i === 0) ? 0 : -1; });
         });
-        return h('span', { ref: box, className: `${P}-choice`, ...(known ? {} : { 'data-suite-unset': '' }) },
+        /*
+         * With no value chosen, DSH's control walks from "before the first"
+         * (an arrow right picks the first choice, an arrow left the one before
+         * the last). Walk from the choice that has the cursor instead, as it
+         * does once a value is chosen.
+         */
+        const walkUnset = (event) => {
+            if (known || disabled || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+            const tabs = [...(box.current?.querySelectorAll?.('[role="tab"]') ?? [])];
+            const from = Math.max(0, tabs.indexOf(event.target?.closest?.('[role="tab"]')));
+            const open = f.options.map((o, i) => (o.disabled === true ? -1 : i)).filter((i) => i >= 0);
+            if (!open.length) return;
+            let to;
+            if (event.key === 'Home') to = open[0];
+            else if (event.key === 'End') to = open.at(-1);
+            else {
+                const step = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : -1;
+                const n = f.options.length;
+                for (let k = 1; k < n && to === undefined; k += 1) {
+                    const i = ((from + step * k) % n + n) % n;
+                    if (open.includes(i)) to = i;
+                }
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            if (to !== undefined) onChange(f.options[to].value);
+        };
+        return h('span', { ref: box, className: `${P}-choice`, onKeyDownCapture: walkUnset, ...(known ? {} : { 'data-suite-unset': '' }) },
             h(ui.SegmentedControl, { id, label: f.title, value: known ? value : '', options: f.options, disabled, onChange, ...(known ? {} : { className: `${P}-seg-none` }) }));
     }
 
@@ -834,7 +877,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         if (!row || row.getClientRects?.().length === 0) return false;
         row.scrollIntoView?.({ block: 'center' });
         // The value itself first: DSH's own field draws "Use the default" before its input.
-        const control = ['input:not([type="hidden"])', 'textarea', 'select', '[role="tab"][aria-selected="true"]', '[role="switch"]', 'button']
+        // A choice with no value chosen: its first choice, which takes the keys (not "Use the default").
+        const control = ['input:not([type="hidden"])', 'textarea', 'select', '[role="tab"][aria-selected="true"]', '[role="tab"][tabindex="0"]', '[role="tab"]', '[role="switch"]', 'button']
             .map((selector) => row.querySelector(selector)).find(Boolean);
         control?.focus?.({ preventScroll: true });
         return true;
@@ -909,6 +953,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const named = scope.getSnapshot?.()?.value?.[f.keyFrom];
             return typeof named === 'string' && named ? named : f.defaultKey;
         };
+        // The plugin may log it (never the value): f.stored('set' | 'removed'), not waited for, so a Save never hangs on it.
+        const told = (change) => { void Promise.resolve().then(() => f.stored?.(change)).catch(() => {}); };
         const keeper = {
             info: { ref: refOf(), configured: false, writable: true },
             ref: refOf,
@@ -928,11 +974,14 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 let response;
                 try { response = await credentials.set(refOf(), text); } catch { response = { ok: false }; }
                 await keeper.read();
-                return response?.ok !== false && keeper.info.configured;
+                const ok = response?.ok !== false && keeper.info.configured;
+                if (ok) told('set');
+                return ok;
             },
             async remove() {
                 try { await credentials.unset(refOf()); } catch { /* the read below shows what is stored */ }
                 await keeper.read();
+                if (!keeper.info.configured) told('removed');
             },
         };
         return keeper;
@@ -943,8 +992,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
      * form (staged as typed, written on Save), registered only while DSH
      * serves them, which is while the plugin runs. Each field:
      * `{ name, kind: 'switch'|'choice'|'number'|'numbers'|'text'|'secret', title, hint, default, min?, max?, options?, group? }`;
-     * a secret also takes `keyFrom`, `defaultKey`, `check(text)`, and its
-     * labels (`setLabel`, `envLabel`, `unsetLabel`, `envHint`, `removeLabel`),
+     * a secret also takes `keyFrom`, `defaultKey`, `check(text)`, its
+     * labels (`setLabel`, `envLabel`, `unsetLabel`, `envHint`, `removeLabel`)
+     * and, to log it, `stored(change)` ('set' or 'removed', never the value),
      * and needs DSH's `remote.credentials`.
      * Does nothing on a DSH without settings forms.
      */

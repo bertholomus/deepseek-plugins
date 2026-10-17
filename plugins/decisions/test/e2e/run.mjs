@@ -25,20 +25,31 @@
  *   (the file is written), Reject stops it, and an answer in the window
  *   takes Decisions' card down and is logged as answered in the session.
  * - The question box: a waiting question answered from Decisions (its
- *   answer is the tool's result); a choice that was not offered is refused.
+ *   answer is the tool's result, which Decisions checks in the session's
+ *   log); a choice that was not offered is refused.
  *   (DSH's question box waits until it is answered unless a profile runs it
  *   in its timed mode; the late answer to a timed question whose wait ran
  *   out is covered by test/decisions.test.js.)
  * - A plugin's question (Autopilot's Ask first), answered from Decisions:
  *   Autopilot carries it out.
+ * - A coordinator's thread (the coordinator plugin) that hands back needing
+ *   a decision, relayed by its chat with a DECISION NEEDED line and a link:
+ *   one card, the thread's, with the chat's recommendation; answered, the
+ *   answer goes into the thread, and while the thread works on it neither
+ *   card comes back and nothing is announced.
  * - The page, from DSH's sidebar: the count, the cards with their controls,
- *   an answer and an approval from the page, dismiss and bring back, the
- *   history; light and dark pictures, a narrow window.
+ *   an answer and an approval from the page (a one-line answer box that
+ *   opens when you are in it; the page says when the answer reached the
+ *   session), dismiss and bring back, the history; light and dark pictures,
+ *   a narrow window.
  * - Its settings in Plugins (DSH's own form): a kind switched off leaves the
  *   list; the webhook address, refused when it cannot work, stored in DSH's
- *   key store (never the profile), shown as set, tested, used for new cards,
- *   never written to a log; a webhook that fails is said as a failure; the
- *   address removed again.
+ *   key store (never the profile), shown as set, noted in What happened by
+ *   its key, tested, used for new cards, never written to a log; a webhook
+ *   that fails is said as a failure, on the page too; the address removed
+ *   again, and noted.
+ * - Decisions switched off and on from Plugins beside the coordinator: its
+ *   page is styled again and the coordinator's sidebar sheet stays its own.
  * - A restart repeats nothing and keeps what is still waiting.
  * - A command instead of a webhook (the profile's mirrorCommand).
  * - A wrong setting: Decisions holds nothing and lists nothing, its page
@@ -138,6 +149,11 @@ ${off.includes('session-watch') ? '  disabled: true\n' : ''}  config:
 - id: decisions
   config:
 ${Object.entries({ windowHours: 72, ...decisions }).map(([key, value]) => `    ${key}: ${json(value)}`).join('\n')}
+- id: coordinator
+  config:
+    storeFile: ${json(join(run.home, 'coordinator', 'coordinator.json'))}
+    memoryDir: ${json(join(run.home, 'coordinator', 'memory'))}
+    logFile: ${json(join(run.home, 'coordinator', 'coordinator.log'))}
 `;
 const run = new DshRun({
     label: 'decisions',
@@ -147,9 +163,12 @@ const run = new DshRun({
         'dsh-plugin-session-watch': join(pluginsDir, 'session-watch'),
         'dsh-plugin-autopilot': join(pluginsDir, 'autopilot'),
         'dsh-plugin-decisions': join(pluginsDir, 'decisions'),
+        // A coordinator's threads hand back decisions, and its sidebar draws a style sheet of its own beside Decisions'.
+        'dsh-plugin-coordinator': join(pluginsDir, 'coordinator'),
     },
-    rows: rowsWith(),
 });
+// The rows name the run's own folder (the coordinator's files go there), so they are written once it exists.
+run.rows = rowsWith();
 const outside = join(run.root, 'outside');
 mkdirSync(outside, { recursive: true });
 
@@ -388,7 +407,7 @@ try {
         await idle(ids.target);
         const events = await run.events(ids.target);
         const result = events.find((e) => e.type === 'tool/result' && /staging/.test(e.text ?? ''));
-        check('the answer is taken, proven by the tool\'s result in the session\'s log', r.ok && entry.text === 'Answered: staging' && Boolean(result), json({ entry, result: result?.text?.slice(0, 200) }));
+        check('the answer is taken, proven by the tool\'s result in the session\'s log (Decisions checked it there)', r.ok && entry.text === 'Answered: staging' && Number.isFinite(entry.provedAt) && Boolean(result), json({ entry, result: result?.text?.slice(0, 200) }));
     });
     // ── A plugin's question ────────────────────────────────────────────
     ids.pilot = await run.newSession(`E2E:todos ${todos(['Rename the config keys', 'in_progress'])}\n#note=progress`, 'Config keys');
@@ -403,6 +422,40 @@ try {
             return s.value?.log?.find((e) => e.sessionId === ids.pilot && e.kind === 'nudge' && e.state === 'delivered');
         }, 'Autopilot\'s note, delivered', 30000, 300);
         check('answered from Decisions, Autopilot sends its note, delivered', r.ok && entry.state === 'answered' && pilotLog.state === 'delivered', json({ entry, pilotLog }));
+    });
+
+    // ── A coordinator's thread ─────────────────────────────────────────
+    await step('a coordinator\'s thread that needs a decision: one card, the thread\'s; answered, the chat\'s relay of it does not come back', async () => {
+        ids.chat = await run.newSession('E2E:say Ready to run threads.', 'Port chat');
+        await idle(ids.chat);
+        const on = await run.api('commands/execute', { agentId: ids.chat, line: '/coordinate', submittedAttachments: [] });
+        check('/coordinate makes the chat coordinate', on.ok === true, json(on).slice(0, 300));
+        // The thread hands back needing a decision; the chat relays it with a DECISION NEEDED line of its own, and a link.
+        const relay = 'E2E:say [Port pick](.dsh-thread/t1): the thread needs your decision.\\n\\nDECISION NEEDED: Port 8080 or 9090? — recommend: Port 8080';
+        const handback = { status: 'needs_decision', summary: `Port 8080 or 9090? I recommend 8080. ${relay}` };
+        await run.bridge('POST', `/sessions/${ids.chat}/prompt`, { text: call('thread_start', { ask: 'Pick the port.', title: 'Port pick', brief: `Pick the port, then report. ${call('thread_handback', handback)}` }) });
+        cards.thread = await waitFor(async () => (await state()).waiting.find((c) => c.kind === 'thread' && c.via?.sessionId === ids.chat), 'the thread\'s card', 40000, 300);
+        await waitFor(async () => /DECISION NEEDED: Port 8080 or 9090\?/.test((await run.session(ids.chat)).lastAssistant?.text ?? ''), 'the chat\'s relay', 30000, 300);
+        await sleep(1500);
+        let s = await state();
+        const mine = s.waiting.filter((c) => c.sessionId === ids.chat || c.sessionId === cards.thread.sessionId);
+        check('one card, the thread\'s, with the chat\'s recommendation; the chat\'s relay is not a second card', mine.length === 1 && mine[0].kind === 'thread' && mine[0].recommendation === 'Port 8080'
+            && /Port 8080 or 9090\?/.test(mine[0].question ?? ''), json(mine));
+        const newBefore = s.history.filter((e) => e.kind === 'new' && e.sessionId === ids.chat).length;
+        // Answered from Decisions: into the thread, which works on it (held open here); the chat's relay is still its newest reply.
+        const r = await api('answer', { id: cards.thread.id, answer: { text: 'Use 8080. E2E:slow' } });
+        check('the answer goes into the thread', r.ok, json(r));
+        await waitFor(async () => (await run.session(cards.thread.sessionId)).status === 'running', 'the thread to work on the answer', 20000, 300);
+        let back;
+        for (let i = 0; i < 12 && !back; i += 1) {
+            await sleep(500);
+            s = await state();
+            back = s.waiting.find((c) => c.sessionId === ids.chat || c.sessionId === cards.thread.sessionId);
+        }
+        check('while the thread works on it, neither the thread nor the chat\'s relay of its question comes back as a card', !back, json(back));
+        check('nothing is announced for the chat', s.history.filter((e) => e.kind === 'new' && e.sessionId === ids.chat).length === newBefore, json(s.history.filter((e) => e.sessionId === ids.chat).slice(0, 3)));
+        model.release();
+        await idle(cards.thread.sessionId).catch(() => {});
     });
 
     // ── The page ───────────────────────────────────────────────────────
@@ -447,13 +500,23 @@ try {
             const { page } = window;
             // A blocked session, answered in words from its card.
             const blocked = page.locator(`[data-decisions-id="${cards.staging.id}"]`);
-            await blocked.getByLabel('Your answer').fill('Use the read-only account for now.');
+            const box = blocked.getByLabel('Your answer');
+            const rowsBefore = await box.getAttribute('rows');
+            await box.focus();
+            const rowsOpen = await box.getAttribute('rows');
+            check('the answer box is one line until you are in it, then has room to write', rowsBefore === '1' && rowsOpen === '3', `${rowsBefore} → ${rowsOpen}`);
+            await box.fill('Use the read-only account for now.');
             await blocked.getByRole('button', { name: 'Send', exact: true }).click();
             await blocked.waitFor({ state: 'detached', timeout: 20000 });
             const said = (await page.locator('[data-decisions-said]').textContent()) ?? '';
             check('Send answers it: the card leaves, and the page says what the answer did', /^Your answer (reached “Staging check”\.|to “Staging check” waits in its queue\.)/.test(said), said);
             await entryFor(cards.staging.id, 'answer', 'delivered');
             check('the session reads the answer into a turn', await readIntoTurn(ids.staging, '[Decisions] The person answered your BLOCKED line (“The staging database refuses my login.”):\n\nUse the read-only account for now.'));
+            const reached = await waitFor(async () => {
+                const text = (await page.locator('[data-decisions-said]').textContent()) ?? '';
+                return text === 'Your answer reached “Staging check”.' ? text : null;
+            }, 'the page to say the answer reached the session', 15000, 300).catch(() => page.locator('[data-decisions-said]').textContent());
+            check('once the session has it, the page says so (not "waits in its queue")', reached === 'Your answer reached “Staging check”.', reached);
             // An approval that arrives while the page is open, allowed from the page.
             ids.page = await run.newSession(writeOutside('from-page.txt', 'It saves the summary.'), 'Summary writer');
             const approval = page.locator('[data-decisions-card="approval"]').first();
@@ -515,6 +578,8 @@ try {
             const profile = readFileSync(join(run.home, 'profiles', 'web', 'cordis.patch.yml'), 'utf8');
             check('the address is stored in DSH\'s key store under its key, and never in the profile', credentials.includes('DECISIONS_WEBHOOK_URL') && credentials.includes(TOKEN) && !profile.includes(TOKEN) && (await state()).mirror.mode === 'webhook', profile.slice(-300));
             check('the field says an address is set, and shows none of it', /An address is set/.test(await secret.innerText()) && (await field.inputValue()) === '' && !(await page.content()).includes(TOKEN), await secret.innerText());
+            const setLine = await waitFor(async () => (await state()).history.find((e) => e.kind === 'settings' && e.text === 'Webhook address set'), 'What happened to note the address', 15000, 300).catch(() => undefined);
+            check('What happened notes the address was set, naming its key and never the address', Boolean(setLine) && setLine.why === 'Kept in DSH\'s key store under DECISIONS_WEBHOOK_URL, never in the settings file.' && !json(setLine).includes(TOKEN), json(setLine));
             await shot(page, shots, 'settings-webhook-light');
             // Back on Decisions' page: where new cards go, and a test.
             await page.getByRole('button', { name: 'Decisions', exact: true }).first().click();
@@ -545,6 +610,12 @@ try {
             cards.failing = await waitCard(ids.failing, 'decision');
             const failed = await entryFor(cards.failing.id, 'mirror', 'not sent');
             check('a webhook that fails is logged as not sent, with the host\'s answer', failed.reason === `${hookHost} answered 500`, json(failed));
+            const failedLine = page.locator('[data-decisions-mirror-failed]');
+            await failedLine.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
+            const failedText = (await failedLine.count()) ? await failedLine.innerText() : '';
+            check('the page says the last new card was not sent, why and when; the older test line is gone', new RegExp(`^The last new card was not sent: ${pattern(hookHost)} answered 500 \\(.+\\)\\.$`).test(failedText)
+                && ((await page.locator('[data-decisions-test-said]').textContent()) ?? '') === '', failedText);
+            await shot(page, shots, 'mirror-failed-light', page.locator('[data-decisions-header]'));
             sink.answer(204);
             check('the webhook\'s secret part is in no log, no file of Decisions\', and not the profile', tokenFound().length === 0, tokenFound().join(', '));
             // The address removed again, from the form.
@@ -552,6 +623,8 @@ try {
             await page.locator('[data-suite-setting="webhookAddress"]').waitFor({ state: 'visible', timeout: 20000 });
             await page.locator('[data-suite-setting="webhookAddress"]').getByRole('button', { name: 'Remove the address' }).click();
             await waitFor(async () => (await page.locator('[data-suite-setting="webhookAddress"]').getAttribute('data-suite-secret')) === 'unset', 'the address to be removed', 15000, 300);
+            const removedLine = await waitFor(async () => (await state()).history.find((e) => e.kind === 'settings' && e.text === 'Webhook address removed'), 'What happened to note the removal', 15000, 300).catch(() => undefined);
+            check('What happened notes the address was removed', Boolean(removedLine), json((await state()).history.slice(0, 3)));
             await page.getByRole('button', { name: 'Decisions', exact: true }).first().click();
             const missing = page.locator('[data-decisions-mirror="problem"]');
             await missing.waitFor({ state: 'visible', timeout: 20000 });
@@ -562,6 +635,35 @@ try {
             check('no errors from the suite in the window', ours.length === 0, ours.join('\n'));
         }, async () => {
             if (window?.page) await shot(window.page, shots, 'failed-settings');
+        });
+        await step('Decisions switched off and on in Plugins beside the coordinator: each keeps its own style sheet', async () => {
+            const { page } = window;
+            // The coordinator's sheet that nests threads under their chat in the sidebar.
+            const nest = () => page.locator('style[data-projects-nest]').count();
+            await waitFor(async () => (await nest()) >= 1, 'the coordinator\'s sidebar sheet', 15000, 300).catch(() => {});
+            const before = await nest();
+            const off = await run.api('pluginManager/setBundleEnabled', { name: 'dsh-plugin-decisions', enabled: false });
+            await waitFor(async () => !(await api('state')).ok, 'Decisions to stop', 30000, 300);
+            await page.waitForTimeout(1500);
+            const whileOff = await nest();
+            const on = await run.api('pluginManager/setBundleEnabled', { name: 'dsh-plugin-decisions', enabled: true });
+            await waitFor(async () => (await api('state')).ok, 'Decisions to run again', 30000, 300);
+            await page.getByRole('button', { name: 'Decisions', exact: true }).first().click({ timeout: 20000 });
+            await page.locator('[data-decisions-page]').waitFor({ state: 'visible', timeout: 20000 });
+            await page.waitForTimeout(500);
+            const look = await page.evaluate(() => ({
+                sr: getComputedStyle(document.querySelector('[data-decisions-page] .dshdc-sr') ?? document.body).position,
+                glass: getComputedStyle(document.querySelector('[data-decisions-header]')).backgroundColor,
+                own: document.querySelectorAll('style[data-plugin-css="dsh-plugin-decisions/client.css"]').length,
+                nest: document.querySelectorAll('style[data-projects-nest]').length,
+                nestOwner: [...document.querySelectorAll('style[data-projects-nest]')].map((el) => el.getAttribute('data-plugin')),
+            }));
+            check('switched off and on from Plugins (as its page does)', off.ok && on.ok, json([off, on]).slice(0, 300));
+            check('the coordinator\'s sidebar sheet is its own and stays through it', before >= 1 && whileOff >= 1 && look.nest >= 1 && look.nestOwner.every((who) => who === 'dsh-plugin-coordinator'), json({ before, whileOff, look }));
+            check('Decisions\' page is styled again: one sheet of its own, hidden words hidden, glass behind the header', look.own === 1 && look.sr === 'absolute' && !/rgba\(0, 0, 0, 0\)/.test(look.glass), json(look));
+            await shot(page, shots, 'after-off-on-light');
+        }, async () => {
+            if (window?.page) await shot(window.page, shots, 'failed-off-on');
         });
         await window?.browser?.close().catch(() => {});
         window = undefined;

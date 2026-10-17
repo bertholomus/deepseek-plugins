@@ -166,8 +166,8 @@ export function apply(ctx, config) {
                 if (inbox.started) inbox.stop();
             } else {
                 // A kind switched off lets its held requests go back to DSH's own card alone.
-                if (settings.approvals === false) inbox.holds.release('approval');
-                if (settings.questions === false) inbox.holds.release('question');
+                if (settings.approvals === false) inbox.holds.release('approval', 'kind');
+                if (settings.questions === false) inbox.holds.release('question', 'kind');
                 if (inbox.started) inbox.soon(0);
                 else inbox.start();
             }

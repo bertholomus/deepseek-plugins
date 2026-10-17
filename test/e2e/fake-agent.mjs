@@ -22,6 +22,10 @@
  * --swallow-enter: the first Enter after each paste is ignored, as some
  * terminal apps do. Messages sent while it works wait, and are written to
  * the transcript when it reads them, as such apps do.
+ *
+ * STAND_IN_STYLE and STAND_IN_DATA give --style and --data when they are
+ * not passed, so a small wrapper named like a program acts as an installed
+ * CLI that keeps its conversations in its own folder (~/.<name>).
  */
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -32,8 +36,8 @@ const flag = (name) => {
     const at = argv.indexOf(name);
     return at === -1 ? undefined : argv[at + 1];
 };
-const style = flag('--style') ?? 'flags';
-const data = flag('--data');
+const style = flag('--style') ?? process.env.STAND_IN_STYLE ?? 'flags';
+const data = flag('--data') ?? process.env.STAND_IN_DATA;
 const swallowEnter = argv.includes('--swallow-enter');
 const cwd = process.cwd();
 const out = (text) => process.stdout.write(text);

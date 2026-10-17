@@ -112,18 +112,34 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     ];
 
     /** Append the plugin's one style sheet to <head>, once: the kit's rules and the plugin's own. */
+    /*
+     * The plugin's own style sheet is found by the mark only this kit writes.
+     * DSH writes data-plugin="<bundle>" on every unmarked sheet added while a
+     * plugin starts, another plugin's included (and removes those with the
+     * plugin), so that mark cannot say which sheet is this one.
+     */
+    const SHEET = `style[data-plugin-css="${bundle}/client.css"]`;
     function injectStyle(own = [], target = doc) {
-        if (!target?.head || target.querySelector(`style[data-plugin="${bundle}"]`)) return;
+        if (!target?.head) return;
+        const text = [...css, ...own].join('\n');
+        const found = target.querySelector?.(SHEET);
+        if (found) {
+            if (found.textContent !== text) found.textContent = text;
+            return;
+        }
         const style = target.createElement('style');
+        // Marked as this plugin's from the start, so DSH never gives it to another plugin.
         style.setAttribute('data-plugin', bundle);
         style.setAttribute('data-plugin-css', `${bundle}/client.css`);
-        style.textContent = [...css, ...own].join('\n');
+        style.textContent = text;
         target.head.appendChild(style);
     }
 
-    /** Remove the plugin's style sheet (the plugin is switched off). */
+    /** Remove the plugin's style sheet (the plugin is switched off): its own only, never a sheet DSH marked with its name. */
     function removeStyle(target = doc) {
-        target?.querySelector?.(`style[data-plugin="${bundle}"]`)?.remove();
+        const all = target?.querySelectorAll?.(SHEET);
+        if (all) for (const el of [...all]) el.remove();
+        else target?.querySelector?.(SHEET)?.remove();
     }
 
     /** The window's DSH connection, as the plugin's parts receive it. */
@@ -780,7 +796,34 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const tabs = box.current?.querySelectorAll?.('[role="tab"]') ?? [];
             tabs.forEach((tab, i) => { tab.tabIndex = tab.getAttribute('aria-selected') === 'true' || (!known && i === 0) ? 0 : -1; });
         });
-        return h('span', { ref: box, className: `${P}-choice`, ...(known ? {} : { 'data-suite-unset': '' }) },
+        /*
+         * With no value chosen, DSH's control walks from "before the first"
+         * (an arrow right picks the first choice, an arrow left the one before
+         * the last). Walk from the choice that has the cursor instead, as it
+         * does once a value is chosen.
+         */
+        const walkUnset = (event) => {
+            if (known || disabled || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+            const tabs = [...(box.current?.querySelectorAll?.('[role="tab"]') ?? [])];
+            const from = Math.max(0, tabs.indexOf(event.target?.closest?.('[role="tab"]')));
+            const open = f.options.map((o, i) => (o.disabled === true ? -1 : i)).filter((i) => i >= 0);
+            if (!open.length) return;
+            let to;
+            if (event.key === 'Home') to = open[0];
+            else if (event.key === 'End') to = open.at(-1);
+            else {
+                const step = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : -1;
+                const n = f.options.length;
+                for (let k = 1; k < n && to === undefined; k += 1) {
+                    const i = ((from + step * k) % n + n) % n;
+                    if (open.includes(i)) to = i;
+                }
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            if (to !== undefined) onChange(f.options[to].value);
+        };
+        return h('span', { ref: box, className: `${P}-choice`, onKeyDownCapture: walkUnset, ...(known ? {} : { 'data-suite-unset': '' }) },
             h(ui.SegmentedControl, { id, label: f.title, value: known ? value : '', options: f.options, disabled, onChange, ...(known ? {} : { className: `${P}-seg-none` }) }));
     }
 
@@ -827,7 +870,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         if (!row || row.getClientRects?.().length === 0) return false;
         row.scrollIntoView?.({ block: 'center' });
         // The value itself first: DSH's own field draws "Use the default" before its input.
-        const control = ['input:not([type="hidden"])', 'textarea', 'select', '[role="tab"][aria-selected="true"]', '[role="switch"]', 'button']
+        // A choice with no value chosen: its first choice, which takes the keys (not "Use the default").
+        const control = ['input:not([type="hidden"])', 'textarea', 'select', '[role="tab"][aria-selected="true"]', '[role="tab"][tabindex="0"]', '[role="tab"]', '[role="switch"]', 'button']
             .map((selector) => row.querySelector(selector)).find(Boolean);
         control?.focus?.({ preventScroll: true });
         return true;
@@ -902,6 +946,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const named = scope.getSnapshot?.()?.value?.[f.keyFrom];
             return typeof named === 'string' && named ? named : f.defaultKey;
         };
+        // The plugin may log it (never the value): f.stored('set' | 'removed'), not waited for, so a Save never hangs on it.
+        const told = (change) => { void Promise.resolve().then(() => f.stored?.(change)).catch(() => {}); };
         const keeper = {
             info: { ref: refOf(), configured: false, writable: true },
             ref: refOf,
@@ -921,11 +967,14 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 let response;
                 try { response = await credentials.set(refOf(), text); } catch { response = { ok: false }; }
                 await keeper.read();
-                return response?.ok !== false && keeper.info.configured;
+                const ok = response?.ok !== false && keeper.info.configured;
+                if (ok) told('set');
+                return ok;
             },
             async remove() {
                 try { await credentials.unset(refOf()); } catch { /* the read below shows what is stored */ }
                 await keeper.read();
+                if (!keeper.info.configured) told('removed');
             },
         };
         return keeper;
@@ -936,8 +985,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
      * form (staged as typed, written on Save), registered only while DSH
      * serves them, which is while the plugin runs. Each field:
      * `{ name, kind: 'switch'|'choice'|'number'|'numbers'|'text'|'secret', title, hint, default, min?, max?, options?, group? }`;
-     * a secret also takes `keyFrom`, `defaultKey`, `check(text)`, and its
-     * labels (`setLabel`, `envLabel`, `unsetLabel`, `envHint`, `removeLabel`),
+     * a secret also takes `keyFrom`, `defaultKey`, `check(text)`, its
+     * labels (`setLabel`, `envLabel`, `unsetLabel`, `envHint`, `removeLabel`)
+     * and, to log it, `stored(change)` ('set' or 'removed', never the value),
      * and needs DSH's `remote.credentials`.
      * Does nothing on a DSH without settings forms.
      */
@@ -986,6 +1036,26 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const PAGE = `${BUNDLE}:page`;
         const kit = suiteKit({ prefix: 'dshdc', bundle: BUNDLE, React, ui, h });
         const P = kit.P;
+        /** The plugin that shows notifications, opened in Plugins when it is not running. */
+        const NOTIFICATIONS_PACKAGE = 'dsh-plugin-notifications';
+        /** DSH's own list of plugins, as its Plugins page reads it. */
+        const pluginList = kit.link('pluginManager', { name: 'DSH\'s plugin list' });
+
+        /** Whether DSH has a plugin installed: true, false, or undefined while that is not known (then it is not said). */
+        function useInstalled(packageName, ask) {
+            const [installed, setInstalled] = React.useState(undefined);
+            React.useEffect(() => {
+                if (!ask) return undefined;
+                let alive = true;
+                void pluginList.call('listBundles').then((result) => {
+                    if (!alive || !result.ok || !Array.isArray(result.value)) return;
+                    const bundle = result.value.find((b) => kit.isRecord(b) && b.name === packageName);
+                    setInstalled(Boolean(bundle) && bundle.installed !== false);
+                });
+                return () => { alive = false; };
+            }, [ask]);
+            return installed;
+        }
         const api = kit.link(BUNDLE, { name: 'Decisions' });
 
         const TEXT = {
@@ -1054,6 +1124,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 keyFrom: 'mirrorUrlEnv',
                 defaultKey: 'DECISIONS_WEBHOOK_URL',
                 check: webhookProblem,
+                // What happened notes it; the address stays in DSH's key store.
+                stored: (change) => api.call('addressChanged', { change }),
                 setLabel: 'An address is set',
                 envLabel: 'Set where DSH starts',
                 unsetLabel: 'No address yet',
@@ -1080,6 +1152,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-label{font:var(--dsw-font-xs-strong-13);color:var(--dsw-alias-label-primary)}`,
             `.${P}-textarea,.${P}-input{box-sizing:border-box;width:100%;min-width:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm);background:var(--${P}-fill);color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-14)}`,
             `.${P}-textarea{resize:vertical;min-height:4.5em}`,
+            `.${P}-textarea.${P}-textarea-closed{resize:none;min-height:0;height:auto}`,
             `.${P}-textarea::placeholder,.${P}-input::placeholder{color:var(--${P}-text-2)}`,
             `.${P}-question{margin:0;padding:0;border:0;min-width:0;display:flex;flex-direction:column;gap:6px}`,
             `.${P}-legend{padding:0;margin:0 0 2px;font:var(--dsw-font-s-strong-14);color:var(--dsw-alias-label-primary);white-space:pre-wrap;overflow-wrap:anywhere}`,
@@ -1107,9 +1180,11 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return off.length ? `Not listed, as its settings say: ${listWords(off)}. DECISION NEEDED and BLOCKED lines and other plugins' questions always are.` : '';
         }
 
-        function notifyText(data) {
+        function notifyText(data, installed) {
             if (!data.notify) return 'Notifications are off in its settings.';
-            return data.notifications ? 'Each new card notifies you.' : 'Each new card would notify you, but the Notifications plugin is not running: switch it on in Plugins to get them.';
+            if (data.notifications) return 'Each new card notifies you.';
+            return installed === false ? 'Each new card would notify you, but the Notifications plugin is not installed: add it in Plugins to get them.'
+                : 'Each new card would notify you, but the Notifications plugin is not running: switch it on in Plugins to get them.';
         }
 
         /** Where new cards also go, or why they cannot. */
@@ -1187,15 +1262,23 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return h('button', { type: 'button', className: `${P}-link ${P}-session`, onClick: () => onOpen(sessionId), title: 'Open this session' }, title || 'Untitled session');
         }
 
+        /** Whether the mirror's last send of a new card failed (a test's failure is said where you sent it). */
+        const mirrorFailed = (m) => Boolean(m && m.mode !== 'off' && !m.problem && kit.isRecord(m.last) && m.last.ok === false && !m.last.test && !m.last.held && Number.isFinite(m.last.at));
+
         function HeaderCard({ data, busy, act, said }) {
+            // "Test message sent" stays only until a newer send says more.
+            const last = data.mirror?.last;
+            const testSaid = said?.where === 'mirror' && Boolean(said.text) && !(kit.isRecord(last) && !last.test && Number.isFinite(said.at) && last.at > said.at);
             const waiting = data.waiting.length;
-            const urgent = data.waiting.filter((c) => c.answer === 'approval' || c.live).length;
+            const urgent = data.waiting.filter((c) => c.answer === 'approval' || c.live === true || ((c.kind === 'approval' || c.kind === 'question') && c.running === true)).length;
             // With nothing waiting, the list's own empty state says so: said once.
             const status = !data.enabled ? TEXT.disabled
                 : waiting === 0 ? ''
                     : [`${waiting} waiting on you`, urgent ? `${urgent} holding a running turn` : ''].filter(Boolean).join(' · ');
             const mirror = mirrorText(data.mirror);
             const canOpen = kit.canOpenPlugin();
+            // Not running: installed and switched off (a button to it), or not installed at all (no button to nowhere).
+            const notesInstalled = useInstalled(NOTIFICATIONS_PACKAGE, data.enabled && data.notify && !data.notifications);
             return h(kit.Card, {
                 title: TEXT.title,
                 headingLevel: 1,
@@ -1207,13 +1290,18 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             status ? h('p', { className: `${P}-status` }, status) : null,
             data.enabled ? h('div', { className: `${P}-lines` },
                 sourcesText(data.sources) ? h('div', { className: `${P}-line`, 'data-decisions-sources': '' }, sourcesText(data.sources)) : null,
-                h('div', { className: `${P}-line`, 'data-decisions-notify': '' }, notifyText(data)),
+                h('div', { className: `${P}-line`, 'data-decisions-notify': data.notify ? (data.notifications ? 'on' : notesInstalled === false ? 'not installed' : 'not running') : 'off' },
+                    h('span', null, notifyText(data, notesInstalled)),
+                    data.notify && !data.notifications && notesInstalled !== false && canOpen
+                        ? h(ui.Button, { variant: 'ghost', size: 'sm', onClick: () => kit.openPlugin(NOTIFICATIONS_PACKAGE) }, 'Open Notifications in Plugins') : null),
                 mirror ? h('div', { className: `${P}-line${data.mirror.problem ? ` ${P}-warn` : ''}`, 'data-decisions-mirror': data.mirror.problem ? 'problem' : data.mirror.mode },
                     h('span', null, mirror),
                     data.mirror.problem
                         ? (canOpen ? h(ui.Button, { variant: 'ghost', size: 'sm', onClick: () => kit.openPlugin(BUNDLE) }, 'Open Decisions\' settings') : null)
                         : h(ui.Button, { variant: 'ghost', size: 'sm', disabled: busy, onClick: () => void act('testMirror', {}) }, 'Send a test')) : null,
-                mirror ? h('div', { className: said?.where === 'mirror' ? `${P}-line ${P}-ok` : `${P}-sr`, role: 'status', 'aria-live': 'polite', 'data-decisions-test-said': '' }, said?.where === 'mirror' ? said.text : '') : null) : null,
+                mirrorFailed(data.mirror) ? h('div', { className: `${P}-line ${P}-warn`, 'data-decisions-mirror-failed': '' },
+                    h('span', null, `The last new card was not sent: ${String(data.mirror.last.reason ?? 'it failed').replace(/\.$/, '')} (`, h(kit.TimeText, { at: data.mirror.last.at }), ').')) : null,
+                mirror ? h('div', { className: testSaid ? `${P}-line ${P}-ok` : `${P}-sr`, role: 'status', 'aria-live': 'polite', 'data-decisions-test-said': '' }, testSaid ? said.text : '') : null) : null,
             data.watchProblem ? h('p', { className: `${P}-note`, 'data-decisions-watch-problem': '' }, `Session Watch uses its default for a wrong setting: ${String(data.watchProblem.text).replace(/\.$/, '')}. Change it in Session Watch's settings in Plugins.`) : null);
         }
 
@@ -1227,16 +1315,19 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
 
         function TextAnswer({ card, busy, answer }) {
             const [text, setText] = React.useState('');
+            // One line until you start answering; then room to write (it stays open, so no button moves under the pointer).
+            const [open, setOpen] = React.useState(false);
             const id = `${P}-answer-${domId(card.id)}`;
             const send = () => { if (text.trim()) void answer({ text }).then((ok) => { if (ok) setText(''); }); };
             return h('div', { className: `${P}-answer` },
                 h('label', { className: `${P}-label`, htmlFor: id }, 'Your answer'),
                 h('textarea', {
                     id,
-                    className: `${P}-textarea`,
-                    rows: 3,
+                    className: `${P}-textarea${open || text ? '' : ` ${P}-textarea-closed`}`,
+                    rows: open || text ? 3 : 1,
                     value: text,
                     disabled: busy,
+                    onFocus: () => setOpen(true),
                     placeholder: card.recommendation ? 'Write your answer, or go with the recommendation' : 'Write your answer',
                     onChange: (event) => setText(event.target.value),
                     onKeyDown: (event) => {
@@ -1278,13 +1369,14 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
 
         function AskAnswer({ card, busy, answer }) {
             const [text, setText] = React.useState('');
+            const [open, setOpen] = React.useState(false);
             const id = `${P}-answer-${domId(card.id)}`;
             return h('div', { className: `${P}-answer` },
                 (card.options ?? []).length ? h('div', { className: `${P}-actions` },
                     ...card.options.map((o, i) => h(ui.Button, { key: o.id, variant: i === 0 ? 'primary' : 'outline', size: 'sm', disabled: busy, onClick: () => void answer({ option: o.id }) }, o.label))) : null,
                 card.freeText ? [
                     h('label', { key: 'l', className: `${P}-label`, htmlFor: id }, (card.options ?? []).length ? 'Or answer in your words' : 'Your answer'),
-                    h('textarea', { key: 't', id, className: `${P}-textarea`, rows: 2, value: text, disabled: busy, onChange: (event) => setText(event.target.value) }),
+                    h('textarea', { key: 't', id, className: `${P}-textarea${open || text ? '' : ` ${P}-textarea-closed`}`, rows: open || text ? 2 : 1, value: text, disabled: busy, onFocus: () => setOpen(true), onChange: (event) => setText(event.target.value) }),
                     h('div', { key: 'a', className: `${P}-actions` }, h(ui.Button, { variant: 'outline', size: 'sm', disabled: busy || !text.trim(), onClick: () => void answer({ text }) }, 'Send')),
                 ] : null);
         }
@@ -1336,8 +1428,23 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     h(ui.Button, { variant: 'ghost', size: 'sm', disabled: busy, onClick: () => void act('dismiss', { id: card.id }, card) }, 'Dismiss')));
         }
 
+        /**
+         * What your last answer did, kept true: once the log shows the session
+         * has it, the line says so; when it failed, the card itself says why;
+         * after two minutes it goes.
+         */
+        function saidNow(said, data, now) {
+            if (said?.where !== 'list' || !said.text) return '';
+            if (Number.isFinite(said.at) && (now ?? Date.now()) - said.at > 120000) return '';
+            if (!said.cardId) return said.text;
+            const entry = (data.history ?? []).find((e) => e.kind === 'answer' && e.cardId === said.cardId);
+            if (entry?.state === 'delivered' || entry?.state === 'answered') return said.title ? `Your answer reached “${said.title}”.` : 'Your answer reached the session.';
+            if (entry && ['not delivered', 'not confirmed', 'failed'].includes(entry.state)) return '';
+            return said.text;
+        }
+
         function WaitingCard({ data, onOpen, act, busyId, now, said }) {
-            const shown = said?.where === 'list' ? said.text : '';
+            const shown = saidNow(said, data, now);
             const line = React.useRef(null);
             const acted = React.useRef(0);
             React.useEffect(() => { if (shown) acted.current = Date.now(); }, [said?.n]);
@@ -1416,7 +1523,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 const { problem, value } = await run(method, args);
                 setBusyId(undefined);
                 if (problem && method !== 'answer') setFailure(problem);
-                if (!problem) setSaid((was) => ({ text: saidText(method, card, value), where: method === 'testMirror' ? 'mirror' : 'list', n: was.n + 1 }));
+                if (!problem) setSaid((was) => ({ text: saidText(method, card, value), where: method === 'testMirror' ? 'mirror' : 'list', n: was.n + 1, at: Date.now(), ...(method === 'answer' && card?.id ? { cardId: card.id, title: card.title ?? '' } : {}) }));
                 void live.refresh();
                 return problem;
             }, [live.refresh]);

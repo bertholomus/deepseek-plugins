@@ -20,7 +20,7 @@
 import { clip, errorText, isRecord, later } from './shared/safe.js';
 import { cutOff, plainError } from './shared/words.js';
 import { APPROVAL_ANSWERS, Holds, approvalProof, approvalWords, lateAnswerProof, questionProof } from './holds.js';
-import { ANSWER_MAX, answerMessage, answerWords, askCard, byUrgency, checkAnswers, coordinatorView, headline, lead, questionCards, readable, replyCard, threadCards } from './cards.js';
+import { ANSWER_MAX, answerMessage, answerWords, askCard, byUrgency, checkAnswers, coordinatorView, handbacksOf, headline, lead, questionCards, readable, replyCard, threadCards } from './cards.js';
 
 /** Ids kept per list in the store (the newest). */
 const KEEP = 600;
@@ -52,7 +52,28 @@ function heldMap(value) {
             question: typeof item.question === 'string' ? item.question.slice(0, 300) : '',
             at: Number.isFinite(item.at) ? item.at : 0,
             ...(Number.isSafeInteger(item.turn) && item.turn >= 0 ? { turn: item.turn } : {}),
+            ...(item.released === 'off' || item.released === 'kind' ? { released: item.released } : {}),
         };
+    }
+    return out;
+}
+
+/** Handbacks seen in coordinating chats, by "<thread>:<at>" (the newest 200): what a chat's relay can be about. */
+function handbackMap(value) {
+    if (!isRecord(value)) return {};
+    const kept = Object.entries(value)
+        .filter(([key, item]) => typeof key === 'string' && key.length <= 300 && isRecord(item) && typeof item.thread === 'string' && typeof item.chat === 'string' && Number.isFinite(item.at))
+        .sort((a, b) => b[1].at - a[1].at)
+        .slice(0, 200);
+    return Object.fromEntries(kept.map(([key, item]) => [key, { thread: item.thread.slice(0, 128), chat: item.chat.slice(0, 128), at: item.at, asks: item.asks === true }]));
+}
+
+/** When the once-an-hour notes were last said: `{ [note]: { at, text } }`. */
+function saidMap(value) {
+    if (!isRecord(value)) return {};
+    const out = {};
+    for (const [key, item] of Object.entries(value).slice(0, 20)) {
+        if (typeof key === 'string' && key.length <= 40 && isRecord(item) && Number.isFinite(item.at)) out[key] = { at: item.at, text: typeof item.text === 'string' ? item.text.slice(0, 300) : '' };
     }
     return out;
 }
@@ -66,6 +87,10 @@ export function parseData(value) {
         dismissed: idMap(value?.dismissed),
         answered: idMap(value?.answered),
         held: heldMap(value?.held),
+        handbacks: handbackMap(value?.handbacks),
+        // Notes said at most once an hour (a notification that could not show, the mirror held back or unable
+        // to send): when each was last said, so a restart does not say them again.
+        said: saidMap(value?.said),
         // When the mirror's messages of the last hour went (sent ones only), for its hourly limit.
         sent: Array.isArray(value?.sent) ? value.sent.filter((at) => Number.isFinite(at)).slice(-500) : [],
     };
@@ -141,6 +166,26 @@ export function relayedThread(state, cards) {
     if (typeof state.inFrom === 'string') return cards.find((card) => card.sessionId === state.inFrom);
     const inAt = Number(state.inAt) || 0;
     return cards.find((card) => card.at > 0 && Math.abs(card.at - inAt) <= RELAY_MS);
+}
+
+/**
+ * The handback a coordinating chat's last message relays, among those
+ * Decisions has seen in that chat: the newest one from the message's
+ * sender (or, when the chat's state names none, the one that came at the
+ * same time) that came before the message. Returned only when it asked the
+ * person: the chat's reply to it says the same thing, so it is never a card
+ * of its own, while the thread's card waits and after it is answered.
+ * @param {object | undefined} state - the chat's watcher state.
+ * @param {Array<{ thread: string, at: number, asks: boolean }>} handbacks - the chat's handbacks.
+ */
+export function relayedHandback(state, handbacks) {
+    if (!handbacks.length || state?.inKind !== 'agent-message') return undefined;
+    const inAt = Number(state.inAt) || 0;
+    const from = typeof state.inFrom === 'string' ? state.inFrom : undefined;
+    const before = handbacks
+        .filter((h) => (from ? h.thread === from : Math.abs(h.at - inAt) <= RELAY_MS) && (!inAt || h.at <= inAt + RELAY_MS))
+        .sort((a, b) => b.at - a.at)[0];
+    return before?.asks ? before : undefined;
 }
 
 export class Inbox {
@@ -249,6 +294,25 @@ export class Inbox {
             delete data.held[card.id];
             this.store.change();
         }
+        if (change.by === 'released') {
+            const why = change.why === 'kind' ? 'kind' : 'off';
+            if (Object.hasOwn(data.held, card.id)) {
+                data.held[card.id] = { ...data.held[card.id], released: why };
+                this.store.change();
+            }
+            this.journal.add({
+                kind: 'released',
+                cardId: card.id,
+                sessionId: card.sessionId,
+                title: card.title,
+                text: 'Handed back to the session\'s own card',
+                why: why === 'kind'
+                    ? `${card.kind === 'approval' ? 'Approvals were' : 'Questions in the question box were'} switched off in Decisions' settings while Decisions held this; answer it in the session.`
+                    : 'Decisions stopped while it held this; answer it in the session.',
+                question: card.question,
+                state: 'handed back',
+            });
+        }
         // A question whose wait ran out stays open as a late question; nothing to log.
         if (change.by === 'window' && this.started && change.code !== 'ASK_TIMED_OUT') {
             const answered = change.error === undefined;
@@ -283,16 +347,25 @@ export class Inbox {
         const byId = new Map(rows.map((row) => [row.sessionId, row]));
         const found = new Map();
         const add = (card) => { if (card && !found.has(card.id)) found.set(card.id, card); };
+        const handbacks = [];
         // A held request's title as DSH lists it now (a new session's title may come after its first request).
-        for (const card of this.holds.cards()) if (config[card.kind === 'approval' ? 'approvals' : 'questions'] !== false) add({ ...card, title: byId.get(card.sessionId)?.title || card.title });
+        for (const card of this.holds.cards()) {
+            if (config[card.kind === 'approval' ? 'approvals' : 'questions'] === false) continue;
+            const row = byId.get(card.sessionId);
+            // DSH 0.2.0 names no call for a question it asks: the session's state has the question-box call that waits, so its answer is proven too.
+            const asking = card.kind === 'question' && !card.callId && typeof row?.state?.asking?.call === 'string' ? row.state.asking.call : undefined;
+            add({ ...card, title: row?.title || card.title, ...(asking ? { callId: asking } : {}) });
+        }
         for (const row of rows) {
             if (!readable(row)) continue;
             try {
                 if (config.approvals && row.status === 'running') {
                     for (const item of row.state?.approvals ?? []) {
                         const words = approvalWords({ toolName: item.tool, reason: item.reason });
+                        const id = `approval:${row.sessionId}:${item.call ?? item.id}`;
+                        const released = data.held[id]?.released;
                         add({
-                            id: `approval:${row.sessionId}:${item.call ?? item.id}`,
+                            id,
                             kind: 'approval',
                             sessionId: row.sessionId,
                             title: row.title || 'Untitled session',
@@ -302,6 +375,10 @@ export class Inbox {
                             at: Number(item.at) || 0,
                             running: true,
                             answer: 'open',
+                            // Decisions held it, and gave it back to the session's own card when it (or approvals) was switched off.
+                            ...(released ? { released, hint: released === 'kind'
+                                ? 'Decisions handed this back to the session\'s own card when approvals were switched off in its settings: answer it in the session.'
+                                : 'Decisions handed this back to the session\'s own card when it stopped: answer it in the session.' } : {}),
                         });
                     }
                 }
@@ -313,21 +390,28 @@ export class Inbox {
                     }
                 }
                 add(replyCard(row, { replies: config.replies, windowMs, now }));
-                if (config.threads) for (const card of threadCards(row, this.watch.projection?.(row.sessionId, 'coordinatorSession'), byId)) add(card);
+                if (config.threads) {
+                    const projection = this.watch.projection?.(row.sessionId, 'coordinatorSession');
+                    for (const card of threadCards(row, projection, byId)) add(card);
+                    handbacks.push(...handbacksOf(row, projection));
+                }
             } catch (error) {
                 this.logger?.warn?.(`decisions: could not read ${row.sessionId}: ${errorText(error)}`);
             }
         }
         for (const ask of this.watch.asks?.() ?? []) add(askCard(ask, byId));
         // A thread's handback, its own last reply and its coordinating chat's relay of it say the same
-        // thing: keep the handback's card, with any recommendation.
+        // thing: keep the handback's card, with any recommendation. Once the handback is answered (here,
+        // in the thread or in the chat), the chat's relay of it asks nothing new: it is not listed again.
         const threads = [...found.values()].filter((card) => card.kind === 'thread');
+        const known = config.threads ? this.rememberHandbacks(handbacks) : [];
         for (const card of [...found.values()]) {
             if (!['decision', 'blocked', 'reply'].includes(card.kind)) continue;
-            const thread = threads.find((t) => t.sessionId === card.sessionId) ?? relayedThread(byId.get(card.sessionId)?.state, threads.filter((t) => t.via?.sessionId === card.sessionId));
-            if (!thread) continue;
+            const chat = byId.get(card.sessionId)?.state;
+            const open = threads.find((t) => t.sessionId === card.sessionId) ?? relayedThread(chat, threads.filter((t) => t.via?.sessionId === card.sessionId));
+            if (!open && !relayedHandback(chat, known.filter((h) => h.chat === card.sessionId))) continue;
             found.delete(card.id);
-            if (card.recommendation && !thread.recommendation) thread.recommendation = card.recommendation;
+            if (open && card.recommendation && !open.recommendation) open.recommendation = card.recommendation;
         }
         const waiting = [];
         const dismissed = [];
@@ -348,6 +432,30 @@ export class Inbox {
         waiting.sort(byUrgency);
         dismissed.sort((a, b) => b.dismissedAt - a.dismissedAt);
         return { waiting, dismissed, rows: byId };
+    }
+
+    /**
+     * Keep the handbacks just seen, so a chat's relay of one is still known
+     * after its thread's card goes (answered, or the thread moved on) and
+     * after a restart.
+     * @param {Array<{ thread: string, chat: string, at: number, asks: boolean }>} seen
+     * @returns {Array<{ thread: string, chat: string, at: number, asks: boolean }>} every handback kept.
+     */
+    rememberHandbacks(seen) {
+        const data = this.store.data;
+        let changed = false;
+        for (const item of seen) {
+            const key = `${item.thread}:${item.at}`;
+            const was = data.handbacks[key];
+            if (was && was.asks === item.asks && was.chat === item.chat) continue;
+            data.handbacks[key] = { thread: item.thread, chat: item.chat, at: item.at, asks: item.asks };
+            changed = true;
+        }
+        if (changed) {
+            data.handbacks = parseData({ handbacks: data.handbacks }).handbacks;
+            this.store.change();
+        }
+        return Object.values(data.handbacks);
     }
 
     /**
@@ -486,11 +594,15 @@ export class Inbox {
         }
         const outcome = notifyOutcome(result);
         const now = this.now();
+        // A notification that could not show is said once an hour (kept across restarts), not for every card.
+        const said = this.store.data.said;
         if (outcome.state !== 'shown') {
-            if (this.unshown?.reason === outcome.reason && now - this.unshown.at < 3600000) return;
-            this.unshown = { reason: outcome.reason, at: now };
-        } else {
-            this.unshown = undefined;
+            if (said.unshown?.text === outcome.reason && now - said.unshown.at < 3600000) return;
+            said.unshown = { at: now, text: outcome.reason };
+            this.store.change();
+        } else if (said.unshown) {
+            delete said.unshown;
+            this.store.change();
         }
         this.journal.add({
             kind: 'notify',

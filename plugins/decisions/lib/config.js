@@ -54,7 +54,7 @@ export function checkConfig(settings) {
     onOff(settings, 'enabled', t.enabled);
     for (const key of ['approvals', 'questions', 'replies', 'threads', 'notify']) onOff(settings, key, t[key]);
     wholeNumber(settings, 'windowHours', 1, 720, 'hours', t.windowHours);
-    oneOf(settings, 'mirror', ['off', 'webhook', 'command'], t.mirror);
+    oneOf(settings, 'mirror', { off: 'Nowhere', webhook: 'Webhook', command: 'Command' }, t.mirror);
     keyName(settings, 'mirrorUrlEnv', t.mirrorUrlEnv);
     commandLine(settings, 'mirrorCommand', { optional: true }, t.mirrorCommand);
     wholeNumber(settings, 'mirrorPerHour', 1, 500, '', t.mirrorPerHour);

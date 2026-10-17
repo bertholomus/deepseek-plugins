@@ -13,7 +13,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { request } from 'node:http';
+import { createServer, request } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -156,15 +156,17 @@ function zstdFrames(buf) {
  */
 export class DshRun {
     /**
-     * @param {{ label: string, bin: string, plugins: Record<string, string>, rows?: string, env?: Record<string, string> }} options
-     *   plugins: package name → folder, linked into the web profile; rows: more cordis.patch.yml rows (YAML, one level in).
+     * @param {{ label: string, bin: string, plugins: Record<string, string>, rows?: string, env?: Record<string, string>, port?: number }} options
+     *   plugins: package name → folder, linked into the web profile; rows: more cordis.patch.yml rows (YAML, one level in);
+     *   port: the window's port, the same after each restart (a window keeps its saved state across one); any free one without.
      */
-    constructor({ label, bin, plugins, rows = '', env = {} }) {
+    constructor({ label, bin, plugins, rows = '', env = {}, port = 0 }) {
         this.label = label;
         this.dsh = bin.endsWith('.js') ? [process.execPath, bin] : [bin];
         this.plugins = plugins;
         this.rows = rows;
         this.env = env;
+        this.port = port;
         this.root = mkdtempSync(join(tmpdir(), `dsh-${label}-e2e-`));
         this.home = join(this.root, 'home');
         this.ws = join(this.root, 'ws');
@@ -227,7 +229,7 @@ ${this.rows}`);
     start() {
         const out = openSync(this.log, 'a');
         const local = '127.0.0.1,localhost';
-        this.child = spawn(this.dsh[0], [...this.dsh.slice(1), '--profile', 'web', '--no-open', '--port', '0'], {
+        this.child = spawn(this.dsh[0], [...this.dsh.slice(1), '--profile', 'web', '--no-open', '--port', String(this.port)], {
             cwd: this.ws,
             env: {
                 ...process.env, DSH_HOME: this.home, FAKE_LLM_KEY: 'sk-fake', DSH_TELEMETRY_DISABLED: '1', NO_PROXY: local, no_proxy: local,
@@ -477,6 +479,15 @@ ${this.rows}`);
         rmSync(this.root, { recursive: true, force: true });
         if (this.sockDir !== this.root) rmSync(this.sockDir, { recursive: true, force: true });
     }
+}
+
+/** A port no one listens on now, for a DshRun that must keep its address across restarts. */
+export async function freePort() {
+    const server = createServer();
+    await new Promise((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+    const { port } = server.address();
+    await new Promise((resolvePromise) => server.close(() => resolvePromise()));
+    return port;
 }
 
 export function httpGet(url, headers = {}) {

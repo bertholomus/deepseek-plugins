@@ -280,10 +280,8 @@ export class Holds {
                 this.changed({ type: 'settled', card: item.card, by: 'decisions', value: result.value });
                 return result.value;
             }
-            if (result.release) {
-                this.changed({ type: 'settled', card: item.card, by: 'released' });
-                return forwarded;
-            }
+            // Let go: said when it was let go (see release), the window alone answers it now.
+            if (result.release) return forwarded;
             this.changed({ type: 'settled', card: item.card, by: 'window', ...('error' in result ? { error: errorText(result.error), ...(typeof result.error?.code === 'string' ? { code: result.error.code } : {}) } : { value: result.value }) });
             if ('error' in result) throw result.error;
             return result.value;
@@ -307,11 +305,18 @@ export class Holds {
      * ('approval' or 'question', when the person switches that kind off), or
      * all of them. DSH's own card stays where it was and still takes the answer.
      */
-    release(kind) {
+    /**
+     * Let held requests go back to the window alone: those of `kind`, or all.
+     * @param {'approval' | 'question'} [kind]
+     * @param {'off' | 'kind'} [why] - Decisions is stopping, or the kind was switched off in its settings.
+     */
+    release(kind, why = 'off') {
         for (const [id, item] of [...this.items]) {
             if (kind && item.card.kind !== kind) continue;
             this.items.delete(id);
-            item.settle({ release: true });
+            // Said now, not a tick later: Decisions may be stopping, and what it keeps must be written before it goes.
+            this.changed({ type: 'settled', card: item.card, by: 'released', why });
+            item.settle({ release: true, why });
         }
     }
 
@@ -323,6 +328,6 @@ export class Holds {
     /** Hold nothing more, and let every held request go back to the window alone (Decisions is stopping). */
     stop() {
         this.stopped = true;
-        this.release();
+        this.release(undefined, 'off');
     }
 }

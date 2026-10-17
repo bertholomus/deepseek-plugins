@@ -75,6 +75,25 @@ export class DecisionsRemote {
         });
     }
 
+    /**
+     * Note in What happened that the webhook address was set or removed on
+     * Decisions' settings page. The address itself never comes here: DSH's
+     * key store holds it.
+     */
+    async addressChanged(change) {
+        return this.run(async () => {
+            if (change !== 'set' && change !== 'removed') throw new Error('Say whether the webhook address was set or removed.');
+            const key = typeof this.config.mirrorUrlEnv === 'string' && this.config.mirrorUrlEnv ? this.config.mirrorUrlEnv : 'DECISIONS_WEBHOOK_URL';
+            this.journal.add({
+                kind: 'settings',
+                text: change === 'set' ? 'Webhook address set' : 'Webhook address removed',
+                why: change === 'set' ? `Kept in DSH's key store under ${key}, never in the settings file.` : `Removed from DSH's key store (${key}).`,
+                state: 'done',
+            });
+            return { ok: true };
+        });
+    }
+
     /** Send a test message through the mirror. */
     async testMirror() {
         return this.run(async () => {
@@ -95,4 +114,4 @@ function markRemote(Class, names) {
         });
     }
 }
-markRemote(DecisionsRemote, ['state', 'badge', 'answer', 'dismiss', 'undismiss', 'testMirror']);
+markRemote(DecisionsRemote, ['state', 'badge', 'answer', 'dismiss', 'undismiss', 'addressChanged', 'testMirror']);

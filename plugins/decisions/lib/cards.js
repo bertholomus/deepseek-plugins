@@ -42,6 +42,9 @@ const ASK_ENDS = new Set(['completed', 'blocked', 'aborted', 'max-tokens']);
 
 const titleOf = (row) => (typeof row?.title === 'string' && row.title.trim() ? row.title.trim() : 'Untitled session');
 
+/** Markdown links as their words: "[Port pick](.dsh-thread/t1)" reads "Port pick" on a card. */
+export const plainLinks = (text) => String(text ?? '').replace(/\[([^\]\n]{1,300})\]\([^)\s]{0,1000}\)/g, '$1');
+
 /**
  * The card for what a session's last reply asks: a DECISION NEEDED line, a
  * BLOCKED line, or (with `replies`) a plain question. None while the
@@ -69,8 +72,8 @@ export function replyCard(row, { replies = true, windowMs = 0, now = Date.now() 
         sessionId: row.sessionId,
         title: titleOf(row),
         ...(row.cwd ? { cwd: row.cwd } : {}),
-        question: String(ask.question ?? ''),
-        ...(ask.recommendation ? { recommendation: String(ask.recommendation) } : {}),
+        question: plainLinks(ask.question),
+        ...(ask.recommendation ? { recommendation: plainLinks(ask.recommendation) } : {}),
         turn: end.turn,
         at: endAt,
         running: false,
@@ -167,7 +170,7 @@ export function threadCards(row, projection, rowsById) {
         if (own?.status === 'running') continue;
         const at = Date.parse(thread.handback.at) || 0;
         if (own?.state && at > 0 && Math.max(Number(own.state.inAt) || 0, Number(own.state.userAt) || 0) > at) continue;
-        const summary = String(thread.handback.summary ?? '').trim();
+        const summary = plainLinks(thread.handback.summary).trim();
         // "… Recommendation: 8080 — it matches the docs." goes under Recommended, with its own answer button.
         const split = recommendationIn(summary);
         cards.push({
@@ -185,6 +188,25 @@ export function threadCards(row, projection, rowsById) {
         });
     }
     return cards;
+}
+
+/**
+ * Every thread's latest handback in a coordinating chat, whether it still
+ * waits or not: what the chat's relay of a handback can be about. Decisions
+ * keeps them (lib/inbox.js), so the chat's relay of a handback that asked
+ * the person is never a card of its own, before or after the answer.
+ * @returns {Array<{ thread: string, chat: string, at: number, asks: boolean }>}
+ */
+export function handbacksOf(row, projection) {
+    const view = coordinatorView(projection?.value);
+    if (!readable(row) || view?.role !== 'coordinator' || view.off) return [];
+    const out = [];
+    for (const thread of Array.isArray(view.threads) ? view.threads : []) {
+        if (!isRecord(thread) || typeof thread.session !== 'string' || !isRecord(thread.handback)) continue;
+        const at = Date.parse(thread.handback.at) || 0;
+        if (at > 0) out.push({ thread: thread.session, chat: row.sessionId, at, asks: WAITING.has(thread.handback.status) });
+    }
+    return out;
 }
 
 /** A card for a question a suite plugin raised through the watcher (Autopilot's Ask first, an agent in a terminal). */
@@ -212,9 +234,12 @@ export function askCard(ask, rowsById) {
     };
 }
 
+/** Whether a card holds a running turn: an approval or a question box the turn waits on, held here or not. */
+export const holdsTurn = (card) => card?.answer === 'approval' || ((card?.kind === 'question' || card?.kind === 'approval') && (card.live === true || card.running === true));
+
 /** Cards in the order the page lists them: what holds a running turn first, then oldest first. */
 export function byUrgency(a, b) {
-    const live = (card) => (card.answer === 'approval' || (card.kind === 'question' && card.live) ? 0 : 1);
+    const live = (card) => (holdsTurn(card) ? 0 : 1);
     return live(a) - live(b) || (a.at || Infinity) - (b.at || Infinity) || KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind) || a.id.localeCompare(b.id);
 }
 
