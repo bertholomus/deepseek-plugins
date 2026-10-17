@@ -97,6 +97,19 @@ test('fold: a saved state is made safe; the projection is registered under one k
     assert.equal(projection.wire.viewSchema.parse('junk'), null);
 });
 
+test('fold: the ask at the end of a reply, with its turn; a later reply without one clears it; saved and shown without the text', () => {
+    const reply = (turn, text) => ({ type: 'assistant/message', time: 10 * turn, data: { turn, message: { role: 'assistant', content: [{ type: 'text', text }] } } });
+    let state = foldAll([{ type: 'turn/start', time: 1, data: { turn: 1 } }, reply(1, 'Both work.\nDECISION NEEDED: Postgres or SQLite? — recommend: SQLite'), { type: 'turn/end', time: 12, data: { turn: 1, reason: { kind: 'completed' } } }]);
+    assert.deepEqual(state.ask, { kind: 'decision', question: 'Postgres or SQLite?', recommendation: 'SQLite', turn: 1 });
+    assert.deepEqual(viewOf(state).ask, state.ask, 'cold sessions keep it in DSH\'s saved value');
+    assert.equal(viewOf(state).text, undefined);
+    assert.deepEqual(parseState(viewOf(state)).ask, state.ask);
+    state = applyEvent(state, reply(2, 'Done: SQLite it is.'));
+    assert.equal(state.ask, undefined);
+    assert.equal(parseState({ ask: { kind: 'other', question: 'x', turn: 1 } }).ask, undefined, 'a saved ask is checked');
+    assert.equal(parseState({ ask: { kind: 'blocked', question: 'x'.repeat(500), turn: 1 } }).ask.question.length, 400, 'kept short');
+});
+
 test('fold: turn ends, goals and todo lists in the watcher\'s words', () => {
     assert.deepEqual(endOf({ turn: 3, reason: { kind: 'aborted', reason: { kind: 'disposed' } } }, 5), { turn: 3, kind: 'aborted', at: 5, cause: 'disposed' });
     assert.deepEqual(endOf({}, 'x'), { turn: 0, kind: 'unknown', at: 0 });
@@ -175,6 +188,21 @@ test('watcher: DSH\'s list is read once for a burst of window reads, and a faile
     const rows = await watch.list();
     assert.deepEqual(rows.map((row) => row.sessionId), ['a']);
     assert.match(warnings.join('\n'), /could not be read: the store is busy/);
+});
+
+test('watcher: another projection\'s value, live while loaded and as DSH saved it otherwise; a new session is listed at once', async () => {
+    const { dsh, watch } = setup();
+    dsh.add('cold', { title: 'Old', values: { userQuestions: { active: [{ callId: 'c', questions: [], state: 'continued' }], settled: [] } } });
+    await watch.list();
+    assert.deepEqual(watch.projection('cold', 'userQuestions'), { live: false, value: { active: [{ callId: 'c', questions: [], state: 'continued' }], settled: [] } });
+    assert.equal(watch.projection('cold', 'coordinatorSession'), undefined);
+    dsh.extra.userQuestions = () => ({ timed: true, questions: { active: [], settled: [] } });
+    dsh.write('cold', 'Go on.');
+    assert.deepEqual(watch.projection('cold', 'userQuestions'), { live: true, value: { timed: true, questions: { active: [], settled: [] } } });
+    assert.equal(watch.projection('none', 'userQuestions'), undefined);
+    // A session the cached list does not have yet makes the next list read DSH's again.
+    dsh.write('fresh', 'Hello');
+    assert.ok((await watch.list()).some((row) => row.sessionId === 'fresh'));
 });
 
 test('watcher: a delivery is queued, then delivered when the session reads it into a turn', async () => {

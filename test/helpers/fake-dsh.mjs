@@ -29,7 +29,9 @@ export function fakeDsh({ now = Date.now, autoRead = true } = {}) {
     function add(id, fields = {}) {
         const known = sessions.get(id);
         if (known) return Object.assign(known, fields);
-        const s = { id, events: [], title: '', cwd: `/work/${id}`, updatedAt: now(), blank: false, loaded: false, goal: undefined, saved: undefined, handle: { id }, ...fields };
+        const s = { id, events: [], title: '', cwd: `/work/${id}`, updatedAt: now(), blank: false, loaded: false, goal: undefined, saved: undefined, values: undefined, ...fields };
+        // The loaded Session object: its log by position, as DSH's `seq` and `eventAt`.
+        s.handle ??= { id, get seq() { return s.events.length; }, eventAt: (at) => s.events[at] };
         sessions.set(id, s);
         return s;
     }
@@ -106,6 +108,8 @@ export function fakeDsh({ now = Date.now, autoRead = true } = {}) {
         sessions,
         agents,
         flushed,
+        /** Other projections' live states by key: `(session) => state` (DSH's question box, the coordinator's roster). */
+        extra: {},
         /** When set, `followup` throws with these words. */
         refuse: undefined,
         add,
@@ -211,7 +215,7 @@ export function fakeDsh({ now = Date.now, autoRead = true } = {}) {
                     blank: s.blank,
                     cwd: s.cwd,
                     ...(s.parentSessionId ? { parentSessionId: s.parentSessionId, origin: 'subagent' } : {}),
-                    projections: { values: { ...(s.title ? { title: { title: s.title } } : {}), ...(s.saved ? { [KEY]: s.saved } : {}) } },
+                    projections: { values: { ...(s.title ? { title: { title: s.title } } : {}), ...(s.saved ? { [KEY]: s.saved } : {}), ...(s.values ?? {}) } },
                 }));
                 return { items };
             },
@@ -238,7 +242,7 @@ export function fakeDsh({ now = Date.now, autoRead = true } = {}) {
             list: () => [...agents.values()],
         },
         sessionProjections: {
-            stateOf: (handle, key) => (key === KEY ? foldOf(sessions.get(handle.id)) : undefined),
+            stateOf: (handle, key) => (key === KEY ? foldOf(sessions.get(handle.id)) : dsh.extra[key]?.(sessions.get(handle.id))),
         },
     };
     return dsh;

@@ -68,6 +68,51 @@ export function decisionIn(text) {
     return undefined;
 }
 
+/** A suite blocker line: `BLOCKED: <what>`. */
+export const BLOCKED_LINE = /^[\s>*_`-]*BLOCKED\s*[:：]\s*(.+?)\s*[*_`]*\s*$/m;
+
+/** The text of the last BLOCKED line in a text, or undefined. */
+export function blockedIn(text) {
+    if (typeof text !== 'string' || !/BLOCKED/.test(text)) return undefined;
+    const lines = text.split('\n');
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+        const match = BLOCKED_LINE.exec(lines[i]);
+        if (match && match[1].trim()) return match[1].trim();
+    }
+    return undefined;
+}
+
+/** Longest question an `askIn` result keeps. */
+const ASK_MAX = 400;
+
+const cutAsk = (text) => {
+    const flat = String(text).replace(/\s+/g, ' ').trim();
+    return flat.length > ASK_MAX ? `${flat.slice(0, ASK_MAX - 1)}…` : flat;
+};
+
+/**
+ * What a reply's end asks a person, if anything: a decision line (with its
+ * recommendation), a BLOCKED line, or a plain question (the last sentence
+ * that asks). A decision line wins over a BLOCKED line, which wins over a
+ * plain question.
+ * @returns {{ kind: 'decision', question: string, recommendation?: string } | { kind: 'blocked', question: string } | { kind: 'question', question: string } | undefined}
+ */
+export function askIn(text) {
+    if (typeof text !== 'string' || text.trim() === '') return undefined;
+    const decision = decisionIn(text);
+    if (decision) return { kind: 'decision', question: cutAsk(decision.question), ...(decision.recommendation ? { recommendation: cutAsk(decision.recommendation) } : {}) };
+    const blocked = blockedIn(text);
+    if (blocked) return { kind: 'blocked', question: cutAsk(blocked) };
+    if (!asksSomeone(text)) return undefined;
+    const lines = text.trim().split('\n').map((line) => line.replace(/^[\s>*_`#-]+|[\s*_`]+$/g, '').trim()).filter(Boolean);
+    const tail = lines.slice(-6);
+    // The last line that asks, cut to its last sentence with a question mark; else the last line.
+    const asking = [...tail].reverse().find((line) => line.includes('?')) ?? tail.at(-1) ?? '';
+    const sentences = asking.match(/[^.!?]*\?/g);
+    const question = sentences ? sentences.at(-1).trim() : asking;
+    return question ? { kind: 'question', question: cutAsk(question) } : undefined;
+}
+
 const ASKS = [
     /\bDECISION NEEDED\b/i,
     /^\s*BLOCKED\s*:/im,

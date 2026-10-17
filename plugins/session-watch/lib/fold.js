@@ -11,9 +11,14 @@
  * The fold is pure: it never throws, never reads the clock, and returns
  * the same object when an event changes nothing.
  *
+ * `ask` is what the newest reply text asks a person (a DECISION NEEDED
+ * line, a BLOCKED line or a plain question), with the turn it came in; it
+ * stays in the view, so Decisions finds asks in sessions that are not
+ * loaded without reading their logs.
+ *
  * @module dsh-plugin-session-watch/fold
  */
-import { cutOff, plainError } from './shared/words.js';
+import { askIn, cutOff, plainError } from './shared/words.js';
 
 export { cutOff };
 
@@ -165,9 +170,12 @@ function step(state, event) {
         case 'assistant/message': {
             const text = textOf(data?.message);
             if (!text.trim()) return state;
+            const textTurn = Number.isSafeInteger(data?.turn) ? data.turn : state.turn;
+            const ask = askIn(text);
             return patched(state, {
                 text: text.length > TEXT_MAX ? `…${text.slice(text.length - TEXT_MAX + 1)}` : text,
-                textTurn: Number.isSafeInteger(data?.turn) ? data.turn : state.turn,
+                textTurn,
+                ask: ask ? { ...ask, turn: textTurn } : undefined,
                 at,
             });
         }
@@ -234,6 +242,14 @@ export function parseState(value) {
     if (isRecord(value.end) && typeof value.end.kind === 'string') out.end = { ...value.end };
     if (isRecord(value.todos)) out.todos = { ...value.todos };
     if (isRecord(value.goal) && typeof value.goal.id === 'string') out.goal = { ...value.goal };
+    if (isRecord(value.ask) && ['decision', 'blocked', 'question'].includes(value.ask.kind) && typeof value.ask.question === 'string') {
+        out.ask = {
+            kind: value.ask.kind,
+            question: value.ask.question.slice(0, 400),
+            ...(typeof value.ask.recommendation === 'string' ? { recommendation: value.ask.recommendation.slice(0, 400) } : {}),
+            turn: Number.isSafeInteger(value.ask.turn) ? value.ask.turn : 0,
+        };
+    }
     if (Array.isArray(value.approvals)) {
         const approvals = value.approvals.filter((item) => isRecord(item) && typeof item.id === 'string').slice(-20);
         if (approvals.length) out.approvals = approvals;

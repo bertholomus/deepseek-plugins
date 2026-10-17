@@ -19,6 +19,8 @@
  * - `asks`: questions waiting on a person, raised by any suite plugin
  *   (Autopilot's "ask first" rule, an agent in a terminal) and answered in
  *   Decisions or on the raising plugin's page.
+ * - `projection(id, key)`: another projection's value for a session (DSH's
+ *   question box, the coordinator's threads), live or as DSH saved it.
  *
  * @module dsh-plugin-session-watch/watch
  */
@@ -29,6 +31,9 @@ import { JsonStore } from './shared/files.js';
 import { errorText, isRecord, later } from './shared/safe.js';
 
 export { stateWord };
+
+/** Other projections the suite reads (DSH's question box, the coordinator's threads), kept from DSH's list for sessions that are not loaded. */
+export const SHARED_KEYS = Object.freeze(['userQuestions', 'coordinatorSession']);
 
 /** How a watcher event is named for listeners. */
 export const EVENTS = Object.freeze(['turn-start', 'turn-end', 'status', 'state', 'agent', 'delivery', 'ask', 'external']);
@@ -103,6 +108,8 @@ export class SessionWatch {
         this.cold = new Map();
         /** Titles and folders of sessions seen. */
         this.rows = new Map();
+        /** SHARED_KEYS values from DSH's last list, by session. */
+        this.saved = new Map();
         /** Deliveries by message id. */
         this.deliveries = new Map();
         /** Questions waiting on a person, by id. */
@@ -156,6 +163,27 @@ export class SessionWatch {
             }
         }
         return this.cold.get(sessionId)?.state;
+    }
+
+    /**
+     * Another projection's value for a session: live from DSH's registry
+     * while the session is loaded (`live: true`; the projection's state),
+     * else what DSH's last list carried for it (its view, for SHARED_KEYS).
+     * Undefined when DSH has neither. Never throws.
+     * @param {string} sessionId
+     * @param {string} key
+     * @returns {{ live: boolean, value: any } | undefined}
+     */
+    projection(sessionId, key) {
+        const session = this.sessionOf(sessionId);
+        if (session) {
+            try {
+                const state = this.ctx.sessionProjections?.stateOf?.(session, key);
+                if (state !== undefined) return { live: true, value: state };
+            } catch { /* a projection DSH does not have */ }
+        }
+        const saved = this.saved.get(sessionId);
+        return saved && Object.hasOwn(saved, key) ? { live: false, value: saved[key] } : undefined;
     }
 
     /** A session's title: DSH's own, else the last one its log named. */
@@ -217,6 +245,9 @@ export class SessionWatch {
                 updatedAt: Number.isFinite(item.updatedAt) ? item.updatedAt : 0,
                 blank: item.blank === true,
             });
+            const shared = {};
+            for (const key of SHARED_KEYS) if (Object.hasOwn(values, key)) shared[key] = values[key];
+            this.saved.set(item.sessionId, shared);
             // A state folded from the whole log is newer than DSH's saved value until the session moves again.
             const known = this.cold.get(item.sessionId);
             if (isRecord(values[KEY]) && !(known?.full && (known.state?.at ?? 0) >= (values[KEY].at ?? 0))) this.cold.set(item.sessionId, { state: parseState(values[KEY]) });
@@ -296,6 +327,8 @@ export class SessionWatch {
     onSessionEvent(session, event) {
         const sessionId = session?.id;
         if (typeof sessionId !== 'string' || !isRecord(event)) return;
+        // A session DSH's last list did not have: the next list() reads DSH's list again.
+        if (!this.rows.has(sessionId)) this.listed.at = 0;
         this.trackDelivery(sessionId, event);
         switch (event.type) {
             case 'turn/start':

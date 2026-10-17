@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { asksSomeone, count, cutOff, decisionIn, plainError, spanWords, stateWord, timeWords } from '../shared/host/words.js';
+import { askIn, asksSomeone, blockedIn, count, cutOff, decisionIn, plainError, spanWords, stateWord, timeWords } from '../shared/host/words.js';
 import { Hub } from '../shared/host/hub.js';
 import { Journal } from '../shared/host/journal.js';
 import { JsonStore, ensurePrivateDir, readJson, writeAtomic } from '../shared/host/files.js';
@@ -65,6 +65,22 @@ test('words: whether a reply ends by asking a person, read from its last lines',
         undefined,
     ]) assert.equal(asksSomeone(statement), false, String(statement));
     assert.equal(asksSomeone(`Should I start?\n${'line\n'.repeat(10)}All done.`), false, 'only the end of the reply counts');
+});
+
+test('words: what a reply asks a person: a decision line, then a BLOCKED line, then the last question', () => {
+    assert.deepEqual(askIn('Compared both.\nDECISION NEEDED: Postgres or SQLite? — recommend: SQLite'), { kind: 'decision', question: 'Postgres or SQLite?', recommendation: 'SQLite' });
+    assert.deepEqual(askIn('BLOCKED: no key\nDECISION NEEDED: wait or skip?'), { kind: 'decision', question: 'wait or skip?' }, 'a decision line wins');
+    assert.deepEqual(askIn('Tried twice.\n\n**BLOCKED: the staging bucket refuses writes**'), { kind: 'blocked', question: 'the staging bucket refuses writes' });
+    assert.deepEqual(askIn('The parser is done. Tests pass. Should I also write the docs? I can start now.'), { kind: 'question', question: 'Should I also write the docs?' });
+    assert.deepEqual(askIn('Done with step 1.\n\n- Which port do you want: 8080 or 3000?'), { kind: 'question', question: 'Which port do you want: 8080 or 3000?' });
+    assert.deepEqual(askIn('Ready to migrate. Waiting for your go.'), { kind: 'question', question: 'Ready to migrate. Waiting for your go.' }, 'a request without a question mark: its last line');
+    assert.equal(askIn('All tests pass; next I write the docs.'), undefined);
+    assert.equal(askIn(''), undefined);
+    assert.equal(askIn(null), undefined);
+    assert.equal(askIn(`DECISION NEEDED: ${'why '.repeat(200)}?`).question.length, 400, 'kept short');
+    assert.equal(blockedIn('BLOCKED: one\ntext\nBLOCKED: two'), 'two');
+    assert.equal(blockedIn('Not blocked at all.'), undefined);
+    assert.equal(blockedIn('UNBLOCKED: fine'), undefined);
 });
 
 test('words: a provider\'s error in plain words, its JSON reduced to the message', () => {
