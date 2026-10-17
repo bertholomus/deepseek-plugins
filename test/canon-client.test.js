@@ -41,7 +41,7 @@ const TRY = {
     terms: ['port', 'harbor', 'gateway', 'listen'],
     folder: { repo: 'harbor-gateway', parent: '' },
     results: [{ path: 'Projects/harbor-gateway/Gateway ports.md', title: 'Gateway ports', score: 15.3, matched: ['port', 'harbor', 'gateway', 'listen'], folder: 'repo', passage: 'Gateway ports: The harbor gateway listens on port 8443.' }],
-    others: [{ path: 'Projects/tide-ledger/Ledger backups.md', title: 'Ledger backups', score: 2.9, matched: ['port', 'listen'], folder: '', fits: true }, { path: 'People/Glossary.md', title: 'Glossary', score: 1.2, matched: ['zone'], folder: '', fits: false }],
+    others: [{ path: 'Projects/tide-ledger/Ledger backups.md', title: 'Ledger backups', score: 2.9, matched: ['port', 'listen'], words: ['port', 'listen'], folder: '', fits: true, why: 'less' }, { path: 'People/Glossary.md', title: 'Glossary', score: 1.2, matched: ['zone'], words: ['zone'], folder: '', fits: false, why: 'few' }],
     block: { text: 'Background from the canon vault: shared long-term notes.\n\n[1] Projects/harbor-gateway/Gateway ports.md\n> Gateway ports: The harbor gateway listens on port 8443.', chars: 140, summary: '1 note from the canon vault: Gateway ports' },
 };
 
@@ -228,7 +228,7 @@ test('the page: the vault, the try-out, the sessions with their switches, the dr
     assert.match(text, /Gateway portsProjects\/harbor-gateway\/Gateway ports\.mdShares the words “port”, “harbor”, “gateway” and “listen”\. It belongs to this folder's project, so it counts for more\./);
     assert.match(text, /this project/);
     assert.match(text, /The exact text the turn gets \(140 characters\)/);
-    assert.match(text, /Close, but not addedLedger backupsIt fits less well than the notes above, or too little to add\.GlossaryOnly one word in common, and not in its title, tags, aliases, path or headings\./);
+    assert.match(text, /Close, but not addedLedger backupsIt fits less well than the notes above, or too little to add\.GlossaryToo little in common: one word besides a project's name, and not in its title, tags, aliases, path or headings\./);
     assert.equal(withAttr(tryCard(), 'data-canon-block')[0].children.join(''), TRY.block.text);
     // A prompt with nothing to search for, and an empty one.
     elementsOf(tryCard()).find((e) => e.props?.['data-canon-try-prompt'] !== undefined).props.onChange({ target: { value: 'thanks, looks good' } });
@@ -480,7 +480,12 @@ test('words: the page\'s sentences for each setting, and no other assistant\'s n
     assert.equal(vaultText({ display: '~/Canon', counts: { active: 1, drafts: 0 } }), 'Reading ~/Canon: 1 active note and 0 drafts.');
     assert.deepEqual(plain(vaultNotes({ truncated: true, counts: { other: 1, unreadable: 2 } })), ['1 note with another status (archived, draft and the like) is never added.', '2 notes could not be read.', 'Only the first 20,000 notes are read.']);
     assert.equal(whyText({ matched: ['tls'], folder: 'parent' }), 'Shares the word “tls”. It belongs to the folder above this one, so it counts a little more.');
-    assert.match(missText({ fits: false }), /^Only one word in common/);
+    // The prompt's own words, never stems.
+    assert.equal(whyText({ matched: ['rotat', 'certificat'], words: ['rotating', 'certificates'], folder: '' }), 'Shares the words “rotating” and “certificates”.');
+    assert.equal(missText({ fits: false, why: 'name' }), 'It shares only a project\'s name with the prompt.');
+    assert.match(missText({ fits: false, why: 'few' }), /^Too little in common: one word besides a project's name/);
+    assert.equal(missText({ fits: false, why: 'other' }), 'It belongs to another project than the one this folder or the prompt points at.');
+    assert.equal(missText({ fits: true, why: 'less' }), 'It fits less well than the notes above, or too little to add.');
     const source = (url) => import('node:fs').then((fs) => fs.readFileSync(url, 'utf8'));
     return source(CLIENT).then((text) => assert.doesNotMatch(text, OTHER_NAMES));
 });

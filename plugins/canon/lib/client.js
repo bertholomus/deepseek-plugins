@@ -1326,13 +1326,16 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
 
         /** Why a note fits, in words. */
         function whyText(r) {
-            const words = (r.matched ?? []).slice(0, 8);
+            const words = (r.words ?? r.matched ?? []).slice(0, 8);
             const place = r.folder === 'repo' ? ' It belongs to this folder\'s project, so it counts for more.' : r.folder === 'parent' ? ' It belongs to the folder above this one, so it counts a little more.' : '';
             return `Shares ${words.length === 1 ? 'the word' : 'the words'} ${listWords(words.map((w) => `“${w}”`))}.${place}`;
         }
         /** Why a close note was left out, in words. */
         function missText(r) {
-            return r.fits ? 'It fits less well than the notes above, or too little to add.' : 'Only one word in common, and not in its title, tags, aliases, path or headings.';
+            if (r.why === 'name') return 'It shares only a project\'s name with the prompt.';
+            if (r.why === 'few') return 'Too little in common: one word besides a project\'s name, and not in its title, tags, aliases, path or headings.';
+            if (r.why === 'other') return 'It belongs to another project than the one this folder or the prompt points at.';
+            return 'It fits less well than the notes above, or too little to add.';
         }
 
         function TryCard() {
@@ -1379,11 +1382,11 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
 
         function TryResult({ result }) {
             if (result.terms.length === 0) {
-                return h(kit.Empty, { title: 'Nothing to search for', text: 'That prompt has no words Canon searches for: greetings, thanks and words like "please" are left out. A turn with it gets no notes.' });
+                return h(kit.Empty, { title: 'Nothing to search for', text: 'That prompt has no words Canon searches for: greetings, thanks, words like “please” and words about the vault itself are left out. A turn with it gets no notes.' });
             }
             return h('div', { 'data-canon-try-result': '' },
                 result.results.length === 0
-                    ? h(kit.Empty, { title: 'No note fits this prompt', text: 'A turn with it gets no notes. A note fits when it shares a word of the prompt in its title, tags, aliases, path or headings, or two words anywhere.' })
+                    ? h(kit.Empty, { title: 'No note fits this prompt', text: 'A turn with it gets no notes. A note fits when it shares two words with the prompt; a project\'s name counts as one word, and when it is one of the two, the other must be in the note\'s title, tags, aliases, path or headings.' })
                     : h('div', { className: `${P}-section` },
                         h('h3', { className: `${P}-section-title` }, `A turn with this prompt gets ${plural(result.results.length, 'note')}`),
                         h('ul', { className: `${P}-list` }, ...result.results.map((r) => h('li', { key: r.path, className: `${P}-item`, 'data-canon-result': r.path },

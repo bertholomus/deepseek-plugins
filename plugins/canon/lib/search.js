@@ -4,19 +4,24 @@
  * or headings counts for more than one in its body; a body's length is
  * evened out; a word few notes have counts for more than a common one.
  *
- * A note is a match only when the prompt and the note share a word in the
- * note's title, aliases, tags, path or headings, or at least two words
- * anywhere; it is kept only above a floor and near the best match. A note
- * that belongs to the session's folder (its path, its `project` or `repo`,
- * or a tag names the folder's repo) is lifted, but never makes a match on
- * its own.
+ * Which notes fit a prompt: words about the vault and about answering from
+ * it ("answer from the team's shared notes") are left out of the prompt; a
+ * project's name counts as one word, however many parts it has; a note
+ * fits when it shares two words with the prompt, at least one beyond a
+ * project's name, and a single word beyond the name must be in its title,
+ * aliases, tags, path or headings (one word in its body never makes a
+ * match); a note that belongs to a project is left out when the session's
+ * folder or the prompt points at other projects and not at its own. A note
+ * is kept only above a floor and near the best match. A note that belongs
+ * to the session's folder (its path, its `project` or `repo`, or a tag
+ * names the folder's repo) is lifted, but never makes a match on its own.
  *
  * The index keeps terms and counts only, never a note's text: the passage
  * a turn gets is read from the file when it is needed (vault.js).
  *
  * @module dsh-plugin-canon/search
  */
-import { counts, distinctTerms, nameKey, terms } from './text.js';
+import { counts, nameKey, promptTerms, terms, wordsOf } from './text.js';
 
 /** BM25's saturation and length weight. */
 const K1 = 1.2;
@@ -25,7 +30,7 @@ const B = 0.6;
 const WEIGHTS = Object.freeze({ title: 4, aliases: 3, tags: 3, path: 2, headings: 1.5 });
 /** A note scores at least this, and at least this share of the best note, to be added. */
 export const MIN_SCORE = 3;
-export const NEAR_BEST = 0.4;
+export const NEAR_BEST = 0.5;
 /** The lift for a note of the session's repo, and of the folder it sits in. */
 export const REPO_BOOST = 1.6;
 export const PARENT_BOOST = 1.2;
@@ -65,6 +70,19 @@ export function folderKeys(folder, home = '') {
     return { repo: useful(repo) ? repo : '', parent: useful(parent) ? parent : '' };
 }
 
+/**
+ * The projects a note belongs to by name: its `project` or `repo`, and the
+ * folder it sits in under a generic folder (Projects/lantern-api/… is
+ * lantern-api's).
+ * @param {{ path: string, projects?: string[] }} note
+ */
+export function projectsOf(note) {
+    const out = new Set(note.projects ?? []);
+    const folders = note.path.split('/').slice(0, -1).map(nameKey);
+    for (let i = 1; i < folders.length; i += 1) if (GENERIC.has(folders[i - 1]) && folders[i] && !GENERIC.has(folders[i])) out.add(folders[i]);
+    return [...out];
+}
+
 export class Index {
     constructor() {
         /** Slot → note record, or null once removed. */
@@ -76,6 +94,10 @@ export class Index {
         this.live = 0;
         this.dead = 0;
         this.bodyLength = 0;
+        /** Project name → how many notes belong to it (projectsOf). */
+        this.projects = new Map();
+        /** Project name → its words as terms. */
+        this.parts = new Map();
     }
 
     get size() {
@@ -129,12 +151,15 @@ export class Index {
             p.body.push(body.get(t) ?? 0);
         }
         const keys = new Set([...segments.map((s, i) => nameKey(i === segments.length - 1 ? s.replace(/\.md$/i, '') : s)), ...(note.projects ?? []), ...(note.tags ?? []).map(nameKey)].filter(Boolean));
+        const projects = projectsOf(note);
+        for (const name of projects) this.projects.set(name, (this.projects.get(name) ?? 0) + 1);
         this.docs.push({
             slot,
             path: note.path,
             title: note.title,
             tags: note.tags ?? [],
             keys,
+            projects,
             bodyLength: bodyTerms.length,
             mtimeMs: file.mtimeMs ?? 0,
             size: file.size ?? 0,
@@ -153,6 +178,11 @@ export class Index {
         if (doc) {
             this.live -= 1;
             this.bodyLength -= doc.bodyLength;
+            for (const name of doc.projects) {
+                const n = (this.projects.get(name) ?? 0) - 1;
+                if (n > 0) this.projects.set(name, n);
+                else this.projects.delete(name);
+            }
             this.docs[slot] = null;
             this.dead += 1;
         }
@@ -187,17 +217,72 @@ export class Index {
         this.dead = 0;
     }
 
+    /** A project name's words, as terms (`lantern-api` → lantern, api). */
+    partsOf(name) {
+        let parts = this.parts.get(name);
+        if (!parts) {
+            parts = terms(name.replace(/-/g, ' '));
+            if (this.parts.size > 5000) this.parts.clear();
+            this.parts.set(name, parts);
+        }
+        return parts;
+    }
+
+    /**
+     * The words of every known project's name, as terms: a project's name
+     * (`lantern-api`) and each of its words (`lantern`, `api`) say which
+     * project, not what about it.
+     * @param {string} [repo] - the session folder's project, known or not.
+     * @returns {Set<string>}
+     */
+    projectWords(repo = '') {
+        const out = new Set();
+        for (const name of repo ? [...this.projects.keys(), repo] : this.projects.keys()) for (const t of this.partsOf(name)) out.add(t);
+        return out;
+    }
+
+    /**
+     * The known projects a prompt names: every word of a name, or one of its
+     * words that no project named in full already accounts for ("the lantern
+     * API" names lantern-api, not lantern-web; "lantern" alone names both).
+     * @param {Set<string>} asked - the prompt's terms.
+     */
+    namedProjects(asked) {
+        const all = [...this.projects.keys()];
+        const full = all.filter((name) => this.partsOf(name).length > 0 && this.partsOf(name).every((t) => asked.has(t)));
+        const claimed = new Set(full.flatMap((name) => this.partsOf(name)));
+        return all.filter((name) => full.includes(name) || this.partsOf(name).some((t) => asked.has(t) && !claimed.has(t)));
+    }
+
     /**
      * The notes that fit a prompt, best first, each with its score, the
-     * prompt terms it matched, and whether it belongs to the folder; and
-     * the few that matched some words but stayed under the floors
-     * (`others`, for the page's "why not").
+     * prompt terms it matched (and the prompt's own words for them), and
+     * whether it belongs to the folder; and the few that matched some words
+     * but stayed out (`others`, for the page's "why not"), each with `why`:
+     * `name` (only a project's name in common), `few` (one word, or one
+     * word in its body), `other` (another project's note), `less` (it fits,
+     * but under the floors).
+     *
+     * The rules: words about the vault ("the team's shared notes") are left
+     * out of the prompt. A project's name counts as one word, however many
+     * parts it has, and a note needs a word beyond it: two words in common,
+     * or one in its title, aliases, tags, path or headings; one word in its
+     * body alone never fits. A note that belongs to a project (its
+     * `project` or `repo`, or its folder under Projects/) is left out when
+     * the session's folder or the prompt points at other projects and not
+     * at its own.
      * @param {string} prompt
      * @param {{ folder?: { repo: string, parent: string }, limit?: number }} [options]
      */
     search(prompt, { folder = { repo: '', parent: '' }, limit = 10 } = {}) {
-        const query = distinctTerms(prompt, { max: 400 }).slice(0, MAX_QUERY_TERMS);
+        const query = promptTerms(prompt, { max: 400 }).slice(0, MAX_QUERY_TERMS);
         if (query.length === 0 || this.live === 0) return { terms: query, results: [], others: [] };
+        const asked = new Set(query);
+        const names = this.projectWords(folder.repo);
+        const context = new Set(this.namedProjects(asked));
+        if (folder.repo && this.projects.has(folder.repo)) context.add(folder.repo);
+        const topics = query.filter((t) => !names.has(t)).length;
+        const need = Math.min(2, topics + (query.some((t) => names.has(t)) ? 1 : 0));
         const n = Math.max(this.live, SMALL_VAULT);
         const average = Math.max(1, this.bodyLength / this.live);
         const found = new Map();
@@ -208,6 +293,7 @@ export class Index {
             for (const slot of p.slots) if (this.docs[slot]) df += 1;
             if (df === 0) continue;
             const idf = Math.log(1 + (n - df + 0.5) / (df + 0.5));
+            const isName = names.has(t);
             for (let i = 0; i < p.slots.length; i += 1) {
                 const doc = this.docs[p.slots[i]];
                 if (!doc) continue;
@@ -216,28 +302,48 @@ export class Index {
                 const score = idf * ((tf * (K1 + 1)) / (tf + K1));
                 let hit = found.get(doc.slot);
                 if (!hit) {
-                    hit = { doc, score: 0, matched: [], strong: 0 };
+                    hit = { doc, topic: 0, name: 0, matched: [], topics: 0, strong: 0 };
                     found.set(doc.slot, hit);
                 }
-                hit.score += score;
                 hit.matched.push(t);
+                if (isName) {
+                    // A project's name counts once: its best-scoring word.
+                    hit.name = Math.max(hit.name, score);
+                    continue;
+                }
+                hit.topic += score;
+                hit.topics += 1;
                 if (p.strong[i] > 0) hit.strong += 1;
             }
         }
-        const need = Math.min(2, query.length);
+        const words = wordsOf(prompt);
         const scored = [];
         for (const hit of found.values()) {
             const place = folder.repo && hit.doc.keys.has(folder.repo) ? 'repo' : folder.parent && hit.doc.keys.has(folder.parent) ? 'parent' : '';
             const boost = place === 'repo' ? REPO_BOOST : place === 'parent' ? PARENT_BOOST : 1;
-            const fits = hit.strong >= 1 || hit.matched.length >= need;
-            scored.push({ path: hit.doc.path, title: hit.doc.title, score: hit.score * boost, matched: hit.matched, folder: place, fits });
+            const shared = hit.topics + (hit.name > 0 ? 1 : 0);
+            const own = hit.doc.projects;
+            let why = '';
+            if (hit.topics === 0) why = 'name';
+            else if (shared < need || (hit.topics === 1 && hit.strong === 0)) why = 'few';
+            else if (context.size > 0 && own.length > 0 && !own.some((name) => context.has(name))) why = 'other';
+            scored.push({
+                path: hit.doc.path,
+                title: hit.doc.title,
+                score: (hit.topic + hit.name) * boost,
+                matched: hit.matched,
+                words: hit.matched.map((t) => words.get(t) ?? t),
+                folder: place,
+                fits: why === '',
+                why: why || 'less',
+            });
         }
         scored.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
         const best = scored.find((r) => r.fits)?.score ?? 0;
         const keep = (r) => r.fits && r.score >= MIN_SCORE && r.score >= best * NEAR_BEST;
-        const kept = scored.filter(keep);
+        const kept = scored.filter(keep).map(({ why, ...r }) => r);
         const results = kept.slice(0, limit);
-        const others = [...kept.slice(limit), ...scored.filter((r) => !keep(r))].slice(0, 5);
+        const others = [...kept.slice(limit).map((r) => ({ ...r, why: 'less' })), ...scored.filter((r) => !keep(r))].slice(0, 5);
         return { terms: query, results, others };
     }
 }

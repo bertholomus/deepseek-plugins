@@ -200,8 +200,8 @@ export class Recall {
         return {
             terms,
             folder: keys,
-            results: entries.filter((e) => shown.has(e.path)).map((e) => ({ path: e.path, title: e.title, score: round(e.score), matched: e.matched, folder: e.folder, passage: e.passage })),
-            others: others.map((e) => ({ path: e.path, title: e.title, score: round(e.score), matched: e.matched, folder: e.folder, fits: e.fits })),
+            results: entries.filter((e) => shown.has(e.path)).map((e) => ({ path: e.path, title: e.title, score: round(e.score), matched: e.matched, words: e.words, folder: e.folder, passage: e.passage })),
+            others: others.map((e) => ({ path: e.path, title: e.title, score: round(e.score), matched: e.matched, words: e.words, folder: e.folder, fits: e.fits, why: e.why })),
             block: block ? { text: block.text, chars: block.chars, summary: block.summary } : null,
         };
     }

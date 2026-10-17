@@ -16,7 +16,7 @@ don done down during each either else enough etc even ever every few for from fu
 goes going gone got had has hasn have haven having he her here hers herself him himself his how however i if in into is
 isn it its itself just keep kind know last least let lets like likely made make makes many may maybe me might mine more
 most much must my myself need needs neither never new next no nor not now of off often oh ok okay on once one only onto
-or other others our ours ourselves out over own per perhaps please pretty quite rather re really right said same say
+or other others our ours ourselves out over per perhaps please pretty quite rather re really right said same say
 says see seem seems shall she should shouldn show since so some something sometimes soon still such sure take tell than
 thank thanks thats the their theirs them themselves then there these they thing things think this those though through
 thus to too try trying two under until up upon us use used uses using very via want wants was wasn way we well were
@@ -80,6 +80,43 @@ export function terms(text, { max = Infinity } = {}) {
 /** The distinct terms of a text, in first-seen order. */
 export function distinctTerms(text, options) {
     return [...new Set(terms(text, options))];
+}
+
+/**
+ * Words about the vault itself and about answering from it ("answer from
+ * the team's shared notes and cite the note", "is it in the canon vault?"),
+ * as terms: they say where to look and how to answer, not what about, so a
+ * prompt's are left out (a note may still use them).
+ */
+export const ABOUT_THE_VAULT = new Set(['note', 'vault', 'canon', 'shar', 'team', 'answer', 'cite', 'cited', 'citation', 'reply', 'repli']);
+
+/**
+ * The words of a text as a person wrote them, by their term: the first
+ * word that gave each term, in lower case ("rotating" for "rotat"), so the
+ * page shows words, never stems.
+ * @param {string} text
+ * @returns {Map<string, string>}
+ */
+export function wordsOf(text) {
+    const out = new Map();
+    if (typeof text !== 'string' || text === '') return out;
+    for (const raw of text.split(SPLIT)) {
+        if (raw === '') continue;
+        const parts = raw.length > 3 && CAMEL.test(raw) ? [raw, ...raw.split(CAMEL)] : [raw];
+        for (const part of parts) {
+            const lower = part.toLowerCase();
+            if (lower.length < 2 || lower.length > 40 || STOP.has(lower)) continue;
+            const s = stem(lower);
+            if (s.length < 2 || STOP.has(s) || out.has(s)) continue;
+            out.set(s, lower);
+        }
+    }
+    return out;
+}
+
+/** A prompt's distinct terms, without its words about the vault. */
+export function promptTerms(text, options) {
+    return distinctTerms(text, options).filter((t) => !ABOUT_THE_VAULT.has(t));
 }
 
 /** How often each term comes in a text. */

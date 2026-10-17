@@ -11,9 +11,9 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statS
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ACCESS_CHOICES, DEFAULTS, LIVE_SETTINGS, RANGES, SETTING_TITLES, checkConfig, displayPath, folderIn, resolved, savedEntry, vaultPath } from '../plugins/canon/lib/config.js';
-import { distinctTerms, stem, terms } from '../plugins/canon/lib/text.js';
+import { ABOUT_THE_VAULT, distinctTerms, promptTerms, stem, terms, wordsOf } from '../plugins/canon/lib/text.js';
 import { noteOf, parseNote, setFields, statusOf, yamlLines } from '../plugins/canon/lib/frontmatter.js';
-import { Index, MIN_SCORE, folderKeys } from '../plugins/canon/lib/search.js';
+import { Index, MIN_SCORE, folderKeys, projectsOf } from '../plugins/canon/lib/search.js';
 import { MAX_NOTE_BYTES, Vault, bestPassage, cut, folderProblem, paragraphs } from '../plugins/canon/lib/vault.js';
 import { HEADER, KIND, Recall, SUMMARY_MAX, buildBlock, entryBudget, notesThatFit, promptOf, summaryOf } from '../plugins/canon/lib/recall.js';
 import { KINDS, capture, cleanTags, cleanTitle, isDraftPath, promote, slugOf, writeRefusal } from '../plugins/canon/lib/drafts.js';
@@ -128,6 +128,14 @@ test('text: the words a prompt shares with a note, and chat filler that shares n
         assert.equal(stem(a), stem(b), `${a} and ${b}`);
     }
     assert.notEqual(stem('port'), stem('portal'));
+    // A prompt's words about the vault and about answering from it are left out; a note keeps them.
+    assert.deepEqual(promptTerms('Check the team\'s shared notes in the canon vault, answer and cite the note: which ports?'), ['check', 'port']);
+    assert.ok(['note', 'vault', 'canon', 'team'].every((t) => ABOUT_THE_VAULT.has(t)));
+    assert.deepEqual(terms('The team\'s shared vault notes'), ['team', 'shar', 'vault', 'note']);
+    // "Who owns it" keeps its verb.
+    assert.deepEqual(distinctTerms('Who owns quartz-cache?'), ['own', 'quartz', 'cache'].map((w) => stem(w)));
+    // The words as the prompt wrote them, by their terms.
+    assert.deepEqual([...wordsOf('Rotating the certificates, rotated again').entries()], [['rotat', 'rotating'], ['certificat', 'certificates']]);
 });
 
 test('frontmatter: the YAML notes use, read without throwing; titles, tags, aliases, projects and status', () => {
@@ -380,6 +388,38 @@ test('search: the session\'s folder lifts its project\'s notes; one shared body 
     for (const r of ask('What port does the harbor gateway listen on?', '').results) assert.ok(r.score >= MIN_SCORE);
 });
 
+test('search: a project\'s name is one word and a note needs another; words about the vault are left out; another project\'s notes stay out', async () => {
+    const vault = await readVault(vaultCopy());
+    const ask = (prompt, folder = '') => vault.search(prompt, { folder, limit: 3 });
+    const paths = (prompt, folder) => ask(prompt, folder).results.map((r) => r.path);
+    const lantern = '/Users/someone/Projects/lantern-api';
+    // The project's name alone, or with one word in a note's body, is not a match.
+    assert.deepEqual(paths('Does the lantern API support websockets?', lantern), []);
+    const renamed = ask('Rename the lantern API\'s logger variable to log.', lantern);
+    assert.deepEqual(renamed.results, []);
+    assert.equal(renamed.others.find((o) => o.path === 'Decisions/2026-04 Lantern API versioning.md')?.why, 'few', 'its body says "renaming"');
+    assert.ok(renamed.others.some((o) => o.why === 'name'), 'and others share only the name');
+    // With a word beyond the name in the title, it is.
+    assert.equal(paths('What is the lantern team\'s mascot called?')[0], 'Misc/Lantern mascot.md');
+    // Words about the vault say where to look, not what about.
+    assert.deepEqual(ask('Answer from the team\'s shared notes, and cite the note you used.', lantern), { terms: [], results: [], others: [], folder: { repo: 'lantern-api', parent: '' } });
+    assert.deepEqual(paths('What ports does quartz use? Answer from the team\'s shared notes and cite the note you used.', '/Users/someone/work/quartz-cache'), ['Projects/quartz-cache/Quartz ports.md']);
+    // In a project's folder, another project's notes stay out unless the prompt names that project.
+    const here = ask('Which ports does this service listen on, and where is its health check?', lantern);
+    assert.deepEqual(here.results.map((r) => r.path), ['Projects/lantern-api/Lantern ports.md']);
+    assert.equal(here.others.find((o) => o.path === 'Projects/harbor-gateway/Gateway ports.md')?.why, 'other');
+    assert.deepEqual(paths('What timeout and retry settings should our quartz client use?', lantern), ['Projects/quartz-cache/Client settings.md'], 'named, so it comes');
+    // "The lantern API" names lantern-api, not lantern-web; a superseded decision never comes.
+    assert.deepEqual(paths('Why did we move the lantern job queue off Redis?', '/Users/someone/src/tide-ledger'), ['Decisions/2026-03 Lantern job queue on NATS JetStream.md']);
+    // The page gets the prompt's words, never their stems.
+    assert.deepEqual(ask('How do I rotate the TLS certificates?').results[0].words, ['rotate', 'tls', 'certificates']);
+    // The project's name is known from a note's project or repo field and from its folder under Projects/.
+    assert.deepEqual(projectsOf({ path: 'Projects/lantern-api/Lantern ports.md', projects: [] }), ['lantern-api']);
+    assert.deepEqual(projectsOf({ path: 'Runbooks/Paging.md', projects: ['harbor-gateway'] }), ['harbor-gateway']);
+    assert.deepEqual(projectsOf({ path: 'Home.md', projects: [] }), []);
+    assert.deepEqual([...vault.index.projects.keys()].sort(), ['harbor-gateway', 'lantern-api', 'lantern-web', 'quartz-cache', 'tide-ledger']);
+});
+
 test('search: the index forgets removed notes and compacts itself; scores never depend on removed ones', () => {
     const index = new Index();
     const note = (i, body) => ({ path: `n/${i}.md`, title: `Note ${i}`, aliases: [], tags: [], projects: [], headings: [], body });
@@ -454,8 +494,8 @@ test('recall: a person\'s new prompt gets the notes once, right after it, as one
     assert.equal(added.source.kind, KIND);
     assert.equal(added.source.form, 'notice');
     assert.equal(added.role, 'user');
-    assert.ok(added.source.summary.startsWith('3 notes from the canon vault: Gateway ports'));
-    assert.deepEqual(added.source.notes.map((n) => n.path), ['Projects/harbor-gateway/Gateway ports.md', 'Projects/harbor-gateway/Routing rules.md', 'Projects/harbor-gateway/Deploying the gateway.md']);
+    assert.equal(added.source.summary, '1 note from the canon vault: Gateway ports');
+    assert.deepEqual(added.source.notes.map((n) => n.path), ['Projects/harbor-gateway/Gateway ports.md'], 'the project\'s other notes share only its name and a word in their body');
     assert.equal(added.source.turn, 1);
     const text = added.content[0].text;
     assert.ok(text.startsWith(HEADER));
@@ -464,7 +504,7 @@ test('recall: a person\'s new prompt gets the notes once, right after it, as one
     assert.equal(decision.messages.length, 4, 'one message added, nothing else changed');
     assert.equal(decision.messages.at(-1).id, 'after', 'DSH\'s own context after the prompt stays after Canon\'s');
     assert.equal(found.length, 1);
-    assert.deepEqual(found[0].boosted, ['Projects/harbor-gateway/Gateway ports.md', 'Projects/harbor-gateway/Routing rules.md', 'Projects/harbor-gateway/Deploying the gateway.md']);
+    assert.deepEqual(found[0].boosted, ['Projects/harbor-gateway/Gateway ports.md']);
     // The same prompt again (a retried step): nothing more.
     const again = step();
     assert.deepEqual((await recall.preStep(again.payload, again.next)).messages.map((m) => m.id), ['old', 'm-1', 'after']);
@@ -538,7 +578,9 @@ test('recall: the page\'s try-out shows the notes, why each fits, the near misse
     const view = await recall.preview('What port does the harbor gateway listen on?', '/work/Projects/harbor-gateway');
     assert.deepEqual(view.terms, ['port', 'harbor', 'gateway', 'listen']);
     assert.deepEqual(view.folder, { repo: 'harbor-gateway', parent: '' });
-    assert.deepEqual(view.results.map((r) => [r.path, r.folder]), [['Projects/harbor-gateway/Gateway ports.md', 'repo'], ['Projects/harbor-gateway/Routing rules.md', 'repo'], ['Projects/harbor-gateway/Deploying the gateway.md', 'repo']]);
+    assert.deepEqual(view.results.map((r) => [r.path, r.folder]), [['Projects/harbor-gateway/Gateway ports.md', 'repo']]);
+    assert.deepEqual(view.results[0].words, ['port', 'harbor', 'gateway', 'listen'], 'the prompt\'s own words, for the page');
+    assert.equal(view.others.find((o) => o.path === 'Projects/harbor-gateway/Routing rules.md')?.why, 'few', 'the project\'s name and one word in its body');
     assert.ok(view.results.every((r) => typeof r.score === 'number' && r.matched.length > 0 && r.passage));
     assert.ok(view.others.some((o) => o.path === 'Projects/tide-ledger/Ledger backups.md'));
     assert.ok(view.block.text.startsWith(HEADER) && view.block.chars === view.block.text.length);
@@ -856,7 +898,7 @@ test('plugin: a prompt gets the cited block; per-session off stops it; capture a
     assert.deepEqual(page.sessions.map((r) => [r.sessionId, r.title, r.count]), [['s-1', 'Gateway work', 1]]);
     assert.deepEqual(page.vault.counts, { notes: 42, active: 35, drafts: 2, other: 5, unreadable: 0 });
     const recallLog = readFileSync(join(dshHome, 'canon', 'recall.jsonl'), 'utf8');
-    assert.match(recallLog, /"text":"Added 3 notes to turn 1"/);
+    assert.match(recallLog, /"text":"Added 1 note to turn 1"/);
 
     // Off for this session: the next prompt gets nothing, and it is logged.
     assert.deepEqual(await remote.setSession('s-1', false), { sessionId: 's-1', off: true, changed: true });
