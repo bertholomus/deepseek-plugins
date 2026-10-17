@@ -1,0 +1,398 @@
+/**
+ * Recall's index: one SQLite file (node:sqlite, built into Node) with an
+ * FTS5 table of turns. Only the index's worker thread opens it.
+ *
+ * - `files`: every file read (a session's log, a transcript, a note): where
+ *   it is, how far it was read (`offset`, `state`), and its facts (session
+ *   id, title, folder, model, times, turns, problem).
+ * - `docs`: one row per turn (or note section): its file, turn number, the
+ *   seq of its start, its time, kind, folder and model, for the filters.
+ * - `fts`: the turn's text in four columns (title, prompt, reply, tools),
+ *   with the same rowid as its `docs` row.
+ *
+ * The index holds nothing that is not in the files: a broken or older
+ * index is set aside and built again.
+ *
+ * @module dsh-plugin-recall/store
+ */
+import { existsSync, renameSync, rmSync, statSync } from 'node:fs';
+
+/** Bump when the tables change: an index of another version is built again. */
+export const SCHEMA_VERSION = 3;
+
+/** bm25 weights of the columns: title, prompt, reply, tools. */
+const WEIGHTS = [4.0, 2.0, 1.0, 0.7];
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS files (
+  id INTEGER PRIMARY KEY,
+  path TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  root TEXT NOT NULL,
+  own INTEGER NOT NULL DEFAULT 0,
+  size INTEGER NOT NULL DEFAULT -1,
+  mtime REAL NOT NULL DEFAULT 0,
+  ino INTEGER NOT NULL DEFAULT 0,
+  offset INTEGER NOT NULL DEFAULT 0,
+  state TEXT,
+  session TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  folder TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  created INTEGER NOT NULL DEFAULT 0,
+  updated INTEGER NOT NULL DEFAULT 0,
+  turns INTEGER NOT NULL DEFAULT 0,
+  skip TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS files_root ON files(root);
+CREATE INDEX IF NOT EXISTS files_session ON files(session);
+CREATE TABLE IF NOT EXISTS docs (
+  id INTEGER PRIMARY KEY,
+  file INTEGER NOT NULL,
+  turn INTEGER NOT NULL,
+  seq INTEGER NOT NULL DEFAULT 0,
+  time INTEGER NOT NULL DEFAULT 0,
+  done INTEGER NOT NULL DEFAULT 1,
+  kind TEXT NOT NULL,
+  folder TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  label TEXT NOT NULL DEFAULT '',
+  line INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (file, turn)
+);
+CREATE INDEX IF NOT EXISTS docs_time ON docs(time);
+CREATE INDEX IF NOT EXISTS docs_folder ON docs(folder);
+CREATE INDEX IF NOT EXISTS docs_model ON docs(model);
+CREATE INDEX IF NOT EXISTS docs_kind ON docs(kind, time);
+CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(title, prompt, reply, tools, tokenize = 'porter unicode61 remove_diacritics 2', prefix = '3');
+`;
+
+/** Escape a folder for LIKE (its subfolders: folder || '/%'). */
+const likePrefix = (folder) => `${folder.replace(/[\\%_]/g, (c) => `\\${c}`)}/%`;
+
+export class Store {
+    /**
+     * Open (or make) the index at `file`. A file that is not an index of this
+     * version is set aside (`<file>.old`) and a new one made.
+     * @param {string} file
+     * @param {{ DatabaseSync: Function }} sqlite - node:sqlite.
+     * @param {{ log?: (level: string, text: string) => void }} [options]
+     */
+    constructor(file, sqlite, { log } = {}) {
+        this.file = file;
+        this.log = log ?? (() => {});
+        this.db = this.open(sqlite);
+        this.statements = new Map();
+    }
+
+    open(sqlite) {
+        const tryOpen = () => {
+            const db = new sqlite.DatabaseSync(this.file);
+            try {
+                db.exec('PRAGMA busy_timeout = 5000');
+                db.exec('PRAGMA journal_mode = WAL');
+                db.exec('PRAGMA synchronous = NORMAL');
+                const version = db.prepare('PRAGMA user_version').get()?.user_version ?? 0;
+                const empty = db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'").get().n === 0;
+                if (!empty && version !== SCHEMA_VERSION) throw Object.assign(new Error(`the index is version ${version}, not ${SCHEMA_VERSION}`), { stale: true });
+                db.exec(SCHEMA);
+                db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+                const check = db.prepare('PRAGMA quick_check').get();
+                const ok = Object.values(check ?? {})[0];
+                if (ok !== 'ok') throw new Error(`the index failed its check (${String(ok).slice(0, 120)})`);
+                return db;
+            } catch (error) {
+                try { db.close(); } catch { /* closing a broken file */ }
+                throw error;
+            }
+        };
+        try {
+            return tryOpen();
+        } catch (error) {
+            if (!existsSync(this.file)) throw error;
+            // A broken or older index: set it aside and build a new one (the files are the truth).
+            this.log(error.stale ? 'info' : 'warn', `${error.stale ? 'An older index' : 'The index could not be opened'} (${String(error?.message ?? error).slice(0, 200)}); it was set aside and a new one is built.`);
+            for (const tail of ['-wal', '-shm']) rmSync(`${this.file}${tail}`, { force: true });
+            renameSync(this.file, `${this.file}.old`);
+            this.setAside = true;
+            return tryOpen();
+        }
+    }
+
+    /** A prepared statement, made once. */
+    sql(text) {
+        let statement = this.statements.get(text);
+        if (!statement) {
+            statement = this.db.prepare(text);
+            this.statements.set(text, statement);
+        }
+        return statement;
+    }
+
+    /** Run `fn` in one transaction (nested calls join the outer one). */
+    transaction(fn) {
+        if (this.inTransaction) return fn();
+        this.db.exec('BEGIN');
+        this.inTransaction = true;
+        try {
+            const out = fn();
+            this.db.exec('COMMIT');
+            return out;
+        } catch (error) {
+            try { this.db.exec('ROLLBACK'); } catch { /* already rolled back */ }
+            throw error;
+        } finally {
+            this.inTransaction = false;
+        }
+    }
+
+    close() {
+        try { this.db.close(); } catch { /* already closed */ }
+    }
+
+    /** The index file's size on disk, its write-ahead log included. */
+    bytes() {
+        let total = 0;
+        for (const tail of ['', '-wal']) {
+            try { total += statSync(`${this.file}${tail}`).size; } catch { /* not there */ }
+        }
+        return total;
+    }
+
+    // ── Files ─────────────────────────────────────────────────────────
+
+    fileByPath(path) {
+        return this.sql('SELECT * FROM files WHERE path = ?').get(path);
+    }
+
+    fileById(id) {
+        return this.sql('SELECT * FROM files WHERE id = ?').get(id);
+    }
+
+    /** A DSH session's file in this DSH's own folder, by its id. */
+    ownSession(sessionId) {
+        return this.sql("SELECT * FROM files WHERE session = ? AND kind = 'session' AND own = 1 ORDER BY id DESC LIMIT 1").get(sessionId);
+    }
+
+    /** Every file of a folder Recall searches: path, size, mtime, inode, id, why it is skipped. */
+    filesOf(root, kind) {
+        return this.sql('SELECT id, path, size, mtime, ino, skip FROM files WHERE root = ? AND kind = ?').all(root, kind);
+    }
+
+    /** The folders the index holds rows from. */
+    roots() {
+        return this.sql('SELECT root, kind, count(*) AS files, sum(turns) AS turns FROM files GROUP BY root, kind').all();
+    }
+
+    /** Add a file (or give the one there): its id. */
+    addFile({ path, kind, root, own }) {
+        const found = this.fileByPath(path);
+        if (found) {
+            if (found.root !== root || found.kind !== kind || found.own !== (own ? 1 : 0)) {
+                this.sql('UPDATE files SET root = ?, kind = ?, own = ? WHERE id = ?').run(root, kind, own ? 1 : 0, found.id);
+            }
+            return found.id;
+        }
+        return Number(this.sql('INSERT INTO files (path, kind, root, own) VALUES (?, ?, ?, ?)').run(path, kind, root, own ? 1 : 0).lastInsertRowid);
+    }
+
+    /** Save how far a file was read, and its facts. */
+    saveFile(id, f) {
+        this.sql(`UPDATE files SET size = ?, mtime = ?, ino = ?, offset = ?, state = ?, session = ?, title = ?, folder = ?, model = ?,
+            created = ?, updated = ?, turns = ?, skip = ?, error = ? WHERE id = ?`).run(
+            f.size ?? -1, f.mtime ?? 0, f.ino ?? 0, f.offset ?? 0, f.state === undefined ? null : JSON.stringify(f.state),
+            f.session ?? '', f.title ?? '', f.folder ?? '', f.model ?? '', Math.round(f.created ?? 0), Math.round(f.updated ?? 0),
+            f.turns ?? 0, f.skip ?? '', f.error ?? '', id,
+        );
+    }
+
+    /** Mark a file as not read (a problem, or skipped on purpose) without losing its rows' place. */
+    fileProblem(id, { size, mtime, ino, error = '', skip = '' }) {
+        this.sql('UPDATE files SET size = ?, mtime = ?, ino = ?, error = ?, skip = ? WHERE id = ?').run(size ?? -1, mtime ?? 0, ino ?? 0, error, skip, id);
+    }
+
+    /** A file's title changed: its rows' title column too. */
+    retitle(id, title) {
+        this.sql('UPDATE files SET title = ? WHERE id = ?').run(title, id);
+        const docs = this.sql('SELECT id FROM docs WHERE file = ?').all(id);
+        const read = this.sql('SELECT prompt, reply, tools FROM fts WHERE rowid = ?');
+        for (const { id: docId } of docs) {
+            const text = read.get(docId);
+            if (!text) continue;
+            this.sql('DELETE FROM fts WHERE rowid = ?').run(docId);
+            this.sql('INSERT INTO fts (rowid, title, prompt, reply, tools) VALUES (?, ?, ?, ?, ?)').run(docId, title, text.prompt, text.reply, text.tools);
+        }
+    }
+
+    /** Forget a file's rows (it is read again from the start). */
+    clearRows(fileId) {
+        for (const { id } of this.sql('SELECT id FROM docs WHERE file = ?').all(fileId)) this.sql('DELETE FROM fts WHERE rowid = ?').run(id);
+        this.sql('DELETE FROM docs WHERE file = ?').run(fileId);
+    }
+
+    /** Forget a file and its rows. */
+    removeFile(fileId) {
+        this.clearRows(fileId);
+        this.sql('DELETE FROM files WHERE id = ?').run(fileId);
+    }
+
+    /** Forget every file of a folder no longer searched. @returns {number} the files forgotten. */
+    removeRoot(root, kind) {
+        const ids = this.sql('SELECT id FROM files WHERE root = ? AND kind = ?').all(root, kind).map((r) => r.id);
+        for (const id of ids) this.removeFile(id);
+        return ids.length;
+    }
+
+    /** Every file is read again (its rows replaced as it is): the rebuild. */
+    staleAll() {
+        this.sql("UPDATE files SET size = -1, mtime = 0, ino = 0, offset = 0, state = NULL, error = '', skip = ''").run();
+    }
+
+    // ── Rows ──────────────────────────────────────────────────────────
+
+    /**
+     * Put a turn's row (a new one, or the same turn again as it grew).
+     * @param {number} fileId
+     * @param {{ kind: string, title: string }} file
+     * @param {object} row - from turns.rowOf or handoffs.readNote.
+     */
+    putRow(fileId, file, row) {
+        const found = this.sql('SELECT id FROM docs WHERE file = ? AND turn = ?').get(fileId, row.turn);
+        const values = [row.seq ?? 0, Math.round(row.time ?? 0), row.status === 'running' ? 0 : 1, file.kind, file.folder ?? '', row.model ?? '', row.label ?? '', row.line ?? 0];
+        let id;
+        if (found) {
+            id = found.id;
+            this.sql('UPDATE docs SET seq = ?, time = ?, done = ?, kind = ?, folder = ?, model = ?, label = ?, line = ? WHERE id = ?').run(...values, id);
+            this.sql('DELETE FROM fts WHERE rowid = ?').run(id);
+        } else {
+            id = Number(this.sql('INSERT INTO docs (seq, time, done, kind, folder, model, label, line, file, turn) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(...values, fileId, row.turn).lastInsertRowid);
+        }
+        this.sql('INSERT INTO fts (rowid, title, prompt, reply, tools) VALUES (?, ?, ?, ?, ?)').run(id, file.title ?? '', row.prompt ?? '', row.reply ?? '', row.tools ?? '');
+        return id;
+    }
+
+    /** The rows of a file past its last turn (a note that got shorter). */
+    trimRows(fileId, lastTurn) {
+        for (const { id } of this.sql('SELECT id FROM docs WHERE file = ? AND turn > ?').all(fileId, lastTurn)) {
+            this.sql('DELETE FROM fts WHERE rowid = ?').run(id);
+            this.sql('DELETE FROM docs WHERE id = ?').run(id);
+        }
+    }
+
+    // ── Reading ───────────────────────────────────────────────────────
+
+    /** Filters as SQL on `docs d`. */
+    static where({ kind, folder, model, from, to, file } = {}) {
+        const parts = [];
+        const args = [];
+        if (kind) { parts.push('d.kind = ?'); args.push(kind); }
+        if (folder) { parts.push("(d.folder = ? OR d.folder LIKE ? ESCAPE '\\')"); args.push(folder, likePrefix(folder)); }
+        if (model) { parts.push('d.model = ?'); args.push(model); }
+        if (Number.isSafeInteger(file)) { parts.push('d.file = ?'); args.push(file); }
+        if (Number.isFinite(from)) { parts.push('d.time >= ?'); args.push(Math.round(from)); }
+        if (Number.isFinite(to)) { parts.push('d.time < ?'); args.push(Math.round(to)); }
+        return { sql: parts.length ? ` AND ${parts.join(' AND ')}` : '', args };
+    }
+
+    /**
+     * The best-matching rows for an FTS5 query (or the newest rows with no
+     * query), at most `cap`, with their file's facts.
+     * @param {{ match?: string, sort?: 'best'|'newest', cap?: number, filters?: object }} q
+     */
+    candidates({ match = '', sort = 'best', cap = 400, filters = {} }) {
+        const w = Store.where(filters);
+        const cols = 'd.id, d.file, d.turn, d.seq, d.time, d.done, d.kind, d.folder, d.model, d.label, d.line';
+        if (!match) {
+            return this.db.prepare(`SELECT ${cols}, 0 AS score FROM docs d WHERE 1 = 1${w.sql} ORDER BY d.time DESC LIMIT ?`).all(...w.args, cap);
+        }
+        const order = sort === 'newest' ? 'd.time DESC' : 'score';
+        return this.db.prepare(`SELECT ${cols}, bm25(fts, ${WEIGHTS.join(', ')}) AS score FROM fts JOIN docs d ON d.id = fts.rowid
+            WHERE fts MATCH ?${w.sql} ORDER BY ${order} LIMIT ?`).all(match, ...w.args, cap);
+    }
+
+    /** How many rows match, counting up to `cap` (more is said as "cap+"). */
+    count({ match = '', filters = {}, cap = 5000 }) {
+        const w = Store.where(filters);
+        const inner = match
+            ? `SELECT 1 FROM fts JOIN docs d ON d.id = fts.rowid WHERE fts MATCH ?${w.sql} LIMIT ?`
+            : `SELECT 1 FROM docs d WHERE 1 = 1${w.sql} LIMIT ?`;
+        return this.db.prepare(`SELECT count(*) AS n FROM (${inner})`).get(...(match ? [match] : []), ...w.args, cap + 1).n;
+    }
+
+    /**
+     * Snippets for some rows of a match: rowid → text with \u0002…\u0003
+     * around each hit. The reply's hits first (where answers are), then the
+     * tools', then the request's; the title only when nothing else has one
+     * (a result shows its title anyway).
+     */
+    snippets(match, ids) {
+        const out = new Map();
+        if (!match || ids.length === 0) return out;
+        const marks = ids.map(() => '?').join(', ');
+        const cut = (col) => `snippet(fts, ${col}, char(2), char(3), '…', 28)`;
+        const rows = this.db.prepare(`SELECT rowid AS id, ${cut(2)} AS reply, ${cut(3)} AS tools, ${cut(1)} AS prompt, ${cut(0)} AS title
+            FROM fts WHERE fts MATCH ? AND rowid IN (${marks})`).all(match, ...ids);
+        for (const r of rows) {
+            const best = [r.reply, r.tools, r.prompt, r.title].find((text) => typeof text === 'string' && text.includes('\u0002'));
+            out.set(r.id, best ?? '');
+        }
+        return out;
+    }
+
+    /** The start of each row's prompt, for "what was asked". */
+    asked(ids, chars = 240) {
+        const out = new Map();
+        if (ids.length === 0) return out;
+        const marks = ids.map(() => '?').join(', ');
+        for (const r of this.db.prepare(`SELECT rowid AS id, substr(prompt, 1, ?) AS text FROM fts WHERE rowid IN (${marks})`).all(chars, ...ids)) out.set(r.id, r.text);
+        return out;
+    }
+
+    /** Files by id, their facts for a result. */
+    filesByIds(ids) {
+        const out = new Map();
+        if (ids.length === 0) return out;
+        const marks = ids.map(() => '?').join(', ');
+        for (const f of this.db.prepare(`SELECT id, path, kind, root, own, session, title, folder, model, updated, turns FROM files WHERE id IN (${marks})`).all(...ids)) out.set(f.id, f);
+        return out;
+    }
+
+    /** One row in full: its text and facts. */
+    doc(fileId, turn) {
+        const d = this.sql('SELECT * FROM docs WHERE file = ? AND turn = ?').get(fileId, turn);
+        if (!d) return undefined;
+        const text = this.sql('SELECT title, prompt, reply, tools FROM fts WHERE rowid = ?').get(d.id) ?? {};
+        return { ...d, ...text };
+    }
+
+    /** The turn numbers of a file's rows, in order (for "earlier" and "later"). */
+    turnsOf(fileId) {
+        return this.sql('SELECT turn FROM docs WHERE file = ? ORDER BY turn').all(fileId).map((r) => r.turn);
+    }
+
+    /** What the filters can choose from: folders, models and kinds, with counts, the most recent first. */
+    facets({ limit = 200 } = {}) {
+        const folders = this.sql(`SELECT folder, count(*) AS turns, count(DISTINCT file) AS files, max(time) AS last FROM docs WHERE folder != '' GROUP BY folder ORDER BY last DESC LIMIT ${limit}`).all();
+        const models = this.sql(`SELECT model, count(*) AS turns, max(time) AS last FROM docs WHERE model != '' GROUP BY model ORDER BY last DESC LIMIT ${limit}`).all();
+        const kinds = this.sql('SELECT kind, count(*) AS turns, count(DISTINCT file) AS files FROM docs GROUP BY kind').all();
+        return { folders, models, kinds };
+    }
+
+    /** Counts for the page. */
+    totals() {
+        const docs = this.sql('SELECT count(*) AS n, max(time) AS last FROM docs').get();
+        const files = this.sql("SELECT count(*) AS n, sum(CASE WHEN error != '' THEN 1 ELSE 0 END) AS problems, sum(CASE WHEN skip != '' THEN 1 ELSE 0 END) AS skipped FROM files").get();
+        return { turns: docs.n, last: docs.last ?? 0, files: files.n, problems: files.problems ?? 0, skipped: files.skipped ?? 0 };
+    }
+
+    /** Files that could not be read, with why: the newest first. */
+    problems(limit = 20) {
+        return this.sql("SELECT id, path, kind, root, error, updated FROM files WHERE error != '' ORDER BY id DESC LIMIT ?").all(limit);
+    }
+
+    /** Per folder searched: files, turns, problems. */
+    rootTotals() {
+        return this.sql("SELECT root, kind, count(*) AS files, sum(turns) AS turns, sum(CASE WHEN error != '' THEN 1 ELSE 0 END) AS problems, max(updated) AS last FROM files WHERE skip = '' GROUP BY root, kind").all();
+    }
+}
