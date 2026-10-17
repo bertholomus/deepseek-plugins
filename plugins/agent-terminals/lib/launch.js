@@ -215,10 +215,12 @@ export function shellWord(word) {
 
 /**
  * The line typed into the terminal's shell: `exec` replaces the shell with
- * the agent, so the terminal ends when the agent does, and says so.
+ * the agent, so the terminal ends when the agent does, and says so. A shell
+ * that stays when `exec` cannot run the program (bash, when interactive)
+ * exits with its code too.
  */
 export function launchLine(argv) {
-    return `exec ${argv.map(shellWord).join(' ')}`;
+    return `exec ${argv.map(shellWord).join(' ')} || exit $?`;
 }
 
 /** The shells a launch line works in. */

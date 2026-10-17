@@ -15,6 +15,7 @@ Each plugin is a normal DSH plugin package. You add it to a DSH profile's bundle
 | [`session-watch`](plugins/session-watch) | The shared watcher behind Autopilot, Decisions and Agent Terminals: every session's state from DSH's own events, and delivery of a message proven by the session's own log. No page of its own. |
 | [`autopilot`](plugins/autopilot) | Keeps sessions moving when nobody is watching: after a restart it tells cut-off sessions to carry on, nudges quiet sessions with open todos once and backs off, and restarts goals an error stopped. Every action has a Why line and a kill switch. |
 | [`decisions`](plugins/decisions) | One inbox for everything waiting on you: decision lines, tools waiting for approval, questions in the question box, threads that need a decision. Each card shows the question, the recommendation, the session and the wait; an answer goes into the session, proven by its log. Optional note to a webhook or a command. |
+| [`agent-terminals`](plugins/agent-terminals) | Command-line coding agents as part of DSH: each in a terminal tab beside its own session, started again after a restart and resuming its conversation, with your messages typed in one at a time and proven read from its transcript, and what it is doing (working, idle, waiting on you) on its session's row and in Decisions. |
 
 These plugins are independent work. They are not made or endorsed by DeepSeek.
 
@@ -33,6 +34,7 @@ DSH loads a plugin only when the profile lists its package in `dsh.profile.bundl
 | session-watch | `dsh-plugin-session-watch` | `session-watch` |
 | autopilot | `dsh-plugin-autopilot` | `autopilot` |
 | decisions | `dsh-plugin-decisions` | `decisions` |
+| agent-terminals | `dsh-plugin-agent-terminals` | `agent-terminals` |
 
 1. Clone this repository:
 

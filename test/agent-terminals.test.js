@@ -75,7 +75,7 @@ test('launch: the command line is quoted for a POSIX shell, and exec replaces th
     assert.equal(shellWord(''), '\'\'');
     assert.equal(shellWord('~/x'), '\'~/x\'', 'a tilde is not expanded behind the person\'s back');
     assert.equal(shellWord('$(rm -rf /)'), '\'$(rm -rf /)\'');
-    assert.equal(launchLine(['/usr/bin/agent', '--name', 'a b']), 'exec /usr/bin/agent --name \'a b\'');
+    assert.equal(launchLine(['/usr/bin/agent', '--name', 'a b']), 'exec /usr/bin/agent --name \'a b\' || exit $?');
     assert.deepEqual(pickShell([{ path: '/bin/fish' }, { path: '/bin/bash' }, { path: '/bin/zsh' }]), { path: '/bin/zsh' }, 'zsh first');
     assert.deepEqual(pickShell([{ path: 'C:/x/pwsh.exe' }, { path: '/usr/bin/bash' }]), { path: '/usr/bin/bash' });
     assert.equal(pickShell([{ path: '/bin/fish' }]), undefined, 'no POSIX shell: nothing to type a command into');
@@ -283,12 +283,12 @@ test('typist: the attached way takes the input, learns the paste mode, and lets 
 
 test('config: every setting is checked in words, and a save says what changed', () => {
     assert.doesNotThrow(() => checkConfig({ ...DEFAULTS }));
-    assert.throws(() => checkConfig({ ...DEFAULTS, proofSeconds: 1 }), /Wait for proof before pressing Enter again \(proofSeconds\) must be a whole number of seconds from 2 to 120 \(it is 1\)/);
+    assert.throws(() => checkConfig({ ...DEFAULTS, proofSeconds: 1 }), /Seconds without proof before Enter is pressed again \(proofSeconds\) must be a whole number of seconds from 2 to 120 \(it is 1\)/);
     assert.throws(() => checkConfig({ ...DEFAULTS, enterRetries: 9 }), /from 0 to 5/);
     assert.throws(() => checkConfig({ ...DEFAULTS, typing: 'fast' }), /"auto", "direct" or "attached"/);
     assert.throws(() => checkConfig({ ...DEFAULTS, notify: 'yes' }), /true or false/);
     for (const key of LIVE_SETTINGS) assert.ok(SETTING_TITLES[key], `${key} has a title`);
-    assert.equal(changedWords([['openTabs'], ['proofSeconds']]), '“Open an agent\'s terminal tab with its session”, “Wait for proof before pressing Enter again”');
+    assert.equal(changedWords([['openTabs'], ['proofSeconds']]), '“Open an agent\'s terminal tab with its session”, “Seconds without proof before Enter is pressed again”');
     const settings = { ...DEFAULTS };
     const check = new SettingsCheck({ settings, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'agent-terminals' });
     check.run();
@@ -487,7 +487,7 @@ class FakeTerminal {
     }
 
     run(line) {
-        const words = splitArgs(line);
+        const words = splitArgs(line.replace(/ \|\| exit \$\?$/, ''));
         if (words[0] !== 'exec' || words.length < 2) {
             this.print(`zsh: ${line}\r\n`);
             return;
@@ -876,6 +876,113 @@ test('engine: the events style is followed through its dated file, across a star
         assert.equal(agents.view(record).turns, 2);
     } finally {
         agents.stop();
+        controller.restart();
+    }
+});
+
+test('engine: a message taken back twice says so; while Agent Terminals runs no agents, each says it is not running and why', async () => {
+    const dir = tmp('held');
+    const first = engine({ dir });
+    first.agents.start();
+    let key;
+    try {
+        const { agent } = await first.agents.launch({ program: FAKE, args: fakeArgs(join(dir, 'data')), style: 'flags', data: join(dir, 'data'), folder: dir, name: 'Held' });
+        key = agent.key;
+        const record = first.agents.records[key];
+        await until(() => first.agents.view(record).ready, 'it to be ready');
+        first.agents.send(key, '#work=600 busy');
+        await until(() => first.agents.view(record).status === 'working', 'it to work');
+        const { delivery } = first.agents.send(key, 'later');
+        await until(() => first.agents.view(record).deliveries[0]?.state === 'waiting', 'the second message to wait');
+        assert.equal(first.agents.cancel(key, delivery.id).delivery.state, 'cancelled');
+        assert.throws(() => first.agents.cancel(key, delivery.id), /^Error: It was taken back already\.$/);
+    } finally {
+        first.agents.stop();
+        first.controller.restart();
+    }
+    // The same agents, read by an Agent Terminals that does not run them: not "starting", but not running, and why.
+    const second = engine({ dir });
+    try {
+        const record = second.agents.records[key];
+        second.agents.working = () => false;
+        let view = second.agents.view(record);
+        assert.equal(view.status, 'stopped');
+        assert.equal(view.detail, 'Not running: Agent Terminals waits for a setting to be fixed (see the top of this page), then picks it up again.');
+        second.agents.lives.clear();
+        second.agents.working = () => true;
+        view = second.agents.view(record);
+        assert.equal(view.status, 'stopped');
+        assert.equal(view.detail, 'Not running: DSH\'s terminals are not there, so Agent Terminals cannot pick it up yet.');
+        assert.deepEqual(second.agents.marks().map((m) => [m.status, m.running]), [['stopped', false]], 'the row says so too');
+    } finally {
+        second.agents.stop();
+        second.controller.restart();
+    }
+});
+
+test('engine: typing through a terminal input this DSH lacks is refused before a terminal opens; after a restart the agent stays meant to run and comes back once fixed', async () => {
+    const dir = tmp('attached');
+    const data = join(dir, 'data');
+    const controller = new FakeController();
+    const watch = fakeWatch();
+    const first = engine({ dir, watch, controller });
+    first.agents.start();
+    let key;
+    try {
+        const { agent } = await first.agents.launch({ program: FAKE, args: fakeArgs(data), style: 'flags', data, folder: dir, name: 'Mover', task: '#work=20 hello' });
+        key = agent.key;
+        await until(() => first.agents.view(first.agents.records[key]).deliveries[0]?.state === 'delivered', 'its first message');
+    } finally {
+        first.agents.stop();
+    }
+    // DSH starts again with typing: attached, and has no terminal input for plugins (this controller has no follow or write).
+    controller.restart();
+    first.store.data.agents[key].hostPid = 1;
+    first.store.flush();
+    const second = engine({ dir, watch, controller, config: { typing: 'attached' }, store: new JsonStore(join(dir, 'state.json'), { parse: parseData, delayMs: 5 }) });
+    second.agents.start();
+    const words = 'This DSH has no terminal input for plugins. Set "How messages are typed in" (typing) to auto in its profile settings.';
+    try {
+        const record = second.agents.records[key];
+        await until(() => second.agents.view(record).problem, 'the start after the restart to fail');
+        const view = second.agents.view(record);
+        assert.equal(view.status, 'stopped');
+        assert.equal(view.problem, words);
+        assert.equal(view.detail, `It could not start after DSH restarted: ${words} It is tried again the next time DSH starts; Start again tries now.`);
+        assert.equal(view.wanted, 'running', 'still meant to run');
+        assert.deepEqual(controller.list(record.sessionId), [], 'no terminal opened for nothing');
+        const started = await second.agents.launch({ program: FAKE, args: fakeArgs(data), style: 'flags', data, folder: dir, name: 'Another' });
+        assert.equal(started.problem, words, 'a new start is refused the same way');
+        assert.deepEqual(controller.list(started.agent.sessionId), []);
+        assert.equal(started.agent.wanted, 'stopped', 'a first start that failed waits for Start again');
+    } finally {
+        second.agents.stop();
+    }
+    // Set back to auto, and DSH started again: it resumes by itself.
+    controller.restart();
+    const third = engine({ dir, watch, controller, store: new JsonStore(join(dir, 'state.json'), { parse: parseData, delayMs: 5 }) });
+    third.agents.start();
+    try {
+        const record = third.agents.records[key];
+        await until(() => controller.terminal(record.sessionId, record.terminalId)?.output.includes(`Resumed conversation ${record.conversationId}`), 'the resume once fixed');
+        await until(() => third.agents.view(record).status === 'idle', 'idle again');
+        assert.equal(third.agents.view(record).problem, undefined);
+    } finally {
+        third.agents.stop();
+        controller.restart();
+    }
+    // A start whose command cannot be typed in: the shell it opened is closed again.
+    const fourth = engine({ dir: tmp('attached-mute'), watch, controller });
+    fourth.agents.start();
+    try {
+        fourth.agents.typist.write = async () => {
+            throw new Error('the terminal took no input');
+        };
+        const { agent, problem } = await fourth.agents.launch({ program: FAKE, args: fakeArgs(data), style: 'flags', data, folder: dir, name: 'Mute' });
+        assert.equal(problem, 'the terminal took no input');
+        assert.deepEqual(controller.list(agent.sessionId), [], 'no empty terminal stays beside the session');
+    } finally {
+        fourth.agents.stop();
         controller.restart();
     }
 });

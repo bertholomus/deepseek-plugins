@@ -301,7 +301,8 @@ export class AgentTerminals {
                 await this.run(record, { resume: true });
                 this.log({ kind: 'restart', agent: record.key, sessionId: record.sessionId, text: `Started ${record.name} again after DSH restarted`, why: 'DSH ended its terminal when it quit. It resumes its conversation in a new terminal with the same name, so its tab finds it.', state: 'done', by: 'Agent Terminals' });
             } catch (error) {
-                this.failed(record, error, 'after DSH restarted');
+                // Still meant to run: the next start of DSH (or of Agent Terminals, once a setting is fixed) tries again.
+                this.failed(record, error, 'after DSH restarted', { keepWanted: true });
             }
         }
         this.changed();
@@ -478,6 +479,8 @@ export class AgentTerminals {
             if (typeof controller?.create !== 'function') throw new Error('This DSH has no terminals for plugins (its terminal controller is not running).');
             const argv = argvOf(record, { resume });
             if (!argv) throw new Error('This program cannot resume its conversation: use Start anew.');
+            // Typing through DSH's terminal input needs a DSH that has it: said before a terminal opens for nothing.
+            if (this.config.typing === 'attached' && !this.typist.attachedOk()) throw new Error(this.typist.way(record.sessionId, record.terminalId).problem);
             let agent;
             try {
                 agent = await this.watch.resolveAgent(record.sessionId);
@@ -500,12 +503,21 @@ export class AgentTerminals {
             if (!shell) throw new Error(`DSH found no zsh or bash for terminals here${shells.length ? ` (only ${shells.map((s) => s.name ?? s.path).join(', ')})` : ''}. Agent Terminals starts the agent with a POSIX shell command.`);
             await this.openTerminal(controller, agent, record, shell);
             try {
-                controller.rename?.(agent, record.terminalId, clip(record.name, 120));
-            } catch {}
-            this.hold(record, agent);
-            // The shell draws its prompt first (and reads its startup files); then the command that becomes the agent.
-            await this.typist.settle(record.sessionId, record.terminalId, { quietMs: 300, maxMs: 5000, fallbackMs: 800 });
-            await this.typist.write(agent, record.terminalId, `${launchLine(argv)}\r`);
+                try {
+                    controller.rename?.(agent, record.terminalId, clip(record.name, 120));
+                } catch {}
+                this.hold(record, agent);
+                // The shell draws its prompt first (and reads its startup files); then the command that becomes the agent.
+                await this.typist.settle(record.sessionId, record.terminalId, { quietMs: 300, maxMs: 5000, fallbackMs: 800 });
+                await this.typist.write(agent, record.terminalId, `${launchLine(argv)}\r`);
+            } catch (error) {
+                // Only a shell runs in it: closed, so no empty terminal stays beside the session.
+                this.unhold(live);
+                try {
+                    await controller.close(agent, record.terminalId);
+                } catch {}
+                throw error;
+            }
             if (this.typist.way(record.sessionId, record.terminalId).way === 'attached') this.typist.release(record.sessionId, record.terminalId);
             record.launchedAt = this.now();
             record.hostPid = process.pid;
@@ -665,12 +677,17 @@ export class AgentTerminals {
         this.changed();
     }
 
-    /** A start that failed: said on the agent's card and in the log. */
-    failed(record, error, when) {
+    /**
+     * A start that failed: said on the agent's card and in the log. With
+     * `keepWanted` (a start after DSH restarted) it stays meant to run, so
+     * the next start of DSH tries again; else it stays stopped until Start again.
+     */
+    failed(record, error, when, { keepWanted = false } = {}) {
         const words = errorText(error);
         record.problem = words;
-        record.wanted = 'stopped';
-        record.ended = { why: 'failed', text: `It could not start ${when}: ${words}`, at: this.now() };
+        if (!keepWanted) record.wanted = 'stopped';
+        const said = /[.!?]$/.test(words) ? words : `${words}.`;
+        record.ended = { why: 'failed', text: `It could not start ${when}: ${said}${keepWanted ? ' It is tried again the next time DSH starts; Start again tries now.' : ''}`, at: this.now() };
         this.liveOf(record).exited = true;
         this.store.change();
         this.log({ kind: 'start', agent: record.key, sessionId: record.sessionId, text: `Could not start ${record.name}`, why: words, state: 'failed', by: 'Agent Terminals' });
@@ -739,6 +756,12 @@ export class AgentTerminals {
         const live = this.liveOf(record);
         if (live.launching) return { status: 'starting', detail: 'Starting its terminal.' };
         if (record.wanted !== 'running' || live.exited) return { status: 'stopped', detail: record.ended?.text ?? record.problem ?? 'Not running.' };
+        // Agent Terminals is not running its agents (a wrong setting, or no terminals): the agent is not running either.
+        if (!this.started && !live.launchAt) {
+            return { status: 'stopped', detail: this.working()
+                ? 'Not running: DSH\'s terminals are not there, so Agent Terminals cannot pick it up yet.'
+                : 'Not running: Agent Terminals waits for a setting to be fixed (see the top of this page), then picks it up again.' };
+        }
         if (!live.launchAt) return { status: 'starting', detail: 'Picking it up.' };
         const format = STYLES[record.style]?.format ?? 'none';
         const status = statusOf(live.fold, { now: this.now(), askAfterMs: this.config.askAfterSeconds * 1000, transcript: format !== 'none' });
@@ -877,6 +900,7 @@ export class AgentTerminals {
         const record = this.need(key);
         const item = record.deliveries.find((d) => d.id === id);
         if (!item) throw new Error('That message is not in its list any more.');
+        if (item.state === 'cancelled') throw new Error('It was taken back already.');
         if (!OPEN.has(item.state)) throw new Error('It is typed in already, so it cannot be taken back.');
         this.settle(record, item, 'cancelled', 'You took it back before it was typed in.');
         return { delivery: { ...item } };
@@ -1073,7 +1097,8 @@ export class AgentTerminals {
     /** One agent as the page shows it. */
     view(record) {
         const live = this.liveOf(record);
-        const status = live.status ?? this.statusFor(record);
+        // Not running its agents: nothing published a status, so it is worked out here.
+        const status = this.started ? live.status ?? this.statusFor(record) : this.statusFor(record);
         const info = this.terminalInfo(record);
         const fold = live.fold;
         return {
@@ -1121,7 +1146,8 @@ export class AgentTerminals {
     marks() {
         return Object.values(this.records).map((record) => {
             const live = this.liveOf(record);
-            const status = live.status ?? this.statusFor(record);
+            // Not running its agents: nothing published a status, so it is worked out here.
+            const status = this.started ? live.status ?? this.statusFor(record) : this.statusFor(record);
             return {
                 key: record.key,
                 sessionId: record.sessionId,

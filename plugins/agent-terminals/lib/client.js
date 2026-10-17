@@ -1098,9 +1098,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             { name: 'listNewSessions', kind: 'switch', title: 'List a new agent\'s session in the sidebar', hint: 'DSH lists a session once a turn ran in it, so the session\'s model answers one short line when the agent starts.', default: true },
             { name: 'openTabs', kind: 'switch', title: 'Open an agent\'s terminal tab with its session', hint: 'When you open its session, the agent\'s terminal opens in a tab beside it, once per agent.', default: true },
             { name: 'typeWhileWorking', kind: 'switch', title: 'Type messages in while the agent works', hint: 'Off: a message waits until the agent is idle. Never while it runs a tool, so nothing lands in an approval prompt.', default: false, group: 'Typing messages in' },
-            { name: 'proofSeconds', kind: 'number', title: 'Wait for proof before pressing Enter again', hint: 'Seconds an idle agent has to show the message in its transcript before Enter is pressed again.', default: 8, min: 2, max: 120 },
+            { name: 'proofSeconds', kind: 'number', title: 'Seconds without proof before Enter is pressed again', hint: 'How long an idle agent has to show the message in its transcript before Enter goes again.', default: 8, min: 2, max: 120 },
             { name: 'enterRetries', kind: 'number', title: 'Press Enter again, at most', hint: 'For programs that swallow the Enter after a paste.', default: 2, min: 0, max: 5 },
-            { name: 'askAfterSeconds', kind: 'number', title: 'A tool call that waits this long is asking you', hint: 'Seconds a tool call may wait for its result before the agent counts as waiting on you: its terminal most likely asks for approval.', default: 20, min: 5, max: 600, group: 'Telling you' },
+            { name: 'askAfterSeconds', kind: 'number', title: 'Seconds before a waiting tool call counts as asking you', hint: 'A tool call that waits this long for its result most likely waits for your approval in its terminal.', default: 20, min: 5, max: 600, group: 'Telling you' },
             { name: 'notify', kind: 'switch', title: 'A notification when an agent waits on you', hint: 'Through DSH\'s notifications, while they run. The question also shows in Decisions.', default: true },
         ];
         const SETTINGS_SUMMARY = 'Starting agents again, opening their terminals, typing messages in, and telling you when one waits on you.';
@@ -1436,6 +1436,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     : [h('path', { key: 'prompt', d: 'm7.5 10 2.5 2-2.5 2' }), h('path', { key: 'cursor', d: 'M12.5 14.5h4' })]));
         }
 
+        /** The prompt DSH's own terminal tabs show (a chevron and a cursor), for menu items about an agent's terminal. */
+        function PromptGlyph({ size = 16 }) {
+            return h('svg', { width: size, height: size, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': 'true', focusable: 'false' },
+                h('path', { d: 'M3 4L7 8L3 12' }),
+                h('path', { d: 'M9 12H13' }));
+        }
+
         /** DSH's state dot for an agent's state, where it has one. */
         function dotOf(agent) {
             if (agent.status === 'waiting on you') return 'warning';
@@ -1622,7 +1629,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             asksInTerminal ? null : h(ui.Button, { key: 'open', variant: 'primary', size: 'sm', onClick: () => openTerminal(agent) }, 'Open its terminal'),
                             h(ui.Button, { key: 'stop', variant: 'outline', size: 'sm', disabled: busy || agent.launching, onClick: () => void doing('stop', {}) }, 'Stop'),
                         ])),
-                agent.detail && !(agent.status === 'waiting on you' && (agent.ask || agent.call)) ? h('p', { className: `${P}-detail`, 'data-agent-terminals-detail': '' }, agent.detail) : null,
+                // An idle agent's detail is its last reply's first line, which the reply below shows whole.
+                agent.detail && !(agent.status === 'waiting on you' && (agent.ask || agent.call)) && !(agent.status === 'idle' && agent.lastReply?.text) ? h('p', { className: `${P}-detail`, 'data-agent-terminals-detail': '' }, agent.detail) : null,
                 stopped && agent.ended?.text && agent.ended.text !== agent.detail ? h('p', { className: `${P}-detail` }, agent.ended.text) : null,
                 h(AskBlock, { agent, busy, send, openTerminal }),
                 agent.lastReply?.text ? h(LastReply, { agent }) : null,
@@ -1899,7 +1907,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             } catch { /* the menu closes by itself */ }
             if (m.off || typeof sessionId !== 'string') return null;
             const agent = m.agents.find((a) => a.sessionId === sessionId);
-            const icon = ui.IconCodeOutlineRegular ? h(ui.IconCodeOutlineRegular, {}) : undefined;
+            const icon = h(PromptGlyph, {});
             if (agent?.running) {
                 return h(ui.MenuItemButton, { icon, onSelect: () => { close(); views?.openTerminal?.(agent); } }, 'Open the coding agent\'s terminal');
             }

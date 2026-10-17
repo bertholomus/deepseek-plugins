@@ -199,6 +199,12 @@ test('an agent\'s card: its state, its session, what it does, and the actions it
     assert.equal(button(working, 'Start again'), undefined);
     assert.equal(button(draw({ ...WORKING, launching: true }), 'Stop').props.disabled, true, 'not while it starts');
 
+    // Idle after a reply: the reply shows once, whole, not again as the detail line above it.
+    const idle = draw(view({ status: 'idle', detail: 'Done: the tests pass.', lastReply: { at: now - 30000, text: 'Done: the tests pass.\n\n12 of 12 green.' } }));
+    assert.equal(withAttr(idle, 'data-agent-terminals-detail').length, 0, 'no detail line that repeats the reply');
+    assert.equal(textIn(idle).split('Done: the tests pass.').length - 1, 1, 'the reply\'s words appear once');
+    assert.match(textIn(draw(view({ status: 'idle', detail: 'Ready for its first message.' }))), /Ready for its first message\./, 'without a reply the detail says what it waits for');
+
     // It asks a question: the question, the recommendation, one click to go with it, or an answer of your own.
     const asking = draw(ASKING);
     const askText = textIn(asking);
@@ -334,7 +340,7 @@ test('the page: reads the agents, shows each, and says what an action did, in wo
     assert.equal(textIn(withAttr(withAttr(page.tree, 'data-agent-terminals-agent')[2], 'data-agent-terminals-error')[0]), 'Not done: That agent is not in the list any more.');
 
     // A setting is wrong: the page says which, and still lists the agents and what happened.
-    state = { ...state, problem: { key: 'proofSeconds', text: 'Wait for proof before pressing Enter again (proofSeconds) must be a whole number of seconds from 2 to 120 (it is 1)', live: true } };
+    state = { ...state, problem: { key: 'proofSeconds', text: 'Seconds without proof before Enter is pressed again (proofSeconds) must be a whole number of seconds from 2 to 120 (it is 1)', live: true } };
     const problemPage = mount(AgentsPage, { agents: views });
     t.after(() => problemPage.unmount());
     await settle(5);
@@ -799,7 +805,7 @@ test('settings in Plugins: its page there has exactly its live settings, with th
     assert.match(text, /Telling you/);
     assert.match(text, /How messages are typed in \(typing\) and switching Agent Terminals off \(enabled\) are set in its entry in DSH's profile\./);
     const fields = Object.fromEntries(elementsOf(page).filter((e) => e.type === 'SettingsValueField').map((e) => [e.props.label, e.props]));
-    const proof = fields['Wait for proof before pressing Enter again'];
+    const proof = fields['Seconds without proof before Enter is pressed again'];
     assert.equal(proof.text, '12');
     assert.equal(proof.overridden, true);
     assert.equal(proof.invalidLabel, 'A whole number from 2 to 120, or empty for the default (8).');

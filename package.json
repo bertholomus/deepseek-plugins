@@ -13,6 +13,7 @@
     "test:sandbox": "node plugins/coordinator/test/e2e/sandbox.mjs",
     "test:e2e:autopilot": "node scripts/e2e.mjs autopilot",
     "test:e2e:decisions": "node scripts/e2e.mjs decisions",
+    "test:e2e:agent-terminals": "node scripts/e2e.mjs agent-terminals",
     "sync:shared": "node scripts/sync-shared.mjs"
   },
   "engines": { "node": ">=20" }

@@ -19,9 +19,9 @@ export const SETTING_TITLES = Object.freeze({
     listNewSessions: 'List a new agent\'s session in the sidebar',
     openTabs: 'Open an agent\'s terminal tab with its session',
     typeWhileWorking: 'Type messages in while the agent works',
-    proofSeconds: 'Wait for proof before pressing Enter again',
+    proofSeconds: 'Seconds without proof before Enter is pressed again',
     enterRetries: 'Press Enter again, at most',
-    askAfterSeconds: 'A tool call that waits this long is asking you',
+    askAfterSeconds: 'Seconds before a waiting tool call counts as asking you',
     notify: 'A notification when an agent waits on you',
     typing: 'How messages are typed in',
 });
