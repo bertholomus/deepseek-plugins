@@ -225,6 +225,18 @@ test('transcripts: proof is the agent\'s own transcript showing the words, after
     assert.ok(provenIn(fold, long, 2000), 'the first 160 characters are enough');
 });
 
+test('transcripts: a call waiting for its result is said in steps, so its line does not change every few seconds', () => {
+    let fold = emptyFold();
+    fold = foldEntry(fold, { kind: 'user', at: 1000, text: 'go' });
+    fold = foldEntry(fold, { kind: 'call', at: 2000, callId: 'c1', tool: 'Bash', summary: 'touch a' });
+    const detail = (ms) => statusOf(fold, { now: 2000 + ms, askAfterMs: 20000 }).detail;
+    assert.equal(detail(5000), 'Running Bash: touch a');
+    assert.equal(detail(21000), 'Bash “touch a” has waited 20 s or more for its result: it may be asking you in its terminal.');
+    assert.equal(detail(45000), detail(21000), 'the same line until a minute has passed');
+    assert.equal(detail(61000), 'Bash “touch a” has waited 1 min for its result: it may be asking you in its terminal.');
+    assert.equal(detail(150000), 'Bash “touch a” has waited 2 min for its result: it may be asking you in its terminal.');
+});
+
 test('transcripts: a file is read as it grows, whole lines only', () => {
     const dir = tmp('tail');
     const file = join(dir, 't.jsonl');
@@ -348,6 +360,9 @@ test('start form: what is sent is checked in words', () => {
     const spec = checkLaunch({ program: 'agent', style: 'flags', folder: '~/app', args: '--model "big one" -v', task: '  Fix it  ' }, { home });
     assert.deepEqual(spec, { program: 'agent', args: ['--model', 'big one', '-v'], style: 'flags', folder: join(home, 'app'), name: 'agent · app', task: 'Fix it' });
     assert.equal(checkLaunch({ program: 'agent', style: 'plain', sessionId: 's1' }).folder, undefined, 'a session brings its own folder');
+    // The start line quotes every word, and a quoted ~ is not the home folder: a ~/ program is kept as its full path.
+    assert.equal(checkLaunch({ program: '~/bin/agent', style: 'plain', folder: home }, { home }).program, join(home, 'bin', 'agent'));
+    assert.equal(checkLaunch({ program: '~', style: 'plain', folder: home }, { home }).program, home);
     assert.deepEqual(splitArgs(`a 'b c' "" d`), ['a', 'b c', '', 'd']);
 });
 
@@ -936,6 +951,206 @@ test('engine: a DSH restart in the middle of a job or an approval leaves the age
     }
 });
 
+/** A DSH restart: its terminals end, and the saved state is read by a new Agent Terminals. */
+function restartDsh(before, { dir, watch, controller, key, config = {} }) {
+    before.agents.stop();
+    controller.restart();
+    before.store.data.agents[key].hostPid = 1;
+    before.store.flush();
+    const after = engine({ dir, watch, controller, config, store: new JsonStore(join(dir, 'state.json'), { parse: parseData, delayMs: 5 }) });
+    after.agents.start();
+    return after;
+}
+
+/** A message by its words, from the saved list (oldest first; the page's list is newest first). */
+const byText = (record, words) => record.deliveries.find((d) => d.text.includes(words));
+
+/** How many times the agent's own transcript holds these words as a user message. */
+const toldTimes = (record, home, words) => parseLines('messages', readFileSync(transcriptPath(record, home), 'utf8').split('\n').filter(Boolean))
+    .filter((e) => e.kind === 'user' && e.text.includes(words)).length;
+
+test('engine: after a restart cut its job, a pick-up without a launch (off and on, a fixed setting, a reload) keeps it idle with nothing held', async () => {
+    for (const job of ['#work=60000 a long job', '#work=20 #approve a guarded job']) {
+        const dir = tmp('pickup');
+        const controller = new FakeController();
+        const watch = fakeWatch();
+        const first = engine({ dir, watch, controller });
+        first.agents.start();
+        let key;
+        try {
+            const { agent } = await first.agents.launch({ program: FAKE, args: fakeArgs(join(dir, 'data')), style: 'flags', data: join(dir, 'data'), folder: dir, name: 'Busy', task: job });
+            key = agent.key;
+            const record = first.agents.records[key];
+            await until(() => first.agents.view(record).deliveries[0]?.state === 'delivered', 'its job under way');
+            if (job.includes('#approve')) await until(() => first.agents.view(record).status === 'waiting on you', 'its approval prompt', 20000);
+            else await until(() => first.agents.view(record).status === 'working', 'it to work');
+        } catch (error) {
+            first.agents.stop();
+            throw error;
+        }
+        const second = restartDsh(first, { dir, watch, controller, key });
+        let third;
+        try {
+            const again = second.agents.records[key];
+            await until(() => second.journal.list().some((e) => e.kind === 'cut'), 'the cut-off job logged');
+            await until(() => second.agents.view(again).ready && second.agents.view(again).status === 'idle', 'idle after the restart', 20000);
+            const launches = again.launches;
+            const stillIdle = async (agents, record, what) => {
+                await until(() => !['starting', 'running'].includes(agents.view(record).status), `${what}: picked up`);
+                await sleep(1200);
+                const view = agents.view(record);
+                assert.equal(view.status, 'idle', `${what}: ${job}: ${view.detail}`);
+                assert.match(view.detail, /was cut off when its program ended/, what);
+                assert.equal(watch.asks.size, 0, `${what}: no question from before the restart`);
+                assert.equal(record.launches, launches, `${what}: not started again`);
+            };
+            // Off and on (switched off and on in Plugins, or a wrong setting fixed): the same program, picked up.
+            second.agents.stop();
+            second.agents.start();
+            await stillIdle(second.agents, again, 'off and on');
+            // A reload of the plugin: only its saved state is left, and it keeps the cut.
+            second.agents.stop();
+            second.store.flush();
+            third = engine({ dir, watch, controller, store: new JsonStore(join(dir, 'state.json'), { parse: parseData, delayMs: 5 }) });
+            third.agents.start();
+            const reloaded = third.agents.records[key];
+            await stillIdle(third.agents, reloaded, 'a reload');
+            // A message goes straight in, held by nothing, and is proven.
+            third.agents.send(key, '#work=20 carry on');
+            await until(() => third.agents.view(reloaded).deliveries.at(-1)?.state === 'delivered', 'typed in and proven', 20000);
+            assert.equal(third.journal.list().filter((e) => e.kind === 'cut').length, 1, 'the cut logged once');
+            assert.equal(existsSync(join(dir, 'approved.txt')), false, 'nothing answered the old prompt');
+        } finally {
+            second.agents.stop();
+            third?.agents.stop();
+            controller.restart();
+        }
+    }
+});
+
+test('engine: a message typed in but not yet read when DSH restarts is typed in again once, and proven', async () => {
+    // With typeWhileWorking the program keeps a message it has not read yet while it works; DSH quits under it.
+    const dir = tmp('lost');
+    const controller = new FakeController();
+    const watch = fakeWatch();
+    const first = engine({ dir, watch, controller, config: { typeWhileWorking: true } });
+    first.agents.start();
+    let key;
+    try {
+        const { agent } = await first.agents.launch({ program: FAKE, args: fakeArgs(join(dir, 'data')), style: 'flags', data: join(dir, 'data'), folder: dir, name: 'Busy', task: '#work=60000 a long job' });
+        key = agent.key;
+        const record = first.agents.records[key];
+        await until(() => first.agents.view(record).status === 'working', 'it to work');
+        first.agents.send(key, '#work=20 typed during the long job');
+        await until(() => byText(record, 'typed during the long job')?.state === 'typed', 'typed in while it works');
+    } catch (error) {
+        first.agents.stop();
+        throw error;
+    }
+    const second = restartDsh(first, { dir, watch, controller, key, config: { typeWhileWorking: true } });
+    try {
+        const again = second.agents.records[key];
+        const item = byText(again, 'typed during the long job');
+        await until(() => item.state === 'delivered', 'typed in again and proven', 20000);
+        assert.deepEqual([item.enters, item.again], [1, true]);
+        assert.equal(toldTimes(again, dir, 'typed during the long job'), 1, 'in its transcript once: the old program never read it');
+        const entry = second.journal.get(item.entry);
+        assert.equal(entry.state, 'delivered');
+    } finally {
+        second.agents.stop();
+        controller.restart();
+    }
+});
+
+test('engine: an answer whose Enter was swallowed when DSH restarted is typed in again, and Decisions hears it delivered', async () => {
+    const dir = tmp('lost-answer');
+    const controller = new FakeController();
+    const watch = fakeWatch();
+    const args = fakeArgs(join(dir, 'data'), ['--swallow-enter']);
+    const first = engine({ dir, watch, controller });
+    first.agents.start();
+    let key;
+    let ask;
+    try {
+        const { agent } = await first.agents.launch({ program: FAKE, args, style: 'flags', data: join(dir, 'data'), folder: dir, name: 'Swallower' });
+        key = agent.key;
+        const record = first.agents.records[key];
+        await until(() => first.agents.view(record).ready, 'it to be ready');
+        first.agents.send(key, '#work=30 #ask Can we go?');
+        await until(() => first.agents.view(record).status === 'waiting on you', 'its question', 20000);
+        ask = [...watch.asks.values()][0];
+        // Enter is not pressed again for a minute: DSH quits while the answer sits in its input line.
+        first.settings.proofSeconds = 60;
+        watch.asks.delete(ask.id);
+        ask.onAnswer('Take the slow path', 'you');
+        await until(() => byText(record, 'Take the slow path')?.state === 'typed', 'the answer typed in, its Enter swallowed');
+    } catch (error) {
+        first.agents.stop();
+        throw error;
+    }
+    const second = restartDsh(first, { dir, watch, controller, key });
+    try {
+        const again = second.agents.records[key];
+        const answer = byText(again, 'Take the slow path');
+        await until(() => answer.state === 'delivered', 'the answer typed in again and proven', 20000);
+        assert.deepEqual([answer.enters, answer.again], [2, true]);
+        assert.equal(toldTimes(again, dir, 'Take the slow path'), 1);
+        assert.deepEqual(watch.outcomes.map(([id, o]) => [id, o.state]), [[ask.id, 'delivered']], 'Decisions hears only that it was delivered');
+        await until(() => second.agents.view(again).status === 'idle', 'idle after its answer');
+        await until(() => watch.asks.size === 0, 'no question left');
+    } finally {
+        second.agents.stop();
+        controller.restart();
+    }
+});
+
+test('engine: a message lost to a second restart failed; an answer that did not go in brings its question back', async () => {
+    const { agents, watch, controller, journal, dir } = engine();
+    agents.start();
+    try {
+        const { agent } = await agents.launch({ program: FAKE, args: fakeArgs(join(dir, 'data')), style: 'flags', data: join(dir, 'data'), folder: dir, name: 'Asker' });
+        const record = agents.records[agent.key];
+        await until(() => agents.view(record).ready, 'it to be ready');
+        agents.send(agent.key, '#work=30 #ask Can we go?');
+        await until(() => agents.view(record).status === 'waiting on you', 'its question', 20000);
+        const ask = [...watch.asks.values()][0];
+        // The terminal will not take it: the answer fails, Decisions hears so, and the question is asked again.
+        const type = agents.typist.type;
+        agents.typist.type = async () => { throw new Error('the terminal is gone'); };
+        // As Session Watch does: an answered question is dropped, then its handler runs.
+        watch.asks.delete(ask.id);
+        ask.onAnswer('Take the slow path', 'you');
+        await until(() => byText(record, 'Take the slow path')?.state === 'failed', 'the answer failed');
+        assert.deepEqual(watch.outcomes.map(([id, o]) => [id, o.state]), [[ask.id, 'not delivered']]);
+        assert.match(watch.outcomes[0][1].text, /Not typed in: the terminal is gone/);
+        assert.equal(watch.asks.has(ask.id), true, 'its question is raised again');
+        agents.typist.type = type;
+        // Answered again: typed in and proven.
+        const asked = watch.asks.get(ask.id);
+        watch.asks.delete(ask.id);
+        asked.onAnswer('Take the fast path', 'you');
+        await until(() => byText(record, 'Take the fast path')?.state === 'delivered', 'the second answer proven', 20000);
+        assert.deepEqual(watch.outcomes.at(-1).slice(0, 1).concat(watch.outcomes.at(-1)[1].state), [ask.id, 'delivered']);
+
+        // Typed in again once after a restart, and lost to a second one before its transcript showed it: failed, said once.
+        const item = { id: 'm-lost', text: 'lost twice', by: 'you', at: Date.now(), state: 'typed', typedAt: Date.now(), enters: 1, again: true, askId: 'q-lost' };
+        record.deliveries.push(item);
+        agents.lostWithRestart(record);
+        assert.equal(item.state, 'failed');
+        assert.match(item.why, /^DSH restarted twice before the agent read it/);
+        assert.deepEqual(watch.outcomes.at(-1).slice(0, 1).concat(watch.outcomes.at(-1)[1].state), ['q-lost', 'not delivered']);
+        assert.equal(journal.list().filter((e) => e.kind === 'restart' && /was lost/.test(e.text)).length, 1);
+        // One its transcript shows was delivered after all: nothing is typed again.
+        const seen = { id: 'm-seen', text: 'Take the fast path', by: 'you', at: Date.now() - 60000, state: 'typed', typedAt: Date.now() - 60000, enters: 1 };
+        record.deliveries.push(seen);
+        agents.lostWithRestart(record);
+        assert.equal(seen.state, 'delivered');
+    } finally {
+        agents.stop();
+        controller.restart();
+    }
+});
+
 test('engine: with typeWhileWorking, no key goes into an approval prompt, and the proof waits for it', async () => {
     const { agents, controller, dir } = engine({ config: { typeWhileWorking: true } });
     agents.start();
@@ -1046,6 +1261,8 @@ test('engine: an agent that exits, a program that is not there, and a program wi
         assert.equal(watch.delivered.length, turnsBefore, 'no first turn for a program that never ran');
         const started = journal.list().find((e) => e.kind === 'start' && /Nameless/.test(e.text));
         assert.deepEqual([started.text, started.state], ['Could not start Nameless', 'failed'], 'never logged as started');
+        assert.equal(agents.recent.some((r) => r.program === 'no-such-agent-x1'), false, 'a program that could not start is not offered under "Used here before"');
+        assert.equal(agents.recent.some((r) => r.program === FAKE), true, 'one that ran is');
 
         const plain = await agents.launch({ program: FAKE, args: ['--style', 'plain'], style: 'plain', folder: dir, name: 'Quiet' });
         const quiet = agents.records[plain.agent.key];

@@ -87,6 +87,7 @@ export function parseData(value) {
             wanted: a.wanted === 'stopped' ? 'stopped' : 'running',
             createdAt: number(a.createdAt) ?? 0,
             ...(number(a.launchedAt) ? { launchedAt: a.launchedAt } : {}),
+            ...(number(a.primedAt) ? { primedAt: a.primedAt } : {}),
             ...(Number.isInteger(a.hostPid) ? { hostPid: a.hostPid } : {}),
             ...(isRecord(a.ended) && typeof a.ended.text === 'string' ? { ended: { why: text(a.ended.why) ?? 'stopped', text: a.ended.text, at: number(a.ended.at) ?? 0, ...(Number.isInteger(a.ended.code) ? { code: a.ended.code } : {}) } } : {}),
             ...(text(a.problem) ? { problem: a.problem } : {}),
@@ -113,6 +114,8 @@ export function checkLaunch(input, { home } = {}) {
     if (!program) throw new Error('Name the program to start: the command you type to run the coding agent.');
     if (program.length > 300 || /[\r\n\0]/.test(program)) throw new Error('The program must be one line, at most 300 characters.');
     if (/\s/.test(program) && !program.includes('/')) throw new Error('The program is one word (put its options under Arguments), or a full path.');
+    // "~/bin/agent" is kept as its full path: the start line quotes every word, and a quoted ~ is not the home folder.
+    const resolved = /^~(\/|$)/.test(program) ? expandHome(program, home ?? '/') : program;
     const args = Array.isArray(input.args) ? input.args.map(String) : typeof input.args === 'string' ? splitArgs(input.args) : [];
     if (args.length > 40 || args.some((arg) => arg.length > 500 || /[\r\n\0]/.test(arg))) throw new Error('Arguments: at most 40, each one line of at most 500 characters.');
     const style = String(input.style ?? '');
@@ -135,7 +138,7 @@ export function checkLaunch(input, { home } = {}) {
     const name = String(input.name ?? '').trim().slice(0, 80) || `${programName(program)}${folder ? ` · ${basename(folder)}` : ''}`;
     const task = typeof input.task === 'string' && input.task.trim() ? input.task.trim() : undefined;
     if (task && Buffer.byteLength(task, 'utf8') > MAX_MESSAGE) throw new Error(`The first message is longer than ${MAX_MESSAGE / 1024} KB: shorten it, or put it in a file and send the file's path.`);
-    return { program, args, style, ...(data ? { data } : {}), ...(folder ? { folder } : {}), ...(sessionId ? { sessionId } : {}), name, ...(task ? { task } : {}) };
+    return { program: resolved, args, style, ...(data ? { data } : {}), ...(folder ? { folder } : {}), ...(sessionId ? { sessionId } : {}), name, ...(task ? { task } : {}) };
 }
 
 /** Arguments typed on one line: split at spaces, with "…" and '…' kept whole. */
@@ -277,8 +280,12 @@ export class AgentTerminals {
                 continue;
             }
             if (info?.state === 'running') {
-                // Agent Terminals restarted, the agent did not: take it up where it is.
+                // Agent Terminals restarted, the agent did not: take it up where it is. What its transcript
+                // left open from before this program started (a job a restart cut, an approval prompt)
+                // stays closed, as it was at the launch: the cut was logged then.
                 live.launchAt = record.launchedAt ?? this.now();
+                const primedAt = record.primedAt ?? record.launchedAt;
+                if (primedAt) live.primedAt = primedAt;
                 live.ready = true;
                 live.exited = false;
                 try {
@@ -292,7 +299,8 @@ export class AgentTerminals {
                 this.ended(record, info.state === 'failed' ? 'failed' : 'exited', info.state === 'failed' ? `Its terminal failed${info.error ? `: ${info.error}` : ''}.` : exitWords(record, info.exitCode, this.againWords(record)), info.exitCode);
                 continue;
             }
-            // DSH restarted: its terminals ended with it.
+            // DSH restarted: its terminals ended with it, and so did what was typed in but not yet read.
+            this.lostWithRestart(record);
             const resumable = this.canResume(record);
             if (!this.config.resumeAfterRestart || !resumable) {
                 record.wanted = 'stopped';
@@ -411,7 +419,6 @@ export class AgentTerminals {
             deliveries: [],
         };
         this.records[key] = record;
-        this.remember(spec);
         this.store.change();
         const why = `${by === 'you' ? 'You' : by} started ${record.program} in ${folder || 'its session\'s folder'}${spec.sessionId ? '' : ', in a new session'}.`;
         const entry = this.log({ kind: 'start', agent: key, sessionId, text: `Starting ${record.name}`, why, state: 'starting', by, program: record.program });
@@ -429,6 +436,11 @@ export class AgentTerminals {
             problem = await this.confirmStart(record);
         } catch (error) {
             problem = this.failed(record, error, 'at its start');
+        }
+        // "Used here before" lists programs that ran, not ones that failed to start.
+        if (!problem) {
+            this.remember(spec);
+            this.store.change();
         }
         if (entry) {
             try {
@@ -779,6 +791,9 @@ export class AgentTerminals {
      */
     prime(record, live) {
         live.primedAt = this.now();
+        // Kept, so a pick-up without a launch (a fixed setting, off and on) closes over the same entries.
+        record.primedAt = live.primedAt;
+        this.store.change();
         live.fold = undefined;
         live.tail = undefined;
         live.tailPath = undefined;
@@ -1039,6 +1054,15 @@ export class AgentTerminals {
         if (item.entry) {
             try { this.journal.set(item.entry, { state, reason: why }); } catch {}
         }
+        // An answer that did not go in leaves its question unanswered: it is raised again first, so the
+        // card Decisions brings back (on hearing "not delivered") has a question to show.
+        if (item.askId && (state === 'failed' || state === 'cancelled')) {
+            const live = this.lives.get(record.key);
+            if (live?.askId === item.askId) {
+                live.askId = undefined;
+                this.publish(record);
+            }
+        }
         // An answer to a question in Decisions: what became of it goes back there ("typed" is final only
         // for a program that keeps no transcript; else its proof is still looked for).
         if (item.askId && OUTCOME[state] && (state !== 'typed' || STYLES[record.style]?.format === 'none')) {
@@ -1215,6 +1239,41 @@ export class AgentTerminals {
                 this.settle(record, item, 'delivered', 'Its transcript shows it.', { provenAt: proof.at || this.now() });
             } else if (!late && this.now() - item.typedAt > PROOF_WHILE_WORKING_MS) {
                 this.settle(record, item, 'not proven', 'Typed in 30 minutes ago, and its transcript still does not show it. Look at its terminal.');
+            }
+        }
+    }
+
+    /**
+     * DSH restarted, which ended the agent's program: a message typed in but
+     * not yet in its transcript sat in that program's input line, and went
+     * with it. Its transcript decides: shown there, it is delivered; else it
+     * is typed in again, once, when the agent runs again. Lost a second time,
+     * it failed, and an answer's question comes back in Decisions.
+     */
+    lostWithRestart(record) {
+        const format = STYLES[record.style]?.format ?? 'none';
+        const typed = record.deliveries.filter((d) => d.state === 'typed' && d.typedAt);
+        // A program that keeps no transcript proves nothing either way: its messages stay "typed in".
+        if (format === 'none' || typed.length === 0) return;
+        let fold = emptyFold();
+        const path = transcriptPath(record, this.home);
+        try {
+            if (path && existsSync(path)) for (const entry of parseLines(format, new Tail(path).read().lines, this.now())) fold = foldEntry(fold, entry);
+        } catch (error) {
+            this.logger?.warn?.(`agent-terminals: could not read the transcript of ${record.name}: ${errorText(error)}`);
+        }
+        for (const item of typed) {
+            const proof = provenIn(fold, item.text, item.typedAt);
+            if (proof) {
+                this.settle(record, item, 'delivered', 'Its transcript shows it.', { provenAt: proof.at || this.now() });
+            } else if (item.again) {
+                this.settle(record, item, 'failed', 'DSH restarted twice before the agent read it, and each time its program ended with the message unread in its input line. Send it again.');
+                this.log({ kind: 'restart', agent: record.key, sessionId: record.sessionId, text: `A message for ${record.name} was lost`, why: `DSH restarted twice before the agent read “${clip(item.text, 120)}”.`, state: 'failed', by: 'Agent Terminals' });
+            } else {
+                delete item.typedAt;
+                delete item.enters;
+                delete item.way;
+                this.settle(record, item, 'queued', 'DSH restarted before the agent read it (it was in the input line of the program that ended), so it is typed in again.', { again: true });
             }
         }
     }

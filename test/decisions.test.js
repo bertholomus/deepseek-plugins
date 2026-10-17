@@ -896,9 +896,15 @@ test('inbox: an answer a plugin proves later says "answered" in its words, then 
     await clock.advance(1000);
     card = (await inbox.list()).waiting.find((c) => c.kind === 'ask');
     await inbox.answer(card.id, { text: 'No' });
+    // Not delivered: the question is unanswered again. Its asker raises it again, and the card comes back saying why.
+    ask('at-2');
     watch.askOutcome('at-2', { state: 'not delivered', text: 'Not typed in: its terminal was closed.' });
     const second = entries(journal, 'answer').find((e) => e.askId === 'at-2');
     assert.deepEqual([second.state, second.reason], ['not delivered', 'Not typed in: its terminal was closed.']);
+    await clock.advance(1000);
+    const back = (await inbox.list()).waiting.find((c) => c.kind === 'ask');
+    assert.equal(back?.id, card.id, 'the card is back');
+    assert.equal(back.error, 'Your answer did not reach it: Not typed in: its terminal was closed.');
     assert.equal(watch.askOutcome('at-9', { state: 'delivered' }), true);
     assert.equal(watch.askOutcome('at-2', { state: 'sent' }), false, 'an outcome word Session Watch does not know is refused');
     assert.equal(entries(journal, 'answer').find((e) => e.askId === 'at-2').state, 'not delivered');

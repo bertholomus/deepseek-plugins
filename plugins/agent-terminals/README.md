@@ -63,10 +63,13 @@ ends when the agent does. The first message, if you wrote one, goes in once
 the agent's screen settles. One agent per session.
 
 A program given as a path must be an executable file there, or the start
-is refused before any session is made. Agent Terminals then watches the
-first moments: a program that ends at once (a name the shell cannot find,
-say) is *Could not start*, with why and what to do, and its session gets no
-first turn. The first turn is noted in *What happened* when it ends.
+is refused before any session is made; `~/` is your home folder, and the
+agent keeps the full path. Agent Terminals then watches the first moments:
+a program that ends at once (a name the shell cannot find, say) is *Could
+not start*, with why and what to do, and its session gets no first turn.
+The form keeps what you wrote, so you can fix it and start again (forget
+the card that could not start), and **Used here before** lists only
+programs that ran. The first turn is noted in *What happened* when it ends.
 
 **Its state.** From the agent's transcript: *working* while it answers or
 runs a tool, *idle* once its reply settles, *waiting on you* when its last
@@ -82,7 +85,9 @@ name, the question, the recommendation, **Go with the recommendation** and
 room for your own words. The answer is typed into its terminal like any
 message, and proven the same way: Decisions says where the answer went,
 then marks it *delivered* once the agent's transcript shows it (or *not
-confirmed*, with where to look). A tool call that waits makes a card that
+confirmed*, with where to look). An answer that does not go in (its
+terminal is gone, or you take it back on the agent's card) brings the
+question back in Decisions, saying why. A tool call that waits makes a card that
 says what the agent asks to run and to answer in its terminal: a terminal
 prompt has no answer that could safely be typed in for you. Messages wait
 until you answered there. With `notify` on and DSH's notifications plugin
@@ -116,8 +121,18 @@ started again, since it cannot resume, and its card says so. A start that
 fails after a restart (a setting this DSH cannot do, say) says why on its
 card and is tried again the next time DSH starts; **Start again** tries
 now. Switching Agent Terminals off and on, or saving its settings, leaves
-running agents running: it picks them up where they are, and a message it
-typed just before still gets its proof.
+running agents running: it picks them up where they are (a job a restart
+cut off stays cut off), and a message it typed just before still gets its
+proof.
+
+**A message DSH quit on.** A message typed in that the program had not read
+yet (its Enter swallowed, or kept while it worked, with `typeWhileWorking`
+on) sat in the input line of the program that ended. If the transcript
+does not show it, it is typed in again, once, when the agent runs again
+(after **Start again**, if the agent is not started again by itself), and
+proven as usual. Lost to a second restart before it was read, it is
+*failed*, with why: send it again (an answer's question comes back in
+Decisions).
 
 **A job cut off by a restart.** The program that resumes writes nothing
 until it gets a message, so a tool call, an approval prompt or a request
@@ -332,8 +347,9 @@ program that swallows it; carries a question to Decisions and types the
 recommendation and an answer in your words back in (Decisions turns the
 answer *delivered* from the transcript's proof); types to a program with no
 transcript (typed in, not proven); refuses a program path that is not
-there before any session is made, and says how to fix a program name the
-shell cannot find (*Could not start*, no first turn). With
+there before any session is made, says how to fix a program name the
+shell cannot find (*Could not start*, no first turn, not offered again),
+and starts a program given as `~/…`. With
 `typeWhileWorking` on and a job that asks for approval after the message
 went in, it presses no Enter into the prompt, and the message is read once
 the prompt is answered in the terminal. In a browser, light and dark, wide
@@ -352,7 +368,11 @@ terminal id; a `plain` one says why it was not started again; the window's
 tab shows the resumed agent), restarts it again in the middle of a job and
 of an approval prompt (both agents come back idle, each cut job is logged
 once, the held messages go in once and are proven, no question is left in
-Decisions), types through DSH's terminal input on 0.2.0 and checks the words
+Decisions), restarts it while a message typed during a job and an answer
+whose Enter was swallowed wait for their proof (each is typed in again once
+and proven; Decisions hears the answer delivered), picks agents up after a
+restart cut a job and an approval prompt (a wrong setting saved, then
+fixed: both stay idle, hold nothing and leave nothing in Decisions), types through DSH's terminal input on 0.2.0 and checks the words
 on later builds, sets a wrong value and fixes it in the form (the agents
 come back), switches Session Watch off in the profile, checks `enabled:
 false` and the file modes, and ends every process it started. It reads the

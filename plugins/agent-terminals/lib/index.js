@@ -143,6 +143,13 @@ export function apply(ctx, config) {
             }
         };
         const some = () => Object.keys(store.data.agents).length > 0;
+        // Whichever part of DSH lets go first (its terminals, or the plugin itself) stops the agents and says so, once.
+        const stopFollowing = (why) => {
+            const was = agents.started;
+            agents.stop();
+            if (was && some()) switched(false, why);
+        };
+        const OFF_WHY = 'Switched off in Plugins, or DSH is quitting. While DSH runs, the agents keep running in their terminals; Agent Terminals picks them up where they are when it starts again.';
 
         // The agents start once DSH's terminals are there (never before: an agent would look gone).
         scope.inject(['terminalController'], (inner) => {
@@ -153,9 +160,7 @@ export function apply(ctx, config) {
             }
             bump();
             return () => {
-                const was = agents.started;
-                agents.stop();
-                if (was && some()) switched(false, 'Switched off in Plugins, or DSH is quitting. While DSH runs, the agents keep running in their terminals; Agent Terminals picks them up where they are when it starts again.');
+                stopFollowing(OFF_WHY);
                 services.terminals = undefined;
                 bump();
             };
@@ -208,7 +213,7 @@ export function apply(ctx, config) {
 
         scope.effect(() => () => {
             if (onSaved === saved) onSaved = undefined;
-            agents.stop();
+            stopFollowing(OFF_WHY);
             typist.close();
             store.close();
         }, 'agent-terminals: agents');

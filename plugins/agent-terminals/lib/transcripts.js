@@ -294,7 +294,9 @@ export function statusOf(fold, { now, settleMs = 4000, askAfterMs = 20000, exite
     if (pending.length) {
         const [callId, call] = pending[0];
         if (now - call.at >= askAfterMs) {
-            return { status: 'waiting on you', detail: `${call.tool}${call.summary ? ` “${call.summary}”` : ''} has waited ${Math.round((now - call.at) / 1000)} s for its result: it may be asking you in its terminal.`, call: { callId, ...call } };
+            // Said in steps (then whole minutes), so the line does not change, and go out again, every few seconds.
+            const waited = now - call.at < 60000 ? `${Math.round(askAfterMs / 1000)} s or more` : `${Math.floor((now - call.at) / 60000)} min`;
+            return { status: 'waiting on you', detail: `${call.tool}${call.summary ? ` “${call.summary}”` : ''} has waited ${waited} for its result: it may be asking you in its terminal.`, call: { callId, ...call } };
         }
         return { status: 'working', detail: `Running ${call.tool}${call.summary ? `: ${call.summary}` : ''}` };
     }

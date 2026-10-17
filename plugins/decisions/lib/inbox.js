@@ -819,7 +819,8 @@ export class Inbox {
     /**
      * What became of an answer, said by the plugin that asked once it knows
      * (Session Watch's `askOutcome`): its log entry turns delivered, not
-     * confirmed or not delivered, with the reason.
+     * confirmed or not delivered, with the reason. Not delivered, the
+     * question is unanswered again: its card comes back, saying why.
      */
     onOutcome(event) {
         const outcome = isRecord(event.outcome) ? event.outcome : undefined;
@@ -830,6 +831,7 @@ export class Inbox {
         const words = typeof outcome.text === 'string' && outcome.text ? clip(outcome.text, 300) : undefined;
         const good = state === 'delivered' || state === 'typed in';
         this.journal.set(entry.id, { state, ...(words ? (good ? { why: words } : { reason: words }) : {}) });
+        if (state === 'not delivered' && typeof entry.cardId === 'string') this.failed({ id: entry.cardId }, `Your answer did not reach it: ${words ?? 'it was not typed in'}`);
         this.changed();
     }
 

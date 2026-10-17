@@ -1564,6 +1564,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     rows: 2,
                     value: text,
                     readOnly: busy,
+                    // Each box says whose it is: a screen reader hears more than one on the page.
+                    'aria-label': asks ? `Your answer to ${agent.name}` : `Message to ${agent.name}`,
                     placeholder: asks ? 'Write your answer' : `Write to ${agent.name}`,
                     onChange: (event) => setText(event.target.value),
                     onKeyDown: (event) => {
@@ -1669,7 +1671,16 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             h('span', { className: `${P}-code`, title: commandText(agent) }, shortCommand(agent)),
                             meta[0] ? ` · ${meta[0]}` : '',
                             meta[1] ? [' · started ', meta[1]] : null)),
-                    h('div', { className: `${P}-actions` },
+                    h('div', {
+                        className: `${P}-actions`,
+                        // Escape takes Forget's question back, as Keep it does.
+                        onKeyDown: stopped && forgetting ? (event) => {
+                            if (event.key !== 'Escape') return;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setForgetting(false);
+                        } : undefined,
+                    },
                         !followed ? (stopped || asksInTerminal ? null : h(ui.Button, { key: 'open', variant: 'outline', size: 'sm', onClick: () => openTerminal(agent) }, 'Open its terminal'))
                             : stopped && forgetting ? [
                                 h('span', { key: 'q', className: `${P}-hint`, 'data-agent-terminals-forget': '' }, `Forget “${agent.name}”? Its session and its conversation files stay.`),
@@ -1767,9 +1778,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 const { problem, value } = await run('start', { input });
                 setBusy(false);
                 if (problem) return setFailure(problem);
-                if (value?.problem) setFailure(`It was added, but could not start: ${value.problem}`);
-                setForm(BLANK);
-                if (inSession) preset.set(undefined);
+                if (value?.problem) {
+                    // The form keeps what was written, to be fixed and started again; its card says the same below.
+                    setFailure(`It was added, but could not start: ${value.problem} The form keeps what you wrote: forget the card that could not start, then fix the form and start again.`);
+                } else {
+                    setForm(BLANK);
+                    if (inSession) preset.set(undefined);
+                }
                 onStarted(value?.agent, value?.problem);
             };
             const ids = { program: `${P}-program`, args: `${P}-args`, data: `${P}-data`, folder: `${P}-folder`, name: `${P}-name`, task: `${P}-task`, folders: `${P}-folders` };

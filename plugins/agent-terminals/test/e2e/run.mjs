@@ -424,6 +424,7 @@ try {
     await step('a program that swallows the Enter after a paste: Enter is pressed again, and the proof says so', async () => {
         const started = await start({ program: 'standin', args: '--swallow-enter', style: 'flags', folder: ws.swallow, name: 'Swallower' });
         agents.swallow = started.agent.key;
+        ids.swallow = started.agent.sessionId;
         await waitAgent(agents.swallow, (a) => a.status === 'idle' && a.ready, 'the swallower to be ready');
         const item = await send(agents.swallow, 'Check the swallow #work=100');
         const proven = await waitDelivery(agents.swallow, item.id, ['delivered', 'not proven'], 'the swallowed message to be proven', 30000);
@@ -493,6 +494,20 @@ try {
         await new Promise((resolve) => setTimeout(resolve, 3000));
         const missingSession = await run.session(missing.agent.sessionId);
         check('its session got no turn: a program that never ran gives its model nothing to say', missingSession.turns.started === 0 && !log.some((e) => e.kind === 'session'), json(missingSession.turns));
+        const recent = (await state()).recent;
+        check('a program that could not start is not offered under "Used here before"; one that ran is', !recent.some((r) => r.program === 'no-such-agent-e2e') && recent.some((r) => r.program === 'standin'), json(recent));
+        // A program under the home folder, given as ~/…: kept as its full path (a quoted ~ is not the home folder to the shell).
+        const tildeFile = join(user, 'bin', 'standin-home');
+        mkdirSync(dirname(tildeFile), { recursive: true });
+        writeFileSync(tildeFile, readFileSync(programs.flags, 'utf8'));
+        chmodSync(tildeFile, 0o755);
+        const tilde = await start({ program: '~/bin/standin-home', style: 'flags', data: '~/.standin', folder: ws.missing, name: 'Home agent', task: 'From the home folder #work=100' });
+        check('a program given as ~/… starts, kept as its full path', !tilde.problem && tilde.agent.program === tildeFile, json({ problem: tilde.problem, program: tilde.agent.program }));
+        const homeFirst = await waitDelivery(tilde.agent.key, tilde.agent.deliveries[0].id, ['delivered', 'not proven'], 'its first message to be proven', 30000);
+        check('it runs: its first message is proven from its transcript', homeFirst.state === 'delivered', json(homeFirst));
+        await api('stop', { key: tilde.agent.key });
+        await waitAgent(tilde.agent.key, (a) => a.status === 'stopped', 'the home agent to stop', 20000);
+        await api('forget', { key: tilde.agent.key });
         // A path that is not a program: refused before a session or an agent is made for it.
         const sessionsBefore = (await run.api('dsh-plugin-session-watch/sessions')).value.items.length;
         const agentsBefore = (await state()).agents.length;
@@ -628,7 +643,7 @@ try {
             await send(key, 'Make the file #approve #work=100');
             const asking = await waitAgent(key, (a) => a.status === 'waiting on you' && Boolean(a.call), 'the call to count as asking you', 20000);
             check('after 5 s with no result, the call counts as asking you, with the command', asking.call.tool === 'Bash' && asking.call.summary === 'touch approved.txt'
-                && /^Bash “touch approved\.txt” has waited \d+ s for its result: it may be asking you in its terminal\.$/.test(asking.detail), json({ call: asking.call, detail: asking.detail }));
+                && /^Bash “touch approved\.txt” has waited (\d+ s or more|\d+ min) for its result: it may be asking you in its terminal\.$/.test(asking.detail), json({ call: asking.call, detail: asking.detail }));
             const card = await waitFor(() => askCardFor(ids.app), 'its card in Decisions', 15000, 300);
             check('Decisions says what it asks and to answer in its terminal, with nothing to pick there', card.question === 'It asks to run “touch approved.txt”.' && card.answer === 'session'
                 && card.hint === 'Answer in its terminal: open the session, then the agent\'s terminal tab.', json(card));
@@ -964,6 +979,81 @@ try {
         const idleLong = await idleAgent(agents.long);
         check('neither works nor waits on you for ever: both idle, with the answer to the held message', idleApp.lastReply?.text === 'Done: After the cut prompt' && idleLong.lastReply?.text === 'Done: After the cut job', json([idleApp.lastReply, idleLong.lastReply]));
         check('no question is left in Decisions, and nothing answered the old prompt', !(await askCardFor(ids.app)) && !(await askCardFor(ids.long)) && !existsSync(join(ws.app, 'approved.txt')), '');
+        await api('stop', { key: agents.long });
+    });
+
+    await step('a restart while messages wait for their proof: each is typed in again once and proven, and Decisions hears the answer delivered', async () => {
+        // The swallower asks first (with Enter pressed again after 2 s).
+        await idleAgent(agents.swallow);
+        await send(agents.swallow, 'Ask before the restart #ask #work=100');
+        const card = await waitFor(() => askCardFor(ids.swallow), 'the swallower\'s question in Decisions', 30000, 300);
+        // Then messages that wait for their proof when DSH quits: one typed in while a job works, and an answer
+        // whose Enter the program swallowed (Enter goes again only after a minute).
+        run.rows = rowsWith({ at: { typeWhileWorking: true, proofSeconds: 60 } });
+        run.writeProfile(model.port);
+        await waitFor(async () => {
+            const now = (await state()).settings;
+            return now.typeWhileWorking === true && now.proofSeconds === 60 ? true : null;
+        }, 'the settings to apply', 30000, 300);
+        await idleAgent(agents.app);
+        await send(agents.app, 'A job to type into #work=600000');
+        await waitAgent(agents.app, (a) => a.status === 'working', 'the job to work', 20000);
+        const during = await send(agents.app, 'Typed during the job #work=100');
+        await waitDelivery(agents.app, during.id, ['typed'], 'typed in while it works', 20000);
+        const answered = await run.api('dsh-plugin-decisions/answer', { id: card.id, answer: { text: 'Restart answer: the slow path' } });
+        check('answered from Decisions', answered.ok && answered.value?.state === 'answered', json(answered));
+        const answer = await waitFor(async () => (await agentOf(agents.swallow)).deliveries.find((d) => d.text === 'Restart answer: the slow path' && d.state === 'typed'), 'the answer typed in, its Enter swallowed', 20000, 300);
+        await restartWith(rowsWith(), 'a restart while messages wait for their proof');
+        await waitFor(async () => (await api('state')).ok, 'Agent Terminals after the restart', 30000);
+        const typedAgain = await waitDelivery(agents.app, during.id, ['delivered', 'not proven', 'failed'], 'the message typed during the job to go in again', 60000);
+        const appUsers = transcriptUsers((await agentOf(agents.app)).transcript);
+        check('the message the old program had not read is typed in again once, and proven', typedAgain.state === 'delivered' && typedAgain.enters === 1
+            && appUsers.filter((u) => u === 'Typed during the job #work=100').length === 1, json({ typedAgain, users: appUsers.slice(-4) }));
+        const answerAgain = await waitDelivery(agents.swallow, answer.id, ['delivered', 'not proven', 'failed'], 'the answer to go in again', 60000);
+        const swallowUsers = transcriptUsers((await agentOf(agents.swallow)).transcript);
+        check('the answer whose Enter was swallowed is typed in again once (Enter twice), and proven', answerAgain.state === 'delivered' && answerAgain.enters === 2
+            && swallowUsers.filter((u) => u === 'Restart answer: the slow path').length === 1, json({ answerAgain, users: swallowUsers.slice(-4) }));
+        const said = await history((e) => e.kind === 'message' && e.delivery === during.id);
+        check('What happened ends the message delivered', said[0]?.state === 'delivered', json(said[0]));
+        const outcome = await waitFor(async () => (await decisions()).history.find((e) => e.kind === 'answer' && e.cardId === card.id && e.state === 'delivered'), 'Decisions to hear the answer was delivered', 20000, 300);
+        check('Decisions\' log turns the answer delivered, from the proof after the restart', outcome.why === 'Its transcript shows it, after Enter 2 times (the first was swallowed).', json(outcome));
+        await idleAgent(agents.swallow, 'the swallower to answer');
+        await waitFor(async () => !(await askCardFor(ids.swallow)), 'no question left in Decisions', 20000, 300);
+    });
+
+    await step('a pick-up after a restart cut a job and an approval prompt, with nothing sent since: both stay idle, hold nothing, and leave nothing in Decisions', async () => {
+        rmSync(join(ws.app, 'approved.txt'), { force: true });
+        await idleAgent(agents.app);
+        await api('startAgain', { key: agents.long, fresh: false });
+        await idleAgent(agents.long, 'the long agent to start again');
+        await send(agents.long, 'Cut before a pick-up #work=600000');
+        await waitAgent(agents.long, (a) => a.status === 'working', 'the job to work', 20000);
+        await send(agents.app, 'Guarded before a pick-up #approve #work=100');
+        await waitAgent(agents.app, (a) => a.status === 'waiting on you' && Boolean(a.call), 'its approval prompt', 20000);
+        await waitFor(() => askCardFor(ids.app), 'its card in Decisions', 15000, 300);
+        await run.stop();
+        await run.boot('a restart before a pick-up');
+        await waitFor(async () => (await api('state')).ok, 'Agent Terminals after the restart', 30000);
+        const cutIdle = (a) => a.status === 'idle' && a.ready && /was cut off when its program ended/.test(a.detail ?? '');
+        await waitAgent(agents.app, cutIdle, 'the approval cut', 40000);
+        await waitAgent(agents.long, cutIdle, 'the job cut', 40000);
+        // A pick-up without a launch: a wrong setting saved, then fixed (as switching off and on in Plugins does).
+        run.rows = rowsWith({ at: { proofSeconds: 500 } });
+        run.writeProfile(model.port);
+        await waitFor(async () => (await state()).problem?.key === 'proofSeconds', 'the wrong setting to be read', 30000, 300);
+        run.rows = rowsWith();
+        run.writeProfile(model.port);
+        await waitFor(async () => !(await state()).problem, 'the setting to be fixed', 30000, 300);
+        await waitFor(async () => (await state()).agents.filter((a) => [agents.app, agents.long].includes(a.key)).every((a) => a.followed === true) || null, 'both picked up', 20000, 300);
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const both = (await state()).agents.filter((a) => [agents.app, agents.long].includes(a.key));
+        check('picked up, both are still idle, with the job the restart cut (not working, not waiting on you)', both.length === 2 && both.every(cutIdle), json(both.map((a) => [a.name, a.status, a.detail])));
+        check('nothing is left in Decisions for them', !(await askCardFor(ids.app)) && !(await askCardFor(ids.long)), '');
+        const row = await watchRow(ids.long);
+        check('their rows say idle too', row?.external?.status === 'idle', json(row?.external));
+        const next = await send(agents.long, 'After the pick-up #work=100');
+        const went = await waitDelivery(agents.long, next.id, ['delivered'], 'a message after the pick-up', 30000);
+        check('a message goes straight in, held by nothing, and is proven', went.enters === 1 && !existsSync(join(ws.app, 'approved.txt')), json(went));
         await api('stop', { key: agents.long });
     });
 
