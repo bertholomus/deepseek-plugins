@@ -102,7 +102,7 @@ DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js npm run test:e2e:categ
 # calendar + session-bridge on a real DSH (RADICALE_VENV, a virtualenv with radicale, adds a CalDAV account)
 DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js npm run test:e2e:calendar
 
-# autopilot + session-watch on a real DSH in a throwaway home, on every DSH under .e2e/ (see plugins/autopilot/README.md)
+# autopilot + session-watch on a real DSH in a throwaway home: every DSH under .e2e/ and the installed app's (see plugins/autopilot/README.md)
 npm run test:e2e:autopilot
 ```
 

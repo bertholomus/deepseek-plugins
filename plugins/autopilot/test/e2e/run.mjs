@@ -35,7 +35,9 @@
  *
  *   DSH_BIN=/path/to/@deepseek-ai/dsh/lib/bin.js node plugins/autopilot/test/e2e/run.mjs
  *
- * Without DSH_BIN it runs the newest DSH under .e2e/. SHOTS=<folder> keeps
+ * Without DSH_BIN it runs the newest DSH under .e2e/; `node scripts/e2e.mjs
+ * autopilot` runs it on each of those and on the installed app's own DSH
+ * (under the app's binary as Node). SHOTS=<folder> keeps
  * the window's pictures there (default .e2e/shots/autopilot/<version>);
  * KEEP=1 keeps the throwaway DSH_HOME. Without Playwright the window checks
  * are skipped and said so.
@@ -51,7 +53,7 @@ if (!bin) {
     console.log('skipped: no DSH to run (set DSH_BIN, or install one under .e2e/dsh-<version>)');
     process.exit(0);
 }
-const version = /dsh-([^/]+)\/node_modules/.exec(bin)?.[1] ?? basename(dirname(dirname(bin)));
+const version = process.env.DSH_LABEL || (/dsh-([^/]+)\/node_modules/.exec(bin)?.[1] ?? basename(dirname(dirname(bin))));
 const shots = process.env.SHOTS || join(repoRoot, '.e2e', 'shots', 'autopilot', version);
 console.log(`# DSH ${version}: ${bin}`);
 console.log(`# pictures: ${shots}`);

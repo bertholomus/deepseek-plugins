@@ -40,21 +40,48 @@ export async function waitFor(fn, what, timeout = 30000, every = 150) {
     throw new Error(`timed out waiting for ${what}${last ? ` (last error: ${last.message})` : ''}`);
 }
 
-/** The DSH runtimes installed for these tests (`npm i @deepseek-ai/dsh@<v>` under `.e2e/dsh-<v>`), oldest first. */
+/**
+ * The DSH builds to test on: the runtimes installed for these tests
+ * (`npm i @deepseek-ai/dsh@<v>` under `.e2e/dsh-<v>`), oldest first, then
+ * the DSH inside the installed app (DSH_APP, else /Applications/DeepSeek
+ * Harness.app), which its own binary runs as Node (`node` and `env` say how).
+ * The app's DSH runs as a separate process in a throwaway home, as the test
+ * runtimes do; the running app is never touched.
+ */
 export function runtimes() {
     const base = join(repoRoot, '.e2e');
     let names = [];
     try {
         names = readdirSync(base).filter((n) => /^dsh-\d/.test(n)).sort();
     } catch {}
-    return names
+    const found = names
         .map((n) => ({ version: n.slice(4), bin: join(base, n, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js') }))
         .filter((r) => existsSync(r.bin));
+    const app = appRuntime();
+    return app ? [...found, app] : found;
 }
 
-/** The DSH to run: DSH_BIN, else the newest test runtime. */
+/** The installed app's DSH, or undefined when there is no app (or its DSH cannot be read). */
+function appRuntime() {
+    const app = process.env.DSH_APP || '/Applications/DeepSeek Harness.app';
+    const node = join(app, 'Contents', 'MacOS', 'DeepSeek Harness');
+    const asar = join(app, 'Contents', 'Resources', 'app.asar');
+    if (!existsSync(node) || !existsSync(asar)) return undefined;
+    const pkg = join(asar, 'dsh', 'node_modules', '@deepseek-ai', 'dsh');
+    const env = { ELECTRON_RUN_AS_NODE: '1' };
+    try {
+        const version = execFileSync(node, ['-p', `require(${JSON.stringify(join(pkg, 'package.json'))}).version`], {
+            encoding: 'utf8', timeout: 30000, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        return version ? { version: `app-${version}`, bin: join(pkg, 'lib', 'bin.js'), node, env } : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/** The DSH to run: DSH_BIN, else the newest test runtime (the app's DSH needs its own binary, so only with DSH_BIN). */
 export function dshBin() {
-    return process.env.DSH_BIN || runtimes().at(-1)?.bin;
+    return process.env.DSH_BIN || runtimes().filter((r) => !r.node).at(-1)?.bin;
 }
 
 /** Pass and fail lines in TAP's words, and a step that turns a throw into a failed check. */

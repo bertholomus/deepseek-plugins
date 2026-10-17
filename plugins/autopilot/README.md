@@ -134,12 +134,14 @@ From the repository root:
 
 ```sh
 node --test test/autopilot.test.js   # the engine over the watcher and a stand-in DSH; the page; the browser half
-node scripts/e2e.mjs autopilot       # real DSH in a throwaway home, on every DSH under .e2e/
+node scripts/e2e.mjs autopilot       # real DSH in a throwaway home, on every DSH build here
 ```
 
 The real-DSH test (47 checks) starts DSH from each `.e2e/dsh-<version>`
 install (`npm i --prefix .e2e/dsh-0.2.1-rc.1 @deepseek-ai/dsh@0.2.1-rc.1`)
-in a throwaway home, with a scripted model playing the agent. It stops and
+and from the installed app's own DSH (run as Node by the app's binary, as a
+separate process), each in a throwaway home, with a scripted model playing
+the agent. It stops and
 kills DSH under running turns, lets sessions go quiet with work open, fails
 a goal round, and drives the page in a browser (`npm i --prefix .e2e/tools
 playwright-core`, with Playwright's Chrome), light and dark, wide and
