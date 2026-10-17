@@ -7,10 +7,10 @@
  */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { DEV, HOLDOUT, LABELS, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, loadCorpus, measure, quietTable, table } from '../test/helpers/proof-corpus.mjs';
+import { DEV, HOLDOUT, LABELS, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, loadCorpus, measure, quietTable, table } from '../test/helpers/proof-corpus.mjs';
 
 const all = [];
-for (const [name, dir] of [['Dev (tuned on)', DEV], ['First hold-out (measured once, then tuned on)', SEEN], ['Second hold-out (measured once, then tuned on)', SEEN2], ['Third hold-out (measured once, then tuned on)', SEEN3], ['Fourth hold-out (measured once, then tuned on)', SEEN4], ['Fifth hold-out (measured once, then tuned on)', SEEN5], ['Hold-out (never tuned on)', HOLDOUT]]) {
+for (const [name, dir] of [['Dev (tuned on)', DEV], ['First hold-out (measured once, then tuned on)', SEEN], ['Second hold-out (measured once, then tuned on)', SEEN2], ['Third hold-out (measured once, then tuned on)', SEEN3], ['Fourth hold-out (measured once, then tuned on)', SEEN4], ['Fifth hold-out (measured once, then tuned on)', SEEN5], ['Sixth hold-out (measured once, then tuned on)', SEEN6], ['Hold-out (never tuned on)', HOLDOUT]]) {
     if (!LABELS.every((label) => existsSync(join(dir, `${label}.json`)))) continue;
     all.push([name, measure(loadCorpus(dir))]);
 }

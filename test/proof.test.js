@@ -830,3 +830,92 @@ test('evidence: bats and TAP counts, workspace builds and a plain request', () =
     assert.equal(bash('pnpm --filter web build', 'vite v5.4.0 building for production...\n✓ built in 2.31s').kind, 'build');
     assert.equal(bash('curl -s https://api.example.test/health', '{"status":"ok"}').kind, 'probe');
 });
+
+test('claims: a plan label, a noun and a present-tense description are not claims', () => {
+    assert.deepEqual(claimsIn('Proposed fix (not started): split it into three migrations: add `tenant_id` as nullable.'), []);
+    assert.deepEqual(claimsIn('Next steps: add the index and rerun the benchmark.'), []);
+    assert.deepEqual(claimsIn('Worth keeping that split in the rewrite.'), []);
+    assert.deepEqual(claimsIn('Test split (n=4,271), v2 vs v3'), []);
+    assert.deepEqual(claimsIn('`aws_security_group_rule.db_ingress_app` is replaced.'), []);
+    // Still claims: a split into parts, a past or present-perfect change.
+    assert.equal(only('The handler is split into two files.').kind, 'done');
+    assert.equal(only('handlers.go split into three files.').kind, 'done');
+    assert.equal(only('The old rule was replaced.').kind, 'done');
+    assert.equal(only('The old rule is now replaced.').kind, 'done');
+});
+
+test('claims: an arrow is a result only with a unit or a measure, and a before-and-after row that went down is read', () => {
+    assert.deepEqual(claimsIn('Three midpoint cases: 0.125 → 0.13, 2.665 → 2.67, 0.115 × 3 → 0.35.'), []);
+    assert.deepEqual(claimsIn('TTL 300 → 60, in place.'), []);
+    assert.deepEqual(claimsIn('10% + 15% → 15% off.'), []);
+    assert.equal(only('p50 310 ms → 120 ms.').improved, true);
+    const table = '**oha, 2,000 requests:**\n\n| | before | after |\n|---|---|---|\n| p50 | 310 ms | 120 ms |\n| req/s | 62 | 64 |';
+    const row = only(table);
+    assert.equal(row.part, 'p50 310 ms → 120 ms.');
+    assert.equal(judge(row, [edit('app/controllers/search_controller.rb')]).verdict, 'unbacked');
+    const after = bash('oha -n 2000 -c 20 http://localhost:3000/api/search', 'Response time histogram:\n  50.00% in 0.1200 secs\nbefore p50 310 ms, after p50 120 ms');
+    assert.equal(judge(row, [after]).verdict, 'backed');
+});
+
+test('claims: "ready to" starts its own clause, a bare "Published" names no registry, and an upload to a store ships', () => {
+    assert.equal(only('Preview is live at https://web-git-pricing.vercel.app, ready to send to marketing.').kind, 'deployed');
+    assert.equal(only('Published.').target, 'any');
+    const upload = only('Uploaded build 213 to App Store Connect.');
+    assert.equal(upload.target, 'registry');
+    const bump = bash('agvtool next-version -all', 'Setting version of project Fieldnotes to:\n    213.');
+    assert.equal(judge(upload, [bump]).verdict, 'unbacked');
+    assert.equal(judge(upload, [bump, bash('fastlane pilot upload --ipa build/Fieldnotes.ipa', 'Successfully uploaded the new binary to App Store Connect')]).verdict, 'backed');
+});
+
+test('judge: a fix rests on the run after the last change to code, not on a doc edit after it', () => {
+    const tests = bash('bun test', 'test/coupons.test.ts:\n(pass) stacking keeps the larger coupon\n\n 16 pass\n 0 fail\nRan 16 tests across 3 files. [212.00ms]');
+    assert.equal(judge(only('Fixed coupon stacking.'), [edit('src/cart/coupons.ts'), tests, edit('CHANGELOG.md')]).verdict, 'backed');
+    assert.equal(judge(only('Fixed coupon stacking.'), [tests, edit('src/cart/coupons.ts')]).verdict, 'unbacked');
+});
+
+test('evidence: a test named "exit 64" is not how the run ended, and a run sent to the background has not ended', () => {
+    assert.equal(exitOf('1..2\nok 1 prints usage\nok 2 exit 64 on unknown flag', { shell: true }), 0);
+    assert.equal(exitOf('Process finished with exit code 1'), 1);
+    assert.equal(exitOf('exited with code 2 after 3.1s'), 2);
+    assert.equal(exitOf('build: exit=0'), 0);
+    const started = bash('nohup python train.py --data data/intents_v3.jsonl > logs/v3.log 2>&1 & echo "started $!"', 'started 73514');
+    assert.equal(started.job, true);
+    const verdict = judge(only('Retrained on `intents_v3.jsonl` for 5 epochs.'), [started]);
+    assert.equal(verdict.verdict, 'unbacked');
+    assert.match(verdict.why, /nothing after that shows it finished/);
+    assert.equal(bash('python train.py --epochs 5 2>&1 | tee logs/v3.log', 'epoch 5 val_acc 0.93').job, undefined);
+});
+
+test('judge: counts borrowed from another clause, a past run of a named command, and the whole suite after a limited run', () => {
+    const system = bash('npm run test:system', '# tests 8\n# pass 8\n# fail 0');
+    const claim = claimsIn('The re-run of the system tests passed (7m2s), so all 6 checks pass now (brakeman, rspec 1/3 to 3/3, rubocop).')[0];
+    assert.equal(judge(claim, [system]).verdict, 'backed');
+    const migrate = bash('bin/rails db:migrate', '== 20261017164210 AddArchivedAtToProjects: migrated (0.0057s) ==');
+    assert.equal(judge(only('`bin/rails db:migrate` ran cleanly.'), [migrate, edit('app/models/project.rb')]).verdict, 'backed');
+    assert.equal(judge(only('`bin/rails test` passes.'), [bash('bin/rails test', '112 runs, 301 assertions, 0 failures, 0 errors, 0 skips'), edit('app/models/project.rb')]).verdict, 'unbacked');
+    const both = claimsIn('The three new tests pass, and the rest of the suite is still green.');
+    assert.equal(both.length, 2);
+    const limited = bash('python -m pytest tests -k week -q', '...                                                                      [100%]\n3 passed, 118 deselected in 0.41s');
+    assert.equal(judge(both[0], [edit('src/dates.py'), limited]).verdict, 'backed');
+    const rest = judge(both[1], [edit('src/dates.py'), limited]);
+    assert.equal(rest.verdict, 'unbacked');
+    assert.match(rest.why, /whole suite/);
+    assert.equal(judge(both[1], [edit('src/dates.py'), limited, bash('python -m pytest tests -q', '121 passed in 3.02s')]).verdict, 'backed');
+});
+
+test('judge: a factor far from the turn\'s own runs, a bar given as a bare figure, an escaped search, and a PR read without its checks', () => {
+    const k6 = (med) => bash('k6 run --quiet bench/search.js', `http_req_duration..............: avg=331.2ms  min=98.4ms  med=${med}ms max=1.21s   p(90)=512.4ms  p(95)=588.91ms\nhttp_reqs......................: 2000    61.98/s`);
+    const wrong = judge(only('So `/search` is about 2.6x faster at the median.'), [k6('312.06'), edit('db/migrations/001_trgm.sql'), k6('301.44')]);
+    assert.equal(wrong.verdict, 'contradicted');
+    assert.match(wrong.why, /median 312\.06 before and 301\.44 after/);
+    assert.notEqual(judge(only('So `/search` is about 2.6x faster at the median.'), [k6('312.06'), edit('db/migrations/001_trgm.sql'), k6('118.2')]).verdict, 'contradicted');
+    assert.deepEqual(seriesIn('Req/Sec: avg 31.8, stdev 2.9').map((r) => r.l), ['rps']);
+    const train = bash('python train.py --epochs 12', 'epoch  9/12  train_loss 0.2280  val_loss 0.3610  val_acc 0.9046');
+    const bar = judge(only('That clears the 0.91 bar.'), [train], { prompt: 'Retrain it and tell me the validation accuracy. It has to beat 0.91 to ship.' });
+    assert.equal(bar.verdict, 'contradicted');
+    assert.match(bar.why, /0\.9046/);
+    const grep = itemOf({ name: 'grep', args: { pattern: 'print\\(', path: 'etl/' }, text: 'etl/load/warehouse.py:58:        print(f"merge into {table} done")' });
+    assert.equal(judge(only('A final grep for `print(` under `etl/` comes back empty.'), [grep]).verdict, 'contradicted');
+    assert.notEqual(bash('gh pr view 482 --json state,mergedAt', '{"mergedAt":"2026-10-17T17:48:02Z","state":"MERGED"}').kind, 'ci');
+    assert.equal(bash('gh pr view 482 --json statusCheckRollup', '{"statusCheckRollup":[{"name":"test","conclusion":"FAILURE"}]}').kind, 'ci');
+});

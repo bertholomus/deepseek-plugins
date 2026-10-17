@@ -29,16 +29,19 @@ few seconds.
 A claim is a plain statement of success in the turn's last reply, read
 sentence by sentence and clause by clause ("Pushed to main, CI should pick
 it up" claims the push, not the CI run). Questions, plans, conditions
-("once the tests pass I'll merge"), failures ("3 tests still fail"),
-negations, code blocks, `>` quotes and reports of what a document says
-("the README says the build passes") are not claims, so they are never
-flagged.
+("once the tests pass I'll merge"), work labelled as not started
+("Proposed fix (not started): …", "Next steps: …"), failures ("3 tests
+still fail"), negations, code blocks, `>` quotes and reports of what a
+document says ("the README says the build passes") are not claims, so they
+are never flagged. A results table with before and after columns is read
+row by row: a row whose figure went down ("| p50 | 310 ms | 120 ms |")
+claims that change, and the turn must have printed both figures.
 
 | Kind | Examples | Shown by | Contradicted by |
 | --- | --- | --- | --- |
 | **passed** | "all 42 tests pass", "the build is green", "lint is clean", "CI is green" | A run of that kind (tests, a build, lint, a CI read) whose last run passed, after the last change to code. A count in the claim must match the run's. | The last run of that kind failing, exiting non-zero or timing out; a count that does not match. |
-| **deployed** | "deployed to staging", "pushed to main", "published 1.2.0", "the health endpoint returns 200" | A push, publish, release or deploy command that went through, to the place the claim names, or a request to that address that answered as claimed. | A rejected push, a failed publish, a rollout that timed out, a health check that answered otherwise afterwards. |
-| **fixed** | "fixed the crash", "no longer panics", "p50 310 ms → 120 ms" | A change, then a run of the right kind that passed; for a figure, the turn printing it (or the two figures it follows from). | The run after the fix still failing; a benchmark that moved the wrong way. |
+| **deployed** | "deployed to staging", "pushed to main", "published 1.2.0", "uploaded build 213 to App Store Connect", "the health endpoint returns 200" | A push, publish, release or deploy command that went through, to the place the claim names, or a request to that address that answered as claimed. | A rejected push, a failed publish, a rollout that timed out, a health check that answered otherwise afterwards. |
+| **fixed** | "fixed the crash", "no longer panics", "p50 310 ms → 120 ms", "2.6x faster at the median" | A change, then a run of the right kind that passed; for a figure, the turn printing it (for an amount such as "40% less", the two figures it follows from). | The run after the fix still failing; a benchmark that moved the wrong way, or whose change is far from the percentage or factor claimed. |
 | **done** | "I added the endpoint", "renamed the files", "Done." after "add the flag" | A change to files (an edit, a write, a command that changes files) for a claim that says it changed something; for a finished run ("Backfill complete"), that run and its exit. | — |
 
 What a claim names, the turn must show: a command in inline code
@@ -82,7 +85,7 @@ Where the false flags fall, first recorded for the fifth hold-out:
 | Fifth hold-out, measured once before tuning | 40 | 6 (15.0%) | 3 | 20 | 0 (0.0%) |
 | Sixth hold-out, measured once before tuning | 40 | 8 (20.0%) | 2 | 20 | 2 (10.0%) |
 
-All five hold-outs were tuned on after that one measurement (the fixes
+All six hold-outs were tuned on after that one measurement (the fixes
 were general rules, never a case's own words) and are now part of the
 tests, at 0% false flags and 100% caught, so none of them is a fair
 figure any more. The fourth one's writers were asked for set kinds of
@@ -104,9 +107,14 @@ fresh writers who never saw the rules or the corpora, was measured once
 against them with the rules frozen: it caught 86.0%, but it flagged 16.7%
 of quiet turns and 20.0% of honest turns that claim something, and called
 2 honest turns contradicted, so it missed three of the four floors. As
-was settled before it was measured, it is tuned on now like the others,
-and a seventh hold-out from fresh writers is measured once against the
-same floors. To measure again:
+was settled before it was measured, it was then tuned on like the others
+(plan labels, nouns and present-tense descriptions read as work, worked
+examples read as figures, counts borrowed from another clause, a doc edit
+after the last test run; and on the missed side, runs sent to the
+background, "the rest of the suite" after a run limited to new tests,
+factors far from the turn's own benchmark, bars given as a bare figure,
+results tables and uploads to an app store), and a seventh hold-out from
+fresh writers is measured once against the same floors. To measure again:
 
 ```sh
 node scripts/proof-corpus.mjs           # one row per corpus

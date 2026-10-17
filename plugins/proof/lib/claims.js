@@ -66,9 +66,45 @@ const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 /** A table's separator row: `|---|:---:|`. */
 const TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 
-/** A two-cell table row read as a sentence ("| Rollout | complete, 3/3 replicas |"); undefined for any other row. */
-function rowSentence(raw) {
-    const cells = raw.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+/** A table row's cells. */
+const cellsOf = (raw) => raw.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+
+/** Header cells of a before-and-after table ("| | before | after |"). */
+const BEFORE_COL = /^(?:before|baseline|old|previous|was|original|unpatched)$/i;
+const AFTER_COL = /^(?:after|patched|new|now|optimi[sz]ed)$/i;
+/** A cell that is one figure: "312 ms", "1.4 s", "~101". */
+const CELL_FIGURE = /^~?\s*(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*([a-zµ%/]*)$/i;
+/** Units of time and size, in ms and bytes, so "1.4 s" and "290 ms" compare. */
+const TIME_UNITS = { ns: 0.000001, 'µs': 0.001, us: 0.001, ms: 1, s: 1000, sec: 1000, secs: 1000, seconds: 1000, min: 60000, mins: 60000, minutes: 60000 };
+const SIZE_UNITS = { b: 1, bytes: 1, kb: 1000, kib: 1024, mb: 1e6, mib: 1048576, gb: 1e9, gib: 1073741824 };
+
+/** A figure in a cell, in its unit's base (1.4 s as 1400 ms), or undefined. */
+function cellFigure(cell) {
+    const m = CELL_FIGURE.exec(plain(cell));
+    if (!m) return undefined;
+    const unit = m[2].toLowerCase();
+    const value = Number(m[1].replace(/,/g, ''));
+    if (unit in TIME_UNITS) return { value: value * TIME_UNITS[unit], unit: 'time' };
+    if (unit in SIZE_UNITS) return { value: value * SIZE_UNITS[unit], unit: 'size' };
+    return { value, unit };
+}
+
+/**
+ * A table row read as a sentence: a key and its value ("| Rollout | complete, 3/3 replicas |"),
+ * or a row of a before-and-after table whose figure went down ("| p50 | 310 ms | 120 ms |"
+ * reads "p50 310 ms → 120 ms."); undefined for any other row.
+ */
+function rowSentence(raw, header) {
+    const cells = cellsOf(raw);
+    const heads = (header ?? []).map((c) => plain(c));
+    const before = heads.findIndex((h) => BEFORE_COL.test(h));
+    const after = heads.findIndex((h) => AFTER_COL.test(h));
+    if (before > 0 && after > 0 && cells.length === heads.length && cells[0] !== '') {
+        const from = cellFigure(cells[before]);
+        const to = cellFigure(cells[after]);
+        if (!from || !to || from.unit !== to.unit || !(to.value < from.value)) return undefined;
+        return `${cells[0]} ${cells[before]} → ${cells[after]}.`;
+    }
     if (cells.length !== 2 || cells[0] === '' || cells[1] === '') return undefined;
     const said = `${cells[0]} ${cells[1]}`;
     return /[.!?]$/.test(said) ? said : `${said}.`;
@@ -79,6 +115,7 @@ function marked(text) {
     if (typeof text !== 'string' || text.trim() === '') return [];
     const out = [];
     let fenced = false;
+    let header;
     const lines = text.split(/\r?\n/);
     for (let at = 0; at < lines.length; at += 1) {
         let raw = lines[at];
@@ -88,11 +125,18 @@ function marked(text) {
         }
         if (fenced || /^\s{0,3}>/.test(raw) || /^ {4,}\S/.test(raw)) continue;
         if (/^\s*\|/.test(raw)) {
-            // A key and its value ("| Helm status | deployed |") says what it says; a header row or a wider table is data.
-            if (TABLE_RULE.test(raw) || TABLE_RULE.test(lines[at + 1] ?? '')) continue;
-            const row = rowSentence(raw);
+            // A key and its value ("| Helm status | deployed |") says what it says, and so does a before-and-after
+            // row whose figure went down; a header row or another wide row is data.
+            if (TABLE_RULE.test(raw)) continue;
+            if (TABLE_RULE.test(lines[at + 1] ?? '')) {
+                header = cellsOf(raw);
+                continue;
+            }
+            const row = rowSentence(raw, header);
             if (row === undefined) continue;
             raw = row;
+        } else {
+            header = undefined;
         }
         const line = plain(raw);
         if (line === '') continue;
@@ -110,10 +154,10 @@ export function sentencesOf(text) {
     return marked(text).map(shown);
 }
 
-/** A sentence's clauses: split at dashes, semicolons, colons and ", so"/", and"/", but". */
+/** A sentence's clauses: split at dashes, semicolons, colons and ", so"/", and"/", but"/", ready to". */
 function clausesOf(sentence) {
     return sentence
-        .split(/\s+[—–]\s+|\s+-\s+|;\s+|(?<!^\s*(?:still|all|everything(?:\s+(?:is|still))?|now)\s+(?:green|passing|clean))(?<!^\s*(?:green|passing))\s*:\s+(?=\S)(?!(?:all\s+)?(?:\d+\s*(?:\/\s*\d+\s+)?(?:tests?\s+)?)?(?:ok|okay|pass|passed|passes|passing|green|clean|success|successful|succeeded)\b)|,\s+(?=(?:so|and|but|while|which|because|since|although|though|yet|then|plus|with)\b)|\s+(?=(?:but|because|although|though)\s)/i)
+        .split(/\s+[—–]\s+|\s+-\s+|;\s+|(?<!^\s*(?:still|all|everything(?:\s+(?:is|still))?|now)\s+(?:green|passing|clean))(?<!^\s*(?:green|passing))\s*:\s+(?=\S)(?!(?:all\s+)?(?:\d+\s*(?:\/\s*\d+\s+)?(?:tests?\s+)?)?(?:ok|okay|pass|passed|passes|passing|green|clean|success|successful|succeeded)\b)|,\s+(?=(?:so|and|but|while|which|because|since|although|though|yet|then|plus|with|ready\s+(?:to|for))\b)|\s+(?=(?:but|because|although|though)\s)/i)
         .map((s) => s.trim())
         .filter((s) => s.length > 1);
 }
@@ -217,7 +261,8 @@ const PASSED = [
 /** "The suite is still 34/34", "tests are 12/12": all of a count, said without a pass word. */
 const ALL_PASS = new RegExp(String.raw`(?:^|\b)${SUBJECT}(?!\w)\s+(?:is|are|was|were|stays?|stayed|remains?|remained)\s+(?:still\s+|now\s+|back\s+(?:to|at)\s+|at\s+)?(\d+)\s*\/\s*\1(?![\d/])`, 'i');
 
-const DEPLOY_WORD = /\b(deployed|redeployed|released|shipped|rolled out|rolled back|promoted|published|pushed|merged|tagged|provisioned)\b/gi;
+// "Uploaded build 213 to App Store Connect": an upload to a place ships it.
+const DEPLOY_WORD = /\b(deployed|redeployed|released|shipped|rolled out|rolled back|promoted|published|pushed|merged|tagged|provisioned|uploaded(?=[^.;]{0,80}?\bto\s))\b/gi;
 const DEPLOYED_OTHER = [
     /\b(is|are)\s+(now\s+)?live\b|\bgo(es)? live\b|\bwent live\b|\b(and|now)\s+live\b|^live\b|\blive\s+(on|in)\s+(staging|production|prod)\b/i,
     /\b(is|are)\s+(now\s+)?((built|pushed|published|up) and\s+)?(on|in)\s+(the\s+)?(registry|npm|pypi|crates\.io|docker ?hub|ghcr|ecr|gcr|rubygems|packagist|origin|production|prod|staging)\b/i,
@@ -249,9 +294,28 @@ const FIXED = [
     // "The fix is in and verified" claims it works; "The fix is in" alone is a change (done).
     /\bthe fix(?:es)?\s+(?:is|are|was|were|has been|have been)\s+(?:now\s+)?(?:in\s+(?:place\s+)?and\s+)?(?:verified|tested|working|confirmed)\b/i,
 ];
+/** An arrow between figures ("310 ms → 120 ms"), with the units on either side. */
+const ARROW = /(?<![\w.])\d+(?:\.\d+)?\s*([a-zµ%/]*)\s*(?:→|->|=>|⟶)\s*\d+(?:\.\d+)?\s*([a-zµ%/]*)/gi;
+const ARROW_UNIT = /^(?:ms|µs|us|ns|s|sec|secs|seconds|min|mins|minutes|h|hrs|%|kib|mib|gib|kb|mb|gb|b|bytes|req\/s|rps|qps|ops\/s|tok\/s|fps|k)$/i;
+/** Names of a measure, so an arrow between bare figures is a result: "p50 310 → 120", "errors 12 → 0". */
+const MEASURE = /\b(coverage|p\d{2,3}|median|mean|avg|average|latency|throughput|faster|slower|quicker|speed(?:up)?|bench(?:mark)?s?|memory|rss|cpu|heap|bundle|size|time|duration|runtime|took|errors?|warnings?|failures?|failing|flak\w*|allocs?|allocations?|queries|requests?|round[- ]?trips?|calls|hits?|misses|loc|score|accuracy|acc|f1|precision|recall|loss|perplexity|wer|cer|rmse|mse|mae|auc|qps|rps|fps|ttfb|lcp|fcp|tbt|cold starts?|startup)\b/i;
+/**
+ * "p50 310 ms → 120 ms", "errors 12 → 0": an arrow between figures with a unit or a measure's name;
+ * not "0.125 → 0.13" or "TTL 300 → 60", and not a worked example ("10% + 15% → 15% off").
+ */
+const MEASURED_ARROW = {
+    test(text) {
+        const t = String(text);
+        for (const m of t.matchAll(ARROW)) {
+            if (/[+×*]\s*$/.test(t.slice(0, m.index))) continue;
+            if (ARROW_UNIT.test(m[1]) || ARROW_UNIT.test(m[2]) || MEASURE.test(t)) return true;
+        }
+        return false;
+    },
+};
 /** A number that got better: "p50 310 ms -> 120 ms", "2.5x faster", "cut the bundle to 182 KiB". */
 const IMPROVED = [
-    /\d+(\.\d+)?\s*[a-zµ%/]*\s*(→|->|=>|⟶)\s*\d/i,
+    MEASURED_ARROW,
     // "p50 is down ~60%", "latency is now down by 40%"
     /\b(?:is|are|was|were|went|came|now)\s+(?:now\s+)?down\s+(?:by\s+)?(?:about\s+|around\s+|roughly\s+|nearly\s+|almost\s+|over\s+|~\s*)?\d+(?:\.\d+)?\s*%/i,
     /\b\d+(\.\d+)?\s*(x|×)\s+(faster|quicker|smaller|less|fewer|lower|higher|more throughput)\b/i,
@@ -265,7 +329,7 @@ const IMPROVED = [
 ];
 
 /** "It beats the current model", "v3 outperforms the baseline": a result better than a bar. */
-const BEATS = /\b(beats?|outperforms?|exceeds?|surpass(?:es)?|better than (?:the )?(?:current|baseline|old|previous|existing|last)|clears the (?:bar|threshold))\b|\b(?:comfortably\s+|well\s+|just\s+|safely\s+)?(?:over|above|past)\s+the\s+\d+(?:\.\d+)?\s*%?\s+(?:bar|threshold|target|mark|goal|baseline)\b|\b(?:we|it|this|the model|that)\s+(?:now\s+)?(?:clear|clears|cleared)\s+(?:it|that|the\s+(?:bar|threshold|target|mark|goal))\b/i;
+const BEATS = /\b(beats?|outperforms?|exceeds?|surpass(?:es)?|better than (?:the )?(?:current|baseline|old|previous|existing|last)|clears the (?:\d+(?:\.\d+)?\s*%?\s+)?(?:bar|threshold))\b|\b(?:comfortably\s+|well\s+|just\s+|safely\s+)?(?:over|above|past)\s+the\s+\d+(?:\.\d+)?\s*%?\s+(?:bar|threshold|target|mark|goal|baseline)\b|\b(?:we|it|this|the model|that)\s+(?:now\s+)?(?:clear|clears|cleared)\s+(?:it|that|the\s+(?:\d+(?:\.\d+)?\s*%?\s+)?(?:bar|threshold|target|mark|goal))\b/i;
 
 /** A search said to come back empty: "a final grep for `X` comes back empty", "no references to `X` remain". */
 const SEARCH_EMPTY = [
@@ -290,11 +354,13 @@ function searchTermOf(clause) {
 /** "is in" claims at the end of a clause ("the fix is in", "is in on main"), not "is in play". */
 const IS_IN = String.raw`in(?=\s*(?:$|[.,;:!)]|now\b|on\s+(?:main|master|the branch)))`;
 const CHANGE_VERBS = 'cleaned|reverted|restored|simplified|trimmed|reordered|inlined|deduplicated|consolidated|normali[sz]ed|parameteri[sz]ed|vendored|scaffolded|stubbed|added|created|updated|wrote|written|implemented|renamed|removed|deleted|moved|changed|replaced|refactored|cleaned up|set up|configured|installed|migrated|converted|extracted|split|merged|rewrote|rewritten|built|rebuilt|generated|completed|finished|registered|wired|hooked up|exposed|exported|introduced|bumped|pinned|upgraded|downgraded|enabled|disabled|documented|gated|ported|switched|swapped|applied|committed|regenerated|recorded|backfilled|pruned|tightened|raised|lowered|made';
+/** The change verbs after a subject ("Report regenerated", "handlers.go split into three files"): "split" alone is a noun ("that split", "Test split"). */
+const SUBJECT_VERBS = CHANGE_VERBS.replace('|split|', String.raw`|split(?=\s+(?:into|in\s+(?:two|three|four|five|half|halves|\d+)|up|out|off|across|by|between|apart|along)\b)|`);
 const DONE = [
     /^(all\s+)?(done|complete|completed|finished|sorted|all set|all wrapped up|wrapped up)\b/i,
     // "Ran the migrations", "Retrained on v7", "I fine-tuned the base model": a run that does the work.
     /^(?:i\s+|we\s+)?(?:have\s+|'ve\s+|just\s+|also\s+|then\s+)?(?:ran|re-?ran|executed)\s+(?:the\s+|both\s+|all\s+|its\s+|that\s+|this\s+|these\s+)?(?:new\s+|pending\s+)?(?:[\w-]+\s+)?migrations?\b(?!\s+(?:files?|generators?))/i,
-    /^(?:i\s+|we\s+)?(?:have\s+|'ve\s+|just\s+|also\s+|then\s+)?(?:re-?trained|fine-?tuned|trained)\s+(?:it|them|the|a|an|on|for|with|both|all|our|your|\w+\s+on)\b/i,
+    /^(?:i\s+|we\s+)?(?:have\s+|'ve\s+|just\s+|also\s+|then\s+)?(?:re-?trained|fine-?tuned|trained)\s+(?:it|them|the|a|an|on|for|with|both|all|our|your|\w+\s+(?:on|for|with))\b/i,
     /\b(?:i|we)\s+(?:have\s+|'ve\s+|just\s+|also\s+|then\s+)?(?:re-?trained|fine-?tuned)\b/i,
     // "Backfill complete", "Index rebuild done", "Training finished for v7"
     /^(?:the\s+)?[\w-]+(?:\s+[\w-]+){0,2}\s+(?:is\s+|are\s+|has\s+|have\s+)?(?:now\s+|all\s+)?(?:done|complete|completed|finished)\b/i,
@@ -302,8 +368,9 @@ const DONE = [
     new RegExp(String.raw`\b(i'?ve|i have|we'?ve|we have|i|we)\s+(now\s+|also\s+|just\s+|then\s+)?(${CHANGE_VERBS})\b`, 'i'),
     new RegExp(String.raw`^(${CHANGE_VERBS})\b`, 'i'),
     /\b(task|work|change|changes|refactor|migration|implementation|feature|fix|rename|update|upgrade|bump|backfill|patch)\s+(is|are)\s+(now\s+)?(done|complete|finished|in place|applied|in(?=\s*(?:$|[.,;:!)]|now\b|on\s+(?:main|master))))/i,
-    // "Report regenerated at docs/api.md", "Dev image rebuilt as app-dev:latest", "1,834 rows updated"
-    new RegExp(String.raw`^(?!(?:which|that|who|so|and|but|because|since|while|as|if|when|where|whether|although|though)\b)(?:the\s+|a\s+|an\s+|all\s+)?[\w.,/${OPEN}${CLOSE}-]+(?:\s+[\w.,/${OPEN}${CLOSE}-]+){0,3}\s+(?:now\s+|also\s+)?(?:${CHANGE_VERBS})\b(?!\s+(?:to\s+be|by\s+the\s+user))`, 'i'),
+    // "Report regenerated at docs/api.md", "Dev image rebuilt as app-dev:latest", "1,834 rows updated";
+    // not "the rule is replaced" (how a plan or the code behaves) or "worth keeping that split" (a noun).
+    new RegExp(String.raw`^(?!(?:which|that|who|so|and|but|because|since|while|as|if|when|where|whether|although|though)\b)(?:the\s+|a\s+|an\s+|all\s+)?[\w.,/${OPEN}${CLOSE}-]+(?:\s+[\w.,/${OPEN}${CLOSE}-]+){0,3}\s+(?:now\s+|also\s+)?(?<!\b(?:is|are)\s+)(?:${SUBJECT_VERBS})\b(?!\s+(?:to\s+be|by\s+the\s+user))`, 'i'),
     // "Worker config now points at redis-2", ".env.example documents CACHE_URL now"
     /\bnow\s+(points|uses|returns|reads|lists|documents|leads|has|includes|contains|imports|exports|calls|sets|defaults|handles|accepts|supports|logs|retries|throws|falls back|guards|checks|skips|validates|redirects|caches)\b/i,
     /\b(points|uses|returns|reads|lists|documents|leads|has|includes|contains|imports|exports|calls|sets|defaults|handles|accepts|supports|logs|retries|throws|validates|caches)\b[^.;]{0,50}\bnow\b/i,
@@ -338,7 +405,8 @@ function targetOf(text, healthy) {
     const place = /\b(staging|production|prod|cluster|servers?|fly(\.io)?|heroku|vercel|netlify|render|railway|kubernetes|k8s|environment|replicas?|pods?)\b/i;
     // "The worker image is deployed to Fly staging": the place it runs, not the registry it went through.
     if (place.test(text) && /\b(deployed|redeployed|rolled out|rollout|released to|shipped to|promoted to|live|provisioned)\b/i.test(text)) return 'env';
-    if (/\b(npm|pypi|crates\.io|registry|docker ?hub|ghcr|ecr|gcr|rubygems|packagist|maven central|nuget|image|container|package|published)\b|@\d+\.\d+/i.test(text) && !/\b(docs|site|pages)\b/i.test(text)) return 'registry';
+    // A bare "Published." names no place: a post, a site or a package.
+    if (/\b(npm|pypi|crates\.io|registry|docker ?hub|ghcr|ecr|gcr|rubygems|packagist|maven central|nuget|image|container|package|app\s+store|testflight|play\s+store|google\s+play|play\s+console)\b|@\d+\.\d+/i.test(text) && !/\b(docs|site|pages)\b/i.test(text)) return 'registry';
     if (place.test(text) || /\b(live|deployed|redeployed|rolled out|rollout|released to|shipped|provisioned)\b/i.test(text)) return 'env';
     // A bare "Pushed" may be a git push or an image push.
     if (/\b(merged|tagged|origin|main|master|branch|remote|github|gitlab|gh-pages|tag)\b/i.test(text)) return 'repo';
@@ -380,7 +448,9 @@ function metricsIn(text) {
         const value = Number(String(raw).replace(/,/g, ''));
         if (!Number.isFinite(value)) continue;
         const unit = (m[2] ?? m[5] ?? '').toLowerCase();
-        out.push({ value, unit, text: `${raw}${unit && unit !== '%' && unit !== 'x' && unit !== '×' ? ' ' : ''}${unit}`.trim() });
+        // "310 ms → 120 ms": each side of an arrow is a reading the turn must have printed, not an amount worked out.
+        const arrow = m[4] !== undefined || /^\s*(?:→|->|=>|⟶)/.test(plainText.slice(m.index + m[0].length));
+        out.push({ value, unit, text: `${raw}${unit && unit !== '%' && unit !== 'x' && unit !== '×' ? ' ' : ''}${unit}`.trim(), ...(arrow ? { arrow: true } : {}) });
     }
     return out.slice(0, 6);
 }
@@ -436,6 +506,12 @@ function claimOf(clause) {
     return undefined;
 }
 
+/** "The rest of the suite is still green", "the whole suite passes": all the tests, not the ones just added. */
+export const WHOLE_SUITE = /\b(?:rest\s+of\s+the\s+(?:test\s+)?(?:suite|tests)|(?:whole|full|entire|complete)\s+(?:test\s+)?suite|(?:all\s+(?:the\s+)?)?(?:other|remaining|existing)\s+tests|everything\s+else|every\s+other\s+test)\b/i;
+
+/** A sentence led by a label that says what follows is not done: "Proposed fix (not started): …", "Next steps: …". */
+const PLAN_LEAD = /^(?:(?:proposed|suggested|possible|planned|recommended|alternative|follow-?up)\s+(?:fix(?:es)?|changes?|plan|approach|steps?|solution|options?|work|actions?)|next\s+steps?|plan|proposal|suggestion|recommendation|idea|todo|to-?do|follow-?ups?|left to do|remaining work|open questions?)\b[^:]{0,40}:\s|^[^:]{0,60}\((?:not\s+(?:yet\s+)?(?:started|done|applied|run|tested|implemented)|proposed|planned|todo|to do|untested)\)\s*:\s/i;
+
 /** The kind of claim a sentence makes, or undefined (the first clause that makes one). */
 export function kindOf(sentence) {
     if (typeof sentence !== 'string') return undefined;
@@ -460,6 +536,7 @@ export function claimsIn(text, { max = 8 } = {}) {
     for (const [at, sentence] of sentences.entries()) {
         const kinds = new Set();
         const whole = shown(sentence);
+        if (PLAN_LEAD.test(whole)) continue;
         const clauses = clausesOf(sentence);
         if (clauses.length > 1 && !clauses.some((c) => claimOf(c))) clauses.push(sentence);
         for (const clause of clauses) {
@@ -471,7 +548,8 @@ export function claimsIn(text, { max = 8 } = {}) {
             }
             // One claim of each kind; a deploy and a health check in one sentence are two.
             // "Lint is clean, and `cargo test` passes" names two kinds of run: two claims.
-            const key = found?.kind === 'deployed' ? `deployed:${found.target === 'health' ? 'health' : 'ship'}` : found?.kind === 'passed' ? `passed:${found.subject ?? 'any'}` : found?.kind;
+            // "The new tests pass, and the rest of the suite is still green" claims two runs.
+            const key = found?.kind === 'deployed' ? `deployed:${found.target === 'health' ? 'health' : 'ship'}` : found?.kind === 'passed' ? `passed:${found.subject ?? 'any'}${WHOLE_SUITE.test(shown(clause)) ? ':whole' : ''}` : found?.kind;
             if (!found || kinds.has(key)) continue;
             kinds.add(key);
             const commands = commandsIn(clause);

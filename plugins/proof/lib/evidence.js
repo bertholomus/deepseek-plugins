@@ -17,7 +17,7 @@
  *
  * @module dsh-plugin-proof/evidence
  */
-import { CHANGE_CLAIM } from './claims.js';
+import { CHANGE_CLAIM, WHOLE_SUITE } from './claims.js';
 
 // ── Which tool did what ────────────────────────────────────────────
 
@@ -30,11 +30,11 @@ const BOOKKEEPING_TOOL = /^(todo_write|todo_read|todowrite|create_goal|get_goal|
 const TEST_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(test|t|e2e|test:\S+|check|verify|ci)\b|\b(node|deno|bun)\s+(--test|test)\b|\bnpx\s+(jest|vitest|mocha|playwright|ava|tap|cypress)\b|\b(jest|vitest|mocha|pytest|py\.test|tox|nox|rspec|phpunit|ctest|ava|karma|cypress\s+run|playwright\s+test)\b|\bgo\s+test\b|\bcargo\s+(test|nextest)\b|\bmvnw?\s+(\S+\s+)*(test|verify)\b|\bgradlew?\s+(\S+\s+)*(\S*:)?(test\w*|check\w*|connected\w*Test)\b|\bxcodebuild\b[^|;&]*\btest\b|\b(flutter|dart)\s+test\b|\bsbt\s+(\S+\s+)*test\b|\b(nx|turbo|lerna)\s+(run\s+)?([\w:-]+\s+)*?(\S+:)?test\b|\bpnpm\s+(-r|--recursive)\s+test\b|\b(stack|cabal)\s+test\b|\bzig\s+build\s+test\b|\bgotestsum\b|\b(python3?|uv\s+run|poetry\s+run)\s+-m\s+(pytest|unittest)\b|\bmake\s+(-\S+\s+(\S+\s+)?)*(test|check|ci|e2e)\b|\bdotnet\s+test\b|\bswift\s+test\b|\bmix\s+test\b|\brake\s+(test|spec)\b|\bbundle\s+exec\s+(rspec|rake\s+(test|spec))\b|\bscripts\/e2e|\b\S*test\S*\.(sh|mjs|js|py)\b|\be2e\.(mjs|js|sh)\b|\bbazel\s+test\b|(^|[\s/])(ci|verify|check|checks|validate|precommit|pre-commit)([-_.]\S*)?\.(sh|mjs|js|py)\b|\bscripts\/(ci|verify|check|validate)\S*|\bpre-commit\s+run\b|\bdbt\s+(test|build)\b|\bbats\b|\bprove\b|\b(npm|pnpm|yarn|bun)(\s+(--filter|-F|-C|--prefix|--cwd|--dir|--workspace|-w|workspace)\s+\S+|\s+-{1,2}[\w-]+(=\S+)?)+\s+(run\s+)?(test|t|e2e|test:\S+)\b/i;
 const BUILD_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(build|build:\S+|compile|typecheck|type-check|tsc|bundle)\b|\btsc\b|\bcargo\s+(build|check)\b|\bgo\s+(build|vet)\b|\bmake(\s+(all|build|install|release))?\s*($|[;&|])|\bmvnw?\s+(\S+\s+)*(package|compile|install)\b|\bgradlew?\s+(\S+\s+)*(\S*:)?(build|assemble\w*|bundle\w*|jar|shadowJar|compile\w*)\b|\bdotnet\s+build\b|\bswift\s+build\b|\bwebpack\b|\bvite\s+build\b|\besbuild\b|\brollup\b|\bnext\s+build\b|\bnode\s+--check\b|\bpython3?\s+-m\s+(py_compile|compileall)\b|\bxcodebuild\b|\bcmake\s+--build\b|\bninja\b|\bdocker\s+(build|buildx\s+build|compose\s+build)\b|\bbazel\s+build\b|\bmix\s+compile\b|\bdbt\s+(run|seed|snapshot|compile)\b|\b(nx|turbo|lerna)\s+(run\s+)?(\S+:)?build\b|\bnx\s+run-many\b[^|;&]*--target[= ]build\b|\b(npm|pnpm|yarn|bun)(\s+(--filter|-F|-C|--prefix|--cwd|--dir|--workspace|-w|workspace)\s+\S+|\s+-{1,2}[\w-]+(=\S+)?)+\s+(run\s+)?(build|build:\S+|compile|typecheck|type-check)\b/i;
 const LINT_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(lint|lint:\S+|format:check|fmt:check|check:format)\b|\b(eslint|ruff|flake8|pylint|mypy|pyright|golangci-lint|shellcheck|stylelint|rubocop|swiftlint|biome\s+(check|lint)|oxlint|phpstan|psalm)\b|\bprettier\s+(--check|-c)\b|\bblack\s+--check\b|\bcargo\s+(clippy|fmt\s+--check)\b|\bgofmt\s+-l\b|\b(bash|sh|zsh|dash|ksh)\s+-n\b|\bphp\s+-l\b|\b(ruby|perl)\s+-c\b|\bterraform\s+(validate|fmt\s+-{1,2}check)\b|\bnginx\s+-t\b|\b(yamllint|hadolint|actionlint|markdownlint(-cli2)?|ktlint|detekt|credo|standardrb|tflint|staticcheck|revive)\b|\bsqlfluff\s+lint\b|\bbuf\s+lint\b|\b(dart|flutter)\s+analyze\b/i;
-const CI_CMD = /\bgh\s+(run\s+(view|list|watch)|pr\s+(checks|status|view)|workflow\s+view)\b|\bglab\s+ci\b|\bcircleci\b|\bbuildkite\b|\bcurl\b[^|;&]*\/(actions|checks|statuses|pipelines)\b/i;
+const CI_CMD = /\bgh\s+(run\s+(view|list|watch)|pr\s+(checks|status)|workflow\s+view)\b|\bgh\s+pr\s+view\b(?=[^|;&]*\b(?:statusCheckRollup|checks|mergeStateStatus)\b)|\bglab\s+ci\b|\bcircleci\b|\bbuildkite\b|\bcurl\b[^|;&]*\/(actions|checks|statuses|pipelines)\b/i;
 /** Where a command ships work: a repository, a package registry, or a running environment. */
 const PUSH_CMD = /\bgit\s+push\b|\bgh\s+pr\s+merge\b|\bgh-pages\b|\bgh\s+release\s+create\b/i;
 const DEPLOY_REMOTE = /\bgit\s+push\s+(-\S+\s+)*(heroku|dokku|deploy|production|prod|staging|live|fly|render|piku)\b|\bgh-pages\b/i;
-const PUBLISH_CMD = /\b(npm|pnpm|yarn)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b|\bgem\s+push\b|\bdocker\s+(push|buildx\s+build\b[^|;&]*--push)\b|\bgh\s+release\s+create\b|\bmvnw?\s+(\S+\s+)*deploy\b|\bgradlew?\s+(\S+\s+)*publish\w*\b|\bdotnet\s+nuget\s+push\b|\b(poetry|uv|flit|hatch)\s+publish\b|\bmix\s+hex\.publish\b|\bpod\s+trunk\s+push\b/i;
+const PUBLISH_CMD = /\b(npm|pnpm|yarn)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b|\bgem\s+push\b|\bdocker\s+(push|buildx\s+build\b[^|;&]*--push)\b|\bgh\s+release\s+create\b|\bmvnw?\s+(\S+\s+)*deploy\b|\bgradlew?\s+(\S+\s+)*publish\w*\b|\bdotnet\s+nuget\s+push\b|\b(poetry|uv|flit|hatch)\s+publish\b|\bmix\s+hex\.publish\b|\bpod\s+trunk\s+push\b|\bfastlane\s+(?:\S+\s+)*(?:pilot|upload_to_testflight|upload_to_app_store|upload_to_play_store|deliver|supply)\b|\baltool\b[^|;&]*--upload|\biTMSTransporter\b/i;
 const RELEASE_CMD = /\bkubectl\b[^|;&]*\b(apply|rollout|set\s+image|replace|scale|patch)\b|\bhelm\s+(upgrade|install|rollback)\b|\b(fly|flyctl)\s+(deploy|releases?)\b|\bvercel\b|\bnetlify\s+deploy\b|\bheroku\s+(releases|container:release|deploy)\b|\bterraform\s+apply\b|\bpulumi\s+up\b|\bwrangler\s+(deploy|publish)\b|\bfirebase\s+deploy\b|\bgcloud\s+(\S+\s+)*deploy\b|\baws\s+(s3\s+sync|deploy|ecs\s+update-service|lambda\s+update-function-code|cloudformation\s+deploy)\b|\bcap\s+\S+\s+deploy\b|\bansible-playbook\b|\bkamal\s+deploy\b|(^|[\s;&|/])deploy(\.sh)?(\s|$)|\b(npm|pnpm|yarn)\s+run\s+deploy\b|\bmake\s+deploy\b|\brsync\b[^|;&]*\s[\w.@-]+:\S*|\bscp\b[^|;&]*\s[\w.@-]+:\S*|\bdocker\s+compose\s+(\S+\s+)*up\b|\bsystemctl\s+(restart|reload)\b/i;
 /** Reads of what a registry holds. */
 const REGISTRY_READ_CMD = /\bnpm\s+(view|info|show)\b|\bpip3?\s+index\s+versions\b|\bcargo\s+search\b|\bgem\s+list\s+(-r|--remote)\b|\bdocker\s+(manifest\s+inspect|pull)\b|\bcrane\s+(digest|ls)\b|\bskopeo\s+inspect\b/i;
@@ -48,6 +48,8 @@ const TRAIN_CMD = /\b[\w-]*(train|finetune|fine_tune|fine-tune|sft|pretrain)[\w-
 const TRAIN_OUT = /\bepoch\s*[:=]?\s*\d+|\b(train(ing)?[_\s]loss|val(idation)?[_\s]loss)\b/i;
 const APPLY_CMD = /\b(terraform|tofu)\s+(\S+\s+)*apply\b|\bpulumi\s+up\b|\bkubectl\b[^|;&]*\b(apply|create|replace|patch|set\s+(image|env))\b|\bhelm\s+(upgrade|install)\b|\bansible-playbook\b|\bcdk\s+deploy\b|\baws\s+cloudformation\s+deploy\b|\bkustomize\b[^|;&]*\|\s*kubectl\s+apply\b|\bargocd\s+app\s+sync\b|\bnomad\s+(job\s+)?run\b/i;
 /** Commands that start a job or workflow somewhere else, which then runs on its own. */
+/** A command sent to the background (`nohup train.py … &`, `setsid`, `screen -dm`): it had not ended when its exit came back. */
+const BACKGROUND_CMD = /(?:^|[;&|(]\s*)(?:nohup|setsid)\s|(?<![&>|])&(?![&>])\s*(?:$|;|\)|echo\b|disown\b)|\bscreen\s+-\w*d\w*m|\btmux\s+new(?:-session)?\b[^;&|]*\s-d\b/;
 const JOB_CMD = /\bargo\s+submit\b|\bgh\s+workflow\s+run\b|\bgh\s+run\s+rerun\b|\bkubectl\s+create\s+job\b|\bsbatch\b|\bqsub\b|\bbsub\b|\bairflow\s+dags\s+trigger\b|\baws\s+batch\s+submit-job\b|\baws\s+glue\s+start-job-run\b|\baws\s+stepfunctions\s+start-execution\b|\bdatabricks\s+(jobs\s+run-now|runs\s+submit)\b|\bgcloud\s+(dataflow\s+jobs\s+run|dataproc\s+jobs\s+submit|batch\s+jobs\s+submit|run\s+jobs\s+execute)\b|\bprefect\s+deployment\s+run\b|\bdagster\s+job\s+launch\b|\bnomad\s+job\s+run\b/i;
 const HASH_CMD = /\b(sha\d+sum|shasum|md5sum|b2sum|cksum|gpg\s+--verify|cosign\s+verify|minisign\s+-V)\b/i;
 const CHANGE_CMD = /(^|[;&|(]\s*|\s)(sed\s+-i|perl\s+-p?i|mv|cp|rm|mkdir|touch|tee|chmod|ln|patch|truncate|install|git\s+(apply|commit|checkout|restore|reset|mv|rm|merge|rebase|cherry-pick|stash\s+pop|add|tag)|(npm|pnpm|yarn|bun)(\s+(-{1,2}[\w-]+(=\S+)?|--filter\s+\S+|-F\s+\S+|-C\s+\S+|--prefix\s+\S+|--cwd\s+\S+|workspace\s+\S+))*\s+(add|install|i|uninstall|remove|rm|update|up|ci|version)\b|pip3?\s+install|uv\s+(add|pip\s+install)|poetry\s+add|cargo\s+add|go\s+get|bundle\s+(install|update)|composer\s+(require|update|install)|apply_patch|python3?\s+-c\s+.*\b(open|write)\b|alembic\s+upgrade|rails\s+db:migrate(?!:status)|prisma\s+migrate|eslint\s+(\S+\s+)*--fix|prettier\s+(\S+\s+)*(--write|-w)|ruff\s+(check\s+(\S+\s+)*--fix|format)|black(?!\s+(\S+\s+)*--check)|gofmt\s+-w|go\s+fmt|cargo\s+fmt(?!\s+(\S+\s+)*--check)|rubocop\s+(\S+\s+)*(-a|-A|--autocorrect\S*)|(npm|pnpm|yarn)\s+(run\s+)?(format|fmt|lint:fix|fix)\b|npm\s+audit\s+fix|codemod|jscodeshift)\b|[^2&]>\s*[^&|\s>]|>>/i;
@@ -70,10 +72,16 @@ export function exitOf(text, { isError = false, shell = false } = {}) {
     if (/\[stopped: [^\]]*\]/.test(t)) return 'stopped';
     if (/\[sandbox: [^\]]*(denied|failed)[^\]]*\]/.test(t)) return 'denied';
     if (isError) return 'error';
-    const said = /\b(?:exit(?:ed)?(?:\s+with)?(?:\s+(?:code|status))?|exit_code|exitcode|exit status|return code|returncode|rc)\s*[:=]?\s*(-?\d{1,3})\b/i.exec(t);
-    if (said) return Number(said[1]);
+    // A test's name ("ok 6 exit 64 on unknown flag", "✓ exits 2 on bad input") says what it checks, not how the run ended.
+    const said = EXIT_SAID.exec(t.replace(TEST_LINE, ''));
+    if (said) return Number(said[1] ?? said[2] ?? said[3]);
     return shell ? 0 : null;
 }
+
+/** A line of a test runner's results: TAP's "ok 6 …", "✓ …", "test x ... ok". */
+const TEST_LINE = /^\s*(?:(?:not\s+)?ok\s+\d+\b|[✓✔✗✘√]\s|test\s+\S+\s+\.\.\.\s).*$/gm;
+/** "exited with code 2", "Exit status: 1", "rc=0", "exit=0"; a bare "exit 1" only at a line's end. */
+const EXIT_SAID = /\b(?:exit(?:ed)?\s+with(?:\s+(?:code|status))?|exited(?:\s+(?:code|status))?|exit\s+(?:code|status)|exit_code|exitcode|return\s+code|returncode|rc)\s*[:=]?\s*(-?\d{1,3})\b|\bexit\s*[:=]\s*(-?\d{1,3})\b|\bexit\s+(-?\d{1,3})\s*$/im;
 
 const num = (v) => (v === undefined ? undefined : Number(String(v).replace(/,/g, '')));
 
@@ -226,14 +234,18 @@ export function numsIn(text) {
 const LOWER_IS_BETTER = /^(p\d+(\.\d)?|mean|median|avg|average|latency|duration|time|took|size|bundle|memory|rss|heap|cpu|errors?|ns\/op|b\/op|allocs\/op)$/;
 /** Readings that are times in ms. */
 const IN_MS = /^(p\d+(\.\d)?|mean|median|avg|average|latency|duration|time|took)$/;
-const SERIES = /\b(p\d{2}(?:\.\d)?|mean|median|avg|average|latency|duration|throughput)\b\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(ms|µs|us|s|sec|req\/s|rps|qps|ops\/s|tok\/s)?|(\d+(?:\.\d+)?)\s*(req\/s|rps|qps|ops\/s|tok\/s)\b/gi;
+const SERIES = /\b(p\d{2}(?:\.\d)?|p\(\d{2}(?:\.\d)?\)|mean|median|med|avg|average|latency|duration|throughput)(?![\w(])\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(ms|µs|us|s|sec|req\/s|rps|qps|ops\/s|tok\/s)?|(\d+(?:\.\d+)?)\s*(req\/s|rps|qps|ops\/s|tok\/s)\b/gi;
 
 /** Benchmark readings in output order: `[{ l: 'p50', v: 310 }]`, times in ms. */
 export function seriesIn(text) {
     if (typeof text !== 'string' || text === '') return [];
     const out = [];
     for (const m of text.matchAll(SERIES)) {
-        let label = (m[1] ?? m[5] ?? '').toLowerCase();
+        // k6 writes "med=312.06ms p(95)=588.91ms"; "Req/Sec: avg 31.8" is a rate, not a time.
+        let label = (m[1] ?? m[5] ?? '').toLowerCase().replace(/[()]/g, '');
+        if (label === 'med') label = 'median';
+        const line = text.slice(text.lastIndexOf('\n', m.index) + 1, m.index);
+        if (m[1] && !m[3] && /\b(?:req(?:uests)?\s*\/\s*s(?:ec)?|rps|qps|ops\s*\/\s*s(?:ec)?|throughput)\b/i.test(line)) label = 'rps';
         let value = num(m[2] ?? m[4]);
         const unit = (m[3] ?? m[5] ?? '').toLowerCase();
         if (!Number.isFinite(value)) continue;
@@ -671,7 +683,7 @@ export function itemOf({ name, args, text, isError = false }) {
             ...(http !== undefined ? { status: http } : {}),
             ...(health !== undefined ? { health } : {}),
             ...(kind === 'ci' && /\b(deploy|publish|upload|release|rollout|ship)/i.test(out) ? { deploys: true } : {}),
-            ...(JOB_CMD.test(command) ? { job: true } : {}),
+            ...(JOB_CMD.test(command) || BACKGROUND_CMD.test(command) ? { job: true } : {}),
             ...(changes && (ROUTE_FILE.test(command) || ROUTE_CODE.test(command)) ? { route: true } : {}),
             ...(registry ? { registry: true } : {}),
             ...(fetched ? { fetched: true } : {}),
@@ -738,8 +750,15 @@ const TARGET_WORDS = {
     any: { none: 'No deploy, push or publish ran in this turn.', last: 'deploy, push or publish' },
 };
 
-/** The number of tests a claim names ("all 42 tests", "12/12 pass"), or undefined. */
-function namedCount(text) {
+/**
+ * The number of tests a claim names ("all 42 tests", "12/12 pass"), or undefined. From the
+ * sentence's other clauses (`inWords`), only "N tests": a bare "1/3" there may count shards or steps.
+ */
+function namedCount(text, { inWords = false } = {}) {
+    if (inWords) {
+        const w = /\b(?:all\s+)?(\d+)\s+(?:of\s+(?:its|the)\s+)?(?:unit\s+|e2e\s+|integration\s+)?(?:tests?|specs?|examples?)\b/i.exec(text);
+        return w ? { passed: num(w[1]), total: num(w[1]) } : undefined;
+    }
     const m = /\b(\d+)\s*\/\s*(\d+)\b|\b(?:all\s+)?(\d+)\s+(?:of\s+(?:its|the)\s+)?(?:unit\s+|e2e\s+|integration\s+)?(?:tests?|specs?|examples?)\b/i.exec(text);
     if (!m) return undefined;
     return { passed: num(m[1] ?? m[3]), total: num(m[2] ?? m[3]) };
@@ -830,10 +849,15 @@ function derivable(items, metric) {
 /** A label as a whole word of a sentence: `p50`, `req/s`. */
 const labelIn = (label, text) => new RegExp(`(^|[^\\w/])${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w/])`, 'i').test(text);
 
+/** "2.6x faster", "a 3x speedup": a factor claimed as the result. */
+const FACTOR = /\b(\d+(?:\.\d+)?)\s*(?:x|×)(?!\w)(?=[^.;]{0,40}?\b(?:faster|quicker|lower|smaller|less|fewer|speed-?up|throughput|higher|more)\b)|\b(?:faster|quicker|speed-?up)\b[^.;]{0,20}?\b(\d+(?:\.\d+)?)\s*(?:x|×)(?!\w)/i;
+
 /**
- * "p50 is down ~60%" when the turn ran the same benchmark before and after:
- * the change its own runs show for the one figure the claim names, when far
- * from the change claimed (more than 5 points and a quarter of the claim).
+ * "p50 is down ~60%", "about 2.6x faster at the median" when the turn ran the
+ * same benchmark before and after: the change its own runs show for the one
+ * figure the claim names, when far from the change claimed (a percentage more
+ * than 5 points and a quarter of the claim off; a factor more than 0.3 and a
+ * quarter of the claim off).
  */
 function farOff(claim, list) {
     const runs = list.filter((i) => (i.series ?? []).length);
@@ -843,8 +867,8 @@ function farOff(claim, list) {
     if (!ranCommand(first, last.cmd ?? '')) return undefined;
     const text = claim.text ?? claim.part ?? '';
     const m = /\b(?:down|lower|faster|less|fewer|cut|dropped|fell|reduced|shrank|shrunk)\b[^.;%]{0,30}?(\d+(?:\.\d+)?)\s*%|(\d+(?:\.\d+)?)\s*%\s+(?:lower|faster|less|fewer|smaller|drop|cut|reduction|decrease|improvement)\b/i.exec(text);
-    if (!m) return undefined;
-    const claimed = Number(m[1] ?? m[2]);
+    const f = m ? undefined : FACTOR.exec(text);
+    if (!m && !f) return undefined;
     const firstOf = (item) => {
         const seen = new Map();
         for (const r of item.series) if (!seen.has(r.l)) seen.set(r.l, r.v);
@@ -852,16 +876,25 @@ function farOff(claim, list) {
     };
     const before = firstOf(first);
     const after = firstOf(last);
-    const labels = [...before.keys()].filter((l) => after.has(l) && labelIn(l, text));
+    // "at the median" names k6's med and a p50.
+    const named = (l) => labelIn(l, text) || ((l === 'median' || l === 'p50') && /\b(?:median|p50)\b/i.test(text));
+    const labels = [...before.keys()].filter((l) => after.has(l) && named(l));
     if (labels.length !== 1) return undefined;
     const [label] = labels;
     const from = before.get(label);
     const to = after.get(label);
-    if (!(from > 0)) return undefined;
-    const actual = ((from - to) / from) * 100;
-    if (Math.abs(actual - claimed) <= Math.max(5, claimed / 4)) return undefined;
-    const moved = actual >= 0 ? `${Math.round(actual)}% lower` : `${Math.round(-actual)}% higher`;
-    return { verdict: 'contradicted', evidence: [said(first), said(last)], why: `It says ${label} is down ${m[1] ?? m[2]}%; the turn's own runs show ${label} ${from} before and ${to} after (${moved}).` };
+    if (!(from > 0) || !(to > 0)) return undefined;
+    if (m) {
+        const claimed = Number(m[1] ?? m[2]);
+        const actual = ((from - to) / from) * 100;
+        if (Math.abs(actual - claimed) <= Math.max(5, claimed / 4)) return undefined;
+        const moved = actual >= 0 ? `${Math.round(actual)}% lower` : `${Math.round(-actual)}% higher`;
+        return { verdict: 'contradicted', evidence: [said(first), said(last)], why: `It says ${label} is down ${m[1] ?? m[2]}%; the turn's own runs show ${label} ${from} before and ${to} after (${moved}).` };
+    }
+    const claimed = Number(f[1] ?? f[2]);
+    const actual = LOWER_IS_BETTER.test(label) ? from / to : to / from;
+    if (Math.abs(actual - claimed) <= Math.max(0.3, claimed / 4)) return undefined;
+    return { verdict: 'contradicted', evidence: [said(first), said(last)], why: `It says ${label} is ${f[1] ?? f[2]}x better; the turn's own runs show ${label} ${from} before and ${to} after (${Math.round(actual * 100) / 100}x).` };
 }
 
 /** The benchmark readings that moved the wrong way for an "it got faster" claim, as words; undefined when none did. */
@@ -933,7 +966,7 @@ function namedChecks(claim, list) {
         if (verdict && verdict.perf.ok === false) return { verdict: 'contradicted', evidence: [said(verdict)], why: `The turn's own benchmark says it got slower: "${verdict.perf.said}".` };
     }
     const required = (claim.metrics ?? []).filter((m) => !derived(m, claim));
-    const missing = required.filter((m) => !printed(list, m) && !(claim.improved && derivable(list, m)));
+    const missing = required.filter((m) => !printed(list, m) && !(claim.improved && !m.arrow && derivable(list, m)));
     if (missing.length) {
         return { verdict: 'unbacked', evidence: [], why: `It quotes ${listed(missing.slice(0, 3).map((m) => m.text))}, which no output in this turn shows.` };
     }
@@ -984,6 +1017,8 @@ const suitesRun = (cmd) => SUITES.filter((k) => k.ran.test(cmd ?? '')).map((k) =
 /** Rule for `passed` and one subject: its runs, the last one passed, after the last change to code. */
 /** The kind of run a command is, by subject; a compound command (`shellcheck x && bats tests/`) can be several. */
 const SUBJECT_CMD = { tests: TEST_CMD, build: BUILD_CMD, lint: LINT_CMD };
+/** A run said to have gone well, in the past tense: "ran cleanly", "went through". */
+const RAN_PAST = /\b(?:ran|succeeded|went\s+through|completed|finished|worked)\b/i;
 /** "30 back-to-back runs", "ran it 50 times", "x20": a count of runs, not of tests. */
 const REPEATS = /\b(\d+)\s+(?:back-to-back\s+|consecutive\s+|repeated\s+|sequential\s+|straight\s+|more\s+|clean\s+|green\s+)?(?:runs?|times|iterations?|repetitions?|attempts?|loops?|rounds?|trials?|reruns?)\b|\b(?:x|×)\s*(\d+)\b|\b(\d+)\s*(?:x|×)(?!\w)/i;
 
@@ -1022,13 +1057,22 @@ function passedFor(subject, claim, list) {
         return { verdict: 'contradicted', evidence: [said(last)], why: `It says there are no warnings, and the last ${what} in this turn printed ${last.warnings === 1 ? 'one' : last.warnings}: ${last.text}.` };
     }
     // Code changed after the last run: the run does not cover it (a CI read or a checksum is about something else).
+    // "`bin/rails db:migrate` ran cleanly" is about that run of the command it names, which is not a check of the code.
     const lastCode = lastIndex(list, (i) => i.code && i.ok !== false);
-    if (subject !== 'ci' && subject !== 'hash' && last.kind !== 'ci' && lastCode > list.lastIndexOf(last)) {
+    const pastRun = byCommand.length > 0 && RAN_PAST.test(words) && !byCommand.some((i) => i.kind === 'test' || i.kind === 'build' || i.kind === 'lint' || i.tests);
+    if (subject !== 'ci' && subject !== 'hash' && last.kind !== 'ci' && !pastRun && lastCode > list.lastIndexOf(last)) {
         return { verdict: 'unbacked', evidence: [said(last), said(list[lastCode])], why: `The last ${what} came before the last change (${list[lastCode].text}); nothing ran after it.` };
     }
     if (subject === 'hash') {
         const clash = hashClash(list);
         if (clash) return clash;
+    }
+    // "The rest of the suite is still green" when every test run in this turn was limited (`-k week`): the rest did not run.
+    if ((subject === 'tests' || subject === 'any') && WHOLE_SUITE.test(words)) {
+        const runs = relevant.filter((i) => i.tests);
+        if (runs.length && runs.every((i) => i.tests.filtered)) {
+            return { verdict: 'unbacked', evidence: [said(runs.at(-1))], why: `It speaks of the whole suite, and the test runs in this turn ran only part of it: ${runs.at(-1).text}.` };
+        }
     }
     // "The integration suite is green" after a run of the doc tests only.
     const named = subject === 'tests' || subject === 'any' ? SUITES.filter((k) => k.said.test(claim.text ?? words)).map((k) => k.name) : [];
@@ -1041,7 +1085,7 @@ function passedFor(subject, claim, list) {
     }
     // "The suite is fully green — all 42 tests pass": the count may sit in the sentence's other clause.
     const sentence = claim.text ?? words;
-    const count = subject === 'tests' || subject === 'any' ? namedCount(words) ?? namedCount(sentence) : undefined;
+    const count = subject === 'tests' || subject === 'any' ? namedCount(words) ?? namedCount(sentence, { inWords: true }) : undefined;
     const repeats = REPEATS.exec(sentence);
     const counted = relevant.filter((i) => i.tests);
     if (count && counted.length && !(repeats && Number(repeats[1] ?? repeats[2] ?? repeats[3]) === count.total)) {
@@ -1085,7 +1129,7 @@ function judgeSearch(claim, list) {
     const term = String(claim.term ?? '').toLowerCase();
     const sentence = String(claim.text ?? '').toLowerCase();
     const same = (i) => {
-        const t = i.search.term.toLowerCase().replace(/^["']|["']$/g, '');
+        const t = i.search.term.toLowerCase().replace(/^["']|["']$/g, '').replace(/\\(?=[^\w\s])/g, '');
         return term === '' || t.includes(term) || term.includes(t) || (t.length >= 3 && sentence.includes(t));
     };
     const searches = list.filter((i) => i.search && same(i));
@@ -1201,11 +1245,14 @@ function judgeDeployed(claim, list) {
     return { verdict: 'backed', evidence: deploys.slice(-3).map(said), why: '' };
 }
 
+const BAR_METRIC = String.raw`(acc(?:uracy)?|f1|auc|precision|recall|bleu|rouge|map|ndcg|mrr|loss|perplexity|wer|cer|mae|rmse|score)`;
+const BAR_SPLIT = String.raw`(?:(val(?:idation)?|test|dev|eval)[\s_-]+)?`;
+
 /** The bar a comparison is against, from a sentence: "the current model's 0.88 val accuracy", "an F1 of 0.9". */
 function barIn(text) {
     const t = String(text ?? '');
-    const metric = String.raw`(acc(?:uracy)?|f1|auc|precision|recall|bleu|rouge|map|ndcg|mrr|loss|perplexity|wer|cer|mae|rmse|score)`;
-    const split = String.raw`(?:(val(?:idation)?|test|dev|eval)[\s_-]+)?`;
+    const metric = BAR_METRIC;
+    const split = BAR_SPLIT;
     const m = new RegExp(String.raw`(?<![\w.])(\d*\.\d+|\d+)\s*(%)?\s+${split}${metric}\b`, 'i').exec(t)
         ?? new RegExp(String.raw`\b${split}${metric}\s*(?:of|at|=|:|is|was)?\s*(\d*\.\d+|\d+)(%)?`, 'i').exec(t);
     if (!m) return undefined;
@@ -1218,11 +1265,26 @@ function barIn(text) {
     return { v: pct || value > 1 ? value / 100 : value, m: name, s, text: m[0].trim() };
 }
 
+/**
+ * A bar given as a bare figure ("clears the 0.91 bar", "has to beat 0.91"), its measure
+ * named elsewhere in `context` (the person's message: "tell me the validation accuracy").
+ */
+function bareBar(text, context) {
+    const b = /\b(?:beats?|clears?|cleared|above|over|exceeds?|past|at\s+least)\s+(?:the\s+)?(\d*\.\d+|\d+)(%)?(?![\w.])|\bthe\s+(\d*\.\d+|\d+)(%)?\s+(?:bar|threshold|target|mark|cut-?off)\b/i.exec(String(text ?? ''));
+    if (!b) return undefined;
+    const named = new RegExp(String.raw`\b${BAR_SPLIT}${BAR_METRIC}\b`, 'i').exec(String(context ?? ''));
+    if (!named) return undefined;
+    const value = Number(b[1] ?? b[3]);
+    const pct = b[2] ?? b[4];
+    const s = /^(val|dev)/i.test(named[1] ?? '') ? 'val' : /^(test|eval)/i.test(named[1] ?? '') ? 'test' : '';
+    return { v: pct || value > 1 ? value / 100 : value, m: named[2].toLowerCase().replace(/^accuracy$/, 'acc'), s, text: `${b[1] ?? b[3]}${pct ?? ''} ${named[0].trim()}` };
+}
+
 /** Rule for `fixed`: a change, then a run of the right kind that passed. */
 function judgeFixed(claim, list, prompt = '') {
     // "It beats the current model's 0.88": the best reading this turn printed for that measure, against the bar.
     if (claim.beats) {
-        const bar = barIn(claim.text) ?? barIn(prompt);
+        const bar = barIn(claim.text) ?? barIn(prompt) ?? bareBar(claim.text, `${prompt}\n${claim.text}`);
         const scale = (v) => (bar && !LOWER_QUALITY.test(bar.m) && v > 1 ? v / 100 : v);
         const seen = bar ? list.flatMap((i) => (i.readings ?? []).filter((r) => r.m === bar.m && r.s !== 'train' && (!bar.s || !r.s || r.s === bar.s)).map((r) => ({ r, i, v: scale(r.v) }))) : [];
         if (seen.length) {
@@ -1242,7 +1304,10 @@ function judgeFixed(claim, list, prompt = '') {
         if (shown.length) return { verdict: 'backed', evidence: shown.slice(-3).map(said), why: '' };
         return { verdict: 'unbacked', evidence: [], why: 'Nothing in this turn measured it: no benchmark or timing ran.' };
     }
-    const lastChange = lastIndex(list, (i) => i.change || i.kind === 'change');
+    // A doc edit after the last run ("a line under Unreleased in CHANGELOG.md") changes nothing the run showed.
+    const changed = (i) => i.change || i.kind === 'change';
+    const code = lastIndex(list, (i) => changed(i) && !(i.kind === 'change' && !i.code));
+    const lastChange = code >= 0 ? code : lastIndex(list, changed);
     const after = list.slice(lastChange + 1).filter((i) => RUNS.has(i.kind));
     // A command that changed files and ran something in one go counts as a run after the change.
     const same = lastChange >= 0 && RUNS.has(list[lastChange].kind) ? [list[lastChange]] : [];
