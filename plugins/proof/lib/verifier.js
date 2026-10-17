@@ -203,8 +203,10 @@ export class Verifier {
      * @param {{ warn: Function, info?: Function }} [options.logger]
      * @param {() => void} [options.changed] - the page's data moved.
      * @param {() => number} [options.now]
+     * @param {(logger: object, label: string, ms: number, fn: Function) => unknown} [options.after] - a timer (tests move time by hand).
+     * @param {(timer: unknown) => void} [options.clear] - stops one.
      */
-    constructor({ config, working, dsh, store, journal, logger, changed, now = Date.now }) {
+    constructor({ config, working, dsh, store, journal, logger, changed, now = Date.now, after = later, clear = clearTimeout }) {
         this.config = config;
         this.working = working;
         this.dsh = dsh;
@@ -213,6 +215,8 @@ export class Verifier {
         this.logger = logger;
         this.changed = changed ?? (() => {});
         this.now = now;
+        this.after = after;
+        this.clear = clear;
         /** check key → its timeout timer. */
         this.timers = new Map();
         /** check session id → the reply so far. */
@@ -242,7 +246,10 @@ export class Verifier {
 
     /** The check one of Proof's check threads runs; undefined for any other session. */
     checkOf(checkSessionId) {
-        return this.isCheckSession(checkSessionId) ? this.data.checks[this.data.sessions[checkSessionId]] : undefined;
+        if (!this.isCheckSession(checkSessionId)) return undefined;
+        const check = this.data.checks[this.data.sessions[checkSessionId]];
+        // "Check again" runs in a new thread: an older thread's check is gone.
+        return check?.checkSessionId === checkSessionId ? check : undefined;
     }
 
     /** The latest checks, newest first. */
@@ -358,7 +365,7 @@ export class Verifier {
     pump() {
         if (this.stopped) return;
         if (this.pumpTimer) {
-            clearTimeout(this.pumpTimer);
+            this.clear(this.pumpTimer);
             this.pumpTimer = undefined;
         }
         const all = Object.values(this.data.checks);
@@ -371,7 +378,7 @@ export class Verifier {
         if (all.filter((c) => c.state === 'running').length >= AT_ONCE) return;
         const { nextAt } = this.budget();
         if (nextAt) {
-            this.pumpTimer = later(this.logger, 'proof: next check', nextAt - this.now() + 1000, () => this.pump());
+            this.pumpTimer = this.after(this.logger, 'proof: next check', nextAt - this.now() + 1000, () => this.pump());
             return;
         }
         void this.run(waiting[0]);
@@ -447,8 +454,8 @@ export class Verifier {
 
     /** Stop waiting after `ms`: the check thread is stopped and its answer is unclear. */
     arm(check, ms) {
-        clearTimeout(this.timers.get(check.key));
-        this.timers.set(check.key, later(this.logger, 'proof: check timeout', ms, () => {
+        this.clear(this.timers.get(check.key));
+        this.timers.set(check.key, this.after(this.logger, 'proof: check timeout', ms, () => {
             this.timers.delete(check.key);
             const live = this.data.checks[check.key];
             if (live?.state !== 'running') return;
@@ -485,7 +492,7 @@ export class Verifier {
 
     /** A check is over: keep its outcome, log it, and start the next. */
     finish(check, state, reason, reply) {
-        clearTimeout(this.timers.get(check.key));
+        this.clear(this.timers.get(check.key));
         this.timers.delete(check.key);
         if (check.checkSessionId) this.replies.delete(check.checkSessionId);
         check.state = state;
@@ -541,12 +548,15 @@ export class Verifier {
         if (all.length <= KEEP) return;
         const done = all.filter((c) => !ACTIVE.has(c.state)).sort((a, b) => (a.endedAt ?? a.queuedAt) - (b.endedAt ?? b.queuedAt));
         for (const c of done.slice(0, all.length - KEEP)) delete this.data.checks[c.key];
+        // Threads whose check is gone: their logs say they are check threads (the projection), so nothing judges them.
+        const kept = new Set(Object.keys(this.data.checks));
+        for (const [id, key] of Object.entries(this.data.sessions)) if (!kept.has(key)) delete this.data.sessions[id];
     }
 
     stop() {
         this.stopped = true;
-        clearTimeout(this.pumpTimer);
-        for (const timer of this.timers.values()) clearTimeout(timer);
+        this.clear(this.pumpTimer);
+        for (const timer of this.timers.values()) this.clear(timer);
         this.timers.clear();
     }
 }

@@ -59,7 +59,7 @@ export async function sessionState({ config, check, verifier, dsh }, sessionId) 
         on,
         flags: on && config.flags !== false,
         verifier: on ? verifier.mode : 'off',
-        isCheck: Boolean(of),
+        isCheck: verifier.isCheckSession(sessionId),
         ...(checkOf ? { checkOf } : {}),
         checks: verifier.checksFor(sessionId).slice(0, 60),
     };
