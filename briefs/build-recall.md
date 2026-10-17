@@ -1,8 +1,9 @@
 # Recall: builder's notes
 
-Updated: 2026-10-17 2:24 PM PDT (Recall builder, a subagent of account B's suite run)
+Updated: 2026-10-17 3:06 PM PDT (Recall builder, a subagent of account B's suite run)
 Branch: `suite/v1` (worktree `~/Projects/dsh-plugin-suite`)
-Status: host (34 tests), browser half (10 tests) and bench (2 tests) done; real-DSH test and README next.
+Status: done. Host (34 tests), browser half (11), bench (2), real-DSH test 84 checks on each of DSH 0.2.0-rc.2,
+0.2.1-rc.1 and the app's 0.2.1-rc.2, README with the measured speed. Waiting on its judge.
 
 ## What Recall is (brief, section 6)
 Search everything we already did. A full-text index over DSH session files (`.jsonl.zstd`), optional coding-agent
@@ -35,13 +36,27 @@ a query on 10k sessions, measured). Results link back to the exact turn. Filters
   says; 22 ms). 10k sessions (120,519 turns, Apple M4 under load average ~6.8, Node 22.20): 260 searches median
   33.7 ms, p95 96.3 ms, slowest 201 ms; first index 19.9 s, 285 MB, DSH's thread held up at most 12.6 ms.
 
+- Real-DSH test (commit 57679f8 "recall: real-DSH test on three builds …") and README (the commit after it): `plugins/recall/test/e2e/run.mjs` and
+  `fake-model.mjs` (a scripted model that plays the agent; synthetic transcripts and notes written by the test), run
+  with `node scripts/e2e.mjs recall`: 84 passed, 0 failed on each of 0.2.0-rc.2, 0.2.1-rc.1 and app-0.2.1-rc.2
+  (about 80 s a build), live DSH pid 18756 / patch 63e0c347… before and after every run. Pictures (light and dark,
+  wide and narrow) in `.e2e/shots/recall/<build>/`. The test found seven bugs, all fixed with unit tests (see the
+  picks and gotchas below): this DSH's sessions folder called "not there" before its first session; the tool's
+  output refused by DSH (not lossless JSON); the tool's card listing no results (its results had no `file`); a
+  transcript's last turn "still running" for ever; a jump right after opening a session not landing (DSH's
+  `loadThrough` does nothing until the session's first page is in); the found line touching the text; a phrase
+  search's quotes doubled in the mark. `plugins/recall/README.md`: what it reads, searching, the page, the jump, the
+  tool, the measured speed, settings, files, setup, switching off, rollback, limits, tests.
+
 ## Next steps (in order)
 1. (done) Host modules with unit tests.
 2. (done) Browser half with `test/recall-client.test.js`.
 3. (done) `scripts/recall-bench.mjs` (10k synthetic sessions, median and p95), numbers into the README; a small bench test.
-4. Real-DSH test `plugins/recall/test/e2e/run.mjs` + `fake-model.mjs`; `node scripts/e2e.mjs recall` on all three
-   builds with the live fingerprint checked; pictures in `.e2e/shots/recall/<build>/`.
-5. README; commit and push after each green step.
+4. (done) Real-DSH test on all three builds.
+5. (done) README.
+6. Its judge: run `node --test test/recall*.test.js` and `node scripts/e2e.mjs recall` (check
+   `~/.local/bin/dsh-test fingerprint` before and after), read the README and the pictures. To measure the speed again:
+   `node scripts/recall-bench.mjs --sessions 10000 --rounds 20` (about 40 s).
 
 ## Picks and why
 - **One worker thread owns the index.** SQLite (node:sqlite, built into Node 22.13+ and the app's Node 24) with FTS5,
@@ -74,7 +89,8 @@ a query on 10k sessions, measured). Results link back to the exact turn. Filters
 - **Filters:** kind (DSH sessions, transcripts, notes), folder (the session's folder or a note's folder, subfolders
   included), model, date (today, past week, month, year), sort (best match, newest).
 - **Tool:** `recall_search` (query, kind, folder, model, since, until, limit up to 20, or `open` with a result id to
-  read that turn in full, bounded to 6,000 characters). Text from past sessions is marked as information, not
+  read that turn in full: 2,000 characters of the request, 3,500 of the reply, 1,200 of the tools; a search answers
+  in at most 9,000 characters). Text from past sessions is marked as information, not
   instructions. A live setting can take the tool away from agents.
 - **Settings:** `enabled` (profile only), `sessions` (this DSH's sessions, on), `sessionFolders` (other DSH homes'
   `sessions` folders), `transcriptFolders`, `handoffFolders` (all live, commas between folders in the form),
@@ -90,7 +106,8 @@ a query on 10k sessions, measured). Results link back to the exact turn. Filters
   30 s), the kind as a segmented choice only when more than one kind is searched, and the order (best match or
   newest) only when words are typed (with no words, newest is the only order that means anything).
 - **Opening at the turn.** A session of this DSH opens in DSH (`uiWorkspace.openSession`), then DSH's own
-  `loadThrough(seq)` pages its history back to the turn (raced against 15 s), then the mark lands it: the mark is in
+  `loadThrough(seq)` pages its history back to the turn (once its first page is in, all raced against 20 s: see
+  `pageBackTo` below), then the mark lands it: the mark is in
   `conversation.chat.turnTail` (order 50, after DSH's own tails), so it is drawn only when DSH draws that turn; its
   effect finds the chat's scroller, brings the turn's first row to 24 px under the top, and puts
   `data-recall-found` on the turn's rows (a 2 px line in DSH's primary colour). DSH lands a chat it opens at its end
@@ -112,6 +129,22 @@ a query on 10k sessions, measured). Results link back to the exact turn. Filters
   next open checks in full first (2 s, in the index thread; searches wait). WAL with synchronous NORMAL does not
   corrupt on a crash, so the check guards against disk damage, which is rare.
 
+## Picks from the real-DSH test
+- **This DSH's own sessions folder not there yet is "up to date", not "not there".** DSH makes it with its first
+  session; a fresh home is not an unplugged disk. Other folders that are missing still say so.
+- **The tool's output is made plain JSON** (`jsonValue` in lib/tool.js): DSH keeps a tool's output only as lossless
+  JSON and refuses `undefined` fields (a transcript result has no session id). The card's results carry `file` and
+  `turn`, the two parts of the id its Open opens; a host test checks both against a real index.
+- **A transcript's last turn is "still running" only while the file was written to in the last 10 minutes**
+  (`TRANSCRIPT_QUIET_MS`): a transcript has no end-of-turn mark, so without this its last turn ran for ever.
+- **The jump waits for the session's first page** (`pageBackTo` in lib/client.js): it watches the session's
+  `getSnapshot().openState` until it is `open` with no older page loading (15 s at most), then calls `loadThrough(seq)`;
+  the whole wait is raced against 20 s. Without it, a jump right after opening a cold session did nothing.
+- **The found line sits 14 px left of the turn's rows** (`::before` on rows in normal flow) so it never touches the
+  text; rows DSH positions itself (its step group seat) get an inset line instead.
+- **The mark shows a phrase search without its quotes** ("for “decide about the exporter”", not doubled quotes).
+- **The e2e clears its own `failed-*.png` pictures at the start**, so a picture of a failure is always from this run.
+
 ## Gotchas
 - FTS5 joined to another table: when a filter has an index, SQLite may lead with it and evaluate `MATCH` once per row
   (seconds). `CROSS JOIN` with `fts` first keeps the match as the outer loop. The bench's "sessions of the past month"
@@ -130,3 +163,16 @@ a query on 10k sessions, measured). Results link back to the exact turn. Filters
   searches or opens a session needs a fake connection and `views.sessions`, else a 10 s or 5 s wait keeps the run alive.
 - DSH's `system/message` and `request/header` lines are large: the parser reads each line's type from its first
   bytes and parses only the types it uses.
+- DSH keeps a tool's output only as lossless JSON (`walkJsonValue`): `undefined`, `-0` and non-finite numbers make
+  DSH answer the agent with "invalid output". Unit tests that read `execute()`'s return directly do not see it.
+- A session's `loadThrough(seq)` returns at once unless the session is `open` and not loading an older page: right
+  after `openSession` it is still `cold` or `loading`.
+- DSH folds a finished turn's steps under its "Completed in 1s" button (`button[data-turn-process]`), and a run of
+  tool calls under a group row (`[data-step-process] button[aria-expanded]`): a test that looks for a tool's card
+  must unfold both. Both are there in 0.2.0-rc.2, 0.2.1-rc.1 and the app's 0.2.1-rc.2.
+- DSH's settings form fills in the saved values a moment after it shows: a test that types too early has its value
+  reset and Save stays disabled. Wait for the field to show the saved value first.
+- A restart compare needs a settled index (two reads 2 s apart with the same counts, not busy), or the "before"
+  is from the middle of a read.
+- DSH writes `data-plugin` on its own style sheets too: count Recall's sheet by `data-plugin-css`.
+- Words in the synthetic notes must not repeat the words a test searches for elsewhere ("canary" was in both).
