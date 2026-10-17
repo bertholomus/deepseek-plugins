@@ -1,8 +1,8 @@
 # Recall: builder's notes
 
-Updated: 2026-10-17 1:35 PM PDT (Recall builder, a subagent of account B's suite run)
+Updated: 2026-10-17 2:14 PM PDT (Recall builder, a subagent of account B's suite run)
 Branch: `suite/v1` (worktree `~/Projects/dsh-plugin-suite`)
-Status: host half done and tested (33 tests); browser half next.
+Status: host half (33 tests) and browser half (10 tests) done; bench, real-DSH test and README next.
 
 ## What Recall is (brief, section 6)
 Search everything we already did. A full-text index over DSH session files (`.jsonl.zstd`), optional coding-agent
@@ -21,10 +21,15 @@ a query on 10k sessions, measured). Results link back to the exact turn. Filters
   `data-chat-turn` rows, node:sqlite + FTS5 + zstd + worker threads in both runtimes (Node 22.20, the app's Node 24.21),
   an FTS5 prototype on 10k synthetic sessions (124,716 rows: build 5.3 s, 307 MB, ranked queries 2 to 58 ms).
 
+- Browser half (commit "recall: the window …"): `plugins/recall/lib/client.js` (Recall's page with search, filters,
+  results, reading view, index and what happened; the "Found by Recall" mark after a found turn; the tool's card in a
+  chat; settings in Plugins) and `test/recall-client.test.js` (10 tests). Host: the tool switch's title no longer
+  names the tool ("Let agents search past work"), and the page state carries the home folder so paths read `~/…`.
+  Whole-repo `npm test` on HEAD plus these files only: 738 pass, 0 fail.
+
 ## Next steps (in order)
 1. (done) Host modules with unit tests.
-2. Browser half `lib/client.js` (page, filters, results, reading view, the "Found by Recall" mark, the tool's card,
-   settings) with `test/recall-client.test.js`.
+2. (done) Browser half with `test/recall-client.test.js`.
 3. `scripts/recall-bench.mjs` (10k synthetic sessions, median and p95), numbers into the README; a small bench test.
 4. Real-DSH test `plugins/recall/test/e2e/run.mjs` + `fake-model.mjs`; `node scripts/e2e.mjs recall` on all three
    builds with the live fingerprint checked; pictures in `.e2e/shots/recall/<build>/`.
@@ -68,6 +73,32 @@ a query on 10k sessions, measured). Results link back to the exact turn. Filters
   `tool` (on). Folder lists are checked (absolute or `~/` paths, at most 20 each); a missing folder is a status, not
   a setting error.
 
+- **The window keeps one search** (a module-level store, not the page's state): leaving the page for a session and
+  coming back shows the same words, filters, results and scroll place, so "Back to the results" means it.
+- **Search while typing**, 200 ms after the last key; the last word searches as a prefix (`prefix: true`), so
+  "deplo" finds "deploy" and "deployment". Enter searches at once; Escape clears. With nothing typed the page shows
+  the newest turns, and reads them again when the index grows.
+- **Filters as DSH menus** (When, Folder, Model; their choices from `facets`, read when a menu opens, at most every
+  30 s), the kind as a segmented choice only when more than one kind is searched, and the order (best match or
+  newest) only when words are typed (with no words, newest is the only order that means anything).
+- **Opening at the turn.** A session of this DSH opens in DSH (`uiWorkspace.openSession`), then DSH's own
+  `loadThrough(seq)` pages its history back to the turn (raced against 15 s), then the mark lands it: the mark is in
+  `conversation.chat.turnTail` (order 50, after DSH's own tails), so it is drawn only when DSH draws that turn; its
+  effect finds the chat's scroller, brings the turn's first row to 24 px under the top, and puts
+  `data-recall-found` on the turn's rows (a 2 px line in DSH's primary colour). DSH lands a chat it opens at its end
+  a moment later, so it tries at 0, 120, 350, 800 and 1,500 ms, and stops at the person's first wheel, touch, click
+  or key. A turn still open has no tail: 2.5 s after opening, Recall lands in the one chat that holds the turn.
+  "Done" takes the mark and the line off; switching Recall off does too.
+- **Reading view in the page** for transcripts, notes and sessions of another DSH (they cannot open in this window),
+  with the turn before and after, and "Open the session at this turn" for this DSH's sessions. "Read here" on a
+  session result shows a turn without leaving the page.
+- **Settings in Plugins:** DSH's settings form, with Recall's own spec for folder lists (commas or lines between
+  folders, each a full path or `~/…`, at most 20; a typed list that does not fit is never saved, and a saved value of
+  the wrong kind is flagged).
+- **Sidebar entry order 9** (after the suite's earlier pages); the tool's card in `tool.call.toolview` keyed by the
+  tool's name, drawn like DSH's tool rows (a disclosure row; results as rows with Open or Read, and "Search this in
+  Recall"). No tool name, ids or raw paths where people read: paths show from `~`.
+
 ## Gotchas
 - FTS5 joins two phrases with a space, but a bracketed OR group only with an explicit `AND`: `"a" ("b" OR "c")` is a
   syntax error. lib/query.js joins every group with ` AND ` (tested by running each query in SQLite).
@@ -78,5 +109,8 @@ a query on 10k sessions, measured). Results link back to the exact turn. Filters
 - Thread timers are unref'd (they never keep DSH running); a test that waits on one keeps its own interval.
 - `zlib.zstdDecompressSync` decodes one frame only: split the file into frames first (lib/zstd.js).
 - node:sqlite prints an ExperimentalWarning once in Node 22; it loads only inside the worker.
+- Client tests: values made in the client's vm realm need `plain()` before `deepEqual`; parts with hooks must be
+  mounted (not called) under the stateful stand-in React, or their effects run in the next mount; a test that
+  searches or opens a session needs a fake connection and `views.sessions`, else a 10 s or 5 s wait keeps the run alive.
 - DSH's `system/message` and `request/header` lines are large: the parser reads each line's type from its first
   bytes and parses only the types it uses.

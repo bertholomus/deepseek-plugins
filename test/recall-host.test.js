@@ -800,7 +800,7 @@ test('settings: folder lists are checked in words; a folder is a full path or on
     assert.equal(notList.message, 'Handoff note folders (handoffFolders) must be a list of folders, such as ["~/notes"] (it is "~/notes")');
     assert.match(wrong({ transcriptFolders: ['logs/here'] }).message, /must list folders by their full path or a path from ~\/, such as ~\/notes \("logs\/here" is not one\)/);
     assert.match(wrong({ sessionFolders: Array.from({ length: MAX_FOLDERS + 1 }, (_, i) => `/f${i}`) }).message, /may list at most 20 folders \(it lists 21\)/);
-    assert.equal(wrong({ tool: 'yes' }).message, 'Let agents search with recall_search (tool) must be true or false (it is "yes")');
+    assert.equal(wrong({ tool: 'yes' }).message, 'Let agents search past work (tool) must be true or false (it is "yes")');
     assert.deepEqual(LIVE_SETTINGS, ['sessions', 'sessionFolders', 'transcriptFolders', 'handoffFolders', 'tool']);
     assert.equal(SETTING_TITLES.enabled, 'Recall on');
     assert.equal(expandFolder('~/notes/', '/Users/me'), '/Users/me/notes');

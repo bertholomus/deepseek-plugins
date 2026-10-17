@@ -21,7 +21,7 @@ export const SETTING_TITLES = Object.freeze({
     sessionFolders: 'More DSH session folders',
     transcriptFolders: 'Coding-agent transcript folders',
     handoffFolders: 'Handoff note folders',
-    tool: 'Let agents search with recall_search',
+    tool: 'Let agents search past work',
 });
 
 /** The settings its page in Plugins can change while it runs. */

@@ -4,6 +4,7 @@
  *
  * @module dsh-plugin-recall/page
  */
+import { homedir } from 'node:os';
 import { basename } from 'node:path';
 
 /** Log entries the page's history lists, newest first. */
@@ -63,8 +64,9 @@ export function refusalOf({ config, check, thread }) {
  * @param {object | undefined} parts.lastStatus - the last status the thread sent.
  * @param {{ left: object[] }} parts.sources - the folders searched, and the ones left out with why.
  * @param {import('./shared/journal.js').Journal} parts.journal
+ * @param {string} [parts.home] - the home folder, which the page writes as ~.
  */
-export async function pageState({ config, check, thread, status, lastStatus, sources, journal }) {
+export async function pageState({ config, check, thread, status, lastStatus, sources, journal, home = homedir() }) {
     const problem = check?.problem;
     const on = working({ config, check });
     let index = lastStatus;
@@ -85,6 +87,7 @@ export async function pageState({ config, check, thread, status, lastStatus, sou
         index: on && index ? { ...index, stale } : undefined,
         left: on ? sources.left : [],
         history: journal.list({ limit: HISTORY }),
+        home,
     };
 }
 
