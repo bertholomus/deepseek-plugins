@@ -4,7 +4,7 @@ _For the two accounts building these plugins only (see AGENTS.md). A session run
 
 # Suite v1 (branch suite/v1): the DSH Plugin Suite
 
-Updated: 2026-10-17 4:46 PM PDT by A (gmail), thread "Suite v1 builder"
+Updated: 2026-10-17 4:51 PM PDT by A (gmail), thread "Suite v1 builder"
 Branch: `suite/v1` in the worktree `~/Projects/dsh-plugin-suite` (remote `gh` = github.com/bertholomus/deepseek-plugins, private). Main is at 3290a42 (Agent Terminals' judged commit, a fast-forward). Tags: `autopilot-v1.0.0` and `session-watch-v1.0.0` at ea10517, `decisions-v1.0.0` at 15d8bf0, `agent-terminals-v1.0.0` at 3290a42.
 Goal: six plugins (Autopilot, Decisions, Agent Terminals, Proof, Canon, Recall) per `briefs/SUITE-BRIEF.md`, each judged >= 8.5/10 (no criterion below 8) by a fresh judge in DSH Test, merged to `main` and tagged `<plugin>-v1.0.0`, then `suite-v1.0.0`. Test only in DSH Test, never the live DSH.
 
@@ -83,8 +83,8 @@ Goal: six plugins (Autopilot, Decisions, Agent Terminals, Proof, Canon, Recall) 
 1. Proof judge round 2 (running at 8d45f20): when it reports, commit `review/proof-round-2*` and the SCOREBOARD row, PROGRESS. Pass → gate the Autopilot, Decisions, Agent Terminals and Proof e2e at the judged commit, fast-forward main (`git push gh <sha>:refs/heads/main`, no force), tag `proof-v1.0.0`, one reply in the thread. Not yet → fix its findings (general rules only for reading; never tune on the eighth hold-out), round 3.
 2. Recall: when its judge reports, commit `review/recall-round-1*` and the SCOREBOARD row, PROGRESS. Pass → gate, fast-forward main, tag `recall-v1.0.0`. Not yet → fix, round 2.
 3. Canon: when the builder reports, check from a clean copy (npm test, e2e x3, README, DESIGN.md "Before you push"). Merge the two hold-out files into `test/fixtures/canon/relevance/holdout.json` (48 prompts; check that paths exist and are in force), measure once against #29, record. Then judge round 2 (instance `suite-canon-j2`). Pass → fast-forward main, tag `canon-v1.0.0`.
-4. If time: Agent Terminals' round-3 minors; the kit's "then restart DSH" wording (settings apply on save) and the hub's polling 404s while Session Watch is off; a wrong type in the profile never stopping a plugin (Canon's fix, suite-wide).
-5. After all six: `SUITE.md` rows and scores for Canon and Recall, root README tables, `suite-v1.0.0`, final fingerprint, the v1.0.1 list (#26), the `DONE:` line.
+4. Autopilot round 4 and Decisions round 4 (#31): a fresh judge each at 8d45f20 (briefs `scratchpad/judge-autopilot-r4.md` and `scratchpad/judge-decisions-r4.md`; instances `suite-autopilot-j4` and `suite-decisions-j4`; folders `~/Projects/dsh-plugin-suite-judge/{autopilot,decisions}-r4`), started once Proof's judge is past its real-DSH run. Pass → tag `autopilot-v1.0.1` and `session-watch-v1.0.1`, and `decisions-v1.0.1`, at 8d45f20. Not yet → fix, e2e, fresh judge before the suite tag. No other change to Autopilot, Decisions, Agent Terminals, Session Watch or `shared/` before the suite tag.
+5. After all six: `SUITE.md` rows and scores (Canon, Recall, and the round-4 scores; the root README tables are done), then, before `suite-v1.0.0`, check that each plugin's paths at the suite commit equal its judged commit (`git diff <judged> <suite> -- plugins/<p>`, plus `plugins/session-watch` and `shared` against 8d45f20), run every suite e2e there, tag, final fingerprint, the `DONE:` line. Write the v1.0.1 list (#26) into this file: Agent Terminals' round-3 minors, Decisions' round-3 finding 7 (its page asks for state about every 4 s and fills the console with 404s while Session Watch is off), the kit's "then restart DSH" wording (settings apply on save), a wrong type in the profile never stopping a plugin (Canon's fix, suite-wide), and each final judge's remaining minor points.
 
 ## Open questions / blockers
 - See `OPEN-QUESTIONS.md` (one line each: question, pick, why). No blockers.
