@@ -1,10 +1,15 @@
 # Canon: builder's notes
 
-Updated: 2026-10-17 1:33 PM PDT (Canon builder)
+Updated: 2026-10-17 1:45 PM PDT (Canon builder)
 Branch: `suite/v1` in `~/Projects/dsh-plugin-suite`
-Status: building. Host half and its tests done (`npm test` 688/688); the window, e2e and README next.
+Status: building. Host half, window and their tests done (`npm test` 728/728); the real-DSH test and README next.
 
 ## Done (newest first)
+- Browser half `plugins/canon/lib/client.js`: the card after the latest turn that got notes (turn off / back on for
+  the session, open Canon), the page (vault state with "Read again", "Try a prompt" with why each note fits, the
+  near misses and the exact block, sessions with their switches, drafts with Promote, what happened), the
+  settings form in Plugins, sidebar entry order 8. `test/canon-client.test.js`, 7 tests. Whole repo `npm test`:
+  728 pass, 0 fail.
 - Host half in `plugins/canon/lib/` (config, text, frontmatter, search, vault, recall, drafts, projection, page,
   remote, tools, index) with the shared files copied by hand; synthetic fixture vault `test/fixtures/canon/vault/`;
   stand-ins for DSH's packages `test/fixtures/canon/stubs/` (a `registerHooks` resolve hook, so `index.js` loads in
@@ -15,12 +20,10 @@ Status: building. Host half and its tests done (`npm test` 688/688); the window,
   1 skipped. Live fingerprint before any work: pid 18756, patch 63e0c347…eef7.
 
 ## Next steps (in order, each runnable by someone new)
-1. Browser half `plugins/canon/lib/client.js` (kit block between the markers, copied from `shared/client-kit.js`),
-   client tests; commit.
-2. Real-DSH test `plugins/canon/test/e2e/run.mjs` + `fake-model.mjs`; `node scripts/e2e.mjs canon` with the live
+1. Real-DSH test `plugins/canon/test/e2e/run.mjs` + `fake-model.mjs`; `node scripts/e2e.mjs canon` with the live
    fingerprint read before and after (`~/.local/bin/dsh-test fingerprint`); screenshots land in
    `.e2e/shots/canon/<build>/`.
-3. README; commit and push (`PATH=/opt/homebrew/bin:$PATH git -c credential.helper= -c
+2. README; commit and push (`PATH=/opt/homebrew/bin:$PATH git -c credential.helper= -c
    credential.helper='!gh auth git-credential' push gh suite/v1`).
 
 ## Picks and why
