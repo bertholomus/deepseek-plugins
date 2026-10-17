@@ -138,8 +138,8 @@ const TRANSITIVE = new RegExp(String.raw`\bpass(?:es|ed|ing)?\s+(?:${OPEN}?(?:tr
 // ── What makes a clause a claim ────────────────────────────────────
 
 const SUBJECT = String.raw`(?:(?:the\s+)?pr(?:\s*#?\d+)?|pull request(?:\s*#?\d+)?|checksums?|digests?|signatures?|tests?|specs?|test ?suites?|suites?|e2e|checks?|assertions?|examples?|cases?|builds?|bundle|lint(?:ing|er|ers)?|ci|pipelines?|workflows?|(?:ci|deploy|build|test|lint|release|e2e|nightly)\s+jobs?|runs?|type ?checks?|typecheck(?:s|ing)?|types|tsc|clippy|eslint|ruff|mypy|flake8|rubocop|pylint|golangci-lint|prettier|vet|go vet|webpack|vite|esbuild|rollup|everything|${OPEN}[^${CLOSE}]{1,80}${CLOSE})`;
-const PASS_VERB = String.raw`(?:pass(?:es|ed|ing)?|green|(?<!\b(?:stops?|stopped|exits?|exited|shuts?\s+down|shut\s+down|terminates?|terminated|closes?|closed|cancels?|cancell?ed|unmounts?|unmounted|disconnects?|disconnected|tears?\s+down|tore\s+down|recovers?|recovered|restarts?|restarted|handles?|handled|separates?|separated|splits?|applies|applied|merges?|merged|rebases?|rebased|reverts?|reverted|drains?|drained|unwinds?|unwound|rolls?\s+back|rolled\s+back)\s)clean(?:ly)?|ok|okay|successful(?:ly)?|succeed(?:s|ed)?|went through|(?:finished|completed|ran|went|exited|exits)\s+(?:successfully|green|clean(?:ly)?|fine|ok|with 0|0)|complete[sd]?(?:\s+successfully)?|compiles?(?:\s+(?:cleanly|fine|successfully))?)`;
-const PASS_WORD = /\b(pass(es|ed|ing)?|green|succeed(s|ed)?|success(ful(ly)?)?|clean(ly)?|ok|okay|good|compiles?|builds|went through|complete[sd]?|verified|verif(y|ies)|match(es|ed)?)\b/i;
+const PASS_VERB = String.raw`(?:(?<!-)pass(?:es|ed|ing)?|green|(?<!\b(?:stops?|stopped|exits?|exited|shuts?\s+down|shut\s+down|terminates?|terminated|closes?|closed|cancels?|cancell?ed|unmounts?|unmounted|disconnects?|disconnected|tears?\s+down|tore\s+down|recovers?|recovered|restarts?|restarted|handles?|handled|separates?|separated|splits?|applies|applied|merges?|merged|rebases?|rebased|reverts?|reverted|drains?|drained|unwinds?|unwound|rolls?\s+back|rolled\s+back)\s)clean(?:ly)?|ok|okay|successful(?:ly)?|succeed(?:s|ed)?|went through|(?:finished|completed|ran|went|exited|exits)\s+(?:successfully|green|clean(?:ly)?|fine|ok|with 0|0|with (?:an? )?exit(?: code| status)? (?:of )?0)|complete[sd]?(?:\s+successfully)?|compiles?(?:\s+(?:cleanly|fine|successfully))?)`;
+const PASS_WORD = /\b(pass(es|ed|ing)?|green|succeed(s|ed)?|success(ful(ly)?)?|clean(ly)?|ok|okay|good|compiles?|builds|went through|complete[sd]?|verified|verif(y|ies)|match(es|ed)?|exit(?: code| status)? (?:of )?0)\b/i;
 
 const PASSED = [
     // "all 42 tests pass", "the test suite is green", "`go test ./...` is clean", "CI on main is green"
@@ -167,15 +167,20 @@ const PASSED = [
     /\b(now\s+)?pass(es|ed)?\s+(with\s+)?(zero|no|0)\s+(errors?|warnings?|failures?|issues?|problems?|findings?|offen[cs]es?)\b/i,
     // "every ledger package passed"
     /\b(every|all|each|both)\s+(\w+\s+){0,2}(packages?|modules?|crates?|targets?|projects?)\s+(\w+\s+){0,1}(pass(es|ed)?|green|succeeded)\b/i,
+    // "the same 12 green tests", "all 40 passing specs"
+    /\b(all\s+)?\d+\s+(green|passing)\s+(unit\s+|e2e\s+|integration\s+)?(tests?|specs?|checks?|cases?|examples?)\b/i,
 ];
 
-const DEPLOY_WORD = /\b(deployed|redeployed|released|shipped|rolled out|rolled back|promoted|published|pushed|merged|tagged)\b/gi;
+const DEPLOY_WORD = /\b(deployed|redeployed|released|shipped|rolled out|rolled back|promoted|published|pushed|merged|tagged|provisioned)\b/gi;
 const DEPLOYED_OTHER = [
     /\b(is|are)\s+(now\s+)?live\b|\bgo(es)? live\b|\bwent live\b|\b(and|now)\s+live\b|^live\b|\blive\s+(on|in)\s+(staging|production|prod)\b/i,
     /\b(is|are)\s+(now\s+)?((built|pushed|published|up) and\s+)?(on|in)\s+(the\s+)?(registry|npm|pypi|crates\.io|docker ?hub|ghcr|ecr|gcr|rubygems|packagist|origin|production|prod|staging)\b/i,
     /\b(is|are)\s+(now\s+)?(on|at)\s+(v?\d+\.\d+(\.\d+)?|release v?\d+|the new (version|release|build|image))\b/i,
     /\b(created|cut)\s+the\s+(tag|release)\b/i,
 ];
+/** "Live" as where something sits, not a deploy: "the tests now live in `tests/`", "the index is live locally". */
+const LIVES_IN = /\b(?:now\s+)?lives?\s+(?:in|under|inside|within|alongside|next to|beside)\s+(?:the\s+|a\s+|its\s+|their\s+)?(?:code\b|[\w-]*\/[\w./-]*|[\w-]+\.[a-z]{1,6}\b|(?:same|new|shared|separate|own|one)\s+\w+|(?:file|folder|directory|module|package|repo|class|component|crate|namespace|workspace)s?\b)|\blive\s+locally\b|\blive\s+(?:on|in)\s+(?:my|your|this|the local)\s+(?:machine|laptop|box|db|database|checkout)\b/gi;
+
 const HEALTH = [
     /\b(is|are)\s+(now\s+)?(healthy|up and running|serving)\b|\bserving (traffic|requests|the new (build|version|release))\b/i,
     /\b(returns?|answers?|responds?|responded|came back|comes back)\s+(with\s+)?(an?\s+)?(http\s+)?(\d{3}|ok)\b/i,
@@ -196,7 +201,7 @@ const IMPROVED = [
     /\b(faster|quicker|smaller|lighter|leaner|speed(ed)? up|sped up|halved|reduced|shaved|lowered|improved)\b[^.;]{0,60}\d/i,
     // "dropped to 120 ms", "cut the bundle by 40%": a figure it went to, by or from, not "cut off" or "cut the release"
     /\b(dropped|cut|fell|went down|came down|shrank|shrunk)\b(?!\s+(?:it\s+|them\s+)?off\b)\s+(?:\w+\s+){0,3}?(?:by|to|from|down to|under|below)\s+~?\d/i,
-    /\d[^.;]{0,40}\b(faster|quicker|smaller|lower|down from|up from|halved|reduced|dropped)\b/i,
+    new RegExp(String.raw`\d(?:\.\d+)?\s?(?:ms|µs|us|ns|s|sec|secs|seconds|min|mins|minutes|%|x|×|kib|mib|gib|kb|mb|gb|bytes|req\/s|rps|qps|ops\/s|tok\/s|fps)(?![\w/])[^.;]{0,40}\b(faster|quicker|smaller|lower|down from|up from|halved|reduced|dropped)\b|\b(down|up) from\s+~?\d`, 'i'),
     /\b(much|far|a lot|way|significantly)\s+(faster|quicker|smaller|lighter)\b/i,
 ];
 
@@ -205,6 +210,8 @@ const IS_IN = String.raw`in(?=\s*(?:$|[.,;:!)]|now\b|on\s+(?:main|master|the bra
 const CHANGE_VERBS = 'cleaned|reverted|restored|simplified|trimmed|reordered|inlined|deduplicated|consolidated|normali[sz]ed|parameteri[sz]ed|vendored|scaffolded|stubbed|added|created|updated|wrote|written|implemented|renamed|removed|deleted|moved|changed|replaced|refactored|cleaned up|set up|configured|installed|migrated|converted|extracted|split|merged|rewrote|rewritten|built|rebuilt|generated|completed|finished|registered|wired|hooked up|exposed|exported|introduced|bumped|pinned|upgraded|downgraded|enabled|disabled|documented|gated|ported|switched|swapped|applied|committed|regenerated|recorded|backfilled|pruned|tightened|raised|lowered|made';
 const DONE = [
     /^(all\s+)?(done|complete|completed|finished|sorted|all set|all wrapped up|wrapped up)\b/i,
+    // "Backfill complete", "Index rebuild done", "Training finished for v7"
+    /^(?:the\s+)?[\w-]+(?:\s+[\w-]+){0,2}\s+(?:is\s+|are\s+|has\s+|have\s+)?(?:now\s+|all\s+)?(?:done|complete|completed|finished)\b/i,
     new RegExp(String.raw`\b(is|are|it'?s|that'?s|everything'?s|all)\s+(now\s+|also\s+)?(done|complete|completed|finished|in place|implemented|${IS_IN}|registered|wired( up)?|exported|added|configured|enabled|pinned|updated|documented|set|cleaned up|ported|migrated|bumped|merged|committed)\b`, 'i'),
     new RegExp(String.raw`\b(i'?ve|i have|we'?ve|we have|i|we)\s+(now\s+|also\s+|just\s+|then\s+)?(${CHANGE_VERBS})\b`, 'i'),
     new RegExp(String.raw`^(${CHANGE_VERBS})\b`, 'i'),
@@ -244,9 +251,9 @@ function targetOf(text, healthy) {
     if (healthy) return 'health';
     const place = /\b(staging|production|prod|cluster|servers?|fly(\.io)?|heroku|vercel|netlify|render|railway|kubernetes|k8s|environment|replicas?|pods?)\b/i;
     // "The worker image is deployed to Fly staging": the place it runs, not the registry it went through.
-    if (place.test(text) && /\b(deployed|redeployed|rolled out|rollout|released to|shipped to|promoted to|live)\b/i.test(text)) return 'env';
+    if (place.test(text) && /\b(deployed|redeployed|rolled out|rollout|released to|shipped to|promoted to|live|provisioned)\b/i.test(text)) return 'env';
     if (/\b(npm|pypi|crates\.io|registry|docker ?hub|ghcr|ecr|gcr|rubygems|packagist|maven central|nuget|image|container|package|published)\b|@\d+\.\d+/i.test(text) && !/\b(docs|site|pages)\b/i.test(text)) return 'registry';
-    if (place.test(text) || /\b(live|deployed|redeployed|rolled out|rollout|released to|shipped)\b/i.test(text)) return 'env';
+    if (place.test(text) || /\b(live|deployed|redeployed|rolled out|rollout|released to|shipped|provisioned)\b/i.test(text)) return 'env';
     // A bare "Pushed" may be a git push or an image push.
     if (/\b(merged|tagged|origin|main|master|branch|remote|github|gitlab|gh-pages|tag)\b/i.test(text)) return 'repo';
     return 'any';
@@ -285,10 +292,14 @@ function metricsIn(text) {
     return out.slice(0, 6);
 }
 
+/** A clause with its inline code as a plain word: "setting `exported=true`" holds no verb. */
+const prose = (s) => s.replace(new RegExp(`${OPEN}[^${CLOSE}]*${CLOSE}`, 'g'), 'code');
+
 /** The kind of claim a clause makes, with what it is about; or undefined. */
 function claimOf(clause) {
     const s = clause.trim();
     const words = shown(s);
+    const said = prose(s).replace(LIVES_IN, ' ');
     if (words === '' || ASKED.test(words) || REPORTED.test(words) || NOT_YET.test(words) || DESCRIBED.test(words) || HISTORY.test(words)) return undefined;
     const fixedByNegation = FIX_BY_NEGATION.test(words);
     let rest = words;
@@ -298,28 +309,28 @@ function claimOf(clause) {
     const healthy = HEALTH.some((re) => re.test(words)) && !/\b(returns?|answers?|responds?|responded|came back|comes back)\b[^.;]*\b(but|however|although|though|except)\b/i.test(words);
     // "both health checks pass" is about a running service, not a test run.
     if (healthy && /\bhealth\s*(checks?|endpoints?|probes?)\b/i.test(words)) return { kind: 'deployed', target: 'health' };
-    // "`load()` passes `true`" hands a value over; it is not a test result.
-    const passing = s.replace(TRANSITIVE, ' ');
+    // "`load()` passes `true`" hands a value over; it is not a test result. A dot in inline code (`eslint .`) ends no sentence.
+    const passing = s.replace(TRANSITIVE, ' ').replace(new RegExp(`${OPEN}[^${CLOSE}]*${CLOSE}`, 'g'), (m) => m.replace(/\./g, '·'));
     if (PASSED.some((re) => re.test(passing)) && PASS_WORD.test(shown(passing))) {
         const subjects = subjectsOf(words);
         return { kind: 'passed', subject: subjects.length === 1 ? subjects[0] : subjects.includes('ci') ? 'ci' : subjects[0], subjects };
     }
     let deployWord = false;
-    for (const m of words.matchAll(DEPLOY_WORD)) {
-        const before = words.slice(0, m.index);
+    for (const m of said.matchAll(DEPLOY_WORD)) {
+        const before = said.slice(0, m.index);
         if (ADJECTIVE.test(before)) continue;
-        if (/^pushed\s+(back|for|ahead|through)\b/i.test(words.slice(m.index))) continue;
+        if (/^pushed\s+(back|for|ahead|through)\b/i.test(said.slice(m.index))) continue;
         deployWord = true;
         break;
     }
-    if (healthy || deployWord || DEPLOYED_OTHER.some((re) => re.test(words))) {
+    if (healthy || deployWord || DEPLOYED_OTHER.some((re) => re.test(said))) {
         // "Deployed to staging and /health returns 200" claims both the deploy and the check.
         const ship = healthy && deployWord ? targetOf(words, false) : undefined;
         return { kind: 'deployed', target: targetOf(words, healthy), ...(ship ? { ship } : {}) };
     }
-    if (fixedByNegation || FIXED.some((re) => re.test(words))) return { kind: 'fixed' };
-    if (IMPROVED.some((re) => re.test(words))) return { kind: 'fixed', improved: true };
-    if (DONE.some((re) => re.test(words))) return { kind: 'done' };
+    if (fixedByNegation || FIXED.some((re) => re.test(said))) return { kind: 'fixed' };
+    if (IMPROVED.some((re) => re.test(said))) return { kind: 'fixed', improved: true };
+    if (DONE.some((re) => re.test(said))) return { kind: 'done' };
     return undefined;
 }
 

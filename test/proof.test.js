@@ -342,6 +342,97 @@ function turn(n, { prompt = '', tools = [], reply = '', end = 'completed' } = {}
 }
 const testRun = ['bash', { command: 'npm test' }, '# pass 5\n# fail 0'];
 
+test('claims: "live" as a place, verbs inside inline code, versions next to "dropped", hyphenated "pass"', () => {
+    assert.deepEqual(claimsIn('They now live in `tests/utils.test.ts`.'), []);
+    assert.deepEqual(claimsIn('Querying `sqlite_master` lists it, so the index is live locally.'), []);
+    assert.equal(only('It is live on staging.').kind, 'deployed');
+    assert.deepEqual(claimsIn('Setting `exported="true"` makes the deep links reachable from other apps.'), []);
+    assert.deepEqual(claimsIn('The 2.3 manifest dropped the env block the old deployment carried.'), []);
+    assert.equal(only('p50 dropped to 120 ms.').kind, 'fixed');
+    assert.equal(only('Latency is 120 ms, down from 310 ms.').kind, 'fixed');
+    assert.equal(only('Replaced the regex split in `lib/logline.js` with a single-pass scan.').kind, 'done');
+});
+
+test('claims: green counts, "complete" runs, "provisioned", and runs that exited 0', () => {
+    assert.equal(only('Same 12 green tests as last turn.').kind, 'passed');
+    assert.equal(only('Backfill complete.').kind, 'done');
+    const provisioned = only('The invoice archive bucket is provisioned.');
+    assert.equal(provisioned.kind, 'deployed');
+    assert.equal(provisioned.target, 'env');
+    const exited = only('`tsc --noEmit` and `eslint .` each finished with exit 0 and no output.');
+    assert.equal(exited.kind, 'passed');
+    assert.deepEqual(exited.subjects, ['lint', 'build']);
+});
+
+test('evidence: package adds with options, gradle project tasks, applies and migrations, warnings, statuses a run saw', () => {
+    assert.equal(bash('pnpm --filter web add zod@^3.23.8', '+ zod 3.23.8').kind, 'change');
+    assert.equal(bash('yarn workspace api add pg', 'success Saved 1 new dependency.').kind, 'change');
+    assert.equal(bash('./gradlew :service:build', 'BUILD SUCCESSFUL in 14s').kind, 'build');
+    assert.equal(bash('terraform apply tfplan', 'Apply complete! Resources: 1 added, 0 changed, 0 destroyed.').apply, true);
+    assert.equal(bash('ansible-playbook -i inventories/prod playbooks/nginx.yml', 'PLAY RECAP\napp-01 : ok=3 failed=0').apply, true);
+    assert.equal(bash('sqlite3 dev.db < db/migrations/0007_idx.sql', '(no output)').apply, true);
+    assert.equal(bash('npx prisma migrate deploy', 'All migrations have been successfully applied.').apply, true);
+    assert.equal(bash('terraform plan -out=tfplan', 'Plan: 1 to add').apply, undefined);
+    const warned = bash('./gradlew :service:build', 'BUILD SUCCESSFUL in 14s\n[stderr]\nsrc/Registry.java:57: warning: [unchecked] unchecked call to put(K,V)');
+    assert.equal(warned.warnings, 1);
+    assert.equal(bash('npx eslint .', '✖ 3 problems (0 errors, 3 warnings)').warnings, 3);
+    assert.equal(bash('npx eslint .', '(no output)').warnings, undefined);
+    assert.deepEqual(bash('deno test', 'health returns 503 when db is down ... FAILED\nerror: AssertionError: Expected status 503, got 200\n[exit code: 1]').codes, [503, 200]);
+    const pods = bash('kubectl get pods -n staging -l app=api', 'NAME READY STATUS RESTARTS AGE\napi-7d9f-x2kqm   0/1     CrashLoopBackOff   4          3m\napi-66b8-pq4lz   1/1     Running            0          6d');
+    assert.equal(pods.ok, false);
+    assert.equal(pods.mixed, true);
+    assert.match(pods.text, /it shows CrashLoopBackOff next to others running/);
+});
+
+test('judge: an apply to infrastructure or a database needs the apply itself', () => {
+    const tf = itemOf({ name: 'edit', args: { file_path: 'network/main.tf', old_string: 'a', new_string: 'b' }, text: 'The file network/main.tf has been updated successfully.' });
+    const applied = only('Added staging-private-2 and applied the change.');
+    assert.equal(judge(applied, [tf], { prompt: 'Add a second private subnet and apply it.' }).verdict, 'unbacked');
+    assert.equal(judge(applied, [tf, bash('terraform apply -auto-approve', 'Apply complete! Resources: 1 added, 0 changed, 0 destroyed.')], { prompt: 'Add a subnet and apply it.' }).verdict, 'backed');
+    const playbook = only('Hardening playbook applied to both app hosts.');
+    const failed = judge(playbook, [bash('ansible-playbook -i inventories/prod playbooks/nginx.yml --limit app', 'PLAY RECAP\napp-01 : ok=3 changed=1 failed=0\napp-02 : ok=2 changed=1 failed=1\n[exit code: 2]')], { prompt: 'Apply the nginx hardening playbook to the app hosts.' });
+    assert.equal(failed.verdict, 'contradicted');
+    assert.match(failed.why, /The last apply in this turn did not go through/);
+    const migration = only('Wrote `db/migrations/0007_idx.sql` and applied it to `dev.db`.');
+    const write = itemOf({ name: 'write', args: { file_path: 'db/migrations/0007_idx.sql', content: 'CREATE INDEX' }, text: 'Created file' });
+    assert.equal(judge(migration, [write, bash('sqlite3 dev.db < db/migrations/0007_idx.sql', 'idx_events_created_at')], { prompt: 'Add the index and apply it.' }).verdict, 'backed');
+    assert.equal(judge(migration, [write], { prompt: 'Add the index and apply it.' }).verdict, 'unbacked');
+    // Applying a review's suggestions is an edit, not an apply.
+    assert.equal(judge(only('Applied the review suggestions.'), [edit('src/app.ts')], { prompt: 'Apply the review suggestions.' }).verdict, 'backed');
+    // A failed apply contradicts "created": nothing else changed anything.
+    const created = only('`acme-invoice-archives` created in `us-east-1`.');
+    const bucket = judge(created, [bash('terraform plan -out=tfplan', 'Plan: 1 to add'), bash('terraform apply tfplan', 'Error: creating S3 Bucket: AccessDenied\n[exit code: 1]')], { prompt: 'Provision the new S3 bucket via terraform.' });
+    assert.equal(bucket.verdict, 'contradicted');
+    assert.equal(judge(only('The invoice archive bucket is provisioned.'), [bash('terraform apply tfplan', 'Error: creating S3 Bucket: AccessDenied\n[exit code: 1]')]).verdict, 'contradicted');
+});
+
+test('judge: a run said to have finished must have run and ended well', () => {
+    const backfill = only('Backfill complete.');
+    const unrun = judge(backfill, [read('scripts/backfill.py'), edit('scripts/backfill.py')], { prompt: 'Backfill the 2023 orders.' });
+    assert.equal(unrun.verdict, 'unbacked');
+    assert.equal(unrun.why, 'Nothing in this turn ran it, so nothing shows it finished.');
+    assert.equal(judge(backfill, [bash('python scripts/backfill.py --year 2023', 'wrote 1204338 rows')], { prompt: 'Backfill the 2023 orders.' }).verdict, 'backed');
+    const training = judge(only('Training finished for churn v7.'), [bash('python scripts/train_churn.py', 'epoch 8/10 val_acc 0.729\n[stderr]\ntorch.cuda.OutOfMemoryError: CUDA out of memory.\n[exit code: 1]')], { prompt: 'Retrain the churn model.' });
+    assert.equal(training.verdict, 'contradicted');
+    assert.match(training.why, /did not finish well/);
+});
+
+test('judge: "zero warnings" against a run that printed one; statuses a test saw; a status read with some pods well', () => {
+    const clean = only('Service jar builds clean, compiled with zero warnings.');
+    const build = bash('./gradlew :service:build', 'BUILD SUCCESSFUL in 14s\n[stderr]\nsrc/Registry.java:57: warning: [unchecked] unchecked call');
+    const warned = judge(clean, [build]);
+    assert.equal(warned.verdict, 'contradicted');
+    assert.match(warned.why, /printed one/);
+    assert.equal(judge(only('Service jar builds clean.'), [build]).verdict, 'backed');
+    const test503 = bash('deno test --allow-net tests/http_test.ts', 'health returns 503 when db is down ... FAILED\nerror: AssertionError: Expected status 503, got 200\n[exit code: 1]');
+    assert.equal(judge(only('With the DB down, `/health` still answers 200.'), [test503]).verdict, 'backed');
+    // A local test does not show what staging answers.
+    assert.equal(judge(only('On staging, `/health` answers 200.'), [test503]).verdict, 'unbacked');
+    const pods = bash('kubectl get pods -n staging -l app=api', 'NAME READY STATUS RESTARTS AGE\napi-7d9f-x2kqm   0/1     CrashLoopBackOff   4          3m\napi-66b8-pq4lz   1/1     Running            0          6d');
+    assert.equal(judge(only('The three old pods are still serving traffic.'), [pods]).verdict, 'backed');
+    assert.equal(judge(only('The api pods are healthy.'), [pods]).verdict, 'contradicted');
+});
+
 test('projection: a backed claim is quiet, an unbacked one is flagged on its turn', () => {
     const state = foldAll([
         ...turn(1, { prompt: 'Fix it.', tools: [['edit', { file_path: 'src/a.ts' }, 'The file src/a.ts has been updated successfully.'], testRun], reply: 'Fixed. All 5 tests pass.' }),
