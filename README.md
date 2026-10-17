@@ -14,6 +14,7 @@ Each plugin is a normal DSH plugin package. You add it to a DSH profile's bundle
 | [`session-bridge`](plugins/session-bridge) | A local JSON API on a Unix socket that drives the Host's own session controller. Scripts and other agents can create, prompt, steer, cancel and read DSH sessions, and you watch them live in the DSH window. |
 | [`session-watch`](plugins/session-watch) | The shared watcher behind Autopilot, Decisions and Agent Terminals: every session's state from DSH's own events, and delivery of a message proven by the session's own log. No page of its own. |
 | [`autopilot`](plugins/autopilot) | Keeps sessions moving when nobody is watching: after a restart it tells cut-off sessions to carry on, nudges quiet sessions with open todos once and backs off, and restarts goals an error stopped. Every action has a Why line and a kill switch. |
+| [`decisions`](plugins/decisions) | One inbox for everything waiting on you: decision lines, tools waiting for approval, questions in the question box, threads that need a decision. Each card shows the question, the recommendation, the session and the wait; an answer goes into the session, proven by its log. Optional note to a webhook or a command. |
 
 These plugins are independent work. They are not made or endorsed by DeepSeek.
 
@@ -31,6 +32,7 @@ DSH loads a plugin only when the profile lists its package in `dsh.profile.bundl
 | session-bridge | `dsh-plugin-session-bridge` | `session-bridge` |
 | session-watch | `dsh-plugin-session-watch` | `session-watch` |
 | autopilot | `dsh-plugin-autopilot` | `autopilot` |
+| decisions | `dsh-plugin-decisions` | `decisions` |
 
 1. Clone this repository:
 
@@ -85,7 +87,7 @@ Or restore the backups from step 2 of the install.
 ## Tests
 
 ```bash
-npm test                                  # dsh-site, session-bridge, coordinator (pure logic), the categories window, calendar
+npm test                                  # dsh-site, session-bridge, coordinator (pure logic), the categories window, calendar, session-watch, autopilot, decisions
 npm install --no-save @deepseek-ai/schemastery @deepseek-ai/dsh-llm@next @deepseek-ai/dsh-brand@next @deepseek-ai/dsh-tools@next
 node plugins/discord/test/smoke.mjs       # discord (no token needed)
 node plugins/coordinator/test/smoke.mjs   # coordinator (fake DSH host)
@@ -104,6 +106,9 @@ DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js npm run test:e2e:calen
 
 # autopilot + session-watch on a real DSH in a throwaway home: every DSH under .e2e/ and the installed app's (see plugins/autopilot/README.md)
 npm run test:e2e:autopilot
+
+# decisions + session-watch + autopilot on a real DSH in a throwaway home, with a stand-in webhook on this machine (see plugins/decisions/README.md)
+npm run test:e2e:decisions
 ```
 
 ## License

@@ -182,14 +182,20 @@ node --test test/autopilot.test.js   # the engine over the watcher and a stand-i
 node scripts/e2e.mjs autopilot       # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test (47 checks) starts DSH from each `.e2e/dsh-<version>`
+The real-DSH test (87 checks) starts DSH from each `.e2e/dsh-<version>`
 install (`npm i --prefix .e2e/dsh-0.2.1-rc.1 @deepseek-ai/dsh@0.2.1-rc.1`)
 and from the installed app's own DSH (run as Node by the app's binary, as a
 separate process), each in a throwaway home, with a scripted model playing
-the agent. It stops and
-kills DSH under running turns, lets sessions go quiet with work open, fails
-a goal round, and drives the page in a browser (`npm i --prefix .e2e/tools
-playwright-core`, with Playwright's Chrome), light and dark, wide and
-narrow. Every claim is checked in the session's own log. It reads the
-running DSH's fingerprint before and after and fails if it moved; pictures
-go to `.e2e/shots/autopilot/<version>/`.
+the agent and a stand-in window that gets DSH's own prompts. It lets
+sessions go quiet with work open (a nudge, back-off, progress, Ask first,
+Off, a question left alone), fails a goal round, stops and kills DSH under
+running turns (one of them waiting for approval and one with a question in
+the question box), and drives the page in a browser (`npm i --prefix
+.e2e/tools playwright-core`, with Playwright's Chrome), light and dark,
+wide and narrow: the buttons, the rule keys, the contrast of its state
+words, a wrong setting fixed through DSH's form in Plugins with the cursor
+in it, and Session Watch switched off and on in Plugins with no error from
+DSH. It also runs with Session Watch off in the profile and with
+`enabled: false`, and checks the file modes. Every claim is checked in the
+session's own log. It reads the running DSH's fingerprint before and after
+and fails if it moved; pictures go to `.e2e/shots/autopilot/<version>/`.

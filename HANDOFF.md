@@ -4,15 +4,16 @@ _For the two accounts building these plugins only (see AGENTS.md). A session run
 
 # Suite v1 (branch suite/v1): the DSH Plugin Suite
 
-Updated: 2026-10-17 1:57 AM PDT by A (gmail), thread "Suite v1 builder"
+Updated: 2026-10-17 2:05 AM PDT by A (gmail), thread "Suite v1 builder"
 Branch: `suite/v1` in the worktree `~/Projects/dsh-plugin-suite` (remote `gh` = github.com/bertholomus/deepseek-plugins, private). Main is at a18b87b.
 Goal: six plugins (Autopilot, Decisions, Agent Terminals, Proof, Canon, Recall) per `briefs/SUITE-BRIEF.md`, each judged >= 8.5/10 (no criterion below 8) by a fresh judge in DSH Test, merged to `main` and tagged `<plugin>-v1.0.0`, then `suite-v1.0.0`. Test only in DSH Test, never the live DSH.
 
 ## Doing now
-- Autopilot round 3: every round-2 finding is fixed and committed (see Done, 1:57 AM). Running the real-DSH tests (`node scripts/e2e.mjs autopilot`, then `decisions`) on the three DSH builds; then a new judge (`briefs/JUDGE.md`, its own DSH Test instance `suite-autopilot-j3`).
-- Decisions waits behind it: its README, its own e2e (`plugins/decisions/test/e2e/run.mjs`, 78/79 before the kit's wrong-value flag), DSH Test `suite-decisions`, its judge.
+- Autopilot round 3: judge `suite-autopilot-j3` running on the commit after 5e879c5 (real-DSH test 87/87 on all three builds). Read `review/autopilot-round-3.md` when it lands, add the SCOREBOARD row; on a pass merge to main and tag `session-watch-v1.0.0` and `autopilot-v1.0.0`.
+- Decisions: README written (`plugins/decisions/README.md`); its real-DSH test running on the three builds (`node scripts/e2e.mjs decisions`), then DSH Test `suite-decisions` and its judge round 1.
 
 ## Done (newest first)
+- 2:05 AM PDT: Autopilot real-DSH test 87/87 on 0.2.0-rc.2, 0.2.1-rc.1 and the app's 0.2.0-rc.2; live unchanged. READMEs: Autopilot's Tests paragraph (87 checks, what they cover), Decisions' README (cards and where they come from, how answers reach the session, holds, the page, settings table with Where, sending elsewhere, files, setup, switching off, rollback, tests), root README rows for Decisions and `npm run test:e2e:decisions`.
 - 1:57 AM PDT: committed the round-2 fixes. The real-DSH test on the app's DSH passed 86 of 87; the one miss was real: "Open Autopilot's settings" put the cursor on DSH's "Use the default" button, which DSH's own field draws before its input. `focusSetting` now picks the value first (input, textarea, select, the selected tab, a switch, then a button), and the unit test's stand-in row draws the button first, as DSH does (it fails on the old kit). `npm test` 485/485.
 - 1:50 AM PDT: Autopilot round-2 findings, all fixed (committed at 1:57 AM):
   1. Approvals and DSH's question box belong to their turn (`session-watch/lib/fold.js`, STATE_VERSION 2): `turn/start` and `turn/end` clear `approvals`, `asking` (a question-box `tool/call` until its `tool/result`) and `cancelled`; a turn a stop cut off records `end.left` (the approval or question it left, also from a graceful stop's `approval/decided: cancelled` or the question's error result). The carry-on note says so (`autopilot/lib/notes.js` `leftWords`), and its Why too.
