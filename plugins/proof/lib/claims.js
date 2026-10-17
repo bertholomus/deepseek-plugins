@@ -54,6 +54,7 @@ function plain(line) {
         .replace(/~~(.*?)~~/g, '')
         .replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+)/, '')
         .replace(/[✅✔☑️🎉🚀]+/gu, '')
+        .replace(/[’‘]/g, "'")
         .replace(/\s+/g, ' ')
         .trim();
 }
@@ -99,10 +100,12 @@ function clausesOf(sentence) {
 
 // ── What makes a clause not a claim ────────────────────────────────
 
+/** A "when …" part, up to a comma or the clause's end: when something happens, not what this turn did ("423 when the order is shipped"). */
+const WHEN_PART = /\bwhen\b[^,;]*(?:,\s*|$)/gi;
 /** A plan, a condition or a hope: success not yet had. */
 const NOT_YET = /\b(if|once|until|unless|whenever|should|shall|will|would|could|might|may|must|need(s)? to|needed to|has to|have to|going to|gonna|want(s)? to|try(ing)? to|plan(ned|s)? to|hope(fully)?|expect(ed)? to|supposed to|let me|let['’]s|i['’]ll|we['’]ll|you'?ll|it['’]ll|that['’]ll|they'?ll|i['’]d|we['’]d|next,? i|to be (done|fixed|deployed|tested)|can then|in order to|so that|ready to|safe to|good to|able to|in case|(?:you|we|they) can|suggests?|suggesting|seems?|seemingly|appears?|apparently|probably|likely|presumably|perhaps|maybe|i think|i suspect|i believe|i guess|looks like)\b/i;
 /** A sentence that says the opposite of success, or reports a failure. */
-const NEGATED = /\b(not|n't|never|neither|nor|nothing|yet|without (?:running|testing|checking|verifying)|yet to|still (?:fail|failing|broken|red|erroring|crash)|fail(s|ed|ing|ure|ures)?|broken|break(s|ing)?|red\b|error(s|ed)?\b|regress(ed|ion)?|flak(y|iness)|skipped|cannot|unable|couldn'?t|didn'?t|doesn'?t|isn'?t|aren'?t|wasn'?t|weren'?t|haven'?t|hasn'?t|won'?t|instead of|rejected|denied|timed out|stalled|crashloop\w*|pending|in progress|queued)\b/i;
+const NEGATED = /\b(not|n't|never|neither|nor|nothing|yet|without (?:running|testing|checking|verifying)|yet to|still (?:fail|failing|broken|red|erroring|crash)|fail(s|ed|ing|ure|ures)?|broken|break(s|ing)?|red\b|error(s|ed)?\b|regress(ed|ion)?|flak(y|iness)|skipped|cannot|unable|couldn'?t|didn'?t|doesn'?t|isn'?t|aren'?t|wasn'?t|weren'?t|haven'?t|hasn'?t|won'?t|\w+n't|instead of|rejected|denied|timed out|stalled|crashloop\w*|pending|in progress|queued)\b/i;
 /** "No failures", "zero errors", "nothing left to fix": words that back a claim up, not negations. */
 const POSITIVE = [
     /\b(with\s+)?(no|zero|0)\s+(new\s+|remaining\s+|more\s+|type\s+|lint\s+|test\s+|compile\s+|build\s+)?(errors?|failures?|failing (tests?|specs?)|warnings?|problems?|issues?|findings?|diagnostics?|regressions?|flakes?|offen[cs]es?)\b(\s+(left|remaining|anywhere|reported|found|to worry about)\b)?/gi,
@@ -122,7 +125,7 @@ const FIX_BY_NEGATION = /\bno longer\s+(fails?|failing|crash(es)?|errors?|throws
 /** A question. */
 const ASKED = /\?\s*$|^(do|does|did|is|are|was|were|can|could|should|would|will|shall|have|has)\s+(you|we|i|it|they|the)\b/i;
 /** What a document or a person says, not this turn's work: "the README says it is done". */
-const REPORTED = /\b(the|this|that|its|their|your|his|her|our)\s+(readme|docs?|documentation|changelog|pr|pull request|description|ticket|issue|comment|commit message|author|reviewer|team|user|checklist|wiki|spec|plan|notes?|release notes)\b[^.;]{0,50}\b(says?|said|claims?|claimed|states?|stated|reports?|reported|mentions?|mentioned|promises?|promised|lists?|listed)\b|\baccording to\b|\b(claims?|claimed|allegedly|supposedly|reportedly)\b/i;
+const REPORTED = /\b(the|this|that|its|their|your|his|her|our|[a-z]+'s)\s+(readme|docs?|documentation|changelog|pr|pull request|description|ticket|issue|comment|commit message|author|reviewer|team|user|checklist|wiki|spec|plan|notes?|release notes)\b[^.;]{0,50}\b(says?|said|claims?|claimed|states?|stated|reports?|reported|mentions?|mentioned|promises?|promised|lists?|listed)\b|\baccording to\b|\b(claims?|claimed|allegedly|supposedly|reportedly)\b/i;
 /** Deploy words used as adjectives: "the published checksum" claims nothing. */
 const ADJECTIVE = /\b(the|a|an|its|our|their|this|that|these|those|every|each|any|your|my|his|her|previously|last|earlier)\s+(\w+\s+)?$|\b(that|which|who)('s|\s+(is|was|are|were|has been|had been|have been|got))\s+(already\s+|just\s+|been\s+)?$/i;
 /**
@@ -131,19 +134,19 @@ const ADJECTIVE = /\b(the|a|an|its|our|their|this|that|these|those|every|each|an
  * a person's work ("`b2f1c88` renamed the param", "Tomas's change landed"),
  * and other people's results ("42 passing on their side").
  */
-const DESCRIBED = /\b(where|whereas|while)\s+(the\s+)?(tests?|specs?|callers?|clients?|it|they|we|you|users?)\s+expects?\b|\b(an?|the|that|this|its)\s+(early\s+)?return\s+\d{3}\b|\bearly\s+return\s+\d{3}\b|^[A-Z][a-z]+['’]s\s+(change|pr|commit|branch|fix|patch|work|refactor|rewrite)\b|\bon their (side|end)\b|\btheir (suite|ci|tests?|builds?|runs?|machines?|team|side|end)\b|\bthey (say|said|report|reported|claim|claimed|believe|see|saw)\b|\bper the (issue|report|ticket|dashboards?|logs?)\b/i;
+const DESCRIBED = /\b(where|whereas|while)\s+(the\s+)?(tests?|specs?|callers?|clients?|it|they|we|you|users?)\s+expects?\b|\b(an?|the|that|this|its)\s+(early\s+)?return\s+\d{3}\b|\bearly\s+return\s+\d{3}\b|^[A-Z][a-z]+['’]s\s+(change|pr|commit|branch|fix|patch|work|refactor|rewrite)\b|\bon their (side|end)\b|\b(their|his|her) (suite|ci|tests?|builds?|runs?|machines?|laptops?|setup|team|side|end)\b|\bthey (say|said|report|reported|claim|claimed|believe|see|saw)\b|\bper the (issue|report|ticket|dashboards?|logs?)\b/i;
 /** Uses of "pass" that hand something over, not a test result: "`load()` passes `true`", "passes the token through". */
 const TRANSITIVE = new RegExp(String.raw`\bpass(?:es|ed|ing)?\s+(?:${OPEN}?(?:true|false|null|nil|none|undefined|nothing|it|them)${CLOSE}?|along|through|back|down|control|ownership|in\s+(?:a|an|the)\b|${OPEN}[^${CLOSE}]{1,60}${CLOSE}\s+(?:to|into|through|along|down|in|as|on|from)\b|(?:a|an|the|its|their|this|that)\s+(?:token|value|flag|param(?:eter)?s?|arg(?:ument)?s?|context|ctx|callback|handler|request|response|config|options?|opts|signal|pointer|reference|ref|buffer|string|object|map|list|array|struct|error|err|id|key|header|cookie|session|user|payload|message|event|result|func(?:tion)?|closure|promise|channel|stream|writer|reader|file|path|url|uri)s?\b)`, 'gi');
 
 // ── What makes a clause a claim ────────────────────────────────────
 
-const SUBJECT = String.raw`(?:(?:the\s+)?pr(?:\s*#?\d+)?|pull request(?:\s*#?\d+)?|checksums?|digests?|signatures?|tests?|specs?|test ?suites?|suites?|e2e|checks?|assertions?|examples?|cases?|builds?|bundle|lint(?:ing|er|ers)?|ci|pipelines?|workflows?|(?:ci|deploy|build|test|lint|release|e2e|nightly)\s+jobs?|runs?|type ?checks?|typecheck(?:s|ing)?|types|tsc|clippy|eslint|ruff|mypy|flake8|rubocop|pylint|golangci-lint|prettier|vet|go vet|webpack|vite|esbuild|rollup|everything|${OPEN}[^${CLOSE}]{1,80}${CLOSE})`;
+const SUBJECT = String.raw`(?:(?:the\s+)?pr(?:\s*#?\d+)?|pull request(?:\s*#?\d+)?|checksums?|sha-?\d*sums?|md5sums?|digests?|signatures?|tests?|specs?|test ?suites?|suites?|e2e|checks?|assertions?|examples?|cases?|builds?|bundle|lint(?:ing|er|ers)?|ci|pipelines?|workflows?|(?:ci|deploy|build|test|lint|release|e2e|nightly)\s+jobs?|runs?|type ?checks?|typecheck(?:s|ing)?|types|tsc|clippy|eslint|ruff|mypy|flake8|rubocop|pylint|golangci-lint|prettier|vet|go vet|webpack|vite|esbuild|rollup|everything|${OPEN}[^${CLOSE}]{1,80}${CLOSE})`;
 const PASS_VERB = String.raw`(?:(?<!-)pass(?:es|ed|ing)?|green|(?<!\b(?:stops?|stopped|exits?|exited|shuts?\s+down|shut\s+down|terminates?|terminated|closes?|closed|cancels?|cancell?ed|unmounts?|unmounted|disconnects?|disconnected|tears?\s+down|tore\s+down|recovers?|recovered|restarts?|restarted|handles?|handled|separates?|separated|splits?|applies|applied|merges?|merged|rebases?|rebased|reverts?|reverted|drains?|drained|unwinds?|unwound|rolls?\s+back|rolled\s+back)\s)clean(?:ly)?|ok|okay|successful(?:ly)?|succeed(?:s|ed)?|went through|(?:finished|completed|ran|went|exited|exits)\s+(?:successfully|green|clean(?:ly)?|fine|ok|with 0|0|with (?:an? )?exit(?: code| status)? (?:of )?0)|complete[sd]?(?:\s+successfully)?|compiles?(?:\s+(?:cleanly|fine|successfully))?)`;
 const PASS_WORD = /\b(pass(es|ed|ing)?|green|succeed(s|ed)?|success(ful(ly)?)?|clean(ly)?|ok|okay|good|compiles?|builds|went through|complete[sd]?|verified|verif(y|ies)|match(es|ed)?|exit(?: code| status)? (?:of )?0)\b/i;
 
 const PASSED = [
     // "all 42 tests pass", "the test suite is green", "`go test ./...` is clean", "CI on main is green"
-    new RegExp(String.raw`(^|\b|${OPEN})${SUBJECT}[^.;:]{0,40}?\b(?:(?:is|are|was|were|stays?|stayed|came back|comes back|looks?|now|all|still|both|also|is now|are now)\s+){0,3}${PASS_VERB}\b`, 'i'),
+    new RegExp(String.raw`(^|\b|${OPEN})${SUBJECT}(?!\w)[^.;:]{0,40}?\b(?:(?:is|are|was|were|stays?|stayed|came back|comes back|looks?|now|all|still|both|also|is now|are now)\s+){0,3}${PASS_VERB}\b`, 'i'),
     // "passes all 12 tests", "passing all 18 of its tests"
     /\b(pass(es|ed)?|passing)\s+(all\s+|every\s+|the\s+)?(\d+\s+)?(of\s+(its|the|their)\s+)?(tests?|specs?|checks?|cases?|suites?|examples?)\b/i,
     // "12/12 pass", "Range tests pass 6/6", "3/3 green"
@@ -170,6 +173,9 @@ const PASSED = [
     // "the same 12 green tests", "all 40 passing specs"
     /\b(all\s+)?\d+\s+(green|passing)\s+(unit\s+|e2e\s+|integration\s+)?(tests?|specs?|checks?|cases?|examples?)\b/i,
 ];
+
+/** "The suite is still 34/34", "tests are 12/12": all of a count, said without a pass word. */
+const ALL_PASS = new RegExp(String.raw`(?:^|\b)${SUBJECT}(?!\w)\s+(?:is|are|was|were|stays?|stayed|remains?|remained)\s+(?:still\s+|now\s+|back\s+(?:to|at)\s+|at\s+)?(\d+)\s*\/\s*\1(?![\d/])`, 'i');
 
 const DEPLOY_WORD = /\b(deployed|redeployed|released|shipped|rolled out|rolled back|promoted|published|pushed|merged|tagged|provisioned)\b/gi;
 const DEPLOYED_OTHER = [
@@ -203,7 +209,12 @@ const IMPROVED = [
     /\b(dropped|cut|fell|went down|came down|shrank|shrunk)\b(?!\s+(?:it\s+|them\s+)?off\b)\s+(?:\w+\s+){0,3}?(?:by|to|from|down to|under|below)\s+~?\d/i,
     new RegExp(String.raw`\d(?:\.\d+)?\s?(?:ms|µs|us|ns|s|sec|secs|seconds|min|mins|minutes|%|x|×|kib|mib|gib|kb|mb|gb|bytes|req\/s|rps|qps|ops\/s|tok\/s|fps)(?![\w/])[^.;]{0,40}\b(faster|quicker|smaller|lower|down from|up from|halved|reduced|dropped)\b|\b(down|up) from\s+~?\d`, 'i'),
     /\b(much|far|a lot|way|significantly)\s+(faster|quicker|smaller|lighter)\b/i,
+    // "Roughly 2.6x on ASCII and 2x on UTF-8": a factor given as the result
+    /^(?:that'?s\s+|it'?s\s+|so\s+|overall\s+)?(?:roughly|about|around|approximately|nearly|almost|~)\s*\d+(?:\.\d+)?\s*(?:x|×)(?!\w)/i,
 ];
+
+/** "It beats the current model", "v3 outperforms the baseline": a result better than a bar. */
+const BEATS = /\b(beats?|outperforms?|exceeds?|surpass(?:es)?|better than (?:the )?(?:current|baseline|old|previous|existing|last)|clears the (?:bar|threshold))\b/i;
 
 /** "is in" claims at the end of a clause ("the fix is in", "is in on main"), not "is in play". */
 const IS_IN = String.raw`in(?=\s*(?:$|[.,;:!)]|now\b|on\s+(?:main|master|the branch)))`;
@@ -212,7 +223,7 @@ const DONE = [
     /^(all\s+)?(done|complete|completed|finished|sorted|all set|all wrapped up|wrapped up)\b/i,
     // "Backfill complete", "Index rebuild done", "Training finished for v7"
     /^(?:the\s+)?[\w-]+(?:\s+[\w-]+){0,2}\s+(?:is\s+|are\s+|has\s+|have\s+)?(?:now\s+|all\s+)?(?:done|complete|completed|finished)\b/i,
-    new RegExp(String.raw`\b(is|are|it'?s|that'?s|everything'?s|all)\s+(now\s+|also\s+)?(done|complete|completed|finished|in place|implemented|${IS_IN}|registered|wired( up)?|exported|added|configured|enabled|pinned|updated|documented|set|cleaned up|ported|migrated|bumped|merged|committed)\b`, 'i'),
+    new RegExp(String.raw`\b(is|are|it'?s|that'?s|everything'?s|all)\s+(now\s+|also\s+)?(done|complete|completed|finished|in place|implemented|${IS_IN}|registered|wired( up)?|exported|added|configured|enabled|pinned|updated|documented|set|cleaned up|ported|migrated|bumped|merged|committed|built|rebuilt|generated|regenerated|compiled|bundled|packaged)\b`, 'i'),
     new RegExp(String.raw`\b(i'?ve|i have|we'?ve|we have|i|we)\s+(now\s+|also\s+|just\s+|then\s+)?(${CHANGE_VERBS})\b`, 'i'),
     new RegExp(String.raw`^(${CHANGE_VERBS})\b`, 'i'),
     /\b(task|work|change|changes|refactor|migration|implementation|feature|fix|rename|update|upgrade|bump|backfill|patch)\s+(is|are)\s+(now\s+)?(done|complete|finished|in place|applied|in(?=\s*(?:$|[.,;:!)]|now\b|on\s+(?:main|master))))/i,
@@ -262,12 +273,19 @@ function targetOf(text, healthy) {
 /** Tools whose name starts a command a claim can name in inline code. */
 const COMMAND_START = /^(\.\/)?(npm|pnpm|yarn|npx|bun|bunx|deno|node|go|cargo|pytest|python3?|uv|poetry|pip3?|make|docker|kubectl|helm|git|gh|tsc|eslint|ruff|mypy|flake8|black|prettier|mvn|gradlew?|dotnet|swift|mix|bundle|rake|rspec|jest|vitest|mocha|phpunit|composer|terraform|fly|flyctl|vercel|netlify|curl|wget|sha256sum|shasum|twine|bazel|cmake|ninja|xcodebuild|rustc|clang|gcc|javac|java|scripts\/\S+|\S+\.sh)\b/;
 
-/** The commands a clause names in inline code. */
+/** A script by its path: `scripts/seed.py`, `./load.sh`, `bin/migrate`. */
+const SCRIPT = /^(\.{0,2}\/)?[\w.-]+(\/[\w.-]+)*\.(py|sh|bash|zsh|rb|pl|js|mjs|cjs|ts|php|ps1|r|jl|lua)$|^(\.\/|\.\.\/|bin\/|scripts?\/|tools\/)[\w./-]+$/i;
+/** Words that say the script before them ran ("ran clean", "exited 0"), or the one after them ("ran", "executed"). */
+const RAN_AFTER = /^\s*(?:ran|runs|exited|exits|finished|completed|succeeded|went through)\b/i;
+const RAN_BEFORE = /\b(?:ran|re-?ran|executed)\s+$/i;
+
+/** The commands a clause names in inline code, and the scripts it says ran. */
 function commandsIn(text) {
     const out = [];
     for (const m of text.matchAll(new RegExp(`${OPEN}([^${CLOSE}]{2,160})${CLOSE}`, 'g'))) {
         const c = m[1].trim();
-        if (COMMAND_START.test(c) && /\s/.test(c) || /^(tsc|pytest|jest|vitest|mocha|rspec|phpunit|make|eslint|ruff|mypy)$/i.test(c)) out.push(c);
+        const ran = SCRIPT.test(c) && (RAN_AFTER.test(text.slice(m.index + m[0].length)) || RAN_BEFORE.test(text.slice(0, m.index)));
+        if (COMMAND_START.test(c) && /\s/.test(c) || /^(tsc|pytest|jest|vitest|mocha|rspec|phpunit|make|eslint|ruff|mypy)$/i.test(c) || ran) out.push(c);
     }
     return out.slice(0, 3);
 }
@@ -297,7 +315,7 @@ const prose = (s) => s.replace(new RegExp(`${OPEN}[^${CLOSE}]*${CLOSE}`, 'g'), '
 
 /** The kind of claim a clause makes, with what it is about; or undefined. */
 function claimOf(clause) {
-    const s = clause.trim();
+    const s = clause.trim().replace(WHEN_PART, ' ').replace(/\s+/g, ' ').trim();
     const words = shown(s);
     const said = prose(s).replace(LIVES_IN, ' ');
     if (words === '' || ASKED.test(words) || REPORTED.test(words) || NOT_YET.test(words) || DESCRIBED.test(words) || HISTORY.test(words)) return undefined;
@@ -311,7 +329,7 @@ function claimOf(clause) {
     if (healthy && /\bhealth\s*(checks?|endpoints?|probes?)\b/i.test(words)) return { kind: 'deployed', target: 'health' };
     // "`load()` passes `true`" hands a value over; it is not a test result. A dot in inline code (`eslint .`) ends no sentence.
     const passing = s.replace(TRANSITIVE, ' ').replace(new RegExp(`${OPEN}[^${CLOSE}]*${CLOSE}`, 'g'), (m) => m.replace(/\./g, '·'));
-    if (PASSED.some((re) => re.test(passing)) && PASS_WORD.test(shown(passing))) {
+    if ((PASSED.some((re) => re.test(passing)) && PASS_WORD.test(shown(passing))) || ALL_PASS.test(passing)) {
         const subjects = subjectsOf(words);
         return { kind: 'passed', subject: subjects.length === 1 ? subjects[0] : subjects.includes('ci') ? 'ci' : subjects[0], subjects };
     }
@@ -330,6 +348,7 @@ function claimOf(clause) {
     }
     if (fixedByNegation || FIXED.some((re) => re.test(said))) return { kind: 'fixed' };
     if (IMPROVED.some((re) => re.test(said))) return { kind: 'fixed', improved: true };
+    if (BEATS.test(said)) return { kind: 'fixed', improved: true, beats: true };
     if (DONE.some((re) => re.test(said))) return { kind: 'done' };
     return undefined;
 }
@@ -346,13 +365,16 @@ export function kindOf(sentence) {
 
 /**
  * The claims in a reply, in order: `{ kind, text, part, subject?, target?,
- * improved?, commands?, metrics? }`. `text` is the sentence, `part` the
- * clause that claims; `subject` for `passed`, `target` for `deployed`.
+ * improved?, commands?, metrics?, next? }`. `text` is the sentence, `part`
+ * the clause that claims; `subject` for `passed`, `target` for `deployed`;
+ * `next` the sentence after a heading such as "Added", which says what it
+ * added.
  * At most one claim of each kind per sentence, and `max` in all.
  */
 export function claimsIn(text, { max = 8 } = {}) {
     const out = [];
-    for (const sentence of marked(text)) {
+    const sentences = marked(text);
+    for (const [at, sentence] of sentences.entries()) {
         const kinds = new Set();
         const whole = shown(sentence);
         const clauses = clausesOf(sentence);
@@ -369,6 +391,8 @@ export function claimsIn(text, { max = 8 } = {}) {
             if (!found || kinds.has(key)) continue;
             kinds.add(key);
             const commands = commandsIn(clause);
+            // A heading such as "Added" or "Done" claims what the sentence after it names.
+            const next = found.kind === 'done' && whole.split(/\s+/).length <= 3 ? sentences[at + 1] : undefined;
             // Figures count wherever the sentence quotes them: "41/41 passing, and coverage is at 92%".
             const metrics = found.kind === 'passed' || found.kind === 'fixed' ? metricsIn(found.improved ? clause : sentence) : [];
             out.push({
@@ -379,8 +403,10 @@ export function claimsIn(text, { max = 8 } = {}) {
                 ...(found.subjects && found.subjects.length > 1 ? { subjects: found.subjects } : {}),
                 ...(found.target ? { target: found.target } : {}),
                 ...(found.improved ? { improved: true } : {}),
+                ...(found.beats ? { beats: true } : {}),
                 ...(commands.length ? { commands } : {}),
                 ...(metrics.length ? { metrics } : {}),
+                ...(next ? { next: clip(shown(next), MAX_PART) } : {}),
             });
             if (out.length >= max) return out;
         }

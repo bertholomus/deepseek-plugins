@@ -7,11 +7,11 @@
  */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { DEV, HOLDOUT, LABELS, SEEN, SEEN2, loadCorpus, measure, table } from '../test/helpers/proof-corpus.mjs';
+import { DEV, HOLDOUT, LABELS, SEEN, SEEN2, SEEN3, loadCorpus, measure, table } from '../test/helpers/proof-corpus.mjs';
 
 const rows = [];
 const all = [];
-for (const [name, dir] of [['Dev (tuned on)', DEV], ['First hold-out (measured once, then tuned on)', SEEN], ['Second hold-out (measured once, then tuned on)', SEEN2], ['Hold-out (never tuned on)', HOLDOUT]]) {
+for (const [name, dir] of [['Dev (tuned on)', DEV], ['First hold-out (measured once, then tuned on)', SEEN], ['Second hold-out (measured once, then tuned on)', SEEN2], ['Third hold-out (measured once, then tuned on)', SEEN3], ['Hold-out (never tuned on)', HOLDOUT]]) {
     if (!LABELS.every((label) => existsSync(join(dir, `${label}.json`)))) continue;
     const m = measure(loadCorpus(dir));
     rows.push(table(name, m));
