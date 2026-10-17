@@ -32,9 +32,10 @@ export function standInReact() {
 
 /**
  * @param {URL} url - the plugin's lib/client.js.
- * @param {{ document?: object, globals?: object, console?: Console }} [options]
+ * @param {{ document?: object, globals?: object, console?: Console, ui?: object }} [options] - `ui`: DSH parts to stand in
+ *   with real code (a settings form model, say); every other part is an element named after itself.
  */
-export function loadClient(url, { document, globals = {}, console: log = console } = {}) {
+export function loadClient(url, { document, globals = {}, console: log = console, ui: parts = {} } = {}) {
     const source = readFileSync(url, 'utf8');
     let loaded;
     const window = { __ModuleLoader__: { load: (m) => { loaded = m; } }, addEventListener: () => {}, removeEventListener: () => {} };
@@ -43,7 +44,7 @@ export function loadClient(url, { document, globals = {}, console: log = console
         URL, console: log, setInterval, clearInterval, setTimeout, clearTimeout, queueMicrotask, Promise, ...globals,
     });
     if (!loaded) return { window };
-    const ui = new Proxy({}, { get: (_target, name) => (typeof name === 'string' ? name : undefined) });
+    const ui = new Proxy({}, { get: (_target, name) => (Object.hasOwn(parts, name) ? parts[name] : typeof name === 'string' ? name : undefined) });
     const react = standInReact();
     const modules = { react, 'react-dom': { createPortal: (node) => node }, '@deepseek-ai/dsh-client-ui-primitives': ui };
     return { id: loaded.id, client: loaded.factory((name) => modules[name]), window, react };

@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { askIn, asksSomeone, blockedIn, count, cutOff, decisionIn, plainError, spanWords, stateWord, timeWords } from '../shared/host/words.js';
@@ -17,6 +17,22 @@ import { OTHER_NAMES, standInReact, elementsOf, textIn } from './helpers/client.
 import { settle } from './helpers/clock.mjs';
 
 const temp = () => mkdtempSync(join(tmpdir(), 'suite-shared-'));
+
+/** Every .js file under a folder of the repo, by walking it (no git needed, so a copy without .git tests the same). */
+function jsFilesUnder(relative) {
+    const root = new URL('..', import.meta.url).pathname;
+    const out = [];
+    const walk = (dir) => {
+        for (const entry of readdirSync(join(root, dir), { withFileTypes: true })) {
+            if (entry.name === 'node_modules' || entry.name === '.e2e' || entry.name.startsWith('.')) continue;
+            const path = join(dir, entry.name);
+            if (entry.isDirectory()) walk(path);
+            else if (entry.name.endsWith('.js')) out.push(path);
+        }
+    };
+    walk(relative);
+    return out.sort();
+}
 
 // ── Words ─────────────────────────────────────────────────────────────
 
@@ -221,7 +237,8 @@ test('files: no suite plugin builds DSH\'s data folder path itself; DSH\'s dshHo
             continue;
         }
         seen += 1;
-        const libFiles = execFileSync('git', ['ls-files', `plugins/${plugin}/lib`], { cwd: new URL('..', import.meta.url), encoding: 'utf8' }).split('\n').filter((f) => f.endsWith('.js'));
+        const libFiles = jsFilesUnder(`plugins/${plugin}/lib`);
+        assert.ok(libFiles.includes(`plugins/${plugin}/lib/index.js`), `${plugin}: its files are found without git`);
         for (const file of libFiles) {
             const text = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
             assert.doesNotMatch(text, /homedir\(\)[^\n]*['"`]\.dsh['"`/]/, `${file} builds a ~/.dsh path`);
@@ -306,15 +323,31 @@ function kitWith({ document, window = {} } = {}) {
 
 test('kit: endpoints answer in words, and a broken answer never reaches a view as a throw', async () => {
     const kit = kitWith();
-    const api = kit.link('dsh-plugin-x');
+    const api = kit.link('dsh-plugin-x', { name: 'X' });
     const calls = [];
-    kit.setConnection({ rpc: { call: async (path, method, payload) => { calls.push([path, method, payload]); return method.endsWith('/broken') ? 'junk' : method.endsWith('/down') ? Promise.reject(new Error('socket closed')) : { ok: true, value: 7 }; } } });
+    kit.setConnection({ rpc: { call: async (path, method, payload) => {
+        calls.push([path, method, payload]);
+        if (method.endsWith('/broken')) return 'junk';
+        if (method.endsWith('/down')) throw new Error('socket closed');
+        if (method.endsWith('/gone')) throw new Error('transport failure for /api/dsh-plugin-x/gone: HTTP 404');
+        if (method.endsWith('/gone2')) return { ok: false, error: { code: 'transport', message: 'transport failure for /api/dsh-plugin-x/gone2: HTTP 404' } };
+        if (method.endsWith('/refused')) return { ok: false, error: { code: 'x/refused', message: 'Room 404 is full.' } };
+        return { ok: true, value: 7 };
+    } } });
     assert.deepEqual(await api.call('state', { a: 1 }), { ok: true, value: 7 });
     assert.deepEqual(calls[0], ['/api', 'dsh-plugin-x/state', { args: { a: 1 } }]);
     assert.equal(await api.read('state'), 7);
-    assert.deepEqual(await api.call('broken'), { ok: false, error: { code: 'unreadable', message: 'The plugin sent an answer this window cannot read.' } });
-    assert.equal((await api.call('down')).error.message, 'DSH did not answer (socket closed).');
+    assert.deepEqual(await api.call('broken'), { ok: false, error: { code: 'unreadable', message: 'X sent an answer this window cannot read. Reload the window.' } });
+    assert.deepEqual((await api.call('down')).error, { code: 'unreachable', message: 'DSH did not answer. Check that DSH is still running, then try again.' });
     await assert.rejects(api.read('broken'), /cannot read/);
+    // A plugin whose host half is not running: said in words, never as a path or an HTTP status.
+    for (const method of ['gone', 'gone2']) {
+        const result = await api.call(method);
+        assert.deepEqual(result, { ok: false, error: { code: 'not-running', message: 'X is not running in DSH.' } });
+    }
+    await assert.rejects(api.read('gone'), (error) => error.code === 'not-running' && !/404|\/api/.test(error.message));
+    // The plugin's own refusal stays its own, whatever its words hold.
+    assert.deepEqual((await api.call('refused')).error, { code: 'x/refused', message: 'Room 404 is full.' });
 });
 
 test('kit: one hub request per window serves every plugin, and moves only the views whose channel changed', async () => {

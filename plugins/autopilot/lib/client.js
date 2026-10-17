@@ -4,9 +4,15 @@
  * - The entry in DSH's panel list (`sidebar.panellist`, order 3), with a
  *   count when Autopilot waits on an answer, and its page in `main`.
  * - The page: the kill switch and the default rule; questions waiting on
- *   you; every session with its state, its open work, its next check and
- *   its rule (Auto, Ask first, Off); and the event log, where each action
- *   says what it did, why, and whether the session's log shows it arrived.
+ *   you; every session with its state, its open work, its next check (or
+ *   why it waits) and its rule (Auto, Ask first, Off); and the event log,
+ *   where each action says what it did, why, and whether the session's log
+ *   shows it arrived. When Autopilot cannot work it says why and what to
+ *   do: Session Watch is off, Autopilot is not running, or a setting is
+ *   wrong (which, what it must be, and where to change it).
+ * - Its settings on its page in Plugins (DSH's `plugins.bundle.config`),
+ *   saved through DSH's own settings form; they apply as soon as they are
+ *   saved.
  *
  * Hand-written in the module format DSH serves to the browser (no build
  * step). Nothing here may throw at load: DSH joins every plugin's browser
@@ -73,6 +79,21 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         `.${P}-glyph{color:var(--${P}-glyph)}`,
         `.${P}-badge{position:absolute;top:-5px;right:-7px;min-width:14px;height:14px;padding:0 3px;box-sizing:border-box;border-radius:7px;background:var(--dsw-alias-state-error-primary);color:#fff;font:600 10px/14px var(--dsw-font-family,system-ui);font-variant-numeric:tabular-nums;text-align:center}`,
         `.${P}-icon{position:relative;display:inline-flex;align-items:center;justify-content:center}`,
+        `.${P}-trouble-title{margin:10px 0 0;font:var(--dsw-font-s-strong-14);color:var(--dsw-alias-label-primary)}`,
+        `.${P}-trouble-text{margin:4px 0 0;font:var(--dsw-font-xs-13);color:var(--${P}-text-2);max-width:68ch}`,
+        `.${P}-trouble .${P}-actions{margin-top:10px}`,
+        `.${P}-settings{display:flex;flex-direction:column;gap:0;min-width:0;color:var(--dsw-alias-label-primary)}`,
+        `.${P}-set-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:10px 0;border-top:.5px solid var(--dsw-alias-border-l2);min-width:0}`,
+        `.${P}-set-row:first-child{border-top:0}`,
+        `.${P}-set-text{min-width:0;flex:1 1 auto}`,
+        `.${P}-set-title{font:var(--dsw-font-s-strong-14);color:var(--dsw-alias-label-primary)}`,
+        `.${P}-set-hint{margin-top:2px;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}`,
+        `.${P}-set-control{flex:0 0 auto;display:flex;align-items:center;gap:10px}`,
+        `.${P}-set-reset{padding:0;border:0;background:none;font:var(--dsw-font-xs-13);color:var(--dsw-alias-link,var(--dsw-alias-state-business-primary));text-decoration:underline;text-underline-offset:2px;cursor:pointer}`,
+        `.${P}-set-reset:focus-visible{outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px;border-radius:var(--dsw-radius-xs)}`,
+        `.${P}-set-note{margin:10px 0 0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary);max-width:72ch}`,
+        `.${P}-set-group{margin:14px 0 2px;font:var(--dsw-font-xs-strong-13);color:var(--dsw-alias-label-secondary)}`,
+        `@media (max-width:560px){.${P}-set-row{flex-wrap:wrap}.${P}-set-control{width:100%;justify-content:flex-start}}`,
         `body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop),body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop)::before,body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop)::after,body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop) *,body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop) *::before,body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop) *::after{animation:none!important;transition:none!important}`,
         `@media (prefers-reduced-motion:reduce){:is(.${P}-page,.${P}-pane,.${P}-pop),:is(.${P}-page,.${P}-pane,.${P}-pop)::before,:is(.${P}-page,.${P}-pane,.${P}-pop)::after,:is(.${P}-page,.${P}-pane,.${P}-pop) *,:is(.${P}-page,.${P}-pane,.${P}-pop) *::before,:is(.${P}-page,.${P}-pane,.${P}-pop) *::after{animation:none!important;transition:none!important}}`,
     ];
@@ -111,8 +132,16 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         });
     }
 
-    /** A plugin's endpoints over DSH's connection: `call(method, args)` gives `{ ok, value }` or `{ ok: false, error }`. */
-    function link(namespace) {
+    /** DSH's gateway answers 404 for a plugin whose host half is not running (switched off, or it needs a plugin that is). */
+    const missing = (text) => /\b404\b/.test(text);
+
+    /**
+     * A plugin's endpoints over DSH's connection: `call(method, args)` gives
+     * `{ ok, value }` or `{ ok: false, error: { code, message } }`, the
+     * message in words. Code `not-running`: DSH runs no such plugin now.
+     */
+    function link(namespace, { name = 'This plugin' } = {}) {
+        const notRunning = { ok: false, error: { code: 'not-running', message: `${name} is not running in DSH.` } };
         return {
             async call(method, args = {}) {
                 const connection = connections.current ?? await whenConnected();
@@ -121,18 +150,38 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 try {
                     result = await connection.rpc.call('/api', `${namespace}/${method}`, { args });
                 } catch (error) {
-                    return { ok: false, error: { code: 'unreachable', message: `DSH did not answer (${String(error?.message ?? error).slice(0, 160)}).` } };
+                    if (missing(String(error?.message ?? error))) return notRunning;
+                    return { ok: false, error: { code: 'unreachable', message: 'DSH did not answer. Check that DSH is still running, then try again.' } };
                 }
+                // A plugin's own refusals carry its code ("autopilot/refused"); the gateway's transport failures do not.
+                if (isRecord(result) && result.ok === false && isRecord(result.error) && !String(result.error.code ?? '').includes('/') && missing(String(result.error.message ?? ''))) return notRunning;
                 return isRecord(result) && (result.ok === true || (result.ok === false && isRecord(result.error))) ? result
-                    : { ok: false, error: { code: 'unreadable', message: 'The plugin sent an answer this window cannot read.' } };
+                    : { ok: false, error: { code: 'unreadable', message: `${name} sent an answer this window cannot read. Reload the window.` } };
             },
-            /** The value, or a thrown Error with the plugin's words. */
+            /** The value, or a thrown Error with the plugin's words (and its `code`). */
             async read(method, args) {
                 const result = await this.call(method, args);
                 if (result.ok) return result.value;
-                throw new Error(result.error?.message || 'The plugin did not answer.');
+                throw Object.assign(new Error(result.error?.message || `${name} did not answer.`), { code: result.error?.code });
             },
         };
+    }
+
+    // ── DSH's Plugins page ────────────────────────────────────────────
+    const nav = { current: undefined };
+    /** DSH's `pluginNavigation` service, as the plugin's parts receive it. */
+    function setNavigation(service) {
+        nav.current = service;
+    }
+    /** Open a plugin's page in DSH's Plugins page (its switch and its settings); false when this DSH cannot. */
+    function openPlugin(packageName) {
+        try {
+            if (typeof nav.current?.openBundle !== 'function') return false;
+            nav.current.openBundle(packageName);
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     // ── One open request per window, for every suite plugin ───────────
@@ -247,7 +296,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
      * says so in `error`.
      */
     function useLive(read, channels, { delayMs = 250 } = {}) {
-        const [state, setState] = React.useState({ data: undefined, error: undefined, loading: true });
+        const [state, setState] = React.useState({ data: undefined, error: undefined, code: undefined, loading: true });
         const readRef = React.useRef(read);
         readRef.current = read;
         const timer = React.useRef(undefined);
@@ -255,9 +304,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const refresh = React.useCallback(async () => {
             try {
                 const data = await readRef.current();
-                if (alive.current) setState({ data, error: undefined, loading: false });
+                if (alive.current) setState({ data, error: undefined, code: undefined, loading: false });
             } catch (error) {
-                if (alive.current) setState((s) => ({ data: s.data, error: String(error?.message ?? error), loading: false }));
+                if (alive.current) setState((s) => ({ data: s.data, error: String(error?.message ?? error), code: typeof error?.code === 'string' ? error.code : undefined, loading: false }));
             }
         }, []);
         const key = channels.join(',');
@@ -317,9 +366,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     function toneOf(word) {
         switch (word) {
             case 'running': case 'working': case 'queued': case 'in the queue': case 'sending': case 'starting': case 'waiting for a round': return 'info';
-            case 'waiting for approval': case 'waiting on you': case 'needs a decision': case 'asked you': case 'cut off': case 'cut short': case 'backed off': case 'held': return 'warning';
-            case 'failed': case 'blocked': case 'not delivered': case 'not started': return 'danger';
-            case 'delivered': case 'started': case 'done': case 'answered': case 'read': return 'success';
+            case 'waiting for approval': case 'waiting on you': case 'needs a decision': case 'asked you': case 'cut off': case 'cut short': case 'backed off': case 'gave up': case 'held': case 'not confirmed': case 'waiting on a setting': return 'warning';
+            case 'failed': case 'blocked': case 'not delivered': case 'not started': case 'not sent': return 'danger';
+            case 'delivered': case 'started': case 'done': case 'answered': case 'read': case 'sent': return 'success';
             case 'stopped': case 'paused': return 'neutral';
             default: return 'quiet';
         }
@@ -373,10 +422,207 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         return h('time', { className: `${P}-num`, dateTime: new Date(at).toISOString(), title: full }, agoText(at, now));
     }
 
+    // ── States every suite page shares ────────────────────────────────
+
+    const WATCH_PACKAGE = 'dsh-plugin-session-watch';
+    const watchLink = link(WATCH_PACKAGE, { name: 'Session Watch' });
+
+    /**
+     * What the page shows when its plugin cannot be read: not running (with
+     * why: the Session Watch it needs is off, or the plugin itself stopped)
+     * or DSH not answering. Each says what to do next, with a button to the
+     * place to do it; the page comes back by itself once the plugin runs.
+     */
+    function Trouble({ name, packageName, code, text, onRetry, needsWatch = true }) {
+        const [watchUp, setWatchUp] = React.useState(undefined);
+        React.useEffect(() => {
+            if (code !== 'not-running' || !needsWatch) return undefined;
+            let alive = true;
+            void watchLink.call('status').then((result) => { if (alive) setWatchUp(result.ok || result.error?.code !== 'not-running'); });
+            return () => { alive = false; };
+        }, [code, needsWatch, text]);
+        const button = (label, target) => (typeof nav.current?.openBundle === 'function'
+            ? h(ui.Button, { variant: 'primary', size: 'sm', onClick: () => openPlugin(target) }, label) : null);
+        const retry = onRetry ? h(ui.Button, { variant: 'ghost', size: 'sm', onClick: onRetry }, 'Check again') : null;
+        let kind;
+        let title;
+        let next;
+        let action = null;
+        if (code === 'not-running' && needsWatch && watchUp === false) {
+            kind = 'watch-off';
+            title = `${name} needs Session Watch, which is not running.`;
+            next = `Switch Session Watch on in Plugins. This page comes back by itself once it runs.`;
+            action = button('Open Session Watch in Plugins', WATCH_PACKAGE);
+        } else if (code === 'not-running') {
+            kind = 'not-running';
+            title = `${name} is not running.`;
+            next = `Open ${name} in Plugins and switch it off and on again. If it still does not start, restart DSH.`;
+            action = button(`Open ${name} in Plugins`, packageName);
+        } else {
+            kind = 'unreachable';
+            title = `Couldn't read ${name}.`;
+            next = text || 'DSH did not answer. Check that DSH is still running, then try again.';
+        }
+        return h('div', { className: `${P}-trouble`, role: 'alert', 'data-suite-trouble': kind },
+            h('p', { className: `${P}-trouble-title` }, title),
+            h('p', { className: `${P}-trouble-text` }, next),
+            h('div', { className: `${P}-actions` }, action, retry));
+    }
+
+    /**
+     * A setting is wrong, so the plugin does no work: which setting, what it
+     * must be, and where to change it (its settings in Plugins when the
+     * person can change it there, else DSH's profile).
+     */
+    function SettingsProblem({ name, packageName, problem }) {
+        const live = problem?.live === true;
+        return h('div', { className: `${P}-trouble`, role: 'alert', 'data-suite-trouble': 'setting' },
+            h('p', { className: `${P}-trouble-title` }, `${name} is waiting for a setting to be fixed.`),
+            h('p', { className: `${P}-trouble-text` }, `${String(problem?.text ?? 'A setting is wrong').replace(/\.$/, '')}.`),
+            h('p', { className: `${P}-trouble-text` }, live
+                ? `Change it in ${name}'s settings in Plugins. ${name} starts working again as soon as you save.`
+                : `Change it in ${name}'s entry in DSH's profile (cordis.patch.yml), then restart DSH.`),
+            live && typeof nav.current?.openBundle === 'function'
+                ? h('div', { className: `${P}-actions` }, h(ui.Button, { variant: 'primary', size: 'sm', onClick: () => openPlugin(packageName) }, `Open ${name}'s settings`)) : null);
+    }
+
+    // ── Settings on the plugin's page in Plugins ──────────────────────
+
+    /**
+     * How one setting turns from its stored value into the text its control
+     * shows, and back. A draft the setting cannot take (a number out of its
+     * range) blocks the Save, so nothing out of range is ever stored.
+     */
+    function fieldSpec(f) {
+        const clear = { kind: 'clear' };
+        const whole = (text) => (/^\d+$/.test(text) ? Number(text) : undefined);
+        switch (f.kind) {
+            case 'switch':
+                return { field: f.name, format: (v) => (v === true ? 'on' : v === false ? 'off' : ''), parse: (t) => (t === 'on' ? { kind: 'set', value: true } : t === 'off' ? { kind: 'set', value: false } : t === '' ? clear : undefined) };
+            case 'choice':
+                return { field: f.name, format: (v) => (typeof v === 'string' ? v : ''), parse: (t) => (t === '' ? clear : f.options.some((o) => o.value === t) ? { kind: 'set', value: t } : undefined) };
+            case 'number':
+                return {
+                    field: f.name,
+                    format: (v) => (Number.isFinite(v) ? String(v) : ''),
+                    parse: (t) => {
+                        const text = String(t).trim();
+                        if (text === '') return clear;
+                        const n = whole(text);
+                        return n !== undefined && n >= f.min && n <= f.max ? { kind: 'set', value: n } : undefined;
+                    },
+                };
+            case 'numbers':
+                return {
+                    field: f.name,
+                    format: (v) => (Array.isArray(v) ? v.join(', ') : ''),
+                    parse: (t) => {
+                        const text = String(t).trim();
+                        if (text === '') return clear;
+                        const list = text.split(/[\s,]+/).filter(Boolean).map(whole);
+                        if (list.length === 0 || list.length > (f.maxItems ?? 10)) return undefined;
+                        return list.every((n) => n !== undefined && n >= f.min && n <= f.max) ? { kind: 'set', value: list } : undefined;
+                    },
+                };
+            default:
+                return {
+                    field: f.name,
+                    format: (v) => (typeof v === 'string' ? v : ''),
+                    parse: (t) => {
+                        const text = String(t).trim();
+                        if (text === '') return clear;
+                        return typeof f.accepts === 'function' && !f.accepts(text) ? undefined : { kind: 'set', value: text };
+                    },
+                };
+        }
+    }
+
+    /** The words under a number that does not fit. */
+    function invalidWords(f) {
+        if (f.invalid) return f.invalid;
+        if (f.kind === 'number') return `A whole number from ${f.min} to ${f.max}, or empty for the default (${f.default}).`;
+        if (f.kind === 'numbers') return `Up to ${f.maxItems ?? 10} whole numbers from ${f.min} to ${f.max}, with commas between them, or empty for the default (${(f.default ?? []).join(', ')}).`;
+        return 'This value does not fit here.';
+    }
+
+    /** One setting's row: a switch or a choice drawn here, anything typed in DSH's own field. */
+    function SettingRow({ f, state, disabled, actions }) {
+        const id = `${P}-set-${f.name}`;
+        const edit = (text) => actions.edit(f.name, text);
+        const reset = state.overridden
+            ? h('button', { type: 'button', className: `${P}-set-reset`, disabled, onClick: () => actions.resetField(f.name), 'aria-label': `Use the default for ${f.title}` }, 'Use the default') : null;
+        if (f.kind === 'switch' || f.kind === 'choice') {
+            return h('div', { className: `${P}-set-row`, 'data-suite-setting': f.name },
+                h('div', { className: `${P}-set-text` },
+                    h('div', { className: `${P}-set-title`, id: `${id}-label` }, f.title),
+                    h('div', { className: `${P}-set-hint` }, f.hint)),
+                h('div', { className: `${P}-set-control` }, reset,
+                    f.kind === 'switch'
+                        ? h(ui.Switch, { checked: state.text === 'on', label: f.title, disabled, onChange: (next) => edit(next ? 'on' : 'off') })
+                        : h(ui.SegmentedControl, { id, label: f.title, value: state.text || f.default, options: f.options, disabled, onChange: edit })));
+        }
+        return h('div', { className: `${P}-set-row`, 'data-suite-setting': f.name },
+            h('div', { className: `${P}-set-text` },
+                h(ui.SettingsValueField, {
+                    id,
+                    label: f.title,
+                    hint: f.hint,
+                    text: state.text,
+                    overridden: state.overridden,
+                    invalid: state.invalid,
+                    overriddenLabel: 'Changed',
+                    resetLabel: 'Use the default',
+                    invalidLabel: invalidWords(f),
+                    disabled,
+                    numeric: f.kind === 'number',
+                    onEdit: edit,
+                    onReset: () => actions.resetField(f.name),
+                })));
+    }
+
+    function SettingsBody({ form, name, fields, note }) {
+        const snap = React.useSyncExternalStore(form.subscribe, form.getSnapshot);
+        const disabled = !snap.writable || snap.saving;
+        const labels = {
+            unavailable: `${name} is not running, so its settings cannot be changed right now. Switch it on above.`,
+            readOnly: 'This DSH keeps its settings read-only, so they cannot be changed here.',
+            saveFailed: 'DSH did not save these. Your changes are still here, so you can try again.',
+            save: 'Save',
+            saving: 'Saving…',
+        };
+        const rows = [];
+        for (const f of fields) {
+            if (f.group) rows.push(h('h4', { key: `g-${f.name}`, className: `${P}-set-group` }, f.group));
+            rows.push(h(SettingRow, { key: f.name, f, state: snap[f.name] ?? { text: '', overridden: false, invalid: false }, disabled, actions: form.actions }));
+        }
+        return h('div', { className: `${P}-settings`, 'data-suite-settings': bundle },
+            h(ui.SettingsForm, { labels, state: snap, onSave: form.actions.save, onDiscard: form.actions.discard },
+                ...rows,
+                note ? h('p', { key: 'note', className: `${P}-set-note` }, note) : null));
+    }
+
+    /**
+     * Put the plugin's settings on its page in Plugins: DSH's own settings
+     * form (staged as typed, written on Save), registered only while DSH
+     * serves them, which is while the plugin runs. Each field:
+     * `{ name, kind: 'switch'|'choice'|'number'|'numbers'|'text', title, hint, default, min?, max?, options?, group? }`.
+     * Does nothing on a DSH without settings forms.
+     */
+    function applySettings(ctx, { entry, name, summary, fields, note }) {
+        if (typeof ui.SettingsFormModel !== 'function' || typeof ui.SettingsForm !== 'function' || typeof ctx.configForms?.get !== 'function') return;
+        const model = new ui.SettingsFormModel(ctx.configForms.get(entry), fields.map(fieldSpec));
+        const store = model.bind(() => ({ ...model.shell(), ...Object.fromEntries(fields.map((f) => [f.name, model.field(f.name)])) }));
+        const form = { subscribe: (fn) => store.subscribe(fn), getSnapshot: () => store.getSnapshot(), actions: model.actions() };
+        const View = (props) => (props?.view === 'summary' ? summary : h(SettingsBody, { form, name, fields, note }));
+        ctx.effect(() => () => model.dispose(), `${bundle}: settings form`);
+        ctx.effect(() => ctx.configForms.whileServed([entry], () => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({ name: 'plugins.bundle.config', key: bundle }, View))), `${bundle}: settings page`);
+    }
+
     return {
         P, css, injectStyle, removeStyle, setConnection, whenConnected, link, hub, useLive,
+        setNavigation, openPlugin, fieldSpec, invalidWords, applySettings,
         timeText, agoText, spanText, toneOf, isRecord,
-        Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText,
+        Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText, Trouble, SettingsProblem, SettingsBody, SettingRow,
     };
 }
 // </suite-kit>
@@ -385,7 +631,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const PAGE = `${BUNDLE}:page`;
         const kit = suiteKit({ prefix: 'dshap', bundle: BUNDLE, React, ui, h });
         const P = kit.P;
-        const api = kit.link(BUNDLE);
+        const api = kit.link(BUNDLE, { name: 'Autopilot' });
+        /** Decisions, when it runs: Ask first questions show there too. */
+        const decisionsApi = kit.link('dsh-plugin-decisions', { name: 'Decisions' });
 
         const RULES = [
             { value: 'auto', label: 'Auto' },
@@ -394,8 +642,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         ];
         const RULE_HINT = {
             auto: 'Autopilot acts on its own.',
-            ask: 'Autopilot asks you first, here and in Decisions.',
+            ask: 'Autopilot asks you first, on this page.',
+            askDecisions: 'Autopilot asks you first, on this page and in Decisions.',
             off: 'Autopilot leaves the session alone.',
+            whileOff: 'Applies when Autopilot is on.',
         };
 
         const TEXT = {
@@ -405,7 +655,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             on: 'Autopilot is on',
             off: 'Autopilot is off',
             offLine: 'Off: no notes, no resumes, no goal starts. Nothing it scheduled will run.',
-            disabled: 'Autopilot is switched off in its settings (Plugins → Autopilot → enabled), so it watches nothing. Switch it on there to use this page.',
+            disabled: 'Autopilot is switched off in DSH\'s profile (enabled: false in its entry in cordis.patch.yml), so it watches nothing. To use it, set enabled to true there and restart DSH. To remove it instead, switch it off in Plugins.',
             defaultRule: 'Sessions without their own rule',
             waiting: 'Waiting for you',
             sessions: 'Sessions',
@@ -423,6 +673,19 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             loading: 'Reading the sessions',
         };
 
+        /** Autopilot's settings on its page in Plugins: the same names and ranges as its config (lib/index.js). */
+        const SETTINGS = [
+            { name: 'idleSeconds', kind: 'number', title: 'Quiet time before a note, in seconds', hint: 'How long a session with open todos or an active goal stays quiet before Autopilot tells it to carry on.', default: 600, min: 5, max: 86400 },
+            { name: 'maxNudges', kind: 'number', title: 'Notes in a row without progress', hint: 'After this many notes that bring no todo done and no goal round, Autopilot backs off until you write in the session.', default: 2, min: 1, max: 10 },
+            { name: 'maxNotesPerHour', kind: 'number', title: 'Notes an hour, at most', hint: 'Over all sessions, goal starts included. Past it, Autopilot holds back and says so in its log.', default: 20, min: 1, max: 500 },
+            { name: 'resumeAfterRestart', kind: 'switch', title: 'Resume after a restart', hint: 'After DSH restarts, tell the sessions it cut off to carry on.', default: true, group: 'After a restart' },
+            { name: 'resumeWindowHours', kind: 'number', title: 'Resume sessions cut off within, in hours', hint: 'Sessions cut off longer ago are left to you.', default: 6, min: 1, max: 168 },
+            { name: 'idleWindowHours', kind: 'number', title: 'At start, look back, in hours', hint: 'When DSH starts, idle sessions that went quiet within this many hours get a look; older ones wait for their next turn.', default: 2, min: 1, max: 168 },
+            { name: 'errorRetrySeconds', kind: 'numbers', title: 'Waits before each try after an error, in seconds', hint: 'One try per number, with commas between them. After the last, Autopilot stops and says so.', default: [120, 600, 1800], min: 0, max: 86400, maxItems: 10, group: 'After an error' },
+        ];
+        const SETTINGS_SUMMARY = 'How long a session waits before a note, how many notes, and what happens after a restart or an error.';
+        const SETTINGS_NOTE = 'Changes apply as soon as you save. Each session\'s rule and the switch that stops everything are on Autopilot\'s own page in the sidebar.';
+
         const CSS = [
             `.${P}-status{margin:10px 0 0;font:var(--dsw-font-xs-13);color:var(--${P}-text-2)}`,
             `.${P}-switch{display:flex;align-items:center;gap:10px;font:var(--dsw-font-s-strong-14)}`,
@@ -435,6 +698,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-details>summary{cursor:pointer;font:var(--dsw-font-xs-13);color:var(--${P}-link);width:max-content;border-radius:var(--dsw-radius-xs)}`,
             `.${P}-details>summary:focus-visible{outline:2px solid var(--${P}-ring);outline-offset:1px}`,
             `.${P}-log-time{flex:0 0 auto;min-width:64px;font:var(--dsw-font-xs-13);color:var(--${P}-text-2)}`,
+            `.${P}-hold{margin-top:4px;font:var(--dsw-font-xs-13);color:var(--${P}-warn)}`,
             `@media (max-width:560px){.${P}-item{flex-wrap:wrap}.${P}-item-side{justify-content:flex-start;width:100%}.${P}-session-rule{align-items:flex-start}}`,
         ];
 
@@ -461,8 +725,25 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return h('button', { type: 'button', className: `${P}-link ${P}-title`, onClick: () => onOpen(sessionId), title: 'Open this session' }, title);
         }
 
+        /** Whether Decisions runs (Ask first questions show there too): asked once per page. */
+        function useDecisions() {
+            const [up, setUp] = React.useState(false);
+            React.useEffect(() => {
+                let alive = true;
+                void decisionsApi.call('badge').then((result) => { if (alive) setUp(result.ok === true); });
+                return () => { alive = false; };
+            }, []);
+            return up;
+        }
+
+        function ruleHint(rule, { paused, decisions }) {
+            if (paused) return RULE_HINT.whileOff;
+            if (rule === 'ask' && decisions) return RULE_HINT.askDecisions;
+            return RULE_HINT[rule] ?? '';
+        }
+
         /** The kill switch, the summary and the default rule. */
-        function HeaderCard({ data, busy, act }) {
+        function HeaderCard({ data, busy, act, decisions }) {
             const paused = data.paused;
             const enabled = data.enabled;
             const status = !enabled ? TEXT.disabled
@@ -481,17 +762,18 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 attrs: { 'data-autopilot-header': paused ? 'off' : 'on' },
             },
             h('p', { className: `${P}-status`, role: 'status' }, status),
-            enabled ? h('div', { className: `${P}-rule-row` },
+            enabled ? h('div', { className: `${P}-rule-row`, 'data-autopilot-rule-row': paused ? 'off' : 'on' },
                 h('span', { className: `${P}-rule-label`, id: `${P}-default-rule-label` }, TEXT.defaultRule),
                 h(ui.SegmentedControl, { id: `${P}-default-rule`, label: TEXT.defaultRule, value: data.defaultRule, options: RULES, disabled: busy, onChange: (rule) => act('setDefaultRule', { rule }) }),
-                h('span', { className: `${P}-rule-label` }, RULE_HINT[data.defaultRule] ?? '')) : null);
+                h('span', { className: `${P}-rule-label` }, ruleHint(data.defaultRule, { paused, decisions }))) : null,
+            data.watchProblem ? h('p', { className: `${P}-note`, 'data-autopilot-watch-problem': '' }, `Session Watch uses its default for a wrong setting: ${String(data.watchProblem.text).replace(/\.$/, '')}. Change it in Session Watch's settings in Plugins.`) : null);
         }
 
         /** Questions Autopilot waits on, and sessions it backed off from. */
         function WaitingCard({ data, busy, act, onOpen }) {
             const backed = data.sessions.filter((s) => s.backedOff || s.gaveUp);
             if (data.asks.length === 0 && backed.length === 0) return null;
-            return h(kit.Card, { title: TEXT.waiting, sub: 'Autopilot holds these until you choose.', attrs: { 'data-autopilot-waiting': '' } },
+            return h(kit.Card, { title: TEXT.waiting, sub: data.paused ? 'Autopilot is off: switch it on to act on these.' : 'Autopilot holds these until you choose.', attrs: { 'data-autopilot-waiting': '' } },
                 h('ul', { className: `${P}-list` },
                     ...data.asks.map((ask) => h('li', { key: ask.id, className: `${P}-item`, 'data-autopilot-ask': ask.id },
                         h('div', { className: `${P}-item-main` },
@@ -523,7 +805,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return h('li', { className: `${P}-item`, 'data-autopilot-session': s.sessionId },
                 h('div', { className: `${P}-item-main` },
                     h(SessionTitle, { title: s.title, sessionId: s.sessionId, onOpen }),
-                    meta ? h('div', { className: `${P}-meta` }, meta) : null),
+                    meta ? h('div', { className: `${P}-meta` }, meta) : null,
+                    s.hold ? h('div', { className: `${P}-hold`, 'data-autopilot-hold': '' }, `${s.hold[0].toUpperCase()}${s.hold.slice(1)}.`) : null),
                 h('div', { className: `${P}-item-side` },
                     h(kit.StateTag, { word: s.word }),
                     h('div', { className: `${P}-session-rule` },
@@ -572,7 +855,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         }
 
         function AutopilotPage({ autopilot }) {
-            const live = kit.useLive(readState, ['autopilot', 'sessions', 'asks'], { delayMs: 400 });
+            const live = kit.useLive(readState, ['autopilot', 'sessions', 'asks', 'settings'], { delayMs: 400 });
+            const decisions = useDecisions();
             const [busy, setBusy] = React.useState(false);
             const [failure, setFailure] = React.useState(undefined);
             const onOpen = useOpener(autopilot?.openSession);
@@ -585,25 +869,35 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 void live.refresh();
             }, [live.refresh]);
             const data = live.data;
+            // Not running (or Session Watch is off): old data would mislead, so the page says why and what to do.
+            const down = live.code === 'not-running' || (data === undefined && live.error);
             return h(kit.Page, { label: TEXT.title, attrs: { 'data-autopilot-page': '' } },
-                data === undefined
-                    ? h(kit.Card, { title: TEXT.title, headingLevel: 1, main: true },
-                        live.error ? h(kit.ErrorLine, { lead: 'Couldn\'t read Autopilot', text: live.error, onRetry: live.refresh }) : h(kit.Loading, { text: TEXT.loading }))
-                    : [
-                        h(HeaderCard, { key: 'head', data, busy, act }),
-                        live.error ? h(kit.ErrorLine, { key: 'refresh', text: live.error, onRetry: live.refresh }) : null,
-                        failure ? h(kit.ErrorLine, { key: 'act', lead: 'Not changed', text: failure }) : null,
-                        data.enabled ? h(WaitingCard, { key: 'waiting', data, busy, act, onOpen }) : null,
-                        data.enabled ? h(SessionsCard, { key: 'sessions', data, busy, act, onOpen }) : null,
-                        h(LogCard, { key: 'log', data, onOpen }),
-                    ]);
+                down
+                    ? h(kit.Card, { title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary },
+                        h(kit.Trouble, { name: 'Autopilot', packageName: BUNDLE, code: live.code, text: live.error, onRetry: live.refresh }))
+                    : data === undefined
+                        ? h(kit.Card, { title: TEXT.title, headingLevel: 1, main: true }, h(kit.Loading, { text: TEXT.loading }))
+                        : data.problem
+                            ? [
+                                h(kit.Card, { key: 'head', title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary, attrs: { 'data-autopilot-header': 'problem' } },
+                                    h(kit.SettingsProblem, { name: 'Autopilot', packageName: BUNDLE, problem: data.problem })),
+                                h(LogCard, { key: 'log', data, onOpen }),
+                            ]
+                            : [
+                                h(HeaderCard, { key: 'head', data, busy, act, decisions }),
+                                live.error ? h(kit.ErrorLine, { key: 'refresh', text: live.error, onRetry: live.refresh }) : null,
+                                failure ? h(kit.ErrorLine, { key: 'act', lead: 'Not changed', text: failure }) : null,
+                                data.enabled ? h(WaitingCard, { key: 'waiting', data, busy, act, onOpen }) : null,
+                                data.enabled ? h(SessionsCard, { key: 'sessions', data, busy, act, onOpen }) : null,
+                                h(LogCard, { key: 'log', data, onOpen }),
+                            ]);
         }
 
         /** The panel entry's glyph, with a count while Autopilot waits on an answer. */
         function AutopilotIcon({ size = 16 }) {
-            const live = kit.useLive(() => api.read('badge'), ['autopilot', 'asks'], { delayMs: 600 });
-            const asks = live.data?.asks ?? 0;
-            const paused = live.data?.paused === true;
+            const live = kit.useLive(() => api.read('badge'), ['autopilot', 'asks', 'settings'], { delayMs: 600 });
+            const asks = live.code === 'not-running' ? 0 : live.data?.asks ?? 0;
+            const paused = live.data?.paused === true || live.code === 'not-running';
             return h('span', { className: `${P}-icon`, 'data-autopilot-icon': paused ? 'off' : 'on' },
                 h('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': 'true', style: paused ? { opacity: 0.55 } : undefined },
                     h('path', { d: 'M20 12a8 8 0 1 1-2.34-5.66' }),
@@ -630,6 +924,19 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 };
             }, 'autopilot: connection'));
             ctx.inject(['uiWorkspace'], (scope) => applyViews(scope));
+            // DSH's Plugins page: the buttons that open Autopilot's (or Session Watch's) switch and settings.
+            ctx.inject(['pluginNavigation'], (scope) => {
+                kit.setNavigation(scope.pluginNavigation);
+                return () => kit.setNavigation(undefined);
+            });
+            // Its settings on its page in Plugins, through DSH's own settings form; one part failing never stops the others.
+            ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => {
+                try {
+                    kit.applySettings(scope, { entry: 'autopilot', name: 'Autopilot', summary: SETTINGS_SUMMARY, fields: SETTINGS, note: SETTINGS_NOTE });
+                } catch (error) {
+                    console?.warn?.('dsh-plugin-autopilot: settings:', error);
+                }
+            });
         }
 
         /** The page and its sidebar entry, once DSH's workspace (which opens sessions) is there. */
@@ -649,7 +956,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         module.exports.inject = inject;
         module.exports.apply = apply;
         // For the plugin's own tests.
-        module.exports.internals = { kit, TEXT, RULES, CSS, nextText, AutopilotPage, AutopilotIcon, HeaderCard, SessionsCard, LogCard, WaitingCard };
+        module.exports.internals = { kit, TEXT, RULES, RULE_HINT, CSS, SETTINGS, nextText, ruleHint, AutopilotPage, AutopilotIcon, HeaderCard, SessionsCard, LogCard, WaitingCard };
         return module.exports;
     },
 });

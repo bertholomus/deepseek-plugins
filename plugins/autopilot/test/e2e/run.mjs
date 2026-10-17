@@ -323,7 +323,7 @@ try {
     await step('after a quit: each cut-off session gets a carry-on note, read into a turn', async () => {
         const note = await entryReaches(ids.cut, 'resume', 'delivered', 1, 40000);
         check('after a quit, the cut-off session gets a carry-on note, delivered', note.state === 'delivered', JSON.stringify(note));
-        check('the note says what happened and what to do', /^\[Autopilot\] DSH stopped while you were working: turn 1 was cut off at .+\. Check what already finished \(files, commands, todos\), then carry on from where you stopped\./.test(note.note ?? ''), note.note);
+        check('the note says what happened and what to do', /^\[Autopilot\] DSH stopped while you were working: turn 1 was cut off \(its last step was at .+\)\. Check what already finished \(files, commands, todos\), then carry on from where you stopped\./.test(note.note ?? ''), note.note);
         check('its Why line says a quit can do it too', /DSH stopped before it finished \(a quit, a restart or a crash\)/.test(note.why ?? ''), note.why);
         check('the session\'s own log shows the note read into a turn', await readIntoTurn(ids.cut, '[Autopilot] DSH stopped while you were working'));
         const goalNote = await entryReaches(ids.cutGoal, 'resume', 'delivered', 1, 40000);

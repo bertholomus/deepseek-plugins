@@ -6,6 +6,7 @@
  *   when any suite plugin's channel moves (or after `timeoutMs`), so each
  *   plugin's window reads its own state only when something changed.
  * - `sessions()`: every session with its state word, for the suite's pages.
+ * - `status()`: that the watcher runs, and a setting of its that is wrong.
  *
  * Parameters are plain names: the gateway reads them from the method source.
  *
@@ -45,6 +46,12 @@ export class SessionWatchRemote {
     async sessions() {
         return { items: await this.watch.list() };
     }
+
+    /** That the watcher runs (the suite's pages ask when their own plugin does not answer), and a wrong setting, if any. */
+    async status() {
+        const problem = this.watch.settings?.problem;
+        return { running: true, ...(problem ? { problem } : {}) };
+    }
 }
 
 /** Mark methods the way the `@Remote` decorator does in DSH's TypeScript: DSH's gateway serves only marked methods. */
@@ -56,4 +63,4 @@ function markRemote(Class, names) {
         });
     }
 }
-markRemote(SessionWatchRemote, ['wait', 'sessions']);
+markRemote(SessionWatchRemote, ['wait', 'sessions', 'status']);

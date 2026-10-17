@@ -9,6 +9,8 @@ import { join } from 'node:path';
 import { Pilot, RULES, hasOpenWork, markOf, parseData, progressed } from '../plugins/autopilot/lib/pilot.js';
 import { actionLabel, answerNote, carryOnNote, errorNote, nudgeNote, openWork, question, whyBackOff, whyResume } from '../plugins/autopilot/lib/notes.js';
 import { lastWords, pageState } from '../plugins/autopilot/lib/page.js';
+import { DEFAULTS as CONFIG_DEFAULTS, LIVE_SETTINGS, SETTING_TITLES, changedWords, checkConfig, savedEntry } from '../plugins/autopilot/lib/config.js';
+import { SettingsCheck, liveSettings } from '../plugins/autopilot/lib/shared/settings.js';
 import { JsonStore } from '../plugins/autopilot/lib/shared/files.js';
 import { Journal } from '../plugins/autopilot/lib/shared/journal.js';
 import { Hub } from '../plugins/autopilot/lib/shared/hub.js';
@@ -31,7 +33,7 @@ const TODOS = [
 const MIN = 60000;
 
 /** Autopilot and the watcher over a stand-in DSH, all on one hand-moved clock. */
-function setup({ config = {}, dir = mkdtempSync(join(tmpdir(), 'autopilot-')), clock = manualClock(), dsh = fakeDsh({ now: clock.now }), start = true } = {}) {
+function setup({ config = {}, dir = mkdtempSync(join(tmpdir(), 'autopilot-')), clock = manualClock(), dsh = fakeDsh({ now: clock.now }), start = true, settingsOk } = {}) {
     const warnings = [];
     const logger = { info: () => {}, warn: (line) => warnings.push(line) };
     const hub = new Hub();
@@ -45,7 +47,7 @@ function setup({ config = {}, dir = mkdtempSync(join(tmpdir(), 'autopilot-')), c
     const journal = new Journal(join(dir, 'autopilot', 'events.jsonl'), { logger, now: clock.now, onChange: () => hub.bump('autopilot') });
     const notified = [];
     const merged = { ...DEFAULTS, ...config };
-    const pilot = new Pilot({ watch, config: merged, store, journal, logger, now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer, notify: (item) => notified.push(item) });
+    const pilot = new Pilot({ watch, config: merged, store, journal, logger, now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer, notify: (item) => notified.push(item), ...(settingsOk ? { settingsOk } : {}) });
     if (start) pilot.start();
     return { dir, clock, dsh, watch, pilot, store, journal, notified, warnings, hub, config: merged };
 }
@@ -191,11 +193,11 @@ test('after a restart: a cut-off session gets a carry-on note, and its goal star
     await clock.advance(1000);
     const notes = notesIn(dsh, 'r');
     assert.equal(notes.length, 1);
-    assert.match(notes[0], /^\[Autopilot\] DSH stopped while you were working: turn 1 was cut off at /);
+    assert.match(notes[0], /^\[Autopilot\] DSH stopped while you were working: turn 1 was cut off \(its last step was at .+\)\./);
     assert.match(notes[0], /Still open: 2 open todos \(next: “Write the parser”\) and the goal “Cut the release” \(round 0 of 20\)\./);
     const [resume] = entries(after.journal, 'resume');
     assert.equal(resume.state, 'delivered');
-    assert.match(resume.why, /DSH stopped before it finished \(a quit, a restart or a crash\)\. Nobody has written in the session since\.$/);
+    assert.match(resume.why, /^Turn 1 was cut off: DSH stopped before it finished \(a quit, a restart or a crash\)\. Its last step was at .+, and nobody has written in the session since\.$/);
     // The goal waits for the carry-on turn to end, then goes on by itself.
     const [rearm] = entries(after.journal, 'rearm');
     assert.equal(rearm.state, 'waiting for a round');
@@ -518,7 +520,7 @@ test('browser half: the page\'s cards say what to do next, in plain words', () =
     rules.props.onChange('ask');
     assert.deepEqual(acts.at(-1), ['setDefaultRule', { rule: 'ask' }]);
     assert.match(textIn(HeaderCard({ data: { ...base, paused: true }, busy: false, act })), /Off: no notes, no resumes, no goal starts/);
-    assert.match(textIn(HeaderCard({ data: { ...base, enabled: false }, busy: false, act })), /switched off in its settings/);
+    assert.match(textIn(HeaderCard({ data: { ...base, enabled: false }, busy: false, act })), /Autopilot is switched off in DSH's profile \(enabled: false in its entry in cordis\.patch\.yml\), so it watches nothing\. To use it, set enabled to true there and restart DSH\./);
     // Empty states that say what to do.
     assert.match(textIn(SessionsCard({ data: base, busy: false, act, onOpen: () => {} })), /Start a chat in DSH/);
     assert.match(textIn(LogCard({ data: base, onOpen: () => {} })), /When Autopilot acts, asks or holds back, it says what and why here/);
@@ -556,4 +558,336 @@ test('page: a session\'s last action in a few words, names kept as written', () 
     assert.equal(lastWords({ kind: 'nudge', text: 'Told it to carry on with its todos' }), 'told it to carry on with its todos');
     assert.equal(lastWords({ kind: 'ask', text: '“Config cleanup” stopped with 1 open todo. Tell it to carry on?' }), 'asked you');
     assert.equal(lastWords({ kind: 'skip', text: '' }), '');
+});
+
+// ── Round 1 findings: holds, a wrong setting, the switch, settings in Plugins ──
+
+test('holds: a quiet session with open work that Autopilot leaves alone says why on its row', async () => {
+    const clock = manualClock();
+    const dsh = fakeDsh({ now: clock.now });
+    // Long before this start: one session cut off by a stop, one that went quiet with open todos.
+    dsh.write('old-cut', 'Work');
+    dsh.stop({ crash: false });
+    idleWithTodos(dsh, 'old-quiet');
+    await clock.advance(7 * 3600000);
+    const { pilot, watch, journal, config } = setup({ clock, dsh, config: { defaultRule: 'ask' } });
+    idleWithTodos(dsh, 'asks', { reply: 'Two ways to go.\nShould I drop the old tables?' });
+    dsh.add('approval');
+    dsh.write('approval', 'Deploy it');
+    dsh.commit('approval', 'approval/asked', { id: 'ap1', toolName: 'bash', reason: 'pushes to production' });
+    dsh.end('approval', { kind: 'completed' }, { todos: TODOS });
+    dsh.add('paused');
+    dsh.setGoal('paused', 'Ship it', { phase: 'paused' });
+    dsh.write('paused', 'Work');
+    dsh.end('paused', { kind: 'completed' }, { todos: TODOS });
+    dsh.add('blocked-goal');
+    dsh.setGoal('blocked-goal', 'Ship it', { phase: 'blocked' });
+    dsh.write('blocked-goal', 'Work');
+    dsh.end('blocked-goal', { kind: 'completed' }, { todos: TODOS });
+    dsh.write('stopped', 'Work');
+    dsh.end('stopped', { kind: 'aborted', reason: { kind: 'user' } }, { todos: TODOS });
+    idleWithTodos(dsh, 'left');
+    idleWithTodos(dsh, 'fresh');
+    await clock.advance(10 * MIN);
+    // The person chose Leave it for one; another waits on its question.
+    const left = watch.asks().find((ask) => ask.sessionId === 'left');
+    await watch.answerAsk(left.id, 'skip', 'you');
+    const rows = Object.fromEntries((await watch.list(undefined, { maxAgeMs: 0 })).map((row) => [row.sessionId, row]));
+    const holds = Object.fromEntries(Object.keys(rows).map((id) => [id, pilot.holdOf(rows[id])]));
+    assert.deepEqual(holds, {
+        'old-cut': 'cut off more than 6 h ago, so Autopilot leaves it to you',
+        'old-quiet': 'quiet for over 2 h, longer than Autopilot looks back; it acts again after the session\'s next turn',
+        asks: 'waits for you: its last reply asks you something',
+        approval: 'waits for you: a tool waits for approval',
+        paused: 'waits for you: its goal is paused',
+        'blocked-goal': 'waits for you: its goal is blocked',
+        stopped: 'you stopped its last turn, so Autopilot leaves it to you',
+        left: 'Autopilot already handled its last turn; it looks again after the next one',
+        fresh: undefined,
+    });
+    // The page puts the reason on the row; a session with a question waiting, or a check pending, needs none.
+    const view = await pageState({ pilot, watch, journal, config });
+    const byId = Object.fromEntries(view.sessions.map((row) => [row.sessionId, row]));
+    assert.equal(byId.asks.hold, 'waits for you: its last reply asks you something');
+    assert.equal(byId.fresh.hold, undefined);
+    assert.equal(view.asks.map((ask) => ask.sessionId).join(), 'fresh');
+    // Off, or a rule of Off, says it in the switch and the rule: no hold on top.
+    pilot.setRule('asks', 'off');
+    assert.equal(pilot.holdOf(rows.asks), undefined);
+    pilot.setPaused(true);
+    assert.equal(pilot.holdOf(rows.approval), undefined);
+});
+
+test('a wrong setting: Autopilot does no work, keeps its question but takes no answer, and looks again once it is fixed', async () => {
+    let ok = true;
+    const { dsh, clock, pilot, watch, journal } = setup({ config: { defaultRule: 'ask' }, settingsOk: () => ok });
+    idleWithTodos(dsh, 'a');
+    await clock.advance(10 * MIN);
+    const [ask] = watch.asks();
+    assert.equal(ask.sessionId, 'a');
+    ok = false;
+    assert.equal(pilot.active(), false);
+    const refused = await watch.answerAsk(ask.id, 'go', 'you');
+    assert.deepEqual(refused, { ok: false, error: 'Autopilot is waiting for a setting to be fixed: see the top of its page.', refused: true });
+    assert.deepEqual(watch.asks().map((item) => item.id), [ask.id], 'the question stays for later');
+    await assert.rejects(pilot.retry('a'), { message: 'Autopilot is waiting for a setting to be fixed: see the top of its page.' });
+    idleWithTodos(dsh, 'b');
+    await clock.advance(30 * MIN);
+    assert.deepEqual(notesIn(dsh, 'a'), []);
+    assert.equal(watch.asks().length, 1, 'no new questions while a setting is wrong');
+    // Fixed: it looks at every session again, as when it is switched back on.
+    ok = true;
+    pilot.settingsChanged({ fixed: true });
+    await clock.advance(1000);
+    assert.deepEqual(watch.asks().map((item) => item.sessionId).sort(), ['a', 'b']);
+    const answered = await watch.answerAsk(ask.id, 'go', 'you');
+    assert.equal(answered.ok, true);
+    await settle();
+    assert.equal(notesIn(dsh, 'a').length, 1);
+    assert.equal(entries(journal, 'nudge')[0].why, 'You chose “Tell it to carry on”.');
+    assert.equal(entries(journal, 'nudge')[0].by, 'you');
+});
+
+test('off and Off: the switch withdraws questions, an Off session\'s question goes, and Try again says what to change first', async () => {
+    const { dsh, clock, pilot, watch, journal } = setup({ config: { defaultRule: 'ask' } });
+    idleWithTodos(dsh, 'a');
+    idleWithTodos(dsh, 'b');
+    await clock.advance(10 * MIN);
+    assert.equal(watch.asks().length, 2);
+    pilot.setRule('a', 'off');
+    assert.deepEqual(watch.asks().map((ask) => ask.sessionId), ['b'], 'an Off session\'s question goes');
+    await assert.rejects(pilot.retry('a'), { message: 'This session\'s rule is Off: set it to Auto or Ask first, then try again.' });
+    pilot.setPaused(true);
+    assert.deepEqual(watch.asks(), []);
+    assert.equal(entries(journal, 'switch')[0].why, 'You switched it off. Its question is withdrawn; it asks again when it is on.');
+    await assert.rejects(pilot.retry('b'), { message: 'Autopilot is off: switch it on at the top of its page first.' });
+    pilot.setPaused(false);
+    await clock.advance(1000);
+    assert.deepEqual(watch.asks().map((ask) => ask.sessionId), ['b'], 'once on, it asks again');
+    // Try again, when it may: the Why line says who pressed it.
+    pilot.setRule('a', 'auto');
+    await clock.advance(1000);
+    const off = setup({ config: { enabled: false } });
+    assert.equal(off.pilot.refusal('x'), 'Autopilot is switched off in DSH\'s profile (enabled: false).');
+    off.pilot.stop();
+    assert.equal(off.pilot.refusal('x'), 'Autopilot is not running.');
+});
+
+test('Try again: the log says the person pressed it, and why nothing happened when nothing could', async () => {
+    const { dsh, clock, pilot, journal } = setup();
+    idleWithTodos(dsh);
+    await clock.advance(10 * MIN);
+    dsh.end('s', { kind: 'completed' }, { reply: 'Looked.' });
+    await clock.advance(10 * MIN);
+    dsh.end('s', { kind: 'completed' }, { reply: 'Still looking.' });
+    await clock.advance(10 * MIN);
+    assert.ok(pilot.data.sessions.s.backedOff);
+    const result = await pilot.retry('s');
+    assert.equal(result.action, 'note');
+    const [latest] = entries(journal, 'nudge');
+    assert.equal(latest.why, 'You pressed Try again on Autopilot\'s page.');
+    assert.equal(latest.by, 'you');
+    dsh.add('done');
+    dsh.write('done', 'One thing');
+    dsh.end('done', { kind: 'completed' }, { reply: 'Done.' });
+    await pilot.retry('done');
+    assert.equal(entries(journal, 'skip')[0].why, 'You pressed Try again, but nothing is open.');
+});
+
+test('settings: a quiet time saved in Plugins moves pending checks at once', async () => {
+    const { dsh, clock, pilot, config } = setup();
+    idleWithTodos(dsh);
+    await clock.advance(2 * MIN);
+    assert.equal(pilot.pending().s.trigger, 'idle');
+    config.idleSeconds = 60;
+    pilot.settingsChanged();
+    await clock.advance(1000);
+    assert.equal(notesIn(dsh, 's').length, 1, 'the new quiet time has already passed');
+});
+
+test('settings: each wrong value is named, with what it must be; the defaults pass', () => {
+    assert.doesNotThrow(() => checkConfig(CONFIG_DEFAULTS));
+    assert.deepEqual({ ...CONFIG_DEFAULTS, errorRetrySeconds: [...CONFIG_DEFAULTS.errorRetrySeconds] }, DEFAULTS, 'the tests run with the plugin\'s own defaults');
+    const wrong = (patch) => {
+        try {
+            checkConfig({ ...CONFIG_DEFAULTS, ...patch });
+            return undefined;
+        } catch (error) {
+            return { key: error.key, text: error.message };
+        }
+    };
+    assert.deepEqual(wrong({ idleSeconds: 2 }), { key: 'idleSeconds', text: 'Quiet time before a note (idleSeconds) must be a whole number of seconds from 5 to 86400 (it is 2)' });
+    assert.equal(wrong({ idleSeconds: 1.5 }).key, 'idleSeconds');
+    assert.equal(wrong({ idleSeconds: '60' }).text, 'Quiet time before a note (idleSeconds) must be a whole number of seconds from 5 to 86400 (it is "60")');
+    assert.equal(wrong({ defaultRule: 'sometimes' }).text, 'The rule for sessions without their own (defaultRule) must be "auto", "ask" or "off" (it is "sometimes")');
+    assert.equal(wrong({ errorRetrySeconds: [] }).text, 'Waits before each try after an error (errorRetrySeconds) must list 1 to 10 whole numbers of seconds, each from 0 to 86400 (it is [])');
+    assert.equal(wrong({ enabled: 'yes' }).text, 'Autopilot on (enabled) must be true or false (it is "yes")');
+    for (const [key, value] of [['maxNudges', 0], ['maxNotesPerHour', 501], ['resumeWindowHours', 200], ['idleWindowHours', 0], ['startDelaySeconds', -1], ['resumeAfterRestart', 1]]) {
+        assert.equal(wrong({ [key]: value })?.key, key, key);
+    }
+    for (const key of LIVE_SETTINGS) assert.ok(SETTING_TITLES[key], key);
+    assert.deepEqual(Object.keys(SETTING_TITLES).sort(), Object.keys(CONFIG_DEFAULTS).sort());
+    assert.equal(changedWords([['idleSeconds'], ['maxNudges']]), 'Quiet time before a note, Notes in a row without progress');
+    assert.equal(changedWords([['idleSeconds'], ['idleSeconds']]), 'Quiet time before a note');
+    assert.equal(changedWords(undefined), '');
+});
+
+test('settings: read live, checked once per change, and a save says in the log what it changed or fixed', () => {
+    let current = 2;
+    // DSH hands a setting its page can change as a live reference.
+    const settings = liveSettings({ ...CONFIG_DEFAULTS, idleSeconds: { get: () => current } });
+    assert.equal(settings.idleSeconds, 2);
+    const logged = [];
+    const logger = { warn: (line) => logged.push(['warn', line]), info: (line) => logged.push(['info', line]) };
+    const check = new SettingsCheck({ settings, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'autopilot', logger });
+    assert.equal(check.run(), false);
+    assert.deepEqual(check.problem, { text: 'Quiet time before a note (idleSeconds) must be a whole number of seconds from 5 to 86400 (it is 2)', key: 'idleSeconds', live: true });
+    check.run();
+    assert.equal(logged.length, 1, 'the same problem is logged once');
+    current = 60;
+    assert.deepEqual(savedEntry(check, [['idleSeconds']]), { kind: 'settings', text: 'Settings fixed: Autopilot is working again', why: 'You saved Quiet time before a note in Plugins.', state: 'done', by: 'you' });
+    assert.equal(check.ok, true);
+    assert.equal(logged.at(-1)[0], 'info');
+    current = 90;
+    assert.deepEqual(savedEntry(check, [['idleSeconds']]), { kind: 'settings', text: 'Settings changed: Quiet time before a note', why: 'You saved them in Plugins. They apply now.', state: 'done', by: 'you' });
+    assert.equal(savedEntry(check, []), undefined, 'nothing changed, nothing logged');
+    current = 1;
+    const broke = savedEntry(check, [['idleSeconds']]);
+    assert.equal(broke.text, 'Settings changed: Quiet time before a note; Autopilot waits until a wrong one is fixed');
+    assert.equal(broke.state, 'waiting on a setting');
+    // One only the profile sets is to be changed there.
+    const profile = new SettingsCheck({ settings: { ...CONFIG_DEFAULTS, startDelaySeconds: 9999 }, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'autopilot' });
+    profile.run();
+    assert.equal(profile.problem.key, 'startDelaySeconds');
+    assert.equal(profile.problem.live, false);
+});
+
+/** DSH's settings form model, enough to draw the form and see what it stages. */
+function standInForm() {
+    const models = [];
+    const edits = [];
+    class SettingsFormModel {
+        constructor(scope, specs) {
+            this.scope = scope;
+            this.specs = specs;
+            models.push(this);
+        }
+        bind(project) { return { subscribe: () => () => {}, getSnapshot: () => project() }; }
+        shell() { return { available: true, writable: true, dirty: false, invalid: false, saving: false, failed: false }; }
+        field(name) {
+            const spec = this.specs.find((item) => item.field === name);
+            return { text: spec.format(this.scope.values[name]), overridden: Object.hasOwn(this.scope.user, name), invalid: false };
+        }
+        actions() { return { edit: (field, text) => edits.push([field, text]), resetField: (field) => edits.push([field, null]), save: () => edits.push(['save']), discard: () => edits.push(['discard']) }; }
+        dispose() { this.disposed = true; }
+    }
+    const SettingsForm = (props) => ({ type: 'SettingsForm', props, children: props.children });
+    return { models, edits, ui: { SettingsFormModel, SettingsForm } };
+}
+
+test('settings in Plugins: Autopilot\'s page there has its live settings, drawn with DSH\'s own form, only while DSH serves them', () => {
+    const form = standInForm();
+    const { client } = loadClient(new URL('../plugins/autopilot/lib/client.js', import.meta.url), { ui: form.ui });
+    const { SETTINGS } = client.internals;
+    // What the client builds lives in its own realm: compared as plain data.
+    const plain = (value) => JSON.parse(JSON.stringify(value));
+    assert.deepEqual(plain(SETTINGS.map((f) => f.name)).sort(), [...LIVE_SETTINGS].sort(), 'the form has exactly the live settings');
+    for (const f of SETTINGS) {
+        assert.deepEqual(plain(f.default), plain(CONFIG_DEFAULTS[f.name]), `${f.name}: the form's default is the config's`);
+        if (f.kind !== 'number') continue;
+        // The form takes exactly what the check takes.
+        assert.doesNotThrow(() => checkConfig({ ...CONFIG_DEFAULTS, [f.name]: f.min }), f.name);
+        assert.doesNotThrow(() => checkConfig({ ...CONFIG_DEFAULTS, [f.name]: f.max }), f.name);
+        assert.throws(() => checkConfig({ ...CONFIG_DEFAULTS, [f.name]: f.min - 1 }), f.name);
+        assert.throws(() => checkConfig({ ...CONFIG_DEFAULTS, [f.name]: f.max + 1 }), f.name);
+    }
+    const registered = [];
+    const effects = [];
+    const served = [];
+    const scope = {
+        configForms: {
+            get: (entry) => ({ entry, values: { ...CONFIG_DEFAULTS, idleSeconds: 120 }, user: { idleSeconds: 120 } }),
+            whileServed: (entries, fn) => { served.push(entries); return fn(); },
+        },
+        slots: { inject: (_name, fn) => fn(), register: (spec, component) => { registered.push({ spec, component }); return () => {}; } },
+        effect: (fn) => { effects.push(fn); },
+        inject: (names, fn) => { if (names[0] === 'configForms') fn(scope); },
+    };
+    client.apply(scope);
+    const disposers = effects.map((fn) => fn());
+    assert.deepEqual(plain(served), [['autopilot']], 'it is drawn only while DSH serves Autopilot\'s settings');
+    assert.equal(form.models[0].scope.entry, 'autopilot');
+    const entry = registered.find((item) => item.spec.name === 'plugins.bundle.config');
+    assert.equal(entry.spec.key, 'dsh-plugin-autopilot');
+    assert.match(entry.component({ view: 'summary' }), /^How long a session waits before a note/);
+    const page = entry.component({});
+    const text = textIn(page);
+    assert.match(text, /After a restart/);
+    assert.match(text, /After an error/);
+    assert.match(text, /Changes apply as soon as you save\./);
+    const fields = Object.fromEntries(elementsOf(page).filter((e) => e.type === 'SettingsValueField').map((e) => [e.props.label, e.props]));
+    const idle = fields['Quiet time before a note, in seconds'];
+    assert.equal(idle.text, '120');
+    assert.equal(idle.overridden, true);
+    assert.equal(idle.overriddenLabel, 'Changed');
+    assert.equal(idle.resetLabel, 'Use the default');
+    assert.equal(idle.invalidLabel, 'A whole number from 5 to 86400, or empty for the default (600).');
+    idle.onEdit('90');
+    idle.onReset();
+    assert.equal(fields['Waits before each try after an error, in seconds'].text, '120, 600, 1800');
+    const resume = elementsOf(page).find((e) => e.type === 'Switch');
+    assert.equal(resume.props.checked, true);
+    resume.props.onChange(false);
+    assert.deepEqual(form.edits, [['idleSeconds', '90'], ['idleSeconds', null], ['resumeAfterRestart', 'off']]);
+    const shell = elementsOf(page).find((e) => e.type === 'SettingsForm');
+    assert.match(shell.props.labels.unavailable, /^Autopilot is not running, so its settings cannot be changed right now\./);
+    // Each field turns typed text into a value only when it fits.
+    const spec = (name) => client.internals.kit.fieldSpec(SETTINGS.find((f) => f.name === name));
+    assert.deepEqual(plain(spec('idleSeconds').parse(' 90 ')), { kind: 'set', value: 90 });
+    assert.deepEqual(plain(spec('idleSeconds').parse('')), { kind: 'clear' });
+    for (const bad of ['2', '1.5', 'ten', '-5', '86401']) assert.equal(spec('idleSeconds').parse(bad), undefined, bad);
+    assert.deepEqual(plain(spec('errorRetrySeconds').parse('60, 300 900')), { kind: 'set', value: [60, 300, 900] });
+    assert.equal(spec('errorRetrySeconds').parse('60, x'), undefined);
+    assert.equal(spec('errorRetrySeconds').parse(Array(11).fill('1').join(',')), undefined);
+    assert.equal(spec('resumeAfterRestart').format(false), 'off');
+    assert.equal(spec('resumeAfterRestart').parse('maybe'), undefined);
+    // Its effects let the model go when the plugin stops.
+    for (const dispose of disposers) if (typeof dispose === 'function') dispose();
+    assert.equal(form.models[0].disposed, true);
+});
+
+test('browser half: when Autopilot cannot work, the page says why and what to do, with a way there', () => {
+    const { client } = loadClient(new URL('../plugins/autopilot/lib/client.js', import.meta.url));
+    const { kit, HeaderCard, SessionsCard, ruleHint, RULE_HINT } = client.internals;
+    const opened = [];
+    kit.setNavigation({ openBundle: (name) => opened.push(name) });
+    const down = kit.Trouble({ name: 'Autopilot', packageName: 'dsh-plugin-autopilot', code: 'not-running', text: 'Autopilot is not running in DSH.', onRetry: () => {} });
+    assert.equal(down.props['data-suite-trouble'], 'not-running');
+    assert.equal(down.props.role, 'alert');
+    assert.equal(textIn(down), 'Autopilot is not running.Open Autopilot in Plugins and switch it off and on again. If it still does not start, restart DSH.Open Autopilot in PluginsCheck again');
+    elementsOf(down).find((e) => e.type === 'Button' && textIn(e) === 'Open Autopilot in Plugins').props.onClick();
+    assert.deepEqual(opened, ['dsh-plugin-autopilot']);
+    const away = kit.Trouble({ name: 'Autopilot', packageName: 'dsh-plugin-autopilot', code: 'unreachable', text: 'DSH did not answer. Check that DSH is still running, then try again.', onRetry: () => {} });
+    assert.equal(away.props['data-suite-trouble'], 'unreachable');
+    assert.equal(textIn(away), 'Couldn\'t read Autopilot.DSH did not answer. Check that DSH is still running, then try again.Check again');
+    const problem = kit.SettingsProblem({ name: 'Autopilot', packageName: 'dsh-plugin-autopilot', problem: { text: 'Quiet time before a note (idleSeconds) must be a whole number of seconds from 5 to 86400 (it is 2)', key: 'idleSeconds', live: true } });
+    assert.equal(textIn(problem), 'Autopilot is waiting for a setting to be fixed.Quiet time before a note (idleSeconds) must be a whole number of seconds from 5 to 86400 (it is 2).Change it in Autopilot\'s settings in Plugins. Autopilot starts working again as soon as you save.Open Autopilot\'s settings');
+    elementsOf(problem).find((e) => e.type === 'Button').props.onClick();
+    assert.equal(opened.at(-1), 'dsh-plugin-autopilot');
+    const profileOnly = kit.SettingsProblem({ name: 'Autopilot', packageName: 'dsh-plugin-autopilot', problem: { text: 'Wait after DSH starts (startDelaySeconds) must be a whole number of seconds from 0 to 600 (it is 9999)', key: 'startDelaySeconds', live: false } });
+    assert.match(textIn(profileOnly), /Change it in Autopilot's entry in DSH's profile \(cordis\.patch\.yml\), then restart DSH\.$/);
+    assert.equal(elementsOf(profileOnly).find((e) => e.type === 'Button'), undefined);
+    kit.setNavigation(undefined);
+    assert.equal(kit.openPlugin('dsh-plugin-autopilot'), false, 'no button and no throw on a DSH without that navigation');
+    // The rule line follows the switch, and names Decisions only when it runs.
+    const base = { enabled: true, paused: false, defaultRule: 'ask', settings: { idleSeconds: 600, maxNotesPerHour: 20 }, notesLastHour: 0, watching: 1, sessions: [], asks: [], log: [] };
+    assert.equal(ruleHint('ask', { paused: false, decisions: false }), RULE_HINT.ask);
+    assert.equal(ruleHint('ask', { paused: false, decisions: true }), 'Autopilot asks you first, on this page and in Decisions.');
+    assert.equal(ruleHint('auto', { paused: true, decisions: true }), 'Applies when Autopilot is on.');
+    assert.match(textIn(HeaderCard({ data: { ...base, paused: true }, busy: false, act: () => {}, decisions: false })), /Applies when Autopilot is on\./);
+    assert.doesNotMatch(textIn(HeaderCard({ data: base, busy: false, act: () => {}, decisions: false })), /Decisions/);
+    assert.match(textIn(HeaderCard({ data: { ...base, watchProblem: { text: 'How long a message may wait to be read (deliveryTimeoutSeconds) must be a whole number of seconds from 10 to 86400 (it is 5)' } }, busy: false, act: () => {} })), /Session Watch uses its default for a wrong setting: .*\(it is 5\)\. Change it in Session Watch's settings in Plugins\./);
+    // A held session says why on its row.
+    const rows = SessionsCard({ data: { ...base, sessions: [{ sessionId: 's', title: 'Parser', folder: 'work', word: 'idle', work: '1 open todo', rule: 'auto', own: false, updatedAt: 1, hold: 'waits for you: its last reply asks you something' }] }, busy: false, act: () => {}, onOpen: () => {} });
+    assert.match(textIn(rows), /Waits for you: its last reply asks you something\./);
 });

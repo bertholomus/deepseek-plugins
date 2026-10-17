@@ -90,8 +90,9 @@ export class Pilot {
      * @param {(timer: any) => void} [options.clearTimer]
      * @param {(item: object) => void} [options.notify] - a system notification, when the notifications plugin runs.
      * @param {() => void} [options.changed] - the window's view moved.
+     * @param {() => boolean} [options.settingsOk] - whether every setting is right (Autopilot does no work while one is wrong).
      */
-    constructor({ watch, config, store, journal, logger, now = Date.now, setTimer, clearTimer, notify, changed }) {
+    constructor({ watch, config, store, journal, logger, now = Date.now, setTimer, clearTimer, notify, changed, settingsOk = () => true }) {
         this.watch = watch;
         this.config = config;
         this.store = store;
@@ -106,6 +107,7 @@ export class Pilot {
         this.clearTimer = clearTimer ?? ((t) => clearTimeout(t));
         this.notify = notify;
         this.changed = changed ?? (() => {});
+        this.settingsOk = settingsOk;
         /** Pending checks: `${sessionId}` → { trigger, timer, at }. */
         this.timers = new Map();
         this.startTimer = undefined;
@@ -121,7 +123,7 @@ export class Pilot {
 
     /** Whether Autopilot may act at all now. */
     active() {
-        return !this.stopped && this.config.enabled !== false && this.data.paused !== true;
+        return !this.stopped && this.config.enabled !== false && this.data.paused !== true && this.settingsOk();
     }
 
     defaultRule() {
@@ -138,7 +140,10 @@ export class Pilot {
         if (rule === undefined) delete this.data.rules[sessionId];
         else this.data.rules[sessionId] = rule;
         this.store.change();
-        if (rule === 'off') this.cancel(sessionId);
+        if (rule === 'off') {
+            this.cancel(sessionId);
+            this.dropAsks((ask) => ask.sessionId === sessionId);
+        }
         this.journal.add({ kind: 'rule', sessionId, title: this.titleOf(sessionId), text: `Rule set to ${RULE_WORDS[rule ?? this.defaultRule()]}${rule === undefined ? ' (the default)' : ''}.`, why: 'You changed it on Autopilot\'s page.', state: 'done', by: 'you' });
         this.changed();
         if (this.ruleOf(sessionId) !== 'off') this.recheck(sessionId);
@@ -158,11 +163,44 @@ export class Pilot {
         this.store.change();
         if (this.data.paused) {
             for (const id of [...this.timers.keys()]) this.cancel(id);
-            this.journal.add({ kind: 'switch', text: 'Autopilot is off: no notes, no resumes, no goal starts.', why: 'You switched it off.', state: 'done', by: 'you' });
+            const dropped = this.dropAsks(() => true);
+            this.journal.add({ kind: 'switch', text: 'Autopilot is off: no notes, no resumes, no goal starts.', why: `You switched it off.${dropped ? ` Its ${dropped === 1 ? 'question is' : `${dropped} questions are`} withdrawn; it asks again when it is on.` : ''}`, state: 'done', by: 'you' });
         } else {
             this.journal.add({ kind: 'switch', text: 'Autopilot is on.', why: 'You switched it on. It looks at every session again now.', state: 'done', by: 'you' });
             void this.scan('switch');
         }
+        this.changed();
+    }
+
+    /** Withdraw Autopilot's questions that `which` picks; returns how many went. */
+    dropAsks(which) {
+        let n = 0;
+        for (const ask of this.watch.asks?.() ?? []) {
+            if (ask.source !== 'Autopilot' || !which(ask)) continue;
+            try { if (this.watch.dropAsk(ask.id)) n += 1; } catch { /* already gone */ }
+        }
+        return n;
+    }
+
+    /** Why the person's own action cannot go now (the switch, the session's rule, a setting), or undefined. */
+    refusal(sessionId) {
+        if (this.stopped) return 'Autopilot is not running.';
+        if (!this.settingsOk()) return 'Autopilot is waiting for a setting to be fixed: see the top of its page.';
+        if (this.config.enabled === false) return 'Autopilot is switched off in DSH\'s profile (enabled: false).';
+        if (this.data.paused === true) return 'Autopilot is off: switch it on at the top of its page first.';
+        if (sessionId && this.ruleOf(sessionId) === 'off') return 'This session\'s rule is Off: set it to Auto or Ask first, then try again.';
+        return undefined;
+    }
+
+    /**
+     * A setting changed while Autopilot runs: pending idle checks move to the
+     * new quiet time. When the save fixed a wrong setting, Autopilot looks at
+     * every session again, as when it is switched back on.
+     */
+    settingsChanged({ fixed = false } = {}) {
+        if (this.stopped) return;
+        for (const [id, item] of [...this.timers]) if (item.trigger === 'idle') this.recheck(id);
+        if (fixed) void this.scan('settings').catch((error) => this.logger?.warn?.(`autopilot: the check after a settings fix failed: ${errorText(error)}`));
         this.changed();
     }
 
@@ -365,10 +403,10 @@ export class Pilot {
         if (state.approvals?.length) return none('it waits for an approval');
         const end = state.end;
         if (!end) return none('it has not ended a turn');
-        const s = this.sessionData(sessionId);
+        const s = this.data.sessions[sessionId] ?? { done: {} };
         const key = `${trigger}:${end.turn}:${end.at}`;
         const base = { key, end, state, trigger };
-        if (!force && s.done[key]) return none('already handled');
+        if (!force && s.done?.[key]) return none('already handled');
         if ((state.inAt ?? 0) > end.at) return none('something was written in it after that turn');
         const now = this.now();
         const goalStopped = state.goal?.phase === 'active' && !this.goalArmed(sessionId);
@@ -414,7 +452,7 @@ export class Pilot {
     }
 
     /** Check a session and act on what the plan says. */
-    async check(sessionId, trigger, { force = false, by = 'Autopilot' } = {}) {
+    async check(sessionId, trigger, { force = false, by = 'Autopilot', why } = {}) {
         if (!this.active() && !force) return { action: 'none', why: 'Autopilot is off' };
         const rule = this.ruleOf(sessionId);
         if (rule === 'off' && !force) return { action: 'none', why: 'its rule is Off' };
@@ -426,7 +464,9 @@ export class Pilot {
         }
         // The read took a moment: the switch or the rule may have changed meanwhile.
         if (!force && (!this.active() || this.ruleOf(sessionId) === 'off')) return { action: 'none', why: 'Autopilot or its rule went off' };
-        const plan = this.plan(sessionId, trigger, { force, state });
+        const planned = this.plan(sessionId, trigger, { force, state });
+        // The person's own action: its Why line says who asked for it.
+        const plan = why && planned.action !== 'none' ? { ...planned, why } : planned;
         if (plan.action === 'none') {
             if (plan.log && plan.key) {
                 this.sessionData(sessionId).done[plan.key] = this.now();
@@ -618,6 +658,8 @@ export class Pilot {
 
     /** The person answered a question Autopilot raised. */
     async answered(sessionId, plan, answer, by = 'you') {
+        const refused = answer === 'skip' ? undefined : this.refusal(sessionId);
+        if (refused) throw Object.assign(new Error(refused), { refused: true });
         this.sessionData(sessionId).done[plan.key] = this.now();
         this.store.change();
         for (const entry of this.journal.list({ sessionId, limit: 50 })) {
@@ -630,7 +672,7 @@ export class Pilot {
         }
         if (answer === 'go') {
             // The session may have moved since the question: decide again, now, as the person said go.
-            const result = await this.check(sessionId, plan.trigger ?? 'idle', { force: true, by });
+            const result = await this.check(sessionId, plan.trigger ?? 'idle', { force: true, by, why: `You chose “${actionLabel(plan)}”.` });
             if (result.action === 'none') {
                 this.journal.add({ kind: 'skip', sessionId, title: this.titleOf(sessionId), text: 'Nothing to do now', why: `You said go, but ${result.why}.`, state: 'done', by });
                 this.changed();
@@ -645,6 +687,8 @@ export class Pilot {
 
     /** Try a backed-off or failed session again now (the page's Try again). */
     async retry(sessionId) {
+        const refused = this.refusal(sessionId);
+        if (refused) throw new Error(refused);
         const s = this.sessionData(sessionId);
         s.nudges = 0;
         s.errorTries = 0;
@@ -655,9 +699,9 @@ export class Pilot {
         const state = this.watch.stateOf?.(sessionId);
         const end = state?.end;
         const trigger = cutOff(end) ? 'resume' : end?.kind === 'error' ? 'error' : 'idle';
-        const result = await this.check(sessionId, trigger, { force: true, by: 'you' });
+        const result = await this.check(sessionId, trigger, { force: true, by: 'you', why: 'You pressed Try again on Autopilot\'s page.' });
         if (result.action === 'none') {
-            this.journal.add({ kind: 'skip', sessionId, title: this.titleOf(sessionId), text: 'Nothing to do', why: `You asked it to try again, but ${result.why}.`, state: 'done', by: 'you' });
+            this.journal.add({ kind: 'skip', sessionId, title: this.titleOf(sessionId), text: 'Nothing to do', why: `You pressed Try again, but ${result.why}.`, state: 'done', by: 'you' });
             this.changed();
         }
         return result;
@@ -667,6 +711,45 @@ export class Pilot {
     prune(s) {
         const old = this.now() - DONE_KEEP_MS;
         for (const [key, at] of Object.entries(s.done ?? {})) if (!(at > old)) delete s.done[key];
+    }
+
+    /**
+     * Why a quiet session with open work gets nothing from Autopilot now, in
+     * a few words for its row ("waits for you: its last reply asks you
+     * something"), or undefined when there is nothing to explain: no open
+     * work, a check is pending, or the switch, the rule or the row's own
+     * word already says it.
+     */
+    holdOf(row) {
+        if (!isRecord(row) || typeof row.sessionId !== 'string' || row.status === 'running' || row.parentSessionId || row.origin === 'subagent') return undefined;
+        // The row carries the watcher's view; its full state (the last reply's text) when the watcher has it.
+        const full = this.watch.stateOf?.(row.sessionId);
+        const state = isRecord(full) && full.end ? full : row.state;
+        const end = state?.end;
+        if (!end || state.open || !this.active() || this.ruleOf(row.sessionId) === 'off') return undefined;
+        const cut = cutOff(end);
+        // A cut-off turn gets a carry-on note with or without open work; any other, only with it.
+        if (!cut && !hasOpenWork(state)) return undefined;
+        const s = this.data.sessions[row.sessionId];
+        if (s?.backedOff || s?.gaveUp) return undefined;
+        if (state.approvals?.length) return 'waits for you: a tool waits for approval';
+        if (!cut && state.goal?.phase === 'paused') return 'waits for you: its goal is paused';
+        if (!cut && state.goal?.phase === 'blocked') return 'waits for you: its goal is blocked';
+        if (end.kind === 'aborted' && !cut) return 'you stopped its last turn, so Autopilot leaves it to you';
+        if (end.kind === 'blocked') return 'waits for you: its last turn was blocked';
+        const asking = typeof state.text === 'string' ? asksSomeone(state.text) : isRecord(state.ask) && state.ask.turn === end.turn;
+        if ((end.kind === 'completed' || end.kind === 'max-tokens') && asking) return 'waits for you: its last reply asks you something';
+        if ((state.inAt ?? 0) > end.at) return undefined;
+        const trigger = cut ? 'resume' : end.kind === 'error' ? 'error' : 'idle';
+        if (s?.done?.[`${trigger}:${end.turn}:${end.at}`]) return 'Autopilot already handled its last turn; it looks again after the next one';
+        const windowHours = trigger === 'resume' ? (this.config.resumeWindowHours ?? 6) : (this.config.idleWindowHours ?? 2);
+        if (this.now() - end.at <= Math.max(1, windowHours) * 3600000) {
+            if (cut && this.config.resumeAfterRestart === false) return 'cut off when DSH stopped; Resume after a restart is off in Autopilot\'s settings';
+            return undefined;
+        }
+        return cut
+            ? `cut off more than ${windowHours} h ago, so Autopilot leaves it to you`
+            : `quiet for over ${windowHours} h, longer than Autopilot looks back; it acts again after the session's next turn`;
     }
 
     /** What is pending, for the window: session id → { trigger, at }. */

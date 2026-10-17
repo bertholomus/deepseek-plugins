@@ -25,7 +25,7 @@ export function openWork(state) {
 export function carryOnNote(end, state, now = Date.now()) {
     const work = openWork(state);
     return [
-        `[Autopilot] DSH stopped while you were working: turn ${end.turn} was cut off at ${timeWords(end.at, now)}.`,
+        `[Autopilot] DSH stopped while you were working: turn ${end.turn} was cut off (its last step was at ${timeWords(end.at, now)}).`,
         'Check what already finished (files, commands, todos), then carry on from where you stopped.',
         work ? `Still open: ${work}.` : '',
         DECISION_HINT,
@@ -63,7 +63,8 @@ export function answerNote(text) {
 export function whyResume(end, now = Date.now()) {
     // DSH closes a running turn as interrupted on its next start, after a quit, a restart or a crash alike.
     const how = end.kind === 'interrupted' ? 'DSH stopped before it finished (a quit, a restart or a crash)' : 'DSH shut down under it';
-    return `Turn ${end.turn} was cut off at ${timeWords(end.at, now)}: ${how}. Nobody has written in the session since.`;
+    // The time is DSH's stamp on the cut-off turn: its last step, not the moment DSH stopped.
+    return `Turn ${end.turn} was cut off: ${how}. Its last step was at ${timeWords(end.at, now)}, and nobody has written in the session since.`;
 }
 
 export function whyNudge(state, idleMs) {

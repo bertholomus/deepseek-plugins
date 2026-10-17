@@ -13,13 +13,20 @@
  * - `kit.css`: glass grounds and cards (§3), DSH's type and colours (§4–5),
  *   the focus ring (§9), and motion that stops under `body.wp-still` and
  *   reduced motion, pseudo-elements included (§6);
- * - `kit.link(namespace)`: a plugin's endpoints over DSH's own connection;
+ * - `kit.link(namespace, { name })`: a plugin's endpoints over DSH's own
+ *   connection; a plugin whose host half is not running answers with code
+ *   `not-running`, in words, never an HTTP status;
  * - `kit.hub`: one open request per window for every suite plugin (the
  *   session watcher's `wait`), so windows read state only when it moved,
  *   and stop while hidden;
  * - `kit.useLive`: a React hook over both, which keeps the last good data
  *   when a refresh fails;
- * - parts: Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText.
+ * - parts: Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText, and
+ *   the two states every suite page shares: `Trouble` (the plugin, or the
+ *   Session Watch it needs, is not running) and `SettingsProblem` (a setting
+ *   is wrong: which, what it must be, and where to change it);
+ * - `kit.applySettings`: the plugin's settings on its page in Plugins
+ *   (DSH's `plugins.bundle.config`), saved through DSH's own settings form.
  *
  * @module suite/shared/client-kit
  */
@@ -73,6 +80,21 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         `.${P}-glyph{color:var(--${P}-glyph)}`,
         `.${P}-badge{position:absolute;top:-5px;right:-7px;min-width:14px;height:14px;padding:0 3px;box-sizing:border-box;border-radius:7px;background:var(--dsw-alias-state-error-primary);color:#fff;font:600 10px/14px var(--dsw-font-family,system-ui);font-variant-numeric:tabular-nums;text-align:center}`,
         `.${P}-icon{position:relative;display:inline-flex;align-items:center;justify-content:center}`,
+        `.${P}-trouble-title{margin:10px 0 0;font:var(--dsw-font-s-strong-14);color:var(--dsw-alias-label-primary)}`,
+        `.${P}-trouble-text{margin:4px 0 0;font:var(--dsw-font-xs-13);color:var(--${P}-text-2);max-width:68ch}`,
+        `.${P}-trouble .${P}-actions{margin-top:10px}`,
+        `.${P}-settings{display:flex;flex-direction:column;gap:0;min-width:0;color:var(--dsw-alias-label-primary)}`,
+        `.${P}-set-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:10px 0;border-top:.5px solid var(--dsw-alias-border-l2);min-width:0}`,
+        `.${P}-set-row:first-child{border-top:0}`,
+        `.${P}-set-text{min-width:0;flex:1 1 auto}`,
+        `.${P}-set-title{font:var(--dsw-font-s-strong-14);color:var(--dsw-alias-label-primary)}`,
+        `.${P}-set-hint{margin-top:2px;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}`,
+        `.${P}-set-control{flex:0 0 auto;display:flex;align-items:center;gap:10px}`,
+        `.${P}-set-reset{padding:0;border:0;background:none;font:var(--dsw-font-xs-13);color:var(--dsw-alias-link,var(--dsw-alias-state-business-primary));text-decoration:underline;text-underline-offset:2px;cursor:pointer}`,
+        `.${P}-set-reset:focus-visible{outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px;border-radius:var(--dsw-radius-xs)}`,
+        `.${P}-set-note{margin:10px 0 0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary);max-width:72ch}`,
+        `.${P}-set-group{margin:14px 0 2px;font:var(--dsw-font-xs-strong-13);color:var(--dsw-alias-label-secondary)}`,
+        `@media (max-width:560px){.${P}-set-row{flex-wrap:wrap}.${P}-set-control{width:100%;justify-content:flex-start}}`,
         `body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop),body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop)::before,body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop)::after,body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop) *,body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop) *::before,body.wp-still :is(.${P}-page,.${P}-pane,.${P}-pop) *::after{animation:none!important;transition:none!important}`,
         `@media (prefers-reduced-motion:reduce){:is(.${P}-page,.${P}-pane,.${P}-pop),:is(.${P}-page,.${P}-pane,.${P}-pop)::before,:is(.${P}-page,.${P}-pane,.${P}-pop)::after,:is(.${P}-page,.${P}-pane,.${P}-pop) *,:is(.${P}-page,.${P}-pane,.${P}-pop) *::before,:is(.${P}-page,.${P}-pane,.${P}-pop) *::after{animation:none!important;transition:none!important}}`,
     ];
@@ -111,8 +133,16 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         });
     }
 
-    /** A plugin's endpoints over DSH's connection: `call(method, args)` gives `{ ok, value }` or `{ ok: false, error }`. */
-    function link(namespace) {
+    /** DSH's gateway answers 404 for a plugin whose host half is not running (switched off, or it needs a plugin that is). */
+    const missing = (text) => /\b404\b/.test(text);
+
+    /**
+     * A plugin's endpoints over DSH's connection: `call(method, args)` gives
+     * `{ ok, value }` or `{ ok: false, error: { code, message } }`, the
+     * message in words. Code `not-running`: DSH runs no such plugin now.
+     */
+    function link(namespace, { name = 'This plugin' } = {}) {
+        const notRunning = { ok: false, error: { code: 'not-running', message: `${name} is not running in DSH.` } };
         return {
             async call(method, args = {}) {
                 const connection = connections.current ?? await whenConnected();
@@ -121,18 +151,38 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 try {
                     result = await connection.rpc.call('/api', `${namespace}/${method}`, { args });
                 } catch (error) {
-                    return { ok: false, error: { code: 'unreachable', message: `DSH did not answer (${String(error?.message ?? error).slice(0, 160)}).` } };
+                    if (missing(String(error?.message ?? error))) return notRunning;
+                    return { ok: false, error: { code: 'unreachable', message: 'DSH did not answer. Check that DSH is still running, then try again.' } };
                 }
+                // A plugin's own refusals carry its code ("autopilot/refused"); the gateway's transport failures do not.
+                if (isRecord(result) && result.ok === false && isRecord(result.error) && !String(result.error.code ?? '').includes('/') && missing(String(result.error.message ?? ''))) return notRunning;
                 return isRecord(result) && (result.ok === true || (result.ok === false && isRecord(result.error))) ? result
-                    : { ok: false, error: { code: 'unreadable', message: 'The plugin sent an answer this window cannot read.' } };
+                    : { ok: false, error: { code: 'unreadable', message: `${name} sent an answer this window cannot read. Reload the window.` } };
             },
-            /** The value, or a thrown Error with the plugin's words. */
+            /** The value, or a thrown Error with the plugin's words (and its `code`). */
             async read(method, args) {
                 const result = await this.call(method, args);
                 if (result.ok) return result.value;
-                throw new Error(result.error?.message || 'The plugin did not answer.');
+                throw Object.assign(new Error(result.error?.message || `${name} did not answer.`), { code: result.error?.code });
             },
         };
+    }
+
+    // ── DSH's Plugins page ────────────────────────────────────────────
+    const nav = { current: undefined };
+    /** DSH's `pluginNavigation` service, as the plugin's parts receive it. */
+    function setNavigation(service) {
+        nav.current = service;
+    }
+    /** Open a plugin's page in DSH's Plugins page (its switch and its settings); false when this DSH cannot. */
+    function openPlugin(packageName) {
+        try {
+            if (typeof nav.current?.openBundle !== 'function') return false;
+            nav.current.openBundle(packageName);
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     // ── One open request per window, for every suite plugin ───────────
@@ -247,7 +297,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
      * says so in `error`.
      */
     function useLive(read, channels, { delayMs = 250 } = {}) {
-        const [state, setState] = React.useState({ data: undefined, error: undefined, loading: true });
+        const [state, setState] = React.useState({ data: undefined, error: undefined, code: undefined, loading: true });
         const readRef = React.useRef(read);
         readRef.current = read;
         const timer = React.useRef(undefined);
@@ -255,9 +305,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const refresh = React.useCallback(async () => {
             try {
                 const data = await readRef.current();
-                if (alive.current) setState({ data, error: undefined, loading: false });
+                if (alive.current) setState({ data, error: undefined, code: undefined, loading: false });
             } catch (error) {
-                if (alive.current) setState((s) => ({ data: s.data, error: String(error?.message ?? error), loading: false }));
+                if (alive.current) setState((s) => ({ data: s.data, error: String(error?.message ?? error), code: typeof error?.code === 'string' ? error.code : undefined, loading: false }));
             }
         }, []);
         const key = channels.join(',');
@@ -317,9 +367,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     function toneOf(word) {
         switch (word) {
             case 'running': case 'working': case 'queued': case 'in the queue': case 'sending': case 'starting': case 'waiting for a round': return 'info';
-            case 'waiting for approval': case 'waiting on you': case 'needs a decision': case 'asked you': case 'cut off': case 'cut short': case 'backed off': case 'held': return 'warning';
-            case 'failed': case 'blocked': case 'not delivered': case 'not started': return 'danger';
-            case 'delivered': case 'started': case 'done': case 'answered': case 'read': return 'success';
+            case 'waiting for approval': case 'waiting on you': case 'needs a decision': case 'asked you': case 'cut off': case 'cut short': case 'backed off': case 'gave up': case 'held': case 'not confirmed': case 'waiting on a setting': return 'warning';
+            case 'failed': case 'blocked': case 'not delivered': case 'not started': case 'not sent': return 'danger';
+            case 'delivered': case 'started': case 'done': case 'answered': case 'read': case 'sent': return 'success';
             case 'stopped': case 'paused': return 'neutral';
             default: return 'quiet';
         }
@@ -373,10 +423,207 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         return h('time', { className: `${P}-num`, dateTime: new Date(at).toISOString(), title: full }, agoText(at, now));
     }
 
+    // ── States every suite page shares ────────────────────────────────
+
+    const WATCH_PACKAGE = 'dsh-plugin-session-watch';
+    const watchLink = link(WATCH_PACKAGE, { name: 'Session Watch' });
+
+    /**
+     * What the page shows when its plugin cannot be read: not running (with
+     * why: the Session Watch it needs is off, or the plugin itself stopped)
+     * or DSH not answering. Each says what to do next, with a button to the
+     * place to do it; the page comes back by itself once the plugin runs.
+     */
+    function Trouble({ name, packageName, code, text, onRetry, needsWatch = true }) {
+        const [watchUp, setWatchUp] = React.useState(undefined);
+        React.useEffect(() => {
+            if (code !== 'not-running' || !needsWatch) return undefined;
+            let alive = true;
+            void watchLink.call('status').then((result) => { if (alive) setWatchUp(result.ok || result.error?.code !== 'not-running'); });
+            return () => { alive = false; };
+        }, [code, needsWatch, text]);
+        const button = (label, target) => (typeof nav.current?.openBundle === 'function'
+            ? h(ui.Button, { variant: 'primary', size: 'sm', onClick: () => openPlugin(target) }, label) : null);
+        const retry = onRetry ? h(ui.Button, { variant: 'ghost', size: 'sm', onClick: onRetry }, 'Check again') : null;
+        let kind;
+        let title;
+        let next;
+        let action = null;
+        if (code === 'not-running' && needsWatch && watchUp === false) {
+            kind = 'watch-off';
+            title = `${name} needs Session Watch, which is not running.`;
+            next = `Switch Session Watch on in Plugins. This page comes back by itself once it runs.`;
+            action = button('Open Session Watch in Plugins', WATCH_PACKAGE);
+        } else if (code === 'not-running') {
+            kind = 'not-running';
+            title = `${name} is not running.`;
+            next = `Open ${name} in Plugins and switch it off and on again. If it still does not start, restart DSH.`;
+            action = button(`Open ${name} in Plugins`, packageName);
+        } else {
+            kind = 'unreachable';
+            title = `Couldn't read ${name}.`;
+            next = text || 'DSH did not answer. Check that DSH is still running, then try again.';
+        }
+        return h('div', { className: `${P}-trouble`, role: 'alert', 'data-suite-trouble': kind },
+            h('p', { className: `${P}-trouble-title` }, title),
+            h('p', { className: `${P}-trouble-text` }, next),
+            h('div', { className: `${P}-actions` }, action, retry));
+    }
+
+    /**
+     * A setting is wrong, so the plugin does no work: which setting, what it
+     * must be, and where to change it (its settings in Plugins when the
+     * person can change it there, else DSH's profile).
+     */
+    function SettingsProblem({ name, packageName, problem }) {
+        const live = problem?.live === true;
+        return h('div', { className: `${P}-trouble`, role: 'alert', 'data-suite-trouble': 'setting' },
+            h('p', { className: `${P}-trouble-title` }, `${name} is waiting for a setting to be fixed.`),
+            h('p', { className: `${P}-trouble-text` }, `${String(problem?.text ?? 'A setting is wrong').replace(/\.$/, '')}.`),
+            h('p', { className: `${P}-trouble-text` }, live
+                ? `Change it in ${name}'s settings in Plugins. ${name} starts working again as soon as you save.`
+                : `Change it in ${name}'s entry in DSH's profile (cordis.patch.yml), then restart DSH.`),
+            live && typeof nav.current?.openBundle === 'function'
+                ? h('div', { className: `${P}-actions` }, h(ui.Button, { variant: 'primary', size: 'sm', onClick: () => openPlugin(packageName) }, `Open ${name}'s settings`)) : null);
+    }
+
+    // ── Settings on the plugin's page in Plugins ──────────────────────
+
+    /**
+     * How one setting turns from its stored value into the text its control
+     * shows, and back. A draft the setting cannot take (a number out of its
+     * range) blocks the Save, so nothing out of range is ever stored.
+     */
+    function fieldSpec(f) {
+        const clear = { kind: 'clear' };
+        const whole = (text) => (/^\d+$/.test(text) ? Number(text) : undefined);
+        switch (f.kind) {
+            case 'switch':
+                return { field: f.name, format: (v) => (v === true ? 'on' : v === false ? 'off' : ''), parse: (t) => (t === 'on' ? { kind: 'set', value: true } : t === 'off' ? { kind: 'set', value: false } : t === '' ? clear : undefined) };
+            case 'choice':
+                return { field: f.name, format: (v) => (typeof v === 'string' ? v : ''), parse: (t) => (t === '' ? clear : f.options.some((o) => o.value === t) ? { kind: 'set', value: t } : undefined) };
+            case 'number':
+                return {
+                    field: f.name,
+                    format: (v) => (Number.isFinite(v) ? String(v) : ''),
+                    parse: (t) => {
+                        const text = String(t).trim();
+                        if (text === '') return clear;
+                        const n = whole(text);
+                        return n !== undefined && n >= f.min && n <= f.max ? { kind: 'set', value: n } : undefined;
+                    },
+                };
+            case 'numbers':
+                return {
+                    field: f.name,
+                    format: (v) => (Array.isArray(v) ? v.join(', ') : ''),
+                    parse: (t) => {
+                        const text = String(t).trim();
+                        if (text === '') return clear;
+                        const list = text.split(/[\s,]+/).filter(Boolean).map(whole);
+                        if (list.length === 0 || list.length > (f.maxItems ?? 10)) return undefined;
+                        return list.every((n) => n !== undefined && n >= f.min && n <= f.max) ? { kind: 'set', value: list } : undefined;
+                    },
+                };
+            default:
+                return {
+                    field: f.name,
+                    format: (v) => (typeof v === 'string' ? v : ''),
+                    parse: (t) => {
+                        const text = String(t).trim();
+                        if (text === '') return clear;
+                        return typeof f.accepts === 'function' && !f.accepts(text) ? undefined : { kind: 'set', value: text };
+                    },
+                };
+        }
+    }
+
+    /** The words under a number that does not fit. */
+    function invalidWords(f) {
+        if (f.invalid) return f.invalid;
+        if (f.kind === 'number') return `A whole number from ${f.min} to ${f.max}, or empty for the default (${f.default}).`;
+        if (f.kind === 'numbers') return `Up to ${f.maxItems ?? 10} whole numbers from ${f.min} to ${f.max}, with commas between them, or empty for the default (${(f.default ?? []).join(', ')}).`;
+        return 'This value does not fit here.';
+    }
+
+    /** One setting's row: a switch or a choice drawn here, anything typed in DSH's own field. */
+    function SettingRow({ f, state, disabled, actions }) {
+        const id = `${P}-set-${f.name}`;
+        const edit = (text) => actions.edit(f.name, text);
+        const reset = state.overridden
+            ? h('button', { type: 'button', className: `${P}-set-reset`, disabled, onClick: () => actions.resetField(f.name), 'aria-label': `Use the default for ${f.title}` }, 'Use the default') : null;
+        if (f.kind === 'switch' || f.kind === 'choice') {
+            return h('div', { className: `${P}-set-row`, 'data-suite-setting': f.name },
+                h('div', { className: `${P}-set-text` },
+                    h('div', { className: `${P}-set-title`, id: `${id}-label` }, f.title),
+                    h('div', { className: `${P}-set-hint` }, f.hint)),
+                h('div', { className: `${P}-set-control` }, reset,
+                    f.kind === 'switch'
+                        ? h(ui.Switch, { checked: state.text === 'on', label: f.title, disabled, onChange: (next) => edit(next ? 'on' : 'off') })
+                        : h(ui.SegmentedControl, { id, label: f.title, value: state.text || f.default, options: f.options, disabled, onChange: edit })));
+        }
+        return h('div', { className: `${P}-set-row`, 'data-suite-setting': f.name },
+            h('div', { className: `${P}-set-text` },
+                h(ui.SettingsValueField, {
+                    id,
+                    label: f.title,
+                    hint: f.hint,
+                    text: state.text,
+                    overridden: state.overridden,
+                    invalid: state.invalid,
+                    overriddenLabel: 'Changed',
+                    resetLabel: 'Use the default',
+                    invalidLabel: invalidWords(f),
+                    disabled,
+                    numeric: f.kind === 'number',
+                    onEdit: edit,
+                    onReset: () => actions.resetField(f.name),
+                })));
+    }
+
+    function SettingsBody({ form, name, fields, note }) {
+        const snap = React.useSyncExternalStore(form.subscribe, form.getSnapshot);
+        const disabled = !snap.writable || snap.saving;
+        const labels = {
+            unavailable: `${name} is not running, so its settings cannot be changed right now. Switch it on above.`,
+            readOnly: 'This DSH keeps its settings read-only, so they cannot be changed here.',
+            saveFailed: 'DSH did not save these. Your changes are still here, so you can try again.',
+            save: 'Save',
+            saving: 'Saving…',
+        };
+        const rows = [];
+        for (const f of fields) {
+            if (f.group) rows.push(h('h4', { key: `g-${f.name}`, className: `${P}-set-group` }, f.group));
+            rows.push(h(SettingRow, { key: f.name, f, state: snap[f.name] ?? { text: '', overridden: false, invalid: false }, disabled, actions: form.actions }));
+        }
+        return h('div', { className: `${P}-settings`, 'data-suite-settings': bundle },
+            h(ui.SettingsForm, { labels, state: snap, onSave: form.actions.save, onDiscard: form.actions.discard },
+                ...rows,
+                note ? h('p', { key: 'note', className: `${P}-set-note` }, note) : null));
+    }
+
+    /**
+     * Put the plugin's settings on its page in Plugins: DSH's own settings
+     * form (staged as typed, written on Save), registered only while DSH
+     * serves them, which is while the plugin runs. Each field:
+     * `{ name, kind: 'switch'|'choice'|'number'|'numbers'|'text', title, hint, default, min?, max?, options?, group? }`.
+     * Does nothing on a DSH without settings forms.
+     */
+    function applySettings(ctx, { entry, name, summary, fields, note }) {
+        if (typeof ui.SettingsFormModel !== 'function' || typeof ui.SettingsForm !== 'function' || typeof ctx.configForms?.get !== 'function') return;
+        const model = new ui.SettingsFormModel(ctx.configForms.get(entry), fields.map(fieldSpec));
+        const store = model.bind(() => ({ ...model.shell(), ...Object.fromEntries(fields.map((f) => [f.name, model.field(f.name)])) }));
+        const form = { subscribe: (fn) => store.subscribe(fn), getSnapshot: () => store.getSnapshot(), actions: model.actions() };
+        const View = (props) => (props?.view === 'summary' ? summary : h(SettingsBody, { form, name, fields, note }));
+        ctx.effect(() => () => model.dispose(), `${bundle}: settings form`);
+        ctx.effect(() => ctx.configForms.whileServed([entry], () => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({ name: 'plugins.bundle.config', key: bundle }, View))), `${bundle}: settings page`);
+    }
+
     return {
         P, css, injectStyle, removeStyle, setConnection, whenConnected, link, hub, useLive,
+        setNavigation, openPlugin, fieldSpec, invalidWords, applySettings,
         timeText, agoText, spanText, toneOf, isRecord,
-        Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText,
+        Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText, Trouble, SettingsProblem, SettingsBody, SettingRow,
     };
 }
 // </suite-kit>

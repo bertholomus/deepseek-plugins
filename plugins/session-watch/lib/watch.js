@@ -529,8 +529,15 @@ export class SessionWatch {
             const result = await item.onAnswer?.(answer, by);
             return { ok: true, ...(isRecord(result) ? result : {}) };
         } catch (error) {
-            this.logger?.warn?.(`session-watch: the answer to ${id} failed: ${errorText(error)}`);
-            return { ok: false, error: errorText(error) };
+            // The asking plugin refused the answer for now (it is switched off, say): the question stays.
+            if (error?.refused === true && !this.asksById.has(id)) {
+                this.asksById.set(id, item);
+                this.emit({ type: 'ask', change: 'kept', ask: publicAsk(item) });
+                this.hub?.bump('asks');
+            } else {
+                this.logger?.warn?.(`session-watch: the answer to ${id} failed: ${errorText(error)}`);
+            }
+            return { ok: false, error: errorText(error), ...(error?.refused === true ? { refused: true } : {}) };
         }
     }
 

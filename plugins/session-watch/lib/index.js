@@ -27,35 +27,36 @@ import { SessionWatch } from './watch.js';
 import { SessionWatchRemote, SERVICE } from './remote.js';
 import { Hub } from './shared/hub.js';
 import { errorText, guard } from './shared/safe.js';
+import { SettingsCheck, live, liveSettings } from './shared/settings.js';
+import { LIVE_SETTINGS, checkConfig, usableSettings } from './config.js';
+
+export { LIVE_SETTINGS, checkConfig } from './config.js';
 
 export const name = 'session-watch';
 
 /** Host services the watcher reads: DSH's session controller, sessions, agents and projections. */
 export const inject = ['sessionController', 'sessions', 'agents', 'sessionProjections'];
 
+/** Settings: types and defaults here, ranges in checkConfig (so a wrong value is said in words, not refused at start). */
 export const Config = z.object({
-    /** How long a message may wait to be read into a turn before its delivery is reported as failed, in seconds. */
-    deliveryTimeoutSeconds: z.natural().min(10).max(86400).default(600),
+    /** How long a message may wait to be read into a turn before its delivery is reported as failed, in seconds (10 to 86400). */
+    deliveryTimeoutSeconds: live(z.number().default(600)),
 });
 
 /** How plugin messages are marked in a session's log, as DSH marks a plugin's own. */
 const PLUGIN_SOURCE = Object.freeze({ kind: 'cordis-host-runner' });
 
-/** Check the config and say what is wrong in words. */
-export function checkConfig(config) {
-    const seconds = config?.deliveryTimeoutSeconds;
-    if (!Number.isInteger(seconds) || seconds < 10 || seconds > 86400) {
-        throw new Error(`session-watch: deliveryTimeoutSeconds must be a whole number of seconds from 10 to 86400 (got ${JSON.stringify(seconds)})`);
-    }
-}
-
 export function apply(ctx, config) {
-    checkConfig(config);
     const logger = ctx.logger;
+    const settings = liveSettings(config);
+    // A wrong value never stops the watcher, which every suite plugin needs: it uses the default and says so.
+    const check = new SettingsCheck({ settings, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'session-watch', logger });
+    check.run();
+    const usable = usableSettings(settings, check);
     const hub = new Hub();
     const watch = new SessionWatch({
         ctx,
-        config,
+        config: usable,
         logger,
         hub,
         // Its folder in DSH's data folder, as DSH resolves it (DSH_HOME, else ~/.dsh).
@@ -88,6 +89,13 @@ export function apply(ctx, config) {
         watch.goals = scope.goals;
         return () => { if (watch.goals === scope.goals) watch.goals = undefined; };
     });
+
+    // A setting saved on its page in Plugins: checked again, and the suite's pages read it.
+    watch.settings = check;
+    ctx.on('loader/volatile-update', guard(logger, 'session-watch: settings', () => {
+        check.run();
+        hub.bump('settings');
+    }));
 
     ctx.provide('sessionWatch', watch);
 

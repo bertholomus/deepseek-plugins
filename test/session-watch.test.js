@@ -8,6 +8,9 @@ import { join } from 'node:path';
 import { INITIAL, KEY, STATE_VERSION, TEXT_MAX, applyEvent, endOf, foldAll, goalOf, parseState, sessionWatchProjection, todoSummary, viewOf } from '../plugins/session-watch/lib/fold.js';
 import { SessionWatch } from '../plugins/session-watch/lib/watch.js';
 import { Hub } from '../plugins/session-watch/lib/shared/hub.js';
+import { DEFAULTS, LIVE_SETTINGS, checkConfig, usableSettings } from '../plugins/session-watch/lib/config.js';
+import { SettingsCheck, liveSettings } from '../plugins/session-watch/lib/shared/settings.js';
+import { loadClient, elementsOf, textIn } from './helpers/client.mjs';
 import { fakeDsh } from './helpers/fake-dsh.mjs';
 import { manualClock, settle } from './helpers/clock.mjs';
 
@@ -362,4 +365,75 @@ test('watcher: an outside agent\'s state shows with its session', async () => {
     assert.equal((await watch.get('t')).word, 'waiting on you');
     watch.setExternal('t', null);
     assert.equal(watch.rowOf('t').external, undefined);
+});
+
+test('watcher: a question its plugin refuses for now (switched off, a setting to fix) stays, and the refusal is said', async () => {
+    const { watch } = setup();
+    let refuse = true;
+    watch.raiseAsk({ id: 'q', sessionId: 's', source: 'Test', question: 'Go?', onAnswer: () => { if (refuse) throw Object.assign(new Error('Test is off: switch it on first.'), { refused: true }); return { sent: true }; } });
+    const changes = [];
+    watch.on((event) => { if (event.type === 'ask') changes.push(event.change); });
+    assert.deepEqual(await watch.answerAsk('q', 'go'), { ok: false, error: 'Test is off: switch it on first.', refused: true });
+    assert.deepEqual(watch.asks().map((ask) => ask.id), ['q'], 'still waiting');
+    assert.deepEqual(changes, ['answered', 'kept']);
+    refuse = false;
+    assert.deepEqual(await watch.answerAsk('q', 'go'), { ok: true, sent: true });
+    assert.deepEqual(watch.asks(), []);
+});
+
+test('settings: a wrong delivery wait is named in words, and the watcher keeps its default until it is fixed', () => {
+    assert.doesNotThrow(() => checkConfig(DEFAULTS));
+    assert.throws(() => checkConfig({ deliveryTimeoutSeconds: 5 }), (error) => error.key === 'deliveryTimeoutSeconds'
+        && error.message === 'How long a message may wait to be read (deliveryTimeoutSeconds) must be a whole number of seconds from 10 to 86400 (it is 5)');
+    assert.deepEqual([...LIVE_SETTINGS], ['deliveryTimeoutSeconds']);
+    let value = 5;
+    const settings = liveSettings({ deliveryTimeoutSeconds: { get: () => value } });
+    const check = new SettingsCheck({ settings, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'session-watch' });
+    check.run();
+    assert.equal(check.problem.live, true);
+    const usable = usableSettings(settings, check);
+    assert.equal(usable.deliveryTimeoutSeconds, 600, 'the default while it is wrong: every suite plugin needs the watcher');
+    value = 120;
+    check.run();
+    assert.equal(usable.deliveryTimeoutSeconds, 120);
+});
+
+test('settings in Plugins: Session Watch\'s page there has its one setting, in DSH\'s own form', () => {
+    const edits = [];
+    class SettingsFormModel {
+        constructor(scope, specs) { this.scope = scope; this.specs = specs; }
+        bind(project) { return { subscribe: () => () => {}, getSnapshot: () => project() }; }
+        shell() { return { available: true, writable: true, dirty: false, invalid: false, saving: false, failed: false }; }
+        field(name) { return { text: this.specs.find((spec) => spec.field === name).format(600), overridden: false, invalid: false }; }
+        actions() { return { edit: (field, text) => edits.push([field, text]), resetField: () => {}, save: () => {}, discard: () => {} }; }
+        dispose() {}
+    }
+    const ui = { SettingsFormModel, SettingsForm: (props) => ({ type: 'SettingsForm', props, children: props.children }) };
+    const { id, client } = loadClient(new URL('../plugins/session-watch/lib/client.js', import.meta.url), { ui });
+    assert.equal(id, 'dsh-plugin-session-watch');
+    const registered = [];
+    const effects = [];
+    const scope = {
+        configForms: { get: (entry) => ({ entry }), whileServed: (entries, fn) => (entries[0] === 'session-watch' ? fn() : undefined) },
+        slots: { inject: (_name, fn) => fn(), register: (spec, component) => { registered.push({ spec, component }); return () => {}; } },
+        effect: (fn) => { effects.push(fn); },
+        inject: (names, fn) => { if (names[0] === 'configForms') fn(scope); },
+    };
+    client.apply(scope);
+    for (const fn of effects) fn();
+    const [entry] = registered;
+    assert.equal(entry.spec.name, 'plugins.bundle.config');
+    assert.equal(entry.spec.key, 'dsh-plugin-session-watch');
+    assert.match(entry.component({ view: 'summary' }), /^How long a message from Autopilot, Decisions or Agent Terminals may wait to be read/);
+    const page = entry.component({});
+    const [field] = elementsOf(page).filter((e) => e.type === 'SettingsValueField');
+    assert.equal(field.props.label, 'How long a message may wait to be read, in seconds');
+    assert.equal(field.props.text, '600');
+    assert.equal(field.props.invalidLabel, 'A whole number from 10 to 86400, or empty for the default (600).');
+    field.props.onEdit('120');
+    assert.deepEqual(edits, [['deliveryTimeoutSeconds', '120']]);
+    assert.match(textIn(page), /they stop working while it is off/);
+    const spec = client.internals.kit.fieldSpec(client.internals.SETTINGS[0]);
+    assert.equal(spec.parse('5'), undefined);
+    assert.equal(JSON.stringify(spec.parse('86400')), '{"kind":"set","value":86400}');
 });

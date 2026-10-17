@@ -22,59 +22,52 @@ import { AutopilotRemote, SERVICE } from './remote.js';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
 import { JsonStore } from './shared/files.js';
 import { Journal } from './shared/journal.js';
-import { errorText } from './shared/safe.js';
+import { errorText, guard } from './shared/safe.js';
+import { SettingsCheck, live, liveSettings } from './shared/settings.js';
+import { LIVE_SETTINGS, checkConfig, savedEntry } from './config.js';
+
+export { SETTING_TITLES, LIVE_SETTINGS, checkConfig, changedWords } from './config.js';
 
 export const name = 'autopilot';
 
 /** The session watcher; DSH starts Autopilot only while it runs. */
 export const inject = ['sessionWatch'];
 
+/**
+ * Settings: types and defaults here, ranges in checkConfig, so a wrong value
+ * is said in words on Autopilot's page instead of stopping it at start. The
+ * live ones are on its page in Plugins and apply as soon as they are saved.
+ */
 export const Config = z.object({
-    /** Master switch: when off, Autopilot watches nothing and its page says so. */
+    /** Profile only. false keeps Autopilot loaded but idle; the switch in Plugins unloads it instead. */
     enabled: z.boolean().default(true),
-    /** The rule for sessions without their own: act ("auto"), ask first ("ask"), or leave alone ("off"). */
-    defaultRule: z.union(['auto', 'ask', 'off']).default('auto'),
+    /** The rule for sessions without their own until the page sets one: "auto", "ask" or "off". */
+    defaultRule: z.string().default('auto'),
     /** After a DSH restart, tell the sessions it cut off to carry on. */
-    resumeAfterRestart: z.boolean().default(true),
-    /** Only sessions cut off within this many hours are resumed. */
-    resumeWindowHours: z.natural().min(1).max(168).default(6),
-    /** How long a session stays quiet, with work open, before a note. */
-    idleSeconds: z.natural().min(5).max(86400).default(600),
-    /** At start, idle sessions whose last turn ended within this many hours are looked at. */
-    idleWindowHours: z.natural().min(1).max(168).default(2),
-    /** Notes in a row that bring no progress before Autopilot backs off. */
-    maxNudges: z.natural().min(1).max(10).default(2),
-    /** The most notes and goal starts Autopilot sends in an hour, over all sessions. */
-    maxNotesPerHour: z.natural().min(1).max(500).default(20),
-    /** Waits before each try after a failed turn, in seconds; one try per entry. */
-    errorRetrySeconds: z.array(z.natural().max(86400)).default([120, 600, 1800]),
-    /** How long after DSH starts Autopilot first looks, in seconds. */
-    startDelaySeconds: z.natural().max(600).default(20),
+    resumeAfterRestart: live(z.boolean().default(true)),
+    /** Only sessions cut off within this many hours are resumed (1 to 168). */
+    resumeWindowHours: live(z.number().default(6)),
+    /** How long a session stays quiet, with work open, before a note, in seconds (5 to 86400). */
+    idleSeconds: live(z.number().default(600)),
+    /** At start, idle sessions whose last turn ended within this many hours are looked at (1 to 168). */
+    idleWindowHours: live(z.number().default(2)),
+    /** Notes in a row that bring no progress before Autopilot backs off (1 to 10). */
+    maxNudges: live(z.number().default(2)),
+    /** The most notes and goal starts Autopilot sends in an hour, over all sessions (1 to 500). */
+    maxNotesPerHour: live(z.number().default(20)),
+    /** Waits before each try after a failed turn, in seconds; one try per entry (1 to 10 entries, each up to 86400). */
+    errorRetrySeconds: live(z.array(z.number()).default([120, 600, 1800])),
+    /** How long after DSH starts Autopilot first looks, in seconds (0 to 600). */
+    startDelaySeconds: z.number().default(20),
 });
 
-/** Check the config and say what is wrong in words (DSH shows this when the plugin cannot start). */
-export function checkConfig(config) {
-    const whole = (key, min, max) => {
-        const value = config?.[key];
-        if (!Number.isInteger(value) || value < min || value > max) throw new Error(`autopilot: ${key} must be a whole number from ${min} to ${max} (got ${JSON.stringify(value)})`);
-    };
-    whole('resumeWindowHours', 1, 168);
-    whole('idleSeconds', 5, 86400);
-    whole('idleWindowHours', 1, 168);
-    whole('maxNudges', 1, 10);
-    whole('maxNotesPerHour', 1, 500);
-    whole('startDelaySeconds', 0, 600);
-    if (!['auto', 'ask', 'off'].includes(config?.defaultRule)) throw new Error(`autopilot: defaultRule must be "auto", "ask" or "off" (got ${JSON.stringify(config?.defaultRule)})`);
-    const retries = config?.errorRetrySeconds;
-    if (!Array.isArray(retries) || retries.length === 0 || retries.length > 10 || retries.some((n) => !Number.isInteger(n) || n < 0 || n > 86400)) {
-        throw new Error(`autopilot: errorRetrySeconds must list 1 to 10 waits, each a whole number of seconds up to 86400 (got ${JSON.stringify(retries)})`);
-    }
-}
-
 export function apply(ctx, config) {
-    checkConfig(config);
     const logger = ctx.logger;
     const watch = ctx.sessionWatch;
+    const settings = liveSettings(config);
+    // A wrong value never stops Autopilot from starting: it does no work, and its page says which setting to change.
+    const check = new SettingsCheck({ settings, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'autopilot', logger });
+    check.run();
     // Its folder in DSH's data folder, as DSH resolves it (DSH_HOME, else ~/.dsh).
     const dir = dshHomePath('autopilot');
     const bump = () => watch.hub?.bump?.('autopilot');
@@ -96,11 +89,24 @@ export function apply(ctx, config) {
         }
     };
 
-    const pilot = new Pilot({ watch, config, store, journal, logger, notify, changed: bump });
-    if (config.enabled) pilot.start();
+    const pilot = new Pilot({ watch, config: settings, store, journal, logger, notify, changed: bump, settingsOk: () => check.ok });
+    const startIfReady = () => {
+        if (settings.enabled !== false && check.ok && !pilot.started) pilot.start();
+    };
+    startIfReady();
+
+    // Settings saved on Autopilot's page in Plugins: checked again, and they apply at once.
+    ctx.on('loader/volatile-update', guard(logger, 'autopilot: settings', (paths) => {
+        const wasWrong = !check.ok;
+        const entry = savedEntry(check, paths);
+        if (entry) journal.add(entry);
+        if (pilot.started) pilot.settingsChanged({ fixed: wasWrong && check.ok });
+        else startIfReady();
+        bump();
+    }));
 
     ctx.inject(['typertGateway'], (scope) => {
-        scope.provide(SERVICE, new AutopilotRemote({ pilot, watch, journal, config }));
+        scope.provide(SERVICE, new AutopilotRemote({ pilot, watch, journal, config: settings, check }));
     });
 
     ctx.effect(() => () => {
