@@ -62,8 +62,59 @@ export function plainLine(line) {
         .replace(/(?<=\S)[*_](?=\s|$|[.,:;!?)])/g, '');
 }
 
-/** A suite decision line: `DECISION NEEDED: <question> — recommend: <pick>` (a hyphen or "--" works too). */
-export const DECISION_LINE = /^[\s>*_`-]*DECISION NEEDED\s*[:：]\s*(.+?)\s*(?:(?:—|–|--|-)\s*recommend(?:ation|ed)?\s*[:：]\s*(.+?))?\s*[*_`]*\s*$/im;
+/*
+ * The suite's markers, as models write them:
+ *   DECISION NEEDED: <question> — recommend: <pick>
+ *   BLOCKED: <what is missing>
+ * A marker counts at the start of any line (after a quote mark, a bullet,
+ * a list number or a heading mark; bold and code marks are dropped first),
+ * and, in the reply's last lines, also after the end of a sentence:
+ * "…without valid credentials. BLOCKED: working staging credentials." A
+ * marker inside a sentence ("the request was BLOCKED: by policy") is not
+ * one. DECISION NEEDED is read in any case; BLOCKED only in capitals.
+ */
+
+/** How many of a reply's last non-empty lines may carry a marker after a sentence's end. */
+const MARKER_TAIL = 6;
+
+/** What may start a line before a marker: quote marks, a bullet, a list number, a heading mark. */
+const LEAD = String.raw`[\s>*_\`#-]*(?:\d{1,3}[.)]\s+)?`;
+
+/** The end of a sentence before an inline marker: a full stop, ! or ?, any closing quote or bracket, then a space. */
+const SENTENCE_END = String.raw`[.!?。！？]["'”’)\]]*\s+`;
+
+/** The words after the last marker in a line, or undefined when the line has none. */
+function afterMarker(line, marker, { anyCase, inline }) {
+    const pattern = new RegExp(`(?:^${LEAD}${inline ? `|${SENTENCE_END}` : ''})${marker}\\s*[:：]\\s*`, anyCase ? 'gi' : 'g');
+    let rest;
+    for (const match of line.matchAll(pattern)) rest = line.slice(match.index + match[0].length);
+    return rest;
+}
+
+/** Where a reply's last lines (the ones that may carry an inline marker) begin. */
+function tailStart(lines) {
+    let left = MARKER_TAIL;
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+        if (lines[i].trim() !== '') left -= 1;
+        if (left === 0) return i;
+    }
+    return 0;
+}
+
+/** Text with the marks a model leaves at its ends dropped. */
+const trimMarks = (text) => String(text ?? '').replace(/^[\s*_`]+|[\s*_`]+$/g, '');
+
+/** A recommendation as a card shows it: no closing full stop. */
+const pickWords = (text) => trimMarks(text).replace(/(?<![.])\.$/, '').trim();
+
+/** A recommendation after the question: "— recommend: …" (a dash, "--" or a hyphen), or a sentence "Recommend: …" / "I recommend …". */
+function splitRecommendation(rest) {
+    const dashed = /^(.+?)\s*(?:—|–|--|-)\s*recommend(?:ation|ed)?\s*[:：]\s*(.+)$/i.exec(rest);
+    if (dashed) return [dashed[1], dashed[2]];
+    const sentence = /^(.+?[.?!])\s+(?:recommend(?:ation|ed)?\s*[:：]|my recommendation(?: is)?\s*[:：]?|I(?:['’]d| would)? recommend\b\s*[:：]?)\s*(.+)$/i.exec(rest);
+    if (sentence) return [sentence[1], sentence[2]];
+    return [rest, undefined];
+}
 
 /** A recommendation on the line after a decision line: `Recommend: <pick>`. */
 const RECOMMEND_LINE = /^[\s>*_`-]*recommend(?:ation|ed)?\s*[:：]\s*(.+?)\s*$/i;
@@ -72,30 +123,52 @@ const RECOMMEND_LINE = /^[\s>*_`-]*recommend(?:ation|ed)?\s*[:：]\s*(.+?)\s*$/i
 export function decisionIn(text) {
     if (typeof text !== 'string' || !/DECISION NEEDED/i.test(text)) return undefined;
     const lines = text.split('\n').map(plainLine);
+    const tail = tailStart(lines);
     for (let i = lines.length - 1; i >= 0; i -= 1) {
-        const match = DECISION_LINE.exec(lines[i]);
-        if (match) {
-            const question = match[1].trim();
-            if (!question) continue;
-            // Some write the recommendation on the next line.
-            const next = match[2] ? undefined : lines.slice(i + 1).find((line) => line.trim() !== '');
-            const recommendation = match[2]?.trim() || (next ? RECOMMEND_LINE.exec(next)?.[1]?.trim() : undefined);
-            return { question, ...(recommendation ? { recommendation } : {}) };
-        }
+        const rest = afterMarker(lines[i], 'DECISION NEEDED', { anyCase: true, inline: i >= tail });
+        if (rest === undefined) continue;
+        const [asked, picked] = splitRecommendation(trimMarks(rest));
+        const question = trimMarks(asked);
+        if (!question) continue;
+        // Some write the recommendation on the next line.
+        const next = picked ? undefined : lines.slice(i + 1).find((line) => line.trim() !== '');
+        const recommendation = pickWords(picked ?? (next ? RECOMMEND_LINE.exec(next)?.[1] : ''));
+        return { question, ...(recommendation ? { recommendation } : {}) };
     }
     return undefined;
 }
 
-/** A suite blocker line: `BLOCKED: <what>`. */
-export const BLOCKED_LINE = /^[\s>*_`-]*BLOCKED\s*[:：]\s*(.+?)\s*[*_`]*\s*$/m;
+/**
+ * A recommendation said at the end of free text (a thread's handback, say),
+ * split from what is asked: "Which port? Recommendation: 8080 — it is
+ * free." gives the question "Which port?" and the recommendation "8080 —
+ * it is free". Only the last line is read, where a handback puts what it
+ * needs; undefined when it recommends nothing.
+ */
+export function recommendationIn(text) {
+    if (typeof text !== 'string' || !/recommend/i.test(text)) return undefined;
+    const lines = text.trim().split('\n');
+    const last = plainLine(lines.at(-1) ?? '');
+    const before = lines.slice(0, -1).join('\n').trim();
+    const own = RECOMMEND_LINE.exec(last);
+    if (own) {
+        const recommendation = pickWords(own[1]);
+        return before && recommendation ? { question: before, recommendation } : undefined;
+    }
+    const [asked, picked] = splitRecommendation(trimMarks(last));
+    const recommendation = pickWords(picked ?? '');
+    const question = [before, trimMarks(asked)].filter(Boolean).join('\n');
+    return recommendation && question ? { question, recommendation } : undefined;
+}
 
-/** The text of the last BLOCKED line in a text, or undefined. */
+/** The text of the last BLOCKED marker in a text, or undefined. */
 export function blockedIn(text) {
     if (typeof text !== 'string' || !/BLOCKED/.test(text)) return undefined;
     const lines = text.split('\n').map(plainLine);
+    const tail = tailStart(lines);
     for (let i = lines.length - 1; i >= 0; i -= 1) {
-        const match = BLOCKED_LINE.exec(lines[i]);
-        if (match && match[1].trim()) return match[1].trim();
+        const rest = trimMarks(afterMarker(lines[i], 'BLOCKED', { anyCase: false, inline: i >= tail }));
+        if (rest) return rest;
     }
     return undefined;
 }
@@ -124,10 +197,17 @@ export function askIn(text) {
     if (!asksSomeone(text)) return undefined;
     const lines = text.trim().split('\n').map((line) => line.replace(/^[\s>*_`#-]+|[\s*_`]+$/g, '').trim()).filter(Boolean);
     const tail = lines.slice(-6);
-    // The last line that asks, cut to its last sentence with a question mark; else the last line.
-    const asking = [...tail].reverse().find((line) => line.includes('?')) ?? tail.at(-1) ?? '';
-    const sentences = asking.match(/[^.!?]*\?/g);
-    const question = sentences ? sentences.at(-1).trim() : asking;
+    // The last sentence with a question mark; else the last line that asks for the person's word
+    // ("It needs your decision on the port."), not a closing line such as "Reply here and I'll pass it on.".
+    const asking = [...tail].reverse().find((line) => line.includes('?'));
+    let question;
+    if (asking) {
+        const sentences = asking.match(/[^.!?]*\?/g);
+        question = sentences ? sentences.at(-1).trim() : asking;
+    } else {
+        const pleading = [...tail].reverse().find((line) => [...ASKS, ...OFFERS].some((pattern) => pattern.test(line)));
+        question = pleading ?? tail.at(-1) ?? '';
+    }
     // "Let me know if you want the docs too." offers more without waiting on an answer.
     const soft = !asksForAnswer(text);
     return question ? { kind: 'question', question: cutAsk(question), ...(soft ? { soft: true } : {}) } : undefined;
@@ -136,7 +216,7 @@ export function askIn(text) {
 /** Asks that wait on a person's answer. */
 const ASKS = [
     /\bDECISION NEEDED\b/i,
-    /^\s*BLOCKED\s*:/im,
+    /(?:^[\s>*_`#-]*(?:\d{1,3}[.)]\s+)?|[.!?。！？]["'”’)\]]*\s+)BLOCKED\s*[:：]/m,
     /\b(?:waiting|wait) (?:for|on) (?:your|you)\b/i,
     /\b(?:your call|your decision|need your|needs your|please confirm|can you confirm|could you confirm)\b/i,
     /\b(?:should I|shall I|do you want|would you like|which (?:one|option) (?:do|would) you)\b/i,

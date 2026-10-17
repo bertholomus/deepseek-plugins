@@ -3,8 +3,7 @@
 // DSH Test (scripts/e2e.mjs autopilot).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { Pilot, RULES, hasOpenWork, markOf, parseData, progressed } from '../plugins/autopilot/lib/pilot.js';
 import { actionLabel, answerNote, carryOnNote, errorNote, nudgeNote, openWork, question, whyBackOff, whyResume } from '../plugins/autopilot/lib/notes.js';
@@ -18,6 +17,7 @@ import { SessionWatch } from '../plugins/session-watch/lib/watch.js';
 import { fakeDsh } from './helpers/fake-dsh.mjs';
 import { manualClock, settle } from './helpers/clock.mjs';
 import { OTHER_NAMES, loadClient, elementsOf, strictRemote, textIn } from './helpers/client.mjs';
+import { tempDir } from './helpers/temp.mjs';
 
 /** Autopilot's defaults (lib/index.js Config). */
 const DEFAULTS = Object.freeze({
@@ -33,7 +33,7 @@ const TODOS = [
 const MIN = 60000;
 
 /** Autopilot and the watcher over a stand-in DSH, all on one hand-moved clock. */
-function setup({ config = {}, dir = mkdtempSync(join(tmpdir(), 'autopilot-')), clock = manualClock(), dsh = fakeDsh({ now: clock.now }), start = true, settingsOk } = {}) {
+function setup({ config = {}, dir = tempDir('autopilot'), clock = manualClock(), dsh = fakeDsh({ now: clock.now }), start = true, settingsOk } = {}) {
     const warnings = [];
     const logger = { info: () => {}, warn: (line) => warnings.push(line) };
     const hub = new Hub();
@@ -174,7 +174,7 @@ test('idle with an active goal that stopped: the goal starts again, proven by th
 // ── Cut off by a stop ─────────────────────────────────────────────────
 
 test('after a restart: a cut-off session gets a carry-on note, and its goal starts again once the note is read', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'autopilot-'));
+    const dir = tempDir('autopilot');
     const clock = manualClock();
     const dsh = fakeDsh({ now: clock.now });
     const before = setup({ dir, clock, dsh });
@@ -216,7 +216,7 @@ test('after a restart: a cut-off session gets a carry-on note, and its goal star
 });
 
 test('after a restart: a turn cut off while a tool waited for approval, or a question waited in the question box, gets its note, which says what did not happen', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'autopilot-'));
+    const dir = tempDir('autopilot');
     const clock = manualClock();
     const dsh = fakeDsh({ now: clock.now });
     const before = setup({ dir, clock, dsh });
@@ -282,7 +282,7 @@ test('Ask first: a withdrawn question says so in the log, with why; an answer ma
 });
 
 test('after a restart: sessions cut off too long ago, ones someone wrote in since, and Off sessions are left alone', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'autopilot-'));
+    const dir = tempDir('autopilot');
     const clock = manualClock();
     const dsh = fakeDsh({ now: clock.now });
     const before = setup({ dir, clock, dsh });
@@ -805,8 +805,8 @@ test('settings: each wrong value is named, with what it must be; the defaults pa
     }
     for (const key of LIVE_SETTINGS) assert.ok(SETTING_TITLES[key], key);
     assert.deepEqual(Object.keys(SETTING_TITLES).sort(), Object.keys(CONFIG_DEFAULTS).sort());
-    assert.equal(changedWords([['idleSeconds'], ['maxNudges']]), 'Quiet time before a note, Notes in a row without progress');
-    assert.equal(changedWords([['idleSeconds'], ['idleSeconds']]), 'Quiet time before a note');
+    assert.equal(changedWords([['idleSeconds'], ['maxNudges']]), '“Quiet time before a note”, “Notes in a row without progress”');
+    assert.equal(changedWords([['idleSeconds'], ['idleSeconds']]), '“Quiet time before a note”');
     assert.equal(changedWords(undefined), '');
 });
 
@@ -823,15 +823,16 @@ test('settings: read live, checked once per change, and a save says in the log w
     check.run();
     assert.equal(logged.length, 1, 'the same problem is logged once');
     current = 60;
-    assert.deepEqual(savedEntry(check, [['idleSeconds']]), { kind: 'settings', text: 'Settings fixed: Autopilot is working again', why: 'You saved Quiet time before a note in Plugins.', state: 'done', by: 'you' });
+    // DSH sends the same notice for a save in Plugins and an edit of its profile: the entry names neither.
+    assert.deepEqual(savedEntry(check, [['idleSeconds']]), { kind: 'settings', text: 'Settings fixed: Autopilot is working again', why: 'The change to “Quiet time before a note” fixed it.', state: 'done' });
     assert.equal(check.ok, true);
     assert.equal(logged.at(-1)[0], 'info');
     current = 90;
-    assert.deepEqual(savedEntry(check, [['idleSeconds']]), { kind: 'settings', text: 'Settings changed: Quiet time before a note', why: 'You saved them in Plugins. They apply now.', state: 'done', by: 'you' });
+    assert.deepEqual(savedEntry(check, [['idleSeconds']]), { kind: 'settings', text: 'Settings changed: “Quiet time before a note”', why: 'They apply now.', state: 'done' });
     assert.equal(savedEntry(check, []), undefined, 'nothing changed, nothing logged');
     current = 1;
     const broke = savedEntry(check, [['idleSeconds']]);
-    assert.equal(broke.text, 'Settings changed: Quiet time before a note; Autopilot waits until a wrong one is fixed');
+    assert.equal(broke.text, 'Settings changed: “Quiet time before a note”; Autopilot waits until a wrong one is fixed');
     assert.equal(broke.state, 'waiting on a setting');
     // One only the profile sets is to be changed there.
     const profile = new SettingsCheck({ settings: { ...CONFIG_DEFAULTS, startDelaySeconds: 9999 }, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'autopilot' });

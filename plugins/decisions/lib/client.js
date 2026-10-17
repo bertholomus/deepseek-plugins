@@ -79,7 +79,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         `.${P}-page :is(button,a,input,select,textarea,[tabindex]):focus-visible,.${P}-pane :is(button,a,input,select,textarea,[tabindex]):focus-visible{outline:2px solid var(--${P}-ring);outline-offset:1px;border-radius:var(--dsw-radius-xs)}`,
         `.${P}-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}`,
         `.${P}-glyph{color:var(--${P}-glyph)}`,
-        `.${P}-badge{position:absolute;top:-5px;right:-7px;min-width:14px;height:14px;padding:0 3px;box-sizing:border-box;border-radius:7px;background:var(--dsw-alias-state-error-primary);color:#fff;font:600 10px/14px var(--dsw-font-family,system-ui);font-variant-numeric:tabular-nums;text-align:center}`,
+        `.${P}-badge{position:absolute;top:-5px;right:-7px;min-width:14px;height:14px;padding:0 3px;box-sizing:border-box;border-radius:7px;background:color-mix(in srgb,var(--dsw-static-red-600,#ec1313) 90%,var(--dsw-static-neutral-bluish-1000,#0f1115));color:var(--dsw-static-neutral-bluish-00,#ffffff);font:600 10px/14px var(--dsw-font-family,system-ui);font-variant-numeric:tabular-nums;text-align:center}`,
         `.${P}-icon{position:relative;display:inline-flex;align-items:center;justify-content:center}`,
         `.${P}-trouble-title{margin:10px 0 0;font:var(--dsw-font-s-strong-14);color:var(--dsw-alias-label-primary)}`,
         `.${P}-trouble-text{margin:4px 0 0;font:var(--dsw-font-xs-13);color:var(--${P}-text-2);max-width:68ch}`,
@@ -91,6 +91,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         `.${P}-set-title{font:var(--dsw-font-s-strong-14);color:var(--dsw-alias-label-primary)}`,
         `.${P}-set-hint{margin-top:2px;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}`,
         `.${P}-set-control{flex:0 0 auto;display:flex;align-items:center;gap:10px}`,
+        `.${P}-choice{display:inline-flex}.${P}-seg-none>[aria-hidden="true"]{visibility:hidden}`,
         `.${P}-set-reset{padding:0;border:0;background:none;font:var(--dsw-font-xs-13);color:var(--dsw-alias-link,var(--dsw-alias-state-business-primary));text-decoration:underline;text-underline-offset:2px;cursor:pointer}`,
         `.${P}-set-reset:focus-visible{outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px;border-radius:var(--dsw-radius-xs)}`,
         `.${P}-set-note{margin:10px 0 0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary);max-width:72ch}`,
@@ -411,7 +412,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             case 'running': case 'working': case 'queued': case 'in the queue': case 'sending': case 'starting': case 'waiting for a round': return 'info';
             case 'waiting for approval': case 'waiting for your answer': case 'waiting on you': case 'needs a decision': case 'asked you': case 'asks you': case 'cut off': case 'cut short': case 'backed off': case 'gave up': case 'held': case 'not confirmed': case 'waiting on a setting': return 'warning';
             case 'failed': case 'blocked': case 'not delivered': case 'not started': case 'not sent': return 'danger';
-            case 'delivered': case 'started': case 'done': case 'answered': case 'read': case 'sent': return 'success';
+            case 'delivered': case 'started': case 'done': case 'answered': case 'read': case 'sent': case 'shown': return 'success';
+            case 'not shown': return 'warning';
             case 'stopped': case 'paused': case 'withdrawn': return 'neutral';
             default: return 'quiet';
         }
@@ -765,6 +767,23 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     ? h('button', { type: 'button', className: `${P}-set-reset`, disabled: disabled || removing, onClick: () => void remove() }, f.removeLabel ?? 'Remove it') : null));
     }
 
+    /**
+     * DSH's segmented control for a choice. A saved value that is not one of
+     * the choices selects none: DSH's control would draw its pill outside
+     * the box and leave no tab to Tab into, so the pill is hidden and the
+     * first choice takes the focus.
+     */
+    function ChoiceControl({ id, f, value, disabled, onChange }) {
+        const known = f.options.some((o) => o.value === value);
+        const box = React.useRef(null);
+        React.useEffect(() => {
+            const tabs = box.current?.querySelectorAll?.('[role="tab"]') ?? [];
+            tabs.forEach((tab, i) => { tab.tabIndex = tab.getAttribute('aria-selected') === 'true' || (!known && i === 0) ? 0 : -1; });
+        });
+        return h('span', { ref: box, className: `${P}-choice`, ...(known ? {} : { 'data-suite-unset': '' }) },
+            h(ui.SegmentedControl, { id, label: f.title, value: known ? value : '', options: f.options, disabled, onChange, ...(known ? {} : { className: `${P}-seg-none` }) }));
+    }
+
     /** One setting's row: a switch or a choice drawn here, anything typed in DSH's own field. */
     function SettingRow({ f, state, disabled, actions }) {
         const id = `${P}-set-${f.name}`;
@@ -780,7 +799,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 h('div', { className: `${P}-set-control` }, reset,
                     f.kind === 'switch'
                         ? h(ui.Switch, { checked: state.text === 'on', label: f.title, disabled, onChange: (next) => edit(next ? 'on' : 'off') })
-                        : h(ui.SegmentedControl, { id, label: f.title, value: state.text || f.default, options: f.options, disabled, onChange: edit })));
+                        : h(ChoiceControl, { id, f, value: state.text || f.default, disabled, onChange: edit })));
         }
         return h('div', { className: `${P}-set-row`, 'data-suite-setting': f.name, ...(state.invalid ? { 'data-suite-invalid': '' } : {}) },
             h('div', { className: `${P}-set-text` },
@@ -958,7 +977,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         P, css, injectStyle, removeStyle, setConnection, whenConnected, link, hub, useLive, useMinute,
         setNavigation, canOpenPlugin, openPlugin, fieldSpec, invalidWords, applySettings,
         timeText, agoText, spanText, toneOf, isRecord,
-        Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText, Choice, Trouble, SettingsProblem, SettingsBody, SettingRow, SecretRow,
+        Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText, Choice, Trouble, SettingsProblem, SettingsBody, SettingRow, SecretRow, ChoiceControl,
     };
 }
 // </suite-kit>
@@ -1022,7 +1041,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const SETTINGS = [
             { name: 'approvals', kind: 'switch', title: 'Tools waiting for approval', hint: 'List a tool that asks to run with more access, with Allow once and Reject.', default: true, group: 'What it lists' },
             { name: 'questions', kind: 'switch', title: 'Questions in the question box', hint: 'List the questions an agent asks in DSH\'s question box, with their choices.', default: true },
-            { name: 'replies', kind: 'switch', title: 'Replies that end with a question', hint: 'List a reply that ends by asking you something. DECISION NEEDED and BLOCKED lines are listed either way.', default: true },
+            { name: 'replies', kind: 'switch', title: 'Replies that end with a question', hint: 'List a reply that ends by asking you something. Replies with a DECISION NEEDED: or BLOCKED: marker (at a line\'s start, or after a sentence near the end) are listed whatever this says.', default: true },
             { name: 'threads', kind: 'switch', title: 'Threads that need a decision', hint: 'List a coordinator\'s thread that handed back needing a decision, or blocked.', default: true },
             { name: 'windowHours', kind: 'number', title: 'Keep a reply\'s question for, in hours', hint: 'An older reply\'s question leaves the list; the session still has it.', default: 72, min: 1, max: 720 },
             { name: 'notify', kind: 'switch', title: 'A notification for each new card', hint: 'Through DSH\'s notifications, while they run. Questions other plugins raise notify through those plugins.', default: true, group: 'Telling you' },
@@ -1056,7 +1075,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-ask{margin:8px 0 0;font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);white-space:pre-wrap;overflow-wrap:anywhere}`,
             `.${P}-rec{margin:6px 0 0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-primary)}`,
             `.${P}-rec-label{color:var(--${P}-text-2)}`,
-            `.${P}-code{font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace);max-height:12em;overflow:auto}`,
+            `.${P}-code{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace);max-height:12em;overflow:auto}`,
             `.${P}-answer{margin-top:10px;display:flex;flex-direction:column;gap:8px;min-width:0}`,
             `.${P}-label{font:var(--dsw-font-xs-strong-13);color:var(--dsw-alias-label-primary)}`,
             `.${P}-textarea,.${P}-input{box-sizing:border-box;width:100%;min-width:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm);background:var(--${P}-fill);color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-14)}`,
@@ -1101,11 +1120,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return `New cards also go to ${where}: ${m.lastHour} of ${m.perHour} this hour.`;
         }
 
+        const WAITS_ON_THIS = 'The session waits on this. Answer here or in the session: the first answer counts.';
+
         /** "waiting 4 minutes", with the full time for hover and screen readers. */
         function Waited({ at, now }) {
             if (!Number.isFinite(at) || at <= 0) return null;
             const seconds = Math.max(0, ((now ?? Date.now()) - at) / 1000);
-            return h('time', { className: `${P}-num`, dateTime: new Date(at).toISOString(), title: new Date(at).toLocaleString() }, seconds < 45 ? 'waiting since just now' : `waiting ${kit.spanText(seconds)}`);
+            return h('time', { className: `${P}-num`, dateTime: new Date(at).toISOString(), title: new Date(at).toLocaleString() }, seconds < 60 ? 'waiting less than a minute' : `waiting ${kit.spanText(seconds)}`);
         }
 
         /** Where a card comes from, in words, beside its session. */
@@ -1169,8 +1190,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         function HeaderCard({ data, busy, act, said }) {
             const waiting = data.waiting.length;
             const urgent = data.waiting.filter((c) => c.answer === 'approval' || c.live).length;
+            // With nothing waiting, the list's own empty state says so: said once.
             const status = !data.enabled ? TEXT.disabled
-                : waiting === 0 ? 'Nothing waits on you.'
+                : waiting === 0 ? ''
                     : [`${waiting} waiting on you`, urgent ? `${urgent} holding a running turn` : ''].filter(Boolean).join(' · ');
             const mirror = mirrorText(data.mirror);
             const canOpen = kit.canOpenPlugin();
@@ -1182,7 +1204,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 actions: canOpen ? h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => kit.openPlugin(BUNDLE) }, TEXT.settings) : null,
                 attrs: { 'data-decisions-header': data.enabled ? 'on' : 'off' },
             },
-            h('p', { className: `${P}-status` }, status),
+            status ? h('p', { className: `${P}-status` }, status) : null,
             data.enabled ? h('div', { className: `${P}-lines` },
                 sourcesText(data.sources) ? h('div', { className: `${P}-line`, 'data-decisions-sources': '' }, sourcesText(data.sources)) : null,
                 h('div', { className: `${P}-line`, 'data-decisions-notify': '' }, notifyText(data)),
@@ -1227,7 +1249,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 h('div', { className: `${P}-actions` },
                     h(ui.Button, { variant: 'primary', size: 'sm', disabled: busy || !text.trim(), onClick: send }, 'Send'),
                     card.recommendation ? h(ui.Button, { variant: 'outline', size: 'sm', disabled: busy, onClick: () => void answer({ recommended: true }) }, 'Go with the recommendation') : null,
-                    h('span', { className: `${P}-hint` }, card.running ? 'The session is running: your answer steers its current turn.' : 'It goes into the session as your next message.')));
+                    h('span', { className: `${P}-hint` }, card.running ? 'The session is running: your answer steers its current turn.'
+                        : card.kind === 'thread' ? 'It goes into the thread as your next message.' : 'It goes into the session as your next message.')));
         }
 
         function QuestionsAnswer({ card, busy, answer }) {
@@ -1260,7 +1283,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 (card.options ?? []).length ? h('div', { className: `${P}-actions` },
                     ...card.options.map((o, i) => h(ui.Button, { key: o.id, variant: i === 0 ? 'primary' : 'outline', size: 'sm', disabled: busy, onClick: () => void answer({ option: o.id }) }, o.label))) : null,
                 card.freeText ? [
-                    h('label', { key: 'l', className: `${P}-label`, htmlFor: id }, 'Or answer in your words'),
+                    h('label', { key: 'l', className: `${P}-label`, htmlFor: id }, (card.options ?? []).length ? 'Or answer in your words' : 'Your answer'),
                     h('textarea', { key: 't', id, className: `${P}-textarea`, rows: 2, value: text, disabled: busy, onChange: (event) => setText(event.target.value) }),
                     h('div', { key: 'a', className: `${P}-actions` }, h(ui.Button, { variant: 'outline', size: 'sm', disabled: busy || !text.trim(), onClick: () => void answer({ text }) }, 'Send')),
                 ] : null);
@@ -1289,7 +1312,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             else if (card.sessionId) {
                 controls = h('div', { className: `${P}-actions`, style: { marginTop: '10px' } },
                     h(ui.Button, { variant: 'primary', size: 'sm', onClick: () => onOpen(card.sessionId) }, 'Answer in the session'),
-                    h('span', { className: `${P}-hint` }, card.kind === 'approval' ? 'Decisions was not holding this request when DSH asked, so answer it in the session.' : 'Only the session can take this answer.'));
+                    h('span', { className: `${P}-hint` }, card.hint || (card.kind === 'approval' ? 'Decisions was not holding this request when DSH asked, so answer it in the session.' : 'Only the session can take this answer.')));
             }
             return h('li', { className: `${P}-item`, 'data-decisions-card': card.kind, 'data-decisions-id': card.id },
                 h('div', { className: `${P}-item-main` },
@@ -1303,8 +1326,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     card.what ? h('p', { className: `${P}-quote ${P}-code` }, card.what) : null,
                     card.detail ? h('p', { className: `${P}-why` }, card.detail) : null,
                     card.lines?.length ? h('details', { className: `${P}-details` }, h('summary', null, 'More about the call'), h('p', { className: `${P}-quote` }, card.lines.join('\n'))) : null,
-                    card.answer === 'approval' || card.live ? h('p', { className: `${P}-why` }, 'The session waits on this. Answer here or in the session: the first answer counts.') : null,
+                    // A question box's questions are in its controls: they come first, then what the session waits on.
+                    (card.answer === 'approval' || card.live) && !asksInForm ? h('p', { className: `${P}-why` }, WAITS_ON_THIS) : null,
                     controls,
+                    card.live && asksInForm ? h('p', { className: `${P}-why` }, WAITS_ON_THIS) : null,
                     shown ? h('p', { className: `${P}-alert`, role: 'alert', tabIndex: -1, ref: alertRef, 'data-decisions-error': '' }, /^Not /.test(String(shown)) ? String(shown) : `Not sent: ${shown}`) : null,
                     card.sending ? h(kit.Loading, { text: 'Sending your answer' }) : null),
                 h('div', { className: `${P}-item-side` },

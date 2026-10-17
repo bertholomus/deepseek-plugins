@@ -18,7 +18,7 @@
  * @module dsh-plugin-decisions/inbox
  */
 import { clip, errorText, isRecord, later } from './shared/safe.js';
-import { plainError } from './shared/words.js';
+import { cutOff, plainError } from './shared/words.js';
 import { APPROVAL_ANSWERS, Holds, approvalProof, approvalWords, lateAnswerProof, questionProof } from './holds.js';
 import { ANSWER_MAX, answerMessage, answerWords, askCard, byUrgency, checkAnswers, coordinatorView, headline, lead, questionCards, readable, replyCard, threadCards } from './cards.js';
 
@@ -39,6 +39,24 @@ function idMap(value) {
     return out;
 }
 
+/** Requests held when they were last seen, by card id, so a restart can say what became of them. */
+function heldMap(value) {
+    if (!isRecord(value)) return {};
+    const out = {};
+    for (const [id, item] of Object.entries(value).slice(-100)) {
+        if (typeof id !== 'string' || id.length > 400 || !isRecord(item) || typeof item.sessionId !== 'string' || !['approval', 'question'].includes(item.kind)) continue;
+        out[id] = {
+            sessionId: item.sessionId.slice(0, 128),
+            kind: item.kind,
+            title: typeof item.title === 'string' ? item.title.slice(0, 120) : '',
+            question: typeof item.question === 'string' ? item.question.slice(0, 300) : '',
+            at: Number.isFinite(item.at) ? item.at : 0,
+            ...(Number.isSafeInteger(item.turn) && item.turn >= 0 ? { turn: item.turn } : {}),
+        };
+    }
+    return out;
+}
+
 /** Make a stored value safe. */
 export function parseData(value) {
     return {
@@ -47,7 +65,47 @@ export function parseData(value) {
         seen: idMap(value?.seen),
         dismissed: idMap(value?.dismissed),
         answered: idMap(value?.answered),
+        held: heldMap(value?.held),
+        // When the mirror's messages of the last hour went (sent ones only), for its hourly limit.
+        sent: Array.isArray(value?.sent) ? value.sent.filter((at) => Number.isFinite(at)).slice(-500) : [],
     };
+}
+
+/** What became of a notification, from the notifications plugin's answer. */
+export function notifyOutcome(result) {
+    switch (result) {
+        case 'desktop': return { state: 'shown', where: 'on this computer' };
+        case 'browser': return { state: 'shown', where: 'in the DSH window' };
+        case 'cli': return { state: 'shown', where: 'by the system' };
+        case 'off': return { state: 'not shown', reason: 'notifications are switched off in the Notifications plugin\'s settings' };
+        case 'none': return { state: 'not shown', reason: 'nothing could show it: no DSH window is open, and the system did not take it' };
+        case undefined: return { state: 'not shown', reason: 'the Notifications plugin is not running' };
+        default: return { state: 'not shown', reason: typeof result === 'string' ? result : 'the Notifications plugin gave no answer' };
+    }
+}
+
+/**
+ * What became of a request Decisions held that no longer waits and has no
+ * outcome in the log (a restart cut its turn off, or it went back to DSH's
+ * own card when Decisions or its kind was switched off): answered in the
+ * session when its turn went on, else stopped. Undefined while it still
+ * waits in the session, or while the session cannot be read.
+ */
+export function heldOutcome(id, entry, row) {
+    const state = row?.state;
+    if (!isRecord(state)) return undefined;
+    const running = row.status === 'running';
+    const turn = Number(entry.turn) || 0;
+    if (running && entry.kind === 'approval' && (state.approvals ?? []).some((item) => `approval:${entry.sessionId}:${item.call ?? item.id}` === id)) return undefined;
+    if (running && entry.kind === 'question' && state.asking && `question:${entry.sessionId}:${state.asking.call}` === id) return undefined;
+    const end = isRecord(state.end) ? state.end : undefined;
+    const ended = end !== undefined && (Number(end.turn) || 0) >= turn;
+    // Its turn is going on, or ended as a turn does: the session's own card took the answer.
+    const wentOn = (running && state.open && (Number(state.turn) || 0) === turn && state.cancelled?.kind !== entry.kind)
+        || (ended && !cutOff(end) && end.kind === 'completed');
+    return wentOn
+        ? { text: 'Answered in the session', state: 'answered' }
+        : { text: 'The turn stopped before anyone answered', state: 'stopped' };
 }
 
 /** Keep the newest `keep` ids of a map. */
@@ -69,6 +127,21 @@ function questionRefusal(error) {
 }
 
 const sessionWords = (card) => (card.title ? `“${clip(card.title, 80)}”` : 'the session');
+
+/** How near a handback and the chat's message that relays it are, when the chat's state does not name its sender. */
+const RELAY_MS = 10000;
+
+/**
+ * The open thread card a coordinating chat's last reply answers: the
+ * chat's last message came from that thread (the coordinator relays a
+ * handback as the thread's message), so its reply is about the handback.
+ */
+export function relayedThread(state, cards) {
+    if (!cards.length || state?.inKind !== 'agent-message') return undefined;
+    if (typeof state.inFrom === 'string') return cards.find((card) => card.sessionId === state.inFrom);
+    const inAt = Number(state.inAt) || 0;
+    return cards.find((card) => card.at > 0 && Math.abs(card.at - inAt) <= RELAY_MS);
+}
 
 export class Inbox {
     /**
@@ -151,12 +224,31 @@ export class Inbox {
     }
 
     onHold(change) {
+        const card = change.card;
+        const data = this.store.data;
         if (change.type === 'held') {
+            // Kept until its outcome is in the log, so a restart that cuts its turn off can say so.
+            let turn;
+            try { turn = this.watch.stateOf?.(card.sessionId)?.turn; } catch { /* the turn is not needed to say what became of it */ }
+            data.held[card.id] = {
+                sessionId: card.sessionId,
+                kind: card.kind,
+                title: card.title ?? '',
+                question: clip(String(card.question ?? ''), 300),
+                at: card.at || this.now(),
+                ...(Number.isSafeInteger(turn) ? { turn } : {}),
+            };
+            this.store.change();
             this.soon(30);
             this.changed();
             return;
         }
-        const card = change.card;
+        // Answered here or in the session: its outcome is logged where it was taken. Let go (Decisions or its
+        // kind switched off): the session's own card still waits, and a later scan says what became of it.
+        if (change.by !== 'released' && Object.hasOwn(data.held, card.id)) {
+            delete data.held[card.id];
+            this.store.change();
+        }
         // A question whose wait ran out stays open as a late question; nothing to log.
         if (change.by === 'window' && this.started && change.code !== 'ASK_TIMED_OUT') {
             const answered = change.error === undefined;
@@ -227,11 +319,13 @@ export class Inbox {
             }
         }
         for (const ask of this.watch.asks?.() ?? []) add(askCard(ask, byId));
-        // A thread's handback and its own last reply say the same thing: keep the handback, with any recommendation.
-        const threads = new Map([...found.values()].filter((card) => card.kind === 'thread').map((card) => [card.sessionId, card]));
+        // A thread's handback, its own last reply and its coordinating chat's relay of it say the same
+        // thing: keep the handback's card, with any recommendation.
+        const threads = [...found.values()].filter((card) => card.kind === 'thread');
         for (const card of [...found.values()]) {
-            const thread = threads.get(card.sessionId);
-            if (!thread || !['decision', 'blocked', 'reply'].includes(card.kind)) continue;
+            if (!['decision', 'blocked', 'reply'].includes(card.kind)) continue;
+            const thread = threads.find((t) => t.sessionId === card.sessionId) ?? relayedThread(byId.get(card.sessionId)?.state, threads.filter((t) => t.via?.sessionId === card.sessionId));
+            if (!thread) continue;
             found.delete(card.id);
             if (card.recommendation && !thread.recommendation) thread.recommendation = card.recommendation;
         }
@@ -239,9 +333,11 @@ export class Inbox {
         const dismissed = [];
         for (const card of found.values()) {
             if (Object.hasOwn(data.answered, card.id) && !this.errors.has(card.id)) continue;
+            // How long it has waited: from when it was first seen, which a re-raise or a restart does not move.
+            const first = Math.min(card.at || Infinity, data.seen[card.id] || Infinity);
             const item = {
                 ...card,
-                at: card.at || data.seen[card.id] || now,
+                at: Number.isFinite(first) ? first : now,
                 ...(this.errors.has(card.id) ? { error: this.errors.get(card.id) } : {}),
                 ...(this.answering.has(card.id) ? { sending: true } : {}),
             };
@@ -251,7 +347,46 @@ export class Inbox {
         for (const id of [...this.errors.keys()]) if (!found.has(id)) this.errors.delete(id);
         waiting.sort(byUrgency);
         dismissed.sort((a, b) => b.dismissedAt - a.dismissedAt);
-        return { waiting, dismissed };
+        return { waiting, dismissed, rows: byId };
+    }
+
+    /**
+     * Say what became of held requests that no longer wait and have no
+     * outcome in the log: a restart cut their turn off, or the session's own
+     * card took the answer while Decisions was off.
+     * @param {Map<string, object>} rows - the sessions as just listed.
+     */
+    async settleHeld(rows) {
+        const data = this.store.data;
+        let changed = false;
+        for (const [id, entry] of Object.entries(data.held)) {
+            if (this.holds.get(id)) continue;
+            let row = rows.get(entry.sessionId);
+            // A session that is not loaded may have a saved state from before the request (DSH saves it at a
+            // turn's end): its log says what happened.
+            if (row && row.status !== 'running' && row.status !== 'idle' && !((Number(row.state?.at) || 0) >= entry.at)) {
+                let state;
+                try { state = await this.watch.fullState?.(entry.sessionId); } catch { /* read again on the next scan */ }
+                if (isRecord(state)) row = { ...row, state };
+            }
+            // A session that cannot be read is let go after a day, unsaid.
+            const outcome = row ? heldOutcome(id, entry, row) : this.now() - entry.at > 86400000 ? null : undefined;
+            if (outcome === undefined) continue;
+            delete data.held[id];
+            changed = true;
+            if (!outcome) continue;
+            this.journal.add({
+                kind: 'elsewhere',
+                cardId: id,
+                sessionId: entry.sessionId,
+                title: row?.title || entry.title,
+                text: outcome.text,
+                question: entry.question,
+                state: outcome.state,
+                ...(outcome.state === 'stopped' ? { why: 'Decisions showed it, but the turn ended (a restart or a stop) before an answer came.' } : {}),
+            });
+        }
+        if (changed) this.store.change();
     }
 
     /** Find new cards, tell the person about them once, and move the page. */
@@ -263,7 +398,8 @@ export class Inbox {
         }
         this.scanning = true;
         try {
-            const { waiting, dismissed } = await this.list();
+            const { waiting, dismissed, rows } = await this.list();
+            if (Object.keys(this.store.data.held).length) await this.settleHeld(rows);
             const data = this.store.data;
             const now = this.now();
             const fresh = waiting.filter((card) => !Object.hasOwn(data.seen, card.id));
@@ -311,9 +447,9 @@ export class Inbox {
             // Plugins' questions and threads' handbacks are announced by the plugin that raised them, and so are a thread's approvals.
             const notable = cards.filter((card) => card.kind !== 'ask' && card.kind !== 'thread' && !(card.kind === 'approval' && this.inThread(card.sessionId)));
             if (notable.length > NOTIFY_EACH) {
-                this.say({ title: 'Decisions', body: `${notable.length} things wait on you. Open Decisions to answer them.`, kind: 'decision' });
+                this.say({ title: 'Decisions', body: `${notable.length} things wait on you. Open Decisions to answer them.`, kind: 'decision' }, { count: notable.length });
             } else {
-                for (const card of notable) this.say({ title: headline(card), body: clip(String(card.question ?? ''), 240), kind: 'decision', ...(card.sessionId ? { sessionId: card.sessionId } : {}) });
+                for (const card of notable) this.say({ title: headline(card), body: clip(String(card.question ?? ''), 240), kind: 'decision', ...(card.sessionId ? { sessionId: card.sessionId } : {}) }, { card });
             }
         }
         if (this.mirror?.on) {
@@ -328,12 +464,45 @@ export class Inbox {
         try { return coordinatorView(this.watch.projection?.(sessionId, 'coordinatorSession')?.value)?.role === 'thread'; } catch { return false; }
     }
 
-    say(item) {
+    /**
+     * Notify the person, and log what became of it: each notification shown,
+     * and a reason it could not be shown once an hour (each card would give
+     * the same one).
+     * @param {object} item - the notification.
+     * @param {{ card?: object, count?: number }} about - the card it is for, or how many it sums up.
+     */
+    say(item, { card, count } = {}) {
+        let result;
         try {
-            this.notify?.(item);
+            result = this.notify?.(item);
         } catch (error) {
             this.logger?.warn?.(`decisions: a notification failed: ${errorText(error)}`);
+            result = `it failed: ${plainError(errorText(error, 160))}`;
         }
+        // A notifier that answers later: its outcome is not known here.
+        if (result && typeof result.then === 'function') {
+            result.then(undefined, (error) => this.logger?.warn?.(`decisions: a notification failed: ${errorText(error)}`));
+            result = 'desktop';
+        }
+        const outcome = notifyOutcome(result);
+        const now = this.now();
+        if (outcome.state !== 'shown') {
+            if (this.unshown?.reason === outcome.reason && now - this.unshown.at < 3600000) return;
+            this.unshown = { reason: outcome.reason, at: now };
+        } else {
+            this.unshown = undefined;
+        }
+        this.journal.add({
+            kind: 'notify',
+            ...(card?.id ? { cardId: card.id } : {}),
+            ...(card?.sessionId ? { sessionId: card.sessionId } : {}),
+            title: card?.title ?? '',
+            text: outcome.state === 'shown'
+                ? `Notified you ${outcome.where}${count ? ` of ${count} new cards` : ''}`
+                : `Did not notify you${count ? ` of ${count} new cards` : ''}`,
+            state: outcome.state,
+            ...(outcome.reason ? { reason: outcome.reason } : {}),
+        });
     }
 
     /** The count the sidebar shows. */

@@ -591,7 +591,7 @@ try {
                 return r.ok && !r.value.problem ? r.value : null;
             }, 'the setting to be fixed', 20000);
             const entry = fixed.log.find((e) => e.kind === 'settings');
-            check('saving a good value fixes it at once, and the log says who did', fixed.settings.idleSeconds === IDLE && entry?.text === 'Settings fixed: Autopilot is working again' && entry?.by === 'you' && entry?.why === 'You saved Quiet time before a note in Plugins.', JSON.stringify(entry));
+            check('saving a good value fixes it at once, and the log says which change did', fixed.settings.idleSeconds === IDLE && entry?.text === 'Settings fixed: Autopilot is working again' && entry?.why === 'The change to “Quiet time before a note” fixed it.', JSON.stringify(entry));
             const note = await entryReaches(ids.waiting, 'nudge', 'delivered', 1, 30000);
             check('once fixed, the session that waited gets its note', note.state === 'delivered', JSON.stringify(note));
             // Session Watch's own setting, on its page in Plugins: back to the plugin list, then its card.

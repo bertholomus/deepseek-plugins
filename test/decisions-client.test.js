@@ -75,7 +75,8 @@ test('browser half: the header says what waits, what it lists, and where else ne
     const act = (method, args) => { acts.push(plain([method, args])); };
     assert.match(textIn(DecisionsPage({ decisions: {} })), /Reading what waits on you/);
     const quiet = textIn(HeaderCard({ data: base, busy: false, act }));
-    assert.match(quiet, /Nothing waits on you\./);
+    // The list's empty state says nothing waits: the header does not say it again.
+    assert.doesNotMatch(quiet, /Nothing waits on you/);
     // Everything listed: the summary says what, once.
     assert.doesNotMatch(quiet, /Not listed/);
     assert.equal((quiet.match(/tools waiting for approval/g) ?? []).length, 1, quiet);
@@ -165,6 +166,9 @@ test('browser half: each card has the controls its kind takes, and sends what th
     assert.equal(button(question, 'Send answer').props.disabled, true, 'nothing chosen yet');
     assert.equal(elementsOf(question).filter((e) => e.type === 'fieldset').length, 1);
     assert.match(textIn(draw({ ...CARDS.question, late: true, live: false })), /its wait ran out; your answer reaches it as a new message/);
+    // The question first, then what the session waits on.
+    const said = textIn(question);
+    assert.ok(said.indexOf('Which environment?') < said.indexOf('The session waits on this.'), said);
 
     // A plugin's question: its own options.
     const ask = draw(CARDS.ask);
@@ -173,11 +177,21 @@ test('browser half: each card has the controls its kind takes, and sends what th
     await button(ask, 'Leave it').props.onClick();
     assert.deepEqual(acts.at(-1), ['answer', { id: CARDS.ask.id, answer: { option: 'skip' } }]);
 
-    // A thread that handed back: which coordinator's.
+    // A thread that handed back: which coordinator's, and the answer goes into the thread.
     const thread = draw(CARDS.thread);
     assert.match(textIn(thread), /a thread of “Coordinator”/);
+    assert.match(textIn(thread), /It goes into the thread as your next message\./);
     assert.match(textIn(thread), /needs a decision/);
     assert.match(textIn(draw({ ...CARDS.thread, status: 'blocked' })), /blocked/);
+
+    // A plugin's question with nothing to pick or write: answered in the session, as the plugin says.
+    const elsewhere = draw({ ...CARDS.ask, options: [], answer: 'session', hint: 'Answer in its terminal: open the session, then the agent\'s terminal tab.' });
+    assert.match(textIn(elsewhere), /Answer in its terminal: open the session, then the agent's terminal tab\./);
+    button(elsewhere, 'Answer in the session').props.onClick();
+    assert.deepEqual(opened.at(-1), 's');
+    // A card seen a moment ago: one form for "just now".
+    assert.match(textIn(draw({ ...CARDS.decision, at: Date.now() - 50000 })), /waiting less than a minute/);
+    assert.doesNotMatch(textIn(draw({ ...CARDS.decision, at: Date.now() - 10000 })), /just now/);
 
     // One only the session can answer: the way there.
     const open = draw(CARDS.open);

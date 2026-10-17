@@ -6,7 +6,7 @@
  *
  * @module dsh-plugin-autopilot/config
  */
-import { oneOf, onOff, wholeNumber, wholeNumbers } from './shared/settings.js';
+import { changedEntry, changedTitles, oneOf, onOff, wholeNumber, wholeNumbers } from './shared/settings.js';
 
 /** The settings on Autopilot's page in Plugins, in the words the page and its errors use. */
 export const SETTING_TITLES = Object.freeze({
@@ -46,26 +46,18 @@ export function checkConfig(settings) {
     wholeNumber(settings, 'startDelaySeconds', 0, 600, 'seconds', t.startDelaySeconds);
 }
 
-/** The settings a save changed, in words, from DSH's changed paths. */
+/** The settings a change touched, by their titles in quotes, from DSH's changed paths. */
 export function changedWords(paths) {
-    const keys = [...new Set((Array.isArray(paths) ? paths : []).map((path) => (Array.isArray(path) ? path[0] : path)).filter((key) => typeof key === 'string'))];
-    return keys.map((key) => SETTING_TITLES[key] ?? key).join(', ');
+    return changedTitles(paths, SETTING_TITLES);
 }
 
 /**
- * After a save in Plugins (DSH's `loader/volatile-update`): check again,
- * and the log entry that says what changed, or undefined when nothing did.
+ * After the settings changed (a save in Plugins, or an edit of DSH's
+ * profile): check again, and the log entry that says what changed, or
+ * undefined when nothing did.
  * @param {import('./shared/settings.js').SettingsCheck} check
  * @param {readonly (readonly string[])[]} paths - the settings DSH changed.
  */
 export function savedEntry(check, paths) {
-    const was = check.problem?.text;
-    check.run();
-    const words = changedWords(paths);
-    if (!check.ok) {
-        return { kind: 'settings', text: `Settings changed${words ? `: ${words}` : ''}; Autopilot waits until a wrong one is fixed`, why: `${check.problem.text}.`, state: 'waiting on a setting', by: 'you' };
-    }
-    if (was) return { kind: 'settings', text: 'Settings fixed: Autopilot is working again', why: `You saved ${words || 'its settings'} in Plugins.`, state: 'done', by: 'you' };
-    if (words) return { kind: 'settings', text: `Settings changed: ${words}`, why: 'You saved them in Plugins. They apply now.', state: 'done', by: 'you' };
-    return undefined;
+    return changedEntry(check, paths, { name: 'Autopilot', titles: SETTING_TITLES });
 }

@@ -12,9 +12,10 @@
  * - `command`: `mirrorCommand` (the program's full path, then its
  *   arguments) run without a shell, with the card as JSON on stdin.
  *
- * At most `mirrorPerHour` messages an hour; past that it holds back and
- * says so once. Every send and every failure goes in the event log, which
- * names the host or the program, never the address.
+ * At most `mirrorPerHour` messages an hour (counting the ones that went,
+ * across restarts); past that it holds back and says so once. Every send
+ * and every failure goes in the event log, which names the host or the
+ * program, never the address.
  *
  * @module dsh-plugin-decisions/mirror
  */
@@ -60,6 +61,7 @@ export class Mirror {
      * @param {object} options
      * @param {object} options.config - Decisions' settings (read when used).
      * @param {import('./shared/journal.js').Journal} options.journal
+     * @param {import('./shared/files.js').JsonStore} [options.store] - Decisions' state, where the hour's sends are kept (`sent`).
      * @param {() => Promise<string | undefined>} [options.readAddress] - the webhook address from DSH's key store, read for each message.
      * @param {{ warn: Function }} [options.logger]
      * @param {typeof fetch} [options.fetch]
@@ -67,17 +69,20 @@ export class Mirror {
      * @param {(path: string) => boolean} [options.exists]
      * @param {() => number} [options.now]
      */
-    constructor({ config, journal, readAddress = async () => undefined, logger, fetch = globalThis.fetch, spawn = spawnProcess, exists = existsSync, now = Date.now }) {
+    constructor({ config, journal, store, readAddress = async () => undefined, logger, fetch = globalThis.fetch, spawn = spawnProcess, exists = existsSync, now = Date.now }) {
         this.config = config;
         this.journal = journal;
+        this.store = store;
         this.readAddress = readAddress;
         this.logger = logger;
         this.fetch = fetch;
         this.spawn = spawn;
         this.exists = exists;
         this.now = now;
-        /** When each message of the last hour went. */
-        this.sent = [];
+        /** When each message of the last hour went, without a store. */
+        this.memory = [];
+        /** Messages on their way now: they count toward the limit until they go or fail. */
+        this.inFlight = 0;
         /** The hour (ms) the limit was last reported for, so it is said once an hour. */
         this.heldReported = 0;
         /** The last reason nothing could be sent, and when it was logged, so it is said once an hour. */
@@ -86,6 +91,23 @@ export class Mirror {
         this.host = '';
         /** The last send's outcome, for the page. */
         this.last = undefined;
+    }
+
+    /** When the messages of the last hour went (only those that went). */
+    recent(now = this.now()) {
+        const list = Array.isArray(this.store?.data?.sent) ? this.store.data.sent : this.memory;
+        return list.filter((at) => at > now - 3600000);
+    }
+
+    /** Count a message that went. */
+    record(at) {
+        const list = [...this.recent(at), at].slice(-500);
+        if (this.store?.data) {
+            this.store.data.sent = list;
+            this.store.change();
+        } else {
+            this.memory = list;
+        }
     }
 
     get on() {
@@ -133,14 +155,13 @@ export class Mirror {
 
     /** What the page shows about the mirror (reads the webhook address's host, never the address). */
     async describe() {
-        const hourAgo = this.now() - 3600000;
         const target = this.on ? await this.target() : undefined;
         return {
             mode: this.on ? this.config.mirror : 'off',
             place: target?.place ?? this.place,
             key: typeof this.config.mirrorUrlEnv === 'string' ? this.config.mirrorUrlEnv : '',
             perHour: this.config.mirrorPerHour,
-            lastHour: this.sent.filter((at) => at > hourAgo).length,
+            lastHour: this.recent().length,
             ...(target?.problem ? { problem: target.problem } : {}),
             ...(this.last ? { last: this.last } : {}),
         };
@@ -154,35 +175,41 @@ export class Mirror {
     async send(card) {
         if (!this.on) return { ok: false, reason: 'the mirror is off' };
         const now = this.now();
-        this.sent = this.sent.filter((at) => at > now - 3600000);
-        if (this.sent.length >= this.config.mirrorPerHour) {
+        if (this.recent(now).length + this.inFlight >= this.config.mirrorPerHour) {
             if (now - this.heldReported > 3600000) {
                 this.heldReported = now;
                 this.journal.add({ kind: 'mirror', text: `Held back sent messages: ${this.config.mirrorPerHour} went out in the last hour`, why: 'The hourly limit in Decisions\' settings caps them; Decisions still lists everything.', state: 'held' });
             }
             return { ok: false, reason: 'the hourly limit is reached' };
         }
-        const target = await this.target();
-        if (target.problem) {
-            // Said once an hour, or when the reason changes: every card would say the same.
-            if (this.problemReported.text !== target.problem || now - this.problemReported.at > 3600000) {
-                this.problemReported = { text: target.problem, at: now };
-                this.journal.add({ kind: 'mirror', text: 'Could not send new cards elsewhere', reason: target.problem, state: 'not sent' });
+        // Its place in the hour is taken now, before anything is awaited, so a burst of new cards cannot pass the limit.
+        this.inFlight += 1;
+        let result;
+        try {
+            const target = await this.target();
+            if (target.problem) {
+                // Said once an hour, or when the reason changes: every card would say the same.
+                if (this.problemReported.text !== target.problem || now - this.problemReported.at > 3600000) {
+                    this.problemReported = { text: target.problem, at: now };
+                    this.journal.add({ kind: 'mirror', text: 'Could not send new cards elsewhere', reason: target.problem, state: 'not sent' });
+                }
+                this.last = { at: now, ok: false, reason: target.problem };
+                return { ok: false, reason: target.problem };
             }
-            this.last = { at: now, ok: false, reason: target.problem };
-            return { ok: false, reason: target.problem };
+            const entry = this.journal.add({
+                kind: 'mirror',
+                cardId: card.id,
+                ...(card.sessionId ? { sessionId: card.sessionId } : {}),
+                title: card.title ?? '',
+                text: `Sending to ${target.place}`,
+                state: 'sending',
+            });
+            result = await this.deliver(target, mirrorText(card), card);
+            if (result.ok) this.record(this.now());
+            this.journal.set(entry.id, result.ok ? { text: `Sent to ${target.place}`, state: 'sent' } : { text: `Not sent to ${target.place}`, state: 'not sent', reason: result.reason });
+        } finally {
+            this.inFlight -= 1;
         }
-        this.sent.push(now);
-        const entry = this.journal.add({
-            kind: 'mirror',
-            cardId: card.id,
-            ...(card.sessionId ? { sessionId: card.sessionId } : {}),
-            title: card.title ?? '',
-            text: `Sent to ${target.place}`,
-            state: 'sending',
-        });
-        const result = await this.deliver(target, mirrorText(card), card);
-        this.journal.set(entry.id, result.ok ? { state: 'sent' } : { state: 'not sent', reason: result.reason });
         this.last = { at: this.now(), ok: result.ok, ...(result.reason ? { reason: result.reason } : {}) };
         return result;
     }
@@ -191,10 +218,11 @@ export class Mirror {
     async test() {
         if (!this.on) return { ok: false, reason: 'Sending elsewhere is off. Choose Webhook or Command in Decisions\' settings in Plugins first.' };
         const target = await this.target();
-        const entry = this.journal.add({ kind: 'mirror', text: `Sent a test message${target.place ? ` to ${target.place}` : ''}`, state: 'sending', by: 'you' });
+        const to = target.place ? ` to ${target.place}` : '';
+        const entry = this.journal.add({ kind: 'mirror', text: `Sending a test message${to}`, state: 'sending', by: 'you' });
         const result = target.problem ? { ok: false, reason: target.problem }
             : await this.deliver(target, 'Decisions can reach you here. When something waits on you in DSH, a short note comes here.', { kind: 'test', title: 'Test', question: 'Decisions can reach you here.' });
-        this.journal.set(entry.id, result.ok ? { state: 'sent' } : { state: 'not sent', reason: result.reason });
+        this.journal.set(entry.id, result.ok ? { text: `Sent a test message${to}`, state: 'sent' } : { text: `Test message not sent${to}`, state: 'not sent', reason: result.reason });
         this.last = { at: this.now(), ok: result.ok, ...(result.reason ? { reason: result.reason } : {}) };
         return { ...result, place: target.place ?? '' };
     }

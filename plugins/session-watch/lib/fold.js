@@ -34,7 +34,7 @@ export { cutOff };
 /** The projection's key in DSH (one name for the whole Host). */
 export const KEY = 'sessionWatch';
 /** Bump when the state's shape changes: DSH then drops saved states of the old shape and folds again. */
-export const STATE_VERSION = 3;
+export const STATE_VERSION = 4;
 
 /** DSH's question box, as a tool. */
 export const ASK_TOOL = 'ask_user_question';
@@ -221,7 +221,9 @@ function step(state, event) {
         }
         case 'user/message': {
             const kind = typeof data?.source?.kind === 'string' ? data.source.kind : 'unknown';
-            const patch = { inAt: at, inKind: kind, at };
+            // Who sent another session's message (a coordinator relaying a thread, say), so a reply to it can be told apart.
+            const from = kind === 'agent-message' && typeof data.source.senderSessionId === 'string' ? data.source.senderSessionId.slice(0, 128) : undefined;
+            const patch = { inAt: at, inKind: kind, inFrom: from, at };
             if (kind === 'user') patch.userAt = at;
             if (kind === 'goal' && state.goal && data.source.goalId === state.goal.id && Number.isSafeInteger(data.source.round) && data.source.round > state.goal.rounds) {
                 patch.goal = { ...state.goal, rounds: data.source.round };
@@ -314,6 +316,7 @@ export function parseState(value) {
     for (const key of ['startedAt', 'userAt', 'inAt']) if (isTime(value[key])) out[key] = value[key];
     for (const key of ['steps', 'errors', 'textTurn']) if (Number.isSafeInteger(value[key]) && value[key] >= 0) out[key] = value[key];
     if (typeof value.inKind === 'string') out.inKind = value.inKind.slice(0, 40);
+    if (typeof value.inFrom === 'string') out.inFrom = value.inFrom.slice(0, 128);
     if (typeof value.title === 'string') out.title = value.title.slice(0, 120);
     if (typeof value.text === 'string') out.text = value.text.slice(-TEXT_MAX);
     if (isRecord(value.end) && typeof value.end.kind === 'string') out.end = { ...value.end };

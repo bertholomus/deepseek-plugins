@@ -5,8 +5,7 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -21,6 +20,7 @@ import { STYLE_CHOICES, pageState } from '../plugins/agent-terminals/lib/page.js
 import { JsonStore } from '../plugins/agent-terminals/lib/shared/files.js';
 import { Journal } from '../plugins/agent-terminals/lib/shared/journal.js';
 import { SettingsCheck } from '../plugins/agent-terminals/lib/shared/settings.js';
+import { tempDir } from './helpers/temp.mjs';
 
 const FAKE = join(dirname(fileURLToPath(import.meta.url)), 'e2e', 'fake-agent.mjs');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -46,7 +46,7 @@ async function until(fn, what, timeout = 15000, every = 50) {
     throw new Error(`timed out waiting for ${what}${last instanceof Error ? `: ${last.message}` : ''}`);
 }
 
-const tmp = (label) => realpathSync(mkdtempSync(join(tmpdir(), `agent-terminals-${label}-`)));
+const tmp = (label) => realpathSync(tempDir(`agent-terminals-${label}`));
 
 // ── Launch rules ───────────────────────────────────────────────────────
 
@@ -288,7 +288,7 @@ test('config: every setting is checked in words, and a save says what changed', 
     assert.throws(() => checkConfig({ ...DEFAULTS, typing: 'fast' }), /"auto", "direct" or "attached"/);
     assert.throws(() => checkConfig({ ...DEFAULTS, notify: 'yes' }), /true or false/);
     for (const key of LIVE_SETTINGS) assert.ok(SETTING_TITLES[key], `${key} has a title`);
-    assert.equal(changedWords([['openTabs'], ['proofSeconds']]), 'Open an agent\'s terminal tab with its session, Wait for proof before pressing Enter again');
+    assert.equal(changedWords([['openTabs'], ['proofSeconds']]), '“Open an agent\'s terminal tab with its session”, “Wait for proof before pressing Enter again”');
     const settings = { ...DEFAULTS };
     const check = new SettingsCheck({ settings, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'agent-terminals' });
     check.run();

@@ -282,6 +282,24 @@ try {
         const badge = await api('badge');
         check('the badge counts them', badge.ok && badge.value.waiting === 4, json(badge));
     });
+    // Markers where models put them: after the end of a sentence, in the reply's last lines.
+    ids.inlineBlocked = await run.newSession('E2E:say I tried the staging server twice, so I cannot proceed without valid credentials. BLOCKED: working staging credentials (or an approved SSH login) for the staging server.', 'Inline blocker');
+    ids.inlineDecision = await run.newSession('E2E:say Both builds pass and the diff is small. DECISION NEEDED: Merge today or wait for review? — recommend: wait for review', 'Inline decision');
+    await step('markers written inline, after a sentence, make cards too, with the recommendation', async () => {
+        const blocked = await waitCard(ids.inlineBlocked, 'blocked');
+        check('an inline BLOCKED: makes a blocked card with what is needed', blocked.question === 'working staging credentials (or an approved SSH login) for the staging server.', json(blocked));
+        const decision = await waitCard(ids.inlineDecision, 'decision');
+        check('an inline DECISION NEEDED: keeps its question and its recommendation', decision.question === 'Merge today or wait for review?' && decision.recommendation === 'wait for review', json(decision));
+        const went = await api('answer', { id: decision.id, answer: { recommended: true } });
+        const rec = await entryFor(decision.id, 'answer', 'delivered');
+        check('Go with the recommendation works for it', went.ok && rec.text === 'Went with the recommendation: wait for review', json(rec));
+        const words = await api('answer', { id: blocked.id, answer: { text: 'Use the read-only account until Monday.' } });
+        check('an answer in words goes to the blocked one', words.ok && (await entryFor(blocked.id, 'answer', 'delivered')).text === 'Answered: Use the read-only account until Monday.', json(words));
+        await leaves(decision.id);
+        await leaves(blocked.id);
+        await idle(ids.inlineDecision);
+        await idle(ids.inlineBlocked);
+    });
     await step('an answer in words, and Go with the recommendation, reach the session and are read into a turn', async () => {
         const answered = await api('answer', { id: cards.schema.id, answer: { text: 'Keep them, and archive them next week.' } });
         check('the answer is taken', answered.ok && ['delivered', 'in the queue'].includes(answered.value?.state), json(answered));
@@ -480,8 +498,8 @@ try {
             await form.getByRole('button', { name: 'Save' }).click();
             await waitFor(async () => (await state()).sources.replies === false, 'replies switched off', 15000, 300);
             const s = await state();
-            check('switched off and saved: a plain question leaves the list at once, and the log says who changed what',
-                !s.waiting.some((c) => c.id === cards.branch.id) && s.history.some((e) => e.kind === 'settings' && e.text === 'Settings changed: Replies that end with a question' && e.by === 'you'), json(s.history.slice(0, 2)));
+            check('switched off and saved: a plain question leaves the list at once, and the log says what changed',
+                !s.waiting.some((c) => c.id === cards.branch.id) && s.history.some((e) => e.kind === 'settings' && e.text === 'Settings changed: “Replies that end with a question”'), json(s.history.slice(0, 2)));
             // The webhook: an address that cannot work is refused where it is typed; a good one goes to DSH's key store.
             await form.getByRole('tab', { name: 'Webhook', exact: true }).click();
             const secret = page.locator('[data-suite-setting="webhookAddress"]');
@@ -550,6 +568,9 @@ try {
     }
 
     // ── A restart ──────────────────────────────────────────────────────
+    // A tool waits on an approval Decisions holds when DSH quits: after the restart, the log says what became of it.
+    ids.cutOff = await run.newSession(writeOutside('cut-off.txt', 'It writes the notes before DSH quits.'), 'Cut off by a restart');
+    const held = await waitCard(ids.cutOff, 'approval');
     const before = await state();
     const newBefore = before.history.filter((e) => e.kind === 'new').length;
     await restart('a restart');
@@ -557,9 +578,12 @@ try {
     await step('a restart repeats nothing and keeps what still waits', async () => {
         await sleep(3000);
         const after = await state();
-        const waitingBefore = before.waiting.map((c) => c.id).sort().join();
+        const waitingBefore = before.waiting.filter((c) => c.id !== held.id).map((c) => c.id).sort().join();
         const waitingAfter = after.waiting.map((c) => c.id).sort().join();
         check('what waited before the restart still waits; nothing answered comes back', waitingBefore === waitingAfter, `${waitingBefore} | ${waitingAfter}`);
+        const stopped = await entryFor(held.id, 'elsewhere', 'stopped');
+        check('the approval the restart cut off is gone, and the log says the turn stopped before anyone answered',
+            !after.waiting.some((c) => c.id === held.id) && stopped.text === 'The turn stopped before anyone answered' && stopped.sessionId === ids.cutOff && !existsSync(join(outside, 'cut-off.txt')), json(stopped));
         check('nothing is announced again', after.history.filter((e) => e.kind === 'new').length === newBefore, `${after.history.filter((e) => e.kind === 'new').length} vs ${newBefore}`);
         check('the settings saved in Plugins survive: replies stay off', after.sources.replies === false, json(after.sources));
     });
@@ -624,8 +648,8 @@ try {
                 return r.ok && !r.value.problem ? r.value : null;
             }, 'the setting to be fixed', 20000);
             const entry = fixed.history.find((e) => e.kind === 'settings');
-            check('saving a good value fixes it at once, the log says who did, and what waits is listed again',
-                entry?.text === 'Settings fixed: Decisions is working again' && entry?.by === 'you' && fixed.waiting.length > 0, json({ entry, waiting: fixed.waiting.length }));
+            check('saving a good value fixes it at once, the log says which change did, and what waits is listed again',
+                entry?.text === 'Settings fixed: Decisions is working again' && /^The change to “.+” fixed it\.$/.test(entry?.why ?? '') && fixed.waiting.length > 0, json({ entry, waiting: fixed.waiting.length }));
             const ours = window.errors.filter((text) => /decisions|session-watch|suite-kit/i.test(text));
             check('no errors from the suite in the window', ours.length === 0, ours.join('\n'));
         }, async () => {

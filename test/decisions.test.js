@@ -3,15 +3,14 @@
 // index.js and remote.js need DSH's own packages; they run end to end in real DSH (scripts/e2e.mjs decisions).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
     KINDS, answerMessage, answerWords, askCard, byUrgency, checkAnswers, coordinatorView, headline, mirrorText, questionCards, questionOf, readable, replyCard, threadCards,
 } from '../plugins/decisions/lib/cards.js';
 import { Holds, approvalProof, approvalWords, callArguments, describeCall, lateAnswerProof, questionProof, reasonText } from '../plugins/decisions/lib/holds.js';
-import { Inbox, parseData } from '../plugins/decisions/lib/inbox.js';
+import { Inbox, heldOutcome, notifyOutcome, parseData, relayedThread } from '../plugins/decisions/lib/inbox.js';
 import { Mirror, NO_ADDRESS, checkCommand, checkWebhook } from '../plugins/decisions/lib/mirror.js';
 import { DEFAULTS, LIVE_SETTINGS, SETTING_TITLES, changedWords, checkConfig, savedEntry } from '../plugins/decisions/lib/config.js';
 import { SettingsCheck } from '../plugins/decisions/lib/shared/settings.js';
@@ -22,12 +21,13 @@ import { Hub } from '../plugins/decisions/lib/shared/hub.js';
 import { SessionWatch } from '../plugins/session-watch/lib/watch.js';
 import { fakeDsh } from './helpers/fake-dsh.mjs';
 import { manualClock, settle } from './helpers/clock.mjs';
+import { tempDir } from './helpers/temp.mjs';
 
 const MIN = 60000;
 const HOUR = 60 * MIN;
 
 /** Decisions and the watcher over a stand-in DSH, on one hand-moved clock. */
-function setup({ config = {}, dir = mkdtempSync(join(tmpdir(), 'decisions-')), clock = manualClock(), dsh = fakeDsh({ now: clock.now }), start = true, questions, mirror } = {}) {
+function setup({ config = {}, dir = tempDir('decisions'), clock = manualClock(), dsh = fakeDsh({ now: clock.now }), start = true, questions, mirror } = {}) {
     const warnings = [];
     const logger = { info: () => {}, warn: (line) => warnings.push(line) };
     const hub = new Hub();
@@ -411,7 +411,7 @@ test('inbox: a card whose session moved on is not answered; a refused delivery k
 });
 
 test('inbox: new cards notify once, also across a restart; what waited before Decisions came is listed, not announced', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'decisions-'));
+    const dir = tempDir('decisions');
     const clock = manualClock();
     const dsh = fakeDsh({ now: clock.now });
     replied(dsh, 'old', DECISION, { title: 'Older' });
@@ -576,6 +576,171 @@ test('inbox: a thread that needs a decision is answered straight into the thread
     assert.deepEqual(notesIn(dsh, 'c'), [], 'the chat is not written to');
 });
 
+/** A coordinating chat 'c' with one thread 'th' that handed back needing a decision. */
+function coordinated(dsh, clock, { summary = 'Pin node 20 or move to 22?' } = {}) {
+    const at = new Date(clock.now()).toISOString();
+    replied(dsh, 'th', 'Both work; the CI matrix is ready either way.', { title: 'Fix CI' });
+    dsh.add('c', { title: 'Release' });
+    dsh.write('c', '/coordinate');
+    dsh.end('c', { kind: 'completed' }, { reply: 'Started a thread for CI.' });
+    dsh.extra.coordinatorSession = (s) => (s.id === 'c' ? {
+        turn: 1,
+        v: {
+            role: 'coordinator',
+            threads: [{ id: 't1', session: 'th', title: 'Fix CI', resolved: false, handback: { status: 'needs_decision', summary, at } }],
+            cards: [{ turn: 1, seq: 3, kind: 'start', thread: 't1' }, { turn: 1, seq: 9, kind: 'handback', thread: 't1', status: 'needs_decision' }],
+        },
+    } : s.id === 'th' ? { turn: 1, v: { role: 'thread' } } : undefined);
+}
+
+/** The chat's turn on a message: the coordinator's relay of a thread's handback, or the person's own words. */
+function chatTurn(dsh, reply, source) {
+    dsh.write('c', source.kind === 'user' ? 'Also, what about node 18?' : '[Thread “Fix CI” handed back] Pin node 20 or move to 22?', source);
+    dsh.end('c', { kind: 'completed' }, { reply });
+}
+
+test('inbox: a coordinating chat\'s relay of a thread\'s decision is one card, the thread\'s, with the chat\'s recommendation', async () => {
+    const { dsh, clock, inbox } = setup();
+    coordinated(dsh, clock);
+    await clock.advance(1000);
+    const relay = 'Thread “Fix CI” handed back: it needs your decision on the node version.\n\nDECISION NEEDED: Pin node 20 or move to 22? — recommend: move to 22';
+    chatTurn(dsh, relay, { kind: 'agent-message', form: 'relay', senderSessionId: 'th' });
+    await clock.advance(1000);
+    const { waiting } = await inbox.list();
+    assert.deepEqual(waiting.map((c) => [c.kind, c.sessionId]), [['thread', 'th']], 'the chat\'s relay folds into the thread\'s card');
+    assert.equal(waiting[0].recommendation, 'move to 22', 'the chat\'s recommendation goes with it');
+    // The person writes in the chat, and the chat asks again: that is the chat's own question, a card of its own.
+    chatTurn(dsh, 'DECISION NEEDED: Also drop node 18? — recommend: yes', { kind: 'user' });
+    await clock.advance(1000);
+    assert.deepEqual((await inbox.list()).waiting.map((c) => c.kind).sort(), ['decision', 'thread']);
+});
+
+test('inbox: a chat\'s relay is matched to its thread by sender, or by time for a state saved before senders were kept', () => {
+    const cards = [{ kind: 'thread', sessionId: 'th1', at: 50000 }, { kind: 'thread', sessionId: 'th2', at: 90000 }];
+    assert.equal(relayedThread({ inKind: 'agent-message', inFrom: 'th2', inAt: 1 }, cards), cards[1]);
+    assert.equal(relayedThread({ inKind: 'agent-message', inFrom: 'other', inAt: 50000 }, cards), undefined, 'a message from another session');
+    assert.equal(relayedThread({ inKind: 'agent-message', inAt: 52000 }, cards), cards[0], 'no sender kept: the handback that came at the same time');
+    assert.equal(relayedThread({ inKind: 'agent-message', inAt: 70000 }, cards), undefined);
+    assert.equal(relayedThread({ inKind: 'user', inFrom: 'th1', inAt: 50000 }, cards), undefined, 'the person wrote last');
+    assert.equal(relayedThread({ inKind: 'agent-message', inFrom: 'th1' }, []), undefined);
+});
+
+test('cards: a handback\'s recommendation goes under Recommended, with its own answer', () => {
+    const at = '2026-10-17T05:00:00.000Z';
+    const chat = { sessionId: 'c', title: 'Release', status: 'idle', state: {} };
+    const view = (summary) => ({ live: true, value: { v: { role: 'coordinator', threads: [{ id: 't1', session: 'th1', title: 'Ports', resolved: false, handback: { status: 'needs_decision', summary, at } }], cards: [{ kind: 'handback', thread: 't1' }] } } });
+    const [card] = threadCards(chat, view('Both ports are free. Which should the dev server use? Recommendation: 8080 — it matches the docs.'), new Map());
+    assert.equal(card.question, 'Both ports are free. Which should the dev server use?');
+    assert.equal(card.recommendation, '8080 — it matches the docs');
+    const [plain] = threadCards(chat, view('Which port should the dev server use?'), new Map());
+    assert.equal(plain.question, 'Which port should the dev server use?');
+    assert.equal(plain.recommendation, undefined);
+    assert.match(answerMessage(card, { recommended: true }), /go with your recommendation \(8080 — it matches the docs\)\.$/);
+});
+
+test('inbox: a card\'s wait counts from when it was first seen; a re-raise or a restart does not restart it', async () => {
+    const { clock, inbox, watch } = setup();
+    await clock.advance(1000);
+    watch.raiseAsk({ id: 'ap-1', sessionId: 'a', source: 'Autopilot', question: 'Nudge?', options: [{ id: 'go', label: 'Nudge' }], onAnswer: () => {} });
+    await clock.advance(1000);
+    const first = (await inbox.list()).waiting[0].at;
+    await clock.advance(5 * MIN);
+    // Session Watch off and on: the plugin raises the same question again, with a new time.
+    watch.dropAsk('ap-1');
+    watch.raiseAsk({ id: 'ap-1', sessionId: 'a', source: 'Autopilot', question: 'Nudge?', options: [{ id: 'go', label: 'Nudge' }], onAnswer: () => {} });
+    await clock.advance(1000);
+    const [card] = (await inbox.list()).waiting;
+    assert.equal(card.at, first);
+    assert.ok(clock.now() - card.at >= 5 * MIN);
+});
+
+test('inbox: each notification is logged with what became of it; one that cannot be shown is said once an hour', async () => {
+    const answers = ['desktop', 'none', 'none', undefined];
+    const { dsh, clock, inbox, journal } = setup();
+    inbox.notify = () => answers.shift();
+    await clock.advance(1000);
+    replied(dsh, 'a', DECISION, { title: 'Task a' });
+    await clock.advance(1000);
+    const [shown] = entries(journal, 'notify');
+    assert.deepEqual({ text: shown.text, state: shown.state, sessionId: shown.sessionId, cardId: shown.cardId }, { text: 'Notified you on this computer', state: 'shown', sessionId: 'a', cardId: 'decision:a:1' });
+    replied(dsh, 'b', DECISION, { title: 'Task b' });
+    await clock.advance(1000);
+    replied(dsh, 'c', DECISION, { title: 'Task c' });
+    await clock.advance(1000);
+    const unshown = entries(journal, 'notify').filter((e) => e.state === 'not shown');
+    assert.equal(unshown.length, 1, 'the same reason, said once an hour');
+    assert.equal(unshown[0].text, 'Did not notify you');
+    assert.match(unshown[0].reason, /no DSH window is open/);
+    replied(dsh, 'd', DECISION, { title: 'Task d' });
+    await clock.advance(1000);
+    assert.equal(entries(journal, 'notify')[0].reason, 'the Notifications plugin is not running', 'a new reason is said at once');
+    assert.deepEqual(notifyOutcome('browser'), { state: 'shown', where: 'in the DSH window' });
+    assert.deepEqual(notifyOutcome('cli'), { state: 'shown', where: 'by the system' });
+    assert.match(notifyOutcome('off').reason, /switched off in the Notifications plugin's settings/);
+    // A notifier that throws is logged, never thrown.
+    inbox.notify = () => { throw new Error('boom'); };
+    replied(dsh, 'e', DECISION, { title: 'Task e' });
+    await clock.advance(1000);
+    assert.match(entries(journal, 'notify')[0].reason, /^it failed: boom/);
+});
+
+test('inbox: a held approval a restart cut off says so; one let go and answered in the session says that', async () => {
+    const dir = tempDir('decisions');
+    const clock = manualClock();
+    const dsh = fakeDsh({ now: clock.now });
+    const first = setup({ dir, clock, dsh });
+    await clock.advance(1000);
+    const { request } = waitingApproval(dsh, 's', { callId: 'c1' });
+    const win = windowStandIn();
+    first.inbox.holds.approval(request, () => win.forward(request)).then(undefined, () => {});
+    await clock.advance(1000);
+    assert.deepEqual(Object.keys(first.store.data.held), ['approval:s:c1']);
+    // DSH quits under the waiting approval: Decisions stops, and DSH ends the turn as cut off.
+    first.inbox.stop();
+    first.store.flush();
+    dsh.stop();
+    const second = setup({ dir, clock, dsh });
+    await clock.advance(1000);
+    const said = entries(second.journal, 'elsewhere');
+    assert.equal(said.length, 1);
+    assert.deepEqual({ text: said[0].text, state: said[0].state, cardId: said[0].cardId, question: said[0].question }, {
+        text: 'The turn stopped before anyone answered', state: 'stopped', cardId: 'approval:s:c1', question: 'Allow this command with Full access?',
+    });
+    assert.deepEqual(second.store.data.held, {});
+    await clock.advance(1000);
+    assert.equal(entries(second.journal, 'elsewhere').length, 1, 'said once');
+
+    // Let go while it waits (approvals switched off), then answered in the session's own card.
+    const next = waitingApproval(dsh, 't', { callId: 'c3' });
+    const win3 = windowStandIn();
+    const outcome = second.inbox.holds.approval(next.request, () => win3.forward(next.request));
+    await clock.advance(1000);
+    second.inbox.holds.release('approval');
+    await clock.advance(1000);
+    assert.ok(second.store.data.held['approval:t:c3'], 'it still waits in the session: nothing to say yet');
+    assert.equal(entries(second.journal, 'elsewhere').length, 1);
+    win3.answer('allowed-once');
+    assert.equal(await outcome, 'allowed-once');
+    dsh.commit('t', 'approval/decided', { id: 'ap-c3', outcome: 'allowed-once' });
+    await clock.advance(1000);
+    assert.deepEqual([entries(second.journal, 'elsewhere')[0].text, entries(second.journal, 'elsewhere')[0].state], ['Answered in the session', 'answered']);
+    assert.deepEqual(second.store.data.held, {});
+});
+
+test('inbox: what became of a held request, read from its session', () => {
+    const entry = { sessionId: 's', kind: 'approval', turn: 2, at: 1 };
+    const row = (status, state) => ({ sessionId: 's', status, state });
+    assert.equal(heldOutcome('approval:s:c1', entry, row('running', { turn: 2, open: true, approvals: [{ id: 'ap', call: 'c1' }] })), undefined, 'still waiting');
+    assert.equal(heldOutcome('approval:s:c1', entry, row('running', { turn: 2, open: true })).state, 'answered', 'its turn went on');
+    assert.equal(heldOutcome('approval:s:c1', entry, row('idle', { turn: 2, open: false, end: { turn: 2, kind: 'completed' } })).state, 'answered');
+    assert.equal(heldOutcome('approval:s:c1', entry, row('cold', { turn: 2, open: false, end: { turn: 2, kind: 'aborted', cause: 'disposed', left: { kind: 'approval' } } })).state, 'stopped');
+    assert.equal(heldOutcome('approval:s:c1', entry, row('cold', { turn: 2, open: true })).state, 'stopped', 'a crash left the turn open');
+    assert.equal(heldOutcome('approval:s:c1', entry, row('idle', { turn: 2, end: { turn: 2, kind: 'aborted', cause: 'user' } })).state, 'stopped', 'the person stopped the turn');
+    assert.equal(heldOutcome('approval:s:c1', entry, row('idle', null)), undefined, 'nothing to read');
+    const question = { sessionId: 's', kind: 'question', turn: 4, at: 1 };
+    assert.equal(heldOutcome('question:s:q1', question, row('running', { turn: 4, open: true, asking: { call: 'q1' } })), undefined);
+});
+
 test('inbox: a plugin\'s question is answered through the watcher, and the plugin carries it out', async () => {
     const { dsh, clock, inbox, watch, journal } = setup();
     replied(dsh, 's', 'Parser done.', { title: 'Parser' });
@@ -594,7 +759,7 @@ test('inbox: a plugin\'s question is answered through the watcher, and the plugi
 });
 
 test('inbox: dismissed stays dismissed across a restart, and comes back on request', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'decisions-'));
+    const dir = tempDir('decisions');
     const clock = manualClock();
     const dsh = fakeDsh({ now: clock.now });
     const first = setup({ dir, clock, dsh });
@@ -668,8 +833,22 @@ test('inbox: the badge counts what waits and what holds a running turn; the page
 });
 
 test('inbox: stored state is made safe when read', () => {
-    assert.deepEqual(parseData(undefined), { version: 1, seeded: false, seen: {}, dismissed: {}, answered: {} });
-    assert.deepEqual(parseData({ seeded: true, seen: { a: 1, b: 'x' }, dismissed: [], answered: { c: 2 } }), { version: 1, seeded: true, seen: { a: 1 }, dismissed: {}, answered: { c: 2 } });
+    assert.deepEqual(parseData(undefined), { version: 1, seeded: false, seen: {}, dismissed: {}, answered: {}, held: {}, sent: [] });
+    assert.deepEqual(parseData({ seeded: true, seen: { a: 1, b: 'x' }, dismissed: [], answered: { c: 2 } }), { version: 1, seeded: true, seen: { a: 1 }, dismissed: {}, answered: { c: 2 }, held: {}, sent: [] });
+    const held = parseData({
+        held: {
+            'approval:s1:c1': { sessionId: 's1', kind: 'approval', title: 'Fix CI', question: 'Run it?', at: 5, turn: 3 },
+            'approval:s1:c2': { sessionId: 's1', kind: 'nonsense', at: 5 },
+            'question:s2:q1': { sessionId: 's2', kind: 'question', at: 'x', turn: -1 },
+            bad: 'x',
+        },
+        sent: [1, 'two', 3],
+    });
+    assert.deepEqual(held.held, {
+        'approval:s1:c1': { sessionId: 's1', kind: 'approval', title: 'Fix CI', question: 'Run it?', at: 5, turn: 3 },
+        'question:s2:q1': { sessionId: 's2', kind: 'question', title: '', question: '', at: 0 },
+    });
+    assert.deepEqual(held.sent, [1, 3]);
 });
 
 test('holds: a kind switched off lets its held requests go back to DSH\'s own card; a stop holds nothing until resumed', async () => {
@@ -707,17 +886,20 @@ test('holds: a kind switched off lets its held requests go back to DSH\'s own ca
 /** A local webhook that records what it gets and answers `status`. */
 async function sink(status = 204) {
     const got = [];
+    const api = { got, status };
     const server = createServer((req, res) => {
         let body = '';
         req.on('data', (chunk) => { body += chunk; });
         req.on('end', () => {
             got.push({ method: req.method, type: req.headers['content-type'], body: JSON.parse(body || '{}') });
-            res.statusCode = status;
+            res.statusCode = api.status;
             res.end();
         });
     });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-    return { got, url: `http://127.0.0.1:${server.address().port}/hook/secret-token`, close: () => new Promise((resolve) => server.close(resolve)) };
+    api.url = `http://127.0.0.1:${server.address().port}/hook/secret-token`;
+    api.close = () => new Promise((resolve) => server.close(resolve));
+    return api;
 }
 
 const CARD = { id: 'decision:s:1', kind: 'decision', title: 'Cache', question: 'Postgres or SQLite?', recommendation: 'SQLite', sessionId: 's' };
@@ -735,7 +917,7 @@ const keyStore = (value) => {
 test('mirror: a webhook gets the card as plain words with mentions off; the address comes from the key store and never reaches the log', async () => {
     const hook = await sink();
     try {
-        const journal = new Journal(join(mkdtempSync(join(tmpdir(), 'decisions-')), 'events.jsonl'));
+        const journal = new Journal(join(tempDir('decisions'), 'events.jsonl'));
         const key = keyStore(hook.url);
         const mirror = new Mirror({ config: { ...DEFAULTS, mirror: 'webhook' }, journal, readAddress: key.read });
         assert.deepEqual(await mirror.send(CARD), { ok: true });
@@ -759,7 +941,7 @@ test('mirror: a webhook gets the card as plain words with mentions off; the addr
 
 test('mirror: no address, a wrong one or a key store that fails is said once an hour, in words that never repeat the address', async () => {
     const clock = manualClock();
-    const journal = new Journal(join(mkdtempSync(join(tmpdir(), 'decisions-')), 'events.jsonl'), { now: clock.now });
+    const journal = new Journal(join(tempDir('decisions'), 'events.jsonl'), { now: clock.now });
     const key = keyStore(undefined);
     const mirror = new Mirror({ config: { ...DEFAULTS, mirror: 'webhook' }, journal, readAddress: key.read, now: clock.now });
     assert.deepEqual(await mirror.send(CARD), { ok: false, reason: NO_ADDRESS });
@@ -786,17 +968,35 @@ test('mirror: a refusal or an unreachable webhook is logged with the reason; pas
     const hook = await sink(404);
     const clock = manualClock();
     try {
-        const journal = new Journal(join(mkdtempSync(join(tmpdir(), 'decisions-')), 'events.jsonl'), { now: clock.now });
-        const mirror = new Mirror({ config: { ...DEFAULTS, mirror: 'webhook', mirrorPerHour: 2 }, journal, readAddress: keyStore(hook.url).read, now: clock.now });
+        const dir = tempDir('decisions');
+        const journal = new Journal(join(dir, 'events.jsonl'), { now: clock.now });
+        const store = new JsonStore(join(dir, 'state.json'), { parse: parseData, delayMs: 5 });
+        const config = { ...DEFAULTS, mirror: 'webhook', mirrorPerHour: 2 };
+        const mirror = new Mirror({ config, journal, store, readAddress: keyStore(hook.url).read, now: clock.now });
         const refused = await mirror.send(CARD);
         assert.equal(refused.ok, false);
         assert.match(refused.reason, /answered 404 \(check the webhook address\)$/);
-        assert.equal(journal.list()[0].state, 'not sent');
-        await mirror.send(CARD);
-        assert.deepEqual(await mirror.send(CARD), { ok: false, reason: 'the hourly limit is reached' });
-        assert.deepEqual(await mirror.send(CARD), { ok: false, reason: 'the hourly limit is reached' });
+        // A failure is headed as one: "Not sent to", never "Sent to".
+        assert.deepEqual([journal.list()[0].text, journal.list()[0].state], [`Not sent to ${new URL(hook.url).host}`, 'not sent']);
+        // Failed sends do not count toward the hour's limit.
+        assert.equal((await mirror.send(CARD)).ok, false);
+        assert.equal((await mirror.describe()).lastHour, 0);
+        hook.status = 204;
+        assert.deepEqual(await mirror.send(CARD), { ok: true });
+        assert.deepEqual([journal.list()[0].text, journal.list()[0].state], [`Sent to ${new URL(hook.url).host}`, 'sent']);
+        // The count is kept in Decisions' state: a restart (a new mirror on the same file) goes on from it.
+        await store.flush?.();
+        const again = new Mirror({ config, journal, store: new JsonStore(join(dir, 'state.json'), { parse: parseData, delayMs: 5 }), readAddress: keyStore(hook.url).read, now: clock.now });
+        assert.equal((await again.describe()).lastHour, 1);
+        assert.deepEqual(await again.send(CARD), { ok: true });
+        assert.deepEqual(await again.send(CARD), { ok: false, reason: 'the hourly limit is reached' });
+        assert.deepEqual(await again.send(CARD), { ok: false, reason: 'the hourly limit is reached' });
         assert.equal(journal.list().filter((e) => e.state === 'held').length, 1, 'said once');
-        clock.advance(HOUR + 1000);
+        // Sends on their way count too, so a burst of new cards cannot pass the limit.
+        await clock.advance(HOUR + 1000);
+        const burst = await Promise.all([1, 2, 3, 4].map(() => again.send(CARD)));
+        assert.deepEqual(burst.map((r) => r.ok), [true, true, false, false]);
+        await clock.advance(HOUR + 1000);
         const gone = new Mirror({ config: { ...DEFAULTS, mirror: 'webhook' }, journal, readAddress: keyStore('http://127.0.0.1:9/none').read, now: clock.now });
         const unreachable = await gone.send(CARD);
         assert.equal(unreachable.reason, '127.0.0.1:9: it could not be reached');
@@ -806,7 +1006,7 @@ test('mirror: a refusal or an unreachable webhook is logged with the reason; pas
 });
 
 test('mirror: a command gets the card as JSON on stdin, without a shell; its failures are reported', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'decisions-'));
+    const dir = tempDir('decisions');
     const out = join(dir, 'got.json');
     const ok = join(dir, 'sink.sh');
     writeFileSync(ok, `#!/bin/sh\ncat > "${out}"\n`);
@@ -861,19 +1061,20 @@ test('mirror and config: wrong values are said in words that name the setting; a
     assert.equal(wrong({ mirror: 'webhook' }), undefined);
     assert.equal(wrong({ mirror: 'command' }), undefined);
     assert.deepEqual(LIVE_SETTINGS.filter((key) => !Object.hasOwn(SETTING_TITLES, key)), []);
-    assert.equal(changedWords([['notify'], ['windowHours'], ['notify']]), 'A notification for each new card, Keep a reply\'s question for');
+    assert.equal(changedWords([['notify'], ['windowHours'], ['notify']]), '“A notification for each new card”, “Keep a reply\'s question for”');
     // The log entry for a save: what changed, that it fixed a wrong setting, or that one is still wrong.
     const settings = { ...DEFAULTS, windowHours: 0 };
     const check = new SettingsCheck({ settings, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'decisions' });
     check.run();
     assert.equal(check.problem.live, true);
     const still = savedEntry(check, [['notify']]);
-    assert.equal(still.text, 'Settings changed: A notification for each new card; Decisions waits until a wrong one is fixed');
+    assert.equal(still.text, 'Settings changed: “A notification for each new card”; Decisions waits until a wrong one is fixed');
     assert.equal(still.state, 'waiting on a setting');
     settings.windowHours = 24;
     const fixed = savedEntry(check, [['windowHours']]);
-    assert.deepEqual(fixed, { kind: 'settings', text: 'Settings fixed: Decisions is working again', why: 'You saved Keep a reply\'s question for in Plugins.', state: 'done', by: 'you' });
-    assert.equal(savedEntry(check, [['mirror']]).text, 'Settings changed: Also send new cards to');
+    // DSH sends the same notice for a save in Plugins and an edit of its profile: the entry names neither.
+    assert.deepEqual(fixed, { kind: 'settings', text: 'Settings fixed: Decisions is working again', why: 'The change to “Keep a reply\'s question for” fixed it.', state: 'done' });
+    assert.equal(savedEntry(check, [['mirror']]).text, 'Settings changed: “Also send new cards to”');
     assert.equal(savedEntry(check, []), undefined);
 });
 
@@ -881,5 +1082,11 @@ test('cards: a plugin\'s question keeps only well-formed choices', () => {
     const card = askCard({ id: 'x', question: 'Go?', options: [{ id: 'go', label: 'Go' }, { label: 'broken' }], at: 5, source: 'Agent Terminals' }, new Map());
     assert.deepEqual(card.options, [{ id: 'go', label: 'Go' }]);
     assert.equal(card.source, 'Agent Terminals');
+    assert.equal(card.answer, 'ask');
     assert.equal(askCard({ id: 'x' }), undefined);
+    // Nothing to pick and no words to write: answered in the session, the way the plugin says.
+    const elsewhere = askCard({ id: 'y', sessionId: 's', question: 'The agent waits on you in its terminal.', answerHint: 'Answer in its terminal: open the session, then the agent\'s terminal tab.' }, new Map());
+    assert.equal(elsewhere.answer, 'session');
+    assert.equal(elsewhere.hint, 'Answer in its terminal: open the session, then the agent\'s terminal tab.');
+    assert.equal(askCard({ id: 'z', question: 'Why?', freeText: true }, new Map()).answer, 'ask');
 });

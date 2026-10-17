@@ -1,8 +1,8 @@
 /**
  * dsh-plugin-decisions — one inbox for everything waiting on you.
  *
- * Every session that waits on a person shows here as a card: a reply that
- * ends with `DECISION NEEDED: … — recommend: …` or `BLOCKED: …` (or, with
+ * Every session that waits on a person shows here as a card: a reply with
+ * a `DECISION NEEDED: … — recommend: …` or `BLOCKED: …` marker (or, with
  * `replies`, a plain question), a tool waiting for approval, a question in
  * DSH's question box, a coordinator thread that handed back needing a
  * decision, and the questions suite plugins raise (Autopilot's Ask first).
@@ -126,7 +126,7 @@ export function apply(ctx, config) {
             return typeof found?.value === 'string' ? found.value : undefined;
         };
 
-        const mirror = new Mirror({ config: settings, journal, logger, readAddress });
+        const mirror = new Mirror({ config: settings, journal, store, logger, readAddress });
         const inbox = new Inbox({
             watch,
             config: settings,
@@ -136,10 +136,8 @@ export function apply(ctx, config) {
             mirror,
             questions: () => questions,
             changed: bump,
-            notify: (item) => {
-                const sent = notifications?.notify?.(item);
-                if (sent && typeof sent.then === 'function') sent.then(undefined, (error) => logger?.warn?.(`decisions: a notification failed: ${errorText(error)}`));
-            },
+            // What the notifications plugin did with it ('desktop', 'browser', 'cli', 'none' or 'off'); undefined when it is not running.
+            notify: (item) => notifications?.notify?.(item),
         });
         const working = () => settings.enabled !== false && check.ok;
 

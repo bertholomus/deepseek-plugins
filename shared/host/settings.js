@@ -167,3 +167,30 @@ export class SettingsCheck {
         return this.problem === undefined;
     }
 }
+
+/** The settings a change touched, by their titles in quotes, from DSH's changed paths. */
+export function changedTitles(paths, titles = {}) {
+    const keys = [...new Set((Array.isArray(paths) ? paths : []).map((path) => (Array.isArray(path) ? path[0] : path)).filter((key) => typeof key === 'string'))];
+    return keys.map((key) => `“${titles[key] ?? key}”`).join(', ');
+}
+
+/**
+ * After the settings changed (DSH's `loader/volatile-update`, which a save
+ * in Plugins and an edit of DSH's profile both send): check again, and the
+ * log entry that says what changed, or undefined when nothing did. It does
+ * not say who changed them or where: DSH does not tell.
+ * @param {SettingsCheck} check
+ * @param {readonly (readonly string[])[]} paths - the settings DSH changed.
+ * @param {{ name: string, titles: Record<string, string> }} plugin - its name in sentences, and its settings' titles.
+ */
+export function changedEntry(check, paths, { name, titles }) {
+    const was = check.problem?.text;
+    check.run();
+    const words = changedTitles(paths, titles);
+    if (!check.ok) {
+        return { kind: 'settings', text: `Settings changed${words ? `: ${words}` : ''}; ${name} waits until a wrong one is fixed`, why: `${check.problem.text}.`, state: 'waiting on a setting' };
+    }
+    if (was) return { kind: 'settings', text: `Settings fixed: ${name} is working again`, why: words ? `The change to ${words} fixed it.` : 'Its settings are right again.', state: 'done' };
+    if (words) return { kind: 'settings', text: `Settings changed: ${words}`, why: 'They apply now.', state: 'done' };
+    return undefined;
+}

@@ -18,7 +18,7 @@
  * @module dsh-plugin-decisions/cards
  */
 import { clip, isRecord } from './shared/safe.js';
-import { cutOff } from './shared/words.js';
+import { cutOff, recommendationIn } from './shared/words.js';
 
 /** Every kind of card, most urgent first: approvals and questions hold a running turn. */
 export const KINDS = Object.freeze(['approval', 'question', 'ask', 'decision', 'blocked', 'thread', 'reply']);
@@ -167,6 +167,9 @@ export function threadCards(row, projection, rowsById) {
         if (own?.status === 'running') continue;
         const at = Date.parse(thread.handback.at) || 0;
         if (own?.state && at > 0 && Math.max(Number(own.state.inAt) || 0, Number(own.state.userAt) || 0) > at) continue;
+        const summary = String(thread.handback.summary ?? '').trim();
+        // "… Recommendation: 8080 — it matches the docs." goes under Recommended, with its own answer button.
+        const split = recommendationIn(summary);
         cards.push({
             id: `thread:${thread.session}:${at || thread.id}`,
             kind: 'thread',
@@ -174,7 +177,8 @@ export function threadCards(row, projection, rowsById) {
             title: clip(String(thread.title ?? 'Thread'), 120) || 'Thread',
             via: { sessionId: row.sessionId, title: titleOf(row) },
             status: thread.handback.status,
-            question: String(thread.handback.summary ?? '').trim() || (thread.handback.status === 'blocked' ? 'The thread is blocked.' : 'The thread needs a decision.'),
+            question: split?.question || summary || (thread.handback.status === 'blocked' ? 'The thread is blocked.' : 'The thread needs a decision.'),
+            ...(split ? { recommendation: split.recommendation } : {}),
             at,
             running: false,
             answer: 'text',
@@ -202,7 +206,9 @@ export function askCard(ask, rowsById) {
         freeText: ask.freeText === true,
         at: Number(ask.at) || 0,
         running: row?.status === 'running',
-        answer: 'ask',
+        // A question with no answers to pick and no words to write is answered in the session; the plugin says how.
+        answer: options.length || ask.freeText === true ? 'ask' : 'session',
+        ...(typeof ask.answerHint === 'string' && ask.answerHint ? { hint: clip(ask.answerHint, 200) } : {}),
     };
 }
 

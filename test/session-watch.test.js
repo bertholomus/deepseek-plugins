@@ -2,8 +2,7 @@
 // index.js needs DSH's own packages, so its wiring is checked end to end in DSH Test (scripts/e2e.mjs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { INITIAL, KEY, STATE_VERSION, TEXT_MAX, applyEvent, endOf, foldAll, goalOf, parseState, sessionWatchProjection, todoSummary, viewOf } from '../plugins/session-watch/lib/fold.js';
 import { SessionWatch } from '../plugins/session-watch/lib/watch.js';
@@ -13,6 +12,7 @@ import { SettingsCheck, liveSettings } from '../plugins/session-watch/lib/shared
 import { loadClient, elementsOf, strictRemote, textIn } from './helpers/client.mjs';
 import { fakeDsh } from './helpers/fake-dsh.mjs';
 import { manualClock, settle } from './helpers/clock.mjs';
+import { tempDir } from './helpers/temp.mjs';
 
 const ev = (type, data = {}, time = 1000) => ({ type, time, data });
 const text = (t) => ({ role: 'assistant', content: [{ type: 'text', text: t }] });
@@ -137,10 +137,22 @@ test('fold: a question waiting in DSH\'s question box is tracked until its resul
     const saved = parseState({ turn: 1, open: true, tools: 1, at: 5, asking: { call: 'q1', question: 'Which?', more: 2, at: 4, junk: true } });
     assert.deepEqual(saved.asking, { call: 'q1', question: 'Which?', more: 2, at: 4 });
     assert.deepEqual(parseState({ end: { kind: 'interrupted', turn: 1, at: 3, left: { kind: 'question', question: 'Which?' } } }).end.left, { kind: 'question', question: 'Which?' });
-    // States saved before this shape fold again from their logs.
-    assert.equal(STATE_VERSION, 3);
+    // States saved before this shape fold again from their logs (4: the sender of another session's message, and markers read anywhere in a reply's end).
+    assert.equal(STATE_VERSION, 4);
     // An offer is kept as one, so Decisions can leave it out.
     assert.deepEqual(parseState({ ask: { kind: 'question', question: 'Let me know.', soft: true, turn: 2 } }).ask, { kind: 'question', question: 'Let me know.', soft: true, turn: 2 });
+});
+
+test('fold: another session\'s message keeps its sender, so a reply to a coordinator\'s relay can be told apart', () => {
+    let s = foldAll([ev('turn/start', { turn: 1 }, 1000), ev('user/message', { source: { kind: 'agent-message', form: 'relay', senderSessionId: 'thread-1' } }, 1001)]);
+    assert.deepEqual([s.inKind, s.inFrom, s.inAt], ['agent-message', 'thread-1', 1001]);
+    s = applyEvent(s, ev('user/message', { source: { kind: 'user' } }, 1002));
+    assert.deepEqual([s.inKind, s.inFrom, s.userAt], ['user', undefined, 1002], 'the person wrote last: no sender');
+    assert.equal('inFrom' in s, false);
+    s = applyEvent(s, ev('user/message', { source: { kind: 'agent-message', senderSessionId: 42 } }, 1003));
+    assert.equal(s.inFrom, undefined, 'only a session id is kept');
+    assert.equal(parseState({ inKind: 'agent-message', inFrom: `t${'x'.repeat(300)}` }).inFrom.length, 128);
+    assert.equal(parseState({ inFrom: 7 }).inFrom, undefined);
 });
 
 test('fold: a saved state is made safe; the projection is registered under one key', () => {
@@ -188,7 +200,7 @@ test('fold: turn ends, goals and todo lists in the watcher\'s words', () => {
 
 // ── The watcher over a stand-in DSH ───────────────────────────────────
 
-function setup({ config = {}, dir = mkdtempSync(join(tmpdir(), 'session-watch-')), clock = manualClock(), dsh = fakeDsh({ now: clock.now }) } = {}) {
+function setup({ config = {}, dir = tempDir('session-watch'), clock = manualClock(), dsh = fakeDsh({ now: clock.now }) } = {}) {
     const warnings = [];
     const logger = { info: () => {}, warn: (line) => warnings.push(line) };
     const hub = new Hub();
@@ -329,7 +341,7 @@ test('watcher: a queued message DSH lets go unread fails the delivery', async ()
 });
 
 test('watcher: a graceful stop and a crash both leave sessions it finds as cut off, checked against their logs', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'session-watch-'));
+    const dir = tempDir('session-watch');
     const clock = manualClock();
     const dsh = fakeDsh({ now: clock.now });
     const first = setup({ dir, clock, dsh });

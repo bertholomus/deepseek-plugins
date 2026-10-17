@@ -77,7 +77,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         `.${P}-page :is(button,a,input,select,textarea,[tabindex]):focus-visible,.${P}-pane :is(button,a,input,select,textarea,[tabindex]):focus-visible{outline:2px solid var(--${P}-ring);outline-offset:1px;border-radius:var(--dsw-radius-xs)}`,
         `.${P}-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}`,
         `.${P}-glyph{color:var(--${P}-glyph)}`,
-        `.${P}-badge{position:absolute;top:-5px;right:-7px;min-width:14px;height:14px;padding:0 3px;box-sizing:border-box;border-radius:7px;background:var(--dsw-alias-state-error-primary);color:#fff;font:600 10px/14px var(--dsw-font-family,system-ui);font-variant-numeric:tabular-nums;text-align:center}`,
+        `.${P}-badge{position:absolute;top:-5px;right:-7px;min-width:14px;height:14px;padding:0 3px;box-sizing:border-box;border-radius:7px;background:color-mix(in srgb,var(--dsw-static-red-600,#ec1313) 90%,var(--dsw-static-neutral-bluish-1000,#0f1115));color:var(--dsw-static-neutral-bluish-00,#ffffff);font:600 10px/14px var(--dsw-font-family,system-ui);font-variant-numeric:tabular-nums;text-align:center}`,
         `.${P}-icon{position:relative;display:inline-flex;align-items:center;justify-content:center}`,
         `.${P}-trouble-title{margin:10px 0 0;font:var(--dsw-font-s-strong-14);color:var(--dsw-alias-label-primary)}`,
         `.${P}-trouble-text{margin:4px 0 0;font:var(--dsw-font-xs-13);color:var(--${P}-text-2);max-width:68ch}`,
@@ -89,6 +89,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         `.${P}-set-title{font:var(--dsw-font-s-strong-14);color:var(--dsw-alias-label-primary)}`,
         `.${P}-set-hint{margin-top:2px;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}`,
         `.${P}-set-control{flex:0 0 auto;display:flex;align-items:center;gap:10px}`,
+        `.${P}-choice{display:inline-flex}.${P}-seg-none>[aria-hidden="true"]{visibility:hidden}`,
         `.${P}-set-reset{padding:0;border:0;background:none;font:var(--dsw-font-xs-13);color:var(--dsw-alias-link,var(--dsw-alias-state-business-primary));text-decoration:underline;text-underline-offset:2px;cursor:pointer}`,
         `.${P}-set-reset:focus-visible{outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px;border-radius:var(--dsw-radius-xs)}`,
         `.${P}-set-note{margin:10px 0 0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary);max-width:72ch}`,
@@ -409,7 +410,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             case 'running': case 'working': case 'queued': case 'in the queue': case 'sending': case 'starting': case 'waiting for a round': return 'info';
             case 'waiting for approval': case 'waiting for your answer': case 'waiting on you': case 'needs a decision': case 'asked you': case 'asks you': case 'cut off': case 'cut short': case 'backed off': case 'gave up': case 'held': case 'not confirmed': case 'waiting on a setting': return 'warning';
             case 'failed': case 'blocked': case 'not delivered': case 'not started': case 'not sent': return 'danger';
-            case 'delivered': case 'started': case 'done': case 'answered': case 'read': case 'sent': return 'success';
+            case 'delivered': case 'started': case 'done': case 'answered': case 'read': case 'sent': case 'shown': return 'success';
+            case 'not shown': return 'warning';
             case 'stopped': case 'paused': case 'withdrawn': return 'neutral';
             default: return 'quiet';
         }
@@ -763,6 +765,23 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     ? h('button', { type: 'button', className: `${P}-set-reset`, disabled: disabled || removing, onClick: () => void remove() }, f.removeLabel ?? 'Remove it') : null));
     }
 
+    /**
+     * DSH's segmented control for a choice. A saved value that is not one of
+     * the choices selects none: DSH's control would draw its pill outside
+     * the box and leave no tab to Tab into, so the pill is hidden and the
+     * first choice takes the focus.
+     */
+    function ChoiceControl({ id, f, value, disabled, onChange }) {
+        const known = f.options.some((o) => o.value === value);
+        const box = React.useRef(null);
+        React.useEffect(() => {
+            const tabs = box.current?.querySelectorAll?.('[role="tab"]') ?? [];
+            tabs.forEach((tab, i) => { tab.tabIndex = tab.getAttribute('aria-selected') === 'true' || (!known && i === 0) ? 0 : -1; });
+        });
+        return h('span', { ref: box, className: `${P}-choice`, ...(known ? {} : { 'data-suite-unset': '' }) },
+            h(ui.SegmentedControl, { id, label: f.title, value: known ? value : '', options: f.options, disabled, onChange, ...(known ? {} : { className: `${P}-seg-none` }) }));
+    }
+
     /** One setting's row: a switch or a choice drawn here, anything typed in DSH's own field. */
     function SettingRow({ f, state, disabled, actions }) {
         const id = `${P}-set-${f.name}`;
@@ -778,7 +797,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 h('div', { className: `${P}-set-control` }, reset,
                     f.kind === 'switch'
                         ? h(ui.Switch, { checked: state.text === 'on', label: f.title, disabled, onChange: (next) => edit(next ? 'on' : 'off') })
-                        : h(ui.SegmentedControl, { id, label: f.title, value: state.text || f.default, options: f.options, disabled, onChange: edit })));
+                        : h(ChoiceControl, { id, f, value: state.text || f.default, disabled, onChange: edit })));
         }
         return h('div', { className: `${P}-set-row`, 'data-suite-setting': f.name, ...(state.invalid ? { 'data-suite-invalid': '' } : {}) },
             h('div', { className: `${P}-set-text` },
@@ -956,7 +975,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         P, css, injectStyle, removeStyle, setConnection, whenConnected, link, hub, useLive, useMinute,
         setNavigation, canOpenPlugin, openPlugin, fieldSpec, invalidWords, applySettings,
         timeText, agoText, spanText, toneOf, isRecord,
-        Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText, Choice, Trouble, SettingsProblem, SettingsBody, SettingRow, SecretRow,
+        Page, Card, Empty, ErrorLine, Loading, StateTag, TimeText, Choice, Trouble, SettingsProblem, SettingsBody, SettingRow, SecretRow, ChoiceControl,
     };
 }
 // </suite-kit>

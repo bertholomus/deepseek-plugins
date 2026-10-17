@@ -3,10 +3,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { appendFileSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { askIn, asksForAnswer, asksSomeone, blockedIn, count, cutOff, decisionIn, plainError, spanWords, stateWord, timeWords } from '../shared/host/words.js';
+import { askIn, asksForAnswer, asksSomeone, blockedIn, count, cutOff, decisionIn, plainError, recommendationIn, spanWords, stateWord, timeWords } from '../shared/host/words.js';
 import { Hub } from '../shared/host/hub.js';
 import { Journal } from '../shared/host/journal.js';
 import { JsonStore, ensurePrivateDir, readJson, writeAtomic } from '../shared/host/files.js';
@@ -15,8 +14,9 @@ import { SUITE, kitBlock, plannedCopies } from '../scripts/sync-shared.mjs';
 import { suiteKit } from '../shared/client-kit.js';
 import { OTHER_NAMES, standInReact, statefulReact, elementsOf, textIn } from './helpers/client.mjs';
 import { settle } from './helpers/clock.mjs';
+import { tempDir } from './helpers/temp.mjs';
 
-const temp = () => mkdtempSync(join(tmpdir(), 'suite-shared-'));
+const temp = () => tempDir('suite-shared');
 
 /** Every .js file under a folder of the repo, by walking it (no git needed, so a copy without .git tests the same). */
 function jsFilesUnder(relative) {
@@ -73,6 +73,47 @@ test('words: decision lines, in every way agents write them', () => {
     assert.deepEqual(blockedIn('**BLOCKED:** the staging password expired'), 'the staging password expired');
 });
 
+test('words: markers after a sentence\'s end, in list items and with closing stops, as real replies put them', () => {
+    // From a real reply in DSH Test (Decisions round 1): the marker closes the last sentence of the last line.
+    const real = 'I checked the deploy script and the staging host.\n\nThe SSH key in `deploy/.env` is rejected (Permission denied (publickey)), and the database URL points at a host that does not resolve, so I cannot proceed without valid credentials. BLOCKED: working staging credentials (or an approved SSH/database login) for the staging server.';
+    assert.equal(blockedIn(real), 'working staging credentials (or an approved SSH/database login) for the staging server.');
+    assert.deepEqual(askIn(real), { kind: 'blocked', question: 'working staging credentials (or an approved SSH/database login) for the staging server.' });
+    assert.equal(asksForAnswer(real), true, 'it waits on an answer');
+    assert.equal(blockedIn('Tried twice. **BLOCKED:** the bucket refuses writes.'), 'the bucket refuses writes.');
+    assert.equal(blockedIn('Done what I can! BLOCKED: need the API key'), 'need the API key');
+    assert.equal(blockedIn('"It says no." BLOCKED: no access'), 'no access', 'after a closing quote');
+    assert.equal(blockedIn('1. BLOCKED: waiting for the vendor'), 'waiting for the vendor', 'a numbered list item');
+    assert.equal(blockedIn('### BLOCKED: no staging access'), 'no staging access', 'a heading');
+    // Inline decision lines keep their recommendation.
+    assert.deepEqual(decisionIn('Both work. DECISION NEEDED: Postgres or SQLite? — recommend: SQLite.'), { question: 'Postgres or SQLite?', recommendation: 'SQLite' });
+    assert.deepEqual(decisionIn('Compared them. **DECISION NEEDED:** ship today or Monday? Recommend: Monday.'), { question: 'ship today or Monday?', recommendation: 'Monday' });
+    assert.deepEqual(decisionIn('Two options. Decision needed: keep the cache or drop it? I\'d recommend dropping it.'), { question: 'keep the cache or drop it?', recommendation: 'dropping it' });
+    assert.deepEqual(decisionIn('- DECISION NEEDED: which port? — recommend: 8080'), { question: 'which port?', recommendation: '8080' }, 'a list item');
+    assert.deepEqual(decisionIn('2) DECISION NEEDED: retry now? My recommendation: wait an hour.'), { question: 'retry now?', recommendation: 'wait an hour' });
+    assert.deepEqual(askIn('Plan ready. DECISION NEEDED: run the migration tonight? — recommend: yes, after 10 PM'), { kind: 'decision', question: 'run the migration tonight?', recommendation: 'yes, after 10 PM' });
+    // Not markers: inside a sentence, lowercase blocked, or an inline mention far above the end.
+    assert.equal(blockedIn('The request was BLOCKED: by the firewall, so I used the mirror.'), undefined);
+    assert.equal(blockedIn('Two tasks are done. blocked: none.'), undefined);
+    assert.equal(blockedIn(`Earlier I wrote "Stop. BLOCKED: x" as an example.\n${'More notes.\n'.repeat(8)}All done.`), undefined, 'inline only in the last lines');
+    assert.equal(blockedIn(`BLOCKED: the old blocker\n${'More notes.\n'.repeat(8)}All done.`), 'the old blocker', 'a line that starts with it counts anywhere, as before');
+    assert.equal(decisionIn('The decision needed: none, it is done.'), undefined);
+    assert.equal(asksForAnswer('All good. The request was BLOCKED: by the firewall, so I used the mirror.'), false);
+});
+
+test('words: a recommendation at the end of free text, as a thread hands back, split from what it asks', () => {
+    assert.deepEqual(recommendationIn('Two ports are free. Which should the dev server use? Recommendation: 8080 — it matches the docs.'),
+        { question: 'Two ports are free. Which should the dev server use?', recommendation: '8080 — it matches the docs' });
+    assert.deepEqual(recommendationIn('Found both configs (src/a.yml, src/b.yml).\nWhich one wins? I recommend src/a.yml.'),
+        { question: 'Found both configs (src/a.yml, src/b.yml).\nWhich one wins?', recommendation: 'src/a.yml' });
+    assert.deepEqual(recommendationIn('Keep the old API or remove it?\n**Recommend:** remove it'), { question: 'Keep the old API or remove it?', recommendation: 'remove it' });
+    assert.deepEqual(recommendationIn('Ship tonight or Monday — recommend: Monday'), { question: 'Ship tonight or Monday', recommendation: 'Monday' });
+    assert.equal(recommendationIn('Which port should it use?'), undefined, 'no recommendation');
+    assert.equal(recommendationIn('Recommendation: 8080'), undefined, 'nothing asked before it');
+    assert.equal(recommendationIn('I recommend 8080 in the README.\nWhich port should it use?'), undefined, 'only the last line');
+    assert.equal(recommendationIn('We followed the recommended setup and it works.'), undefined, 'a word in a sentence');
+    assert.equal(recommendationIn(undefined), undefined);
+});
+
 test('words: whether a reply ends by asking a person, read from its last lines', () => {
     for (const ask of [
         'I can do either.\nWhich do you prefer?',
@@ -111,6 +152,9 @@ test('words: what a reply asks a person: a decision line, then a BLOCKED line, t
     assert.deepEqual(askIn('The parser is done. Tests pass. Should I also write the docs? I can start now.'), { kind: 'question', question: 'Should I also write the docs?' });
     assert.deepEqual(askIn('Done with step 1.\n\n- Which port do you want: 8080 or 3000?'), { kind: 'question', question: 'Which port do you want: 8080 or 3000?' });
     assert.deepEqual(askIn('Ready to migrate. Waiting for your go.'), { kind: 'question', question: 'Ready to migrate. Waiting for your go.' }, 'a request without a question mark: its last line');
+    // A coordinating chat's relay ends with how to answer; the card shows the line that asks.
+    const relay = 'Thread “Port check” handed back: it needs your decision on the dev server port, 8080 or 3000.\nReply here with your choice and I\'ll pass it on.';
+    assert.deepEqual(askIn(relay), { kind: 'question', question: 'Thread “Port check” handed back: it needs your decision on the dev server port, 8080 or 3000.' });
     assert.equal(askIn('All tests pass; next I write the docs.'), undefined);
     assert.equal(askIn(''), undefined);
     assert.equal(askIn(null), undefined);
@@ -475,6 +519,19 @@ test('kit: state tags write their words at 4.5:1 or more on DSH\'s tag fill, in 
     }
 });
 
+test('kit: the sidebar badge writes its count at 4.5:1 or more in light and dark (DSH\'s red in dark read 3.3:1 under white)', () => {
+    const kit = kitWith();
+    const rule = kit.css.find((r) => r.includes('.dshx-badge{'));
+    // Static tokens: DSH gives them the same values in both themes (red-600 #ec1313, bluish-1000 #0f1115, bluish-00 #fff).
+    const m = /background:color-mix\(in srgb,var\(--dsw-static-red-600,(#[0-9a-f]{6})\) (\d+)%,var\(--dsw-static-neutral-bluish-1000,(#[0-9a-f]{6})\)\);color:var\(--dsw-static-neutral-bluish-00,(#[0-9a-f]{6})\)/.exec(rule);
+    assert.ok(m, rule);
+    const fill = mix(rgb(m[1]), rgb(m[3]), Number(m[2]) / 100);
+    const ours = contrast(rgb(m[4]), fill);
+    assert.ok(ours >= 4.5, `${ours.toFixed(2)}:1`);
+    assert.ok(contrast(rgb('#ffffff'), rgb(DSH.dark.danger)) < 3.5, 'white on DSH\'s dark error colour');
+    assert.ok(contrast(rgb('#ffffff'), rgb(DSH.light.danger)) < 4.5, 'white on DSH\'s light error colour is just short too');
+});
+
 test('kit: a choice commits on a click or on Enter, never on an arrow key; Escape and leaving go back; it is never disabled', async () => {
     const { react, mount } = statefulReact();
     const kit = kitWith({ react });
@@ -614,6 +671,30 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
     assert.equal(row('fine').props['data-suite-invalid'], undefined);
     assert.match(textIn(row('mode')), /The saved value is not one of the choices\. Choose Auto, Ask first or Off, then save\./);
     assert.match(textIn(row('resume')), /The saved value is neither on nor off\. Switch it to the one you want, then save\./);
+    // A saved choice that is not an option selects none: DSH's control would draw its pill outside its box, over "Use the default".
+    const control = elementsOf(row('mode')).find((e) => e.type === 'SegmentedControl');
+    assert.equal(control.props.value, '');
+    assert.equal(control.props.className, 'dshx-seg-none');
+    assert.ok(kit.css.some((rule) => rule.includes('.dshx-seg-none>[aria-hidden="true"]{visibility:hidden}')), 'its pill is hidden');
+});
+
+test('kit: a choice with no valid saved value can still be reached with Tab; once fixed, DSH\'s selection takes the focus again', () => {
+    const { react, mount } = statefulReact();
+    const kit = kitWith({ react });
+    const f = { name: 'mode', title: 'Mode', options: [{ value: 'a', label: 'Auto' }, { value: 'b', label: 'Off' }] };
+    const tab = (selected, tabIndex = -1) => ({ tabIndex, getAttribute: (name) => (name === 'aria-selected' ? String(selected) : null) });
+    let tabs = [tab(false), tab(false)];
+    const part = mount(kit.ChoiceControl, { id: 'x', f, value: 'maybe', disabled: false, onChange() {} });
+    part.tree.props.ref.current = { querySelectorAll: () => tabs };
+    part.update({});
+    assert.deepEqual(tabs.map((t) => t.tabIndex), [0, -1], 'DSH leaves every tab at -1 when none is selected: the first one takes the focus');
+    assert.equal(part.tree.props['data-suite-unset'], '');
+    tabs = [tab(false, 0), tab(true)];
+    part.update({ value: 'b' });
+    assert.deepEqual(tabs.map((t) => t.tabIndex), [-1, 0]);
+    const control = elementsOf(part.tree).find((e) => e.type === 'SegmentedControl');
+    assert.equal(control.props.value, 'b');
+    assert.equal(control.props.className, undefined);
 });
 
 test('kit: "Open X\'s settings" brings the setting the problem is about into view, with the cursor in it', async () => {

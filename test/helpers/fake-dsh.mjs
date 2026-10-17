@@ -146,13 +146,13 @@ export function fakeDsh({ now = Date.now, autoRead = true } = {}) {
             commit(id, 'turn/start', { turn: (foldOf(s).turn ?? 0) + 1 });
             for (const msg of queued) commit(id, 'user/message', msg);
         },
-        /** The person writes in a session and its turn starts. */
-        write(id, text = 'Please carry on.') {
+        /** The person (or, with a source, another session) writes in a session and its turn starts. */
+        write(id, text = 'Please carry on.', source = { kind: 'user' }) {
             const agent = dsh.load(id);
             const s = sessions.get(id);
             setStatus(agent, 'running');
             commit(id, 'turn/start', { turn: (foldOf(s).turn ?? 0) + 1 });
-            commit(id, 'user/message', message(text));
+            commit(id, 'user/message', message(text, source));
         },
         /** End the running turn: todos, a reply, then the end; the goal driver then runs (or an error disarms it). */
         end(id, reason = { kind: 'completed' }, { reply, todos, tools = 0 } = {}) {
