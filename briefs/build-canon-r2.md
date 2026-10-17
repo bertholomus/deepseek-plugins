@@ -1,8 +1,8 @@
 # Canon round 2: builder's notes
 
-Updated: 2026-10-17 4:25 PM PDT (Canon round-2 builder)
+Updated: 2026-10-17 4:19 PM PDT (Canon round-2 builder)
 Branch: `suite/v1` in `~/Projects/dsh-plugin-suite`
-Status: vault grown and frozen, dev set written and measured before any tuning; tuning next (code only).
+Status: vault frozen; tuned on the dev set (code only); Finding 1 next.
 Vault frozen at f7283b5: test/fixtures/canon/vault
 
 For the hold-out writers (their brief is the coordinator's; these are facts about the measuring, not rules):
@@ -17,6 +17,15 @@ Live DSH fingerprint before any work (3:40 PM PDT): pid 18756, started Sat Oct 1
 63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7.
 
 ## Done (newest first)
+- 86f6daf: tuned on the dev set with general rules (search.js, text.js): a project's name is one word and a note needs
+  a word beyond it; one word in a note's body never fits; words about the vault and about answering (note, vault,
+  canon, shared, team, answer, cite, reply) are left out of prompts; a note that belongs to a project (`project`/`repo`
+  or its folder under Projects/) stays out when the session's folder or the prompt points at other projects and not at
+  its own ("the lantern API" names lantern-api, not lantern-web); the relative floor is half the best (was 0.4); "own"
+  left the stop words ("who owns X" kept no verb). The try-out shows the prompt's own words (never stems) and why a
+  close note stayed out. Dev: first note answers 43 of 47 (91.5%), answering note in the block 45 of 47 (95.7%), 0.36
+  notes per block that do not answer (16 in 45), no block for 25 of 30 (83.3%). `DEV_REACHED` holds these.
+- ea545b4: dev set, measuring helper and script, relevance tests, host tests' counts for the grown vault.
 - Dev set `test/fixtures/canon/relevance/dev.json` (77 prompts: 47 a note answers; 8 that only name a project, 8 of
   chat filler, 8 of words about the vault, 6 others no note answers), the measuring helper
   `test/helpers/canon-relevance.mjs`, `scripts/canon-relevance.mjs [--misses] [--set dev|holdout]`,
@@ -31,21 +40,27 @@ Live DSH fingerprint before any work (3:40 PM PDT): pid 18756, started Sat Oct 1
   real-DSH test and `scripts/e2e.mjs`.
 
 ## Next steps (in order, each runnable by someone new)
-1. Tune `plugins/canon/lib/search.js` (and `text.js`) on the dev set with general rules only: a project's name counts
-   as one term for the two-word rule and the floors, a note needs a prompt word beyond the project's name, words about
-   the vault (note, vault, canon, shared, team) are left out of prompts. Measure with
-   `node scripts/canon-relevance.mjs --set dev --misses`; raise `DEV_REACHED` in `test/canon-relevance.test.js`;
-   update the host tests' recall expectations. Never touch the vault.
-2. Finding 1: the vault folder's own listing error sets the error state (`lib/vault.js` `read()`), with unit tests
+1. Finding 1: the vault folder's own listing error sets the error state (`lib/vault.js` `read()`), with unit tests
    and a real-DSH step on a `chmod 000` copy.
-3. Findings 3, 4, 5, 6: `~/` in the try-out, the block says where its paths live, wrong types said in words, the
+2. Findings 3, 4, 5, 6: `~/` in the try-out, the block says where its paths live, wrong types said in words, the
    form refuses a promote folder inside the drafts folder.
-4. README "How well it picks notes" with the dev figures.
-5. Findings 7, 8, 9: focus, README on Read only's reach, the nits.
-6. e2e counts for the grown vault (35 active, 2 drafts, 5 other); `npm test`, then `node scripts/e2e.mjs canon` on
+3. README "How well it picks notes" with the dev figures (above) and `node scripts/canon-relevance.mjs --set dev`.
+4. Findings 7, 8, 9: focus, README on Read only's reach, the nits.
+5. e2e counts for the grown vault (35 active, 2 drafts, 5 other); `npm test`, then `node scripts/e2e.mjs canon` on
    all three builds with the live fingerprint before and after.
 
 ## Picks and why
+- Tuning: what was tried and left out. Counting a project's name only when the note belongs to that project lost the
+  mascot and Node answers (85.1% first). Dropping every unnamed project's note in a session with no project folder
+  scored one more no-block on dev but would drop answers to prompts that name no project from a neutral folder, so the
+  rule needs the folder or the prompt to point at a project. Bold words as a strong field and "mean"/"explain" as stop
+  words changed nothing on dev, so they are not in. The relative floor at 0.6 cut more extra notes (0.20) but leaves
+  less room when the first note is wrong; 0.5 kept every answer the dev blocks had.
+- Misses left on dev, and why no rule takes them: "What does bastion mean?" (one body word in the glossary), "What
+  Node version does lantern-web need?" (one body word), "Write a unit test for the lantern API's pagination helper"
+  (the local-development note shares "unit test"), "Check..."/"Save this to the shared notes later" (two common words
+  in Home.md), "How long does the gateway keep idle connections open?" (On-call's "a week long", "still open"),
+  "Refactor the parser in src/lexer.ts" (Feature flags' `src/flags.ts`). Each would need a rule that fits its words.
 - The vault was committed alone (f7283b5), then the dev set, the helper and the tests' new counts right after it, so
   HEAD was red only between those two pushes.
 - Answers name only notes Canon may add (active ones): a prompt only a draft, a superseded decision or an idea with
