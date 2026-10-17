@@ -4,7 +4,7 @@ _For the two accounts building these plugins only (see AGENTS.md). A session run
 
 # Suite v1 (branch suite/v1): the DSH Plugin Suite
 
-Updated: 2026-10-17 11:31 AM PDT by A (gmail), thread "Suite v1 builder"
+Updated: 2026-10-17 11:24 AM PDT by A (gmail), thread "Suite v1 builder"
 Branch: `suite/v1` in the worktree `~/Projects/dsh-plugin-suite` (remote `gh` = github.com/bertholomus/deepseek-plugins, private). Main is at 3290a42 (Agent Terminals' judged commit, a fast-forward). Tags: `autopilot-v1.0.0` and `session-watch-v1.0.0` at ea10517, `decisions-v1.0.0` at 15d8bf0, `agent-terminals-v1.0.0` at 3290a42.
 Goal: six plugins (Autopilot, Decisions, Agent Terminals, Proof, Canon, Recall) per `briefs/SUITE-BRIEF.md`, each judged >= 8.5/10 (no criterion below 8) by a fresh judge in DSH Test, merged to `main` and tagged `<plugin>-v1.0.0`, then `suite-v1.0.0`. Test only in DSH Test, never the live DSH.
 
