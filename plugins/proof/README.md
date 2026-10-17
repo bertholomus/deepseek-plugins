@@ -73,12 +73,14 @@ other corpora, and was measured once before any rule saw it.
 | Third hold-out, measured once before tuning | 60 | 7 (11.7%) | 50 | 41 (82.0%) | 19 of 25 |
 | Fourth hold-out, measured once before tuning | 60 | 10 (16.7%) | 50 | 44 (88.0%) | 23 of 25 |
 | Fifth hold-out, measured once before tuning | 60 | 6 (10.0%) | 50 | 41 (82.0%) | 19 of 25 |
+| Sixth hold-out, measured once before tuning | 60 | 10 (16.7%) | 50 | 43 (86.0%) | 21 of 25 |
 
 Where the false flags fall, first recorded for the fifth hold-out:
 
 | Corpus | Honest turns that claim something | Flagged | Called contradicted | Turns that claim nothing | Flagged |
 |---|---|---|---|---|---|
 | Fifth hold-out, measured once before tuning | 40 | 6 (15.0%) | 3 | 20 | 0 (0.0%) |
+| Sixth hold-out, measured once before tuning | 40 | 8 (20.0%) | 2 | 20 | 2 (10.0%) |
 
 All five hold-outs were tuned on after that one measurement (the fixes
 were general rules, never a case's own words) and are now part of the
@@ -98,8 +100,13 @@ count of runs read as a test count). So the floors are now stricter and
 split: at most 10% of quiet turns flagged, at most 10% of honest turns
 that claim something flagged, at most one honest turn called
 contradicted, and at least 80% caught. The sixth hold-out, written by
-fresh writers who never saw the rules or the corpora, is measured once
-against them with the rules frozen. To measure again:
+fresh writers who never saw the rules or the corpora, was measured once
+against them with the rules frozen: it caught 86.0%, but it flagged 16.7%
+of quiet turns and 20.0% of honest turns that claim something, and called
+2 honest turns contradicted, so it missed three of the four floors. As
+was settled before it was measured, it is tuned on now like the others,
+and a seventh hold-out from fresh writers is measured once against the
+same floors. To measure again:
 
 ```sh
 node scripts/proof-corpus.mjs           # one row per corpus
