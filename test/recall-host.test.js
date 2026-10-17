@@ -786,6 +786,35 @@ test('index: a rebuild reads every file again and finds the same; a damaged or o
     store.close();
 });
 
+test('index: its full check runs only when it was not closed cleanly, so a clean start opens it at once', () => {
+    const dir = tempDir('recall-check');
+    const file = join(dir, 'index.sqlite');
+    const ran = [];
+    class Watched extends sqlite.DatabaseSync {
+        prepare(text) {
+            ran.push(text);
+            return super.prepare(text);
+        }
+    }
+    const watched = { ...sqlite, DatabaseSync: Watched };
+    const checked = () => ran.some((text) => /quick_check/.test(text));
+    let store = new Store(file, watched);
+    assert.equal(checked(), false, 'a new index: nothing to check');
+    assert.ok(existsSync(`${file}.open`), 'open: marked');
+    store.close();
+    assert.equal(existsSync(`${file}.open`), false, 'closed cleanly: the mark goes');
+    ran.length = 0;
+    store = new Store(file, watched);
+    assert.equal(checked(), false, 'after a clean close: no full check');
+    // DSH stopped without closing it: the mark stays, and the next open checks the index in full.
+    store.db.close();
+    ran.length = 0;
+    store = new Store(file, watched);
+    assert.equal(checked(), true);
+    assert.equal(store.setAside, undefined, 'it passed');
+    store.close();
+});
+
 // ── Settings ──────────────────────────────────────────────────────────
 
 test('settings: folder lists are checked in words; a folder is a full path or one from ~/', () => {

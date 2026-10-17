@@ -1,8 +1,8 @@
 # Recall: builder's notes
 
-Updated: 2026-10-17 2:14 PM PDT (Recall builder, a subagent of account B's suite run)
+Updated: 2026-10-17 2:24 PM PDT (Recall builder, a subagent of account B's suite run)
 Branch: `suite/v1` (worktree `~/Projects/dsh-plugin-suite`)
-Status: host half (33 tests) and browser half (10 tests) done; bench, real-DSH test and README next.
+Status: host (34 tests), browser half (10 tests) and bench (2 tests) done; real-DSH test and README next.
 
 ## What Recall is (brief, section 6)
 Search everything we already did. A full-text index over DSH session files (`.jsonl.zstd`), optional coding-agent
@@ -27,10 +27,18 @@ a query on 10k sessions, measured). Results link back to the exact turn. Filters
   names the tool ("Let agents search past work"), and the page state carries the home folder so paths read `~/…`.
   Whole-repo `npm test` on HEAD plus these files only: 738 pass, 0 fail.
 
+- Bench (commit "recall: bench …"): `scripts/recall-bench.mjs` (10k synthetic sessions through Recall's own index
+  thread) and `test/recall-bench.test.js` (200 sessions, end to end, plus percentiles). It found two slow paths, both
+  fixed in `lib/store.js`: a search with kind and date filters took 7.4 s (SQLite led the join with the filter's
+  index and ran the full-text match again for every row: now `CROSS JOIN`, 27 ms), and opening a 285 MB index took
+  2.3 s (`PRAGMA quick_check` on every open: now only after an unclean close, which a marker file beside the index
+  says; 22 ms). 10k sessions (120,519 turns, Apple M4 under load average ~6.8, Node 22.20): 260 searches median
+  33.7 ms, p95 96.3 ms, slowest 201 ms; first index 19.9 s, 285 MB, DSH's thread held up at most 12.6 ms.
+
 ## Next steps (in order)
 1. (done) Host modules with unit tests.
 2. (done) Browser half with `test/recall-client.test.js`.
-3. `scripts/recall-bench.mjs` (10k synthetic sessions, median and p95), numbers into the README; a small bench test.
+3. (done) `scripts/recall-bench.mjs` (10k synthetic sessions, median and p95), numbers into the README; a small bench test.
 4. Real-DSH test `plugins/recall/test/e2e/run.mjs` + `fake-model.mjs`; `node scripts/e2e.mjs recall` on all three
    builds with the live fingerprint checked; pictures in `.e2e/shots/recall/<build>/`.
 5. README; commit and push after each green step.
@@ -99,7 +107,15 @@ a query on 10k sessions, measured). Results link back to the exact turn. Filters
   tool's name, drawn like DSH's tool rows (a disclosure row; results as rows with Open or Read, and "Search this in
   Recall"). No tool name, ids or raw paths where people read: paths show from `~`.
 
+- **Index check only after an unclean close.** `PRAGMA quick_check` reads the whole file (2.3 s at 285 MB). The store
+  writes `index.sqlite.open` when it opens and removes it on a clean close; a mark left behind (DSH killed) means the
+  next open checks in full first (2 s, in the index thread; searches wait). WAL with synchronous NORMAL does not
+  corrupt on a crash, so the check guards against disk damage, which is rare.
+
 ## Gotchas
+- FTS5 joined to another table: when a filter has an index, SQLite may lead with it and evaluate `MATCH` once per row
+  (seconds). `CROSS JOIN` with `fts` first keeps the match as the outer loop. The bench's "sessions of the past month"
+  query is the canary.
 - FTS5 joins two phrases with a space, but a bracketed OR group only with an explicit `AND`: `"a" ("b" OR "c")` is a
   syntax error. lib/query.js joins every group with ` AND ` (tested by running each query in SQLite).
 - Porter stems "deploy" to "deploi" but "deployment" to "deploy": they do not match each other. Accepted (FTS5's own

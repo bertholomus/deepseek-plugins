@@ -15,7 +15,7 @@
  *
  * @module dsh-plugin-recall/store
  */
-import { existsSync, renameSync, rmSync, statSync } from 'node:fs';
+import { existsSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 
 /** Bump when the tables change: an index of another version is built again. */
 export const SCHEMA_VERSION = 3;
@@ -86,7 +86,15 @@ export class Store {
         this.statements = new Map();
     }
 
+    /**
+     * Open the index. Its full check (SQLite's quick_check: about 2 seconds
+     * for 10k sessions) runs only when the index was not closed cleanly last
+     * time (DSH stopped without closing it), which a marker file beside it
+     * says: an index closed cleanly opens in milliseconds.
+     */
     open(sqlite) {
+        const marker = `${this.file}.open`;
+        const unclean = existsSync(marker);
         const tryOpen = () => {
             const db = new sqlite.DatabaseSync(this.file);
             try {
@@ -98,17 +106,23 @@ export class Store {
                 if (!empty && version !== SCHEMA_VERSION) throw Object.assign(new Error(`the index is version ${version}, not ${SCHEMA_VERSION}`), { stale: true });
                 db.exec(SCHEMA);
                 db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-                const check = db.prepare('PRAGMA quick_check').get();
-                const ok = Object.values(check ?? {})[0];
-                if (ok !== 'ok') throw new Error(`the index failed its check (${String(ok).slice(0, 120)})`);
+                if (unclean && !empty) {
+                    const check = db.prepare('PRAGMA quick_check').get();
+                    const ok = Object.values(check ?? {})[0];
+                    if (ok !== 'ok') throw new Error(`the index failed its check (${String(ok).slice(0, 120)})`);
+                }
                 return db;
             } catch (error) {
                 try { db.close(); } catch { /* closing a broken file */ }
                 throw error;
             }
         };
+        const opened = (db) => {
+            try { writeFileSync(marker, `${process.pid}\n`); } catch { /* the next open checks the index in full */ }
+            return db;
+        };
         try {
-            return tryOpen();
+            return opened(tryOpen());
         } catch (error) {
             if (!existsSync(this.file)) throw error;
             // A broken or older index: set it aside and build a new one (the files are the truth).
@@ -116,7 +130,7 @@ export class Store {
             for (const tail of ['-wal', '-shm']) rmSync(`${this.file}${tail}`, { force: true });
             renameSync(this.file, `${this.file}.old`);
             this.setAside = true;
-            return tryOpen();
+            return opened(tryOpen());
         }
     }
 
@@ -147,8 +161,12 @@ export class Store {
         }
     }
 
+    /** Close the index cleanly: the next open skips the full check. */
     close() {
-        try { this.db.close(); } catch { /* already closed */ }
+        try {
+            this.db.close();
+            rmSync(`${this.file}.open`, { force: true });
+        } catch { /* already closed */ }
     }
 
     /** The index file's size on disk, its write-ahead log included. */
@@ -307,7 +325,10 @@ export class Store {
             return this.db.prepare(`SELECT ${cols}, 0 AS score FROM docs d WHERE 1 = 1${w.sql} ORDER BY d.time DESC LIMIT ?`).all(...w.args, cap);
         }
         const order = sort === 'newest' ? 'd.time DESC' : 'score';
-        return this.db.prepare(`SELECT ${cols}, bm25(fts, ${WEIGHTS.join(', ')}) AS score FROM fts JOIN docs d ON d.id = fts.rowid
+        // CROSS JOIN keeps the full-text match as the outer loop: led by a filter's index instead (kind and date,
+        // say), SQLite would run the match again for every row the filter lets through (8.7 s instead of 19 ms on
+        // 10k sessions, measured by scripts/recall-bench.mjs).
+        return this.db.prepare(`SELECT ${cols}, bm25(fts, ${WEIGHTS.join(', ')}) AS score FROM fts CROSS JOIN docs d ON d.id = fts.rowid
             WHERE fts MATCH ?${w.sql} ORDER BY ${order} LIMIT ?`).all(match, ...w.args, cap);
     }
 
@@ -315,7 +336,7 @@ export class Store {
     count({ match = '', filters = {}, cap = 5000 }) {
         const w = Store.where(filters);
         const inner = match
-            ? `SELECT 1 FROM fts JOIN docs d ON d.id = fts.rowid WHERE fts MATCH ?${w.sql} LIMIT ?`
+            ? `SELECT 1 FROM fts CROSS JOIN docs d ON d.id = fts.rowid WHERE fts MATCH ?${w.sql} LIMIT ?`
             : `SELECT 1 FROM docs d WHERE 1 = 1${w.sql} LIMIT ?`;
         return this.db.prepare(`SELECT count(*) AS n FROM (${inner})`).get(...(match ? [match] : []), ...w.args, cap + 1).n;
     }
