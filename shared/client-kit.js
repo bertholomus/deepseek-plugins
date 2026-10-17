@@ -412,12 +412,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     /** DSH's tag tone for one of the suite's state words. */
     function toneOf(word) {
         switch (word) {
-            case 'running': case 'working': case 'queued': case 'in the queue': case 'sending': case 'starting': case 'waiting for a round': return 'info';
-            case 'waiting for approval': case 'waiting for your answer': case 'waiting on you': case 'needs a decision': case 'asked you': case 'asks you': case 'cut off': case 'cut short': case 'backed off': case 'gave up': case 'held': case 'not confirmed': case 'waiting on a setting': return 'warning';
+            case 'running': case 'working': case 'queued': case 'in the queue': case 'sending': case 'starting': case 'waiting for a round': case 'waiting': case 'typing': case 'typed in': return 'info';
+            case 'waiting for approval': case 'waiting for your answer': case 'waiting on you': case 'needs a decision': case 'asked you': case 'asks you': case 'cut off': case 'cut short': case 'backed off': case 'gave up': case 'held': case 'not confirmed': case 'waiting on a setting': case 'not proven': return 'warning';
             case 'failed': case 'blocked': case 'not delivered': case 'not started': case 'not sent': return 'danger';
             case 'delivered': case 'started': case 'done': case 'answered': case 'read': case 'sent': case 'shown': return 'success';
             case 'not shown': return 'warning';
-            case 'stopped': case 'paused': case 'withdrawn': return 'neutral';
+            case 'stopped': case 'paused': case 'withdrawn': case 'taken back': return 'neutral';
             default: return 'quiet';
         }
     }
