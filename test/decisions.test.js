@@ -871,6 +871,39 @@ test('inbox: a plugin\'s question is answered through the watcher, and the plugi
     assert.deepEqual((await inbox.list()).waiting.filter((c) => c.kind === 'ask'), []);
 });
 
+test('inbox: an answer a plugin proves later says "answered" in its words, then what became of it', async () => {
+    const { dsh, clock, inbox, watch, journal } = setup();
+    replied(dsh, 's', 'Parser done.', { title: 'Parser' });
+    const ask = (id) => watch.raiseAsk({ id, sessionId: 's', source: 'Agent Terminals', title: 'Parser agent', question: 'Use the fast path?', freeText: true, onAnswer: () => ({ text: 'It goes into “Parser agent”\'s terminal when the agent is ready, and counts as delivered once its transcript shows it.', delivery: 'm-1' }) });
+    ask('at-1');
+    await clock.advance(1000);
+    let card = (await inbox.list()).waiting.find((c) => c.kind === 'ask');
+    const value = await inbox.answer(card.id, { text: 'Yes' });
+    // Not "reached": the plugin took it; its agent has it only once that is proven.
+    assert.deepEqual(value, { state: 'answered', text: 'It goes into “Parser agent”\'s terminal when the agent is ready, and counts as delivered once its transcript shows it.' });
+    let [entry] = entries(journal, 'answer');
+    assert.deepEqual([entry.state, entry.askId], ['answered', 'at-1']);
+    assert.match(entry.why, /counts as delivered once its transcript shows it/);
+    // Typed in, not shown: "not confirmed", with the reason; seen later: delivered.
+    watch.askOutcome('at-1', { state: 'not proven', text: 'Typed in, but its transcript has not shown it.', by: 'Agent Terminals', sessionId: 's' });
+    [entry] = entries(journal, 'answer');
+    assert.deepEqual([entry.state, entry.reason], ['not confirmed', 'Typed in, but its transcript has not shown it.']);
+    watch.askOutcome('at-1', { state: 'delivered', text: 'Its transcript shows it.', sessionId: 's' });
+    [entry] = entries(journal, 'answer');
+    assert.deepEqual([entry.state, entry.why], ['delivered', 'Its transcript shows it.']);
+    // A failure is said with its reason; an outcome for a question nobody answered here, or a word it does not know, changes nothing.
+    ask('at-2');
+    await clock.advance(1000);
+    card = (await inbox.list()).waiting.find((c) => c.kind === 'ask');
+    await inbox.answer(card.id, { text: 'No' });
+    watch.askOutcome('at-2', { state: 'not delivered', text: 'Not typed in: its terminal was closed.' });
+    const second = entries(journal, 'answer').find((e) => e.askId === 'at-2');
+    assert.deepEqual([second.state, second.reason], ['not delivered', 'Not typed in: its terminal was closed.']);
+    assert.equal(watch.askOutcome('at-9', { state: 'delivered' }), true);
+    assert.equal(watch.askOutcome('at-2', { state: 'sent' }), false, 'an outcome word Session Watch does not know is refused');
+    assert.equal(entries(journal, 'answer').find((e) => e.askId === 'at-2').state, 'not delivered');
+});
+
 test('inbox: dismissed stays dismissed across a restart, and comes back on request', async () => {
     const dir = tempDir('decisions');
     const clock = manualClock();

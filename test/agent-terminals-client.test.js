@@ -154,7 +154,11 @@ test('the header: what runs and waits, why nothing can run, and where its settin
     const starts = [];
     const onStart = () => starts.push(1);
     assert.equal(countText([]), '');
-    assert.equal(countText([WORKING, ASKING, APPROVAL, STOPPED]), '3 running · 2 waiting on you · 1 stopped');
+    assert.equal(countText([WORKING, ASKING, APPROVAL, STOPPED]), '3 running, 2 of them waiting on you · 1 stopped', 'the ones waiting on you are among the running');
+    assert.equal(countText([ASKING]), '1 running, waiting on you');
+    assert.equal(countText([ASKING, APPROVAL]), '2 running, both waiting on you');
+    assert.equal(countText([ASKING, APPROVAL, { ...ASKING, key: 'k9' }]), '3 running, all 3 waiting on you');
+    assert.equal(countText([STOPPED]), '1 stopped');
     const quiet = HeaderCard({ data: STATE, onStart });
     assert.equal(withAttr(quiet, 'data-agent-terminals-count').length, 0, 'no count line without agents');
     assert.equal(button(quiet, TEXT.settings), undefined, 'no settings button on a DSH that cannot open it');
@@ -233,8 +237,6 @@ test('an agent\'s card: its state, its session, what it does, and the actions it
     assert.equal(button(stopped, 'Start anew'), undefined, 'a program that cannot resume has only Start again');
     await button(stopped, 'Start again').props.onClick();
     assert.deepEqual(acts.at(-1), ['startAgain', { key: 'k4', fresh: false }]);
-    await button(stopped, 'Forget').props.onClick();
-    assert.deepEqual(acts.at(-1), ['forget', { key: 'k4' }]);
     await button(draw({ ...STOPPED, canResume: true }), 'Start anew').props.onClick();
     assert.deepEqual(acts.at(-1), ['startAgain', { key: 'k4', fresh: true }]);
     assert.equal(button(stopped, 'Open its terminal'), undefined);
@@ -245,6 +247,62 @@ test('an agent\'s card: its state, its session, what it does, and the actions it
     assert.equal(button(busy, 'Stop').props.disabled, true);
     assert.equal(elementsOf(busy).find((e) => e.type === 'textarea').props.readOnly, true);
     assert.equal(elementsOf(busy).find((e) => e.type === 'textarea').props.disabled, undefined);
+});
+
+test('an agent\'s card: Forget asks first and says what stays; the program by its name, its path on hover', async (t) => {
+    const { react, mount } = statefulReact();
+    const { client } = loadClient(CLIENT, { react });
+    const { AgentCard, shortCommand } = client.internals;
+    const acts = [];
+    const act = async (method, args) => { acts.push(plain([method, args])); return undefined; };
+    const card = mount(AgentCard, { agent: STOPPED, act, busyKey: undefined, onOpen() {}, openTerminal() {}, spot: undefined });
+    t.after(() => card.unmount());
+    button(card.tree, 'Forget').props.onClick();
+    assert.match(textIn(card.tree), /Forget “plain tool”\? Its session and its conversation files stay\./);
+    assert.equal(button(card.tree, 'Start again'), undefined, 'the question is the card\'s only business');
+    assert.equal(acts.length, 0, 'nothing forgotten yet');
+    button(card.tree, 'Keep it').props.onClick();
+    assert.ok(button(card.tree, 'Start again'), 'Keep it goes back');
+    button(card.tree, 'Forget').props.onClick();
+    await button(card.tree, 'Forget it').props.onClick();
+    assert.deepEqual(acts, [['forget', { key: 'k4' }]]);
+
+    // A program given by its path: its name on the card, the whole command on hover.
+    const long = { ...WORKING, program: '/Users/me/tools/bin/helper', programName: 'helper' };
+    assert.equal(shortCommand(long), 'helper --fast');
+    const code = elementsOf(AgentCard({ agent: long, act, busyKey: undefined, onOpen() {}, openTerminal() {}, spot: undefined })).find((e) => e.props?.className === 'dshat-code');
+    assert.deepEqual([textIn(code), code.props.title], ['helper --fast', '/Users/me/tools/bin/helper --fast']);
+    assert.equal(shortCommand({ program: '/opt/x/agent', args: [] }), 'agent', 'a host that sends no short name');
+});
+
+test('an agent\'s card while Agent Terminals does not follow its agents: no buttons that would act, no message box', () => {
+    const { client } = loadClient(CLIENT);
+    const { AgentCard } = client.internals;
+    const draw = (agent) => AgentCard({ agent, act: async () => undefined, busyKey: undefined, onOpen() {}, openTerminal() {}, spot: undefined });
+    const running = draw({ ...WORKING, status: 'running', followed: false, detail: 'Running in its terminal, not followed: Agent Terminals waits for a setting to be fixed (see the top of this page), then picks it up where it is.' });
+    assert.match(textIn(running), /Running in its terminal, not followed/);
+    for (const label of ['Stop', 'Start again', 'Start anew', 'Forget']) assert.equal(button(running, label), undefined, label);
+    assert.ok(button(running, 'Open its terminal'), 'its terminal can still be opened');
+    assert.equal(elementsOf(running).find((e) => e.type === 'textarea'), undefined, 'no message box');
+    const stopped = draw({ ...STOPPED, followed: false });
+    assert.deepEqual(['Start again', 'Forget', 'Open its terminal'].map((label) => button(stopped, label)), [undefined, undefined, undefined]);
+});
+
+test('the list\'s line follows a message you sent: typed in, delivered, or not proven', () => {
+    const { client } = loadClient(CLIENT);
+    const { saidLine } = client.internals;
+    const said = { text: 'Queued for “helper · app”. It is typed in when the agent is ready, and marked delivered once its transcript shows it.', n: 1, at: now, delivery: 'm1', key: 'k1' };
+    const data = (state, more = {}) => ({ agents: [{ ...WORKING, deliveries: [{ id: 'm1', text: 'Run the linter', by: 'you', at: now, state, ...more }] }] });
+    assert.equal(saidLine(said, data('queued'), now).text, said.text);
+    assert.equal(saidLine(said, data('waiting', { why: 'The agent is working; this is typed in when it is idle.' }), now).text, 'Queued for “helper · app”: The agent is working; this is typed in when it is idle.');
+    assert.equal(saidLine(said, data('typed'), now).text, 'Typed into “helper · app”\'s terminal; waiting for its transcript to show it.');
+    assert.deepEqual(plain(saidLine(said, data('delivered'), now)), { text: '“helper · app” has your message: its transcript shows it.' });
+    assert.deepEqual(plain(saidLine(said, data('not proven'), now)), { text: 'Typed into “helper · app”\'s terminal, but its transcript has not shown it: look at its terminal.', warn: true });
+    assert.deepEqual(plain(saidLine(said, data('failed', { why: 'Not typed in: its terminal was closed.' }), now)), { text: 'Your message was not typed in: its terminal was closed.', warn: true });
+    assert.equal(saidLine(said, data('cancelled'), now).text, 'Taken back before it was typed in.');
+    assert.equal(saidLine(said, data('delivered'), now + 121000).text, '', 'gone two minutes later');
+    assert.equal(saidLine({ text: 'Stopped “x”.', n: 2, at: now }, data('queued'), now).text, 'Stopped “x”.', 'other actions say what they did');
+    assert.equal(saidLine(said, { agents: [] }, now).text, said.text, 'a message whose agent is gone keeps its words');
 });
 
 test('an agent\'s messages: each one\'s state in words, why it waits, and Take back while it can', async () => {
@@ -308,7 +366,7 @@ test('the page: reads the agents, shows each, and says what an action did, in wo
     assert.match(textIn(page.tree), /Reading the coding agents/);
     await settle(5);
     const text = textIn(page.tree);
-    assert.match(text, /2 running · 1 waiting on you · 1 stopped/);
+    assert.match(text, /2 running, 1 of them waiting on you · 1 stopped/);
     assert.deepEqual(withAttr(page.tree, 'data-agent-terminals-agent').map((e) => e.props['data-agent-terminals-agent']), ['k2', 'k1', 'k4'], 'in the order the host sorts them: waiting on you first');
     assert.match(text, /Closing an agent's terminal tab ends the agent; Start again brings it back\./);
     assert.ok(withAttr(page.tree, 'data-agent-terminals-start').length === 1, 'the start form');
@@ -334,8 +392,9 @@ test('the page: reads the agents, shows each, and says what an action did, in wo
     assert.equal(failed.props.role, 'alert');
     assert.equal(failed.props.tabIndex, -1);
     assert.equal(textIn(failed), 'Not done: It could not start: There is no program named tool where DSH looks for programs.');
-    // A refusal: the host's words.
+    // A refusal: the host's words (Forget asks first).
     await button(withAttr(page.tree, 'data-agent-terminals-agent')[2], 'Forget').props.onClick();
+    await button(withAttr(page.tree, 'data-agent-terminals-agent')[2], 'Forget it').props.onClick();
     await settle(5);
     assert.equal(textIn(withAttr(withAttr(page.tree, 'data-agent-terminals-agent')[2], 'data-agent-terminals-error')[0]), 'Not done: That agent is not in the list any more.');
 
@@ -503,7 +562,7 @@ test('session rows: the mark says what the agent does (in DSH\'s dots, and in wo
     assert.equal(stopped.props.title, undefined, 'said once: in words and in the hover card, not in a tooltip too');
     // The hover card: in words, on DSH's dark card.
     const hover = AgentHover({ sessionId: 's2' });
-    assert.equal(textIn(hover), 'Coding agent waiting on youIt asks you: Ship it?');
+    assert.equal(textIn(hover), 'Coding agent in its terminal: waiting on youIt asks you: Ship it?');
     assert.equal(AgentHover({ sessionId: 'nope' }), null);
     // The panel entry: how many wait on you, in a badge and in words.
     const icon = AgentsIcon({});

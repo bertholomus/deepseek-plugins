@@ -17,7 +17,8 @@
  *   #reply=TEXT answer with TEXT (to the end of the line)
  *   #ask        the answer ends with a DECISION NEEDED line
  *   #tool       one tool call and its result before the answer
- *   #approve    one tool call that waits for 1 or y (yes), 2 or n (no) in the terminal
+ *   #approve    one tool call that waits for 1, y or Enter (yes), 2, n or Escape (no) in the
+ *               terminal: Enter takes the first choice, as real programs' prompts do
  *   #exit       quit after answering
  * --swallow-enter: the first Enter after each paste is ignored, as some
  * terminal apps do. Messages sent while it works wait, and are written to
@@ -305,7 +306,7 @@ function onKeys(chunk) {
         const key = pending[0];
         pending = pending.slice(1);
         if (approval) {
-            if (key === '1' || key === 'y') approval(true);
+            if (key === '1' || key === 'y' || key === '\r' || key === '\n') approval(true);
             else if (key === '2' || key === 'n') approval(false);
             continue;
         }

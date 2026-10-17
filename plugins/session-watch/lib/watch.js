@@ -18,7 +18,8 @@
  *   the session's log.
  * - `asks`: questions waiting on a person, raised by any suite plugin
  *   (Autopilot's "ask first" rule, an agent in a terminal) and answered in
- *   Decisions or on the raising plugin's page.
+ *   Decisions or on the raising plugin's page. `askOutcome` says later what
+ *   became of an answer (typed into a terminal, then proven or not).
  * - `projection(id, key)`: another projection's value for a session (DSH's
  *   question box, the coordinator's threads), live or as DSH saved it.
  *
@@ -37,6 +38,9 @@ export const SHARED_KEYS = Object.freeze(['userQuestions', 'coordinatorSession']
 
 /** How a watcher event is named for listeners. */
 export const EVENTS = Object.freeze(['turn-start', 'turn-end', 'status', 'state', 'agent', 'delivery', 'ask', 'external']);
+
+/** What can become of an answer, once its asker knows (`askOutcome`). */
+export const OUTCOMES = new Set(['delivered', 'not proven', 'not delivered', 'typed in']);
 
 /** One message's way into a session, for `deliver`. */
 class Delivery {
@@ -551,6 +555,31 @@ export class SessionWatch {
         this.asksById.delete(id);
         this.emit({ type: 'ask', change: 'dropped', ask: publicAsk(item) });
         this.hub?.bump('asks');
+        return true;
+    }
+
+    /**
+     * Say what became of an answer once its asker knows: an answer typed
+     * into a coding agent's terminal is delivered only when the agent's own
+     * transcript shows it. Decisions turns its "answered" into what this says.
+     * @param {string} id - the question's id.
+     * @param {{ state: 'delivered' | 'not proven' | 'not delivered' | 'typed in', text?: string, by?: string, sessionId?: string }} outcome
+     * @returns {boolean} whether it was told.
+     */
+    askOutcome(id, outcome) {
+        if (typeof id !== 'string' || !isRecord(outcome) || !OUTCOMES.has(outcome.state)) return false;
+        this.emit({
+            type: 'ask',
+            change: 'outcome',
+            id,
+            ...(typeof outcome.sessionId === 'string' ? { sessionId: outcome.sessionId } : {}),
+            outcome: {
+                state: outcome.state,
+                ...(typeof outcome.text === 'string' && outcome.text ? { text: outcome.text.slice(0, 600) } : {}),
+                ...(typeof outcome.by === 'string' && outcome.by ? { by: outcome.by.slice(0, 80) } : {}),
+                at: this.now(),
+            },
+        });
         return true;
     }
 

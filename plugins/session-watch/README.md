@@ -38,7 +38,9 @@ when a plugin needs the reply text of a session that is not loaded.
   left to their parents.
 - **Questions for a person.** Any suite plugin can raise a question
   (Autopilot's Ask first rule, an agent in a terminal); Decisions shows them
-  all, and an answer goes back to the plugin that asked.
+  all, and an answer goes back to the plugin that asked. When the answer's
+  fate is known only later (typed into a terminal, then seen in the agent's
+  transcript or not), the asking plugin says so, and Decisions shows it.
 - **One request per window.** Suite pages keep a single request open to the
   watcher (`/api/dsh-plugin-session-watch/wait`) that answers when anything
   they show moved, and read their own state only then. Nothing polls, and a

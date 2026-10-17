@@ -188,6 +188,9 @@ export function relayedHandback(state, handbacks) {
     return before?.asks ? before : undefined;
 }
 
+/** What an asker's outcome (`askOutcome`) makes of an answer's log entry. */
+const OUTCOME_STATES = Object.freeze({ delivered: 'delivered', 'not proven': 'not confirmed', 'not delivered': 'not delivered', 'typed in': 'typed in' });
+
 export class Inbox {
     /**
      * @param {object} options
@@ -253,6 +256,10 @@ export class Inbox {
 
     onWatch(event) {
         if (!this.started || !isRecord(event)) return;
+        if (event.type === 'ask' && event.change === 'outcome') {
+            this.onOutcome(event);
+            return;
+        }
         if (typeof event.sessionId === 'string') for (const proof of [...this.proofs]) if (proof.sessionId === event.sessionId) this.prove(proof);
         if (event.type === 'delivery') return;
         this.soon();
@@ -794,7 +801,7 @@ export class Inbox {
         if (option === undefined && (!card.freeText || text === '')) throw new Error(card.freeText ? 'Choose an answer or write one.' : 'Choose one of the answers.');
         if (text.length > ANSWER_MAX) throw new Error(`Keep the answer under ${ANSWER_MAX} characters.`);
         const label = option !== undefined ? card.options.find((o) => o.id === option).label : text;
-        const entry = this.logAnswer(card, { text: `Answered ${card.source}: ${clip(label, 160)}`, answer: label, state: 'sending' });
+        const entry = this.logAnswer(card, { text: `Answered ${card.source}: ${clip(label, 160)}`, answer: label, state: 'sending', askId: card.askId });
         const result = await this.watch.answerAsk(card.askId, option ?? text, 'you');
         if (!result?.ok) {
             const reason = plainError(String(result?.error ?? 'it did not take the answer'));
@@ -802,8 +809,28 @@ export class Inbox {
             throw new Error(`Not sent: ${reason}`);
         }
         this.answered(card);
-        this.journal.set(entry.id, { state: 'answered', why: `${card.source} carries it out and logs what it did on its own page.` });
-        return { state: 'answered' };
+        // What the plugin that asked does with it, in its words. One that proves it only later (an answer
+        // typed into a coding agent's terminal) says what became of it then (onOutcome).
+        const told = typeof result.text === 'string' && result.text.trim() ? clip(result.text.trim(), 300) : undefined;
+        this.journal.set(entry.id, { state: 'answered', why: told ?? `${card.source} carries it out and logs what it did on its own page.` });
+        return { state: 'answered', ...(told ? { text: told } : {}) };
+    }
+
+    /**
+     * What became of an answer, said by the plugin that asked once it knows
+     * (Session Watch's `askOutcome`): its log entry turns delivered, not
+     * confirmed or not delivered, with the reason.
+     */
+    onOutcome(event) {
+        const outcome = isRecord(event.outcome) ? event.outcome : undefined;
+        const state = OUTCOME_STATES[outcome?.state];
+        if (typeof event.id !== 'string' || !state) return;
+        const entry = this.journal.list({ limit: 400 }).find((e) => e.kind === 'answer' && e.askId === event.id);
+        if (!entry || entry.state === state) return;
+        const words = typeof outcome.text === 'string' && outcome.text ? clip(outcome.text, 300) : undefined;
+        const good = state === 'delivered' || state === 'typed in';
+        this.journal.set(entry.id, { state, ...(words ? (good ? { why: words } : { reason: words }) : {}) });
+        this.changed();
     }
 
     /**

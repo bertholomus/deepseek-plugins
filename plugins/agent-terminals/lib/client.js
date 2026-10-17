@@ -1382,23 +1382,53 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
 
         const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-        /** The header's line: how many agents run and how many wait on you. */
+        /** The header's line: how many agents run, how many of those wait on you, and how many are stopped. */
         function countText(agents) {
             if (!agents.length) return '';
             const waiting = agents.filter((a) => a.status === 'waiting on you').length;
             const running = agents.filter((a) => a.status !== 'stopped').length;
             const stopped = agents.length - running;
-            return [running ? `${running} running` : '', waiting ? `${waiting} waiting on you` : '', stopped ? `${stopped} stopped` : ''].filter(Boolean).join(' · ');
+            const of = waiting === 0 ? ''
+                : waiting === running ? (running === 1 ? ', waiting on you' : running === 2 ? ', both waiting on you' : `, all ${running} waiting on you`)
+                    : `, ${waiting} of them waiting on you`;
+            return [running ? `${running} running${of}` : '', stopped ? `${stopped} stopped` : ''].filter(Boolean).join(' · ');
         }
 
         /** The program as typed, with its arguments. */
         const commandText = (agent) => [agent.program, ...(agent.args ?? [])].join(' ');
+        /** The program by its name (not its whole path), with its arguments: the card's short line. */
+        const shortCommand = (agent) => [agent.programName || String(agent.program ?? '').split('/').pop() || agent.program, ...(agent.args ?? [])].join(' ');
 
         /** The last part of a folder, for a short line. */
         const folderName = (folder) => String(folder ?? '').replace(/\/+$/, '').split('/').pop() || String(folder ?? '');
 
         /** How a stopped agent comes back, in words. */
         const againText = (agent) => (agent.canResume ? 'Start again resumes its conversation.' : 'Start again runs it anew: this program cannot resume a conversation.');
+
+        /**
+         * The line under the list, kept true: a message you sent says where
+         * it is now (typed in, delivered, not proven), and the line goes two
+         * minutes after the last thing you did. `warn` when the news is bad.
+         */
+        function saidLine(said, data, now) {
+            if (!said?.text) return { text: '' };
+            if (Number.isFinite(said.at) && (now ?? Date.now()) - said.at > 120000) return { text: '' };
+            if (!said.delivery) return { text: said.text };
+            const agent = (data?.agents ?? []).find((a) => a.key === said.key);
+            const item = agent?.deliveries?.find((d) => d.id === said.delivery);
+            if (!agent || !item) return { text: said.text };
+            const name = `“${agent.name}”`;
+            switch (item.state) {
+                case 'typing': return { text: `Typing your message into ${name}'s terminal.` };
+                case 'typed': return { text: agent.keepsTranscript === false ? `Your message was typed into ${name}'s terminal.` : `Typed into ${name}'s terminal; waiting for its transcript to show it.` };
+                case 'delivered': return { text: `${name} has your message: its transcript shows it.` };
+                case 'not proven': return { text: `Typed into ${name}'s terminal, but its transcript has not shown it: look at its terminal.`, warn: true };
+                case 'failed': return { text: `Your message was not typed in: ${String(item.why ?? 'see its card').replace(/^Not typed in: /, '').replace(/\.$/, '')}.`, warn: true };
+                case 'cancelled': return { text: 'Taken back before it was typed in.' };
+                case 'waiting': return { text: item.why ? `Queued for ${name}: ${String(item.why).replace(/\.$/, '')}.` : said.text };
+                default: return { text: said.text };
+            }
+        }
 
         /** What an action did, in a line (shown where the person is looking, and read out). */
         function saidText(method, agent, value) {
@@ -1553,6 +1583,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const [open, setOpen] = React.useState(false);
             const [screen, setScreen] = React.useState(undefined);
             const [reading, setReading] = React.useState(false);
+            const pre = React.useRef(null);
+            // Its prompt and its latest lines are at the bottom: shown first, as in its terminal.
+            React.useEffect(() => {
+                const box = pre.current;
+                if (box) box.scrollTop = box.scrollHeight;
+            }, [screen]);
             const read = React.useCallback(async () => {
                 setReading(true);
                 const { problem, value } = await run('screen', { key: agent.key });
@@ -1567,7 +1603,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         : screen.problem ? h('p', { className: `${P}-alert`, role: 'alert' }, `Couldn't read its screen: ${screen.problem}`)
                             : screen.lines === null || screen.lines.length === 0
                                 ? h('p', { className: `${P}-why` }, agent.status === 'stopped' ? 'It is not running, so there is no screen to read.' : 'Its screen cannot be read now. Open its terminal to see it.')
-                                : h('pre', { className: `${P}-screen`, 'aria-label': `${agent.name}'s screen`, tabIndex: 0 }, screen.lines.join('\n')),
+                                : h('pre', { ref: pre, className: `${P}-screen`, 'aria-label': `${agent.name}'s screen`, tabIndex: 0 }, screen.lines.join('\n')),
                 open ? h('div', { className: `${P}-actions`, style: { marginTop: '6px' } },
                     h(ui.Button, { variant: 'ghost', size: 'sm', disabled: reading, onClick: () => void read() }, 'Read again')) : null);
         }
@@ -1592,8 +1628,19 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const alertRef = React.useRef(null);
             const headRef = React.useRef(null);
             const [all, setAll] = React.useState(false);
+            const [forgetting, setForgetting] = React.useState(false);
+            const keepRef = React.useRef(null);
+            const forgetRef = React.useRef(null);
+            const asked = React.useRef(false);
             const busy = busyKey === agent.key;
             const stopped = agent.status === 'stopped';
+            // Agent Terminals waits for a setting: it does not follow its agents, so nothing here acts on them.
+            const followed = agent.followed !== false;
+            React.useEffect(() => {
+                if (forgetting) keepRef.current?.focus?.();
+                else if (asked.current) forgetRef.current?.focus?.();
+                asked.current = forgetting;
+            }, [forgetting]);
             // Its terminal asks (a tool call waits for approval): the question's block holds the way there.
             const asksInTerminal = agent.status === 'waiting on you' && !agent.ask && Boolean(agent.call);
             React.useEffect(() => { if (failure) alertRef.current?.focus?.(); }, [failure]);
@@ -1619,18 +1666,24 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             h(kit.StateTag, { word: statusWord(agent) }),
                             h('h3', { className: `${P}-h3`, ref: headRef, tabIndex: -1 }, h(SessionLink, { title: agent.name, sessionId: agent.sessionId, onOpen }))),
                         h('div', { className: `${P}-meta` },
-                            h('span', { className: `${P}-code` }, commandText(agent)),
+                            h('span', { className: `${P}-code`, title: commandText(agent) }, shortCommand(agent)),
                             meta[0] ? ` · ${meta[0]}` : '',
                             meta[1] ? [' · started ', meta[1]] : null)),
                     h('div', { className: `${P}-actions` },
-                        stopped ? [
-                            h(ui.Button, { key: 'again', variant: 'primary', size: 'sm', disabled: busy, onClick: () => void doing('startAgain', { fresh: false }) }, 'Start again'),
-                            agent.canResume ? h(ui.Button, { key: 'anew', variant: 'outline', size: 'sm', disabled: busy, onClick: () => void doing('startAgain', { fresh: true }) }, 'Start anew') : null,
-                            h(ui.Button, { key: 'forget', variant: 'ghost', size: 'sm', disabled: busy, onClick: () => void doing('forget', {}) }, 'Forget'),
-                        ] : [
-                            asksInTerminal ? null : h(ui.Button, { key: 'open', variant: 'primary', size: 'sm', onClick: () => openTerminal(agent) }, 'Open its terminal'),
-                            h(ui.Button, { key: 'stop', variant: 'outline', size: 'sm', disabled: busy || agent.launching, onClick: () => void doing('stop', {}) }, 'Stop'),
-                        ])),
+                        !followed ? (stopped || asksInTerminal ? null : h(ui.Button, { key: 'open', variant: 'outline', size: 'sm', onClick: () => openTerminal(agent) }, 'Open its terminal'))
+                            : stopped && forgetting ? [
+                                h('span', { key: 'q', className: `${P}-hint`, 'data-agent-terminals-forget': '' }, `Forget “${agent.name}”? Its session and its conversation files stay.`),
+                                h(ui.Button, { key: 'yes', variant: 'primary', size: 'sm', disabled: busy, onClick: () => void doing('forget', {}) }, 'Forget it'),
+                                h(ui.Button, { key: 'no', variant: 'ghost', size: 'sm', disabled: busy, onClick: () => setForgetting(false), ref: keepRef }, 'Keep it'),
+                            ]
+                                : stopped ? [
+                                    h(ui.Button, { key: 'again', variant: 'primary', size: 'sm', disabled: busy, onClick: () => void doing('startAgain', { fresh: false }) }, 'Start again'),
+                                    agent.canResume ? h(ui.Button, { key: 'anew', variant: 'outline', size: 'sm', disabled: busy, onClick: () => void doing('startAgain', { fresh: true }) }, 'Start anew') : null,
+                                    h(ui.Button, { key: 'forget', variant: 'ghost', size: 'sm', disabled: busy, onClick: () => setForgetting(true), ref: forgetRef }, 'Forget'),
+                                ] : [
+                                    asksInTerminal ? null : h(ui.Button, { key: 'open', variant: 'primary', size: 'sm', onClick: () => openTerminal(agent) }, 'Open its terminal'),
+                                    h(ui.Button, { key: 'stop', variant: 'outline', size: 'sm', disabled: busy || agent.launching, onClick: () => void doing('stop', {}) }, 'Stop'),
+                                ])),
                 // An idle agent's detail is its last reply's first line, which the reply below shows whole.
                 agent.detail && !(agent.status === 'waiting on you' && (agent.ask || agent.call)) && !(agent.status === 'idle' && agent.lastReply?.text) ? h('p', { className: `${P}-detail`, 'data-agent-terminals-detail': '' }, agent.detail) : null,
                 stopped && agent.ended?.text && agent.ended.text !== agent.detail ? h('p', { className: `${P}-detail` }, agent.ended.text) : null,
@@ -1640,7 +1693,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     h('div', { className: `${P}-label` }, `Messages (${messages.length})`),
                     h('ul', { className: `${P}-msgs` }, ...shown.map((item) => h(MessageRow, { key: item.id, item, busy, onCancel: (m) => doing('cancel', { id: m.id }) }))),
                     messages.length > shown.length ? h('div', { style: { marginTop: '6px' } }, h(ui.Button, { variant: 'ghost', size: 'sm', onClick: () => setAll(true) }, `Show all ${messages.length}`)) : null) : null,
-                h(SendBox, { agent, busy, send }),
+                followed ? h(SendBox, { agent, busy, send }) : null,
                 failure ? h('p', { className: `${P}-alert`, role: 'alert', tabIndex: -1, ref: alertRef, 'data-agent-terminals-error': '' }, /^Not /.test(failure) ? failure : `Not done: ${failure}`) : null,
                 h(ScreenPeek, { agent }));
         }
@@ -1648,6 +1701,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         function AgentsCard({ data, act, busyKey, said, onOpen, openTerminal, onStart }) {
             const spot = useStore(spotlight);
             const line = React.useRef(null);
+            const { text: shown, warn } = saidLine(said, data, Date.now());
             React.useEffect(() => {
                 if (!said?.text || typeof document === 'undefined') return;
                 const at = document.activeElement;
@@ -1656,7 +1710,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 line.current?.focus?.({ preventScroll: true });
             }, [said?.n]);
             return h(kit.Card, { title: TEXT.agents, main: true, sub: data.agents.length ? TEXT.closeEnds : undefined, attrs: { 'data-agent-terminals-agents': String(data.agents.length) } },
-                h('p', { ref: line, tabIndex: -1, className: said?.text ? `${P}-note ${P}-ok ${P}-said` : `${P}-sr`, role: 'status', 'aria-live': 'polite', 'data-agent-terminals-said': '' }, said?.text ?? ''),
+                h('p', { ref: line, tabIndex: -1, className: shown ? `${P}-note ${warn ? `${P}-warn` : `${P}-ok`} ${P}-said` : `${P}-sr`, role: 'status', 'aria-live': 'polite', 'data-agent-terminals-said': '' }, shown),
                 data.agents.length === 0
                     ? h(kit.Empty, { title: TEXT.none, text: TEXT.noneText, action: h(ui.Button, { variant: 'primary', size: 'sm', onClick: onStart }, TEXT.start) })
                     : h('ul', { className: `${P}-list` }, ...data.agents.map((agent) => h(AgentCard, { key: agent.key, agent, act, busyKey, onOpen, openTerminal, spot }))));
@@ -1828,14 +1882,16 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 setBusyKey(undefined);
                 if (!problem) {
                     const text = method === 'startAgain' && value?.problem ? '' : saidText(method, agent, value);
-                    if (text) setSaid((was) => ({ text, n: was.n + 1 }));
+                    // A message you sent: the line follows it (typed in, delivered, not proven).
+                    const follow = method === 'send' && value?.delivery?.id ? { delivery: value.delivery.id, key: agent?.key } : {};
+                    if (text) setSaid((was) => ({ text, n: was.n + 1, at: Date.now(), ...follow }));
                     if (method === 'startAgain' && value?.problem) return `It could not start: ${value.problem}`;
                 }
                 void live.refresh();
                 return problem;
             }, [live.refresh]);
             const onStarted = React.useCallback((agent, problem) => {
-                if (agent && !problem) setSaid((was) => ({ text: `Started “${agent.name}”. Open its terminal to watch it work.`, n: was.n + 1 }));
+                if (agent && !problem) setSaid((was) => ({ text: `Started “${agent.name}”. Open its terminal to watch it work.`, n: was.n + 1, at: Date.now() }));
                 void live.refresh();
             }, [live.refresh]);
             const data = live.data;
@@ -1895,7 +1951,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return h('div', { className: `${P}-hover`, 'data-agent-terminals-hover': agent.status },
                 h('div', { className: `${P}-hover-head` },
                     ui.StateDot ? h(ui.StateDot, { state: dot }) : null,
-                    h('span', null, `Coding agent ${statusWord(agent)}`)),
+                    h('span', null, `Coding agent in its terminal: ${statusWord(agent)}`)),
                 agent.detail ? h('div', { className: `${P}-hover-line` }, String(agent.detail).length > 160 ? `${String(agent.detail).slice(0, 159)}…` : agent.detail) : null);
         }
 
@@ -1997,7 +2053,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         module.exports.inject = inject;
         module.exports.apply = apply;
         // For the plugin's own tests.
-        module.exports.internals = { kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, STATUS_WORDS, DELIVERY_WORDS, statusWord, deliveryWord, countText, saidText, earlierTerminal, boundTerminal, followTabs, followMarks, marks, preset, spotlight, reveal, AgentsPage, AgentsIcon, AgentCard, AgentsCard, StartCard, HeaderCard, HistoryCard, AgentMark, AgentHover, AgentMenuItem };
+        module.exports.internals = { kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, STATUS_WORDS, DELIVERY_WORDS, statusWord, deliveryWord, countText, saidText, saidLine, shortCommand, earlierTerminal, boundTerminal, followTabs, followMarks, marks, preset, spotlight, reveal, AgentsPage, AgentsIcon, AgentCard, AgentsCard, StartCard, HeaderCard, HistoryCard, AgentMark, AgentHover, AgentMenuItem };
         return module.exports;
     },
 });

@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import {
     STYLES, argvOf, dataFolder, eventsMeta, findNewTranscript, findTranscriptById, folderKey, launchLine, pickShell, programName, shellWord, transcriptPath,
 } from '../plugins/agent-terminals/lib/launch.js';
-import { Tail, callSummary, emptyFold, entriesOf, foldEntry, parseLines, provenIn, statusOf } from '../plugins/agent-terminals/lib/transcripts.js';
+import { Tail, callSummary, closeOver, emptyFold, entriesOf, foldEntry, parseLines, provenIn, statusOf } from '../plugins/agent-terminals/lib/transcripts.js';
 import { PASTE_END, PASTE_START, Typist, messageKeys, pasteSwitch } from '../plugins/agent-terminals/lib/typist.js';
 import { AgentTerminals, checkLaunch, exitWords, parseData, splitArgs } from '../plugins/agent-terminals/lib/agents.js';
 import { DEFAULTS, LIVE_SETTINGS, SETTING_TITLES, changedWords, checkConfig, savedEntry } from '../plugins/agent-terminals/lib/config.js';
@@ -178,6 +178,40 @@ test('transcripts: the fold says what the agent does now', () => {
     assert.equal(foldEntry(fold, { kind: 'unknown' }), fold);
 });
 
+test('transcripts: what a program left open when it ended is closed, and a job it was on is said cut off', () => {
+    const now = Date.parse(at(10));
+    let fold = emptyFold();
+    fold = foldEntry(fold, { kind: 'user', at: now - 9000, text: 'Refactor the parser' });
+    fold = foldEntry(fold, { kind: 'reply', at: now - 8000, text: 'Done.', final: true });
+    assert.equal(closeOver(fold), fold, 'nothing open: the same fold');
+    // Mid-job: a message with no answer, and a call waiting.
+    fold = foldEntry(fold, { kind: 'user', at: now - 5000, text: 'Now run the migration' });
+    fold = foldEntry(fold, { kind: 'call', at: now - 4000, callId: 'c1', tool: 'Bash', summary: 'npm run migrate' });
+    fold = foldEntry(fold, { kind: 'approval', at: now - 3900, summary: 'npm run migrate', callId: 'c1' });
+    fold = foldEntry(fold, { kind: 'meta', at: now - 3800, id: 'conv-1' });
+    assert.equal(statusOf(fold, { now }).status, 'waiting on you');
+    const closed = closeOver(fold);
+    assert.deepEqual([Object.keys(closed.calls).length, closed.approval, closed.ended], [0, undefined, true]);
+    assert.deepEqual(closed.cut, { at: now - 3900, text: 'Now run the migration' });
+    const cut = statusOf(closed, { now });
+    assert.equal(cut.status, 'idle', 'not working, not waiting on you');
+    assert.match(cut.detail, /^Its job “Now run the migration” was cut off when its program ended \(a DSH restart, or a stop\)\. Send it a message to carry on\.$/);
+    // Entries from the program running now stay open; older ones are closed.
+    const mixed = foldEntry(closed, { kind: 'user', at: now + 1000, text: 'Carry on' });
+    assert.equal(mixed.cut, undefined, 'new work: the cut job is history');
+    const busy = foldEntry(mixed, { kind: 'call', at: now + 2000, callId: 'c2', tool: 'Bash', summary: 'ls' });
+    assert.equal(closeOver(busy, now), busy, 'nothing from before the start is open');
+    assert.equal(statusOf(closeOver(busy, now), { now: now + 2500 }).status, 'working');
+    // A file that replays the old conversation with its old times: closed against the start.
+    const replay = closeOver(fold, now);
+    assert.equal(replay.cut.text, 'Now run the migration');
+    // A job that ended before the program did is not cut.
+    let finished = foldEntry(emptyFold(), { kind: 'user', at: now - 2000, text: 'Hi' });
+    finished = foldEntry(finished, { kind: 'end', at: now - 1000, text: 'Hello.' });
+    assert.equal(closeOver(finished).cut, undefined);
+    assert.equal(closeOver(undefined), undefined);
+});
+
 test('transcripts: proof is the agent\'s own transcript showing the words, after they were typed', () => {
     let fold = emptyFold();
     fold = foldEntry(fold, { kind: 'user', at: 1000, text: 'Please   run\nthe tests' });
@@ -330,8 +364,14 @@ test('detect: coding agents are found by the conversations they keep, not by nam
     assert.ok(keepsProjects(join(home, '.alpha')));
     assert.equal(keepsProjects(join(home, '.gamma')), undefined, 'an empty projects folder is not an agent');
     assert.ok(keepsSessions(join(home, '.beta')));
+    // A second folder of a program (a backup, another profile) is not a program; one named like an installed program is.
+    for (const name of ['.alpha-backup', '.delta-cli']) {
+        mkdirSync(join(home, name, 'projects', '-w-app'), { recursive: true });
+        writeFileSync(join(home, name, 'projects', '-w-app', 'c1.jsonl'), '{}\n');
+    }
+    writeFileSync(join(home, '.local', 'bin', 'delta-cli'), '#!/bin/sh\n', { mode: 0o755 });
     const found = detectAgents(home, { path: '' });
-    assert.deepEqual(found.map((f) => [f.program, f.style]).sort(), [['alpha', 'flags'], ['beta', 'subcommand']]);
+    assert.deepEqual(found.map((f) => [f.program, f.style]).sort(), [['alpha', 'flags'], ['beta', 'subcommand'], ['delta-cli', 'flags']]);
 });
 
 test('page: its state reads in one go, and says what is wrong', async () => {
@@ -364,6 +404,8 @@ test('saved state: a broken or older file never stops it', () => {
     assert.equal(data.agents.k1.terminalId, 'agent-k1-1');
     assert.deepEqual(data.agents.k1.deliveries.map((d) => [d.id, d.state]), [['m', 'queued']], 'a message cut off while typed is typed again');
     assert.match(exitWords({ program: 'nope' }, 127), /could not find nope/);
+    assert.match(exitWords({ program: '/opt/bin/nope' }, 127), /“which nope” in a terminal shows it/);
+    assert.doesNotMatch(exitWords({ program: 'nope' }, 127), /`/, 'no code marks in words people read');
     assert.match(exitWords({ program: 'x' }, 0, 'Start again runs it anew.'), /runs it anew/);
 });
 
@@ -581,11 +623,24 @@ class FakeController {
 
 function fakeWatch() {
     const sessions = new Map();
+    const listeners = new Set();
     return {
         sessions,
         asks: new Map(),
         externals: new Map(),
         delivered: [],
+        outcomes: [],
+        on(listener) {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+        },
+        emit(event) {
+            for (const listener of [...listeners]) listener(event);
+        },
+        askOutcome(id, outcome) {
+            this.outcomes.push([id, outcome]);
+            return true;
+        },
         add(sessionId, cwd) {
             sessions.set(sessionId, { id: sessionId, session: { header: { cwd } }, followup() {}, status: 'idle' });
         },
@@ -611,7 +666,7 @@ function fakeWatch() {
     };
 }
 
-function engine({ dir = tmp('engine'), watch = fakeWatch(), controller = new FakeController(), config = {}, store } = {}) {
+function engine({ dir = tmp('engine'), watch = fakeWatch(), controller = new FakeController(), config = {}, store, working } = {}) {
     let n = 0;
     const notices = [];
     const settings = { ...DEFAULTS, proofSeconds: 1, askAfterSeconds: 1, ...config };
@@ -630,7 +685,7 @@ function engine({ dir = tmp('engine'), watch = fakeWatch(), controller = new Fak
     const typist = new Typist({ controller: () => controller, method: () => settings.typing, wait });
     const agents = new AgentTerminals({
         watch, controller: () => controller, sessions, typist, config: settings, store: theStore, journal, home: dir,
-        notify: (item) => notices.push(item), tickMs: 100, wait,
+        notify: (item) => notices.push(item), tickMs: 100, wait, startCheckMs: 500, ...(working ? { working } : {}),
     });
     return { agents, watch, controller, settings, store: theStore, journal, notices, dir };
 }
@@ -649,6 +704,15 @@ test('engine: start an agent, type its first message in, and prove it from its t
         const record = agents.records[key];
         assert.equal(watch.delivered.length, 1, 'its session got a first turn, so DSH lists it');
         assert.match(watch.delivered[0].text, /coding agent runs in this session's terminal/);
+        // Logged as sending, and done only when that turn ends.
+        const turn = () => journal.list().find((e) => e.kind === 'session');
+        assert.deepEqual([turn().text, turn().state], ['Giving its session a first turn', 'sending']);
+        watch.emit({ type: 'turn-end', sessionId: 'another', end: { kind: 'completed' } });
+        assert.equal(turn().state, 'sending', 'another session\'s turn is not its');
+        watch.emit({ type: 'turn-end', sessionId: record.sessionId, end: { kind: 'completed' } });
+        await until(() => turn().state === 'done', 'the first turn done');
+        assert.equal(turn().text, 'Gave its session a first turn');
+        assert.deepEqual([journal.list().find((e) => e.kind === 'start').text, journal.list().find((e) => e.kind === 'start').state], ['Started Stand-in', 'done']);
         const terminal = controller.terminal(record.sessionId, record.terminalId);
         assert.ok(terminal, 'a terminal in its session');
         assert.equal(terminal.info.title, 'Stand-in');
@@ -686,8 +750,13 @@ test('engine: a question in its reply goes to Decisions, and the answer is typed
         assert.equal(notices.length, 1, 'one notification');
         assert.match(notices[0].title, /Asker waits on you/);
         const result = ask.onAnswer('recommended', 'you');
-        assert.match(result.text, /Typed into Asker's terminal/);
+        assert.match(result.text, /goes into “Asker”'s terminal when the agent is ready, and counts as delivered once its transcript shows it/);
         await until(() => agents.view(record).deliveries[0]?.state === 'delivered', 'the answer proven');
+        // Decisions hears what became of it: delivered only now, with the proof.
+        await until(() => watch.outcomes.length === 1, 'the outcome told to Decisions');
+        assert.equal(watch.outcomes[0][0], ask.id);
+        assert.deepEqual([watch.outcomes[0][1].state, watch.outcomes[0][1].sessionId], ['delivered', record.sessionId]);
+        assert.match(watch.outcomes[0][1].text, /Its transcript shows it/);
         assert.equal(agents.view(record).deliveries[0].text, 'Go with your recommendation: Yes, the fast path');
         await until(() => watch.asks.size === 0, 'the question dropped once answered');
         await until(() => agents.view(record).status === 'idle', 'idle again');
@@ -729,7 +798,7 @@ test('engine: a tool call waiting in its terminal holds the next message, and De
         assert.match(ask.answerHint, /Answer in its terminal/);
         agents.send(agent.key, '#work=20 after the approval');
         await until(() => agents.view(record).deliveries[0].state === 'waiting', 'the next message to wait');
-        assert.match(agents.view(record).deliveries[0].why, /waits on you in its terminal/);
+        assert.match(agents.view(record).deliveries[0].why, /^Held while a tool call waits in its terminal \(to run “touch approved.txt”\); this is typed in after it ends/);
         // The person answers in the terminal.
         await controller.terminal(record.sessionId, record.terminalId).handle.write('1');
         await until(() => existsSync(join(dir, 'approved.txt')), 'the approved command to run');
@@ -824,8 +893,138 @@ test('engine: a reload of the plugin leaves the agent running, and a message typ
     }
 });
 
+test('engine: a DSH restart in the middle of a job or an approval leaves the agent idle, and its held message goes in once', async () => {
+    for (const job of ['#work=60000 a long job', '#work=20 #approve a guarded job']) {
+        const dir = tmp('cut');
+        const controller = new FakeController();
+        const watch = fakeWatch();
+        const first = engine({ dir, watch, controller });
+        first.agents.start();
+        let key;
+        try {
+            const { agent } = await first.agents.launch({ program: FAKE, args: fakeArgs(join(dir, 'data')), style: 'flags', data: join(dir, 'data'), folder: dir, name: 'Busy', task: job });
+            key = agent.key;
+            const record = first.agents.records[key];
+            await until(() => first.agents.view(record).deliveries[0]?.state === 'delivered', 'its job under way');
+            if (job.includes('#approve')) await until(() => first.agents.view(record).status === 'waiting on you', 'its approval prompt', 20000);
+            else await until(() => first.agents.view(record).status === 'working', 'it to work');
+            first.agents.send(key, '#work=20 after the restart');
+            await until(() => first.agents.view(record).deliveries[0]?.state === 'waiting', 'the next message held');
+        } finally {
+            first.agents.stop();
+        }
+        // DSH quits mid-job: its terminals end with it.
+        controller.restart();
+        first.store.data.agents[key].hostPid = 1;
+        first.store.flush();
+        const second = engine({ dir, watch, controller, store: new JsonStore(join(dir, 'state.json'), { parse: parseData, delayMs: 5 }) });
+        second.agents.start();
+        try {
+            const again = second.agents.records[key];
+            const cut = await until(() => second.journal.list().find((e) => e.kind === 'cut'), 'the cut-off job logged');
+            assert.match(cut.why, job.includes('#approve') ? /a guarded job/ : /a long job/, job);
+            await until(() => second.agents.view(again).deliveries[0]?.state === 'delivered', 'the held message typed in and proven', 20000);
+            assert.equal(second.agents.view(again).deliveries[0].enters, 1, 'typed in once');
+            await until(() => second.agents.view(again).status === 'idle', 'idle after its answer');
+            assert.equal(watch.asks.size, 0, `no question left from before the restart (${job})`);
+            assert.equal(existsSync(join(dir, 'approved.txt')), false, 'nothing answered the old prompt');
+            assert.equal(second.journal.list().filter((e) => e.kind === 'cut').length, 1, 'logged once');
+        } finally {
+            second.agents.stop();
+            controller.restart();
+        }
+    }
+});
+
+test('engine: with typeWhileWorking, no key goes into an approval prompt, and the proof waits for it', async () => {
+    const { agents, controller, dir } = engine({ config: { typeWhileWorking: true } });
+    agents.start();
+    try {
+        const { agent } = await agents.launch({ program: FAKE, args: fakeArgs(join(dir, 'data')), style: 'flags', data: join(dir, 'data'), folder: dir, name: 'Guarded' });
+        const record = agents.records[agent.key];
+        await until(() => agents.view(record).ready, 'it to be ready');
+        // Typed while it works; its approval prompt opens before it reads the message.
+        agents.send(agent.key, '#work=1500 #approve guarded job');
+        await until(() => agents.view(record).status === 'working', 'it to work');
+        agents.send(agent.key, 'typed while it works');
+        await until(() => agents.view(record).deliveries[0]?.state === 'typed', 'typed in while it works');
+        await until(() => agents.view(record).status === 'waiting on you', 'its approval prompt', 20000);
+        await new Promise((resolve) => setTimeout(resolve, 3500));
+        assert.equal(existsSync(join(dir, 'approved.txt')), false, 'no Enter answered the prompt');
+        assert.equal(agents.view(record).deliveries[0].enters, 1, 'no Enter pressed again while the prompt is open');
+        assert.equal(agents.view(record).deliveries[0].state, 'typed');
+        // Sent while the prompt is open: it waits its turn behind the one not proven yet, untyped.
+        agents.send(agent.key, 'sent while it asks');
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        assert.equal(agents.view(record).deliveries[0].state, 'queued');
+        assert.equal(agents.view(record).deliveries[0].enters, undefined, 'not typed in');
+        // The person says no in its terminal; then both messages go in, each proven once.
+        await controller.terminal(record.sessionId, record.terminalId).handle.write('n');
+        await until(() => agents.view(record).deliveries.every((d) => d.state === 'delivered'), 'both messages proven', 20000);
+        assert.deepEqual(agents.view(record).deliveries.map((d) => d.enters), [1, 1, 1]);
+        assert.equal(existsSync(join(dir, 'approved.txt')), false);
+    } finally {
+        agents.stop();
+        controller.restart();
+    }
+});
+
+test('engine: a message marked not proven turns delivered when its transcript shows it later', async () => {
+    const { agents, controller, journal, dir } = engine({ config: { enterRetries: 0 } });
+    agents.start();
+    try {
+        const { agent } = await agents.launch({ program: FAKE, args: fakeArgs(join(dir, 'data'), ['--swallow-enter']), style: 'flags', data: join(dir, 'data'), folder: dir, name: 'Late' });
+        const record = agents.records[agent.key];
+        await until(() => agents.view(record).ready, 'it to be ready');
+        agents.send(agent.key, '#work=20 seen late');
+        await until(() => agents.view(record).deliveries[0]?.state === 'not proven', 'not proven after its only Enter', 15000);
+        assert.match(agents.view(record).deliveries[0].why, /It turns delivered if its transcript shows it later/);
+        const noProof = journal.list().find((e) => e.kind === 'proof' && /No proof/.test(e.text));
+        assert.equal(noProof.state, 'failed');
+        // The person presses Enter in its terminal.
+        await controller.terminal(record.sessionId, record.terminalId).handle.write('\r');
+        await until(() => agents.view(record).deliveries[0]?.state === 'delivered', 'delivered after all', 15000);
+        assert.match(agents.view(record).deliveries[0].why, /later than Agent Terminals looked for it/);
+        assert.ok(journal.list().some((e) => e.kind === 'proof' && /has the message after all/.test(e.text)));
+        assert.equal(journal.get(noProof.id).state, 'done', 'the "no proof" entry says it was seen later');
+        assert.match(journal.get(noProof.id).reason, /Seen later/);
+    } finally {
+        agents.stop();
+        controller.restart();
+    }
+});
+
+test('engine: while a setting is wrong, a running agent reads running (not followed), and is picked up where it is', async () => {
+    let ok = true;
+    const { agents, controller, dir } = engine({ working: () => ok });
+    agents.start();
+    try {
+        const { agent } = await agents.launch({ program: FAKE, args: fakeArgs(join(dir, 'data')), style: 'flags', data: join(dir, 'data'), folder: dir, name: 'Followed' });
+        const record = agents.records[agent.key];
+        await until(() => agents.view(record).ready, 'it to be ready');
+        const terminalId = record.terminalId;
+        // A setting goes wrong: Agent Terminals stops following, the program keeps running.
+        ok = false;
+        agents.stop();
+        const view = agents.view(record);
+        assert.deepEqual([view.status, view.followed], ['running', false]);
+        assert.match(view.detail, /^Running in its terminal, not followed: Agent Terminals waits for a setting to be fixed/);
+        assert.throws(() => agents.send(agent.key, 'hello'), /waiting for a setting to be fixed/);
+        // Fixed: the same terminal, not started again.
+        ok = true;
+        agents.start();
+        await until(() => agents.view(record).status === 'idle', 'picked up idle');
+        assert.equal(record.terminalId, terminalId);
+        assert.equal(record.launches, 1);
+        assert.equal(agents.view(record).followed, true);
+    } finally {
+        agents.stop();
+        controller.restart();
+    }
+});
+
 test('engine: an agent that exits, a program that is not there, and a program with no transcript', async () => {
-    const { agents, controller, dir } = engine();
+    const { agents, watch, controller, journal, dir } = engine();
     agents.start();
     try {
         const { agent } = await agents.launch({ program: FAKE, args: fakeArgs(join(dir, 'data')), style: 'flags', data: join(dir, 'data'), folder: dir, name: 'Leaver' });
@@ -836,10 +1035,17 @@ test('engine: an agent that exits, a program that is not there, and a program wi
         assert.match(agents.view(record).detail, /exited by itself \(code 0\)/);
         assert.equal(record.wanted, 'stopped');
 
-        const missing = await agents.launch({ program: join(dir, 'no-such-agent'), style: 'plain', folder: dir, name: 'Ghost' });
-        const ghost = agents.records[missing.agent.key];
-        await until(() => agents.view(ghost).status === 'stopped', 'the missing program to end');
-        assert.match(agents.view(ghost).detail, /could not find/);
+        const sessionsBefore = watch.sessions.size;
+        await assert.rejects(agents.launch({ program: join(dir, 'no-such-agent'), style: 'plain', folder: dir, name: 'Ghost' }), /^Error: There is no program at .*no-such-agent: check the path, and that the file is executable\.$/);
+        assert.equal(Object.values(agents.records).some((r) => r.name === 'Ghost'), false, 'no agent kept for a path that is not a program');
+        assert.equal(watch.sessions.size, sessionsBefore, 'and no session made for it');
+        const turnsBefore = watch.delivered.length;
+        const nameless = await agents.launch({ program: 'no-such-agent-x1', style: 'plain', folder: dir, name: 'Nameless' });
+        assert.match(nameless.problem, /code 127: the shell could not find no-such-agent-x1\. Use its full path \(“which no-such-agent-x1” in a terminal shows it\)/);
+        assert.equal(agents.view(agents.records[nameless.agent.key]).status, 'stopped');
+        assert.equal(watch.delivered.length, turnsBefore, 'no first turn for a program that never ran');
+        const started = journal.list().find((e) => e.kind === 'start' && /Nameless/.test(e.text));
+        assert.deepEqual([started.text, started.state], ['Could not start Nameless', 'failed'], 'never logged as started');
 
         const plain = await agents.launch({ program: FAKE, args: ['--style', 'plain'], style: 'plain', folder: dir, name: 'Quiet' });
         const quiet = agents.records[plain.agent.key];

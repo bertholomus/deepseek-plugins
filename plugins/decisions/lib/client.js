@@ -1231,7 +1231,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 switch (value?.state) {
                     case 'delivered': return `Your answer reached ${where}.`;
                     case 'in the queue': return `Your answer to ${where} waits in its queue. What happened says when the session reads it.`;
-                    case 'answered': return `Answered. ${card?.source || 'The plugin that asked'} carries it out.`;
+                    case 'answered': return value?.text ? `Answered. ${value.text}` : `Answered. ${card?.source || 'The plugin that asked'} carries it out.`;
                     default: return `Sent your answer to ${where}. What happened says when the session has it.`;
                 }
             }
@@ -1433,20 +1433,25 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         /**
          * What your last answer did, kept true: once the log shows the session
          * has it, the line says so; when it failed, the card itself says why;
-         * after two minutes it goes.
+         * after two minutes it goes. `warn` when an answer typed into a
+         * coding agent's terminal is not in its transcript.
          */
-        function saidNow(said, data, now) {
-            if (said?.where !== 'list' || !said.text) return '';
-            if (Number.isFinite(said.at) && (now ?? Date.now()) - said.at > 120000) return '';
-            if (!said.cardId) return said.text;
+        function saidLine(said, data, now) {
+            if (said?.where !== 'list' || !said.text) return { text: '' };
+            if (Number.isFinite(said.at) && (now ?? Date.now()) - said.at > 120000) return { text: '' };
+            if (!said.cardId) return { text: said.text };
             const entry = (data.history ?? []).find((e) => e.kind === 'answer' && e.cardId === said.cardId);
-            if (entry?.state === 'delivered' || entry?.state === 'answered') return said.title ? `Your answer reached “${said.title}”.` : 'Your answer reached the session.';
-            if (entry && ['not delivered', 'not confirmed', 'failed'].includes(entry.state)) return '';
-            return said.text;
+            const terminal = said.title ? `“${said.title}”'s terminal` : 'its terminal';
+            // A plugin's question is "answered" when the plugin took the answer; it reached its agent only once that is proven.
+            if (entry?.state === 'delivered' || (entry?.state === 'answered' && entry.cardKind !== 'ask')) return { text: said.title ? `Your answer reached “${said.title}”.` : 'Your answer reached the session.' };
+            if (entry?.state === 'typed in') return { text: `Your answer was typed into ${terminal}.` };
+            if (entry?.state === 'not confirmed' && entry.cardKind === 'ask') return { text: `Your answer was typed into ${terminal}, but its transcript has not shown it: look at its terminal.`, warn: true };
+            if (entry && ['not delivered', 'not confirmed', 'failed'].includes(entry.state)) return { text: '' };
+            return { text: said.text };
         }
 
         function WaitingCard({ data, onOpen, act, busyId, now, said }) {
-            const shown = saidNow(said, data, now);
+            const { text: shown, warn } = saidLine(said, data, now);
             const line = React.useRef(null);
             const acted = React.useRef(0);
             React.useEffect(() => { if (shown) acted.current = Date.now(); }, [said?.n]);
@@ -1460,7 +1465,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             });
             return h(kit.Card, { title: TEXT.waiting, main: true, attrs: { 'data-decisions-waiting': String(data.waiting.length) } },
                 // What your last answer did, said where you are looking (and to screen readers).
-                h('p', { ref: line, tabIndex: -1, className: shown ? `${P}-note ${P}-ok` : `${P}-sr`, role: 'status', 'aria-live': 'polite', 'data-decisions-said': '' }, shown),
+                h('p', { ref: line, tabIndex: -1, className: shown ? `${P}-note ${warn ? `${P}-warn` : `${P}-ok`}` : `${P}-sr`, role: 'status', 'aria-live': 'polite', 'data-decisions-said': '' }, shown),
                 data.waiting.length === 0
                     ? h(kit.Empty, { title: TEXT.nothing, text: TEXT.nothingText })
                     : h('ul', { className: `${P}-list` }, ...data.waiting.map((card) => h(DecisionCard, { key: card.id, card, onOpen, act, busyId, now }))));

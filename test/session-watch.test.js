@@ -430,6 +430,22 @@ test('watcher: questions for a person are raised, answered once, and dropped', a
     assert.throws(() => watch.raiseAsk({ question: 'No id' }), /needs an id and a question/);
 });
 
+test('watcher: what became of an answer is told once its asker knows', () => {
+    const { watch } = setup();
+    const events = [];
+    watch.on((event) => events.push(event));
+    assert.equal(watch.askOutcome('q1', { state: 'delivered', text: 'Its transcript shows it.', by: 'Agent Terminals', sessionId: 's' }), true);
+    const [told] = events;
+    assert.deepEqual({ ...told, outcome: { ...told.outcome, at: 0 } }, { type: 'ask', change: 'outcome', id: 'q1', sessionId: 's', outcome: { state: 'delivered', text: 'Its transcript shows it.', by: 'Agent Terminals', at: 0 } });
+    assert.ok(told.outcome.at > 0);
+    for (const state of ['not proven', 'not delivered', 'typed in']) assert.equal(watch.askOutcome('q1', { state }), true, state);
+    assert.equal(watch.askOutcome('q1', { state: 'sent' }), false, 'a word Decisions would not know');
+    assert.equal(watch.askOutcome(7, { state: 'delivered' }), false);
+    assert.equal(watch.askOutcome('q1', null), false);
+    assert.equal(events.length, 4);
+    assert.equal(watch.askOutcome('q1', { state: 'delivered', text: 'x'.repeat(900) }) && events.at(-1).outcome.text.length, 600, 'its words are kept short');
+});
+
 test('watcher: an outside agent\'s state shows with its session', async () => {
     const { dsh, watch } = setup();
     dsh.add('t', { title: 'Terminal' });

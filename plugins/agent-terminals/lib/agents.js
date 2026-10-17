@@ -25,11 +25,11 @@
  * @module dsh-plugin-agent-terminals/agents
  */
 import { randomUUID } from 'node:crypto';
-import { statSync } from 'node:fs';
+import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import { basename, isAbsolute } from 'node:path';
 import { STYLES, STYLE_IDS, argvOf, expandHome, findFlagsTranscript, findNewTranscript, findTranscriptById, launchLine, pickShell, programName, transcriptPath } from './launch.js';
-import { existsSync } from 'node:fs';
-import { Tail, emptyFold, foldEntry, oneLine, parseLines, provenIn, statusOf } from './transcripts.js';
+import { whereIs } from './detect.js';
+import { Tail, closeOver, emptyFold, foldEntry, oneLine, parseLines, provenIn, statusOf } from './transcripts.js';
 import { MAX_MESSAGE } from './typist.js';
 import { clip, errorText, isRecord, later } from './shared/safe.js';
 
@@ -39,6 +39,12 @@ const KEEP_DELIVERIES = 30;
 const KEEP_RECENT = 6;
 /** How long a typed message may wait for proof while the agent works. */
 const PROOF_WHILE_WORKING_MS = 30 * 60 * 1000;
+/** How long a message marked "not proven" is still looked for in its transcript. */
+const LATE_PROOF_MS = 24 * 60 * 60 * 1000;
+/** How long a new program must run before it counts as started (one that is not there ends at once). */
+const START_CHECK_MS = 2500;
+/** How long a new session's first turn may take before its log entry stops waiting for its end. */
+const FIRST_TURN_MS = 5 * 60 * 1000;
 /** A detail-only change (the tool it runs now) reaches the session row at most this often. */
 const DETAIL_EVERY_MS = 3000;
 /** Terminal size until a window's tab sets its own. */
@@ -51,8 +57,12 @@ const sleep = (ms) => new Promise((resolve) => {
 });
 const DELIVERY_STATES = new Set(['queued', 'waiting', 'typing', 'typed', 'delivered', 'not proven', 'failed', 'cancelled']);
 const OPEN = new Set(['queued', 'waiting']);
+/** What a Decisions answer's delivery state means to Decisions (`askOutcome`). */
+const OUTCOME = Object.freeze({ delivered: 'delivered', 'not proven': 'not proven', failed: 'not delivered', cancelled: 'not delivered', typed: 'typed in' });
 const strings = (value, max = 40) => (Array.isArray(value) ? value.filter((part) => typeof part === 'string').slice(0, max) : []);
 const text = (value) => (typeof value === 'string' ? value : undefined);
+/** A message cut to length with its line breaks kept (`clip` makes one line). */
+const clipLines = (value, max) => (String(value).length > max ? `${String(value).slice(0, max - 1)}…` : String(value));
 const number = (value) => (Number.isFinite(value) ? value : undefined);
 
 /** A saved document made safe: what a broken or older file lacks is dropped or filled in. */
@@ -170,7 +180,7 @@ export class AgentTerminals {
      * @param {() => boolean} [options.working] - false while a setting is wrong.
      * @param {() => void} [options.changed] - what the page shows moved.
      */
-    constructor({ watch, controller, sessions, typist, config, store, journal, logger, notify, home, working = () => true, changed, now = Date.now, wait = sleep, tickMs = 1000 }) {
+    constructor({ watch, controller, sessions, typist, config, store, journal, logger, notify, home, working = () => true, changed, now = Date.now, wait = sleep, tickMs = 1000, startCheckMs = START_CHECK_MS }) {
         this.watch = watch;
         this.controller = controller;
         this.sessions = sessions;
@@ -186,6 +196,7 @@ export class AgentTerminals {
         this.now = now;
         this.wait = wait;
         this.tickMs = tickMs;
+        this.startCheckMs = startCheckMs;
         /** What only this process knows, by agent key. */
         this.lives = new Map();
         this.timer = undefined;
@@ -362,6 +373,11 @@ export class AgentTerminals {
     async launch(input, { by = 'you' } = {}) {
         this.ensureWorking();
         const spec = checkLaunch(input, { home: this.home });
+        // A path that is not a program is said before a session is made for it.
+        if (spec.program.includes('/')) {
+            const path = expandHome(spec.program, this.home);
+            if (!findProgram(path, this.home).found) throw new Error(`There is no program at ${path}: check the path, and that the file is executable.`);
+        }
         let sessionId = spec.sessionId;
         let folder = spec.folder;
         if (sessionId) {
@@ -377,6 +393,7 @@ export class AgentTerminals {
         }
         const key = randomUUID().replace(/-/g, '').slice(0, 8);
         const style = STYLES[spec.style];
+        const look = findProgram(spec.program, this.home);
         const record = {
             key,
             sessionId,
@@ -396,24 +413,55 @@ export class AgentTerminals {
         this.records[key] = record;
         this.remember(spec);
         this.store.change();
-        this.log({ kind: 'start', agent: key, sessionId, text: `Started ${record.name}`, why: `${by === 'you' ? 'You' : by} started ${record.program} in ${folder || 'its session\'s folder'}${spec.sessionId ? '' : ', in a new session'}.`, state: 'done', by, program: record.program });
+        const why = `${by === 'you' ? 'You' : by} started ${record.program} in ${folder || 'its session\'s folder'}${spec.sessionId ? '' : ', in a new session'}.`;
+        const entry = this.log({ kind: 'start', agent: key, sessionId, text: `Starting ${record.name}`, why, state: 'starting', by, program: record.program });
         if (!spec.sessionId) {
             try {
                 await this.sessions.rename(sessionId, record.name);
             } catch (error) {
                 this.logger?.warn?.(`agent-terminals: could not name the new session: ${errorText(error)}`);
             }
-            if (this.config.listNewSessions) void this.firstTurn(record);
         }
         if (spec.task) this.queue(record, spec.task, by, 'as its first message');
         let problem;
         try {
             await this.run(record, { resume: false });
+            problem = await this.confirmStart(record);
         } catch (error) {
             problem = this.failed(record, error, 'at its start');
         }
+        if (entry) {
+            try {
+                this.journal.set(entry.id, problem
+                    ? { text: `Could not start ${record.name}`, state: 'failed', reason: problem }
+                    : { text: `Started ${record.name}`, state: 'done', ...(look.found ? {} : { why: `${why} DSH did not find ${record.program} where it looks for programs; the shell in its terminal did.` }) });
+            } catch {}
+        }
+        // The session gets its first turn (so DSH lists it) only once the program runs: none for one that is not there.
+        if (!problem && !spec.sessionId && this.config.listNewSessions) void this.firstTurn(record);
         this.changed();
         return { agent: this.view(record), ...(problem ? { problem } : {}) };
+    }
+
+    /**
+     * After the command that starts a program is typed: wait a moment and see
+     * that it still runs. A program that is not there, or that fails at once,
+     * ends within that moment.
+     * @returns {Promise<string | undefined>} why it did not start, in words.
+     */
+    async confirmStart(record) {
+        const live = this.liveOf(record);
+        for (let waited = 0; waited < this.startCheckMs; waited += 250) {
+            await this.wait(250);
+            if (live.exited || record.wanted !== 'running') break;
+            const info = this.terminalInfo(record);
+            if (!info || info.state !== 'running') {
+                this.check(record);
+                break;
+            }
+        }
+        if (!live.exited && record.wanted === 'running') return undefined;
+        return record.ended?.text ?? record.problem ?? 'It ended at once.';
     }
 
     /** Start an agent that stopped: resuming its conversation where it can, or a new one with `fresh`. */
@@ -442,7 +490,8 @@ export class AgentTerminals {
         let problem;
         try {
             await this.run(record, { resume });
-            this.log({ kind: 'start', agent: key, sessionId: record.sessionId, text: `Started ${record.name} again`, why: resume ? `${by === 'you' ? 'You' : by} started it again; it resumes its conversation.` : `${by === 'you' ? 'You' : by} started it again${fresh ? ' with a new conversation' : '; this program cannot resume, so it starts anew'}.`, state: 'done', by });
+            problem = await this.confirmStart(record);
+            if (!problem) this.log({ kind: 'start', agent: key, sessionId: record.sessionId, text: `Started ${record.name} again`, why: resume ? `${by === 'you' ? 'You' : by} started it again; it resumes its conversation.` : `${by === 'you' ? 'You' : by} started it again${fresh ? ' with a new conversation' : '; this program cannot resume, so it starts anew'}.`, state: 'done', by });
         } catch (error) {
             problem = this.failed(record, error, 'when started again');
         }
@@ -509,6 +558,8 @@ export class AgentTerminals {
                 this.hold(record, agent);
                 // The shell draws its prompt first (and reads its startup files); then the command that becomes the agent.
                 await this.typist.settle(record.sessionId, record.terminalId, { quietMs: 300, maxMs: 5000, fallbackMs: 800 });
+                // What its transcript holds now was written by a program that has ended: read it before the new one starts.
+                this.prime(record, live);
                 await this.typist.write(agent, record.terminalId, `${launchLine(argv)}\r`);
             } catch (error) {
                 // Only a shell runs in it: closed, so no empty terminal stays beside the session.
@@ -524,9 +575,6 @@ export class AgentTerminals {
             delete record.ended;
             record.wanted = 'running';
             live.launchAt = record.launchedAt;
-            live.fold = undefined;
-            live.tail = undefined;
-            live.tailPath = undefined;
             this.store.change();
             void this.whenReady(record, live.launchAt);
         })().finally(() => {
@@ -606,15 +654,40 @@ export class AgentTerminals {
         live.hold = undefined;
     }
 
-    /** The session's model says one line about the agent, so DSH lists the session (it lists none without a turn). */
+    /**
+     * The session's model says one line about the agent, so DSH lists the
+     * session (it lists none without a turn). Logged as sending, and done
+     * when that turn ends.
+     */
     async firstTurn(record) {
         const note = `A coding agent runs in this session's terminal: ${record.program} in ${record.folder || 'this session\'s folder'}, started by Agent Terminals. Reply with one short line to say you see it; there is nothing else to do.`;
+        const entry = this.log({ kind: 'session', agent: record.key, sessionId: record.sessionId, text: 'Giving its session a first turn', why: 'DSH lists a session in its sidebar once a turn ran in it. The session\'s model answers one line.', state: 'sending', by: 'Agent Terminals' });
+        const set = (patch) => {
+            if (!entry) return;
+            try { this.journal.set(entry.id, patch); } catch {}
+        };
+        let off;
+        let timer;
         try {
+            // Its end, from Session Watch; a turn that has not ended after a while is left to run.
+            const ended = typeof this.watch.on !== 'function' ? Promise.resolve(undefined) : new Promise((resolve) => {
+                off = this.watch.on((event) => {
+                    if (event?.type === 'turn-end' && event.sessionId === record.sessionId) resolve(event.end ?? {});
+                });
+                timer = setTimeout(() => resolve(undefined), FIRST_TURN_MS);
+                timer.unref?.();
+            });
             const delivery = await this.watch.deliver(record.sessionId, note, { mode: 'queue' });
             if (delivery?.state === 'failed') throw new Error(delivery.reason ?? 'the session did not take it');
-            this.log({ kind: 'session', agent: record.key, sessionId: record.sessionId, text: 'Gave its session a first turn', why: 'DSH lists a session in its sidebar once a turn ran in it. The session\'s model answers one line.', state: 'done', by: 'Agent Terminals' });
+            const end = await ended;
+            if (!end) set({ text: 'Gave its session a first turn', state: 'done', reason: off ? 'Its session took the message; its turn had not ended 5 minutes later.' : 'Its session took the message.' });
+            else if (end.kind === 'completed') set({ text: 'Gave its session a first turn', state: 'done' });
+            else set({ text: 'Its session\'s first turn did not finish', state: 'failed', reason: `The turn ended ${end.kind === 'error' ? `with an error${end.error ? `: ${end.error}` : ''}` : end.kind === 'aborted' ? 'stopped' : `as ${end.kind ?? 'unknown'}`}. The session is listed in the sidebar all the same.` });
         } catch (error) {
-            this.log({ kind: 'session', agent: record.key, sessionId: record.sessionId, text: 'Could not give its session a first turn', why: `${errorText(error)}. The session is listed once you open it and send something.`, state: 'failed', by: 'Agent Terminals' });
+            set({ text: 'Could not give its session a first turn', state: 'failed', reason: `${errorText(error)}. The session is listed once you open it and send something.` });
+        } finally {
+            clearTimeout(timer);
+            try { off?.(); } catch {}
         }
     }
 
@@ -697,6 +770,37 @@ export class AgentTerminals {
 
     // ── Reading the transcript ─────────────────────────────────────────
 
+    /**
+     * Read an agent's transcript as it is before its program starts again,
+     * and close what it left open: the program that had a tool call, an
+     * approval prompt or a job open has ended (DSH restarted, or it was
+     * stopped), so none of it is waiting any more. A job cut off this way is
+     * said on its card and logged once.
+     */
+    prime(record, live) {
+        live.primedAt = this.now();
+        live.fold = undefined;
+        live.tail = undefined;
+        live.tailPath = undefined;
+        const format = STYLES[record.style]?.format ?? 'none';
+        if (format === 'none') return;
+        const path = transcriptPath(record, this.home);
+        if (!path || !existsSync(path)) return;
+        live.tail = new Tail(path);
+        live.tailPath = path;
+        let fold = emptyFold();
+        try {
+            for (const entry of parseLines(format, live.tail.read().lines, live.primedAt)) fold = foldEntry(fold, entry);
+        } catch (error) {
+            this.logger?.warn?.(`agent-terminals: could not read the transcript of ${record.name}: ${errorText(error)}`);
+        }
+        const closed = closeOver(fold, Infinity);
+        live.fold = closed;
+        if (closed.cut && !fold.cut) {
+            this.log({ kind: 'cut', agent: record.key, sessionId: record.sessionId, text: `${record.name}'s job was cut off`, why: `Its program ended while it worked on “${clip(closed.cut.text, 120)}”. It starts again idle in the same conversation: send it a message to carry on.`, state: 'stopped', by: 'Agent Terminals' });
+        }
+    }
+
     /** Read what the agent's transcript gained since the last look. */
     read(record) {
         const live = this.liveOf(record);
@@ -725,9 +829,10 @@ export class AgentTerminals {
         if (lines.length === 0) return;
         let fold = live.fold ?? emptyFold();
         for (const entry of parseLines(format, lines, this.now())) fold = foldEntry(fold, entry);
-        live.fold = fold;
-        // Its first words in the transcript: it is ready, whatever the screen says.
-        if (!live.ready && fold.turns > 0) live.ready = true;
+        // A program that writes its resumed conversation into a new file repeats the old entries, with their times.
+        live.fold = live.primedAt ? closeOver(fold, live.primedAt) : fold;
+        // Its first words in the transcript since it started: it is ready, whatever the screen says.
+        if (!live.ready && fold.turns > 0 && (!live.primedAt || (fold.activeAt ?? 0) >= live.primedAt)) live.ready = true;
     }
 
     /** An events-style agent names its conversation in a file it makes after it starts: find it, once. */
@@ -758,6 +863,12 @@ export class AgentTerminals {
         if (record.wanted !== 'running' || live.exited) return { status: 'stopped', detail: record.ended?.text ?? record.problem ?? 'Not running.' };
         // Agent Terminals is not running its agents (a wrong setting, or no terminals): the agent is not running either.
         if (!this.started && !live.launchAt) {
+            // Its program may still run in its terminal (a setting went wrong while it ran): said so, not "stopped".
+            if (this.terminalInfo(record)?.state === 'running') {
+                return { status: 'running', unfollowed: true, detail: this.working()
+                    ? 'Running in its terminal. Agent Terminals picks it up where it is once DSH\'s terminals are there.'
+                    : 'Running in its terminal, not followed: Agent Terminals waits for a setting to be fixed (see the top of this page), then picks it up where it is.' };
+            }
             return { status: 'stopped', detail: this.working()
                 ? 'Not running: DSH\'s terminals are not there, so Agent Terminals cannot pick it up yet.'
                 : 'Not running: Agent Terminals waits for a setting to be fixed (see the top of this page), then picks it up again.' };
@@ -860,8 +971,8 @@ export class AgentTerminals {
         }
         const words = answer === 'recommended' && ask.recommendation ? `Go with your recommendation: ${ask.recommendation}` : String(answer ?? '').trim();
         if (!words) throw new Error('The answer is empty.');
-        const item = this.queue(record, words, by, 'as an answer in Decisions');
-        return { text: `Typed into ${record.name}'s terminal when it is ready; its card on the Coding agents page shows when its transcript has it.`, delivery: item.id };
+        const item = this.queue(record, words, by, 'as an answer in Decisions', { askId: ask.id });
+        return { text: `It goes into “${record.name}”'s terminal when the agent is ready, and counts as delivered once its transcript shows it.`, delivery: item.id };
     }
 
     // ── Messages ───────────────────────────────────────────────────────
@@ -881,8 +992,8 @@ export class AgentTerminals {
      * @param {string} by - who sent it ('you', or a plugin's name).
      * @param {string} [via] - how, in words ('in Decisions').
      */
-    queue(record, body, by, via = '') {
-        const item = { id: `m-${this.now().toString(36)}-${randomUUID().slice(0, 4)}`, text: body, by, ...(via ? { via } : {}), at: this.now(), state: 'queued' };
+    queue(record, body, by, via = '', { askId } = {}) {
+        const item = { id: `m-${this.now().toString(36)}-${randomUUID().slice(0, 4)}`, text: body, by, ...(via ? { via } : {}), ...(askId ? { askId } : {}), at: this.now(), state: 'queued' };
         record.deliveries.push(item);
         this.trimDeliveries(record);
         const who = by === 'you' ? 'You' : by;
@@ -928,6 +1039,15 @@ export class AgentTerminals {
         if (item.entry) {
             try { this.journal.set(item.entry, { state, reason: why }); } catch {}
         }
+        // An answer to a question in Decisions: what became of it goes back there ("typed" is final only
+        // for a program that keeps no transcript; else its proof is still looked for).
+        if (item.askId && OUTCOME[state] && (state !== 'typed' || STYLES[record.style]?.format === 'none')) {
+            try {
+                this.watch.askOutcome?.(item.askId, { state: OUTCOME[state], text: why, by: 'Agent Terminals', sessionId: record.sessionId });
+            } catch (error) {
+                this.logger?.warn?.(`agent-terminals: could not tell Decisions: ${errorText(error)}`);
+            }
+        }
         this.store.change();
         this.changed();
     }
@@ -938,10 +1058,20 @@ export class AgentTerminals {
         if (!this.working()) return 'Agent Terminals is waiting for a setting to be fixed (see the top of its page).';
         if (live.launching || (record.wanted === 'running' && !live.ready && !live.exited)) return 'The agent is starting; this is typed in when it is ready.';
         if (record.wanted !== 'running' || live.exited) return 'The agent is not running: Start again and this is typed in.';
-        const status = live.status ?? this.statusFor(record);
-        if (status.status === 'waiting on you' && status.call) return `The agent waits on you in its terminal (${clip(status.detail ?? 'it asks something', 160)}). Answer there; this is typed in after.`;
+        // A fresh look at its transcript: a tool call that opened a moment ago holds this too.
+        this.read(record);
+        const status = this.statusFor(record);
+        if (status.status === 'waiting on you' && status.call) {
+            const what = status.call.summary ? `to run “${clip(status.call.summary, 120)}”` : `to use ${status.call.tool ?? 'a tool'}`;
+            return status.call.approval
+                ? `Held while the agent asks you in its terminal ${what}; this is typed in after you answer there.`
+                : `Held while a tool call waits in its terminal (${what}); this is typed in after it ends. If its terminal asks you something, answer there.`;
+        }
         const calls = live.fold ? Object.values(live.fold.calls) : [];
-        if (calls.length) return `The agent is running ${calls[0].tool}${calls[0].summary ? ` (${clip(calls[0].summary, 80)})` : ''}; this is typed in after, so it never lands in an approval prompt.`;
+        if (calls.length || live.fold?.approval) {
+            const call = calls[0];
+            return `Held while the agent runs ${call ? `${call.tool}${call.summary ? ` (${clip(call.summary, 80)})` : ''}` : 'a tool'}; this is typed in after, so it never lands in an approval prompt.`;
+        }
         if (status.status === 'working' && !this.config.typeWhileWorking) return 'The agent is working; this is typed in when it is idle.';
         const way = this.typist.way(record.sessionId, record.terminalId);
         if ('problem' in way) return way.problem;
@@ -1027,7 +1157,11 @@ export class AgentTerminals {
                 }
                 const status = this.statusFor(record);
                 const now = this.now();
-                if (status.status === 'working') {
+                // No key while a tool call or an approval prompt is open (Enter there could answer it), and
+                // none while it works: the proof clock starts again once it is idle.
+                const callOpen = Boolean(status.call) || Boolean(live.fold?.approval) || Object.keys(live.fold?.calls ?? {}).length > 0;
+                if (status.status === 'working' || callOpen) {
+                    lastEnter = now;
                     if (now - since > PROOF_WHILE_WORKING_MS) {
                         this.settle(record, item, 'not proven', 'Typed in 30 minutes ago, and its transcript still does not show it. Look at its terminal.');
                         return;
@@ -1048,8 +1182,10 @@ export class AgentTerminals {
                     this.settle(record, item, 'typed', `No proof after ${this.config.proofSeconds} s while the agent was idle: pressed Enter again (${item.enters - 1} of ${this.config.enterRetries}).`);
                     continue;
                 }
-                this.settle(record, item, 'not proven', `Typed in, but its transcript never showed it, after Enter ${item.enters} time${item.enters === 1 ? '' : 's'}. Look at its terminal: the message may still be in its input box.`);
-                this.log({ kind: 'proof', agent: record.key, sessionId: record.sessionId, text: `No proof that ${record.name} read a message`, why: `Its transcript never showed “${clip(item.text, 120)}”.`, state: 'failed', by: 'Agent Terminals' });
+                this.settle(record, item, 'not proven', `Typed in, but its transcript has not shown it, after Enter ${item.enters} time${item.enters === 1 ? '' : 's'}. Look at its terminal: the message may still be in its input box. It turns delivered if its transcript shows it later.`);
+                const noProof = this.log({ kind: 'proof', agent: record.key, sessionId: record.sessionId, text: `No proof that ${record.name} read a message`, why: `Its transcript has not shown “${clip(item.text, 120)}”.`, state: 'failed', by: 'Agent Terminals' });
+                if (noProof) item.noProof = noProof.id;
+                this.store.change();
                 return;
             }
         } finally {
@@ -1065,10 +1201,21 @@ export class AgentTerminals {
     lateProof(record, live) {
         if (!live.fold || STYLES[record.style]?.format === 'none') return;
         for (const item of record.deliveries) {
-            if (item.state !== 'typed' || !item.typedAt || live.proving.has(item.id)) continue;
+            if (!item.typedAt || live.proving.has(item.id)) continue;
+            const late = item.state === 'not proven';
+            if (item.state !== 'typed' && !(late && this.now() - item.typedAt <= LATE_PROOF_MS)) continue;
             const proof = provenIn(live.fold, item.text, item.typedAt);
-            if (proof) this.settle(record, item, 'delivered', 'Its transcript shows it.', { provenAt: proof.at || this.now() });
-            else if (this.now() - item.typedAt > PROOF_WHILE_WORKING_MS) this.settle(record, item, 'not proven', 'Typed in 30 minutes ago, and its transcript still does not show it. Look at its terminal.');
+            if (proof && late) {
+                this.settle(record, item, 'delivered', 'Its transcript shows it, later than Agent Terminals looked for it (it was marked not proven).', { provenAt: proof.at || this.now() });
+                this.log({ kind: 'proof', agent: record.key, sessionId: record.sessionId, text: `${record.name} has the message after all`, why: `Its own transcript shows “${clip(item.text, 120)}”, later than Agent Terminals looked for it.`, state: 'done', by: 'Agent Terminals' });
+                if (item.noProof) {
+                    try { this.journal.set(item.noProof, { state: 'done', reason: 'Seen later: its transcript shows it.' }); } catch {}
+                }
+            } else if (proof) {
+                this.settle(record, item, 'delivered', 'Its transcript shows it.', { provenAt: proof.at || this.now() });
+            } else if (!late && this.now() - item.typedAt > PROOF_WHILE_WORKING_MS) {
+                this.settle(record, item, 'not proven', 'Typed in 30 minutes ago, and its transcript still does not show it. Look at its terminal.');
+            }
         }
     }
 
@@ -1106,11 +1253,13 @@ export class AgentTerminals {
             sessionId: record.sessionId,
             name: record.name,
             program: record.program,
+            programName: programName(record.program),
             args: record.args,
             style: record.style,
             ...(record.data ? { data: record.data } : {}),
             folder: record.folder,
             terminalId: record.terminalId,
+            followed: this.started,
             terminal: info ? { state: info.state, ...(Number.isInteger(info.exitCode) ? { exitCode: info.exitCode } : {}), title: info.title } : null,
             status: status.status,
             ...(status.detail ? { detail: status.detail } : {}),
@@ -1131,7 +1280,7 @@ export class AgentTerminals {
             launches: record.launches,
             typing: this.typist.way(record.sessionId, record.terminalId).way ?? null,
             controlTakenAt: this.typist.takenAt(record.sessionId, record.terminalId),
-            deliveries: record.deliveries.slice(-12).reverse().map((d) => ({ id: d.id, text: clip(d.text, 400), by: d.by, at: d.at, state: d.state, ...(d.why ? { why: d.why } : {}), ...(d.enters ? { enters: d.enters } : {}), ...(d.way ? { way: d.way } : {}), ...(d.provenAt ? { provenAt: d.provenAt } : {}) })),
+            deliveries: record.deliveries.slice(-12).reverse().map((d) => ({ id: d.id, text: clipLines(d.text, 400), by: d.by, at: d.at, state: d.state, ...(d.why ? { why: d.why } : {}), ...(d.enters ? { enters: d.enters } : {}), ...(d.way ? { way: d.way } : {}), ...(d.provenAt ? { provenAt: d.provenAt } : {}) })),
         };
     }
 
@@ -1168,11 +1317,34 @@ export class AgentTerminals {
 
 /** Why an agent's program ended, in words, from its exit code. */
 export function exitWords(record, code, again = 'Start again resumes its conversation.') {
-    if (code === 127) return `It exited with code 127: the shell could not find ${record.program}. Use its full path (\`which ${programName(record.program)}\` in a terminal shows it), or check the name.`;
+    if (code === 127) return `It exited with code 127: the shell could not find ${record.program}. Use its full path (“which ${programName(record.program)}” in a terminal shows it), or check the name.`;
     if (code === 126) return `It exited with code 126: ${record.program} is not a program the shell can run. Check the path and that it is executable.`;
     if (code === 0) return `It exited by itself (code 0). ${again}`;
     if (code === 130 || code === 129 || code === 143) return `It was interrupted (code ${code}). ${again}`;
     return `It exited${Number.isInteger(code) ? ` with code ${code}` : ''}. Its terminal shows why. ${again}`;
+}
+
+/**
+ * Where a program is: a path as given, or a name where the start form's
+ * finder looks (DSH's PATH and the folders shells usually add). The shell
+ * in an agent's terminal reads the person's own startup files, so a name
+ * not found here may still run there: a miss is said, never refused.
+ * @returns {{ found: boolean, path?: string }}
+ */
+export function findProgram(program, home) {
+    const name = String(program ?? '').trim();
+    if (!name) return { found: false };
+    if (!name.includes('/')) {
+        const path = whereIs(name, { home });
+        return path ? { found: true, path } : { found: false };
+    }
+    const path = expandHome(name, home ?? '/');
+    try {
+        accessSync(path, constants.X_OK);
+        return statSync(path).isFile() ? { found: true, path } : { found: false };
+    } catch {
+        return { found: false };
+    }
 }
 
 /** A short, stable hash of some words (to tell one question from the next). */

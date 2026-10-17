@@ -167,7 +167,10 @@ function eventEntries(line, fallbackAt) {
 
 /**
  * What a transcript says so far. Plain data, so it can be saved.
- * @typedef {{ turns: number, lastAt: number, user?: { at: number, text: string }, reply?: { at: number, text: string, final: boolean }, calls: Record<string, { at: number, tool: string, summary: string }>, approval?: { at: number, summary: string, callId?: string }, ended: boolean, id?: string, cwd?: string, users: Array<{ at: number, text: string }> }} Fold
+ * `activeAt` and `last` are the time and kind of its last entry that was
+ * work (not meta); `cut` is a job its program ended in the middle of
+ * (see closeOver).
+ * @typedef {{ turns: number, lastAt: number, activeAt?: number, last?: string, user?: { at: number, text: string }, reply?: { at: number, text: string, final: boolean }, calls: Record<string, { at: number, tool: string, summary: string }>, approval?: { at: number, summary: string, callId?: string }, ended: boolean, cut?: { at: number, text: string }, id?: string, cwd?: string, users: Array<{ at: number, text: string }> }} Fold
  */
 
 /** Messages kept for proof: the last few the agent was told. */
@@ -185,6 +188,12 @@ export function emptyFold() {
  */
 export function foldEntry(fold, entry) {
     const next = { ...fold, calls: { ...fold.calls }, lastAt: Math.max(fold.lastAt, entry.at || 0) };
+    if (entry.kind !== 'meta') {
+        next.activeAt = Math.max(fold.activeAt ?? 0, entry.at || 0);
+        next.last = entry.kind;
+        // New work after a job was cut off: that job is history now.
+        if (fold.cut && entry.kind !== 'end') next.cut = undefined;
+    }
     switch (entry.kind) {
         case 'meta':
             if (entry.id) next.id = entry.id;
@@ -238,6 +247,36 @@ export function foldEntry(fold, entry) {
     }
 }
 
+/** Kinds of entry after which a job is still going: its answer has not come. */
+const MID_JOB = new Set(['user', 'start', 'call', 'result', 'approval']);
+
+/**
+ * Close what a transcript left open when its program ended: a DSH restart
+ * or a stop ends the process, so its tool calls and its approval prompt are
+ * gone, and a job it was in the middle of is over (`cut`, with its words),
+ * so the agent reads idle in its resumed conversation instead of working for
+ * ever. Entries at or after `before` belong to the program running now and
+ * stay as they are. Returns the same object when nothing was open.
+ * @param {Fold} fold
+ * @param {number} [before] - when the program started again (Infinity: everything read so far is from before).
+ * @returns {Fold}
+ */
+export function closeOver(fold, before = Infinity) {
+    if (!fold) return fold;
+    const old = (at) => !(at >= before);
+    const calls = Object.fromEntries(Object.entries(fold.calls).filter(([, call]) => !old(call.at)));
+    const dropped = Object.keys(calls).length !== Object.keys(fold.calls).length;
+    const approval = fold.approval && old(fold.approval.at) ? undefined : fold.approval;
+    const midJob = fold.turns > 0 && !fold.ended && MID_JOB.has(fold.last) && old(fold.activeAt ?? fold.lastAt);
+    if (!dropped && approval === fold.approval && !midJob) return fold;
+    const next = { ...fold, calls, approval };
+    if (midJob) {
+        next.ended = true;
+        next.cut = { at: fold.activeAt ?? fold.lastAt, text: fold.user?.text ?? '' };
+    }
+    return next;
+}
+
 /**
  * What the agent is doing, from its transcript and its terminal.
  * @param {Fold | undefined} fold
@@ -260,6 +299,10 @@ export function statusOf(fold, { now, settleMs = 4000, askAfterMs = 20000, exite
         return { status: 'working', detail: `Running ${call.tool}${call.summary ? `: ${call.summary}` : ''}` };
     }
     const reply = fold.reply;
+    // Its last job was cut off when its program ended, and nothing came after: idle, and why.
+    if (fold.cut && !(reply && reply.at > fold.cut.at)) {
+        return { status: 'idle', detail: `Its job ${fold.cut.text ? `“${oneLine(fold.cut.text, 80)}” ` : ''}was cut off when its program ended (a DSH restart, or a stop). Send it a message to carry on.`, cut: true };
+    }
     const settled = reply && (reply.final || fold.ended || now - Math.max(reply.at, fold.lastAt) >= settleMs);
     if (!reply || !settled) return { status: 'working', ...(fold.user ? { detail: `On: ${oneLine(fold.user.text, 80)}` } : {}) };
     const ask = askIn(reply.text);

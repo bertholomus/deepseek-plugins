@@ -10,14 +10,18 @@ that terminal in a tab beside the session. From then on:
   *stopped*, on the Coding agents page, on its session's row in the
   sidebar, and, when it waits on you, in Decisions.
 - **Your messages go in, and are proven read.** One at a time, only while
-  the agent is ready for one (never while it runs a tool, so nothing lands
-  in an approval prompt), pasted as one message when the program asked for
-  pasted text, and *delivered* only once the agent's own transcript shows
-  it. A program that swallowed the Enter after a paste gets Enter again.
+  the agent is ready for one, pasted as one message when the program asked
+  for pasted text, and *delivered* only once the agent's own transcript
+  shows it. A program that swallowed the Enter after a paste gets Enter
+  again. Agent Terminals reads the transcript just before it types, and
+  presses no key at all while a tool call or an approval prompt is open in
+  it, so it never answers a prompt for you.
 - **It comes back after DSH restarts.** DSH ends every terminal when it
   quits. On the next start each agent that was running starts again in a
   new terminal under the same name, so the window's tab finds it, and
-  resumes its conversation.
+  resumes its conversation. A job the restart cut off ends there: the
+  agent comes back idle, *What happened* says which job was cut off, and
+  your next message carries on.
 
 It needs Session Watch, which carries each agent's state to its session's
 row and to Decisions. While Session Watch is off, Agent Terminals stays on
@@ -58,6 +62,12 @@ in any terminal), and types `exec <program> <arguments>`, so the terminal
 ends when the agent does. The first message, if you wrote one, goes in once
 the agent's screen settles. One agent per session.
 
+A program given as a path must be an executable file there, or the start
+is refused before any session is made. Agent Terminals then watches the
+first moments: a program that ends at once (a name the shell cannot find,
+say) is *Could not start*, with why and what to do, and its session gets no
+first turn. The first turn is noted in *What happened* when it ends.
+
 **Its state.** From the agent's transcript: *working* while it answers or
 runs a tool, *idle* once its reply settles, *waiting on you* when its last
 reply asks you (a `DECISION NEEDED: <question> — recommend: <pick>` line,
@@ -70,7 +80,9 @@ Watch, so the other suite plugins see it too.
 **When it asks you.** A reply that asks makes a Decisions card: the agent's
 name, the question, the recommendation, **Go with the recommendation** and
 room for your own words. The answer is typed into its terminal like any
-message, and proven the same way. A tool call that waits makes a card that
+message, and proven the same way: Decisions says where the answer went,
+then marks it *delivered* once the agent's transcript shows it (or *not
+confirmed*, with where to look). A tool call that waits makes a card that
 says what the agent asks to run and to answer in its terminal: a terminal
 prompt has no answer that could safely be typed in for you. Messages wait
 until you answered there. With `notify` on and DSH's notifications plugin
@@ -82,11 +94,20 @@ is stopped), *typing*, *typed in*, and *delivered* once the transcript
 shows it. **Take back** removes one that is not typed in yet. A message of
 several lines goes in as one paste when the program asked for pasted text;
 otherwise its line breaks go in as spaces, and the message says so. With
-`typeWhileWorking` on, a message is typed in while the agent works (never
-while it runs a tool), and the program keeps it until it reads it. When an
-idle agent's transcript does not show the message after `proofSeconds`,
-Enter goes again, up to `enterRetries` times; after that the message is
-*not proven*, with where to look.
+`typeWhileWorking` on, a message is typed in while the agent works, and the
+program keeps it until it reads it. When an idle agent's transcript does
+not show the message after `proofSeconds`, Enter goes again, up to
+`enterRetries` times; after that the message is *not proven*, with where to
+look. If the transcript shows it later (within a day), it turns
+*delivered*, and *What happened* says so.
+
+**Nothing goes into a prompt.** Just before it types, Agent Terminals reads
+the transcript again: while a tool call or an approval prompt is open, the
+message waits, and says why. While one is open after a message was typed
+(with `typeWhileWorking` on, a job can ask for approval after the message
+went in), no key is pressed, not even Enter again, and the wait for proof
+pauses until the call ends. Answer the prompt in its terminal; the message
+is read after it.
 
 **After a restart.** With `resumeAfterRestart` on, each agent that was
 running starts again in a new terminal with the same id and resumes its
@@ -98,6 +119,21 @@ now. Switching Agent Terminals off and on, or saving its settings, leaves
 running agents running: it picks them up where they are, and a message it
 typed just before still gets its proof.
 
+**A job cut off by a restart.** The program that resumes writes nothing
+until it gets a message, so a tool call, an approval prompt or a request
+left open in its transcript by the old program would hold the agent as
+*working* or *waiting on you* for ever. Agent Terminals reads the
+transcript before each start: whatever was open then is over. The agent
+reads *idle*, any question it left in Decisions goes away, held messages
+go in once, and *What happened* says which job was cut off (once) and that
+a message carries on.
+
+**While Agent Terminals is switched off or waits for a setting.** Nobody
+follows the agents then, but they keep running in their terminals. Each
+card says *running*, not followed, and why, and offers only **Open its
+terminal**; *What happened* notes when Agent Terminals stopped following
+its agents and when it picked them up again, where they were.
+
 **Closing its tab ends it.** Closing an agent's terminal tab closes the
 terminal, which ends the program in it. Its card says so, and **Start
 again** brings it back in a new terminal and tab, resuming its
@@ -107,18 +143,22 @@ conversation. **Stop** on the page does the same as closing the tab.
 
 **Coding agents** in DSH's sidebar, with a count of agents waiting on you:
 
-- **The header**: how many agents run, wait on you or are stopped, **Start
-  a coding agent** and **Settings**.
+- **The header**: how many agents run, how many of those wait on you, and
+  how many are stopped (*3 running, 2 of them waiting on you · 1
+  stopped*), **Start a coding agent** and **Settings**.
 - **Agents**: each with its state, its name (one click opens its session),
-  its command and folder and when it started; what it does now; what it
+  its program's name (the whole command on hover) and folder and when it
+  started; what it does now; what it
   asks you, with **Go with the recommendation**, or **Open its terminal**
   when its terminal asks; its last reply; its messages with their states
   and why (the newest four, then **Show all**); a message box; and **Its
   screen now**, what its terminal shows. While it runs: **Open its
   terminal** and **Stop**. Stopped: **Start again** (resuming its
   conversation where the program can), **Start anew** (a new conversation)
-  and **Forget** (it leaves the list; its session and its own conversation
-  files stay).
+  and **Forget**, which asks first (**Forget it** takes it off the list;
+  its session and its own conversation files stay; **Keep it** changes
+  nothing). A line under the list follows your last message: typed in,
+  delivered, or not proven with where to look.
 - **Start a coding agent**: the programs found on this computer and the
   ones used here before (one click fills the form), then Program,
   Arguments, How it resumes a conversation, Its conversations folder, Where
@@ -142,8 +182,9 @@ cause is gone.
   its state in words for screen readers. When another plugin's mark comes
   first, Agent Terminals leaves the seat to it and says its state in words
   only.
-- **A hover line**: *Coding agent idle* (or its state), and what it last
-  did.
+- **A hover line**: *Coding agent in its terminal: idle* (or its state),
+  and what it last did. DSH's own state for the session (its model's
+  turns) stays beside it.
 - **The ⋯ menu**: **Open the coding agent's terminal** while it runs,
   **Show its coding agent** when it is stopped, and **Start a coding agent
   here** for a session without one.
@@ -163,7 +204,7 @@ range and says what fits.
 | `resumeAfterRestart` (Start agents again after DSH restarts) | on | on or off | Plugins | Each agent that was running starts again, resuming its conversation where its program can. |
 | `listNewSessions` (List a new agent's session in the sidebar) | on | on or off | Plugins | A new agent's session gets one short turn by its model, so DSH lists it. |
 | `openTabs` (Open an agent's terminal tab with its session) | on | on or off | Plugins | Opening an agent's session opens its terminal tab beside it, once per agent and window. |
-| `typeWhileWorking` (Type messages in while the agent works) | off | on or off | Plugins | Off: a message waits until the agent is idle. Never while it runs a tool. |
+| `typeWhileWorking` (Type messages in while the agent works) | off | on or off | Plugins | Off: a message waits until the agent is idle. On: it is typed in while the agent works, and the program keeps it. Either way, no key is pressed while a tool call or an approval prompt is open. |
 | `proofSeconds` (Seconds without proof before Enter is pressed again) | `8` | 2 to 120 | Plugins | How long an idle agent has to show a message in its transcript. |
 | `enterRetries` (Press Enter again, at most) | `2` | 0 to 5 | Plugins | For programs that swallow the Enter after a paste. |
 | `askAfterSeconds` (Seconds before a waiting tool call counts as asking you) | `20` | 5 to 600 | Plugins | A tool call that waits this long for its result most likely waits for your approval in its terminal. |
@@ -174,9 +215,9 @@ range and says what fits.
 *Profile* settings go in the `agent-terminals` row of the profile's
 `cordis.patch.yml` (see Setup) and apply after a restart. A wrong value
 there never stops Agent Terminals from starting: it starts no agent and
-types nothing, each agent says it is not running and why, and the page
-says which setting is wrong, what it must be, and where to change it.
-Fixed, the agents come back by themselves.
+types nothing, agents already running keep running unfollowed and say so,
+and the page says which setting is wrong, what it must be, and where to
+change it. Fixed, it picks the agents up where they are.
 
 ## Files
 
@@ -259,6 +300,14 @@ conversations, so you can resume one by hand.
   to close one of its terminal tabs.
 - Proof needs a transcript: for `continue` and `plain` programs, a message
   is typed in, not proven read.
+- It leans on parts of DSH that are not a plugin interface. The direct way
+  of typing uses the terminal controller's own terminals (their owners,
+  handle and screen modes), and the page reads DSH's
+  `dsh.terminal.binding.v1.` window storage to find a session's terminal
+  tab. The real-DSH test covers every build here (0.2.0, 0.2.1 and the
+  app's own); a later DSH can break either without notice. When the direct
+  way is not there, `auto` types through DSH's terminal input instead, and
+  the test above is the way to check a new build.
 
 ## Tests
 

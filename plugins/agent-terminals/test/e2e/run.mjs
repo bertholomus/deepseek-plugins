@@ -27,9 +27,11 @@
  *   and the proof says so.
  * - A reply that asks: waiting on you, on the session's row and in
  *   Decisions; answered there (the recommendation, and own words), the
- *   answer is typed in and proven.
+ *   answer is typed in and proven, and Decisions says "reached" only then.
  * - A program with no transcript runs and is typed to, and says it cannot
- *   prove; a program that is not there says how to fix it.
+ *   prove; a program that is not there says how to fix it, is never logged
+ *   as started and gives its session no turn; a path that is not a program
+ *   is refused before anything is made.
  * - The window: the Coding agents page (counts, agents, messages, the start
  *   form with the programs found here), light and dark and narrow; the
  *   session row's mark, hover line and menu item beside the neighbour's; a
@@ -43,9 +45,16 @@
  * - Closing an agent's terminal tab ends it; Start again brings it back in a
  *   new tab.
  * - Its settings in Plugins (DSH's own form): typing while the agent works,
- *   switched on, applies at once.
+ *   switched on, applies at once; a message typed while it works is never
+ *   followed by an Enter into an approval prompt that opens before it is read.
  * - "Start a coding agent here" from a session's menu starts one in that
  *   session.
+ * - A wrong setting saved while DSH runs: the agents keep running, read
+ *   "running, not followed" with no buttons that would act, and are picked
+ *   up where they are once it is fixed.
+ * - A DSH restart in the middle of a job and of an approval prompt: the
+ *   agents come back idle (the job said cut off), the messages held for
+ *   them go in once and are proven, and no question is left in Decisions.
  * - A DSH restart: every running agent starts again under the same terminal
  *   id and resumes its conversation; a program that cannot resume is not
  *   started again, and says why; the window's tab shows the resumed agent.
@@ -68,7 +77,7 @@
  * the window checks.
  */
 import { execFileSync } from 'node:child_process';
-import { accessSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, utimesSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, dirname, join } from 'node:path';
 import { Script } from 'node:vm';
 import { DshRun, checks, dshBin, findPlaywright, freePort, modeOf, openWindow, pluginsDir, repoRoot, setDark, shot, waitFor } from '../../../../test/e2e/harness.mjs';
@@ -180,7 +189,7 @@ seed(join(user, '.standin-events', 'sessions', '2026', '10', '14', 'rollout-2026
 run.env = { HOME: user, ZDOTDIR: user, PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}` };
 
 const ws = {};
-for (const name of ['app', 'swallow', 'events', 'plain', 'missing']) {
+for (const name of ['app', 'swallow', 'events', 'plain', 'missing', 'long']) {
     ws[name] = join(run.root, 'projects', name);
     mkdirSync(ws[name], { recursive: true });
 }
@@ -374,7 +383,9 @@ try {
         check('DSH has its session: named after the agent, in its folder', session.title === 'App agent' && real(session.cwd) === real(ws.app), json(session));
         const events = await run.events(ids.app);
         const note = events.find((e) => e.type === 'user/message' && /^A coding agent runs in this session's terminal: standin in /.test(e.text ?? ''));
-        check('its session got one short turn by its model, so DSH lists it', Boolean(note) && session.turns.started >= 1 && session.turns.started === session.turns.ended && (await watchRow(ids.app))?.blank === false, json({ turns: session.turns, note: note?.text }));
+        // Session Watch reads DSH's list again when it is older than 1.5 s: the row turns from blank within a few seconds.
+        const listed = await waitFor(async () => ((await watchRow(ids.app))?.blank === false ? true : null), 'its session\'s row to stop being blank', 10000, 300).catch(() => false);
+        check('its session got one short turn by its model, so DSH lists it', Boolean(note) && session.turns.started >= 1 && session.turns.started === session.turns.ended && listed === true, json({ turns: session.turns, note: note?.text, blank: (await watchRow(ids.app))?.blank }));
         const idle = await idleAgent(view.key, 'the agent to be idle after its answer');
         check('it is idle after its answer, with its reply', idle.lastReply?.text === 'Done: Read the README' && idle.detail === 'Done: Read the README', json({ status: idle.status, lastReply: idle.lastReply }));
         const row = await waitFor(async () => {
@@ -441,9 +452,12 @@ try {
         const asked = await history((e) => e.agent === key && e.kind === 'ask');
         check('What happened says it waits on you, and on what', asked[0]?.text === 'App agent waits on you' && asked[0]?.why === 'Use the fast path? Recommended: Yes, the fast path', json(asked[0]));
         const answered = await run.api('dsh-plugin-decisions/answer', { id: card.id, answer: { option: 'recommended' } });
-        check('answered from Decisions', answered.ok, json(answered));
+        check('answered from Decisions: "answered", in Agent Terminals\' words, not yet "reached"', answered.ok && answered.value?.state === 'answered'
+            && answered.value?.text === 'It goes into “App agent”\'s terminal when the agent is ready, and counts as delivered once its transcript shows it.', json(answered));
         const typed = await waitFor(async () => (await agentOf(key)).deliveries.find((d) => d.text === 'Go with your recommendation: Yes, the fast path' && d.state === 'delivered'), 'the answer to be proven', 30000, 300);
         check('the answer is typed into its terminal and proven from its transcript, marked as from Decisions', typed.by === 'you' && transcriptUsers((await agentOf(key)).transcript).includes('Go with your recommendation: Yes, the fast path'), json(typed));
+        const outcome = await waitFor(async () => (await decisions()).history.find((e) => e.kind === 'answer' && e.cardId === card.id && e.state === 'delivered'), 'Decisions to hear it was delivered', 15000, 300);
+        check('Decisions\' log turns the answer delivered once the agent\'s transcript shows it, with that proof', outcome.why === 'Its transcript shows it.' && outcome.askId === card.askId, json(outcome));
         await waitFor(async () => !(await askCardFor(ids.app)), 'the card to leave Decisions', 20000, 300);
         // A second question, answered in words.
         await idleAgent(key);
@@ -466,13 +480,27 @@ try {
         await waitFor(async () => shows(await screen(agents.plain), 'agent: Done: Hello plain'), 'the plain agent to answer on its screen', 15000, 300);
         check('its message is typed in, not "delivered": it says it cannot prove the agent read it; its screen shows the answer',
             /^(Typed|Pasted) in, then Enter\. This program keeps no transcript Agent Terminals can read, so it cannot prove the agent read it: look at its terminal\.$/.test(typed.why), json(typed));
+        const words127 = 'It exited with code 127: the shell could not find no-such-agent-e2e. Use its full path (“which no-such-agent-e2e” in a terminal shows it), or check the name.';
         const missing = await start({ program: 'no-such-agent-e2e', style: 'plain', folder: ws.missing, name: 'Missing' });
         agents.missing = missing.agent.key;
+        check('a program the shell cannot find: the start says it could not start, and why', missing.problem === words127, json(missing.problem));
         const ended = await waitAgent(agents.missing, (a) => a.status === 'stopped', 'the missing program to end', 30000);
-        check('a program the shell cannot find: stopped, with the exit code and what to do', ended.ended?.code === 127
-            && ended.ended?.text === 'It exited with code 127: the shell could not find no-such-agent-e2e. Use its full path (`which no-such-agent-e2e` in a terminal shows it), or check the name.', json(ended.ended));
-        const log = await history((e) => e.agent === agents.missing && e.kind === 'ended');
-        check('What happened says it stopped, and why', log[0]?.text === 'Missing stopped' && log[0]?.state === 'stopped', json(log[0]));
+        check('it is stopped, with the exit code and what to do', ended.ended?.code === 127 && ended.ended?.text === words127, json(ended.ended));
+        const log = await history((e) => e.agent === agents.missing);
+        const startEntry = log.find((e) => e.kind === 'start');
+        check('What happened never says it started: it could not start, and it stopped, each with why', startEntry?.text === 'Could not start Missing' && startEntry?.state === 'failed' && startEntry?.reason === words127
+            && log.some((e) => e.kind === 'ended' && e.text === 'Missing stopped' && e.state === 'stopped') && !log.some((e) => /^Started/.test(e.text ?? '')), json(log.map((e) => [e.kind, e.text, e.state])));
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const missingSession = await run.session(missing.agent.sessionId);
+        check('its session got no turn: a program that never ran gives its model nothing to say', missingSession.turns.started === 0 && !log.some((e) => e.kind === 'session'), json(missingSession.turns));
+        // A path that is not a program: refused before a session or an agent is made for it.
+        const sessionsBefore = (await run.api('dsh-plugin-session-watch/sessions')).value.items.length;
+        const agentsBefore = (await state()).agents.length;
+        const nowhere = await api('start', { input: { program: join(ws.missing, 'no-such-program'), style: 'plain', folder: ws.missing, name: 'Nowhere' } });
+        const sessionsAfter = (await run.api('dsh-plugin-session-watch/sessions')).value.items.length;
+        check('a path that is not a program is refused in words, and nothing is made for it', nowhere.ok === false
+            && nowhere.error?.message === `There is no program at ${join(ws.missing, 'no-such-program')}: check the path, and that the file is executable.`
+            && sessionsAfter === sessionsBefore && (await state()).agents.length === agentsBefore, json({ nowhere, sessionsBefore, sessionsAfter }));
     });
 
     // ── The window ─────────────────────────────────────────────────────
@@ -540,7 +568,7 @@ try {
             const hover = page.locator('[data-agent-terminals-hover]');
             await hover.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
             const hoverText = (await hover.count()) ? await hover.innerText() : '';
-            check('its hover line says the agent\'s state and what it last did', /Coding agent idle/.test(hoverText) && /Done: Take the slow path, it is safer\./.test(hoverText), hoverText);
+            check('its hover line says the agent\'s state and what it last did', /Coding agent in its terminal: idle/.test(hoverText) && /Done: Take the slow path, it is safer\./.test(hoverText), hoverText);
             await shot(page, shots, 'row-hover-light');
             // The neighbour marks the row too: its mark keeps the seat, ours stays in words; the menus hold both.
             await page.evaluate((id) => window.localStorage.setItem('dsh-plugin-neighbour/marked', JSON.stringify([id])), ids.app);
@@ -606,7 +634,7 @@ try {
                 && card.hint === 'Answer in its terminal: open the session, then the agent\'s terminal tab.', json(card));
             const held = await send(key, 'After the file #work=100');
             const waits = await waitDelivery(key, held.id, ['waiting'], 'the next message to wait', 10000);
-            check('the next message waits, so nothing lands in the prompt, and says where to answer', /^The agent waits on you in its terminal \(Bash “touch approved\.txt” has waited \d+ s for its result: it may be asking you in its terminal\.\)\. Answer there; this is typed in after\.$/.test(waits.why), waits.why);
+            check('the next message waits, so nothing lands in the prompt, and says where to answer', waits.why === 'Held while a tool call waits in its terminal (to run “touch approved.txt”); this is typed in after it ends. If its terminal asks you something, answer there.', waits.why);
             await openAgents();
             const icon = page.locator('[data-agent-terminals-icon]').first();
             await waitFor(async () => (await icon.getAttribute('data-agent-terminals-icon')) === '1', 'the badge to count it', 15000, 300);
@@ -684,7 +712,18 @@ try {
             check('Start anew: a new conversation, in a new file', !shows(await screen(key), 'Resumed conversation') && anew.transcript !== before.transcript, json({ id: anew.conversationId }));
             await card.getByRole('button', { name: 'Stop', exact: true }).click();
             await waitAgent(key, (a) => a.status === 'stopped', 'the agent to stop before it is forgotten');
+            // Forget asks first: Keep it changes nothing, Forget it takes it off the list.
             await card.getByRole('button', { name: 'Forget', exact: true }).click();
+            const asked = card.locator('[data-agent-terminals-forget]');
+            await asked.waitFor({ state: 'visible', timeout: 10000 });
+            const question = await asked.innerText();
+            const keepFocused = await page.evaluate(() => document.activeElement?.textContent ?? '');
+            await card.getByRole('button', { name: 'Keep it', exact: true }).click();
+            await page.waitForTimeout(300);
+            const kept = Boolean(await agentOf(key)) && (await card.getByRole('button', { name: 'Forget', exact: true }).count()) === 1;
+            check('Forget asks first, with Keep it in focus; Keep it changes nothing', question === 'Forget “Events agent”? Its session and its conversation files stay.' && keepFocused === 'Keep it' && kept, json({ question, keepFocused, kept }));
+            await card.getByRole('button', { name: 'Forget', exact: true }).click();
+            await card.getByRole('button', { name: 'Forget it', exact: true }).click();
             await waitFor(async () => !(await agentOf(key)), 'the agent to leave the list', 15000, 300);
             const session = await run.session(ids.events);
             const forgot = await history((e) => e.agent === key && e.kind === 'forget');
@@ -759,6 +798,30 @@ try {
             const kept = await waitDelivery(key, during.id, ['delivered'], 'the message typed while it worked to be proven', 30000);
             const users = transcriptUsers((await agentOf(key)).transcript);
             check('and proven once the agent reads it, after the job it was working on', kept.enters === 1 && users.indexOf('While it works #work=100') > users.indexOf('Long job #work=4000'), json(users.slice(-3)));
+            // Typed while it works, then its approval prompt opens before it reads the message: no Enter may land there.
+            rmSync(join(ws.app, 'approved.txt'), { force: true });
+            await idleAgent(key);
+            const guarded = await send(key, 'Guarded job #approve #work=2000');
+            await waitDelivery(key, guarded.id, ['delivered'], 'the guarded job to be proven', 20000);
+            const early = await send(key, 'Typed before its prompt #work=100');
+            const earlyTyped = await waitDelivery(key, early.id, ['typed'], 'the next message typed in while it works', 10000);
+            await waitAgent(key, (a) => a.status === 'waiting on you' && Boolean(a.call), 'its approval prompt', 20000);
+            await new Promise((resolve) => setTimeout(resolve, 6000));
+            const held = deliveryOf(await agentOf(key), early.id);
+            check('with typing while it works on, no Enter goes into the approval prompt that opened: the prompt is unanswered, the message typed once and waiting for its proof',
+                earlyTyped.enters === 1 && held.state === 'typed' && held.enters === 1 && !existsSync(join(ws.app, 'approved.txt')), json({ held, approved: existsSync(join(ws.app, 'approved.txt')) }));
+            const block = cardOf(page, key).locator('[data-agent-terminals-ask="call"]');
+            await openAgents();
+            await block.waitFor({ state: 'visible', timeout: 15000 });
+            await block.getByRole('button', { name: 'Open its terminal' }).click();
+            await terminalShows(page, 'Allow this command?');
+            await page.locator('.xterm-screen:visible').first().click();
+            await page.keyboard.type('n');
+            const late = await waitDelivery(key, early.id, ['delivered'], 'the message typed before the prompt to be proven', 30000);
+            const after = transcriptUsers((await agentOf(key)).transcript);
+            check('refused in its terminal: the tool did not run, and the message went in once, proven, after the guarded job', late.enters === 1 && !existsSync(join(ws.app, 'approved.txt'))
+                && after.filter((u) => u === 'Typed before its prompt #work=100').length === 1 && after.indexOf('Typed before its prompt #work=100') > after.indexOf('Guarded job #approve #work=2000'), json(after.slice(-3)));
+            await idleAgent(key);
             // Back off, in the same form.
             if (!(await form.isVisible())) {
                 await openAgents();
@@ -798,6 +861,43 @@ try {
     }
 
     // ── A DSH restart ──────────────────────────────────────────────────
+    await step('a wrong setting saved while DSH runs: the agents keep running, read "not followed" with nothing that would act on them, and are picked up where they are', async () => {
+        const before = await idleAgent(agents.app);
+        run.rows = rowsWith({ at: { proofSeconds: 500 } });
+        run.writeProfile(model.port);
+        const s = await waitFor(async () => {
+            const now = await state();
+            return now.problem?.key === 'proofSeconds' ? now : null;
+        }, 'the wrong setting to be read', 30000, 300);
+        const app = s.agents.find((a) => a.key === agents.app);
+        check('the agent still runs in its terminal, and says it is running, not followed, and what Agent Terminals waits for', app.status === 'running' && app.followed === false && app.terminal?.state === 'running'
+            && app.detail === 'Running in its terminal, not followed: Agent Terminals waits for a setting to be fixed (see the top of this page), then picks it up where it is.', json({ status: app.status, followed: app.followed, detail: app.detail }));
+        const stopped = await history((e) => e.kind === 'switch');
+        check('What happened says Agent Terminals stopped following its agents, and why', stopped[0]?.text === 'Agent Terminals stopped following its agents' && /A setting is wrong/.test(stopped[0]?.why ?? ''), json(stopped[0]));
+        if (window) {
+            const page = await openAgents();
+            const card = cardOf(page, agents.app);
+            await card.waitFor({ state: 'visible', timeout: 20000 });
+            // The page reads its state again within a moment of the change.
+            const acts = (names) => !names.some((n) => /^(Stop|Start again|Start anew|Forget|Send)$/.test(n.trim())) && names.some((n) => n.trim() === 'Open its terminal');
+            const names = await waitFor(async () => {
+                const now = await card.getByRole('button').allInnerTexts();
+                return acts(now) ? now : null;
+            }, 'its card to show it is not followed', 10000, 300).catch(async () => card.getByRole('button').allInnerTexts());
+            check('its card offers nothing that would act on it while it is not followed (its terminal can still be opened)', acts(names), json(names));
+            await shot(page, shots, 'not-followed-light');
+        }
+        run.rows = rowsWith();
+        run.writeProfile(model.port);
+        await waitFor(async () => !(await state()).problem, 'the setting to be fixed', 30000, 300);
+        const back = await idleAgent(agents.app, 'the agent to be picked up');
+        check('fixed: the agent is picked up where it is, in the same terminal, not started again', back.followed === true && back.terminalId === before.terminalId && back.launches === before.launches, json({ terminalId: back.terminalId, launches: back.launches }));
+        const follows = await history((e) => e.kind === 'switch');
+        check('What happened says it follows its agents again', follows[0]?.text === 'Agent Terminals follows its agents' && follows[0]?.why === 'Its settings are right again: it picks up every agent where it is.', json(follows[0]));
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-not-followed');
+    });
+
     await step('a DSH restart: running agents start again under the same terminal id and resume; one that cannot resume says why', async () => {
         const before = await agentOf(agents.app);
         const plainBefore = await agentOf(agents.plain);
@@ -827,6 +927,44 @@ try {
         }
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-restart');
+    });
+
+    await step('a DSH restart in the middle of a job and of an approval prompt: idle after it, the held messages typed in once and proven, no question left in Decisions', async () => {
+        rmSync(join(ws.app, 'approved.txt'), { force: true });
+        await idleAgent(agents.app);
+        const long = await start({ program: 'standin', style: 'flags', folder: ws.long, name: 'Long agent', task: 'A long job #work=600000' });
+        agents.long = long.agent.key;
+        ids.long = long.agent.sessionId;
+        await waitDelivery(agents.long, long.agent.deliveries[0].id, ['delivered'], 'the long job to be under way', 30000);
+        await waitAgent(agents.long, (a) => a.status === 'working', 'the long job to work', 20000);
+        await send(agents.app, 'Guarded job #approve #work=100');
+        await waitAgent(agents.app, (a) => a.status === 'waiting on you' && Boolean(a.call), 'its approval prompt', 20000);
+        await waitFor(() => askCardFor(ids.app), 'its card in Decisions', 15000, 300);
+        const heldApp = await send(agents.app, 'After the cut prompt #work=100');
+        const heldLong = await send(agents.long, 'After the cut job #work=100');
+        await waitDelivery(agents.app, heldApp.id, ['waiting'], 'the message held by the prompt', 10000);
+        await waitDelivery(agents.long, heldLong.id, ['waiting'], 'the message held by the job', 10000);
+        await run.stop();
+        await run.boot('a restart in the middle of a job');
+        await waitFor(async () => (await api('state')).ok, 'Agent Terminals after the restart', 30000);
+        const cut = await waitFor(async () => {
+            const entries = await history((e) => e.kind === 'cut');
+            return entries.some((e) => e.agent === agents.app) && entries.some((e) => e.agent === agents.long) ? entries : null;
+        }, 'the cut jobs to be logged', 40000, 300);
+        check('What happened says which jobs the restart cut off, once each, and that the agent waits for a message', cut.filter((e) => e.agent === agents.app).length === 1 && cut.filter((e) => e.agent === agents.long).length === 1
+            && cut.find((e) => e.agent === agents.app).why === 'Its program ended while it worked on “Guarded job #approve #work=100”. It starts again idle in the same conversation: send it a message to carry on.'
+            && cut.find((e) => e.agent === agents.long).text === 'Long agent\'s job was cut off', json(cut.map((e) => [e.agent, e.text, e.why])));
+        const app = await waitDelivery(agents.app, heldApp.id, ['delivered'], 'the message held by the prompt to go in after the restart', 60000);
+        const longDone = await waitDelivery(agents.long, heldLong.id, ['delivered'], 'the message held by the job to go in after the restart', 60000);
+        const appUsers = transcriptUsers((await agentOf(agents.app)).transcript);
+        const longUsers = transcriptUsers((await agentOf(agents.long)).transcript);
+        check('each held message is typed in once and proven, into the resumed conversation', app.enters === 1 && longDone.enters === 1
+            && appUsers.filter((u) => u === 'After the cut prompt #work=100').length === 1 && longUsers.filter((u) => u === 'After the cut job #work=100').length === 1, json({ app, longDone }));
+        const idleApp = await idleAgent(agents.app);
+        const idleLong = await idleAgent(agents.long);
+        check('neither works nor waits on you for ever: both idle, with the answer to the held message', idleApp.lastReply?.text === 'Done: After the cut prompt' && idleLong.lastReply?.text === 'Done: After the cut job', json([idleApp.lastReply, idleLong.lastReply]));
+        check('no question is left in Decisions, and nothing answered the old prompt', !(await askCardFor(ids.app)) && !(await askCardFor(ids.long)) && !existsSync(join(ws.app, 'approved.txt')), '');
+        await api('stop', { key: agents.long });
     });
 
     // ── Typing through DSH's terminal input ────────────────────────────

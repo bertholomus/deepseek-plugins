@@ -5,7 +5,9 @@
  * resumes like the `flags` style, and one that keeps dated event files under
  * `~/.<program>/sessions/<year>/<month>/<day>/` like the `subcommand` style.
  * The start form offers what it finds; the person may type any other
- * program.
+ * program. A folder named `~/.<name>-<more>` is most often a second folder
+ * of the program `<name>` (a backup, another profile): it is offered only
+ * when a program of that whole name is installed.
  *
  * @module dsh-plugin-agent-terminals/detect
  */
@@ -97,6 +99,7 @@ export function detectAgents(home, { path } = {}) {
         const kept = projects ?? sessions;
         if (!kept) continue;
         const where = whereIs(program, { path, home });
+        if (program.includes('-') && !where) continue;
         found.push({ program, style: projects ? 'flags' : 'subcommand', data, conversations: kept.conversations, latest: kept.latest, ...(where ? { path: where } : {}) });
     }
     return found.sort((a, b) => b.latest - a.latest);

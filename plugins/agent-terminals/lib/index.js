@@ -134,13 +134,28 @@ export function apply(ctx, config) {
             },
         });
 
+        // Agent Terminals itself starting and stopping is in the log too: while stopped, nobody follows the agents.
+        const switched = (on, why) => {
+            try {
+                journal.add({ kind: 'switch', text: on ? 'Agent Terminals follows its agents' : 'Agent Terminals stopped following its agents', why, state: on ? 'done' : 'stopped', by: 'Agent Terminals' });
+            } catch (error) {
+                logger?.warn?.(`agent-terminals: could not log: ${errorText(error)}`);
+            }
+        };
+        const some = () => Object.keys(store.data.agents).length > 0;
+
         // The agents start once DSH's terminals are there (never before: an agent would look gone).
         scope.inject(['terminalController'], (inner) => {
             services.terminals = inner.terminalController;
-            if (working()) agents.start();
+            if (working()) {
+                agents.start();
+                if (some()) switched(true, 'It started (with DSH, or switched on in Plugins): it picks up every agent where it is.');
+            }
             bump();
             return () => {
+                const was = agents.started;
                 agents.stop();
+                if (was && some()) switched(false, 'Switched off in Plugins, or DSH is quitting. While DSH runs, the agents keep running in their terminals; Agent Terminals picks them up where they are when it starts again.');
                 services.terminals = undefined;
                 bump();
             };
@@ -172,8 +187,17 @@ export function apply(ctx, config) {
         const saved = (paths) => {
             const entry = savedEntry(check, paths);
             if (entry) journal.add(entry);
-            if (working() && services.terminals && !agents.started) agents.start();
-            else if (!working() && agents.started) agents.stop();
+            if (working() && services.terminals && !agents.started) {
+                agents.start();
+                if (some()) switched(true, 'Its settings are right again: it picks up every agent where it is.');
+            } else if (!working() && agents.started) {
+                agents.stop();
+                if (some()) {
+                    switched(false, settings.enabled === false
+                        ? 'It was switched off in its settings. The agents keep running in their terminals, unfollowed: switch it on to pick them up where they are.'
+                        : 'A setting is wrong (see the top of its page). The agents keep running in their terminals, unfollowed: once the setting is fixed, it picks them up where they are.');
+                }
+            }
             bump();
         };
         onSaved = saved;

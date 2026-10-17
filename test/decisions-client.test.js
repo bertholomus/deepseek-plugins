@@ -178,6 +178,19 @@ test('browser half: the answer box is one line until you start answering, and wh
     assert.equal(line([entry('delivered'), entry('in the queue')]), 'Your answer reached “Schema”.', 'the newest entry for the card counts');
     assert.equal(line([entry('not delivered')]), '');
     assert.equal(line([entry('in the queue')], now + 121000), '', 'gone after two minutes');
+
+    // A plugin's question: "answered" says what the plugin does with it; "reached" only once it is proven.
+    const asked = { ...said, text: 'Answered. It goes into “Parser agent”\'s terminal when the agent is ready.', title: 'Parser agent' };
+    const askLine = (state) => {
+        const tree = WaitingCard({ data: { ...base, history: [{ id: 'j2', kind: 'answer', cardKind: 'ask', cardId: CARDS.decision.id, state, at: now }] }, onOpen() {}, act, busyId: undefined, now, said: asked });
+        return elementsOf(tree).find((e) => e.props?.['data-decisions-said'] !== undefined);
+    };
+    assert.match(textIn(askLine('answered')), /^Answered\. It goes into/);
+    assert.equal(textIn(askLine('delivered')), 'Your answer reached “Parser agent”.');
+    assert.equal(textIn(askLine('typed in')), 'Your answer was typed into “Parser agent”\'s terminal.');
+    assert.match(textIn(askLine('not confirmed')), /its transcript has not shown it: look at its terminal/);
+    assert.match(askLine('not confirmed').props.className, /dshdc-warn/, 'not proven is said as a warning');
+    assert.match(askLine('delivered').props.className, /dshdc-ok/);
 });
 
 test('browser half: each card has the controls its kind takes, and sends what the host expects', async () => {
