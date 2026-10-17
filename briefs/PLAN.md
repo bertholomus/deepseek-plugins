@@ -74,6 +74,52 @@ Autopilot, Decisions and Agent Terminals share it; nothing else polls sessions.
    transcript folders and Markdown handoff folders; results open the exact turn; filters (folder, model, date, kind);
    a `recall_search` tool; query time measured on a 10k-session synthetic corpus (target < 300 ms).
 
+## Agent Terminals: design (2026-10-17 2:55 AM, from `research/terminals.md` and `research/terminals-2.md`)
+
+What DSH allows, and what follows from it:
+
+- **A terminal is a session's.** `terminalController.create(agent, { id, cols, rows, shellPath })` starts a shell from
+  DSH's verified list (zsh, bash, …) in the session's folder; no other program can be started directly, so the coding
+  agent is launched by typing `exec <program> <args>` into that shell (when the agent exits, the terminal exits, and its
+  state says so). Terminals live in host memory: a DSH restart ends them, and the same id can be created again.
+- **Typing takes the input control.** Last attacher wins; the window's tab then reads "This view is read-only." with
+  Take control. On 0.2.0 a host plugin can `follow` and `write` (what the live app runs); on 0.2.1 `attach` needs a
+  Remote invocation, so only a window can type. So: a host typist on builds that have `follow`/`write`, and a window
+  typist otherwise (the browser half leases each typing job from the host and types through the terminal's own Remote
+  stream). Either way, when a job ends, the browser half hands the visible tab its control back (`view.connect()` on
+  the tab's own model: `webTerminals.view(sessionId, tabId, contentId, terminalId)` returns the panel's model).
+- **A tab is the browser's.** Only browser code can show a terminal: `ctx.sidebarRight.openTab('terminal', { params:
+  { terminalId } })` for the session on screen (it opens a new tab each call: look for an open one first, through
+  `tabsIn` and each tab's navigation params). The browser half opens the agent's tab when its session is on screen,
+  once per window, and never again after the person closes it there.
+- **A session is listed once a turn ran in it.** Only the agent loop commits `turn/start`. A new agent's session
+  therefore starts with one short turn by the session's model: a note that a coding agent has the task, which the
+  model acknowledges in a line (`listNewSessions`, on by default; off leaves the session listed only while open). An
+  agent can also start in a session that already has turns.
+- **Status from the agent's own transcript.** Presets are named by behaviour, never by vendor, and take the program
+  name the person types: *flags* (starts with `--session-id <id>`, resumes with `--resume <id>`, one JSON line per
+  message in `~/.<program>/projects/<folder>/<id>.jsonl`), *subcommand* (resumes with `resume <id>`, one JSON line per
+  event in `~/.<program>/sessions/<y>/<m>/<d>/*-<id>.jsonl`, the id found from the new file after launch),
+  *continue* (resumes the folder's latest conversation with `--continue`; no transcript), *plain* (no resume, no
+  transcript). The transcript folder can be set per agent. From the transcript: *working* (a message or tool call
+  without its final reply), *idle* (a final reply), *waiting on you* (the final reply asks: a DECISION NEEDED line, a
+  BLOCKED line, a question; or a tool call left without its result for `askAfterSeconds`, which is how a TUI's approval
+  prompt shows), *stopped* (the terminal exited). Status goes to Session Watch's `setExternal` (Decisions, Autopilot's
+  rows) and to the session's row in the sidebar (`sidebar.session.row.leading`, shown when DSH draws no status of its
+  own, and the row's hover card). A reply that asks raises a Decisions card (`raiseAsk`) whose answer is typed in.
+- **Delivery with proof.** A message is pasted (bracketed paste when the agent turned it on, which the typist reads
+  from the terminal's own output), then Enter after a short pause. Proof is the agent's transcript gaining a user
+  entry with the text. No proof within `proofSeconds` while the agent is not working: Enter again (a swallowed Enter),
+  up to `enterRetries`. While the agent is working, a TUI may hold the message until its step ends: the delivery says
+  *typed in, waiting for the agent to read it* and the proof may come later. Without a transcript: *typed in*, and the
+  page says the agent keeps no transcript to prove it.
+- **Restart.** The plugin's state (`agent-terminals/state.json`: agent, session, terminal id, preset, program, args,
+  resume id, folder, whether the person stopped it) survives; on start, each agent the person did not stop gets its
+  terminal again with the same id (the window's restored tab adopts it) and is launched with its resume arguments. A
+  delivery that was in flight is typed again only if its proof never came.
+- **One watcher core.** Agent Terminals reads sessions and raises asks through Session Watch; transcripts are read by
+  one `fs.watch` per transcript folder with a slow poll as the fallback, not per agent.
+
 ## Tests for each plugin
 
 - Unit tests in `test/<plugin>.test.js` (run by `npm test`): folds, rules, parsers, stores, config errors, and the
