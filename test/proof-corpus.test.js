@@ -1,0 +1,92 @@
+/**
+ * Proof against its labelled corpora (test/helpers/proof-corpus.mjs).
+ *
+ * The dev corpus is what the rules were tuned on, so its bar is high: no
+ * false flag at all, and every unshown or contradicted claim caught. The
+ * hold-out corpus was written apart from the rules and is only measured:
+ * its floors are there to catch a rule change that makes Proof noisy or
+ * blind, and the README reports its exact numbers
+ * (`node scripts/proof-corpus.mjs`).
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { OTHER_NAMES } from './helpers/client.mjs';
+import { DEV, HOLDOUT, LABELS, TOOL_NAMES, loadCorpus, measure } from './helpers/proof-corpus.mjs';
+
+const DEV_COUNTS = { honest: 60, 'no-claim': 30, unbacked: 40, contradicted: 30 };
+
+function checkShape(corpus, where) {
+    const ids = new Set();
+    for (const label of LABELS) {
+        for (const c of corpus[label]) {
+            const at = `${where} ${label} ${c.id}`;
+            assert.equal(typeof c.id, 'string', `${at}: id`);
+            assert.ok(!ids.has(c.id), `${at}: the id is used twice`);
+            ids.add(c.id);
+            assert.equal(c.label, label, `${at}: its label is ${c.label}, in ${label}.json`);
+            for (const key of ['note', 'prompt', 'reply']) assert.equal(typeof c[key], 'string', `${at}: ${key}`);
+            for (const turn of [c, c.previous].filter(Boolean)) {
+                assert.ok(Array.isArray(turn.tools), `${at}: tools`);
+                for (const tool of turn.tools) {
+                    assert.ok(TOOL_NAMES.has(tool.name), `${at}: tool ${tool.name}`);
+                    assert.equal(typeof tool.output, 'string', `${at}: ${tool.name} output`);
+                }
+            }
+            assert.doesNotMatch(JSON.stringify(c), OTHER_NAMES, `${at}: names a vendor`);
+        }
+    }
+    return ids;
+}
+
+test('the dev corpus is well formed: 160 turns, unique ids, the four labels, only known tools', () => {
+    const corpus = loadCorpus(DEV);
+    for (const label of LABELS) assert.equal(corpus[label].length, DEV_COUNTS[label], label);
+    checkShape(corpus, 'dev');
+});
+
+test('dev corpus: quiet whenever the evidence is there, or nothing is claimed', () => {
+    const m = measure(loadCorpus(DEV));
+    assert.deepEqual(m.misses.filter((miss) => miss.label === 'honest' || miss.label === 'no-claim'), []);
+    assert.equal(m.falseFlags, 0);
+});
+
+test('dev corpus: every claim nothing shows is flagged', () => {
+    const m = measure(loadCorpus(DEV));
+    assert.deepEqual(m.misses.filter((miss) => miss.label === 'unbacked'), []);
+});
+
+test('dev corpus: every claim the turn\'s own output contradicts is flagged as contradicted', () => {
+    const m = measure(loadCorpus(DEV));
+    assert.deepEqual(m.misses.filter((miss) => miss.label === 'contradicted'), []);
+});
+
+test('hold-out corpus: well formed, apart from the dev corpus, and within its floors', (t) => {
+    if (!LABELS.every((label) => existsSync(join(HOLDOUT, `${label}.json`)))) {
+        t.skip('the hold-out corpus is not there');
+        return;
+    }
+    const dev = checkShape(loadCorpus(DEV), 'dev');
+    const corpus = loadCorpus(HOLDOUT);
+    const ids = checkShape(corpus, 'hold-out');
+    for (const id of ids) assert.ok(!dev.has(id), `hold-out ${id} is also in the dev corpus`);
+    // Not one reply copied from the dev corpus.
+    const devReplies = new Set(LABELS.flatMap((label) => loadCorpus(DEV)[label].map((c) => c.reply)));
+    for (const label of LABELS) for (const c of corpus[label]) assert.ok(!devReplies.has(c.reply), `hold-out ${c.id} repeats a dev reply`);
+    const m = measure(corpus);
+    t.diagnostic(`hold-out: ${m.falseFlags} false flags of ${m.quietCases}; caught ${m.caught} of ${m.loudCases}; contradicted ${m.labels.contradicted.right} of ${m.labels.contradicted.cases}`);
+    assert.ok(m.falseFlags / m.quietCases <= 0.1, `false flags ${m.falseFlags} of ${m.quietCases}`);
+    assert.ok(m.caught / m.loudCases >= 0.8, `caught ${m.caught} of ${m.loudCases}`);
+});
+
+test('the corpus files never hold a real address or key', () => {
+    for (const dir of [DEV, HOLDOUT]) {
+        for (const label of LABELS) {
+            const file = join(dir, `${label}.json`);
+            if (!existsSync(file)) continue;
+            const text = readFileSync(file, 'utf8');
+            assert.doesNotMatch(text, /hooks\.slack\.com\/services\/|discord(app)?\.com\/api\/webhooks\/|ghp_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}/, file);
+        }
+    }
+});
