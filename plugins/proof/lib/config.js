@@ -18,7 +18,7 @@ export const SETTING_TITLES = Object.freeze({
     verifier: 'Independent check',
     verifierProvider: 'Check with the model from',
     verifierModel: 'Check with the model',
-    verifierMinutes: 'Give a check at most',
+    verifierMinutes: 'Minutes a check may take',
     verifierPerHour: 'Checks an hour, at most',
 });
 
@@ -26,7 +26,7 @@ export const SETTING_TITLES = Object.freeze({
 export const LIVE_SETTINGS = Object.freeze(['flags', 'verifier', 'verifierProvider', 'verifierModel', 'verifierMinutes', 'verifierPerHour']);
 
 /** How the independent check runs: never, when you press Check, or by itself for each flagged claim. */
-export const VERIFIER_CHOICES = Object.freeze({ off: 'Off', ask: 'When I press Check', auto: 'By itself, for each flagged claim' });
+export const VERIFIER_CHOICES = Object.freeze({ off: 'Off', ask: 'When I press Check', auto: 'By itself' });
 
 /** What Proof uses when the profile sets nothing (the defaults in lib/index.js Config). */
 export const DEFAULTS = Object.freeze({

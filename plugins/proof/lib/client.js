@@ -1085,15 +1085,15 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 name: 'verifier',
                 kind: 'choice',
                 title: 'Independent check',
-                hint: 'A fresh read-only thread on a local model re-runs or re-reads a flagged claim\'s evidence and answers VERIFIED or NOT VERIFIED, with its reason.',
+                hint: 'A fresh read-only thread on a local model re-runs or re-reads a flagged claim\'s evidence and answers VERIFIED or NOT VERIFIED, with its reason. By itself checks each new flagged claim.',
                 default: 'ask',
                 options: [{ value: 'off', label: 'Off' }, { value: 'ask', label: 'When I press Check' }, { value: 'auto', label: 'By itself' }],
                 group: 'Independent check',
             },
             { name: 'verifierProvider', kind: 'text', title: 'Check with the model from', hint: 'The provider, as DSH\'s model list names it.', default: 'owner-ascents', accepts: (t) => ROUTE.test(t), invalid: 'A provider name as DSH\'s model list shows it: letters, digits and . _ - : / @ +, such as owner-ascents.' },
             { name: 'verifierModel', kind: 'text', title: 'Check with the model', hint: 'A cheap local model is enough: it re-runs a command or reads a file. Only the check thread uses it; DSH\'s default model stays as it is.', default: 'GLM-5.3-Flash-EXL3', accepts: (t) => ROUTE.test(t), invalid: 'A model name as DSH\'s model list shows it, such as GLM-5.3-Flash-EXL3.' },
-            { name: 'verifierMinutes', kind: 'number', title: 'Give a check at most, in minutes', hint: 'Then it is stopped and its answer is unclear.', default: 5, min: 1, max: 30 },
-            { name: 'verifierPerHour', kind: 'number', title: 'Checks an hour, at most', hint: 'More wait their turn and start when the hour allows.', default: 12, min: 1, max: 120 },
+            { name: 'verifierMinutes', kind: 'number', title: 'Minutes a check may take', hint: 'From 1 to 30. A check still running then is stopped, and its answer is unclear.', default: 5, min: 1, max: 30 },
+            { name: 'verifierPerHour', kind: 'number', title: 'Checks an hour, at most', hint: 'From 1 to 120. More wait their turn and start when the hour allows.', default: 12, min: 1, max: 120 },
         ];
         const SETTINGS_SUMMARY = 'Whether Proof flags claims on their turn, and how the independent check runs.';
         const SETTINGS_NOTE = 'Changes apply as soon as you save. A check thread can read and run commands but never write a file, and Proof refuses edits, commits, pushes, installs and deploys in it.';
