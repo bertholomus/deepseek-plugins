@@ -5,9 +5,10 @@
  * searches the vault's active notes for the prompt and the session's
  * folder, and adds the few that fit as one short block after the prompt,
  * each cited by its path in the vault (lib/recall.js). It is bounded (a
- * few notes, a few thousand characters), drawn by DSH as a collapsed
- * "Context injection" row, and can be turned off for one session from the
- * card after the turn or from Canon's page.
+ * few notes, a few thousand characters), kept in the session's log as
+ * Canon's context (DSH's Trajectory tab lists it; its Chat shows Canon's
+ * card after the turn instead), and can be turned off for one session from
+ * the card or from Canon's page.
  *
  * Capture: while the settings allow drafts, agents get a `canon_capture`
  * tool that saves a note as a DRAFT (`status: draft`, its kind, where it
@@ -217,26 +218,45 @@ export function apply(ctx, config) {
         bump();
     }));
 
-    // DSH's session list, read at most every two seconds: the page's session titles.
+    // DSH's session list, read at most every two seconds (sooner for a session it did not list yet): the page's titles.
     const sc = ctx.sessionController;
-    let listed = { at: 0, items: [] };
+    let listed = { at: 0, items: [], ids: new Set() };
+    /** Sessions the last read did not list (gone, or another computer's): no reason to read again before two seconds. */
+    const unlisted = new Set();
+    const titleIn = (value) => (typeof value === 'string' ? value : typeof value?.title === 'string' ? value.title : '');
+    // DSH works a session's title out lazily: an open session's list row can lack it until something has looked.
+    const openTitle = (sessionId) => {
+        try {
+            const session = ctx.get?.('sessions')?.get?.(sessionId);
+            return session ? titleIn(ctx.sessionProjections?.snapshot?.(session, ['title'])?.values?.title) : '';
+        } catch {
+            return '';
+        }
+    };
+    const readList = async () => {
+        try {
+            const result = await sc.list({}, AbortSignal.timeout(20000));
+            const items = Array.isArray(result?.items) ? result.items : [];
+            listed = { at: Date.now(), items, ids: new Set(items.map((item) => item?.sessionId)) };
+        } catch (error) {
+            logger?.warn?.(`canon: session titles: ${errorText(error)}`);
+        }
+    };
+    /** The sessions DSH still has, by id, with their titles ('' for none); a session DSH no longer has is left out. */
     const titles = async (ids) => {
         const out = new Map();
         if (!ids.length) return out;
-        if (Date.now() - listed.at > 2000) {
-            try {
-                const result = await sc.list({}, AbortSignal.timeout(20000));
-                listed = { at: Date.now(), items: Array.isArray(result?.items) ? result.items : [] };
-            } catch (error) {
-                logger?.warn?.(`canon: session titles: ${errorText(error)}`);
-            }
+        const newcomer = ids.some((id) => !listed.ids.has(id) && !unlisted.has(id));
+        if (Date.now() - listed.at > 2000 || newcomer) {
+            await readList();
+            for (const id of [...unlisted]) if (listed.ids.has(id)) unlisted.delete(id);
+            if (unlisted.size > 2000) unlisted.clear();
+            for (const id of ids) if (!listed.ids.has(id)) unlisted.add(id);
         }
         const wanted = new Set(ids);
         for (const item of listed.items) {
             if (!wanted.has(item?.sessionId)) continue;
-            const values = item.projections?.values ?? {};
-            const title = typeof values.title === 'string' ? values.title : typeof values.title?.title === 'string' ? values.title.title : '';
-            out.set(item.sessionId, title);
+            out.set(item.sessionId, titleIn(item.projections?.values?.title) || openTitle(item.sessionId));
         }
         return out;
     };
@@ -253,7 +273,7 @@ export function apply(ctx, config) {
         async setSession(sessionId, on) {
             const changed = switches.set(sessionId, on);
             if (changed) {
-                const [title] = [...(await titles([sessionId])).values()];
+                const title = (await titles([sessionId])).get(sessionId) ?? '';
                 events.add({
                     kind: 'session',
                     state: 'done',

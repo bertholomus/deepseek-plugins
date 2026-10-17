@@ -8,9 +8,10 @@
  * hold a person's prompt (`source.kind === 'user'`), once per prompt. The
  * search starts before DSH's own step work and the block goes right after
  * the last claimed message, under its own source kind
- * (`dsh-plugin-canon`, form `notice`): DSH draws it as a collapsed
- * "Context injection" row with Canon's one-line summary, and the model
- * reads it as a message. A rejected or empty step, an aborted turn, or
+ * (`dsh-plugin-canon`, form `notice`, with a one-line summary): the model
+ * reads it as a message; DSH's Trajectory tab lists it as context, and its
+ * Chat keeps context out of sight (Canon's card after the turn names the
+ * notes there). A rejected or empty step, an aborted turn, or
  * anything going wrong leaves DSH's step exactly as it was.
  *
  * No DSH packages here: the message is made by the `makeMessage` DSH's

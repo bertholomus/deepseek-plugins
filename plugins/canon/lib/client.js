@@ -5,9 +5,9 @@
  * - The card (`conversation.chat.turnTail`, order 45): after the latest
  *   turn of a session that got notes from the canon vault, which notes
  *   (title and folder), with "Turn off for this session" (or "Turn back
- *   on") and the way to Canon's page. DSH's own "Context injection" row on
- *   each such turn holds exactly what the model read; older turns get no
- *   card of Canon's.
+ *   on") and the way to Canon's page. DSH's Chat keeps the block itself out
+ *   of sight (its Trajectory tab lists it), and Canon's page lists each
+ *   session's recent turns that got notes, so older turns get no card.
  * - The entry in DSH's panel list (`sidebar.panellist`, order 8) and the
  *   page in `main`: the vault and what Canon may do with it, a try-out
  *   that shows what a prompt would get and why, the sessions that got
@@ -1471,7 +1471,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             h('div', { className: `${P}-title` }, nameOf(d)),
                             h('div', { className: `${P}-meta` },
                                 d.created ? h('span', null, 'Saved ', h(kit.TimeText, { at: d.created })) : null,
-                                d.sessionId ? h('span', null, d.created ? ' from ' : 'From ', h(SessionLink, { title: d.sessionTitle || 'a session', sessionId: d.sessionId }), Number.isSafeInteger(d.turn) ? `, turn ${d.turn}` : '') : null,
+                                d.sessionId ? h('span', null, d.created ? ' from ' : 'From ', h(SessionLink, { title: d.sessionTitle || 'a session', sessionId: d.sessionKnown === false ? '' : d.sessionId }), Number.isSafeInteger(d.turn) ? `, turn ${d.turn}` : '') : null,
                                 h('span', { className: `${P}-code` }, `${d.created || d.sessionId ? ' · ' : ''}${d.path}`)),
                             d.preview ? h('div', { className: `${P}-why` }, d.preview) : null),
                         h('div', { className: `${P}-item-side` },
@@ -1489,7 +1489,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             h('span', { className: `${P}-log-time` }, h(kit.TimeText, { at: entry.at })),
                             h('div', { className: `${P}-item-main` },
                                 h('div', null,
-                                    entry.sessionId ? h(SessionLink, { title: titles.get(entry.sessionId) || 'A session', sessionId: entry.sessionId }) : null,
+                                    entry.sessionId ? h(SessionLink, { title: entry.sessionTitle || titles.get(entry.sessionId) || 'A session', sessionId: entry.sessionKnown === false ? '' : entry.sessionId }) : null,
                                     entry.sessionId ? h('span', { className: `${P}-meta` }, ' · ') : null,
                                     h('span', null, entry.text)),
                                 entry.why ? h('div', { className: `${P}-why` }, sentence(upper(entry.why))) : null),

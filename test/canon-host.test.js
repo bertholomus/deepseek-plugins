@@ -793,10 +793,13 @@ function standInDsh() {
         sessionProjections: {
             register: (projection) => projections.push(projection),
             stateOf: (session, key) => states.get(`${session?.id}\0${key}`),
+            // DSH folds a title lazily: s-2's list row has none until its open session is asked.
+            snapshot: (session, keys) => (session?.id === 's-2' && keys.includes('title') ? { values: { title: 'Open title' } } : { values: {} }),
         },
         sessionController: {
-            list: async () => ({ items: [{ sessionId: 's-1', projections: { values: { title: 'Gateway work' } } }] }),
+            list: async () => ({ items: [{ sessionId: 's-1', projections: { values: { title: 'Gateway work' } } }, { sessionId: 's-2', projections: { values: {} } }] }),
         },
+        get: (name) => (name === 'sessions' ? { get: (id) => (id === 's-2' ? { id } : undefined) } : undefined),
     };
     return {
         ctx, provided, tools, projections, states, warnings,
@@ -847,8 +850,14 @@ test('plugin: a prompt gets the cited block; per-session off stops it; capture a
     const off = step({ id: 'm-2', turn: 2 });
     const offDecision = await off.next();
     assert.equal(await dsh.preStep(off.payload, async () => offDecision), offDecision);
-    assert.match((await remote.state()).history[0].why, /Canon adds nothing to “Gateway work” until it is turned back on\./);
+    const offState = await remote.state();
+    assert.match(offState.history[0].why, /Canon adds nothing to “Gateway work” until it is turned back on\./);
+    assert.deepEqual([offState.history[0].sessionTitle, offState.history[0].sessionKnown], ['Gateway work', true], 'what happened names the session as DSH does now');
     await remote.setSession('s-1', true);
+    // A session whose list row has no title yet: its title is read from the open session.
+    await remote.setSession('s-2', false);
+    assert.match((await remote.state()).history[0].why, /Canon adds nothing to “Open title” until it is turned back on\./);
+    await remote.setSession('s-2', true);
     const on = step({ id: 'm-3', turn: 3 });
     assert.equal((await dsh.preStep(on.payload, on.next)).messages.length, 4, 'back on: notes again');
 
@@ -878,6 +887,13 @@ test('plugin: a prompt gets the cited block; per-session off stops it; capture a
     assert.equal(written.length, 1);
     const draftData = parseNote(readFileSync(join(vault, written[0]), 'utf8')).data;
     assert.deepEqual([draftData.status, draftData.kind, draftData.source.session, draftData.source.turn], ['draft', 'fact', 's-1', 3]);
+    // The page names a draft's session while DSH has it, and offers it as a link only then.
+    await remote.refresh();
+    const listedDrafts = (await remote.state()).drafts;
+    const fresh = listedDrafts.find((d) => d.path === written[0]);
+    const old = listedDrafts.find((d) => d.path === 'Drafts/2026-10-01 Gateway timeouts.md');
+    assert.deepEqual([fresh?.sessionId, fresh?.sessionTitle, fresh?.sessionKnown], ['s-1', 'Gateway work', true]);
+    assert.deepEqual([old?.sessionId, old?.sessionTitle, old?.sessionKnown], ['fixture-session-1', '', false]);
     let history = (await remote.state()).history;
     assert.equal(history[0].kind, 'capture');
     assert.equal(history[0].text, 'Draft saved: “Gateway health check port”');

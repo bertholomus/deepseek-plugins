@@ -285,6 +285,11 @@ test('the page: the vault, the try-out, the sessions with their switches, the dr
     text = textIn(withAttr(page.tree, 'data-canon-history')[0]);
     assert.match(text, /Gateway work · Draft saved: “Gateway timeouts”A gotcha note in Drafts\/2026-10-01 Gateway timeouts\.md\. It waits for a person to promote it\./);
     assert.match(text, /Not promotedDrafts\/x\.md: Promoting is off\.not changed/);
+    // An entry from a session DSH no longer has names it without a link.
+    const gone = mount(client.internals.HistoryCard, { data: { history: [{ id: 'h9', at: now, kind: 'session', state: 'done', sessionId: 'gone', sessionTitle: 'Old work', sessionKnown: false, text: 'Notes turned off for a session' }] }, titles: new Map() });
+    t.after(() => gone.unmount());
+    assert.match(textIn(gone.tree), /Old work · Notes turned off for a session/);
+    assert.equal(buttons(gone.tree).filter((b) => textIn(b) === 'Old work').length, 0);
 
     // Drafts and promoting allowed: the card says so.
     state = { ...PAGE_STATE, settings: { ...SETTINGS, access: 'drafts', promote: true, promoteFolder: 'Notes' } };
@@ -368,6 +373,19 @@ test('the page: no vault, a vault it cannot read, empty lists, switched off, a w
     assert.match(text, /Canon is not running\./);
     assert.match(text, /Open Canon in Plugins and switch it off and on again/);
     assert.doesNotMatch(text, /Session Watch/, 'Canon needs nothing else');
+});
+
+test('a draft from a session DSH no longer has names it in words, with no link to open', (t) => {
+    const { react, mount } = statefulReact();
+    const { client } = loadClient(CLIENT, { react });
+    const { DraftsCard } = client.internals;
+    const gone = { ...DRAFT, path: 'Drafts/Old.md', title: 'Old', sessionId: 'gone', sessionTitle: '', sessionKnown: false };
+    const card = mount(DraftsCard, { data: { ...PAGE_STATE, drafts: [gone, DRAFT] }, onChanged: () => {} });
+    t.after(() => card.unmount());
+    const rows = withAttr(card.tree, 'data-canon-draft');
+    assert.match(textIn(rows[0]), /from a session, turn 4/);
+    assert.equal(buttons(rows[0]).filter((b) => textIn(b) === 'a session').length, 0);
+    assert.ok(button(rows[1], 'Gateway work'), 'a session DSH has opens from its name');
 });
 
 test('settings in Plugins: the form has every live setting, takes what the config takes, and saves through DSH', async () => {

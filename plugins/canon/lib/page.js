@@ -112,14 +112,16 @@ function settingsOf(config, current) {
  * @param {import('./shared/journal.js').Journal} parts.events
  * @param {import('./shared/journal.js').Journal} parts.recalls
  * @param {Switches} parts.switches
- * @param {(ids: string[]) => Promise<Map<string, string>>} parts.titles - DSH's session titles.
+ * @param {(ids: string[]) => Promise<Map<string, string>>} parts.titles - the sessions DSH still has, with their titles.
  */
 export async function pageState({ config, check, current, vault, events, recalls, switches, titles }) {
     const on = working({ config, check });
     const problem = check?.problem;
     const sessions = on ? recentSessions(recalls.list({ limit: 300 }), switches) : [];
     const drafts = on ? vault.drafts() : [];
-    const ids = [...new Set([...sessions.map((s) => s.sessionId), ...drafts.map((d) => d.sessionId).filter(Boolean)])];
+    const history = events.list({ limit: HISTORY });
+    const named = (id) => typeof id === 'string' && id !== '';
+    const ids = [...new Set([...sessions.map((s) => s.sessionId), ...drafts.map((d) => d.sessionId), ...history.map((e) => e.sessionId)].filter(named))];
     let names = new Map();
     try { names = (await titles(ids)) ?? new Map(); } catch { names = new Map(); }
     return {
@@ -128,8 +130,10 @@ export async function pageState({ config, check, current, vault, events, recalls
         settings: settingsOf(config, current()),
         vault: on ? vault.status() : { state: 'unset', counts: { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0 } },
         sessions: sessions.map((s) => ({ ...s, title: names.get(s.sessionId) ?? '' })),
-        drafts: drafts.map((d) => ({ ...d, sessionTitle: d.sessionId ? names.get(d.sessionId) ?? '' : '' })),
-        history: events.list({ limit: HISTORY }),
+        // A draft from a session DSH no longer has (or another computer's) names it without a way to open it.
+        drafts: drafts.map((d) => ({ ...d, sessionTitle: d.sessionId ? names.get(d.sessionId) ?? '' : '', sessionKnown: Boolean(d.sessionId) && names.has(d.sessionId) })),
+        // Each entry names its session as DSH does now (its title), and says whether DSH still has it.
+        history: history.map((e) => (named(e.sessionId) ? { ...e, sessionTitle: names.get(e.sessionId) ?? '', sessionKnown: names.has(e.sessionId) } : e)),
     };
 }
 
