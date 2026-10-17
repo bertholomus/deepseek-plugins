@@ -1064,7 +1064,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             entry: 'Decisions',
             title: 'Decisions',
             summary: 'Everything waiting on you, in one place: decision lines, tools waiting for approval, questions, and threads that need a decision. Answer here and the answer goes into the session.',
-            disabled: 'Decisions is switched off in DSH\'s profile (enabled: false in its entry in cordis.patch.yml), so it lists nothing and holds nothing. To use it, set enabled to true there and restart DSH. To remove it instead, switch it off in Plugins.',
+            disabled: 'Decisions is switched off in DSH\'s profile (enabled: false in its entry in cordis.patch.yml), so it lists nothing and holds nothing. To use it, set enabled to true there; DSH applies it when you save the file. To remove it instead, switch it off in Plugins.',
             waiting: 'Waiting on you',
             nothing: 'Nothing waits on you',
             nothingText: 'When a session asks you something (a DECISION NEEDED line, a tool that needs approval, a question in the question box, a thread that needs a decision), it shows here, and you can answer it here.',
@@ -1147,6 +1147,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-card-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}`,
             `.${P}-session{font:var(--dsw-font-s-strong-14)}`,
             `.${P}-ask{margin:8px 0 0;font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary);white-space:pre-wrap;overflow-wrap:anywhere}`,
+            `.${P}-lead{font:var(--dsw-font-s-strong-14)}`,
+            `.${P}-before{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0}`,
+            `.${P}-before>.${P}-quote{align-self:stretch}`,
             `.${P}-rec{margin:6px 0 0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-primary)}`,
             `.${P}-rec-label{color:var(--${P}-text-2)}`,
             `.${P}-code{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace);max-height:12em;overflow:auto}`,
@@ -1209,6 +1212,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         /** Where a card comes from, in words, beside its session. */
         function originWords(card) {
             if (card.kind === 'thread' && card.via?.title) return `a thread of “${card.via.title}”`;
+            if (card.via?.title) return `in a thread of “${card.via.title}”`;
             if (card.kind === 'ask') return `from ${card.source || 'a plugin'}`;
             if (card.kind === 'question' && card.late) return 'its wait ran out; your answer reaches it as a new message';
             return '';
@@ -1299,7 +1303,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 mirror ? h('div', { className: `${P}-line${data.mirror.problem ? ` ${P}-warn` : ''}`, 'data-decisions-mirror': data.mirror.problem ? 'problem' : data.mirror.mode },
                     h('span', null, mirror),
                     data.mirror.problem
-                        ? (canOpen ? h(ui.Button, { variant: 'ghost', size: 'sm', onClick: () => kit.openPlugin(BUNDLE) }, 'Open Decisions\' settings') : null)
+                        // The command lives only in DSH's profile, which its words name; the rest is in the settings form.
+                        ? (canOpen && data.mirror.mode !== 'command' ? h(ui.Button, { variant: 'ghost', size: 'sm', onClick: () => kit.openPlugin(BUNDLE) }, 'Open Decisions\' settings') : null)
                         : h(ui.Button, { variant: 'ghost', size: 'sm', disabled: busy, onClick: () => void act('testMirror', {}) }, 'Send a test')) : null,
                 mirrorFailed(data.mirror) ? h('div', { className: `${P}-line ${P}-warn`, 'data-decisions-mirror-failed': '' },
                     h('span', null, `The last new card was not sent: ${String(data.mirror.last.reason ?? 'it failed').replace(/\.$/, '')} (`, h(kit.TimeText, { at: data.mirror.last.at }), ').')) : null,
@@ -1383,6 +1388,17 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 ] : null);
         }
 
+        /** The reply's lines before its question, folded after two: what the question is about. */
+        function ReplyBefore({ text }) {
+            const [open, setOpen] = React.useState(false);
+            const lines = String(text).split('\n');
+            const more = lines.length - 2;
+            return h('div', { className: `${P}-before`, 'data-decisions-context': '' },
+                h('p', { className: `${P}-quote` }, open || more <= 0 ? lines.join('\n') : lines.slice(0, 2).join('\n')),
+                more > 0 ? h(ui.Button, { variant: 'ghost', size: 'sm', 'aria-expanded': open ? 'true' : 'false', onClick: () => setOpen(!open) },
+                    open ? 'Show less of the reply' : `Show ${more} more line${more === 1 ? '' : 's'} of the reply`) : null);
+        }
+
         /** One thing waiting on you, with the controls its kind takes. */
         function DecisionCard({ card, onOpen, act, busyId, now }) {
             const [failure, setFailure] = React.useState(undefined);
@@ -1414,7 +1430,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         h(kit.StateTag, { word: wordOf(card) }),
                         h(SessionLink, { title: card.title, sessionId: card.sessionId, onOpen }),
                         h('span', { className: `${P}-meta` }, origin ? `${origin} · ` : '', h(Waited, { at: card.at, now }))),
-                    asksInForm ? null : h('p', { className: `${P}-ask` }, card.question),
+                    asksInForm ? null : h('p', { className: `${P}-ask` }, card.head ? [h('span', { key: 'h', className: `${P}-lead` }, card.head), ' ', card.question] : card.question),
+                    card.context && !asksInForm ? h(ReplyBefore, { text: card.context }) : null,
                     card.more && !asksInForm ? h('p', { className: `${P}-why` }, `And ${card.more} more question${card.more === 1 ? '' : 's'}.`) : null,
                     card.recommendation ? h('p', { className: `${P}-rec`, 'data-decisions-recommendation': '' }, h('span', { className: `${P}-rec-label` }, 'Recommended: '), card.recommendation) : null,
                     card.what ? h('p', { className: `${P}-quote ${P}-code` }, card.what) : null,

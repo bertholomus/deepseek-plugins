@@ -20,7 +20,7 @@
 import { clip, errorText, isRecord, later } from './shared/safe.js';
 import { cutOff, plainError } from './shared/words.js';
 import { APPROVAL_ANSWERS, Holds, approvalProof, approvalWords, lateAnswerProof, questionProof } from './holds.js';
-import { ANSWER_MAX, answerMessage, answerWords, askCard, byUrgency, checkAnswers, coordinatorView, handbacksOf, headline, lead, questionCards, readable, replyCard, threadCards } from './cards.js';
+import { ANSWER_MAX, answerMessage, answerWords, askCard, byUrgency, checkAnswers, coordinatorView, handbacksOf, headline, lead, questionCards, readable, replyCard, threadCards, threadsOf } from './cards.js';
 
 /** Ids kept per list in the store (the newest). */
 const KEEP = 600;
@@ -355,6 +355,8 @@ export class Inbox {
         const found = new Map();
         const add = (card) => { if (card && !found.has(card.id)) found.set(card.id, card); };
         const handbacks = [];
+        // Which chat coordinates each thread session, so a card from inside a thread says whose thread it is.
+        const chats = new Map();
         // A held request's title as DSH lists it now (a new session's title may come after its first request).
         for (const card of this.holds.cards()) {
             if (config[card.kind === 'approval' ? 'approvals' : 'questions'] === false) continue;
@@ -396,9 +398,13 @@ export class Inbox {
                         add(card);
                     }
                 }
-                add(replyCard(row, { replies: config.replies, windowMs, now }));
+                // The reply itself is not in a row: the watcher's full state has it while the session is loaded.
+                const full = row.state?.ask ? this.watch.stateOf?.(row.sessionId) : undefined;
+                const reply = typeof full?.text === 'string' ? { text: full.text, turn: full.textTurn } : undefined;
+                add(replyCard(row, { replies: config.replies, windowMs, now, reply }));
+                const projection = this.watch.projection?.(row.sessionId, 'coordinatorSession');
+                for (const thread of threadsOf(row, projection)) chats.set(thread.session, thread.chat);
                 if (config.threads) {
-                    const projection = this.watch.projection?.(row.sessionId, 'coordinatorSession');
                     for (const card of threadCards(row, projection, byId)) add(card);
                     handbacks.push(...handbacksOf(row, projection));
                 }
@@ -419,6 +425,9 @@ export class Inbox {
             if (!open && !relayedHandback(chat, known.filter((h) => h.chat === card.sessionId))) continue;
             found.delete(card.id);
             if (open && card.recommendation && !open.recommendation) open.recommendation = card.recommendation;
+        }
+        for (const card of found.values()) {
+            if (card.kind !== 'thread' && !card.via && chats.has(card.sessionId)) card.via = chats.get(card.sessionId);
         }
         const waiting = [];
         const dismissed = [];

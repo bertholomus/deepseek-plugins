@@ -458,6 +458,13 @@ try {
         await idle(cards.thread.sessionId).catch(() => {});
     });
 
+    // A plain question after a list: the card carries the list, so it can be answered in place.
+    ids.names = await run.newSession('E2E:say Here are three names for the CLI:\\n1. **tidy** — short\\n2. **sweep** — says what it does\\n3. **pare** — rare\\n\\nWhich one do you prefer?', 'CLI names');
+    await step('a plain question after a list carries the list', async () => {
+        cards.names = await waitCard(ids.names, 'reply');
+        check('the card keeps the reply\'s lines before its question, without Markdown marks', cards.names.question === 'Which one do you prefer?' && cards.names.context === 'Here are three names for the CLI:\n1. tidy — short\n2. sweep — says what it does\n3. pare — rare', json(cards.names));
+    });
+
     // ── The page ───────────────────────────────────────────────────────
     pw = await findPlaywright();
     if (!pw) {
@@ -477,6 +484,14 @@ try {
             const blocked = page.locator(`[data-decisions-id="${cards.staging.id}"]`);
             check('a card shows its state, its session, its wait and its question', /blocked/.test(await blocked.innerText()) && /Staging check/.test(await blocked.innerText()) && /waiting (less than a minute|\d+ minutes?)/.test(await blocked.innerText()) && /The staging database refuses my login\./.test(await blocked.innerText()),
                 await blocked.innerText());
+            const names = page.locator(`[data-decisions-id="${cards.names.id}"]`);
+            const before = names.locator('[data-decisions-context]');
+            const unfold = before.getByRole('button', { name: 'Show 2 more lines of the reply' });
+            check('a question\'s earlier lines show folded after two, with a button to unfold them', /Here are three names for the CLI:\n1\. tidy — short$/.test((await before.locator('p').innerText()).trim()) && await unfold.getAttribute('aria-expanded') === 'false', await before.innerText());
+            await unfold.click();
+            const fold = before.getByRole('button', { name: 'Show less of the reply' });
+            check('unfolded, all of them show, and the button keeps the keyboard', /3\. pare — rare$/.test((await before.locator('p').innerText()).trim()) && await fold.getAttribute('aria-expanded') === 'true' && await fold.evaluate((el) => el === document.activeElement), await before.innerText());
+            check('a BLOCKED line says what the session is blocked on', /Blocked on: The staging database refuses my login\./.test(await blocked.innerText()), await blocked.innerText());
             await shot(page, shots, 'decisions-light');
             await shot(page, shots, 'waiting-light', page.locator('[data-decisions-waiting]'));
             await setDark(page, true);
@@ -825,7 +840,7 @@ try {
         const header = page.locator('[data-decisions-header="off"]');
         await header.waitFor({ state: 'visible', timeout: 20000 });
         const words = (await header.innerText()).replace(/\n+/g, ' ');
-        check('the page says it lists nothing, and how to change that', /Decisions is switched off in DSH's profile \(enabled: false in its entry in cordis\.patch\.yml\), so it lists nothing and holds nothing\. To use it, set enabled to true there and restart DSH\./.test(words), words);
+        check('the page says it lists nothing, and how to change that', /Decisions is switched off in DSH's profile \(enabled: false in its entry in cordis\.patch\.yml\), so it lists nothing and holds nothing\. To use it, set enabled to true there; DSH applies it when you save the file\./.test(words), words);
         await shot(page, shots, 'disabled-light');
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-disabled');

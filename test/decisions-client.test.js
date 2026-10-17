@@ -516,3 +516,35 @@ test('settings in Plugins: on a DSH without a key store in the window, the form 
     assert.ok(elementsOf(page).some((e) => e.type === 'Switch'));
     assert.deepEqual(plain(form.models[0].secrets), []);
 });
+
+test('browser half: a question\'s earlier lines fold after two, a BLOCKED line says what it waits for, and a thread\'s approval names its chat', () => {
+    const { react, mount } = statefulReact();
+    const { client } = loadClient(CLIENT, { react });
+    const { DecisionCard, originWords } = client.internals;
+    const act = async () => undefined;
+    const reply = { id: 'reply:n:2', kind: 'reply', sessionId: 'n', title: 'Names', question: 'Which one do you prefer?', context: 'Here are three names:\n1. tidy\n2. sweep\n3. pare', at, running: false, answer: 'text' };
+    const card = mount(DecisionCard, { card: reply, onOpen() {}, act, busyId: undefined, now: Date.now() });
+    const before = () => elementsOf(card.tree).find((e) => e.props?.['data-decisions-context'] !== undefined);
+    const toggle = () => elementsOf(before()).find((e) => e.type === 'Button');
+    assert.equal(textIn(elementsOf(before()).find((e) => e.type === 'p')), 'Here are three names:\n1. tidy');
+    assert.equal(textIn(toggle()), 'Show 2 more lines of the reply');
+    assert.equal(toggle().props['aria-expanded'], 'false');
+    toggle().props.onClick();
+    assert.equal(textIn(elementsOf(before()).find((e) => e.type === 'p')), 'Here are three names:\n1. tidy\n2. sweep\n3. pare');
+    assert.equal(textIn(toggle()), 'Show less of the reply');
+    assert.equal(toggle().props['aria-expanded'], 'true');
+    card.unmount();
+    // Two lines or fewer: shown whole, nothing to unfold.
+    const short = mount(DecisionCard, { card: { ...reply, context: 'Options: tidy or sweep.' }, onOpen() {}, act, busyId: undefined, now: Date.now() });
+    assert.equal(elementsOf(short.tree).filter((e) => e.type === 'Button' && /of the reply/.test(textIn(e))).length, 0);
+    short.unmount();
+    const blocked = mount(DecisionCard, { card: { ...reply, id: 'blocked:n:2', kind: 'blocked', head: 'Blocked on:', question: 'valid staging credentials.', context: undefined }, onOpen() {}, act, busyId: undefined, now: Date.now() });
+    assert.equal(textIn(elementsOf(blocked.tree).find((e) => /-ask$/.test(e.props?.className ?? ''))), 'Blocked on: valid staging credentials.');
+    // Its own class: the kit's card head is a flex row and would put the words on a line of their own.
+    const lead = elementsOf(blocked.tree).find((e) => e.type === 'span' && textIn(e) === 'Blocked on:');
+    assert.ok(lead && !/-head$/.test(lead.props.className), lead?.props?.className);
+    blocked.unmount();
+    assert.equal(originWords({ ...CARDS.approval, via: { sessionId: 'co', title: 'Status page work' } }), 'in a thread of “Status page work”');
+    assert.equal(originWords(CARDS.thread), 'a thread of “Coordinator”');
+    assert.equal(originWords(CARDS.approval), '');
+});

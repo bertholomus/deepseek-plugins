@@ -45,6 +45,80 @@ const titleOf = (row) => (typeof row?.title === 'string' && row.title.trim() ? r
 /** Markdown links as their words: "[Port pick](.dsh-thread/t1)" reads "Port pick" on a card. */
 export const plainLinks = (text) => String(text ?? '').replace(/\[([^\]\n]{1,300})\]\([^)\s]{0,1000}\)/g, '$1');
 
+/** A reply's line as a card shows it: links as their words, without Markdown's marks. */
+const plainLine = (line) => plainLinks(line).replace(/\*\*|__|`/g, '').replace(/^\s*>+\s?/, '').replace(/^\s*#{1,6}\s+/, '').replace(/\s+/g, ' ').trim();
+
+/** Words to find a question by in its reply: lower case, without marks or extra spacing (as long as `plainLine`). */
+const findable = (text) => plainLine(text).toLowerCase();
+
+/** The most of a reply a card carries from before its question. */
+const CONTEXT_LINES = 4;
+const CONTEXT_MAX = 400;
+
+/**
+ * The lines of a reply just before its question: what the question is
+ * about ("1. tidy … 2. sweep … Which one do you prefer?"). Up to four lines
+ * or 400 characters, in their order, as plain text; empty when the question
+ * opens the reply or is not found in it.
+ * @param {string} text - the reply.
+ * @param {string} question - the question the card shows.
+ */
+export function contextOf(text, question) {
+    if (typeof text !== 'string' || typeof question !== 'string') return '';
+    const wanted = findable(question).replace(/…$/, '');
+    if (wanted.length < 4) return '';
+    const lines = text.replace(/\r/g, '').split('\n');
+    // The line that holds the question: the last one with its start (a long question is found by its first words).
+    let at = -1;
+    let from = -1;
+    for (const size of [60, 24]) {
+        const probe = wanted.slice(0, size);
+        for (let i = lines.length - 1; i >= 0 && at < 0; i -= 1) {
+            const index = findable(lines[i]).indexOf(probe);
+            if (index >= 0) { at = i; from = index; }
+        }
+        if (at >= 0) break;
+    }
+    if (at < 0) return '';
+    const out = [];
+    let size = 0;
+    // What the question's own line says before it ("Here are three: A, B, C."), without a marker.
+    const own = plainLine(lines[at]);
+    const lead = own.slice(0, Math.min(from, own.length)).replace(/(?:DECISION NEEDED|BLOCKED)\s*[:：]?\s*$/i, '').trim();
+    if (lead) { out.push(lead); size += lead.length; }
+    for (let i = at - 1; i >= 0 && out.length < CONTEXT_LINES; i -= 1) {
+        if (/^\s*(?:```|~~~)/.test(lines[i])) continue;
+        const line = plainLine(lines[i]);
+        if (!line) continue;
+        if (size + line.length > CONTEXT_MAX) {
+            // A long line is cut at a word, and only when nothing was kept yet.
+            if (out.length === 0) out.unshift(`…${line.slice(line.length - CONTEXT_MAX + 1).replace(/^\S*\s/, '')}`);
+            break;
+        }
+        out.unshift(line);
+        size += line.length;
+    }
+    return out.join('\n');
+}
+
+/** "Recommend 9090 for the status page.", "I'd recommend 9090", "Recommendation: 9090", "My recommendation is 9090". */
+const PICK_SAID = /(?:^|[.!?;]\s+|\n)\s*(?:[-*]\s+|\d{1,2}[.)]\s+)?(?:(?:(?:I|we)(?:'d|’d|\s+would)?\s+)?recommend\b(?:\s*[:：])?|(?:my\s+|our\s+)?recommendation(?:\s+is\b|\s*[:：]))\s*(?!\s|(?:that|you|we|against|not|it|this|these|those|doing|to|a\s+few|some)\b)([^.;!?\n]{1,160})/i;
+/** "9090 (recommended)", "9090 (the thread's recommendation)". */
+const PICK_MARKED = /(?:^|[\n.;:!?,]\s*)(?:[-*]\s+|\d{1,2}[.)]\s+)?([^\n.;:!?(),]{1,120}?)\s*\((?:recommended|my\s+recommendation|(?:the\s+)?thread['’]s\s+recommendation|recommendation)\)/i;
+
+/**
+ * A pick stated as a sentence anywhere in a handback or a reply's end, when
+ * no "Recommendation:" closes it: "Recommend 9090 for the status page." or
+ * "**9090 (thread's recommendation)**" give "9090 for the status page" and
+ * "9090". Undefined when nothing is recommended.
+ */
+export function pickIn(text) {
+    const flat = String(text ?? '').replace(/\*\*|__|`/g, '');
+    const found = PICK_SAID.exec(flat) ?? PICK_MARKED.exec(flat);
+    const words = found?.[1]?.replace(/\s+/g, ' ').replace(/[\s,:—–-]+$/, '').trim().replace(/^(?:or|and|either)\s+/i, '');
+    return words && words.length >= 1 ? words : undefined;
+}
+
 /**
  * The card for what a session's last reply asks: a DECISION NEEDED line, a
  * BLOCKED line, or (with `replies`) a plain question. None while the
@@ -52,9 +126,11 @@ export const plainLinks = (text) => String(text ?? '').replace(/\[([^\]\n]{1,300
  * person answered, or a plugin's note moved it on), or when the turn ended
  * longer than `windowMs` ago.
  * @param {object} row - a watcher row (`sessionWatch.list()`).
- * @param {{ replies?: boolean, windowMs?: number, now?: number }} [options]
+ * @param {{ replies?: boolean, windowMs?: number, now?: number, reply?: { text: string, turn: number } }} [options] -
+ *   `reply`: the session's last reply and its turn, from the watcher's full state (`sessionWatch.stateOf`): a row
+ *   leaves the text out.
  */
-export function replyCard(row, { replies = true, windowMs = 0, now = Date.now() } = {}) {
+export function replyCard(row, { replies = true, windowMs = 0, now = Date.now(), reply } = {}) {
     const state = row?.state;
     const ask = state?.ask;
     const end = state?.end;
@@ -66,14 +142,24 @@ export function replyCard(row, { replies = true, windowMs = 0, now = Date.now() 
     const kind = ask.kind === 'decision' ? 'decision' : ask.kind === 'blocked' ? 'blocked' : 'reply';
     // An offer ("Let me know if you want the docs too") waits on nobody: Autopilot still leaves the session alone.
     if (kind === 'reply' && (!replies || ask.soft === true)) return undefined;
+    const question = plainLinks(ask.question);
+    // The reply's lines before its question ("1. tidy 2. sweep … Which one do you prefer?"), so the card can be answered in place.
+    const said = reply ?? (typeof state.text === 'string' ? { text: state.text, turn: state.textTurn } : undefined);
+    const text = said?.turn === ask.turn ? said.text : undefined;
+    const context = contextOf(text, ask.question);
+    // A plain question after "I'd recommend 9090 for the page." gets the pick too, with its own answer.
+    const pick = ask.recommendation ? plainLinks(ask.recommendation) : kind === 'reply' ? pickIn(`${context}\n${question}`) : undefined;
     return {
         id: `${kind}:${row.sessionId}:${end.turn}`,
         kind,
         sessionId: row.sessionId,
         title: titleOf(row),
         ...(row.cwd ? { cwd: row.cwd } : {}),
-        question: plainLinks(ask.question),
-        ...(ask.recommendation ? { recommendation: plainLinks(ask.recommendation) } : {}),
+        // A BLOCKED line's words are what the session waits for ("valid staging credentials"): said as such.
+        ...(kind === 'blocked' ? { head: 'Blocked on:' } : {}),
+        question,
+        ...(context ? { context } : {}),
+        ...(pick ? { recommendation: pick } : {}),
         turn: end.turn,
         at: endAt,
         running: false,
@@ -171,8 +257,12 @@ export function threadCards(row, projection, rowsById) {
         const at = Date.parse(thread.handback.at) || 0;
         if (own?.state && at > 0 && Math.max(Number(own.state.inAt) || 0, Number(own.state.userAt) || 0) > at) continue;
         const summary = plainLinks(thread.handback.summary).trim();
-        // "… Recommendation: 8080 — it matches the docs." goes under Recommended, with its own answer button.
+        // "… Recommendation: 8080 — it matches the docs." goes under Recommended, with its own answer button,
+        // and so does a pick said anywhere in it ("Recommend 9090 for the status page. …").
         const split = recommendationIn(summary);
+        const pick = split ? undefined : pickIn(summary);
+        const question = split?.question || summary;
+        const blocked = thread.handback.status === 'blocked';
         cards.push({
             id: `thread:${thread.session}:${at || thread.id}`,
             kind: 'thread',
@@ -180,14 +270,30 @@ export function threadCards(row, projection, rowsById) {
             title: clip(String(thread.title ?? 'Thread'), 120) || 'Thread',
             via: { sessionId: row.sessionId, title: titleOf(row) },
             status: thread.handback.status,
-            question: split?.question || summary || (thread.handback.status === 'blocked' ? 'The thread is blocked.' : 'The thread needs a decision.'),
-            ...(split ? { recommendation: split.recommendation } : {}),
+            // A summary that asks nothing is headed by what the thread waits for, so it reads as a request.
+            ...(question && !question.includes('?') ? { head: blocked ? 'The thread is blocked:' : 'The thread needs your decision:' } : {}),
+            question: question || (blocked ? 'The thread is blocked.' : 'The thread needs a decision.'),
+            ...(split ? { recommendation: split.recommendation } : pick ? { recommendation: pick } : {}),
             at,
             running: false,
             answer: 'text',
         });
     }
     return cards;
+}
+
+/**
+ * The thread sessions a coordinating chat runs, each with the chat: so a
+ * card from inside a thread (an approval, a question) can say whose thread
+ * it is.
+ * @returns {Array<{ session: string, chat: { sessionId: string, title: string } }>}
+ */
+export function threadsOf(row, projection) {
+    const view = coordinatorView(projection?.value);
+    if (!readable(row) || view?.role !== 'coordinator') return [];
+    return (Array.isArray(view.threads) ? view.threads : [])
+        .filter((thread) => isRecord(thread) && typeof thread.session === 'string')
+        .map((thread) => ({ session: thread.session, chat: { sessionId: row.sessionId, title: titleOf(row) } }));
 }
 
 /**
@@ -341,9 +447,11 @@ export function cutLines(text, max) {
 
 /** The plain text a mirror sends for a card. */
 export function mirrorText(card) {
-    const lines = [headline(card), clip(String(card.question ?? ''), 900)];
+    const lines = [headline(card)];
+    if (card.context) lines.push(cutLines(card.context, CONTEXT_MAX));
+    lines.push(clip(`${card.head ? `${card.head} ` : ''}${String(card.question ?? '')}`, 900));
     if (card.recommendation) lines.push(`Recommended: ${clip(card.recommendation, 300)}`);
-    if (card.via?.title) lines.push(`In “${clip(card.via.title, 80)}”.`);
+    if (card.via?.title) lines.push(card.kind === 'thread' ? `In “${clip(card.via.title, 80)}”.` : `In a thread of “${clip(card.via.title, 80)}”.`);
     lines.push('Answer it in DSH: Decisions.');
     return lines.join('\n');
 }

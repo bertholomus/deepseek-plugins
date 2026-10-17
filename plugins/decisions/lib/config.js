@@ -10,7 +10,7 @@
  *
  * @module dsh-plugin-decisions/config
  */
-import { changedEntry, changedTitles, commandLine, keyName, oneOf, onOff, wholeNumber } from './shared/settings.js';
+import { changedEntry, changedTitles, keyName, oneOf, onOff, wholeNumber } from './shared/settings.js';
 
 /** The settings, in the words the page, the settings form and the errors use. */
 export const SETTING_TITLES = Object.freeze({
@@ -56,7 +56,8 @@ export function checkConfig(settings) {
     wholeNumber(settings, 'windowHours', 1, 720, 'hours', t.windowHours);
     oneOf(settings, 'mirror', { off: 'Nowhere', webhook: 'Webhook', command: 'Command' }, t.mirror);
     keyName(settings, 'mirrorUrlEnv', t.mirrorUrlEnv);
-    commandLine(settings, 'mirrorCommand', { optional: true }, t.mirrorCommand);
+    // mirrorCommand is checked by the mirror alone, while new cards go to a command: a wrong command stops only
+    // the mirror (its line on the page says what is wrong and where to change it), never the inbox.
     wholeNumber(settings, 'mirrorPerHour', 1, 500, '', t.mirrorPerHour);
 }
 

@@ -47,13 +47,46 @@ export function checkWebhook(text) {
     throw new Error(`The webhook address must start with https:// (http:// only to this machine), not ${url.protocol}//`);
 }
 
-/** Check a command sink: the program's full path, then plain arguments. Throws in words. */
+/** Where the command is changed, said after what is wrong with it. */
+const WHERE_COMMAND = 'change mirrorCommand in Decisions\' entry in DSH\'s profile (cordis.patch.yml)';
+
+/**
+ * Check a command sink: the program's full path, then plain arguments.
+ * Throws in words that say where to change it. Only the mirror checks it,
+ * and only while new cards go to a command: a wrong command stops nothing
+ * else.
+ */
 export function checkCommand(command) {
-    if (!Array.isArray(command) || command.length === 0 || command.some((part) => typeof part !== 'string')) {
-        throw new Error('No command is set: add mirrorCommand (the program\'s full path, then its arguments) to Decisions\' entry in DSH\'s profile');
+    if (command === undefined || command === null || (Array.isArray(command) && command.length === 0)) {
+        throw new Error('No command is set: add mirrorCommand (the program\'s full path, then its arguments) to Decisions\' entry in DSH\'s profile (cordis.patch.yml)');
     }
-    if (!isAbsolute(command[0])) throw new Error(`The command must start with the program's full path (it starts with ${JSON.stringify(clip(command[0], 80))})`);
+    if (!Array.isArray(command) || command.some((part) => typeof part !== 'string')) {
+        throw new Error(`The command must be a list of the program's full path and then its arguments, such as [/usr/local/bin/notify-me, --from, dsh] (it is ${clip(JSON.stringify(command) ?? String(command), 80)}): ${WHERE_COMMAND}`);
+    }
+    if (!isAbsolute(command[0])) throw new Error(`The command must start with the program's full path (it starts with ${JSON.stringify(clip(command[0], 80))}): ${WHERE_COMMAND}`);
     return command;
+}
+
+/** Programs that run a script named after them: the script, not the program, names where cards go. */
+const RUNNERS = /^(?:sh|bash|zsh|dash|ksh|fish|env|node|nodejs|bun|deno|python(?:\d+(?:\.\d+)?)?|ruby|perl|php|osascript)$/;
+
+/**
+ * The name the page and the log give a command: its program's name, or,
+ * for a shell or an interpreter running a script, the script's name
+ * ("cmdsink.sh" for [/bin/sh, /path/cmdsink.sh]). Code given inline
+ * (`sh -c …`) keeps the program's name.
+ */
+export function programName(command) {
+    const name = basename(command[0]);
+    if (!RUNNERS.test(name)) return name;
+    for (const part of command.slice(1)) {
+        if (/^-(?:c|e|m|-eval|-command)$/.test(part)) return name;
+        if (part.startsWith('-') || /^\w+=/.test(part)) continue;
+        if (RUNNERS.test(part)) continue;
+        if (part.includes('/') || /\.\w{1,5}$/.test(part)) return basename(part);
+        return name;
+    }
+    return name;
 }
 
 export class Mirror {
@@ -140,7 +173,7 @@ export class Mirror {
     get place() {
         if (this.config.mirror === 'webhook') return this.host;
         if (this.config.mirror === 'command') {
-            try { return basename(checkCommand(this.config.mirrorCommand)[0]); } catch { return ''; }
+            try { return programName(checkCommand(this.config.mirrorCommand)); } catch { return ''; }
         }
         return '';
     }
@@ -167,7 +200,7 @@ export class Mirror {
             try {
                 const command = checkCommand(this.config.mirrorCommand);
                 if (!this.exists(command[0])) return { problem: `The command's program ${clip(command[0], 120)} does not exist` };
-                return { kind: 'command', command, place: basename(command[0]) };
+                return { kind: 'command', command, place: programName(command) };
             } catch (error) {
                 return { problem: errorText(error, 200) };
             }
@@ -282,7 +315,7 @@ export class Mirror {
     }
 
     run(command, text, card) {
-        const name = basename(command[0]);
+        const name = programName(command);
         return new Promise((resolve) => {
             let child;
             let done = false;
@@ -315,6 +348,7 @@ export class Mirror {
                 kind: card?.kind ?? '',
                 title: card?.title ?? '',
                 question: card?.question ?? '',
+                ...(card?.context ? { context: card.context } : {}),
                 ...(card?.recommendation ? { recommendation: card.recommendation } : {}),
                 ...(card?.sessionId ? { sessionId: card.sessionId } : {}),
             };

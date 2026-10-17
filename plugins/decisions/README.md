@@ -22,7 +22,7 @@ also notifies you outside the window.
 | Card | Where it comes from | Answer it with | Proven by |
 | --- | --- | --- | --- |
 | **Needs a decision** | A reply with a `DECISION NEEDED: <question> — recommend: <your pick>` marker (see below) | Your own words, or **Go with the recommendation** | The answer read into a turn of that session |
-| **Blocked** | A reply with a `BLOCKED: <what is needed>` marker | Your own words | As above |
+| **Blocked** | A reply with a `BLOCKED: <what is needed>` marker; the card reads *Blocked on: <what is needed>* | Your own words | As above |
 | **Asked you** | A reply that ends by asking you something (`replies`) | Your own words | As above |
 | **Waiting for approval** | A tool that asks to run with more access (`approvals`) | **Allow once** or **Reject** | The tool's call in the session's log: it ran, or it was rejected |
 | **Asks you** (question box) | A question the agent asks in DSH's question box (`questions`) | Its choices, and your own words where it allows them | The tool's result in the session's log (on a DSH that does not name the call with the question, the call the session's state says it waits on) |
@@ -38,6 +38,11 @@ reply, and the coordinating chat's reply to that handback (the chat relays
 it to you) are one card, the thread's; a recommendation in any of them
 shows under *Recommended*, with **Go with the recommendation**, and a
 link in the question (`[Port pick](.dsh-thread/t1)`) reads as its words.
+A handback's pick counts wherever it is said (`Recommend 9090 for the status
+page.`, `9090 (recommended)`), and a handback that asks no question is
+headed *The thread needs your decision:* (or *The thread is blocked:*). An
+approval or a question from inside a thread says whose thread it is (*in a
+thread of “Release”*).
 Once the thread's card is answered (here or in the thread), the chat's
 relay of that question does not come back as a card of its own, also
 after a restart; a new question in the chat does. A reply
@@ -58,7 +63,11 @@ question after a dash (`— recommend: …`), in a sentence of its own
 (`Recommend: …`, `I'd recommend …`, `My recommendation: …`), or on the
 next line (`Recommend: …`). A reply without a marker that ends by asking
 you something shows its last question, or else its last line that asks for
-your word.
+your word. Its card also carries the reply's lines just before the question
+(up to four lines or 400 characters, folded after two), so a list of
+choices comes with "Which one do you prefer?" and you can answer in place;
+a pick the reply states there (`I'd recommend tidy`) shows under
+*Recommended*.
 
 **How answers reach the session.** Words go in as the session's next
 message, starting `[Decisions] The person answered …` and quoting the
@@ -148,11 +157,12 @@ Command ("command")*.
 | Webhook address | none | `https://…`, or `http://` to this machine | Plugins | Kept in DSH's key store, never in the settings file. |
 | `mirrorPerHour` (Messages sent an hour, at most) | `30` | 1 to 500 | Plugins | Counts the notes that went (not failures), across restarts. Past it, Decisions holds back and says so once; it still lists everything. |
 | `mirrorUrlEnv` | `DECISIONS_WEBHOOK_URL` | a key name | Profile | The key in DSH's key store (or the environment DSH starts in) that holds the webhook address. |
-| `mirrorCommand` | none | the program's full path, then its arguments | Profile | The command `command` runs. |
+| `mirrorCommand` | none | the program's full path, then its arguments | Profile | The command `command` runs. Checked only while `mirror` is `command`; a wrong one stops only the sending, and the page's line says what is wrong. |
 | `enabled` | `true` | `true` or `false` | Profile | `false` keeps Decisions loaded but idle: it lists and holds nothing, and its page says so and how to change it. |
 
 *Profile* settings go in the `decisions` row of the profile's
-`cordis.patch.yml` (see Setup) and apply after a restart. A wrong value
+`cordis.patch.yml` (see Setup). DSH reads the file again when you save it
+and applies them then (Decisions starts again with them). A wrong value
 there never stops Decisions from starting: it lists and holds nothing, and
 its page says which setting is wrong, what it must be, and where to change
 it.
@@ -173,8 +183,10 @@ Decisions."), to:
   too, and the field says so.
 - **A command**: `mirrorCommand` in the profile, the program's full path
   then its arguments, run without a shell, with the card as one line of
-  JSON on its input (`text`, `kind`, `title`, `question`, `recommendation`,
-  `sessionId`). It has 15 seconds.
+  JSON on its input (`text`, `kind`, `title`, `question`, `context`,
+  `recommendation`, `sessionId`). It has 15 seconds. The page and the log
+  name it by its program, or by its script when the program is a shell or
+  an interpreter (`[/bin/sh, /Users/me/bin/cmdsink.sh]` is *cmdsink.sh*).
 
 ```yaml
 - id: decisions

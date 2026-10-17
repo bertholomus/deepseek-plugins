@@ -7,11 +7,11 @@ import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import {
-    KINDS, answerMessage, answerWords, askCard, byUrgency, checkAnswers, coordinatorView, headline, holdsTurn, mirrorText, plainLinks, questionCards, questionOf, readable, replyCard, threadCards,
+    KINDS, answerMessage, answerWords, askCard, byUrgency, checkAnswers, contextOf, coordinatorView, headline, holdsTurn, mirrorText, pickIn, plainLinks, questionCards, questionOf, readable, replyCard, threadCards, threadsOf,
 } from '../plugins/decisions/lib/cards.js';
 import { Holds, approvalProof, approvalWords, callArguments, describeCall, lateAnswerProof, questionProof, reasonText } from '../plugins/decisions/lib/holds.js';
 import { Inbox, heldOutcome, notifyOutcome, parseData, relayedHandback, relayedThread } from '../plugins/decisions/lib/inbox.js';
-import { Mirror, NO_ADDRESS, checkCommand, checkWebhook } from '../plugins/decisions/lib/mirror.js';
+import { Mirror, NO_ADDRESS, checkCommand, checkWebhook, programName } from '../plugins/decisions/lib/mirror.js';
 import { DEFAULTS, LIVE_SETTINGS, SETTING_TITLES, changedWords, checkConfig, savedEntry } from '../plugins/decisions/lib/config.js';
 import { SettingsCheck } from '../plugins/decisions/lib/shared/settings.js';
 import { pageState } from '../plugins/decisions/lib/page.js';
@@ -1211,7 +1211,8 @@ test('mirror and config: wrong values are said in words that name the setting; a
     assert.throws(() => checkWebhook('discord'), /^Error: The webhook address is not a web address/);
     assert.throws(() => checkWebhook(''), new RegExp(`^Error: ${NO_ADDRESS}$`));
     assert.throws(() => checkCommand(['notify']), /must start with the program's full path/);
-    assert.throws(() => checkCommand('notify me'), /^Error: No command is set/);
+    assert.throws(() => checkCommand('notify me'), /^Error: The command must be a list of the program's full path and then its arguments, .* \(it is "notify me"\): change mirrorCommand in Decisions' entry in DSH's profile \(cordis\.patch\.yml\)$/);
+    assert.throws(() => checkCommand([]), /^Error: No command is set/);
     assert.doesNotThrow(() => checkConfig({ ...DEFAULTS }));
     const wrong = (patch) => {
         try {
@@ -1226,8 +1227,11 @@ test('mirror and config: wrong values are said in words that name the setting; a
     assert.deepEqual(wrong({ mirror: 'discord' }), { key: 'mirror', text: 'Also send new cards to (mirror) must be Nowhere ("off"), Webhook ("webhook") or Command ("command") (it is "discord")' });
     assert.deepEqual(wrong({ approvals: 'yes' }), { key: 'approvals', text: 'Tools waiting for approval (approvals) must be true or false (it is "yes")' });
     assert.match(wrong({ mirrorUrlEnv: 'https://discord.com/x' }).text, /^The key that holds the webhook address \(mirrorUrlEnv\) must be a name of letters, digits and _/);
-    assert.match(wrong({ mirrorCommand: ['notify'] }).text, /^The command \(mirrorCommand\) must start with the program's full path/);
-    assert.match(wrong({ mirrorCommand: 'notify' }).text, /^The command \(mirrorCommand\) must list the program and then its arguments/);
+    // A wrong command is the mirror's own problem, said on its line, and only while new cards go to a command:
+    // it never stops the inbox (round 3: with the mirror off, a wrong command stopped every card).
+    assert.equal(wrong({ mirrorCommand: ['notify'] }), undefined);
+    assert.equal(wrong({ mirrorCommand: 'notify' }), undefined);
+    assert.equal(wrong({ mirror: 'command', mirrorCommand: ['cmdsink.sh'] }), undefined);
     // A webhook or command without its address or program is not a wrong setting: the inbox works, and the page says what is missing.
     assert.equal(wrong({ mirror: 'webhook' }), undefined);
     assert.equal(wrong({ mirror: 'command' }), undefined);
@@ -1260,4 +1264,117 @@ test('cards: a plugin\'s question keeps only well-formed choices', () => {
     assert.equal(elsewhere.answer, 'session');
     assert.equal(elsewhere.hint, 'Answer in its terminal: open the session, then the agent\'s terminal tab.');
     assert.equal(askCard({ id: 'z', question: 'Why?', freeText: true }, new Map()).answer, 'ask');
+});
+
+// ── Round-3 findings ─────────────────────────────────────────────────
+
+test('cards: a plain question carries the reply\'s lines before it, folded on the page and sent to the mirror', () => {
+    const now = Date.UTC(2026, 9, 17, 6);
+    const reply = 'Here are three names for the CLI:\n\n1. **tidy** — short and friendly\n2. **sweep** — says what it does\n3. **pare** — rare, may confuse\n\nWhich one do you prefer?';
+    assert.equal(contextOf(reply, 'Which one do you prefer?'), 'Here are three names for the CLI:\n1. tidy — short and friendly\n2. sweep — says what it does\n3. pare — rare, may confuse');
+    const row = (text, ask) => ({ sessionId: 's', title: 'Names', status: 'idle', state: { ask: { ...ask, turn: 3 }, end: { kind: 'completed', turn: 3, at: now - MIN }, text, textTurn: 3 } });
+    const card = replyCard(row(reply, { kind: 'question', question: 'Which one do you prefer?' }), { now });
+    assert.equal(card.context.split('\n').length, 4);
+    assert.equal(card.recommendation, undefined, 'nothing is recommended');
+    assert.match(mirrorText(card), /^“Names” asked you something\nHere are three names for the CLI:\n1\. tidy — short and friendly\n2\. sweep[^\n]*\n3\. pare[^\n]*\nWhich one do you prefer\?\n/);
+    // At most four lines, nearest the question; the question's own line gives what comes before it.
+    const long = ['Intro.', 'a', 'b', 'c', 'd', 'e', 'Two options: A or B. Which should I use?'].join('\n');
+    assert.equal(contextOf(long, 'Which should I use?'), 'c\nd\ne\nTwo options: A or B.');
+    // At most 400 characters: a long line alone is cut at a word, from its end.
+    const wide = `${'word '.repeat(150)}end.\nWhich one?`;
+    const cut = contextOf(wide, 'Which one?');
+    assert.ok(cut.length <= 400 && cut.startsWith('…') && cut.endsWith('word end.'), cut);
+    assert.equal(contextOf('Which one do you prefer?', 'Which one do you prefer?'), '', 'a question that opens the reply has nothing before it');
+    assert.equal(contextOf('Something else entirely.', 'Which one do you prefer?'), '', 'a question not found in the reply');
+    assert.equal(contextOf(reply, 'Which one do you prefer?').includes('**'), false, 'Markdown marks are dropped');
+    // The reply kept is the last turn's only: an older reply's lines are not this question's.
+    assert.equal(replyCard({ ...row(reply, { kind: 'question', question: 'Which one do you prefer?' }), state: { ...row(reply, { kind: 'question', question: 'Which one do you prefer?' }).state, textTurn: 2 } }, { now }).context, undefined);
+    // A pick the reply states before its question goes under Recommended, with its own answer.
+    const picked = replyCard(row('Both build.\nI\'d recommend tidy, as it is short.\nWhich name should I use?', { kind: 'question', question: 'Which name should I use?' }), { now });
+    assert.equal(picked.recommendation, 'tidy, as it is short');
+    assert.match(answerMessage(picked, { recommended: true }), /go with your recommendation \(tidy, as it is short\)\.$/);
+});
+
+test('cards: a BLOCKED line is said as what the session is blocked on', () => {
+    const now = Date.UTC(2026, 9, 17, 6);
+    const row = { sessionId: 's', title: 'Deploy', status: 'idle', state: { ask: { kind: 'blocked', question: 'valid staging credentials (e.g., deploy token/SSH key) and the target staging environment details.', turn: 2 }, end: { kind: 'blocked', turn: 2, at: now - MIN } } };
+    const card = replyCard(row, { now });
+    assert.equal(card.head, 'Blocked on:');
+    assert.equal(card.question, 'valid staging credentials (e.g., deploy token/SSH key) and the target staging environment details.');
+    assert.match(mirrorText(card), /\nBlocked on: valid staging credentials/);
+    assert.match(answerMessage(card, { text: 'Use the key in 1Password.' }), /answered your BLOCKED line \(“valid staging credentials/, 'the session is quoted its own words');
+});
+
+test('cards: a handback\'s pick counts wherever it is said, and a handback that asks nothing is headed by what it waits for', () => {
+    const at = '2026-10-17T05:00:00.000Z';
+    const chat = { sessionId: 'c', title: 'Status page work', status: 'idle', state: {} };
+    const view = (summary, status = 'needs_decision') => ({ live: true, value: { v: { role: 'coordinator', threads: [{ id: 't1', session: 'th1', title: 'Port pick', resolved: false, handback: { status, summary, at } }], cards: [{ kind: 'handback', thread: 't1' }] } } });
+    // The real model's handback (round 3, picture 06).
+    const summary = 'Recommend 9090 for the status page. The dev server is at 8080, so 8080 would clash; 9090 is fully free and nothing else claims it. Pick 8080 only if the page must share the dev origin.';
+    const [card] = threadCards(chat, view(summary), new Map());
+    assert.equal(card.recommendation, '9090 for the status page');
+    assert.equal(card.head, 'The thread needs your decision:');
+    assert.equal(card.question, summary);
+    assert.match(answerMessage(card, { recommended: true }), /go with your recommendation \(9090 for the status page\)\.$/);
+    assert.equal(threadCards(chat, view('No staging key, so I stopped.', 'blocked'), new Map())[0].head, 'The thread is blocked:');
+    assert.equal(threadCards(chat, view('Which port should the page use?'), new Map())[0].head, undefined, 'a handback that asks needs no head');
+    // The other ways a pick is said.
+    assert.equal(pickIn('**9090 (thread\'s recommendation)** or 8080 if it must share the dev origin.'), '9090');
+    assert.equal(pickIn('Options: 8080, or 9090 (recommended).'), '9090');
+    assert.equal(pickIn('Both are free. My recommendation is 9090.'), '9090');
+    assert.equal(pickIn('Both are free. Recommendation: 9090, as it is unused.'), '9090, as it is unused');
+    assert.equal(pickIn('I recommend that you pick one soon.'), undefined, 'advice is no pick');
+    assert.equal(pickIn('We tried the recommended settings first.'), undefined);
+    assert.equal(pickIn('Which port should the page use?'), undefined);
+});
+
+test('inbox: a plain question\'s card carries the reply\'s lines before it, read from the watcher (its rows leave the reply out)', async () => {
+    const { dsh, clock, inbox, watch } = setup();
+    replied(dsh, 'n', 'Here are three names for the CLI:\n\n1. **tidy** — short\n2. **sweep** — says what it does\n\nWhich one do you prefer?', { title: 'CLI names' });
+    await clock.advance(1000);
+    const [row] = (await watch.list()).filter((r) => r.sessionId === 'n');
+    assert.equal(row.state.text, undefined, 'a row has no reply text');
+    const [card] = (await inbox.list()).waiting;
+    assert.equal(card.kind, 'reply');
+    assert.equal(card.context, 'Here are three names for the CLI:\n1. tidy — short\n2. sweep — says what it does');
+});
+
+test('inbox: an approval from inside a coordinator\'s thread says whose thread it is', async () => {
+    const { dsh, clock, inbox } = setup();
+    dsh.add('c', { title: 'Status page work' });
+    dsh.write('c', '/coordinate');
+    dsh.end('c', { kind: 'completed' }, { reply: 'Started a thread for the port.' });
+    waitingApproval(dsh, 'th', { callId: 'c1' });
+    dsh.extra.coordinatorSession = (s) => (s.id === 'c' ? { turn: 1, v: { role: 'coordinator', threads: [{ id: 't1', session: 'th', title: 'Port pick', resolved: false }], cards: [{ turn: 1, seq: 3, kind: 'start', thread: 't1' }] } }
+        : s.id === 'th' ? { turn: 1, v: { role: 'thread' } } : undefined);
+    await clock.advance(1000);
+    const [card] = (await inbox.list()).waiting;
+    assert.equal(card.kind, 'approval');
+    assert.deepEqual(card.via, { sessionId: 'c', title: 'Status page work' });
+    assert.match(mirrorText(card), /\nIn a thread of “Status page work”\.\n/);
+    assert.deepEqual(threadsOf({ sessionId: 'c', title: 'Status page work' }, { value: { v: { role: 'thread' } } }), [], 'a thread runs no threads');
+});
+
+test('mirror: a command run by a shell or an interpreter is named by its script, and a wrong command stops only the mirror', async () => {
+    assert.equal(programName(['/bin/sh', '/Users/me/bin/cmdsink.sh']), 'cmdsink.sh');
+    assert.equal(programName(['/usr/bin/env', 'node', '/Users/me/bin/sink.mjs']), 'sink.mjs');
+    assert.equal(programName(['/usr/bin/python3', '-u', '/Users/me/bin/sink.py']), 'sink.py');
+    assert.equal(programName(['/bin/sh', '-c', 'curl -s https://example.com']), 'sh', 'inline code keeps the program\'s name');
+    assert.equal(programName(['/usr/local/bin/notify-me', '--from', 'dsh']), 'notify-me');
+    const dir = tempDir('decisions');
+    const script = join(dir, 'cmdsink.sh');
+    writeFileSync(script, '#!/bin/sh\ncat > /dev/null\n');
+    chmodSync(script, 0o755);
+    const journal = new Journal(join(dir, 'events.jsonl'));
+    const mirror = new Mirror({ config: { ...DEFAULTS, mirror: 'command', mirrorCommand: ['/bin/sh', script] }, journal });
+    assert.equal(mirror.place, 'cmdsink.sh');
+    assert.deepEqual(await mirror.send({ id: 'x', kind: 'reply', title: 'Names', question: 'Which one?', context: 'A or B.' }), { ok: true });
+    assert.equal(journal.list()[0].text, 'Sent to cmdsink.sh');
+    const wrong = new Mirror({ config: { ...DEFAULTS, mirror: 'command', mirrorCommand: ['cmdsink.sh'] }, journal });
+    assert.match((await wrong.describe()).problem, /^The command must start with the program's full path \(it starts with "cmdsink\.sh"\): change mirrorCommand in Decisions' entry in DSH's profile/);
+    // The inbox keeps listing while the command is wrong: the round-3 judge's card stayed listed only after this fix.
+    const { dsh, clock, inbox } = setup({ config: { mirror: 'command', mirrorCommand: ['cmdsink.sh'] } });
+    replied(dsh, 's', DECISION);
+    await clock.advance(1000);
+    assert.deepEqual((await inbox.list()).waiting.map((c) => c.kind), ['decision']);
 });
