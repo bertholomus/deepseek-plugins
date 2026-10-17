@@ -12,6 +12,13 @@ the Lead merges each block from the thread's handback and marks verified only on
   ({{cwd}} persona variable; llm-deepseek-account models key) — not plugin code.
 - [ ] dsh-test fingerprint before/after each run logged in review/RELEASE-PROGRESS.md (live pid + patch sha unchanged).
 - [ ] review/history-scrub.md written (report only; no history rewrite — Albert decides).
+- [x] Root shared files scrubbed (Lead, verified): test/sends.test.js fixtures frankennas→nas.example,
+  100.108.23.102→100.64.0.7, bertholomus@→alex@, ascent-01→host-01, /tank→/data (192.168.1.49 / 192.168.1.10 kept —
+  generic RFC1918 examples, not ours); 550/550 root tests pass. Placeholder set for all plugin scrubs:
+  nas.example, 100.64.0.7, /Users/alex, alex@, host-01, /data.
+- [ ] DECISION NEEDED (tied to the make-public gate): HANDOFF.md, briefs/*.md and the AGENTS.md account lines carry
+  private details (hosts, emails, paths); README.md names the repo clone URL. If the repo goes public these need
+  scrubbing or removal first. Left untouched — builders'/Albert's files.
 
 ## Wallpaper (+ dsh-context skin)
 - 0.2.1: in progress (thread t2) — Automation tasks page (@deepseek-ai/dsh-client-ui-schedule, `.abd_5a_calendar`)
