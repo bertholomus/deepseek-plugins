@@ -70,13 +70,18 @@ other corpora, and was measured once before any rule saw it.
 | Dev (tuned on) | 90 | 0 (0.0%) | 70 | 70 (100.0%) | 30 of 30 |
 | First hold-out, measured once before tuning | 60 | 12 (20.0%) | 50 | 43 (86.0%) | — |
 | Second hold-out, measured once before tuning | 60 | 6 (10.0%) | 50 | 45 (90.0%) | 20 of 25 |
-| Third hold-out (never tuned on), measured once | 60 | 7 (11.7%) | 50 | 41 (82.0%) | 19 of 25 |
+| Third hold-out, measured once before tuning | 60 | 7 (11.7%) | 50 | 41 (82.0%) | 19 of 25 |
+| Fourth hold-out (never tuned on), measured once | 60 | 10 (16.7%) | 50 | 44 (88.0%) | 23 of 25 |
 
-The first two hold-outs were tuned on after that one measurement (the
+The first three hold-outs were tuned on after that one measurement (the
 fixes were general rules, never a case's own words) and are now part of
-the tests, at 0% false flags and 100% caught. The third hold-out is the
-honest figure: it was never used for tuning, and it stays that way. To
-measure again:
+the tests, at 0% false flags and 100% caught. The fourth hold-out is the
+honest figure: it was never used for tuning. Its writers were asked for
+set kinds of turns (claims shown earlier in the turn, summaries that lean
+on the turn before, hashes, metrics and CI reads, subtle misses) and added
+hard ones of their own (results only on stderr, a failed run fixed later
+in the turn, success-looking output the reply never claims). To measure
+again:
 
 ```sh
 node scripts/proof-corpus.mjs           # one row per corpus
@@ -145,8 +150,10 @@ itself* are left for you). A check:
    - approvals that never ask: an action that would need one is refused,
      so a check never waits on you;
    - its model is offered only tools that read or run (`read`, `grep`,
-     `glob`, `bash`, `web_fetch` and the like);
-   - a guard that refuses any other tool, and any command that sends
+     `glob`, `bash`, `web_fetch` and the like), plus DSH's own `subagent`
+     tool, which DSH adds to every thread and no plugin can take away;
+   - a guard that refuses any other tool, `subagent` included, and any
+     command that sends
      something elsewhere (a push, a publish, a deploy, a request that does
      more than read, a command on another machine) or changes the work (a
      commit, a reset, an install, a killed process, a container). The
@@ -282,4 +289,28 @@ node --test test/proof*.test.js       # claims, evidence, the ledger, the check,
 node scripts/e2e.mjs proof            # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test is being written; this paragraph will say what it covers.
+The real-DSH test (88 checks, about two minutes a build) starts DSH from
+each `.e2e/dsh-<version>` install and from the installed app's own DSH,
+each in a throwaway home, with Session Watch and Proof and a scripted model
+(`test/e2e/fake-model.mjs`) that plays both the agent and the check model.
+From real sessions it shows that a claim its turn's run shows stays quiet
+(in a summary turn, the turn before shows it), that a claim with nothing
+behind it is flagged, that one the run's own output denies is called
+contradicted with the run's words, and that a reply that only asks makes
+no claim. It asks for checks from the page and the endpoint: each runs in
+a new "Proof check · …" thread on the check model alone, and DSH's own log
+shows the read-only file policy and approvals that never ask before its
+first message; its model is offered only tools that read or run (and DSH's
+`subagent`), Proof's guard refuses the subagent and a commit, DSH's file
+policy stops a write, the checked session gets nothing and DSH's default
+model is unchanged. A slow check is stopped by DSH and settles as unclear,
+a new flagged claim is checked by itself, a fifth check in the hour waits
+and says until when, and switching checks off ends it. It restarts DSH in
+the middle of a check (the check settles, with why), runs with Session
+Watch off, starts with a wrong setting (named with its range, and fixed by
+saving a good value), checks Proof's file modes and loads it with
+`enabled: false`. It drives the page and Proof's settings in Plugins in a
+browser, light and dark, wide and narrow: the header, the sessions, the
+ledger and its filter, What the turn ran, the exports to Markdown, CSV,
+JSON and the clipboard, and Proof switched off and on in Plugins, its
+entry and flags gone and back. Pictures go to `.e2e/shots/proof/<build>/`.
