@@ -1137,8 +1137,11 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-mark-text{flex:1 1 200px;min-width:0;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}`,
             `.${P}-mark-strong{font:var(--dsw-font-xs-strong-13);color:var(--dsw-alias-label-primary)}`,
             `.${P}-mark-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}`,
-            // The turn a result opened at: a line down the left of its rows (DSH's rows that carry Recall's own mark).
-            `[data-recall-found]{box-shadow:inset 2px 0 0 var(--dsw-alias-state-business-primary)}`,
+            // The turn a result opened at: a line down the left of its rows (DSH's rows that carry Recall's own mark), a
+            // little apart from their text; a row DSH positions itself keeps the line inside its edge instead.
+            `[data-recall-found="line"]{position:relative}`,
+            `[data-recall-found="line"]::before{content:"";position:absolute;top:0;bottom:0;left:-14px;width:2px;border-radius:1px;background:var(--dsw-alias-state-business-primary);pointer-events:none}`,
+            `[data-recall-found="inset"]{box-shadow:inset 2px 0 0 var(--dsw-alias-state-business-primary)}`,
             // The tool's card in a chat: DSH's tool row, and the results under it, with no ground of their own.
             `.${P}-tool-body{padding:2px 0 4px 24px;min-width:0}`,
             `.${P}-tool-list{list-style:none;margin:0;padding:0}`,
@@ -1352,6 +1355,19 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         }
         const finder = createFinder((method, args) => api.read(method, args));
 
+        /** The home folder, so paths read from ~: the page's state says it, and a tool card asks once. */
+        const homeStore = makeStore(undefined);
+        let homeAsked = false;
+        function useHome(given) {
+            const home = useStore(homeStore);
+            React.useEffect(() => {
+                if (given !== undefined || home !== undefined || homeAsked) return;
+                homeAsked = true;
+                api.read('state').then((s) => { if (typeof s?.home === 'string') homeStore.set(s.home); }, () => { homeAsked = false; });
+            }, [home]);
+            return given ?? home;
+        }
+
         // ── Opening a session at a turn ───────────────────────────────
 
         /** The turn a result opened at, which its mark and line show until the person is done: `{ sessionId, turn, seq, query, n, landed }`. */
@@ -1377,6 +1393,16 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             landing = undefined;
             unmarkRows();
             jump.set(undefined);
+        }
+
+        /** Whether DSH leaves a row in the flow (so the line can sit beside it without moving anything). */
+        function inFlow(row) {
+            try {
+                const position = typeof getComputedStyle === 'function' ? getComputedStyle(row)?.position : undefined;
+                return !position || position === 'static';
+            } catch {
+                return false;
+            }
         }
 
         /** The element that scrolls a chat: the nearest one around its flow that can. */
@@ -1413,7 +1439,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 if (rows.length === 0) return;
                 for (const row of rows) {
                     if (marked.has(row)) continue;
-                    row.setAttribute('data-recall-found', '');
+                    row.setAttribute('data-recall-found', inFlow(row) ? 'line' : 'inset');
                     marked.add(row);
                 }
                 const box = rows[0].getBoundingClientRect();
@@ -1448,6 +1474,26 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         }
 
         /**
+         * Page a session's history back to `seq` with DSH's turn-jump loader.
+         * The loader does nothing until the session's first page is in (a
+         * session opened just now is still loading it) or while older history
+         * is already being read, so it waits for both first.
+         */
+        async function pageBackTo(session, seq, n) {
+            const snapshot = () => {
+                try { return typeof session.getSnapshot === 'function' ? session.getSnapshot() : undefined; } catch { return undefined; }
+            };
+            if (snapshot() !== undefined) {
+                await waitFor(() => {
+                    const s = snapshot();
+                    return jump.get()?.n !== n || !s || s.openState === 'error' || (s.openState === 'open' && !s.loadingOlder);
+                }, 15000);
+            }
+            if (jump.get()?.n !== n) return;
+            await session.loadThrough(seq);
+        }
+
+        /**
          * Open a session of this DSH at a turn: DSH opens the session, its
          * history pages back to the turn (the turn jump's own loader), and the
          * turn's mark brings it into view. False when this window cannot
@@ -1470,7 +1516,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             if (typeof session?.loadThrough === 'function' && Number.isSafeInteger(seq) && seq > 0) {
                 let timer;
                 try {
-                    await Promise.race([session.loadThrough(seq), new Promise((resolve) => { timer = setTimeout(resolve, 15000); })]);
+                    await Promise.race([pageBackTo(session, seq, n), new Promise((resolve) => { timer = setTimeout(resolve, 20000); })]);
                 } catch {
                     // The chat shows what it has; the mark finds the turn if it is there.
                 } finally {
@@ -1509,6 +1555,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 h('path', { d: 'M10.5 7.4v3.1l2.1 1.5' }));
         }
 
+        /** A search that is one "exact phrase", without its own quotes (the mark puts it in quotes already). */
+        const phraseless = (text) => (/^"[^"]+"$/.test(String(text ?? '').trim()) ? String(text).trim().slice(1, -1) : text);
+
         /** After the turn a result opened at: "Found by Recall", and the way back. Nothing after any other turn. */
         function RecallMark({ turn, sessionId }) {
             const j = useStore(jump);
@@ -1525,7 +1574,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 h('span', { className: `${P}-mark-glyph` }, h(RecallGlyph, { size: 14 })),
                 h('span', { className: `${P}-mark-text` },
                     h('span', { className: `${P}-mark-strong` }, 'Found by Recall'),
-                    j.query ? ` · turn ${n}, for ${quoted(j.query, 60)}` : ` · turn ${n}`),
+                    j.query ? ` · turn ${n}, for ${quoted(phraseless(j.query), 60)}` : ` · turn ${n}`),
                 h('span', { className: `${P}-mark-actions` },
                     h('button', { type: 'button', className: `${P}-link`, onClick: () => views.openPage() }, TEXT.back),
                     h('button', { type: 'button', className: `${P}-link`, onClick: endJump, 'aria-label': 'Done: take the mark off this turn' }, 'Done')));
@@ -1909,6 +1958,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const [busy, setBusy] = React.useState(false);
             const [said, setSaid] = React.useState({ text: '', bad: false });
             const data = live.data;
+            React.useEffect(() => {
+                if (typeof data?.home === 'string' && homeStore.get() !== data.home) homeStore.set(data.home);
+            }, [data?.home]);
             const act = async (method) => {
                 setBusy(true);
                 setSaid({ text: '', bad: false });
@@ -2066,6 +2118,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         function SettledToolView(props) {
             const { block, phase } = props;
             const disclosure = typeof props.useDisclosure === 'function' ? props.useDisclosure() : { expanded: false, toggle: noop };
+            const home = useHome(typeof props.home === 'string' ? props.home : undefined);
             const a = callArgs(block);
             if (phase !== 'result') return h('div', { className: `${P}-pane`, 'data-recall-tool': 'running' }, h(ToolHead, { title: runningTitle(a), running: true }));
             if (block?.isError) {
@@ -2076,7 +2129,6 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             }
             const view = kit.isRecord(block?.meta) && (block.meta.kind === 'results' || block.meta.kind === 'turn') ? block.meta : null;
             if (!view) return h('div', { className: `${P}-pane`, 'data-recall-tool': 'done' }, h(ToolHead, { title: a.open ? 'Read a past turn' : a.query ? `Searched past work for ${quoted(a.query, 50)}` : 'Searched past work' }));
-            const home = typeof props.home === 'string' ? props.home : undefined;
             return h('div', { className: `${P}-pane`, 'data-recall-tool': view.kind },
                 h(ToolHead, { title: doneTitle(view, a), open: disclosure.expanded, expandable: true, onToggle: disclosure.toggle },
                     view.kind === 'turn' ? h(ToolTurn, { view, home }) : h(ToolResults, { view, args: a, home })));

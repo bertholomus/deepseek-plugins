@@ -282,7 +282,8 @@ export class Indexer {
         st.files = walk.count;
         st.capped = walk.capped;
         st.error = walk.error;
-        st.state = walk.missing ? 'missing' : walk.error ? 'unreadable' : 'ok';
+        // This DSH's own sessions folder is made with its first session: not there yet is not a folder gone.
+        st.state = walk.missing ? (walk.source.own ? 'ok' : 'missing') : walk.error ? 'unreadable' : 'ok';
         this.rootState.set(key, st);
         if (walk.missing || walk.error) return;
         // Files gone from a folder that is still there: their rows go too.

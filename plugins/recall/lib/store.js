@@ -15,7 +15,7 @@
  *
  * @module dsh-plugin-recall/store
  */
-import { existsSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 
 /** Bump when the tables change: an index of another version is built again. */
 export const SCHEMA_VERSION = 3;
@@ -97,6 +97,8 @@ export class Store {
         const unclean = existsSync(marker);
         const tryOpen = () => {
             const db = new sqlite.DatabaseSync(this.file);
+            // The index holds what sessions said: only its owner reads it (SQLite gives its -wal and -shm files the same mode).
+            try { chmodSync(this.file, 0o600); } catch { /* the folder is private anyway */ }
             try {
                 db.exec('PRAGMA busy_timeout = 5000');
                 db.exec('PRAGMA journal_mode = WAL');
@@ -118,7 +120,7 @@ export class Store {
             }
         };
         const opened = (db) => {
-            try { writeFileSync(marker, `${process.pid}\n`); } catch { /* the next open checks the index in full */ }
+            try { writeFileSync(marker, `${process.pid}\n`, { mode: 0o600 }); } catch { /* the next open checks the index in full */ }
             return db;
         };
         try {
@@ -375,7 +377,7 @@ export class Store {
         const out = new Map();
         if (ids.length === 0) return out;
         const marks = ids.map(() => '?').join(', ');
-        for (const f of this.db.prepare(`SELECT id, path, kind, root, own, session, title, folder, model, updated, turns FROM files WHERE id IN (${marks})`).all(...ids)) out.set(f.id, f);
+        for (const f of this.db.prepare(`SELECT id, path, kind, root, own, session, title, folder, model, updated, mtime, turns FROM files WHERE id IN (${marks})`).all(...ids)) out.set(f.id, f);
         return out;
     }
 

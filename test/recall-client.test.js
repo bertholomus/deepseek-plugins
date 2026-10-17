@@ -128,7 +128,8 @@ test('browser half: loads as DSH loads it, adds its page, its entry (order 9), i
     assert.match(css, /\.dshrc-mark\{[^}]*background:var\(--dsw-alias-bg-layer-1\);border:\.5px solid var\(--dsw-alias-border-l4\);border-radius:var\(--dsw-radius-lg\)/, 'the mark in a chat is drawn as DSH draws its own cards there');
     const chatRules = css.split('\n').filter((rule) => /^\.dshrc-(mark|tool)/.test(rule)).join('\n');
     assert.doesNotMatch(chatRules, /backdrop-filter|background:var\(--dshrc-(glass|conv)/, 'no glass and no blur inside a chat');
-    assert.match(css, /\[data-recall-found\]\{box-shadow:inset 2px 0 0 /, 'the found turn\'s rows get a line, by Recall\'s own mark');
+    assert.match(css, /\[data-recall-found="line"\]::before\{content:"";position:absolute;top:0;bottom:0;left:-14px;width:2px/, 'the found turn\'s rows get a line beside them, by Recall\'s own mark');
+    assert.match(css, /\[data-recall-found="inset"\]\{box-shadow:inset 2px 0 0 /, 'a row DSH positions itself keeps the line inside its edge');
     assert.match(css, /body\.wp-still/);
     assert.match(css, /prefers-reduced-motion/);
     assert.match(css, /prefers-reduced-transparency/);
@@ -438,6 +439,16 @@ test('opening a session at a turn: the mark shows on that turn only, brings it i
     views.sessions = { binding: () => (++ask < 3 ? undefined : { session: { loadThrough: async () => {} } }) };
     assert.equal(await openAt({ sessionId: 'sess-own-1', turn: 4, seq: 40, query: 'deploy the gateway' }), true);
     assert.equal(ask, 3, 'it waits for DSH to hold the session');
+    // A session opened just now is still reading its first page, and DSH's jump loader does nothing until it is in: Recall waits for it.
+    let state = { openState: 'loading', loadingOlder: false };
+    const jumps = [];
+    views.sessions = { binding: () => ({ session: { getSnapshot: () => state, loadThrough: async (seq) => { jumps.push([state.openState, seq]); } } }) };
+    const opening = openAt({ sessionId: 'sess-own-1', turn: 4, seq: 40, query: 'deploy the gateway' });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.deepEqual(jumps, [], 'not while its first page loads');
+    state = { openState: 'open', loadingOlder: false };
+    assert.equal(await opening, true);
+    assert.deepEqual(jumps, [['open', 40]]);
 
     const elsewhere = [mount(RecallMark, { turn: { turn: 5 }, sessionId: 'sess-own-1' }), mount(RecallMark, { turn: { turn: 4 }, sessionId: 'other' })];
     t.after(() => { for (const m of elsewhere) m.unmount(); });
@@ -453,7 +464,7 @@ test('opening a session at a turn: the mark shows on that turn only, brings it i
     land(chat.flow, 4, jump.get().n);
     await settle(10);
     assert.equal(chat.scroller.scrollTop, 1500 - 24);
-    assert.deepEqual(chat.rows.get(4).map((row) => row.attrs['data-recall-found']), ['', '']);
+    assert.deepEqual(chat.rows.get(4).map((row) => row.attrs['data-recall-found']), ['line', 'line']);
     assert.equal(chat.rows.get(5)[0].attrs['data-recall-found'], undefined);
     assert.equal(jump.get().landed, true);
     // DSH lands the chat at its end a moment later; Recall tries again, until the person scrolls.
@@ -543,6 +554,24 @@ test('the tool\'s card: running, what it found (each a press from its turn), not
     assert.equal(elementsOf(tree).find((e) => e.type === 'DisclosureRow').props.title, 'Didn\'t read the past turn: stopped before it finished.');
     tree = RecallToolView({ phase: 'result', block: { isError: false, content: [], call: { argsRaw: '{"query":"deploy"}' } } });
     assert.equal(elementsOf(tree).find((e) => e.type === 'DisclosureRow').props.title, 'Searched past work for “deploy”', 'an older result with no card: its line');
+});
+
+test('the tool\'s card shows paths from ~ too: it asks Recall once for the home folder', async (t) => {
+    const { react, mount } = statefulReact();
+    const { client } = loadClient(CLIENT, { react });
+    const { RecallToolView, kit } = client.internals;
+    const calls = connect(kit, { state: STATE });
+    const props = { phase: 'result', useDisclosure: () => ({ expanded: true, toggle() {} }), block: { isError: false, meta: { kind: 'results', query: 'deploy', total: 1, sessions: 1, results: [OWN] } } };
+    const card = mount(RecallToolView, props);
+    const again = mount(RecallToolView, props);
+    t.after(() => { card.unmount(); again.unmount(); kit.setConnection(undefined); });
+    assert.match(textIn(card.tree), /Session · \/Users\/me\/work\/gateway · glm-5\.3/, 'before it knows: the full path');
+    await settle(5);
+    card.update({});
+    again.update({});
+    assert.match(textIn(card.tree), /Session · ~\/work\/gateway · glm-5\.3/);
+    assert.match(textIn(again.tree), /~\/work\/gateway/);
+    assert.equal(calls.filter(([name]) => name === 'state').length, 1, 'asked once for every card');
 });
 
 test('index: each folder\'s state in words, files it could not read, folders left out, and its actions', async (t) => {

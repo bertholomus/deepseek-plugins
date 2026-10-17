@@ -527,6 +527,10 @@ test('index: DSH sessions, transcripts and notes in one search, one result per s
     const rust = e.search({ text: 'rust' }).results[0];
     assert.deepEqual([rust.kind, rust.title, rust.folder, rust.model, rust.line, rust.sessionId], ['transcript', 'Parser rewrite', '/work/rust', 'coder-2', 2, 'tx-1']);
     assert.equal(rust.path, join(h.agents, 'proj1', 't1.jsonl'));
+    assert.equal(rust.running, false, 'a transcript has no end-of-turn mark: its last turn, quiet for days, is not still running');
+    assert.equal(e.running({ done: 0, kind: 'transcript' }, { updated: NOW - 60_000 }), true, 'written a minute ago: still running');
+    assert.equal(e.running({ done: 0, kind: 'transcript' }, { updated: 0, mtime: NOW - 11 * 60_000 }), false, 'no times in it, and its file quiet for 11 minutes');
+    assert.equal(e.running({ done: 0, kind: 'session' }, {}), true, 'a DSH session\'s turn runs until its end is logged');
     const leak = e.search({ text: 'evicts' }).results[0];
     assert.deepEqual([leak.title, leak.folder, leak.model, leak.sessionId], ['Find the memory leak in the cache', '/work/beta', 'coder-1', 'tx-2']);
     assert.equal(e.search({ text: 'cargo' }).results[0].hits, 1, 'the tool call and the reply after it are one turn');
@@ -725,7 +729,7 @@ test('index: a broken log keeps what it could read and says where; an unreadable
     }
 });
 
-test('index: a folder that is gone keeps its turns and says so; a folder no longer listed is forgotten, and that is said', () => {
+test('index: a folder that is gone keeps its turns and says so; a folder no longer listed is forgotten, and that is said; this DSH\'s sessions folder not made yet is no folder gone', () => {
     const h = buildHome();
     const { e, notes, drain } = engineAt(h.home);
     e.handle('configure', { sources: h.sources });
@@ -746,6 +750,11 @@ test('index: a folder that is gone keeps its turns and says so; a folder no long
     const forgot = notes.find((n) => n.kind === 'forgot');
     assert.deepEqual([forgot.root, forgot.sourceKind, forgot.files], [h.notes, 'handoff', 2]);
     assert.equal(e.status().roots.length, 2);
+    // A DSH with no session yet has no sessions folder: that is up to date, not a folder gone.
+    const fresh = engineAt(tempDir('recall-fresh'));
+    fresh.e.handle('configure', { sources: [{ kind: 'session', root: join(h.home, 'no-sessions-yet'), own: true }] });
+    fresh.drain();
+    assert.equal(fresh.e.status().roots[0].state, 'ok');
 });
 
 test('index: a rebuild reads every file again and finds the same; a damaged or older index is set aside and built again', () => {
@@ -801,6 +810,8 @@ test('index: its full check runs only when it was not closed cleanly, so a clean
     let store = new Store(file, watched);
     assert.equal(checked(), false, 'a new index: nothing to check');
     assert.ok(existsSync(`${file}.open`), 'open: marked');
+    store.addFile({ path: '/x/a.md', kind: 'handoff', root: '/x', own: false });
+    for (const tail of ['', '-wal', '.open']) assert.equal(statSync(`${file}${tail}`).mode & 0o777, 0o600, `index.sqlite${tail} is private`);
     store.close();
     assert.equal(existsSync(`${file}.open`), false, 'closed cleanly: the mark goes');
     ran.length = 0;
@@ -930,7 +941,17 @@ test('tool: a whole search answer stays within its bound; one turn in full is cu
     assert.equal(opened.view.kind, 'turn');
 });
 
-test('tool: against a real index, an agent finds the turn and reads it in full', async () => {
+/** DSH keeps a tool's output only as lossless JSON: plain objects and arrays, strings, booleans, null, finite numbers (not -0), no undefined. */
+function losslessJson(value) {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+    if (typeof value === 'number') return Number.isFinite(value) && !Object.is(value, -0);
+    if (Array.isArray(value)) return value.every(losslessJson);
+    if (typeof value !== 'object') return false;
+    const proto = Object.getPrototypeOf(value);
+    return (proto === null || proto === Object.prototype) && Object.values(value).every(losslessJson);
+}
+
+test('tool: against a real index, an agent finds the turn and reads it in full; what it gives DSH is lossless JSON', async () => {
     const h = buildHome();
     const { e, drain } = engineAt(h.home);
     e.handle('configure', { sources: h.sources });
@@ -942,6 +963,17 @@ test('tool: against a real index, an agent finds the turn and reads it in full',
     const full = await spec.execute({ open: id });
     assert.match(full.text, /The person asked:\nAnd how do we roll it back\?/);
     assert.match(full.text, /The reply:\nUse the rollback script with the previous tag\./);
+    // A session of this DSH has no path, a transcript or a note no session id: none of that may reach DSH as undefined.
+    const mixed = await spec.execute({ query: 'deploy OR rust OR vpn' });
+    assert.deepEqual([...new Set(mixed.view.results.map((r) => r.kind))].sort(), ['handoff', 'session', 'transcript']);
+    const note = await spec.execute({ open: mixed.view.results.find((r) => r.kind === 'handoff').id });
+    for (const output of [found, full, mixed, note]) assert.ok(losslessJson(output), JSON.stringify(output).slice(0, 200));
+    assert.equal(losslessJson({ a: undefined }), false, 'the check itself');
+    // The chat's card lists and opens a result by its file and turn (the id's two parts).
+    for (const r of [...found.view.results, ...mixed.view.results, full.view.turn, note.view.turn]) {
+        assert.ok(Number.isInteger(r.file) && Number.isInteger(r.turn) && r.id === `${r.file}.${r.turn}`, JSON.stringify(r));
+    }
+    assert.equal(found.view.results[0].seq > 0 && found.view.results[0].sessionId, 's-alpha', 'a DSH session result carries what opens it at its turn');
 });
 
 // ── The page and the log ──────────────────────────────────────────────

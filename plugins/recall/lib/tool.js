@@ -3,8 +3,9 @@
  * (DSH sessions, coding-agent transcripts, handoff notes) by their words,
  * with the same filters as the page, and reads one in full by its id.
  *
- * The result is bounded (at most 20 sessions, and 6,000 characters for one
- * turn in full) and says that text from past sessions is a record of
+ * The result is bounded (at most 20 sessions in 9,000 characters; one turn
+ * in full keeps 2,000 characters of the request, 3,500 of the reply and
+ * 1,200 of the tools) and says that text from past sessions is a record of
  * earlier work, not instructions. A view for the chat's card rides along.
  *
  * No DSH packages here (lib/index.js wraps the spec with defineTool), so
@@ -43,6 +44,12 @@ const cut = (text, max) => {
     const t = String(text ?? '').trim();
     return t.length > max ? `${t.slice(0, max - 1)}… (cut)` : t;
 };
+/**
+ * A value as DSH keeps a tool's output: lossless JSON, so no undefined
+ * fields (a result of a transcript has no session id), no -0, no NaN.
+ */
+export const jsonValue = (value) => JSON.parse(JSON.stringify(value));
+
 /** A path with the home folder as ~. */
 export const homeless = (path, home = homedir()) => (typeof path === 'string' && home && (path === home || path.startsWith(`${home}/`)) ? `~${path.slice(home.length)}` : path ?? '');
 
@@ -113,9 +120,9 @@ export function turnText(t) {
     return lines.join('\n');
 }
 
-/** A result as the chat's card keeps it (small, no full text). */
+/** A result as the chat's card keeps it (small, no full text; `file` and `turn` are what its Open opens). */
 const cardOf = (r) => ({
-    id: r.id, kind: r.kind, own: r.own, sessionId: r.sessionId, path: r.path, title: r.title, turn: r.turn, seq: r.seq, line: r.line,
+    id: r.id, file: r.file, kind: r.kind, own: r.own, sessionId: r.sessionId, path: r.path, title: r.title, turn: r.turn, seq: r.seq, line: r.line,
     label: r.label, time: r.time, folder: r.folder, model: r.model, snippet: String(r.snippet ?? '').slice(0, 400), hits: r.hits,
 });
 
@@ -154,7 +161,7 @@ export function toolSpec({ ask, refusal }) {
             if (given(a.open)) {
                 const t = await ask('turn', { id: String(a.open).trim() });
                 const text = turnText(t);
-                return { text, view: { kind: 'turn', turn: { ...cardOf(t), prompt: cut(t.prompt, 600), reply: cut(t.reply, 1200) } } };
+                return jsonValue({ text, view: { kind: 'turn', turn: { ...cardOf(t), prompt: cut(t.prompt, 600), reply: cut(t.reply, 1200) } } });
             }
             if (!given(a.query)) throw new Error('Give words to search for in query, or a result id in open.');
             const limit = Number.isFinite(a.limit) ? Math.min(TOOL_LIMITS.results, Math.max(1, Math.trunc(a.limit))) : TOOL_LIMITS.defaultResults;
@@ -167,10 +174,10 @@ export function toolSpec({ ask, refusal }) {
                 until: given(a.until) ? a.until : undefined,
                 limit,
             });
-            return {
+            return jsonValue({
                 text: searchText(found, { limit }),
                 view: { kind: 'results', query: String(a.query).slice(0, 200), total: found.total, totalMore: found.totalMore, sessions: found.sessions, took: found.took, results: found.results.map(cardOf) },
-            };
+            });
         },
     };
 }

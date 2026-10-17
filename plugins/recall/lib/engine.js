@@ -37,6 +37,9 @@ export function folderOf(value, home = homedir()) {
 /** How much more a recent turn counts: up to 30% for today, about half that after two weeks. */
 const lift = (time, now) => 1 + 0.3 * Math.exp(-Math.max(0, now - time) / (20 * DAY));
 
+/** A transcript has no end-of-turn mark: its last turn is still running only while the transcript was written to lately. */
+export const TRANSCRIPT_QUIET_MS = 10 * 60_000;
+
 export class Engine {
     /**
      * @param {object} options
@@ -206,12 +209,20 @@ export class Engine {
             time: d.time,
             folder: d.folder,
             model: d.model,
-            running: d.done === 0,
+            running: this.running(d, f),
             snippet: snippet ?? '',
             asked: String(asked ?? '').replace(/\s+/g, ' ').trim(),
             hits: g.hits,
             others: g.others.sort((a, b) => a.turn - b.turn),
         };
+    }
+
+    /** Whether a turn is still running: a DSH session's until its end is logged; a transcript's while it is written to. */
+    running(d, f = {}) {
+        if (d.done !== 0) return false;
+        if (d.kind !== 'transcript') return true;
+        const last = Number(f.updated) > 0 ? Number(f.updated) : Number(f.mtime) || 0;
+        return this.now() - last < TRANSCRIPT_QUIET_MS;
     }
 
     /** One turn (or note section) in full, by its result id ("12.4"). */
@@ -238,7 +249,7 @@ export class Engine {
             time: d.time,
             folder: d.folder,
             model: d.model,
-            running: d.done === 0,
+            running: this.running(d, f),
             prompt: d.prompt ?? '',
             reply: d.reply ?? '',
             tools: d.tools ?? '',
