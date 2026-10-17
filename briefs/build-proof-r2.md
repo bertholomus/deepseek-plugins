@@ -38,7 +38,7 @@ README matches. The thread that started this one fixes findings 1 to 3 (claims.j
 ## Done
 - d6ef765 `plugins/proof/lib/{config,verifier,ledger,page,remote,index,client}.js`, `test/proof-host.test.js`,
   `test/proof-client.test.js`, these notes.
-- (this commit) Real-DSH steps in `plugins/proof/test/e2e/run.mjs` (+ `fake-model.mjs` records each request's effort;
+- b9d25d0 Real-DSH steps in `plugins/proof/test/e2e/run.mjs` (+ `fake-model.mjs` records each request's effort;
   the check model `fake-check` offers low and high): the focus after Check it and Check; NOT VERIFIED and VERIFIED heading
   their cards; the verified claim counted apart on the ledger, the session row, the header, Markdown and JSON; the bar
   above a running check's message box; the limit raised while a check runs, the check still stopped at its own minute
