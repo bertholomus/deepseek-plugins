@@ -4,15 +4,17 @@ _For the two accounts building these plugins only (see AGENTS.md). A session run
 
 # Suite v1 (branch suite/v1): the DSH Plugin Suite
 
-Updated: 2026-10-17 12:57 PM PDT by A (gmail), thread "Suite v1 builder"
+Updated: 2026-10-17 2:23 PM PDT by A (gmail), thread "Suite v1 builder"
 Branch: `suite/v1` in the worktree `~/Projects/dsh-plugin-suite` (remote `gh` = github.com/bertholomus/deepseek-plugins, private). Main is at 3290a42 (Agent Terminals' judged commit, a fast-forward). Tags: `autopilot-v1.0.0` and `session-watch-v1.0.0` at ea10517, `decisions-v1.0.0` at 15d8bf0, `agent-terminals-v1.0.0` at 3290a42.
 Goal: six plugins (Autopilot, Decisions, Agent Terminals, Proof, Canon, Recall) per `briefs/SUITE-BRIEF.md`, each judged >= 8.5/10 (no criterion below 8) by a fresh judge in DSH Test, merged to `main` and tagged `<plugin>-v1.0.0`, then `suite-v1.0.0`. Test only in DSH Test, never the live DSH.
 
 ## Doing now
 - Proof judge round 1 (fresh subagent judge, brief `scratchpad/judge-proof-r1.md` = the AT r3 template with Proof's details) at commit 550c532: scorecard `review/proof-round-1.md`, pictures `review/proof-round-1/`, a SCOREBOARD row, DSH Test instance `suite-proof-j1`, judge folder `~/Projects/dsh-plugin-suite-judge/proof-r1`.
-- Canon and Recall are being built by two subagent builders (OPEN-QUESTIONS #25) in this worktree, on their own paths only (`plugins/canon/`, `test/canon*`, `test/fixtures/canon/`; `plugins/recall/`, `test/recall*`, `test/fixtures/recall/`, `scripts/recall-bench.mjs`). Each keeps `briefs/build-<plugin>.md` (state, picks, next steps) and commits only green states. Their shared rules: `scratchpad/brief-builder-common.md` (DSH Test only, fingerprint around every e2e, no branding, no trailers, push to `gh` only).
+- Canon judge round 1 at 8e2af4b (brief `scratchpad/judge-canon-r1.md`; scorecard `review/canon-round-1.md`; instance `suite-canon-j1`). Canon was checked here first: `npm test` 739/739 and e2e 81/81 on three builds from a clean copy.
+- Recall (and, until 2:18 PM, Canon) are being built by subagent builders (OPEN-QUESTIONS #25) in this worktree, on their own paths only (`plugins/canon/`, `test/canon*`, `test/fixtures/canon/`; `plugins/recall/`, `test/recall*`, `test/fixtures/recall/`, `scripts/recall-bench.mjs`). Each keeps `briefs/build-<plugin>.md` (state, picks, next steps) and commits only green states. Their shared rules: `scratchpad/brief-builder-common.md` (DSH Test only, fingerprint around every e2e, no branding, no trailers, push to `gh` only).
 
 ## Done (newest first)
+- 2:23 PM PDT: Canon built (4723b8e, c005c19, 8e2af4b): host half, window half, real-DSH e2e 81/81 on three builds, README; 34 unit tests. Suite README `SUITE.md` drafted at 1:00 PM (cd2cba0).
 - 12:54 PM PDT: **Proof's fifth hold-out measured once** (550c532): 10.0% false flags, 82.0% caught, 19 of 25 contradicted, rules frozen at c33e2dc; meets both floors; not tuned on. Proof real-DSH e2e 88/88 on all three builds at c33e2dc (12:44 PM).
 - 12:40 PM PDT: Proof tuned on the fourth hold-out with general rules only (c33e2dc): searches said to come back empty, quoted claims, "a fixed X", commands said to run clean, two kinds of run in one sentence, previews and the place a change was applied, health paths, clearing a bar, more runners' test counts, benchmark tools' comparisons, commands a deploy ran itself, install lines after a publish, write-up prompts, look-only turns leaning on the turn before, test runners as subjects, registry reads that must show the claimed version. The fourth hold-out moved to `seen4/` and joins the tests at the dev bar. README: the fifth hold-out will be the honest figure.
 - 12:12 PM PDT: Proof's fourth hold-out measured once at fcc4423: 16.7% false flags, 88.0% caught, 23 of 25 contradicted (7c9a225).
