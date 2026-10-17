@@ -4,23 +4,25 @@ _For the two accounts building these plugins only (see AGENTS.md). A session run
 
 # Suite v1 (branch suite/v1): the DSH Plugin Suite
 
-Updated: 2026-10-16 9:06 PM PDT by A (gmail), thread "Suite v1 builder"
+Updated: 2026-10-16 9:58 PM PDT by A (gmail), thread "Suite v1 builder"
 Branch: `suite/v1` in the worktree `~/Projects/dsh-plugin-suite` (remote `gh` = github.com/bertholomus/deepseek-plugins, private). Main is at a18b87b.
 Goal: six plugins (Autopilot, Decisions, Agent Terminals, Proof, Canon, Recall) per `briefs/SUITE-BRIEF.md`, each judged >= 8.5/10 (no criterion below 8) by a fresh judge in DSH Test, merged to `main` and tagged `<plugin>-v1.0.0`, then `suite-v1.0.0`. Test only in DSH Test, never the live DSH.
 
 ## Doing now
-- Reading DSH's host API (the npm runtimes in `.e2e/`) and planning the shared session watch core.
+- Building the real-DSH e2e harness (`test/e2e/harness.mjs`, `scripts/e2e.mjs`) and running Autopilot in DSH Test.
 
 ## Done (newest first)
+- 9:58 PM PDT: Session Watch (`plugins/session-watch`, the shared watcher core) and Autopilot (`plugins/autopilot`) written, with READMEs; shared code in `shared/` synced into each plugin by `scripts/sync-shared.mjs` (`npm test` fails on a stale copy). Unit tests: `test/session-watch.test.js` (16), `test/autopilot.test.js` (22), `test/suite-shared.test.js` (15), over a stand-in DSH (`test/helpers/fake-dsh.mjs`) and a hand-moved clock (`test/helpers/clock.mjs`). `npm test`: 389 pass.
+- 9:20 PM: `briefs/PLAN.md`: what DSH gives us, the watcher core's API, each plugin's design, tests and the gate.
 - 9:05 PM: DSH runtimes 0.2.0-rc.2 and 0.2.1-rc.1 installed under `.e2e/` (gitignored), for real-DSH e2e tests and API reading.
 - 9:05 PM: `OPEN-QUESTIONS.md`, `PROGRESS.md` and `review/SCOREBOARD.md` started.
 - 8:58 PM: first check: suite/v1 at e0bdda6; DSH Test stopped; live DSH pid 687, `cordis.patch.yml` sha256 e04a0449ecfe8534.
 
 ## Next steps (in order)
-1. Write `briefs/PLAN.md`: the shared watcher core's API and each plugin's design.
-2. Build the watcher core, then Autopilot; e2e on both runtimes; DSH Test named instance `suite-autopilot`; judge round 1.
-3. Then Decisions, Agent Terminals, Proof, Canon, Recall in that order, each through the same gate.
-4. On each pass: merge `suite/v1` into `main` (no force), tag `<plugin>-v1.0.0`, push. After all six: `suite-v1.0.0`.
+1. Real-DSH e2e for Autopilot: shared harness `test/e2e/harness.mjs` + `scripts/e2e.mjs autopilot` on both runtimes (stand-in model; restart under a running turn; idle nudge; error → goal restart; page drawn light and dark). Then DSH Test named instance `suite-autopilot` on GLM-5.3-Flash-EXL3, screenshots light and dark into `review/autopilot-round-1/`.
+2. Judge round 1 (fresh judge subagent) → `review/autopilot-round-1.md` + `review/SCOREBOARD.md`; fix and re-judge until >= 8.5 with no criterion below 8; merge `suite/v1` into `main` (no force), tag `autopilot-v1.0.0` (Session Watch ships with it), push.
+3. Then Decisions, Agent Terminals, Proof, Canon, Recall in that order (designs in `briefs/PLAN.md`), each through the same gate.
+4. After all six: suite README, `suite-v1.0.0`, final fingerprint check, `DONE:` line.
 
 ## Open questions / blockers
 - See `OPEN-QUESTIONS.md` (one line each: question, pick, why). No blockers.
@@ -34,7 +36,10 @@ Goal: six plugins (Autopilot, Decisions, Agent Terminals, Proof, Canon, Recall) 
 
 ## Gotchas
 - Helpers: `dshlane` does not know this project; use `~/.local/bin/dshb new --ws ~/Projects/dsh-plugin-suite --provider owner-ascents --model GLM-5.3-Flash-EXL3 --effort max --title "[Flash] · <task>" --text-file <brief>` and `dshb wait SID`. Do not edit shared tools in `~/.local/bin`.
-- The naming scan in `test/coordinator.test.js` covers every text file except `HANDOFF.md` (and now `briefs/`): no vendor assistant names anywhere else, commit messages included.
+- The naming scan in `test/coordinator.test.js` covers every text file except `HANDOFF.md` (and now `briefs/`): no vendor assistant names anywhere else, commit messages included. Tests that check for such names use `OTHER_NAMES` from `test/helpers/client.mjs` (built in pieces).
+- Shared code: edit `shared/host/*.js` or `shared/client-kit.js`, then `node scripts/sync-shared.mjs`; never edit a plugin's `lib/shared/` copy or its kit block by hand.
+- Plugins' `index.js`/`remote.js` import DSH packages, which the repo has no `node_modules` for: unit tests import only the pure modules; the wiring is proven by the real-DSH e2e.
+- DSH's agent events put the agent in the payload (`({ agent, status })`); `agent/created` is a serial event, so its listener must never return a promise that blocks (ours are wrapped in `guard`).
 
 # Earlier work (main line, before the suite)
 
