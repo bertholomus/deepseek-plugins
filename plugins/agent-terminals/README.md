@@ -333,7 +333,7 @@ node --test test/agent-terminals.test.js test/agent-terminals-client.test.js   #
 node scripts/e2e.mjs agent-terminals                                           # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test (117 checks, about 150 seconds a build) starts DSH from
+The real-DSH test (129 checks, about 190 seconds a build) starts DSH from
 each `.e2e/dsh-<version>` install and from the installed app's own DSH, each in a throwaway home with a throwaway
 home folder for its shell, with Session Watch, Decisions, Agent Terminals
 and a stand-in neighbour plugin that draws in the same places. Stand-in
