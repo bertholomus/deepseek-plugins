@@ -1,8 +1,9 @@
 # Canon round 2: builder's notes
 
-Updated: 2026-10-17 5:04 PM PDT (Canon round-2 builder)
+Updated: 2026-10-17 5:16 PM PDT (Canon round-2 builder)
 Branch: `suite/v1` in `~/Projects/dsh-plugin-suite`
-Status: findings 1 to 9 fixed in code, unit tests and README; the real-DSH run on all three builds is under way.
+Status: done. Findings 1 to 9 fixed in code, unit tests and README; `npm test` passes; the real-DSH test passes on all
+three builds; the live DSH was never touched. The hold-out waits on its writers.
 Vault frozen at f7283b5: test/fixtures/canon/vault
 
 For the hold-out writers (their brief is the coordinator's; these are facts about the measuring, not rules):
@@ -17,6 +18,20 @@ Live DSH fingerprint before any work (3:40 PM PDT): pid 18756, started Sat Oct 1
 63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7.
 
 ## Done (newest first)
+- Real-DSH runs (`node scripts/e2e.mjs canon`, each build about a minute): at e57922b, 94/94 on 0.2.0-rc.2 and
+  0.2.1-rc.1, 93/94 on the app's 0.2.1-rc.2 (Canon's style sheet was still there right after the card and entry went,
+  when Canon was switched off: the check did not wait for it); at 4231db8 (the check waits for the style too, and
+  switching on again adds one style sheet), 95/95 on all three; at d3a2913 (e072de5 changes only a README line), 95/95
+  on all three (0.2.0-rc.2 56 s, 0.2.1-rc.1 58 s, app 0.2.1-rc.2 56 s). Live DSH fingerprint before and after every
+  run (5:03, 5:08, 5:11 and 5:13 PM PDT, and 5:16 PM PDT after the last run): pid 18756, started Sat Oct 17 10:39:36
+  2026, patch sha256 63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7, unchanged.
+- d3a2913: when more notes fit than a turn takes, each question's best note is kept before the rest (in score order),
+  so a two-question prompt gets both answers within 3 notes; a host test holds the README's sample block to what a
+  turn gets. `npm test`: 801 tests, 800 pass, 1 skipped (the hold-out, absent). Dev unchanged.
+- 4231db8: "that", "although", "unless", "already", "always", "usually", "none", "nothing", "everything", "someone",
+  "everyone", "somebody", "anybody", "everybody" and "less" are stop words (they were missing; "Remember that …"
+  matched notes on "that"); dev and round 1's prompts unchanged.
+- 79b2ff7: README wording (the score floor; an unreadable folder is tried again at the next turn or on Read again).
 - e57922b: the real-DSH test (`plugins/canon/test/e2e/run.mjs`) for the grown vault (42/35/2/5) and the new words
   (header, block header, curly quotes); new checks: the try-out with `~/` and with a folder that is not a full path,
   the focus after the card's switch, the page's switch (named "Add notes to Gateway work"), Promote and Read again;
@@ -72,10 +87,9 @@ Live DSH fingerprint before any work (3:40 PM PDT): pid 18756, started Sat Oct 1
   real-DSH test and `scripts/e2e.mjs`.
 
 ## Next steps (in order, each runnable by someone new)
-1. `node scripts/e2e.mjs canon` on all three builds (started 5:03 PM PDT; fingerprint before: pid 18756, sha256
-   63e0c347…05eef7), then `~/.local/bin/dsh-test fingerprint` again; fix what fails; write the results here.
-2. When the hold-out file appears (written by others): `node scripts/canon-relevance.mjs --set holdout`, and add its
-   figures to the README's "How well it picks notes" (never tune on it).
+1. When the hold-out file appears (written by others): `node scripts/canon-relevance.mjs --set holdout --misses`,
+   add its figures to the README's "How well it picks notes" next to the dev figures, and never tune on it.
+   `npm test` then holds it to the floors.
 
 ## Picks and why
 - Tuning: what was tried and left out. Counting a project's name only when the note belongs to that project lost the
@@ -113,6 +127,10 @@ Live DSH fingerprint before any work (3:40 PM PDT): pid 18756, started Sat Oct 1
   topic words the best lacks kept under the relative floor (brings Home.md into the capture prompts). A question
   must fit on its own to keep its note: scoring each question inside the whole prompt let "what must I run before
   one?" bring Lantern ports (a heading has "run").
+- Also tried and left out: a generic word of a project's name ("api", "web", "cache", …) never naming the project
+  alone. "Browser cache in Safari" then lost the quartz-cache context that kept lantern-web's browser note out (dev
+  no block 24 of 30). The e2e's Read Only prompt gets Lantern ports from the scripted model's own directive line
+  (`E2E:turn {…}` words), not from the prompt a person would type.
 - Extra notes left on round 1's prompts, and why: the weekday prompt also gets the rollback runbook ("release" is in
   both titles, 9.30 against 9.65); the quartz health-check prompt gets the TLS runbook (two body words, "service" and
   "check"); "Write a unit test for the lantern API's pagination helper" gets Local development and the release
@@ -125,9 +143,16 @@ Live DSH fingerprint before any work (3:40 PM PDT): pid 18756, started Sat Oct 1
   in the real-DSH run; Wallpaper is not loaded in Canon's run, and nothing this round draws a surface it tints; off
   and on again in Plugins checked by the run.
 
+- A question's best note must fit that question asked alone (a full `rank` of it), and the whole prompt too, so a
+  question with one weak word ("who is the backup") adds nothing a note of another project would answer.
+
 ## Gotchas
 - Never create or read `test/fixtures/canon/relevance/holdout.json`: fresh writers write it. Before each `npm test`,
   check only whether it exists (`test -e`); if it does, run the tests on a clean copy without it.
 - Never change a note in `test/fixtures/canon/vault` after f7283b5: the hold-out's answers are its paths.
 - `node scripts/sync-shared.mjs` (without `--check`) writes every plugin's copies; the kit and `lib/shared/` are not
   Canon's to change.
+- The real-DSH test loads Canon (and Session Watch) from the worktree at each build's boot: never edit plugin files
+  while `node scripts/e2e.mjs` runs, or later builds test other code.
+- The e2e prompts carry the scripted model's directive line (`E2E:say …`, `E2E:turn {…}`), and Canon searches it with
+  the prompt: the Read Only prompt's Lantern ports comes from those words.
