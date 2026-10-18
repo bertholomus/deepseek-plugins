@@ -1,8 +1,8 @@
 # Canon round 2: builder's notes
 
-Updated: 2026-10-17 4:53 PM PDT (Canon round-2 builder)
+Updated: 2026-10-17 5:04 PM PDT (Canon round-2 builder)
 Branch: `suite/v1` in `~/Projects/dsh-plugin-suite`
-Status: findings 1, 3 to 7 and 9 fixed in code with unit tests; README and the real-DSH run next.
+Status: findings 1 to 9 fixed in code, unit tests and README; the real-DSH run on all three builds is under way.
 Vault frozen at f7283b5: test/fixtures/canon/vault
 
 For the hold-out writers (their brief is the coordinator's; these are facts about the measuring, not rules):
@@ -17,6 +17,14 @@ Live DSH fingerprint before any work (3:40 PM PDT): pid 18756, started Sat Oct 1
 63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7.
 
 ## Done (newest first)
+- e57922b: the real-DSH test (`plugins/canon/test/e2e/run.mjs`) for the grown vault (42/35/2/5) and the new words
+  (header, block header, curly quotes); new checks: the try-out with `~/` and with a folder that is not a full path,
+  the focus after the card's switch, the page's switch (named "Add notes to Gateway work"), Promote and Read again;
+  `maxChars: "900"` in the profile (replaces the out-of-range 5: the form step still refuses 5); a copy of the vault
+  made unreadable with `chmod 000` in the run's own folder (put back to 755 in the step and again in `finally`).
+- fefd7b9: README (fit rules, the block, "How well it picks notes", header words, try-out folder, switch name, curly
+  quotes, numbers in quotes, "What Read only covers" for Finding 8, tests); the try-out says which folder it used
+  ("For a session in ~/…."; `place` from the host). `npm test`: 791 tests, 790 pass, 1 skipped (the hold-out, absent).
 - ef0a258: relevance, from round 1's real prompts (run through `scratchpad/canon-r2/block.mjs`, not added to dev): a
   prompt that asks two things keeps the note that best answers each question asked alone (`questionsOf`, `rank` in
   search.js), so "When does the lantern on-call rotation hand over, and why did we choose NATS JetStream …?" gets
@@ -64,16 +72,10 @@ Live DSH fingerprint before any work (3:40 PM PDT): pid 18756, started Sat Oct 1
   real-DSH test and `scripts/e2e.mjs`.
 
 ## Next steps (in order, each runnable by someone new)
-1. README: "How well it picks notes" (dev figures, `node scripts/canon-relevance.mjs --set dev --misses`, the
-   hold-out line), the new fit rules in "What a turn gets", the block as it is now, the try-out's folder (`~/`),
-   Read only's reach (Finding 8), the header's words, "Add notes to <title>", the wrong-type promise, the tests.
-2. `plugins/canon/test/e2e/run.mjs`: counts 42/35/2/5 and "The vault … holds 35 active notes and 2 drafts.", "5 notes
-   with another status", the new header sentence, curly quotes in the two refusals; new steps: a `chmod 000` copy
-   of the vault in the run's temp folder (restored in `finally`), `maxChars: "900"` in the profile, the try-out
-   with `~/`, focus after the card's switch, the page's switch and Promote.
-3. `npm test` (check `test -e test/fixtures/canon/relevance/holdout.json` first; clean copy if other agents'
-   files fail), then `node scripts/e2e.mjs canon` on all three builds with `~/.local/bin/dsh-test fingerprint`
-   before and after.
+1. `node scripts/e2e.mjs canon` on all three builds (started 5:03 PM PDT; fingerprint before: pid 18756, sha256
+   63e0c347…05eef7), then `~/.local/bin/dsh-test fingerprint` again; fix what fails; write the results here.
+2. When the hold-out file appears (written by others): `node scripts/canon-relevance.mjs --set holdout`, and add its
+   figures to the README's "How well it picks notes" (never tune on it).
 
 ## Picks and why
 - Tuning: what was tried and left out. Counting a project's name only when the note belongs to that project lost the
@@ -115,6 +117,13 @@ Live DSH fingerprint before any work (3:40 PM PDT): pid 18756, started Sat Oct 1
   both titles, 9.30 against 9.65); the quartz health-check prompt gets the TLS runbook (two body words, "service" and
   "check"); "Write a unit test for the lantern API's pagination helper" gets Local development and the release
   checklist (both say how to run the unit tests).
+
+- The try-out says the folder it used ("For a session in ~/Projects/app.", or "with no folder") above its result,
+  so a `~/` folder visibly counts; the placeholder stays `~/Projects/app` since `~/` now works.
+- DESIGN.md "Before you push": no new surface (a meta line in the try-out, focus outlines and a fixed-width time
+  column on Canon's own classes and tokens); `node --check` and `npm test` pass; both DSH versions and both themes
+  in the real-DSH run; Wallpaper is not loaded in Canon's run, and nothing this round draws a surface it tints; off
+  and on again in Plugins checked by the run.
 
 ## Gotchas
 - Never create or read `test/fixtures/canon/relevance/holdout.json`: fresh writers write it. Before each `npm test`,
