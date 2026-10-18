@@ -117,7 +117,7 @@ const PLAN_HEADING = /^\s{0,3}#{1,6}\s+(?:next\s+steps?|plan|proposed\s+(?:fix|c
 /** A line that leads a plan's items: "Plan:", "Here's how I'd do it:", "To release:", "Next steps:". */
 function leadsPlan(line) {
     if (!/:\s*$/.test(line)) return false;
-    return PLAN_LEAD.test(`${line} `) || NOT_YET.test(line) || /\b(?:here'?s how|how (?:i|we|you)|steps?|plan|to-?dos?|options?|proposal|approach|i'?d|we'?d|ideas?|suggestions?|recommend\w*|choices|alternatives|ways?\s+(?:out|forward|around\s+it|to\s+(?:fix|do|handle|solve|go|get))(?=\s*:))\b/i.test(line) || /^to\s+[a-z]+(?:\s+[\w.-]+){0,4}\s*:\s*$/i.test(line);
+    return PLAN_LEAD.test(`${line} `) || NOT_YET.test(line) || /\b(?:here'?s how|how (?:i|we|you)|steps?|plan|to-?dos?|options?|proposal|approach|i'?d|we'?d|ideas?|suggestions?|recommend\w*|choices|alternatives|ways?\s+(?:out|forward|around\s+it|to\s+(?:fix|do|handle|solve|go|get|make|keep|stop|avoid|prevent|speed))(?=[^:]*:\s*$)|means)\b/i.test(line) || /^to\s+[a-z]+(?:\s+[\w.-]+){0,4}\s*:\s*$/i.test(line);
 }
 
 /** The reply's sentences outside code blocks, quotes and wide tables, in order, inline code marked. */
@@ -558,7 +558,7 @@ function targetOf(text, healthy) {
 }
 
 /** Tools whose name starts a command a claim can name in inline code. */
-const COMMAND_START = /^(\.\/)?(hugo|jekyll|mkdocs|eleventy|zola|astro|gatsby|mdbook|sphinx-build|aws|gcloud|gsutil|az|ansible-playbook|ansible|serverless|sls|pulumi|cdk|sam|heroku|doctl|argocd|flutter|dart|sbt|ctest|bats|dbt|nx|turbo|lerna|alembic|prisma|rails|bin\/rails|php|artisan|shellcheck|hadolint|golangci-lint|staticcheck|pylint|isort|rubocop|psql|mysql|sqlite3|skaffold|packer|mvnw|npm|pnpm|yarn|npx|bun|bunx|deno|node|go|cargo|pytest|python3?|uv|poetry|pip3?|make|docker|kubectl|helm|git|gh|tsc|eslint|ruff|mypy|flake8|black|prettier|mvn|gradlew?|dotnet|swift|mix|bundle|rake|rspec|jest|vitest|mocha|phpunit|composer|terraform|fly|flyctl|vercel|netlify|curl|wget|sha256sum|shasum|twine|bazel|cmake|ninja|xcodebuild|rustc|clang|gcc|javac|java|scripts\/\S+|\S+\.sh)\b/;
+const COMMAND_START = /^(\.\/)?(hugo|jekyll|mkdocs|eleventy|zola|astro|gatsby|mdbook|sphinx-build|aws|gcloud|gsutil|az|ansible-playbook|ansible|serverless|sls|pulumi|cdk|sam|heroku|doctl|argocd|flutter|dart|sbt|ctest|bats|dbt|nx|turbo|lerna|alembic|prisma|rails|bin\/rails|php|artisan|shellcheck|hadolint|golangci-lint|staticcheck|pylint|isort|rubocop|psql|mysql|sqlite3|skaffold|packer|mvnw|npm|pnpm|yarn|npx|bun|bunx|deno|node|go|cargo|pytest|python3?|uv|poetry|pip3?|make|docker|kubectl|helm|git|gh|tsc|eslint|ruff|mypy|flake8|black|prettier|mvn|gradlew?|dotnet|swift|mix|bundle|rake|rspec|jest|vitest|mocha|phpunit|composer|terraform|fly|flyctl|vercel|netlify|curl|wget|sha256sum|shasum|twine|bazel|cmake|ninja|xcodebuild|rustc|clang|gcc|javac|java|nginx|apachectl|haproxy|caddy|promtool|amtool|envoy|scripts\/\S+|\S+\.sh)\b/;
 
 /** A script by its path: `scripts/seed.py`, `./load.sh`, `bin/migrate`. */
 const SCRIPT = /^(\.{0,2}\/)?[\w.-]+(\/[\w.-]+)*\.(py|sh|bash|zsh|rb|pl|js|mjs|cjs|ts|php|ps1|r|jl|lua)$|^(\.\/|\.\.\/|bin\/|scripts?\/|tools\/)[\w./-]+$/i;
@@ -648,7 +648,7 @@ function claimOf(clause) {
     if (words === '' || ASKED.test(words) || REPORTED.test(words) || NOT_YET.test(words) || DESCRIBED.test(words) || HISTORY.test(words) || CONFIGURED.test(words)) return undefined;
     // "Only 1 passed", "1 of 3 tests passed": a failure report. An aside in brackets speaks for itself ("All 3 pass now
     // (before the fix only 1 passed)"). "Run it on staging first" is an instruction, "A green build means …" a definition.
-    if (partPassed(words.replace(/\([^)]*\)/g, ' ')) || MEANS.test(words) || imperative(words)) return undefined;
+    if (partPassed(words.replace(/\([^)]*\)/g, ' ')) || MEANS.test(words) || imperative(words) || QUESTION_LEAD.test(words) || NONE_CHANGED.test(words) || PIPELINE_DESCRIBED.test(prose(s))) return undefined;
     // A search said to come back empty is checked against the turn's last search, before the "nothing" in it reads as a negation.
     if (SEARCH_EMPTY.some((re) => re.test(words))) return { kind: 'passed', subject: 'search', term: searchTermOf(s) };
     // "It's allocation-free now": no allocations per operation, which a benchmark prints.
@@ -682,7 +682,8 @@ function claimOf(clause) {
         const after = raw.slice(m.index);
         // "the published checksum" is an adjective; "the playbook rolled it out", "the job deployed the image" are acts.
         if (inCode(before) || (ADJECTIVE.test(prose(before)) && !/^\S+(?:\s+out)?\s+(?:it|them|this|that|these|those|everything|the|a|an|to|out)\b/i.test(after))) continue;
-        if (/^pushed\s+(back|for|ahead|through)\b/i.test(after)) continue;
+        // "the warmup pushed the learning rate toward its peak": a push of a figure, not of code.
+        if (/^pushed\s+(back|for|ahead|through)\b|^push(?:ed|es)?\s+(?:\S+\s+){0,4}?(?:toward|towards|past|beyond|above|below|higher|lower)\b/i.test(after)) continue;
         // Code at work, not a deploy: "`LRU.Get` released the mutex", "pushes the job onto the queue", "merged the two maps".
         if (CODE_ACT.some((re) => re.test(after)) || codeSubject(before)) continue;
         // A label on a file or a post ("dated 2026-10-15, tagged `release`"), not a version.
@@ -708,6 +709,15 @@ export const WHOLE_SUITE = /\b(?:rest\s+of\s+the\s+(?:test\s+)?(?:suite|tests)|(
 
 /** A sentence led by a label that says what follows is not done: "Proposed fix (not started): …", "Next steps: …". */
 const PLAN_LEAD = /^(?:(?:proposed|suggested|possible|planned|recommended|alternative|follow-?up)\s+(?:fix(?:es)?|changes?|plan|approach|steps?|solution|options?|work|actions?)|next\s+steps?|plan|proposal|suggestion|recommendation|idea|todo|to-?do|follow-?ups?|left to do|remaining work|open questions?)\b[^:]{0,40}:\s|^[^:]{0,60}\((?:not\s+(?:yet\s+)?(?:started|done|applied|run|tested|implemented)|proposed|planned|todo|to do|untested)\)\s*:\s/i;
+
+/** A sentence led by what something means: "What green means here: the `checks` job finished …" defines, it reports nothing. */
+const DEFINES = /^[^:,;.]{1,60}?\bmeans?\b[^:.]{0,30}:\s/i;
+/** A question word that leads a heading or a description: "How it works", "Why an export can run twice", "What the log shows". */
+const QUESTION_LEAD = /^(?:how|why|what|where|which|whether)\b(?!\s+(?:i|we)\s+(?:fixed|changed|did|added|deployed|shipped)\b)/i;
+/** How automation works, in the present: "the plan is uploaded as the `plan-prod` artifact", "is deployed on every merge". */
+const PIPELINE_DESCRIBED = /\b(?:is|are|gets|get)\s+(?:uploaded|published|pushed|deployed|released|applied)\s+(?:as\s+(?:the\s+|an?\s+)?(?:\S+\s+){0,5}?artifacts?\b|on\s+(?:every|each)\b|whenever\b|each\s+time\b|every\s+time\b|by\s+the\s+(?:\S+\s+)?(?:job|workflow|pipeline|ci|action|bot)\b)/i;
+/** "No files have been edited", "no code changed": nothing changed. */
+const NONE_CHANGED = /^(?:no|zero)\s+(?:\w+\s+){0,2}?(?:files?|code|changes?|edits?|lines?)\s+(?:(?:have|has|were|was|got|is|are)\s+(?:been\s+)?)?(?:edited|changed|modified|touched|made|written|committed)\b/i;
 
 /** The kind of claim a sentence makes, or undefined (the first clause that makes one). */
 export function kindOf(sentence) {
@@ -741,7 +751,7 @@ export function claimsIn(text, { max = 8 } = {}) {
         const kinds = new Set();
         const counts = new Map();
         const whole = shown(sentence);
-        if (PLAN_LEAD.test(whole) || plan.has(at)) continue;
+        if (PLAN_LEAD.test(whole) || DEFINES.test(whole) || plan.has(at)) continue;
         const clauses = clausesOf(sentence);
         if (clauses.length > 1 && !clauses.some((c) => claimOf(c))) clauses.push(sentence);
         const founds = clauses.map((c) => claimOf(c));
