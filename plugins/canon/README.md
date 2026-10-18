@@ -112,8 +112,8 @@ notes, 2,000 characters). The dev set
 answers, and 30 that none does (8 that name a project but ask what no note
 says, 8 of chat filler, 8 of words about the vault, 6 others), from
 sessions in a project's folder, in an unrelated folder and in none.
-Canon's rules were tuned on it, so a new prompt can expect less than
-these figures. The floors were fixed before anything was measured.
+Canon's rules were tuned on it, so new prompts may do worse than these
+figures. The floors were fixed before anything was measured.
 
 | Figure | Before tuning | Now | Floor |
 | --- | --- | --- | --- |
@@ -386,7 +386,7 @@ form's promote-folder check, and where the focus goes after each switch,
 Read again and Promote. `test/canon-relevance.test.js` holds the dev set to
 the figures it reached, and the hold-out to the floors once it is there.
 
-The real-DSH test (a few minutes a build) starts DSH from each
+The real-DSH test (about one minute a build) starts DSH from each
 `.e2e/dsh-<version>` install and from the installed app's own DSH, each in
 a throwaway home, with Session Watch and Canon and a scripted model
 (`test/e2e/fake-model.mjs`) that records what each request carried. It

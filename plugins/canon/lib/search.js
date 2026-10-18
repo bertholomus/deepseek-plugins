@@ -309,8 +309,11 @@ export class Index {
         }
         const keep = (r) => r.fits && r.score >= MIN_SCORE && (r.score >= best * NEAR_BEST || leads.has(r.path));
         const kept = scored.filter(keep).map(({ why, ...r }) => r);
-        const results = kept.slice(0, limit);
-        const others = [...kept.slice(limit).map((r) => ({ ...r, why: 'less' })), ...scored.filter((r) => !keep(r))].slice(0, 5);
+        // Each question's best note comes before the rest when not all fit (still in score order).
+        const firsts = kept.filter((r) => leads.has(r.path)).slice(0, limit);
+        const chosen = new Set([...firsts, ...kept.filter((r) => !leads.has(r.path)).slice(0, limit - firsts.length)].map((r) => r.path));
+        const results = kept.filter((r) => chosen.has(r.path));
+        const others = [...kept.filter((r) => !chosen.has(r.path)).map((r) => ({ ...r, why: 'less' })), ...scored.filter((r) => !keep(r))].slice(0, 5);
         return { terms: query, results, others };
     }
 

@@ -546,6 +546,15 @@ test('search: a session in a project\'s folder names that project; a prompt that
     const both = ask(two, '/Users/someone/Elsewhere/scratch').results;
     assert.deepEqual(both.map((r) => r.path), ['Decisions/2026-03 Lantern job queue on NATS JetStream.md', 'People/On-call.md']);
     assert.ok(both[1].score < both[0].score * 0.5, 'On-call is under half the best, kept as its question\'s best note');
+    // When not all fit, each question's best note comes before the rest.
+    const index = new Index();
+    const note = (path, title, body) => ({ path, title, aliases: [], tags: [], projects: [], headings: [], body });
+    for (const i of [1, 2, 3, 4]) index.add(note(`n/Alpha ${i}.md`, `Alpha beta epsilon zeta ${i}`, 'alpha beta epsilon zeta'));
+    index.add(note('n/Gamma.md', 'Odd one', 'a short word on gamma and delta'));
+    for (let i = 0; i < 8; i += 1) index.add(note(`n/Other ${i}.md`, `Other ${i}`, `filler words ${i}`));
+    const many = index.search('What about alpha beta epsilon zeta, and why gamma delta?', { limit: 3 }).results.map((r) => r.path);
+    assert.equal(many.length, 3);
+    assert.deepEqual(many, ['n/Alpha 1.md', 'n/Alpha 2.md', 'n/Gamma.md'], 'the second question\'s note, though four notes score higher');
     // A question must fit on its own: "what must I run before one?" fits no note, so a note with "run" in a heading stays out.
     const weekday = paths('On which weekday do lantern releases go out, and what must I run before one?', '/Users/someone/Projects/lantern-api');
     assert.equal(weekday[0], 'Projects/lantern-api/Release checklist.md');
@@ -716,6 +725,11 @@ test('recall: the page\'s try-out shows the notes, why each fits, the near misse
     assert.ok(view.results.every((r) => typeof r.score === 'number' && r.matched.length > 0 && r.passage));
     assert.ok(view.others.some((o) => o.path === 'Projects/tide-ledger/Ledger backups.md'));
     assert.ok(view.block.text.startsWith(HEADER) && view.block.chars === view.block.text.length);
+    // The README's block is the one a turn gets for its prompt and folder.
+    const readme = readFileSync(join(ROOT, 'plugins', 'canon', 'README.md'), 'utf8');
+    const sample = /```text\n([\s\S]*?)\n```/.exec(readme)?.[1];
+    const shown = await recall.preview('Which port does the load balancer use for the gateway\'s health check, and how do I roll out a new build?', `${HOME}/Projects/harbor-gateway`);
+    assert.equal(shown.block?.text, sample, 'the README shows the block exactly as a turn gets it');
     const none = await recall.preview('Thanks!', '');
     assert.deepEqual([none.results, none.block], [[], null]);
 });
