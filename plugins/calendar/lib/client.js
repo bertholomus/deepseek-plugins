@@ -89,15 +89,31 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const HIDDEN = 'position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0';
         const GLASS = 'background:var(--cal-glass);-webkit-backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%)';
         const CSS = [
-            // Tokens: dark by default (the wallpaper plugin's own values), light where DSH is light.
-            `:is(${ROOTS}){--cal-text:#ECEAE4;--cal-strong:#DADDD7;--cal-soft:#C9CDC7;--cal-meta:#A9AEA8;--cal-faint:#8E948E;--cal-accent:#7FA7F5;--cal-on-accent:#0B1220;`
-                + '--cal-glass:rgba(14,18,17,var(--wp-tint,.55));--cal-conv:rgba(10,13,12,calc(var(--wp-tint,.55) + .2));--cal-pop:rgba(20,24,23,.95);--cal-modal:rgba(16,20,19,.82);--cal-shadow:rgba(0,0,0,.45);'
-                + '--cal-line:rgba(255,255,255,.09);--cal-line2:rgba(255,255,255,.16);--cal-fill:rgba(255,255,255,.04);--cal-hover:rgba(255,255,255,.07);--cal-press:rgba(255,255,255,.11);'
-                + '--cal-accent-soft:rgba(127,167,245,.16);--cal-danger:#F2ABA2;--cal-warn:#E8C48C;--cal-ok:#93D2A8;--cal-now:#FF7A6E;--cal-chip-ground:#141817;color-scheme:dark}',
-            `body:not([data-ds-dark-theme]) :is(${ROOTS}){--cal-text:#191E1B;--cal-strong:#232926;--cal-soft:#38403B;--cal-meta:#55605A;--cal-faint:#68716B;--cal-accent:#3F6FD8;--cal-on-accent:#FFFFFF;`
-                + '--cal-glass:rgba(250,250,246,var(--wp-tint,.55));--cal-conv:rgba(250,250,246,calc(var(--wp-tint,.55) + .2));--cal-pop:rgba(252,252,249,.96);--cal-modal:rgba(250,250,246,.9);--cal-shadow:rgba(20,26,22,.18);'
-                + '--cal-line:rgba(0,0,0,.1);--cal-line2:rgba(0,0,0,.17);--cal-fill:rgba(20,26,22,.035);--cal-hover:rgba(20,26,22,.07);--cal-press:rgba(20,26,22,.11);'
-                + '--cal-accent-soft:rgba(63,111,216,.12);--cal-danger:#B3261E;--cal-warn:#8A5A00;--cal-ok:#1E7B45;--cal-now:#D93025;--cal-chip-ground:#FAFAF7;color-scheme:light}',
+            // Tokens. DSH's colours, deepened for glass as DESIGN.md §3 shows (secondary and tertiary toward the
+            // label colour; state colours per §4), on the wallpaper's grounds; light where DSH is light.
+            `:is(${ROOTS}){--cal-text:var(--dsw-alias-label-primary);--cal-strong:var(--dsw-alias-label-primary);`
+                + '--cal-soft:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary));--cal-meta:var(--cal-soft);'
+                + '--cal-faint:color-mix(in srgb,var(--dsw-alias-label-tertiary) 75%,var(--dsw-alias-label-primary));'
+                + '--cal-accent:color-mix(in srgb,var(--dsw-alias-link) 85%,var(--dsw-alias-label-primary));--cal-on-accent:var(--dsw-alias-label-primary-foreground);'
+                + '--cal-glass:rgba(14,18,17,var(--wp-tint,.55));--cal-conv:rgba(10,13,12,calc(var(--wp-tint,.55) + .2));--cal-pop:rgba(20,24,23,.95);--cal-shadow:rgba(0,0,0,.45);'
+                + '--cal-line:var(--dsw-alias-border-l2);--cal-line2:var(--dsw-alias-border-l3);--cal-fill:rgba(255,255,255,.04);--cal-hover:rgba(255,255,255,.07);--cal-press:rgba(255,255,255,.11);'
+                + '--cal-accent-soft:color-mix(in srgb,var(--cal-accent) 16%,transparent);--cal-danger:var(--dsw-alias-state-error-primary);--cal-warn:var(--dsw-alias-state-warn-primary);'
+                + '--cal-ok:var(--dsw-alias-state-success-primary);--cal-now:var(--dsw-alias-state-error-primary);--cal-chip-ground:#141817;color-scheme:dark}',
+            `body:not([data-ds-dark-theme]) :is(${ROOTS}){--cal-text:var(--dsw-alias-label-primary);--cal-strong:var(--dsw-alias-label-primary);`
+                + '--cal-soft:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary));--cal-meta:var(--cal-soft);'
+                + '--cal-faint:color-mix(in srgb,var(--dsw-alias-label-tertiary) 75%,var(--dsw-alias-label-primary));'
+                + '--cal-accent:color-mix(in srgb,var(--dsw-alias-link) 85%,var(--dsw-alias-label-primary));--cal-on-accent:var(--dsw-alias-label-primary-foreground);'
+                + '--cal-glass:rgba(250,250,246,var(--wp-tint,.55));--cal-conv:rgba(250,250,246,calc(var(--wp-tint,.55) + .2));--cal-pop:rgba(252,252,249,.96);--cal-shadow:rgba(20,26,22,.18);'
+                + '--cal-line:var(--dsw-alias-border-l2);--cal-line2:var(--dsw-alias-border-l3);--cal-fill:rgba(20,26,22,.035);--cal-hover:rgba(20,26,22,.07);--cal-press:rgba(20,26,22,.11);'
+                + '--cal-accent-soft:color-mix(in srgb,var(--cal-accent) 12%,transparent);'
+                + '--cal-danger:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary));'
+                + '--cal-warn:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 55%,var(--dsw-alias-label-primary));'
+                + '--cal-ok:color-mix(in srgb,var(--dsw-alias-state-success-primary) 60%,var(--dsw-alias-label-primary));'
+                + '--cal-now:var(--dsw-alias-state-error-primary);--cal-chip-ground:#FAFAF7;color-scheme:light}',
+            // The user asks for less transparency: the glass goes near-opaque, as DSH raises its own sidebar.
+            '@media (prefers-reduced-transparency:reduce){'
+                + `:is(${ROOTS}){--cal-glass:rgba(14,18,17,.9);--cal-conv:rgba(10,13,12,.95)}`
+                + `body:not([data-ds-dark-theme]) :is(${ROOTS}){--cal-glass:rgba(250,250,246,.9);--cal-conv:rgba(250,250,246,.95)}}`,
             // Keyboard focus on the plugin's own controls (DSH's controls inside keep theirs).
             ':is(button,a,input,select,textarea,[tabindex])[class*="dshcal-"]:focus-visible{outline:2px solid var(--cal-accent);outline-offset:2px}',
             `.dshcal-sr{${HIDDEN}}`,
@@ -197,10 +213,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-mini-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:1px}',
             '.dshcal-mini-grid[data-week-numbers]{grid-template-columns:20px repeat(7,1fr)}',
             '.dshcal-mini-wk{height:28px;display:flex;align-items:center;justify-content:center;font-size:10.5px;color:var(--cal-meta);font-variant-numeric:tabular-nums}',
-            '.dshcal-mini-wd{height:20px;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:600;color:var(--cal-faint);text-transform:uppercase}',
+            '.dshcal-mini-wd{height:20px;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:600;color:var(--cal-meta);text-transform:uppercase}',
             '.dshcal-mini-day{height:28px;display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;background:none;color:var(--cal-text);font:inherit;font-size:12px;font-variant-numeric:tabular-nums;cursor:pointer}',
             '.dshcal-mini-day:hover{background:var(--cal-hover)}',
-            '.dshcal-mini-day[data-out]{color:var(--cal-faint)}',
+            '.dshcal-mini-day[data-out]{color:var(--cal-meta)}',
             '.dshcal-mini-day[data-in-range]{background:var(--cal-accent-soft)}',
             '.dshcal-mini-day[data-today]{color:var(--cal-on-accent);background:var(--cal-accent);font-weight:600}',
             '.dshcal-cals{display:flex;flex-direction:column;gap:12px;min-height:0}',
@@ -231,7 +247,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-wk-dayhead[data-today] span:first-child{color:var(--cal-accent)}',
             '.dshcal-wk-dayhead[data-today] span:last-child{background:var(--cal-accent);color:var(--cal-on-accent)}',
             '.dshcal-wk-allday{border-bottom:1px solid var(--cal-line);max-height:30%;overflow-y:auto}',
-            '.dshcal-wk-gutterlabel{display:flex;flex-direction:column;align-items:flex-end;justify-content:flex-start;gap:2px;padding:5px 8px 4px 0;font-size:11px;color:var(--cal-faint);white-space:nowrap}',
+            '.dshcal-wk-gutterlabel{display:flex;flex-direction:column;align-items:flex-end;justify-content:flex-start;gap:2px;padding:5px 8px 4px 0;font-size:11px;color:var(--cal-meta);white-space:nowrap}',
             '.dshcal-wk-lanes{grid-column:2 / -1;display:grid;grid-template-columns:repeat(var(--days),minmax(0,1fr));grid-template-rows:repeat(var(--lanes),22px);row-gap:2px;padding:3px 0;min-height:22px}',
             '.dshcal-wk-lanecell{grid-row:1 / -1;border:0;border-left:1px solid var(--cal-line);background:none;padding:0;cursor:pointer;min-height:22px}',
             '.dshcal-wk-lanecell:hover{background:var(--cal-fill)}',
@@ -240,7 +256,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-wk-scroll{position:relative;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable;scrollbar-width:thin;touch-action:pan-y}',
             '.dshcal-wk-canvas{position:relative;display:grid;grid-template-columns:var(--gutter) repeat(var(--days),minmax(0,1fr));height:calc(24 * var(--hour))}',
             '.dshcal-wk-hours{position:relative}',
-            '.dshcal-wk-hour{position:absolute;right:8px;transform:translateY(-50%);font-size:11px;color:var(--cal-faint);font-variant-numeric:tabular-nums;white-space:nowrap}',
+            '.dshcal-wk-hour{position:absolute;right:8px;transform:translateY(-50%);font-size:11px;color:var(--cal-meta);font-variant-numeric:tabular-nums;white-space:nowrap}',
             '.dshcal-wk-col{position:relative;border-left:1px solid var(--cal-line);background-image:linear-gradient(to bottom,var(--cal-line) 1px,transparent 1px);background-size:100% var(--hour);cursor:cell;user-select:none;-webkit-user-select:none}',
             '.dshcal-wk-col[data-today]{background-color:color-mix(in srgb,var(--cal-accent) 5%,transparent)}',
             '.dshcal-wk-ghost{position:absolute;left:2px;right:4px;z-index:19;border-radius:8px;background:color-mix(in srgb,var(--cal-accent) 30%,transparent);border:1px solid var(--cal-accent);pointer-events:none;font-size:11.5px;font-weight:600;padding:3px 6px;box-sizing:border-box;color:var(--cal-text)}',
@@ -248,7 +264,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-now::before{content:"";position:absolute;left:-5px;top:-4px;width:10px;height:10px;border-radius:50%;background:var(--cal-now)}',
 
             // An event in the time grid, a bar in the all-day row and the month.
-            '.dshcal-ev{position:absolute;z-index:2;display:flex;flex-direction:column;gap:1px;box-sizing:border-box;min-width:0;padding:3px 6px;overflow:hidden;border:0;border-radius:7px;background:var(--ev);color:var(--ev-text);box-shadow:0 0 0 1px var(--cal-chip-ring,rgba(0,0,0,.08));font:inherit;font-size:12px;line-height:1.3;text-align:left;cursor:pointer}',
+            '.dshcal-ev{position:absolute;z-index:2;display:flex;flex-direction:column;gap:1px;box-sizing:border-box;min-width:0;padding:3px 6px;overflow:hidden;border:0;border-radius:7px;background:var(--ev);color:var(--ev-text);box-shadow:0 0 0 1px var(--dsw-alias-border-l2);font:inherit;font-size:12px;line-height:1.3;text-align:left;cursor:pointer}',
             '.dshcal-ev:hover,.dshcal-ev:focus-visible{z-index:5;filter:brightness(1.06)}',
             '.dshcal-ev-more{position:absolute;display:flex;align-items:flex-start;justify-content:center;box-sizing:border-box;min-width:0;padding:3px 2px;border:0;border-radius:7px;background:color-mix(in srgb,var(--cal-text) 9%,var(--cal-chip-ground));color:var(--cal-text);box-shadow:0 0 0 1px var(--cal-line);font:inherit;font-size:11.5px;font-weight:700;cursor:pointer;overflow:hidden}',
             '.dshcal-ev-more:hover,.dshcal-ev-more:focus-visible{z-index:5;background:color-mix(in srgb,var(--cal-text) 15%,var(--cal-chip-ground))}',
@@ -307,7 +323,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-mo-cell:focus-visible{box-shadow:inset 0 0 0 2px var(--cal-accent)}',
             '.dshcal-mo-num{grid-row:1;z-index:1;justify-self:start;align-self:center;display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;margin-left:5px;padding:0 5px;box-sizing:border-box;border:0;border-radius:12px;background:none;color:var(--cal-strong);font:inherit;font-size:12.5px;font-weight:500;font-variant-numeric:tabular-nums;cursor:pointer}',
             '.dshcal-mo-num:hover{background:var(--cal-hover)}',
-            '.dshcal-mo-num[data-out]{color:var(--cal-faint)}',
+            '.dshcal-mo-num[data-out]{color:var(--cal-meta)}',
             '.dshcal-mo-num[data-today]{background:var(--cal-accent);color:var(--cal-on-accent);font-weight:600}',
             '.dshcal-mo-more{z-index:1;align-self:center;justify-self:start;height:20px;margin:0 3px;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--cal-meta);font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap;overflow:hidden;max-width:calc(100% - 6px);text-overflow:ellipsis}',
             '.dshcal-mo-more:hover{background:var(--cal-hover);color:var(--cal-text)}',
@@ -333,12 +349,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-ag-part{padding:12px 8px 4px;font-size:11.5px;font-weight:600;letter-spacing:.03em;color:var(--cal-meta);text-transform:uppercase}',
             '.dshcal-ag-part:first-child{padding-top:6px}',
 
-            // ── Popovers (an event's details, a day's events): fixed, portaled, glass.
-            '.dshcal-pop{position:fixed;z-index:990;box-sizing:border-box;width:min(360px,calc(100vw - 24px));max-height:min(620px,calc(100vh - 24px));overflow:auto;padding:14px 14px 12px;'
-                + 'background:var(--cal-pop);-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);border:1px solid var(--cal-line2);border-radius:18px;box-shadow:0 18px 48px var(--cal-shadow);'
+            // ── Popovers (an event's details, a day's events): DSH's MenuSurface (its material and stacking) on
+            // DSH's dialog level; the placement stays the plugin's. Layout here; the material only in the fallback
+            // (.dshcal-pop-own, where a DSH has no MenuSurface).
+            '.dshcal-pop{box-sizing:border-box;width:min(360px,calc(100vw - 24px));max-height:min(620px,calc(100vh - 24px));overflow:auto;padding:14px 14px 12px;'
                 + 'color:var(--cal-text);font-size:13px;line-height:1.45;animation:dshcal-in .14s ease-out;scrollbar-width:thin}',
+            '.dshcal-pop-own{position:fixed;z-index:1000;background:var(--cal-pop);-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);border:1px solid var(--cal-line2);border-radius:18px;box-shadow:0 18px 48px var(--cal-shadow)}',
             '.dshcal-pop:focus{outline:none}',
-            '.dshcal-pop[data-sheet]{left:12px!important;right:12px;bottom:12px;top:auto!important;width:auto;max-height:70vh}',
             '.dshcal-pop-top{display:flex;align-items:flex-start;gap:10px}',
             '.dshcal-pop-swatch{flex:none;width:12px;height:12px;margin-top:6px;border-radius:4px;background:var(--ev)}',
             '.dshcal-pop-title{flex:1;min-width:0;margin:0;font-size:16px;font-weight:600;line-height:1.4;color:var(--cal-strong);overflow-wrap:anywhere}',
@@ -369,8 +386,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-daypop-list{display:flex;flex-direction:column;gap:3px;margin:10px 0 2px}',
             '.dshcal-daypop-list .dshcal-bar,.dshcal-daypop-list .dshcal-line{margin:0}',
 
-            // ── Dialogs: DSH's Modal, on frosted glass, scrolling inside.
-            '.dshcal-dlg.dshcal-dlg{width:min(540px,100%);max-height:100%;' + 'background:var(--cal-modal);-webkit-backdrop-filter:blur(28px);backdrop-filter:blur(28px);border:1px solid var(--cal-line);border-radius:22px;color:var(--cal-text)}',
+            // ── Dialogs: DSH's Modal draws its own material; only the plugin's sizes here, content scrolling inside.
+            '.dshcal-dlg.dshcal-dlg{width:min(540px,100%);max-height:100%}',
             '.dshcal-dlg.dshcal-dlg-narrow{width:min(420px,100%)}',
             '.dshcal-dlg.dshcal-dlg-wide{width:min(600px,100%)}',
             // Starts and Ends share a row only where both show in full; a time goes under its date before either is cut.
@@ -431,23 +448,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-tile b{font-size:13.5px;font-weight:600}',
             '.dshcal-tile span{font-size:12px;line-height:1.4;color:var(--cal-meta)}',
             '.dshcal-steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px;font-size:12.5px;line-height:1.5;color:var(--cal-soft)}',
-            '.dshcal-steps code,.dshcal-code{font-family:var(--dsh-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:.95em;padding:1px 4px;border-radius:5px;background:var(--cal-hover)}',
+            '.dshcal-steps code,.dshcal-code{font-family:var(--ds-font-family-code,var(--dsh-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace));font-size:.95em;padding:1px 4px;border-radius:5px;background:var(--cal-hover)}',
             '.dshcal-usercode{display:flex;align-items:center;justify-content:center;gap:12px;padding:16px;border-radius:14px;background:var(--cal-fill);border:1px solid var(--cal-line2)}',
-            '.dshcal-usercode b{font-family:var(--dsh-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:28px;font-weight:700;letter-spacing:.12em;color:var(--cal-strong);user-select:all}',
+            '.dshcal-usercode b{font-family:var(--ds-font-family-code,var(--dsh-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace));font-size:28px;font-weight:700;letter-spacing:.12em;color:var(--cal-strong);user-select:all}',
             '.dshcal-wait{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--cal-meta)}',
             '.dshcal-back{align-self:flex-start;margin:-6px 0 -4px -8px}',
             // Where a dialog's page puts its own buttons, among the dialog's footer buttons.
             '.dshcal-slot{display:contents}',
 
-            // Menus (DSH's Menu, its card on glass).
-            '.dshcal-menu{background:var(--cal-pop)!important;-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px)}',
+            // Menus: DSH's Menu draws its own material; the class only scopes the plugin's tokens on the portaled list.
             '.dshcal-menu-swatch{display:inline-block;width:12px;height:12px;border-radius:4px;background:var(--sw)}',
 
-            // Toasts.
-            '.dshcal-toast{position:fixed;left:0;right:0;bottom:24px;z-index:1200;display:flex;align-items:center;gap:10px;box-sizing:border-box;width:fit-content;max-width:min(520px,calc(100vw - 32px));margin:0 auto;padding:10px 14px;border-radius:14px;'
+            // Toasts: DSH's ui.Toast (its banner at the top of the window) when the DSH has it; the class below is
+            // only the fallback card for a DSH without that part.
+            '.dshcal-toast{position:fixed;left:0;right:0;bottom:24px;z-index:1100;display:flex;align-items:center;gap:10px;box-sizing:border-box;width:fit-content;max-width:min(520px,calc(100vw - 32px));margin:0 auto;padding:10px 14px;border-radius:16px;'
                 + 'background:var(--cal-pop);-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);border:1px solid var(--cal-line2);box-shadow:0 12px 32px var(--cal-shadow);color:var(--cal-text);font-size:13px;animation:dshcal-in .16s ease-out}',
-            // While one of the plugin's dialogs is open, toasts show at the top, off its buttons.
-            'body:has(.dshcal-dlg) .dshcal-toast{top:max(16px,var(--dsh-frame-overlay-top,16px));bottom:auto}',
             '.dshcal-toast[data-tone=error]>svg{color:var(--cal-danger)}',
             '.dshcal-toast[data-tone=ok]>svg{color:var(--cal-ok)}',
 
@@ -472,7 +487,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-pane-sub{font-size:12px;color:var(--cal-meta);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}',
             '.dshcal-pane-badge{display:inline-flex;align-items:center;height:17px;padding:0 6px;margin-right:5px;border-radius:9px;background:var(--cal-accent);color:var(--cal-on-accent);font-size:10.5px;font-weight:700;vertical-align:1px}',
             '.dshcal-pane-join{position:relative;z-index:1;height:26px;padding:0 9px;border:0;border-radius:8px;background:var(--cal-accent);color:var(--cal-on-accent);font:inherit;font-size:12px;font-weight:600;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}',
-            '.dshcal-pane-empty{padding:6px 4px;font-size:12.5px;color:var(--cal-faint)}',
+            '.dshcal-pane-empty{padding:6px 4px;font-size:12.5px;color:var(--cal-meta)}',
             '.dshcal-notes{display:flex;flex-direction:column;gap:6px;padding:8px 12px 0}',
             '.dshcal-notice{display:flex;align-items:flex-start;gap:8px;padding:7px 6px 7px 10px;border-radius:10px;background:color-mix(in srgb,var(--cal-accent) 10%,transparent);font-size:12px;line-height:1.45;color:var(--cal-text)}',
             '.dshcal-notice>svg{flex:none;margin-top:2px;color:var(--cal-meta)}',
@@ -484,9 +499,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-pane .dshcal-stale{margin:0 0 10px;padding:6px 9px;border:0;border-radius:10px}',
             '.dshcal-pane-foot{display:flex;justify-content:center;margin-top:16px}',
 
-            // ── Chat cards for the calendar tools: a faint fill, no blur.
-            '.dshcal-chat{display:flex;flex-direction:column;gap:6px;min-width:0;max-width:640px;margin:2px 0 6px;color:var(--cal-text);font-size:13px;line-height:1.45}',
-            '.dshcal-chat-card{display:flex;flex-direction:column;gap:2px;min-width:0;padding:8px;border:1px solid var(--cal-line);border-radius:14px;background:var(--cal-fill)}',
+            // ── Chat cards for the calendar tools: inside DSH's chat, so they draw like DSH's own cards there —
+            // opaque, a .5px line, DSH's radius, no blur of their own — with DSH's plain tokens (not the deepened
+            // glass forms).
+            '.dshcal-chat{display:flex;flex-direction:column;gap:6px;min-width:0;max-width:640px;margin:2px 0 6px;color:var(--cal-text);font-size:13px;line-height:1.45;'
+                + '--cal-soft:var(--dsw-alias-label-secondary);--cal-meta:var(--dsw-alias-label-secondary);--cal-faint:var(--dsw-alias-label-tertiary)}',
+            '.dshcal-chat-card{display:flex;flex-direction:column;gap:2px;min-width:0;padding:8px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1)}',
             '.dshcal-chat-day{padding:6px 6px 2px;font-size:11.5px;font-weight:600;letter-spacing:.03em;color:var(--cal-meta);text-transform:uppercase}',
             '.dshcal-chat-day:first-child{padding-top:0}',
             '.dshcal-chat-ev{display:grid;grid-template-columns:4px minmax(96px,auto) minmax(0,1fr);gap:10px;align-items:center;padding:5px 6px;border:0;border-radius:9px;background:none;color:var(--cal-text);font:inherit;text-align:left;cursor:pointer;min-width:0}',
@@ -499,7 +517,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-chat-what span{color:var(--cal-meta)}',
             '.dshcal-chat-ev[data-look=struck] b{text-decoration:line-through;color:var(--cal-meta)}',
             '.dshcal-chat-foot{padding:4px 6px 0;font-size:12px;color:var(--cal-meta)}',
-            '.dshcal-chat-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;padding:8px 10px;border:1px solid var(--cal-line);border-radius:12px;background:var(--cal-fill)}',
+            '.dshcal-chat-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;padding:8px 10px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1)}',
             '.dshcal-chat-line>svg{flex:none;color:var(--cal-ok)}',
             '.dshcal-chat-line[data-kind=deleted]>svg{color:var(--cal-meta)}',
             '.dshcal-chat-line[data-kind=failed]{align-items:flex-start;border-color:color-mix(in srgb,var(--cal-warn) 45%,var(--cal-line))}',
@@ -518,7 +536,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-chat-cal>span:nth-child(2){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshcal-chat-row{display:flex;align-items:center;gap:6px;min-width:0;height:24px;color:var(--cal-meta);font-size:13px}',
             '.dshcal-chat-row>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-            '.dshcal-chat-out{margin:2px 0 0 22px;max-height:240px;overflow:auto;padding:8px 10px;border-radius:10px;background:var(--cal-fill);white-space:pre-wrap;font-family:var(--dsh-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:11.5px;color:var(--cal-soft);scrollbar-width:thin}',
+            '.dshcal-chat-out{margin:2px 0 0 22px;max-height:240px;overflow:auto;padding:8px 10px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-markdown-code-block);white-space:pre-wrap;font-family:var(--ds-font-family-code,var(--dsh-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace));font-size:11.5px;color:var(--cal-soft);scrollbar-width:thin}',
 
             // The side column: beside the view on a roomy page, folded behind its button on a narrower one (the page says
             // which: data-side-folded), and over the page while open on a narrow one (data-side-open). Then the header wraps.
@@ -1523,6 +1541,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     emit();
                 },
                 currentToast: () => toast,
+                /** The toast is gone (DSH's banner says it faded, or the store's own timer ran out). */
+                clearToast() {
+                    if (toast === null) return;
+                    toast = null;
+                    clearTimeout(toastTimer);
+                    emit();
+                },
                 /** A notice that stays on the page until the user closes it: what a change did in part, and what is left to do. */
                 keepNotice(text) {
                     notices = [...notices, { id: ++noticeSeq, text: String(text) }].slice(-5);
@@ -1624,13 +1649,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         let toastHostSeq = 0;
-        /** The store's toast, at the bottom of the window (at the top while a dialog is open): one at a time, shown by one view. */
+        /** The store's toast, in DSH's own banner at the top of the window: one at a time, shown by one view. */
         function ToastHost({ store }) {
             useStore(store);
             const [id] = React.useState(() => ++toastHostSeq);
             React.useEffect(() => store.hostToasts(id), [store, id]);
             const toast = store.currentToast();
             if (!toast || store.toastHost() !== id) return null;
+            // DSH's banner: it fades itself (holdMs, then a second's fade) and says when it is done; the store's own
+            // timer stays as the backstop. A tone of its own only for an error: success carries DSH's check.
+            if (typeof ui.Toast === 'function') {
+                return h(ui.Toast, {
+                    key: toast.id,
+                    text: toast.text,
+                    holdMs: toast.tone === 'error' ? 6000 : 3000,
+                    ...(toast.tone === 'error' ? { icon: icon('IconWarningOutlineRegular', { size: 16 }) } : { tone: 'success' }),
+                    onDone: () => store.clearToast(),
+                });
+            }
+            // A DSH without its Toast part: the plugin's own card, same words.
             return ReactDOM.createPortal(h('div', { className: 'dshcal-toast', role: toast.tone === 'error' ? 'alert' : 'status', 'data-tone': toast.tone, key: toast.id },
                 toast.tone === 'error' ? icon('IconWarningOutlineRegular') : icon('IconCheckCircleOutlineRegular'),
                 h('span', null, toast.text)), document.body);
@@ -2904,7 +2941,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     }
                 };
             }, []);
-            const style = place === null ? { left: -9999, top: 0, visibility: 'hidden' } : place.sheet ? {} : { left: place.left, top: place.top };
+            // Where it stands: fixed at the placed point, or a sheet at the bottom of a narrow window, DSH's dialog
+            // level either way (it must sit with dialogs: one of the plugin's own opens from it and has to cover it).
+            const style = place === null ? { position: 'fixed', left: -9999, top: 0, visibility: 'hidden' }
+                : place.sheet ? { position: 'fixed', left: 12, right: 12, bottom: 12, top: 'auto', width: 'auto', maxHeight: '70vh' }
+                    : { position: 'fixed', zIndex: 1000, left: place.left, top: place.top };
             // Escape inside it is its own: the page under it doesn't see it too.
             const onKeyDown = (event) => {
                 if (event.key !== 'Escape' || document.querySelector('[role=dialog][aria-modal=true]')) return;
@@ -2912,9 +2953,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 event.stopPropagation();
                 close.current('escape');
             };
-            return ReactDOM.createPortal(h('div', {
-                ref, className: 'dshcal-pop', role: 'dialog', 'aria-label': label, tabIndex: -1, style, 'data-sheet': place?.sheet ? '' : undefined, onKeyDown, ...rest,
-            }, children), document.body);
+            const card = { role: 'dialog', 'aria-label': label, tabIndex: -1, onKeyDown, ...rest };
+            // DSH's MenuSurface: its material and stacking. Without it (no such part), the plugin's own card.
+            return ReactDOM.createPortal(
+                ui.MenuSurface
+                    ? h(ui.MenuSurface, { ref, className: 'dshcal-pop', ...card, style, 'data-calendar-popover': '' }, children)
+                    : h('div', { ref, className: 'dshcal-pop dshcal-pop-own', 'data-calendar-popover': '', ...card, style }, children),
+                document.body);
         }
 
         const ANSWER_WORDS = { accepted: 'Going', declined: 'Not going', tentative: 'Maybe', 'needs-action': 'Not answered yet', delegated: 'Delegated' };

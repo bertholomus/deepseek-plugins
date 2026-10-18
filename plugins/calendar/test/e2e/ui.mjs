@@ -553,6 +553,12 @@ async function dismissNotices(page) {
 }
 
 /**
+ * DSH's toast banner: the plugin's toasts are DSH's own (`ui.Toast`, portaled
+ * to the body), so the tests read it by that structure, never a class name.
+ */
+const dshToast = (page) => page.locator('body > div[role="alert"]');
+
+/**
  * DSH's window up (its Calendar entry showing), and its first-run notices out
  * of the way: they can come seconds late on a busy machine, so they're looked
  * for until none has come for a few seconds.
@@ -815,7 +821,7 @@ try {
         await form.locator('[data-calendar-title]').fill('E2E Toast');
         await page.locator('[data-calendar-save]').click();
         await dialogGone();
-        await page.locator('.dshcal-toast').waitFor({ state: 'visible', timeout: 10000 });
+        await dshToast(page).waitFor({ state: 'visible', timeout: 10000 });
         await page.locator('[data-calendar-side-new]').click();
         await form.waitFor({ state: 'visible' });
         const geo = await page.evaluate(() => {
@@ -823,7 +829,9 @@ try {
                 const r = el?.getBoundingClientRect();
                 return r ? { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right) } : null;
             };
-            const toast = document.querySelector('.dshcal-toast');
+            // DSH's toast is a body child with role="alert" (its banner at the top of the window).
+            const toast = [...document.querySelectorAll('body > div[role="alert"]')]
+                .find((el) => el.textContent.includes('E2E Toast')) ?? null;
             return { toast: box(toast), text: toast?.textContent ?? '', footer: box(document.querySelector('[data-calendar-save]')?.parentElement) };
         });
         await shot(page, 'event-dialog-toast');
@@ -1082,7 +1090,7 @@ try {
             await page.locator('[data-calendar-save]').click();
             await (await consent()).answer(true);
             await dialogGone();
-            const toast = await page.locator('.dshcal-toast').first().textContent();
+            const toast = await dshToast(page).first().textContent();
             const saved = (await events(day1, day1)).find((o) => o.title === 'E2E Planning review');
             check('a change that would email six guests asks first, naming all six on screen with what they get and why; Don\'t save sends nothing, Save and email repeats it with notify and approved: the six, and the toast says who was emailed',
                 question.title === 'Email an update to 6 guests?' && question.text.includes(`${why}.`) && !question.text.includes('so it\'s made only when')
@@ -1292,7 +1300,7 @@ try {
             await shot(page, 'drag-week');
             await page.mouse.up();
             const moved = await waitFor(async () => (await events(target, target)).find((o) => o.id === dragged.id && o.startLocal === `${target}T13:30`), 'the moved event', 10000);
-            const toast = (await page.locator('.dshcal-toast').first().textContent().catch(() => '')) ?? '';
+            const toast = (await dshToast(page).first().textContent().catch(() => '')) ?? '';
             const opened = await page.locator('[data-calendar-details]').count();
             // Its bottom edge an hour lower: it ends at 15:30.
             await page.waitForTimeout(400);
@@ -1421,7 +1429,7 @@ try {
             await question.answer(true);
             const moved = await waitFor(async () => (await events(day1, day1)).find((o) => o.id === made?.id && o.startLocal === `${day1}T09:30`), 'the meeting at 9:30', 10000);
             // The page has its answer once it says so: the played call is done before the next one (and before the route goes).
-            const saidMoved = (at) => page.locator('.dshcal-toast', { hasText: new RegExp(`Moved “E2E Key meeting” to .*${at}`) }).first().waitFor({ state: 'visible', timeout: 10000 });
+            const saidMoved = (at) => dshToast(page).filter({ hasText: new RegExp(`Moved “E2E Key meeting” to .*${at}`) }).first().waitFor({ state: 'visible', timeout: 10000 });
             await saidMoved('9:30');
             const twice = sent.splice(0);
             // Enter saves at once, without opening the event.
@@ -1512,7 +1520,7 @@ try {
 
     /** The toast that says these words, as it shows. */
     const toastWith = async (words) => {
-        const toast = page.locator('.dshcal-toast', { hasText: words }).first();
+        const toast = dshToast(page).filter({ hasText: words }).first();
         await toast.waitFor({ state: 'visible', timeout: 10000 });
         return (await toast.textContent()) ?? '';
     };
