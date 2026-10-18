@@ -3,8 +3,9 @@
 Generated 2026-10-17 (Pacific) by DSH thread t7 ("History scrub report"), per the release-prep brief.
 **Snapshot: commit `7d37571` (HEAD of release/glass-v1), 338 commits, full ancestry.** Release-prep threads are
 committing to this branch concurrently; anything landed after this snapshot is not covered — re-run the commands
-in Appendix A for a fresh sweep. (Commits landed while this report was written, through `6a5e4d2`, were
-re-checked against all classes below: clean.)
+in Appendix A for a fresh sweep. (Post-snapshot commits touch these classes constantly: the scrub itself —
+`d7af38c` LAN IP, `ae80b27` coordinator fixtures, `82e34ed` categories, `7745469` wallpaper — plus review docs
+quoting the values, e.g. `df9e34d`, `6cb15b0`, this report. HEAD-status lines below describe the snapshot.)
 
 Method: full `git log -p` dump of the branch ancestry, parsed per string class (diffs **and** commit messages);
 cross-checked with `git log -G`/`-S` and `git log --grep`; line numbers read from the file content at each
@@ -26,9 +27,9 @@ both match future greps for these classes — accept or exclude `review/` when r
 | 1 | `frankennas` / `FrankenNAS` | a030400, 4b2a894, 1717697 (+ docs 55e5d6c, c787703) | 504ff19 (test/sends.test.js only) | **Yes** — coordinator smoke.mjs ×13, README ×1, brief ×2, checklist |
 | 2 | `ascent-01..08` / `ascent-` / `owner-ascents` | 4b2a894, a030400, 55e5d6c, 0034759, 47e4b1a, e0bdda6 (+ checklist) | 504ff19 (sends.test.js only) | **Yes** — smoke.mjs ×8 (ascent-01), owner-ascents ×5, brief/checklist |
 | 3 | Tailnet `100.x.x.x` | 4b2a894, a030400, 1717697, 55e5d6c (+ checklist) | 504ff19 (sends.test.js: 100.108.23.102 → 100.64.0.7) | **Yes** — 100.108.23.102 ×5 (+2 in checklist); `100.64.0.x` doc/placeholder values are not private |
-| 4 | `192.168.x.x` | a030400, 4b2a894, e19d35d, 2600feb (+ checklist) | **nothing** — the real LAN IP survived the scrub | **Yes** — 192.168.1.49 ×7 (+1 checklist); other 192.168 values are generic test fixtures |
+| 4 | `192.168.x.x` | a030400, 4b2a894, e19d35d, 2600feb (+ checklist) | d7af38c (post-snapshot: 192.168.1.49 → TEST-NET-1 192.0.2.49) | **Yes** — 192.168.1.49 ×2 kept deliberately in coordinator smoke.mjs; other 192.168 values are generic test fixtures |
 | 5 | `/tank` | a030400, 4b2a894, 3625092, 55e5d6c (+ checklist) | 504ff19 (sends.test.js only → `/data`) | **Yes** — smoke.mjs ×8, brief ×3, HANDOFF ×1, checklist quotes |
-| 6 | `albertlee` / `/Users/albertlee` | d8baf0d, e2c7501, 55e5d6c (+ checklist) | — | **Yes** — categories smoke.mjs ×7, brief ×3, HANDOFF ×1 |
+| 6 | `albertlee` / `/Users/albertlee` | d8baf0d, e2c7501, 55e5d6c (+ checklist) | 82e34ed (post-snapshot, categories smoke) | **Yes (docs only)** — brief ×3, HANDOFF ×1, review quotes; scrubbed from code |
 | 7 | `bertholomus@` + emails around it | a030400, 4b2a894, 55e5d6c, fadf5f9 (+ checklist) | 504ff19 (sends.test.js: bertholomus@ → alex@) | **Yes** — sends.js doc ×1, smoke ×2, brief ×2, HANDOFF ×1; plus **every commit's author/committer metadata** (§8) |
 | 8 | Discord ids (17–20 digit snowflakes) | — | — | **None found** — the 5 snowflake-shaped matches are synthetic test values (§7) |
 | 9 | Real calendar names / events | — | — | **None found** — all calendar fixtures are synthetic (§9) |
@@ -108,7 +109,9 @@ Pattern: `192\.168\.[0-9]{1,3}\.[0-9]{1,3}` · commits: `a030400`, `4b2a894`, `e
 | 4b2a894 | 2026-10-14 | coordinator: a thread's sends to trustedHosts… | plugins/coordinator/test/smoke.mjs | 4379, 4401 |
 
 - ⚠ **`504ff19` did NOT scrub this one** — `trustedHosts: ['nas.example', '100.64.0.7', '192.168.1.49']` kept
-  the real LAN IP. **Still at HEAD:** test/sends.test.js ×5, smoke.mjs ×2 (+1 quoted in the checklist, line 16).
+  the real LAN IP. **Post-snapshot:** `d7af38c` scrubbed the five sends.test.js occurrences to TEST-NET-1
+  (`192.0.2.49`). **At the re-check HEAD (`cba8aa8`):** ×2 remain in plugins/coordinator/test/smoke.mjs
+  (4379, 4401) — kept deliberately per the coordinator's release notes — plus quotes in review docs.
 
 **Generic RFC1918 test values (not identifiable as ours — decision needed whether to genericise):**
 calendar tests `e19d35d` (2026-10-11): caldav.test.mjs 383, 391 (`192.168.1.20`), http.test.mjs 66, 102, 125,
@@ -139,8 +142,8 @@ Pattern: `albertlee` (-i; "Albert Lee" with a space: 0 hits) · commits: `d8baf0
 | e2c7501 | 2026-10-11 | handoff: categories and projects are two plugins… | HANDOFF.md | 14 (now 107): `link:/Users/albertlee/.dsh-plugins/…` |
 | 55e5d6c | 2026-10-17 | Release prep brief | briefs/BRIEF-RELEASE-GLASS.md | 12, 18, 19 |
 
-- **Still at HEAD:** categories smoke.mjs ×7, brief ×3, HANDOFF ×1 (the categories smoke fixture is being
-  scrubbed by another thread right now — uncommitted at snapshot time).
+- **Still at HEAD (snapshot):** categories smoke.mjs ×7, brief ×3, HANDOFF ×1. **Post-snapshot:** `82e34ed`
+  scrubbed the categories smoke fixture; `albertlee` now survives at HEAD only in briefs/HANDOFF/review quotes.
 
 ## 7. Discord ids (snowflake-like 17–20 digit numbers)
 
@@ -160,9 +163,10 @@ The `plugins/discord` plugin carries no hardcoded ids; its test webhook is a syn
 Two distinct surfaces:
 
 **(a) Commit identity metadata — present on every commit, invisible to `git log -p` diffs.** Author and
-committer are identical on all 338 commits:
+committer are identical on all 338 commits at the snapshot (the total and each count grow with every new
+commit — 349 commits / 52 for the AI identity at the re-check HEAD `cba8aa8`; reproduce with Appendix A):
 
-| Identity | Commits |
+| Identity | Commits at snapshot |
 |---|---|
 | `bertholomus <311723197+bertholomus@users.noreply.github.com>` | 225 |
 | `Bertholomus AI <albert@dnaclothing.com>` | 41 |
