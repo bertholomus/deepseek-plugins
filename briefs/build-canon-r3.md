@@ -1,14 +1,24 @@
 # Canon round 3: builder's notes
 
-Updated: 2026-10-17 7:37 PM PDT (Canon round-3 builder)
+Updated: 2026-10-17 7:49 PM PDT (Canon round-3 builder)
 Branch: `suite/v1` in `~/Projects/dsh-plugin-suite`
-Status: under way. Finding 1 is in (rule 3405922, dev set and measure 7cc1c48, README next commit); Findings 2 to 6 next.
+Status: under way. Finding 1 is in (rule 3405922, dev set and measure 7cc1c48, README 14893d8); Findings 2 and 3 in (next commit); 4, 5, 6 next.
 Vault frozen at f7283b5: test/fixtures/canon/vault (not changed this round).
 
 Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 17 10:39:36 2026, patch sha256
 63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7.
 
 ## Done (newest first)
+- Finding 3: `walk()` keeps the folders inside the vault it may not list (not ENOENT/ENOTDIR); the vault's status counts
+  them (`counts.closed`) and names the first 20 (`closed`); the header says "1 folder Canon may not read:
+  Projects/osprey-mobile. Its notes are never added to turns: give DSH access to it, then read the vault again.";
+  What happened notes it once (`closedEntry`), and "Every folder in the vault can be read again" after. Unit tests at
+  the vault and the plugin level (a chmod 000 folder in the test's own copy).
+- Finding 2: the host works out what a live setting in quotes would be without them when that is right
+  (`config.js unquoted`: "3" → 3 for a number in range, "false" → false for a switch) and gives it with the problem;
+  the waiting state offers **Save it as 3**, which saves through DSH's own settings call
+  (`configForms.get('canon').set(key, value)`), and the page then says "Saved “Notes a turn, at most” as 3, without
+  quotes. Canon works again." If DSH does not take it, it says so. Not offered for `enabled` (profile only).
 - README (Finding 1): the fit rule in "What a turn gets"; "How well it picks notes" with round 3's dev set (its make-up,
   round 2's rules against now, the coding row, by kind), round 2's section and both hold-outs' paragraphs kept with
   every figure as it was, the second hold-out's line, "What it still misses" for round 3.
@@ -27,8 +37,7 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
   judge's generic set (60, none answerable): no block 44 of 60 (73.3%).
 
 ## Next steps (in order, each runnable by someone new)
-1. Findings 2 to 6, each with tests (2: the quoted number fixed from the waiting state; 3: unreadable folders named;
-   4: the README on instructions in notes; 5: the e2e waits for the vault's `ok`; 6: the nits).
+1. Findings 4 (README on instructions in notes), 5 (the e2e waits for the vault's `ok`), 6 (the nits).
 2. `npm test`, then `node scripts/e2e.mjs canon` with the live fingerprint before and after each run.
 
 ## Picks and why
@@ -63,6 +72,13 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
   for names; one share for both paths.
 - The first hold-out's test now prints its figures only (no misses, problems as a count): `npm test`'s output is not
   read for choosing, and nothing was chosen by it.
+
+## For the v1.0.1 list (the kit, not changed before the suite tag)
+- Finding 2 at the kit level (`shared/client-kit.js`, `SettingsBody`/`fieldSpec`): a number or switch field whose
+  stored value is text (`typeof value === 'string'`) shows with its quotes and is marked invalid in the plugin's words
+  ("Saved as text, in quotes: save it to store it as 3"), and Save is on for it and writes the parsed value (a
+  `mutate([{ op: 'set', path: [field], value: 3 }])` when the draft's text equals the stored text). Then Canon's
+  one-press fix can go.
 
 ## Gotchas
 - `test/fixtures/canon/relevance/holdout.json` (the first hold-out) is there; `npm test` measures it and prints its

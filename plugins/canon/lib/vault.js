@@ -6,7 +6,8 @@
  * folder's notes listed for the page, never indexed.
  *
  * Reading never writes and never throws at its callers: a folder that is
- * missing or may not be read is a state with words for the page. Nothing
+ * missing or may not be read is a state with words for the page, and a
+ * folder inside the vault that may not be listed is named on it. Nothing
  * blocks DSH: every read is asynchronous, a recall waits at most a moment
  * for a fresh read and otherwise uses the index it has.
  *
@@ -27,6 +28,8 @@ export const MAX_NOTE_BYTES = 256 * 1024;
 export const STALE_MS = 5000;
 /** How long a recall waits for a fresh read before it uses the index it has. */
 export const WAIT_MS = 800;
+/** Folders inside the vault that may not be listed, named at most (all are counted). */
+export const MAX_CLOSED_NAMED = 20;
 /** Drafts listed on the page, at most. */
 const MAX_DRAFTS = 200;
 
@@ -67,6 +70,35 @@ export function folderProblem(error, display) {
     }
     return { code: 'unreadable', text: `Canon could not read ${display} (${String(error?.message ?? error).slice(0, 160)}). Check the folder, then read it again.` };
 }
+
+/**
+ * What happened when the folders inside the vault that Canon may not list
+ * changed: which ones, and what to do; or that every folder reads again.
+ * Undefined when nothing changed.
+ * @param {{ vault?: string, closed?: string[], closedCount?: number } | undefined} before - the vault's state before the read.
+ * @param {{ path: string, closed: string[], counts: { closed: number } }} after - its status after it.
+ */
+export function closedEntry(before, after) {
+    // Another vault starts with none named.
+    const same = before?.vault !== undefined && before.vault === after.path;
+    const was = same ? before.closed ?? [] : [];
+    const wasCount = same ? before.closedCount ?? 0 : 0;
+    const now = after.closed ?? [];
+    const count = after.counts?.closed ?? now.length;
+    if (was.join('\n') === now.join('\n') && wasCount === count) return undefined;
+    if (count === 0) return wasCount > 0 ? { kind: 'vault', state: 'done', text: 'Every folder in the vault can be read again' } : undefined;
+    return { kind: 'vault', state: 'failed', text: closedText(now, count), why: closedWhat(count) };
+}
+
+/** "1 folder Canon may not read: Projects/osprey-mobile" (the first few named). */
+export function closedText(names, count = names.length) {
+    const shown = names.slice(0, 5);
+    const more = count - shown.length;
+    return `${count} folder${count === 1 ? '' : 's'} Canon may not read: ${shown.join(', ')}${more > 0 ? `, and ${more} more` : ''}`;
+}
+
+/** What to do about folders Canon may not read. */
+export const closedWhat = (count) => `${count === 1 ? 'Its' : 'Their'} notes are never added to turns. Give DSH access to ${count === 1 ? 'it' : 'them'} (${count === 1 ? 'its' : 'their'} permissions, or on a Mac System Settings, Privacy & Security, Files and Folders), then read the vault again.`;
 
 /** Whether a vault path is in the drafts folder (compared without case: a Mac's disk ignores it). */
 const inFolder = (rel, folder) => Boolean(folder) && (rel.toLowerCase() === folder.toLowerCase() || rel.toLowerCase().startsWith(`${folder.toLowerCase()}/`));
@@ -163,9 +195,9 @@ export class Vault {
     status() {
         const where = this.where();
         const own = this.state.state === 'unset' ? !where.vault : this.state.vault === where.vault;
-        const counts = { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0 };
+        const counts = { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0, closed: 0 };
         if (own) {
-            Object.assign(counts, { notes: this.files.size, active: this.index.size, drafts: this.draftsByPath.size });
+            Object.assign(counts, { notes: this.files.size, active: this.index.size, drafts: this.draftsByPath.size, closed: this.state.closedCount ?? 0 });
             for (const f of this.files.values()) {
                 if (f.kind === 'other') counts.other += 1;
                 else if (f.kind === 'unreadable') counts.unreadable += 1;
@@ -173,6 +205,8 @@ export class Vault {
         }
         return {
             ...(own ? this.state : { state: 'reading' }),
+            // The folders inside the vault it may not list, by their vault paths (the first few).
+            closed: own ? this.state.closed ?? [] : [],
             path: where.vault,
             display: displayPath(where.vault, this.home),
             draftsFolder: where.draftsFolder,
@@ -248,12 +282,13 @@ export class Vault {
         let root;
         let listed;
         let truncated;
+        let closed;
         try {
             root = await realpath(where.vault);
             const st = await stat(root);
             if (!st.isDirectory()) throw Object.assign(new Error('not a folder'), { code: 'ENOTDIR' });
             // A folder that can be looked up may still refuse its listing (no access, a Mac's privacy rules).
-            ({ files: listed, truncated } = await this.walk(root));
+            ({ files: listed, truncated, closed } = await this.walk(root));
         } catch (error) {
             if (generation !== this.generation) return;
             this.reset('');
@@ -314,17 +349,25 @@ export class Vault {
             }
         });
         if (generation !== this.generation) return;
-        this.state = { state: 'ok', readAt: this.now(), took: this.now() - started, truncated, changed: stale.length, vault: where.vault };
-        if (before.state !== 'ok' || stale.length > 0 || before.truncated !== truncated) this.changed(before.state === 'ok' ? 'changed' : 'ok', before);
+        const named = closed.slice(0, MAX_CLOSED_NAMED);
+        const closedNow = (before.closed ?? []).join('\n') !== named.join('\n') || (before.closedCount ?? 0) !== closed.length;
+        this.state = { state: 'ok', readAt: this.now(), took: this.now() - started, truncated, changed: stale.length, vault: where.vault, closed: named, closedCount: closed.length };
+        if (before.state !== 'ok' || stale.length > 0 || before.truncated !== truncated || closedNow) this.changed(before.state === 'ok' ? 'changed' : 'ok', before);
     }
 
     changed(kind, before) {
         try { this.onChange?.({ kind, before, after: this.status() }); } catch { /* a listener never stops a read */ }
     }
 
-    /** The vault's Markdown files (vault paths), skipping hidden folders, links and other files; at most MAX_NOTES. */
+    /**
+     * The vault's Markdown files (vault paths), skipping hidden folders,
+     * links and other files, at most MAX_NOTES; and the folders inside it
+     * that may not be listed (no permission, a Mac's privacy rules), by
+     * their vault paths, sorted. The vault's own folder not listing throws.
+     */
     async walk(root) {
         const files = [];
+        const closed = [];
         const folders = [''];
         let truncated = false;
         while (folders.length && !truncated) {
@@ -334,6 +377,8 @@ export class Vault {
                 entries = await readdir(rel ? join(root, rel) : root, { withFileTypes: true });
             } catch (error) {
                 if (!rel) throw error;
+                // Gone since it was listed: nothing to say. Anything else keeps its notes out, so the page names it.
+                if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') closed.push(rel);
                 continue;
             }
             entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -350,7 +395,8 @@ export class Vault {
                 }
             }
         }
-        return { files, truncated };
+        closed.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+        return { files, truncated, closed };
     }
 
     /** The drafts folder's notes, newest first. */

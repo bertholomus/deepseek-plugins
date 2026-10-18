@@ -432,6 +432,63 @@ test('the page: no vault, a vault it cannot read, empty lists, switched off, a w
     assert.doesNotMatch(text, /Session Watch/, 'Canon needs nothing else');
 });
 
+test('the page: a number or true/false in quotes is saved without them through DSH\'s own settings call, in one press, and the page says so after', async (t) => {
+    const { react, mount } = statefulReact();
+    const { client } = loadClient(CLIENT, { react });
+    const { kit, CanonPage, views } = client.internals;
+    const problem = { key: 'maxNotes', text: 'Notes a turn, at most (maxNotes) must be a whole number from 1 to 10, written without quotes (it is “3”, which is text)', live: true, unquoted: 3 };
+    let state = { ...PAGE_STATE, problem };
+    connect(kit, { state: () => state });
+    t.after(() => kit.setConnection(undefined));
+    const writes = [];
+    let accept = false;
+    views.settings = {
+        set: async (field, value) => {
+            writes.push([field, value]);
+            if (accept) state = { ...PAGE_STATE };
+            return accept;
+        },
+    };
+    t.after(() => { views.settings = undefined; });
+    const page = mount(CanonPage, {});
+    t.after(() => page.unmount());
+    await settle(5);
+    assert.match(textIn(page.tree), /written without quotes \(it is “3”, which is text\)\..*Without the quotes it is right: Canon can save it as 3 for you, as the settings form would\.Save it as 3/);
+    // DSH does not take it: the page says so, and the setting is as it was.
+    button(page.tree, 'Save it as 3').props.onClick();
+    await settle(10);
+    assert.deepEqual(writes, [['maxNotes', 3]], 'the number, not the text');
+    assert.match(textIn(page.tree), /DSH did not save it\. Change it in Canon's settings in Plugins instead\./);
+    // DSH takes it: the page comes back working and says what was saved, as a status line.
+    accept = true;
+    button(page.tree, 'Save it as 3').props.onClick();
+    await settle(20);
+    assert.deepEqual(writes, [['maxNotes', 3], ['maxNotes', 3]]);
+    const fixed = withAttr(page.tree, 'data-canon-fixed')[0];
+    assert.equal(textIn(fixed), 'Saved “Notes a turn, at most” as 3, without quotes. Canon works again.');
+    assert.equal(fixed.props.role, 'status');
+    assert.equal(withAttr(page.tree, 'data-canon-header')[0].props['data-canon-header'], 'ok');
+    // A switch in quotes: saved as true or false.
+    const { react: r2, mount: m2 } = statefulReact();
+    const second = loadClient(CLIENT, { react: r2 }).client.internals;
+    connect(second.kit, { state: () => ({ ...PAGE_STATE, problem: { key: 'recall', text: 'Add notes to turns (recall) must be true or false, written without quotes (it is “false”, which is text)', live: true, unquoted: false } }) });
+    const saved = [];
+    second.views.settings = { set: async (field, value) => { saved.push([field, value]); return true; } };
+    const switchPage = m2(second.CanonPage, {});
+    t.after(() => { switchPage.unmount(); second.kit.setConnection(undefined); });
+    await settle(5);
+    button(switchPage.tree, 'Save it as false').props.onClick();
+    await settle(10);
+    assert.deepEqual(saved, [['recall', false]]);
+    // Not offered: a value wrong without quotes too, a setting of the profile only, or a DSH without the call.
+    const { QuotedFix } = client.internals;
+    views.settings = { set: async () => true };
+    assert.equal(QuotedFix({ problem: { ...problem, unquoted: undefined }, onSaved: () => {} }), null);
+    assert.equal(QuotedFix({ problem: { ...problem, live: false }, onSaved: () => {} }), null);
+    views.settings = undefined;
+    assert.equal(QuotedFix({ problem, onSaved: () => {} }), null);
+});
+
 test('a draft from a session DSH no longer has names it in words, with no link to open', (t) => {
     const { react, mount } = statefulReact();
     const { client } = loadClient(CLIENT, { react });
@@ -558,6 +615,9 @@ test('words: the page\'s sentences for each setting, and no other assistant\'s n
     assert.equal(turnsText({ recall: true, maxNotes: 1, maxChars: 8000 }), 'A turn that starts from your prompt gets at most 1 note and 8,000 characters.');
     assert.equal(vaultText({ display: '~/Canon', counts: { active: 1, drafts: 0 } }), 'The vault ~/Canon holds 1 active note and 0 drafts.');
     assert.deepEqual(plain(vaultNotes({ truncated: true, counts: { other: 1, unreadable: 2 } })), ['1 note with another status (archived, draft and the like) is never added.', '2 notes could not be read.', 'Only the first 20,000 notes are read.']);
+    // Folders inside the vault it may not list: named first, with what to do.
+    assert.deepEqual(plain(vaultNotes({ counts: { closed: 1, other: 0 }, closed: ['Projects/osprey-mobile'] })), ['1 folder Canon may not read: Projects/osprey-mobile. Its notes are never added to turns: give DSH access to it, then read the vault again.']);
+    assert.equal(vaultNotes({ counts: { closed: 7 }, closed: ['A', 'B', 'C', 'D', 'E', 'F'] })[0], '7 folders Canon may not read: A, B, C, D, E, and 2 more. Their notes are never added to turns: give DSH access to them, then read the vault again.');
     assert.equal(whyText({ matched: ['tls'], folder: 'parent' }), 'Shares the word “tls”. It belongs to the folder above this one, so it counts a little more.');
     // The prompt's own words, never stems.
     assert.equal(whyText({ matched: ['rotat', 'certificat'], words: ['rotating', 'certificates'], folder: '' }), 'Shares the words “rotating” and “certificates”.');

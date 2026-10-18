@@ -34,7 +34,7 @@ import { KEY, canonProjection } from './projection.js';
 import { Recall } from './recall.js';
 import { CanonRemote, SERVICE } from './remote.js';
 import { captureTool } from './tools.js';
-import { Vault } from './vault.js';
+import { Vault, closedEntry } from './vault.js';
 import { JsonStore } from './shared/files.js';
 import { Journal } from './shared/journal.js';
 import { errorText, guard } from './shared/safe.js';
@@ -120,6 +120,11 @@ export function apply(ctx, config) {
                 events.add({ kind: 'vault', state: 'failed', text: 'Couldn\'t read the vault', why: after.error?.text ?? '' });
             } else if (kind === 'ok' && before?.state === 'error') {
                 events.add({ kind: 'vault', state: 'done', text: 'Reading the vault again', why: `${after.counts.active} active note${after.counts.active === 1 ? '' : 's'}, ${after.counts.drafts} draft${after.counts.drafts === 1 ? '' : 's'}.` });
+            }
+            // Folders inside the vault it may not list, once each time they change.
+            if (kind === 'ok' || kind === 'changed') {
+                const entry = closedEntry(before, after);
+                if (entry) events.add(entry);
             }
             bump();
         }),

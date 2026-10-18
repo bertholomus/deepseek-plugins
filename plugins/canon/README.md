@@ -260,7 +260,11 @@ Canon has its own entry in the sidebar. Its page shows:
   "Reading the vault ~/Obsidian/Canon…". A vault folder that is missing, a
   file, or one DSH may not read (its permissions, or a Mac's privacy rules)
   says so, what to do and when it was tried, and What happened notes it;
-  no turn gets notes until the folder can be read.
+  no turn gets notes until the folder can be read. A folder inside the
+  vault that DSH may not list is named under the header ("1 folder Canon
+  may not read: Projects/osprey-mobile. Its notes are never added to
+  turns: give DSH access to it, then read the vault again."), and What
+  happened notes it once, and again when every folder reads.
 - **Try a prompt**: type a prompt and, if you like, a session's folder (a
   full path, or one starting with `~/`, as a session has it; anything else
   is refused and says why), and see which notes a turn in that folder would
@@ -278,6 +282,14 @@ Canon has its own entry in the sidebar. Its page shows:
 - **What happened**: drafts saved and refused, drafts promoted and
   refused, sessions switched off and on, setting changes and vault
   problems, newest first.
+
+While a setting is wrong, the page says which one, what it must be and
+where to change it, and shows What happened. A number or true/false
+written in quotes in the profile (`maxNotes: "3"`) is text, which DSH's
+settings form shows as if it were right; when it would be right without
+the quotes, the page offers **Save it as 3**, which saves it so through
+DSH's own settings call, and then says "Saved “Notes a turn, at most” as
+3, without quotes. Canon works again."
 
 Every empty state says what to do next, and every refusal says why in
 words: "Not promoted: promoting is off (“Allow promoting drafts” in
@@ -482,7 +494,8 @@ notes, superseded decisions, an archived runbook, ideas that are proposed
 or drafts, drafts in and out of the drafts folder, notes with no
 frontmatter, `.obsidian`, `.trash` and an attachment) and always work on a
 copy of it in a temporary folder. They cover a vault folder DSH may not
-list, the try-out's `~/` folder, numbers in quotes in the profile, the
+list and a folder inside it that DSH may not list, the try-out's `~/`
+folder, numbers in quotes in the profile and the page's fix for them, the
 form's promote-folder check, and where the focus goes after each switch,
 Read again and Promote. `test/canon-relevance.test.js` holds the dev set to
 the figures it reached, the first hold-out to its four floors and, once it

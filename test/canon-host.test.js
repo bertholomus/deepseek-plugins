@@ -11,11 +11,11 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rm
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ACCESS_CHOICES, DEFAULTS, LIVE_SETTINGS, RANGES, SETTING_TITLES, checkConfig, displayPath, folderIn, resolved, savedEntry, sessionFolder, vaultPath } from '../plugins/canon/lib/config.js';
+import { ACCESS_CHOICES, DEFAULTS, LIVE_SETTINGS, RANGES, SETTING_TITLES, checkConfig, displayPath, folderIn, resolved, savedEntry, sessionFolder, unquoted, vaultPath } from '../plugins/canon/lib/config.js';
 import { ABOUT_THE_VAULT, EVERYDAY, distinctTerms, promptTerms, stem, terms, wordsOf } from '../plugins/canon/lib/text.js';
 import { noteOf, parseNote, setFields, statusOf, yamlLines } from '../plugins/canon/lib/frontmatter.js';
 import { Index, MIN_SCORE, SHARE_BODY, SHARE_TITLED, folderKeys, projectsOf, questionsOf } from '../plugins/canon/lib/search.js';
-import { MAX_NOTE_BYTES, Vault, bestPassage, cut, folderProblem, paragraphs, plainText } from '../plugins/canon/lib/vault.js';
+import { MAX_NOTE_BYTES, Vault, bestPassage, closedEntry, closedText, closedWhat, cut, folderProblem, paragraphs, plainText } from '../plugins/canon/lib/vault.js';
 import { HEADER, KIND, Recall, SUMMARY_MAX, buildBlock, entryBudget, notesThatFit, promptOf, summaryOf } from '../plugins/canon/lib/recall.js';
 import { KINDS, capture, cleanTags, cleanTitle, isDraftPath, promote, slugOf, writeRefusal } from '../plugins/canon/lib/drafts.js';
 import { INITIAL, KEY, applyEvent, canonProjection, foldAll, parseState, parseView, viewOf } from '../plugins/canon/lib/projection.js';
@@ -122,6 +122,11 @@ test('config: drafts and promoted folders stay inside the vault and apart; numbe
     assert.equal(said({ recall: 'false' }), 'recall: Add notes to turns (recall) must be true or false, written without quotes (it is “false”, which is text)');
     assert.equal(said({ promote: 'yes' }), 'promote: Allow promoting drafts (promote) must be true or false (it is “yes”)');
     assert.equal(said({ enabled: 'TRUE' }), 'enabled: Canon on (enabled) must be true or false, written without quotes (it is “TRUE”, which is text)');
+    // What a value in quotes would be without them, when that is right for its setting; nothing otherwise.
+    assert.deepEqual([unquoted({ maxChars: '900' }, 'maxChars'), unquoted({ maxNotes: ' 5 ' }, 'maxNotes'), unquoted({ recall: 'false' }, 'recall'), unquoted({ enabled: 'TRUE' }, 'enabled')], [900, 5, false, true]);
+    for (const [settings, key] of [[{ maxNotes: '12' }, 'maxNotes'], [{ maxNotes: '2.5' }, 'maxNotes'], [{ maxNotes: 'five' }, 'maxNotes'], [{ maxNotes: 5 }, 'maxNotes'], [{ promote: 'yes' }, 'promote'], [{ vault: '7' }, 'vault'], [{ access: 'true' }, 'access']]) {
+        assert.equal(unquoted(settings, key), undefined, JSON.stringify(settings));
+    }
     assert.equal(said({ access: true }), 'access: What Canon may write (access) must be Read only (read-only) or Drafts (drafts) (it is true)');
     assert.equal(said({ access: 'write' }), 'access: What Canon may write (access) must be Read only (read-only) or Drafts (drafts) (it is “write”)');
     assert.equal(said({ draftsFolder: 7 }), 'draftsFolder: Drafts folder (draftsFolder) must be a folder inside the vault, such as Drafts or Canon/Drafts: letters, digits and spaces, no part starting with a dot, no .. (it is 7)');
@@ -250,7 +255,7 @@ test('vault: only active notes are searched; drafts, other statuses, hidden fold
     const vault = await readVault(dir);
     const status = vault.status();
     assert.equal(status.state, 'ok');
-    assert.deepEqual(status.counts, { notes: 42, active: 35, drafts: 2, other: 5, unreadable: 0 });
+    assert.deepEqual(status.counts, { notes: 42, active: 35, drafts: 2, other: 5, unreadable: 0, closed: 0 });
     assert.deepEqual(vault.index.notes().map((n) => n.path).sort(), [
         'Decisions/2026-02 Ledger stays on Postgres.md', 'Decisions/2026-03 Lantern job queue on NATS JetStream.md', 'Decisions/2026-04 Lantern API versioning.md',
         'Decisions/2026-06 Quartz eviction policy.md', 'Home.md', 'Ideas/Warming the quartz cache.md', 'Misc/Lantern mascot.md', 'Misc/Office.md',
@@ -376,7 +381,7 @@ test('vault: a vault folder Canon may not list is an error in words, logged once
     assert.equal(status.state, 'error');
     assert.equal(status.error.code, 'no-access');
     assert.equal(status.error.text, `DSH may not read ${dir}. Give DSH access to it (on a Mac: System Settings, Privacy & Security, Files and Folders), or choose another folder.`);
-    assert.deepEqual(status.counts, { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0 });
+    assert.deepEqual(status.counts, { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0, closed: 0 });
     assert.deepEqual(changes.map((c) => [c.kind, c.after.state, c.after.error?.code]), [['error', 'error', 'no-access']]);
     assert.deepEqual(vault.search('harbor gateway port').results, [], 'a turn gets nothing from it');
     assert.equal(await vault.passage('Projects/harbor-gateway/Gateway ports.md', ['port'], 300), undefined);
@@ -399,6 +404,45 @@ test('vault: a vault folder Canon may not list is an error in words, logged once
         assert.deepEqual([refused.status().state, refused.status().error.code], ['error', 'no-access'], code);
         assert.equal(refused.status().error.text, 'DSH may not read ~/Canon. Give DSH access to it (on a Mac: System Settings, Privacy & Security, Files and Folders), or choose another folder.', code);
     }
+});
+
+test('vault: a folder inside the vault Canon may not list is counted and named, on the page and once in What happened; access given, it reads again', async (t) => {
+    // A project folder in this test's own copy that can be looked up but not listed.
+    const dir = vaultCopy('canon-closed');
+    const closed = join(dir, 'Projects', 'osprey-mobile');
+    mkdirSync(closed);
+    writeFileSync(join(closed, 'Releases.md'), '---\nproject: osprey-mobile\n---\n# Osprey releases\n\nThe app ships to the app stores on Thursdays.\n');
+    chmodSync(closed, 0o000);
+    t.after(() => chmodSync(closed, 0o755));
+    const changes = [];
+    const vault = new Vault({ where: () => ({ vault: dir, draftsFolder: 'Drafts' }), home: HOME, onChange: (change) => changes.push(change) });
+    await vault.refresh();
+    let status = vault.status();
+    assert.equal(status.state, 'ok', 'the rest of the vault reads');
+    assert.deepEqual(status.counts, { notes: 42, active: 35, drafts: 2, other: 5, unreadable: 0, closed: 1 });
+    assert.deepEqual(status.closed, ['Projects/osprey-mobile']);
+    assert.deepEqual(vault.search('When does osprey-mobile ship to the app stores?').results, [], 'its note is not there to add');
+    // What happened says it once, with what to do; a read that finds the same says nothing new.
+    const entry = closedEntry(changes[0].before, changes[0].after);
+    assert.deepEqual(entry, {
+        kind: 'vault',
+        state: 'failed',
+        text: '1 folder Canon may not read: Projects/osprey-mobile',
+        why: 'Its notes are never added to turns. Give DSH access to it (its permissions, or on a Mac System Settings, Privacy & Security, Files and Folders), then read the vault again.',
+    });
+    await vault.again();
+    assert.equal(changes.length, 1, 'the same folders: no new change');
+    // Access given: it reads, and What happened says every folder reads again.
+    chmodSync(closed, 0o755);
+    await vault.again();
+    status = vault.status();
+    assert.deepEqual([status.counts.closed, status.closed, status.counts.active], [0, [], 36]);
+    assert.deepEqual(closedEntry(changes.at(-1).before, changes.at(-1).after), { kind: 'vault', state: 'done', text: 'Every folder in the vault can be read again' });
+    // Several: counted all, the first few named in order.
+    assert.equal(closedText(['A', 'B', 'C', 'D', 'E'], 7), '7 folders Canon may not read: A, B, C, D, E, and 2 more');
+    assert.match(closedWhat(2), /^Their notes are never added to turns\. Give DSH access to them \(their permissions/);
+    // Another vault starts with none named, so it is not "read again".
+    assert.equal(closedEntry({ vault: '/elsewhere', closed: ['X'], closedCount: 1 }, { path: dir, closed: [], counts: { closed: 0 } }), undefined);
 });
 
 test('vault: when the vault folder changes, the earlier folder\'s words and counts go at once; the new folder is reading until its read ends', async (t) => {
@@ -427,7 +471,7 @@ test('vault: when the vault folder changes, the earlier folder\'s words and coun
     where = { vault: empty, draftsFolder: 'Drafts' };
     assert.deepEqual([vault.status().state, vault.status().counts.active], ['reading', 0]);
     await vault.again();
-    assert.deepEqual([vault.status().state, vault.status().counts], ['ok', { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0 }]);
+    assert.deepEqual([vault.status().state, vault.status().counts], ['ok', { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0, closed: 0 }]);
     // No vault at all: unset, at once.
     where = { vault: '', draftsFolder: '' };
     await vault.again();
@@ -1062,7 +1106,7 @@ test('plugin: a prompt gets the cited block; per-session off stops it; capture a
     assert.match(added.content[0].text, /\[1\] Projects\/harbor-gateway\/Gateway ports\.md/);
     const page = await remote.state();
     assert.deepEqual(page.sessions.map((r) => [r.sessionId, r.title, r.count]), [['s-1', 'Gateway work', 1]]);
-    assert.deepEqual(page.vault.counts, { notes: 42, active: 35, drafts: 2, other: 5, unreadable: 0 });
+    assert.deepEqual(page.vault.counts, { notes: 42, active: 35, drafts: 2, other: 5, unreadable: 0, closed: 0 });
     const recallLog = readFileSync(join(dshHome, 'canon', 'recall.jsonl'), 'utf8');
     assert.match(recallLog, /"text":"Added 1 note to turn 1"/);
 
@@ -1176,6 +1220,38 @@ test('plugin: a prompt gets the cited block; per-session off stops it; capture a
     await settle();
 });
 
+test('plugin: a folder inside the vault Canon may not list is named on its page and once in What happened', async (t) => {
+    await import('./fixtures/canon/stubs/hooks.mjs');
+    const canon = await import('../plugins/canon/lib/index.js');
+    process.env.CANON_TEST_DSH_HOME = tempDir('canon-dsh-closed');
+    const dir = vaultCopy('canon-closed');
+    const closed = join(dir, 'Projects', 'osprey-mobile');
+    mkdirSync(closed);
+    writeFileSync(join(closed, 'Releases.md'), '# Osprey releases\n\nThe app ships to the app stores on Thursdays.\n');
+    chmodSync(closed, 0o000);
+    t.after(() => chmodSync(closed, 0o755));
+    const dsh = standInDsh();
+    canon.apply(dsh.ctx, { ...DEFAULTS, vault: dir });
+    const remote = dsh.provided.get('dshPluginCanonRemote');
+    await remote.refresh();
+    let page = await remote.state();
+    assert.deepEqual([page.vault.state, page.vault.counts.closed, page.vault.closed], ['ok', 1, ['Projects/osprey-mobile']]);
+    const entries = () => page.history.filter((e) => e.kind === 'vault');
+    assert.deepEqual(entries().map((e) => [e.state, e.text]), [['failed', '1 folder Canon may not read: Projects/osprey-mobile']]);
+    assert.match(entries()[0].why, /^Its notes are never added to turns\. Give DSH access to it/);
+    // Read again: the same folder, no second entry.
+    await remote.refresh();
+    page = await remote.state();
+    assert.equal(entries().length, 1);
+    // Access given: its note reads, and What happened says every folder reads again.
+    chmodSync(closed, 0o755);
+    await remote.refresh();
+    page = await remote.state();
+    assert.deepEqual([page.vault.counts.closed, page.vault.counts.active], [0, 36]);
+    assert.deepEqual(entries().map((e) => e.text), ['Every folder in the vault can be read again', '1 folder Canon may not read: Projects/osprey-mobile']);
+    dsh.stop();
+});
+
 test('plugin: switched off in the profile, Canon reads no vault, offers no tool and says so', async () => {
     await import('./fixtures/canon/stubs/hooks.mjs');
     const canon = await import('../plugins/canon/lib/index.js');
@@ -1237,7 +1313,8 @@ test('plugin: a number in quotes in the profile never stops Canon: it starts, sa
     assert.doesNotThrow(() => canon.apply(dsh.ctx, config));
     const remote = dsh.provided.get('dshPluginCanonRemote');
     const page = await remote.state();
-    assert.deepEqual(page.problem, { key: 'maxChars', text: 'Characters a turn, at most (maxChars) must be a whole number of characters from 400 to 8000, written without quotes (it is “900”, which is text)', live: true });
+    // Right without the quotes: the page is told the value to save in their place.
+    assert.deepEqual(page.problem, { key: 'maxChars', text: 'Characters a turn, at most (maxChars) must be a whole number of characters from 400 to 8000, written without quotes (it is “900”, which is text)', live: true, unquoted: 900 });
     const s = step();
     const decision = await s.next();
     assert.equal(await dsh.preStep(s.payload, async () => decision), decision, 'no block while it is wrong');

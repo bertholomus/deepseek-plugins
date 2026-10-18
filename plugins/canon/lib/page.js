@@ -4,7 +4,7 @@
  *
  * @module dsh-plugin-canon/page
  */
-import { RANGES } from './config.js';
+import { RANGES, unquoted } from './config.js';
 
 /** Log entries the page's history lists, newest first. */
 const HISTORY = 150;
@@ -116,7 +116,9 @@ function settingsOf(config, current) {
  */
 export async function pageState({ config, check, current, vault, events, recalls, switches, titles }) {
     const on = working({ config, check });
-    const problem = check?.problem;
+    // A number or true/false in quotes that would be right without them: the page offers to save it so.
+    const fix = check?.problem?.live && check.problem.key ? unquoted(config, check.problem.key) : undefined;
+    const problem = check?.problem && (fix === undefined ? check.problem : { ...check.problem, unquoted: fix });
     const sessions = on ? recentSessions(recalls.list({ limit: 300 }), switches) : [];
     const drafts = on ? vault.drafts() : [];
     const history = events.list({ limit: HISTORY });
@@ -128,7 +130,7 @@ export async function pageState({ config, check, current, vault, events, recalls
         ...(problem ? { problem } : {}),
         enabled: config.enabled !== false,
         settings: settingsOf(config, current()),
-        vault: on ? vault.status() : { state: 'unset', counts: { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0 } },
+        vault: on ? vault.status() : { state: 'unset', counts: { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0, closed: 0 }, closed: [] },
         sessions: sessions.map((s) => ({ ...s, title: names.get(s.sessionId) ?? '' })),
         // A draft from a session DSH no longer has (or another computer's) names it without a way to open it.
         drafts: drafts.map((d) => ({ ...d, sessionTitle: d.sessionId ? names.get(d.sessionId) ?? '' : '', sessionKnown: Boolean(d.sessionId) && names.has(d.sessionId) })),

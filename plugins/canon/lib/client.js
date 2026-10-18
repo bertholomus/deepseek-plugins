@@ -1197,6 +1197,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-item[tabindex]:focus{outline:none}`,
             `.${P}-item[tabindex]:focus-visible{outline:2px solid var(--${P}-ring);outline-offset:-2px}`,
             `.${P}-said{margin:8px 0 0;font:var(--dsw-font-xs-13)}`,
+            `.${P}-fix{margin-top:10px}`,
+            `.${P}-fixed{margin:0 0 8px}`,
             `.${P}-said[tabindex]:focus{outline:none}`,
             `.${P}-said[tabindex]:focus-visible{outline:2px solid var(--${P}-ring);outline-offset:1px}`,
             `@media (max-width:560px){.${P}-item{flex-wrap:wrap}.${P}-item-side{justify-content:flex-start;width:100%}}`,
@@ -1239,10 +1241,16 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const parts = [plural(c.active ?? 0, 'active note'), plural(c.drafts ?? 0, 'draft')];
             return `${v.display ? `The vault ${v.display}` : 'The vault'} holds ${listWords(parts)}.`;
         }
-        /** The vault's side notes: notes left out, cut short or unreadable. */
+        /** The vault's side notes: folders it may not read, notes left out, cut short or unreadable. */
         function vaultNotes(v) {
             const c = v.counts ?? {};
             const out = [];
+            if (c.closed > 0) {
+                const names = (v.closed ?? []).slice(0, 5);
+                const more = c.closed - names.length;
+                const one = c.closed === 1;
+                out.push(`${plural(c.closed, 'folder')} Canon may not read${names.length ? `: ${names.join(', ')}${more > 0 ? `, and ${more} more` : ''}` : ''}. ${one ? 'Its' : 'Their'} notes are never added to turns: give DSH access to ${one ? 'it' : 'them'}, then read the vault again.`);
+            }
             if (c.other > 0) out.push(`${plural(c.other, 'note')} with another status (archived, draft and the like) ${c.other === 1 ? 'is' : 'are'} never added.`);
             if (c.unreadable > 0) out.push(`${plural(c.unreadable, 'note')} could not be read.`);
             if (v.truncated) out.push('Only the first 20,000 notes are read.');
@@ -1251,8 +1259,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
 
         // ── Shared state ──────────────────────────────────────────────
 
-        /** DSH's way to open a panel page and a session, set once its workspace is there. */
-        const views = { openPage: () => {}, openSession: () => {} };
+        /**
+         * DSH's way to open a panel page and a session, set once its workspace
+         * is there; and DSH's own settings form for Canon (`settings.set(field,
+         * value)` saves one setting as the form's Save does), while DSH serves it.
+         */
+        const views = { openPage: () => {}, openSession: () => {}, settings: undefined };
 
         /** Do something on the host: `{ value }`, or `{ problem }` in words. */
         async function run(method, args) {
@@ -1335,7 +1347,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return h(ui.Button, { variant, size: 'sm', onClick: () => kit.openPlugin(BUNDLE, focus ? { focus } : {}) }, label);
         }
 
-        function HeaderCard({ data, onRead, reading }) {
+        function HeaderCard({ data, onRead, reading, said = '' }) {
             const s = data.settings;
             const v = data.vault;
             // Read again stays the same button through a read and whatever it finds (an error, then the notes), so
@@ -1373,7 +1385,37 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 sub: TEXT.summary,
                 actions: h(SettingsButton, {}),
                 attrs: { 'data-canon-header': data.enabled ? v.state : 'off' },
-            }, body);
+            }, said ? [h('p', { key: 'said', className: `${P}-said ${P}-fixed`, role: 'status', 'data-canon-fixed': '' }, said), h(React.Fragment, { key: 'body' }, body)] : body);
+        }
+
+        /**
+         * A number or true/false written in quotes (text in the profile) that
+         * would be right without them. DSH's settings form shows it as if it
+         * were right, so the waiting state offers to save it without quotes,
+         * through DSH's own settings call, in one press.
+         */
+        function QuotedFix({ problem, onSaved }) {
+            const [busy, setBusy] = React.useState(false);
+            const [failed, setFailed] = React.useState(false);
+            const form = views.settings;
+            if (problem?.live !== true || problem.unquoted === undefined || typeof form?.set !== 'function') return null;
+            const title = SETTINGS.find((f) => f.name === problem.key)?.title ?? problem.key;
+            const value = String(problem.unquoted);
+            const save = async () => {
+                if (busy) return;
+                setBusy(true);
+                setFailed(false);
+                let ok = false;
+                try { ok = (await form.set(problem.key, problem.unquoted)) === true; } catch { ok = false; }
+                setBusy(false);
+                if (ok) onSaved(`Saved “${title}” as ${value}, without quotes. Canon works again.`);
+                else setFailed(true);
+            };
+            return h('div', { className: `${P}-fix`, 'data-canon-fix': problem.key },
+                h('p', { className: `${P}-trouble-text` }, `Without the quotes it is right: Canon can save it as ${value} for you, as the settings form would.`),
+                h('div', { className: `${P}-actions` },
+                    h(ui.Button, { variant: 'primary', size: 'sm', 'aria-disabled': busy ? 'true' : undefined, onClick: () => void save(), 'data-canon-fix-save': '' }, busy ? 'Saving…' : `Save it as ${value}`)),
+                failed ? h('p', { className: `${P}-said ${P}-error`, role: 'alert' }, 'DSH did not save it. Change it in Canon\'s settings in Plugins instead.') : null);
         }
 
         /** Why a note fits, in words. */
@@ -1578,7 +1620,14 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const live = kit.useLive(() => api.read('state'), CHANNELS, { delayMs: 300 });
             const [reading, setReading] = React.useState(false);
             const [readProblem, setReadProblem] = React.useState('');
+            // What the waiting state's fix saved, said on the page it comes back to.
+            const [fixed, setFixed] = React.useState('');
             const data = live.data;
+            const problemText = data?.problem?.text;
+            // A new setting problem: what an earlier fix saved is old news.
+            React.useEffect(() => {
+                if (problemText) setFixed('');
+            }, [problemText]);
             const down = live.code === 'not-running' || (data === undefined && live.error);
             const onRead = async () => {
                 if (reading) return;
@@ -1600,11 +1649,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         : data.problem
                             ? [
                                 h(kit.Card, { key: 'head', title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary, attrs: { 'data-canon-header': 'problem' } },
-                                    h(kit.SettingsProblem, { name: 'Canon', packageName: BUNDLE, problem: data.problem })),
+                                    h(kit.SettingsProblem, { name: 'Canon', packageName: BUNDLE, problem: data.problem }),
+                                    h(QuotedFix, { key: `fix-${data.problem.key ?? ''}`, problem: data.problem, onSaved: (text) => { setFixed(text); void live.refresh(); } })),
                                 h(HistoryCard, { key: 'history', data, titles }),
                             ]
                             : [
-                                h(HeaderCard, { key: 'head', data, onRead: () => void onRead(), reading }),
+                                h(HeaderCard, { key: 'head', data, onRead: () => void onRead(), reading, said: fixed }),
                                 live.error ? h(kit.ErrorLine, { key: 'refresh', text: live.error, onRetry: live.refresh }) : null,
                                 readProblem ? h(kit.ErrorLine, { key: 'read', lead: 'Couldn\'t read the vault again', text: readProblem, onRetry: () => void onRead() }) : null,
                                 ok ? h(TryCard, { key: 'try' }) : null,
@@ -1644,13 +1694,16 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             });
             // Its settings on its page in Plugins, through DSH's own settings form.
             ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => {
+                let saved;
                 try {
-                    const saved = scope.configForms?.get?.('canon');
+                    saved = scope.configForms?.get?.('canon');
+                    views.settings = saved;
                     const fields = settingsFields(() => saved?.getSnapshot?.()?.value?.draftsFolder);
                     kit.applySettings(scope, { entry: 'canon', name: 'Canon', summary: SETTINGS_SUMMARY, fields, note: SETTINGS_NOTE });
                 } catch (error) {
                     console?.warn?.('dsh-plugin-canon: settings:', error);
                 }
+                return () => { if (views.settings === saved) views.settings = undefined; };
             });
         }
 
@@ -1678,7 +1731,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         // For the plugin's own tests.
         module.exports.internals = {
             kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, KIND_WORD, settingsFields, views, notesOf, sameNotes, writesText, promoteText, turnsText, vaultText, vaultNotes, whyText, missText,
-            CanonTurn, TurnCard, CanonPage, CanonIcon, HeaderCard, TryCard, TryResult, SessionsCard, DraftsCard, HistoryCard,
+            CanonTurn, TurnCard, CanonPage, CanonIcon, HeaderCard, QuotedFix, TryCard, TryResult, SessionsCard, DraftsCard, HistoryCard,
         };
         return module.exports;
     },

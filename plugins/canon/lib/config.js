@@ -68,6 +68,30 @@ const quoted = (value, looks) => typeof value === 'string' && looks.test(value.t
 const QUOTED_NUMBER = /^[+-]?\d+(?:\.\d+)?$/;
 const QUOTED_SWITCH = /^(?:true|false)$/i;
 
+/** The settings that are true or false. */
+const SWITCHES = Object.freeze(['enabled', 'promote', 'recall']);
+
+/**
+ * What a setting written in quotes would be without them, when that is
+ * right for it: "3" for Notes a turn, at most, is 3; "false" for a switch is
+ * false. Undefined for anything else (another type, a number out of range,
+ * a setting that is not a number or a switch): the page offers to save the
+ * value without quotes only then.
+ * @param {object} settings
+ * @param {string} key
+ * @returns {number | boolean | undefined}
+ */
+export function unquoted(settings, key) {
+    const value = settings?.[key];
+    if (typeof value !== 'string') return undefined;
+    const text = value.trim();
+    if (SWITCHES.includes(key)) return QUOTED_SWITCH.test(text) ? text.toLowerCase() === 'true' : undefined;
+    if (!Object.hasOwn(RANGES, key) || !QUOTED_NUMBER.test(text)) return undefined;
+    const n = Number(text);
+    const [min, max] = RANGES[key];
+    return Number.isInteger(n) && n >= min && n <= max ? n : undefined;
+}
+
 /** Throw unless a setting is true or false; a "true" in quotes is said to be text. */
 function onOff(settings, key) {
     const value = settings?.[key];
