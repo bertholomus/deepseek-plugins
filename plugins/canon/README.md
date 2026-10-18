@@ -150,6 +150,16 @@ the dev set, on the fixture vault as it is, and measured once, on October
 
 To measure it again: `node scripts/canon-relevance.mjs --set holdout`.
 
+That hold-out has no coding request among its 24 prompts that no note
+answers (they are chat, questions about the vault and project switches),
+and coding requests are the commonest turn. Round 2's judge measured
+prompts of its own on the same vault with the same code (at f341843): of
+89 everyday coding requests that no note answers ("Write a small Python
+function that checks whether a string is a palindrome", "Add a health
+check endpoint to the Express server"), 26 got a block, so 70.8% got
+none, and at least 23 of those blocks held nothing that bears on the
+request: a note fits on any two shared words, however common.
+
 ## On the turn
 
 After the latest turn of a session that got notes, a short card:
