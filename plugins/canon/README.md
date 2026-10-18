@@ -65,13 +65,13 @@ fits. Three rules keep a project's notes to the prompts about them:
   prompt points at other projects and not at its own: "the lantern API"
   names lantern-api, not lantern-web.
 
-Of the notes that fit, a turn gets the best one and those that score at
-least half as well; a prompt that asks two things ("…, and how do I roll
-out a new build?") also gets the note that best answers each question
-asked alone. Notes that belong to the session's folder count for more: a
-note whose path, `project`/`repo` field or tags name the folder's project
-(`~/Projects/harbor-gateway` → `harbor-gateway`), and a little more for the
-folder above.
+Of the notes that fit and score above a small floor, a turn gets the best
+one and those that score at least half as well; a prompt that asks two
+things ("…, and how do I roll out a new build?") also gets the note that
+best answers each question asked alone. Notes that belong to the session's
+folder count for more: a note whose path, `project`/`repo` field or tags
+name the folder's project (`~/Projects/harbor-gateway` → `harbor-gateway`),
+and a little more for the folder above.
 
 Only a turn that starts from a person's prompt gets notes, and only once,
 right after that prompt: not the later steps of the turn, not messages
@@ -266,11 +266,11 @@ A wrong value never stops Canon from starting, whatever its type: it adds
 and writes nothing, and its page says which setting is wrong, what it must
 be, and **Open Canon's settings** puts the cursor in it. A number, or true
 or false, in quotes in the profile is text, and the page says so:
-"Characters a turn, at most (maxChars) must be a whole number of
-characters from 400 to 8000, written without quotes (it is “900”, which is
-text)." Once you fix it, Canon works again at once. A vault folder that cannot be read is not a wrong setting:
-the page says what is wrong with the folder, and Canon reads it again as
-soon as it can.
+"Characters a turn, at most (maxChars) must be a whole number of characters
+from 400 to 8000, written without quotes (it is “900”, which is text)." Once
+you fix it, Canon works again at once. A vault folder that cannot be read is
+not a wrong setting: the page says what is wrong with the folder, and Canon
+tries it again at the next turn, or when you press **Read again**.
 
 ## Files
 
