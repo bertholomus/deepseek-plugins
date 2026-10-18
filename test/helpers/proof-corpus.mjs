@@ -24,7 +24,8 @@
  * `wrong`. With those lists a corpus is also scored per claim: a bad turn is
  * caught for the right claim when a flag falls on one of its unshown or
  * wrong claims, and a flag that falls on neither is on another claim.
- * `seen9/` is the ninth hold-out once it is tuned on.
+ * `seen9/` and `seen10/` are the ninth and tenth hold-outs once they are tuned
+ * on. The eleventh (holdout11/) is written and measured the same way.
  *
  * A case's `previous` is the turn before it, or a list of turns before it,
  * oldest first; a turn with `cut: true` ended without a reply (DSH cut it).
@@ -48,6 +49,8 @@ export const HOLDOUT = join(DEV, 'holdout');
 export const HOLDOUT9 = join(DEV, 'holdout9');
 export const SEEN9 = join(DEV, 'seen9');
 export const HOLDOUT10 = join(DEV, 'holdout10');
+export const SEEN10 = join(DEV, 'seen10');
+export const HOLDOUT11 = join(DEV, 'holdout11');
 /** The labels of a claim in a case's `claims` list. */
 export const CLAIM_LABELS = ['shown', 'unshown', 'wrong'];
 export const TOOL_NAMES = new Set(['bash', 'read', 'edit', 'write', 'grep', 'glob', 'todo_write']);

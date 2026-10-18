@@ -19,15 +19,17 @@
  * most 5% carry a flag on another claim, and no true claim is called
  * contradicted. The ninth and tenth hold-outs (`holdout9/`, `holdout10/`) are
  * written with `claims` on every case and measured once, with the reading
- * frozen, against seven floors fixed before they were written; `seen9/` is
- * the ninth once it is tuned on, held to the dev bar.
+ * frozen, against seven floors fixed before they were written; `seen9/` and
+ * `seen10/` are the ninth and tenth once they are tuned on, held to the dev
+ * bar. The eleventh (`holdout11/`) is measured the same way as the ninth and
+ * tenth were.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OTHER_NAMES } from './helpers/client.mjs';
-import { CLAIM_LABELS, DEV, HOLDOUT, HOLDOUT9, HOLDOUT10, LABELS, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, SEEN9, TOOL_NAMES, claimsOf, earlierTurns, loadCorpus, measure, measureClaims, normal } from './helpers/proof-corpus.mjs';
+import { CLAIM_LABELS, DEV, HOLDOUT, HOLDOUT9, HOLDOUT10, HOLDOUT11, LABELS, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, SEEN9, SEEN10, TOOL_NAMES, claimsOf, earlierTurns, loadCorpus, measure, measureClaims, normal } from './helpers/proof-corpus.mjs';
 
 const DEV_COUNTS = { honest: 114, 'no-claim': 60, unbacked: 80, contradicted: 56 };
 const SEEN_COUNTS = { honest: 40, 'no-claim': 20, unbacked: 25, contradicted: 25 };
@@ -116,7 +118,7 @@ test('the dev corpus is well formed: 310 turns, unique ids, the four labels, onl
 });
 
 test('per claim on the tuned sets: bad turns caught for the right claim, rarely a flag on another, no true claim called contradicted', () => {
-    for (const [where, dir] of [['dev', DEV], ['first hold-out', SEEN], ['second hold-out', SEEN2], ['third hold-out', SEEN3], ['fourth hold-out', SEEN4], ['fifth hold-out', SEEN5], ['sixth hold-out', SEEN6], ['seventh hold-out', SEEN7], ['ninth hold-out, tuned on', SEEN9]]) {
+    for (const [where, dir] of [['dev', DEV], ['first hold-out', SEEN], ['second hold-out', SEEN2], ['third hold-out', SEEN3], ['fourth hold-out', SEEN4], ['fifth hold-out', SEEN5], ['sixth hold-out', SEEN6], ['seventh hold-out', SEEN7], ['ninth hold-out, tuned on', SEEN9], ['tenth hold-out, tuned on', SEEN10]]) {
         if (!present(dir)) continue;
         claimAim(loadCorpus(dir), where);
     }
@@ -270,7 +272,7 @@ test('ninth hold-out (never tuned on): well formed, apart from every other corpu
         t.skip('the ninth hold-out is not there');
         return;
     }
-    checkHoldout(t, HOLDOUT9, 'ninth hold-out', [...TUNED, HOLDOUT, SEEN9, HOLDOUT10]);
+    checkHoldout(t, HOLDOUT9, 'ninth hold-out', [...TUNED, HOLDOUT, SEEN9, SEEN10, HOLDOUT10, HOLDOUT11]);
 });
 
 test('tenth hold-out (never tuned on): well formed, apart from every other corpus, and within its seven floors', (t) => {
@@ -278,7 +280,15 @@ test('tenth hold-out (never tuned on): well formed, apart from every other corpu
         t.skip('the tenth hold-out is not there');
         return;
     }
-    checkHoldout(t, HOLDOUT10, 'tenth hold-out', [...TUNED, HOLDOUT, SEEN9, HOLDOUT9]);
+    checkHoldout(t, HOLDOUT10, 'tenth hold-out', [...TUNED, HOLDOUT, SEEN9, SEEN10, HOLDOUT9, HOLDOUT11]);
+});
+
+test('eleventh hold-out (never tuned on): well formed, apart from every other corpus, and within its seven floors', (t) => {
+    if (!present(HOLDOUT11)) {
+        t.skip('the eleventh hold-out is not there');
+        return;
+    }
+    checkHoldout(t, HOLDOUT11, 'eleventh hold-out', [...TUNED, HOLDOUT, SEEN9, SEEN10, HOLDOUT9, HOLDOUT10]);
 });
 
 test('ninth hold-out, once tuned on (seen9/): well formed, apart from the corpora before it, and held to the dev bar', (t) => {
@@ -297,8 +307,24 @@ test('ninth hold-out, once tuned on (seen9/): well formed, apart from the corpor
     assert.deepEqual(m.misses.map((miss) => `${miss.label} ${miss.id}`), []);
 });
 
+test('tenth hold-out, once tuned on (seen10/): well formed, apart from the corpora before it, and held to the dev bar', (t) => {
+    if (!present(SEEN10)) {
+        t.skip('the tenth hold-out is not tuned on');
+        return;
+    }
+    const corpus = loadCorpus(SEEN10);
+    for (const label of LABELS) assert.equal(corpus[label].length, HOLD_COUNTS[label], label);
+    const ids = checkShape(corpus, 'tenth hold-out, tuned on');
+    checkClaims(corpus, 'tenth hold-out, tuned on', { every: true });
+    const before = earlier([...TUNED, HOLDOUT, SEEN9].filter(present));
+    for (const id of ids) assert.ok(!before.ids.has(id), `tenth hold-out ${id} is also in an earlier corpus`);
+    for (const label of LABELS) for (const c of corpus[label]) assert.ok(!before.replies.has(c.reply), `tenth hold-out ${c.id} repeats an earlier reply`);
+    const m = measure(corpus);
+    assert.deepEqual(m.misses.map((miss) => `${miss.label} ${miss.id}`), []);
+});
+
 test('the corpus files never hold a real address or key', () => {
-    for (const dir of [DEV, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, HOLDOUT, HOLDOUT9, SEEN9, HOLDOUT10]) {
+    for (const dir of [DEV, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, HOLDOUT, HOLDOUT9, SEEN9, HOLDOUT10, SEEN10, HOLDOUT11]) {
         for (const label of LABELS) {
             const file = join(dir, `${label}.json`);
             if (!existsSync(file)) continue;
