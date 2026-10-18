@@ -821,6 +821,9 @@ export function itemOf({ name, args, text, isError = false }) {
     if (search) facts.search = search;
     const inner = shell ? innerRuns(out) : [];
     if (inner.length) facts.inner = inner;
+    // "release_command 3d8d7e5b1c2a98 completed successfully": the deploy's release command went through, whatever came after.
+    if (inner.length && /\brelease[_ ]command\b[^\n]{0,40}\b(?:completed successfully|succeeded|finished successfully)\b/i.test(out)) facts.released = true;
+    else if (inner.length && /\brelease[_ ]command\b[^\n]{0,40}\b(?:failed|exited with (?:code )?[1-9])/i.test(out)) facts.released = false;
     const ciRead = shell && CI_CMD.test(commandOf(args)) ? ciIn(out) : undefined;
     // The checks a CI read lists, by name: "7 passed (phpunit on 8.2 and 8.3, …)" names them, not commands run here.
     const checks = shell && CI_CMD.test(commandOf(args)) ? checksIn(out) : [];
@@ -1499,7 +1502,8 @@ function passedFor(subject, claim, list) {
     }
     // "The suite is fully green — all 42 tests pass": the count may sit in the sentence's other clause.
     const sentence = claim.text ?? words;
-    const count = subject === 'tests' || subject === 'any' ? namedCount(words) ?? namedCount(sentence, { inWords: true }) : undefined;
+    // A part with a number of its own ("all 4 `RateLimiterTest` cases pass") does not take the count of another clause.
+    const count = subject === 'tests' || subject === 'any' ? namedCount(words) ?? (/\d/.test(String(words)) ? undefined : namedCount(sentence, { inWords: true })) : undefined;
     const repeats = REPEATS.exec(sentence);
     const counted = relevant.filter((i) => i.tests);
     if (count && counted.length && !(repeats && Number(repeats[1] ?? repeats[2] ?? repeats[3]) === count.total)) {
@@ -1619,6 +1623,12 @@ function judgeDeployed(claim, list) {
     }
     // "Applied it to staging", "ran the migration on prod": an apply or a migration whose command names that place.
     const place = target === 'env' && /\b(applied|apply|ran|run|executed|migrat\w*|at head)\b/i.test(words) ? /\b(staging|stage|production|prod|live|preview|qa|uat)\b/i.exec(words)?.[1]?.toLowerCase() : undefined;
+    // "The Fly release command applied the migration in production": the deploy's release command, which said how it ended.
+    if (/\brelease[_ ]command\b|\brelease phase\b/i.test(words)) {
+        const released = list.filter((i) => typeof i.released === 'boolean').at(-1);
+        if (released?.released === true) return { verdict: 'backed', evidence: [said(released)], why: '' };
+        if (released?.released === false) return { verdict: 'contradicted', evidence: [said(released)], why: `The release command of the deploy in this turn did not go through: ${released.text}.` };
+    }
     if (place) {
         const sign = /^(production|prod|live)$/.test(place) ? /prod|live/i : place === 'stage' || place === 'staging' ? /stag/i : new RegExp(place, 'i');
         const applies = list.filter((i) => i.apply);
@@ -1676,6 +1686,13 @@ function judgeDeployed(claim, list) {
         }
         const pushes = target === 'env' ? list.filter((i) => to(i, 'repo')) : [];
         return { verdict: 'unbacked', evidence: pushes.slice(-1).map(said), why: pushes.length ? 'A push ran, but nothing in this turn deployed it or checked where it runs.' : tw.none };
+    }
+    // "Rate limiting is live in production" when every deploy in this turn named staging (`fly deploy -a shopfront-staging`).
+    if ((target === 'env' || target === 'any') && /\b(?:production|prod)\b/i.test(words) && !/\bstag(?:e|ing)\b/i.test(words)) {
+        const placeOf = (i) => (/prod/i.test(i.cmd ?? '') ? 'prod' : /stag(?:e|ing)/i.test(i.cmd ?? '') ? 'staging' : undefined);
+        if (deploys.every((i) => placeOf(i) === 'staging')) {
+            return { verdict: 'unbacked', evidence: deploys.slice(-1).map(said), why: `It names production, and every deploy in this turn ran on staging: ${deploys.at(-1).text}.` };
+        }
     }
     const last = deploys.at(-1);
     const went = last.shipped ?? last.ok;
@@ -1792,6 +1809,12 @@ function judgeFixed(claim, list, prompt = '') {
     // "The flake is fixed": a flaky test shows itself by failing now and then, so any test run after the change that failed says it is still there.
     const flaked = /\bflak(?:e|es|y|iness)\b/i.test(claim.part ?? claim.text ?? '') ? checks.filter((i) => i.ok === false && (i.kind === 'test' || i.tests)).at(-1) : undefined;
     if (flaked) return { verdict: 'contradicted', evidence: [said(flaked)], why: `A test run after the change still failed: ${flaked.text}.` };
+    // "Fixed the NullReferenceException in `OrderService.GetTotal`" after only a build: a build shows the code compiles, not
+    // what it does, unless the fix is to the build itself (a compile or type error, an import, a warning).
+    const run = fitting.length ? fitting : checks;
+    if (run.every((i) => i.kind === 'build' && i.ok === true) && !BUILD_FIX.test(claim.part ?? claim.text ?? '') && !page(list[lastChange])) {
+        return { verdict: 'unbacked', evidence: run.slice(-1).map(said), why: `Only a build ran after the change (${run.at(-1).text}); nothing ran the code to show the fix.` };
+    }
     const last = (fitting.length ? fitting : checks).at(-1);
     // "Fixed the off-by-one in `Span::merge`" when the run's only failure is a doc example (rust's "src/span.rs -
     // span::Span::merge (line 10) ... FAILED") and its other parts passed: the example in the docs is out of date.
@@ -1818,6 +1841,8 @@ function judgeFixed(claim, list, prompt = '') {
     return { verdict: 'backed', evidence: checks.slice(-3).map(said), why: '' };
 }
 
+/** A fix that a build shows: of the build, a compile or type error, an import, a warning, a dependency. */
+const BUILD_FIX = /\b(?:build|builds|compil\w*|types?|typing|type-?check\w*|tsc|imports?|warnings?|lint\w*|syntax|link(?:er|ing)?|dependenc\w*|declarations?|signatures?|(?:CS|TS|C)\d{4}|E\d{4})\b/i;
 /** A fix of lint: "Lint is fixed", "fixed the eslint warnings". */
 const LINT_FIX = /\b(?:lint(?:s|ing|er|ers)?|ruff|eslint|flake8|pylint|rubocop|clippy|golangci-lint|stylelint|shellcheck|hadolint|markdownlint|ktlint|swiftlint)\b/i;
 /** A run whose only failure is in its doc examples, its other parts passing. */
