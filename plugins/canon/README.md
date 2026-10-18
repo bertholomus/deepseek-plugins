@@ -108,8 +108,8 @@ when the note is not of a project the prompt or the session names, whatever
 their share: values and pasted output thin the share, not the words in
 common. "acme keeps hitting 429s on their nightly sync. bump their key
 (key_1234) to 250 req/s with bursts up to 500" in `~/Projects/lantern-api`
-gets the rate limits note; a build log that ends "no space left on device"
-gets the runbook for a full disk.
+gets the rate limits note; a pasted build log that says "no space left on
+device", with "can you clean it up", gets the runbook for a full disk.
 
 So most everyday coding requests get no note, though notes share a word or
 two with them: "Write a small helper that checks whether a request has a JSON
@@ -144,10 +144,9 @@ Does that need a v3, or can it go into v2?" in `~/Projects/lantern-api`
 gets the versioning decision. "Write a function that pages through
 /v2/projects. Any idea what is wrong?" there gets none: the note its
 question fits, the vault's home note, is no project's. Notes that belong to
-the session's
-folder count for more: a note whose path, `project`/`repo` field or tags
-name the folder's project (`~/Projects/harbor-gateway` → `harbor-gateway`),
-and a little more for the folder above.
+the session's folder count for more: a note whose path, `project`/`repo`
+field or tags name the folder's project (`~/Projects/harbor-gateway` →
+`harbor-gateway`), and a little more for the folder above.
 
 Only a turn that starts from a person's prompt gets notes, and only once,
 right after that prompt: not the later steps of the turn, not messages
@@ -199,11 +198,12 @@ were fixed before anything was measured (the first four in round 2, the
 everyday-coding one in round 3).
 
 The dev set has 994 prompts, each with its kind, in two files.
-`test/fixtures/canon/relevance/dev.json` has 922: round 2's 77 (below); the 113 prompts round 2's judge
-measured Canon on (its fixture set, ids `jf-`, less one that repeats a dev
-prompt word for word, and its generic set, ids `jg-`); and 732 written in
-round 3, each group before it was measured, from sessions in a project's
-folder, in a folder inside one, in an unrelated folder and in none:
+`test/fixtures/canon/relevance/dev.json` has 922: round 2's 77 (below);
+the 113 prompts round 2's judge measured Canon on (its fixture set, ids
+`jf-`, less one that repeats a dev prompt word for word, and its generic
+set, ids `jg-`); and 732 written in round 3, each group before it was
+measured, from sessions in a project's folder, in a folder inside one, in
+an unrelated folder and in none:
 
 - everyday coding requests that no note answers, many asked as a question
   or told as a problem (ids `c`, `q`, `w`);
@@ -227,10 +227,10 @@ They came in as dev data during round 3 (OPEN-QUESTIONS #38) and were
 measured once, with the rules as they stood, before any rule changed for
 them:
 
-| Figure | First measured (ec6d005) | Now | Floor |
+| Figure | First measured, with d4cd038's rules | Now | Floor |
 | --- | --- | --- | --- |
-| The block's first note answers | 19 of 24 (79.2%) | 23 of 24 (95.8%) | at least 80% |
-| An answering note is in the block | 19 of 24 (79.2%) | 23 of 24 (95.8%) | at least 90% |
+| The block's first note answers | 19 of 24 (79.2%): missed | 23 of 24 (95.8%) | at least 80% |
+| An answering note is in the block | 19 of 24 (79.2%): missed | 23 of 24 (95.8%) | at least 90% |
 | Notes per block that do not answer | 0.45 (9 in 20 blocks) | 0.39 (9 in 23 blocks) | at most 1.0 |
 | No block, for a prompt no note answers | 43 of 48 (89.6%) | 46 of 48 (95.8%) | at least 70% |
 | No block, for an everyday coding request no note answers | 36 of 40 (90.0%) | 39 of 40 (97.5%) | at least 90% |
@@ -239,10 +239,10 @@ The rules were then tuned on them too, so their figure now is a dev figure,
 not a fair one. All five misses were coding requests whose words in common
 carried too little of a long prompt (two pasted build logs, a request full
 of values, a question beside the work, a problem told before the work), and
-three of the five blocks for prompts no note
-answers came to pasted stack traces read as questions; the rules for
-pasted output, many words in common and a coding request's own question
-(above) came from them.
+three of the five blocks for prompts no note answers came to pasted stack
+traces read as questions; the rules for pasted output, many words in common
+and a coding request's own question (above) came from them. The first
+figure is on record in the suite's `PROGRESS.md` (ec6d005).
 
 In the whole dev set a note answers 586 prompts; of the 408 that none
 does, 295 are everyday coding requests, 68 name a project but ask what no
