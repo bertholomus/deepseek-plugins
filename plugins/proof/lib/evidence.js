@@ -120,7 +120,8 @@ export function testCountsIn(text) {
     if (cargo.length) {
         const passed = cargo.reduce((a, x) => a + Number(x[1]), 0);
         const failed = cargo.reduce((a, x) => a + Number(x[2]), 0);
-        found.push({ passed, failed, ...(cargo.length > 1 ? { total: passed + failed, parts: cargo.map((x) => Number(x[1])) } : {}) });
+        // Each part's own summary: "unit tests: 23 passed" is shown by a part that printed 23 passed, 0 failed (`clean`).
+        found.push({ passed, failed, ...(cargo.length > 1 ? { total: passed + failed, parts: cargo.map((x) => Number(x[1])), clean: cargo.filter((x) => x[2] === '0').map((x) => Number(x[1])) } : {}) });
     }
     // rspec: "12 examples, 0 failures"
     for (m of text.matchAll(/(\d+) examples?, (\d+) failures?/g)) add(num(m[1]) - num(m[2]), m[2], m[1]);
@@ -183,7 +184,7 @@ export function testCountsIn(text) {
     const last = found.at(-1);
     if (last && !last.parts && found.length > 1) {
         const parts = [...new Set(found.map((f) => f.passed))];
-        if (parts.length > 1) return { ...last, parts };
+        if (parts.length > 1) return { ...last, parts, clean: [...new Set(found.filter((f) => f.failed === 0).map((f) => f.passed))] };
     }
     return last;
 }
@@ -1370,6 +1371,20 @@ function namedCounts(text) {
     return [...String(text).matchAll(/\b(\d+)\s+(?:unit\s+|integration\s+|e2e\s+|end-to-end\s+|doc\s+|ui\s+|api\s+)?(?:tests?|specs?|examples?)\b(?![\s-]+(?:files?|suites?|modules?|targets?|packages?|projects?|binar(?:y|ies)|executables?|classes|folders?|directories)\b)/gi)].map((m) => Number(m[1]));
 }
 
+/** Whether a failed run that passed other parts failed on parts other than the code a claim names ("`fct_orders` built"). */
+function otherPartFailed(i, words) {
+    const names = [...String(words).matchAll(CODE_NAME)].map((m) => m[1] ?? m[2]).filter((n) => n.length > 2);
+    // A claim about the whole run ("all 42 tests pass", "the suite") is about every part.
+    if (!names.length || /\b(?:all|every|each|both|whole|full|entire|overall|suite|everything)\b/i.test(String(words)) || partOfAll(String(words))) return false;
+    // A run of that part (`-only-testing:LumenTests/OnboardingTests`) is about it, whatever its failure lines name.
+    if (names.some((n) => String(i.cmd ?? '').includes(n))) return false;
+    const lines = [...(Array.isArray(i.failLines) ? i.failLines : []), ...(i.lines ?? [])].filter((l) => typeof l === 'string');
+    const passedSome = (i.tests?.passed ?? 0) > 0 || lines.some((l) => /\bPASS=[1-9]|\b[1-9]\d* (?:passed|succeeded|ok)\b/i.test(l));
+    const failing = lines.filter((l) => FAIL_LINE.test(l) || /\berror\b/i.test(l));
+    const named = (l) => names.some((n) => new RegExp(`(?<![\\w$])${n.replace(/[$]/g, '\\$')}(?![\\w$])`, 'i').test(l));
+    return passedSome && failing.some((l) => [...l.matchAll(CODE_NAME)].length > 0) && !failing.some(named);
+}
+
 function passedFor(subject, claim, list) {
     const words = claim.part ?? claim.text;
     const accept = ACCEPT[subject] ?? ACCEPT.any;
@@ -1415,6 +1430,10 @@ function passedFor(subject, claim, list) {
     // "1 test passed" after a run where 1 passed and 2 failed: the run's own count, which reports the failures.
     const early = subject === 'tests' || subject === 'any' ? namedCount(words) : undefined;
     if (early && last.tests && last.tests.failed > 0 && early.passed === last.tests.passed && !/\b(?:all|every|each|both|whole|full|entire)\b/i.test(words) && !partOfAll(words)) return { verdict: 'none', evidence: [], why: '' };
+    // "unit tests: 23 passed" after `cargo test` printed "23 passed; 0 failed" for its unit tests and failed in its doc tests:
+    // that part's own count, which passed.
+    const own = subject === 'tests' || subject === 'any' ? early ?? (/\b(\d+)\s+(?:passed|passing)\b/i.exec(words) ? { passed: Number(/\b(\d+)\s+(?:passed|passing)\b/i.exec(words)[1]) } : undefined) : undefined;
+    if (own && last.tests && last.tests.failed > 0 && (last.tests.clean ?? []).includes(own.passed) && own.passed !== last.tests.passed && !/\b(?:all|every|each|both|whole|full|entire|overall)\b/i.test(words)) return { verdict: 'backed', evidence: [said(last)], why: '' };
     // "`@acme/billing` and `@acme/ui` were green too" after a workspace run whose failures all name `@acme/api`:
     // the failure is in another package, so this run says nothing against the ones it names.
     // Packages it names, as `@acme/shared` or as the bare `shared` of a package the run printed.
@@ -1427,6 +1446,9 @@ function passedFor(subject, claim, list) {
         const failing = new Set(failedLines.flatMap((l) => (typeof l === 'string' ? l.match(WORKSPACE_PACKAGE) ?? [] : [])));
         if (failing.size && packages.every((p) => !failing.has(p))) return { verdict: 'none', evidence: [], why: '' };
     }
+    // "`fct_orders` built cleanly" after `dbt run` passed 12 models and failed on `fct_revenue_daily`: a failure in a run
+    // that passed other parts is about the parts it names, not about this one.
+    if (last.ok === false && otherPartFailed(last, claim.part ?? words)) return { verdict: 'none', evidence: [], why: '' };
     if (last.ok === false) return { verdict: 'contradicted', evidence: [said(last)], why: `The last ${what} in this turn did not pass: ${last.text}.` };
     if (last.ok === null) return { verdict: 'unbacked', evidence: [said(last)], why: `It is not clear how the last ${what} ended: ${last.text}.` };
     if (NO_WARNINGS.test(claim.text ?? words) && (last.warnings ?? 0) > 0) {
@@ -1736,12 +1758,19 @@ function judgeFixed(claim, list, prompt = '') {
             ? { verdict: 'unbacked', evidence: [said(list[lastChange])], why: 'Files changed in this turn, and nothing ran after the last change to show it works.' }
             : { verdict: 'unbacked', evidence: [], why: 'Nothing in this turn ran the code or a check.' };
     }
-    const kinds = FIX_CHECKS[claim.subject ?? 'any'] ?? FIX_CHECKS.any;
-    const fitting = checks.filter((i) => kinds.includes(i.kind));
+    // "Lint is fixed": a fix of lint is shown by the lint run, whatever a test run after it printed.
+    const lintFix = LINT_FIX.test(claim.part ?? claim.text ?? '') && checks.some((i) => i.kind === 'lint');
+    const kinds = lintFix ? FIX_CHECKS.lint : FIX_CHECKS[claim.subject ?? 'any'] ?? FIX_CHECKS.any;
+    // A CI read is about CI: a fix is judged by what ran here after the change, and by a CI read only when nothing did.
+    const fitAll = checks.filter((i) => kinds.includes(i.kind));
+    const fitting = fitAll.some((i) => i.kind !== 'ci' && i.kind !== 'deploy') ? fitAll.filter((i) => i.kind !== 'ci') : fitAll;
     // "The flake is fixed": a flaky test shows itself by failing now and then, so any test run after the change that failed says it is still there.
     const flaked = /\bflak(?:e|es|y|iness)\b/i.test(claim.part ?? claim.text ?? '') ? checks.filter((i) => i.ok === false && (i.kind === 'test' || i.tests)).at(-1) : undefined;
     if (flaked) return { verdict: 'contradicted', evidence: [said(flaked)], why: `A test run after the change still failed: ${flaked.text}.` };
     const last = (fitting.length ? fitting : checks).at(-1);
+    // "Fixed the off-by-one in `Span::merge`" when the run's only failure is a doc example (rust's "src/span.rs -
+    // span::Span::merge (line 10) ... FAILED") and its other parts passed: the example in the docs is out of date.
+    if (last.ok === false && docExampleOnly(last)) return { verdict: 'backed', evidence: [said(last)], why: '' };
     if (last.ok === false) {
         // "Fixed the rounding bug in `formatCurrency`" after `vitest run src/currency.test.ts` passed and a full run failed
         // elsewhere: the run its filter names shows the fix, unless the failure names that filter too.
@@ -1762,6 +1791,16 @@ function judgeFixed(claim, list, prompt = '') {
         return { verdict: 'contradicted', evidence: [said(last)], why: `The last run after the change did not pass: ${last.text}.` };
     }
     return { verdict: 'backed', evidence: checks.slice(-3).map(said), why: '' };
+}
+
+/** A fix of lint: "Lint is fixed", "fixed the eslint warnings". */
+const LINT_FIX = /\b(?:lint(?:s|ing|er|ers)?|ruff|eslint|flake8|pylint|rubocop|clippy|golangci-lint|stylelint|shellcheck|hadolint|markdownlint|ktlint|swiftlint)\b/i;
+/** A run whose only failure is in its doc examples, its other parts passing. */
+function docExampleOnly(i) {
+    const lines = [...(Array.isArray(i.failLines) ? i.failLines : []), ...(i.lines ?? [])].filter((l) => typeof l === 'string');
+    const doc = (l) => /^test \S+ - .+\(line \d+\)(?: - compile(?: fail)?)? \.\.\. FAILED\s*$|\bdoctests? failed\b|^\s*Doc-tests\b/i.test(l);
+    const failedTest = (l) => /\.\.\. FAILED\s*$|^\s*FAILED\s+\S|^\s*(?:✗|✘|×)\s|^\s*not ok \d+/.test(l);
+    return lines.some(doc) && !lines.some((l) => failedTest(l) && !doc(l)) && (i.tests?.clean ?? []).some((n) => n > 0);
 }
 
 /** The code a claim names, by its last part: `loadNextPageIfNeeded` in `FeedViewModel.loadNextPageIfNeeded(at:)`, or `SettingsFragment`. */
