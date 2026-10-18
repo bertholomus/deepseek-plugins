@@ -196,10 +196,11 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
 - [x] Only DSH tokens in both versions, `--wp-blur`, `--wp-tint`, `body.wp-still`: no token added.
 - [x] No selector with a DSH hash, nothing on `:root`, `html` or `body`, no `:has()` into DSH's list: no CSS changed.
 - [x] Motion stops under `wp-still` and reduced motion: no motion added.
-- [x] `node --check plugins/canon/lib/client.js`: parses. `npm test`: every Canon test but the first hold-out's floors
-  test passes, and so does the naming scan; that test is not ok (Next steps 1).
+- [x] `node --check plugins/canon/lib/client.js`: parses.
+- [ ] `npm test` passes: not in full. The first hold-out's floors test is not ok (Next steps 1); every other Canon test
+  and the naming scan pass (two Proof tests also fail on a clean copy: Proof's work in progress).
 - [x] Both DSH versions and both themes: the e2e's browser half, light and dark, wide and narrow, on all three builds.
-  Wallpaper on and off not looked at again: nothing visual changed.
+- [ ] Wallpaper on and off: not looked at again; nothing visual changed this round.
 - [x] Off leaves nothing behind, on again repeats nothing: the e2e switches Canon off and on in Plugins (95 passed).
 
 ## For the v1.0.1 list (the kit, not changed before the suite tag)
