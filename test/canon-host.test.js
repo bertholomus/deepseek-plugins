@@ -12,9 +12,9 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ACCESS_CHOICES, DEFAULTS, LIVE_SETTINGS, RANGES, SETTING_TITLES, checkConfig, displayPath, folderIn, resolved, savedEntry, sessionFolder, vaultPath } from '../plugins/canon/lib/config.js';
-import { ABOUT_THE_VAULT, distinctTerms, promptTerms, stem, terms, wordsOf } from '../plugins/canon/lib/text.js';
+import { ABOUT_THE_VAULT, EVERYDAY, distinctTerms, promptTerms, stem, terms, wordsOf } from '../plugins/canon/lib/text.js';
 import { noteOf, parseNote, setFields, statusOf, yamlLines } from '../plugins/canon/lib/frontmatter.js';
-import { Index, MIN_SCORE, folderKeys, projectsOf, questionsOf } from '../plugins/canon/lib/search.js';
+import { Index, MIN_SCORE, SHARE_BODY, SHARE_TITLED, folderKeys, projectsOf, questionsOf } from '../plugins/canon/lib/search.js';
 import { MAX_NOTE_BYTES, Vault, bestPassage, cut, folderProblem, paragraphs, plainText } from '../plugins/canon/lib/vault.js';
 import { HEADER, KIND, Recall, SUMMARY_MAX, buildBlock, entryBudget, notesThatFit, promptOf, summaryOf } from '../plugins/canon/lib/recall.js';
 import { KINDS, capture, cleanTags, cleanTitle, isDraftPath, promote, slugOf, writeRefusal } from '../plugins/canon/lib/drafts.js';
@@ -157,8 +157,14 @@ test('text: the words a prompt shares with a note, and chat filler that shares n
     }
     assert.notEqual(stem('port'), stem('portal'));
     // A prompt's words about the vault and about answering from it are left out; a note keeps them.
-    assert.deepEqual(promptTerms('Check the team\'s shared notes in the canon vault, answer and cite the note: which ports?'), ['check', 'port']);
+    assert.deepEqual(promptTerms('Check the team\'s shared notes in the canon vault, answer and cite the note: which ports?'), ['port']);
     assert.ok(['note', 'vault', 'canon', 'team'].every((t) => ABOUT_THE_VAULT.has(t)));
+    // So are everyday request words ("check" above): they say what to do, not what about; the share a note
+    // carries still counts them (search.js).
+    assert.deepEqual(promptTerms('Write a small function that checks the gateway ports'), ['gateway', 'port']);
+    assert.deepEqual(promptTerms('Write a small function that checks the gateway ports', { everyday: true }), ['writ', 'small', 'function', 'check', 'gateway', 'port']);
+    assert.ok(['write', 'add', 'fix', 'test', 'function', 'file', 'small'].every((w) => EVERYDAY.has(stem(w))));
+    assert.ok(!['port', 'deploy', 'release', 'backup', 'certificate'].some((w) => EVERYDAY.has(stem(w))), 'words a note is about are not everyday words');
     assert.deepEqual(terms('The team\'s shared vault notes'), ['team', 'shar', 'vault', 'note']);
     // "Who owns it" keeps its verb; "called" and "named" only name a thing.
     assert.deepEqual(distinctTerms('Who owns quartz-cache?'), ['own', 'quartz', 'cache'].map((w) => stem(w)));
@@ -503,12 +509,24 @@ test('search: a project\'s name is one word and a note needs another; words abou
     const ask = (prompt, folder = '') => vault.search(prompt, { folder, limit: 3 });
     const paths = (prompt, folder) => ask(prompt, folder).results.map((r) => r.path);
     const lantern = '/Users/someone/Projects/lantern-api';
-    // The project's name alone, or with one word in a note's body, is not a match.
+    // The project's name alone, or with the one word a prompt asks only in a note's body, is not a match.
     assert.deepEqual(paths('Does the lantern API support websockets?', lantern), []);
+    const email = ask('Who gets the lantern API\'s email?', lantern);
+    assert.deepEqual(email.results, []);
+    assert.equal(email.others.find((o) => o.path === 'Decisions/2026-04 Lantern API versioning.md')?.why, 'few', 'its body says "email"');
+    // Everyday request words never make a match: "renaming" is in the versioning decision's body.
     const renamed = ask('Rename the lantern API\'s logger variable to log.', lantern);
     assert.deepEqual(renamed.results, []);
-    assert.equal(renamed.others.find((o) => o.path === 'Decisions/2026-04 Lantern API versioning.md')?.why, 'few', 'its body says "renaming"');
-    assert.ok(renamed.others.some((o) => o.why === 'name'), 'and others share only the name');
+    assert.equal(renamed.others.find((o) => o.path === 'Decisions/2026-04 Lantern API versioning.md')?.why, 'name', 'only the name in common');
+    // Words in common that carry too little of what a prompt asks are not a match: Rate limits has "requests"
+    // in a heading and its body, and "body", but not "JSON", the prompt's rarest word.
+    const json = ask('Write a small helper that checks whether a request has a JSON body.', lantern);
+    assert.deepEqual(json.results, []);
+    const limits = json.others.find((o) => o.path === 'Projects/lantern-api/Rate limits.md');
+    assert.equal(limits?.why, 'part');
+    assert.ok(limits.share > 0 && limits.share < SHARE_TITLED, `it carries ${limits.share}`);
+    // The page says the two figures as they are.
+    assert.deepEqual([SHARE_TITLED, SHARE_BODY], [1 / 3, 0.55], 'the page\'s words say "a third" and "55%"');
     // With a word beyond the name in the title, it is ("called" is not On-call's "call").
     assert.deepEqual(paths('What is the lantern team\'s mascot called?'), ['Misc/Lantern mascot.md']);
     // Words about the vault say where to look, not what about.
@@ -721,7 +739,7 @@ test('recall: the page\'s try-out shows the notes, why each fits, the near misse
     assert.deepEqual(view.folder, { repo: 'harbor-gateway', parent: '' });
     assert.deepEqual(view.results.map((r) => [r.path, r.folder]), [['Projects/harbor-gateway/Gateway ports.md', 'repo']]);
     assert.deepEqual(view.results[0].words, ['port', 'harbor', 'gateway', 'listen'], 'the prompt\'s own words, for the page');
-    assert.equal(view.others.find((o) => o.path === 'Projects/harbor-gateway/Routing rules.md')?.why, 'few', 'the project\'s name and one word in its body');
+    assert.equal(view.others.find((o) => o.path === 'Projects/harbor-gateway/Routing rules.md')?.why, 'part', 'the project\'s name and one word in its body carry too little of the prompt');
     assert.ok(view.results.every((r) => typeof r.score === 'number' && r.matched.length > 0 && r.passage));
     assert.ok(view.others.some((o) => o.path === 'Projects/tide-ledger/Ledger backups.md'));
     assert.ok(view.block.text.startsWith(HEADER) && view.block.chars === view.block.text.length);

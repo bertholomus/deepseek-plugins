@@ -5,19 +5,19 @@
  * evened out; a word few notes have counts for more than a common one.
  *
  * Which notes fit a prompt: words about the vault and about answering from
- * it ("answer from the team's shared notes") are left out of the prompt; a
+ * it ("answer from the team's shared notes") are left out of the prompt,
+ * and so are everyday request words ("write", "add", "fix", "test",
+ * "function", "small"), which still weigh in what the prompt asks; a
  * project's name counts as one word, however many parts it has, and a
- * session in a known project's folder names that project for its notes; a
- * note fits when it shares two words with the prompt, at least one beyond
- * a project's name, and a single word beyond the name must be in its
- * title, aliases, tags, path or headings (one word in its body never makes
- * a match); a note that belongs to a project is left out when the
- * session's folder or the prompt points at other projects and not at its
- * own. A note is kept above a floor and near the best match, or as the
- * best match of one of the questions a prompt asks, asked alone. A note
- * that belongs to the session's folder (its path, its `project` or `repo`,
- * or a tag names the folder's repo) is lifted, but never makes a match on
- * its own.
+ * session in a known project's folder names that project for its notes. A
+ * note fits when it shares two words with the prompt and those words carry
+ * enough of what the prompt asks (search() says the rules). A note that
+ * belongs to a project is left out when the session's folder or the prompt
+ * points at other projects and not at its own. A note is kept above a
+ * floor and near the best match, or as the best match of one of the
+ * questions a prompt asks, asked alone. A note that belongs to the
+ * session's folder (its path, its `project` or `repo`, or a tag names the
+ * folder's repo) is lifted, but never makes a match on its own.
  *
  * The index keeps terms and counts only, never a note's text: the passage
  * a turn gets is read from the file when it is needed (vault.js).
@@ -34,6 +34,15 @@ const WEIGHTS = Object.freeze({ title: 4, aliases: 3, tags: 3, path: 2, headings
 /** A note scores at least this, and at least this share of the best note, to be added. */
 export const MIN_SCORE = 3;
 export const NEAR_BEST = 0.5;
+/** A word is rare when at most this share of the vault's notes has it (one note, in a small vault). */
+export const RARE = 0.06;
+/**
+ * The share of a prompt's weight that the words a note shares with it must
+ * carry: a third when one of them is in the note's title, aliases, tags or
+ * headings, 55% when none is (the page's words say these figures).
+ */
+export const SHARE_TITLED = 1 / 3;
+export const SHARE_BODY = 0.55;
 /** The lift for a note of the session's repo, and of the folder it sits in. */
 export const REPO_BOOST = 1.6;
 export const PARENT_BOOST = 1.2;
@@ -107,7 +116,12 @@ export class Index {
         this.docs = [];
         /** Note path → slot. */
         this.byPath = new Map();
-        /** Term → { slots, strong, body }: parallel arrays, one entry per note that has the term. */
+        /**
+         * Term → { slots, strong, marked, body }: parallel arrays, one entry
+         * per note that has the term. `strong` counts its title, aliases,
+         * tags, path and headings; `marked` the same without the path (the
+         * fields that say what a note is about, not where it is).
+         */
         this.postings = new Map();
         this.live = 0;
         this.dead = 0;
@@ -146,13 +160,17 @@ export class Index {
         const slot = this.docs.length;
         const segments = note.path.split('/');
         const strong = new Map();
-        const addStrong = (text, weight) => {
-            for (const [t, n] of counts(text)) strong.set(t, (strong.get(t) ?? 0) + n * weight);
+        const marked = new Map();
+        const addStrong = (text, weight, marks = true) => {
+            for (const [t, n] of counts(text)) {
+                strong.set(t, (strong.get(t) ?? 0) + n * weight);
+                if (marks) marked.set(t, (marked.get(t) ?? 0) + n * weight);
+            }
         };
         addStrong(note.title, WEIGHTS.title);
         for (const alias of note.aliases ?? []) addStrong(alias, WEIGHTS.aliases);
         for (const tag of note.tags ?? []) addStrong(tag.replace(/[/_-]+/g, ' '), WEIGHTS.tags);
-        addStrong(segments.join(' ').replace(/\.md$/i, ''), WEIGHTS.path);
+        addStrong(segments.join(' ').replace(/\.md$/i, ''), WEIGHTS.path, false);
         for (const heading of note.headings ?? []) addStrong(heading, WEIGHTS.headings);
         const bodyTerms = terms(note.body ?? '');
         const body = new Map();
@@ -161,11 +179,12 @@ export class Index {
         for (const t of all) {
             let p = this.postings.get(t);
             if (!p) {
-                p = { slots: [], strong: [], body: [] };
+                p = { slots: [], strong: [], marked: [], body: [] };
                 this.postings.set(t, p);
             }
             p.slots.push(slot);
             p.strong.push(strong.get(t) ?? 0);
+            p.marked.push(marked.get(t) ?? 0);
             p.body.push(body.get(t) ?? 0);
         }
         const keys = new Set([...segments.map((s, i) => nameKey(i === segments.length - 1 ? s.replace(/\.md$/i, '') : s)), ...(note.projects ?? []), ...(note.tags ?? []).map(nameKey)].filter(Boolean));
@@ -219,12 +238,13 @@ export class Index {
             docs.push(doc);
         }
         for (const [term, p] of this.postings) {
-            const next = { slots: [], strong: [], body: [] };
+            const next = { slots: [], strong: [], marked: [], body: [] };
             for (let i = 0; i < p.slots.length; i += 1) {
                 const to = moved.get(p.slots[i]);
                 if (to === undefined) continue;
                 next.slots.push(to);
                 next.strong.push(p.strong[i]);
+                next.marked.push(p.marked[i]);
                 next.body.push(p.body[i]);
             }
             if (next.slots.length) this.postings.set(term, next);
@@ -277,22 +297,36 @@ export class Index {
      * prompt terms it matched (and the prompt's own words for them), and
      * whether it belongs to the folder; and the few that matched some words
      * but stayed out (`others`, for the page's "why not"), each with `why`:
-     * `name` (only a project's name in common), `few` (one word, or one
-     * word in its body), `other` (another project's note), `less` (it fits,
-     * but under the floors).
+     * `name` (only a project's name in common), `few` (too few words in
+     * common, or too few that say what the note is about), `part` (the
+     * words in common carry too little of what the prompt asks), `other`
+     * (another project's note), `less` (it fits, but under the floors).
      *
-     * The rules: words about the vault ("the team's shared notes") are left
-     * out of the prompt. A project's name counts as one word, however many
-     * parts it has, and a note needs a word beyond it: two words in common,
-     * or one in its title, aliases, tags, path or headings; one word in its
-     * body alone never fits. A session in a known project's folder names
-     * that project for its own notes ("this service" in quartz-cache's
-     * folder). A note that belongs to a project (its `project` or `repo`,
-     * or its folder under Projects/) is left out when the session's folder
-     * or the prompt points at other projects and not at its own. A note is
-     * kept above a floor and near the best note; a prompt that asks two
-     * things also keeps the note that best answers each question asked
-     * alone ("When does on-call hand over, and why did we choose NATS?").
+     * The rules. Words about the vault ("the team's shared notes") are left
+     * out of the prompt, and so are everyday request words ("write a small
+     * function", "fix the failing test"): a note never fits on them, but
+     * they still weigh in what the prompt asks. A project's name counts as
+     * one word, however many parts it has; a session in a known project's
+     * folder names that project for its own notes ("this service" in
+     * quartz-cache's folder). Each word of the prompt weighs as much as it
+     * is rare in the vault (a word no note has weighs most; a project's
+     * name weighs once), and a note fits when:
+     * - it shares two words with the prompt (a project's name can be one),
+     *   or the one word a prompt of one word asks;
+     * - when one of those words is in its title, aliases, tags or headings:
+     *   enough of them are distinctive (in those fields, in at most 6% of
+     *   the notes, or twice in its body), and they carry a third of the
+     *   prompt's weight;
+     * - when they are only in its body: they carry 55% of the prompt's
+     *   weight, and a single one fits only beside a project the prompt or
+     *   the session names, in a prompt that asks more than one word.
+     * A note that belongs to a project (its `project` or `repo`, or its
+     * folder under Projects/) is left out when the session's folder or the
+     * prompt points at other projects and not at its own. A note is kept
+     * above a floor and near the best note; a prompt that asks two things
+     * also keeps the note that best answers each question asked alone
+     * ("When does on-call hand over, and why did we choose NATS?"), which
+     * needs its share of that question only.
      * @param {string} prompt
      * @param {{ folder?: { repo: string, parent: string }, limit?: number }} [options]
      */
@@ -307,8 +341,11 @@ export class Index {
                 if (lead) leads.add(lead.path);
             }
         }
-        const keep = (r) => r.fits && r.score >= MIN_SCORE && (r.score >= best * NEAR_BEST || leads.has(r.path));
-        const kept = scored.filter(keep).map(({ why, ...r }) => r);
+        // A question's best note carries its question, not the whole prompt: it is kept when the whole
+        // prompt finds it short only on the share (`question` says so).
+        const fits = (r) => r.fits || (r.why === 'part' && leads.has(r.path));
+        const keep = (r) => fits(r) && r.score >= MIN_SCORE && (r.score >= best * NEAR_BEST || leads.has(r.path));
+        const kept = scored.filter(keep).map(({ why, ...r }) => (r.fits ? r : { ...r, fits: true, question: true }));
         // Each question's best note comes before the rest when not all fit (still in score order).
         const firsts = kept.filter((r) => leads.has(r.path)).slice(0, limit);
         const chosen = new Set([...firsts, ...kept.filter((r) => !leads.has(r.path)).slice(0, limit - firsts.length)].map((r) => r.path));
@@ -317,10 +354,21 @@ export class Index {
         return { terms: query, results, others };
     }
 
+    /** How many live notes have a term. */
+    notesWith(term) {
+        const p = this.postings.get(term);
+        let df = 0;
+        if (p) for (const slot of p.slots) if (this.docs[slot]) df += 1;
+        return df;
+    }
+
     /**
      * Every note that shares a word with a prompt, scored, best first, each
      * with whether it fits the prompt and, when it does not, why (search()
-     * says the rules).
+     * says the rules); with `named` (the prompt or the session names its
+     * project), `titled` (a word in common is in its title, aliases, tags
+     * or headings) and `share` (how much of the prompt's weight the words
+     * it shares carry, 0 to 1).
      * @param {string} prompt
      * @param {{ repo: string, parent: string }} folder
      */
@@ -335,15 +383,31 @@ export class Index {
         const topics = query.filter((t) => !names.has(t)).length;
         const need = Math.min(2, topics + (query.some((t) => names.has(t)) ? 1 : 0));
         const n = Math.max(this.live, SMALL_VAULT);
+        const idfOf = (df) => Math.log(1 + (n - df + 0.5) / (df + 0.5));
+        const rare = Math.max(1, Math.floor(RARE * n));
         const average = Math.max(1, this.bodyLength / this.live);
+        // What the prompt asks, by weight: every word it asks about, its everyday request words too, each as
+        // rare as it is in the vault; a project's name once, as its rarest word.
+        const weight = new Map();
+        for (const t of [...query, ...promptTerms(prompt, { max: 400, everyday: true }).slice(0, MAX_QUERY_TERMS)]) {
+            if (!weight.has(t)) weight.set(t, idfOf(this.notesWith(t)));
+        }
+        let nameWeight = 0;
+        let total = 0;
+        for (const [t, w] of weight) {
+            if (names.has(t)) nameWeight = Math.max(nameWeight, w);
+            else total += w;
+        }
+        total += nameWeight;
+        // For its own notes, a session in a project's folder says that project's name.
+        const hereWeight = here ? Math.max(0, ...this.partsOf(here).map((t) => idfOf(this.notesWith(t)))) : 0;
         const found = new Map();
         for (const t of query) {
             const p = this.postings.get(t);
             if (!p) continue;
-            let df = 0;
-            for (const slot of p.slots) if (this.docs[slot]) df += 1;
+            const df = this.notesWith(t);
             if (df === 0) continue;
-            const idf = Math.log(1 + (n - df + 0.5) / (df + 0.5));
+            const idf = idfOf(df);
             const isName = names.has(t);
             for (let i = 0; i < p.slots.length; i += 1) {
                 const doc = this.docs[p.slots[i]];
@@ -353,7 +417,7 @@ export class Index {
                 const score = idf * ((tf * (K1 + 1)) / (tf + K1));
                 let hit = found.get(doc.slot);
                 if (!hit) {
-                    hit = { doc, topic: 0, name: 0, matched: [], topics: 0, strong: 0 };
+                    hit = { doc, topic: 0, name: 0, matched: [], topics: 0, marked: 0, distinct: 0, covered: 0 };
                     found.set(doc.slot, hit);
                 }
                 hit.matched.push(t);
@@ -364,7 +428,9 @@ export class Index {
                 }
                 hit.topic += score;
                 hit.topics += 1;
-                if (p.strong[i] > 0) hit.strong += 1;
+                hit.covered += weight.get(t);
+                if (p.marked[i] > 0) hit.marked += 1;
+                if (p.marked[i] > 0 || df <= rare || p.body[i] >= 2) hit.distinct += 1;
             }
         }
         const words = wordsOf(prompt);
@@ -373,11 +439,16 @@ export class Index {
             const place = folder.repo && hit.doc.keys.has(folder.repo) ? 'repo' : folder.parent && hit.doc.keys.has(folder.parent) ? 'parent' : '';
             const boost = place === 'repo' ? REPO_BOOST : place === 'parent' ? PARENT_BOOST : 1;
             const own = hit.doc.projects;
-            // The session's own project counts as named for its notes.
-            const shared = hit.topics + (hit.name > 0 || (here !== '' && own.includes(here)) ? 1 : 0);
+            // The session's own project counts as named for its notes, as if the prompt said its name.
+            const named = hit.name > 0 || (here !== '' && own.includes(here));
+            const said = hit.name > 0 ? nameWeight : named ? hereWeight : 0;
+            const asks = total + (hit.name === 0 && named && nameWeight === 0 ? hereWeight : 0);
+            const share = asks > 0 ? (hit.covered + said) / asks : 0;
+            const titled = hit.marked > 0;
             let why = '';
             if (hit.topics === 0) why = 'name';
-            else if (shared < need || (hit.topics === 1 && hit.strong === 0)) why = 'few';
+            else if ((titled ? hit.distinct : hit.topics) + (named ? 1 : 0) < need || (!titled && hit.topics === 1 && (!named || topics === 1))) why = 'few';
+            else if (share < (titled ? SHARE_TITLED : SHARE_BODY)) why = 'part';
             else if (context.size > 0 && own.length > 0 && !own.some((name) => context.has(name))) why = 'other';
             scored.push({
                 path: hit.doc.path,
@@ -388,6 +459,9 @@ export class Index {
                 folder: place,
                 fits: why === '',
                 why: why || 'less',
+                named,
+                titled,
+                share,
             });
         }
         scored.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));

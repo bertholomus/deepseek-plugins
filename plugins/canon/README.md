@@ -87,7 +87,10 @@ Background from the canon vault: shared long-term notes that may bear on this re
 > Changing a port: Edit `listen` in `gateway.toml`, then restart the service with `systemctl restart harbor-gateway`. The load balancer reads the health check on 8080, so keep that one as it is.
 
 [2] Projects/harbor-gateway/Deploying the gateway.md
-> Deploying the gateway: Wait for the health check in each zone before the next one. A rollout that fails its health check rolls back by itself.
+> Deploying the gateway: 1. Build the image with `make image`.
+> 2. Push it with `make push TAG=<version>`.
+> 3. Roll it out one zone at a time: `deployctl rollout harbor-gateway --zone a`, then b, then c.
+> Wait for the health check in each zone before the next one. A rollout that fails its health check rolls back by itself.
 ```
 
 Each note gets its path in the vault (the header says so, so a model does

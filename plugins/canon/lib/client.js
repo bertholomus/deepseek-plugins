@@ -1380,12 +1380,21 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         function whyText(r) {
             const words = (r.words ?? r.matched ?? []).slice(0, 8);
             const place = r.folder === 'repo' ? ' It belongs to this folder\'s project, so it counts for more.' : r.folder === 'parent' ? ' It belongs to the folder above this one, so it counts a little more.' : '';
-            return `Shares ${words.length === 1 ? 'the word' : 'the words'} ${listWords(words.map((w) => `“${w}”`))}.${place}`;
+            const question = r.question ? ' It is the best note for one of the questions the prompt asks.' : '';
+            return `Shares ${words.length === 1 ? 'the word' : 'the words'} ${listWords(words.map((w) => `“${w}”`))}.${question}${place}`;
         }
         /** Why a close note was left out, in words. */
         function missText(r) {
             if (r.why === 'name') return 'It shares only a project\'s name with the prompt.';
-            if (r.why === 'few') return 'Too little in common: one word besides a project\'s name, and not in its title, tags, aliases, path or headings.';
+            if (r.why === 'few' && r.named) return 'Too little in common: besides the project\'s name, only the one word the prompt asks, and not in the note\'s title, tags, aliases or headings.';
+            if (r.why === 'few' && r.titled) return 'Too little in common: one word that says what the note is about. A note needs two (in its title, tags, aliases or headings, in few notes, or twice in its body), or one beside a project the prompt or this folder names.';
+            if (r.why === 'few') return 'Too little in common: one word, and not in the note\'s title, tags, aliases or headings.';
+            if (r.why === 'part') {
+                const weigh = typeof r.share === 'number' ? `weigh ${Math.round(r.share * 100)}% of it` : 'weigh too little of it';
+                return r.titled
+                    ? `Too little of what the prompt asks: the words in common ${weigh}, and a note needs a third.`
+                    : `Too little of what the prompt asks: the words in common ${weigh}, and a note needs 55% when they are not in its title, tags, aliases or headings.`;
+            }
             if (r.why === 'other') return 'It belongs to another project than the one this folder or the prompt points at.';
             return 'It fits less well than the notes above, or too little to add.';
         }
@@ -1434,12 +1443,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
 
         function TryResult({ result }) {
             if (result.terms.length === 0) {
-                return h(kit.Empty, { title: 'Nothing to search for', text: 'That prompt has no words Canon searches for: greetings, thanks, words like “please” and words about the vault itself are left out. A turn with it gets no notes.' });
+                return h(kit.Empty, { title: 'Nothing to search for', text: 'That prompt has no words Canon searches for: greetings, thanks, words like “please”, everyday request words like “write”, “fix” and “test”, and words about the vault itself are left out. A turn with it gets no notes.' });
             }
             return h('div', { 'data-canon-try-result': '' },
                 h('p', { className: `${P}-meta`, 'data-canon-try-place': '' }, result.place ? `For a session in ${result.place}.` : 'For a session with no folder.'),
                 result.results.length === 0
-                    ? h(kit.Empty, { title: 'No note fits this prompt', text: 'A turn with it gets no notes. A note fits when it shares two words with the prompt; a project\'s name counts as one word, and when it is one of the two, the other must be in the note\'s title, tags, aliases, path or headings.' })
+                    ? h(kit.Empty, { title: 'No note fits this prompt', text: 'A turn with it gets no notes. A note fits when it shares two words with the prompt (a project\'s name counts as one) and they carry enough of what the prompt asks, rare words weighing most: a third when one is in the note\'s title, tags, aliases or headings, 55% when none is. Everyday request words like “write”, “fix” and “test” never count as words in common.' })
                     : h('div', { className: `${P}-section` },
                         h('h3', { className: `${P}-section-title` }, `A turn with this prompt gets ${plural(result.results.length, 'note')}`),
                         h('ul', { className: `${P}-list` }, ...result.results.map((r) => h('li', { key: r.path, className: `${P}-item`, 'data-canon-result': r.path },

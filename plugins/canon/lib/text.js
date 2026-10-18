@@ -119,9 +119,33 @@ export function wordsOf(text) {
     return out;
 }
 
-/** A prompt's distinct terms, without its words about the vault. */
-export function promptTerms(text, options) {
-    return distinctTerms(text, options).filter((t) => !ABOUT_THE_VAULT.has(t));
+/**
+ * Everyday request words, as terms: what a coding request asks to do
+ * ("write", "add", "fix", "test", "check", "run"), the parts of code it
+ * names ("function", "file", "script", "regex") and how big or good
+ * ("small", "simple", "faster"). They say what to do, not what about, so
+ * a note never fits a prompt on them (search.js); they still weigh in what
+ * the prompt asks.
+ */
+export const EVERYDAY = new Set(`
+add adds added adding write writes wrote written writing create make set setup fix fixes fixed fixing update change
+save saved modify edit remove delete rename refactor rewrite convert generate implement run runs ran running check
+test explain describe mean means meant meaning help improve optimize split format print return handle parse validate
+debug translate upgrade bump
+function method class file script code line snippet program module component helper util utility variable parameter
+argument value string number list array object type regex loop condition statement spec unit bug issue exception
+warning comment doc docs readme import package library folder directory example
+small short simple quick little tiny faster slow better proper correct
+`.split(/\s+/).filter(Boolean).flatMap((word) => terms(word)));
+
+/**
+ * A prompt's distinct terms, without its words about the vault and, unless
+ * `everyday` is set, without its everyday request words.
+ * @param {string} text
+ * @param {{ max?: number, everyday?: boolean }} [options]
+ */
+export function promptTerms(text, options = {}) {
+    return distinctTerms(text, options).filter((t) => !ABOUT_THE_VAULT.has(t) && (options.everyday || !EVERYDAY.has(t)));
 }
 
 /** How often each term comes in a text. */
