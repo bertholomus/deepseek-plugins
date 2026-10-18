@@ -233,7 +233,11 @@ const canonNow = {};
 try {
     run.writeProfile(model.port);
     await run.boot('first start');
-    await waitFor(async () => (await api('state')).ok, 'Canon\'s endpoints', 30000);
+    // The endpoints answer before the first read of the vault ends: wait for that read, not only for an answer.
+    await waitFor(async () => {
+        const r = await api('state');
+        return r.ok && r.value?.vault?.state === 'ok';
+    }, 'Canon\'s endpoints and its first read of the vault', 30000);
 
     // ── The browser half and the endpoints ─────────────────────────────
     await step('DSH serves Canon\'s browser half and it parses', async () => {
