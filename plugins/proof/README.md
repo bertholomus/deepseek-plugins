@@ -392,7 +392,7 @@ node --test test/proof*.test.js       # claims, evidence, the ledger, the check,
 node scripts/e2e.mjs proof            # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test (112 checks, about two minutes a build) starts DSH from
+The real-DSH test (113 checks, about two minutes a build) starts DSH from
 each `.e2e/dsh-<version>` install and from the installed app's own DSH,
 each in a throwaway home, with Session Watch and Proof and a scripted model
 (`test/e2e/fake-model.mjs`) that plays both the agent and the check model
@@ -417,7 +417,8 @@ was given, and says so. A new flagged claim is checked by itself, a fifth
 check in the hour waits and says until when, and switching checks off ends
 it. It restarts DSH in the middle of a check (it settles at once: "DSH
 restarted while it ran …"), runs with Session Watch off, starts with a
-wrong setting (named with its range, and fixed by saving a good value),
+wrong setting (named with its range, and fixed by saving a good value)
+and with a number in quotes in the profile (named with the value),
 checks Proof's file modes, loads it with `enabled: false`, and then shows
 that a session made and one used meanwhile are listed again once it is
 back on. It drives the page and Proof's settings in Plugins in a browser,

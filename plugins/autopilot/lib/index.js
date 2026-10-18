@@ -40,31 +40,33 @@ export const name = 'autopilot';
 export const inject = [];
 
 /**
- * Settings: types and defaults here, ranges in checkConfig, so a wrong value
- * is said in words on Autopilot's page instead of stopping it at start. The
+ * Settings: their defaults here; their types and ranges in checkConfig
+ * (lib/config.js). Each takes any value, so a wrong type in the profile (a
+ * number in quotes, say) is said in words on Autopilot's page as a wrong range
+ * is, instead of stopping it at start or being dropped on a live edit. The
  * live ones are on its page in Plugins and apply as soon as they are saved.
  */
 export const Config = z.object({
     /** Profile only. false keeps Autopilot loaded but idle; the switch in Plugins unloads it instead. */
-    enabled: z.boolean().default(true),
+    enabled: z.any().default(true),
     /** The rule for sessions without their own until the page sets one: "auto", "ask" or "off". */
-    defaultRule: z.string().default('auto'),
+    defaultRule: z.any().default('auto'),
     /** After a DSH restart, tell the sessions it cut off to carry on. */
-    resumeAfterRestart: live(z.boolean().default(true)),
+    resumeAfterRestart: live(z.any().default(true)),
     /** Only sessions cut off within this many hours are resumed (1 to 168). */
-    resumeWindowHours: live(z.number().default(6)),
+    resumeWindowHours: live(z.any().default(6)),
     /** How long a session stays quiet, with work open, before a note, in seconds (5 to 86400). */
-    idleSeconds: live(z.number().default(600)),
+    idleSeconds: live(z.any().default(600)),
     /** At start, idle sessions whose last turn ended within this many hours are looked at (1 to 168). */
-    idleWindowHours: live(z.number().default(2)),
+    idleWindowHours: live(z.any().default(2)),
     /** Notes in a row that bring no progress before Autopilot backs off (1 to 10). */
-    maxNudges: live(z.number().default(2)),
+    maxNudges: live(z.any().default(2)),
     /** The most notes and goal starts Autopilot sends in an hour, over all sessions (1 to 500). */
-    maxNotesPerHour: live(z.number().default(20)),
+    maxNotesPerHour: live(z.any().default(20)),
     /** Waits before each try after a failed turn, in seconds; one try per entry (1 to 10 entries, each up to 86400). */
-    errorRetrySeconds: live(z.array(z.number()).default([120, 600, 1800])),
+    errorRetrySeconds: live(z.any().default([120, 600, 1800])),
     /** How long after DSH starts Autopilot first looks, in seconds (0 to 600). */
-    startDelaySeconds: z.number().default(20),
+    startDelaySeconds: z.any().default(20),
 });
 
 export function apply(ctx, config) {

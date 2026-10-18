@@ -311,7 +311,7 @@ webhook on this machine, a failing webhook said as a failure in the log
 and on the page, a command instead, and Decisions switched off and on in
 Plugins beside the coordinator (each keeps its own style sheet). It restarts DSH with an approval waiting
 (nothing repeats, and the log says the turn stopped before anyone
-answered), sets a wrong value and fixes it in the form, switches Session Watch off and on in
+answered), starts with a number in quotes in the profile (named on the page with the value), sets a wrong value and fixes it in the form, switches Session Watch off and on in
 Plugins and in the profile, and checks `enabled: false` and the file
 modes. It reads the running DSH's fingerprint before and after and fails if
 it moved; pictures go to `.e2e/shots/decisions/<version>/`.

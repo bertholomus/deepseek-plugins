@@ -37,10 +37,14 @@ export const name = 'session-watch';
 /** Host services the watcher reads: DSH's session controller, sessions, agents and projections. */
 export const inject = ['sessionController', 'sessions', 'agents', 'sessionProjections'];
 
-/** Settings: types and defaults here, ranges in checkConfig (so a wrong value is said in words, not refused at start). */
+/**
+ * Settings: their defaults here; their types and ranges in checkConfig. It takes any value, so a wrong type in the
+ * profile (a number in quotes, say) is said in words as a wrong range is, instead of stopping the watcher at start
+ * or being dropped on a live edit.
+ */
 export const Config = z.object({
     /** How long a message may wait to be read into a turn before its delivery is reported as failed, in seconds (10 to 86400). */
-    deliveryTimeoutSeconds: live(z.number().default(600)),
+    deliveryTimeoutSeconds: live(z.any().default(600)),
 });
 
 /** How plugin messages are marked in a session's log, as DSH marks a plugin's own. */

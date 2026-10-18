@@ -188,7 +188,7 @@ node --test test/autopilot.test.js   # the engine over the watcher and a stand-i
 node scripts/e2e.mjs autopilot       # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test (101 checks) starts DSH from each `.e2e/dsh-<version>`
+The real-DSH test (103 checks) starts DSH from each `.e2e/dsh-<version>`
 install (`npm i --prefix .e2e/dsh-0.2.1-rc.1 @deepseek-ai/dsh@0.2.1-rc.1`)
 and from the installed app's own DSH (run as Node by the app's binary, as a
 separate process), each in a throwaway home, with a scripted model playing
@@ -201,7 +201,7 @@ the question box), and drives the page in a browser (`npm i --prefix
 wide and narrow: the buttons, the rule keys, where the cursor goes after
 an answer and after Try again, a refusal in its row, the contrast of every
 state word on the page, the cards' small text at Wallpaper's tint .2 over a
-mid picture, a question open across a quit, a wrong setting fixed through DSH's form in Plugins with the cursor
+mid picture, a question open across a quit, numbers in quotes for Autopilot and for Session Watch in the profile (both named on the page with the value), a wrong setting fixed through DSH's form in Plugins with the cursor
 in it, and Session Watch switched off and on in Plugins with no error from
 DSH. It also runs with Session Watch off in the profile and with
 `enabled: false`, and checks the file modes. Every claim is checked in the

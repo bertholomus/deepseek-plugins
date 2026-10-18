@@ -720,6 +720,15 @@ try {
         check('the command gets the card as JSON: its text, kind, title, question and recommendation', got?.kind === 'decision' && got.title === 'Import retry' && got.question === 'Retry the import?' && got.recommendation === 'Retry it once' && /^“Import retry” needs a decision\n/.test(got.text), json(got));
     });
 
+    // ── A wrong type in the profile ────────────────────────────────────
+    await restartWith(rowsWith({ decisions: { notify: 'yes' } }), 'a wrong type');
+    await waitFor(async () => (await api('state')).ok, 'Decisions\' endpoints with a wrong type', 30000);
+    await step('a wrong type in the profile: Decisions starts, holds and lists nothing, and names the setting with its value', async () => {
+        const s = await state();
+        check('"yes" for a switch does not stop Decisions from starting: its state names the setting and the value as the profile has it',
+            s.problem?.text === 'A notification for each new card (notify) must be true or false (it is "yes")' && s.problem?.live === true && s.waiting.length === 0, json(s.problem));
+    });
+
     // ── A wrong setting, fixed in Plugins ──────────────────────────────
     await restartWith(rowsWith({ decisions: { windowHours: 0 } }), 'a wrong setting');
     await waitFor(async () => (await api('state')).ok, 'Decisions\' endpoints with a wrong setting', 30000);

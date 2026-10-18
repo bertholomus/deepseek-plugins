@@ -45,29 +45,30 @@ export const name = 'proof';
 export const inject = ['sessionController', 'sessionProjections'];
 
 /**
- * Settings: types and defaults here, the rest in checkConfig (lib/config.js),
- * so a wrong value is said in words on Proof's page instead of stopping it
- * at start. The live ones are on its page in Plugins and apply as soon as
- * they are saved.
+ * Settings: their defaults here; their types and ranges in checkConfig
+ * (lib/config.js). Each takes any value, so a wrong type in the profile (a
+ * number in quotes, say) is said in words on Proof's page as a wrong range
+ * is, instead of stopping it at start or being dropped on a live edit. The
+ * live ones are on its page in Plugins and apply as soon as they are saved.
  */
 export const Config = z.object({
     /** Profile only. false keeps Proof loaded but idle: it reads no claims, and its page says so. */
-    enabled: z.boolean().default(true),
+    enabled: z.any().default(true),
     /** Show a flag on each turn whose claim nothing in the turn shows, or its own output contradicts. */
-    flags: live(z.boolean().default(true)),
+    flags: live(z.any().default(true)),
     /** The independent check: "off", "ask" (when you press Check) or "auto" (by itself, for each new flagged claim). */
-    verifier: live(z.string().default('ask')),
+    verifier: live(z.any().default('ask')),
     /** The provider of the check model, by its id in DSH's profile. */
-    verifierProvider: live(z.string().default('owner-ascents')),
+    verifierProvider: live(z.any().default('owner-ascents')),
     /** The check model, by its id in DSH's profile: a cheap local one, asked for low effort when it offers that. */
-    verifierModel: live(z.string().default('GLM-5.3-Flash-EXL3')),
+    verifierModel: live(z.any().default('GLM-5.3-Flash-EXL3')),
     /**
      * The longest a check may take, in minutes (1 to 60); it is stopped after that. 15 by default: a check
      * re-runs a command or two, but a busy shared gateway can take several minutes to answer each request.
      */
-    verifierMinutes: live(z.number().default(15)),
+    verifierMinutes: live(z.any().default(15)),
     /** The most checks that start in an hour (1 to 120); more wait their turn. */
-    verifierPerHour: live(z.number().default(12)),
+    verifierPerHour: live(z.any().default(12)),
 });
 
 /** How Proof's own messages are marked in a session's log, as DSH marks a plugin's. */

@@ -48,34 +48,35 @@ export const inject = [];
 const keyRef = (schema) => (typeof schema?.role === 'function' ? schema.role('credential-ref') : schema);
 
 /**
- * Settings: types and defaults here, the rest in checkConfig (lib/config.js),
- * so a wrong value is said in words on Decisions' page instead of stopping
- * it at start. The live ones are on its page in Plugins and apply as soon as
- * they are saved.
+ * Settings: their defaults here; their types and ranges in checkConfig
+ * (lib/config.js). Each takes any value, so a wrong type in the profile (a
+ * number in quotes, say) is said in words on Decisions' page as a wrong range
+ * is, instead of stopping it at start or being dropped on a live edit. The
+ * live ones are on its page in Plugins and apply as soon as they are saved.
  */
 export const Config = z.object({
     /** Profile only. false keeps Decisions loaded but idle: it lists and holds nothing, and its page says so. */
-    enabled: z.boolean().default(true),
+    enabled: z.any().default(true),
     /** Tools waiting for approval ("Allow once" or "Reject"). */
-    approvals: live(z.boolean().default(true)),
+    approvals: live(z.any().default(true)),
     /** Questions in DSH's question box. */
-    questions: live(z.boolean().default(true)),
+    questions: live(z.any().default(true)),
     /** Replies that end with a plain question for you (DECISION NEEDED and BLOCKED lines always show). */
-    replies: live(z.boolean().default(true)),
+    replies: live(z.any().default(true)),
     /** Coordinator threads that handed back needing a decision, or blocked. */
-    threads: live(z.boolean().default(true)),
+    threads: live(z.any().default(true)),
     /** A system notification for each new card, through the notifications plugin. */
-    notify: live(z.boolean().default(true)),
+    notify: live(z.any().default(true)),
     /** How long a reply's question stays in the inbox, in hours (1 to 720). */
-    windowHours: live(z.number().default(72)),
+    windowHours: live(z.any().default(72)),
     /** Where new cards are also sent: "off", "webhook" or "command". */
-    mirror: live(z.string().default('off')),
+    mirror: live(z.any().default('off')),
     /** The key in DSH's key store that holds the webhook address (never the address itself). */
-    mirrorUrlEnv: live(keyRef(z.string()).default(WEBHOOK_KEY)),
+    mirrorUrlEnv: live(keyRef(z.any()).default(WEBHOOK_KEY)),
     /** Profile only: the program's full path, then its arguments, run without a shell; the card comes as JSON on stdin. */
-    mirrorCommand: z.array(z.string()).default([]),
+    mirrorCommand: z.any().default([]),
     /** The most messages sent elsewhere in an hour (1 to 500). */
-    mirrorPerHour: live(z.number().default(30)),
+    mirrorPerHour: live(z.any().default(30)),
 });
 
 export function apply(ctx, config) {

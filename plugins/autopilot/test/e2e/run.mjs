@@ -98,7 +98,7 @@ const model = await startFakeModel();
  * The profile's rows: new sessions on Workspace Write (writing outside the workspace asks for approval), and the two
  * plugins with the e2e's short waits; `off` lists rows switched off in the profile.
  */
-const rowsWith = ({ off = [], idle = IDLE, enabled = true } = {}) => `- id: permission
+const rowsWith = ({ off = [], idle = IDLE, enabled = true, extra = {}, watchTimeout = 60 } = {}) => `- id: permission
   config:
     defaultPreset: workspace-write
 - id: autopilot
@@ -107,9 +107,9 @@ ${enabled ? '' : '    enabled: false\n'}    idleSeconds: ${idle}
     startDelaySeconds: 1
     errorRetrySeconds: [2, 2]
     maxNotesPerHour: 80
-- id: session-watch
+${Object.entries(extra).map(([key, value]) => `    ${key}: ${JSON.stringify(value)}\n`).join('')}- id: session-watch
 ${off.includes('session-watch') ? '  disabled: true\n' : ''}  config:
-    deliveryTimeoutSeconds: 60
+    deliveryTimeoutSeconds: ${JSON.stringify(watchTimeout)}
 `;
 const run = new DshRun({
     label: 'autopilot',
@@ -648,6 +648,20 @@ try {
         const files = [join(run.home, 'autopilot', 'state.json'), join(run.home, 'autopilot', 'events.jsonl'), join(run.home, 'session-watch', 'running.json')];
         const modes = [...dirs, ...files].map((p) => `${p.slice(run.home.length + 1)} ${modeOf(p).toString(8)}`);
         check('Autopilot\'s and the watcher\'s folders are 700 and their files 600', dirs.every((d) => modeOf(d) === 0o700) && files.every((f) => modeOf(f) === 0o600), modes.join(', '));
+    });
+
+    // ── A wrong type in the profile ────────────────────────────────────
+    // A number in quotes, for Autopilot and for Session Watch: DSH starts both. Autopilot names its setting and does
+    // no work; the watcher keeps its default for its own, and Autopilot's page names that one too.
+    await restartWith(rowsWith({ extra: { maxNudges: '2' }, watchTimeout: '60' }), 'a wrong type');
+    await waitFor(async () => (await api('state')).ok, 'Autopilot\'s endpoints with a wrong type', 30000);
+    await step('a wrong type in the profile: Session Watch and Autopilot both start, and the setting is named with its value', async () => {
+        const s = await state();
+        check('a number in quotes does not stop Autopilot from starting: its state names the setting and the value as the profile has it',
+            s.problem?.text === 'Notes in a row without progress (maxNudges) must be a whole number from 1 to 10 (it is "2")' && s.problem?.live === true, JSON.stringify(s.problem));
+        check('Session Watch starts with a number in quotes too (Autopilot\'s endpoints need it), and Autopilot\'s page names its setting and the value as the profile has it',
+            s.watchProblem?.text === 'How long a message may wait to be read (deliveryTimeoutSeconds) must be a whole number of seconds from 10 to 86400 (it is "60")' && s.watchProblem?.live === true,
+            JSON.stringify(s.watchProblem));
     });
 
     // ── A wrong setting, fixed in Plugins ──────────────────────────────

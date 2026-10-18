@@ -887,6 +887,15 @@ try {
     await window?.browser?.close().catch(() => {});
     window = undefined;
 
+    // ── A wrong type in the profile ────────────────────────────────────
+    await restartWith(rowsWith({ proof: { verifierMinutes: '20' } }), 'a wrong type');
+    await waitFor(async () => (await api('state')).ok, 'Proof\'s endpoints with a wrong type', 30000);
+    await step('a wrong type in the profile: Proof starts, flags nothing, and names the setting with its value', async () => {
+        const s = await pageState();
+        check('a number in quotes does not stop Proof from starting: its state names the setting and the value as the profile has it',
+            s.problem?.text === 'Minutes a check may take (verifierMinutes) must be a whole number of minutes from 1 to 60 (it is "20")' && s.problem?.live === true && s.sessions.length === 0, json(s.problem));
+    });
+
     // ── A wrong setting, fixed in Plugins ──────────────────────────────
     await restartWith(rowsWith({ proof: { verifierMinutes: 0 } }), 'a wrong setting');
     await waitFor(async () => (await api('state')).ok, 'Proof\'s endpoints with a wrong setting', 30000);
