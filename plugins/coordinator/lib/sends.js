@@ -717,7 +717,7 @@ function urlHost(url) {
 
 /**
  * The machine ssh reaches for a destination: `[user@]host`, or an `ssh://`
- * URL. A trustedHosts entry is read the same way, so `bertholomus@nas`,
+ * URL. A trustedHosts entry is read the same way, so `alex@nas.example`,
  * `NAS:22` and `[fd7a::1]` name `nas` and `fd7a::1`.
  */
 export function hostOf(place) {

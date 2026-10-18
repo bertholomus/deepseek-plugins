@@ -217,7 +217,7 @@ The projects plugin this one grew from kept its data in `~/.dsh/projects/`. This
 | `maxThreadsPerHour` | `20` | New threads one chat may start per hour. Stops a chat that keeps starting threads, for example to retry a failing one; it gets an error to report to you instead. |
 | `approvalNoticeSeconds` | `0` | How long a thread the chat started may wait on a permission prompt before the chat is told. `0` tells it at once. |
 | `guardedTools` | `[]` | Your personal and infrastructure MCP servers or tools: a list of names, or a map from each name to the words you'd call it by. Threads use them only when your words ask; see [Guarded tools](#guarded-tools). Tools another plugin marks as yours are guarded without being listed. |
-| `trustedHosts` | `[]` | Machines you trust, such as your own NAS: host names or addresses (`frankennas`, `100.64.0.7`); case doesn't matter, and a user, a port or brackets are left off. A thread's command whose sends all reach these runs without asking; a delete on this machine, a push, a publish or a deploy still asks. |
+| `trustedHosts` | `[]` | Machines you trust, such as your own NAS: host names or addresses (`nas.example`, `100.64.0.7`); case doesn't matter, and a user, a port or brackets are left off. A thread's command whose sends all reach these runs without asking; a delete on this machine, a push, a publish or a deploy still asks. |
 | `storeFile` | `~/.dsh/coordinator/coordinator.json` | The coordinating chats and their threads: sessions, settings, held handbacks. Mode 600. |
 | `memoryDir` | `~/.dsh/coordinator/memory` | Each chat's shared notes, one file per chat (named by its session id). |
 | `maxMemoryBytes` | `65536` | Largest notes file the tools will write. |
