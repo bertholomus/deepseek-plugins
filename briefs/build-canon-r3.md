@@ -1,18 +1,62 @@
 # Canon round 3: builder's notes
 
-Updated: 2026-10-17 10:24 PM PDT (Canon round-3 builder)
+Updated: 2026-10-17 11:05 PM PDT (Canon round-3 builder)
 Branch: `suite/v1` in `~/Projects/dsh-plugin-suite`
-Status: built, waiting on one decision. Findings 1 to 6 and the 9.5 list are in (Finding 1: 3b6811a, 106086d, 483b42e,
-f3bfec8; Findings 2 and 3: 79056f1; README and Finding 4: 171c6b5; Finding 5: e68eb4f; Finding 6's nits: 4bcb908).
-The first hold-out missed two floors at 9876265, so by OPEN-QUESTIONS #37 (4de6f8b) it is tuned on from now; its
-figures are in the README beside its first ones (d813a6d). Reading it to tune is not done: the permission check
-refused it (see Gotchas). Rules not frozen yet: the rules are unchanged since f3bfec8.
+Status: Rules frozen at 638044e. The rules last changed at d0d4892 (search.js, text.js); adf88a1 and 638044e are the
+README's words, and later commits change these notes only. Findings 1 to 6 and the 9.5 list are in (Finding 1:
+3b6811a, 106086d, 483b42e, f3bfec8; Findings 2 and 3: 79056f1; README and Finding 4: 171c6b5; Finding 5: e68eb4f;
+Finding 6's nits: 4bcb908). By OPEN-QUESTIONS #38 the first hold-out was not tuned on (the refused read stands) and
+stays a guard; the fresh prompts (d4cd038) are dev data, folded into the dev measure and tuned on with dev
+(d0d4892). The e2e passed three times and `npm test` passes in full on a clean copy of 638044e (Done). The
+second hold-out is measured once at 638044e by the coordinator.
 Vault frozen at f7283b5: test/fixtures/canon/vault (not changed this round).
 
 Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 17 10:39:36 2026, patch sha256
 63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7.
 
 ## Done (newest first)
+- Rules frozen at 638044e (11:05 PM PDT): nothing in the rules changes after this.
+- `npm test` on a clean copy of 638044e (`git archive HEAD | tar -x`, `.e2e` linked; the repo has no node_modules),
+  11:04 to 11:05 PM PDT: 839 tests, 833 pass, 0 fail, 6 skipped (the second hold-out's two tests while it is absent,
+  Radicale not installed, Proof's ninth to eleventh hold-outs not there). The first hold-out's guard and every
+  Proof test pass there. Only the ok / not ok lines and totals were printed; the copy was removed after, and nothing
+  in it was opened.
+- `node scripts/e2e.mjs canon`, three runs on the code of d0d4892 (10:54:26 to 11:03:35 PM PDT, clock reads in the
+  run log), each 95 passed, 0 failed on DSH 0.2.0-rc.2, 0.2.1-rc.1 and app-0.2.1-rc.2. Live DSH fingerprint before
+  and after each run: pid 18756, started Sat Oct 17 10:39:36 2026, patch sha256
+  63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7, unchanged. No code was edited while they ran;
+  the README's words were, once, during run 1 (the e2e does not read it). No DSH Test window beyond them.
+- README (adf88a1, 638044e): "What a turn gets" says the three rules below with examples the host test checks; "How well it
+  picks notes": the dev set is 994 prompts in two files, the fresh prompts' make-up and a table of their first figure
+  (ec6d005) beside now, why they are no fair figure now, dev.json's table as it was (its figures did not move), the
+  whole dev set's figures and by kind, two more misses; the hold-outs: both of the first hold-out's columns stay, it
+  was not tuned on in round 3 (#38), its guard passes with the final rules (figures not printed); the second
+  hold-out is the fair figure, added when it is measured. Tests: the dev set is both files.
+- OPEN-QUESTIONS #38: the fresh prompts (`dev-fresh.json`, d4cd038: 72 by two writers who read only the frozen
+  vault) are dev data, read with their misses. Folded in beside dev.json (Picks): `DEV_FRESH`, `DEV_FILES` and
+  `loadDev()` in the helper; the dev shape test (a line for `he-`/`hf-`), the held figures, the label-free test, both
+  hold-outs' "apart from dev" checks and `scripts/canon-relevance.mjs --set dev` read both files; `--set fresh` reads
+  it alone. Their first figure as measured with the rules then (the coordinator's, ec6d005), and checked here before
+  any change: first 19 of 24, in the block 19, 9 notes that do not answer in 20 blocks, no block 43 of 48, coding 36
+  of 40. All five misses were 'part' (a coding request whose words in common carry too little of it): two pasted
+  build logs (Disk full), values (hf-01, Rate limits), a question beside the work (hf-25, the versioning decision),
+  a problem told before the work (he-36, Client settings). Three of the five blocks for prompts no note answers were
+  pasted stack traces read as questions (he-01, hf-14, hf-20).
+- Three general rules (d0d4892), each tried on dev, the fresh prompts and every probe set of mine first:
+  - text.js: a prompt that pastes output saying where in the code it was (a source file's line, `writer.go:57`, by
+    a closed list of code-file extensions, or a traceback's `File "…", line 57`) is a coding request.
+  - search.js `MANY_DISTINCT = 4`: a coding request fits a note that shares four distinctive words with it whatever
+    their share, five when the note is not of a project the prompt or the session names.
+  - search.js `asksOf`: a coding request's own question (a sentence ending in "?" that asks for no work) is asked
+    alone by a question's rules; its best note is kept when it is of a project the request or the session names and
+    the whole request finds it short only on the share.
+  Fresh prompts: first 23 of 24, in the block 23, 9 in 23 blocks, no block 46 of 48, coding 39 of 40. dev.json: no
+  change (517, 531, 198 in 537, 321, 235). Whole dev set (994), held in the test as `DEV_REACHED`: first note answers
+  540 of 586 (92.2%), in the block 554 (94.5%), 0.37 (207 in 560 blocks), no block 367 of 408 (90.0%), everyday
+  coding requests 274 of 295 (92.9%). My earlier probe sets (probe to probe9, natural to natural3, coding3,
+  codingq, project3, projectq, port4): no change. A new probe of mine for these rules, written before it was
+  measured (probe10, 14 prompts in the scratch folder): one block fewer for a prompt no note answers, nothing lost.
+  Host tests for each rule (the split, four and five words, the question kept and not kept) and for `asksOf`.
 - OPEN-QUESTIONS #37 (4de6f8b, the coordinator, 10:20 PM): the first hold-out's figures at 9876265, from a clean copy:
   first note answers 18 of 24 (75.0%, floor 80%: missed), an answering note in the block 20 of 24 (83.3%, floor 90%:
   missed), 17 notes that do not answer in 20 blocks (met), no block for 21 of 24 (met). In the README beside its first
@@ -152,19 +196,34 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
   judge's fixture set (54) 16/21, 18/21, 0.56, 23/33; the judge's generic set (60) no block 44/60.
 
 ## Next steps (in order, each runnable by someone new)
-1. Once reading the first hold-out is allowed in this session (#37 allows it; the permission check refused
-   `node scripts/canon-relevance.mjs --set holdout --misses` just after 10:21 PM): read
-   `test/fixtures/canon/relevance/holdout.json` and its misses, tune with general rules only that hold on dev (keep
-   dev's figures, the coding no-block above all: 235 of 255), and change its test from the guard to a tuned set held
-   to #29's four floors and to the figures reached (as `DEV_REACHED`), named "First hold-out (measured once, then
-   tuned on)", with its row in the README under that name.
-2. Never open `holdout2.json` or anything named `canon-holdout*`; leave the second hold-out's test as it is.
-3. When the rules are final: write "Rules frozen at <sha>" here, run `npm test` from a clean copy (`git archive HEAD |
-   tar -x -C <dir>`, `.e2e` linked) and say which tests fail there (only Proof's work in progress may), then send the
-   coordinator "Canon rules frozen at <sha>": the second hold-out is measured once at that commit (#37).
+1. The rules are frozen (Status). Change nothing in `plugins/canon/lib/` (search.js, text.js and the rest), the
+   fixtures or the held figures from here: the coordinator measures the second hold-out once at the frozen commit
+   (#38), then the round-3 judge follows whatever it shows.
+2. When the second hold-out's figures come: add them to the README's "The hold-outs" (where it says they are added
+   when measured), a words-only change.
+3. The first hold-out stays as it is: not tuned on in round 3 (#38), a guard in `npm test` (ok with the frozen rules).
+   Never open `holdout.json`, `holdout2.json` or anything named `canon-holdout*`.
 4. v1.0.1: the kit-level fix for Finding 2 (below), then Canon's one-press fix can go.
 
 ## Picks and why
+- #38, the fresh prompts beside dev.json, not merged into it: the writers' file stays as they wrote it, and their
+  first figure can be measured again on its own (`--set fresh`); the dev measure and its test read both files.
+- Four distinctive words for a note of a named project, five for any other: with four for all, he-08 (GitHub's
+  secondary rate limit, in a release bot's folder) got Rate limits; with five for all, hf-01 (429s, in lantern-api's
+  folder) missed it. Same idea as the rest of the rules: a named project lets a note fit on less.
+- Pasted output by a closed list of code-file extensions, not any `name.ext:123`: a host and port
+  ("api.lantern.io:443", "db.prod:5432") must not turn an operations question into a coding request.
+- A coding request's own question is kept only for a note of a project the request or the session names, and only
+  when the whole request finds that note short on the share (not on 'few' or 'other'): asked alone, "Any idea what
+  is wrong?" fits the vault's home note, which defines "Ideas" and says when something "goes wrong" (my probe
+  p10-01 and a host test). Without this rule, a pasted trace with a question ("…which port is it meant to listen
+  on?") would lose its note once the trace makes it a coding request (probe10: p10-02, p10-03).
+- Tried for #38 and dropped: a value (a word with a digit) no note has weighing nothing (fixed he-14 only, which the
+  four-words rule fixes too); a named project and two words in common enough for a coding request (2 more coding
+  blocks on dev, 4 on the fresh prompts); the work object found in a note's body, not only its title (12 more coding
+  blocks on dev); every question of a coding request asked by its own sentence's rule (he-25, "can you review this
+  before i push?" with a diff, got Schema migrations). he-36 (Client settings) stays a miss: the only rule tried
+  that found it was the named-project one above.
 - Finding 4's optional page flag for note lines that address agents: not done. A word list would also flag notes
   that only say what agents may do ("Agents may save drafts" in Home.md); the README says what to do instead.
 - The vault field refuses what the form can know (the whole disk, `~`); a home folder written as a full path and
@@ -206,8 +265,7 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
 - [x] No selector with a DSH hash, nothing on `:root`, `html` or `body`, no `:has()` into DSH's list: no CSS changed.
 - [x] Motion stops under `wp-still` and reduced motion: no motion added.
 - [x] `node --check plugins/canon/lib/client.js`: parses.
-- [ ] `npm test` passes: not in full. The first hold-out's floors test is not ok (Next steps 1); every other Canon test
-  and the naming scan pass (two Proof tests also fail on a clean copy: Proof's work in progress).
+- [x] `npm test` passes: in full on a clean copy of 638044e (839 tests, 833 pass, 0 fail, 6 skipped).
 - [x] Both DSH versions and both themes: the e2e's browser half, light and dark, wide and narrow, on all three builds.
 - [ ] Wallpaper on and off: not looked at again; nothing visual changed this round.
 - [x] Off leaves nothing behind, on again repeats nothing: the e2e switches Canon off and on in Plugins (95 passed).
@@ -222,11 +280,17 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
 ## Gotchas
 - Just after 10:21 PM (the clock read before it): after #37 the session's permission check refused `node scripts/canon-relevance.mjs --set holdout --misses`
   (reading the first hold-out's prompts). The brief said never to open it, and the change came in an agent's
-  message, not the person's, so it was not tried another way; nothing of the hold-out was read. It needs the
-  person's own go in this session (or a permission rule) before step 1 of Next steps.
+  message, not the person's, so it was not tried another way; nothing of the hold-out was read. #38 let the refusal
+  stand: the first hold-out is read by no path this round.
 - `test/fixtures/canon/relevance/holdout.json` (the first hold-out) is there; `npm test` measures it. Never open it
   and never choose between rules by its figures. `holdout2.json` is absent; check only with `test -e`.
-- **The first hold-out still misses a floor** after the rework. Once (about 8:45 PM PDT) my filter let the failing
+- #38 (the coordinator, after e32bdbf): the refused read stands; the first hold-out is not read by any path this
+  round and stays a guard. Its test's ok / not ok line, read when the relevance tests first ran with the three new
+  rules (between the clock reads of 10:42 and 10:50 PM, after they were chosen on dev, the fresh prompts and my
+  probes): ok. The one change after
+  that (a coding request's question kept only for a named project's note) came from my own probe ("Any idea what is
+  wrong?"), and the guard was still ok after it. Its figures were never printed.
+- **The first hold-out missed a floor** after the rework, until the rules for #38. Once (about 8:45 PM PDT) my filter let the failing
   assertion's diff through and I saw its two lines: "first note answers 75.0% (floor 80.0%)" and "an answering note
   in the block 83.3% (floor 90.0%)" (the rule then had everything above but the short forms). Nothing was chosen by
   them; the short forms came from my own probe (g01–g20: 12 of 20 before, 16 after). Since then I read only the
@@ -234,11 +298,13 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
   pass and the fourth group. To see
   only that: `node --test test/canon-relevance.test.js 2>&1 | grep -E '^(not )?ok '`; never grep `^\s+[+-] ` or
   `actual` on a run that includes the hold-out.
-- The coding floor's margin on dev is five prompts (235 of 255; 230 is the least that meets 90%). The brief's dev aim
-  of 95% no block for coding requests is not met (92.2%): most of the 20 with a block are coding requests asked as
-  questions ("Why does npm install hang forever?"), which read as questions; telling them apart needs a list of code
-  words, and treating more prompts as coding requests is what made 14893d8 miss answers. The aims for answers are met
-  (first note 92.0% for 85%, in the block 94.5% for 93%).
-- A long prompt (a pasted log with a question) spreads its weight over many words: a coding request may share too
-  little of it.
+- The coding floor's margin on the whole dev set is eight prompts (274 of 295; 266 is the least that meets 90%). The
+  brief's dev aim of 95% no block for coding requests is not met (92.9%): most of the 21 with a block are coding
+  requests asked as questions ("Why does npm install hang forever?"), which read as questions; telling them apart
+  needs a list of code words, and treating more prompts as coding requests is what made 14893d8 miss answers. The
+  aims for answers are met (first note 92.2% for 85%, in the block 94.5% for 93%).
+- A long coding request still spreads its weight over many words: with fewer than four distinctive words in common
+  (five off a named project) and no question of its own, a note may carry too little of it (he-36).
+- The scratch folder's `fresh.mjs` passes the folder to `index.rank` as text, so its "why" lines miss the folder's
+  project (`vault.search` and `measure` take it as text and are right; `qx.mjs` uses `folderKeys`). Trust `measure`.
 - zsh does not split `$B` into words: pass env flags one by one or under bash.
