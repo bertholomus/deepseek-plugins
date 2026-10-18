@@ -1437,6 +1437,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 return h(kit.Empty, { title: 'Nothing to search for', text: 'That prompt has no words Canon searches for: greetings, thanks, words like “please” and words about the vault itself are left out. A turn with it gets no notes.' });
             }
             return h('div', { 'data-canon-try-result': '' },
+                h('p', { className: `${P}-meta`, 'data-canon-try-place': '' }, result.place ? `For a session in ${result.place}.` : 'For a session with no folder.'),
                 result.results.length === 0
                     ? h(kit.Empty, { title: 'No note fits this prompt', text: 'A turn with it gets no notes. A note fits when it shares two words with the prompt; a project\'s name counts as one word, and when it is one of the two, the other must be in the note\'s title, tags, aliases, path or headings.' })
                     : h('div', { className: `${P}-section` },

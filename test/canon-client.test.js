@@ -43,6 +43,7 @@ const TRY = {
     results: [{ path: 'Projects/harbor-gateway/Gateway ports.md', title: 'Gateway ports', score: 15.3, matched: ['port', 'harbor', 'gateway', 'listen'], folder: 'repo', passage: 'Gateway ports: The harbor gateway listens on port 8443.' }],
     others: [{ path: 'Projects/tide-ledger/Ledger backups.md', title: 'Ledger backups', score: 2.9, matched: ['port', 'listen'], words: ['port', 'listen'], folder: '', fits: true, why: 'less' }, { path: 'People/Glossary.md', title: 'Glossary', score: 1.2, matched: ['zone'], words: ['zone'], folder: '', fits: false, why: 'few' }],
     block: { text: 'Background from the canon vault: shared long-term notes.\n\n[1] Projects/harbor-gateway/Gateway ports.md\n> Gateway ports: The harbor gateway listens on port 8443.', chars: 140, summary: '1 note from the canon vault: Gateway ports' },
+    place: '~/Projects/harbor-gateway',
 };
 
 /** DSH's connection as the window has it: answers by method name; anything else never answers (the hub's wait). */
@@ -232,7 +233,7 @@ test('the page: the vault, the try-out, the sessions with their switches, the dr
     await settle(5);
     assert.deepEqual(calls.find(([m]) => m === 'search'), ['search', { text: 'What port does the harbor gateway listen on?', folder: '~/Projects/harbor-gateway' }]);
     text = textIn(tryCard());
-    assert.match(text, /A turn with this prompt gets 1 note/);
+    assert.match(text, /For a session in ~\/Projects\/harbor-gateway\.A turn with this prompt gets 1 note/, 'it says the folder it used');
     assert.match(text, /Gateway portsProjects\/harbor-gateway\/Gateway ports\.mdShares the words “port”, “harbor”, “gateway” and “listen”\. It belongs to this folder's project, so it counts for more\./);
     assert.match(text, /this project/);
     assert.match(text, /The exact text the turn gets \(140 characters\)/);
