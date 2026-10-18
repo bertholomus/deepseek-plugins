@@ -1,16 +1,30 @@
 # Canon round 3: builder's notes
 
-Updated: 2026-10-17 9:34 PM PDT (Canon round-3 builder)
+Updated: 2026-10-17 9:54 PM PDT (Canon round-3 builder)
 Branch: `suite/v1` in `~/Projects/dsh-plugin-suite`
-Status: under way. Finding 1 reworked twice after the first hold-out's guard failed at 14893d8 (3b6811a, 106086d,
-483b42e: the rules, the dev set, the tests); Findings 2 and 3 in (79056f1); README for the rework, 4, 5, 6's nits,
-`npm test` and the e2e runs next. The first hold-out's floors test is still not ok (see Gotchas).
+Status: under way. Finding 1 reworked after the first hold-out's guard failed at 14893d8 (3b6811a, 106086d,
+483b42e, f3bfec8: the rules, the dev set, the tests); Findings 2 and 3 in (79056f1); README for the rework, 4, 5,
+6's nits, `npm test` and the e2e runs next. The first hold-out's floors test is still not ok (see Gotchas).
 Vault frozen at f7283b5: test/fixtures/canon/vault (not changed this round).
 
 Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 17 10:39:36 2026, patch sha256
 63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7.
 
 ## Done (newest first)
+- A fourth group of my own, written before it was measured, in forms the dev set lacked (zr01 to zr43 a note
+  answers, zs01 to zs11 none does; two I had written before word for word left out): tasks a note answers told as
+  orders with a work verb ("Set up the VPN for a new hire.", "Check who owns quartz-cache."), situations told as
+  statements ("I'm getting 429s from lantern-api.", "The cert on the gateway expires next week."), questions that
+  name a tool no note has ("Do we page people through PagerDuty or our own tool?", "Is the ledger on MySQL or
+  Postgres?"), words alone ("ledger restore steps") and "may I" questions. As first measured, against round 2's
+  rules (9a8a4c9) and 14893d8: first note answers 37 of 44 now, 35 with round 2's rules, 31 at 14893d8; in the block
+  38, 36, 33; no block for 10 of 12, 9, 12. Round 2's rules found two that these miss: "Set up the VPN for a new
+  hire." (a work verb makes it a coding request, and "VPN" alone in a note's body is too little of it) and the
+  PagerDuty question (a name no note has needs three words in common or a named project). One change: a number's
+  plural reads as the number (text.js `stem`: "429s" is "429"), which finds Rate limits for the 429s statement and
+  changes nothing else on dev. Dev, 922 prompts: first note answers 517 of 562 (92.0%), in the block 531 (94.5%),
+  0.37 notes that do not answer per block (198 in 537), no block 321 of 360 (89.2%), everyday coding requests 235 of
+  255 (92.2%); held in the test. The first hold-out's floors test read once after (9:53 PM): still not ok. (f3bfec8)
 - The fit rule, third pass (483b42e), chosen on dev only, from four more groups of my own written before they were
   measured: z (45 prompts and 15 no note answers: one everyday word and a project's name, "What's a standby?",
   orders with no work verb, "we/our", short ones), zb (35 and 10: "remind me", "any idea", numbers, people, lower
@@ -116,6 +130,11 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
    fingerprint` before and after each run.
 
 ## Picks and why
+- Fourth group, tried on dev and dropped: a name no note has forgiven when the note shares a rare word of its title,
+  aliases, tags or headings (the PagerDuty question found On-call, and one everyday coding request no note answers
+  got Rate limits on "request"); one common word in a note's body enough beside a named project, as round 2's rule
+  had it (9 more answering notes in the block and 4 more first, for 54 more notes that do not answer and 12 more
+  prompts no note answers with a block: a note that does not answer costs as much as a missing one).
 - Third pass, tried on dev and dropped: "wait" and "back" as words, not stop words (11 more notes that do not
   answer, one first note lost); the lone title word rule without its guard on words the vault lacks (5 more
   prompts no note answers got a block); "-ction" and "-ment" cut in the stemmer (no change on dev or the groups,
@@ -155,7 +174,8 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
   assertion's diff through and I saw its two lines: "first note answers 75.0% (floor 80.0%)" and "an answering note
   in the block 83.3% (floor 90.0%)" (the rule then had everything above but the short forms). Nothing was chosen by
   them; the short forms came from my own probe (g01–g20: 12 of 20 before, 16 after). Since then I read only the
-  test's ok / not ok line, once after each pass (9:02 PM, 9:31 PM): still not ok, also after the third pass. To see
+  test's ok / not ok line, once after each pass (9:02 PM, 9:31 PM, 9:53 PM): still not ok, also after the third
+  pass and the fourth group. To see
   only that: `node --test test/canon-relevance.test.js 2>&1 | grep -E '^(not )?ok '`; never grep `^\s+[+-] ` or
   `actual` on a run that includes the hold-out.
 - The coding floor's margin on dev is two prompts (210 of 231; 208 is 90.0%).
