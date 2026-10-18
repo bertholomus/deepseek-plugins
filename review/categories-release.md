@@ -97,3 +97,30 @@ Closed every "Where things stand → Categories" gap plus the rules 1–3/6/9–
 ## Test runs
 
 Appended to `review/RELEASE-PROGRESS.md` (one line per run), fingerprints recorded there.
+
+## Screenshots — DSH Test `glass-categories` (0.2.1-rc.2), 2026-10-17
+
+Driven over CDP at the instance's web URL (Chrome `--headless=new --no-sandbox --use-angle=swiftshader`),
+1440×900, wallpaper's own glass rules active, tint .20 (`glassTint: 20`), seeded pictures in the test
+home's wallpaper library (`review` collection: `light.png`, `dark.png`). Six states in
+`review/glass-v1/categories/`:
+
+| File | Theme | Wallpaper | Picture |
+| --- | --- | --- | --- |
+| `dark-wp-on-light-pic.png` | dark | on | light |
+| `light-wp-on-light-pic.png` | light | on | light |
+| `light-wp-on-dark-pic.png` | light | on | dark (the hard case) |
+| `dark-wp-on-dark-pic.png` | dark | on | dark |
+| `dark-wp-off.png` | dark | off | — |
+| `light-wp-off.png` | light | off | — |
+
+What they show: with Wallpaper on, the page's content is one glass card over the wall (no plain
+`--dsw-alias-bg-base` sheet anywhere), the wall visible around it, the sidebar's category headers on
+Wallpaper's glass; with Wallpaper off the same card reads as a subtle frosted panel on DSH's own
+background (the fallbacks). The page tree's meta (workspace path) reads in the deepened secondary in all
+four on-states, including light-over-dark. Wallpaper was toggled from DSH's own Plugins page in the test
+instance and re-enabled after the run (`wp-on` confirmed restored); the instance is untouched otherwise.
+
+Test-instance notes for the Lead: `dsh-plugin-categories` and `dsh-plugin-wallpaper` are loaded from this
+worktree (linked), isolation check ok. Chrome's renderer helper is a setuid exec this sandbox refuses, so
+screenshots ran with `--no-sandbox` (the `--single-process` fallback crashes on the real app).
