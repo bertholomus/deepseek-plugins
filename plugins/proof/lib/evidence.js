@@ -234,7 +234,7 @@ export function numsIn(text) {
 const LOWER_IS_BETTER = /^(p\d+(\.\d)?|mean|median|avg|average|latency|duration|time|took|size|bundle|memory|rss|heap|cpu|errors?|ns\/op|b\/op|allocs\/op)$/;
 /** Readings that are times in ms. */
 const IN_MS = /^(p\d+(\.\d)?|mean|median|avg|average|latency|duration|time|took)$/;
-const SERIES = /\b(p\d{2}(?:\.\d)?|p\(\d{2}(?:\.\d)?\)|mean|median|med|avg|average|latency|duration|throughput)(?![\w(])\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(ms|µs|us|s|sec|req\/s|rps|qps|ops\/s|tok\/s)?|(\d+(?:\.\d+)?)\s*(req\/s|rps|qps|ops\/s|tok\/s)\b/gi;
+const SERIES = /\b(p\d{2}(?:\.\d)?|p\(\d{2}(?:\.\d)?\)|mean|median|med|avg|average|latency|duration|throughput)(?![\w(])(?:\s*±\s*σ\))?\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(ms|µs|us|s|sec|req\/s|rps|qps|ops\/s|tok\/s)?|(\d+(?:\.\d+)?)\s*(req\/s|rps|qps|ops\/s|tok\/s)\b/gi;
 
 /** Benchmark readings in output order: `[{ l: 'p50', v: 310 }]`, times in ms. */
 export function seriesIn(text) {
@@ -1019,9 +1019,12 @@ function beforeAfter(items) {
  * Whether an amount or a factor a claim gives ("40% less", "3x faster", "cut 300 ms") follows from one metric's
  * before and after in this turn: their change in percent, their ratio, or their difference.
  */
-function derivable(items, metric) {
+function derivable(items, metric, claim) {
     const room = slack(metric);
-    for (const [from, to] of beforeAfter(items)) {
+    // The claim's own before and after, when both printed ("about 4x faster (820 ms → 205 ms)").
+    const arrows = (claim?.metrics ?? []).filter((m) => m.arrow);
+    const own = arrows.length === 2 && arrows.every((m) => printed(items, m)) ? [arrows.map((m) => m.value * (MS_PER[m.unit] ?? 1))] : [];
+    for (const [from, to] of [...beforeAfter(items), ...own]) {
         if (metric.unit === 'x' || metric.unit === '×') {
             if (near(Math.max(from, to) / Math.min(from, to), metric.value, Math.max(room, 0.15))) return true;
         } else if (metric.unit === '%') {
@@ -1216,7 +1219,7 @@ function namedChecks(claim, list) {
     // Every figure must have printed, but an amount or a factor ("40% less", "3x faster") may follow from one metric's
     // before and after. A reading ("p95 is 120 ms") and both sides of "from X to Y" must print as they are.
     const required = claim.metrics ?? [];
-    const missing = required.filter((m) => !printed(list, m) && !(!m.arrow && (m.amount || m.unit === 'x' || m.unit === '×') && derivable(list, m)));
+    const missing = required.filter((m) => !printed(list, m) && !(!m.arrow && (m.amount || m.unit === 'x' || m.unit === '×') && derivable(list, m, claim)));
     if (missing.length) {
         return { verdict: 'unbacked', evidence: [], why: `It quotes ${listed(missing.slice(0, 3).map((m) => m.text))}, which no output in this turn shows.` };
     }

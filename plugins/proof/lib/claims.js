@@ -567,13 +567,14 @@ function metricsIn(text) {
         out.push({ value, unit, text: `${raw}${unit && unit !== '%' && unit !== 'x' && unit !== '×' ? ' ' : ''}${unit}`.trim(), ...flags });
     };
     // A before and an after in words: both are readings to print, even without a unit ("from 120 to 95 ms").
-    for (const re of FROM_TO) {
+    for (const [at, re] of FROM_TO.entries()) {
         for (const m of plainText.matchAll(re)) {
             if (taken.some(([a, b]) => m.index < b && m.index + m[0].length > a)) continue;
             taken.push([m.index, m.index + m[0].length]);
             const unit = m[2] ?? m[4];
-            add(m[1], m[2] ?? unit, m.index, { arrow: true });
-            add(m[3], m[4] ?? unit, m.index, { arrow: true });
+            // Before first: "from 410 ms to 142 ms" says it in that order, "120 ms, down from 900 ms" the other way round.
+            const pair = at === 0 ? [[m[1], m[2]], [m[3], m[4]]] : [[m[3], m[4]], [m[1], m[2]]];
+            for (const [raw, u] of pair) add(raw, u ?? unit, m.index, { arrow: true });
         }
     }
     for (const m of plainText.matchAll(METRIC)) {
