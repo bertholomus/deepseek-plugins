@@ -13,6 +13,8 @@ import { CHECK_WORDS, EXPORT_FORMATS, VERDICT_WORDS, countsOf, csvField, exportL
 import { CHECK_LINE, KEY, foldAll, viewOf } from '../plugins/proof/lib/projection.js';
 import { CHECK_TOOLS, Verifier, checkTime, effortFor, endWords, parseChecks, promptFor, refusalOf, verdictIn } from '../plugins/proof/lib/verifier.js';
 import { ledgerState, pageState, sessionState, working } from '../plugins/proof/lib/page.js';
+import { DEFAULTS, LIVE_SETTINGS, MAX_MINUTES, changesOf, checkConfig, liveValues, savedEntry, unquoted } from '../plugins/proof/lib/config.js';
+import { SettingsCheck } from '../plugins/proof/lib/shared/settings.js';
 import { JsonStore } from '../plugins/proof/lib/shared/files.js';
 import { Journal } from '../plugins/proof/lib/shared/journal.js';
 import { manualClock, settle } from './helpers/clock.mjs';
@@ -122,15 +124,18 @@ test('ledger: counts, checks by claim, titles and the sessions with claims', () 
         null,
     ];
     const rows = sessionRows(items);
-    assert.deepEqual(rows.map((r) => r.sessionId), ['new', 'quiet', 'old'], 'newest first; no claims, check threads and junk left out');
+    // The one flagged last first (its latest flagged claim's time), then a session with no flag by when it changed.
+    assert.deepEqual(rows.map((r) => r.sessionId), ['new', 'old', 'quiet'], 'the one flagged last first; no claims, check threads and junk left out');
+    assert.ok(rows[0].at > rows[1].at, 'timed by its latest flag');
+    assert.equal(rows[2].at, 5, 'no flag: when the session last changed');
     assert.equal(rows[0].title, 'New');
     assert.equal(rows[0].running, true);
     assert.ok(rows[0].flagged >= 2);
     assert.ok(rows[0].contradicted >= 1);
     assert.equal(rows[0].latest.turn, 3);
-    assert.equal(rows[1].flagged, 0);
-    assert.equal(rows[1].latest, undefined);
-    assert.equal(rows[2].cwd, '/w/old');
+    assert.equal(rows[2].flagged, 0);
+    assert.equal(rows[2].latest, undefined);
+    assert.equal(rows[1].cwd, '/w/old');
     assert.equal(sessionRows(items, { limit: 1 }).length, 1);
     // With the checks: a verified claim leaves the flagged count and the latest flagged claim.
     const newest = items[1].projections.values[KEY].flagged;
@@ -139,10 +144,11 @@ test('ledger: counts, checks by claim, titles and the sessions with claims', () 
     assert.equal(checked[0].flagged, rows[0].flagged - 1);
     assert.equal(checked[0].verified, 1);
     assert.notEqual(checked[0].latest.id, lastId, 'the latest flagged claim is one still open');
-    assert.equal(checked[2].flagged, rows[2].flagged, 'not verified stays flagged');
-    assert.equal(checked[2].verified, 0);
+    assert.equal(checked[1].flagged, rows[1].flagged, 'not verified stays flagged');
+    assert.equal(checked[1].verified, 0);
     const all = sessionRows(items, { checkOf: (sessionId) => (sessionId === 'old' ? { state: 'verified' } : undefined) });
-    assert.deepEqual([all[2].flagged, all[2].verified, all[2].latest], [0, 1, undefined]);
+    const old = all.find((r) => r.sessionId === 'old');
+    assert.deepEqual([old.flagged, old.verified, old.latest], [0, 1, undefined]);
     const broken = sessionRows(items, { checkOf: () => { throw new Error('gone'); } });
     assert.deepEqual(broken.map((r) => r.flagged), rows.map((r) => r.flagged), 'a check store that cannot be read counts nothing as verified');
 });
@@ -212,6 +218,9 @@ test('export: JSON with every field, and refusals in words', () => {
     assert.deepEqual(EXPORT_FORMATS, ['md', 'csv', 'json']);
     assert.throws(() => exportLedger({ id: 's' }, [], 'pdf'), /Export as Markdown \(md\), CSV \(csv\) or JSON \(json\), not "pdf"\./);
     assert.equal(exportName({ id: 'session-x', title: '  ### ' }, 'md', NOW), 'proof-ledger-x-2026-10-17.md');
+    // Named for the person's own day: an export at 11:30 PM is that day's, not tomorrow's (as UTC would have it west of it).
+    assert.equal(exportName({ id: 's', title: 'Late' }, 'csv', new Date(2026, 9, 17, 23, 30).getTime()), 'proof-ledger-late-2026-10-17.csv');
+    assert.equal(exportName({ id: 's', title: 'Early' }, 'json', new Date(2026, 9, 18, 0, 15).getTime()), 'proof-ledger-early-2026-10-18.json');
     assert.equal(VERDICT_WORDS.unbacked, 'No evidence');
     assert.equal(CHECK_WORDS.failed, 'Could not check');
 });
@@ -586,7 +595,8 @@ test('check: switching the check off drops what waits; a restart finishes what i
     b.verifier.settingsChanged();
     await settle();
     const waiting = b.verifier.data.checks[`s#${two.id}`];
-    assert.equal(waiting.state, 'failed');
+    // Switched off by the person: not an error.
+    assert.equal(waiting.state, 'cancelled');
     assert.equal(waiting.reason, 'The independent check was switched off before it started.');
     assert.equal(b.verifier.data.checks[`s#${one.id}`].state, 'running', 'the one already running finishes');
 
@@ -891,8 +901,9 @@ test('host half: a session saved while Proof was off is listed again, its claims
         return state.sessions.length > 1 ? state : undefined;
     });
     assert.ok(later, 'the folded session shows up');
-    assert.deepEqual(later.sessions.map((s) => [s.sessionId, s.title]), [['live', 'Live'], ['cold', 'Saved while off']]);
-    const row = later.sessions[1];
+    // The one flagged last first: the folded session's claims came after the live one's.
+    assert.deepEqual(later.sessions.map((s) => [s.sessionId, s.title]), [['cold', 'Saved while off'], ['live', 'Live']]);
+    const row = later.sessions[0];
     assert.equal(row.total, ledgerOf(cold).claims.length);
     assert.equal(row.flagged, ledgerOf(cold).claims.filter((c) => c.verdict !== 'backed').length);
     assert.deepEqual([...proof.asked.inspected].sort(), ['cold', 'lost', 'quiet'], 'each read once; the session DSH gives claims for is not read');
@@ -934,4 +945,42 @@ test('host half: a check runs at the lowest effort its model offers (low), named
     assert.deepEqual(plainLlm.asked, [{ provider: 'owner-ascents', model: 'GLM-5.3-Flash-EXL3' }]);
     assert.deepEqual(other.asked.selected, [{ provider: 'owner-ascents', model: 'GLM-5.3-Flash-EXL3' }]);
     assert.equal((await other.remote.state()).checks[0].effort, '');
+});
+
+test('settings: a number or true/false in quotes is offered without them only when that is right; the log says what each change was; 45 minutes by default', () => {
+    assert.equal(DEFAULTS.verifierMinutes, 45);
+    assert.equal(MAX_MINUTES, 60);
+    assert.equal(unquoted({ verifierMinutes: '45' }, 'verifierMinutes'), 45);
+    assert.equal(unquoted({ verifierMinutes: ' 60 ' }, 'verifierMinutes'), 60);
+    assert.equal(unquoted({ verifierPerHour: '12' }, 'verifierPerHour'), 12);
+    assert.equal(unquoted({ flags: 'false' }, 'flags'), false);
+    assert.equal(unquoted({ flags: 'TRUE' }, 'flags'), true);
+    assert.equal(unquoted({ verifierMinutes: '90' }, 'verifierMinutes'), undefined, 'out of range without quotes too');
+    assert.equal(unquoted({ verifierMinutes: '4.5' }, 'verifierMinutes'), undefined, 'not a whole number');
+    assert.equal(unquoted({ verifierMinutes: 45 }, 'verifierMinutes'), undefined, 'not in quotes');
+    assert.equal(unquoted({ enabled: 'true' }, 'enabled'), undefined, 'a setting of the profile only');
+    assert.equal(unquoted({ verifierModel: 'x' }, 'verifierModel'), undefined, 'text is right for a name');
+    // The log: each live setting that moved, before and after, in the form's words.
+    assert.deepEqual(changesOf({ ...DEFAULTS }, { ...DEFAULTS, verifierMinutes: 60, verifier: 'auto', flags: false }), [
+        '“Flag claims with no evidence on their turn” on → off',
+        '“Independent check” When I press Check → By itself',
+        '“Minutes a check may take” 45 → 60',
+    ]);
+    assert.deepEqual(changesOf({ ...DEFAULTS }, { ...DEFAULTS, verifierMinutes: '45' }), ['“Minutes a check may take” 45 → "45"'], 'a number in quotes shows its quotes');
+    assert.deepEqual(changesOf({ ...DEFAULTS }, { ...DEFAULTS }), []);
+    const settings = { ...DEFAULTS };
+    const check = new SettingsCheck({ settings, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'proof', logger: {} });
+    check.run();
+    const before = liveValues(settings);
+    settings.verifierMinutes = 60;
+    const entry = savedEntry(check, [['verifierMinutes']], { before, after: liveValues(settings) });
+    assert.equal(entry.text, 'Settings changed: “Minutes a check may take”');
+    assert.equal(entry.why, '“Minutes a check may take” 45 → 60. They apply now.');
+    // Without the values (an edit of the profile it did not see before), the entry is as the kit words it.
+    assert.equal(savedEntry(check, [['verifierMinutes']]).why, 'They apply now.');
+    const wrong = liveValues(settings);
+    settings.verifierMinutes = '45';
+    const waits = savedEntry(check, [['verifierMinutes']], { before: wrong, after: liveValues(settings) });
+    assert.match(waits.text, /Proof waits until a wrong one is fixed/);
+    assert.match(waits.why, /^“Minutes a check may take” 60 → "45"\. /);
 });

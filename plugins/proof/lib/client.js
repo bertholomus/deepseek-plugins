@@ -1051,7 +1051,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             disabled: 'Proof is switched off in DSH\'s profile (enabled: false in its entry in cordis.patch.yml), so it reads no claims. To use it, set enabled to true there and restart DSH. To remove it instead, switch it off in Plugins.',
             loading: 'Reading the claims',
             sessions: 'Sessions with claims',
-            sessionsSub: 'Newest first. Pick one to see its ledger.',
+            sessionsSub: 'The one flagged last first, timed by its latest flag. Pick one to see its ledger.',
             noSessions: 'No claims yet',
             noSessionsText: 'When a turn says something is done, passing, fixed or deployed, Proof checks the claim against what the turn ran and lists the session here. Nothing to do until then.',
             ledger: 'Ledger',
@@ -1076,11 +1076,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         /** One set of words for a claim's verdict and a check's state, on every surface. */
         const VERDICT_WORD = Object.freeze({ backed: 'shown', unbacked: 'no evidence', contradicted: 'contradicted' });
         const CHECK_WORD = Object.freeze({
-            queued: 'waiting to check', running: 'checking', verified: 'verified', 'not-verified': 'not verified', unclear: 'unclear', failed: 'could not check',
+            queued: 'waiting to check', running: 'checking', verified: 'verified', 'not-verified': 'not verified', unclear: 'unclear', failed: 'could not check', cancelled: 'stopped',
         });
         const TONE = Object.freeze({
             shown: 'success', 'no evidence': 'warning', contradicted: 'danger',
             'waiting to check': 'info', checking: 'info', verified: 'success', 'not verified': 'danger', unclear: 'warning', 'could not check': 'danger',
+            // A check the person switched off before it started is stopped, not an error.
+            stopped: 'neutral',
         });
 
         /** Proof's settings on its page in Plugins: the same names and ranges as its config (lib/config.js). */
@@ -1098,13 +1100,16 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             },
             { name: 'verifierProvider', kind: 'text', title: 'Check with the model from', hint: 'The provider\'s id in DSH\'s profile, such as owner-ascents. Proof\'s page names it as DSH\'s model menu does.', default: 'owner-ascents', accepts: (t) => ROUTE.test(t), invalid: 'A provider id as DSH\'s profile has it: letters, digits and . _ - : / @ +, such as owner-ascents.' },
             { name: 'verifierModel', kind: 'text', title: 'Check with the model', hint: 'The model\'s id in DSH\'s profile. A cheap local model is enough: a check re-runs a command or reads a file, and Proof asks it for low effort when the model offers that. Only the check thread uses it; DSH\'s default model stays as it is.', default: 'GLM-5.3-Flash-EXL3', accepts: (t) => ROUTE.test(t), invalid: 'A model id as DSH\'s profile has it, such as GLM-5.3-Flash-EXL3.' },
-            { name: 'verifierMinutes', kind: 'number', title: 'Minutes a check may take', hint: 'From 1 to 60. A check still running then is stopped, and its answer is unclear. A quiet local model answers in a minute or two; on a busy shared gateway, where each answer can wait several minutes, allow 30.', default: 15, min: 1, max: 60 },
+            { name: 'verifierMinutes', kind: 'number', title: 'Minutes a check may take', hint: 'From 1 to 60. A check still running then is stopped, and its answer is unclear. A quiet local model answers in a minute or two; a busy shared gateway can take half an hour to answer one check: allow 60 then.', default: 45, min: 1, max: 60 },
             { name: 'verifierPerHour', kind: 'number', title: 'Checks an hour, at most', hint: 'From 1 to 120. More wait their turn and start when the hour allows.', default: 12, min: 1, max: 120 },
         ];
         const SETTINGS_SUMMARY = 'Whether Proof flags claims on their turn, and how the independent check runs.';
         const SETTINGS_NOTE = 'Changes apply as soon as you save. A check thread can read and run commands but never write a file, and Proof refuses edits, commits, pushes, installs and deploys in it.';
 
         const CSS = [
+            // The waiting state's one-press fix of a value in quotes, and what it saved.
+            `.${P}-fix{margin-top:10px}`,
+            `.${P}-fixed{margin:0 0 8px}`,
             // The flag: a card in a chat, drawn like DSH's own cards there (no blur: the chat is glass already). It is a kit
             // pane, for the suite's colours, tag words, focus ring and motion rules; its own ground is DSH's layer 1.
             `.${P}-flag{box-sizing:border-box;margin:6px 0 2px;padding:10px 12px;max-width:100%;min-width:0;background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-lg);color:var(--dsw-alias-label-primary);font:var(--dsw-font-xs-13)}`,
@@ -1130,7 +1135,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-dock-bar::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:inherit;background:var(--dsw-specific-menu);backdrop-filter:var(--dsw-menu-backdrop-filter);pointer-events:none}`,
             `.${P}-dock-glyph{flex:none;display:inline-flex;color:var(--dsw-alias-label-tertiary)}`,
             `.${P}-dock-label{flex:none;font-size:13px;font-weight:500;line-height:24px}`,
-            `.${P}-dock-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary-dimmed,var(--dsw-alias-label-secondary))}`,
+            `.${P}-dock-text{flex:1;min-width:0;white-space:normal;overflow-wrap:anywhere;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary-dimmed,var(--dsw-alias-label-secondary))}`,
             `@container ${P}-dock (max-width:600px){.${P}-dock-bar{flex-wrap:wrap;row-gap:0;padding-bottom:7px}.${P}-dock-label{flex:1 1 auto}.${P}-dock-text{order:1;box-sizing:border-box;flex:1 1 100%;padding-inline:24px 7px;white-space:normal}}`,
             // The page.
             `.${P}-status{margin:10px 0 0;font:var(--dsw-font-xs-13);color:var(--${P}-text-2)}`,
@@ -1250,7 +1255,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             if (check.state === 'running') {
                 const effort = typeof check.effort === 'string' && check.effort ? ` at ${check.effort.toLowerCase()} effort` : '';
                 const limit = Number.isSafeInteger(check.minutes) ? `, for up to ${plural(check.minutes, 'minute')}` : '';
-                return `In a read-only thread on ${check.model || 'the check model'}${effort}${limit}.`;
+                return `In a read-only thread on ${check.model || 'the check model'}${effort}${limit}. It waits on the model's answers; on a busy shared gateway a request can wait and be sent again.`;
             }
             if (check.state === 'queued') return sentence(check.reason) || 'It starts when the check before it ends.';
             return sentence(check.reason) || 'It gave no reason.';
@@ -1320,7 +1325,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         /** The session (and claim) the page should show next: set by a flag's "Open in Proof". */
         const spotlight = makeStore(undefined);
         /** DSH's way to open a panel page and a session, set once its workspace is there. */
-        const views = { openPage: () => {}, openSession: () => {} };
+        /**
+         * DSH's way to open a panel page and a session, set once its workspace
+         * is there; and DSH's own settings form for Proof (`settings.set(field,
+         * value)` saves one setting as the form's Save does), while DSH serves it.
+         */
+        const views = { openPage: () => {}, openSession: () => {}, settings: undefined };
 
         /** Do something on the host: `{ value }`, or `{ problem }` in words. */
         async function run(method, args) {
@@ -1357,7 +1367,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const verified = check?.state === 'verified';
             const evidence = claim.verdict === 'contradicted' && !verified ? newEvidence(claim) : [];
             return h('li', { className: `${P}-flag-item`, 'data-proof-claim': claim.id, 'data-proof-verdict': claim.verdict },
-                h('p', { className: `${P}-flag-claim` }, quotedRich(claim.text)),
+                h('p', { className: `${P}-flag-claim`, title: claim.part && claim.part !== claim.text ? claim.text : undefined }, quotedRich(claim.part || claim.text)),
                 claim.why && !verified ? h('p', { className: `${P}-flag-why` }, richText(sentence(claim.why))) : null,
                 evidence.length ? h('p', { className: `${P}-flag-why` }, 'What the turn shows: ', richText(evidence.join('; '))) : null,
                 check ? h(CheckLine, { check, className: `${P}-flag-line`, tag: headSays !== check.state, onOpen: onOpenCheck, takeFocus, onFocused }) : null,
@@ -1494,7 +1504,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return h('button', { type: 'button', className: `${P}-link`, onClick: () => views.openSession(sessionId), title: 'Open this session' }, title || 'Untitled session');
         }
 
-        function HeaderCard({ data }) {
+        function HeaderCard({ data, said = '' }) {
             const canOpen = kit.canOpenPlugin();
             const flagged = data.sessions.reduce((n, s) => n + s.flagged, 0);
             const verified = data.sessions.reduce((n, s) => n + (s.verified ?? 0), 0);
@@ -1509,12 +1519,44 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 actions: canOpen ? h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => kit.openPlugin(BUNDLE) }, TEXT.settings) : null,
                 attrs: { 'data-proof-header': data.enabled ? 'on' : 'off' },
             },
+            // What the waiting state's fix saved, said on the page it comes back to.
+            said ? h('p', { className: `${P}-note ${P}-ok ${P}-fixed`, role: 'status', 'data-proof-fixed': '' }, said) : null,
             status ? h('p', { className: `${P}-status` }, status) : null,
             // How checks run is said once, on Independent checks.
             data.enabled ? h('div', { className: `${P}-lines` },
                 h('div', { className: `${P}-line`, 'data-proof-flags': data.flags ? 'on' : 'off' }, data.flags
                     ? 'Flags are on: a turn whose claim nothing in it shows gets a short card after it.'
                     : 'Flags are off: claims are judged and kept in the ledger, but turns show no card.')) : null);
+        }
+
+        /**
+         * A number or true/false written in quotes (text in the profile) that
+         * would be right without them. DSH's settings form shows it as if it
+         * were right, so the waiting state offers to save it without quotes,
+         * through DSH's own settings call, in one press.
+         */
+        function QuotedFix({ problem, onSaved }) {
+            const [busy, setBusy] = React.useState(false);
+            const [failed, setFailed] = React.useState(false);
+            const form = views.settings;
+            if (problem?.live !== true || problem.unquoted === undefined || typeof form?.set !== 'function') return null;
+            const title = SETTINGS.find((f) => f.name === problem.key)?.title ?? problem.key;
+            const value = typeof problem.unquoted === 'boolean' ? (problem.unquoted ? 'on' : 'off') : String(problem.unquoted);
+            const save = async () => {
+                if (busy) return;
+                setBusy(true);
+                setFailed(false);
+                let ok = false;
+                try { ok = (await form.set(problem.key, problem.unquoted)) === true; } catch { ok = false; }
+                setBusy(false);
+                if (ok) onSaved(`Saved “${title}” as ${value}, without quotes. Proof works again.`);
+                else setFailed(true);
+            };
+            return h('div', { className: `${P}-fix`, 'data-proof-fix': problem.key },
+                h('p', { className: `${P}-trouble-text` }, `Without the quotes it is right: Proof can save it as ${value} for you, as the settings form would.`),
+                h('div', { className: `${P}-actions` },
+                    h(ui.Button, { variant: 'primary', size: 'sm', 'aria-disabled': busy ? 'true' : undefined, onClick: () => void save(), 'data-proof-fix-save': '' }, busy ? 'Saving…' : `Save it as ${value}`)),
+                failed ? h('p', { className: `${P}-note ${P}-error ${P}-alert`, role: 'alert' }, 'DSH did not save it. Change it in Proof\'s settings in Plugins instead.') : null);
         }
 
         /** A session's one state on its row: its flagged claims, else verified, else shown. */
@@ -1537,7 +1579,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             h('span', { className: `${P}-meta ${P}-clip` }, `${plural(s.total, 'claim')}`, s.latest ? ` · latest flagged: ${quoted(String(s.latest.text ?? '').replace(/`/g, ''))}` : '')),
                         h('span', { className: `${P}-row-side` },
                             h(Tag, { word: rowWord(s) }),
-                            h('span', { className: `${P}-meta` }, h(kit.TimeText, { at: s.updatedAt }))))))));
+                            h('span', { className: `${P}-meta` }, h(kit.TimeText, { at: s.at ?? s.updatedAt }))))))));
         }
 
         /**
@@ -1559,7 +1601,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     h('div', { className: `${P}-claim-top` },
                         h('span', { className: `${P}-num` }, `Turn ${claim.turn}`),
                         claim.at ? h(kit.TimeText, { at: claim.at }) : null),
-                    h('p', { className: `${P}-claim` }, quotedRich(claim.text)),
+                    // Its own clause (a sentence can make two claims), the whole sentence on hover.
+                    h('p', { className: `${P}-claim`, title: claim.part && claim.part !== claim.text ? claim.text : undefined }, quotedRich(claim.part || claim.text)),
                     claim.why && !verified ? h('p', { className: `${P}-why` }, richText(sentence(claim.why))) : null,
                     evidence.length ? h('p', { className: `${P}-why` }, flagged ? 'What the turn shows: ' : 'Shown by: ', richText(evidence.join('; '))) : null,
                     claim.ran?.length ? h('details', { className: `${P}-details` },
@@ -1627,7 +1670,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             });
             const claims = data?.claims ?? [];
             const open = (c) => (c.verdict !== 'backed' && !isVerified(c)) || kept.has(c.id);
-            const shown = (filter === 'flagged' ? claims.filter(open) : claims).slice().reverse();
+            // The newest turn first; a turn's claims in the order its reply makes them.
+            const shown = (filter === 'flagged' ? claims.filter(open) : claims).map((c, i) => ({ c, i })).sort((a, b) => (b.c.turn ?? 0) - (a.c.turn ?? 0) || (a.c.seq ?? 0) - (b.c.seq ?? 0) || a.i - b.i).map((x) => x.c);
             const counts = data?.counts;
             const verifiedCount = counts?.verified ?? 0;
             return h(kit.Card, {
@@ -1737,6 +1781,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const focus = useStore(spotlight);
             const [picked, setPicked] = React.useState(undefined);
             const data = live.data;
+            // What the waiting state's fix saved, said on the page it comes back to; a new setting problem makes it old news.
+            const [fixed, setFixed] = React.useState('');
+            const problemText = data?.problem?.text;
+            React.useEffect(() => { if (problemText) setFixed(''); }, [problemText]);
             React.useEffect(() => { if (focus?.sessionId) setPicked(focus.sessionId); }, [focus?.n]);
             const down = live.code === 'not-running' || (data === undefined && live.error);
             const sessions = data?.sessions ?? [];
@@ -1753,11 +1801,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         : data.problem
                             ? [
                                 h(kit.Card, { key: 'head', title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary, attrs: { 'data-proof-header': 'problem' } },
-                                    h(kit.SettingsProblem, { name: 'Proof', packageName: BUNDLE, problem: data.problem })),
+                                    h(kit.SettingsProblem, { name: 'Proof', packageName: BUNDLE, problem: data.problem }),
+                                    h(QuotedFix, { key: `fix-${data.problem.key ?? ''}`, problem: data.problem, onSaved: (text) => { setFixed(text); void live.refresh(); } })),
                                 h(HistoryCard, { key: 'history', data, titles }),
                             ]
                             : [
-                                h(HeaderCard, { key: 'head', data }),
+                                h(HeaderCard, { key: 'head', data, said: fixed }),
                                 live.error ? h(kit.ErrorLine, { key: 'refresh', text: live.error, onRetry: live.refresh }) : null,
                                 data.enabled ? h(SessionsCard, { key: 'sessions', data, selected, onSelect: setPicked }) : null,
                                 data.enabled && selected ? h(LedgerCard, { key: `ledger:${selected}`, sessionId: selected, verifier: data.verifier.mode, row }) : null,
@@ -1799,11 +1848,15 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             });
             // Its settings on its page in Plugins, through DSH's own settings form.
             ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => {
+                let saved;
                 try {
+                    saved = scope.configForms?.get?.('proof');
+                    views.settings = saved;
                     kit.applySettings(scope, { entry: 'proof', name: 'Proof', summary: SETTINGS_SUMMARY, fields: SETTINGS, note: SETTINGS_NOTE });
                 } catch (error) {
                     console?.warn?.('dsh-plugin-proof: settings:', error);
                 }
+                return () => { if (views.settings === saved) views.settings = undefined; };
             });
         }
 
@@ -1834,7 +1887,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         // For the plugin's own tests.
         module.exports.internals = {
             kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, VERDICT_WORD, CHECK_WORD, TONE, flagHead, flagState, verifierText, checkWords, richText,
-            flagOf, sameFlag, spotlight, views, ProofFlag, FlagCard, CheckNote, CheckDock, ProofPage, ProofIcon, HeaderCard, SessionsCard, LedgerCard, ChecksCard, HistoryCard, ClaimRow,
+            flagOf, sameFlag, spotlight, views, ProofFlag, FlagCard, CheckNote, CheckDock, ProofPage, ProofIcon, HeaderCard, QuotedFix, SessionsCard, LedgerCard, ChecksCard, HistoryCard, ClaimRow,
         };
         return module.exports;
     },

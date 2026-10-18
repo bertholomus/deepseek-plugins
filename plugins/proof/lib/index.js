@@ -26,7 +26,7 @@ import { join } from 'node:path';
 import z from '@deepseek-ai/schemastery';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
-import { LIVE_SETTINGS, checkConfig, savedEntry } from './config.js';
+import { LIVE_SETTINGS, checkConfig, liveValues, savedEntry } from './config.js';
 import { sessionRows, titleOf } from './ledger.js';
 import { KEY, foldAll, proofProjection, viewOf } from './projection.js';
 import { ProofRemote, SERVICE } from './remote.js';
@@ -63,10 +63,10 @@ export const Config = z.object({
     /** The check model, by its id in DSH's profile: a cheap local one, asked for low effort when it offers that. */
     verifierModel: live(z.any().default('GLM-5.3-Flash-EXL3')),
     /**
-     * The longest a check may take, in minutes (1 to 60); it is stopped after that. 15 by default: a check
-     * re-runs a command or two, but a busy shared gateway can take several minutes to answer each request.
+     * The longest a check may take, in minutes (1 to 60); it is stopped after that. 45 by default: a check
+     * re-runs a command or two, but a busy shared gateway can take half an hour to answer (allow 60 then).
      */
-    verifierMinutes: live(z.any().default(15)),
+    verifierMinutes: live(z.any().default(45)),
     /** The most checks that start in an hour (1 to 120); more wait their turn. */
     verifierPerHour: live(z.any().default(12)),
 });
@@ -317,8 +317,12 @@ export function apply(ctx, config) {
     }
 
     // Settings saved on Proof's page in Plugins: checked again, and they apply at once.
+    // The live settings as they were before the next save, so its log entry says what each change was.
+    let values = liveValues(settings);
     ctx.on('loader/volatile-update', guard(logger, 'proof: settings', (paths) => {
-        const entry = savedEntry(check, paths);
+        const now = liveValues(settings);
+        const entry = savedEntry(check, paths, { before: values, after: now });
+        values = now;
         if (entry) journal.add(entry);
         verifier.settingsChanged();
         bump();
