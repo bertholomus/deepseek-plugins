@@ -10,7 +10,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Notifier, EVENT_FIELDS, BROWSER_TTL_MS, MAX_QUEUED } from '../lib/notifier.js';
+import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol';
+import { Notifier, EVENT_FIELDS, BROWSER_TTL_MS, MAX_QUEUED, QUEUE_STALE_MS } from '../lib/notifier.js';
 import { oneLine, cliCommand, cliSend, desktopSend, iconFor } from '../lib/backends.js';
 import { NotificationsRemote, SERVICE } from '../lib/remote.js';
 import * as plugin from '../lib/index.js';
@@ -52,11 +53,10 @@ test('notifications: one line', () => {
 });
 
 test('notifications: the platform command and its quoting', () => {
-    assert.deepEqual(cliCommand('darwin', { title: 'He said "hi"', body: 'a\\b' }),
-        { command: 'osascript', args: ['-e', 'display notification "a\\\\b" with title "He said \\"hi\\""'] });
-    // macOS's osascript has no icon of its own: given one, it is ignored.
-    assert.deepEqual(cliCommand('darwin', { title: 'T', body: 'B' }, { path: '/i/whale.png' }),
-        { command: 'osascript', args: ['-e', 'display notification "B" with title "T"'] });
+    // macOS takes no command-line sender at all: osascript cannot set a
+    // per-notification icon, so its posts show Script Editor's icon.
+    assert.equal(cliCommand('darwin', { title: 'T', body: 'B' }), null);
+    assert.equal(cliSend('darwin', { title: 'T', body: 'B' }, { spawnImpl: () => assert.fail('macOS must not spawn a sender') }), false);
     assert.deepEqual(cliCommand('linux', { title: 'T', body: 'B' }),
         { command: 'notify-send', args: ['--app-name=DSH', 'T', 'B'] });
     assert.deepEqual(cliCommand('linux', { title: 'T', body: 'B' }, { path: '/i/whale.svg' }),
@@ -73,8 +73,8 @@ test('notifications: the platform command and its quoting', () => {
 
 test('notifications: the cli sender reports a missing command, never throws', () => {
     const errors = [];
-    const ok = cliSend('darwin', { title: 'T', body: 'B' }, { spawnImpl: () => ({ on() {}, kill() {} }) });
-    assert.equal(ok, true);
+    // macOS has no command-line sender here at all: it never spawns one.
+    assert.equal(cliSend('darwin', { title: 'T', body: 'B' }, { spawnImpl: () => assert.fail('macOS must not spawn a sender') }), false);
     const failed = cliSend('linux', { title: 'T', body: 'B' }, { spawnImpl: () => { throw new Error('no notify-send'); }, onError: (e) => errors.push(e) });
     assert.equal(failed, false);
     assert.match(String(errors[0]), /notify-send/);
@@ -145,6 +145,44 @@ test('notifications: the browser queue takes, shows once and clears', () => {
     clock += BROWSER_TTL_MS + 1;
     assert.equal(notifier.notify({ title: 'T3' }), 'cli');
     assert.deepEqual(sent, ['cli', 'cli']);
+});
+
+test('notifications: a desktop host queues for its hidden window past the poll ttl', () => {
+    let clock = 1000;
+    const sent = [];
+    const notifier = new Notifier({ settings: () => CONFIG, desktopHost: true, send: () => { sent.push('cli'); return true; }, now: () => clock });
+    // No poll has ever arrived: the Desktop app's window still exists (hidden,
+    // minimised or behind others), so its renderer is the DSH-icon sender.
+    assert.equal(notifier.notify({ title: 'Hidden', body: 'B' }), 'browser');
+    clock += BROWSER_TTL_MS + 1;
+    assert.equal(notifier.notify({ title: 'Still hidden' }), 'browser');
+    assert.deepEqual(sent, [], 'macOS must not fall back to the command line');
+    assert.deepEqual(notifier.pending().items.map((item) => item.title), ['Hidden', 'Still hidden']);
+    // Without the desktop host the ttl rules, as before.
+    const tab = new Notifier({ settings: () => CONFIG, send: () => true, now: () => clock });
+    assert.equal(tab.notify({ title: 'T' }), 'cli');
+});
+
+test('notifications: the queue sheds items no window would still show', () => {
+    let clock = 10_000;
+    const notifier = new Notifier({ settings: () => CONFIG, desktopHost: true, send: () => true, now: () => clock });
+    notifier.notify({ title: 'Old' });
+    clock += QUEUE_STALE_MS + 1;
+    notifier.notify({ title: 'New' });
+    assert.deepEqual(notifier.pending().items.map((item) => item.title), ['New']);
+});
+
+test('notifications: the gateway can name its methods, so the queue is served (not 404)', () => {
+    // The gateway answers "not found" for a namespace whose methods carry no
+    // Remote marker — the browser half then never polls and every macOS
+    // notification fell to osascript and its Script Editor icon. The marker
+    // is what `remoteMethods` reads, exactly what the gateway consults.
+    const notifier = new Notifier({ settings: () => CONFIG });
+    const remote = new NotificationsRemote(notifier);
+    const named = remoteMethods(remote).map((marker) => marker.method).sort();
+    assert.deepEqual(named, ['acknowledge', 'pending']);
+    // The binding still names the wire namespace the client calls.
+    assert.equal(remote.typertRemote.namespace, 'dsh-plugin-notifications');
 });
 
 test('notifications: the queue keeps the newest MAX_QUEUED', () => {
@@ -337,4 +375,81 @@ test('notifications: the browser sender drops stale items instead of showing the
     assert.equal(await poller.read(), 0);
     assert.deepEqual(FakeNotification.shown, []);
     disposers[0](); // the interval's cleanup, as DSH runs it
+});
+
+test('notifications: the browser sender survives the 404 that used to kill polling', async () => {
+    const { applyPoller } = clientInternals();
+    class FakeNotification {
+        constructor(title) { FakeNotification.shown.push(title); }
+        close() {}
+    }
+    FakeNotification.shown = [];
+    FakeNotification.permission = 'granted';
+    const doc = { hasFocus: () => false, addEventListener() {}, removeEventListener() {} };
+    const warns = [];
+    const disposers = [];
+    // The old bug: the gateway answered HTTP 404 ("not found") for the
+    // unmarked methods, and the sender gave up and the host fell back to
+    // osascript. A failing call must now be a retry, not a stop.
+    let failing = true;
+    const link = {
+        async call(method) {
+            if (method === 'pending') {
+                if (failing) throw new Error('transport failure for /api/dsh-plugin-notifications/pending: HTTP 404');
+                return { ok: true, value: { desktop: false, items: [{ id: 7, title: 'After the fix', body: '', at: new Date().toISOString() }] } };
+            }
+            return { ok: true, value: 1 };
+        },
+    };
+    const poller = applyPoller({ effect(fn) { return disposers.push(fn()); } }, link, { Notification: FakeNotification, doc, win: undefined, warn: (m) => warns.push(m) });
+    assert.equal(await poller.read(), 0, 'a transport failure shows nothing and throws nothing');
+    assert.equal(poller.state.transportFailed, true);
+    assert.equal(warns.length, 1, 'the failure is warned about once, not every poll');
+    assert.match(warns[0], /404/);
+    failing = false;
+    assert.equal(await poller.read(), 1, 'the next poll still works');
+    assert.deepEqual(FakeNotification.shown, ['After the fix']);
+    assert.equal(poller.state.transportFailed, false);
+    disposers[0](); // the interval's cleanup, as DSH runs it
+});
+
+test('notifications: the browser sender keeps the queue waiting while permission is unanswered', async () => {
+    const { applyPoller } = clientInternals();
+    class FakeNotification {
+        constructor(title) { FakeNotification.shown.push(title); }
+        close() {}
+    }
+    FakeNotification.shown = [];
+    FakeNotification.permission = 'default';
+    const doc = { hasFocus: () => false, addEventListener() {}, removeEventListener() {} };
+    const link = {
+        calls: [],
+        async call(method, args) {
+            this.calls.push([method, args]);
+            return method === 'pending'
+                ? { ok: true, value: { desktop: false, items: [{ id: 3, title: 'Waiting', body: '', at: new Date().toISOString() }] } }
+                : { ok: true, value: 1 };
+        },
+    };
+    const disposers = [];
+    const poller = applyPoller({ effect(fn) { return disposers.push(fn()); } }, link, { Notification: FakeNotification, doc, win: undefined });
+    assert.equal(await poller.read(), 0);
+    assert.deepEqual(link.calls.map(([method]) => method), ['pending'], 'nothing is acknowledged, so the items wait');
+    FakeNotification.permission = 'granted';
+    assert.equal(await poller.read(), 1, 'once the ask is answered, the waiting items show');
+    assert.deepEqual(link.calls.at(-1), ['acknowledge', { ids: [3] }]);
+    disposers[0](); // the interval's cleanup, as DSH runs it
+});
+
+test('notifications: permission is asked once where an ask can work, and not where it cannot', () => {
+    const { ensurePermissionOnce } = clientInternals();
+    const asks = [];
+    const electronNotification = Object.assign(() => {}, { permission: 'default', requestPermission: () => { asks.push('ask'); return Promise.resolve('granted'); } });
+    ensurePermissionOnce(electronNotification, { userAgent: 'Mozilla/5.0 (Macintosh) Electron/44.0.0' });
+    assert.deepEqual(asks, ['ask']);
+    ensurePermissionOnce(electronNotification, { userAgent: 'Mozilla/5.0 (Macintosh) Chrome/141.0.0.0 Safari/537.36' });
+    assert.deepEqual(asks, ['ask'], 'a browser needs the settings page button; no silent ask');
+    ensurePermissionOnce(Object.assign(() => {}, { permission: 'granted' }), { userAgent: 'Mozilla/5.0 Electron/44.0.0' });
+    assert.deepEqual(asks, ['ask'], 'granted needs no ask');
+    assert.equal(ensurePermissionOnce(undefined, undefined), undefined);
 });

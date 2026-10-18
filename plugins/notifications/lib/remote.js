@@ -13,7 +13,7 @@
  *
  * @module dsh-plugin-notifications/remote
  */
-import { bindTypertRemote } from '@deepseek-ai/dsh-typert-protocol';
+import { Remote, bindTypertRemote } from '@deepseek-ai/dsh-typert-protocol';
 
 /** Wire namespace: the client calls `/api/dsh-plugin-notifications/<method>`. */
 export const NAMESPACE = 'dsh-plugin-notifications';
@@ -40,3 +40,16 @@ export class NotificationsRemote {
         return this.notifier.acknowledge(ids);
     }
 }
+
+/** Mark methods the way the `@Remote` decorator does in DSH's TypeScript. Without
+ * these markers the gateway answers "not found" for every method here, and the
+ * browser half never reaches the queue (it fell back to the command line). */
+function markRemote(Class, names) {
+    for (const name of names) {
+        Remote(Class.prototype[name], {
+            kind: 'method', name, static: false, private: false,
+            addInitializer(init) { init.call(Object.create(Class.prototype)); },
+        });
+    }
+}
+markRemote(NotificationsRemote, ['pending', 'acknowledge']);

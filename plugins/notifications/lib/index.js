@@ -49,7 +49,14 @@ export function apply(ctx, config) {
         settings: () => config,
         logger: ctx.logger,
         platform: process.platform,
+        // The Desktop host is Electron: its window's browser half exists even
+        // while the window is hidden or minimised, so the queue is always for
+        // it. DSH_CLIENT_VERSION is the Desktop build's inlined version when a
+        // future build exports it; process.versions.electron is the signal
+        // today's host process carries (a terminal DSH is plain Node).
+        desktopHost: process.versions?.electron !== undefined || process.env.DSH_CLIENT_VERSION !== undefined,
     });
+    notifier.logger?.info?.('notifications: desktop host %s', notifier.desktopHost ? 'yes' : 'no');
 
     // DSH's own sender (Electron main), in the Desktop app only. It already
     // skips while the window is focused and shows the window on a click.

@@ -209,21 +209,53 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
+         * Ask once where an ask can work without a click: the Desktop app's
+         * window (Electron) grants it; a browser needs the settings page's
+         * Allow button, because its prompt is refused without a user gesture.
+         */
+        function ensurePermissionOnce(Notification = globalThis.Notification, nav = (typeof navigator === 'undefined' ? undefined : navigator)) {
+            if (typeof Notification !== 'function' || Notification.permission !== 'default') return;
+            if (!nav?.userAgent?.includes('Electron')) return;
+            try {
+                void Notification.requestPermission?.();
+            } catch { /* the ask is best-effort; the settings page can ask again */ }
+        }
+
+        /**
          * The sender for the `web` profile: poll the queue, show what is new
          * while the window is unfocused, and take the rest (a focused window
          * is watching already). When the answer says the Desktop app sends
-         * natively, stand down entirely.
+         * natively, stand down entirely. The queue is only taken where it can
+         * be shown or is worthless: with permission still 'default' the items
+         * wait in the host's queue, so they show once the ask is answered.
          */
-        function applyPoller(scope, link, { now = Date.now, Notification = globalThis.Notification, win = typeof window === 'undefined' ? undefined : window, doc = typeof document === 'undefined' ? undefined : document } = {}) {
+        function applyPoller(scope, link, { now = Date.now, Notification = globalThis.Notification, win = typeof window === 'undefined' ? undefined : window, doc = typeof document === 'undefined' ? undefined : document, warn = (message) => console?.warn?.(message) } = {}) {
             const seen = new Set();
-            const state = { stopped: false, desktopHandled: false };
+            const state = { stopped: false, desktopHandled: false, transportFailed: false };
             const stop = () => {
                 state.stopped = true;
             };
+            const transportTrouble = (detail) => {
+                if (!state.transportFailed) {
+                    state.transportFailed = true;
+                    warn(`dsh-plugin-notifications: the queue is unreachable right now (${detail}); retrying`);
+                }
+            };
             const read = async () => {
                 if (state.stopped) return 0;
-                const result = await link.call('pending', {});
-                if (state.stopped || !isRecord(result) || result.ok !== true || !isRecord(result.value)) return 0;
+                let result;
+                try {
+                    result = await link.call('pending', {});
+                } catch (error) {
+                    transportTrouble(String(error?.message ?? error));
+                    return 0;
+                }
+                if (state.stopped) return 0;
+                if (!isRecord(result) || result.ok !== true || !isRecord(result.value)) {
+                    transportTrouble(isRecord(result) && isRecord(result.error) ? String(result.error.code ?? result.error.message ?? 'refused') : 'unreadable answer');
+                    return 0;
+                }
+                state.transportFailed = false;
                 if (result.value.desktop === true) {
                     state.desktopHandled = true;
                     stop();
@@ -232,21 +264,31 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const items = Array.isArray(result.value.items) ? result.value.items.filter(isRecord) : [];
                 if (items.length === 0) return 0;
                 let shown = 0;
+                const took = [];
                 for (const item of items) {
-                    if (typeof item.id !== 'number' || seen.has(item.id)) continue;
-                    seen.add(item.id);
+                    if (typeof item.id !== 'number') continue;
                     const at = typeof item.at === 'string' ? Date.parse(item.at) : NaN;
-                    if (Number.isFinite(at) && now() - at > STALE_MS) continue;
-                    if (typeof Notification === 'function' && Notification.permission === 'granted' && doc && !doc.hasFocus()) {
-                        try {
-                            showNotification(item, Notification, win);
-                            shown += 1;
-                        } catch { /* a browser that refuses one notification still takes the rest */ }
+                    const stale = Number.isFinite(at) && now() - at > STALE_MS;
+                    if (typeof Notification === 'function' && Notification.permission === 'granted') {
+                        if (doc && !doc.hasFocus() && !stale && !seen.has(item.id)) {
+                            seen.add(item.id);
+                            try {
+                                showNotification(item, Notification, win);
+                                shown += 1;
+                            } catch { /* a browser that refuses one notification still takes the rest */ }
+                        }
+                        took.push(item.id);
+                    } else if (typeof Notification === 'function' && Notification.permission === 'denied') {
+                        seen.add(item.id);
+                        took.push(item.id);
                     }
+                    // permission 'default': take nothing, so the items wait
+                    // in the queue and show once the ask is answered.
                 }
-                void link.call('acknowledge', { ids: items.map((item) => item.id).filter((id) => typeof id === 'number') });
+                if (took.length > 0) void link.call('acknowledge', { ids: took });
                 return shown;
             };
+            ensurePermissionOnce(Notification);
             const timer = setInterval(() => { void read(); }, POLL_MS);
             const wake = () => { void read(); };
             if (doc) {
@@ -293,7 +335,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the parts are built on.
         module.exports.internals = {
-            FIELDS, EVENTS, TEXT, LABELS, CSS, boolSpec, injectStyle, permissionState, askPermission, permissionLine, hostLink, showNotification, isRecord, applyPoller, applySettingsForm,
+            FIELDS, EVENTS, TEXT, LABELS, CSS, boolSpec, injectStyle, permissionState, askPermission, permissionLine, ensurePermissionOnce, hostLink, showNotification, isRecord, applyPoller, applySettingsForm,
         };
         return module.exports;
     },
