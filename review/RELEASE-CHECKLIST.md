@@ -13,12 +13,22 @@ the Lead merges each block from the thread's handback and marks verified only on
 - [ ] dsh-test fingerprint before/after each run logged in review/RELEASE-PROGRESS.md (live pid + patch sha unchanged).
 - [ ] review/history-scrub.md written (report only; no history rewrite — Albert decides).
 - [x] Root shared files scrubbed (Lead, verified): test/sends.test.js fixtures frankennas→nas.example,
-  100.108.23.102→100.64.0.7, bertholomus@→alex@, ascent-01→host-01, /tank→/data (192.168.1.49 / 192.168.1.10 kept —
-  generic RFC1918 examples, not ours); 550/550 root tests pass. Placeholder set for all plugin scrubs:
-  nas.example, 100.64.0.7, /Users/alex, alex@, host-01, /data.
+  100.108.23.102→100.64.0.7, bertholomus@→alex@, ascent-01→host-01, /tank→/data, and (after the history report
+  caught it) the real LAN IP 192.168.1.49→192.0.2.49 (TEST-NET-1, commit d7af38c). 550/550 root tests pass.
+  Placeholder set for all plugin scrubs: nas.example, 100.64.0.7, 192.0.2.49, /Users/alex, alex@, host-01, /data.
+- [x] review/history-scrub.md written by t7 — **Lead-verified** (spot-checked: named commits exist with claimed
+  subjects; identity-metadata counts match §8; 192.168.1.49 findings confirmed and acted on). It found:
+  192.168.1.49 survived in smoke.mjs ×2 (t5 steered to 192.0.2.49); commit metadata carries the real email and
+  GitHub id on every commit; screenshots carry private names (light-Tank.png shows albertlee, light-Fleet.png
+  shows FrankenNAS/Ascents). The report tripped test/coordinator.test.js:89 (branding scan) by quoting the
+  third-party assistant identity — Lead edited §8 lines 170/174 to describe it without literals; t7 commits the
+  fixed file once its git-dir approval lands.
 - [ ] DECISION NEEDED (tied to the make-public gate): HANDOFF.md, briefs/*.md and the AGENTS.md account lines carry
-  private details (hosts, emails, paths); README.md names the repo clone URL. If the repo goes public these need
-  scrubbing or removal first. Left untouched — builders'/Albert's files.
+  private details (hosts, emails, paths); README.md names the repo clone URL; **commit author/committer metadata
+  carries the real email (`albert@dnaclothing.com`, 42+1 commits) and GitHub id on all 338+**; **review screenshots
+  carry private names on-screen** (verified two: light-Tank.png, light-Fleet.png — the older round evidence very
+  likely too). If the repo goes public: scrub docs, rewrite or squash history (options in the report §"Options"),
+  and drop or re-shoot screenshots. Left untouched — builders'/Albert's files.
 
 ## Wallpaper (+ dsh-context skin)
 - 0.2.1: in progress (thread t2) — Automation tasks page (@deepseek-ai/dsh-client-ui-schedule, `.abd_5a_calendar`)
@@ -37,7 +47,8 @@ the Lead merges each block from the thread's handback and marks verified only on
 
 ## Coordinator
 - 0.2.1: in progress (thread t5). Glass skin: in progress (DESIGN.md gaps: wp-still, header :has(), try/catch,
-  slot-id separators). Scrub: in progress (smoke.mjs: frankennas, 100.108.23.102, bertholomus@, ascent-01, /tank).
+  slot-id separators). Scrub: in progress (smoke.mjs: frankennas, 100.108.23.102, bertholomus@, ascent-01, /tank,
+  plus 192.168.1.49 ×2 — Lead steer: use 192.0.2.49 for the LAN IP to match the root suite).
   Verdict: **not yet**.
 
 ## Notifications (must-fix)
