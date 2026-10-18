@@ -6,13 +6,16 @@ Each plugin is a normal DSH plugin package. You add it to a DSH profile's bundle
 
 | Plugin | What it does |
 | --- | --- |
+| [`wallpaper`](plugins/wallpaper) | Wallpaper and glass for the DSH window: a wallpaper library with rotation and colours, frosted glass on the sidebar, conversation, composer and right panel, motion, and an editable headline. Visual only — it changes no content. |
 | [`dsh-site`](plugins/dsh-site) | Serves the running DSH Desktop GUI to other devices on a private network (for example a Tailscale tailnet). Same sessions, same workspaces, same tools as the machine itself. |
 | [`discord`](plugins/discord) | Connects a Discord bot to DSH sessions. Each Discord thread is one persistent agent session, and the agent answers through Discord tools. Full bot setup steps are in its README. |
 | [`categories`](plugins/categories) | Categories of workspaces in DSH's session list: a header per category over its workspaces, Other workspaces for the rest, made and arranged from the list or the Categories page. |
 | [`coordinator`](plugins/coordinator) | Any chat can run its work in threads. The chat starts thread sessions for focused work, each thread reports back to it, and threads keep their own model, effort and permission. |
 | [`calendar`](plugins/calendar) | Your calendars, for you and your agents: iCloud, Google, Microsoft 365 and Exchange Online, Fastmail, Nextcloud and other CalDAV servers, subscribed `.ics` feeds, and calendars on this computer. Agents read them and, as their permission allows, change them. |
+| [`notifications`](plugins/notifications) | System notifications when DSH's window is hidden or unfocused, for other plugins to call. |
 | [`session-bridge`](plugins/session-bridge) | A local JSON API on a Unix socket that drives the Host's own session controller. Scripts and other agents can create, prompt, steer, cancel and read DSH sessions, and you watch them live in the DSH window. |
 | [`session-watch`](plugins/session-watch) | The shared watcher behind Autopilot, Decisions and Agent Terminals: every session's state from DSH's own events, and delivery of a message proven by the session's own log. No page of its own. |
+| [`agent-terminals`](plugins/agent-terminals) | Coding agents in DSH: a command-line coding agent in a visible terminal tab of its session, started again after a restart, with messages typed in and proven read, and its status in the session list and in Decisions. |
 | [`autopilot`](plugins/autopilot) | Keeps sessions moving when nobody is watching: after a restart it tells cut-off sessions to carry on, nudges quiet sessions with open todos once and backs off, and restarts goals an error stopped. Every action has a Why line and a kill switch. |
 | [`decisions`](plugins/decisions) | One inbox for everything waiting on you: decision lines, tools waiting for approval, questions in the question box, threads that need a decision. Each card shows the question, the recommendation, the session and the wait; an answer goes into the session, proven by its log. Optional note to a webhook or a command. |
 
@@ -24,13 +27,16 @@ DSH loads a plugin only when the profile lists its package in `dsh.profile.bundl
 
 | Plugin | Package | Row id |
 | --- | --- | --- |
+| wallpaper | `dsh-plugin-wallpaper` | `wallpaper` |
 | dsh-site | `dsh-plugin-dsh-site` | `dsh-site` |
 | discord | `dsh-plugin-discord` | `discord` |
 | categories | `dsh-plugin-categories` | `categories` |
 | coordinator | `dsh-plugin-coordinator` | `coordinator` |
 | calendar | `dsh-plugin-calendar` | `calendar` |
+| notifications | `dsh-plugin-notifications` | `notifications` |
 | session-bridge | `dsh-plugin-session-bridge` | `session-bridge` |
 | session-watch | `dsh-plugin-session-watch` | `session-watch` |
+| agent-terminals | `dsh-plugin-agent-terminals` | `agent-terminals` |
 | autopilot | `dsh-plugin-autopilot` | `autopilot` |
 | decisions | `dsh-plugin-decisions` | `decisions` |
 
