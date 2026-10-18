@@ -1,16 +1,47 @@
 # Recall round 2: the builder's notes
 
-Updated: 7:09 PM PDT (Recall round-2 builder)
+Updated: 7:44 PM PDT (Recall round-2 builder)
 
 ## Status
 
-Every finding of round 1 (`review/recall-round-1.md`: 8.0, NOT YET; reliability 8, UX 8) is fixed
-in code, unit tests and the real-DSH test, except Finding 9's 404 polling (the kit's, see Picks).
-At 9a48a2e the real-DSH test passed 103 of 103 on DSH 0.2.0-rc.2 and 0.2.1-rc.1 (the app's build
-running). Now: a real-DSH step for the shrink (another DSH's 450 sessions added and taken out in
-the form), then the three builds again, `npm test`, DESIGN.md "Before you push".
+Done: every finding of round 1 (`review/recall-round-1.md`: 8.0, NOT YET; reliability 8, UX 8) is
+fixed in code, unit tests and the real-DSH test, except Finding 9's 404 polling (the kit's hub; see
+Picks). At d004666: the real-DSH test 106 of 106 on DSH 0.2.0-rc.2, 0.2.1-rc.1 and the app's
+0.2.1-rc.2, the live DSH unchanged; `npm test` on a clean copy 818 of 820 pass, 1 skipped, 1 fail
+(Canon's relevance hold-out, the Canon builder's work in progress, not Recall's). Ready for the
+round-2 judge.
 
 ## Done (newest first)
+
+- 7:44 PM PDT. Results at d004666 (Recall's last code commit). Real-DSH test, `node
+  scripts/e2e.mjs recall`, 7:36 to 7:42 PM PDT: 106 of 106 on 0.2.0-rc.2 (111 s), 0.2.1-rc.1
+  (118 s) and app-0.2.1-rc.2 (116 s); a new turn searchable 1.68 to 1.69 s after it was asked;
+  another DSH's 450 sessions (5,236 turns) taken out and the index from 19 MB to 1 MB in 0.9 s.
+  Live DSH fingerprint before (7:36 PM PDT) and after (7:42 PM PDT): pid 18756, started Sat Oct
+  17 10:39:36 2026, `cordis.patch.yml` sha256
+  63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7, unchanged (also unchanged
+  around the runs at 7:03, 7:11, 7:17 and 7:28 PM PDT). `npm test` on a clean copy (`git
+  archive d004666`, `.e2e` linked): 820 tests, 818 pass, 1 skipped (Radicale), 1 fail:
+  `test/canon-relevance.test.js` "first hold-out … within the four floors" (25% against 80%),
+  Canon's builder's work in progress at 7cc1c48, not Recall's. Recall's own: 63 of 63 unit tests,
+  six runs in a row; `test/suite-shared.test.js` and `test/syntax.test.js` 111 of 111 (the kit
+  and `lib/shared/` byte for byte).
+- 7:36 PM PDT. d004666: What happened says the index went from the size the page showed before
+  the folder was taken out (taking it out writes to the write-ahead log, so the files were 2 MB
+  bigger when the pass began: "from 19 MB" where the card had said 17). Unit test and the real-DSH
+  check compare them.
+- 7:28 PM PDT. ce4e0f6: several wrong settings at once are all named (the first says what fits,
+  the others by name: "…; Let agents search past work (tool) is wrong too"); an index from another
+  version of Recall is deleted, not kept as `index.sqlite.old` beside the new one (a damaged one is
+  still set aside); What happened keeps an entry made in the same millisecond as the start
+  before's (see Picks: the kit's journal ids). Tests: the words for two and six wrong settings and
+  the 400-character cut, the older index deleted through the store and the engine, two starts in
+  one millisecond (fails without the fix, passes with it).
+- 7:11 PM PDT. 1684f1d: What happened counts turns and note sections apart ("Read 1 file in under
+  a second: 2 note sections indexed."); the real-DSH test adds another DSH's 450 sessions in the
+  form and takes them out, and sees the index give their space back, What happened say how much
+  and the Index card show the new size (shot `index-smaller-light`); README's Tests and the tool
+  card's words.
 
 - 7:09 PM PDT. 9a48a2e: notes counted in sections in the page's count and the tool ("3 matching
   sections in 1 note"), a chosen kind's places named ("1 turn in 1 session" when the agent asked
@@ -104,11 +135,25 @@ the form), then the three builds again, `npm test`, DESIGN.md "Before you push".
 
 ## Next steps
 
-1. Run the real-DSH test with the new shrink step on all three builds (`node scripts/e2e.mjs
-   recall`), the live fingerprint before and after (pid 18756, sha256 63e0c347…05eef7); record it.
-2. README's Tests section (done in the working tree: 106 checks, the new list); commit by name.
-3. `npm test` in full (a clean copy if other agents' uncommitted files break unrelated tests).
-4. DESIGN.md "Before you push", ticked below.
+1. None for the builder: the round-2 judge takes it from d004666 (the notes commit after it changes
+   nothing in Recall). A judge's window: `dsh-test --name <n> up`, `defaultPreset:
+   workspace-write`, then load Session Watch and Recall from a copy of this branch.
+
+## DESIGN.md "Before you push" (Recall at d004666)
+
+- [x] Surfaces: glass cards on Recall's own page (every card `main`); the mark a small pane at the
+  turn's tail; no ground inside DSH's surfaces.
+- [x] Tokens: DSH's own, each found in both DSH builds' styles (checked: `--dsw-alias-*`,
+  `--dsw-elevation-soft`, `--dsw-font-*`, `--dsw-radius-*`, `--ds-font-family-code`); from
+  Wallpaper only `--wp-blur`, `--wp-tint`, `body.wp-still`.
+- [x] No selector with a DSH hash (the narrow switcher's rules use `[data-suite-choice]`,
+  `[role="tablist"]`, `[role="tab"]`); nothing on `:root`, `html` or `body`; no `:has()`.
+- [x] Motion: nothing new moves; the kit's stops under `wp-still` and reduced motion.
+- [x] `node --check` on every file of `lib/`, and `npm test` (clean copy: only Canon's hold-out
+  fails, not Recall's).
+- [x] Both DSH versions (and the app's build), both themes, Wallpaper on (a stand-in, over a light
+  and a dark picture) and off: the real-DSH test, pictures in `.e2e/shots/recall/<build>/`.
+- [x] Off leaves nothing behind, on again repeats nothing: the real-DSH test's off-and-on step.
 
 ## Picks and why
 
@@ -193,6 +238,11 @@ the form), then the three builds again, `npm test`, DESIGN.md "Before you push".
   under load; a loop of starts lost one in two). Recall times each entry after the newest one in
   its log (`now` option, its own code); the kit's journal is unchanged and the other plugins keep
   the flaw. A fix belongs in the kit.
+
+- No DSH Test window this round: the real-DSH test drove the app's own DSH build in a browser for
+  every state the judge named (light, dark, 1280, 760 and 420 px, the Wallpaper stand-in, the
+  reading view, the mark, the tool card, the settings form, off and on, wrong types, turns that
+  ended early, the shrink), so no instance was made and none is left to destroy.
 
 ## Gotchas
 
