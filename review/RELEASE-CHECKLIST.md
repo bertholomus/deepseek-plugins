@@ -11,7 +11,10 @@ the Lead merges each block from the thread's handback and marks verified only on
   `dsh-auth-<sha256(authority)>` cookie per authority) — see dsh-site block; and two 0.2.1 config breaks
   ({{cwd}} persona variable; llm-deepseek-account models key) — not plugin code.
 - [ ] dsh-test fingerprint before/after each run logged in review/RELEASE-PROGRESS.md (live pid + patch sha unchanged).
-- [ ] review/history-scrub.md written (report only; no history rewrite — Albert decides).
+- [x] review/history-scrub.md written (report only; no history rewrite — Albert decides). **Done** — t7's report
+  committed `8d35757`, content Lead-verified (commit/identity/finding spot-checks passed; §8 brand-clean;
+  post-snapshot scrubs annotated). Push to gh NOT yet confirmed from the Lead session (github.com unresolvable at
+  handback time, branch ahead 1) — Lead will push and reconcile. History-fix options remain Albert's decision.
 - [x] Root shared files scrubbed (Lead, verified): test/sends.test.js fixtures frankennas→nas.example,
   100.108.23.102→100.64.0.7, bertholomus@→alex@, ascent-01→host-01, /tank→/data, and (after the history report
   caught it) the real LAN IP 192.168.1.49→192.0.2.49 (TEST-NET-1, commit d7af38c). 550/550 root tests pass.
