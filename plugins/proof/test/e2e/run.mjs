@@ -936,14 +936,17 @@ try {
         await openProof(page);
         const problem = page.locator('[data-suite-trouble="setting"]');
         await problem.waitFor({ state: 'visible', timeout: 20000 });
-        const fix = problem.locator('[data-proof-fix="verifierMinutes"]');
+        // The kit's box says what is wrong; Proof's offer sits under it, in the same card.
+        const head = page.locator('[data-proof-header="problem"]');
+        const fix = head.locator('[data-proof-fix="verifierMinutes"]');
         await fix.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
         const words = (await fix.innerText().catch(() => '')).replace(/\n+/g, ' ');
-        check('the page offers to save it without the quotes, in one press',
-            words.includes('Without the quotes it is right: Proof can save it as 20 for you, as the settings form would.') && (await fix.getByRole('button', { name: 'Save it as 20', exact: true }).count()) === 1, words);
-        await shot(page, shots, 'quoted-light', problem);
+        check('under the setting\'s problem, the page offers to save it without the quotes, in one press',
+            words.includes('Without the quotes it is right: Proof can save it as 20 for you, as the settings form would.') && (await fix.getByRole('button', { name: 'Save it as 20', exact: true }).count()) === 1
+            && (await head.locator('[data-suite-trouble="setting"]').count()) === 1, words);
+        await shot(page, shots, 'quoted-light', head);
         await setDark(page, true);
-        await shot(page, shots, 'quoted-dark', problem);
+        await shot(page, shots, 'quoted-dark', head);
         await setDark(page, false);
         await fix.getByRole('button', { name: 'Save it as 20', exact: true }).click();
         const fixed = await waitFor(async () => {
