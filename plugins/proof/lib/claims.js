@@ -181,10 +181,17 @@ export function sentencesOf(text) {
 }
 
 /** A sentence's clauses: split at dashes, semicolons, colons and ", so"/", and"/", but"/", ready to". */
+/** Code, quotes and brackets: what they hold is one piece ("`signal: AbortSignal.timeout(ms)`", `("install.sh: quote paths")`). */
+const HELD = new RegExp(String.raw`${OPEN}[^${CLOSE}\n]{1,200}${CLOSE}|"[^"\n]{1,200}"|“[^”\n]{1,200}”|\([^()\n]{1,200}\)`, 'g');
+const HOLD = { ':': '\u0001', ';': '\u0002', ',': '\u0003', '—': '\u0004', '–': '\u0005', ' - ': ' \u0006 ' };
+const hold = (s) => s.replace(HELD, (m) => m.replace(/ - |[:;,—–]/g, (c) => HOLD[c]));
+const unhold = (s) => s.replace(/[\u0001-\u0006]/g, (c) => Object.keys(HOLD).find((k) => HOLD[k] === c));
+
 function clausesOf(sentence) {
-    return sentence
-        .split(/\s+[—–]\s+|\s+-\s+|;\s+|(?<!^\s*(?:still|all|everything(?:\s+(?:is|still))?|now)\s+(?:green|passing|clean))(?<!^\s*(?:green|passing))\s*:\s+(?=\S)(?!(?:all\s+)?(?:\d+\s*(?:\/\s*\d+\s+)?(?:tests?\s+)?)?(?:ok|okay|pass|passed|passes|passing|green|clean|success|successful|succeeded)\b)|,\s+(?=(?:so|and|but|while|which|because|since|although|though|yet|then|plus|with|ready\s+(?:to|for))\b)|\s+(?=(?:but|because|although|though)\s)/i)
-        .map((s) => s.trim())
+    return hold(sentence)
+        // "`mix test test/x_test.exs`: 3 tests, 0 failures": a command and its result are one clause.
+        .split(/\s+[—–]\s+|\s+-\s+|;\s+|(?<!^\s*(?:still|all|everything(?:\s+(?:is|still))?|now)\s+(?:green|passing|clean))(?<!^\s*(?:green|passing))(?<!^\s*(?:[-*]\s+)?(?:(?:the\s+)?(?:full|whole|filtered|focused|targeted|local|new)\s+)?⟨[^⟩]{1,200}⟩)\s*:\s+(?=\S)(?!(?:all\s+)?(?:\d+\s*(?:\/\s*\d+\s+)?(?:tests?\s+)?)?(?:ok|okay|pass|passed|passes|passing|green|clean|success|successful|succeeded)\b)|,\s+(?=(?:so|and|but|while|which|because|since|although|though|yet|then|plus|with|ready\s+(?:to|for))\b)|\s+(?=(?:but|because|although|though)\s)/i)
+        .map((s) => unhold(s).trim())
         .filter((s) => s.length > 1);
 }
 
@@ -216,7 +223,7 @@ const POSITIVE = [
     /\b(?:the|a|an|that|this|those|these|its|their|our|both|all|each|every|previously|formerly)\s+(?:previously\s+|formerly\s+|\d+\s+|two\s+|three\s+)?(?:failing|failed|broken|erroring|flaky|crashing|red|regressed)\b(?=(?:\s+[\w.\/⟨⟩-]+){0,5}?\s+(?:now\s+|all\s+|also\s+)?(?:pass(?:es|ed)?|passing|green|works?|working|succeeds?|compiles?|builds?|(?:is|are|was|were|has been|have been)\s+(?:now\s+)?(?:fixed|resolved|green|passing|working|gone))\b)/gi,
 ];
 /** "Fixed" as an adjective: "a fixed window", "fixed-size buffers", "a fixed seed". */
-const FIXED_ADJ = /\b(?:a|an)\s+fixed\s+(?=[a-z])|\bfixed-(?=[a-z])|\bfixed\s+(?=(?:window|size|width|height|point|rate|price|cost|delay|interval|timeout|length|number|seed|order|format|position|schedule|budget|fee|amount|set|string|header|offset|port|address|value|key|salt|term|layout|pitch|capacity|duration|frame|step|cadence|cap|ratio|limit|quota|pool|count|mtime|timestamp|date|time|clock|epoch|locale|timezone|tz|umask|mode|margin|padding|font|dimension|shape|temperature|tar|zip|gzip|build id|ordering)s?\b)/gi;
+const FIXED_ADJ = /\b(?:a|an)\s+fixed\s+(?=[a-z0-9])|\bfixed-(?=[a-z])|\b[a-z0-9]+-(?:guarded|patched|fixed|sorted|corrected|resolved)\b|\bfixed\s+(?=(?:window|size|width|height|point|rate|price|cost|delay|interval|timeout|length|number|seed|order|format|position|schedule|budget|fee|amount|set|string|header|offset|port|address|value|key|salt|term|layout|pitch|capacity|duration|frame|step|cadence|cap|ratio|limit|quota|pool|count|mtime|timestamp|date|time|clock|epoch|locale|timezone|tz|umask|mode|margin|padding|font|dimension|shape|temperature|tar|zip|gzip|build id|ordering)s?\b)/gi;
 /** A quoted phrase that holds a claim's words: what someone or something said, not this turn's claim ('the bot posts "all checks passed"'). */
 const QUOTED_CLAIM = /"[^"\n]{1,120}"|“[^”\n]{1,120}”/g;
 const CLAIM_WORDS = /\b(pass(es|ed|ing)?|green|deployed|released|published|shipped|fixed|done|succeeded|successful(ly)?|merged|live|clean|healthy|ok)\b/i;
@@ -233,7 +240,7 @@ const ASKED = /\?\s*$|^(do|does|did|is|are|was|were|can|could|should|would|will|
  * is fixed". "Claim" is reported speech only as a verb with a speaker and what it says ("it claimed that …",
  * "the README claims the build passes"); job claims, JWT claims and insurance claims are things.
  */
-const REPORTED = /\b(the|this|that|its|their|your|his|her|our|[a-z]+'s)\s+(readme|docs?|documentation|changelog|pr|pull request|description|ticket|issue|comment|commit message|author|reviewer|team|user|checklist|wiki|spec|plan|notes?|release notes|approvals?|reviews?|messages?|reply|replies|summary|email|handoff|thread)\b[^.;]{0,50}\b(says?|said|claims?|claimed|states?|stated|reports?|reported|mentions?|mentioned|promises?|promised|lists?|listed)\b|\baccording to\b|\b(allegedly|supposedly|reportedly)\b|\b(?:it|he|she|they|someone|somebody|[a-z]+(?:'s)?)\s+(?:also\s+|still\s+|now\s+|even\s+)?(?:claims|claimed)\s+(?:that\b|to\s+(?:be|have)\b|(?:it|they|he|she|this|there|everything|all|the\s+[\w-]+(?:\s+[\w-]+)?|[\w-]+)\s+(?:is|are|was|were|has|have|had|passes|passed|pass|works|worked|runs|ran|succeeds|succeeded|builds|built|fixes|fixed)\b)/i;
+const REPORTED = /\b(the|this|that|its|their|your|his|her|our|[a-z]+'s)\s+(?:(?:v?\d[\w.-]*|release|latest|current|new|old|original|updated|upstream|vendor|project|repo|repository|package|library|official|top|last|first)\s+){0,2}(readme|docs?|documentation|changelog|(?:changelog\s+)?entry|entries|pr|pull request|description|ticket|issue|comment|commit message|author|reviewer|team|user|checklist|wiki|spec|plan|notes?|release notes|approvals?|reviews?|messages?|reply|replies|summary|email|handoff|thread|page|post|article|docstring)\b[^.;]{0,50}\b(says?|said|claims?|claimed|states?|stated|reports?|reported|mentions?|mentioned|promises?|promised|lists?|listed)\b|\baccording to\b|\b(allegedly|supposedly|reportedly)\b|\b(?:it|he|she|they|someone|somebody|[a-z]+(?:'s)?)\s+(?:also\s+|still\s+|now\s+|even\s+)?(?:claims|claimed)\s+(?:that\b|to\s+(?:be|have)\b|(?:[\w-]+\s+){1,4}?(?:is|are|was|were|has|have|had|passes|passed|pass|works|worked|runs|ran|succeeds|succeeded|builds|built|fixes|fixed)\b)/i;
 /**
  * A pass count that reports a failure: "only 1 passed", "just one test passes", "only `parses a port` passed".
  * Not "not only"; a count, a name or a few words between "only" and the pass word, without another clause between.
@@ -326,6 +333,8 @@ const PASSED = [
     /\b(pass(es|ed)?|passing)\s+(all\s+|every\s+|the\s+)?(\d+\s+)?(of\s+(its|the|their)\s+)?(tests?|specs?|checks?|cases?|suites?|examples?)\b/i,
     // "12/12 pass", "Range tests pass 6/6", "3/3 green"
     /\b\d+\s*\/\s*\d+\s+(\w+\s+){0,2}(pass(ed|es|ing)?|green|ok)\b|\b(pass(es|ed)?|passing)\s+\d+\s*\/\s*\d+\b/i,
+    // "4 of 4 packages pass", "12 out of 12 specs passed": all of a count
+    new RegExp(String.raw`\b(\d+)\s+(?:of|out\s+of)\s+\1\s+(?:[\w-]+\s+){0,3}?${PASS_VERB}\b`, 'i'),
     // "12 passed", "1 passed", "7 passing, 0 failing", "12 pass, 0 fail"
     /\b\d+\s+(tests?\s+|specs?\s+|checks?\s+|examples?\s+|cases?\s+)?(passed|passing|pass(?=[,;.]|\s+(and\s+)?0\b))/i,
     // "`SlugTest`: OK", "`go vet`: clean"
@@ -357,6 +366,8 @@ const ALL_PASS = new RegExp(String.raw`(?:^|\b)${SUBJECT}(?!\w)\s+(?:is|are|was|
 // "Uploaded build 213 to App Store Connect": an upload to a place ships it.
 const DEPLOY_WORD = /\b(deployed|redeployed|released|shipped|rolled out|rolled\s+(?:it|them|this|that|these|those|everything)\s+out|rolled back|promoted|published|pushed|merged|tagged|provisioned|uploaded(?=[^.;]{0,80}?\bto\s))\b/gi;
 const DEPLOYED_OTHER = [
+    // "staging is stable on the new version", "prod is healthy on 3.1.0": where the new version runs
+    /\b(?:is|are)\s+(?:now\s+)?(?:stable|healthy|up|serving|running)\s+(?:on|with)\s+(?:the\s+)?(?:new\s+(?:version|release|build|image)|v?\d+\.\d+(?:\.\d+)?)\b/i,
     /\b(is|are)\s+(now\s+)?live\b|\bgo(es)? live\b|\bwent live\b|\b(and|now)\s+live\b|^live\b(?![\s-]+(?:check|query|read|test|look|probe|smoke|run|lookup|request|call|curl|verification|validation)s?\b)|\blive\s+(on|in)\s+(staging|production|prod)\b/i,
     /\b(is|are)\s+(now\s+)?((built|pushed|published|up) and\s+)?(on|in)\s+(the\s+)?(registry|npm|pypi|crates\.io|docker ?hub|ghcr|ecr|gcr|rubygems|packagist|origin|production|prod|staging)\b/i,
     /\b(is|are)\s+(now\s+)?(on|at)\s+(v?\d+\.\d+(\.\d+)?|release v?\d+|the new (version|release|build|image))\b/i,
@@ -405,7 +416,27 @@ const MEASURED_ARROW = {
         const t = String(text);
         for (const m of t.matchAll(ARROW)) {
             if (/[+×*]\s*$/.test(t.slice(0, m.index))) continue;
+            // "Annual discount 15% → 20%", "timeout 30 s → 60 s": a setting changed, not a figure measured.
+            if (SETTING_BEFORE.test(t.slice(0, m.index).replace(/[*_`]/g, ''))) continue;
             if (ARROW_UNIT.test(m[1]) || ARROW_UNIT.test(m[2]) || MEASURE.test(t)) return true;
+        }
+        return false;
+    },
+};
+/** A setting, not a measurement: "the timeout went from 30 s to 60 s" is a change to it. */
+const SETTING_BEFORE = /\b(?:discounts?|prices?|pricing|fees?|tax|vat|tiers?|seats?|timeouts?|delays?|intervals?|ttls?|limits?|caps?|retries|retry|thresholds?|ports?|versions?|defaults?|settings?|budgets?|quotas?|windows?|backoffs?|concurrency|replicas?|workers?|pool(?:\s+size)?|max(?:imum)?|min(?:imum)?)\b[^.;]{0,30}$/i;
+/**
+ * "p95 went from 900 ms to 120 ms", "Dropping moment.js took the main chunk from 412 kB to 296 kB": a measured
+ * before and after, with a unit or a measure's name; not a setting that went from one value to another.
+ */
+const MOVED_FROM_TO = {
+    test(text) {
+        const t = String(text);
+        const re = /\b(?:went|goes|go|came|comes|got|gets|took|takes|brought|brings|moved|moves)\s+(?:[\w.$-]+\s+){0,4}?from\s+~?\d[\d.,]*\s*([a-zµ%/]*)\s+(?:to|down\s+to|up\s+to)\s+~?\d[\d.,]*\s*([a-zµ%/]*)/gi;
+        for (const m of t.matchAll(re)) {
+            if (SETTING_BEFORE.test(t.slice(0, m.index + m[0].indexOf('from')))) continue;
+            const unit = (u) => ARROW_UNIT.test(u) || /^(?:ns|b|allocs)\/op$/i.test(u);
+            if (unit(m[1]) || unit(m[2]) || MEASURE.test(t)) return true;
         }
         return false;
     },
@@ -413,6 +444,7 @@ const MEASURED_ARROW = {
 /** A number that got better: "p50 310 ms -> 120 ms", "2.5x faster", "cut the bundle to 182 KiB". */
 const IMPROVED = [
     MEASURED_ARROW,
+    MOVED_FROM_TO,
     // "p50 is down ~60%", "latency is now down by 40%"
     /\b(?:is|are|was|were|went|came|now)\s+(?:now\s+)?down\s+(?:by\s+)?(?:about\s+|around\s+|roughly\s+|nearly\s+|almost\s+|over\s+|~\s*)?\d+(?:\.\d+)?\s*%/i,
     /\b\d+(\.\d+)?\s*(x|×)\s+(faster|quicker|smaller|less|fewer|lower|higher|more throughput)\b/i,
@@ -432,6 +464,9 @@ const BEATS = /\b(beats?|outperforms?|exceeds?|surpass(?:es)?|better than (?:the
 const SEARCH_EMPTY = [
     /\b(?:grep|rg|ripgrep|ag|ack|search(?:es|ed)?|find)\b[^.;]{0,100}?\b(?:comes?\s+back\s+empty|came\s+back\s+empty|(?:now\s+|still\s+)?(?:returns?|returned|finds?|found|shows?|showed|prints?|printed|turns?\s+up|turned\s+up|gives?|gave)\s+(?:nothing|no\s+(?:matches|results|hits|references|uses|usages|lines|occurrences))|is\s+(?:now\s+)?empty)\b/i,
     /\bno\s+(?:more\s+|remaining\s+|other\s+)?(?:references|uses|usages|mentions|imports|occurrences|callers|matches)\s+(?:to\s+|of\s+)?\S+\s+(?:remain|are\s+left|left)\b/i,
+    // "no `console.log` calls remain", "none are left in `src/`", "`src/app.js` has none left"
+    /\bno\s+(?:more\s+|remaining\s+|other\s+)?\S+\s+(?:calls|references|uses|usages|imports|occurrences|callers|matches|mentions|reads|instances)\s+(?:remain|are\s+left|left)\b/i,
+    /\bnone\s+(?:are\s+|is\s+|were\s+|was\s+)?(?:now\s+)?(?:left|remain(?:s|ing)?)\b|\b(?:has|have)\s+none\s+(?:left|remaining)\b/i,
     /\bnothing\s+(?:else\s+)?(?:references|uses|imports|calls|mentions)\s+\S+\s+(?:any\s?more|now)\b/i,
 ];
 const SEARCH_CODE = /^(?:git\s+grep|grep|egrep|fgrep|rg|ag|ack)\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*(?:-e\s+)?(["']?)([^"'\s]+)\1/;
@@ -453,6 +488,10 @@ const IS_IN = String.raw`in(?=\s*(?:$|[.,;:!)]|now\b|on\s+(?:main|master|the bra
 const CHANGE_VERBS = 'edited|modified|tweaked|adjusted|amended|altered|revised|reworked|rewired|restructured|reorgani[sz]ed|reformatted|reworded|cleaned|reverted|restored|simplified|trimmed|reordered|inlined|deduplicated|consolidated|normali[sz]ed|parameteri[sz]ed|vendored|scaffolded|stubbed|added|created|updated|wrote|written|implemented|renamed|removed|deleted|moved|changed|replaced|refactored|cleaned up|set up|configured|installed|migrated|converted|extracted|split|merged|rewrote|rewritten|built|rebuilt|generated|completed|finished|registered|wired|hooked up|exposed|exported|introduced|bumped|pinned|upgraded|downgraded|enabled|disabled|documented|gated|ported|switched|swapped|applied|committed|regenerated|recorded|backfilled|pruned|tightened|raised|lowered|made';
 /** The change verbs after a subject ("Report regenerated", "handlers.go split into three files"): "split" alone is a noun ("that split", "Test split"). */
 const SUBJECT_VERBS = CHANGE_VERBS.replace('|split|', String.raw`|split(?=\s+(?:into|in\s+(?:two|three|four|five|half|halves|\d+)|up|out|off|across|by|between|apart|along)\b)|`);
+/** A clause led by a change: "I edited …", "Changed …". */
+const CHANGE_HEAD = new RegExp(String.raw`^(?:i\s+|we\s+)?(?:have\s+|'ve\s+|just\s+|also\s+|now\s+|then\s+)?(?:${CHANGE_VERBS})\b`, 'i');
+/** What a change is for: "… so non-numeric entries are skipped", "… so that it doesn't throw". */
+const PURPOSE_TAIL = /\s(?:so\s+that|so|in\s+order\s+to|such\s+that)\s.*$/i;
 const DONE = [
     /^(all\s+)?(done|complete|completed|finished|sorted|all set|all wrapped up|wrapped up)\b/i,
     // "Ran the migrations", "Retrained on v7", "I fine-tuned the base model": a run that does the work.
@@ -469,7 +508,7 @@ const DONE = [
     // not "the rule is replaced" (how a plan or the code behaves) or "worth keeping that split" (a noun).
     new RegExp(String.raw`^(?!(?:which|that|who|so|and|but|because|since|while|as|if|when|where|whether|although|though)\b)(?:the\s+|a\s+|an\s+|all\s+)?[\w.,/${OPEN}${CLOSE}-]+(?:\s+[\w.,/${OPEN}${CLOSE}-]+){0,3}\s+(?:now\s+|also\s+)?(?<!\b(?:is|are|gets?|getting)\s+)(?:${SUBJECT_VERBS})\b(?!\s+(?:to\s+be|by\s+the\s+user))`, 'i'),
     // "Worker config now points at redis-2", ".env.example documents CACHE_URL now"
-    /\bnow\s+(points|uses|returns|reads|lists|documents|leads|has|includes|contains|imports|exports|calls|sets|defaults|handles|accepts|supports|logs|retries|throws|falls back|guards|checks|skips|validates|redirects|caches)\b/i,
+    /\bnow\s+(points|uses|returns|reads|lists|documents|leads|has|includes|contains|imports|exports|calls|sets|defaults|handles|accepts|supports|logs|retries|throws|falls back|guards|checks|skips|validates|redirects|caches|goes through|go through|routes? through)\b/i,
     /\b(points|uses|returns|reads|lists|documents|leads|has|includes|contains|imports|exports|calls|sets|defaults|handles|accepts|supports|logs|retries|throws|validates|caches)\b[^.;]{0,50}\bnow\b/i,
     /\b(is|are)\s+(now\s+)?applied\b/i,
     // "The three retry helpers are consolidated into one shared lib/retry.go", "is now gated behind a flag"
@@ -607,6 +646,9 @@ function claimOf(clause) {
     const fixedByNegation = FIX_BY_NEGATION.test(words);
     let rest = words;
     for (const re of POSITIVE) rest = rest.replace(re, ' ');
+    // "I edited `sum.js` so non-numeric entries are skipped", "Changed `parse` so that it doesn't throw": what a change
+    // makes the code do is not a negation of the change.
+    if (CHANGE_HEAD.test(rest)) rest = rest.replace(PURPOSE_TAIL, ' ');
     if (!fixedByNegation && NEGATED.test(rest)) return undefined;
     if (TRIED.test(words)) return { kind: 'passed', subject: 'run', subjects: ['run'] };
     // "returns 200, but only for the cached path": a status with a catch is not a health claim.
@@ -674,37 +716,56 @@ export function kindOf(sentence) {
  * added.
  * At most one claim of each kind per sentence, and `max` in all.
  */
+/** A claim's own clause as shown, without the word that joins it to the clause before ("and the suite passes"). */
+const partOf = (clause) => clip(shown(clause).replace(/^(?:and|but|so|then|also|plus)\s+(?=\S)/i, ''), MAX_PART);
+
+/** The count a pass clause quotes: "(9/9)", "all 188 tests", "12 of 12". */
+const PASS_COUNT = /\b(\d+)\s*\/\s*\1\b|\ball\s+(\d+)\b|\b(\d+)\s+(?:of|out\s+of)\s+\d+\b|\b(\d+)\s+(?:[\w-]+\s+){0,2}?(?:tests?|specs?|checks?|cases?)\b/i;
+const passCount = (clause) => shown(clause).match(PASS_COUNT)?.slice(1).find(Boolean);
+
 export function claimsIn(text, { max = 8 } = {}) {
     const out = [];
     const { sentences, plan } = markedWithPlans(text);
     for (const [at, sentence] of sentences.entries()) {
         const kinds = new Set();
+        const counts = new Map();
         const whole = shown(sentence);
         if (PLAN_LEAD.test(whole) || plan.has(at)) continue;
         const clauses = clausesOf(sentence);
         if (clauses.length > 1 && !clauses.some((c) => claimOf(c))) clauses.push(sentence);
-        for (const clause of clauses) {
-            const found = claimOf(clause);
+        const founds = clauses.map((c) => claimOf(c));
+        // "41/41 passing, and coverage is at 92% — up from 78%": the figures of a clause that claims nothing go with the
+        // sentence's measured claim when it has one, and with its pass claim when it has none.
+        const measured = founds.some((f) => f?.improved);
+        const loose = measured ? clauses.filter((c, i) => !founds[i]).flatMap((c) => metricsIn(c)) : [];
+        for (const [index, clause] of clauses.entries()) {
+            const found = founds[index];
             if (found?.ship && !kinds.has('deployed:ship')) {
                 kinds.add('deployed:ship');
-                out.push({ kind: 'deployed', text: whole, part: clip(shown(clause), MAX_PART), target: found.ship, ...(commandsIn(clause).length ? { commands: commandsIn(clause) } : {}) });
+                out.push({ kind: 'deployed', text: whole, part: partOf(clause), target: found.ship, ...(commandsIn(clause).length ? { commands: commandsIn(clause) } : {}) });
                 if (out.length >= max) return out;
             }
             // One claim of each kind; a deploy and a health check in one sentence are two.
             // "Lint is clean, and `cargo test` passes" names two kinds of run: two claims.
             // "The new tests pass, and the rest of the suite is still green" claims two runs.
             const key = found?.kind === 'deployed' ? `deployed:${found.target === 'health' ? 'health' : 'ship'}` : found?.kind === 'passed' ? `passed:${found.subject ?? 'any'}${WHOLE_SUITE.test(shown(clause)) ? ':whole' : ''}` : found?.kind;
-            if (!found || kinds.has(key)) continue;
+            if (!found) continue;
+            // "The currency tests pass (9/9), and all 188 tests pass": two counts, two runs, two claims.
+            const count = found.kind === 'passed' ? passCount(clause) : undefined;
+            if (kinds.has(key) && !(count && counts.get(key) && counts.get(key) !== count)) continue;
             kinds.add(key);
+            if (count && !counts.has(key)) counts.set(key, count);
             const commands = commandsIn(clause);
             // A heading such as "Added" or "Done" claims what the sentence after it names.
             const next = found.kind === 'done' && whole.split(/\s+/).length <= 3 ? sentences[at + 1] : undefined;
             // Figures count wherever the sentence quotes them: "41/41 passing, and coverage is at 92%".
-            const metrics = found.kind === 'passed' || found.kind === 'fixed' ? metricsIn(found.improved ? clause : sentence) : [];
+            const metrics = found.improved ? [...metricsIn(clause), ...loose]
+                : found.kind === 'passed' && measured ? metricsIn(clause)
+                    : found.kind === 'passed' || found.kind === 'fixed' ? metricsIn(sentence) : [];
             out.push({
                 kind: found.kind,
                 text: whole,
-                part: clip(shown(clause), MAX_PART),
+                part: partOf(clause),
                 ...(found.subject ? { subject: found.subject } : {}),
                 ...(found.term ? { term: clip(found.term, 80) } : {}),
                 ...(found.subjects && found.subjects.length > 1 ? { subjects: found.subjects } : {}),

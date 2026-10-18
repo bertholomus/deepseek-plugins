@@ -34,7 +34,7 @@ const CI_CMD = /\bgh\s+(run\s+(view|list|watch)|pr\s+(checks|status)|workflow\s+
 /** Where a command ships work: a repository, a package registry, or a running environment. */
 const PUSH_CMD = /\bgit\s+push\b|\bgh\s+pr\s+merge\b|\bgh-pages\b|\bgh\s+release\s+create\b/i;
 const DEPLOY_REMOTE = /\bgit\s+push\s+(-\S+\s+)*(heroku|dokku|deploy|production|prod|staging|live|fly|render|piku)\b|\bgh-pages\b/i;
-const PUBLISH_CMD = /\b(npm|pnpm|yarn)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b|\bgem\s+push\b|\bdocker\s+(push|buildx\s+build\b[^|;&]*--push)\b|\bgh\s+release\s+create\b|\bmvnw?\s+(\S+\s+)*deploy\b|\bgradlew?\s+(\S+\s+)*publish\w*\b|\bdotnet\s+nuget\s+push\b|\b(poetry|uv|flit|hatch)\s+publish\b|\bmix\s+hex\.publish\b|\bpod\s+trunk\s+push\b|\bfastlane\s+(?:\S+\s+)*(?:pilot|upload_to_testflight|upload_to_app_store|upload_to_play_store|deliver|supply)\b|\baltool\b[^|;&]*--upload|\biTMSTransporter\b/i;
+const PUBLISH_CMD = /\b(npm|pnpm|yarn)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b|\bgem\s+push\b|\bdocker\s+(push|buildx\s+build\b[^|;&]*--push)\b|\b(?:podman|buildah)\s+push\b|\bjib:build\b|\bgradlew?\s+(?:\S+\s+)*jib\b(?!\w)|\bko\s+(?:build|publish|apply)\b|\bcrane\s+(?:push|copy|cp)\b|\bskopeo\s+copy\b|\bgh\s+release\s+create\b|\bmvnw?\s+(\S+\s+)*deploy\b|\bgradlew?\s+(\S+\s+)*publish\w*\b|\bdotnet\s+nuget\s+push\b|\b(poetry|uv|flit|hatch)\s+publish\b|\bmix\s+hex\.publish\b|\bpod\s+trunk\s+push\b|\bfastlane\s+(?:\S+\s+)*(?:pilot|upload_to_testflight|upload_to_app_store|upload_to_play_store|deliver|supply)\b|\baltool\b[^|;&]*--upload|\biTMSTransporter\b/i;
 const RELEASE_CMD = /\bkubectl\b[^|;&]*\b(apply|rollout|set\s+image|replace|scale|patch)\b|\bhelm\s+(upgrade|install|rollback)\b|\b(fly|flyctl)\s+(deploy|releases?)\b|\bvercel\b|\bnetlify\s+deploy\b|\bheroku\s+(releases|container:release|deploy)\b|\bterraform\s+apply\b|\bpulumi\s+up\b|\bwrangler\s+(deploy|publish)\b|\bfirebase\s+deploy\b|\bgcloud\s+(\S+\s+)*deploy\b|\baws\s+(s3\s+sync|deploy|ecs\s+update-service|lambda\s+update-function-code|cloudformation\s+deploy)\b|\bcap\s+\S+\s+deploy\b|\bansible-playbook\b|\bkamal\s+deploy\b|(^|[\s;&|/])deploy(\.sh)?(\s|$)|\b(npm|pnpm|yarn)\s+run\s+deploy\b|\bmake\s+deploy\b|\brsync\b[^|;&]*\s[\w.@-]+:\S*|\bscp\b[^|;&]*\s[\w.@-]+:\S*|\bdocker\s+compose\s+(\S+\s+)*up\b|\bsystemctl\s+(restart|reload)\b/i;
 /** Reads of what a registry holds. */
 const REGISTRY_READ_CMD = /\bnpm\s+(view|info|show)\b|\bpip3?\s+index\s+versions\b|\bcargo\s+search\b|\bgem\s+list\s+(-r|--remote)\b|\bdocker\s+(manifest\s+inspect|pull)\b|\bcrane\s+(digest|ls)\b|\bskopeo\s+inspect\b/i;
@@ -175,7 +175,14 @@ export function testCountsIn(text) {
         const failLines = (text.match(/^\s*(?:✗|✘|×|FAIL\b|not ok \d+ )/gm) ?? []).length;
         if (passLines + failLines >= 2) add(passLines, failLines);
     }
-    return found.at(-1);
+    // A workspace run prints one summary per package (`@acme/schemas: Tests 58 passed`, `@acme/api: Tests: 141 passed`):
+    // the last is the run's, and each one's count was printed too.
+    const last = found.at(-1);
+    if (last && !last.parts && found.length > 1) {
+        const parts = [...new Set(found.map((f) => f.passed))];
+        if (parts.length > 1) return { ...last, parts };
+    }
+    return last;
 }
 
 /** The first file hash or commit in the output: sha256, a full commit id, or a short one in a push or commit line. */
@@ -584,11 +591,27 @@ function outcome(exit, extra) {
 
 /** What kind of run a shell command is. */
 /** A test run limited to some tests: a name filter, a single file or a single test. */
-const FILTERED_RUN = /\s(-k|-t|--testNamePattern|--grep|-g|-run|--run|--filter|--tests|--select)\s|\s-Dtest=|\s(-k|-t|--grep|--filter|--testNamePattern)=|\bpytest\b[^|;&]*\s-m\s|::\w|\.(test|spec)\.[cm]?[jt]sx?\b|_spec\.rb(:\d+)?\b|\btest_\w+\.py\b|\bcargo\s+(test|nextest\s+run)\s+(--?[\w-]+(=\S+)?\s+)*(?!--?)[a-z_][\w:]*/;
+const FILTERED_RUN = /\s(-k|-t|--testNamePattern|--grep|-g|-run|--run|--filter|--tests|--select)\s|\s-Dtest=|\s(-k|-t|--grep|--filter|--testNamePattern)=|\bpytest\b[^|;&]*\s-m\s|::\w|\.(test|spec)\.[cm]?[jt]sx?\b|_spec\.rb(:\d+)?\b|\btest_\w+\.py\b|\b\w+_test\.(?:exs|dart)(?::\d+)?\b|\b\w+(?:Test|Tests|Spec)\.(?:php|kt|java|cs|swift|scala)\b|\bcargo\s+(test|nextest\s+run)\s+(--?[\w-]+(=\S+)?\s+)*(?!--?)[a-z_][\w:]*/;
+/** A package the workspace tool picks, not tests the runner picks: `pnpm --filter @acme/utils test`, `turbo run test --filter=web`. */
+const PACKAGE_PICK = /(\b(?:pnpm|turbo)\b[^|;&]*?)\s(?:--filter|-F)(?:=|\s+)(?:"[^"]*"|'[^']*'|[^\s|;&]+)/;
+function unpicked(command) {
+    let out = command;
+    for (let n = 0; n < 4 && PACKAGE_PICK.test(out); n += 1) out = out.replace(PACKAGE_PICK, '$1');
+    return out;
+}
+/** A line of a test run that names a failure: `FAIL src/date.test.ts`, `× parses ISO weeks`, `--- FAIL: TestParse`. */
+const FAIL_LINE = /(?:^|\s)(?:FAIL(?:ED)?\b|[✗×✖]|not ok\b|---\s*FAIL\b|●)|\bfail(?:ed|ing|ure|ures)?\b|^\s*\d+\)\s+\S/i;
+/** The words of the part a filtered run covered: its test files' own names and its name filters (`invoice mailer` for `mix test test/billing/invoice_mailer_test.exs`). */
+const focusOf = (item) => (Array.isArray(item.focus) && item.focus.length ? item.focus : Array.isArray(item.filter) ? item.filter : []).filter((w) => typeof w === 'string');
+/** Whether a failing run names one of the words of a part: the failure is in that part. */
+const failsOn = (item, words) => {
+    const lines = Array.isArray(item.failLines) ? item.failLines : Array.isArray(item.lines) ? item.lines : [];
+    return lines.some((l) => typeof l === 'string' && FAIL_LINE.test(l) && words.some((w) => l.toLowerCase().includes(w)));
+};
 /** A test run's filter given by a flag: `-k login`, `-t "parses dates"`, `--testNamePattern=Date`, `-run TestParse`. */
 const FILTER_FLAG = /(?:^|\s)(?:-k|-t|--testNamePattern|--test-name-pattern|--grep|-g|-run|--run|--filter|--tests|--select|-Dtest)(?:=|\s+)(?:"([^"]*)"|'([^']*)'|([^\s|;&]+))/g;
 /** Runners that take test files or name filters as plain words: `vitest run date`, `jest src/date`, `pytest tests/test_auth.py`. */
-const POSITIONAL_RUNNER = /\b(?:vitest(?:\s+run)?|jest|mocha|ava|pytest|py\.test|rspec|phpunit|bun\s+test|deno\s+test|go\s+test|(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|t)(?:\s+--)?)((?:\s+[^\s|;&>]+)*)/i;
+const POSITIONAL_RUNNER = /\b(?:vitest(?:\s+run)?|jest|mocha|ava|pytest|py\.test|rspec|phpunit|bun\s+test|deno\s+test|go\s+test|mix\s+test|(?:dart|flutter)\s+test|(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|t)(?:\s+--)?)((?:\s+[^\s|;&>]+)*)/i;
 /** Flags of those runners that take a value, so the word after them is not a filter. */
 const VALUE_FLAG = /^-(?:c|-config|-reporter|-project|-dir|-root|-environment|-env|-shard|-maxWorkers|-max-workers|-testTimeout|-test-timeout|-outputFile|-output-file|-workspace|-filter|-pool|-mode|-color|-cov-report|-cov|-tb|-junitxml|-durations|-maxfail|p|-rootdir|-basetemp|-ignore|-deselect|m|-require|r|-timeout|-format|f|o|-count|count|-parallel|parallel|-tags|tags|-run|run|k|t|g|-grep|-testNamePattern|-tests|-select|-coverprofile|coverprofile|-bench|bench)$/;
 /** Words that say nothing about which tests a filter picks. */
@@ -614,6 +637,30 @@ function filterOf(command) {
             }
             if (/^[\w-]+=/.test(arg) || arg === '.' || arg === './...' || /^\.\/?$/.test(arg)) continue;
             add(arg.replace(/\/\.\.\.$/, ''));
+        }
+    }
+    return [...words].slice(0, 6);
+}
+/** The words of what a filtered run covered: a name filter's words and each test file's own name, not its folders. */
+function focusOf_(command) {
+    const words = new Set();
+    const add = (text) => {
+        for (const part of String(text ?? '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/)) {
+            if (part.length >= 3 && !FILTER_GENERIC.has(part) && !/^\d+$/.test(part)) words.add(part);
+        }
+    };
+    for (const m of command.matchAll(FILTER_FLAG)) add(m[1] ?? m[2] ?? m[3]);
+    const pos = POSITIONAL_RUNNER.exec(command);
+    if (pos) {
+        const args = pos[1].trim().split(/\s+/).filter(Boolean);
+        for (let at = 0; at < args.length; at += 1) {
+            const arg = args[at];
+            if (arg.startsWith('-')) {
+                if (!arg.includes('=') && VALUE_FLAG.test(arg)) at += 1;
+                continue;
+            }
+            if (!/\.[a-z]{1,5}(?::\d+)?$/i.test(arg)) continue;
+            add(arg.replace(/:\d+$/, '').split('/').at(-1).replace(/\.[a-z]{1,5}$/i, '').replace(/(?:[._-]?(?:test|spec)s?)$|^(?:test|spec)s?[._-]/i, ''));
         }
     }
     return [...words].slice(0, 6);
@@ -738,11 +785,20 @@ export function itemOf({ name, args, text, isError = false }) {
     const codes = codesIn(out);
     if (codes.length) facts.codes = codes;
     if (tests && !(shell && /^(deploy|probe|lint|hash|build)$/.test(kindOfCommand(commandOf(args), tests)))) {
-        const filter = shell ? filterOf(command) : [];
-        facts.tests = { ...tests, ...(shell && (FILTERED_RUN.test(command) || filter.length) ? { filtered: true } : {}), ...(shell && MIXED_RUN.test(command) ? { mixed: true } : {}) };
+        const picked = shell ? unpicked(command) : '';
+        const filter = shell ? filterOf(picked) : [];
+        facts.tests = { ...tests, ...(shell && (FILTERED_RUN.test(picked) || filter.length) ? { filtered: true } : {}), ...(shell && MIXED_RUN.test(command) ? { mixed: true } : {}) };
         if (filter.length) facts.filter = filter;
+        const focus = shell && filter.length ? focusOf_(picked) : [];
+        if (focus.length && focus.join() !== filter.join()) facts.focus = focus;
+        // The lines that name what failed, which the kept head and tail may not hold.
+        const failLines = tests.failed > 0 ? out.split(/\r?\n/).filter((l) => FAIL_LINE.test(l)).slice(0, 6).map((l) => clip(l.trim(), 120)) : [];
+        if (failLines.length) facts.failLines = failLines;
     }
     if (hash) facts.hash = hash;
+    // "[main 8c41d2e] install.sh: quote PREFIX paths": git made the commit, whatever a later step of the command did.
+    const record = shell && /\bgit\s+commit\b/.test(command) ? /^\[[\w./-]+(?: \(root-commit\))? ([0-9a-f]{7,12})\]/m.exec(out) : null;
+    if (record) facts.committed = record[1];
     if (metric) facts.metric = metric;
     if (series.length) facts.series = series;
     // A table of a baseline row and one other is a before-and-after in one run.
@@ -1069,7 +1125,9 @@ function farOff(claim, list) {
     const after = firstOf(last);
     // "at the median" names k6's med and a p50.
     const named = (l) => labelIn(l, text) || ((l === 'median' || l === 'p50') && /\b(?:median|p50)\b/i.test(text));
-    const labels = [...before.keys()].filter((l) => after.has(l) && named(l));
+    const common = [...before.keys()].filter((l) => after.has(l));
+    // "Parsing is about 4x faster" names no figure: it is about the one figure both runs print, when there is one.
+    const labels = common.filter(named).length ? common.filter(named) : common.length === 1 ? common : [];
     if (labels.length !== 1) return undefined;
     const [label] = labels;
     const from = before.get(label);
@@ -1306,7 +1364,13 @@ function passedFor(subject, claim, list) {
     const byCommand = [...new Set(commands.flatMap((c) => namedRuns(fitting, c)))].sort((a, b) => list.indexOf(a) - list.indexOf(b));
     const suites = subject === 'tests' || subject === 'any' ? SUITES.filter((k) => k.said.test(words)).map((k) => k.name) : [];
     const bySuite = suites.length ? fitting.filter((i) => suitesRun(i.cmd).some((k) => suites.includes(k))) : [];
-    const relevant = byCommand.length ? byCommand : bySuite.length ? bySuite : fitting;
+    // "Invoice tests: 9/9 pass" after `pytest -k invoice` and a full run with an unrelated failure: the claim is about the run its
+    // filter names, unless a later failing run names that filter too.
+    const byFilter = subject === 'tests' || subject === 'any'
+        ? fitting.filter((i) => i.tests?.filtered && Array.isArray(i.filter) && i.filter.some((w) => new RegExp(`\\b${w}`, 'i').test(words)))
+        : [];
+    const failsThere = byFilter.length > 0 && fitting.slice(fitting.indexOf(byFilter.at(-1)) + 1).some((i) => i.ok === false && failsOn(i, focusOf(byFilter.at(-1))));
+    const relevant = byCommand.length ? byCommand : byFilter.length && !failsThere ? byFilter : bySuite.length ? bySuite : fitting;
     const last = relevant.at(-1);
     const what = LAST_FAILED[subject] ?? 'run';
     // CI read before the last push is about the commit before it.
@@ -1317,6 +1381,13 @@ function passedFor(subject, claim, list) {
     // "1 test passed" after a run where 1 passed and 2 failed: the run's own count, which reports the failures.
     const early = subject === 'tests' || subject === 'any' ? namedCount(words) : undefined;
     if (early && last.tests && last.tests.failed > 0 && early.passed === last.tests.passed && !/\b(?:all|every|each|both|whole|full|entire)\b/i.test(words) && !partOfAll(words)) return { verdict: 'none', evidence: [], why: '' };
+    // "`@acme/billing` and `@acme/ui` were green too" after a workspace run whose failures all name `@acme/api`:
+    // the failure is in another package, so this run says nothing against the ones it names.
+    const packages = String(claim.part ?? words).match(WORKSPACE_PACKAGE) ?? [];
+    if (last.ok === false && packages.length && Array.isArray(last.failLines)) {
+        const failing = new Set(last.failLines.flatMap((l) => (typeof l === 'string' ? l.match(WORKSPACE_PACKAGE) ?? [] : [])));
+        if (failing.size && packages.every((p) => !failing.has(p))) return { verdict: 'none', evidence: [], why: '' };
+    }
     if (last.ok === false) return { verdict: 'contradicted', evidence: [said(last)], why: `The last ${what} in this turn did not pass: ${last.text}.` };
     if (last.ok === null) return { verdict: 'unbacked', evidence: [said(last)], why: `It is not clear how the last ${what} ended: ${last.text}.` };
     if (NO_WARNINGS.test(claim.text ?? words) && (last.warnings ?? 0) > 0) {
@@ -1372,6 +1443,9 @@ function passedFor(subject, claim, list) {
     }
     return { verdict: 'backed', evidence: relevant.slice(-3).map(said), why: '' };
 }
+
+/** A workspace package's name: `@acme/api`. */
+const WORKSPACE_PACKAGE = /@[\w.-]+\/[\w.-]+/g;
 
 /** "12/12", "3 of 3": a count said to be all of the run. */
 const partOfAll = (words) => /\b(\d+)\s*(?:\/|of|out of)\s*\1\b/.test(words);
@@ -1514,6 +1588,11 @@ function judgeDeployed(claim, list) {
         if (commit && commit.ok === false) return { verdict: 'contradicted', evidence: [said(commit), said(last)], why: `The commit in this turn did not go through (${commit.text}), so the push sent nothing new.` };
     }
     if (target === 'env' || target === 'any') {
+        // "`kubectl rollout status` completed": the claim is about the run it names, which went through, whatever ran after it.
+        const quoted = (claim.commands ?? []).flatMap((c) => list.filter((i) => ranCommand(i, c)));
+        if (quoted.length && quoted.every((i) => i.ok === true) && /\b(?:completed|complete|finished|succeeded|accepted|reported|returned|printed|went through)\b/i.test(words)) {
+            return { verdict: 'backed', evidence: quoted.slice(-2).map(said), why: '' };
+        }
         // What ran after the deploy and says it is not well (pods crashing, a failed health check).
         const after = list.slice(list.indexOf(last) + 1).filter((i) => (i.kind === 'probe' && !i.registry && i.ok === false) || i.health === false);
         if (after.length) return { verdict: 'contradicted', evidence: [said(last), said(after.at(-1))], why: `After the ${tw.last}, a check in this turn says it is not up: ${after.at(-1).text}.` };
@@ -1607,7 +1686,15 @@ function judgeFixed(claim, list, prompt = '') {
     const kinds = FIX_CHECKS[claim.subject ?? 'any'] ?? FIX_CHECKS.any;
     const fitting = checks.filter((i) => kinds.includes(i.kind));
     const last = (fitting.length ? fitting : checks).at(-1);
-    if (last.ok === false) return { verdict: 'contradicted', evidence: [said(last)], why: `The last run after the change did not pass: ${last.text}.` };
+    if (last.ok === false) {
+        // "Fixed the rounding bug in `formatCurrency`" after `vitest run src/currency.test.ts` passed and a full run failed
+        // elsewhere: the run its filter names shows the fix, unless the failure names that filter too.
+        const words = String(claim.part ?? claim.text ?? '').replace(/([a-z])([A-Z])/g, '$1 $2');
+        const named = fitting.filter((i) => i.ok === true && i.tests?.filtered && focusOf(i).some((w) => new RegExp(`\\b${w}`, 'i').test(words))).at(-1);
+        const failing = named ? fitting.slice(fitting.indexOf(named) + 1).filter((i) => i.ok === false) : [];
+        if (named && !failing.some((i) => failsOn(i, focusOf(named)))) return { verdict: 'backed', evidence: [said(named)], why: '' };
+        return { verdict: 'contradicted', evidence: [said(last)], why: `The last run after the change did not pass: ${last.text}.` };
+    }
     return { verdict: 'backed', evidence: checks.slice(-3).map(said), why: '' };
 }
 
@@ -1733,7 +1820,7 @@ function judgeDone(claim, list, prompt) {
     }
     // "Committed the fix" after a `git commit` that failed.
     const commit = /\bcommitted\b/i.test(words) ? list.filter((i) => /\bgit\s+commit\b/i.test(i.cmd ?? '')).at(-1) : undefined;
-    if (commit && commit.ok === false) return { verdict: 'contradicted', evidence: [said(commit)], why: `The commit in this turn did not go through: ${commit.text}.` };
+    if (commit && commit.ok === false && !commit.committed) return { verdict: 'contradicted', evidence: [said(commit)], why: `The commit in this turn did not go through: ${commit.text}.` };
     if (changeClaim) {
         // An apply or a deploy to an environment changes things too ("created the bucket" with `terraform apply`).
         const acts = (i) => i.change || i.kind === 'change' || i.apply || (i.kind === 'deploy' && (i.targets ?? []).includes('env'));
