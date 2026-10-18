@@ -97,8 +97,8 @@
  *   page; a read and an answer that didn't work, each in the plugin's own
  *   row saying what wasn't done and why; an agent's change to a Microsoft
  *   meeting that didn't say to tell its guests, refused, in the window's
- *   words (whom it would email, why, and what to do); the cards' faint fill
- *   and no blur, light and dark;
+ *   words (whom it would email, why, and what to do); the cards opaque like
+ *   DSH's own in a chat, no blur, light and dark;
  * - the Agenda pane in DSH's right sidebar: an event's details beside it,
  *   the chat staying, and Open in Calendar to the event on the page; at the
  *   sidebar's narrowest (300 px) nothing cut or scrolled sideways; no fill
@@ -814,7 +814,7 @@ try {
     });
 
     await step('a toast while the event dialog is open', async () => {
-        // An event saved, its toast showing: the next event dialog opened under it keeps its buttons clear (the toast goes to the top).
+        // An event saved, its toast showing: the next event dialog opened under it keeps its buttons clear (DSH's banner is at the top).
         await page.locator('[data-calendar-side-new]').click();
         const form = page.locator('[data-calendar-event-form="new"]');
         await form.waitFor({ state: 'visible' });
@@ -2397,8 +2397,8 @@ try {
             JSON.stringify({ listText: listText?.slice(0, 200), hasDays, createText: createText?.slice(0, 200), detailsText: detailsText?.slice(0, 120) }));
         await page.keyboard.press('Escape');
     });
-    // The glass contract for what the plugin draws in a chat: a faint fill of its own, no blur (the conversation behind
-    // it is DSH's or the wallpaper's to blur), in light and dark.
+    // The glass contract for what the plugin draws in a chat: a card like DSH's own there — opaque, no blur of its
+    // own (the conversation behind it is DSH's or the wallpaper's to blur) — in light and dark.
     /** A computed colour's alpha: 1 for rgb(), 0 for transparent. */
     const alphaOf = (color) => {
         if (color === 'transparent') return 0;
@@ -2406,7 +2406,7 @@ try {
         const parts = m ? m[1].split(/[,\s/]+/).filter(Boolean) : [];
         return parts.length >= 4 ? Number(parts[3]) : parts.length === 3 ? 1 : NaN;
     };
-    await step('chat cards on glass: a faint fill and no blur, in light and dark', async () => {
+    await step('chat cards on glass: opaque like DSH\'s own cards, no blur, in light and dark', async () => {
         await openSession(await titleOf(listCall.sessionId));
         const card = page.locator('.dshcal-chat[data-calendar-chat="calendar_events"][data-phase="result"] .dshcal-chat-card').first();
         await card.waitFor({ state: 'attached', timeout: 10000 });
@@ -2420,9 +2420,10 @@ try {
         const dark = await look();
         if (shots) await card.screenshot({ path: join(shots, 'chat-events-dark.png') }).catch(() => {});
         await setDark(page, false);
-        const faint = (c) => alphaOf(c.fill) > 0 && alphaOf(c.fill) <= 0.06 && c.blur === 'none' && alphaOf(c.row) === 0 && c.rowBlur === 'none';
-        check('a chat card has a faint fill of its own (4 % in dark) and no blur, its row no background, in light and dark',
-            faint(light) && faint(dark) && Math.abs(alphaOf(dark.fill) - 0.04) < 0.005 && light.fill !== dark.fill, JSON.stringify({ light, dark }));
+        // Opaque DSH card grounds (layer 1: white light, #232324 dark), never a blur of their own; the row around none.
+        const opaque = (c) => alphaOf(c.fill) === 1 && c.blur === 'none' && alphaOf(c.row) === 0 && c.rowBlur === 'none';
+        check('a chat card draws like DSH\'s own cards in a chat (opaque, no blur of its own), its row no background, in light and dark',
+            opaque(light) && opaque(dark) && light.fill !== dark.fill, JSON.stringify({ light, dark }));
     });
 
     await step('chat cards for a meeting that reached a guest, and for a move', async () => {
