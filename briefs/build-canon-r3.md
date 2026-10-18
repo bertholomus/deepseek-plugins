@@ -221,7 +221,11 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
   pass and the fourth group. To see
   only that: `node --test test/canon-relevance.test.js 2>&1 | grep -E '^(not )?ok '`; never grep `^\s+[+-] ` or
   `actual` on a run that includes the hold-out.
-- The coding floor's margin on dev is two prompts (210 of 231; 208 is 90.0%).
+- The coding floor's margin on dev is five prompts (235 of 255; 230 is the least that meets 90%). The brief's dev aim
+  of 95% no block for coding requests is not met (92.2%): most of the 20 with a block are coding requests asked as
+  questions ("Why does npm install hang forever?"), which read as questions; telling them apart needs a list of code
+  words, and treating more prompts as coding requests is what made 14893d8 miss answers. The aims for answers are met
+  (first note 92.0% for 85%, in the block 94.5% for 93%).
 - A long prompt (a pasted log with a question) spreads its weight over many words: a coding request may share too
   little of it.
 - zsh does not split `$B` into words: pass env flags one by one or under bash.
