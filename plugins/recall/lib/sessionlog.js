@@ -17,6 +17,12 @@
  * A forked session's log starts with its parent's events up to a
  * `session/end-seed` marker; those turns are the parent's, and are skipped.
  *
+ * A turn's end keeps DSH's reason: `completed`, `aborted` (who stopped it:
+ * `user`, `parent`, `disposed` or a `hook`), `error` (with its message),
+ * `max-tokens`, `blocked`, or `interrupted` (DSH closes a turn so when it
+ * opens a session again after a crash; Recall does the same when a turn
+ * starts while one is open).
+ *
  * @module dsh-plugin-recall/sessionlog
  */
 import { addPrompt, addReply, addTool, newTurn, rowOf, titleLine } from './turns.js';
@@ -50,6 +56,22 @@ export function isPrompt(message) {
     const source = message.source ?? {};
     if (CONTEXT_KINDS.has(source.kind) || CONTEXT_FORMS.has(source.form)) return false;
     return true;
+}
+
+/** Why a turn ended early, in DSH's own words: who or what stopped it, or the error's message; '' otherwise. */
+export function whyOf(reason) {
+    const words = (text) => String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, 300);
+    if (reason?.kind === 'aborted') {
+        const cause = reason.reason && typeof reason.reason === 'object' ? reason.reason : {};
+        const kind = typeof cause.kind === 'string' ? cause.kind.slice(0, 20) : '';
+        const text = typeof cause.reason === 'string' ? cause.reason : typeof cause.reason?.message === 'string' ? cause.reason.message : '';
+        return text ? words(`${kind}: ${text}`) : kind;
+    }
+    if (reason?.kind === 'error') {
+        const e = reason.error && typeof reason.error === 'object' ? reason.error : {};
+        return words(typeof e.message === 'string' && e.message.trim() ? e.message : typeof e.code === 'string' ? e.code : '');
+    }
+    return '';
 }
 
 /** A reader's state before the first line. */
@@ -154,21 +176,24 @@ export class SessionLog {
             case 'tool/call':
                 if (s.open && typeof data.name === 'string') addTool(s.open, data.name, data.arguments);
                 return;
-            case 'turn/end':
+            case 'turn/end': {
                 if (!s.open) return;
                 if (Number.isSafeInteger(data.turn) && data.turn !== s.open.turn) return;
-                this.close(typeof data.reason?.kind === 'string' ? data.reason.kind : 'completed', Number.isFinite(event.time) ? event.time : 0);
+                const reason = data.reason && typeof data.reason === 'object' ? data.reason : {};
+                this.close(typeof reason.kind === 'string' && reason.kind ? reason.kind.slice(0, 40) : 'completed', Number.isFinite(event.time) ? event.time : 0, whyOf(reason));
                 return;
+            }
             default:
         }
     }
 
-    /** End the open turn. */
-    close(status, at) {
+    /** End the open turn: how (DSH's reason) and why (who stopped it, or the error). */
+    close(status, at, why = '') {
         const s = this.state;
         const open = s.open;
         if (!open) return;
         open.status = status;
+        open.why = why;
         open.end = at;
         this.ended.set(open.turn, rowOf(open, { done: true }));
         s.turns = Math.max(s.turns, open.turn);

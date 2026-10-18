@@ -68,7 +68,8 @@ function tick() {
     if (result.idle) {
         post({ type: 'note', note: { kind: 'caught-up', ...result.idle } });
         report(true);
-    } else if (result.more) report(false);
+    } else if (result.shrunk) report(true);
+    else if (result.more) report(false);
     if (result.more) schedule();
 }
 

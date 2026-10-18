@@ -1103,7 +1103,22 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             // The search box, its filters and the count.
             `.${P}-find{display:flex;align-items:center;gap:8px;margin-top:12px;min-width:0}`,
             `.${P}-find-box{flex:1 1 auto;min-width:0}`,
-            `.${P}-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;min-width:0}`,
+            `.${P}-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;min-width:0;container-type:inline-size}`,
+            // On glass at a low tint (Wallpaper at .2, the cards at .4) over a mid picture, the suite's state words and the
+            // green and red notes read at 3.3 to 4.1:1: on Recall's page they lean further toward the label colour, so they
+            // read at 4.5:1 or more there, as on DSH's own ground (the real-DSH test measures both).
+            `.${P}-page .${P}-tag[data-tone="success"]{color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 30%,var(--dsw-alias-label-primary))}`,
+            `.${P}-page .${P}-tag[data-tone="warning"]{color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 30%,var(--dsw-alias-label-primary))}`,
+            `.${P}-page .${P}-tag[data-tone="info"]{color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 45%,var(--dsw-alias-label-primary))}`,
+            `.${P}-page .${P}-tag[data-tone="danger"]{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 55%,var(--dsw-alias-label-primary))}`,
+            `.${P}-page .${P}-note.${P}-ok{color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 35%,var(--dsw-alias-label-primary))}`,
+            `.${P}-page .${P}-note.${P}-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 55%,var(--dsw-alias-label-primary))}`,
+            // In a narrow card the kind switcher (DSH's segmented control, four equal columns as wide as "Transcripts")
+            // would be wider than its row: there each choice is as wide as its word, and the chosen one wears the pill.
+            `@container (max-width: 480px){.${P}-filters [data-suite-choice] [role="tablist"]{grid-auto-columns:auto;max-width:100%}`
+                + `.${P}-filters [data-suite-choice] [role="tablist"]>[aria-hidden="true"]{display:none}`
+                + `.${P}-filters [data-suite-choice] [role="tab"]{padding:0 10px}`
+                + `.${P}-filters [data-suite-choice] [role="tab"][aria-selected="true"]{background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-elevation-soft)}}`,
             `.${P}-count{margin:12px 0 0;font:var(--dsw-font-xs-13);color:var(--${P}-text-2)}`,
             // Results.
             `.${P}-results{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column}`,
@@ -1187,15 +1202,45 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return r?.kind === 'transcript' ? 'Untitled transcript' : 'Untitled session';
         }
         const ownSession = (r) => r?.kind === 'session' && r.own === true && typeof r.sessionId === 'string' && r.sessionId !== '';
+        /** A result's turn in words, for a button's name: “Long session”, turn 2 (section 2 of a note). */
+        const turnName = (r, turn = r.turn) => `${quoted(titleOf(r), 60)}, ${r.kind === 'handoff' ? 'section' : 'turn'} ${turn}`;
+        /** What pressing a result does, named with it: "Open “Long session” at turn 2", or "Read “Notes”, section 2 here". */
+        const openName = (r, turn = r.turn, where = 'here') => (ownSession(r) ? `Open ${quoted(titleOf(r), 60)} at turn ${turn}` : `Read ${turnName(r, turn)} ${where}`);
         /** Where a result is in its file: its turn, or its note's section and line. */
         function placeOf(r) {
             if (r.kind === 'handoff') return [r.label && r.label !== r.title ? `section ${quoted(r.label, 40)}` : 'its first section', Number.isFinite(r.line) ? `line ${r.line}` : ''].filter(Boolean).join(', ');
             return Number.isFinite(r.turn) ? `turn ${r.turn}` : '';
         }
-        /** A result's kind, its folder, its model and its place, for its meta line (the time is drawn apart). */
-        function metaParts(r, home) {
+        /** A turn's state in a word or two, for its meta line ('' when it ended as it should): one word everywhere. */
+        const STATE_WORD = Object.freeze({ running: 'still running', stopped: 'stopped', failed: 'failed', 'cut-off': 'cut off by a restart', 'cut-short': 'cut short', blocked: 'blocked' });
+        const stateOf = (r) => (typeof r?.state === 'string' ? r.state : r?.running === true ? 'running' : '');
+        /** A stopped turn in a sentence, from DSH's cause ("user", "parent", "disposed", "hook: why"). */
+        function stoppedSentence(why) {
+            const text = String(why ?? '');
+            const kind = text.split(':')[0];
+            if (kind === 'user') return 'This turn was stopped from the chat before it finished.';
+            if (kind === 'parent') return 'The session that started this turn stopped it before it finished.';
+            if (kind === 'disposed') return 'This turn stopped when DSH closed its session.';
+            if (kind === 'hook') return `A plugin stopped this turn before it finished${text.includes(':') ? ` (${cut(text.slice(text.indexOf(':') + 1), 120)})` : ''}.`;
+            return 'This turn was stopped before it finished.';
+        }
+        /** A turn's state in a sentence, for the reading view; '' when it ended as it should. */
+        function stateSentence(t) {
+            switch (stateOf(t)) {
+                case 'running': return 'This turn is still running.';
+                case 'stopped': return stoppedSentence(t.why);
+                case 'failed': return t.why ? `This turn failed: ${sentence(cut(t.why, 300))}` : 'This turn failed.';
+                case 'cut-off': return 'This turn was cut off by a restart: DSH stopped before it finished.';
+                case 'cut-short': return 'This turn was cut short: its reply reached the model\'s output limit.';
+                case 'blocked': return 'A plugin blocked this turn before it could go on.';
+                default: return '';
+            }
+        }
+        /** A result's kind, its folder, its model, its place (of how many) and its state, for its meta line (the time is drawn apart). */
+        function metaParts(r, home, { of: total } = {}) {
             const kind = r.kind === 'session' && !r.own ? 'Session from another DSH' : KIND_WORD[r.kind] ?? 'Result';
-            return [kind, r.folder ? homeless(r.folder, home) : '', r.model || '', placeOf(r), r.running ? 'still running' : ''].filter(Boolean);
+            const place = placeOf(r);
+            return [kind, r.folder ? homeless(r.folder, home) : '', r.model || '', place && Number.isFinite(total) && r.kind !== 'handoff' ? `${place} of ${count(total)}` : place, STATE_WORD[stateOf(r)] ?? ''].filter(Boolean);
         }
         /** A snippet's text with its hits as marks (the index marks them with \u0002 and \u0003). */
         function snippetParts(snippet) {
@@ -1217,11 +1262,24 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         /** "120 matching turns in 34 sessions and files · 18 ms". */
         function countLine(found, kind) {
             if (!found) return '';
-            const turns = `${count(found.total)}${found.totalMore ? '+' : ''} matching ${found.total === 1 && !found.totalMore ? 'turn' : 'turns'}`;
             const [one, many] = KIND_PLURAL[kind] ?? ['session or file', 'sessions and files'];
-            const where = `${count(found.sessions)}${found.sessionsMore ? '+' : ''} ${found.sessions === 1 && !found.sessionsMore ? one : many}`;
             const took = Number.isFinite(found.took) ? ` · ${found.took < 1 ? '<1' : Math.round(found.took)} ms` : '';
-            return `${turns} in ${where}${took}`;
+            // Sessions whose title alone has the words: counted apart, as no turn of theirs says them.
+            const titled = found.titled > 0 ? `${count(found.titled)}${found.titledMore ? '+' : ''}` : '';
+            const single = found.titled === 1 && !found.titledMore;
+            // A note is read in sections, not turns.
+            const [unit, units] = kind === 'handoff' ? ['section', 'sections'] : ['turn', 'turns'];
+            if (titled && found.total === 0 && !found.totalMore) return `No ${unit} says it; ${titled} ${single ? one : many} ${single ? 'matches' : 'match'} by title only${took}`;
+            const turns = `${count(found.total)}${found.totalMore ? '+' : ''} matching ${found.total === 1 && !found.totalMore ? unit : units}`;
+            const where = `${count(found.sessions)}${found.sessionsMore ? '+' : ''} ${found.sessions === 1 && !found.sessionsMore ? one : many}`;
+            return `${turns} in ${where}${titled ? `, and ${titled} more by title only` : ''}${took}`;
+        }
+
+        /** Where a list stops before its end: at its 1,000th result, or at the files of the turns a search looks through. */
+        function endLine(found, shown) {
+            if (found?.cut === 'length') return `The list stops at ${plural(shown, 'result')}. Add a word or a filter to find others.`;
+            const turns = !found?.text?.trim() ? 'newest turns' : found.sort === 'newest' ? 'newest matching turns' : 'best-matching turns';
+            return `These are the sessions and files of the ${count(found?.looked ?? 0)} ${turns}. Add a word or a filter to find others.`;
         }
 
         // ── Shared state ──────────────────────────────────────────────
@@ -1332,9 +1390,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 more() {
                     return search({ offset: store.get().results.length });
                 },
-                /** Show one turn or note section in full, in the page's reading view. */
+                /**
+                 * Show one turn or note section in full, in the page's reading view. `from` is the control that
+                 * opened it (a selector), where Back puts the focus again; Turn before and after pass it on.
+                 */
                 read(id, from) {
-                    if (typeof id === 'string' && /^\d{1,12}\.\d{1,9}$/.test(id)) patch({ reading: { id, from } });
+                    if (typeof id === 'string' && /^\d{1,12}\.\d{1,9}$/.test(id)) patch({ reading: { id, from: typeof from === 'string' ? from : undefined } });
                 },
                 closeReading() {
                     patch({ reading: undefined });
@@ -1532,17 +1593,17 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         }
 
         /** Open a result: a session of this DSH at its turn, anything else in Recall's reading view. */
-        function openResult(r, { turn = r.turn, seq = r.seq, query = finder.store.get().query.text, page = false } = {}) {
+        function openResult(r, { turn = r.turn, seq = r.seq, query = finder.store.get().query.text, page = false, from } = {}) {
             const id = `${r.file}.${turn}`;
             if (ownSession(r)) {
                 void openAt({ sessionId: r.sessionId, turn, seq, query }).then((opened) => {
                     if (opened) return;
-                    finder.read(id);
+                    finder.read(id, from);
                     if (page) views.openPage();
                 });
                 return;
             }
-            finder.read(id);
+            finder.read(id, from);
             if (page) views.openPage();
         }
 
@@ -1592,8 +1653,20 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             if (!ix) return 'Starting the index.';
             const t = ix.totals ?? {};
             const held = t.turns > 0 ? `Recall has ${plural(t.turns, 'turn')} from ${plural(t.files ?? 0, 'session or file', 'sessions and files')}.` : 'Recall has nothing indexed yet.';
-            if (ix.busy) return `${held} Reading ${ix.queued > 0 ? plural(ix.queued, 'more file', 'more files') : 'what changed'}…`;
+            if (ix.busy) return `${held} ${readingWords(ix, data.home)}`;
             return `${held} Up to date.`;
+        }
+
+        /** How far a catch-up has read: "Reading new and changed files: 1,234 of 10,002 read…", or what it is looking through. */
+        function readingWords(ix, home) {
+            const b = ix.batch ?? { read: 0, left: ix.queued ?? 0, looking: Boolean(ix.walking) };
+            const read = Math.max(0, Number(b.read) || 0);
+            const total = read + Math.max(0, Number(b.left) || 0);
+            const where = typeof ix.walking === 'string' && ix.walking ? homeless(ix.walking, home) : '';
+            if (b.looking && total === 0) return where ? `Looking through ${where} for new and changed files…` : 'Looking for new and changed files…';
+            if (b.looking) return `Reading new and changed files: ${count(read)} read so far, still looking${where ? ` through ${where}` : ''} for more…`;
+            if (total === 1) return 'Reading 1 new or changed file…';
+            return `Reading new and changed files: ${count(read)} of ${count(total)} read…`;
         }
 
         function HeaderCard({ data, children }) {
@@ -1694,7 +1767,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         /** A menu of choices for one filter, drawn as a button that says the choice. */
         function FilterMenu({ name, label, value, items, onChoose, onOpen }) {
             const [open, setOpen] = React.useState(false);
-            const current = items.find((i) => i.id === value)?.label ?? label;
+            const chosen = items.find((i) => i.id === value);
+            const current = chosen?.label ?? label;
+            const currentText = chosen?.full ?? (typeof chosen?.label === 'string' ? chosen.label : label);
             return h(ui.Menu, {
                 open,
                 onClose: () => setOpen(false),
@@ -1712,7 +1787,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     size: 'sm',
                     'aria-haspopup': 'menu',
                     'aria-expanded': open,
-                    'aria-label': `${label}: ${current}`,
+                    'aria-label': `${label}: ${currentText}`,
                     'data-recall-filter': name,
                     onClick: () => {
                         if (!open) onOpen?.();
@@ -1723,14 +1798,45 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         }
 
         /** The menus' items for folders and models: Any, the one chosen, then what the index holds (newest first). */
+        /** The most characters of a folder a menu shows: DSH's menus cut a longer one at its end, where folders differ. */
+        const PATH_SHOWN = 46;
+
+        /**
+         * A long path cut in the middle at whole folders: its start and as many of its last folders as fit
+         * ("~/Projects/…/data/notes/projects/osprey"); a last folder too long by itself keeps its end.
+         */
+        function cutPath(path, max = PATH_SHOWN) {
+            const p = String(path ?? '');
+            if (p.length <= max) return p;
+            const parts = p.split('/');
+            const lead = parts[0] === '' || parts[0] === '~' ? 2 : 1;
+            if (parts.length <= lead) return `${p.slice(0, Math.ceil(max / 2) - 1)}…${p.slice(p.length - Math.floor(max / 2))}`;
+            const head = parts.slice(0, lead).join('/');
+            let tail = parts[parts.length - 1];
+            for (let i = parts.length - 2; i >= lead; i -= 1) {
+                if (head.length + 3 + parts[i].length + 1 + tail.length > max) break;
+                tail = `${parts[i]}/${tail}`;
+            }
+            if (head.length + 3 + tail.length <= max) return `${head}/…/${tail}`;
+            return `${head}/…${tail.slice(tail.length - Math.max(8, max - head.length - 2))}`;
+        }
+
+        /** A folder as a menu item: cut in the middle when long, with the whole path for screen readers and on hover. */
+        function folderLabel(path) {
+            const cut = cutPath(path);
+            if (cut === path) return path;
+            return h('span', { title: path, 'data-recall-path': path }, h('span', { 'aria-hidden': 'true' }, cut), h('span', { className: `${P}-sr` }, path));
+        }
+
         function facetItems({ facets, key, chosen, any, home }) {
             const list = Array.isArray(facets.data?.[key === 'folder' ? 'folders' : 'models']) ? facets.data[key === 'folder' ? 'folders' : 'models'] : [];
-            const items = [{ id: 'any', label: any }];
+            const items = [{ id: 'any', label: any, full: any }];
             const seen = new Set();
             const add = (value) => {
                 if (!value || seen.has(value) || items.length > 41) return;
                 seen.add(value);
-                items.push({ id: `v:${value}`, label: key === 'folder' ? homeless(value, home) : value });
+                const full = key === 'folder' ? homeless(value, home) : value;
+                items.push({ id: `v:${value}`, label: key === 'folder' ? folderLabel(full) : full, full });
             };
             add(chosen);
             for (const row of list) add(row?.[key]);
@@ -1773,24 +1879,26 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         type: 'button',
                         className: `${P}-open`,
                         'data-recall-open': id,
-                        title: own ? 'Open the session at this turn' : 'Read this here',
-                        onClick: () => openResult(r),
+                        'aria-label': openName(r),
+                        onClick: () => openResult(r, { from: `[data-recall-open="${id}"]` }),
                     }, titleOf(r)),
                     h('div', { className: `${P}-meta` }, metaParts(r, home).join(' · '), r.time ? ' · ' : '', r.time ? h(kit.TimeText, { at: r.time }) : null),
                     r.snippet ? h('p', { className: `${P}-snippet` }, ...snippetParts(r.snippet)) : null,
+                    r.titleOnly ? h('p', { className: `${P}-asked`, 'data-recall-title-only': '' }, `Only its title matches: it opens at its first ${r.kind === 'handoff' ? 'section' : 'turn'}.`) : null,
                     asked ? h('p', { className: `${P}-asked` }, `Asked: ${asked}`) : null,
                     others.length > 0 ? h('div', { className: `${P}-others` },
-                        h('span', null, r.kind === 'handoff' ? `${plural(rest, 'other section')} of this note match:` : `${plural(rest, 'other turn')} here match${rest === 1 ? 'es' : ''}:`),
+                        h('span', null, `${plural(rest, r.kind === 'handoff' ? 'other section' : 'other turn')} ${r.kind === 'handoff' ? 'of this note' : 'here'} ${rest === 1 ? 'matches' : 'match'}:`),
                         ...others.map((o) => h('button', {
                             key: o.turn,
                             type: 'button',
                             className: `${P}-link`,
                             'data-recall-other': `${r.file}.${o.turn}`,
-                            onClick: () => openResult(r, { turn: o.turn, seq: o.seq }),
+                            'aria-label': openName(r, o.turn),
+                            onClick: () => openResult(r, { turn: o.turn, seq: o.seq, from: `[data-recall-other="${r.file}.${o.turn}"]` }),
                         }, r.kind === 'handoff' ? `section ${o.turn}` : `turn ${o.turn}`)),
                         rest > others.length ? h('span', null, `and ${count(rest - others.length)} more`) : null) : null),
                 own ? h('div', { className: `${P}-item-side` },
-                    h(ui.Button, { variant: 'ghost', size: 'sm', onClick: () => finder.read(id), 'data-recall-peek': id }, 'Read here')) : null);
+                    h(ui.Button, { variant: 'ghost', size: 'sm', 'aria-label': `Read ${turnName(r)} here`, onClick: () => finder.read(id, `[data-recall-peek="${id}"]`), 'data-recall-peek': id }, 'Read here')) : null);
         }
 
         /** One turn or note section in full, with the turns beside it, and the way into its session. */
@@ -1816,13 +1924,14 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const t = state.t;
             const note = t.kind === 'handoff';
             const own = ownSession(t);
-            const go = (n) => finder.read(`${t.file}.${n}`);
+            const go = (n) => finder.read(`${t.file}.${n}`, finder.store.get().reading?.from);
             const where = own ? '' : `${note || t.kind === 'transcript' ? 'File' : 'Session file'}: ${homeless(t.path, home)}${t.line ? `, line ${t.line}` : ''}`;
             return h('div', { className: `${P}-read`, 'data-recall-reading': id },
                 back,
                 h('h3', { className: `${P}-read-title`, ref: head, tabIndex: -1 }, titleOf(t)),
-                h('div', { className: `${P}-meta` }, metaParts(t, home).join(' · '), Number.isFinite(t.count) && !note ? ` of ${count(t.count)}` : '', t.time ? ' · ' : '', t.time ? h(kit.TimeText, { at: t.time }) : null),
+                h('div', { className: `${P}-meta` }, metaParts(t, home, { of: t.count }).join(' · '), t.time ? ' · ' : '', t.time ? h(kit.TimeText, { at: t.time }) : null),
                 where ? h('div', { className: `${P}-meta` }, where) : null,
+                stateSentence(t) ? h('p', { className: `${P}-note`, 'data-recall-state': stateOf(t) }, stateSentence(t)) : null,
                 note ? [
                     h('h4', { key: 'l', className: `${P}-read-label` }, t.label ? `Section ${quoted(t.label, 80)}` : 'The note'),
                     h('div', { key: 't', className: `${P}-read-text` }, t.reply || 'This section has no text.'),
@@ -1830,7 +1939,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     h('h4', { key: 'al', className: `${P}-read-label` }, 'Asked'),
                     h('div', { key: 'at', className: `${P}-read-text` }, t.prompt || 'No words were kept for this request.'),
                     h('h4', { key: 'rl', className: `${P}-read-label` }, 'Reply'),
-                    h('div', { key: 'rt', className: `${P}-read-text` }, t.reply || (t.running ? 'This turn is still running.' : 'This turn has no reply text.')),
+                    h('div', { key: 'rt', className: `${P}-read-text` }, t.reply || (stateOf(t) === 'running' ? 'No reply yet.' : 'This turn has no reply text.')),
                     t.tools ? h('h4', { key: 'tl', className: `${P}-read-label` }, 'Commands and files it used') : null,
                     t.tools ? h('div', { key: 'tt', className: `${P}-read-text ${P}-code` }, t.tools) : null,
                 ],
@@ -1861,8 +1970,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             if (found?.nothing === 'no-words') {
                 return h(kit.Empty, { title: 'Type a word to search for', text: 'Words with a minus in front are left out of the results, but they find nothing by themselves.' });
             }
-            const clear = filtered(q) ? h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => finder.clearFilters() }, 'Clear the filters') : null;
-            if (!q.text.trim()) return h(kit.Empty, { title: 'No turns with these filters', text: 'Try another time, folder or model, or clear the filters.', action: clear });
+            // The filter row has its own "Clear the filters": this one says what it does from here.
+            const clear = filtered(q) ? h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => finder.clearFilters(), 'data-recall-unfilter': '' }, 'Search again without the filters') : null;
+            if (!q.text.trim()) return h(kit.Empty, { title: 'No turns with these filters', text: 'Try another time, folder or model.', action: clear });
             return h(kit.Empty, {
                 title: `Nothing matches ${quoted(q.text, 60)}`,
                 text: `Try fewer or other words, or the start of a word (deplo finds deploy and deployment). "Quotes" find an exact phrase; OR between two words finds either.${filtered(q) ? ' The filters may also leave it out.' : ''}`,
@@ -1884,9 +1994,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const kinds = new Set((data.index?.roots ?? []).map((r) => r.kind)).size;
             const reading = state.reading;
             const backToList = () => {
-                const from = reading?.id;
+                const { from, id } = reading ?? {};
                 finder.closeReading();
-                setTimeout(() => { windowDoc()?.querySelector?.(`[data-recall-open="${from}"]`)?.focus?.(); }, 0);
+                setTimeout(() => {
+                    const doc = windowDoc();
+                    const target = (from && doc?.querySelector?.(from)) || doc?.querySelector?.(`[data-recall-open="${id}"]`) || input.current;
+                    target?.focus?.();
+                }, 0);
             };
             const newer = q.text.trim() && state.turnsAt !== undefined && turns > state.turnsAt && !state.loading;
             let body;
@@ -1902,8 +2016,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         state.loading ? ' · searching…' : ''),
                     state.problem ? h(kit.ErrorLine, { key: 'error', lead: 'Not searched', text: state.problem, onRetry: () => void finder.search({ turns }) }) : null,
                     h('ul', { key: 'list', className: `${P}-results`, 'aria-label': 'Results' }, ...state.results.map((r) => h(ResultRow, { key: `${r.file}.${r.turn}`, r, home }))),
-                    state.more || newer ? h('div', { key: 'more', className: `${P}-more` },
+                    state.more || newer || (state.found?.cut && !state.loading) ? h('div', { key: 'more', className: `${P}-more` },
                         state.more ? h(ui.Button, { variant: 'outline', size: 'sm', disabled: state.loading, onClick: () => void finder.more(), 'data-recall-more': '' }, 'Show more results') : null,
+                        !state.more && state.found?.cut && !state.loading ? h('span', { className: `${P}-meta`, 'data-recall-end': state.found.cut }, endLine(state.found, state.results.length)) : null,
                         newer ? h('span', { className: `${P}-meta` }, 'Recall has read more since this search. ', h('button', { type: 'button', className: `${P}-link`, onClick: () => void finder.search({ turns }) }, 'Search again')) : null) : null,
                 ];
             }
@@ -1945,7 +2060,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             if (root.problems > 0) parts.push(`${plural(root.problems, 'file')} could not be read`);
             let why = '';
             if (root.state === 'missing') why = 'This folder is not there now (a disk may be unplugged). What Recall read from it stays searchable, and it looks again every minute.';
-            else if (root.state === 'unreadable') why = `${sentence(root.error) || 'Recall cannot read this folder.'} Check that DSH may read it.`;
+            else if (root.state === 'unreadable') why = sentence(root.error) || 'Recall cannot read this folder. Check that DSH may read it.';
             else if (root.state === 'waiting') why = 'Not read yet.';
             else if (root.capped) why = `It holds more files than Recall reads: only the first ${count(root.files)} are searched.`;
             return { word, counts: parts.join(' · '), why };
@@ -1959,7 +2074,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const running = data.thread?.state === 'running';
             const t = ix?.totals ?? {};
             const sub = ix ? `${plural(t.turns ?? 0, 'turn')} from ${plural(t.files ?? 0, 'file')}${ix.bytes > 0 ? ` · ${Math.max(1, Math.round(ix.bytes / 1048576))} MB on this computer` : ''}${ix.lastRead ? ' · read ' : ''}` : TEXT.indexSub;
-            return h(kit.Card, { title: TEXT.index, sub: ix ? [sub, ix.lastRead ? h(kit.TimeText, { key: 't', at: ix.lastRead }) : null] : sub, attrs: { 'data-recall-index': ix?.busy ? 'reading' : 'idle' } },
+            // Every card on the page is read (lists, why lines, small text): glass at tint + .2, as DESIGN puts what people read.
+            return h(kit.Card, { title: TEXT.index, main: true, sub: ix ? [sub, ix.lastRead ? h(kit.TimeText, { key: 't', at: ix.lastRead }) : null] : sub, attrs: { 'data-recall-index': ix?.busy ? 'reading' : 'idle' } },
                 ix?.stale ? h('p', { className: `${P}-note` }, 'The index is busy reading, so this is the last count it sent.') : null,
                 roots.length === 0
                     ? h(kit.Empty, {
@@ -1999,7 +2115,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const [all, setAll] = React.useState(false);
             const history = Array.isArray(data.history) ? data.history : [];
             const shown = all ? history : history.slice(0, 20);
-            return h(kit.Card, { title: TEXT.history, sub: TEXT.historySub, attrs: { 'data-recall-history': String(history.length) } },
+            return h(kit.Card, { title: TEXT.history, main: true, sub: TEXT.historySub, attrs: { 'data-recall-history': String(history.length) } },
                 history.length === 0 ? h(kit.Empty, { title: TEXT.noHistory, text: TEXT.noHistoryText })
                     : [
                         h('ul', { key: 'l', className: `${P}-list` }, ...shown.map((entry) => h('li', { key: entry.id, className: `${P}-item`, 'data-recall-entry': entry.kind },
@@ -2131,8 +2247,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         function doneTitle(view, a) {
             if (view?.kind === 'turn') return `Read a past turn: ${quoted(titleOf(view.turn), 50)}`;
             const q = view?.query || a.query;
+            if ((!Number.isFinite(view?.total) || view.total === 0) && view?.titled > 0) return `Searched past work for ${quoted(q, 50)}: ${plural(view.titled, 'session or file', 'sessions and files')} by title only`;
             if (!Number.isFinite(view?.total) || view.total === 0) return `Searched past work for ${quoted(q, 50)}: nothing found`;
-            return `Searched past work for ${quoted(q, 50)}: ${count(view.total)}${view.totalMore ? '+' : ''} ${view.total === 1 && !view.totalMore ? 'turn' : 'turns'} in ${plural(view.sessions ?? 0, 'session or file', 'sessions and files')}`;
+            // With a kind asked for, its places by name (a note's are sections), as the page's count says them.
+            const [one, many] = KIND_PLURAL[a?.kind] ?? ['session or file', 'sessions and files'];
+            const [unit, units] = a?.kind === 'handoff' ? ['section', 'sections'] : ['turn', 'turns'];
+            return `Searched past work for ${quoted(q, 50)}: ${count(view.total)}${view.totalMore ? '+' : ''} ${view.total === 1 && !view.totalMore ? unit : units} in ${plural(view.sessions ?? 0, one, many)}`;
         }
 
         const noop = () => {};
@@ -2160,7 +2280,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         h('div', { className: `${P}-tool-title` }, titleOf(r)),
                         h('div', { className: `${P}-tool-meta` }, [...metaParts(r, home), kit.timeText(r.time)].filter(Boolean).join(' · ')),
                         r.snippet ? h('p', { className: `${P}-tool-snippet` }, ...snippetParts(r.snippet)) : null),
-                    h(ui.Button, { variant: 'ghost', size: 'sm', onClick: () => openResult(r, { query: view.query, page: true }), 'data-recall-tool-open': `${r.file}.${r.turn}` }, ownSession(r) ? 'Open' : 'Read')))),
+                    h(ui.Button, { variant: 'ghost', size: 'sm', 'aria-label': openName(r, r.turn, 'in Recall'), onClick: () => openResult(r, { query: view.query, page: true }), 'data-recall-tool-open': `${r.file}.${r.turn}` }, ownSession(r) ? 'Open' : 'Read')))),
                 h('div', { className: `${P}-tool-foot` },
                     h('button', { type: 'button', className: `${P}-link`, onClick: openSearch, 'data-recall-tool-page': '' }, 'Search this in Recall')));
         }
@@ -2313,7 +2433,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         // For the plugin's own tests.
         module.exports.internals = {
             kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, KIND_WORD, TONE, finder, jump, views,
-            folderList, folderSpec, specOf, homeless, titleOf, metaParts, snippetParts, askedLine, countLine, indexLine, rootWords, callArgs, failureText, runningTitle, doneTitle,
+            folderList, folderSpec, specOf, homeless, cutPath, folderLabel, titleOf, metaParts, snippetParts, askedLine, countLine, endLine, stateSentence, indexLine, rootWords, callArgs, failureText, runningTitle, doneTitle,
             openAt, openResult, endJump, land, landWithoutMark, applySettings,
             RecallPage, RecallMark, RecallIcon, RecallToolView, SettledToolView, PreparingToolView, SearchCard, ResultRow, ReadingView, IndexCard, HistoryCard, HeaderCard, ThreadState, Filters, FilterMenu, NoResults,
         };

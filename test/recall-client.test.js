@@ -45,7 +45,7 @@ const STATUS = {
 const STATE = {
     enabled: true, tool: true, sessions: true, thread: { state: 'running', problem: '' }, index: STATUS,
     left: [{ kind: 'handoff', root: `${HOME}/notes/old`, why: `Inside ${HOME}/notes, which is already searched.` }],
-    history: [{ id: 'e1', at: now - 5000, kind: 'caught-up', text: 'Caught up with what changed', why: 'Read 30 files in 1.2 seconds: 340 turns and note sections indexed.', state: 'done' }],
+    history: [{ id: 'e1', at: now - 5000, kind: 'caught-up', text: 'Caught up with what changed', why: 'Read 30 files in 1.2 seconds: 320 turns and 20 note sections indexed.', state: 'done' }],
     home: HOME,
 };
 const FOUND = { text: 'deploy', words: ['deploy'], excluded: [], sort: 'best', filters: {}, total: 7, totalMore: false, sessions: 3, sessionsMore: false, results: [OWN, TRANSCRIPT, NOTE], more: true, took: 12.4 };
@@ -165,6 +165,24 @@ test('words: a result says what it is, where, when and which turn; hits are mark
     assert.deepEqual(plain(metaParts({ ...OWN, own: false, running: true }, HOME)), ['Session from another DSH', '~/work/gateway', 'glm-5.3', 'turn 4', 'still running']);
     assert.deepEqual(plain(metaParts(NOTE, HOME)), ['Handoff note', '~/notes', 'section “Next steps”, line 40']);
     assert.deepEqual(plain(metaParts(TRANSCRIPT, HOME)), ['Coding-agent transcript', '~/work/parser', 'glm-5.3-flash', 'turn 2']);
+    // One state per turn, one word for it everywhere: the rows, the tool's card, the reading view (after "of N").
+    const word = (state, extra = {}) => plain(metaParts({ ...OWN, state, ...extra }, HOME)).slice(3).join(' · ');
+    assert.deepEqual(['running', 'stopped', 'failed', 'cut-off', 'cut-short', 'blocked', ''].map((st) => word(st)),
+        ['turn 4 · still running', 'turn 4 · stopped', 'turn 4 · failed', 'turn 4 · cut off by a restart', 'turn 4 · cut short', 'turn 4 · blocked', 'turn 4']);
+    assert.equal(plain(metaParts({ ...OWN, state: 'running' }, HOME, { of: 1 })).slice(3).join(' · '), 'turn 4 of 1 · still running', 'not "still running of 1"');
+    assert.equal(plain(metaParts(NOTE, HOME, { of: 3 })).at(-1), 'section “Next steps”, line 40', 'a note\'s section has no count');
+    const { stateSentence } = client.internals;
+    assert.deepEqual([
+        stateSentence({ state: 'stopped', why: 'user' }), stateSentence({ state: 'stopped', why: 'parent' }), stateSentence({ state: 'stopped', why: 'disposed' }),
+        stateSentence({ state: 'stopped', why: 'hook: account/signed-out' }), stateSentence({ state: 'stopped' }),
+        stateSentence({ state: 'failed', why: 'The model provider did not answer (503)' }), stateSentence({ state: 'failed' }),
+        stateSentence({ state: 'cut-off' }), stateSentence({ state: 'cut-short' }), stateSentence({ state: 'blocked' }), stateSentence({ state: 'running' }), stateSentence({ state: '' }),
+    ], [
+        'This turn was stopped from the chat before it finished.', 'The session that started this turn stopped it before it finished.', 'This turn stopped when DSH closed its session.',
+        'A plugin stopped this turn before it finished (account/signed-out).', 'This turn was stopped before it finished.',
+        'This turn failed: The model provider did not answer (503).', 'This turn failed.',
+        'This turn was cut off by a restart: DSH stopped before it finished.', 'This turn was cut short: its reply reached the model\'s output limit.', 'A plugin blocked this turn before it could go on.', 'This turn is still running.', '',
+    ]);
     assert.equal(homeless('/Users/me', HOME), '~');
     assert.equal(homeless('/Users/meg/x', HOME), '/Users/meg/x', 'only the home folder itself');
     assert.equal(titleOf(TRANSCRIPT), 'Untitled transcript');
@@ -180,18 +198,31 @@ test('words: a result says what it is, where, when and which turn; hits are mark
     assert.equal(askedLine({ ...OWN, snippet: '\u0002please\u0003 deploy the gateway' }), '', 'not twice when the snippet is the request');
     assert.equal(askedLine(NOTE), '');
     assert.equal(countLine(FOUND, 'any'), '7 matching turns in 3 sessions and files · 12 ms');
-    assert.equal(countLine({ ...FOUND, total: 1, sessions: 1, took: 0.4 }, 'handoff'), '1 matching turn in 1 note · <1 ms');
+    assert.equal(countLine({ ...FOUND, total: 1, sessions: 1, took: 0.4 }, 'handoff'), '1 matching section in 1 note · <1 ms', 'a note is read in sections');
+    assert.equal(countLine({ ...FOUND, total: 3, sessions: 1 }, 'handoff'), '3 matching sections in 1 note · 12 ms');
     assert.equal(countLine({ ...FOUND, total: 5000, totalMore: true, sessions: 400, sessionsMore: true }, 'session'), '5,000+ matching turns in 400+ sessions · 12 ms');
+    // Sessions whose title alone has the words are counted apart: no turn of theirs says them.
+    assert.equal(countLine({ ...FOUND, total: 2, sessions: 2, titled: 1 }, 'any'), '2 matching turns in 2 sessions and files, and 1 more by title only · 12 ms');
+    assert.equal(countLine({ ...FOUND, total: 0, sessions: 0, titled: 1 }, 'handoff'), 'No section says it; 1 note matches by title only · 12 ms');
+    assert.equal(countLine({ ...FOUND, total: 0, sessions: 0, titled: 3 }, 'any'), 'No turn says it; 3 sessions and files match by title only · 12 ms');
     assert.equal(failureText('Give words to search for in query, or a result id in open.'), 'the agent gave no words to search for.');
     assert.equal(failureText('Error: Recall\'s index is starting. Try again in a moment.'), 'Recall\'s index is starting. Try again in a moment.');
     assert.equal(runningTitle({ query: 'deploy gateway' }), 'Searching past work for “deploy gateway”');
     assert.equal(runningTitle({ open: '3.4' }), 'Reading a past turn');
     assert.equal(doneTitle({ kind: 'results', query: 'deploy', total: 7, sessions: 3 }, {}), 'Searched past work for “deploy”: 7 turns in 3 sessions and files');
     assert.equal(doneTitle({ kind: 'results', query: 'zzz', total: 0, sessions: 0 }, {}), 'Searched past work for “zzz”: nothing found');
+    assert.equal(doneTitle({ kind: 'results', query: 'deploy', total: 1, sessions: 1 }, { kind: 'session' }), 'Searched past work for “deploy”: 1 turn in 1 session');
+    assert.equal(doneTitle({ kind: 'results', query: 'quokka', total: 3, sessions: 1 }, { kind: 'handoff' }), 'Searched past work for “quokka”: 3 sections in 1 note');
+    assert.equal(doneTitle({ kind: 'results', query: 'kestrel', total: 0, sessions: 0, titled: 1 }, {}), 'Searched past work for “kestrel”: 1 session or file by title only');
     assert.equal(doneTitle({ kind: 'turn', turn: OWN }, {}), 'Read a past turn: “Fix the gateway”');
     assert.equal(indexLine({ index: STATUS }), 'Recall has 1,234 turns from 56 sessions and files. Up to date.');
-    assert.equal(indexLine({ index: { ...STATUS, busy: true, queued: 12 } }), 'Recall has 1,234 turns from 56 sessions and files. Reading 12 more files…');
-    assert.equal(indexLine({ index: { ...STATUS, busy: true, queued: 0, totals: { turns: 0, files: 0 } } }), 'Recall has nothing indexed yet. Reading what changed…');
+    // How far a catch-up has read: of a total once every folder was looked through, else so far and where it looks.
+    assert.equal(indexLine({ index: { ...STATUS, busy: true, queued: 12, batch: { read: 30, left: 12, looking: false } } }), 'Recall has 1,234 turns from 56 sessions and files. Reading new and changed files: 30 of 42 read…');
+    assert.equal(indexLine({ index: { ...STATUS, busy: true, queued: 9992, batch: { read: 10, left: 9992, looking: false } } }), 'Recall has 1,234 turns from 56 sessions and files. Reading new and changed files: 10 of 10,002 read…');
+    assert.equal(indexLine({ home: HOME, index: { ...STATUS, busy: true, queued: 5, walking: `${HOME}/big`, batch: { read: 1200, left: 5, looking: true } } }), 'Recall has 1,234 turns from 56 sessions and files. Reading new and changed files: 1,200 read so far, still looking through ~/big for more…');
+    assert.equal(indexLine({ home: HOME, index: { ...STATUS, busy: true, queued: 0, walking: `${HOME}/big`, totals: { turns: 0, files: 0 }, batch: { read: 0, left: 0, looking: true } } }), 'Recall has nothing indexed yet. Looking through ~/big for new and changed files…');
+    assert.equal(indexLine({ index: { ...STATUS, busy: true, queued: 1, batch: { read: 0, left: 1, looking: false } } }), 'Recall has 1,234 turns from 56 sessions and files. Reading 1 new or changed file…');
+    assert.equal(indexLine({ index: { ...STATUS, busy: true, queued: 12 } }), 'Recall has 1,234 turns from 56 sessions and files. Reading new and changed files: 0 of 12 read…', 'an index thread from before the batch count');
     assert.equal(indexLine({}), 'Starting the index.');
     const source = readFileSync(CLIENT, 'utf8');
     assert.doesNotMatch(source, OTHER_NAMES);
@@ -342,6 +373,17 @@ test('search: typing waits for a pause, Enter and filters search at once with wh
     s = finder.store.get();
     assert.deepEqual(plain(s.results.map((r) => `${r.file}.${r.turn}`)), ['3.4', '9.2', '12.3', '20.1']);
     assert.equal(s.more, false);
+    let card = client.internals.SearchCard({ data: STATE });
+    assert.equal(withAttr(card, 'data-recall-more').length + withAttr(card, 'data-recall-end').length, 0, 'the whole list: no more, and nothing to say');
+    // A list cut short (the files of the 4,000 turns a search looks through, or its 1,000th result) says so where it stops.
+    finder.store.set({ ...finder.store.get(), found: { ...finder.store.get().found, sort: 'newest', cut: 'cap', looked: 4000 } });
+    card = client.internals.SearchCard({ data: STATE });
+    assert.equal(withAttr(card, 'data-recall-more').length, 0);
+    assert.equal(textIn(withAttr(card, 'data-recall-end')), 'These are the sessions and files of the 4,000 newest matching turns. Add a word or a filter to find others.');
+    const { endLine } = client.internals;
+    assert.equal(endLine({ text: 'deploy', sort: 'best', cut: 'cap', looked: 4000 }, 312), 'These are the sessions and files of the 4,000 best-matching turns. Add a word or a filter to find others.');
+    assert.equal(endLine({ text: '', sort: 'best', cut: 'cap', looked: 4000 }, 312), 'These are the sessions and files of the 4,000 newest turns. Add a word or a filter to find others.');
+    assert.equal(endLine({ text: 'deploy', sort: 'best', cut: 'length', looked: 4000 }, 1000), 'The list stops at 1,000 results. Add a word or a filter to find others.');
     answer = { ok: false, error: { code: 'recall/refused', message: 'Recall\'s index is starting. Try again in a moment.' } };
     await finder.search();
     s = finder.store.get();
@@ -382,6 +424,35 @@ test('search: typing waits for a pause, Enter and filters search at once with wh
     assert.ok(!elementsOf(one).some((e) => e.props?.['data-suite-choice'] === 'dshrc-kind'), 'one kind searched: no kind filter');
 });
 
+test('filters: a long folder is cut in the middle at whole folders, so folders that differ at the end look different; its whole path is its name', () => {
+    const { client } = loadClient(CLIENT, { react: standInReact() });
+    const { cutPath, folderLabel, finder, kit } = client.internals;
+    const notes = '~/Projects/dsh-plugin-suite-judge/recall-r1/data/notes';
+    const osprey = '~/Projects/dsh-plugin-suite-judge/recall-r1/data/notes/projects/osprey';
+    assert.equal(cutPath(notes), '~/Projects/…/recall-r1/data/notes');
+    assert.equal(cutPath(osprey), '~/Projects/…/data/notes/projects/osprey');
+    assert.equal(cutPath('/Volumes/Backup/agent-logs/2026/october/week-three/run-forty-two'), '/Volumes/…/october/week-three/run-forty-two');
+    assert.equal(cutPath('~/short/path'), '~/short/path', 'short paths stay whole');
+    assert.equal(cutPath(`~/a/${'x'.repeat(70)}`), `~/a/…${'x'.repeat(41)}`, 'a last folder too long by itself keeps its end');
+    assert.equal(cutPath(`/${'y'.repeat(80)}`).length, 46);
+    for (const path of [notes, osprey]) assert.ok(cutPath(path).length <= 46);
+    const label = folderLabel(osprey);
+    assert.equal(label.props.title, osprey);
+    assert.deepEqual(plain(label.children.map((c) => [c.props['aria-hidden'] ?? null, textIn(c)])), [['true', '~/Projects/…/data/notes/projects/osprey'], [null, osprey]], 'the cut words are hidden from screen readers, which read the whole path');
+    assert.equal(folderLabel('~/notes'), '~/notes');
+
+    // In the menu, and on its button once chosen: the button's name is the whole path.
+    const HOME_LONG = `${HOME}/Projects/dsh-plugin-suite-judge/recall-r1/data/notes/projects/osprey`;
+    finder.facets.set({ loading: false, data: { folders: [{ folder: HOME_LONG, turns: 3 }], models: [] } });
+    finder.store.set({ ...finder.store.get(), query: { ...finder.store.get().query, folder: HOME_LONG } });
+    const menus = elementsOf(client.internals.SearchCard({ data: STATE })).filter((e) => e.type === 'Menu');
+    const folder = menus.find((m) => m.props.anchor.props['data-recall-filter'] === 'folder');
+    assert.equal(folder.props.anchor.props['aria-label'], `Folder: ${osprey}`);
+    assert.equal(folder.props.items[1].full, osprey);
+    assert.equal(textIn(folder.props.items[1].label), `~/Projects/…/data/notes/projects/osprey${osprey}`);
+    void kit;
+});
+
 test('results: each says where it is and opens at its turn (this DSH) or in the reading view; its other turns too; empty states say what to do next', async (t) => {
     const { client } = loadClient(CLIENT, { react: standInReact() });
     const { ResultRow, NoResults, finder, views, jump, endJump } = client.internals;
@@ -407,15 +478,31 @@ test('results: each says where it is and opens at its turn (this DSH) or in the 
     assert.deepEqual(loads.at(-1), ['sess-own-1', 70], 'another turn of the same session');
     assert.equal(jump.get().turn, 7);
     button(row, 'Read here').props.onClick();
-    assert.deepEqual(plain(finder.store.get().reading), { id: '3.4' }, 'Read here: the reading view, not the session');
+    assert.deepEqual(plain(finder.store.get().reading), { id: '3.4', from: '[data-recall-peek="3.4"]' }, 'Read here: the reading view, not the session; Back comes to it again');
+    // Every button is named with what it opens, not only "Read here" or "turn 2".
+    assert.equal(withAttr(row, 'data-recall-open')[0].props['aria-label'], 'Open “Fix the gateway” at turn 4');
+    assert.deepEqual(withAttr(row, 'data-recall-other').map((e) => e.props['aria-label']), ['Open “Fix the gateway” at turn 2', 'Open “Fix the gateway” at turn 7']);
+    assert.equal(button(row, 'Read here').props['aria-label'], 'Read “Fix the gateway”, turn 4 here');
 
     const transcript = ResultRow({ r: TRANSCRIPT, home: HOME });
     assert.match(textIn(transcript), /^Untitled transcriptCoding-agent transcript · ~\/work\/parser · glm-5\.3-flash · turn 2/);
     assert.equal(button(transcript, 'Read here'), undefined, 'it opens here anyway');
+    assert.equal(withAttr(transcript, 'data-recall-open')[0].props['aria-label'], 'Read “Untitled transcript”, turn 2 here');
     withAttr(transcript, 'data-recall-open')[0].props.onClick();
-    assert.equal(finder.store.get().reading.id, '9.2');
+    assert.deepEqual(plain(finder.store.get().reading), { id: '9.2', from: '[data-recall-open="9.2"]' });
     const note = ResultRow({ r: NOTE, home: HOME });
-    assert.match(textIn(note), /1 other section of this note match:section 5/);
+    assert.match(textIn(note), /1 other section of this note matches:section 5/);
+    assert.equal(withAttr(note, 'data-recall-other')[0].props['aria-label'], 'Read “Gateway handoff”, section 5 here');
+    withAttr(note, 'data-recall-other')[0].props.onClick();
+    assert.deepEqual(plain(finder.store.get().reading), { id: '12.5', from: '[data-recall-other="12.5"]' });
+    const two = ResultRow({ r: { ...NOTE, hits: 3, others: [{ turn: 5, seq: 0 }, { turn: 6, seq: 0 }] }, home: HOME });
+    assert.match(textIn(two), /2 other sections of this note match:section 5section 6/);
+    // A session whose title alone has the words: said so, it opens at its first turn, and no other turn is offered.
+    const titled = ResultRow({ r: { ...OWN, id: '5.1', file: 5, turn: 1, seq: 4, snippet: '', hits: 0, others: [], titleOnly: true, asked: 'Check the build' }, home: HOME });
+    assert.match(textIn(titled), /Only its title matches: it opens at its first turn\.Asked: Check the build/);
+    assert.equal(withAttr(titled, 'data-recall-other').length, 0);
+    const titledNote = ResultRow({ r: { ...NOTE, turn: 1, snippet: '', hits: 0, others: [], titleOnly: true }, home: HOME });
+    assert.match(textIn(titledNote), /Only its title matches: it opens at its first section\./);
     // A window that cannot open sessions shows the turn in Recall instead.
     views.openSession = () => false;
     withAttr(row, 'data-recall-open')[0].props.onClick();
@@ -429,7 +516,10 @@ test('results: each says where it is and opens at its turn (this DSH) or in the 
     assert.match(empty({ query: { text: '-staging', kind: 'any', when: 'any', folder: '', model: '', sort: 'best' }, found: { nothing: 'no-words' } }), /^Type a word to search for/);
     const none = NoResults({ state: { query: { text: 'kubernetes', kind: 'any', when: 'week', folder: '', model: '', sort: 'best' }, found: { total: 0 } }, data: STATE });
     assert.match(textIn(none), /^Nothing matches “kubernetes”Try fewer or other words, or the start of a word .* The filters may also leave it out\./);
-    assert.ok(button(none, 'Clear the filters'));
+    assert.ok(button(none, 'Search again without the filters'), 'one "Clear the filters" in the filter row; the empty state says what its button does from there');
+    assert.equal(button(none, 'Clear the filters'), undefined);
+    const noTurns = NoResults({ state: { query: { text: '', kind: 'transcript', when: 'week', folder: '', model: '', sort: 'best' }, found: { total: 0 } }, data: STATE });
+    assert.match(textIn(noTurns), /^No turns with these filtersTry another time, folder or model\.Search again without the filters$/);
 });
 
 test('reading view: the turn in full, the turns beside it, the way into its session, and back', async (t) => {
@@ -437,7 +527,14 @@ test('reading view: the turn in full, the turns beside it, the way into its sess
     const { client } = loadClient(CLIENT, { react });
     const { kit, ReadingView, finder, views, jump, endJump } = client.internals;
     const TURN = { ...OWN, path: `${HOME}/.dsh/sessions/w/sess-own-1/session.v4.jsonl.zstd`, prompt: 'please deploy the gateway to staging', reply: 'Deployed: 3 pods ready.', tools: 'bash: make deploy ENV=staging', prev: 3, next: 5, count: 9 };
-    const calls = connect(kit, { turn: ({ id }) => (id === '3.4' ? TURN : id === '9.2' ? { ...TRANSCRIPT, prompt: 'roll back', reply: 'Rolled back.', tools: '', prev: undefined, next: 3, count: 3 } : { ok: false, error: { code: 'recall/refused', message: 'That result is no longer in the index (its file changed or went). Search again.' } }) });
+    const turns = {
+        '3.4': TURN,
+        '3.6': { ...TURN, id: '3.6', turn: 6, reply: '', tools: '', state: 'cut-off' },
+        '3.9': { ...TURN, id: '3.9', turn: 9, reply: '', tools: '', state: 'running', running: true, next: undefined },
+        '3.7': { ...TURN, id: '3.7', turn: 7, reply: 'Half an answer', state: 'failed', why: 'The model provider did not answer (503)' },
+        '9.2': { ...TRANSCRIPT, prompt: 'roll back', reply: 'Rolled back.', tools: '', prev: undefined, next: 3, count: 3 },
+    };
+    const calls = connect(kit, { turn: ({ id }) => turns[id] ?? { ok: false, error: { code: 'recall/refused', message: 'That result is no longer in the index (its file changed or went). Search again.' } } });
     t.after(() => { kit.setConnection(undefined); endJump(); });
     let backs = 0;
     const view = mount(ReadingView, { id: '3.4', home: HOME, onBack: () => { backs += 1; } });
@@ -449,10 +546,11 @@ test('reading view: the turn in full, the turns beside it, the way into its sess
     assert.match(text, /^Back to the resultsFix the gatewaySession · ~\/work\/gateway · glm-5\.3 · turn 4 of 9 · 1 h ago/);
     assert.match(text, /Askedplease deploy the gateway to stagingReplyDeployed: 3 pods ready\.Commands and files it usedbash: make deploy ENV=staging/);
     assert.doesNotMatch(text, /sess-own-1|session\.v4/, 'no ids or log files where people read');
+    finder.read('3.4', '[data-recall-peek="3.4"]');
     button(view.tree, 'Turn after').props.onClick();
-    assert.equal(finder.store.get().reading.id, '3.5');
+    assert.deepEqual(plain(finder.store.get().reading), { id: '3.5', from: '[data-recall-peek="3.4"]' }, 'Back still goes to what opened it');
     button(view.tree, 'Turn before').props.onClick();
-    assert.equal(finder.store.get().reading.id, '3.3');
+    assert.deepEqual(plain(finder.store.get().reading), { id: '3.3', from: '[data-recall-peek="3.4"]' });
     const opened = [];
     views.openSession = (id) => { opened.push(id); return true; };
     const loads = [];
@@ -465,6 +563,24 @@ test('reading view: the turn in full, the turns beside it, the way into its sess
     withAttr(view.tree, 'data-recall-back')[0].props.onClick();
     assert.equal(backs, 1);
 
+    // How a turn ended, when not as it should: in its meta line after "of 9", and in a sentence.
+    view.update({ id: '3.6' });
+    await settle(5);
+    text = textIn(view.tree);
+    assert.match(text, /turn 6 of 9 · cut off by a restart · 1 h agoThis turn was cut off by a restart: DSH stopped before it finished\.Asked/);
+    assert.match(text, /ReplyThis turn has no reply text\./);
+    assert.equal(withAttr(view.tree, 'data-recall-state')[0].props['data-recall-state'], 'cut-off');
+    view.update({ id: '3.9' });
+    await settle(5);
+    text = textIn(view.tree);
+    assert.match(text, /turn 9 of 9 · still running · 1 h agoThis turn is still running\.Asked/);
+    assert.match(text, /ReplyNo reply yet\./);
+    view.update({ id: '3.7' });
+    await settle(5);
+    assert.match(textIn(view.tree), /turn 7 of 9 · failed · 1 h agoThis turn failed: The model provider did not answer \(503\)\.Asked.*ReplyHalf an answer/);
+    view.update({ id: '3.4' });
+    await settle(5);
+    assert.equal(withAttr(view.tree, 'data-recall-state').length, 0, 'a turn that ended as it should says nothing more');
     view.update({ id: '9.2' });
     await settle(5);
     text = textIn(view.tree);
@@ -475,6 +591,25 @@ test('reading view: the turn in full, the turns beside it, the way into its sess
     view.update({ id: '99.1' });
     await settle(5);
     assert.match(textIn(view.tree), /Couldn't read it: That result is no longer in the index \(its file changed or went\)\. Search again\./);
+});
+
+test('reading view: Back puts the focus on the button that opened it, even after Turn before or after; else on its row, else the search box', async () => {
+    const focused = [];
+    const present = new Set(['[data-recall-other="9.3"]', '[data-recall-open="9.2"]']);
+    const document = { querySelector: (sel) => (present.has(sel) ? { focus: () => focused.push(sel) } : null) };
+    const { client } = loadClient(CLIENT, { document });
+    const { SearchCard, finder } = client.internals;
+    const back = () => withAttr(SearchCard({ data: STATE }), 'data-recall-back')[0].props.onClick();
+    finder.read('9.3', '[data-recall-other="9.3"]');
+    finder.read('9.2', finder.store.get().reading.from);
+    back();
+    await settle(5);
+    assert.equal(finder.store.get().reading, undefined, 'the list again');
+    assert.deepEqual(focused, ['[data-recall-other="9.3"]'], 'the "turn 3" link that opened it, though the view moved to turn 2');
+    finder.read('9.2', '[data-recall-peek="9.2"]');
+    back();
+    await settle(5);
+    assert.deepEqual(focused.at(-1), '[data-recall-open="9.2"]', 'what opened it is gone: its row');
 });
 
 test('opening a session at a turn: the mark shows on that turn only, brings it into view, marks its rows, stops when the person scrolls, and goes when done', async (t) => {
@@ -572,7 +707,7 @@ test('the tool\'s card: running, what it found (each a press from its turn), not
     tree = RecallToolView({ phase: 'result', home: HOME, useDisclosure: () => ({ expanded: true, toggle() {} }), block: { isError: false, content: [{ type: 'text', text: 'Recall found 7 matching turns …' }], meta: results, call: { argsRaw: '{"query":"deploy","kind":"session"}' } } });
     assert.equal(tree.props['data-recall-tool'], 'results');
     row = elementsOf(tree).find((e) => e.type === 'DisclosureRow');
-    assert.equal(row.props.title, 'Searched past work for “deploy”: 7 turns in 3 sessions and files');
+    assert.equal(row.props.title, 'Searched past work for “deploy”: 7 turns in 3 sessions', 'the call asked for sessions: its places are named so');
     assert.equal(row.props.expandable, true);
     let text = textIn(tree);
     assert.match(text, /Fix the gatewaySession · ~\/work\/gateway · glm-5\.3 · turn 4 · .*we deployed the gateway to …Open/);
@@ -643,7 +778,11 @@ test('index: each folder\'s state in words, files it could not read, folders lef
     assert.deepEqual(actions, ['rescan', 'rebuild']);
     assert.equal(rootWords({ kind: 'session', root: '/s', state: 'ok', indexed: 2, turns: 3 }, { busy: true, reading: { kind: 'session', path: '/s/p/x/session.v4.jsonl.zstd' } }).word, 'reading');
     assert.equal(rootWords({ kind: 'session', root: '/s', state: 'ok', indexed: 2, turns: 3 }, { busy: true, reading: { kind: 'session', path: '/sx/p' } }).word, 'up to date', 'another folder is being read');
-    assert.deepEqual(plain(rootWords({ kind: 'handoff', root: '/n', state: 'unreadable', error: 'EACCES: permission denied', indexed: 0 }, {})), { word: 'cannot read', counts: '', why: 'EACCES: permission denied. Check that DSH may read it.' });
+    // The index's words for a folder it cannot read say what to do, once: the card adds nothing to them.
+    const folderWords = 'DSH may not read this folder (permission denied). Give DSH access to it, or name another folder in Recall\'s settings.';
+    assert.deepEqual(plain(rootWords({ kind: 'handoff', root: '/n', state: 'unreadable', error: folderWords, indexed: 0 }, {})), { word: 'cannot read', counts: '', why: folderWords });
+    assert.equal(rootWords({ kind: 'handoff', root: '/n', state: 'unreadable', error: 'This is a file, not a folder. Name the folder that holds it in Recall\'s settings.' }, {}).why, 'This is a file, not a folder. Name the folder that holds it in Recall\'s settings.');
+    assert.equal(rootWords({ kind: 'handoff', root: '/n', state: 'unreadable', error: '' }, {}).why, 'Recall cannot read this folder. Check that DSH may read it.');
     assert.match(rootWords({ kind: 'transcript', root: '/t', state: 'ok', capped: true, files: 50000, indexed: 50000, turns: 9 }, {}).why, /only the first 50,000 are searched/);
     assert.equal(rootWords({ kind: 'transcript', root: '/t', state: 'waiting' }, {}).why, 'Not read yet.');
     const empty = IndexCard({ data: { ...STATE, index: { ...STATUS, roots: [], problems: [] }, left: [] }, busy: false, said: {}, onAction: () => {} });

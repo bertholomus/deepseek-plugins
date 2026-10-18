@@ -24,7 +24,7 @@ page reads again every few seconds.
 
 | Kind | Where | One row per | What it keeps |
 | --- | --- | --- | --- |
-| **DSH sessions** | This DSH's `sessions` folder (`session.v*.jsonl.zstd`), and the DSH homes in *More DSH session folders* | turn | The title, what the person asked (6,000 characters), the reply (its first 3,000 and last 9,000 characters, where an answer usually is), the commands and files its tools used (60 lines), the model, the folder and DSH's own seq for the turn. |
+| **DSH sessions** | This DSH's `sessions` folder (`session.v*.jsonl.zstd`), and the DSH homes in *More DSH session folders* | turn | The title, what the person asked (6,000 characters), the reply (its first 3,000 and last 9,000 characters, where an answer usually is), the commands and files its tools used (60 lines), the model, the folder, DSH's own seq for the turn, and how the turn ended. |
 | **Coding-agent transcripts** | *Coding-agent transcript folders* and their subfolders: `.jsonl` files, one message a line | turn: each message the person wrote, with the replies and tool calls after it | The same, plus the file and the line the turn starts on. |
 | **Handoff notes** | *Handoff note folders* and their subfolders: `.md`, `.markdown`, `.mdown`, `.mkd` | section: one per heading (a long one is cut at about 8,000 characters) | The heading, its text, the file and line. Front matter is left out; its `title` names the note. |
 
@@ -53,7 +53,36 @@ Some things are left out on purpose:
 - **A folder that is not there** (an unplugged disk) keeps what Recall read
   from it searchable, and Recall looks again every minute.
 - **A folder taken out of the settings** has its turns taken out of the
-  index.
+  index at once.
+- **Space goes back to the disk.** When a folder taken out (or files gone)
+  held a fifth or more of the index, Recall then gives the space back, a
+  few milliseconds at a time with searches answered in between; a rebuild
+  does the same once it has read every file again. The Index card shows
+  the new size, and What happened says how much it gave back (*Made the
+  index smaller: it went from 287 MB to 14 MB*).
+- **How far it has read.** While it reads, the line under the search box
+  says how many files of how many (*Reading new and changed files: 1,200
+  of 10,002 read…*), or which folder it is still looking through.
+- **An index from an earlier Recall** is built again once, at the first
+  start after an update: it now keeps how each turn ended. The old index
+  is deleted, so its space goes back to the disk, and searches find more
+  as the new one is built.
+
+### How each turn ended
+
+A turn that did not end as it should says so, in the same words in its
+row, the reading view and the tool:
+
+| State | When |
+| --- | --- |
+| *still running* | A turn of this DSH: only while DSH says its session runs. A transcript's last turn, or another DSH's: while its file was written to in the last 10 minutes. |
+| *stopped* | DSH stopped it: from the chat, the session that started it, DSH closing the session, or a plugin. The reading view says which. |
+| *failed* | It ended with an error. The reading view and the tool give DSH's message. |
+| *cut short* | Its reply reached the model's output limit. |
+| *blocked* | A plugin's check stopped it before its next step. |
+| *cut off by a restart* | DSH stopped before it finished, by a crash or a restart. That is DSH's own mark when it opens the session again, and Recall's word for a turn with no end in a session that no longer runs. |
+
+A turn that ended as it should, and a note's section, say nothing more.
 
 ## Searching
 
@@ -66,25 +95,40 @@ Some things are left out on purpose:
 
 Results are ranked best first:
 
-- A match in the title weighs most, then the request, the reply and the
-  commands. A new turn gets a small lift: 30% at first, fading over the
-  next few weeks.
-- Each session or file shows once, at its best turn, with *Also matches
-  turns 4, 7* for the others.
-- *Newest* sorts by time instead.
-- With nothing typed, the page lists the newest turns.
+- A turn that says the words itself, in its request, its reply or its
+  commands, always comes first. The request weighs most, then the reply
+  and the commands. A turn whose session title says the words too gets a
+  lift of a fifth, and a new turn gets a small lift: 30% at first, fading
+  over the next few weeks.
+- Each session or file shows once, at its best turn, with its other turns
+  that say the words listed under it. A turn that does not say them is
+  never listed, even when its session's title does: DSH names a session
+  from its first request, so the title's words are in no other turn.
+- A session or file whose title alone has the words comes once, after
+  every turn that says them, marked *Only its title matches*, and opens at
+  its first turn.
+- The count is of turns that say the words. Sessions and files that match
+  by their title alone are counted apart: *12 matching turns in 5 sessions
+  and files, and 1 more by title only*.
+- *Newest* sorts by time instead, with the same order: turns that say the
+  words first.
+- With nothing typed, the page lists the newest turns, one for each
+  session or file (nothing is matched, so no "other turns" are listed).
 
 **Filters** (on the page and in the tool):
 
 | Filter | Choices |
 | --- | --- |
 | Kind | All, Sessions, Transcripts, Notes |
-| Folder | Any folder, or one folder (its subfolders too) |
+| Folder | Any folder, or one folder (its subfolders too). A long path is cut in the middle, at whole folders, so the folders where two paths differ show; screen readers and the tooltip give the whole path. |
 | Model | Any model, or one model |
 | Time | Any time, Past day, Past week, Past month, Past year |
 | Sort | Best match or Newest |
 
-A search that matches more than 5,000 turns counts to 5,000 and says *5000+*.
+A search that matches more than 5,000 turns counts to 5,000 and says
+*5,000+*. A list shows the sessions and files of the 4,000 best-matching
+(or newest) turns, up to 1,000 results; where it stops before its end,
+the page says so and suggests a word or a filter.
 
 ## The page
 
@@ -93,7 +137,8 @@ Recall has its own entry in the sidebar. Its page shows:
 - **The search box and filters.** The count says how many turns match, in
   how many sessions and files, and how long the search took.
 - **Results.** Each one shows its title, where it is (kind, folder, model,
-  turn or section), when, and the matching words in context.
+  turn or section), when, and the matching words in context, as plain
+  text (links, code marks and other Markdown taken out).
   - Pressing the title of a session of this DSH opens it at that turn.
     Anything else (another DSH's session, a transcript, a note) opens in
     Recall's reading view.
@@ -101,10 +146,14 @@ Recall has its own entry in the sidebar. Its page shows:
     leaving the page.
   - Other matching turns of the same session are listed under it (*2 other
     turns here match: turn 4, turn 7*), each one press away.
+  - Every button is named with what it opens, for screen readers too:
+    *Open “Fix the gateway” at turn 4*, *Read “Run log”, turn 2 here*.
   - **Show more results** loads the next page.
 - **The reading view.** It shows what was asked, the reply, the commands
   and files used, the file and line, and **Turn before** / **Turn after**
-  (**Section before** / **Section after** for notes).
+  (**Section before** / **Section after** for notes). **Back to the
+  results** returns to the list with the focus on the button that opened
+  it, even after Turn before or after.
 - **The index card.** It lists each folder Recall searches with its state
   (*up to date*, *reading*, *not there*, *cannot read*) and its files and
   turns. Below that come **Files Recall could not read**, **Folders left
@@ -118,8 +167,9 @@ Every empty state says what to do next:
 - *No folders to search* says to switch on this DSH's sessions or add
   folders, with **Open Recall's settings**.
 - *Nothing to search yet* says that new sessions are added as they happen.
-- *Nothing matches* suggests fewer or other words, and offers **Clear the
-  filters** when filters are on.
+- *Nothing matches* suggests fewer or other words, and offers **Search
+  again without the filters** when filters are on (the filter row keeps its
+  own **Clear the filters**).
 - A wrong setting is named, with **Open Recall's settings**.
 - A stopped index has **Start the index again**.
 
@@ -150,6 +200,8 @@ With *Let agents search past work* on, agents are offered `recall_search`:
 
 What it gives the agent is bounded:
 
+- A search leaves out the turn that asks: the agent's own question is not
+  earlier work. The session's earlier turns stay.
 - A search gives at most 20 results in 9,000 characters.
 - One turn in full keeps 2,000 characters of the request, 3,500 of the
   reply and 1,200 of the commands.
@@ -160,8 +212,9 @@ What it gives the agent is bounded:
 In the chat, each call shows as a tool row in DSH's own style:
 
 - *Searched past work for “narwhal exporter”: 1 turn in 1 session or
-  file* opens to the results. Each result has **Open**, and the row has
-  **Search this in Recall**.
+  file* opens to the results (*in 1 session* when the agent asked for
+  sessions only; *3 sections in 1 note* for notes). Each result has
+  **Open**, and the row has **Search this in Recall**.
 - *Read a past turn: “Long session”* opens to the request, the reply and
   **Open the session at this turn**.
 - A refused call reads *Didn't search past work: the agent gave no words
@@ -178,41 +231,42 @@ DSH sessions:
 - Each search is a round trip through that thread, as the page and the
   tool make them, 20 rounds each.
 - Apple M4, macOS, Node 22.20.0, with other work running (load average
-  about 7).
+  about 5).
 
 | Search | Matching turns | Median | p95 | In the index (median) |
 | --- | ---: | ---: | ---: | ---: |
-| one common word | 5000+ | 46.3 ms | 65 ms | 46.2 ms |
-| two words | 5000+ | 44 ms | 124.4 ms | 43.2 ms |
-| a phrase | 1433 | 23.9 ms | 45.7 ms | 23.7 ms |
-| typing (last word a prefix) | 5000+ | 91.2 ms | 147.1 ms | 91 ms |
-| a rare word | 1 | 0.5 ms | 1.2 ms | 0.4 ms |
-| either word (OR) | 5000+ | 61.1 ms | 97.3 ms | 60.9 ms |
-| a word left out | 5000+ | 26.6 ms | 40.5 ms | 26.1 ms |
-| sessions of the past month | 5000+ | 27.2 ms | 39.7 ms | 27 ms |
-| one folder | 2227 | 31.5 ms | 49.8 ms | 31.3 ms |
-| one model | 5000+ | 35.6 ms | 52.5 ms | 35.5 ms |
-| newest first | 5000+ | 21.5 ms | 29.9 ms | 21.2 ms |
-| nothing typed (newest turns) | 5000+ | 1.1 ms | 2.8 ms | 0.9 ms |
-| third page | 5000+ | 56.4 ms | 74.5 ms | 56.3 ms |
-| **All 260 searches** | | **33.7 ms** | **96.3 ms** | 33.5 ms |
+| one common word | 5,000+ | 40.2 ms | 42.8 ms | 40.1 ms |
+| two words | 5,000+ | 38.6 ms | 41.7 ms | 38.4 ms |
+| a phrase | 1,380 | 19.9 ms | 21 ms | 19.8 ms |
+| typing (last word a prefix) | 5,000+ | 79.7 ms | 85.6 ms | 79.6 ms |
+| a rare word | 1 | 0.3 ms | 0.3 ms | 0.2 ms |
+| either word (OR) | 5,000+ | 53.6 ms | 57.1 ms | 53.5 ms |
+| a word left out | 5,000+ | 22.4 ms | 24.1 ms | 22.3 ms |
+| sessions of the past month | 5,000+ | 22.9 ms | 24.8 ms | 22.7 ms |
+| one folder | 2,187 | 26.9 ms | 28.3 ms | 26.8 ms |
+| one model | 5,000+ | 30.4 ms | 32.7 ms | 30.3 ms |
+| newest first | 5,000+ | 17.3 ms | 19.6 ms | 17.1 ms |
+| nothing typed (newest turns) | 5,000+ | 0.8 ms | 0.9 ms | 0.7 ms |
+| third page | 5,000+ | 49.3 ms | 54 ms | 49.2 ms |
+| **All 260 searches** | | **27 ms** | **79.5 ms** | 26.9 ms |
 
 Every search is well inside the 300 ms target. The slowest of the 260 took
-201 ms.
+90 ms. The counts are of turns that say the words; counting them that way
+moved the median by under 2 ms, measured side by side on one index.
 
 **Building and keeping up:**
 
-- **The first index** took 19.9 s (6,057 turns a second) and came to
-  284.8 MB.
-- **DSH's own thread** was held up at most 12.6 ms meanwhile (p99 11.4 ms).
-- **Searches during that build** took a median of 57.3 ms (p95 104.4 ms).
+- **The first index** took 15.8 s (7,646 turns a second) and came to
+  290.4 MB.
+- **DSH's own thread** was held up at most 12.6 ms meanwhile (p99 12.1 ms).
+- **Searches during that build** took a median of 50.7 ms (p95 80.5 ms).
 - **Reading one turn in full**: under 0.1 ms.
-- **A new turn** was found 75 ms after DSH said its session moved; a new
-  session, 40 ms after. With DSH's 1.5 s of batching, the real-DSH test
+- **A new turn** was found 14 ms after DSH said its session moved; a new
+  session, 42 ms after. With DSH's 1.5 s of batching, the real-DSH test
   measures a turn searchable about 1.7 s after it was asked.
-- **A restart** opened the index in 22 ms and answered the first search in
-  97 ms. Its look through all 10,001 files took 0.4 s and read none again.
-- **After a stop that did not close the index**, opening it took 2.0 s:
+- **A restart** opened the index in 21 ms and answered the first search in
+  98 ms. Its look through all 10,001 files took 0.5 s and read none again.
+- **After a stop that did not close the index**, opening it took 1.7 s:
   SQLite's full check runs then.
 
 To measure again:
@@ -254,8 +308,11 @@ for a switch, a number written as text.
 - Its page says which setting is wrong, what it must be and what it is,
   such as *Coding-agent transcript folders (transcriptFolders) must be a
   list of folders in square brackets, such as ["~/agent-logs"] (it is
-  "~/agent-logs", one folder without the brackets)*. What happened says
-  it too, once, also when the profile was edited while DSH was stopped.
+  "~/agent-logs", one folder without the brackets)*. When more than one
+  is wrong, the others are named after it (*…; Let agents search past
+  work (tool) is wrong too*), and each says what fits once the one before
+  is fixed. What happened says it too, once, also when the profile was
+  edited while DSH was stopped.
 - **Open Recall's settings** takes you to that setting, flagged in the
   form.
 - Once you fix it, in the form or in the profile, Recall works again at
@@ -271,8 +328,8 @@ mode 600:
 
 | File | What |
 | --- | --- |
-| `recall/index.sqlite` (and its `-wal` and `-shm`) | The index: one row per turn or section, with what it kept (above), and where each file was read up to. About 2.4 KB a turn (284.8 MB for 120,519 turns). |
-| `recall/index.sqlite.open` | Written while the index is open. If DSH stops without closing it, the next start checks the index in full (SQLite's quick check). An index that fails the check, or one from an older Recall, is set aside as `index.sqlite.old` and built again from the files. |
+| `recall/index.sqlite` (and its `-wal` and `-shm`) | The index: one row per turn or section, with what it kept (above), and where each file was read up to. About 2.4 KB a turn (290.4 MB for 120,519 turns). Space that turns taken out leave in it goes back to the disk (Keeping up, above). |
+| `recall/index.sqlite.open` | Written while the index is open. If DSH stops without closing it, the next start checks the index in full (SQLite's quick check). An index that fails the check is set aside as `index.sqlite.old` (one copy: the next replaces it) and built again from the files. |
 | `recall/events.jsonl` | What happened. It keeps the last 400 entries and rewrites itself past 1 MB. |
 
 The index holds only copies. The sessions, transcripts and notes are the
@@ -328,8 +385,8 @@ restart DSH Desktop:
 git -C ~/.dsh-plugins/deepseek-plugins restore --source recall-v1.0.0 -- plugins/recall
 ```
 
-If the index format changed between the two, Recall sets the newer index
-aside and builds its own.
+If the index format changed between the two, Recall builds its index
+again from the files.
 
 To remove Recall, follow [Remove a plugin](../../README.md#remove-a-plugin)
 for `dsh-plugin-recall` (row `recall`). Then delete `recall/` in DSH's data
@@ -347,9 +404,18 @@ transcripts or notes it reads.
   files.
 - **Transcripts.** A transcript has no end-of-turn mark. Its last turn
   shows as still running while the file was written to in the last 10
-  minutes.
+  minutes. A transcript that gives no times (plain role lines) is dated by
+  when its file was last written, and a line with no time of its own takes
+  the latest time before it.
+- **Another DSH's sessions** say *still running* or *cut off by a restart*
+  from their log alone: this DSH cannot ask that one which of its sessions
+  run.
 - **Sessions of another DSH** open in Recall's reading view, not in the
   chat: this DSH cannot open them.
+- **Long lists.** A search lists the sessions and files of its 4,000
+  best-matching (or newest) turns, and at most 1,000 results. Where a list
+  stops before its end, the page and the tool say so; more words or a
+  filter reach the rest.
 - **New turns** wait for DSH's session event plus 1.5 s. Changes in other
   folders wait for the next minute's look, or **Look for changes now**.
 
@@ -364,20 +430,35 @@ node scripts/e2e.mjs recall        # real DSH in a throwaway home, on every DSH 
 
 **Unit tests.** The host tests cover:
 
-- reading DSH session logs, transcripts and notes;
+- reading DSH session logs, transcripts (undated ones take their file's
+  time) and notes;
 - the incremental index: appends, rewrites, deletes, a folder that is not
-  there, an unclean stop, a broken index set aside;
-- the query syntax, ranking, snippets and filters;
-- the tool's bounds, and output DSH keeps as lossless JSON;
-- settings and the page's log.
+  there, an unclean stop, a broken index set aside, an older one deleted,
+  and the space a folder taken out or a rebuild leaves given back, a slice
+  at a time, with the new size sent to the page;
+- the query syntax, ranking (a turn that says the words before one whose
+  title alone does), counts, plain-text snippets, filters, and lists cut
+  where they stop;
+- how each turn ended, for every reason DSH logs, and running only while
+  DSH says its session runs;
+- the tool's bounds, the turn that asks left out, and output DSH keeps as
+  lossless JSON;
+- settings, including every wrong type the profile can hold, and the
+  page's log.
 
-The browser-half tests cover the page, the mark and the jump to a turn. The
-bench test runs the bench on 200 sessions.
+The plugin tests start Recall as DSH does (`apply`, with stand-ins for
+DSH's packages): a wrong type in the profile, several at once, DSH's word
+on which sessions run, and two starts in one millisecond (What happened
+keeps both entries). The browser-half tests cover the page, the mark and the jump to a
+turn, buttons named with their result, focus after Back, the folder menu's
+cut paths and every state's words. The bench test runs the bench on 200
+sessions.
 
-**Real-DSH test.** It makes 84 checks and takes under two minutes a build.
-It starts DSH from each `.e2e/dsh-<version>` install and from the installed
-app's own DSH, each in a throwaway home. It runs with Session Watch, Recall
-and a scripted model (`test/e2e/fake-model.mjs` here) that plays the agent.
+**Real-DSH test.** It makes 106 checks and takes about two minutes a
+build. It starts DSH from each `.e2e/dsh-<version>` install and from the
+installed app's own DSH, each in a throwaway home. It runs with Session
+Watch, Recall and a scripted model (`test/e2e/fake-model.mjs` here) that
+plays the agent.
 
 What it checks:
 
@@ -387,23 +468,41 @@ What it checks:
   a note section with their file and line.
 - **Keeping up.** A new turn is found seconds after it ends. A grown
   transcript is read from where it ended, and a deleted one is taken out.
+  Another DSH's 450 sessions (some 5,000 turns) are added in the form and
+  taken out: the index gives their space back by itself, What happened
+  says how much, and the Index card shows the new size.
+- **How each turn ended.** A turn is *still running* only while DSH runs
+  it. One stopped from the chat (DSH's own stop) reads *stopped*, and one
+  DSH was running when it crashed reads *cut off by a restart*, in the
+  results, the rows and the reading view.
 - **The tool.** An agent searches, reads a turn in full and is refused a
-  call with no words.
+  call with no words. An agent that asks about the stopped turn is told it
+  was stopped from the chat, and its own question is left out of what it
+  finds.
 - **The window.** In a browser it drives:
-  - the page, light and dark, wide and narrow;
+  - the page, light and dark, at 1280, 760 and 420 px (at 420 the kind
+    switcher fits its row, every choice whole);
+  - Wallpaper on, over a light and a dark picture (a stand-in for
+    Wallpaper's public values in the test window), and off: the page's
+    small text is measured, at 4.5:1 or more with Wallpaper off and at its
+    lowest tint over a mid grey;
   - a result that opens the 40-turn session at turn 2, which DSH's first
     page of it does not hold, marked and at the top;
-  - Back to the results and Done;
-  - the filters and the reading view;
+  - Back to the results and Done; after Turn before, Back puts the focus
+    on the button that opened the reading view;
+  - the filters, the reading view, and the rows of turns that ended early;
   - the tool's card and its Open;
   - the index card with a folder that is not there;
   - Look for changes now;
   - Recall's settings in Plugins.
 - **Restarts and failures.** It restarts DSH (nothing read again) and
   crashes it (the index checked and kept). It switches Recall off and on in
-  Plugins, and runs without Session Watch. It starts with a wrong setting,
-  named and then fixed through the form. It checks Recall's file modes and
-  loads it with `enabled: false`.
+  Plugins, and runs without Session Watch. It starts with wrong types in
+  the profile (one folder without the brackets, `"yes"` for a switch):
+  Recall runs, names them, refuses searches and offers no tool. It starts
+  with a wrong setting, named and then fixed through the form. It checks
+  Recall's file modes and loads it with `enabled: false`.
 
-No real session is read: every transcript and note is written by the test.
+No real session is read: every session, transcript and note it reads is
+made by the test.
 Pictures go to `.e2e/shots/recall/<build>/`.

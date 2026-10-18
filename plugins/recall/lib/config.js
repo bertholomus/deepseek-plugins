@@ -130,15 +130,37 @@ function folderList(settings, key) {
 
 /**
  * Check the settings and say what is wrong in words (a SettingError naming
- * the setting), the first wrong one in the order its page lists them. Every
- * value reaches this check: the Config takes any value, so a wrong type is
- * named here like a wrong range, and never stops Recall from starting.
+ * the setting): the first wrong one in the order its page lists them, and
+ * the names of any others, so one look shows everything to fix. Every value
+ * reaches this check: the Config takes any value, so a wrong type is named
+ * here like a wrong range, and never stops Recall from starting.
  */
 export function checkConfig(settings) {
-    onOff(settings, 'enabled');
-    onOff(settings, 'sessions');
-    for (const key of Object.keys(FOLDER_SETTINGS)) folderList(settings, key);
-    onOff(settings, 'tool');
+    const checks = [
+        () => onOff(settings, 'enabled'),
+        () => onOff(settings, 'sessions'),
+        ...Object.keys(FOLDER_SETTINGS).map((key) => () => folderList(settings, key)),
+        () => onOff(settings, 'tool'),
+    ];
+    const wrong = [];
+    for (const check of checks) {
+        try {
+            check();
+        } catch (error) {
+            if (!(error instanceof SettingError)) throw error;
+            wrong.push(error);
+        }
+    }
+    if (wrong.length === 0) return;
+    const [first, ...more] = wrong;
+    if (more.length === 0) throw first;
+    // The others by name only: the first says what fits, and each says it in turn once the one before is fixed.
+    // DSH's word for a problem is cut at 400 characters, so after a long first one they are only counted.
+    const names = more.length <= 2 ? more.map((e) => named(e.key)) : [named(more[0].key), `${more.length - 1} more`];
+    const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+    const also = `; ${list} ${more.length === 1 ? 'is' : 'are'} wrong too`;
+    const counted = `; ${more.length} more ${more.length === 1 ? 'setting is' : 'settings are'} wrong too`;
+    throw new SettingError(first.key, `${first.message}${first.message.length + also.length <= 400 ? also : counted}`);
 }
 
 /** Whether Recall keeps an index at all: only when `enabled` is true (DSH fills in true when the profile sets nothing); a wrong value keeps it idle until it is fixed. */

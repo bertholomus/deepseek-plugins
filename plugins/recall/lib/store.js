@@ -16,12 +16,21 @@
  * @module dsh-plugin-recall/store
  */
 import { chmodSync, existsSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { plainText } from './plain.js';
 
 /** Bump when the tables change: an index of another version is built again. */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /** bm25 weights of the columns: title, prompt, reply, tools. */
 const WEIGHTS = [4.0, 2.0, 1.0, 0.7];
+/**
+ * The same without the title: a row's own text. Every row of a file holds
+ * its file's title, so a word only in the title matches every turn of it;
+ * with the title's weight 0 such a row scores exactly 0 (bm25 adds nothing
+ * for a word it does not find in a weighted column), and a row whose own
+ * text has a hit scores below 0.
+ */
+const OWN_WEIGHTS = [0, 2.0, 1.0, 0.7];
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS files (
@@ -54,6 +63,8 @@ CREATE TABLE IF NOT EXISTS docs (
   seq INTEGER NOT NULL DEFAULT 0,
   time INTEGER NOT NULL DEFAULT 0,
   done INTEGER NOT NULL DEFAULT 1,
+  ended TEXT NOT NULL DEFAULT '',
+  why TEXT NOT NULL DEFAULT '',
   kind TEXT NOT NULL,
   folder TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
@@ -73,8 +84,10 @@ const likePrefix = (folder) => `${folder.replace(/[\\%_]/g, (c) => `\\${c}`)}/%`
 
 export class Store {
     /**
-     * Open (or make) the index at `file`. A file that is not an index of this
-     * version is set aside (`<file>.old`) and a new one made.
+     * Open (or make) the index at `file`. A damaged index is set aside
+     * (`<file>.old`, one copy: the next replaces it) and an index of another
+     * version deleted (it holds only copies of what the files say), and a new
+     * one made.
      * @param {string} file
      * @param {{ DatabaseSync: Function }} sqlite - node:sqlite.
      * @param {{ log?: (level: string, text: string) => void }} [options]
@@ -84,6 +97,8 @@ export class Store {
         this.log = log ?? (() => {});
         this.db = this.open(sqlite);
         this.statements = new Map();
+        /** Rows taken out since the index last gave its space back: the search index keeps their words until it is. */
+        this.taken = 0;
     }
 
     /**
@@ -101,10 +116,13 @@ export class Store {
             try { chmodSync(this.file, 0o600); } catch { /* the folder is private anyway */ }
             try {
                 db.exec('PRAGMA busy_timeout = 5000');
+                const empty = db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'").get().n === 0;
+                // A new index can give pages back to the disk a few at a time (after a folder is taken out, a rebuild).
+                // SQLite takes this only before the first write, and switching to its write-ahead log is one.
+                if (empty) db.exec('PRAGMA auto_vacuum = INCREMENTAL');
                 db.exec('PRAGMA journal_mode = WAL');
                 db.exec('PRAGMA synchronous = NORMAL');
                 const version = db.prepare('PRAGMA user_version').get()?.user_version ?? 0;
-                const empty = db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'").get().n === 0;
                 if (!empty && version !== SCHEMA_VERSION) throw Object.assign(new Error(`the index is version ${version}, not ${SCHEMA_VERSION}`), { stale: true });
                 db.exec(SCHEMA);
                 db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
@@ -127,11 +145,14 @@ export class Store {
             return opened(tryOpen());
         } catch (error) {
             if (!existsSync(this.file)) throw error;
-            // A broken or older index: set it aside and build a new one (the files are the truth).
-            this.log(error.stale ? 'info' : 'warn', `${error.stale ? 'An older index' : 'The index could not be opened'} (${String(error?.message ?? error).slice(0, 200)}); it was set aside and a new one is built.`);
+            // A broken index is set aside for a look; one of another version goes, so its space goes back to the disk.
+            // Either way a new one is built: the files are the truth.
+            this.log(error.stale ? 'info' : 'warn', `${error.stale ? 'An index from another version of Recall' : 'The index could not be opened'} (${String(error?.message ?? error).slice(0, 200)}); ${error.stale ? 'it was deleted' : 'it was set aside'} and a new one is built.`);
             for (const tail of ['-wal', '-shm']) rmSync(`${this.file}${tail}`, { force: true });
-            renameSync(this.file, `${this.file}.old`);
-            this.setAside = true;
+            if (error.stale) rmSync(this.file, { force: true });
+            else renameSync(this.file, `${this.file}.old`);
+            /** Why a new index was made: 'stale' (another version's, deleted) or 'damaged' (set aside). */
+            this.setAside = error.stale ? 'stale' : 'damaged';
             return opened(tryOpen());
         }
     }
@@ -169,6 +190,37 @@ export class Store {
             this.db.close();
             rmSync(`${this.file}.open`, { force: true });
         } catch { /* already closed */ }
+    }
+
+    /** Pages of the index file, and how many of them are free inside it (left by rows taken out). */
+    space() {
+        const one = (name) => Number(Object.values(this.db.prepare(`PRAGMA ${name}`).get() ?? {})[0] ?? 0);
+        return { free: one('freelist_count'), pages: one('page_count'), vacuum: one('auto_vacuum') === 2 };
+    }
+
+    /**
+     * One slice of giving space back to the disk after many rows were taken out. First the search index's own
+     * leftovers: FTS5 keeps a deleted row's words until its segments are merged, so they are merged a few pages at
+     * a time. Then the free pages, moved off the end of the file a thousand at a time, and the write-ahead log cut
+     * to nothing. Each slice takes a few milliseconds, so a search waits at most that long.
+     * @param {'merge' | 'vacuum'} phase
+     * @returns {'merge' | 'vacuum' | 'done'} the next phase.
+     */
+    shrinkSlice(phase) {
+        const changes = () => this.sql('SELECT total_changes() AS n').get().n;
+        if (phase === 'merge') {
+            this.taken = 0;
+            const before = changes();
+            this.sql("INSERT INTO fts (fts, rank) VALUES ('merge', -16)").run();
+            return changes() - before >= 2 ? 'merge' : 'vacuum';
+        }
+        const { free, vacuum } = this.space();
+        if (free > 0 && vacuum) {
+            this.db.exec('PRAGMA incremental_vacuum(1000)');
+            if (this.space().free < free) return 'vacuum';
+        }
+        try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch { /* a reader holds it: the next checkpoint */ }
+        return 'done';
     }
 
     /** The index file's size on disk, its write-ahead log included. */
@@ -245,10 +297,22 @@ export class Store {
         }
     }
 
+    /** How many rows (turns, sections) a file has in the index. */
+    rowCount(fileId) {
+        return this.sql('SELECT count(*) AS n FROM docs WHERE file = ?').get(fileId)?.n ?? 0;
+    }
+
     /** Forget a file's rows (it is read again from the start). */
     clearRows(fileId) {
-        for (const { id } of this.sql('SELECT id FROM docs WHERE file = ?').all(fileId)) this.sql('DELETE FROM fts WHERE rowid = ?').run(id);
+        const rows = this.sql('SELECT id FROM docs WHERE file = ?').all(fileId);
+        for (const { id } of rows) this.sql('DELETE FROM fts WHERE rowid = ?').run(id);
         this.sql('DELETE FROM docs WHERE file = ?').run(fileId);
+        this.taken += rows.length;
+    }
+
+    /** How many rows (turns, note sections) the index holds. */
+    rowTotal() {
+        return this.sql('SELECT count(*) AS n FROM docs').get()?.n ?? 0;
     }
 
     /** Forget a file and its rows. */
@@ -279,14 +343,16 @@ export class Store {
      */
     putRow(fileId, file, row) {
         const found = this.sql('SELECT id FROM docs WHERE file = ? AND turn = ?').get(fileId, row.turn);
-        const values = [row.seq ?? 0, Math.round(row.time ?? 0), row.status === 'running' ? 0 : 1, file.kind, file.folder ?? '', row.model ?? '', row.label ?? '', row.line ?? 0];
+        // How the turn ended, when it did not end as it should: DSH's reason (aborted, error, interrupted, …) and why.
+        const ended = ['running', 'done', 'completed'].includes(row.status) || typeof row.status !== 'string' ? '' : row.status.slice(0, 40);
+        const values = [row.seq ?? 0, Math.round(row.time ?? 0), row.status === 'running' ? 0 : 1, ended, ended ? String(row.why ?? '').slice(0, 300) : '', file.kind, file.folder ?? '', row.model ?? '', row.label ?? '', row.line ?? 0];
         let id;
         if (found) {
             id = found.id;
-            this.sql('UPDATE docs SET seq = ?, time = ?, done = ?, kind = ?, folder = ?, model = ?, label = ?, line = ? WHERE id = ?').run(...values, id);
+            this.sql('UPDATE docs SET seq = ?, time = ?, done = ?, ended = ?, why = ?, kind = ?, folder = ?, model = ?, label = ?, line = ? WHERE id = ?').run(...values, id);
             this.sql('DELETE FROM fts WHERE rowid = ?').run(id);
         } else {
-            id = Number(this.sql('INSERT INTO docs (seq, time, done, kind, folder, model, label, line, file, turn) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(...values, fileId, row.turn).lastInsertRowid);
+            id = Number(this.sql('INSERT INTO docs (seq, time, done, ended, why, kind, folder, model, label, line, file, turn) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(...values, fileId, row.turn).lastInsertRowid);
         }
         this.sql('INSERT INTO fts (rowid, title, prompt, reply, tools) VALUES (?, ?, ?, ?, ?)').run(id, file.title ?? '', row.prompt ?? '', row.reply ?? '', row.tools ?? '');
         return id;
@@ -317,30 +383,48 @@ export class Store {
 
     /**
      * The best-matching rows for an FTS5 query (or the newest rows with no
-     * query), at most `cap`, with their file's facts.
+     * query), at most `cap`, with their file's facts. Each row has `own`,
+     * its score on its own text (below 0 when its request, reply or tools
+     * say the words; 0 when only its file's title does), and `score`, on
+     * its title too (below `own` when the title says some of them). Best
+     * first: the rows whose own text matches come first, by `own`, then the
+     * rows that match by their title alone. Newest first: by time (the
+     * engine puts the rows that say the words first).
      * @param {{ match?: string, sort?: 'best'|'newest', cap?: number, filters?: object }} q
      */
     candidates({ match = '', sort = 'best', cap = 400, filters = {} }) {
         const w = Store.where(filters);
         const cols = 'd.id, d.file, d.turn, d.seq, d.time, d.done, d.kind, d.folder, d.model, d.label, d.line';
         if (!match) {
-            return this.db.prepare(`SELECT ${cols}, 0 AS score FROM docs d WHERE 1 = 1${w.sql} ORDER BY d.time DESC LIMIT ?`).all(...w.args, cap);
+            return this.db.prepare(`SELECT ${cols}, -1 AS own, 0 AS score FROM docs d WHERE 1 = 1${w.sql} ORDER BY d.time DESC LIMIT ?`).all(...w.args, cap);
         }
-        const order = sort === 'newest' ? 'd.time DESC' : 'score';
+        // Only what the order needs is scored for every matching row: SQLite scores the other column for the rows
+        // it keeps (sorting newest first by own text too took 45 ms instead of 15 on 10k sessions).
+        const order = sort === 'newest' ? 'd.time DESC' : 'own';
         // CROSS JOIN keeps the full-text match as the outer loop: led by a filter's index instead (kind and date,
         // say), SQLite would run the match again for every row the filter lets through (8.7 s instead of 19 ms on
         // 10k sessions, measured by scripts/recall-bench.mjs).
-        return this.db.prepare(`SELECT ${cols}, bm25(fts, ${WEIGHTS.join(', ')}) AS score FROM fts CROSS JOIN docs d ON d.id = fts.rowid
-            WHERE fts MATCH ?${w.sql} ORDER BY ${order} LIMIT ?`).all(match, ...w.args, cap);
+        return this.db.prepare(`SELECT ${cols}, bm25(fts, ${OWN_WEIGHTS.join(', ')}) AS own, bm25(fts, ${WEIGHTS.join(', ')}) AS score
+            FROM fts CROSS JOIN docs d ON d.id = fts.rowid WHERE fts MATCH ?${w.sql} ORDER BY ${order} LIMIT ?`).all(match, ...w.args, cap);
     }
 
-    /** How many rows match, counting up to `cap` (more is said as "cap+"). */
+    /**
+     * How many rows match an FTS5 query (the engine gives query.js's `own`,
+     * so a row that matches only by its file's title is not counted), or
+     * how many rows there are with no query, counting up to `cap` (more is
+     * said as "cap+").
+     */
     count({ match = '', filters = {}, cap = 5000 }) {
         const w = Store.where(filters);
         const inner = match
             ? `SELECT 1 FROM fts CROSS JOIN docs d ON d.id = fts.rowid WHERE fts MATCH ?${w.sql} LIMIT ?`
             : `SELECT 1 FROM docs d WHERE 1 = 1${w.sql} LIMIT ?`;
         return this.db.prepare(`SELECT count(*) AS n FROM (${inner})`).get(...(match ? [match] : []), ...w.args, cap + 1).n;
+    }
+
+    /** A file's first row (where a file that matches by its title alone opens). */
+    firstRow(fileId) {
+        return this.sql('SELECT id, file, turn, seq, time, done, kind, folder, model, label, line FROM docs WHERE file = ? ORDER BY turn LIMIT 1').get(fileId);
     }
 
     /**
@@ -358,9 +442,34 @@ export class Store {
             FROM fts WHERE fts MATCH ? AND rowid IN (${marks})`).all(match, ...ids);
         for (const r of rows) {
             const best = [r.reply, r.tools, r.prompt, r.title].find((text) => typeof text === 'string' && text.includes('\u0002'));
-            out.set(r.id, best ?? '');
+            out.set(r.id, plainText(best ?? ''));
         }
         return out;
+    }
+
+    /** How each row ended (`done`, DSH's reason when it ended early, and why), for the page's rows. */
+    endsOf(ids) {
+        const out = new Map();
+        if (ids.length === 0) return out;
+        const marks = ids.map(() => '?').join(', ');
+        for (const r of this.db.prepare(`SELECT id, done, ended, why FROM docs WHERE id IN (${marks})`).all(...ids)) out.set(r.id, r);
+        return out;
+    }
+
+    /** This DSH's session file for a session id (the tool leaves out the turn that asks), or undefined. */
+    ownSessionFile(sessionId) {
+        if (typeof sessionId !== 'string' || !sessionId) return undefined;
+        return this.sql('SELECT id FROM files WHERE session = ? AND own = 1 AND kind = \'session\' LIMIT 1').get(sessionId)?.id;
+    }
+
+    /** A file's open turn (a session's turn still going: the one that asks, for the tool), or undefined. */
+    openTurnOf(fileId) {
+        return this.sql('SELECT id FROM docs WHERE file = ? AND done = 0 ORDER BY turn DESC LIMIT 1').get(fileId)?.id;
+    }
+
+    /** Whether one row matches an FTS5 query. */
+    says(match, id) {
+        return Boolean(match) && this.sql('SELECT 1 AS hit FROM fts WHERE fts MATCH ? AND rowid = ?').get(match, id) !== undefined;
     }
 
     /** The start of each row's prompt, for "what was asked". */
@@ -368,7 +477,7 @@ export class Store {
         const out = new Map();
         if (ids.length === 0) return out;
         const marks = ids.map(() => '?').join(', ');
-        for (const r of this.db.prepare(`SELECT rowid AS id, substr(prompt, 1, ?) AS text FROM fts WHERE rowid IN (${marks})`).all(chars, ...ids)) out.set(r.id, r.text);
+        for (const r of this.db.prepare(`SELECT rowid AS id, substr(prompt, 1, ?) AS text FROM fts WHERE rowid IN (${marks})`).all(chars, ...ids)) out.set(r.id, plainText(r.text));
         return out;
     }
 

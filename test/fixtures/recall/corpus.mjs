@@ -37,7 +37,10 @@ export function sessionWriter(file, { id, cwd = '/work/project', createdAt = Dat
             put(event('system/message', { text: 'You are a coding agent. '.repeat(40) }, createdAt));
             return w;
         },
-        /** A whole turn: the person's words, context DSH injects, tool calls, the reply, its end. */
+        /**
+         * A whole turn: the person's words, context DSH injects, tool calls, the reply, its end. `end`: true (it
+         * completed), false (left open), or DSH's reason for its end (`{ kind: 'aborted', reason: { kind: 'user' } }`).
+         */
         turn({ prompt, reply = '', tools = [], at = createdAt + turn * 60_000, context = [], end = true, source = { kind: 'user' }, turnModel = model }) {
             turn += 1;
             // DSH's order: the turn starts, then each step logs its request's messages (the person's, then context).
@@ -52,12 +55,12 @@ export function sessionWriter(file, { id, cwd = '/work/project', createdAt = Dat
                 put(event('tool/result', { output: 'output '.repeat(50) }, at + 600));
             }
             if (reply) put(event('assistant/message', { message: { role: 'assistant', content: [{ type: 'text', text: reply }], source: { kind: 'model', provider, model: turnModel } } }, at + 1000));
-            if (end) put(event('turn/end', { turn, reason: { kind: 'completed' } }, at + 2000));
+            if (end) put(event('turn/end', { turn, reason: end === true ? { kind: 'completed' } : end }, at + 2000));
             return start.seq;
         },
-        /** The end of a turn left open. */
-        end(at) {
-            put(event('turn/end', { turn, reason: { kind: 'completed' } }, at));
+        /** The end of a turn left open, with DSH's reason (completed unless given). */
+        end(at, reason = { kind: 'completed' }) {
+            put(event('turn/end', { turn, reason }, at));
         },
         title(text, at = createdAt) {
             put(event('session/title', { title: text }, at));

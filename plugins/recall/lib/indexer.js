@@ -46,6 +46,16 @@ const errorWords = (error) => {
     return String(error?.message ?? error).replace(/\s+/g, ' ').slice(0, 200);
 };
 
+/** Why a searched folder cannot be read, as whole sentences that say what to do (it is looked at again every minute). */
+export const folderWords = (error) => {
+    const code = error?.code;
+    if (code === 'EACCES' || code === 'EPERM') return 'DSH may not read this folder (permission denied). Give DSH access to it, or name another folder in Recall\'s settings.';
+    if (code === 'ENOTDIR') return 'Part of this path is a file, not a folder. Check the folder\'s path in Recall\'s settings.';
+    if (code === 'ELOOP') return 'This path goes round in a loop of links. Name the folder itself in Recall\'s settings.';
+    if (code === 'EIO') return 'Its disk could not be read (an input/output error). Check the disk; Recall looks again every minute.';
+    return `Recall cannot read this folder (${errorWords(error).replace(/\.$/, '')}). Check that DSH may read it; Recall looks again every minute.`;
+};
+
 /** The folder a source's walk starts from: a DSH home's `sessions` folder when given the home. */
 export function walkRoot(source) {
     if (source.kind !== 'session') return source.root;
@@ -70,11 +80,11 @@ class Walk {
         const top = walkRoot(source);
         try {
             const st = statSync(top);
-            if (!st.isDirectory()) this.error = 'it is a file, not a folder';
+            if (!st.isDirectory()) this.error = 'This is a file, not a folder. Name the folder that holds it in Recall\'s settings.';
             else this.stack.push({ dir: top, depth: 0 });
         } catch (error) {
             if (error?.code === 'ENOENT') this.missing = true;
-            else this.error = errorWords(error);
+            else this.error = folderWords(error);
         }
     }
 
@@ -89,7 +99,7 @@ class Walk {
         try {
             entries = readdirSync(dir, { withFileTypes: true });
         } catch (error) {
-            if (depth === 0) this.error = errorWords(error);
+            if (depth === 0) this.error = folderWords(error);
             return;
         }
         const kind = this.source.kind;
@@ -160,6 +170,8 @@ export class Indexer {
         this.rootState = new Map();
         this.read = 0;
         this.rowsPut = 0;
+        /** Of those, a note's sections (the rest are turns), so the log can say which it read. */
+        this.sectionsPut = 0;
         this.lastRead = 0;
         /** Sessions DSH named that no walk found yet: id → when last looked for. */
         this.missed = new Map();
@@ -332,7 +344,7 @@ export class Indexer {
         try { st = statSync(job.path); } catch { st = undefined; }
         const words = errorWords(error);
         this.store.fileProblem(job.id, { size: st?.size, mtime: st?.mtimeMs, ino: st?.ino, error: `Could not be read: ${words}.` });
-        this.note({ kind: 'problem', path: job.path, sourceKind: job.source.kind, error: words });
+        this.note({ kind: 'problem', path: job.path, sourceKind: job.source.kind, error: words, rows: this.store.rowCount(job.id) });
     }
 
     /** Where a file's read goes on from: its saved place when the file only grew, else the start. */
@@ -356,6 +368,7 @@ export class Indexer {
             this.store.putRow(job.id, file, r);
             this.rowsPut += 1;
         }
+        if (file.kind === 'handoff') this.sectionsPut += rows.length;
         if ((row?.title ?? '') !== meta.title) this.store.retitle(job.id, meta.title);
         this.store.saveFile(job.id, { size, mtime, ino, offset, state, ...meta, skip, error });
     }
@@ -393,7 +406,7 @@ export class Indexer {
             if (r.bad) {
                 next = r.bad.resume ?? r.size;
                 job.broken = `Part of it could not be read (${r.bad.why} at byte ${r.bad.at}); Recall read on from the next whole write.`;
-                this.note({ kind: 'problem', path: job.path, sourceKind: 'session', error: `${r.bad.why} at byte ${r.bad.at}` });
+                this.note({ kind: 'problem', path: job.path, sourceKind: 'session', error: `${r.bad.why} at byte ${r.bad.at}`, part: true });
             }
             this.save(job, job.row, { rows, meta, size: r.size, mtime: r.mtime, ino: r.ino, offset: next, state: log.state, error: job.broken });
             job.row = { ...(job.row ?? {}), title: meta.title };
@@ -424,6 +437,8 @@ export class Indexer {
             lines.forEach((line, i) => log.line(line, first + i));
             log.state.lines = (job.state.lines ?? 0) + lines.length + (r.skipped ? 1 : 0);
             const { rows, meta } = log.take();
+            // A transcript that gives no times (plain role lines): its turns are dated by when the file was written.
+            for (const row of rows) if (!(row.time > 0)) row.time = Math.round(r.mtime);
             if (!meta.session) meta.session = basename(job.path).replace(/\.jsonl$/i, '');
             if (!meta.folder) meta.folder = dirname(job.path);
             this.save(job, job.row, { rows, meta, size: r.size, mtime: r.mtime, ino: r.ino, offset: r.next, state: log.state });
