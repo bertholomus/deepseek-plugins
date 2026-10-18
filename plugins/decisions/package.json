@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-decisions",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "One inbox for everything waiting on you: decision lines, approvals, question-box questions, threads that need a decision. Answer in place.",
   "icon": "./icon.svg",
   "license": "MIT",

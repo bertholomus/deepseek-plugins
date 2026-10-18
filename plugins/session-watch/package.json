@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-session-watch",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Watches every session for Autopilot, Decisions and Agent Terminals.",
   "icon": "./icon.svg",
   "license": "MIT",
