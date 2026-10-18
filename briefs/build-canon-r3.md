@@ -1,14 +1,17 @@
 # Canon round 3: builder's notes
 
-Updated: 2026-10-17 7:34 PM PDT (Canon round-3 builder)
+Updated: 2026-10-17 7:37 PM PDT (Canon round-3 builder)
 Branch: `suite/v1` in `~/Projects/dsh-plugin-suite`
-Status: under way. Finding 1's rule and dev set are in (README still to write); Findings 2 to 6 next.
+Status: under way. Finding 1 is in (rule 3405922, dev set and measure 7cc1c48, README next commit); Findings 2 to 6 next.
 Vault frozen at f7283b5: test/fixtures/canon/vault (not changed this round).
 
 Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 17 10:39:36 2026, patch sha256
 63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7.
 
 ## Done (newest first)
+- README (Finding 1): the fit rule in "What a turn gets"; "How well it picks notes" with round 3's dev set (its make-up,
+  round 2's rules against now, the coding row, by kind), round 2's section and both hold-outs' paragraphs kept with
+  every figure as it was, the second hold-out's line, "What it still misses" for round 3.
 - The fit rule (Finding 1), chosen on dev only. Dev, 238 prompts: first note answers 59 of 67 (88.1%), an answering
   note in the block 64 of 67 (95.5%), 0.30 notes per block that do not answer (19 in 64), no block 170 of 171 (99.4%),
   everyday coding requests with no block 139 of 140 (99.3%). The brief's aims (coding 95%, first 85%, block 93%) are
@@ -24,10 +27,9 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
   judge's generic set (60, none answerable): no block 44 of 60 (73.3%).
 
 ## Next steps (in order, each runnable by someone new)
-1. README: the fit rule in "Which notes fit", "How well it picks notes" (dev figures, coding apart from chat, the dev
-   set's make-up, the second hold-out line), "What it still misses".
-2. Findings 2 to 6, each with tests.
-3. `npm test`, then `node scripts/e2e.mjs canon` with the live fingerprint before and after each run.
+1. Findings 2 to 6, each with tests (2: the quoted number fixed from the waiting state; 3: unreadable folders named;
+   4: the README on instructions in notes; 5: the e2e waits for the vault's `ok`; 6: the nits).
+2. `npm test`, then `node scripts/e2e.mjs canon` with the live fingerprint before and after each run.
 
 ## Picks and why
 - The rule, in full (search.js `rank()`): everyday request words (text.js `EVERYDAY`: verbs such as write, add, fix,

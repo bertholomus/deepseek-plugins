@@ -47,11 +47,28 @@ lightly stemmed ("listens" finds "listen"), and words that say nothing
 ("please", "thanks", "looks good", "called") are left out. So are a
 prompt's words about the vault and about answering from it ("answer from
 the team's shared notes and cite the note"): they say where to look, not
-what about.
+what about. And so are everyday request words ("write", "add", "fix",
+"test", "run", "function", "file", "small"): they say what to do, not what
+about, so a note never fits on them.
 
-A note fits a prompt when it shares two of its words, or one in the note's
-title, aliases, tags, path or headings; one word in its body alone never
-fits. Three rules keep a project's notes to the prompts about them:
+A note fits a prompt when the words it shares with it carry enough of what
+the prompt asks. Each word of the prompt weighs as much as it is rare in
+the vault (a word no note has weighs most; everyday request words weigh
+too, though no note fits on them), and the words a note shares must carry:
+
+- a third of that weight when one of them is in the note's title, aliases,
+  tags or headings, and two of them (a project's name can be one; one, for
+  a prompt of one word) must say what the note is about: be in those
+  fields, in few of the vault's notes, or twice in its body;
+- 55% of it when they are only in its body; a single word in its body fits
+  only beside a project that the prompt or the session names, in a prompt
+  that asks more than that word.
+
+So most everyday coding requests get no note, though notes share a word or
+two with them: "Write a small helper that checks whether a request has a JSON
+body." in `~/Projects/lantern-api` shares "request" and "body" with the
+rate limits note, but "JSON", the rarest word it asks, is in no note. Three
+rules keep a project's notes to the prompts about them:
 
 - A project's name counts as one word, however many parts it has
   (`lantern-api` is "lantern" and "api"), and a note needs a word beyond
@@ -68,7 +85,8 @@ fits. Three rules keep a project's notes to the prompts about them:
 Of the notes that fit and score above a small floor, a turn gets the best
 one and those that score at least half as well; a prompt that asks two
 things ("…, and how do I roll out a new build?") also gets the note that
-best answers each question asked alone. Notes that belong to the session's
+best answers each question asked alone, which needs to carry enough of its
+own question, not of the whole prompt. Notes that belong to the session's
 folder count for more: a note whose path, `project`/`repo` field or tags
 name the folder's project (`~/Projects/harbor-gateway` → `harbor-gateway`),
 and a little more for the folder above.
@@ -106,24 +124,37 @@ out of sight, so Canon's card stands for it there.
 
 ## How well it picks notes
 
-Measured on a labelled set of prompts over the fixture vault
+Measured on labelled sets of prompts over the fixture vault
 (`test/fixtures/canon/vault`: 42 notes, 35 of them active, for five
 projects, people, decisions, runbooks and ideas), each prompt going through
 Canon's own recall exactly as a turn does, with the default settings (3
-notes, 2,000 characters). The dev set
-(`test/fixtures/canon/relevance/dev.json`) has 77 prompts: 47 that a note
-answers, and 30 that none does (8 that name a project but ask what no note
-says, 8 of chat filler, 8 of words about the vault, 6 others), from
-sessions in a project's folder, in an unrelated folder and in none.
-Canon's rules were tuned on it, so new prompts may do worse than these
-figures. The floors were fixed before anything was measured.
+notes, 2,000 characters). The floors were fixed before anything was
+measured (the first four in round 2, the everyday-coding one in round 3).
 
-| Figure | Before tuning | Now | Floor |
+The dev set (`test/fixtures/canon/relevance/dev.json`) has 238 prompts,
+each with its kind: round 2's 77 (below); the 113 prompts round 2's judge
+measured Canon on (its fixture set, ids `jf-`, less one that repeats a dev
+prompt word for word, and its generic set, ids `jg-`); and 48 everyday
+coding requests written for round 3 (`c01` to `c48`: 21 from sessions in the
+vault's projects' folders, 15 from unrelated folders, 12 from sessions with
+none). A note answers 67 of them; of the 171 that none does, 140 are
+everyday coding requests, 9 name a project but ask what no note says, 8
+are chat filler, 8 are words about the vault and 6 are others. Canon's
+rules were tuned on it (round 3: the fit rule above), so new prompts may do
+worse than these figures.
+
+| Figure | Round 2's rules | Now | Floor |
 | --- | --- | --- | --- |
-| The block's first note answers | 40 of 47 (85.1%) | 43 of 47 (91.5%) | at least 80% |
-| An answering note is in the block | 45 of 47 (95.7%) | 45 of 47 (95.7%) | at least 90% |
-| Notes per block that do not answer | 1.04 (48 in 46 blocks) | 0.33 (15 in 45 blocks) | at most 1.0 |
-| No block, for a prompt no note answers | 8 of 30 (26.7%) | 25 of 30 (83.3%) | at least 70% |
+| The block's first note answers | 58 of 67 (86.6%) | 59 of 67 (88.1%) | at least 80% |
+| An answering note is in the block | 62 of 67 (92.5%) | 64 of 67 (95.5%) | at least 90% |
+| Notes per block that do not answer | 0.40 (25 in 62 blocks) | 0.30 (19 in 64 blocks) | at most 1.0 |
+| No block, for a prompt no note answers | 109 of 171 (63.7%) | 170 of 171 (99.4%) | at least 70% |
+| No block, for an everyday coding request no note answers | 80 of 140 (57.1%) | 139 of 140 (99.3%) | at least 90% |
+
+The prompts no note answers, by kind, now: everyday coding requests 139 of
+140 with no block; chat filler 8 of 8; words about the vault 8 of 8 (7 of
+8 with round 2's rules); a project named, but nothing a note says, 9 of 9;
+others 6 of 6.
 
 `npm test` holds the dev set to the figures it reached. To measure again,
 with each prompt that got a wrong note, an extra one or a block it should
@@ -133,11 +164,47 @@ not have:
 node scripts/canon-relevance.mjs --set dev --misses
 ```
 
-What it still misses: a note that shares only one word with the prompt,
-in its body ("What does bastion mean?" and the glossary), and notes that
-share two common words with a prompt no note answers.
+What it still misses (dev, round 3):
 
-The fair figures are the hold-out's. Its 48 prompts
+- One word in a note's body, in a prompt that asks only that word: "What
+  does bastion mean?" and the glossary.
+- Words a note says another way: "How do I ship a new build of this
+  service to production?" in harbor-gateway's folder, and "Deploying the
+  gateway" (it says "deploy" and "roll out", never "ship" or
+  "production"); "Add an index on entries.created_at in tide-ledger." and
+  "Schema migrations", whose words in common carry too little of it.
+- A note with the prompt's words in its title before the one that answers:
+  "Cluster layout" before "Restarting a quartz-cache node" for "How do I
+  restart a node without losing data?", "Browser support" before "Running
+  lantern-web locally" for "What Node version does lantern-web need?".
+- One everyday coding request gets a note: "Add a timeout so the fetch call
+  gives up after 10 seconds." gets On-call, which has "call", "10" and
+  "seconds".
+- A long prompt (a pasted log and a question) spreads its weight over many
+  words, so a note may share too little of it; ask the question on its own.
+
+### Round 2
+
+Round 2's dev set had 77 prompts (now part of the dev set above): 47 that a note
+answers, and 30 that none does (8 that name a project but ask what no note
+says, 8 of chat filler, 8 of words about the vault, 6 others), from
+sessions in a project's folder, in an unrelated folder and in none.
+Round 2's rules were tuned on it.
+
+| Figure | Before tuning | Now | Floor |
+| --- | --- | --- | --- |
+| The block's first note answers | 40 of 47 (85.1%) | 43 of 47 (91.5%) | at least 80% |
+| An answering note is in the block | 45 of 47 (95.7%) | 45 of 47 (95.7%) | at least 90% |
+| Notes per block that do not answer | 1.04 (48 in 46 blocks) | 0.33 (15 in 45 blocks) | at most 1.0 |
+| No block, for a prompt no note answers | 8 of 30 (26.7%) | 25 of 30 (83.3%) | at least 70% |
+
+Round 2 still missed a note that shares only one word with the prompt, in
+its body ("What does bastion mean?" and the glossary), and notes that share
+two common words with a prompt no note answers.
+
+### The hold-outs
+
+The fair figures are the hold-outs'. The first hold-out's 48 prompts
 (`test/fixtures/canon/relevance/holdout.json`: 24 that a note answers, 24
 that none does) were written by two writers who never saw Canon's code or
 the dev set, on the fixture vault as it is, and measured once, on October
@@ -151,7 +218,9 @@ the dev set, on the fixture vault as it is, and measured once, on October
 | Notes per block that do not answer | 0.54 (13 in 24 blocks) | at most 1.0 |
 | No block, for a prompt no note answers | 22 of 24 (91.7%) | at least 70% |
 
-To measure it again: `node scripts/canon-relevance.mjs --set holdout`.
+Those are round 2's rules' figures. `npm test` measures it again with every
+change and holds Canon to the four floors on it; to measure it by hand:
+`node scripts/canon-relevance.mjs --set holdout`.
 
 That hold-out has no coding request among its 24 prompts that no note
 answers (they are chat, questions about the vault and project switches),
@@ -162,6 +231,13 @@ function that checks whether a string is a palindrome", "Add a health
 check endpoint to the Express server"), 26 got a block, so 70.8% got
 none, and at least 23 of those blocks held nothing that bears on the
 request: a note fits on any two shared words, however common.
+
+A second hold-out (`test/fixtures/canon/relevance/holdout2.json`), with a
+kind for every prompt and everyday coding requests among those no note
+answers, is measured after round 3: its figures are added here when it is
+measured (`node scripts/canon-relevance.mjs --set holdout2`). `npm test`
+skips it while it is not there, and holds Canon to all five floors on it
+when it is.
 
 ## On the turn
 
@@ -409,7 +485,9 @@ copy of it in a temporary folder. They cover a vault folder DSH may not
 list, the try-out's `~/` folder, numbers in quotes in the profile, the
 form's promote-folder check, and where the focus goes after each switch,
 Read again and Promote. `test/canon-relevance.test.js` holds the dev set to
-the figures it reached, and the hold-out to the floors.
+the figures it reached, the first hold-out to its four floors and, once it
+is there, the second hold-out to all five; a hold-out's test prints its
+figures only, never its prompts.
 
 The real-DSH test (about one minute a build) starts DSH from each
 `.e2e/dsh-<version>` install and from the installed app's own DSH, each in
