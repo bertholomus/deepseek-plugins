@@ -27,6 +27,14 @@ const mode = (path) => statSync(path).mode & 0o777;
 const logOf = (file) => (existsSync(file) ? readFileSync(file, 'utf8') : '');
 
 /**
+ * The plugin's one-time moves read under DSH's data folder when a test doesn't set one
+ * (the old sidebar, a projects store), so every test here points DSH_HOME at a throwaway
+ * folder: the machine's real DSH home is never read. Tests that need a specific one use
+ * withDshHome, which puts it back.
+ */
+process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'categories-home-'));
+
+/**
  * DSH's workspace registry: get, list (DSH's order, a new workspace first)
  * and insertBefore, the call DSH's own workspace drag makes.
  */
@@ -241,9 +249,9 @@ function projectsStoreWithCategories() {
         version: 1,
         projects: {
             'dsh-plugins': { settings: { goal: 'Ship it' }, threads: { t1: { sessionId: 's-t1', title: 'Fix CI' } }, pendingHandbacks: [], nextThread: 2, coordinatorSessionId: 's-dsh', home: 'ws:/work/dsh' },
-            'testing-out-coordinator': { name: 'Testing out Coordinator', source: 'page', order: 0, coordinatorSessionId: 's-test', home: 'ws:/work/albertlee', threads: { t1: { sessionId: 's-n1' }, t2: { sessionId: 's-n2' } } },
+            'testing-out-coordinator': { name: 'Testing out Coordinator', source: 'page', order: 0, coordinatorSessionId: 's-test', home: 'ws:/work/alex', threads: { t1: { sessionId: 's-n1' }, t2: { sessionId: 's-n2' } } },
         },
-        workspaceOf: { 'ws:/work/dsh': 'dsh-plugins', 'ws:/work/d2': 'dsh-plugins', 'ws:/work/albertlee': 'testing-out-coordinator', 'ws:/work/c': 'testing-out-coordinator' },
+        workspaceOf: { 'ws:/work/dsh': 'dsh-plugins', 'ws:/work/d2': 'dsh-plugins', 'ws:/work/alex': 'testing-out-coordinator', 'ws:/work/c': 'testing-out-coordinator' },
         categories: {
             'local-model-recipe': { name: 'Local Model Recipe', order: 1, createdAt: '2026-10-10T08:13:00.000Z', source: 'import', importedFrom: 'p4' },
             'fleet-services': { name: 'Fleet Services', order: 2, createdAt: '2026-10-10T08:13:00.000Z', source: 'import', importedFrom: 'p3' },
@@ -253,7 +261,7 @@ function projectsStoreWithCategories() {
         },
         categoryOf: {
             'ws:/work/a': 'local-model-recipe', 'ws:/work/clef-quant': 'local-model-recipe', 'ws:/work/b': 'local-model-recipe', 'ws:/work/ops': 'fleet-services',
-            'ws:/work/lab': 'experimentation', 'ws:/work/albertlee': 'testing-out-coordinator', 'ws:/work/dsh': 'testing-out-coordinator', 'ws:/work/x': 'broken',
+            'ws:/work/lab': 'experimentation', 'ws:/work/alex': 'testing-out-coordinator', 'ws:/work/dsh': 'testing-out-coordinator', 'ws:/work/x': 'broken',
         },
         imports: {
             fleetShell: { at: '2026-10-10T08:13:00.000Z', file: '/home/u/.dsh/fleet-shell/state.json', projects: 5, joined: 0, workspaces: 14, skipped: 0 },
@@ -268,7 +276,7 @@ const OLD_SIDEBAR = {
         { id: 'p1', name: 'DSH Plugins' }, { id: 'p4', name: 'Local Model Recipe' }, { id: 'p3', name: 'Fleet Services' }, { id: 'p2', name: 'Experimentation' },
         { id: 'p5', name: 'General' }, { id: 'p6', name: 'Project Testing' }, { id: 'p7', name: 'Security' },
     ],
-    projectOf: { 'ws:/work/dsh': 'p1', 'ws:/work/albertlee': 'p5', 'ws:/work/c': 'p6', 'ws:/work/new': 'p7', 'ws:/work/a': 'p4' },
+    projectOf: { 'ws:/work/dsh': 'p1', 'ws:/work/alex': 'p5', 'ws:/work/c': 'p6', 'ws:/work/new': 'p7', 'ws:/work/a': 'p4' },
 };
 
 test('move: at the first start, the projects plugin\'s categories come over exactly as they are, with a copy of its store; it and the old sidebar are only read', async () => {
@@ -284,7 +292,7 @@ test('move: at the first start, the projects plugin\'s categories come over exac
     delete source.imports.fleetShell;
     const text = `${JSON.stringify(source, null, 2)}\n`;
     writeFileSync(projectsFile, text, { mode: 0o600 });
-    const options = { workspaces: ['/work/new', '/work/dsh', '/work/a', '/work/b', '/work/ops', '/work/lab', '/work/albertlee', '/work/c'] };
+    const options = { workspaces: ['/work/new', '/work/dsh', '/work/a', '/work/b', '/work/ops', '/work/lab', '/work/alex', '/work/c'] };
     await withDshHome(home, async () => {
         const { host, raw, remote } = setup({}, dir, options);
         await tick();
@@ -292,7 +300,7 @@ test('move: at the first start, the projects plugin\'s categories come over exac
         // The same ids (General keeps the id it shares with a ◆ project), names, sources and order; the workspaces
         // DSH has (clef-quant is gone). Nothing from the old sidebar or the old groups.
         assert.deepEqual(plain(list.categories).map((c) => [c.id, c.name, c.source, c.importedFrom ?? null, c.workspaces.map((w) => w.id.slice(9))]), [
-            ['testing-out-coordinator', 'General', 'group', null, ['dsh', 'albertlee']],
+            ['testing-out-coordinator', 'General', 'group', null, ['dsh', 'alex']],
             ['local-model-recipe', 'Local Model Recipe', 'import', 'p4', ['a', 'b']],
             ['fleet-services', 'Fleet Services', 'import', 'p3', ['ops']],
             ['experimentation', 'Experimentation', 'import', 'p2', ['lab']],
@@ -311,7 +319,7 @@ test('move: at the first start, the projects plugin\'s categories come over exac
         assert.match(readFileSync(raw.logFile, 'utf8'), /move from projects from=categories categories=4 workspaces=7 backup=/);
         assert.doesNotMatch(readFileSync(raw.logFile, 'utf8'), /fleet-shell/);
         // DSH's order reads like the list: each category's workspaces together, then the rest in DSH's order.
-        assert.deepEqual(host.workspaceRegistry.list().map((ws) => ws.id.slice(9)), ['dsh', 'albertlee', 'a', 'b', 'ops', 'lab', 'new', 'c']);
+        assert.deepEqual(host.workspaceRegistry.list().map((ws) => ws.id.slice(9)), ['dsh', 'alex', 'a', 'b', 'ops', 'lab', 'new', 'c']);
 
         // Once: the projects store changes, a category is renamed here; a restart moves and imports nothing.
         writeFileSync(projectsFile, JSON.stringify({ version: 1, projects: {}, categories: { other: { name: 'Other', order: 0 } }, categoryOf: {} }));

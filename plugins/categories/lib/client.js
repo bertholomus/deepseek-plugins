@@ -62,60 +62,67 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // Keyboard focus: DSH's ring on every plugin control. DSH's own buttons (New category, Create, Cancel…) get
             // its outline; the plugin's own controls draw it inset below, so a scrolling list can't clip it.
             `:where(.dshc-pg,.dshc-pg-dialog) button:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid ${RING};outline-offset:2px}`,
-            // The Categories page (its entry in DSH's sidebar): DSH's page layout, as on Automation tasks, with the whole
-            // tree: categories, their workspaces, each one's sessions.
-            '.dshc-pg{display:flex;width:100%;min-width:0;height:100%;min-height:0;overflow:hidden;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);font-size:14px;line-height:1.6}',
-            '.dshc-pg-scroll{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;container-type:inline-size;--dsh-scrollbar-width:9px;--dsh-scrollbar-thumb-border:2px}',
-            '.dshc-pg-content{max-width:960px;margin:0 auto;padding:0 clamp(24px,4vw,48px) 48px}',
+            // The Categories page (its entry in DSH's sidebar): a surface the plugin owns whole (DESIGN.md rule 3), so
+            // its root paints no ground — the wall or DSH's own background shows around one glass card — and the whole
+            // tree (categories, their workspaces, each one's sessions) sits on that card, dense text at tint + .2.
+            // The grounds are defined once here, with their fallbacks, so with Wallpaper off the card reads frosted on
+            // DSH's own background; text deepens toward DSH's label colour on glass (rule 6).
+            '.dshc-pg{--dshc-glass:rgba(10,13,12,calc(var(--wp-tint,.55) + .2));--dshc-text-2:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary));--dshc-glyph:color-mix(in srgb,var(--dsw-alias-label-tertiary) 75%,var(--dsw-alias-label-primary))}',
+            'body:not([data-ds-dark-theme]) .dshc-pg{--dshc-glass:rgba(250,250,246,calc(var(--wp-tint,.55) + .2))}',
+            '@media (prefers-reduced-transparency:reduce){.dshc-pg{--dshc-glass:rgba(10,13,12,.95)}body:not([data-ds-dark-theme]) .dshc-pg{--dshc-glass:rgba(250,250,246,.95)}}',
+            '.dshc-pg{display:flex;width:100%;min-width:0;height:100%;min-height:0;overflow:hidden;color:var(--dsw-alias-label-primary);font-size:14px;line-height:1.6}',
+            '.dshc-pg-scroll{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;container-type:inline-size;--dsh-scrollbar-width:9px;--dsh-scrollbar-thumb-border:2px;padding:16px 16px 0}',
+            '[data-platform=darwin] .dshc-pg-scroll{padding-top:calc(16px + var(--dsh-frame-top-clearance,0px))}',
+            '.dshc-pg-content{box-sizing:border-box;max-width:960px;margin:0 auto 48px;padding:0 24px 40px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-lg);background:var(--dshc-glass);-webkit-backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%)}',
             '.dshc-pg-heading{display:flex;align-items:baseline;gap:12px;margin-bottom:16px;padding-top:28px}',
             '[data-platform=darwin] .dshc-pg-heading{padding-top:calc(28px + var(--dsh-frame-top-clearance,0px))}',
             '.dshc-pg-heading h1{margin:0;font-size:20px;font-weight:500;line-height:28px}',
             '.dshc-tree,.dshc-tree-group{list-style:none;margin:0;padding:0}',
             '.dshc-tree-item{outline:none}',
             '.dshc-tree-row{display:flex;align-items:center;gap:6px;min-height:30px;padding-inline-end:10px;border-radius:6px;cursor:default}',
-            '.dshc-tree-row:hover{background:var(--dsh-color-bg-hover,rgba(127,127,127,.08))}',
-            '.dshc-tree-item:focus-visible>.dshc-tree-row{outline:2px solid var(--dsw-focus-ring-color,Highlight);outline-offset:-2px}',
+            '.dshc-tree-row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+            '.dshc-tree-item:focus-visible>.dshc-tree-row{outline:2px solid ' + RING + ';outline-offset:-2px}',
             // The chevron's target is wider than it looks (20 px), and takes no more room in the row.
-            '.dshc-tree-chevron{display:inline-flex;align-items:center;justify-content:center;width:20px;align-self:stretch;margin-inline:-4px;flex:none;opacity:.7}',
+            '.dshc-tree-chevron{display:inline-flex;align-items:center;justify-content:center;width:20px;align-self:stretch;margin-inline:-4px;flex:none;color:var(--dshc-glyph)}',
             '.dshc-tree-title{flex:0 1 auto;min-width:4em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshc-tree-category>.dshc-tree-row .dshc-tree-title{font-weight:500}',
             // What follows a title (a level and its count, a path) gives way before the title does.
-            '.dshc-tree-meta{margin-left:auto;padding-left:12px;flex:0 100 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12px;opacity:.65;white-space:nowrap}',
+            '.dshc-tree-meta{margin-left:auto;padding-left:12px;flex:0 100 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--dshc-text-2);white-space:nowrap}',
             '.dshc-tree-dot{display:inline-flex;flex:none}',
-            '.dshc-tree-glyph{display:inline-flex;width:14px;flex:none;opacity:.75}',
+            '.dshc-tree-glyph{display:inline-flex;width:14px;flex:none;color:var(--dshc-glyph)}',
             // A category's or a workspace's ⋯ at the end of its row, as on DSH's own rows: shown while the row is
             // pointed at, has the focus or has its menu open, its place kept meanwhile so the row doesn't shift.
             // DSH's menu wraps its button in a box of its own, which takes the menu's class: that box is what sits in the row.
             '.dshc-tree-row>.dshc-tree-act{flex:none;display:inline-flex;margin-left:auto;margin-right:-6px}',
             '.dshc-tree-meta+.dshc-tree-act{margin-left:4px}',
-            '.dshc-tree-more{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:var(--dsw-radius-sm,4px);background:none;color:var(--dsw-alias-label-secondary);cursor:pointer;visibility:hidden}',
+            '.dshc-tree-more{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:var(--dsw-radius-sm,4px);background:none;color:var(--dshc-text-2);cursor:pointer;visibility:hidden}',
             '.dshc-tree-more:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
             '.dshc-tree-row:hover .dshc-tree-more,.dshc-tree-item:focus-visible>.dshc-tree-row .dshc-tree-more,.dshc-tree-more:focus,.dshc-tree-more[aria-expanded="true"]{visibility:visible}',
-            '.dshc-pg-count{font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
+            '.dshc-pg-count{font-size:13px;line-height:20px;color:var(--dshc-text-2)}',
             '.dshc-pg-heading .dshc-pg-new{margin-left:auto;align-self:center}',
-            '.dshc-pg-note{display:flex;align-items:center;gap:8px;margin:-4px 0 12px;padding:5px 5px 5px 12px;border-radius:12px;background:var(--dsw-alias-interactive-bg-hover);font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
+            '.dshc-pg-note{display:flex;align-items:center;gap:8px;margin:-4px 0 12px;padding:5px 5px 5px 12px;border-radius:12px;background:var(--dsw-alias-interactive-bg-hover);font-size:13px;line-height:20px;color:var(--dshc-text-2)}',
             '.dshc-pg-note>svg{flex:none}',
             '.dshc-pg-note>span{flex:1;min-width:0}',
             // The note's ×: a small icon button, its ring drawn inset.
-            '.dshc-pg-dismiss{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;border:0;border-radius:var(--dsw-radius-sm);background:none;color:var(--dsw-alias-label-tertiary);cursor:pointer}',
+            '.dshc-pg-dismiss{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;border:0;border-radius:var(--dsw-radius-sm);background:none;color:var(--dshc-glyph);cursor:pointer}',
             '.dshc-pg-dismiss:hover,.dshc-pg-dismiss:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
             `.dshc-pg-dismiss:focus-visible{box-shadow:inset 0 0 0 2px ${RING}}`,
             // Find by name, above the tree; a found name's words are marked in its title.
             '.dshc-pg-find{position:relative;max-width:360px;margin:0 0 10px}',
             '.dshc-pg-find .dshc-pg-find-box{display:flex;width:100%;box-sizing:border-box}',
             '.dshc-pg-find .dshc-pg-find-query{padding-right:34px}',
-            '.dshc-pg-find-clear{position:absolute;top:50%;right:4px;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:none;color:var(--dsw-alias-label-secondary);cursor:pointer;transform:translateY(-50%)}',
+            '.dshc-pg-find-clear{position:absolute;top:50%;right:4px;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:none;color:var(--dshc-text-2);cursor:pointer;transform:translateY(-50%)}',
             '.dshc-pg-find-clear:hover,.dshc-pg-find-clear:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover)}',
             `.dshc-pg-find-clear:focus-visible{box-shadow:inset 0 0 0 2px ${RING}}`,
             '.dshc-pg-state.dshc-pg-find-none{padding:6px 8px}',
             '.dshc-tree-hit{background:none;color:inherit;font-weight:600}',
-            '.dshc-pg-state{padding:48px 0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}',
+            '.dshc-pg-state{padding:48px 0;font-size:13px;line-height:20px;color:var(--dshc-text-2)}',
             `.dshc-pg-state.dshc-pg-error{color:${ERROR_TEXT}}`,
             '.dshc-pg-retry{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border:0;border-radius:var(--dsw-radius-sm);background:none;font:inherit;font-size:12px;color:inherit;vertical-align:middle;cursor:pointer}',
             '.dshc-pg-retry:hover,.dshc-pg-retry:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover)}',
             `.dshc-pg-retry:focus-visible{box-shadow:inset 0 0 0 2px ${RING}}`,
-            '.dshc-pg-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:72px 20px;text-align:center;color:var(--dsw-alias-label-secondary)}',
-            '.dshc-pg-empty-glyph{display:inline-flex;margin-bottom:4px;color:var(--dsw-alias-label-tertiary)}',
+            '.dshc-pg-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:72px 20px;text-align:center;color:var(--dshc-text-2)}',
+            '.dshc-pg-empty-glyph{display:inline-flex;margin-bottom:4px;color:var(--dshc-glyph)}',
             '.dshc-pg-empty h2{margin:0;font-size:15px;font-weight:500;line-height:22px;color:var(--dsw-alias-label-primary)}',
             '.dshc-pg-empty p{max-width:440px;margin:0;font-size:13px;line-height:21px}',
             // The dialogs (New category, Rename, Delete) and a menu item's quieter part, shared with the session list's menus.
@@ -144,16 +151,20 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // Shown while it has the keyboard too (DSH's menu hands it back there when it closes), or the focus would drop.
             '.dshc-sb-head:is(:hover,:focus-visible,:focus-within,[data-categories-menu-open]) .dshc-sb-more{display:inline-flex}',
             '.dshc-sb-head:is(:hover,:focus-visible,[data-categories-menu-open]) .dshc-sb-count{display:none}',
-            '@media (prefers-reduced-motion:reduce){.dshc-sb-chev{transition:none}}',
+            // Nothing moves while the user asks for stillness (Wallpaper's wp-still) or reduced motion, pseudo-elements
+            // included (DESIGN.md section 6): the page's tree and the sidebar headers' chevrons.
+            'body.wp-still :is(.dshc-pg,.dshc-sb-head),body.wp-still :is(.dshc-pg,.dshc-sb-head)::before,body.wp-still :is(.dshc-pg,.dshc-sb-head)::after,body.wp-still :is(.dshc-pg,.dshc-sb-head) *,body.wp-still :is(.dshc-pg,.dshc-sb-head) *::before,body.wp-still :is(.dshc-pg,.dshc-sb-head) *::after{animation:none!important;transition:none!important}',
+            '@media (prefers-reduced-motion:reduce){:is(.dshc-pg,.dshc-sb-head),:is(.dshc-pg,.dshc-sb-head)::before,:is(.dshc-pg,.dshc-sb-head)::after,:is(.dshc-pg,.dshc-sb-head) *,:is(.dshc-pg,.dshc-sb-head) *::before,:is(.dshc-pg,.dshc-sb-head) *::after{animation:none!important;transition:none!important}}',
             // Dragging a category or a workspace: what moves is dimmed, the category it goes into is lit, and DSH's line shows where.
             '[data-categories-dragging]{opacity:.5}',
             '.dshc-sb-head[data-categories-drop]{background:var(--dsw-alias-interactive-bg-hover);box-shadow:inset 0 0 0 1px var(--dsw-alias-state-business-primary)}',
             // Other workspaces with nothing in it shows only while a workspace is dragged, as somewhere to drop it. It
             // goes last in a list that scrolls, so it is held at the list's lower edge, in sight wherever the list is
-            // scrolled, on the sidebar's own fill so the rows under it don't show through.
-            '.dshc-sb-head.dshc-sb-pinned{position:sticky;bottom:0;z-index:1;background:var(--dsw-specific-sidebar-fill,var(--dsw-alias-bg-base))}',
-            '.dshc-sb-head.dshc-sb-pinned:is(:hover,[data-categories-drop]){background:linear-gradient(var(--dsw-alias-interactive-bg-hover),var(--dsw-alias-interactive-bg-hover)) var(--dsw-specific-sidebar-fill,var(--dsw-alias-bg-base))}',
-            `.dshc-sb-drop-line{position:fixed;z-index:2147483000;height:12px;pointer-events:none;background:${DROP_LINE}}`,
+            // scrolled. Its rows live inside DSH's sidebar surface, so it paints no ground of its own (rule 3): it
+            // draws like DSH's own rows do there, in their hover fill; the drop mark lights it like any header's.
+            '.dshc-sb-head.dshc-sb-pinned{position:sticky;bottom:0;z-index:1;background:var(--dsw-alias-interactive-bg-hover)}',
+            // Content sits under 100 (DESIGN.md section 1): above DSH's own in-page layers, below its floating parts.
+            `.dshc-sb-drop-line{position:fixed;z-index:30;height:12px;pointer-events:none;background:${DROP_LINE}}`,
             '.dshc-sb-drop-line[hidden]{display:none}',
             // The chip at the top of a session: its category and workspace, among DSH's header actions. Those never
             // shrink; while they show the chip they may, by the chip alone, before the title does. Its text breaks at

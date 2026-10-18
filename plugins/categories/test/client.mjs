@@ -1910,8 +1910,9 @@ test('browser half: an empty Other workspaces shows once the browser has started
     assert.deepEqual([dragging.at(-1), dimmed(head)], [false, true]);
     fire('dragend', head);
 
-    // The empty Other workspaces goes last in DSH's list, which scrolls: it is held at the list's lower edge, on the
-    // sidebar's own fill, so it is in sight wherever the list is scrolled. One that holds workspaces, and a category
+    // The empty Other workspaces goes last in DSH's list, which scrolls: it is held at the list's lower edge, so it is
+    // in sight wherever the list is scrolled. Its rows live inside DSH's sidebar surface, so it paints no ground of its
+    // own (DESIGN.md rule 3): DSH's hover fill, like DSH's own rows there. One that holds workspaces, and a category
     // (even an empty one), sit in their own places.
     const drawn = (group) => CategoryHeader({
         group, index: 1, count: group.workspaces.length, folded: false, dot: null, onToggle() {}, onMove() {},
@@ -1921,9 +1922,7 @@ test('browser half: an empty Other workspaces shows once the browser has started
     assert.deepEqual([others.className, others['data-categories-sb'], others['aria-label']], ['dshc-sb-head dshc-sb-pinned', OTHERS, 'Other workspaces, 0 workspaces']);
     assert.equal(drawn({ id: OTHERS, name: 'Other workspaces', category: false, workspaces: ['w1'] }).className, 'dshc-sb-head');
     assert.equal(drawn({ id: 'e', name: 'Empty', category: true, workspaces: [] }).className, 'dshc-sb-head');
-    assert.ok(CSS.includes('.dshc-sb-head.dshc-sb-pinned{position:sticky;bottom:0;z-index:1;background:var(--dsw-specific-sidebar-fill,var(--dsw-alias-bg-base))}'));
-    // Lit as somewhere to drop, it keeps that fill under DSH's hover colour, so the rows under it still don't show through.
-    assert.match(CSS, /\.dshc-sb-head\.dshc-sb-pinned:is\(:hover,\[data-categories-drop\]\)\{background:linear-gradient\([^)]*\)[^}]*var\(--dsw-specific-sidebar-fill/);
+    assert.ok(CSS.includes('.dshc-sb-head.dshc-sb-pinned{position:sticky;bottom:0;z-index:1;background:var(--dsw-alias-interactive-bg-hover)}'));
 });
 
 test('browser half: every session in a category names its category and workspace at its top, and a click opens the Categories page', () => {
