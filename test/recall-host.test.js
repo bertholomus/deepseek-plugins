@@ -513,6 +513,10 @@ test('index: DSH sessions, transcripts and notes in one search, one result per s
     const idle = drain();
     assert.equal(idle.more, false);
     assert.ok(idle.idle.read >= 11, `read ${idle.idle.read} files`);
+    // The log says how many of the rows read were a note's sections and how many turns.
+    const indexed = (kind) => e.status().roots.filter((r) => r.kind === kind).reduce((n, r) => n + r.turns, 0);
+    assert.ok(indexed('handoff') > 0);
+    assert.deepEqual([idle.idle.rows, idle.idle.sections], [e.status().totals.turns, indexed('handoff')]);
     assert.deepEqual(notes.filter((n) => n.kind === 'problem'), []);
 
     const deploy = e.search({ text: 'deploy' });
@@ -1382,9 +1386,9 @@ test('log: problems are gathered into one entry; a folder forgotten, a new index
     const journal = new Journal(join(tempDir('recall-notes'), 'events.jsonl'));
     const timers = [];
     const log = new NoteLog({ journal, later: (ms, fn) => { timers.push(fn); return {}; } });
-    log.note({ kind: 'caught-up', read: 3, rows: 40, ms: 1200 });
+    log.note({ kind: 'caught-up', read: 3, rows: 40, sections: 6, ms: 1200 });
     assert.equal(journal.list()[0].text, 'Caught up with what changed');
-    assert.equal(journal.list()[0].why, 'Read 3 files in 1.2 seconds: 40 turns and note sections indexed.');
+    assert.equal(journal.list()[0].why, 'Read 3 files in 1.2 seconds: 34 turns and 6 note sections indexed.');
     log.note({ kind: 'caught-up', read: 1, rows: 1, ms: 10 });
     assert.equal(journal.list().length, 1, 'one changed session is not news');
     log.note({ kind: 'caught-up', read: 25, rows: 300, ms: 4000 });
@@ -1422,7 +1426,10 @@ test('log: the words as a person reads them: ~ for home, under a second, nothing
     assert.equal(last().why, 'Read 3 files in under a second; nothing in them was new.');
     log.expectCatchUp('folder');
     log.note({ kind: 'caught-up', read: 2, rows: 1, ms: 1400 });
-    assert.equal(last().why, 'Read 2 files in 1.4 seconds: 1 turn or note section indexed.');
+    assert.equal(last().why, 'Read 2 files in 1.4 seconds: 1 turn indexed.');
+    log.expectCatchUp('folder');
+    log.note({ kind: 'caught-up', read: 1, rows: 2, sections: 2, ms: 30 });
+    assert.equal(last().why, 'Read 1 file in under a second: 2 note sections indexed.', 'a notes folder: its sections, not "turns"');
     assert.equal(secondsWords(0), 'under a second');
     assert.equal(secondsWords(999), 'under a second');
     assert.equal(secondsWords(12_000), '12 seconds');

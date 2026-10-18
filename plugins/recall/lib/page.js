@@ -174,8 +174,11 @@ export class NoteLog {
                 this.expect = undefined;
                 if ((note.read ?? 0) === 0 && why === 'start') return;
                 const took = secondsWords(note.ms ?? 0);
-                const read = (note.rows ?? 0) > 0
-                    ? `Read ${plural(note.read ?? 0, 'file')} in ${took}: ${plural(note.rows, 'turn or note section', 'turns and note sections')} indexed.`
+                const rows = note.rows ?? 0;
+                const sections = Math.min(rows, note.sections ?? 0);
+                const what = [rows > sections ? plural(rows - sections, 'turn') : '', sections > 0 ? plural(sections, 'note section') : ''].filter(Boolean).join(' and ');
+                const read = rows > 0
+                    ? `Read ${plural(note.read ?? 0, 'file')} in ${took}: ${what} indexed.`
                     : `Read ${plural(note.read ?? 0, 'file')} in ${took}; nothing in ${note.read === 1 ? 'it' : 'them'} was new.`;
                 const text = why === 'rebuild' ? 'Rebuilt the index' : why === 'folder' ? 'Read the new folders' : why === 'start' ? 'Caught up with what changed' : 'Read new and changed files';
                 this.journal.add({ kind: 'caught-up', text, why: read, state: 'done' });

@@ -83,6 +83,7 @@ export class Engine {
         this.busySince = 0;
         this.busyRead = 0;
         this.busyRows = 0;
+        this.busySections = 0;
         /** This DSH's sessions running now, as DSH says (`running`); until it says, a session's log moving tells. */
         this.live = new Set();
         this.liveKnown = false;
@@ -143,7 +144,7 @@ export class Engine {
 
     /**
      * Index for about `budgetMs`.
-     * @returns {{ more: boolean, idle?: { read: number, rows: number, ms: number } }} `idle`: the index just caught up.
+     * @returns {{ more: boolean, idle?: { read: number, rows: number, sections: number, ms: number } }} `idle`: the index just caught up (`rows` of which `sections` are a note's sections, the rest turns).
      */
     work(budgetMs = 40) {
         const was = this.indexer.busy;
@@ -152,6 +153,7 @@ export class Engine {
             this.busySince = this.now();
             this.busyRead = this.indexer.read;
             this.busyRows = this.indexer.rowsPut;
+            this.busySections = this.indexer.sectionsPut;
         }
         const more = this.indexer.step(budgetMs);
         if (this.indexer.rowsPut !== this.busyRowsSeen) {
@@ -159,7 +161,7 @@ export class Engine {
             this.facetCache = undefined;
         }
         if (more) return { more };
-        const idle = { read: this.indexer.read - this.busyRead, rows: this.indexer.rowsPut - this.busyRows, ms: this.now() - this.busySince };
+        const idle = { read: this.indexer.read - this.busyRead, rows: this.indexer.rowsPut - this.busyRows, sections: this.indexer.sectionsPut - this.busySections, ms: this.now() - this.busySince };
         this.busySince = 0;
         // Caught up: after a rebuild, or when rows taken out left much of the file free, it gives that space back next.
         if (this.shrinkAfter || (this.shrinking === undefined && this.worthShrinking())) {

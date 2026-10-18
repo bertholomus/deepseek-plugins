@@ -39,7 +39,10 @@
  *   measured at 4.5:1; at 420 px the kind switcher inside its row.
  * - Its settings in Plugins (DSH's own form): a folder that is not a full
  *   path refused; a notes folder added, read and searchable; the tool
- *   switched off and on (offered to agents, or not).
+ *   switched off and on (offered to agents, or not); another DSH's 450
+ *   sessions added and taken out, after which the index gives their space
+ *   back by itself, What happened says how much and the Index card shows
+ *   the new size.
  * - A restart: the index is kept, nothing read again. A crash: the index is
  *   checked and kept.
  * - Recall switched off and on in Plugins: no failure; its entry, marks and
@@ -67,6 +70,7 @@ import { basename, dirname, join } from 'node:path';
 import { Script } from 'node:vm';
 import { DshRun, checks, dshBin, findPlaywright, modeOf, openWindow, pluginsDir, repoRoot, setDark, shot, sleep, waitFor } from '../../../../test/e2e/harness.mjs';
 import { startRecallModel } from './fake-model.mjs';
+import { writeCorpus } from '../../../../test/fixtures/recall/corpus.mjs';
 
 const bin = dshBin();
 if (!bin) {
@@ -135,6 +139,10 @@ Updated by the gateway team.
 `);
 mkdirSync(MORE_NOTES, { recursive: true });
 writeFileSync(join(MORE_NOTES, 'plan.md'), '# Storage plan\n\n## Open questions\n\nShould the wombat backups move to the new volume?\n');
+// Another DSH's home with 450 synthetic sessions (some 5,000 turns, many MB of index): added in the form and taken out.
+const OTHER_DSH = join(run.root, 'other-dsh');
+const OTHER_WORD = 'ptarmigan';
+const OTHER = writeCorpus(join(OTHER_DSH, 'sessions'), { sessions: 450, seed: 11, now: Date.now(), rare: [{ session: 7, turn: 2, word: OTHER_WORD }] });
 
 /** The profile's rows: new sessions on Workspace Write, Session Watch, and Recall's settings. */
 const rowsWith = ({ recall = {}, off = [] } = {}) => `- id: permission
@@ -811,6 +819,52 @@ try {
         }, async () => {
             if (window?.page) await shot(window.page, shots, 'failed-settings');
         });
+
+        await step('a large folder taken out in the form: the index gives its space back by itself, What happened says how much, and the Index card shows the new size', async () => {
+            const { page } = window;
+            const settingsForm = async () => {
+                await openRecall(page);
+                await page.locator('[data-recall-header]').getByRole('button', { name: 'Settings', exact: true }).click();
+                const form = page.locator('[data-suite-settings="dsh-plugin-recall"]');
+                await form.waitFor({ state: 'visible', timeout: 20000 });
+                await waitFor(async () => (await page.getByLabel('Handoff note folders').inputValue()) !== '', 'the form to show the saved folders', 15000, 200).catch(() => {});
+                return form;
+            };
+            let form = await settingsForm();
+            await page.getByLabel('More DSH session folders').fill(OTHER_DSH);
+            await form.getByRole('button', { name: 'Save' }).click();
+            await found({ text: OTHER_WORD }, 'the other DSH\'s sessions to be read', 60000);
+            const full = await settledIndex();
+            const mb = (bytes) => `${Math.max(1, Math.round(bytes / 1048576))} MB`;
+            console.log(`# another DSH's ${OTHER.files} sessions (${OTHER.turns} turns) read: the index is ${mb(full.bytes)}`);
+            form = await settingsForm();
+            await page.getByLabel('More DSH session folders').fill('');
+            await form.getByRole('button', { name: 'Save' }).click();
+            const asked = Date.now();
+            const small = await waitFor(async () => {
+                const s = await pageState();
+                return s.index && !s.index.busy && s.history.some((e) => e.text === 'Made the index smaller') ? s : null;
+            }, 'the index to give its space back', 60000, 200);
+            timings.shrunk = Date.now() - asked;
+            const said = small.history.find((e) => e.text === 'Made the index smaller');
+            const gone = full.totals.turns - small.index.totals.turns;
+            console.log(`# taken out: ${mb(full.bytes)} → ${mb(small.index.bytes)} in ${timings.shrunk} ms; ${said?.why}`);
+            check('taken out, its turns are gone at once and the index gives their space back by itself',
+                gone === OTHER.turns && small.index.bytes < full.bytes / 2 && (await search({ text: OTHER_WORD })).total === 0
+                && small.history.some((e) => /^Stopped searching \S*\/other-dsh$/.test(e.text) && e.why.includes(`(${OTHER.files} files, ${gone.toLocaleString('en-US')} turns)`)),
+                json({ before: [full.bytes, full.totals], after: [small.index.bytes, small.index.totals], history: small.history.slice(0, 3) }));
+            check('What happened says how much it gave back', /^What was taken out of it \(a folder no longer searched, files gone\) left space in it, which it gave back to the disk: it went from [\d,]+ MB to [\d,]+ MB\.$/.test(said?.why ?? ''), json(said));
+            await openRecall(page);
+            const card = page.locator('[data-recall-index]');
+            await waitFor(async () => (await card.innerText()).includes(`${mb(small.index.bytes)} on this computer`), 'the Index card to show the new size', 10000, 200)
+                .catch(() => {});
+            const head = (await card.innerText()).split('\n').slice(0, 3).join(' · ');
+            check('the Index card shows the new size', head.includes(`${mb(small.index.bytes)} on this computer`), head);
+            await page.locator('[data-recall-history]').scrollIntoViewIfNeeded();
+            await shot(page, shots, 'index-smaller-light');
+        }, async () => {
+            if (window?.page) await shot(window.page, shots, 'failed-index-smaller');
+        });
         await window?.browser?.close().catch(() => {});
         window = undefined;
     }
@@ -1067,6 +1121,6 @@ try {
     if (warnings.length) console.log(`# DSH said about the suite:\n${warnings.slice(-20).map((l) => `#   ${l}`).join('\n')}`);
     run.cleanup();
 }
-if (timings.newTurn) console.log(`# timings: new turn searchable after ${timings.newTurn} ms; first search after a restart ${timings.afterRestart ?? '?'} ms`);
+if (timings.newTurn) console.log(`# timings: new turn searchable after ${timings.newTurn} ms; first search after a restart ${timings.afterRestart ?? '?'} ms${timings.shrunk ? `; a large folder taken out and its space given back in ${timings.shrunk} ms` : ''}`);
 console.log(`\n# DSH ${version}: ${tally.passed} passed, ${tally.failed} failed${pw ? '' : ', window checks skipped (no Playwright)'}`);
 process.exit(tally.failed ? 1 : 0);

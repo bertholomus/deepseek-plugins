@@ -211,8 +211,9 @@ What it gives the agent is bounded:
 In the chat, each call shows as a tool row in DSH's own style:
 
 - *Searched past work for “narwhal exporter”: 1 turn in 1 session or
-  file* opens to the results. Each result has **Open**, and the row has
-  **Search this in Recall**.
+  file* opens to the results (*in 1 session* when the agent asked for
+  sessions only; *3 sections in 1 note* for notes). Each result has
+  **Open**, and the row has **Search this in Recall**.
 - *Read a past turn: “Long session”* opens to the request, the reply and
   **Open the session at this turn**.
 - A refused call reads *Didn't search past work: the agent gave no words
@@ -448,10 +449,11 @@ turn, buttons named with their result, focus after Back, the folder menu's
 cut paths and every state's words. The bench test runs the bench on 200
 sessions.
 
-**Real-DSH test.** It makes 84 checks and takes under two minutes a build.
-It starts DSH from each `.e2e/dsh-<version>` install and from the installed
-app's own DSH, each in a throwaway home. It runs with Session Watch, Recall
-and a scripted model (`test/e2e/fake-model.mjs` here) that plays the agent.
+**Real-DSH test.** It makes 106 checks and takes about two minutes a
+build. It starts DSH from each `.e2e/dsh-<version>` install and from the
+installed app's own DSH, each in a throwaway home. It runs with Session
+Watch, Recall and a scripted model (`test/e2e/fake-model.mjs` here) that
+plays the agent.
 
 What it checks:
 
@@ -461,23 +463,41 @@ What it checks:
   a note section with their file and line.
 - **Keeping up.** A new turn is found seconds after it ends. A grown
   transcript is read from where it ended, and a deleted one is taken out.
+  Another DSH's 450 sessions (some 5,000 turns) are added in the form and
+  taken out: the index gives their space back by itself, What happened
+  says how much, and the Index card shows the new size.
+- **How each turn ended.** A turn is *still running* only while DSH runs
+  it. One stopped from the chat (DSH's own stop) reads *stopped*, and one
+  DSH was running when it crashed reads *cut off by a restart*, in the
+  results, the rows and the reading view.
 - **The tool.** An agent searches, reads a turn in full and is refused a
-  call with no words.
+  call with no words. An agent that asks about the stopped turn is told it
+  was stopped from the chat, and its own question is left out of what it
+  finds.
 - **The window.** In a browser it drives:
-  - the page, light and dark, wide and narrow;
+  - the page, light and dark, at 1280, 760 and 420 px (at 420 the kind
+    switcher fits its row, every choice whole);
+  - Wallpaper on, over a light and a dark picture (a stand-in for
+    Wallpaper's public values in the test window), and off: the page's
+    small text is measured, at 4.5:1 or more with Wallpaper off and at its
+    lowest tint over a mid grey;
   - a result that opens the 40-turn session at turn 2, which DSH's first
     page of it does not hold, marked and at the top;
-  - Back to the results and Done;
-  - the filters and the reading view;
+  - Back to the results and Done; after Turn before, Back puts the focus
+    on the button that opened the reading view;
+  - the filters, the reading view, and the rows of turns that ended early;
   - the tool's card and its Open;
   - the index card with a folder that is not there;
   - Look for changes now;
   - Recall's settings in Plugins.
 - **Restarts and failures.** It restarts DSH (nothing read again) and
   crashes it (the index checked and kept). It switches Recall off and on in
-  Plugins, and runs without Session Watch. It starts with a wrong setting,
-  named and then fixed through the form. It checks Recall's file modes and
-  loads it with `enabled: false`.
+  Plugins, and runs without Session Watch. It starts with wrong types in
+  the profile (one folder without the brackets, `"yes"` for a switch):
+  Recall runs, names them, refuses searches and offers no tool. It starts
+  with a wrong setting, named and then fixed through the form. It checks
+  Recall's file modes and loads it with `enabled: false`.
 
-No real session is read: every transcript and note is written by the test.
+No real session is read: every session, transcript and note it reads is
+made by the test.
 Pictures go to `.e2e/shots/recall/<build>/`.

@@ -170,6 +170,8 @@ export class Indexer {
         this.rootState = new Map();
         this.read = 0;
         this.rowsPut = 0;
+        /** Of those, a note's sections (the rest are turns), so the log can say which it read. */
+        this.sectionsPut = 0;
         this.lastRead = 0;
         /** Sessions DSH named that no walk found yet: id → when last looked for. */
         this.missed = new Map();
@@ -366,6 +368,7 @@ export class Indexer {
             this.store.putRow(job.id, file, r);
             this.rowsPut += 1;
         }
+        if (file.kind === 'handoff') this.sectionsPut += rows.length;
         if ((row?.title ?? '') !== meta.title) this.store.retitle(job.id, meta.title);
         this.store.saveFile(job.id, { size, mtime, ino, offset, state, ...meta, skip, error });
     }

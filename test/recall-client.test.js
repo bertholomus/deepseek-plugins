@@ -45,7 +45,7 @@ const STATUS = {
 const STATE = {
     enabled: true, tool: true, sessions: true, thread: { state: 'running', problem: '' }, index: STATUS,
     left: [{ kind: 'handoff', root: `${HOME}/notes/old`, why: `Inside ${HOME}/notes, which is already searched.` }],
-    history: [{ id: 'e1', at: now - 5000, kind: 'caught-up', text: 'Caught up with what changed', why: 'Read 30 files in 1.2 seconds: 340 turns and note sections indexed.', state: 'done' }],
+    history: [{ id: 'e1', at: now - 5000, kind: 'caught-up', text: 'Caught up with what changed', why: 'Read 30 files in 1.2 seconds: 320 turns and 20 note sections indexed.', state: 'done' }],
     home: HOME,
 };
 const FOUND = { text: 'deploy', words: ['deploy'], excluded: [], sort: 'best', filters: {}, total: 7, totalMore: false, sessions: 3, sessionsMore: false, results: [OWN, TRANSCRIPT, NOTE], more: true, took: 12.4 };

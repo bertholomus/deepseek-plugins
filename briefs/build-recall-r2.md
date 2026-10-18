@@ -1,17 +1,28 @@
 # Recall round 2: the builder's notes
 
-Updated: 6:43 PM PDT (Recall round-2 builder)
+Updated: 7:09 PM PDT (Recall round-2 builder)
 
 ## Status
 
-Working through round 1's findings (`review/recall-round-1.md`: 8.0, NOT YET; reliability 8, UX 8).
-Findings 1 and 2 done in code and unit tests (their real-DSH steps come with the e2e batch), and with
-them Finding 5 (focus after Back), Finding 9's paging, and Finding 8's button names, plain-text
-snippets and "1 other section … matches"; then Findings 3, 4 and 7; then Finding 6 and the rest
-of Finding 8, and Finding 9's kind switcher in CSS (to be seen in a window with the e2e). The e2e
-additions next.
+Every finding of round 1 (`review/recall-round-1.md`: 8.0, NOT YET; reliability 8, UX 8) is fixed
+in code, unit tests and the real-DSH test, except Finding 9's 404 polling (the kit's, see Picks).
+At 9a48a2e the real-DSH test passed 103 of 103 on DSH 0.2.0-rc.2 and 0.2.1-rc.1 (the app's build
+running). Now: a real-DSH step for the shrink (another DSH's 450 sessions added and taken out in
+the form), then the three builds again, `npm test`, DESIGN.md "Before you push".
 
 ## Done (newest first)
+
+- 7:09 PM PDT. 9a48a2e: notes counted in sections in the page's count and the tool ("3 matching
+  sections in 1 note"), a chosen kind's places named ("1 turn in 1 session" when the agent asked
+  for sessions); the page's tags and notes a little deeper on glass (Recall's own rules under
+  `.dshrc-page`, the kit's colours untouched); the Index and What happened cards are `main` (what
+  people read sits at tint+.2). The real-DSH test grew from 84 to 103 checks: a turn stopped from
+  the chat by DSH's own cancel (`E2E:hang` in the scripted model, the bridge's `/cancel`), an agent
+  asking about it (told "stopped before it finished (stopped from the chat)", its own turn left
+  out), a turn cut by the crash ("cut off by a restart" in rows and the reading view), focus after
+  Turn before and Back, Wallpaper on over a light and a dark picture and off (small text measured),
+  420 px (the kind switcher fits its row), wrong types in the profile at a restart. Pictures:
+  `.e2e/shots/recall/<build>/wallpaper-*`, `narrow-420-*`, `ended-early-*`, `wrong-type-light`.
 
 - 6:43 PM PDT. F6 and the rest of F8, F9's switcher. F6: a new index is made with SQLite's
   incremental vacuum (set before the write-ahead log is switched on: SQLite takes it only before
@@ -93,16 +104,11 @@ additions next.
 
 ## Next steps
 
-1. (F2 done.) Run the bench once more after F3 and F6 if the search path changed, and update the
-   README table again if it moved.
-2. (F3, F4 done.)
-3. (F6 done.)
-4. (F8 done; F9's switcher in CSS: check it at 420 px in the e2e window.)
-5. The e2e: wrong types with `restartWith`, a turn cut by a crash, a stopped turn, focus after
-   Back, the tool leaving out the asking turn, Wallpaper on and off pictures and contrast, 420 px
-   (the kind switcher inside its row), the folder menu's cut paths, the shrink's size.
-6. README, `npm test`, `node scripts/e2e.mjs recall` on three builds with the fingerprint before
-   and after, DESIGN.md "Before you push".
+1. Run the real-DSH test with the new shrink step on all three builds (`node scripts/e2e.mjs
+   recall`), the live fingerprint before and after (pid 18756, sha256 63e0c347…05eef7); record it.
+2. README's Tests section (done in the working tree: 106 checks, the new list); commit by name.
+3. `npm test` in full (a clean copy if other agents' uncommitted files break unrelated tests).
+4. DESIGN.md "Before you push", ticked below.
 
 ## Picks and why
 
@@ -148,11 +154,31 @@ additions next.
   new (SCHEMA_VERSION 4 rebuilds older ones), so no full VACUUM (seconds of holding searches).
 - A damaged write in a session log is "Could not read part of …: … Recall read on from the next
   whole write." (what happened), not "Could not read …".
-- The 404 polling for Session Watch's `wait` while Session Watch is off is left as it is: it is
-  the kit's hub (`lib/shared/hub.js`, not Recall's to change), it backs off to 10 s, and nothing
-  shows on the page.
+- The 404 polling for Session Watch's `wait` while Session Watch is off is left as it is. It is the
+  kit's browser hub (inside `// <suite-kit>` in `lib/client.js`, whose name for the endpoint is
+  fixed to Session Watch's), and those failed waits are also how the page reads itself again
+  without Session Watch (every 4 to 10 s). A fix belongs in the kit for every plugin (ask DSH's
+  plugin list whether Session Watch runs before waiting on it), not in Recall alone.
 - The narrow kind switcher drops DSH's sliding pill for a pill on the chosen choice itself (equal
   columns as wide as "Transcripts" are what made it too wide); the labels stay whole.
+
+- Tags and notes on Recall's page are a little deeper than the kit's (success 30%, warning 30%,
+  info 45%, danger 55% of the state colour into the label colour; the green note 35%), by
+  Recall-only rules after the kit's: measured over Wallpaper's lowest tint (.2) on a mid grey they
+  read at 4.67:1 or more (they were 3.35 to 4.08). The kit's own colours are not Recall's to change.
+- Wallpaper in the real-DSH test is a stand-in for its public values (`body.wp-on`, `--wp-tint`,
+  `--wp-blur`, a picture behind DSH's frame made clear), as the calendar test does: the Wallpaper
+  plugin is not in this repo, and the live one is not to be touched.
+- Light glass over a dark picture (1.56:1 at the far end) and dark glass over a light one (2.22:1)
+  are logged, not gated: DESIGN.md lists light glass over a dark picture as an open question for
+  Albert, and Recall uses the kit's glass as every suite page does.
+- The Index and What happened cards are `main` cards (tint+.2): people read every card on Recall's
+  page, and DESIGN.md puts what people read there.
+- A note's results are counted in sections, in the page's count and the tool, when only notes are
+  searched; with kinds mixed, "turns" stays the one word (a section is one result like a turn).
+- The shrink's real-DSH step uses another DSH's sessions written by the corpus the bench uses
+  (450 sessions, some 5,000 turns, 15 MB or so of index): enough rows to pass the shrink's 4,000-row
+  floor and its 5 MB note, written in a quarter of a second.
 
 ## Gotchas
 
