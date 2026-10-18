@@ -95,6 +95,8 @@ export class Store {
         this.log = log ?? (() => {});
         this.db = this.open(sqlite);
         this.statements = new Map();
+        /** Rows taken out since the index last gave its space back: the search index keeps their words until it is. */
+        this.taken = 0;
     }
 
     /**
@@ -112,10 +114,13 @@ export class Store {
             try { chmodSync(this.file, 0o600); } catch { /* the folder is private anyway */ }
             try {
                 db.exec('PRAGMA busy_timeout = 5000');
+                const empty = db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'").get().n === 0;
+                // A new index can give pages back to the disk a few at a time (after a folder is taken out, a rebuild).
+                // SQLite takes this only before the first write, and switching to its write-ahead log is one.
+                if (empty) db.exec('PRAGMA auto_vacuum = INCREMENTAL');
                 db.exec('PRAGMA journal_mode = WAL');
                 db.exec('PRAGMA synchronous = NORMAL');
                 const version = db.prepare('PRAGMA user_version').get()?.user_version ?? 0;
-                const empty = db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'").get().n === 0;
                 if (!empty && version !== SCHEMA_VERSION) throw Object.assign(new Error(`the index is version ${version}, not ${SCHEMA_VERSION}`), { stale: true });
                 db.exec(SCHEMA);
                 db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
@@ -180,6 +185,37 @@ export class Store {
             this.db.close();
             rmSync(`${this.file}.open`, { force: true });
         } catch { /* already closed */ }
+    }
+
+    /** Pages of the index file, and how many of them are free inside it (left by rows taken out). */
+    space() {
+        const one = (name) => Number(Object.values(this.db.prepare(`PRAGMA ${name}`).get() ?? {})[0] ?? 0);
+        return { free: one('freelist_count'), pages: one('page_count'), vacuum: one('auto_vacuum') === 2 };
+    }
+
+    /**
+     * One slice of giving space back to the disk after many rows were taken out. First the search index's own
+     * leftovers: FTS5 keeps a deleted row's words until its segments are merged, so they are merged a few pages at
+     * a time. Then the free pages, moved off the end of the file a thousand at a time, and the write-ahead log cut
+     * to nothing. Each slice takes a few milliseconds, so a search waits at most that long.
+     * @param {'merge' | 'vacuum'} phase
+     * @returns {'merge' | 'vacuum' | 'done'} the next phase.
+     */
+    shrinkSlice(phase) {
+        const changes = () => this.sql('SELECT total_changes() AS n').get().n;
+        if (phase === 'merge') {
+            this.taken = 0;
+            const before = changes();
+            this.sql("INSERT INTO fts (fts, rank) VALUES ('merge', -16)").run();
+            return changes() - before >= 2 ? 'merge' : 'vacuum';
+        }
+        const { free, vacuum } = this.space();
+        if (free > 0 && vacuum) {
+            this.db.exec('PRAGMA incremental_vacuum(1000)');
+            if (this.space().free < free) return 'vacuum';
+        }
+        try { this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch { /* a reader holds it: the next checkpoint */ }
+        return 'done';
     }
 
     /** The index file's size on disk, its write-ahead log included. */
@@ -256,10 +292,22 @@ export class Store {
         }
     }
 
+    /** How many rows (turns, sections) a file has in the index. */
+    rowCount(fileId) {
+        return this.sql('SELECT count(*) AS n FROM docs WHERE file = ?').get(fileId)?.n ?? 0;
+    }
+
     /** Forget a file's rows (it is read again from the start). */
     clearRows(fileId) {
-        for (const { id } of this.sql('SELECT id FROM docs WHERE file = ?').all(fileId)) this.sql('DELETE FROM fts WHERE rowid = ?').run(id);
+        const rows = this.sql('SELECT id FROM docs WHERE file = ?').all(fileId);
+        for (const { id } of rows) this.sql('DELETE FROM fts WHERE rowid = ?').run(id);
         this.sql('DELETE FROM docs WHERE file = ?').run(fileId);
+        this.taken += rows.length;
+    }
+
+    /** How many rows (turns, note sections) the index holds. */
+    rowTotal() {
+        return this.sql('SELECT count(*) AS n FROM docs').get()?.n ?? 0;
     }
 
     /** Forget a file and its rows. */

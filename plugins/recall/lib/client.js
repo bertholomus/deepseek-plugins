@@ -1103,7 +1103,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             // The search box, its filters and the count.
             `.${P}-find{display:flex;align-items:center;gap:8px;margin-top:12px;min-width:0}`,
             `.${P}-find-box{flex:1 1 auto;min-width:0}`,
-            `.${P}-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;min-width:0}`,
+            `.${P}-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;min-width:0;container-type:inline-size}`,
+            // In a narrow card the kind switcher (DSH's segmented control, four equal columns as wide as "Transcripts")
+            // would be wider than its row: there each choice is as wide as its word, and the chosen one wears the pill.
+            `@container (max-width: 480px){.${P}-filters [data-suite-choice] [role="tablist"]{grid-auto-columns:auto;max-width:100%}`
+                + `.${P}-filters [data-suite-choice] [role="tablist"]>[aria-hidden="true"]{display:none}`
+                + `.${P}-filters [data-suite-choice] [role="tab"]{padding:0 10px}`
+                + `.${P}-filters [data-suite-choice] [role="tab"][aria-selected="true"]{background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-elevation-soft)}}`,
             `.${P}-count{margin:12px 0 0;font:var(--dsw-font-xs-13);color:var(--${P}-text-2)}`,
             // Results.
             `.${P}-results{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column}`,
@@ -1636,8 +1642,20 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             if (!ix) return 'Starting the index.';
             const t = ix.totals ?? {};
             const held = t.turns > 0 ? `Recall has ${plural(t.turns, 'turn')} from ${plural(t.files ?? 0, 'session or file', 'sessions and files')}.` : 'Recall has nothing indexed yet.';
-            if (ix.busy) return `${held} Reading ${ix.queued > 0 ? plural(ix.queued, 'more file', 'more files') : 'what changed'}…`;
+            if (ix.busy) return `${held} ${readingWords(ix, data.home)}`;
             return `${held} Up to date.`;
+        }
+
+        /** How far a catch-up has read: "Reading new and changed files: 1,234 of 10,002 read…", or what it is looking through. */
+        function readingWords(ix, home) {
+            const b = ix.batch ?? { read: 0, left: ix.queued ?? 0, looking: Boolean(ix.walking) };
+            const read = Math.max(0, Number(b.read) || 0);
+            const total = read + Math.max(0, Number(b.left) || 0);
+            const where = typeof ix.walking === 'string' && ix.walking ? homeless(ix.walking, home) : '';
+            if (b.looking && total === 0) return where ? `Looking through ${where} for new and changed files…` : 'Looking for new and changed files…';
+            if (b.looking) return `Reading new and changed files: ${count(read)} read so far, still looking${where ? ` through ${where}` : ''} for more…`;
+            if (total === 1) return 'Reading 1 new or changed file…';
+            return `Reading new and changed files: ${count(read)} of ${count(total)} read…`;
         }
 
         function HeaderCard({ data, children }) {
@@ -1738,7 +1756,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         /** A menu of choices for one filter, drawn as a button that says the choice. */
         function FilterMenu({ name, label, value, items, onChoose, onOpen }) {
             const [open, setOpen] = React.useState(false);
-            const current = items.find((i) => i.id === value)?.label ?? label;
+            const chosen = items.find((i) => i.id === value);
+            const current = chosen?.label ?? label;
+            const currentText = chosen?.full ?? (typeof chosen?.label === 'string' ? chosen.label : label);
             return h(ui.Menu, {
                 open,
                 onClose: () => setOpen(false),
@@ -1756,7 +1776,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     size: 'sm',
                     'aria-haspopup': 'menu',
                     'aria-expanded': open,
-                    'aria-label': `${label}: ${current}`,
+                    'aria-label': `${label}: ${currentText}`,
                     'data-recall-filter': name,
                     onClick: () => {
                         if (!open) onOpen?.();
@@ -1767,14 +1787,45 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         }
 
         /** The menus' items for folders and models: Any, the one chosen, then what the index holds (newest first). */
+        /** The most characters of a folder a menu shows: DSH's menus cut a longer one at its end, where folders differ. */
+        const PATH_SHOWN = 46;
+
+        /**
+         * A long path cut in the middle at whole folders: its start and as many of its last folders as fit
+         * ("~/Projects/…/data/notes/projects/osprey"); a last folder too long by itself keeps its end.
+         */
+        function cutPath(path, max = PATH_SHOWN) {
+            const p = String(path ?? '');
+            if (p.length <= max) return p;
+            const parts = p.split('/');
+            const lead = parts[0] === '' || parts[0] === '~' ? 2 : 1;
+            if (parts.length <= lead) return `${p.slice(0, Math.ceil(max / 2) - 1)}…${p.slice(p.length - Math.floor(max / 2))}`;
+            const head = parts.slice(0, lead).join('/');
+            let tail = parts[parts.length - 1];
+            for (let i = parts.length - 2; i >= lead; i -= 1) {
+                if (head.length + 3 + parts[i].length + 1 + tail.length > max) break;
+                tail = `${parts[i]}/${tail}`;
+            }
+            if (head.length + 3 + tail.length <= max) return `${head}/…/${tail}`;
+            return `${head}/…${tail.slice(tail.length - Math.max(8, max - head.length - 2))}`;
+        }
+
+        /** A folder as a menu item: cut in the middle when long, with the whole path for screen readers and on hover. */
+        function folderLabel(path) {
+            const cut = cutPath(path);
+            if (cut === path) return path;
+            return h('span', { title: path, 'data-recall-path': path }, h('span', { 'aria-hidden': 'true' }, cut), h('span', { className: `${P}-sr` }, path));
+        }
+
         function facetItems({ facets, key, chosen, any, home }) {
             const list = Array.isArray(facets.data?.[key === 'folder' ? 'folders' : 'models']) ? facets.data[key === 'folder' ? 'folders' : 'models'] : [];
-            const items = [{ id: 'any', label: any }];
+            const items = [{ id: 'any', label: any, full: any }];
             const seen = new Set();
             const add = (value) => {
                 if (!value || seen.has(value) || items.length > 41) return;
                 seen.add(value);
-                items.push({ id: `v:${value}`, label: key === 'folder' ? homeless(value, home) : value });
+                const full = key === 'folder' ? homeless(value, home) : value;
+                items.push({ id: `v:${value}`, label: key === 'folder' ? folderLabel(full) : full, full });
             };
             add(chosen);
             for (const row of list) add(row?.[key]);
@@ -1908,8 +1959,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             if (found?.nothing === 'no-words') {
                 return h(kit.Empty, { title: 'Type a word to search for', text: 'Words with a minus in front are left out of the results, but they find nothing by themselves.' });
             }
-            const clear = filtered(q) ? h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => finder.clearFilters() }, 'Clear the filters') : null;
-            if (!q.text.trim()) return h(kit.Empty, { title: 'No turns with these filters', text: 'Try another time, folder or model, or clear the filters.', action: clear });
+            // The filter row has its own "Clear the filters": this one says what it does from here.
+            const clear = filtered(q) ? h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => finder.clearFilters(), 'data-recall-unfilter': '' }, 'Search again without the filters') : null;
+            if (!q.text.trim()) return h(kit.Empty, { title: 'No turns with these filters', text: 'Try another time, folder or model.', action: clear });
             return h(kit.Empty, {
                 title: `Nothing matches ${quoted(q.text, 60)}`,
                 text: `Try fewer or other words, or the start of a word (deplo finds deploy and deployment). "Quotes" find an exact phrase; OR between two words finds either.${filtered(q) ? ' The filters may also leave it out.' : ''}`,
@@ -1997,7 +2049,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             if (root.problems > 0) parts.push(`${plural(root.problems, 'file')} could not be read`);
             let why = '';
             if (root.state === 'missing') why = 'This folder is not there now (a disk may be unplugged). What Recall read from it stays searchable, and it looks again every minute.';
-            else if (root.state === 'unreadable') why = `${sentence(root.error) || 'Recall cannot read this folder.'} Check that DSH may read it.`;
+            else if (root.state === 'unreadable') why = sentence(root.error) || 'Recall cannot read this folder. Check that DSH may read it.';
             else if (root.state === 'waiting') why = 'Not read yet.';
             else if (root.capped) why = `It holds more files than Recall reads: only the first ${count(root.files)} are searched.`;
             return { word, counts: parts.join(' · '), why };
@@ -2366,7 +2418,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         // For the plugin's own tests.
         module.exports.internals = {
             kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, KIND_WORD, TONE, finder, jump, views,
-            folderList, folderSpec, specOf, homeless, titleOf, metaParts, snippetParts, askedLine, countLine, endLine, stateSentence, indexLine, rootWords, callArgs, failureText, runningTitle, doneTitle,
+            folderList, folderSpec, specOf, homeless, cutPath, folderLabel, titleOf, metaParts, snippetParts, askedLine, countLine, endLine, stateSentence, indexLine, rootWords, callArgs, failureText, runningTitle, doneTitle,
             openAt, openResult, endJump, land, landWithoutMark, applySettings,
             RecallPage, RecallMark, RecallIcon, RecallToolView, SettledToolView, PreparingToolView, SearchCard, ResultRow, ReadingView, IndexCard, HistoryCard, HeaderCard, ThreadState, Filters, FilterMenu, NoResults,
         };

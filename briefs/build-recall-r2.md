@@ -1,15 +1,40 @@
 # Recall round 2: the builder's notes
 
-Updated: 6:20 PM PDT (Claude Code, Recall round-2 builder)
+Updated: 6:43 PM PDT (Recall round-2 builder)
 
 ## Status
 
 Working through round 1's findings (`review/recall-round-1.md`: 8.0, NOT YET; reliability 8, UX 8).
 Findings 1 and 2 done in code and unit tests (their real-DSH steps come with the e2e batch), and with
 them Finding 5 (focus after Back), Finding 9's paging, and Finding 8's button names, plain-text
-snippets and "1 other section … matches"; then Findings 3, 4 and 7. Finding 6 next.
+snippets and "1 other section … matches"; then Findings 3, 4 and 7; then Finding 6 and the rest
+of Finding 8, and Finding 9's kind switcher in CSS (to be seen in a window with the e2e). The e2e
+additions next.
 
 ## Done (newest first)
+
+- 6:43 PM PDT. F6 and the rest of F8, F9's switcher. F6: a new index is made with SQLite's
+  incremental vacuum (set before the write-ahead log is switched on: SQLite takes it only before
+  the first write, which the first try missed and the test caught). When the index thread is idle
+  and rows taken out were a fifth of the index (at least 4,000 rows) or left a fifth of the file
+  free (at least 10 MB), and always after a rebuild, it merges the search index's parts and moves
+  free pages off the end of the file, a few milliseconds a slice inside its 40 ms budget, then
+  empties the write-ahead log; searches are answered between slices; the page gets the new size
+  at once (`changed`) and What happened says "Made the index smaller" with before and after (5 MB
+  or more). Measured on 620 sessions: rebuild 44.8 MB → 18.1 MB; a 600-session folder taken out
+  22.4 MB → 0.7 MB in 62 ms. F8: folder problems in whole sentences with the right advice per
+  cause (permission, a file, a path through a file, a loop, the disk), shown once; "under a
+  second"; "nothing in it was new"; a file never read does not "stay as last read"; a damaged
+  write says "Could not read part of …"; `~/` in "Stopped searching" and problem paths; "what
+  Recall read from it (1 note, 3 sections) was taken out"; "Reading new and changed files: 1,200
+  of 10,002 read…" or "still looking through ~/x"; one "Clear the filters" (the empty state's
+  button is "Search again without the filters"); nothing typed lists no "other turns"; folder menu
+  paths cut in the middle at whole folders, whole path for screen readers and the tooltip. F9:
+  under 480 px of card the kind switcher's choices are as wide as their words, the chosen one
+  wearing DSH's pill (a container query outside the kit). Tests: host (the shrink through the
+  engine and through the thread, the log's words, nothing typed), client (index line, folder
+  words, empty state, cut paths and the menu's names). 175 tests pass (recall, suite-shared,
+  syntax). README: Keeping up, the page, Files, Tests.
 
 - 6:20 PM PDT. F3, F4, F7. Each turn keeps how it ended (DSH's `turn/end` reason and why: who
   stopped it, or the error's message; new `docs.ended` and `docs.why`, SCHEMA_VERSION 4, so an
@@ -71,13 +96,11 @@ snippets and "1 other section … matches"; then Findings 3, 4 and 7. Finding 6 
 1. (F2 done.) Run the bench once more after F3 and F6 if the search path changed, and update the
    README table again if it moved.
 2. (F3, F4 done.)
-3. F6: the index shrinks after a take-out and a rebuild (F7 done).
-4. F8 and F9 rest: the wording slips not yet done (still running of N, nothing-typed others,
-   Clear the filters twice, the not-a-folder words, a never-read file, "Read 1 file in 0
-   seconds", "Reading what changed" with no total, `~/` in Stopped searching and problem paths,
-   middle-cut paths in the folder menu); the kind switcher at 420 px.
+3. (F6 done.)
+4. (F8 done; F9's switcher in CSS: check it at 420 px in the e2e window.)
 5. The e2e: wrong types with `restartWith`, a turn cut by a crash, a stopped turn, focus after
-   Back, Wallpaper on and off pictures and contrast, 420 px.
+   Back, the tool leaving out the asking turn, Wallpaper on and off pictures and contrast, 420 px
+   (the kind switcher inside its row), the folder menu's cut paths, the shrink's size.
 6. README, `npm test`, `node scripts/e2e.mjs recall` on three builds with the fingerprint before
    and after, DESIGN.md "Before you push".
 
@@ -119,7 +142,22 @@ snippets and "1 other section … matches"; then Findings 3, 4 and 7. Finding 6 
 - The asking turn is the calling session's open turn (DSH gives a tool the agent, not the turn
   number); the session's earlier turns stay in the results.
 
+- The index gives space back when idle, not in the middle of a take-out: a folder's rows go at once
+  (as before), and the space a slice at a time afterwards, so no search waits more than a slice.
+  An index made before this change cannot use incremental vacuum; every index of this version is
+  new (SCHEMA_VERSION 4 rebuilds older ones), so no full VACUUM (seconds of holding searches).
+- A damaged write in a session log is "Could not read part of …: … Recall read on from the next
+  whole write." (what happened), not "Could not read …".
+- The 404 polling for Session Watch's `wait` while Session Watch is off is left as it is: it is
+  the kit's hub (`lib/shared/hub.js`, not Recall's to change), it backs off to 10 s, and nothing
+  shows on the page.
+- The narrow kind switcher drops DSH's sliding pill for a pill on the chosen choice itself (equal
+  columns as wide as "Transcripts" are what made it too wide); the labels stay whole.
+
 ## Gotchas
+
+- SQLite's `auto_vacuum` must be set before `journal_mode = WAL` on a new file: WAL mode writes the
+  header, after which the setting is ignored without an error.
 
 - Other agents have uncommitted files in the worktree (autopilot, decisions, proof, session-watch,
   `test/suite-config.test.js`). Stage only Recall's paths by name.

@@ -213,8 +213,13 @@ test('words: a result says what it is, where, when and which turn; hits are mark
     assert.equal(doneTitle({ kind: 'results', query: 'kestrel', total: 0, sessions: 0, titled: 1 }, {}), 'Searched past work for “kestrel”: 1 session or file by title only');
     assert.equal(doneTitle({ kind: 'turn', turn: OWN }, {}), 'Read a past turn: “Fix the gateway”');
     assert.equal(indexLine({ index: STATUS }), 'Recall has 1,234 turns from 56 sessions and files. Up to date.');
-    assert.equal(indexLine({ index: { ...STATUS, busy: true, queued: 12 } }), 'Recall has 1,234 turns from 56 sessions and files. Reading 12 more files…');
-    assert.equal(indexLine({ index: { ...STATUS, busy: true, queued: 0, totals: { turns: 0, files: 0 } } }), 'Recall has nothing indexed yet. Reading what changed…');
+    // How far a catch-up has read: of a total once every folder was looked through, else so far and where it looks.
+    assert.equal(indexLine({ index: { ...STATUS, busy: true, queued: 12, batch: { read: 30, left: 12, looking: false } } }), 'Recall has 1,234 turns from 56 sessions and files. Reading new and changed files: 30 of 42 read…');
+    assert.equal(indexLine({ index: { ...STATUS, busy: true, queued: 9992, batch: { read: 10, left: 9992, looking: false } } }), 'Recall has 1,234 turns from 56 sessions and files. Reading new and changed files: 10 of 10,002 read…');
+    assert.equal(indexLine({ home: HOME, index: { ...STATUS, busy: true, queued: 5, walking: `${HOME}/big`, batch: { read: 1200, left: 5, looking: true } } }), 'Recall has 1,234 turns from 56 sessions and files. Reading new and changed files: 1,200 read so far, still looking through ~/big for more…');
+    assert.equal(indexLine({ home: HOME, index: { ...STATUS, busy: true, queued: 0, walking: `${HOME}/big`, totals: { turns: 0, files: 0 }, batch: { read: 0, left: 0, looking: true } } }), 'Recall has nothing indexed yet. Looking through ~/big for new and changed files…');
+    assert.equal(indexLine({ index: { ...STATUS, busy: true, queued: 1, batch: { read: 0, left: 1, looking: false } } }), 'Recall has 1,234 turns from 56 sessions and files. Reading 1 new or changed file…');
+    assert.equal(indexLine({ index: { ...STATUS, busy: true, queued: 12 } }), 'Recall has 1,234 turns from 56 sessions and files. Reading new and changed files: 0 of 12 read…', 'an index thread from before the batch count');
     assert.equal(indexLine({}), 'Starting the index.');
     const source = readFileSync(CLIENT, 'utf8');
     assert.doesNotMatch(source, OTHER_NAMES);
@@ -416,6 +421,35 @@ test('search: typing waits for a pause, Enter and filters search at once with wh
     assert.ok(!elementsOf(one).some((e) => e.props?.['data-suite-choice'] === 'dshrc-kind'), 'one kind searched: no kind filter');
 });
 
+test('filters: a long folder is cut in the middle at whole folders, so folders that differ at the end look different; its whole path is its name', () => {
+    const { client } = loadClient(CLIENT, { react: standInReact() });
+    const { cutPath, folderLabel, finder, kit } = client.internals;
+    const notes = '~/Projects/dsh-plugin-suite-judge/recall-r1/data/notes';
+    const osprey = '~/Projects/dsh-plugin-suite-judge/recall-r1/data/notes/projects/osprey';
+    assert.equal(cutPath(notes), '~/Projects/…/recall-r1/data/notes');
+    assert.equal(cutPath(osprey), '~/Projects/…/data/notes/projects/osprey');
+    assert.equal(cutPath('/Volumes/Backup/agent-logs/2026/october/week-three/run-forty-two'), '/Volumes/…/october/week-three/run-forty-two');
+    assert.equal(cutPath('~/short/path'), '~/short/path', 'short paths stay whole');
+    assert.equal(cutPath(`~/a/${'x'.repeat(70)}`), `~/a/…${'x'.repeat(41)}`, 'a last folder too long by itself keeps its end');
+    assert.equal(cutPath(`/${'y'.repeat(80)}`).length, 46);
+    for (const path of [notes, osprey]) assert.ok(cutPath(path).length <= 46);
+    const label = folderLabel(osprey);
+    assert.equal(label.props.title, osprey);
+    assert.deepEqual(plain(label.children.map((c) => [c.props['aria-hidden'] ?? null, textIn(c)])), [['true', '~/Projects/…/data/notes/projects/osprey'], [null, osprey]], 'the cut words are hidden from screen readers, which read the whole path');
+    assert.equal(folderLabel('~/notes'), '~/notes');
+
+    // In the menu, and on its button once chosen: the button's name is the whole path.
+    const HOME_LONG = `${HOME}/Projects/dsh-plugin-suite-judge/recall-r1/data/notes/projects/osprey`;
+    finder.facets.set({ loading: false, data: { folders: [{ folder: HOME_LONG, turns: 3 }], models: [] } });
+    finder.store.set({ ...finder.store.get(), query: { ...finder.store.get().query, folder: HOME_LONG } });
+    const menus = elementsOf(client.internals.SearchCard({ data: STATE })).filter((e) => e.type === 'Menu');
+    const folder = menus.find((m) => m.props.anchor.props['data-recall-filter'] === 'folder');
+    assert.equal(folder.props.anchor.props['aria-label'], `Folder: ${osprey}`);
+    assert.equal(folder.props.items[1].full, osprey);
+    assert.equal(textIn(folder.props.items[1].label), `~/Projects/…/data/notes/projects/osprey${osprey}`);
+    void kit;
+});
+
 test('results: each says where it is and opens at its turn (this DSH) or in the reading view; its other turns too; empty states say what to do next', async (t) => {
     const { client } = loadClient(CLIENT, { react: standInReact() });
     const { ResultRow, NoResults, finder, views, jump, endJump } = client.internals;
@@ -479,7 +513,10 @@ test('results: each says where it is and opens at its turn (this DSH) or in the 
     assert.match(empty({ query: { text: '-staging', kind: 'any', when: 'any', folder: '', model: '', sort: 'best' }, found: { nothing: 'no-words' } }), /^Type a word to search for/);
     const none = NoResults({ state: { query: { text: 'kubernetes', kind: 'any', when: 'week', folder: '', model: '', sort: 'best' }, found: { total: 0 } }, data: STATE });
     assert.match(textIn(none), /^Nothing matches “kubernetes”Try fewer or other words, or the start of a word .* The filters may also leave it out\./);
-    assert.ok(button(none, 'Clear the filters'));
+    assert.ok(button(none, 'Search again without the filters'), 'one "Clear the filters" in the filter row; the empty state says what its button does from there');
+    assert.equal(button(none, 'Clear the filters'), undefined);
+    const noTurns = NoResults({ state: { query: { text: '', kind: 'transcript', when: 'week', folder: '', model: '', sort: 'best' }, found: { total: 0 } }, data: STATE });
+    assert.match(textIn(noTurns), /^No turns with these filtersTry another time, folder or model\.Search again without the filters$/);
 });
 
 test('reading view: the turn in full, the turns beside it, the way into its session, and back', async (t) => {
@@ -738,7 +775,11 @@ test('index: each folder\'s state in words, files it could not read, folders lef
     assert.deepEqual(actions, ['rescan', 'rebuild']);
     assert.equal(rootWords({ kind: 'session', root: '/s', state: 'ok', indexed: 2, turns: 3 }, { busy: true, reading: { kind: 'session', path: '/s/p/x/session.v4.jsonl.zstd' } }).word, 'reading');
     assert.equal(rootWords({ kind: 'session', root: '/s', state: 'ok', indexed: 2, turns: 3 }, { busy: true, reading: { kind: 'session', path: '/sx/p' } }).word, 'up to date', 'another folder is being read');
-    assert.deepEqual(plain(rootWords({ kind: 'handoff', root: '/n', state: 'unreadable', error: 'EACCES: permission denied', indexed: 0 }, {})), { word: 'cannot read', counts: '', why: 'EACCES: permission denied. Check that DSH may read it.' });
+    // The index's words for a folder it cannot read say what to do, once: the card adds nothing to them.
+    const folderWords = 'DSH may not read this folder (permission denied). Give DSH access to it, or name another folder in Recall\'s settings.';
+    assert.deepEqual(plain(rootWords({ kind: 'handoff', root: '/n', state: 'unreadable', error: folderWords, indexed: 0 }, {})), { word: 'cannot read', counts: '', why: folderWords });
+    assert.equal(rootWords({ kind: 'handoff', root: '/n', state: 'unreadable', error: 'This is a file, not a folder. Name the folder that holds it in Recall\'s settings.' }, {}).why, 'This is a file, not a folder. Name the folder that holds it in Recall\'s settings.');
+    assert.equal(rootWords({ kind: 'handoff', root: '/n', state: 'unreadable', error: '' }, {}).why, 'Recall cannot read this folder. Check that DSH may read it.');
     assert.match(rootWords({ kind: 'transcript', root: '/t', state: 'ok', capped: true, files: 50000, indexed: 50000, turns: 9 }, {}).why, /only the first 50,000 are searched/);
     assert.equal(rootWords({ kind: 'transcript', root: '/t', state: 'waiting' }, {}).why, 'Not read yet.');
     const empty = IndexCard({ data: { ...STATE, index: { ...STATUS, roots: [], problems: [] }, left: [] }, busy: false, said: {}, onAction: () => {} });

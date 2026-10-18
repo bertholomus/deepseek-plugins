@@ -53,7 +53,16 @@ Some things are left out on purpose:
 - **A folder that is not there** (an unplugged disk) keeps what Recall read
   from it searchable, and Recall looks again every minute.
 - **A folder taken out of the settings** has its turns taken out of the
-  index.
+  index at once.
+- **Space goes back to the disk.** When a folder taken out (or files gone)
+  held a fifth or more of the index, Recall then gives the space back, a
+  few milliseconds at a time with searches answered in between; a rebuild
+  does the same once it has read every file again. The Index card shows
+  the new size, and What happened says how much it gave back (*Made the
+  index smaller: it went from 287 MB to 14 MB*).
+- **How far it has read.** While it reads, the line under the search box
+  says how many files of how many (*Reading new and changed files: 1,200
+  of 10,002 read…*), or which folder it is still looking through.
 - **An index from an earlier Recall** is built again once, at the first
   start after an update: it now keeps how each turn ended. Searches find
   more as it goes.
@@ -102,14 +111,15 @@ Results are ranked best first:
   and files, and 1 more by title only*.
 - *Newest* sorts by time instead, with the same order: turns that say the
   words first.
-- With nothing typed, the page lists the newest turns.
+- With nothing typed, the page lists the newest turns, one for each
+  session or file (nothing is matched, so no "other turns" are listed).
 
 **Filters** (on the page and in the tool):
 
 | Filter | Choices |
 | --- | --- |
 | Kind | All, Sessions, Transcripts, Notes |
-| Folder | Any folder, or one folder (its subfolders too) |
+| Folder | Any folder, or one folder (its subfolders too). A long path is cut in the middle, at whole folders, so the folders where two paths differ show; screen readers and the tooltip give the whole path. |
 | Model | Any model, or one model |
 | Time | Any time, Past day, Past week, Past month, Past year |
 | Sort | Best match or Newest |
@@ -156,8 +166,9 @@ Every empty state says what to do next:
 - *No folders to search* says to switch on this DSH's sessions or add
   folders, with **Open Recall's settings**.
 - *Nothing to search yet* says that new sessions are added as they happen.
-- *Nothing matches* suggests fewer or other words, and offers **Clear the
-  filters** when filters are on.
+- *Nothing matches* suggests fewer or other words, and offers **Search
+  again without the filters** when filters are on (the filter row keeps its
+  own **Clear the filters**).
 - A wrong setting is named, with **Open Recall's settings**.
 - A stopped index has **Start the index again**.
 
@@ -312,7 +323,7 @@ mode 600:
 
 | File | What |
 | --- | --- |
-| `recall/index.sqlite` (and its `-wal` and `-shm`) | The index: one row per turn or section, with what it kept (above), and where each file was read up to. About 2.4 KB a turn (284.8 MB for 120,519 turns). |
+| `recall/index.sqlite` (and its `-wal` and `-shm`) | The index: one row per turn or section, with what it kept (above), and where each file was read up to. About 2.4 KB a turn (284.8 MB for 120,519 turns). Space that turns taken out leave in it goes back to the disk (Keeping up, above). |
 | `recall/index.sqlite.open` | Written while the index is open. If DSH stops without closing it, the next start checks the index in full (SQLite's quick check). An index that fails the check, or one from an older Recall, is set aside as `index.sqlite.old` and built again from the files. |
 | `recall/events.jsonl` | What happened. It keeps the last 400 entries and rewrites itself past 1 MB. |
 
@@ -414,15 +425,28 @@ node scripts/e2e.mjs recall        # real DSH in a throwaway home, on every DSH 
 
 **Unit tests.** The host tests cover:
 
-- reading DSH session logs, transcripts and notes;
+- reading DSH session logs, transcripts (undated ones take their file's
+  time) and notes;
 - the incremental index: appends, rewrites, deletes, a folder that is not
-  there, an unclean stop, a broken index set aside;
-- the query syntax, ranking, snippets and filters;
-- the tool's bounds, and output DSH keeps as lossless JSON;
-- settings and the page's log.
+  there, an unclean stop, a broken index set aside, and the space a folder
+  taken out or a rebuild leaves given back, a slice at a time, with the
+  new size sent to the page;
+- the query syntax, ranking (a turn that says the words before one whose
+  title alone does), counts, plain-text snippets, filters, and lists cut
+  where they stop;
+- how each turn ended, for every reason DSH logs, and running only while
+  DSH says its session runs;
+- the tool's bounds, the turn that asks left out, and output DSH keeps as
+  lossless JSON;
+- settings, including every wrong type the profile can hold, and the
+  page's log.
 
-The browser-half tests cover the page, the mark and the jump to a turn. The
-bench test runs the bench on 200 sessions.
+The plugin tests start Recall as DSH does (`apply`, with stand-ins for
+DSH's packages): a wrong type in the profile, DSH's word on which sessions
+run. The browser-half tests cover the page, the mark and the jump to a
+turn, buttons named with their result, focus after Back, the folder menu's
+cut paths and every state's words. The bench test runs the bench on 200
+sessions.
 
 **Real-DSH test.** It makes 84 checks and takes under two minutes a build.
 It starts DSH from each `.e2e/dsh-<version>` install and from the installed

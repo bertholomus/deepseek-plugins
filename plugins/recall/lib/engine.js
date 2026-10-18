@@ -50,6 +50,15 @@ const ownHit = (r) => r.own < 0;
 export const TRANSCRIPT_QUIET_MS = 10 * 60_000;
 /** After DSH says a session stopped running, how long its log may still show the turn open (its end is read a moment later). */
 export const END_GRACE_MS = 30_000;
+/**
+ * When rows taken out leave this share of the index file free (and at least 10 MB at 4 KB pages), or were this share
+ * of its rows (and at least 4,000: the search index keeps a row's words until its parts are merged), it is made smaller.
+ */
+const SHRINK_SHARE = 0.2;
+const SHRINK_PAGES = 2560;
+const SHRINK_ROWS = 4000;
+/** How often an idle index looks at whether it is worth making smaller. */
+const SHRINK_LOOK_MS = 5000;
 /** How a turn that ended early ended, from DSH's reason for its end; any other reason reads as stopped. */
 export const END_STATES = Object.freeze({ aborted: 'stopped', error: 'failed', interrupted: 'cut-off', 'max-tokens': 'cut-short', blocked: 'blocked' });
 
@@ -79,6 +88,13 @@ export class Engine {
         this.liveKnown = false;
         /** When each session last stopped running, as DSH said (its turn's end is read a moment after). */
         this.stoppedAt = new Map();
+        /** Giving space back to the disk: undefined, or the phase it is in ('merge', 'vacuum'); and after a rebuild. */
+        this.shrinking = undefined;
+        this.shrinkAfter = false;
+        this.shrinkLooked = 0;
+        this.shrinkFrom = 0;
+        /** Why it gives space back: 'taken-out' (a folder no longer searched, files gone) or 'rebuild'. */
+        this.shrinkCause = 'taken-out';
     }
 
     /** One request from the plugin. Throws a message in words. */
@@ -87,6 +103,8 @@ export class Engine {
             case 'configure':
                 this.indexer.configure(Array.isArray(args.sources) ? args.sources : []);
                 this.facetCache = undefined;
+                // A folder no longer searched is taken out at once: look at the space it left on the next slice.
+                this.shrinkLooked = 0;
                 return this.status();
             case 'touch':
                 for (const id of Array.isArray(args.sessionIds) ? args.sessionIds.slice(0, 500) : []) this.indexer.touchSession(id);
@@ -107,6 +125,8 @@ export class Engine {
             case 'rebuild':
                 this.indexer.rebuild();
                 this.facetCache = undefined;
+                // Every row is replaced: once it has read every file again, the index gives back what the old rows held.
+                this.shrinkAfter = true;
                 return this.status();
             case 'search':
                 return this.search(args);
@@ -127,7 +147,7 @@ export class Engine {
      */
     work(budgetMs = 40) {
         const was = this.indexer.busy;
-        if (!was) return { more: false };
+        if (!was) return this.shrinkWork(budgetMs);
         if (!this.busySince) {
             this.busySince = this.now();
             this.busyRead = this.indexer.read;
@@ -141,7 +161,49 @@ export class Engine {
         if (more) return { more };
         const idle = { read: this.indexer.read - this.busyRead, rows: this.indexer.rowsPut - this.busyRows, ms: this.now() - this.busySince };
         this.busySince = 0;
-        return { more: false, idle };
+        // Caught up: after a rebuild, or when rows taken out left much of the file free, it gives that space back next.
+        if (this.shrinkAfter || (this.shrinking === undefined && this.worthShrinking())) {
+            this.shrinking = 'merge';
+            this.shrinkCause = this.shrinkAfter ? 'rebuild' : 'taken-out';
+        }
+        this.shrinkAfter = false;
+        return { more: this.shrinking !== undefined, idle };
+    }
+
+    /** Whether rows taken out (a folder no longer searched, files gone) left enough of the index file free to give back. */
+    worthShrinking() {
+        const { free, pages, vacuum } = this.store.space();
+        if (!vacuum) return false;
+        if (free >= SHRINK_PAGES && free >= pages * SHRINK_SHARE) return true;
+        const taken = this.store.taken;
+        return taken >= SHRINK_ROWS && taken >= (this.store.rowTotal() + taken) * SHRINK_SHARE;
+    }
+
+    /**
+     * While the index is idle: give space back to the disk, a slice at a time within `budgetMs` (searches are
+     * answered between slices), and say so once it is done (`shrunk`: the size before and after).
+     */
+    shrinkWork(budgetMs) {
+        if (this.shrinking === undefined) {
+            // A folder taken out at once (no longer in the settings) is seen here, at most every few seconds.
+            if (this.now() - this.shrinkLooked < SHRINK_LOOK_MS) return { more: false };
+            this.shrinkLooked = this.now();
+            if (!this.worthShrinking()) return { more: false };
+            this.shrinking = 'merge';
+            this.shrinkCause = 'taken-out';
+        }
+        if (!this.shrinkFrom) this.shrinkFrom = this.store.bytes();
+        const started = this.clock();
+        do {
+            this.shrinking = this.store.shrinkSlice(this.shrinking);
+        } while (this.shrinking !== 'done' && this.clock() - started < budgetMs);
+        if (this.shrinking !== 'done') return { more: true };
+        this.shrinking = undefined;
+        const shrunk = { before: this.shrinkFrom, after: this.store.bytes() };
+        this.shrinkFrom = 0;
+        this.shrinkLooked = this.now();
+        if (shrunk.before - shrunk.after >= 5 * 1048576) this.note({ kind: 'shrunk', ...shrunk, cause: this.shrinkCause });
+        return { more: false, shrunk };
     }
 
     /**
@@ -247,7 +309,8 @@ export class Engine {
             const key = file === undefined ? r.file : own ? r.id : `title:${r.file}`;
             const g = groups.get(key);
             if (!g) groups.set(key, own ? { best: r, hits: 1, others: [] } : { best: r, hits: 0, others: [], titleOnly: true });
-            else if (own) {
+            // With nothing typed every turn is listed, not matched: no "other turns here match".
+            else if (own && parsed.match) {
                 g.hits += 1;
                 if (g.others.length < SEARCH_LIMITS.others) g.others.push({ turn: r.turn, seq: r.seq });
             }
@@ -366,8 +429,11 @@ export class Engine {
     status() {
         const ix = this.indexer.status();
         const byRoot = new Map(this.store.rootTotals().map((r) => [`${r.kind}:${r.root}`, r]));
+        // How far this catch-up has read: files read since it began, files left, and whether a folder is still being looked through (more may come).
+        const batch = ix.busy ? { read: this.busySince ? Math.max(0, this.indexer.read - this.busyRead) : 0, left: ix.queued, looking: Boolean(ix.walking) || this.indexer.walks.length > 0 } : undefined;
         return {
             ...ix,
+            ...(batch ? { batch } : {}),
             totals: this.store.totals(),
             bytes: this.store.bytes(),
             problems: this.store.problems(10),

@@ -463,9 +463,9 @@ try {
             await page.getByRole('menuitem', { name: 'Past month' }).or(page.getByRole('menuitemradio', { name: 'Past month' })).or(page.getByRole('option', { name: 'Past month' })).first().click();
             await page.getByText('Nothing matches “xylophone OR quokka OR gateway”').first().waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
             const empty = (await page.locator('[data-recall-search]').innerText()).replace(/\n+/g, ' ');
-            check('the past month has no transcript turn: the empty state says why and offers to clear the filters', /Nothing matches “xylophone OR quokka OR gateway”/.test(empty) && /The filters may also leave it out\./.test(empty) && /Clear the filters/.test(empty), empty);
+            check('the past month has no transcript turn: the empty state says why and offers to search again without the filters, one "Clear the filters" on the page', /Nothing matches “xylophone OR quokka OR gateway”/.test(empty) && /The filters may also leave it out\./.test(empty) && /Search again without the filters/.test(empty) && (empty.match(/Clear the filters/g) ?? []).length === 1, empty);
             await shot(page, shots, 'filters-light');
-            await page.getByRole('button', { name: 'Clear the filters' }).first().click();
+            await page.getByRole('button', { name: 'Search again without the filters' }).click();
             await waitFor(async () => await kindsShown() === 'handoff,session,transcript', 'every kind again', 10000, 200);
             await searchFor(page, 'xylophone', { total: 1 });
             await page.locator('[data-recall-open]').first().click();

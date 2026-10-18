@@ -6,11 +6,15 @@
  */
 import { homedir } from 'node:os';
 import { basename } from 'node:path';
+import { tildePath } from './config.js';
 
 /** Log entries the page's history lists, newest first. */
 const HISTORY = 100;
 
 const plural = (n, one, many = `${one}s`) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+
+/** A size as the page's Index card writes it: whole megabytes, at least 1. */
+export const megabytes = (bytes) => `${Math.max(1, Math.round((Number(bytes) || 0) / 1048576)).toLocaleString('en-US')} MB`;
 
 /** The kinds of files, in the page's and the log's words. */
 export const KIND_WORDS = Object.freeze({ session: 'DSH sessions', transcript: 'coding-agent transcripts', handoff: 'handoff notes' });
@@ -33,9 +37,10 @@ export function cleanQuery(query) {
 /** Whether Recall works now: switched on in the profile, and every setting right. */
 export const working = ({ config, check }) => config.enabled !== false && (check?.ok ?? true);
 
-/** A length of time in words: "0.4 seconds", "12 seconds", "3 minutes". */
+/** A length of time in words: "under a second", "1.4 seconds", "12 seconds", "3 minutes". */
 export function secondsWords(ms) {
     const s = Math.max(0, ms) / 1000;
+    if (s < 1) return 'under a second';
     if (s < 10) return `${Math.round(s * 10) / 10} seconds`;
     if (s < 90) return `${Math.round(s)} seconds`;
     return `${Math.round(s / 60)} minutes`;
@@ -95,6 +100,7 @@ export async function pageState({ config, check, thread, status, lastStatus, sou
  * Turns the index thread's notes into the person's log, a few at a time:
  * - `forgot`: a folder no longer searched, and how much was taken out;
  * - `problem`: files that could not be read (gathered for two seconds, one entry);
+ * - `shrunk`: the index gave space back to the disk (after a take-out or a rebuild);
  * - `set-aside`: the old index could not be used, so a new one is built;
  * - `caught-up`: the first full read after a start, after a rebuild or a new
  *   folder, or a large catch-up (20 files or more); small ones are not logged.
@@ -104,9 +110,11 @@ export class NoteLog {
      * @param {object} options
      * @param {import('./shared/journal.js').Journal} options.journal
      * @param {(ms: number, fn: () => void) => any} [options.later] - a timer (tests pass their own).
+     * @param {string} [options.home] - the home folder, which the log writes as ~.
      */
-    constructor({ journal, later = (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return t; } }) {
+    constructor({ journal, later = (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return t; }, home = homedir() }) {
         this.journal = journal;
+        this.home = home;
         this.later = later;
         this.problems = [];
         this.timer = undefined;
@@ -126,8 +134,8 @@ export class NoteLog {
             case 'forgot':
                 this.journal.add({
                     kind: 'forgot',
-                    text: `Stopped searching ${note.root}`,
-                    why: `It is no longer in Recall's settings, so its ${plural(note.files ?? 0, 'file')} (${plural(note.turns ?? 0, 'turn')}) were taken out of the index.`,
+                    text: `Stopped searching ${tildePath(note.root, this.home)}`,
+                    why: `It is no longer in Recall's settings, so what Recall read from it (${note.sourceKind === 'handoff' ? `${plural(note.files ?? 0, 'note')}, ${plural(note.turns ?? 0, 'section')}` : `${plural(note.files ?? 0, 'file')}, ${plural(note.turns ?? 0, 'turn')}`}) was taken out of the index.`,
                     state: 'done',
                 });
                 return;
@@ -138,6 +146,16 @@ export class NoteLog {
                 if (this.seen.size > 2000) this.seen.delete(this.seen.values().next().value);
                 this.problems.push(note);
                 if (!this.timer) this.timer = this.later(2000, () => this.flushProblems());
+                return;
+            }
+            case 'shrunk': {
+                const left = note.cause === 'rebuild' ? 'Building it again left the old copy\'s space in it' : 'What was taken out of it (a folder no longer searched, files gone) left space in it';
+                this.journal.add({
+                    kind: 'shrunk',
+                    text: 'Made the index smaller',
+                    why: `${left}, which it gave back to the disk: it went from ${megabytes(note.before)} to ${megabytes(note.after)}.`,
+                    state: 'done',
+                });
                 return;
             }
             case 'set-aside':
@@ -156,7 +174,9 @@ export class NoteLog {
                 this.expect = undefined;
                 if ((note.read ?? 0) === 0 && why === 'start') return;
                 const took = secondsWords(note.ms ?? 0);
-                const read = `Read ${plural(note.read ?? 0, 'file')} in ${took}: ${plural(note.rows ?? 0, 'turn or note section', 'turns and note sections')} indexed.`;
+                const read = (note.rows ?? 0) > 0
+                    ? `Read ${plural(note.read ?? 0, 'file')} in ${took}: ${plural(note.rows, 'turn or note section', 'turns and note sections')} indexed.`
+                    : `Read ${plural(note.read ?? 0, 'file')} in ${took}; nothing in ${note.read === 1 ? 'it' : 'them'} was new.`;
                 const text = why === 'rebuild' ? 'Rebuilt the index' : why === 'folder' ? 'Read the new folders' : why === 'start' ? 'Caught up with what changed' : 'Read new and changed files';
                 this.journal.add({ kind: 'caught-up', text, why: read, state: 'done' });
                 return;
@@ -171,13 +191,19 @@ export class NoteLog {
         if (list.length === 0) return;
         const first = list[0];
         if (list.length === 1) {
-            this.journal.add({ kind: 'problem', text: `Could not read ${basename(first.path)}`, why: `${first.path}: ${String(first.error).replace(/\.$/, '')}. Its turns stay as last read; Recall tries again when it changes.`, state: 'failed' });
+            const where = `${tildePath(first.path, this.home)}: ${String(first.error).replace(/\.$/, '')}.`;
+            if (first.part) {
+                this.journal.add({ kind: 'problem', text: `Could not read part of ${basename(first.path)}`, why: `${where} Recall read on from the next whole write.`, state: 'failed' });
+                return;
+            }
+            const kept = (first.rows ?? 0) > 0 ? `Its ${first.sourceKind === 'handoff' ? 'sections' : 'turns'} stay as last read; Recall` : 'Recall';
+            this.journal.add({ kind: 'problem', text: `Could not read ${basename(first.path)}`, why: `${where} ${kept} tries again when it changes.`, state: 'failed' });
             return;
         }
         this.journal.add({
             kind: 'problem',
             text: `Could not read ${plural(list.length, 'file')}`,
-            why: `${list.slice(0, 2).map((p) => `${p.path}: ${String(p.error).replace(/\.$/, '')}`).join('; ')}${list.length > 2 ? `; and ${plural(list.length - 2, 'more')}` : ''}. Recall's page lists them under Index; it tries each again when it changes.`,
+            why: `${list.slice(0, 2).map((p) => `${tildePath(p.path, this.home)}: ${String(p.error).replace(/\.$/, '')}`).join('; ')}${list.length > 2 ? `; and ${plural(list.length - 2, 'more')}` : ''}. Recall's page lists them under Index; it tries each again when it changes.`,
             state: 'failed',
         });
     }

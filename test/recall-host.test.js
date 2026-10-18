@@ -25,10 +25,10 @@ import { Engine, folderOf } from '../plugins/recall/lib/engine.js';
 import { IndexThread } from '../plugins/recall/lib/thread.js';
 import { DEFAULTS, LIVE_SETTINGS, MAX_FOLDERS, SETTING_TITLES, checkConfig, expandFolder, indexing, sourcesOf, tildePath } from '../plugins/recall/lib/config.js';
 import { TOOL_LIMITS, TOOL_NAME, searchText, toolSpec, turnText } from '../plugins/recall/lib/tool.js';
-import { NoteLog, cleanQuery, pageState, refusalOf, working } from '../plugins/recall/lib/page.js';
+import { NoteLog, cleanQuery, megabytes, pageState, refusalOf, secondsWords, working } from '../plugins/recall/lib/page.js';
 import { Journal } from '../plugins/recall/lib/shared/journal.js';
 import { SettingsCheck } from '../plugins/recall/lib/shared/settings.js';
-import { frame, sessionFile, sessionWriter } from './fixtures/recall/corpus.mjs';
+import { frame, sessionFile, sessionWriter, writeCorpus } from './fixtures/recall/corpus.mjs';
 import { tempDir } from './helpers/temp.mjs';
 
 const DAY = 86_400_000;
@@ -600,6 +600,11 @@ test('index: filters by kind, folder (its subfolders, not its neighbours), model
     const next = e.search({ text: '', kind: 'session', limit: 2, offset: 2 });
     assert.equal(next.results.length, 2);
     assert.notDeepEqual(ids(next), ids(newest));
+    // With nothing typed the turns are listed, not matched: no session says "other turns here match".
+    const listed = e.search({ text: '' });
+    assert.ok(listed.results.length > 3);
+    assert.ok(listed.results.every((r) => r.others.length === 0 && r.hits === 1), JSON.stringify(listed.results.map((r) => [r.title, r.hits, r.others])));
+    assert.ok(e.search({ text: 'gateway' }).results.some((r) => r.others.length > 0), 'words typed: a session\'s other matching turns are listed');
     // Words that are all punctuation, or only left-out words: nothing to search, said so.
     assert.equal(e.search({ text: '!!!' }).nothing, 'no-words');
     assert.equal(e.search({ text: '-deploy' }).nothing, 'no-words');
@@ -1059,6 +1064,62 @@ test('index: a rebuild reads every file again and finds the same; a damaged or o
     store.close();
 });
 
+test('index: a folder taken out and a rebuild give their space back to the disk, a slice at a time with searches answered between; the size the page shows is the new one', () => {
+    const home = tempDir('recall-shrink');
+    writeCorpus(join(home, 'own'), { sessions: 20, seed: 3 });
+    writeCorpus(join(home, 'big'), { sessions: 600, seed: 5 });
+    const { e, notes } = engineAt(tempDir('recall-shrink-index'));
+    assert.equal(e.store.space().vacuum, true, 'a new index can give pages back a few at a time');
+    const own = { kind: 'session', root: join(home, 'own'), own: true };
+    const big = { kind: 'session', root: join(home, 'big'), own: false };
+    // The index thread's loop: slices of `budget` ms, and a search between any two while it gives space back.
+    const run = (budget) => {
+        const out = { slices: 0, shrunk: undefined, searched: 0 };
+        let r;
+        do {
+            r = e.work(budget);
+            out.slices += 1;
+            if (r.shrunk) out.shrunk = r.shrunk;
+            if (e.shrinking !== undefined) {
+                assert.ok(e.search({ text: 'gateway' }).total > 0, 'searches are answered while it shrinks');
+                out.searched += 1;
+            }
+        } while (r.more && out.slices < 100_000);
+        return out;
+    };
+    e.handle('configure', { sources: [own, big] });
+    run(1000);
+    const full = e.search({ text: 'gateway' }).total;
+
+    // A rebuild replaces every row: once every file is read again, the old rows' space goes back.
+    const built = e.status().bytes;
+    e.handle('rebuild');
+    const rebuilt = run(40);
+    assert.ok(rebuilt.shrunk, 'a rebuild ends by giving space back');
+    assert.ok(rebuilt.searched > 0);
+    assert.equal(e.search({ text: 'gateway' }).total, full, 'and finds the same');
+    assert.ok(e.status().bytes <= built, `no bigger than it was before the rebuild (${built} → ${e.status().bytes})`);
+    const said = notes.filter((n) => n.kind === 'shrunk');
+    assert.deepEqual(said.map((n) => n.cause), ['rebuild']);
+    assert.equal(said[0].after, rebuilt.shrunk.after);
+
+    // A folder no longer searched: its rows go at once, and the space they held soon after.
+    const before = e.status().bytes;
+    e.handle('configure', { sources: [own] });
+    const out = run(5);
+    assert.ok(out.shrunk, 'taking a large folder out gives its space back');
+    assert.ok(out.searched > 0);
+    const after = e.status().bytes;
+    assert.ok(after < before * 0.25, `the index went from ${before} to ${after} bytes`);
+    assert.equal(after, out.shrunk.after, 'the Index card\'s size is the new one');
+    const last = notes.filter((n) => n.kind === 'shrunk').at(-1);
+    assert.deepEqual([last.cause, last.before > last.after], ['taken-out', true]);
+    assert.ok(e.search({ text: 'gateway' }).total > 0 && e.search({ text: 'gateway' }).total < full);
+    // Done: it does not start again by itself, and a small take-out is not worth a pass.
+    assert.deepEqual(e.work(40), { more: false });
+    assert.equal(e.worthShrinking(), false);
+});
+
 test('index: its full check runs only when it was not closed cleanly, so a clean start opens it at once', () => {
     const dir = tempDir('recall-check');
     const file = join(dir, 'index.sqlite');
@@ -1337,12 +1398,59 @@ test('log: problems are gathered into one entry; a folder forgotten, a new index
     assert.equal(problem.text, 'Could not read 3 files');
     assert.match(problem.why, /^\/a\/one\.md: permission denied; \/a\/two\.md: it is gone; and 1 more\. Recall's page lists them under Index/);
     log.note({ kind: 'forgot', root: '/old/notes', files: 2, turns: 7 });
-    assert.equal(journal.list()[0].why, 'It is no longer in Recall\'s settings, so its 2 files (7 turns) were taken out of the index.');
+    assert.equal(journal.list()[0].why, 'It is no longer in Recall\'s settings, so what Recall read from it (2 files, 7 turns) was taken out of the index.');
     log.note({ kind: 'set-aside' });
     assert.equal(journal.list()[0].text, 'Built a new index');
     log.note({ kind: 'problem', path: '/b/x.jsonl', error: 'it is a folder' });
     log.stop();
     assert.equal(journal.list()[0].text, 'Could not read x.jsonl');
+});
+
+test('log: the words as a person reads them: ~ for home, under a second, nothing new, a file never read, part of a file, the index made smaller', () => {
+    const journal = new Journal(join(tempDir('recall-notes-words'), 'events.jsonl'));
+    const timers = [];
+    const log = new NoteLog({ journal, later: (ms, fn) => { timers.push(fn); return {}; }, home: '/Users/me' });
+    const last = () => journal.list()[0];
+    log.note({ kind: 'caught-up', read: 1, rows: 0, ms: 4 });
+    assert.deepEqual([last().text, last().why], ['Caught up with what changed', 'Read 1 file in under a second; nothing in it was new.']);
+    log.expectCatchUp('folder');
+    log.note({ kind: 'caught-up', read: 3, rows: 0, ms: 950 });
+    assert.equal(last().why, 'Read 3 files in under a second; nothing in them was new.');
+    log.expectCatchUp('folder');
+    log.note({ kind: 'caught-up', read: 2, rows: 1, ms: 1400 });
+    assert.equal(last().why, 'Read 2 files in 1.4 seconds: 1 turn or note section indexed.');
+    assert.equal(secondsWords(0), 'under a second');
+    assert.equal(secondsWords(999), 'under a second');
+    assert.equal(secondsWords(12_000), '12 seconds');
+    assert.equal(secondsWords(200_000), '3 minutes');
+
+    log.note({ kind: 'forgot', root: '/Users/me/old/notes', sourceKind: 'handoff', files: 1, turns: 3 });
+    assert.deepEqual([last().text, last().why], ['Stopped searching ~/old/notes', 'It is no longer in Recall\'s settings, so what Recall read from it (1 note, 3 sections) was taken out of the index.']);
+    // Never read: nothing of it "stays"; read before: its turns (a note's sections) stay as last read.
+    log.note({ kind: 'problem', path: '/Users/me/logs/new.jsonl', sourceKind: 'transcript', error: 'permission denied', rows: 0 });
+    timers.shift()();
+    assert.deepEqual([last().text, last().why], ['Could not read new.jsonl', '~/logs/new.jsonl: permission denied. Recall tries again when it changes.']);
+    log.note({ kind: 'problem', path: '/Users/me/notes/plan.md', sourceKind: 'handoff', error: 'permission denied', rows: 4 });
+    timers.shift()();
+    assert.equal(last().why, '~/notes/plan.md: permission denied. Its sections stay as last read; Recall tries again when it changes.');
+    log.note({ kind: 'problem', path: '/Users/me/logs/old.jsonl', sourceKind: 'transcript', error: 'permission denied', rows: 9 });
+    timers.shift()();
+    assert.equal(last().why, '~/logs/old.jsonl: permission denied. Its turns stay as last read; Recall tries again when it changes.');
+    // A session log with a damaged write: the rest of it was read.
+    log.note({ kind: 'problem', path: '/Users/me/.dsh/sessions/p/s/session.v4.jsonl.zstd', sourceKind: 'session', error: 'not a zstd frame at byte 120', part: true });
+    timers.shift()();
+    assert.deepEqual([last().text, last().why], ['Could not read part of session.v4.jsonl.zstd', '~/.dsh/sessions/p/s/session.v4.jsonl.zstd: not a zstd frame at byte 120. Recall read on from the next whole write.']);
+    log.note({ kind: 'problem', path: '/Users/me/a.md', error: 'x', rows: 0 });
+    log.note({ kind: 'problem', path: '/Users/me/b.md', error: 'y', rows: 0 });
+    timers.shift()();
+    assert.match(last().why, /^~\/a\.md: x; ~\/b\.md: y\. /);
+
+    // The index gave space back: after a folder was taken out, or after a rebuild; sizes as the Index card writes them.
+    log.note({ kind: 'shrunk', before: 287 * 1048576, after: 14 * 1048576, cause: 'taken-out' });
+    assert.deepEqual([last().text, last().why], ['Made the index smaller', 'What was taken out of it (a folder no longer searched, files gone) left space in it, which it gave back to the disk: it went from 287 MB to 14 MB.']);
+    log.note({ kind: 'shrunk', before: 1200 * 1048576, after: 610 * 1048576, cause: 'rebuild' });
+    assert.equal(last().why, 'Building it again left the old copy\'s space in it, which it gave back to the disk: it went from 1,200 MB to 610 MB.');
+    assert.equal(megabytes(300_000), '1 MB');
 });
 
 // ── The index thread ──────────────────────────────────────────────────
@@ -1377,6 +1485,35 @@ test('thread: the worker owns the index; the plugin asks it, and it reads a sess
     await thread.stop();
     assert.equal(thread.state, 'stopped');
     await assert.rejects(thread.call('status'), /not running|starting/);
+});
+
+test('thread: after a large folder is taken out, the index thread gives its space back by itself and sends the page its new size', async () => {
+    const home = tempDir('recall-thread-shrink');
+    writeCorpus(join(home, 'own'), { sessions: 5, seed: 3 });
+    writeCorpus(join(home, 'big'), { sessions: 600, seed: 5 });
+    const events = [];
+    const thread = new IndexThread({ file: join(home, 'index.sqlite'), onEvent: (m) => events.push(m), workerData: { rescanMs: 600_000 } });
+    const own = { kind: 'session', root: join(home, 'own'), own: true };
+    const big = { kind: 'session', root: join(home, 'big'), own: false };
+    const until = async (fn, ms = 60_000) => {
+        const end = Date.now() + ms;
+        while (Date.now() < end) {
+            if (await fn()) return true;
+            await new Promise((r) => setTimeout(r, 20));
+        }
+        return false;
+    };
+    thread.call('configure', { sources: [own, big] }, { standing: true }).catch(() => {});
+    thread.start();
+    assert.ok(await until(() => events.some((m) => m.type === 'note' && m.note.kind === 'caught-up')));
+    const before = (await thread.call('status')).bytes;
+    await thread.call('configure', { sources: [own] }, { standing: true });
+    const shrunkAt = () => events.findIndex((m) => m.type === 'note' && m.note.kind === 'shrunk');
+    assert.ok(await until(() => shrunkAt() >= 0 && events.findLastIndex((m) => m.type === 'changed') > shrunkAt()), 'the page hears of it');
+    const sent = events.findLast((m) => m.type === 'changed').status;
+    assert.ok(sent.bytes < before * 0.25, `the size the page shows went from ${before} to ${sent.bytes} bytes`);
+    assert.equal(events[shrunkAt()].note.cause, 'taken-out');
+    await thread.stop();
 });
 
 /** A worker stand-in: `behave(worker)` decides what each start does. */
