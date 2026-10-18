@@ -296,25 +296,26 @@ The fair figures are the hold-outs'. The first hold-out's 48 prompts
 (`test/fixtures/canon/relevance/holdout.json`: 24 that a note answers, 24
 that none does) were written by two writers who never saw Canon's code or
 the dev set, on the fixture vault as it is, and measured once, on October
-17 at 5:20 PM, with the rules frozen at 9a8a4c9. It is never tuned on, and
+17 at 5:20 PM, with the rules frozen at 9a8a4c9. It was never tuned on, and
 `npm test` holds Canon to the floors on it.
 
-| Figure | Hold-out, measured once | Floor |
-| --- | --- | --- |
-| The block's first note answers | 22 of 24 (91.7%) | at least 80% |
-| An answering note is in the block | 23 of 24 (95.8%) | at least 90% |
-| Notes per block that do not answer | 0.54 (13 in 24 blocks) | at most 1.0 |
-| No block, for a prompt no note answers | 22 of 24 (91.7%) | at least 70% |
+| Figure | Measured once, at 9a8a4c9 (round 2's rules) | At 9876265 (round 3's rules) | Floor |
+| --- | --- | --- | --- |
+| The block's first note answers | 22 of 24 (91.7%) | 18 of 24 (75.0%): missed | at least 80% |
+| An answering note is in the block | 23 of 24 (95.8%) | 20 of 24 (83.3%): missed | at least 90% |
+| Notes per block that do not answer | 0.54 (13 in 24 blocks) | 0.85 (17 in 20 blocks) | at most 1.0 |
+| No block, for a prompt no note answers | 22 of 24 (91.7%) | 21 of 24 (87.5%) | at least 70% |
 
-Those are round 2's rules' figures. `npm test` measures it again with every
-change and holds Canon to the four floors on it; to measure it by hand:
-`node scripts/canon-relevance.mjs --set holdout`.
-
-Round 3's first rule (14893d8) fell short of two of those floors there: the
-block's first note, and an answering note in the block. The rules were then
-reworked on prompts of round 3's own (the dev set above), never on the
-hold-out, whose figures are not used to choose between rules; with the
-rules now, `npm test` still finds it short of at least one of the four.
+The first column is round 2's rules' figures, as first measured. The
+second is round 3's rules, measured from a clean copy of 9876265. Round
+3's first rule (14893d8) had already fallen short of the same two floors
+there; the rules were then reworked on prompts of round 3's own (the dev
+set above), never on the hold-out, whose figures were not used to choose
+between rules. Both columns stay as they are. As OPEN-QUESTIONS #37
+decides for a hold-out that missed, the first hold-out is no longer kept
+apart: it may be tuned on from now, and the fair figure is the second
+hold-out's, measured once at the next freeze. To measure the first by
+hand: `node scripts/canon-relevance.mjs --set holdout`.
 
 That hold-out has no coding request among its 24 prompts that no note
 answers (they are chat, questions about the vault and project switches),
