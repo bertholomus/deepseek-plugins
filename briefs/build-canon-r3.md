@@ -1,77 +1,103 @@
 # Canon round 3: builder's notes
 
-Updated: 2026-10-17 7:49 PM PDT (Canon round-3 builder)
+Updated: 2026-10-17 8:58 PM PDT (Canon round-3 builder)
 Branch: `suite/v1` in `~/Projects/dsh-plugin-suite`
-Status: under way. Finding 1 is in (rule 3405922, dev set and measure 7cc1c48, README 14893d8); Findings 2 and 3 in (next commit); 4, 5, 6 next.
+Status: under way. Finding 1 reworked after the first hold-out's guard failed at 14893d8 (this commit: the rule,
+the dev set, the tests); Findings 2 and 3 in (79056f1); README for the rework, 4, 5, 6's nits, `npm test` and the
+e2e runs next. The first hold-out still misses a floor (see Gotchas).
 Vault frozen at f7283b5: test/fixtures/canon/vault (not changed this round).
 
 Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 17 10:39:36 2026, patch sha256
 63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7.
 
 ## Done (newest first)
+- The fit rule reworked (Finding 1, second pass), chosen on dev only, after the coordinator reported that `npm test`
+  on a clean copy of 0aa5be1 (my commits up to 14893d8) failed the first hold-out's guard: "first note answers 25.0%
+  (floor 80.0%)" and "an answering note in the block 25.0% (floor 90.0%)". **The guard was failing at 14893d8.**
+  Why, found with prompts of my own (never with the hold-out's): round 3's share rule ("the words in common carry a
+  third / 55% of what the prompt asks", a word no note has weighing most) was built for coding requests and ran on
+  every prompt. A person asks in other words than a note's title ("Which bucket does the built site end up in?"),
+  so most of a question's weight sits in words no note has and the share falls short: on 70 natural questions of
+  mine (n01 to n70) round 3's rule found the answering note first for 38 (54%), round 2's for 50. What changed:
+  - Questions and coding requests are told apart (text.js `isCodingRequest`: a sentence starts with a work verb,
+    or "this/my" names code), and each has its rule. A question: round 2's rule (two shared words, a project's
+    name counting as one) with everyday words kept as words in common, one strong word when it is all the prompt
+    asks, one distinctive body word beside a named project, one rare title word that is the prompt's rarest known
+    word; an everyday word is never enough alone, not even beside a project's name. A coding request: round 3's
+    share rule as it was.
+  - A session in a folder inside a known project's folder is in that project (`folderKeys(folder, home,
+    isProject)`): ~/Projects/lantern-api/internal/auth is lantern-api's.
+  - "this repo", "this service", "this app" in a known project's folder say that project's name ("Who owns this
+    repo?"); "this database" and "this cluster" also keep their word.
+  - "Run me through…", "Update me on…", "Read me the…" ask to be told: questions, not coding requests; "Write me a
+    function" stays one. "This repo" and "this app" no longer make a prompt a coding request.
+  - One rare title word needs a prompt with no word the vault lacks ("Look up the parental leave policy" no
+    longer gets the eviction decision).
+  - A coding request that works on what one of the session project's notes is titled for fits it, whatever its
+    share ("Write a migration that adds a currency column to accounts." in tide-ledger: Schema migrations).
+  - Short forms are read as the whole word in notes and prompts (text.js `SHORT_FORMS`: certs, DB, auth, config,
+    env, prod, repo, k8s, …), so "How do I rotate the certs?" meets "Rotating TLS certificates".
+  - The passage is chosen on the prompt's words beyond everyday words (falls back to all), which keeps README's
+    sample block as it was.
+  - Dev now 656 prompts (each new group written before it was measured): round 3's 238, my natural questions
+    (n01–n70, m01–m45, k01–k30: other words than the title, words from the body or headings, questions not orders,
+    short ones, in a project's folder and not), question-form and told-as-a-problem coding requests (q01–q40,
+    w01–w30), project questions no note answers (r01–r15, j01–j10), and other forms (s: folders inside a
+    project's folder; t: coding tasks a note answers; i: requests to be told; d: "this repo"; y: typos and lower
+    case; l: long prompts; e: pasted errors; h: other names for a project; b: "can you check…", times, people;
+    g: short forms; o, x: prompts no note answers in those forms). w05 relabelled `answers` (Schema migrations):
+    it is the same task as the judge's jf-a21 and my t01. Five prompts I wrote again word for word were left out.
+  - Dev figures: first note answers 312 of 349 (89.4%), an answering note in the block 322 of 349 (92.3%), 0.37
+    notes per block that do not answer (121 in 328), no block 272 of 307 (88.6%), everyday coding requests 210 of
+    231 (90.9%). Every floor met; held in test/canon-relevance.test.js.
+  - The rule reads only the prompt, the session's folder and the vault: the helper hands `recall.preStep` the
+    prompt's text and the cwd only; a new test measures dev with every id, kind and answer taken away and gets the
+    same blocks.
+  - Tests: host (classifier cases, folders inside a project, "this repo", short forms, the lone-word guard, the
+    everyday-word guard, the work-object rule), client (the page's words for each rule), relevance (dev's make-up
+    and figures, the no-labels test).
+- Finding 6 (part): the switched-off page's last line says "Switching it off in Plugins instead also takes this
+  page away; it stays installed either way." (in this commit).
 - Finding 3: `walk()` keeps the folders inside the vault it may not list (not ENOENT/ENOTDIR); the vault's status counts
   them (`counts.closed`) and names the first 20 (`closed`); the header says "1 folder Canon may not read:
   Projects/osprey-mobile. Its notes are never added to turns: give DSH access to it, then read the vault again.";
-  What happened notes it once (`closedEntry`), and "Every folder in the vault can be read again" after. Unit tests at
-  the vault and the plugin level (a chmod 000 folder in the test's own copy).
+  What happened notes it once (`closedEntry`), and "Every folder in the vault can be read again" after. (79056f1)
 - Finding 2: the host works out what a live setting in quotes would be without them when that is right
   (`config.js unquoted`: "3" → 3 for a number in range, "false" → false for a switch) and gives it with the problem;
   the waiting state offers **Save it as 3**, which saves through DSH's own settings call
-  (`configForms.get('canon').set(key, value)`), and the page then says "Saved “Notes a turn, at most” as 3, without
-  quotes. Canon works again." If DSH does not take it, it says so. Not offered for `enabled` (profile only).
-- README (Finding 1): the fit rule in "What a turn gets"; "How well it picks notes" with round 3's dev set (its make-up,
-  round 2's rules against now, the coding row, by kind), round 2's section and both hold-outs' paragraphs kept with
-  every figure as it was, the second hold-out's line, "What it still misses" for round 3.
-- The fit rule (Finding 1), chosen on dev only. Dev, 238 prompts: first note answers 59 of 67 (88.1%), an answering
-  note in the block 64 of 67 (95.5%), 0.30 notes per block that do not answer (19 in 64), no block 170 of 171 (99.4%),
-  everyday coding requests with no block 139 of 140 (99.3%). The brief's aims (coding 95%, first 85%, block 93%) are
-  met on dev. `node scripts/canon-relevance.mjs --set dev --misses` shows the 20 misses.
-- The dev set: round 2's 77 prompts, 48 everyday coding requests of my own (c01 to c48: 21 from the vault's projects'
-  folders, 15 from unrelated folders, 12 with none), the judge's fixture set (53, ids `jf-`) and generic set (60, ids
-  `jg-`), each with a `kind`: answers 67, coding 140, project 9, chat 8, vault 8, other 6. The helper and script: the
-  coding row and its 90% floor (#33), the by-kind line, `--set holdout2`, a second hold-out test that skips while the
-  file is absent.
-- Baseline (6:45 PM PDT, round 2's rules, measured with the helper as it was). Dev (77): first note answers 43 of 47
-  (91.5%), answering note in the block 45 of 47 (95.7%), 0.33 notes per block that do not answer (15 in 45), no block
-  25 of 30 (83.3%). The judge's fixture set (54): 16 of 21, 18 of 21, 0.56 (10 in 18), no block 23 of 33 (69.7%). The
-  judge's generic set (60, none answerable): no block 44 of 60 (73.3%).
+  (`configForms.get('canon').set(key, value)`). Not offered for `enabled` (profile only). (79056f1)
+- README (Finding 1, first pass), the first fit rule (3405922), the dev set's kinds and the measure's coding floor
+  (7cc1c48), README (14893d8): superseded in part by the rework above.
+- Baseline (6:45 PM PDT, round 2's rules): dev (77) first 43/47, block 45/47, 0.33 extra, no block 25/30; the
+  judge's fixture set (54) 16/21, 18/21, 0.56, 23/33; the judge's generic set (60) no block 44/60.
 
 ## Next steps (in order, each runnable by someone new)
-1. Findings 4 (README on instructions in notes), 5 (the e2e waits for the vault's `ok`), 6 (the nits).
-2. `npm test`, then `node scripts/e2e.mjs canon` with the live fingerprint before and after each run.
+1. README: "What a turn gets" (the two rules, folders inside a project, "this repo", short forms), "How well it
+   picks notes" (dev's make-up and figures; round 2 / round 3 at 14893d8 / now on dev; what it still misses).
+2. Finding 4 (README: a model may still act on a note's words; keep instructions to agents out of notes), Finding
+   5 (`plugins/canon/test/e2e/run.mjs`: the first state check waits until the vault's state is `ok`), Finding 6's
+   nits (the vault field refuses `/` and `~/` in the profile's words; a draft's file name cut at the last whole
+   word; DSH's Trajectory label stays).
+3. `npm test` (others' uncommitted Proof files may break unrelated tests: then a clean copy, `git archive HEAD | tar
+   -x -C <dir>` plus node_modules and .e2e linked), then `node scripts/e2e.mjs canon` x3 with `~/.local/bin/dsh-test
+   fingerprint` before and after each run.
 
 ## Picks and why
-- The rule, in full (search.js `rank()`): everyday request words (text.js `EVERYDAY`: verbs such as write, add, fix,
-  test, run; the parts of code such as function, file, script, regex; size words such as small, simple) are never
-  words in common, but they still weigh in what the prompt asks. Each prompt word weighs its idf (a word no note has
-  weighs most); a project's name weighs once (its rarest word). A note fits when the words it shares carry a share of
-  that weight: a third when one of them is in its title, aliases, tags or headings (and then two of them, a project's
-  name counting as one, must be distinctive: in those fields, in at most 6% of the notes, or twice in its body, which
-  is the judge's rule), 55% when they are only in its body (and a single body word fits only beside a named project in
-  a prompt of more than one word). "Another project's note" stays as in round 2.
-- Why a share and not the judge's rule alone: the distinctive rule alone (with the everyday list) took dev's first note
-  to 77.6%, the block to 80.6%, coding to 87.9%; answers often rest on several common words in a note's body. A
-  coding request's main words are mostly not in the vault, so the words a note shares carry little of it.
-- Everyday words weigh in the total: without their weight, coding was 95.7%; with it, 99.3%, and the gaps widened.
-- The two figures sit in dev's gaps. Titled: coding requests reach 0.300 (c02) and 0.295 (jg-g29), the lowest answer is
-  0.370 (a32): a third is the middle (0.3 was right at c02's edge; 0.25 lets c02 and jg-g29 in). Body: the highest
-  prompt no note answers is 0.535 (jf-p05, a project question), the lowest answer that comes this way 0.586 (a40):
-  0.55 leans to the answers, whose floors are tighter (0.5 lets jf-p05 in and adds 2 notes that do not answer; 0.6
-  loses a40). c29 (On-call on "call", "10", "seconds", 0.41) stays a miss rather than tune for it.
-- For its own notes, the session's project counts in the share as if the prompt said its name: no change on dev; keeps
-  "Which ports does this service listen on?" in quartz-cache's folder (README, host test).
-- A question's best note is kept when the whole prompt finds it short only on the share (it carries its own question):
-  no change on dev; keeping every question's best note added 2 notes that do not answer (a13, a24), so only the share
-  is waived. Keeps the README's two-question block and the On-call + NATS test.
-- Kinds: round 2's p02, p03, p04, p06, p07 and u05 are everyday coding requests in a project's folder (coding); p01,
-  p05, p08, u01, u02 ask about a project and no note says it (project); u03, u04, u06 other. The judge's jf-c22,
-  jf-c24, jf-c27 are other; its jf-p prompts project; its other jf-c prompts and all jg prompts coding.
-- jf-a09 is left out of dev: it repeats a33 word for word in the same folder.
-- Tried and dropped on dev: bold words as marked (a27 then scores 2.95, under the floor of 3; not tuned for one
-  prompt); a project's name credited only when in a note's fields (a16 fell out); other weights for unknown words and
-  for names; one share for both paths.
-- The first hold-out's test now prints its figures only (no misses, problems as a count): `npm test`'s output is not
-  read for choosing, and nothing was chosen by it.
+- Split, not one rule: on dev, round 2's rule for questions and round 3's for coding requests beat either alone
+  (round 3's alone: natural questions 54%; round 2's alone: coding requests with no block 80 of 140 on the old dev).
+- Questions keep everyday words as words in common ("How do I run the unit tests?" is all everyday words and
+  Local development answers it); a lone everyday word never fits, even beside a project's name (it fit before:
+  "Why is this useEffect running twice?" in lantern-web got its local-run note on "running").
+- Tried and dropped, on dev: a share floor for questions (0.25 lost 3 answers; 0.2 and 0.15 changed little); the
+  question rule for coding requests too (coding with no block 136 of 210); a distinctive-words rule for coding
+  requests (167 of 210); a tag naming the session's project counting as "named" (only added notes); keeping
+  another project's note when it names the prompt's project (13 more notes that do not answer); "dev" as a short
+  form of "development" ("npm run dev" is a name).
+- The object of a coding request is the words after its first work verb up to the next clause or preposition; it
+  counts only for a title of the session project's own notes (on dev it added no note to a coding request).
+- `isCodingRequest` reads the prompt only. Question-form coding requests ("How do I read a CSV file with pandas?")
+  stay questions: 33 of 56 of mine get no block, the weakest group; picking them out needs a list of code words,
+  not done.
 
 ## For the v1.0.1 list (the kit, not changed before the suite tag)
 - Finding 2 at the kit level (`shared/client-kit.js`, `SettingsBody`/`fieldSpec`): a number or switch field whose
@@ -81,8 +107,15 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
   one-press fix can go.
 
 ## Gotchas
-- `test/fixtures/canon/relevance/holdout.json` (the first hold-out) is there; `npm test` measures it and prints its
-  four figures. Never open it and never choose between rules by its figures. `holdout2.json` is absent; check only
-  with `test -e`.
-- A long prompt (a pasted log with a question) spreads its weight over many words: a note may share too little of it.
-- zsh does not split `set -- $pair`; loop scripts run under bash.
+- `test/fixtures/canon/relevance/holdout.json` (the first hold-out) is there; `npm test` measures it. Never open it
+  and never choose between rules by its figures. `holdout2.json` is absent; check only with `test -e`.
+- **The first hold-out still misses a floor** after the rework. Once (about 8:45 PM PDT) my filter let the failing
+  assertion's diff through and I saw its two lines: "first note answers 75.0% (floor 80.0%)" and "an answering note
+  in the block 83.3% (floor 90.0%)" (the rule then had everything above but the short forms). Nothing was chosen by
+  them; the short forms came from my own probe (g01–g20: 12 of 20 before, 16 after). Since then I read only the
+  test's ok / not ok line: still not ok. To see only that: `node --test test/canon-relevance.test.js 2>&1 | grep -E
+  '^(not )?ok '`; never grep `^\s+[+-] ` or `actual` on a run that includes the hold-out.
+- The coding floor's margin on dev is two prompts (210 of 231; 208 is 90.0%).
+- A long prompt (a pasted log with a question) spreads its weight over many words: a coding request may share too
+  little of it.
+- zsh does not split `$B` into words: pass env flags one by one or under bash.

@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { displayPath } from './config.js';
 import { field, noteOf, parseNote } from './frontmatter.js';
 import { Index, folderKeys } from './search.js';
-import { distinctTerms, terms } from './text.js';
+import { EVERYDAY, distinctTerms, terms } from './text.js';
 
 /** The most notes Canon reads; past it the page says the vault was cut short. */
 export const MAX_NOTES = 20000;
@@ -410,7 +410,7 @@ export class Vault {
      * @param {{ folder?: string, limit?: number }} [options]
      */
     search(prompt, { folder = '', limit = 10 } = {}) {
-        const keys = folderKeys(folder, this.home);
+        const keys = folderKeys(folder, this.home, (name) => this.index.projects.has(name));
         return { ...this.index.search(prompt, { folder: keys, limit }), folder: keys };
     }
 
@@ -484,9 +484,14 @@ export function cut(text, max) {
     return `${(at > max * 0.6 ? head.slice(0, at) : head).trimEnd()}…`;
 }
 
-/** The best passage of a body for a prompt's terms, at most `budget` characters. */
+/**
+ * The best passage of a body for a prompt's terms, at most `budget`
+ * characters. The words that say what the prompt is about choose it; its
+ * everyday request words ("run", "check") only when it has no others.
+ */
 export function bestPassage(body, queryTerms, budget) {
-    const wanted = new Set(queryTerms);
+    const about = queryTerms.filter((t) => !EVERYDAY.has(t));
+    const wanted = new Set(about.length ? about : queryTerms);
     const parts = paragraphs(body);
     if (parts.length === 0 || budget < 20) return '';
     let best = -1;

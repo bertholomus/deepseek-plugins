@@ -14,12 +14,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { DEV, FLOORS, HOLDOUT, HOLDOUT2, belowFloors, loadSet, measure, missText } from './helpers/canon-relevance.mjs';
+import { isCodingRequest } from '../plugins/canon/lib/text.js';
 
 /**
  * The dev set's figures as reached (README, "How well it picks notes"):
  * held so a change that makes them worse fails here.
  */
-const DEV_REACHED = Object.freeze({ first: 59, inBlock: 64, extra: 19, noBlock: 170, coding: 139 });
+const DEV_REACHED = Object.freeze({ first: 312, inBlock: 322, extra: 121, noBlock: 272, coding: 210 });
 
 /** The fixture vault's projects: a folder named for one is that project's. */
 const PROJECTS = new Set(['harbor-gateway', 'lantern-api', 'lantern-web', 'quartz-cache', 'tide-ledger']);
@@ -34,22 +35,38 @@ function figures(name, m) {
     return `${name}: first note answers ${a.first} of ${a.n}; an answering note in the block ${a.inBlock} of ${a.n}; ${a.extra} notes that do not answer in ${a.blocks} blocks; no block for ${u.noBlock} of ${u.n}${coding}`;
 }
 
-test('dev set: every prompt has a kind; the round-2 judge\'s two sets and 40 or more everyday coding requests of the builder\'s own; every answer an active note', async () => {
+test('dev set: every prompt has a kind; the round-2 judge\'s two sets, and questions and everyday coding requests of the builder\'s own; every answer an active note', async () => {
     const set = loadSet(DEV, { kinds: true });
     const of = (kind) => set.filter((e) => e.kind === kind);
-    assert.ok(of('answers').length >= 24, 'at least 24 prompts a note answers');
-    for (const kind of ['project', 'chat', 'vault']) assert.ok(of(kind).length >= 8, `at least 8 ${kind} prompts`);
+    assert.ok(of('answers').length >= 200, 'at least 200 prompts a note answers');
+    assert.ok(of('project').length >= 30, 'at least 30 questions about a project that no note answers');
+    for (const kind of ['chat', 'vault']) assert.ok(of(kind).length >= 8, `at least 8 ${kind} prompts`);
     // The judge's sets, whole: judge-fixture (jf-, less one prompt that repeats a dev prompt word for word in its folder) and judge-generic (jg-).
     assert.ok(set.filter((e) => e.id.startsWith('jf-')).length >= 53, 'the judge\'s fixture set');
     assert.equal(set.filter((e) => e.id.startsWith('jg-')).length, 60, 'the judge\'s generic set');
-    // The builder's own everyday coding requests (c01, …): from a project's folder, an unrelated folder, and none.
-    const mine = set.filter((e) => /^c\d+$/.test(e.id));
-    assert.ok(mine.length >= 40 && mine.every((e) => e.kind === 'coding'), `${mine.length} everyday coding requests of the builder's own`);
+    // The builder's own everyday coding requests (c01, q01, w01, …; w05 turned out to be one a note answers): from a
+    // project's folder, an unrelated folder, and none; many asked as a question or told as a problem, not as an order.
+    const mine = set.filter((e) => /^[cqw]\d+$/.test(e.id) && e.kind === 'coding');
+    assert.ok(mine.length >= 110, `${mine.length} everyday coding requests of the builder's own`);
     const last = (folder) => folder.split('/').filter(Boolean).at(-1) ?? '';
     assert.ok(mine.filter((e) => PROJECTS.has(last(e.folder))).length >= 10, 'from a project\'s folder');
     assert.ok(mine.filter((e) => e.folder && !PROJECTS.has(last(e.folder))).length >= 10, 'from an unrelated folder');
     assert.ok(mine.filter((e) => e.folder === '').length >= 10, 'from a session with no folder');
-    assert.ok(of('coding').length >= 100, 'everyday coding requests in all');
+    assert.ok(mine.filter((e) => !isCodingRequest(e.prompt)).length >= 40, 'asked as questions, not only as orders');
+    assert.ok(of('coding').length >= 200, 'everyday coding requests in all');
+    // The builder's own questions a note answers, asked the way a person asks (n01, m01, k01, …): mostly in other
+    // words than the note's title, short, in a project's folder and in none or another.
+    const asked = set.filter((e) => /^[nmk]\d+$/.test(e.id));
+    assert.ok(asked.length >= 140 && asked.every((e) => e.kind === 'answers'), `${asked.length} questions of the builder's own`);
+    assert.ok(asked.filter((e) => PROJECTS.has(last(e.folder))).length >= 40, 'in a project\'s folder');
+    assert.ok(asked.filter((e) => !PROJECTS.has(last(e.folder))).length >= 40, 'in no folder or another');
+    // And in other forms (s01, t01, i01, …): from a folder inside a project's folder, coding tasks a note answers,
+    // requests to be told ("Run me through…"), "this repo", typos and lower case, long prompts, pasted errors,
+    // other names for a project, short forms ("certs", "DB"); and prompts no note answers in the same forms (o01, x01, …).
+    const inside = (folder) => folder.split('/').filter(Boolean).slice(0, -1).some((part) => PROJECTS.has(part));
+    assert.ok(set.filter((e) => inside(e.folder)).length >= 20, 'from a folder inside a project\'s folder');
+    assert.ok(set.filter((e) => /^[stideylhbg]\d+$/.test(e.id) && e.kind === 'answers').length >= 120, 'questions and tasks in other forms');
+    assert.ok(set.filter((e) => /^[ox]\d+$/.test(e.id) && e.kind !== 'answers').length >= 30, 'and prompts no note answers in those forms');
     // No prompt twice in one folder.
     const keys = set.map((e) => `${e.folder}\n${said(e.prompt)}`);
     assert.equal(new Set(keys).size, keys.length, 'a prompt repeats in its folder');
@@ -70,6 +87,13 @@ test('dev set: the figures reached are held (first note, an answering note in th
     assert.ok(u.noBlock >= DEV_REACHED.noBlock, `no block for ${u.noBlock} of ${u.n}\n${misses}`);
     assert.ok(c.noBlock >= DEV_REACHED.coding, `no block for ${c.noBlock} of ${c.n} everyday coding requests\n${misses}`);
     assert.deepEqual(belowFloors(m), []);
+});
+
+test('the measure gives Canon only the prompt and the session\'s folder: the same blocks with every label taken away', async () => {
+    const set = loadSet(DEV, { kinds: true });
+    const bare = set.map((e, i) => ({ id: `x${i}`, folder: e.folder, prompt: e.prompt, answers: [] }));
+    const [labelled, unlabelled] = [await measure(set), await measure(bare)];
+    assert.deepEqual(unlabelled.rows.map((r) => r.got), labelled.rows.map((r) => r.got));
 });
 
 test('first hold-out: well formed, apart from the dev set, and within the four floors of OPEN-QUESTIONS #29 (its figures only)', async (t) => {

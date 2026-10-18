@@ -1048,12 +1048,16 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             entry: 'Canon',
             title: 'Canon',
             summary: 'Shared long-term notes from your Obsidian canon vault. When a turn starts from your prompt, Canon adds the few active notes that fit it and the session\'s folder, as a short block that cites each note.',
-            disabled: 'Canon is switched off in DSH\'s profile (enabled: false in its entry in cordis.patch.yml), so it reads no vault. To use it, set enabled to true there and restart DSH. To remove it instead, switch it off in Plugins.',
+            disabled: 'Canon is switched off in DSH\'s profile (enabled: false in its entry in cordis.patch.yml), so it reads no vault. To use it, set enabled to true there and restart DSH. Switching it off in Plugins instead also takes this page away; it stays installed either way.',
             loading: 'Reading Canon',
             noVault: 'No vault yet',
             noVaultText: 'Set “Vault folder” in Canon\'s settings to your Obsidian vault\'s folder, such as ~/Obsidian/Canon. Canon only reads it unless you allow drafts.',
             tryTitle: 'Try a prompt',
             trySub: 'See which notes a prompt would get, and why, without sending it.',
+            readQuestion: 'Read as a question.',
+            readCoding: 'Read as a coding request: it asks for work on code, or speaks of “this function” or “my script”.',
+            noFitQuestion: 'A turn with it gets no notes. A note fits a question when it shares two words with it (a project\'s name counts as one). One word is enough in the note\'s title, tags, aliases or headings when the prompt asks only that word, or when few notes have it, the prompt shares no rarer word with the vault and has no word the vault lacks; and in the note\'s body beside a project the prompt or this folder names, when few notes have it or the body has it twice. An everyday request word like “run” or “test” is never enough alone, not even beside a project\'s name.',
+            noFitCoding: 'A turn with it gets no notes. A note fits a coding request when the words it shares with it, beyond everyday request words like “write”, “fix” and “test”, carry enough of what it asks, rare words weighing most: a third when one is in the note\'s title, tags, aliases or headings, 55% when none is. It also fits when the request works on what the note is titled for and the note is this folder\'s project\'s, as “Add a route…” and Routing rules.',
             sessions: 'Sessions that got notes',
             sessionsSub: 'Newest first. Switch one off and its later turns get no notes.',
             noSessions: 'No notes added yet',
@@ -1425,17 +1429,22 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const question = r.question ? ' It is the best note for one of the questions the prompt asks.' : '';
             return `Shares ${words.length === 1 ? 'the word' : 'the words'} ${listWords(words.map((w) => `“${w}”`))}.${question}${place}`;
         }
-        /** Why a close note was left out, in words. */
+        /** Why a close note was left out, in words: a question's rules, or a coding request's. */
         function missText(r) {
             if (r.why === 'name') return 'It shares only a project\'s name with the prompt.';
-            if (r.why === 'few' && r.named) return 'Too little in common: besides the project\'s name, only the one word the prompt asks, and not in the note\'s title, tags, aliases or headings.';
-            if (r.why === 'few' && r.titled) return 'Too little in common: one word that says what the note is about. A note needs two (in its title, tags, aliases or headings, in few notes, or twice in its body), or one beside a project the prompt or this folder names.';
-            if (r.why === 'few') return 'Too little in common: one word, and not in the note\'s title, tags, aliases or headings.';
+            if (r.why === 'few' && !r.coding) {
+                if (r.plain === 0) return `Too little in common: ${r.named ? 'besides the project\'s name, ' : ''}one everyday request word like “run” or “test”, which is never enough alone.`;
+                if (r.body) return 'Too little in common: one word, only in the note\'s body. That is enough beside a project the prompt or this folder names, when few notes have the word or the body has it twice.';
+                return 'Too little in common: one word, and the prompt asks more. One word in the note\'s title, tags, aliases or headings is enough when few notes have it, the prompt shares no rarer word with the vault and has no word the vault lacks, and it names no other project.';
+            }
+            if (r.why === 'few' && r.named) return 'Too little in common for a coding request: besides the project\'s name, only the one word the prompt asks, and not in the note\'s title, tags, aliases or headings.';
+            if (r.why === 'few' && r.titled) return 'Too little in common for a coding request: one word that says what the note is about. It needs two (in the note\'s title, tags, aliases or headings, in few notes, or twice in its body), or one beside a project the prompt or this folder names.';
+            if (r.why === 'few') return 'Too little in common for a coding request: one word, and not in the note\'s title, tags, aliases or headings.';
             if (r.why === 'part') {
                 const weigh = typeof r.share === 'number' ? `weigh ${Math.round(r.share * 100)}% of it` : 'weigh too little of it';
                 return r.titled
-                    ? `Too little of what the prompt asks: the words in common ${weigh}, and a note needs a third.`
-                    : `Too little of what the prompt asks: the words in common ${weigh}, and a note needs 55% when they are not in its title, tags, aliases or headings.`;
+                    ? `Too little of what the coding request asks: the words in common ${weigh}, and a note needs a third.`
+                    : `Too little of what the coding request asks: the words in common ${weigh}, and a note needs 55% when they are not in its title, tags, aliases or headings.`;
             }
             if (r.why === 'other') return 'It belongs to another project than the one this folder or the prompt points at.';
             return 'It fits less well than the notes above, or too little to add.';
@@ -1485,12 +1494,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
 
         function TryResult({ result }) {
             if (result.terms.length === 0) {
-                return h(kit.Empty, { title: 'Nothing to search for', text: 'That prompt has no words Canon searches for: greetings, thanks, words like “please”, everyday request words like “write”, “fix” and “test”, and words about the vault itself are left out. A turn with it gets no notes.' });
+                return h(kit.Empty, { title: 'Nothing to search for', text: 'That prompt has no words Canon searches for: greetings, thanks, words like “please” and words about the vault itself are left out, and so are everyday request words like “write”, “fix” and “test” in a coding request. A turn with it gets no notes.' });
             }
             return h('div', { 'data-canon-try-result': '' },
-                h('p', { className: `${P}-meta`, 'data-canon-try-place': '' }, result.place ? `For a session in ${result.place}.` : 'For a session with no folder.'),
+                h('p', { className: `${P}-meta`, 'data-canon-try-place': '', 'data-canon-try-coding': result.coding ? '' : undefined }, `${result.place ? `For a session in ${result.place}.` : 'For a session with no folder.'} ${result.coding ? TEXT.readCoding : TEXT.readQuestion}`),
                 result.results.length === 0
-                    ? h(kit.Empty, { title: 'No note fits this prompt', text: 'A turn with it gets no notes. A note fits when it shares two words with the prompt (a project\'s name counts as one) and they carry enough of what the prompt asks, rare words weighing most: a third when one is in the note\'s title, tags, aliases or headings, 55% when none is. Everyday request words like “write”, “fix” and “test” never count as words in common.' })
+                    ? h(kit.Empty, { title: 'No note fits this prompt', text: result.coding ? TEXT.noFitCoding : TEXT.noFitQuestion })
                     : h('div', { className: `${P}-section` },
                         h('h3', { className: `${P}-section-title` }, `A turn with this prompt gets ${plural(result.results.length, 'note')}`),
                         h('ul', { className: `${P}-list` }, ...result.results.map((r) => h('li', { key: r.path, className: `${P}-item`, 'data-canon-result': r.path },

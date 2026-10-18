@@ -190,7 +190,7 @@ export class Recall {
     async preview(text, folder = '') {
         const s = this.settings();
         await this.vault.ready({ waitMs: 4000 });
-        const { results, others, terms, folder: keys } = this.vault.search(text, { folder, limit: s.maxNotes });
+        const { results, others, terms, folder: keys, coding } = this.vault.search(text, { folder, limit: s.maxNotes });
         const n = notesThatFit(results.length, s.maxChars);
         const budget = n ? entryBudget(n, s.maxChars) : 0;
         const entries = [];
@@ -204,8 +204,9 @@ export class Recall {
         return {
             terms,
             folder: keys,
+            coding: coding === true,
             results: entries.filter((e) => shown.has(e.path)).map((e) => ({ path: e.path, title: e.title, score: round(e.score), matched: e.matched, words: e.words, folder: e.folder, question: e.question === true, passage: e.passage })),
-            others: others.map((e) => ({ path: e.path, title: e.title, score: round(e.score), matched: e.matched, words: e.words, folder: e.folder, fits: e.fits, why: e.why, named: e.named, titled: e.titled, share: Math.round(e.share * 100) / 100 })),
+            others: others.map((e) => ({ path: e.path, title: e.title, score: round(e.score), matched: e.matched, words: e.words, folder: e.folder, fits: e.fits, why: e.why, coding: e.coding === true, named: e.named, titled: e.titled, topics: e.topics, plain: e.plain, body: e.body, share: Math.round(e.share * 100) / 100 })),
             block: block ? { text: block.text, chars: block.chars, summary: block.summary } : null,
         };
     }
