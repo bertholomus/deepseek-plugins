@@ -250,7 +250,7 @@ or a promote folder inside the drafts folder, and says what fits instead.
 | Setting | Default | Range | Where | What it does |
 | --- | --- | --- | --- | --- |
 | `vault` (Vault folder) | empty | a full path, or one starting with `~/` | Plugins | The Obsidian vault Canon reads. Empty: Canon does nothing until it is set. Never the home folder, `/`, or DSH's own data folder. |
-| `access` (What Canon may write) | `read-only` | `read-only` (Read only) or `drafts` (Drafts) | Plugins | Read only: nothing, ever. Drafts: agents may save new drafts in the drafts folder. |
+| `access` (What Canon may write) | `read-only` | `read-only` (Read only) or `drafts` (Drafts) | Plugins | Read only: Canon writes nothing, ever (agents' own tools: see [What Read only covers](#what-read-only-covers)). Drafts: agents may save new drafts in the drafts folder. |
 | `draftsFolder` (Drafts folder) | `Drafts` | a folder inside the vault | Plugins | Where drafts go. Its notes are never added to turns. |
 | `promote` (Allow promoting drafts) | `false` | on or off | Plugins | Whether Promote on Canon's page does anything. Needs `access: drafts`. |
 | `promoteFolder` (Promoted notes go to) | empty | empty, or a folder inside the vault outside the drafts folder | Plugins | Where promoted notes go. Empty: the vault's top level. |
