@@ -19,15 +19,24 @@
  *   found seconds after it ends; a transcript that grew read from where it
  *   ended; a deleted one taken out.
  * - Filters: kind, folder, model and time, and newest first.
+ * - How each turn ended: a turn is "still running" only while DSH runs it;
+ *   stopped from the chat it reads "stopped", and why; one DSH was running
+ *   when it crashed reads "cut off by a restart", in the API, the rows and
+ *   the reading view.
  * - The tool: an agent searches, reads a turn in full (marked as a record,
- *   not instructions), and a call with no words is refused in words.
+ *   not instructions), and a call with no words is refused in words; the
+ *   turn that asks is left out of what it finds.
  * - The window: the page (newest turns first, then a search), a result that
  *   opens the long session at turn 2 (which DSH's first page of it does not
  *   hold), marked "Found by Recall", the turn's rows marked and brought to
  *   the top; Back to the results keeps the search; Done takes the marks off;
  *   the filters; the reading view for a transcript and a note; the tool's
  *   card in the agent's chat and its Open; the index card, a folder that is
- *   not there, Look for changes now; a narrow window; light and dark.
+ *   not there, Look for changes now; a narrow window; light and dark; focus
+ *   back on the button that opened the reading view after Turn before and
+ *   Back; Wallpaper on (a stand-in for it in this window) over a light and a
+ *   dark picture at a low tint, and off, light and dark, the small text
+ *   measured at 4.5:1; at 420 px the kind switcher inside its row.
  * - Its settings in Plugins (DSH's own form): a folder that is not a full
  *   path refused; a notes folder added, read and searchable; the tool
  *   switched off and on (offered to agents, or not).
@@ -36,6 +45,9 @@
  * - Recall switched off and on in Plugins: no failure; its entry, marks and
  *   style go and come back.
  * - Without Session Watch, the open page follows new turns.
+ * - Wrong types in the profile (one folder without the brackets, "yes" for a
+ *   switch): Recall starts, names the setting and how to write it, refuses
+ *   searches and offers no tool.
  * - A wrong setting: Recall starts, refuses searches, offers no tool, and
  *   its page says which setting; fixed through the form.
  * - Its folder is 700 and its files 600. `enabled: false`: idle, and its
@@ -197,6 +209,94 @@ const offeredTool = (anchorWords) => model.requests.filter((r) => r.anchor.inclu
 
 const ours = (errors) => errors.filter((text) => /recall|session-watch|suite-kit/i.test(text));
 
+/**
+ * The contrast of an element's text over what is painted behind it: its own and its ancestors' backgrounds, stacked
+ * as the window draws them (down to the first solid one), measured as WCAG does. With `ground`, the page stands on
+ * that colour instead of DSH's own ground, as over a picture with Wallpaper on (where DSH's grounds go clear).
+ */
+const contrastOf = (locator, { ground } = {}) => locator.evaluate((el, ground) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const c = canvas.getContext('2d', { willReadFrequently: true });
+    const pixel = () => [...c.getImageData(0, 0, 1, 1).data];
+    const alphaOf = (css) => {
+        c.clearRect(0, 0, 1, 1);
+        c.fillStyle = css;
+        c.fillRect(0, 0, 1, 1);
+        return pixel()[3];
+    };
+    const layers = [];
+    for (let node = el; node; node = node.parentElement) {
+        const bg = getComputedStyle(node).backgroundColor;
+        const alpha = alphaOf(bg);
+        if (alpha > 0) layers.push(bg);
+        if (alpha === 255 || (ground && node.matches('[data-recall-page]'))) break;
+    }
+    c.clearRect(0, 0, 1, 1);
+    c.fillStyle = ground ?? '#ffffff';
+    c.fillRect(0, 0, 1, 1);
+    for (const bg of [...layers].reverse()) {
+        c.fillStyle = bg;
+        c.fillRect(0, 0, 1, 1);
+    }
+    const back = pixel().slice(0, 3);
+    c.fillStyle = getComputedStyle(el).color;
+    c.fillRect(0, 0, 1, 1);
+    const text = pixel().slice(0, 3);
+    const channel = (v) => {
+        const x = v / 255;
+        return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+    };
+    const lum = ([r, g, b]) => 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+    const [hi, lo] = [lum(text), lum(back)].sort((a, b) => b - a);
+    return { word: (el.textContent ?? '').trim().slice(0, 40), ratio: Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100 };
+}, ground ?? null);
+/** The lowest contrast among every element a locator matches, how many it measured, and the three lowest. */
+const lowestContrast = async (locator, options) => {
+    const all = [];
+    for (let i = 0; i < await locator.count(); i += 1) {
+        const x = await contrastOf(locator.nth(i), options);
+        all.push({ ...x, kind: await locator.nth(i).evaluate((el) => [...el.classList].filter((c) => c.startsWith('dshrc-')).join('.') + (el.getAttribute('data-tone') ? `[${el.getAttribute('data-tone')}]` : '')) });
+    }
+    all.sort((a, b) => a.ratio - b.ratio);
+    return { count: all.length, ratio: all[0]?.ratio ?? 0, word: all[0]?.word ?? '', low: all.slice(0, 3).map((x) => `${x.kind} ${x.ratio}`) };
+};
+/** The small text people read on Recall's page: lines under titles, snippets, counts, why lines, state words. */
+const SMALL_TEXT = ['sub', 'meta', 'snippet', 'asked', 'count', 'others', 'status', 'why', 'note', 'tag'].map((c) => `[data-recall-page] .dshrc-${c}`).join(', ');
+/** Pictures for the Wallpaper stand-in: a light one and a dark one. */
+const PICTURES = {
+    light: 'radial-gradient(circle at 20% 25%,#fde68a 0,transparent 40%),radial-gradient(circle at 80% 70%,#bae6fd 0,transparent 45%),linear-gradient(135deg,#f5f0e6,#dde7ee)',
+    dark: 'radial-gradient(circle at 25% 30%,#1d4ed8 0,transparent 40%),radial-gradient(circle at 75% 70%,#9d174d 0,transparent 45%),linear-gradient(135deg,#0b1020,#1f2937)',
+};
+/** A stand-in for the Wallpaper plugin, in this test window only: its public values on <body>, a picture behind DSH, DSH's frame clear. */
+const wallpaperOn = (page, picture, tint) => page.evaluate(({ picture, tint }) => {
+    const b = document.body;
+    b.classList.add('wp-on');
+    b.style.setProperty('--wp-blur', '22px');
+    b.style.setProperty('--wp-tint', String(tint));
+    let wall = document.getElementById('test-wall');
+    if (!wall) {
+        wall = document.createElement('div');
+        wall.id = 'test-wall';
+        document.body.prepend(wall);
+        const style = document.createElement('style');
+        style.id = 'test-wall-style';
+        style.textContent = 'body.wp-on #root{position:relative;z-index:1}'
+            + 'body.wp-on [class*="_frame"],body.wp-on [class*="_centerCol"],body.wp-on [class*="_sidebarCol"],body.wp-on [class*="_rightbarCol"],'
+            + 'body.wp-on [data-slot="main"],body.wp-on [data-slot="main.conversation"]>div{background:transparent!important;border:0!important;box-shadow:none!important}';
+        document.head.append(style);
+    }
+    wall.style.cssText = `position:fixed;inset:0;z-index:0;background:${picture}`;
+}, { picture, tint });
+const wallpaperOff = (page) => page.evaluate(() => {
+    document.body.classList.remove('wp-on');
+    document.body.style.removeProperty('--wp-blur');
+    document.body.style.removeProperty('--wp-tint');
+    document.getElementById('test-wall')?.remove();
+    document.getElementById('test-wall-style')?.remove();
+});
+
 let window;
 let pw;
 const ids = {};
@@ -308,6 +408,20 @@ try {
         await api('rescan');
         const gone = await found({ text: 'okapi' }, 'the deleted transcript to go', 15000, (x) => x.total === 0);
         check('a deleted transcript\'s turns are taken out', gone.total === 0);
+    });
+
+    // ── How a turn ended: running by DSH's word, then stopped from the chat ──
+    ids.stopped = await run.newSession('Roll out the stoat release.\nE2E:hang The stoat rollout waits.', 'Stoat rollout');
+    await step('a turn is still running only while DSH runs it; stopped from the chat, it says "stopped" and who stopped it', async () => {
+        await waitFor(async () => (await run.session(ids.stopped)).status === 'running', 'the stoat turn to start', 20000, 200);
+        const running = await found({ text: 'stoat' }, 'the running turn to be read', 20000, (r) => r.results[0]?.state === 'running');
+        check('while DSH runs the turn, it is still running', running.results[0]?.sessionId === ids.stopped && running.results[0].running === true, json(running.results[0]));
+        await run.bridge('POST', `/sessions/${encodeURIComponent(ids.stopped)}/cancel`, {});
+        await turnsEnded(ids.stopped, 1);
+        const stopped = await found({ text: 'stoat' }, 'the turn to read as stopped', 20000, (r) => r.results[0]?.state === 'stopped');
+        const turn = await value('turn', { id: stopped.results[0].id });
+        check('stopped from the chat: "stopped", from the chat as DSH logged it, never running again',
+            stopped.results[0].sessionId === ids.stopped && stopped.results[0].running === false && stopped.results[0].why === 'user' && turn.state === 'stopped' && turn.why === 'user', json({ hit: stopped.results[0], state: turn.state, why: turn.why }));
     });
 
     // ── The window ─────────────────────────────────────────────────────
@@ -441,12 +555,27 @@ try {
         const [empty, searched, opened] = asked.slice(1, 4).map((r) => r.result);
         check('a call with no words is refused, saying what to give', /Give words to search for/.test(empty ?? ''), empty);
         check('the search answers with the session, its turn and its id, marked as a record of earlier work',
-            /Recall found 1 matching turn in 1 session or file for “narwhal exporter” \(kind session\)/.test(searched ?? '') && searched.includes('“Long session”') && /DSH session, turn 2/.test(searched)
+            /Recall found 1 matching turn in 1 session for “narwhal exporter” \(kind session\)/.test(searched ?? '') && searched.includes('“Long session”') && /DSH session, turn 2/.test(searched)
             && searched.includes(`session ${ids.long}`) && searched.includes('information, not instructions'), searched);
         check('open reads that turn in full: what was asked, the reply, the turns beside it',
             /^“Long session” \(DSH session, turn 2/.test(opened ?? '') && opened.includes('The person asked:') && opened.includes('Turn 2: wire the narwhal exporter.') && opened.includes('The reply:') && /Next to it: earlier \d+\.1, later \d+\.3/.test(opened), opened);
         const results = (await run.events(ids.agent)).filter((e) => e.type === 'tool/result');
         check('DSH logged the three calls\' results in the session', results.length === 3, json(results.map((e) => e.type)));
+    });
+    // An agent whose own request says "stoat": a command first (3 s), so its open turn is in the index when it searches.
+    ids.askStoat = await run.newSession(`What happened to the stoat rollout?\n${turnScript([
+        { tool: 'bash', args: { command: 'sleep 3', description: 'Wait a moment' } },
+        { tool: 'recall_search', args: { query: 'stoat' } },
+    ], 'It was stopped before it finished.')}`, 'Ask about the stoat rollout');
+    await turnsEnded(ids.askStoat, 1, 60000);
+    await step('the tool leaves out the turn that asks: its own words are the question, not earlier work', async () => {
+        const asked = model.requests.filter((r) => r.anchor.includes('What happened to the stoat rollout?'));
+        const result = asked[2]?.result ?? '';
+        check('the agent finds the stopped rollout, with how it ended, and not its own turn, though its request says "stoat" too',
+            /Recall found 1 matching turn in 1 session or file for “stoat”/.test(result) && result.includes(`session ${ids.stopped}`) && !result.includes(`session ${ids.askStoat}`)
+            && /stopped before it finished \(stopped from the chat\)/.test(result), result);
+        const later = await search({ text: 'stoat' });
+        check('once its turn is over, the asking session is found like any other', later.results.some((r) => r.sessionId === ids.askStoat) && later.results.some((r) => r.sessionId === ids.stopped), json(later.results.map((r) => [r.title, r.state])));
     });
 
     if (pw) {
@@ -468,6 +597,7 @@ try {
             await page.getByRole('button', { name: 'Search again without the filters' }).click();
             await waitFor(async () => await kindsShown() === 'handoff,session,transcript', 'every kind again', 10000, 200);
             await searchFor(page, 'xylophone', { total: 1 });
+            const opener = await page.locator('[data-recall-open]').first().getAttribute('data-recall-open');
             await page.locator('[data-recall-open]').first().click();
             const reading = page.locator('[data-recall-reading]');
             await reading.getByText('Fixed the xylophone tokenizer', { exact: false }).first().waitFor({ state: 'visible', timeout: 15000 });
@@ -482,6 +612,9 @@ try {
             await reading.getByText('Please migrate the ledger schema to version 7.').first().waitFor({ state: 'visible', timeout: 10000 });
             check('Turn before reads the turn before, with the command it ran', /make migrate-ledger/.test(await reading.innerText()));
             await reading.getByRole('button', { name: 'Back to the results' }).click();
+            const focused = () => page.evaluate(() => document.activeElement?.getAttribute('data-recall-open') ?? document.activeElement?.tagName ?? null);
+            await waitFor(async () => (await focused()) === opener, 'the focus to come back', 5000, 100).catch(() => {});
+            check('Back after Turn before: the focus is back on the button that opened the reading view', (await focused()) === opener, json({ focused: await focused(), opener }));
             await searchFor(page, 'quokka', { total: 1 });
             await page.locator('[data-recall-open]').first().click();
             await reading.getByText('Rotate the quokka certificates', { exact: false }).first().waitFor({ state: 'visible', timeout: 15000 });
@@ -508,7 +641,7 @@ try {
             const card = page.locator('[data-recall-tool="results"]').filter({ visible: true }).first();
             await card.waitFor({ state: 'visible', timeout: 20000 });
             const head = (await card.innerText()).replace(/\n+/g, ' ');
-            check('the search call shows as a tool row in DSH\'s own style: what it searched and what it found', /Searched past work for “narwhal exporter”: 1 turn in 1 session or file/.test(head), head);
+            check('the search call shows as a tool row in DSH\'s own style: what it searched and what it found', /Searched past work for “narwhal exporter”: 1 turn in 1 session$/.test(head.trim()), head);
             const turnCard = page.locator('[data-recall-tool="turn"]').filter({ visible: true }).first();
             const failed = page.locator('[data-recall-tool="failed"]').filter({ visible: true }).first();
             check('the open call reads "Read a past turn", and the call with no words says why in the person\'s words',
@@ -565,6 +698,76 @@ try {
             check('no errors from the suite in the window', ours(window.errors).length === 0, ours(window.errors).join('\n'));
         }, async () => {
             if (window?.page) await shot(window.page, shots, 'failed-index');
+        });
+
+        await step('Wallpaper on and off, light and dark, over a light and a dark picture: the small text reads at 4.5:1; at 420 px the kind switcher fits', async () => {
+            const { page } = window;
+            await openRecall(page);
+            await searchFor(page, 'gateway OR canary OR xylophone OR quokka OR stoat');
+            await page.locator('[data-recall-page]').evaluate((el) => el.scrollIntoView({ block: 'start' }));
+            const off = {};
+            for (const mode of ['light', 'dark']) {
+                await setDark(page, mode === 'dark');
+                await page.waitForTimeout(300);
+                off[mode] = await lowestContrast(page.locator(SMALL_TEXT));
+            }
+            await setDark(page, false);
+            // At a low tint (.2): over a mid grey (lighter in dark, darker in light: where the glass carries small text),
+            // and over each picture's own colour (the far ends, which DESIGN leaves open), measured; pictures of each.
+            const low = {};
+            const ends = {};
+            try {
+                for (const mode of ['light', 'dark']) {
+                    await setDark(page, mode === 'dark');
+                    for (const picture of ['light', 'dark']) {
+                        await wallpaperOn(page, PICTURES[picture], 0.2);
+                        await page.waitForTimeout(300);
+                        await shot(page, shots, `wallpaper-${mode}-on-${picture}-picture`);
+                    }
+                    low[mode] = await lowestContrast(page.locator(SMALL_TEXT), { ground: mode === 'dark' ? 'rgb(140, 140, 140)' : 'rgb(180, 180, 180)' });
+                    ends[mode] = {
+                        overLight: (await lowestContrast(page.locator(SMALL_TEXT), { ground: 'rgb(240, 236, 228)' })).ratio,
+                        overDark: (await lowestContrast(page.locator(SMALL_TEXT), { ground: 'rgb(20, 24, 36)' })).ratio,
+                    };
+                }
+            } finally {
+                await wallpaperOff(page);
+                await setDark(page, false);
+            }
+            console.log(`# small text, lowest contrast: Wallpaper off ${json(off)}; tint .2 over a mid grey ${json(low)}; over the pictures' far ends ${json(ends)}`);
+            check('Wallpaper off: the page\'s small text reads at 4.5:1 or more, light and dark', ['light', 'dark'].every((m) => off[m].count > 10 && off[m].ratio >= 4.5), json(off));
+            check('Wallpaper on at a low tint (.2) over a mid picture: the small text reads at 4.5:1 or more, light and dark', ['light', 'dark'].every((m) => low[m].count > 10 && low[m].ratio >= 4.5), json(low));
+            // A narrow window: the kind switcher inside its row, every choice whole; nothing wider than the page.
+            await page.setViewportSize({ width: 420, height: 900 });
+            await page.waitForTimeout(500);
+            const fit = () => page.evaluate(() => {
+                const row = document.querySelector('[data-recall-filters]');
+                const list = row?.querySelector('[data-suite-choice="dshrc-kind"] [role="tablist"]');
+                const r = row?.getBoundingClientRect();
+                const l = list?.getBoundingClientRect();
+                const tabs = [...(list?.querySelectorAll('[role="tab"]') ?? [])].map((t) => ({ text: t.textContent, whole: t.scrollWidth <= t.clientWidth + 1 }));
+                const pageEl = document.querySelector('[data-recall-page]');
+                return { row: r ? [Math.round(r.left), Math.round(r.right)] : null, list: l ? [Math.round(l.left), Math.round(l.right)] : null, tabs, spill: pageEl.scrollWidth - pageEl.clientWidth };
+            });
+            const narrow = await fit();
+            check('at 420 px the kind switcher fits inside its row with every choice whole, and nothing spills sideways',
+                narrow.row && narrow.list && narrow.list[0] >= narrow.row[0] && narrow.list[1] <= narrow.row[1] && narrow.tabs.length === 4 && narrow.tabs.every((t) => t.whole) && narrow.spill <= 1, json(narrow));
+            await page.locator('[data-suite-choice="dshrc-kind"]').getByRole('tab', { name: 'Notes', exact: true }).click();
+            await waitFor(async () => (await page.locator('[data-recall-result]').count()) > 0 && (await page.locator('[data-recall-result]').evaluateAll((els) => els.every((el) => el.getAttribute('data-recall-result') === 'handoff'))), 'notes only', 10000, 200).catch(() => {});
+            check('at 420 px a choice still chooses: Notes lists notes only', await page.locator('[data-recall-result]').evaluateAll((els) => els.length > 0 && els.every((el) => el.getAttribute('data-recall-result') === 'handoff')));
+            await shot(page, shots, 'narrow-420-light');
+            await setDark(page, true);
+            await shot(page, shots, 'narrow-420-dark');
+            await setDark(page, false);
+            await page.locator('[data-suite-choice="dshrc-kind"]').getByRole('tab', { name: 'All', exact: true }).click();
+            await page.setViewportSize({ width: 1280, height: 860 });
+            await page.waitForTimeout(300);
+        }, async () => {
+            if (window?.page) {
+                await wallpaperOff(window.page).catch(() => {});
+                await shot(window.page, shots, 'failed-wallpaper');
+                await window.page.setViewportSize({ width: 1280, height: 860 }).catch(() => {});
+            }
         });
 
         await step('its settings in Plugins: a folder that is not a full path refused; a notes folder added and read; the tool off and on', async () => {
@@ -632,6 +835,10 @@ try {
         check('the restart kept every turn and did not read every file again', s.index.totals.turns === before.index.totals.turns && s.index.read < s.index.totals.files && !(await historyHas(/^Built a new index/)),
             json({ before: before.index.totals, after: s.index.totals, read: s.index.read }));
     });
+    // A turn DSH is running when it crashes, in a session nothing opens again afterwards.
+    ids.hung = await run.newSession('Migrate the ibis tables.\nE2E:hang The ibis migration waits.', 'Ibis migration');
+    await waitFor(async () => (await run.session(ids.hung)).status === 'running', 'the ibis turn to start', 20000, 200);
+    await found({ text: 'ibis' }, 'the running ibis turn to be read', 20000, (r) => r.results[0]?.state === 'running');
     await run.crash();
     const markerAfterCrash = existsSync(join(run.home, 'recall', 'index.sqlite.open'));
     await run.boot('after a crash');
@@ -642,6 +849,43 @@ try {
         check('after the crash the index passed its check and is kept: the turn is found', hit?.turn === 2, json(hit));
         check('no new index was built', !(await historyHas(/^Built a new index/)));
     });
+    await step('turns that ended early say how: one cut by the crash is "cut off by a restart", the stopped one "stopped", in rows and the reading view', async () => {
+        const cut = await found({ text: 'ibis' }, 'the turn cut by the crash', 30000, (r) => r.results[0]?.state === 'cut-off');
+        check('the turn DSH was running when it crashed is cut off by a restart, not still running', cut.results[0].sessionId === ids.hung && cut.results[0].running === false, json(cut.results[0]));
+        if (!pw) return;
+        window = await openWindow(run, pw, { entry: 'Recall' });
+        const { page } = window;
+        await openRecall(page);
+        await searchFor(page, 'ibis OR "stoat release"');
+        const rowOf = (title) => page.locator('[data-recall-result]').filter({ hasText: title }).first();
+        const ibis = (await rowOf('Ibis migration').innerText()).replace(/\n+/g, ' ');
+        const stoat = (await rowOf('Stoat rollout').innerText()).replace(/\n+/g, ' ');
+        check('each row says how its turn ended', /turn 1 · cut off by a restart/.test(ibis) && /turn 1 · stopped/.test(stoat) && !/still running/.test(`${ibis} ${stoat}`), `${ibis} | ${stoat}`);
+        await shot(page, shots, 'ended-early-light');
+        const reading = page.locator('[data-recall-reading]');
+        const said = async (title) => {
+            await rowOf(title).getByRole('button', { name: /^Read / }).click();
+            const line = reading.locator('[data-recall-state]').first();
+            await line.waitFor({ state: 'visible', timeout: 15000 });
+            const text = (await line.innerText()).trim();
+            const meta = (await reading.innerText()).replace(/\n+/g, ' ');
+            await reading.getByRole('button', { name: 'Back to the results' }).click();
+            return { text, meta };
+        };
+        const ibisRead = await said('Ibis migration');
+        const stoatRead = await said('Stoat rollout');
+        check('the reading view says it in a sentence: cut off by a restart; stopped from the chat',
+            ibisRead.text === 'This turn was cut off by a restart: DSH stopped before it finished.' && /turn 1 of 1 · cut off by a restart/.test(ibisRead.meta)
+            && stoatRead.text === 'This turn was stopped from the chat before it finished.' && /turn 1 of 1 · stopped/.test(stoatRead.meta), json({ ibisRead, stoatRead }));
+        await setDark(page, true);
+        await shot(page, shots, 'ended-early-dark');
+        await setDark(page, false);
+        check('no errors from the suite in the window', ours(window.errors).length === 0, ours(window.errors).join('\n'));
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-ended-early');
+    });
+    await window?.browser?.close().catch(() => {});
+    window = undefined;
 
     // ── Recall switched off and on in Plugins ──────────────────────────
     await step('Recall switched off and on in Plugins: no failure; its entry, marks and style go and come back', async () => {
@@ -699,6 +943,38 @@ try {
         check('no errors from the suite in the window', ours(window.errors).length === 0, ours(window.errors).join('\n'));
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-watch-off');
+    });
+    await window?.browser?.close().catch(() => {});
+    window = undefined;
+
+    // ── Wrong types in the profile ─────────────────────────────────────
+    await restartWith(rowsWith({ recall: { transcriptFolders: AGENT_LOGS, tool: 'yes' } }), 'wrong types');
+    await waitFor(async () => (await api('state')).ok, 'Recall\'s endpoints with wrong types', 60000);
+    await step('wrong types in the profile (one folder without the brackets, "yes" for a switch): Recall starts, says what to write, refuses searches, offers no tool', async () => {
+        const s = await pageState();
+        const words = /^Coding-agent transcript folders \(transcriptFolders\) must be a list of folders in square brackets, such as \[".+"\] \(it is ".+", one folder without the brackets\)$/;
+        check('DSH starts Recall: its state names the first wrong setting in words and how to write it', words.test(s.problem?.text ?? '') && s.problem?.key === 'transcriptFolders' && s.problem?.live === true, json(s.problem));
+        const plugins = await run.api('pluginManager/listPlugins', {});
+        const entry = (plugins.value?.plugins ?? plugins.value ?? []).find?.((p) => /recall/.test(p?.name ?? p?.id ?? ''));
+        console.log(`# DSH's plugin list has Recall as ${json(entry ?? plugins.value ?? plugins.error).slice(0, 300)}`);
+        const refused = await api('search', { query: { text: 'narwhal' } });
+        check('searches are refused, naming the setting', refused.ok === false && /^Recall is waiting for a setting to be fixed: Coding-agent transcript folders \(transcriptFolders\)/.test(refused.error?.message ?? ''), json(refused.error));
+        check('What happened says it started with a wrong setting', await historyHas(/^Started with a wrong setting; Recall waits until it is fixed/));
+        ids.wrongType = await run.newSession(sayText('A turn while a type is wrong.'), 'Wrong type');
+        await turnsEnded(ids.wrongType, 1);
+        check('while a type is wrong, agents are not offered recall_search', offeredTool('A turn while a type is wrong.').length > 0 && offeredTool('A turn while a type is wrong.').every((x) => !x));
+        if (!pw) return;
+        window = await openWindow(run, pw, { entry: 'Recall' });
+        const { page } = window;
+        await openRecall(page);
+        const problem = page.locator('[data-suite-trouble="setting"]');
+        await problem.waitFor({ state: 'visible', timeout: 20000 });
+        const text = (await problem.innerText()).replace(/\n+/g, ' ');
+        check('the page names the setting, what to write, and where to change it', /Coding-agent transcript folders \(transcriptFolders\) must be a list of folders in square brackets/.test(text) && /one folder without the brackets/.test(text) && /Change it in Recall's settings in Plugins/.test(text), text);
+        await shot(page, shots, 'wrong-type-light');
+        check('no errors from the suite in the window', ours(window.errors).length === 0, ours(window.errors).join('\n'));
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-wrong-type');
     });
     await window?.browser?.close().catch(() => {});
     window = undefined;
@@ -775,7 +1051,7 @@ try {
         const header = page.locator('[data-recall-header="off"]');
         await header.waitFor({ state: 'visible', timeout: 20000 });
         const words = (await header.innerText()).replace(/\n+/g, ' ');
-        check('the page says it keeps no index, and how to change that', /Recall is switched off in DSH's profile \(enabled: false in its entry in cordis\.patch\.yml\), so it keeps no index\. To use it, set enabled to true there and restart DSH\./.test(words), words);
+        check('the page says it keeps no index, and how to change that', /Recall is switched off in DSH's profile \(enabled: false in its entry in cordis\.patch\.yml\), so it keeps no index\. To use it, set enabled to true there; DSH applies it when you save the file\./.test(words), words);
         await shot(page, shots, 'disabled-light');
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-disabled');

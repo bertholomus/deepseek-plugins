@@ -1104,6 +1104,15 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-find{display:flex;align-items:center;gap:8px;margin-top:12px;min-width:0}`,
             `.${P}-find-box{flex:1 1 auto;min-width:0}`,
             `.${P}-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;min-width:0;container-type:inline-size}`,
+            // On glass at a low tint (Wallpaper at .2, the cards at .4) over a mid picture, the suite's state words and the
+            // green and red notes read at 3.3 to 4.1:1: on Recall's page they lean further toward the label colour, so they
+            // read at 4.5:1 or more there, as on DSH's own ground (the real-DSH test measures both).
+            `.${P}-page .${P}-tag[data-tone="success"]{color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 30%,var(--dsw-alias-label-primary))}`,
+            `.${P}-page .${P}-tag[data-tone="warning"]{color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 30%,var(--dsw-alias-label-primary))}`,
+            `.${P}-page .${P}-tag[data-tone="info"]{color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 45%,var(--dsw-alias-label-primary))}`,
+            `.${P}-page .${P}-tag[data-tone="danger"]{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 55%,var(--dsw-alias-label-primary))}`,
+            `.${P}-page .${P}-note.${P}-ok{color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 35%,var(--dsw-alias-label-primary))}`,
+            `.${P}-page .${P}-note.${P}-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 55%,var(--dsw-alias-label-primary))}`,
             // In a narrow card the kind switcher (DSH's segmented control, four equal columns as wide as "Transcripts")
             // would be wider than its row: there each choice is as wide as its word, and the chosen one wears the pill.
             `@container (max-width: 480px){.${P}-filters [data-suite-choice] [role="tablist"]{grid-auto-columns:auto;max-width:100%}`
@@ -1258,8 +1267,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             // Sessions whose title alone has the words: counted apart, as no turn of theirs says them.
             const titled = found.titled > 0 ? `${count(found.titled)}${found.titledMore ? '+' : ''}` : '';
             const single = found.titled === 1 && !found.titledMore;
-            if (titled && found.total === 0 && !found.totalMore) return `No turn says it; ${titled} ${single ? one : many} ${single ? 'matches' : 'match'} by title only${took}`;
-            const turns = `${count(found.total)}${found.totalMore ? '+' : ''} matching ${found.total === 1 && !found.totalMore ? 'turn' : 'turns'}`;
+            // A note is read in sections, not turns.
+            const [unit, units] = kind === 'handoff' ? ['section', 'sections'] : ['turn', 'turns'];
+            if (titled && found.total === 0 && !found.totalMore) return `No ${unit} says it; ${titled} ${single ? one : many} ${single ? 'matches' : 'match'} by title only${took}`;
+            const turns = `${count(found.total)}${found.totalMore ? '+' : ''} matching ${found.total === 1 && !found.totalMore ? unit : units}`;
             const where = `${count(found.sessions)}${found.sessionsMore ? '+' : ''} ${found.sessions === 1 && !found.sessionsMore ? one : many}`;
             return `${turns} in ${where}${titled ? `, and ${titled} more by title only` : ''}${took}`;
         }
@@ -2063,7 +2074,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const running = data.thread?.state === 'running';
             const t = ix?.totals ?? {};
             const sub = ix ? `${plural(t.turns ?? 0, 'turn')} from ${plural(t.files ?? 0, 'file')}${ix.bytes > 0 ? ` · ${Math.max(1, Math.round(ix.bytes / 1048576))} MB on this computer` : ''}${ix.lastRead ? ' · read ' : ''}` : TEXT.indexSub;
-            return h(kit.Card, { title: TEXT.index, sub: ix ? [sub, ix.lastRead ? h(kit.TimeText, { key: 't', at: ix.lastRead }) : null] : sub, attrs: { 'data-recall-index': ix?.busy ? 'reading' : 'idle' } },
+            // Every card on the page is read (lists, why lines, small text): glass at tint + .2, as DESIGN puts what people read.
+            return h(kit.Card, { title: TEXT.index, main: true, sub: ix ? [sub, ix.lastRead ? h(kit.TimeText, { key: 't', at: ix.lastRead }) : null] : sub, attrs: { 'data-recall-index': ix?.busy ? 'reading' : 'idle' } },
                 ix?.stale ? h('p', { className: `${P}-note` }, 'The index is busy reading, so this is the last count it sent.') : null,
                 roots.length === 0
                     ? h(kit.Empty, {
@@ -2103,7 +2115,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const [all, setAll] = React.useState(false);
             const history = Array.isArray(data.history) ? data.history : [];
             const shown = all ? history : history.slice(0, 20);
-            return h(kit.Card, { title: TEXT.history, sub: TEXT.historySub, attrs: { 'data-recall-history': String(history.length) } },
+            return h(kit.Card, { title: TEXT.history, main: true, sub: TEXT.historySub, attrs: { 'data-recall-history': String(history.length) } },
                 history.length === 0 ? h(kit.Empty, { title: TEXT.noHistory, text: TEXT.noHistoryText })
                     : [
                         h('ul', { key: 'l', className: `${P}-list` }, ...shown.map((entry) => h('li', { key: entry.id, className: `${P}-item`, 'data-recall-entry': entry.kind },
@@ -2237,7 +2249,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const q = view?.query || a.query;
             if ((!Number.isFinite(view?.total) || view.total === 0) && view?.titled > 0) return `Searched past work for ${quoted(q, 50)}: ${plural(view.titled, 'session or file', 'sessions and files')} by title only`;
             if (!Number.isFinite(view?.total) || view.total === 0) return `Searched past work for ${quoted(q, 50)}: nothing found`;
-            return `Searched past work for ${quoted(q, 50)}: ${count(view.total)}${view.totalMore ? '+' : ''} ${view.total === 1 && !view.totalMore ? 'turn' : 'turns'} in ${plural(view.sessions ?? 0, 'session or file', 'sessions and files')}`;
+            // With a kind asked for, its places by name (a note's are sections), as the page's count says them.
+            const [one, many] = KIND_PLURAL[a?.kind] ?? ['session or file', 'sessions and files'];
+            const [unit, units] = a?.kind === 'handoff' ? ['section', 'sections'] : ['turn', 'turns'];
+            return `Searched past work for ${quoted(q, 50)}: ${count(view.total)}${view.totalMore ? '+' : ''} ${view.total === 1 && !view.totalMore ? unit : units} in ${plural(view.sessions ?? 0, one, many)}`;
         }
 
         const noop = () => {};

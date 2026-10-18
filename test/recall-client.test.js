@@ -198,11 +198,12 @@ test('words: a result says what it is, where, when and which turn; hits are mark
     assert.equal(askedLine({ ...OWN, snippet: '\u0002please\u0003 deploy the gateway' }), '', 'not twice when the snippet is the request');
     assert.equal(askedLine(NOTE), '');
     assert.equal(countLine(FOUND, 'any'), '7 matching turns in 3 sessions and files · 12 ms');
-    assert.equal(countLine({ ...FOUND, total: 1, sessions: 1, took: 0.4 }, 'handoff'), '1 matching turn in 1 note · <1 ms');
+    assert.equal(countLine({ ...FOUND, total: 1, sessions: 1, took: 0.4 }, 'handoff'), '1 matching section in 1 note · <1 ms', 'a note is read in sections');
+    assert.equal(countLine({ ...FOUND, total: 3, sessions: 1 }, 'handoff'), '3 matching sections in 1 note · 12 ms');
     assert.equal(countLine({ ...FOUND, total: 5000, totalMore: true, sessions: 400, sessionsMore: true }, 'session'), '5,000+ matching turns in 400+ sessions · 12 ms');
     // Sessions whose title alone has the words are counted apart: no turn of theirs says them.
     assert.equal(countLine({ ...FOUND, total: 2, sessions: 2, titled: 1 }, 'any'), '2 matching turns in 2 sessions and files, and 1 more by title only · 12 ms');
-    assert.equal(countLine({ ...FOUND, total: 0, sessions: 0, titled: 1 }, 'handoff'), 'No turn says it; 1 note matches by title only · 12 ms');
+    assert.equal(countLine({ ...FOUND, total: 0, sessions: 0, titled: 1 }, 'handoff'), 'No section says it; 1 note matches by title only · 12 ms');
     assert.equal(countLine({ ...FOUND, total: 0, sessions: 0, titled: 3 }, 'any'), 'No turn says it; 3 sessions and files match by title only · 12 ms');
     assert.equal(failureText('Give words to search for in query, or a result id in open.'), 'the agent gave no words to search for.');
     assert.equal(failureText('Error: Recall\'s index is starting. Try again in a moment.'), 'Recall\'s index is starting. Try again in a moment.');
@@ -210,6 +211,8 @@ test('words: a result says what it is, where, when and which turn; hits are mark
     assert.equal(runningTitle({ open: '3.4' }), 'Reading a past turn');
     assert.equal(doneTitle({ kind: 'results', query: 'deploy', total: 7, sessions: 3 }, {}), 'Searched past work for “deploy”: 7 turns in 3 sessions and files');
     assert.equal(doneTitle({ kind: 'results', query: 'zzz', total: 0, sessions: 0 }, {}), 'Searched past work for “zzz”: nothing found');
+    assert.equal(doneTitle({ kind: 'results', query: 'deploy', total: 1, sessions: 1 }, { kind: 'session' }), 'Searched past work for “deploy”: 1 turn in 1 session');
+    assert.equal(doneTitle({ kind: 'results', query: 'quokka', total: 3, sessions: 1 }, { kind: 'handoff' }), 'Searched past work for “quokka”: 3 sections in 1 note');
     assert.equal(doneTitle({ kind: 'results', query: 'kestrel', total: 0, sessions: 0, titled: 1 }, {}), 'Searched past work for “kestrel”: 1 session or file by title only');
     assert.equal(doneTitle({ kind: 'turn', turn: OWN }, {}), 'Read a past turn: “Fix the gateway”');
     assert.equal(indexLine({ index: STATUS }), 'Recall has 1,234 turns from 56 sessions and files. Up to date.');
@@ -704,7 +707,7 @@ test('the tool\'s card: running, what it found (each a press from its turn), not
     tree = RecallToolView({ phase: 'result', home: HOME, useDisclosure: () => ({ expanded: true, toggle() {} }), block: { isError: false, content: [{ type: 'text', text: 'Recall found 7 matching turns …' }], meta: results, call: { argsRaw: '{"query":"deploy","kind":"session"}' } } });
     assert.equal(tree.props['data-recall-tool'], 'results');
     row = elementsOf(tree).find((e) => e.type === 'DisclosureRow');
-    assert.equal(row.props.title, 'Searched past work for “deploy”: 7 turns in 3 sessions and files');
+    assert.equal(row.props.title, 'Searched past work for “deploy”: 7 turns in 3 sessions', 'the call asked for sessions: its places are named so');
     assert.equal(row.props.expandable, true);
     let text = textIn(tree);
     assert.match(text, /Fix the gatewaySession · ~\/work\/gateway · glm-5\.3 · turn 4 · .*we deployed the gateway to …Open/);

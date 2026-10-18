@@ -229,42 +229,42 @@ DSH sessions:
 - Each search is a round trip through that thread, as the page and the
   tool make them, 20 rounds each.
 - Apple M4, macOS, Node 22.20.0, with other work running (load average
-  about 7).
+  about 5).
 
 | Search | Matching turns | Median | p95 | In the index (median) |
 | --- | ---: | ---: | ---: | ---: |
-| one common word | 5,000+ | 40.3 ms | 42.1 ms | 40.1 ms |
-| two words | 5,000+ | 39.5 ms | 43.1 ms | 39.4 ms |
-| a phrase | 1,380 | 20.7 ms | 22.8 ms | 20.5 ms |
-| typing (last word a prefix) | 5,000+ | 81.2 ms | 85.1 ms | 81.1 ms |
-| a rare word | 1 | 0.3 ms | 0.6 ms | 0.3 ms |
-| either word (OR) | 5,000+ | 54.6 ms | 57 ms | 54.4 ms |
-| a word left out | 5,000+ | 22.6 ms | 26.2 ms | 22.5 ms |
-| sessions of the past month | 5,000+ | 22.9 ms | 25.2 ms | 22.8 ms |
-| one folder | 2,187 | 27.4 ms | 29 ms | 27.3 ms |
-| one model | 5,000+ | 31.3 ms | 32.8 ms | 31.2 ms |
-| newest first | 5,000+ | 18 ms | 19.3 ms | 17.8 ms |
-| nothing typed (newest turns) | 5,000+ | 0.8 ms | 1 ms | 0.7 ms |
-| third page | 5,000+ | 49.5 ms | 51.9 ms | 49.4 ms |
-| **All 260 searches** | | **27.4 ms** | **80.8 ms** | 27.3 ms |
+| one common word | 5,000+ | 40.2 ms | 42.8 ms | 40.1 ms |
+| two words | 5,000+ | 38.6 ms | 41.7 ms | 38.4 ms |
+| a phrase | 1,380 | 19.9 ms | 21 ms | 19.8 ms |
+| typing (last word a prefix) | 5,000+ | 79.7 ms | 85.6 ms | 79.6 ms |
+| a rare word | 1 | 0.3 ms | 0.3 ms | 0.2 ms |
+| either word (OR) | 5,000+ | 53.6 ms | 57.1 ms | 53.5 ms |
+| a word left out | 5,000+ | 22.4 ms | 24.1 ms | 22.3 ms |
+| sessions of the past month | 5,000+ | 22.9 ms | 24.8 ms | 22.7 ms |
+| one folder | 2,187 | 26.9 ms | 28.3 ms | 26.8 ms |
+| one model | 5,000+ | 30.4 ms | 32.7 ms | 30.3 ms |
+| newest first | 5,000+ | 17.3 ms | 19.6 ms | 17.1 ms |
+| nothing typed (newest turns) | 5,000+ | 0.8 ms | 0.9 ms | 0.7 ms |
+| third page | 5,000+ | 49.3 ms | 54 ms | 49.2 ms |
+| **All 260 searches** | | **27 ms** | **79.5 ms** | 26.9 ms |
 
 Every search is well inside the 300 ms target. The slowest of the 260 took
-107 ms. The counts are of turns that say the words; counting them that way
+90 ms. The counts are of turns that say the words; counting them that way
 moved the median by under 2 ms, measured side by side on one index.
 
 **Building and keeping up:**
 
-- **The first index** took 16.6 s (7,244 turns a second) and came to
-  285.6 MB.
-- **DSH's own thread** was held up at most 18.9 ms meanwhile (p99 11.3 ms).
-- **Searches during that build** took a median of 54.8 ms (p95 84.5 ms).
+- **The first index** took 15.8 s (7,646 turns a second) and came to
+  290.4 MB.
+- **DSH's own thread** was held up at most 12.6 ms meanwhile (p99 12.1 ms).
+- **Searches during that build** took a median of 50.7 ms (p95 80.5 ms).
 - **Reading one turn in full**: under 0.1 ms.
-- **A new turn** was found 12 ms after DSH said its session moved; a new
-  session, 41 ms after. With DSH's 1.5 s of batching, the real-DSH test
+- **A new turn** was found 14 ms after DSH said its session moved; a new
+  session, 42 ms after. With DSH's 1.5 s of batching, the real-DSH test
   measures a turn searchable about 1.7 s after it was asked.
-- **A restart** opened the index in 20 ms and answered the first search in
-  93 ms. Its look through all 10,001 files took 0.4 s and read none again.
-- **After a stop that did not close the index**, opening it took 1.6 s:
+- **A restart** opened the index in 21 ms and answered the first search in
+  98 ms. Its look through all 10,001 files took 0.5 s and read none again.
+- **After a stop that did not close the index**, opening it took 1.7 s:
   SQLite's full check runs then.
 
 To measure again:
@@ -323,7 +323,7 @@ mode 600:
 
 | File | What |
 | --- | --- |
-| `recall/index.sqlite` (and its `-wal` and `-shm`) | The index: one row per turn or section, with what it kept (above), and where each file was read up to. About 2.4 KB a turn (284.8 MB for 120,519 turns). Space that turns taken out leave in it goes back to the disk (Keeping up, above). |
+| `recall/index.sqlite` (and its `-wal` and `-shm`) | The index: one row per turn or section, with what it kept (above), and where each file was read up to. About 2.4 KB a turn (290.4 MB for 120,519 turns). Space that turns taken out leave in it goes back to the disk (Keeping up, above). |
 | `recall/index.sqlite.open` | Written while the index is open. If DSH stops without closing it, the next start checks the index in full (SQLite's quick check). An index that fails the check, or one from an older Recall, is set aside as `index.sqlite.old` and built again from the files. |
 | `recall/events.jsonl` | What happened. It keeps the last 400 entries and rewrites itself past 1 MB. |
 
