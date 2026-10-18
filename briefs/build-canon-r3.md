@@ -1,16 +1,44 @@
 # Canon round 3: builder's notes
 
-Updated: 2026-10-17 9:08 PM PDT (Canon round-3 builder)
+Updated: 2026-10-17 9:34 PM PDT (Canon round-3 builder)
 Branch: `suite/v1` in `~/Projects/dsh-plugin-suite`
-Status: under way. Finding 1 reworked after the first hold-out's guard failed at 14893d8 (this commit: the rule,
-the dev set, the tests); Findings 2 and 3 in (79056f1); README for the rework, 4, 5, 6's nits, `npm test` and the
-e2e runs next. The first hold-out still misses a floor (see Gotchas).
+Status: under way. Finding 1 reworked twice after the first hold-out's guard failed at 14893d8 (3b6811a, 106086d,
+483b42e: the rules, the dev set, the tests); Findings 2 and 3 in (79056f1); README for the rework, 4, 5, 6's nits,
+`npm test` and the e2e runs next. The first hold-out's floors test is still not ok (see Gotchas).
 Vault frozen at f7283b5: test/fixtures/canon/vault (not changed this round).
 
 Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 17 10:39:36 2026, patch sha256
 63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7.
 
 ## Done (newest first)
+- The fit rule, third pass (483b42e), chosen on dev only, from four more groups of my own written before they were
+  measured: z (45 prompts and 15 no note answers: one everyday word and a project's name, "What's a standby?",
+  orders with no work verb, "we/our", short ones), zb (35 and 10: "remind me", "any idea", numbers, people, lower
+  case), zc (25 tasks a note answers and 10 coding requests none does), zp (69 and 10: one or two short questions
+  for every active note, in other words than its title, on a word of its body or headings, half in its project's
+  folder, the way the coordinator described). As first measured: z first note answers 38 of 45, zb 31 of 35, zc 22
+  of 25, zp 58 of 69 (in the block 60 of 69, under 90%). What changed:
+  - An everyday request word alone fits when it is all the prompt asks ("How do I run lantern-web?", "how do i run
+    it" in lantern-web's folder); "Why is this useEffect running twice?" still gets nothing.
+  - One word beyond everyday words, when it is all the prompt asks, fits a note's body when few notes have it or
+    the body has it twice ("What runs on 6412?": Quartz ports; "What's a standby?").
+  - A term a list defines in bold ("- **Standby**: …", frontmatter.js `defined`) counts as an alias: "What does
+    bastion mean?" gets the glossary.
+  - A question that names something no note has (a word with a capital inside a sentence or in capitals, not a
+    day, a month or "I'm": "How do I run Kafka locally?", "CORS") fits only a note of a project it or the folder
+    names, or one sharing three words; the page names the word.
+  - The work-object rule counts for a project the prompt names, not only the folder's ("Write a migration for the
+    ledger that…").
+  - The stemmer gives three-letter roots their "e" ("moving"/"move", "hired"/"hire"; "fixed"/"fix") and cuts
+    "-ation" ("authenticate"/"Authentication", "migrate"/"migration").
+  - "Team" is a word about the vault only before one ("the team's notes"): "When is team lunch?".
+  - A few other words read as the notes' words (text.js `OTHER_WORDS`: revert and undo as roll back, reboot,
+    RAM, TTL, handoff, dump, runner, storage, entrance).
+  - Each hold-out test is split in two: its apart check (no prompt repeats a dev prompt) and its floors, so a
+    repeat never reads as a missed floor. The apart check is ok with the larger dev set.
+  - After: z 43 of 45, zb 33 of 35, zc 23 of 25, zp 62 of 69 (64 in the block). Dev, 868 prompts with the four
+    groups: first note answers 480 of 519 (92.5%), in the block 493 (95.0%), 0.36 notes that do not answer per
+    block (182 in 499), no block 312 of 349 (89.4%), everyday coding requests 232 of 252 (92.1%).
 - A coding request's words in common need 45% of its weight when they are only in a note's body (was 55%):
   set again on dev's coding requests alone, now that only they are held to a share. The body-only notes of coding
   requests no note answers reach at most 0.42 (w12), and the answering note of t12 ("Add the API key header to
@@ -88,6 +116,15 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
    fingerprint` before and after each run.
 
 ## Picks and why
+- Third pass, tried on dev and dropped: "wait" and "back" as words, not stop words (11 more notes that do not
+  answer, one first note lost); the lone title word rule without its guard on words the vault lacks (5 more
+  prompts no note answers got a block); "-ction" and "-ment" cut in the stemmer (no change on dev or the groups,
+  and "production" would meet "product"); one common body word enough beside a named project (up to 42 more
+  notes that do not answer); the titled share at 0.31 (one probe prompt, a margin of 0.006 over a note that does
+  not answer); the everyday-word guard only without a named project (one more note that does not answer).
+- The other words are a short list of words people use in operations for what these notes say otherwise; each
+  is read as the note's word in notes and prompts alike, as short forms are. On dev they gained 5 first notes and
+  added no note that does not answer.
 - Split, not one rule: on dev, round 2's rule for questions and round 3's for coding requests beat either alone
   (round 3's alone: natural questions 54%; round 2's alone: coding requests with no block 80 of 140 on the old dev).
 - Questions keep everyday words as words in common ("How do I run the unit tests?" is all everyday words and
@@ -118,8 +155,9 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
   assertion's diff through and I saw its two lines: "first note answers 75.0% (floor 80.0%)" and "an answering note
   in the block 83.3% (floor 90.0%)" (the rule then had everything above but the short forms). Nothing was chosen by
   them; the short forms came from my own probe (g01–g20: 12 of 20 before, 16 after). Since then I read only the
-  test's ok / not ok line: still not ok. To see only that: `node --test test/canon-relevance.test.js 2>&1 | grep -E
-  '^(not )?ok '`; never grep `^\s+[+-] ` or `actual` on a run that includes the hold-out.
+  test's ok / not ok line, once after each pass (9:02 PM, 9:31 PM): still not ok, also after the third pass. To see
+  only that: `node --test test/canon-relevance.test.js 2>&1 | grep -E '^(not )?ok '`; never grep `^\s+[+-] ` or
+  `actual` on a run that includes the hold-out.
 - The coding floor's margin on dev is two prompts (210 of 231; 208 is 90.0%).
 - A long prompt (a pasted log with a question) spreads its weight over many words: a coding request may share too
   little of it.
