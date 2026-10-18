@@ -1006,8 +1006,8 @@ try {
     await waitFor(async () => (await api('state')).ok, 'Recall\'s endpoints with wrong types', 60000);
     await step('wrong types in the profile (one folder without the brackets, "yes" for a switch): Recall starts, says what to write, refuses searches, offers no tool', async () => {
         const s = await pageState();
-        const words = /^Coding-agent transcript folders \(transcriptFolders\) must be a list of folders in square brackets, such as \[".+"\] \(it is ".+", one folder without the brackets\)$/;
-        check('DSH starts Recall: its state names the first wrong setting in words and how to write it', words.test(s.problem?.text ?? '') && s.problem?.key === 'transcriptFolders' && s.problem?.live === true, json(s.problem));
+        const words = /^Coding-agent transcript folders \(transcriptFolders\) must be a list of folders in square brackets, such as \[".+"\] \(it is ".+", one folder without the brackets\); Let agents search past work \(tool\) is wrong too$/;
+        check('DSH starts Recall: its state names the first wrong setting in words and how to write it, and names the other one', words.test(s.problem?.text ?? '') && s.problem?.key === 'transcriptFolders' && s.problem?.live === true, json(s.problem));
         const plugins = await run.api('pluginManager/listPlugins', {});
         const entry = (plugins.value?.plugins ?? plugins.value ?? []).find?.((p) => /recall/.test(p?.name ?? p?.id ?? ''));
         console.log(`# DSH's plugin list has Recall as ${json(entry ?? plugins.value ?? plugins.error).slice(0, 300)}`);
@@ -1024,7 +1024,7 @@ try {
         const problem = page.locator('[data-suite-trouble="setting"]');
         await problem.waitFor({ state: 'visible', timeout: 20000 });
         const text = (await problem.innerText()).replace(/\n+/g, ' ');
-        check('the page names the setting, what to write, and where to change it', /Coding-agent transcript folders \(transcriptFolders\) must be a list of folders in square brackets/.test(text) && /one folder without the brackets/.test(text) && /Change it in Recall's settings in Plugins/.test(text), text);
+        check('the page names the setting, what to write, the other wrong one, and where to change them', /Coding-agent transcript folders \(transcriptFolders\) must be a list of folders in square brackets/.test(text) && /one folder without the brackets\); Let agents search past work \(tool\) is wrong too\./.test(text) && /Change it in Recall's settings in Plugins/.test(text), text);
         await shot(page, shots, 'wrong-type-light');
         check('no errors from the suite in the window', ours(window.errors).length === 0, ours(window.errors).join('\n'));
     }, async () => {

@@ -1030,7 +1030,7 @@ test('index: a folder that is gone keeps its turns and says so; a folder no long
     assert.equal(fresh.e.status().roots[0].state, 'ok');
 });
 
-test('index: a rebuild reads every file again and finds the same; a damaged or older index is set aside and built again', () => {
+test('index: a rebuild reads every file again and finds the same; a damaged index is set aside and built again; an older one is deleted and built again', () => {
     const h = buildHome();
     const first = engineAt(h.home);
     first.e.handle('configure', { sources: h.sources });
@@ -1047,8 +1047,8 @@ test('index: a rebuild reads every file again and finds the same; a damaged or o
     rmSync(`${file}-shm`, { force: true });
     writeFileSync(file, 'this is not a database at all, just bytes '.repeat(200));
     const again = engineAt(h.home);
-    assert.ok(again.notes.some((n) => n.kind === 'set-aside'));
-    assert.ok(existsSync(`${file}.old`));
+    assert.ok(again.notes.some((n) => n.kind === 'set-aside' && n.stale === false));
+    assert.ok(existsSync(`${file}.old`), 'a damaged index is kept beside the new one for a look');
     assert.ok(again.logs.some(([level, text]) => level === 'warn' && /could not be opened .* set aside/.test(text)));
     again.e.handle('configure', { sources: h.sources });
     again.drain();
@@ -1062,10 +1062,23 @@ test('index: a rebuild reads every file again and finds the same; a damaged or o
     db.close();
     const logs = [];
     const store = new Store(oldFile, sqlite, { log: (level, text) => logs.push([level, text]) });
-    assert.equal(store.setAside, true);
+    assert.equal(store.setAside, 'stale');
     assert.deepEqual(logs.map(([level]) => level), ['info']);
-    assert.match(logs[0][1], new RegExp(`the index is version 1, not ${SCHEMA_VERSION}`));
+    assert.match(logs[0][1], new RegExp(`^An index from another version of Recall \\(the index is version 1, not ${SCHEMA_VERSION}\\); it was deleted and a new one is built\\.$`));
+    // An older index holds only copies of what the files say: it is not kept, so its space goes back to the disk.
+    assert.equal(existsSync(`${oldFile}.old`), false);
+    assert.equal(store.space().vacuum, true, 'and the new one can give space back');
+    assert.equal(store.rowTotal(), 0);
     store.close();
+    // Through the engine: What happened says so.
+    const older = tempDir('recall-older');
+    const olderDb = new sqlite.DatabaseSync(join(older, 'index.sqlite'));
+    olderDb.exec('CREATE TABLE files (id INTEGER PRIMARY KEY); PRAGMA user_version = 3');
+    olderDb.close();
+    const upgraded = engineAt(older);
+    assert.ok(upgraded.notes.some((n) => n.kind === 'set-aside' && n.stale === true));
+    assert.equal(existsSync(join(older, 'index.sqlite.old')), false);
+    upgraded.e.close();
 });
 
 test('index: a folder taken out and a rebuild give their space back to the disk, a slice at a time with searches answered between; the size the page shows is the new one', () => {
@@ -1208,8 +1221,13 @@ test('settings: a value of the wrong type is named in words, like a wrong range:
     assert.deepEqual(wrong({ enabled: 'false' }), ['enabled', 'Recall on (enabled) must be true or false, written without quotes (it is "false", which is text)']);
     // A long value is cut, never pasted whole into the page.
     assert.ok(wrong({ handoffFolders: `~/${'x'.repeat(400)}` })[1].length < 400);
-    // The first wrong one in the page's order is the one named.
-    assert.equal(wrong({ tool: 'yes', transcriptFolders: '~/logs' })[0], 'transcriptFolders');
+    // The first wrong one in the page's order says what fits; the others are named, so one look shows all there is to fix.
+    assert.deepEqual(wrong({ tool: 'yes', transcriptFolders: '~/logs' }), ['transcriptFolders', `${t} must be a list of folders in square brackets, such as ["~/logs"] (it is "~/logs", one folder without the brackets); Let agents search past work (tool) is wrong too`]);
+    assert.equal(wrong({ tool: 'yes', sessions: 'on', handoffFolders: 'x' })[1], 'Search this DSH\'s sessions (sessions) must be true or false, written without quotes (it is "on", which is text); Handoff note folders (handoffFolders) and Let agents search past work (tool) are wrong too');
+    assert.equal(wrong({ enabled: 1, sessions: 1, sessionFolders: 1, transcriptFolders: 1, handoffFolders: 1, tool: 1 })[1], 'Recall on (enabled) must be true or false (it is 1, a number); Search this DSH\'s sessions (sessions) and 4 more are wrong too');
+    // DSH cuts a problem's words at 400 characters: after a long first one, the others are counted, never cut off.
+    const long = wrong({ transcriptFolders: `/${'x/'.repeat(80)}logs`, handoffFolders: 'notes', tool: 'yes' })[1];
+    assert.ok(long.length <= 400 && / are wrong too$/.test(long), long);
     assert.equal(indexing({ enabled: true }), true);
     for (const value of [false, 'yes', 'true', 1, undefined]) assert.equal(indexing({ enabled: value }), false, String(value));
 });
@@ -1407,8 +1425,10 @@ test('log: problems are gathered into one entry; a folder forgotten, a new index
     assert.match(problem.why, /^\/a\/one\.md: permission denied; \/a\/two\.md: it is gone; and 1 more\. Recall's page lists them under Index/);
     log.note({ kind: 'forgot', root: '/old/notes', files: 2, turns: 7 });
     assert.equal(journal.list()[0].why, 'It is no longer in Recall\'s settings, so what Recall read from it (2 files, 7 turns) was taken out of the index.');
-    log.note({ kind: 'set-aside' });
-    assert.equal(journal.list()[0].text, 'Built a new index');
+    log.note({ kind: 'set-aside', stale: false });
+    assert.deepEqual([journal.list()[0].text, journal.list()[0].why], ['Built a new index', 'The old index could not be used (it was damaged), so it was set aside as index.sqlite.old and every file is read again. Searches find more as it goes.']);
+    log.note({ kind: 'set-aside', stale: true });
+    assert.deepEqual([journal.list()[0].text, journal.list()[0].why], ['Built a new index', 'The index was made by another version of Recall, so it was deleted and every file is read again. Searches find more as it goes.']);
     log.note({ kind: 'problem', path: '/b/x.jsonl', error: 'it is a folder' });
     log.stop();
     assert.equal(journal.list()[0].text, 'Could not read x.jsonl');

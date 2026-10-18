@@ -77,7 +77,7 @@ export class Engine {
         this.clock = clock;
         this.note = note;
         this.store = new Store(file, sqlite, { log });
-        if (this.store.setAside) note({ kind: 'set-aside' });
+        if (this.store.setAside) note({ kind: 'set-aside', stale: this.store.setAside === 'stale' });
         this.indexer = new Indexer({ store: this.store, log, note, now });
         this.facetCache = undefined;
         this.busySince = 0;

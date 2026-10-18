@@ -145,6 +145,27 @@ test('plugin: one folder without the brackets, or "yes" for a switch: Recall sta
     assert.deepEqual([state.history[0].text, state.history[0].why], ['Settings fixed: Recall is working again', 'Its settings were right when DSH started it again.']);
 });
 
+test('plugin: two starts in one millisecond keep both entries of What happened (a wrong setting, then its fix)', async (t) => {
+    const home = tempDir('recall-plugin-same-ms');
+    process.env.RECALL_TEST_DSH_HOME = home;
+    // The suite's log names an entry by its millisecond and a count from each start: frozen, the clock gives both the same.
+    const realNow = Date.now;
+    const frozen = realNow();
+    t.after(() => { Date.now = realNow; });
+    Date.now = () => frozen;
+    let dsh = standInDsh();
+    recall.apply(dsh.ctx, configOf({ tool: 'yes' }));
+    dsh.stop();
+    dsh = standInDsh();
+    t.after(() => dsh.stop());
+    recall.apply(dsh.ctx, configOf());
+    Date.now = realNow;
+    const { history } = await dsh.remote().state();
+    assert.deepEqual(history.slice(0, 2).map((e) => e.text), ['Settings fixed: Recall is working again', 'Started with a wrong setting; Recall waits until it is fixed']);
+    assert.notEqual(history[0].id, history[1].id);
+    assert.ok(history[0].at > history[1].at, 'the fix is timed after the entry before it');
+});
+
 test('plugin: every setting wrong at once still starts; enabled written as text keeps Recall idle with no index, named as a profile setting', async (t) => {
     const home = tempDir('recall-plugin-idle');
     process.env.RECALL_TEST_DSH_HOME = home;
@@ -154,7 +175,7 @@ test('plugin: every setting wrong at once still starts; enabled written as text 
     assert.doesNotThrow(() => recall.apply(dsh.ctx, config));
     const remote = dsh.remote();
     const state = await remote.state();
-    assert.deepEqual(state.problem, { text: 'Recall on (enabled) must be true or false, written without quotes (it is "yes", which is text)', key: 'enabled', live: false });
+    assert.deepEqual(state.problem, { text: 'Recall on (enabled) must be true or false, written without quotes (it is "yes", which is text); Search this DSH\'s sessions (sessions) and 4 more are wrong too', key: 'enabled', live: false });
     assert.notEqual(state.thread.state, 'running');
     assert.equal(state.index, undefined);
     await assert.rejects(remote.search({ text: 'x' }), /Recall is waiting for a setting to be fixed: Recall on \(enabled\)/);

@@ -84,8 +84,10 @@ const likePrefix = (folder) => `${folder.replace(/[\\%_]/g, (c) => `\\${c}`)}/%`
 
 export class Store {
     /**
-     * Open (or make) the index at `file`. A file that is not an index of this
-     * version is set aside (`<file>.old`) and a new one made.
+     * Open (or make) the index at `file`. A damaged index is set aside
+     * (`<file>.old`, one copy: the next replaces it) and an index of another
+     * version deleted (it holds only copies of what the files say), and a new
+     * one made.
      * @param {string} file
      * @param {{ DatabaseSync: Function }} sqlite - node:sqlite.
      * @param {{ log?: (level: string, text: string) => void }} [options]
@@ -143,11 +145,14 @@ export class Store {
             return opened(tryOpen());
         } catch (error) {
             if (!existsSync(this.file)) throw error;
-            // A broken or older index: set it aside and build a new one (the files are the truth).
-            this.log(error.stale ? 'info' : 'warn', `${error.stale ? 'An older index' : 'The index could not be opened'} (${String(error?.message ?? error).slice(0, 200)}); it was set aside and a new one is built.`);
+            // A broken index is set aside for a look; one of another version goes, so its space goes back to the disk.
+            // Either way a new one is built: the files are the truth.
+            this.log(error.stale ? 'info' : 'warn', `${error.stale ? 'An index from another version of Recall' : 'The index could not be opened'} (${String(error?.message ?? error).slice(0, 200)}); ${error.stale ? 'it was deleted' : 'it was set aside'} and a new one is built.`);
             for (const tail of ['-wal', '-shm']) rmSync(`${this.file}${tail}`, { force: true });
-            renameSync(this.file, `${this.file}.old`);
-            this.setAside = true;
+            if (error.stale) rmSync(this.file, { force: true });
+            else renameSync(this.file, `${this.file}.old`);
+            /** Why a new index was made: 'stale' (another version's, deleted) or 'damaged' (set aside). */
+            this.setAside = error.stale ? 'stale' : 'damaged';
             return opened(tryOpen());
         }
     }

@@ -101,7 +101,8 @@ export async function pageState({ config, check, thread, status, lastStatus, sou
  * - `forgot`: a folder no longer searched, and how much was taken out;
  * - `problem`: files that could not be read (gathered for two seconds, one entry);
  * - `shrunk`: the index gave space back to the disk (after a take-out or a rebuild);
- * - `set-aside`: the old index could not be used, so a new one is built;
+ * - `set-aside`: the old index could not be used (damaged: set aside; another
+ *   version's: deleted), so a new one is built;
  * - `caught-up`: the first full read after a start, after a rebuild or a new
  *   folder, or a large catch-up (20 files or more); small ones are not logged.
  */
@@ -162,7 +163,9 @@ export class NoteLog {
                 this.journal.add({
                     kind: 'set-aside',
                     text: 'Built a new index',
-                    why: 'The old index could not be used (it was damaged, or from another version of Recall), so it was set aside as index.sqlite.old and every file is read again. Searches find more as it goes.',
+                    why: note.stale
+                        ? 'The index was made by another version of Recall, so it was deleted and every file is read again. Searches find more as it goes.'
+                        : 'The old index could not be used (it was damaged), so it was set aside as index.sqlite.old and every file is read again. Searches find more as it goes.',
                     state: 'done',
                 });
                 this.expect = 'rebuild';

@@ -86,7 +86,16 @@ export function apply(ctx, config) {
     // Its folder in DSH's data folder, as DSH resolves it (DSH_HOME, else ~/.dsh).
     const dir = dshHomePath('recall');
     const sessionsDir = dshHomePath('sessions');
-    const journal = new Journal(join(dir, 'events.jsonl'), { logger, onChange: bump });
+    // The suite's log names an entry by its millisecond and a count that starts again at each start, and keeps one
+    // entry per name: an entry made in the same millisecond as the last one of the start before would be lost. So each
+    // entry is timed after the newest one already in the log (unless that one is far ahead: a clock set back).
+    let journal;
+    const after = () => {
+        const now = Date.now();
+        const newest = journal?.list({ limit: 1 })[0]?.at ?? 0;
+        return newest >= now && newest - now < 60_000 ? newest + 1 : now;
+    };
+    journal = new Journal(join(dir, 'events.jsonl'), { logger, onChange: bump, now: after });
     const notes = new NoteLog({ journal });
 
     // A wrong setting at the start (the profile edited while DSH was stopped, or an edit that made DSH start Recall

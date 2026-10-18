@@ -64,8 +64,9 @@ Some things are left out on purpose:
   says how many files of how many (*Reading new and changed files: 1,200
   of 10,002 read…*), or which folder it is still looking through.
 - **An index from an earlier Recall** is built again once, at the first
-  start after an update: it now keeps how each turn ended. Searches find
-  more as it goes.
+  start after an update: it now keeps how each turn ended. The old index
+  is deleted, so its space goes back to the disk, and searches find more
+  as the new one is built.
 
 ### How each turn ended
 
@@ -307,8 +308,11 @@ for a switch, a number written as text.
 - Its page says which setting is wrong, what it must be and what it is,
   such as *Coding-agent transcript folders (transcriptFolders) must be a
   list of folders in square brackets, such as ["~/agent-logs"] (it is
-  "~/agent-logs", one folder without the brackets)*. What happened says
-  it too, once, also when the profile was edited while DSH was stopped.
+  "~/agent-logs", one folder without the brackets)*. When more than one
+  is wrong, the others are named after it (*…; Let agents search past
+  work (tool) is wrong too*), and each says what fits once the one before
+  is fixed. What happened says it too, once, also when the profile was
+  edited while DSH was stopped.
 - **Open Recall's settings** takes you to that setting, flagged in the
   form.
 - Once you fix it, in the form or in the profile, Recall works again at
@@ -325,7 +329,7 @@ mode 600:
 | File | What |
 | --- | --- |
 | `recall/index.sqlite` (and its `-wal` and `-shm`) | The index: one row per turn or section, with what it kept (above), and where each file was read up to. About 2.4 KB a turn (290.4 MB for 120,519 turns). Space that turns taken out leave in it goes back to the disk (Keeping up, above). |
-| `recall/index.sqlite.open` | Written while the index is open. If DSH stops without closing it, the next start checks the index in full (SQLite's quick check). An index that fails the check, or one from an older Recall, is set aside as `index.sqlite.old` and built again from the files. |
+| `recall/index.sqlite.open` | Written while the index is open. If DSH stops without closing it, the next start checks the index in full (SQLite's quick check). An index that fails the check is set aside as `index.sqlite.old` (one copy: the next replaces it) and built again from the files. |
 | `recall/events.jsonl` | What happened. It keeps the last 400 entries and rewrites itself past 1 MB. |
 
 The index holds only copies. The sessions, transcripts and notes are the
@@ -381,8 +385,8 @@ restart DSH Desktop:
 git -C ~/.dsh-plugins/deepseek-plugins restore --source recall-v1.0.0 -- plugins/recall
 ```
 
-If the index format changed between the two, Recall sets the newer index
-aside and builds its own.
+If the index format changed between the two, Recall builds its index
+again from the files.
 
 To remove Recall, follow [Remove a plugin](../../README.md#remove-a-plugin)
 for `dsh-plugin-recall` (row `recall`). Then delete `recall/` in DSH's data

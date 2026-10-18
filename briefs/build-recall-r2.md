@@ -180,8 +180,25 @@ the form), then the three builds again, `npm test`, DESIGN.md "Before you push".
   (450 sessions, some 5,000 turns, 15 MB or so of index): enough rows to pass the shrink's 4,000-row
   floor and its 5 MB note, written in a quarter of a second.
 
+- When more than one setting is wrong, the first says what fits and the others are named after it
+  ("…; Let agents search past work (tool) is wrong too"), so one look shows all there is to fix;
+  each says what fits in turn. The kit shows one problem; Recall's words carry the rest, counted
+  instead of named when DSH's 400-character cut would reach them.
+- An index from another version of Recall is deleted, not kept as `index.sqlite.old`: it holds only
+  copies of what the files say, and after the round-1 index (290 MB for the judge) a kept copy
+  would hold the space F6 is about. A damaged index is still set aside (one copy) for a look.
+- The suite's log (`lib/shared/journal.js`, the kit's) names an entry `<ms>-<count>` with the count
+  starting again at each start, and keeps one entry per name: a start's first entry in the same
+  millisecond as the start before's lost one of them (the plugin test failed about one run in five
+  under load; a loop of starts lost one in two). Recall times each entry after the newest one in
+  its log (`now` option, its own code); the kit's journal is unchanged and the other plugins keep
+  the flaw. A fix belongs in the kit.
+
 ## Gotchas
 
+- DSH's hot reload (`dsh-hmr`, chokidar) watches the plugin folders a throwaway DSH loads: an edit
+  under `plugins/recall` while the real-DSH test runs reloads Recall in the middle of the run (run 2
+  on 0.2.1-rc.1 failed its off-and-on check that way, 7:14 PM PDT). Edit only between runs.
 - SQLite's `auto_vacuum` must be set before `journal_mode = WAL` on a new file: WAL mode writes the
   header, after which the setting is ignored without an error.
 
