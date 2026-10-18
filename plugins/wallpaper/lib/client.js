@@ -14,7 +14,6 @@ window.__ModuleLoader__.load({
 		const { useState, useEffect, useRef, useSyncExternalStore, Fragment } = React;
 		const NS = "wallpaper";
 		const API = (typeof window !== "undefined" && window.__WALLPAPER_API__) || "/api/wallpaper/"; // dev hook: point a test page at a local server
-		const OLD_LOCALE_ID = "en-x-fleet"; // the locale an early Fleet Shell build switched DSH to (see installHeadline)
 
 		// ------------------------------------------------------------ stores
 		const createStore = (init) => {
@@ -27,7 +26,7 @@ window.__ModuleLoader__.load({
 			};
 		};
 		const useStore = (s) => useSyncExternalStore(s.sub, s.get, s.get);
-		const DEFAULT_PREFS = { headline: "Quit fucking around and do something", wallpaperCollection: "cars", wallpaperPinned: null, wallpaperRotate: null, wallpaperRotateMin: 60, wallpaperOpacity: 90, wallpaperFrost: 4, glassBlur: 22, glassTint: 55, motion: true };
+		const DEFAULT_PREFS = { headline: "", wallpaperCollection: null, wallpaperPinned: null, wallpaperRotate: null, wallpaperRotateMin: 60, wallpaperOpacity: 90, wallpaperFrost: 4, glassBlur: 22, glassTint: 55, motion: true };
 		// Wallpaper rotation stops in minutes; prefs.wallpaperRotate is "off" or null (rotate).
 		const ROTATE_STOPS = [1, 5, 15, 30, 60, 120, 240, 480, 720, 1440];
 		const rotateMinOf = (p) => (p?.wallpaperRotate === "off" ? 0 : typeof p?.wallpaperRotate === "string" ? (p.wallpaperRotate === "daily" ? 1440 : 60) : (Number(p?.wallpaperRotateMin) || 60));
@@ -256,10 +255,6 @@ window.__ModuleLoader__.load({
 			style.setAttribute("data-plugin", "dsh-plugin-wallpaper");
 			style.textContent = CSS;
 			document.head.appendChild(style);
-			const fonts = document.createElement("link");
-			fonts.rel = "stylesheet"; fonts.href = "https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap";
-			fonts.setAttribute("data-plugin", "dsh-plugin-wallpaper");
-			document.head.appendChild(fonts);
 			const wall = document.createElement("div");
 			wall.id = "wp-wall"; wall.setAttribute("aria-hidden", "true");
 			wall.innerHTML = '<div class="wp-wl"></div><div class="wp-wl"></div><div class="wp-scrim"></div>';
@@ -295,14 +290,35 @@ window.__ModuleLoader__.load({
 			// A colour's tone follows the colour mode: re-apply when DSH switches between light and dark.
 			const themeWatch = new MutationObserver(apply);
 			themeWatch.observe(document.body, { attributes: true, attributeFilter: ["data-ds-dark-theme"] });
-			return () => { unsub(); clearInterval(tick); themeWatch.disconnect(); style.remove(); fonts.remove(); wall.remove(); document.body.classList.remove("wp-on", "wp-still"); ["--wp-op", "--wp-frost", "--wp-blur", "--wp-tint"].forEach((k) => document.body.style.removeProperty(k)); };
+			return () => { unsub(); clearInterval(tick); themeWatch.disconnect(); style.remove(); wall.remove(); document.body.classList.remove("wp-on", "wp-still"); ["--wp-op", "--wp-frost", "--wp-blur", "--wp-tint"].forEach((k) => document.body.style.removeProperty(k)); };
 		};
 		// The headline is drawn with CSS over DSH's own hero text; an empty headline leaves DSH's own text alone.
-		// Nothing here writes DSH settings, except one undo: an early Fleet Shell build switched DSH to a custom locale
-		// to change this text, and DSH saved that by re-writing the whole profile patch. If that locale is still active,
-		// the language goes back to English once.
+		// Nothing here writes DSH settings.
 		const cssString = (t) => '"' + String(t).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, " ") + '"';
-		const installHeadline = (ctx) => {
+		// While Wallpaper is on, DSH's secondary and tertiary labels are deepened toward the label colour
+		// (DESIGN.md section 3), so its own pages and every plugin built on its tokens read on glass in light
+		// mode. The dark values pass DSH's own statics through unchanged. The layer is removed when Wallpaper
+		// turns off.
+		const GLASS_LABEL_OVERRIDES = {
+			"--dsw-alias-label-secondary": {
+				light: "color-mix(in srgb, var(--dsw-static-neutral-bluish-700) 80%, var(--dsw-static-neutral-bluish-1000))",
+				dark: "var(--dsw-static-neutral-bluish-300)",
+			},
+			"--dsw-alias-label-tertiary": {
+				light: "color-mix(in srgb, var(--dsw-static-neutral-bluish-600) 75%, var(--dsw-static-neutral-bluish-1000))",
+				dark: "var(--dsw-static-neutral-bluish-400)",
+			},
+		};
+		const installGlassLabels = (ctx) => {
+			let dispose = null;
+			try {
+				const theme = ctx?.get?.("theme");
+				if (theme && typeof theme.overrideTokens === "function") dispose = theme.overrideTokens("dsh-plugin-wallpaper", GLASS_LABEL_OVERRIDES);
+				else console.warn("wallpaper: theme.overrideTokens unavailable; labels stay as DSH draws them");
+			} catch (e) { console.warn("wallpaper: label deepen failed", e); }
+			return () => { try { dispose?.(); } catch (e) { console.warn("wallpaper: label deepen removal failed", e); } };
+		};
+		const installHeadline = () => {
 			const apply = () => {
 				const text = stateS.get()?.prefs?.headline;
 				document.body.classList.toggle("wp-headline", !!text);
@@ -311,11 +327,6 @@ window.__ModuleLoader__.load({
 			};
 			const unsub = stateS.sub(apply);
 			apply();
-			try {
-				const loc = ctx.locale;
-				const active = (loc?.getSnapshot?.() ?? loc?.snapshot)?.active;
-				if (loc && (loc.preference === OLD_LOCALE_ID || active === OLD_LOCALE_ID)) loc.setLocale("en");
-			} catch (e) { console.warn("wallpaper: locale reset", e); }
 			return () => { unsub(); document.body.classList.remove("wp-headline"); document.body.style.removeProperty("--wp-headline"); };
 		};
 
@@ -323,8 +334,10 @@ window.__ModuleLoader__.load({
 		// Tokens follow DSH's colour mode (data-ds-dark-theme on <body>). Rules on DSH's own surfaces only make them
 		// transparent or frosted; nothing is hidden except DSH's hero text while a headline is set.
 		const CSS = `
-body.wp-on{--wp-ground:#0a0d0c;--wp-text:#ECEAE4;--wp-strong:#DADDD7;--wp-soft:#C9CDC7;--wp-meta:#A9AEA8;--wp-faint:#8E948E;--wp-accent:#7FA7F5;--wp-accent-text:#C9D8FA;--wp-accent-strong:#E4ECFD;--wp-warn-text:#E8C48C;--wp-danger-text:#F2ABA2;--wp-glass:rgba(14,18,17,var(--wp-tint,.55));--wp-conv:rgba(10,13,12,calc(var(--wp-tint,.55) + .2));--wp-pop:rgba(20,24,23,.95);--wp-modal:rgba(16,20,19,.82);--wp-shadow:rgba(0,0,0,.45);--wp-backdrop:rgba(6,8,8,.45);--wp-headline-shadow:rgba(0,0,0,.35);--wp-scrim:linear-gradient(180deg,rgba(6,8,8,.35),rgba(6,8,8,.15) 40%,rgba(6,8,8,.45));--wp-line:rgba(255,255,255,.09);--wp-ease:cubic-bezier(.2,.7,.2,1);--wp-w04:rgba(255,255,255,.04);--wp-w05:rgba(255,255,255,.05);--wp-w06:rgba(255,255,255,.06);--wp-w07:rgba(255,255,255,.07);--wp-w08:rgba(255,255,255,.08);--wp-w10:rgba(255,255,255,.1);--wp-w18:rgba(255,255,255,.18);--wp-w20:rgba(255,255,255,.2);--wp-a08:rgba(127,167,245,.08);--wp-a14:rgba(127,167,245,.14);--wp-a35:rgba(127,167,245,.35);--wp-a45:rgba(127,167,245,.45);--wp-a50:rgba(127,167,245,.5);--wp-a70:rgba(127,167,245,.7);--wp-d12:rgba(242,120,107,.12);--wp-d45:rgba(242,120,107,.45);background:var(--wp-ground)!important}
-body.wp-on:not([data-ds-dark-theme]){--wp-ground:#E7E7E2;--wp-text:#191E1B;--wp-strong:#232926;--wp-soft:#38403B;--wp-meta:#55605A;--wp-faint:#68716B;--wp-accent:#3F6FD8;--wp-accent-text:#2A56BE;--wp-accent-strong:#1C45A8;--wp-warn-text:#8A5410;--wp-danger-text:#B3261E;--wp-glass:rgba(250,250,246,var(--wp-tint,.55));--wp-conv:rgba(250,250,246,calc(var(--wp-tint,.55) + .2));--wp-pop:rgba(250,250,247,.97);--wp-modal:rgba(250,250,247,.9);--wp-shadow:rgba(0,0,0,.16);--wp-backdrop:rgba(40,44,42,.22);--wp-headline-shadow:rgba(255,255,255,.55);--wp-scrim:linear-gradient(180deg,rgba(255,255,255,.28),rgba(255,255,255,.1) 40%,rgba(255,255,255,.32));--wp-line:rgba(0,0,0,.1);--wp-w04:rgba(20,26,22,0.044);--wp-w05:rgba(20,26,22,0.055);--wp-w06:rgba(20,26,22,0.066);--wp-w07:rgba(20,26,22,0.077);--wp-w08:rgba(20,26,22,0.088);--wp-w10:rgba(20,26,22,0.110);--wp-w18:rgba(20,26,22,0.198);--wp-w20:rgba(20,26,22,0.220);--wp-a08:rgba(63,111,216,.08);--wp-a14:rgba(63,111,216,.14);--wp-a35:rgba(63,111,216,.35);--wp-a45:rgba(63,111,216,.45);--wp-a50:rgba(63,111,216,.5);--wp-a70:rgba(63,111,216,.7);--wp-d12:rgba(179,38,30,.12);--wp-d45:rgba(179,38,30,.45)}
+body.wp-on{--wp-ground:#0a0d0c;--wp-text:#ECEAE4;--wp-strong:#DADDD7;--wp-soft:#C9CDC7;--wp-meta:#A9AEA8;--wp-accent:#7FA7F5;--wp-accent-text:#C9D8FA;--wp-accent-strong:#E4ECFD;--wp-warn-text:#E8C48C;--wp-danger-text:#F2ABA2;--wp-glass:rgba(14,18,17,var(--wp-tint,.55));--wp-conv:rgba(10,13,12,calc(var(--wp-tint,.55) + .2));--wp-pop:rgba(20,24,23,.95);--wp-modal:rgba(16,20,19,.82);--wp-shadow:rgba(0,0,0,.45);--wp-backdrop:rgba(6,8,8,.45);--wp-headline-shadow:rgba(0,0,0,.35);--wp-scrim:linear-gradient(180deg,rgba(6,8,8,.35),rgba(6,8,8,.15) 40%,rgba(6,8,8,.45));--wp-line:rgba(255,255,255,.09);--wp-ease:cubic-bezier(.2,.7,.2,1);--wp-w04:rgba(255,255,255,.04);--wp-w05:rgba(255,255,255,.05);--wp-w06:rgba(255,255,255,.06);--wp-w07:rgba(255,255,255,.07);--wp-w08:rgba(255,255,255,.08);--wp-w10:rgba(255,255,255,.1);--wp-w18:rgba(255,255,255,.18);--wp-w20:rgba(255,255,255,.2);--wp-a08:rgba(127,167,245,.08);--wp-a14:rgba(127,167,245,.14);--wp-a35:rgba(127,167,245,.35);--wp-a45:rgba(127,167,245,.45);--wp-a50:rgba(127,167,245,.5);--wp-a70:rgba(127,167,245,.7);--wp-d12:rgba(242,120,107,.12);--wp-d45:rgba(242,120,107,.45);background:var(--wp-ground)!important}
+/* Light text follows DESIGN.md section 3: secondary and tertiary deepened toward DSH's label colour (the 0.2.1
+   statics mixed 80% and 75% with label-primary), so Wallpaper's own labels and the sidebar tiles read on glass. */
+body.wp-on:not([data-ds-dark-theme]){--wp-ground:#E7E7E2;--wp-text:#191E1B;--wp-strong:#232926;--wp-soft:#38403B;--wp-meta:#51555A;--wp-accent:#3F6FD8;--wp-accent-text:#2A56BE;--wp-accent-strong:#1C45A8;--wp-warn-text:#8A5410;--wp-danger-text:#B3261E;--wp-glass:rgba(250,250,246,var(--wp-tint,.55));--wp-conv:rgba(250,250,246,calc(var(--wp-tint,.55) + .2));--wp-pop:rgba(250,250,247,.97);--wp-modal:rgba(250,250,247,.9);--wp-shadow:rgba(0,0,0,.16);--wp-backdrop:rgba(40,44,42,.22);--wp-headline-shadow:rgba(255,255,255,.55);--wp-scrim:linear-gradient(180deg,rgba(255,255,255,.28),rgba(255,255,255,.1) 40%,rgba(255,255,255,.32));--wp-line:rgba(0,0,0,.1);--wp-w04:rgba(20,26,22,0.044);--wp-w05:rgba(20,26,22,0.055);--wp-w06:rgba(20,26,22,0.066);--wp-w07:rgba(20,26,22,0.077);--wp-w08:rgba(20,26,22,0.088);--wp-w10:rgba(20,26,22,0.110);--wp-w18:rgba(20,26,22,0.198);--wp-w20:rgba(20,26,22,0.220);--wp-a08:rgba(63,111,216,.08);--wp-a14:rgba(63,111,216,.14);--wp-a35:rgba(63,111,216,.35);--wp-a45:rgba(63,111,216,.45);--wp-a50:rgba(63,111,216,.5);--wp-a70:rgba(63,111,216,.7);--wp-d12:rgba(179,38,30,.12);--wp-d45:rgba(179,38,30,.45)}
 #wp-wall{position:fixed;inset:0;z-index:0;pointer-events:none;background:var(--wp-ground);overflow:hidden}
 #wp-wall .wp-wl{position:absolute;inset:-32px;background-size:cover;background-position:center;filter:blur(var(--wp-frost,4px));opacity:0;transition:opacity 1.1s ease}
 #wp-wall .wp-wl.on{opacity:var(--wp-op,.9)}
@@ -332,42 +345,45 @@ body.wp-on:not([data-ds-dark-theme]){--wp-ground:#E7E7E2;--wp-text:#191E1B;--wp-
 #wp-wall .wp-scrim{position:absolute;inset:0;background:var(--wp-scrim)}
 body.wp-on #root{position:relative;z-index:1}
 body.wp-on{--wp-gap:12px;--wp-hair:1px solid var(--wp-line)}
-/* DSH's frame goes transparent so the wallpaper shows through */
-body.wp-on [class*="_frame"],body.wp-on [class*="_centerCol"],body.wp-on [class*="_sidebarCol"],body.wp-on [class*="_rightbarCol"],body.wp-on [data-slot="main"],body.wp-on [data-slot="main.conversation"]>div{background:transparent!important;border:0!important;box-shadow:none!important}
-body.wp-on [class*="_sidebarCol"],body.wp-on [class*="_rightbarCol"]{overflow:hidden}
-body.wp-on [class*="_6Qf49G_handle"]{background:transparent!important;border:0!important;box-shadow:none!important}
-body.wp-on [class*="_6Qf49G_handle"]::before,body.wp-on [class*="_6Qf49G_handle"]::after{display:none!important}
+/* DSH's frame goes transparent so the wallpaper shows through. The frame and its columns are named by the word
+   of their class under the root outlet — never by a hash (the npm builds hash the same classes differently),
+   and never the bare word, which also matches attachment frames, the subagent card and document previews. */
+body.wp-on [data-slot="root"]>[class*="_frame"],body.wp-on [data-slot="root"]>[class*="_frame"]>:is([class*="_sidebarCol"],[class*="_centerCol"],[class*="_rightbarCol"]),body.wp-on [data-slot="main"],body.wp-on [data-slot="main.conversation"]>div{background:transparent!important;border:0!important;box-shadow:none!important}
+body.wp-on [data-slot="root"]>[class*="_frame"]>:is([class*="_sidebarCol"],[class*="_rightbarCol"]){overflow:hidden}
+body.wp-on [data-slot="root"] [class*="_handle"]{background:transparent!important;border:0!important;box-shadow:none!important}
+body.wp-on [data-slot="root"] [class*="_handle"]::before,body.wp-on [data-slot="root"] [class*="_handle"]::after{display:none!important}
 /* sidebar: one frosted card */
 body.wp-on [data-slot="sidebar"]>div{background:var(--wp-glass)!important;backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);-webkit-backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);border:var(--wp-hair)!important;border-radius:18px;margin:var(--wp-gap) 0 var(--wp-gap) var(--wp-gap);height:calc(100% - 2 * var(--wp-gap))!important;width:calc(100% - var(--wp-gap))!important;box-sizing:border-box;overflow:hidden}
 body.wp-on [data-slot="sidebar"]>div>*{min-width:0;max-width:100%}
 body.wp-on [data-slot="sidebar"] [class*="_footArea"]{border:0!important}
 /* DSH's list fades into its own opaque background at the bottom; on glass that fade is a dark bar, so it goes */
-body.wp-on [data-slot="sidebar.workspaces"] [class*="_fade"]{background:none!important}
+body.wp-on [data-slot="sidebar"] [class*="_fade"]{background:none!important}
 body.wp-on [data-slot="sidebar"] [class*="_footArea"]::before,body.wp-on [data-slot="sidebar"] [class*="_footArea"]::after{display:none!important}
-/* main card: the conversation (not the empty hero) */
+/* main card: the conversation. DSH stamps the phase on its root (hero, settling, active), so "a session is
+   open" reads off the attribute — no :has() over the conversation subtree, which would restyle all of it on
+   every streamed token. */
 body.wp-on [data-slot="main.conversation"]>div{margin:var(--wp-gap);height:calc(100% - 2 * var(--wp-gap))!important;border-radius:18px;box-sizing:border-box;overflow:hidden}
-body.wp-on [data-slot="main.conversation"]>div:has([data-slot="conversation.session"] [class*="_viewArea"]){background:var(--wp-conv)!important;backdrop-filter:blur(var(--wp-blur,22px));-webkit-backdrop-filter:blur(var(--wp-blur,22px));border:var(--wp-hair)!important}
+body.wp-on [data-slot="main.conversation"]>div:is([data-phase="active"],[data-phase="settling"]){background:var(--wp-conv)!important;backdrop-filter:blur(var(--wp-blur,22px));-webkit-backdrop-filter:blur(var(--wp-blur,22px));border:var(--wp-hair)!important}
 body.wp-on header[class*="_header"]{background:transparent!important;border:0!important;box-shadow:none!important}
-body.wp-on [data-slot="main.conversation"]>div:has([data-slot="conversation.session"] [class*="_viewArea"]) header[class*="_header"]{background-image:linear-gradient(var(--wp-w08),var(--wp-w08))!important;background-size:calc(100% - 32px) 1px!important;background-position:center bottom!important;background-repeat:no-repeat!important}
-body.wp-on [data-slot="main.conversation"] [class*="_body"]{background:transparent!important;border:0!important;margin:0!important}
-/* right dock card, only while open */
-body.wp-on [data-slot="rightbar"] [class*="_tabHost"]{background:transparent!important;border:0!important}
-body.wp-on [data-slot="rightbar"] [class*="irMxjq_panel"]:not([class*="_panelBody"]){background:var(--wp-glass)!important;backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);-webkit-backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);border:var(--wp-hair)!important;border-radius:18px;margin:var(--wp-gap) var(--wp-gap) var(--wp-gap) 0;height:calc(100% - 2 * var(--wp-gap))!important;width:calc(100% - var(--wp-gap))!important;box-sizing:border-box;overflow:hidden}
-body.wp-on [data-rightbar-collapsed="true"] [data-slot="rightbar"] [class*="irMxjq_panel"]{border:0!important;background:transparent!important;margin:0!important;backdrop-filter:none!important}
-body.wp-on [data-slot="rightbar"] [class*="_tabLayout"] *{border-color:var(--wp-w07)}
-/* composer: frosted, with a focus ring */
-body.wp-on [class*="yhfFVG_card"],body.wp-on [data-slot="conversation.composer.bar"] [class*="_card"]{background:var(--wp-glass)!important;backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);-webkit-backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);border:1px solid var(--wp-w10)!important;border-radius:22px!important;transition:border-color .2s ease}
-body.wp-on [class*="yhfFVG_card"]:focus-within{border-color:var(--wp-a50)!important}
+body.wp-on [data-slot="main.conversation"]>div:is([data-phase="active"],[data-phase="settling"]) header[class*="_header"]{background-image:linear-gradient(var(--wp-w08),var(--wp-w08))!important;background-size:calc(100% - 32px) 1px!important;background-position:center bottom!important;background-repeat:no-repeat!important}
+/* right dock card, only while open. The dock panel is the direct child of DSH's rightbar.session outlet in
+   both DSH versions; the collapsed state comes from the frame's own attribute. */
+body.wp-on [data-slot="rightbar.session"]>[class*="_panel"]:not([class*="_panelBody"]){background:var(--wp-glass)!important;backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);-webkit-backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);border:var(--wp-hair)!important;border-radius:18px;margin:var(--wp-gap) var(--wp-gap) var(--wp-gap) 0;height:calc(100% - 2 * var(--wp-gap))!important;width:calc(100% - var(--wp-gap))!important;box-sizing:border-box;overflow:hidden}
+body.wp-on [data-rightbar-collapsed="true"] [data-slot="rightbar.session"]>[class*="_panel"]{border:0!important;background:transparent!important;margin:0!important;backdrop-filter:none!important}
+/* composer: frosted, with a focus ring. DSH marks its composer card with data-composer-card; the hero's
+   workspace chip carries the same mark plus its own trigger class and keeps DSH's look. */
+body.wp-on [data-slot="conversation.composer.bar"] [data-composer-card]:not([class*="WorkspaceTrigger"]){background:var(--wp-glass)!important;backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);-webkit-backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);border:1px solid var(--wp-w10)!important;border-radius:22px!important;transition:border-color .2s ease}
+body.wp-on [data-slot="conversation.composer.bar"] [data-composer-card]:not([class*="WorkspaceTrigger"]):focus-within{border-color:var(--wp-a50)!important}
 /* hero: the headline over DSH's own hero text, while one is set */
 body.wp-on [class*="_composerHero"]{container-type:inline-size}
 body.wp-on.wp-headline [class*="_titleGroup"]>span:first-child{font-size:0!important;line-height:0;display:block;flex:1 1 auto;min-width:0;width:100%;text-align:center}
-body.wp-on.wp-headline [class*="_titleGroup"]>span:first-child::after{content:var(--wp-headline);font-family:Geist,system-ui,sans-serif;font-size:clamp(30px,4.2vw,52px);line-height:1.04;font-weight:600;letter-spacing:-.035em;color:var(--wp-text);text-shadow:0 2px 24px var(--wp-headline-shadow);display:block;width:min(100%,900px);margin-inline:auto;text-align:center;text-wrap:balance;white-space:normal}
+body.wp-on.wp-headline [class*="_titleGroup"]>span:first-child::after{content:var(--wp-headline);font-family:var(--dsw-font-family,system-ui,sans-serif);font-size:clamp(30px,4.2vw,52px);line-height:1.04;font-weight:600;letter-spacing:-.035em;color:var(--wp-text);text-shadow:0 2px 24px var(--wp-headline-shadow);display:block;width:min(100%,900px);margin-inline:auto;text-align:center;text-wrap:balance;white-space:normal}
 @container (max-width: 640px){body.wp-on.wp-headline [class*="_titleGroup"]>span:first-child::after{font-size:clamp(20px,6.4cqw,40px)}}
 body.wp-on [class*="_previewBadge"],body.wp-on [class*="_fishHitbox"]{display:none!important}
 /* collapsed rail: a slimmer card */
 body.wp-on [data-slot="sidebar"]>div[class*="_collapsed"]{padding-left:4px!important;padding-right:4px!important;align-items:center}
-/* DSH's panel list as a compact menu of tiles, three to a row. Every entry stays (DSH's, Fleet's, Projects', any
-   plugin's); only the layout changes. Long names take two lines. */
+/* DSH's panel list as a compact menu of tiles, three to a row. Every entry stays (DSH's and every plugin's);
+   only the layout changes. Long names take two lines. */
 body.wp-on nav[class*="_panelList"]{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:4px!important;margin:0 0 10px!important;width:auto!important;border-radius:12px;background:var(--wp-w04);border:1px solid var(--wp-w06)!important;box-sizing:border-box}
 body.wp-on nav[class*="_panelList"]>*{display:contents}
 body.wp-on nav[class*="_panelList"] button[class*="_panelRow"]{display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center;gap:3px;min-width:0;width:auto!important;min-height:52px;height:auto!important;padding:5px 3px!important;margin:0!important;border-radius:9px;font-size:11.5px;color:var(--wp-meta);overflow:hidden}
@@ -388,11 +404,11 @@ body.wp-on [data-slot="sidebar"]>div[class*="_collapsed"] nav[class*="_panelList
 .wp-wrap{flex-wrap:wrap}
 .wp-meta{font-size:12.5px;color:var(--wp-meta);line-height:1.4}
 .wp-small{font-size:11.5px}
-.wp-mono{font-family:'Geist Mono',ui-monospace,monospace}
+.wp-mono{font-family:var(--ds-font-family-code,ui-monospace,monospace)}
 .wp-warntext{color:var(--wp-warn-text)}
 .wp-modal-wrap{position:fixed;inset:0;z-index:1000;background:var(--wp-backdrop);display:flex;align-items:flex-start;justify-content:center;padding:48px 16px;overflow:auto;pointer-events:auto}
 .wp-modal-wrap.wp-top{z-index:1010}
-.wp-modal{width:600px;max-width:100%;display:flex;flex-direction:column;gap:16px;padding:26px;border-radius:22px;background:var(--wp-modal);backdrop-filter:blur(28px);-webkit-backdrop-filter:blur(28px);border:1px solid var(--wp-w10);box-shadow:0 30px 60px var(--wp-shadow);color:var(--wp-text);font-family:Geist,system-ui,sans-serif;box-sizing:border-box}
+.wp-modal{width:600px;max-width:100%;display:flex;flex-direction:column;gap:16px;padding:26px;border-radius:22px;background:var(--wp-modal);backdrop-filter:blur(28px);-webkit-backdrop-filter:blur(28px);border:1px solid var(--wp-w10);box-shadow:0 30px 60px var(--wp-shadow);color:var(--wp-text);font-family:var(--dsw-font-family,system-ui,sans-serif);box-sizing:border-box}
 .wp-modal h2{margin:4px 0 2px;font-size:24px;font-weight:600;letter-spacing:-.02em}
 .wp-iconbtn{width:40px;height:40px;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;background:transparent;border:0;color:var(--wp-soft);cursor:pointer;flex:none;transition:background .16s ease}
 .wp-iconbtn:hover{background:var(--wp-w07)}
@@ -439,16 +455,26 @@ body.wp-on [data-slot="sidebar"]>div[class*="_collapsed"] nav[class*="_panelList
 .wp-confirm{width:440px;gap:12px;padding:22px}.wp-confirm h2{font-size:19px}
 .wp-confirm-body{font-size:13.5px;line-height:1.5;color:var(--wp-soft)}
 .wp-confirm-actions{justify-content:flex-end;gap:8px;margin-top:4px}
-.wp-toast{position:fixed;right:24px;bottom:24px;z-index:1100;max-width:420px;padding:12px 16px;border-radius:14px;background:var(--wp-pop);border:1px solid var(--wp-w10);color:var(--wp-text);font:14px Geist,system-ui,sans-serif;box-shadow:0 18px 40px var(--wp-shadow);pointer-events:auto}
+.wp-toast{position:fixed;right:24px;bottom:24px;z-index:1100;max-width:420px;padding:12px 16px;border-radius:14px;background:var(--wp-pop);border:1px solid var(--wp-w10);color:var(--wp-text);font-size:14px;line-height:1.4;font-family:var(--dsw-font-family,system-ui,sans-serif);box-shadow:0 18px 40px var(--wp-shadow);pointer-events:auto}
 /* --- skins: grounds for surfaces that bring their own opaque page ---
    A page that paints DSH's --dsw-alias-bg-base over the wall gets the conversation card's treatment: one glass
    card at tint + .2, with DSH's card tokens remapped inside it so the surface's own cards, wells and inputs read
    as faint fills (blur once). Anchored on each surface's own hand-written root class or DSH's structure, never a
    hash. Every rule here sits under body.wp-on: switching Wallpaper off leaves nothing behind. */
 
-/* dsh-context: its overview page in main. Its right-sidebar pane (.lc-root) already sits on the dock's glass and
-   needs only the token remap. Its version-gate modal takes Wallpaper's floating material; the page's own
-   container-type already made it the modal's containing block, so the blur adds no new trap. */
+/* DSH's own pages in main (re-checked on 0.2.1-rc.2): the Automation tasks page (@deepseek-ai/dsh-client-ui-schedule)
+   paints --dsw-alias-bg-base, black in dark and white in light, over the wall; the Plugins page paints nothing, so
+   its text sits on the wall. Both roots end in _page, so the word of the class under main's outlet covers them on
+   the Desktop app and on the npm builds (which hash these classes differently); the token remap turns the page's
+   own bg-base wells into faint fills. */
+body.wp-on [data-slot="main"] [class$="_page"]{background:var(--wp-conv)!important;-webkit-backdrop-filter:blur(var(--wp-blur,22px));backdrop-filter:blur(var(--wp-blur,22px));border:var(--wp-hair)!important;border-radius:18px;margin:var(--wp-gap);height:calc(100% - 2 * var(--wp-gap))!important;width:calc(100% - 2 * var(--wp-gap));box-sizing:border-box}
+body.wp-on [data-slot="main"] [class$="_page"]{--dsw-alias-bg-base:var(--wp-w04);--dsw-alias-bg-layer-1:var(--wp-w06);--dsw-alias-bg-layer-2:var(--wp-w08);--dsw-alias-bg-layer-3:var(--wp-w10)}
+
+/* dsh-context 0.72.0: its overview page in main (section.lc-ov-page, paints --dsw-alias-bg-base). Its
+   right-sidebar pane (.lc-root) already sits on the dock's glass and needs only the token remap; its cards read
+   --dsw-alias-bg-layer-1..3, which the remap turns into faint fills. Its version-gate modal (.lc-modal-card)
+   takes Wallpaper's floating material; the page's own container (lc-ov) already made it the modal's containing
+   block, so the blur adds no new trap. */
 body.wp-on .lc-ov-page{background:var(--wp-conv)!important;-webkit-backdrop-filter:blur(var(--wp-blur,22px));backdrop-filter:blur(var(--wp-blur,22px));border:var(--wp-hair)!important;border-radius:18px;margin:var(--wp-gap);height:calc(100% - 2 * var(--wp-gap))!important;width:calc(100% - 2 * var(--wp-gap));box-sizing:border-box}
 body.wp-on :is(.lc-ov-page,.lc-root){--dsw-alias-bg-layer-1:var(--wp-w06);--dsw-alias-bg-layer-2:var(--wp-w08);--dsw-alias-bg-layer-3:var(--wp-w10)}
 body.wp-on .lc-modal-card{background:var(--wp-pop)!important;-webkit-backdrop-filter:blur(28px);backdrop-filter:blur(28px)}
@@ -470,7 +496,8 @@ body.wp-still *{transition:none!important}
 		function apply(ctx) {
 			ctx.effect(() => { refresh.state(); }, "wallpaper: settings");
 			ctx.effect(() => installLook(), "wallpaper: wallpaper and glass");
-			ctx.effect(() => installHeadline(ctx), "wallpaper: headline");
+			ctx.effect(() => installGlassLabels(ctx), "wallpaper: glass labels");
+			ctx.effect(() => installHeadline(), "wallpaper: headline");
 			const reg = (slot, opts, comp) => ctx.slots.inject(slot, () => ctx.slots.register({ name: slot, locale: NS, ...opts }, comp));
 			reg("sidebar.footer.action", { id: "wp-open", order: 90 }, WallpaperButton);
 			reg("shell.overlay", { id: "wp-overlays", order: 40, inject: () => ({ ctx }) }, (props) => h(Fragment, null, h(WallpaperPanel, props), h(ConfirmDialog, null), h(Toast, null)));

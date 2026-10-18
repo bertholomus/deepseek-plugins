@@ -1,11 +1,9 @@
 // Wallpaper and glass — host side.
 // Keeps the look's settings and the wallpaper library, and serves both to the client bundle on /api/wallpaper/*.
-// Everything lives in this plugin's own folder (<DSH home>/wallpaper). The one exception is a one-time import when
-// the plugin first starts: Fleet Shell's wallpaper settings and picture library are copied in (APFS clones, so no
-// extra disk until a file changes). The originals are left as they were.
+// Everything lives in this plugin's own folder (<DSH home>/wallpaper).
 
 import { execFile } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, statSync, renameSync, appendFileSync, copyFileSync, constants } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, statSync, renameSync, appendFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, extname, basename } from 'node:path';
 
@@ -16,11 +14,10 @@ const DSH_HOME = process.env.DSH_HOME || join(homedir(), '.dsh');
 const DEFAULTS = {
   dataDir: join(DSH_HOME, 'wallpaper'), // state.json, wp-cache/, wallpaper.log
   wallpaperDir: null, // one folder per collection; null = <dataDir>/wallpapers. Nothing else is ever shown as wallpaper.
-  importFrom: join(DSH_HOME, 'fleet-shell'), // read once, on first start: its state.json prefs and wallpapers/ folder
 };
 const PREF_DEFAULTS = {
-  headline: 'Quit fucking around and do something',
-  wallpaperCollection: 'cars', wallpaperPinned: null, wallpaperRotate: null, wallpaperRotateMin: 60,
+  headline: '',
+  wallpaperCollection: null, wallpaperPinned: null, wallpaperRotate: null, wallpaperRotateMin: 60,
   wallpaperOpacity: 90, wallpaperFrost: 4, glassBlur: 22, glassTint: 55, motion: true,
 };
 // The only settings this plugin keeps. Anything else sent to /state is ignored.
@@ -47,34 +44,6 @@ export async function apply(ctx, rawConfig) {
   let state = { prefs: { ...PREF_DEFAULTS }, ...readJson(statePath, {}) };
   state.prefs = { ...PREF_DEFAULTS, ...pick(state.prefs, PREF_KEYS) };
   const saveState = () => writeJson(statePath, state);
-
-  // ---------------------------------------------------------------- one-time import from Fleet Shell
-  const importDir = config.importFrom ? expand(config.importFrom) : null;
-  if (firstStart && importDir && existsSync(importDir)) {
-    const old = readJson(join(importDir, 'state.json'), null);
-    const prefs = pick(old?.prefs, PREF_KEYS);
-    // Fleet Shell's old rotate modes: "hourly" -> 60 min, "daily" -> 1440 min; "off" stays.
-    if (typeof prefs.wallpaperRotate === 'string' && prefs.wallpaperRotate !== 'off') {
-      prefs.wallpaperRotateMin = prefs.wallpaperRotate === 'daily' ? 1440 : 60;
-      prefs.wallpaperRotate = null;
-    }
-    state.prefs = { ...state.prefs, ...prefs };
-    let images = 0; let failed = 0;
-    const from = join(importDir, 'wallpapers');
-    if (existsSync(from) && !(existsSync(wpDir) && readdirSync(wpDir).some((c) => !c.startsWith('.')))) {
-      for (const c of readdirSync(from)) {
-        const dir = join(from, c);
-        try { if (c.startsWith('.') || !statSync(dir).isDirectory()) continue; } catch { continue; }
-        mkdirSync(join(wpDir, c), { recursive: true });
-        for (const f of readdirSync(dir)) {
-          if (f.startsWith('.') || !IMG.has(extname(f).toLowerCase()) || existsSync(join(wpDir, c, f))) continue;
-          try { copyFileSync(join(dir, f), join(wpDir, c, f), constants.COPYFILE_FICLONE); images++; } catch (e) { failed++; log(`import ${c}/${f} failed: ${e?.message ?? e}`); }
-        }
-      }
-    }
-    state.imported = { from: importDir, at: now(), prefs: Object.keys(prefs).length, images, failed };
-    log(`first start: imported ${Object.keys(prefs).length} settings and ${images} pictures from ${importDir}${failed ? ` (${failed} failed)` : ''}; the originals stay`);
-  }
   mkdirSync(wpDir, { recursive: true });
   if (firstStart) saveState();
 
