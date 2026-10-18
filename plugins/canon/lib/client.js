@@ -1057,7 +1057,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             readQuestion: 'Read as a question.',
             readCoding: 'Read as a coding request: it asks for work on code, or speaks of “this function” or “my script”.',
             noFitQuestion: 'A turn with it gets no notes. A note fits a question when it shares two words with it (a project\'s name counts as one). One word is enough in the note\'s title, tags, aliases or headings when the prompt asks only that word, or when few notes have it, the prompt shares no rarer word with the vault and has no word the vault lacks; and in the note\'s body beside a project the prompt or this folder names, when few notes have it or the body has it twice. An everyday request word like “run” or “test” is never enough alone, not even beside a project\'s name.',
-            noFitCoding: 'A turn with it gets no notes. A note fits a coding request when the words it shares with it, beyond everyday request words like “write”, “fix” and “test”, carry enough of what it asks, rare words weighing most: a third when one is in the note\'s title, tags, aliases or headings, 55% when none is. It also fits when the request works on what the note is titled for and the note is this folder\'s project\'s, as “Add a route…” and Routing rules.',
+            noFitCoding: 'A turn with it gets no notes. A note fits a coding request when the words it shares with it, beyond everyday request words like “write”, “fix” and “test”, carry enough of what it asks, rare words weighing most: a third when one is in the note\'s title, tags, aliases or headings, 45% when none is. It also fits when the request works on what the note is titled for and the note is this folder\'s project\'s, as “Add a route…” and Routing rules.',
             sessions: 'Sessions that got notes',
             sessionsSub: 'Newest first. Switch one off and its later turns get no notes.',
             noSessions: 'No notes added yet',
@@ -1444,7 +1444,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 const weigh = typeof r.share === 'number' ? `weigh ${Math.round(r.share * 100)}% of it` : 'weigh too little of it';
                 return r.titled
                     ? `Too little of what the coding request asks: the words in common ${weigh}, and a note needs a third.`
-                    : `Too little of what the coding request asks: the words in common ${weigh}, and a note needs 55% when they are not in its title, tags, aliases or headings.`;
+                    : `Too little of what the coding request asks: the words in common ${weigh}, and a note needs 45% when they are not in its title, tags, aliases or headings.`;
             }
             if (r.why === 'other') return 'It belongs to another project than the one this folder or the prompt points at.';
             return 'It fits less well than the notes above, or too little to add.';

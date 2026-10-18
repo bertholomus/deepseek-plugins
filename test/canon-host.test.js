@@ -613,7 +613,7 @@ test('search: a project\'s name is one word and a note needs another; words abou
     assert.deepEqual(paths(migration, '/Users/someone/Elsewhere/scratch'), []);
     assert.equal(ask(migration, '/Users/someone/Elsewhere/scratch').others.find((o) => o.path === 'Projects/tide-ledger/Schema migrations.md')?.why, 'few');
     // The page says the two figures as they are.
-    assert.deepEqual([SHARE_TITLED, SHARE_BODY], [1 / 3, 0.55], 'the page\'s words say "a third" and "55%"');
+    assert.deepEqual([SHARE_TITLED, SHARE_BODY], [1 / 3, 0.45], 'the page\'s words say "a third" and "45%"');
     // With a word beyond the name in the title, it is ("called" is not On-call's "call").
     assert.deepEqual(paths('What is the lantern team\'s mascot called?'), ['Misc/Lantern mascot.md']);
     // Words about the vault say where to look, not what about.

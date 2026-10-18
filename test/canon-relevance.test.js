@@ -20,7 +20,7 @@ import { isCodingRequest } from '../plugins/canon/lib/text.js';
  * The dev set's figures as reached (README, "How well it picks notes"):
  * held so a change that makes them worse fails here.
  */
-const DEV_REACHED = Object.freeze({ first: 312, inBlock: 322, extra: 121, noBlock: 272, coding: 210 });
+const DEV_REACHED = Object.freeze({ first: 313, inBlock: 323, extra: 121, noBlock: 272, coding: 210 });
 
 /** The fixture vault's projects: a folder named for one is that project's. */
 const PROJECTS = new Set(['harbor-gateway', 'lantern-api', 'lantern-web', 'quartz-cache', 'tide-ledger']);

@@ -40,10 +40,10 @@ export const RARE = 0.06;
 /**
  * The share of a coding request's weight that the words a note shares with
  * it must carry: a third when one of them is in the note's title, aliases,
- * tags or headings, 55% when none is (the page's words say these figures).
+ * tags or headings, 45% when none is (the page's words say these figures).
  */
 export const SHARE_TITLED = 1 / 3;
-export const SHARE_BODY = 0.55;
+export const SHARE_BODY = 0.45;
 /** The lift for a note of the session's repo, and of the folder it sits in. */
 export const REPO_BOOST = 1.6;
 export const PARENT_BOOST = 1.2;
@@ -354,7 +354,7 @@ export class Index {
      * - when one of those words is in its title, aliases, tags or headings:
      *   enough of them are distinctive, and they carry a third of the
      *   prompt's weight;
-     * - when they are only in its body: they carry 55% of the prompt's
+     * - when they are only in its body: they carry 45% of the prompt's
      *   weight, and a single one fits only beside a project the prompt or
      *   the session names, in a prompt that asks more than one word.
      *

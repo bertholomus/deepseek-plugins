@@ -652,7 +652,7 @@ test('words: the page\'s sentences for each setting, and no other assistant\'s n
     assert.match(missText({ fits: false, why: 'few', coding: true, named: false, titled: true }), /^Too little in common for a coding request: one word that says what the note is about\. It needs two .*, or one beside a project the prompt or this folder names\.$/);
     assert.equal(missText({ fits: false, why: 'few', coding: true, named: true, titled: false }), 'Too little in common for a coding request: besides the project\'s name, only the one word the prompt asks, and not in the note\'s title, tags, aliases or headings.');
     assert.equal(missText({ fits: false, why: 'part', coding: true, titled: true, share: 0.22 }), 'Too little of what the coding request asks: the words in common weigh 22% of it, and a note needs a third.');
-    assert.equal(missText({ fits: false, why: 'part', coding: true, titled: false, share: 0.414 }), 'Too little of what the coding request asks: the words in common weigh 41% of it, and a note needs 55% when they are not in its title, tags, aliases or headings.');
+    assert.equal(missText({ fits: false, why: 'part', coding: true, titled: false, share: 0.414 }), 'Too little of what the coding request asks: the words in common weigh 41% of it, and a note needs 45% when they are not in its title, tags, aliases or headings.');
     assert.equal(missText({ fits: false, why: 'other' }), 'It belongs to another project than the one this folder or the prompt points at.');
     assert.equal(missText({ fits: true, why: 'less' }), 'It fits less well than the notes above, or too little to add.');
     const source = (url) => import('node:fs').then((fs) => fs.readFileSync(url, 'utf8'));
