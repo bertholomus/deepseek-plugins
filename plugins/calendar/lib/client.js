@@ -350,11 +350,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-ag-part:first-child{padding-top:6px}',
 
             // ── Popovers (an event's details, a day's events): DSH's MenuSurface (its material and stacking) on
-            // DSH's dialog level; the placement stays the plugin's. Layout here; the material only in the fallback
-            // (.dshcal-pop-own, where a DSH has no MenuSurface).
-            '.dshcal-pop{box-sizing:border-box;width:min(360px,calc(100vw - 24px));max-height:min(620px,calc(100vh - 24px));overflow:auto;padding:14px 14px 12px;'
-                + 'color:var(--cal-text);font-size:13px;line-height:1.45;animation:dshcal-in .14s ease-out;scrollbar-width:thin}',
-            '.dshcal-pop-own{position:fixed;z-index:1000;background:var(--cal-pop);-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);border:1px solid var(--cal-line2);border-radius:18px;box-shadow:0 18px 48px var(--cal-shadow)}',
+            // DSH's dialog level; the placement stays the plugin's. The surface carries the type and width; the
+            // scroll is an inner div of it, so the material never scrolls away. The fallback (.dshcal-pop-own,
+            // where a DSH has no MenuSurface) draws the material itself and scrolls itself.
+            '.dshcal-pop{box-sizing:border-box;width:min(360px,calc(100vw - 24px));color:var(--cal-text);font-size:13px;line-height:1.45;animation:dshcal-in .14s ease-out}',
+            '.dshcal-pop-scroll{max-height:min(620px,calc(100vh - 24px));overflow:auto;padding:14px 14px 12px;scrollbar-width:thin}',
+            '.dshcal-pop-own{position:fixed;z-index:1000;max-height:min(620px,calc(100vh - 24px));overflow:auto;padding:14px 14px 12px;background:var(--cal-pop);-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);border:1px solid var(--cal-line2);border-radius:18px;box-shadow:0 18px 48px var(--cal-shadow)}',
             '.dshcal-pop:focus{outline:none}',
             '.dshcal-pop-top{display:flex;align-items:flex-start;gap:10px}',
             '.dshcal-pop-swatch{flex:none;width:12px;height:12px;margin-top:6px;border-radius:4px;background:var(--ev)}',
@@ -2954,10 +2955,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 close.current('escape');
             };
             const card = { role: 'dialog', 'aria-label': label, tabIndex: -1, onKeyDown, ...rest };
+            // A sheet caps its scroll at 70vh; the placed popover at the viewport minus a margin (in the class).
+            const scrollStyle = place?.sheet ? { maxHeight: '70vh' } : undefined;
             // DSH's MenuSurface: its material and stacking. Without it (no such part), the plugin's own card.
             return ReactDOM.createPortal(
                 ui.MenuSurface
-                    ? h(ui.MenuSurface, { ref, className: 'dshcal-pop', ...card, style, 'data-calendar-popover': '' }, children)
+                    ? h(ui.MenuSurface, { ref, className: 'dshcal-pop', ...card, style, 'data-calendar-popover': '' },
+                        h('div', { className: 'dshcal-pop-scroll', style: scrollStyle }, children))
                     : h('div', { ref, className: 'dshcal-pop dshcal-pop-own', 'data-calendar-popover': '', ...card, style }, children),
                 document.body);
         }
