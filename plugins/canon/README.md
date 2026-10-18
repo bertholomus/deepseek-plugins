@@ -351,15 +351,17 @@ the dev set, on the fixture vault as it is, and measured once, on October
 17 at 5:20 PM, with the rules frozen at 9a8a4c9. It was never tuned on, and
 `npm test` holds Canon to the floors on it.
 
-| Figure | Measured once, at 9a8a4c9 (round 2's rules) | At 9876265 (round 3's rules) | Floor |
-| --- | --- | --- | --- |
-| The block's first note answers | 22 of 24 (91.7%) | 18 of 24 (75.0%): missed | at least 80% |
-| An answering note is in the block | 23 of 24 (95.8%) | 20 of 24 (83.3%): missed | at least 90% |
-| Notes per block that do not answer | 0.54 (13 in 24 blocks) | 0.85 (17 in 20 blocks) | at most 1.0 |
-| No block, for a prompt no note answers | 22 of 24 (91.7%) | 21 of 24 (87.5%) | at least 70% |
+| Figure | Measured once, at 9a8a4c9 (round 2's rules) | At 9876265 (round 3's first build) | At 638044e (round 3's frozen rules) | Floor |
+| --- | --- | --- | --- | --- |
+| The block's first note answers | 22 of 24 (91.7%) | 18 of 24 (75.0%): missed | 22 of 24 (91.7%) | at least 80% |
+| An answering note is in the block | 23 of 24 (95.8%) | 20 of 24 (83.3%): missed | 24 of 24 (100.0%) | at least 90% |
+| Notes per block that do not answer | 0.54 (13 in 24 blocks) | 0.85 (17 in 20 blocks) | 0.71 (17 in 24 blocks) | at most 1.0 |
+| No block, for a prompt no note answers | 22 of 24 (91.7%) | 21 of 24 (87.5%) | 21 of 24 (87.5%) | at least 70% |
 
 The first column is round 2's rules' figures, as first measured. The
-second is round 3's rules, measured from a clean copy of 9876265. Round
+second is round 3's first build, measured from a clean copy of 9876265.
+The third is round 3's frozen rules, as `npm test` printed them in the run
+that measured the second hold-out. Round
 3's first rule (14893d8) had already fallen short of the same two floors
 there; the rules were then reworked on prompts of round 3's own (the dev
 set above), never on the hold-out, whose figures were not used to choose
@@ -367,9 +369,11 @@ between rules. Both columns stay as they are. OPEN-QUESTIONS #37 then let
 the first hold-out be tuned on, but reading it for tuning was not allowed
 in round 3 (#38), so it was not tuned on in round 3: no rule was chosen on
 its prompts, its misses or its figures, and `npm test` keeps it as a guard
-on its four floors. With round 3's final rules that guard passes (its
-figures were not printed). To measure it by hand: `node
-scripts/canon-relevance.mjs --set holdout`.
+on its four floors. With round 3's frozen rules that guard passes (the
+third column). While the rules were tuned, their builder saw only the
+guard's pass or fail line in test runs and, once, by accident, two of its
+floor lines (at about 8:45 PM); never its prompts. To measure it by hand:
+`node scripts/canon-relevance.mjs --set holdout`.
 
 That hold-out has no coding request among its 24 prompts that no note
 answers (they are chat, questions about the vault and project switches),
@@ -382,12 +386,29 @@ none, and at least 23 of those blocks held nothing that bears on the
 request: a note fits on any two shared words, however common.
 
 The fair figure for round 3's rules is the second hold-out's
-(`test/fixtures/canon/relevance/holdout2.json`: a kind for every prompt,
-and everyday coding requests among those no note answers), measured once,
-with the rules frozen at the end of round 3: its figures are added here
-when it is measured (`node scripts/canon-relevance.mjs --set holdout2`).
-`npm test` skips it while it is not there, and holds Canon to all five
-floors on it when it is.
+(`test/fixtures/canon/relevance/holdout2.json`: 72 prompts by two writers
+who never saw Canon's code or the dev set, a kind for every prompt; 24 that
+a note answers and 48 that none does, 40 of them everyday coding requests),
+measured once, on October 17 at 11:07 PM, with the rules frozen at 638044e.
+It was never tuned on, and it missed two of its five floors:
+
+| Figure | Measured once, at 638044e | Floor |
+| --- | --- | --- |
+| The block's first note answers | 20 of 24 (83.3%) | at least 80% |
+| An answering note is in the block | 20 of 24 (83.3%): missed | at least 90% |
+| Notes per block that do not answer | 0.35 (7 in 20 blocks) | at most 1.0 |
+| No block, for a prompt no note answers | 37 of 48 (77.1%) | at least 70% |
+| No block, for an everyday coding request no note answers | 29 of 40 (72.5%): missed | at least 90% |
+
+So on prompts nobody tuned on, Canon still adds notes to about one everyday
+coding request in four (the 11 that got a block got 19 notes between them),
+and for one prompt in six that a note answers, no answering note is in the
+block. The project, chat and vault prompts that no note answers (8) got no
+block. There is no further hold-out this round (OPEN-QUESTIONS #38) and the
+misses stand: `npm test` holds its shape as a plain test and runs its five
+floors as a known miss (a `todo` test that prints them on every run,
+OPEN-QUESTIONS #40). To measure it by hand: `node
+scripts/canon-relevance.mjs --set holdout2`.
 
 ## On the turn
 
@@ -651,9 +672,9 @@ folder, numbers in quotes in the profile and the page's fix for them, the
 form's promote-folder check, and where the focus goes after each switch,
 Read again and Promote. `test/canon-relevance.test.js` holds the dev set
 (`dev.json` and `dev-fresh.json`) to the figures it reached, the first
-hold-out to its four floors and, once it
-is there, the second hold-out to all five; a hold-out's test prints its
-figures only, never its prompts.
+hold-out to its four floors, and the second hold-out's shape, with its
+five floors run as a known miss (a `todo` test, OPEN-QUESTIONS #40); a
+hold-out's test prints its figures only, never its prompts.
 
 The real-DSH test (about one minute a build) starts DSH from each
 `.e2e/dsh-<version>` install and from the installed app's own DSH, each in

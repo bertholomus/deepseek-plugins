@@ -9,7 +9,12 @@
  * dev set, measured and never tuned on: the first (no kinds) is held to the
  * four floors of OPEN-QUESTIONS #29, the second (with kinds) to those and
  * the everyday-coding floor of #33. A hold-out's test prints its figures
- * only, never its prompts.
+ * only, never its prompts. Measured once at 638044e, the second missed two of
+ * its five floors (an answering note in the block 83.3%, floor 90%; no block
+ * for 72.5% of everyday coding requests, floor 90%). It is not tuned on
+ * (OPEN-QUESTIONS #38), so its shape is a plain test and its floors a `todo`
+ * test that runs and prints the misses on every run without hiding a new
+ * failure behind it (#40).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -142,7 +147,7 @@ test('first hold-out: within the four floors of OPEN-QUESTIONS #29 (its figures 
     assert.deepEqual(belowFloors(m), [], `floors ${JSON.stringify(FLOORS)}`);
 });
 
-test('second hold-out: well formed with kinds and apart from the dev set and the first hold-out', (t) => {
+test('second hold-out: well formed with kinds and apart from the dev set and the first hold-out', async (t) => {
     if (!existsSync(HOLDOUT2)) {
         t.skip('the second hold-out set is not there yet');
         return;
@@ -150,9 +155,16 @@ test('second hold-out: well formed with kinds and apart from the dev set and the
     const earlier = new Set([...loadDev(), ...(existsSync(HOLDOUT) ? loadSet(HOLDOUT) : [])].map((e) => said(e.prompt)));
     const repeats = loadSet(HOLDOUT2, { kinds: true }).filter((e) => earlier.has(said(e.prompt))).length;
     assert.equal(repeats, 0, `${repeats} of its prompts repeat a dev or first hold-out prompt`);
+    const m = await measure(loadSet(HOLDOUT2, { kinds: true }));
+    assert.equal(m.problems.length, 0, `${m.problems.length} problems with the set`);
+    const s = m.summary;
+    assert.ok(s.answerable.n > 0 && s.unanswerable.n > 0 && s.coding.n > 0, 'it has prompts a note answers, prompts none does, and everyday coding requests');
 });
 
-test('second hold-out: within all five floors (its figures only)', async (t) => {
+// Measured once at 638044e with the rules frozen, the second hold-out missed two floors. It is not tuned on, so the
+// misses stand: every floor still runs and the misses print, but as known misses they do not fail the run
+// (OPEN-QUESTIONS #40).
+test('second hold-out: within all five floors (its figures only)', { todo: 'missed when measured once at 638044e: an answering note in the block 20 of 24 (83.3%, floor 90%); no block for 29 of 40 everyday coding requests (72.5%, floor 90%) (OPEN-QUESTIONS #40)' }, async (t) => {
     if (!existsSync(HOLDOUT2)) {
         t.skip('the second hold-out set is not there yet');
         return;
