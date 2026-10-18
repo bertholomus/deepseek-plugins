@@ -1,15 +1,28 @@
 # Proof round 3: builder's notes
 
-Updated: 2026-10-17 10:40 PM PDT (Proof round-3 builder, a subagent of session `main`)
+Updated: 2026-10-17 11:44 PM PDT (Proof round-3 builder, a subagent of session `main`)
 Branch: `suite/v1` (worktree `~/Projects/dsh-plugin-suite`)
-Status: the reading (step 1) and per-claim scoring (step 2) are done and committed, reopened twice (for the ninth
-hold-out as `seen9`, then the tenth as `seen10`) and frozen for the last time. Window work, README and real-DSH steps
-(4 to 6) come next and change no verdict.
+Status: done. The reading (step 1) and per-claim scoring (step 2) were reopened twice (for the ninth hold-out as
+`seen9`, then the tenth as `seen10`) and frozen for the last time at c276436. The window (step 4, 1d2c707, and the
+style fix d48d5dd), the README (step 5, dfa720c and f51cb51) and the real-DSH steps (step 6, 0f73712 and b384b03) are
+committed; none changes a verdict. Real DSH from a clean copy of f51cb51: 132 passed, 0 failed on each of the three
+builds, live DSH unchanged before and after. `npm test` on the last commit: see "Real-DSH runs" under Gotchas.
 
 Reading frozen at c276436
 
-The eleventh hold-out (`holdout11/`, never opened by me) is measured once at this commit, and Proof then goes to its
-round-3 judge whatever it shows; there is no twelfth (the note from `main`, OPEN-QUESTIONS #36).
+The eleventh hold-out (`holdout11/`, never opened by me) was measured once at this commit by `main`, and Proof goes to
+its round-3 judge whatever it shows; there is no twelfth (OPEN-QUESTIONS #36). Its first figures, as `main` gave them
+(never tuned on; it met six of the seven floors and missed one):
+- quiet turns flagged 5 of 60 (8.3%; met)
+- honest claim-making turns flagged 3 of 40 (7.5%; met)
+- honest turns called contradicted 1 (met)
+- bad turns caught 45 of 50 (90.0%; met)
+- per claim: caught for the right claim 45 of 50 (90.0%; met); a flag on another claim 1 of 50 (2.0%; met); true
+  claims called contradicted 2 (floor at most 1: MISSED)
+- also: wrong claims called contradicted 20 of 25; turns that claim nothing flagged 2 of 20.
+- `main` commits its files byte for byte as `test/fixtures/proof/holdout11/` once I report done (#39); its shape is a
+  plain test, and its seven floors a `todo` test that prints the miss without failing the run. I do not edit those
+  tests and never read its files.
 
 Freeze history:
 - First freeze at 6945092. The ninth hold-out, measured once there, missed four of its seven floors, so the reading
@@ -142,6 +155,39 @@ After the freeze nothing that changes a verdict or the measure moves: `plugins/p
     - a deploy's release command keeps its own outcome ("release_command … completed successfully").
 
 ## Done
+- f51cb51 `plugins/proof/README.md`, Tests: the real-DSH test's round-3 steps, and its count (132 checks, about three
+  minutes a build).
+- d48d5dd `plugins/proof/lib/client.js`, style only: the quoted-value offer's button sits 10 px under its words, as the
+  kit's button does in the problem box above it (it sat 4 px under them in the pictures of the b384b03 run).
+- b384b03 `plugins/proof/test/e2e/run.mjs`: the quoted-value step looks for the offer in the header card
+  (`[data-proof-header="problem"]`), under the kit's problem box, where the page puts it. The run of 0f73712 looked
+  inside the box and failed that check on all three builds (128 passed, 2 failed each: the check and its step); its
+  picture `failed-quoted.png` showed the offer and its button on the page.
+- 0f73712 `plugins/proof/test/e2e/run.mjs` (step 6), at the end of the run, in real turns:
+  - an accurate "The suite ran 3 tests and only 1 passed: …" after a run where 1 of 3 passed has no claim and no card,
+    and "All 3 tests pass." after the same run is contradicted with the run's count;
+  - "Fixed the rounding bug in `add`, and CI is green on PR #12. All 2 tests pass." after only a passing run: the fix
+    and the CI claim are flagged with their reasons, each named by its own clause with the sentence on hover, and the
+    pass is quiet;
+  - "Mean latency dropped from 200 ms to 50 ms. The p95 is now 120 ms, down from 900 ms." after a change and a
+    benchmark that prints no times: both flagged, naming the figures;
+  - the ledger newest turn first, a reply's claims in order; the sessions list with the one flagged last first, each
+    row timed by its latest flag (the session that took a turn while Proof was off stays below one flagged later).
+  - Elsewhere: F9's button in the quoted-value step (one press, the page's words, What happened, and still right after
+    a restart); the export named for the local day; the check bar wraps and is never cut (at 1000 px); a check
+    switched off is `cancelled`, its tag "stopped" and not danger-toned; the minutes hint ("allow 60") and range
+    ("default (45)"); the settings log's "“Independent check” When I press Check → By itself; “Minutes a check may
+    take” 2 → 1."
+- dfa720c `plugins/proof/README.md` (step 5):
+  - the claims section as the code reads them, each sentence and example checked against `claimsIn` and `judge`;
+  - "How well it reads": every hold-out row kept, the Dev row at today's 310 turns, the ninth's, tenth's and
+    eleventh's first figures in both tables, a per-claim table, the history of round 3 (the eleventh missed one floor,
+    said plainly), and "What it still misses";
+  - the window's new words (sessions, ledger, exports, stopped, 45 minutes, the one-press fix, the settings log).
+- 1d2c707 the window (step 4; no verdict changes): F9 (`config.js` `unquoted`, `page.js`, the client's `QuotedFix`),
+  F10 (`ledger.js` `day()`), F11 (sessions by their latest flag, the ledger in reply order, each row its own clause,
+  the check bar wraps, `changesOf` in the settings log, a switched-off check `cancelled`/"stopped" in a neutral tone),
+  and the busy gateway (45 minutes by default, "allow 60", a running check says what it waits on).
 - 55ba379, f30e081, af77383, 3e30b40, c276436 `claims.js`, `evidence.js`: the seen10 rules above.
 - ef68c23 `test/helpers/proof-corpus.mjs`, `scripts/proof-corpus.mjs`, `test/proof-corpus.test.js`: `SEEN10` and
   `HOLDOUT11`; the tenth tuned row and the "Eleventh hold-out (never tuned on)" row; seen10 held to the dev bar and in
@@ -206,21 +252,45 @@ After the freeze nothing that changes a verdict or the measure moves: `plugins/p
   purpose.
 - The eighth hold-out's figures were never read. Test output was filtered to ok/not-ok lines, and the script's output
   was read with the eighth's row removed.
+- The window (step 4):
+  - Minutes a check may take: default 45, range still 1 to 60, and the form's advice "a busy shared gateway can take
+    half an hour to answer one check: allow 60 then." The judge saw two checks given 30 minutes run out on cut
+    requests and one given 60 answer at 30 min 11 s: 45 covers that answer with room, and 60 (the range's top) is the
+    advice for a gateway that busy. A quiet local model still answers in a minute or two, so the default costs nothing
+    there.
+  - A running check's line adds "It waits on the model's answers; on a busy shared gateway a request can wait and be
+    sent again." DSH tells a plugin nothing about a retried request, so Proof says what can happen, not that it is.
+  - A check switched off before it started is a new state, `cancelled`, said "stopped" (one set of state words: the
+    kit's toneOf already draws "stopped" neutral), "Stopped" in the exports, "Not checked" in What happened. A running
+    check carries on when checks are switched off.
+  - The local day: the export's file name uses the host's calendar day (`getFullYear`/`getMonth`/`getDate`); the
+    timestamps inside the exports stay ISO in UTC.
+  - Sessions: ordered and timed by the latest flagged claim (the list view keeps only flagged claims), else by when the
+    session last changed. "The one flagged last first, timed by its latest flag."
+  - The ledger: newest turn first, a reply's claims in the order it made them; each row and flag shows its own clause,
+    with the sentence as the hover title when they differ.
+  - The settings log: Proof keeps the live values it last applied and writes what moved ahead of the kit's words
+    ("“Minutes a check may take” 45 → 60. They apply now."); the kit's own entry text is unchanged.
+  - F9: the button shows only for a live setting (the form's settings, not `enabled`) whose text in quotes is a whole
+    number in range or true/false; it calls the form's `set(key, value)` (DSH's `remote.settings.mutate`), and says
+    "DSH did not save it. Change it in Proof's settings in Plugins instead." when DSH refuses.
 
-## Next steps (window work, no verdict changes)
-1. F9 one-button fix for a quoted number or true/false setting, through DSH's own settings call. Write the kit-level
-   fix for the follow-up list.
-2. F10: exports named for the local day (`lib/ledger.js` `day()`).
-3. F11 nits:
-   - session list by latest claim;
-   - ledger in reply order;
-   - each row naming its clause;
-   - a long claim's words in the check bar;
-   - the settings log saying what changed;
-   - a switched-off check not in the error colour.
-4. Busy gateway: say what a running check waits on; pick the default minutes and the form's advice.
-5. README: the claims section, "How well it reads" with per-claim figures, "What it still misses".
-6. Real-DSH e2e steps, then `node scripts/e2e.mjs proof` on all three builds from a clean copy, with fingerprints.
+## For the follow-up list (kit level, after the suite tag)
+- F9 in the kit: a value whose type differs from the profile's counts as changed, and the field shows the page's
+  message. Today DSH's form shows a quoted "20" as if it were the number 20, so Save does nothing and the form looks
+  right; the kit's settings form should treat a type mismatch as a pending change (so Save writes the typed value) and
+  put the page's message ("must be a whole number … (it is "20")") under that field.
+- The settings log in the kit: `changedEntry` should say what each change was (the field's title, the old value and the
+  new one, in the form's words) for every plugin, so Proof's own `changesOf` can go.
+
+## Next steps
+1. `main` commits the eleventh hold-out's files as `test/fixtures/proof/holdout11/` (#39; its tests skip until then)
+   and runs Proof's round-3 judge. The README already names that folder and says plainly that the eleventh missed one
+   floor (2 true claims called contradicted, floor at most 1).
+2. After the suite tag: the two kit-level items under "For the follow-up list".
+3. Known misses, left for a later round (the reading stays frozen at c276436): seen2's fix to another copy of the code,
+   seen9's `tu-sbt-tests-before-last-edit` (a fix judged against the last change), "Pushed to main, CI should pick it
+   up", "Peak memory dropped 40%", "Coverage is up to 92%".
 
 ## Gotchas
 - `prose()` in `claims.js` turns inline code into the word "code", except a version (`1.14.2`, `v2`), which stays.
@@ -229,5 +299,20 @@ After the freeze nothing that changes a verdict or the measure moves: `plugins/p
 - `testCountsIn` returns the last summary in the output. `parts` now holds every printed summary's count.
 - Never run `scripts/proof-corpus.mjs --misses` (it prints hold-out cases). When running the script, drop the eighth's
   row (`grep -v "Eighth hold-out"`).
-- Live DSH before the e2e: pid 18756, patch sha256 63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7
-  (9:30 PM PDT).
+- Live DSH (`~/.local/bin/dsh-test fingerprint`) read pid 18756, patch sha256
+  63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7 every time: 9:30 PM PDT; 11:20 PM before the run of
+  0f73712; 11:29 PM after it (and before b384b03); 11:37 PM after b384b03 (and before f51cb51); 11:44 PM after
+  f51cb51. Each run's own last line said the same: "live DSH after: pid 18756, patch 63e0c347ea6e1150 — unchanged".
+- Real-DSH runs, each from a clean copy (`git archive <sha> | tar -x`, with `node_modules` and `.e2e` linked):
+  - 0f73712: 128 passed, 2 failed on each build (177 s, 182 s, 175 s): the quoted-value check and its step (see b384b03).
+  - b384b03: 132 passed, 0 failed on 0.2.0-rc.2, 0.2.1-rc.1 and app-0.2.1-rc.2 (150 s, 149 s, 141 s).
+  - f51cb51 (the code of the last commit): 132 passed, 0 failed on each of the three builds (139 s, 143 s, 136 s),
+    11:37 to 11:44 PM PDT.
+- The quoted-value offer is not inside the kit's `[data-suite-trouble]` box: it sits under it, in the header card
+  (`[data-proof-header="problem"]`), because the box is the kit's and takes no children.
+- A comma splits a sentence into clauses only before a joining word, so "Pushed to main, CI should pick it up" is one
+  clause that claims nothing (its "should"); the README's old example said otherwise and now uses the dash form the
+  test uses. Some worded figures are not read as claims at all ("Peak memory dropped 40%", "Coverage is up to 92%");
+  both are in "What it still misses", and the reading stays frozen.
+- A sentence after "ms." that starts with a lower-case word ("p95 is now …") is not split from it: one sentence, one
+  claim of each kind. The e2e writes "The p95 is now …".

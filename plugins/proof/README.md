@@ -546,11 +546,11 @@ node --test test/proof*.test.js       # claims, evidence, the ledger, the check,
 node scripts/e2e.mjs proof            # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test (132 checks, about three minutes a build) starts DSH from
-each `.e2e/dsh-<version>` install and from the installed app's own DSH,
-each in a throwaway home, with Session Watch and Proof and a scripted model
-(`test/e2e/fake-model.mjs`) that plays both the agent and the check model
-(which offers a low and a high effort).
+The real-DSH test (132 checks, about two and a half minutes a build)
+starts DSH from each `.e2e/dsh-<version>` install and from the installed
+app's own DSH, each in a throwaway home, with Session Watch and Proof and
+a scripted model (`test/e2e/fake-model.mjs`) that plays both the agent and
+the check model (which offers a low and a high effort).
 From real sessions it shows that a claim its turn's run shows stays quiet
 (in a summary turn, the turn before shows it), that a claim with nothing
 behind it is flagged, that one the run's own output denies is called
