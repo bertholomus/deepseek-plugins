@@ -550,10 +550,9 @@ test('index: DSH sessions, transcripts and notes in one search, one result per s
     const rust = e.search({ text: 'rust' }).results[0];
     assert.deepEqual([rust.kind, rust.title, rust.folder, rust.model, rust.line, rust.sessionId], ['transcript', 'Parser rewrite', '/work/rust', 'coder-2', 2, 'tx-1']);
     assert.equal(rust.path, join(h.agents, 'proj1', 't1.jsonl'));
-    assert.equal(rust.running, false, 'a transcript has no end-of-turn mark: its last turn, quiet for days, is not still running');
-    assert.equal(e.running({ done: 0, kind: 'transcript' }, { updated: NOW - 60_000 }), true, 'written a minute ago: still running');
-    assert.equal(e.running({ done: 0, kind: 'transcript' }, { updated: 0, mtime: NOW - 11 * 60_000 }), false, 'no times in it, and its file quiet for 11 minutes');
-    assert.equal(e.running({ done: 0, kind: 'session' }, {}), true, 'a DSH session\'s turn runs until its end is logged');
+    assert.deepEqual([rust.running, rust.state], [false, ''], 'a transcript has no end-of-turn mark: its last turn, quiet for days, is not still running');
+    assert.equal(e.stateOf({ done: 0, kind: 'transcript' }, { updated: NOW - 60_000 }), 'running', 'written a minute ago: still running');
+    assert.equal(e.stateOf({ done: 0, kind: 'transcript' }, { updated: 0, mtime: NOW - 11 * 60_000 }), '', 'no times in it, and its file quiet for 11 minutes');
     const leak = e.search({ text: 'evicts' }).results[0];
     assert.deepEqual([leak.title, leak.folder, leak.model, leak.sessionId], ['Find the memory leak in the cache', '/work/beta', 'coder-1', 'tx-2']);
     assert.equal(e.search({ text: 'cargo' }).results[0].hits, 1, 'the tool call and the reply after it are one turn');
@@ -743,6 +742,113 @@ test('snippets: plain words, without the Markdown a reply is written in; the hit
     const r = e.search({ text: 'gyrfalcon' }).results[0];
     assert.equal(clean(r.snippet), 'Done: [gyrfalcon]_notes.txt\n\n \ncat [gyrfalcon]_notes.txt\n ');
     assert.equal(r.asked, 'Write the gyrfalcon notes');
+});
+
+test('turns: one honest state each: running only while DSH says its session runs; stopped, failed, cut short, blocked or cut off by a restart as DSH logged it, to the page and to agents', async () => {
+    const home = tempDir('recall-states');
+    const sessions = join(home, 'sessions');
+    const at = Date.parse('2026-10-16T17:00:00Z');
+    const w = sessionWriter(sessionFile(sessions, 's-ends', 'p1'), { id: 's-ends', cwd: '/work/ends', createdAt: at }).header();
+    w.turn({ prompt: 'osprey one, finished', reply: 'Done.' });
+    w.turn({ prompt: 'osprey two, stopped from the chat', reply: 'Starting…', end: { kind: 'aborted', reason: { kind: 'user' } } });
+    w.turn({ prompt: 'osprey three, a plugin stopped it', end: { kind: 'aborted', reason: { kind: 'hook', reason: 'account/signed-out' } } });
+    w.turn({ prompt: 'osprey four, it failed', end: { kind: 'error', error: { message: 'The model provider did not answer (503).', code: 'UNAVAILABLE' } } });
+    w.turn({ prompt: 'osprey five, too long', reply: 'A very long answer', end: { kind: 'max-tokens' } });
+    w.turn({ prompt: 'osprey six, blocked', end: { kind: 'blocked' } });
+    w.turn({ prompt: 'osprey seven, cut by a crash, closed when DSH opened it again', end: { kind: 'interrupted' } });
+    w.turn({ prompt: 'osprey eight, a turn started while it was open', end: false });
+    w.turn({ prompt: 'osprey nine, open now', end: false });
+    // A session DSH never opened again after a crash: its last turn has no end, and never will.
+    sessionWriter(sessionFile(sessions, 's-crashed', 'p2'), { id: 's-crashed', cwd: '/work/ends', createdAt: at }).header()
+        .turn({ prompt: 'osprey in a session cut by a crash', end: false });
+    let clock = NOW;
+    const { e, drain } = engineAt(home, { now: () => clock });
+    e.handle('configure', { sources: [{ kind: 'session', root: sessions, own: true }] });
+    drain();
+    const file = e.search({ text: 'finished' }).results[0].file;
+    const crashedFile = e.search({ text: 'crash' }).results.find((r) => r.sessionId === 's-crashed').file;
+    const states = () => Object.fromEntries(e.search({ text: 'osprey', file, limit: 20 }).results.map((r) => [r.turn, r.why ? `${r.state}: ${r.why}` : r.state]));
+    const ended = { 1: '', 2: 'stopped: user', 3: 'stopped: hook: account/signed-out', 4: 'failed: The model provider did not answer (503).', 5: 'cut-short', 6: 'blocked', 7: 'cut-off', 8: 'cut-off' };
+    // Before DSH says which sessions run, a log quiet for a day with a turn open: cut off.
+    assert.deepEqual(states(), { ...ended, 9: 'cut-off' });
+    // DSH says the session runs: its open turn is running, and only it; the crashed session's turn is cut off.
+    e.handle('running', { sessions: ['s-ends'], known: true });
+    assert.deepEqual(states(), { ...ended, 9: 'running' });
+    assert.equal(e.turn(`${crashedFile}.1`).state, 'cut-off');
+    // It stops: its end is read a moment later, so nothing is said for half a minute; then, with no end logged, cut off.
+    e.handle('running', { sessions: [], known: true });
+    clock = NOW + 10_000;
+    assert.equal(states()[9], '');
+    clock = NOW + 40_000;
+    assert.equal(states()[9], 'cut-off');
+    // Read in full: the same state, and why.
+    const four = e.turn(`${file}.4`);
+    assert.deepEqual([four.state, four.running, four.why], ['failed', false, 'The model provider did not answer (503).']);
+    assert.deepEqual([e.turn(`${file}.1`).state, e.turn(`${file}.1`).why], ['', undefined]);
+    // To agents: the state in words on each result and on a turn read in full.
+    const text = searchText(e.search({ text: 'osprey', file, limit: 20 }), { limit: 20 });
+    assert.match(text, /\(DSH session, turn 2 · stopped before it finished \(stopped from the chat\) · /);
+    assert.match(text, /\(DSH session, turn 3 · stopped before it finished \(stopped by a plugin: account\/signed-out\) · /);
+    assert.match(text, /\(DSH session, turn 4 · failed: The model provider did not answer \(503\)\. · /);
+    assert.match(text, /\(DSH session, turn 5 · cut short: its reply reached the model's output limit · /);
+    assert.match(text, /\(DSH session, turn 6 · blocked by a plugin before it could go on · /);
+    assert.match(text, /\(DSH session, turn 7 · cut off by a restart: DSH stopped before it finished · /);
+    assert.match(text, /\(DSH session, turn 1 · 2026-/, 'a turn that ended as it should says nothing more');
+    assert.match(turnText(e.turn(`${file}.2`)), /^“[^”]+” \(DSH session, turn 2 · stopped before it finished \(stopped from the chat\) · /);
+    e.handle('running', { sessions: ['s-ends'], known: true });
+    assert.match(turnText(e.turn(`${file}.9`)), /turn 9 · still running · /);
+});
+
+test('tool: the turn that asks is left out (its own words are the question, not earlier work); the session\'s earlier turns stay', async () => {
+    const home = tempDir('recall-asking');
+    const sessions = join(home, 'sessions');
+    const at = Date.parse('2026-10-16T17:00:00Z');
+    const w = sessionWriter(sessionFile(sessions, 's-ask', 'p1'), { id: 's-ask', cwd: '/work/ask', createdAt: at }).header();
+    w.turn({ prompt: 'Write gyrfalcon_notes.txt', reply: 'Wrote it.', tools: [['write_file', { path: '/work/ask/gyrfalcon_notes.txt' }]] });
+    w.turn({ prompt: 'What is in gyrfalcon_notes.txt?', end: false });
+    sessionWriter(sessionFile(sessions, 's-other', 'p2'), { id: 's-other', cwd: '/work/ask', createdAt: at - DAY }).header()
+        .turn({ prompt: 'Read gyrfalcon_notes.txt aloud', reply: 'It lists the birds.' });
+    const { e, drain } = engineAt(home, { now: () => NOW });
+    e.handle('configure', { sources: [{ kind: 'session', root: sessions, own: true }] });
+    drain();
+    e.handle('running', { sessions: ['s-ask'], known: true });
+    const all = e.search({ text: 'gyrfalcon_notes.txt' });
+    assert.deepEqual([all.total, all.results.map((r) => [r.sessionId, r.turn, r.hits])], [3, [['s-ask', 2, 2], ['s-other', 1, 1]]]);
+    const asked = e.search({ text: 'gyrfalcon_notes.txt', leave: { session: 's-ask' } });
+    assert.deepEqual([asked.total, asked.results.map((r) => [r.sessionId, r.turn, r.hits])], [2, [['s-ask', 1, 1], ['s-other', 1, 1]]], 'turn 2 asks; turn 1 wrote the file');
+    assert.equal(e.search({ text: 'gyrfalcon_notes.txt', leave: { session: 's-nobody' } }).total, 3);
+    // Through the tool: DSH gives the calling agent, whose session is the one asking.
+    const calls = [];
+    const spec = toolSpec({ ask: async (op, args) => { calls.push(args); return e.handle(op, args); }, refusal: () => undefined });
+    const out = await spec.execute({ query: 'gyrfalcon_notes.txt' }, { agent: { session: { id: 's-ask' } }, callId: 'c1' });
+    assert.deepEqual(calls[0].leave, { session: 's-ask' });
+    assert.doesNotMatch(out.text, /turn 2/);
+    assert.equal(out.view.results.length, 2);
+    await spec.execute({ query: 'gyrfalcon_notes.txt' }, {});
+    assert.equal(calls[1].leave, undefined, 'no agent: nothing left out');
+    // Its own turn read in full by id is still there: only a search leaves it out.
+    assert.equal(e.turn(`${asked.results[0].file}.2`).state, 'running');
+});
+
+test('transcripts: one with no times takes its file\'s modified time, so "Past week" and Newest find it', () => {
+    const home = tempDir('recall-undated');
+    const logs = join(home, 'agent-logs');
+    mkdirSync(logs, { recursive: true });
+    const file = join(logs, 'plain.jsonl');
+    writeFileSync(file, [{ role: 'user', content: 'pangolin plan' }, { role: 'assistant', content: 'Planned.' }, { role: 'user', content: 'pangolin again' }].map((r) => JSON.stringify(r)).join('\n') + '\n');
+    const written = NOW - 2 * 3_600_000;
+    utimesSync(file, written / 1000, written / 1000);
+    writeFileSync(join(logs, 'dated.jsonl'), `${JSON.stringify({ role: 'user', content: 'pangolin of old', timestamp: '2026-01-05T10:00:00Z' })}\n`);
+    const { e, drain } = engineAt(home, { now: () => NOW });
+    e.handle('configure', { sources: [{ kind: 'transcript', root: logs, own: false }] });
+    drain();
+    const week = e.search({ text: 'pangolin', since: 'week' });
+    assert.deepEqual(week.results.map((r) => [r.path.endsWith('plain.jsonl'), r.time]), [[true, Math.round(written)]], 'dated by when it was written, not 1970');
+    assert.deepEqual(e.search({ text: 'pangolin', sort: 'newest' }).results.map((r) => r.path.endsWith('plain.jsonl')), [true, false]);
+    // A turn with no time after a dated line takes the latest time before it.
+    const log = new TranscriptLog();
+    [{ role: 'user', content: 'first', timestamp: '2026-10-02T10:00:00Z' }, { role: 'assistant', content: 'ok' }, { role: 'user', content: 'second, undated' }].forEach((l, i) => log.line(JSON.stringify(l), i + 1));
+    assert.deepEqual(log.take().rows.map((r) => r.time), [Date.parse('2026-10-02T10:00:00Z'), Date.parse('2026-10-02T10:00:00Z')]);
 });
 
 test('index: a result read in full by its id, with the turns next to it; an id that went says so', () => {
@@ -1118,7 +1224,7 @@ test('tool: recall_search searches with the page\'s filters, bounded, and marks 
     assert.match(titled, /2\. “Session 3” \(DSH session, turn 1 [^\n]*\)\n {3}Asked: How do we deploy\?\n {3}Only its title has the words; this is its first turn\.\n {3}id 3\.1/);
     assert.doesNotMatch(titled.split('2. ')[1], /Also matches|Match:/);
     assert.match(searchText({ text: 'heron', filters: {}, total: 4200, sessions: 6, sessionsMore: true, cut: 'cap', looked: 4000, results: [RESULT(1)] }, { limit: 8 }),
-        /the best 1 below\. These are the sessions and files of its 4000 best-matching turns: more words or a filter find others\. Text from past sessions/);
+        /the best 1 below\. These are the sessions and files of its 4,000 best-matching turns: more words or a filter find others\. Text from past sessions/);
     const onlyTitled = searchText({ text: 'kestrel', filters: {}, total: 0, sessions: 0, titled: 1, results: [RESULT(4, { kind: 'handoff', turn: 1, snippet: '', hits: 0, others: [], titleOnly: true, label: 'Goal', line: 4 })] }, { limit: 8 });
     assert.match(onlyTitled, /^Recall found no turn that says “kestrel”, only 1 session or file whose title alone has the words; the best 1 below\./);
     assert.match(onlyTitled, /Only its title has the words; this is its first section\./);

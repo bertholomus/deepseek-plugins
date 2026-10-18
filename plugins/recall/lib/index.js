@@ -64,6 +64,8 @@ export const Config = z.object({
 
 /** How long after a session's event its log is read again (events come in bursts while a turn runs). */
 const TOUCH_MS = 1500;
+/** How long a burst of agents starting and stopping is gathered before the index hears which sessions run. */
+const LIVE_MS = 200;
 
 export function apply(ctx, config) {
     const logger = ctx.logger;
@@ -199,8 +201,37 @@ export function apply(ctx, config) {
             }, TOUCH_MS);
             touchTimer.unref?.();
         }));
+        // Which of this DSH's sessions run now, as DSH says: a turn is running only while its session runs, and one
+        // DSH stopped under (a crash, a restart) is said to be cut off, not running for ever.
+        let agents;
+        let liveTimer;
+        const sendLive = () => {
+            clearTimeout(liveTimer);
+            liveTimer = setTimeout(() => {
+                liveTimer = undefined;
+                let sessions = [];
+                try {
+                    sessions = agents ? [...(agents.list?.() ?? [])].filter((a) => a?.status === 'running' && typeof a.id === 'string').map((a) => a.id) : [];
+                } catch (error) {
+                    logger?.warn?.(`recall: could not read which sessions run: ${errorText(error)}`);
+                }
+                thread.call('running', { sessions, known: Boolean(agents) }, { standing: true }).catch(() => { /* sent again when the thread starts */ });
+            }, LIVE_MS);
+            liveTimer.unref?.();
+        };
+        ctx.inject(['agents'], (scope) => {
+            const mine = scope.agents;
+            agents = mine;
+            sendLive();
+            return () => {
+                if (agents === mine) agents = undefined;
+                sendLive();
+            };
+        });
+        for (const event of ['agent/status', 'agent/created', 'agent/disposed']) ctx.on(event, guard(logger, `recall: ${event}`, () => sendLive()));
         ctx.effect(() => () => {
             clearTimeout(touchTimer);
+            clearTimeout(liveTimer);
             notes.stop();
             void thread.stop();
         }, 'recall: index thread');

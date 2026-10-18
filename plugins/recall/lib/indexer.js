@@ -424,6 +424,8 @@ export class Indexer {
             lines.forEach((line, i) => log.line(line, first + i));
             log.state.lines = (job.state.lines ?? 0) + lines.length + (r.skipped ? 1 : 0);
             const { rows, meta } = log.take();
+            // A transcript that gives no times (plain role lines): its turns are dated by when the file was written.
+            for (const row of rows) if (!(row.time > 0)) row.time = Math.round(r.mtime);
             if (!meta.session) meta.session = basename(job.path).replace(/\.jsonl$/i, '');
             if (!meta.folder) meta.folder = dirname(job.path);
             this.save(job, job.row, { rows, meta, size: r.size, mtime: r.mtime, ino: r.ino, offset: r.next, state: log.state });

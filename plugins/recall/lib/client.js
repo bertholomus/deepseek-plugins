@@ -1196,10 +1196,36 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             if (r.kind === 'handoff') return [r.label && r.label !== r.title ? `section ${quoted(r.label, 40)}` : 'its first section', Number.isFinite(r.line) ? `line ${r.line}` : ''].filter(Boolean).join(', ');
             return Number.isFinite(r.turn) ? `turn ${r.turn}` : '';
         }
-        /** A result's kind, its folder, its model and its place, for its meta line (the time is drawn apart). */
-        function metaParts(r, home) {
+        /** A turn's state in a word or two, for its meta line ('' when it ended as it should): one word everywhere. */
+        const STATE_WORD = Object.freeze({ running: 'still running', stopped: 'stopped', failed: 'failed', 'cut-off': 'cut off by a restart', 'cut-short': 'cut short', blocked: 'blocked' });
+        const stateOf = (r) => (typeof r?.state === 'string' ? r.state : r?.running === true ? 'running' : '');
+        /** A stopped turn in a sentence, from DSH's cause ("user", "parent", "disposed", "hook: why"). */
+        function stoppedSentence(why) {
+            const text = String(why ?? '');
+            const kind = text.split(':')[0];
+            if (kind === 'user') return 'This turn was stopped from the chat before it finished.';
+            if (kind === 'parent') return 'The session that started this turn stopped it before it finished.';
+            if (kind === 'disposed') return 'This turn stopped when DSH closed its session.';
+            if (kind === 'hook') return `A plugin stopped this turn before it finished${text.includes(':') ? ` (${cut(text.slice(text.indexOf(':') + 1), 120)})` : ''}.`;
+            return 'This turn was stopped before it finished.';
+        }
+        /** A turn's state in a sentence, for the reading view; '' when it ended as it should. */
+        function stateSentence(t) {
+            switch (stateOf(t)) {
+                case 'running': return 'This turn is still running.';
+                case 'stopped': return stoppedSentence(t.why);
+                case 'failed': return t.why ? `This turn failed: ${sentence(cut(t.why, 300))}` : 'This turn failed.';
+                case 'cut-off': return 'This turn was cut off by a restart: DSH stopped before it finished.';
+                case 'cut-short': return 'This turn was cut short: its reply reached the model\'s output limit.';
+                case 'blocked': return 'A plugin blocked this turn before it could go on.';
+                default: return '';
+            }
+        }
+        /** A result's kind, its folder, its model, its place (of how many) and its state, for its meta line (the time is drawn apart). */
+        function metaParts(r, home, { of: total } = {}) {
             const kind = r.kind === 'session' && !r.own ? 'Session from another DSH' : KIND_WORD[r.kind] ?? 'Result';
-            return [kind, r.folder ? homeless(r.folder, home) : '', r.model || '', placeOf(r), r.running ? 'still running' : ''].filter(Boolean);
+            const place = placeOf(r);
+            return [kind, r.folder ? homeless(r.folder, home) : '', r.model || '', place && Number.isFinite(total) && r.kind !== 'handoff' ? `${place} of ${count(total)}` : place, STATE_WORD[stateOf(r)] ?? ''].filter(Boolean);
         }
         /** A snippet's text with its hits as marks (the index marks them with \u0002 and \u0003). */
         function snippetParts(snippet) {
@@ -1841,8 +1867,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return h('div', { className: `${P}-read`, 'data-recall-reading': id },
                 back,
                 h('h3', { className: `${P}-read-title`, ref: head, tabIndex: -1 }, titleOf(t)),
-                h('div', { className: `${P}-meta` }, metaParts(t, home).join(' · '), Number.isFinite(t.count) && !note ? ` of ${count(t.count)}` : '', t.time ? ' · ' : '', t.time ? h(kit.TimeText, { at: t.time }) : null),
+                h('div', { className: `${P}-meta` }, metaParts(t, home, { of: t.count }).join(' · '), t.time ? ' · ' : '', t.time ? h(kit.TimeText, { at: t.time }) : null),
                 where ? h('div', { className: `${P}-meta` }, where) : null,
+                stateSentence(t) ? h('p', { className: `${P}-note`, 'data-recall-state': stateOf(t) }, stateSentence(t)) : null,
                 note ? [
                     h('h4', { key: 'l', className: `${P}-read-label` }, t.label ? `Section ${quoted(t.label, 80)}` : 'The note'),
                     h('div', { key: 't', className: `${P}-read-text` }, t.reply || 'This section has no text.'),
@@ -1850,7 +1877,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     h('h4', { key: 'al', className: `${P}-read-label` }, 'Asked'),
                     h('div', { key: 'at', className: `${P}-read-text` }, t.prompt || 'No words were kept for this request.'),
                     h('h4', { key: 'rl', className: `${P}-read-label` }, 'Reply'),
-                    h('div', { key: 'rt', className: `${P}-read-text` }, t.reply || (t.running ? 'This turn is still running.' : 'This turn has no reply text.')),
+                    h('div', { key: 'rt', className: `${P}-read-text` }, t.reply || (stateOf(t) === 'running' ? 'No reply yet.' : 'This turn has no reply text.')),
                     t.tools ? h('h4', { key: 'tl', className: `${P}-read-label` }, 'Commands and files it used') : null,
                     t.tools ? h('div', { key: 'tt', className: `${P}-read-text ${P}-code` }, t.tools) : null,
                 ],
@@ -2339,7 +2366,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         // For the plugin's own tests.
         module.exports.internals = {
             kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, KIND_WORD, TONE, finder, jump, views,
-            folderList, folderSpec, specOf, homeless, titleOf, metaParts, snippetParts, askedLine, countLine, endLine, indexLine, rootWords, callArgs, failureText, runningTitle, doneTitle,
+            folderList, folderSpec, specOf, homeless, titleOf, metaParts, snippetParts, askedLine, countLine, endLine, stateSentence, indexLine, rootWords, callArgs, failureText, runningTitle, doneTitle,
             openAt, openResult, endJump, land, landWithoutMark, applySettings,
             RecallPage, RecallMark, RecallIcon, RecallToolView, SettledToolView, PreparingToolView, SearchCard, ResultRow, ReadingView, IndexCard, HistoryCard, HeaderCard, ThreadState, Filters, FilterMenu, NoResults,
         };

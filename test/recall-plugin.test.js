@@ -10,6 +10,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { DEFAULTS, LIVE_SETTINGS } from '../plugins/recall/lib/config.js';
 import { tempDir } from './helpers/temp.mjs';
+import { sessionFile, sessionWriter } from './fixtures/recall/corpus.mjs';
 
 await import('./fixtures/recall/stubs/hooks.mjs');
 const recall = await import('../plugins/recall/lib/index.js');
@@ -24,8 +25,11 @@ function configOf(patch = {}) {
     return Object.fromEntries(Object.entries(values).map(([key, value]) => [key, LIVE_SETTINGS.includes(key) ? ref(value) : value]));
 }
 
-/** Enough of DSH for `apply`: events, effects, the tools and the gateway (Session Watch is not running: Recall needs nothing else). */
-function standInDsh() {
+/**
+ * Enough of DSH for `apply`: events, effects, the tools and the gateway (Session Watch is not running: Recall needs
+ * nothing else). `agents`: DSH's agents service (which sessions run), when the test gives one.
+ */
+function standInDsh({ agents } = {}) {
     const handlers = new Map();
     const disposers = [];
     const provided = new Map();
@@ -40,6 +44,7 @@ function standInDsh() {
             },
         },
         provide: (name, value) => provided.set(name, value),
+        agents,
     };
     const ctx = {
         logger: { warn: (line) => warnings.push(line), info: () => {} },
@@ -53,7 +58,7 @@ function standInDsh() {
             if (typeof off === 'function') disposers.push(off);
         },
         inject(names, fn) {
-            if (names.includes('sessionWatch')) return;
+            if (names.includes('sessionWatch') || (names.includes('agents') && !agents)) return;
             const off = fn(scope);
             if (typeof off === 'function') disposers.push(off);
         },
@@ -161,4 +166,27 @@ test('plugin: every setting wrong at once still starts; enabled written as text 
     config.sessions.value = true;
     await dsh.emit('loader/volatile-update', [['sessions']]);
     assert.equal((await remote.state()).problem.key, 'enabled');
+});
+
+test('plugin: a turn runs only while DSH says its session runs; a session DSH stopped under (a crash it never reopened) is cut off', async (t) => {
+    const home = tempDir('recall-plugin-live');
+    process.env.RECALL_TEST_DSH_HOME = home;
+    const sessions = join(home, 'sessions');
+    const at = Date.now() - 3_600_000;
+    sessionWriter(sessionFile(sessions, 's-live'), { id: 's-live', createdAt: at }).header().turn({ prompt: 'osprey, asked now', end: false });
+    sessionWriter(sessionFile(sessions, 's-dead'), { id: 's-dead', createdAt: at }).header().turn({ prompt: 'osprey, asked before a crash', end: false });
+    const list = [{ id: 's-live', status: 'running' }];
+    const dsh = standInDsh({ agents: { list: () => list } });
+    t.after(() => dsh.stop());
+    recall.apply(dsh.ctx, configOf());
+    const remote = dsh.remote();
+    const states = async () => Object.fromEntries((await remote.search({ text: 'osprey' })).results.map((r) => [r.sessionId, r.state]));
+    assert.ok(await until(async () => JSON.stringify(await states()) === JSON.stringify({ 's-live': 'running', 's-dead': 'cut-off' })), JSON.stringify(await states().catch((e) => e.message)));
+    // DSH says it stopped: its end is read a moment later, so no word for now, and never "running".
+    list[0].status = 'idle';
+    await dsh.emit('agent/status', { agent: list[0], status: 'idle' });
+    assert.ok(await until(async () => (await states())['s-live'] === ''), JSON.stringify(await states()));
+    list[0].status = 'running';
+    await dsh.emit('agent/status', { agent: list[0], status: 'running' });
+    assert.ok(await until(async () => (await states())['s-live'] === 'running'));
 });

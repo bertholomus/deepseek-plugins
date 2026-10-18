@@ -24,7 +24,7 @@ page reads again every few seconds.
 
 | Kind | Where | One row per | What it keeps |
 | --- | --- | --- | --- |
-| **DSH sessions** | This DSH's `sessions` folder (`session.v*.jsonl.zstd`), and the DSH homes in *More DSH session folders* | turn | The title, what the person asked (6,000 characters), the reply (its first 3,000 and last 9,000 characters, where an answer usually is), the commands and files its tools used (60 lines), the model, the folder and DSH's own seq for the turn. |
+| **DSH sessions** | This DSH's `sessions` folder (`session.v*.jsonl.zstd`), and the DSH homes in *More DSH session folders* | turn | The title, what the person asked (6,000 characters), the reply (its first 3,000 and last 9,000 characters, where an answer usually is), the commands and files its tools used (60 lines), the model, the folder, DSH's own seq for the turn, and how the turn ended. |
 | **Coding-agent transcripts** | *Coding-agent transcript folders* and their subfolders: `.jsonl` files, one message a line | turn: each message the person wrote, with the replies and tool calls after it | The same, plus the file and the line the turn starts on. |
 | **Handoff notes** | *Handoff note folders* and their subfolders: `.md`, `.markdown`, `.mdown`, `.mkd` | section: one per heading (a long one is cut at about 8,000 characters) | The heading, its text, the file and line. Front matter is left out; its `title` names the note. |
 
@@ -54,6 +54,25 @@ Some things are left out on purpose:
   from it searchable, and Recall looks again every minute.
 - **A folder taken out of the settings** has its turns taken out of the
   index.
+- **An index from an earlier Recall** is built again once, at the first
+  start after an update: it now keeps how each turn ended. Searches find
+  more as it goes.
+
+### How each turn ended
+
+A turn that did not end as it should says so, in the same words in its
+row, the reading view and the tool:
+
+| State | When |
+| --- | --- |
+| *still running* | A turn of this DSH: only while DSH says its session runs. A transcript's last turn, or another DSH's: while its file was written to in the last 10 minutes. |
+| *stopped* | DSH stopped it: from the chat, the session that started it, DSH closing the session, or a plugin. The reading view says which. |
+| *failed* | It ended with an error. The reading view and the tool give DSH's message. |
+| *cut short* | Its reply reached the model's output limit. |
+| *blocked* | A plugin's check stopped it before its next step. |
+| *cut off by a restart* | DSH stopped before it finished, by a crash or a restart. That is DSH's own mark when it opens the session again, and Recall's word for a turn with no end in a session that no longer runs. |
+
+A turn that ended as it should, and a note's section, say nothing more.
 
 ## Searching
 
@@ -169,6 +188,8 @@ With *Let agents search past work* on, agents are offered `recall_search`:
 
 What it gives the agent is bounded:
 
+- A search leaves out the turn that asks: the agent's own question is not
+  earlier work. The session's earlier turns stay.
 - A search gives at most 20 results in 9,000 characters.
 - One turn in full keeps 2,000 characters of the request, 3,500 of the
   reply and 1,200 of the commands.
@@ -367,7 +388,12 @@ transcripts or notes it reads.
   files.
 - **Transcripts.** A transcript has no end-of-turn mark. Its last turn
   shows as still running while the file was written to in the last 10
-  minutes.
+  minutes. A transcript that gives no times (plain role lines) is dated by
+  when its file was last written, and a line with no time of its own takes
+  the latest time before it.
+- **Another DSH's sessions** say *still running* or *cut off by a restart*
+  from their log alone: this DSH cannot ask that one which of its sessions
+  run.
 - **Sessions of another DSH** open in Recall's reading view, not in the
   chat: this DSH cannot open them.
 - **Long lists.** A search lists the sessions and files of its 4,000

@@ -165,6 +165,24 @@ test('words: a result says what it is, where, when and which turn; hits are mark
     assert.deepEqual(plain(metaParts({ ...OWN, own: false, running: true }, HOME)), ['Session from another DSH', '~/work/gateway', 'glm-5.3', 'turn 4', 'still running']);
     assert.deepEqual(plain(metaParts(NOTE, HOME)), ['Handoff note', '~/notes', 'section “Next steps”, line 40']);
     assert.deepEqual(plain(metaParts(TRANSCRIPT, HOME)), ['Coding-agent transcript', '~/work/parser', 'glm-5.3-flash', 'turn 2']);
+    // One state per turn, one word for it everywhere: the rows, the tool's card, the reading view (after "of N").
+    const word = (state, extra = {}) => plain(metaParts({ ...OWN, state, ...extra }, HOME)).slice(3).join(' · ');
+    assert.deepEqual(['running', 'stopped', 'failed', 'cut-off', 'cut-short', 'blocked', ''].map((st) => word(st)),
+        ['turn 4 · still running', 'turn 4 · stopped', 'turn 4 · failed', 'turn 4 · cut off by a restart', 'turn 4 · cut short', 'turn 4 · blocked', 'turn 4']);
+    assert.equal(plain(metaParts({ ...OWN, state: 'running' }, HOME, { of: 1 })).slice(3).join(' · '), 'turn 4 of 1 · still running', 'not "still running of 1"');
+    assert.equal(plain(metaParts(NOTE, HOME, { of: 3 })).at(-1), 'section “Next steps”, line 40', 'a note\'s section has no count');
+    const { stateSentence } = client.internals;
+    assert.deepEqual([
+        stateSentence({ state: 'stopped', why: 'user' }), stateSentence({ state: 'stopped', why: 'parent' }), stateSentence({ state: 'stopped', why: 'disposed' }),
+        stateSentence({ state: 'stopped', why: 'hook: account/signed-out' }), stateSentence({ state: 'stopped' }),
+        stateSentence({ state: 'failed', why: 'The model provider did not answer (503)' }), stateSentence({ state: 'failed' }),
+        stateSentence({ state: 'cut-off' }), stateSentence({ state: 'cut-short' }), stateSentence({ state: 'blocked' }), stateSentence({ state: 'running' }), stateSentence({ state: '' }),
+    ], [
+        'This turn was stopped from the chat before it finished.', 'The session that started this turn stopped it before it finished.', 'This turn stopped when DSH closed its session.',
+        'A plugin stopped this turn before it finished (account/signed-out).', 'This turn was stopped before it finished.',
+        'This turn failed: The model provider did not answer (503).', 'This turn failed.',
+        'This turn was cut off by a restart: DSH stopped before it finished.', 'This turn was cut short: its reply reached the model\'s output limit.', 'A plugin blocked this turn before it could go on.', 'This turn is still running.', '',
+    ]);
     assert.equal(homeless('/Users/me', HOME), '~');
     assert.equal(homeless('/Users/meg/x', HOME), '/Users/meg/x', 'only the home folder itself');
     assert.equal(titleOf(TRANSCRIPT), 'Untitled transcript');
@@ -469,7 +487,14 @@ test('reading view: the turn in full, the turns beside it, the way into its sess
     const { client } = loadClient(CLIENT, { react });
     const { kit, ReadingView, finder, views, jump, endJump } = client.internals;
     const TURN = { ...OWN, path: `${HOME}/.dsh/sessions/w/sess-own-1/session.v4.jsonl.zstd`, prompt: 'please deploy the gateway to staging', reply: 'Deployed: 3 pods ready.', tools: 'bash: make deploy ENV=staging', prev: 3, next: 5, count: 9 };
-    const calls = connect(kit, { turn: ({ id }) => (id === '3.4' ? TURN : id === '9.2' ? { ...TRANSCRIPT, prompt: 'roll back', reply: 'Rolled back.', tools: '', prev: undefined, next: 3, count: 3 } : { ok: false, error: { code: 'recall/refused', message: 'That result is no longer in the index (its file changed or went). Search again.' } }) });
+    const turns = {
+        '3.4': TURN,
+        '3.6': { ...TURN, id: '3.6', turn: 6, reply: '', tools: '', state: 'cut-off' },
+        '3.9': { ...TURN, id: '3.9', turn: 9, reply: '', tools: '', state: 'running', running: true, next: undefined },
+        '3.7': { ...TURN, id: '3.7', turn: 7, reply: 'Half an answer', state: 'failed', why: 'The model provider did not answer (503)' },
+        '9.2': { ...TRANSCRIPT, prompt: 'roll back', reply: 'Rolled back.', tools: '', prev: undefined, next: 3, count: 3 },
+    };
+    const calls = connect(kit, { turn: ({ id }) => turns[id] ?? { ok: false, error: { code: 'recall/refused', message: 'That result is no longer in the index (its file changed or went). Search again.' } } });
     t.after(() => { kit.setConnection(undefined); endJump(); });
     let backs = 0;
     const view = mount(ReadingView, { id: '3.4', home: HOME, onBack: () => { backs += 1; } });
@@ -498,6 +523,24 @@ test('reading view: the turn in full, the turns beside it, the way into its sess
     withAttr(view.tree, 'data-recall-back')[0].props.onClick();
     assert.equal(backs, 1);
 
+    // How a turn ended, when not as it should: in its meta line after "of 9", and in a sentence.
+    view.update({ id: '3.6' });
+    await settle(5);
+    text = textIn(view.tree);
+    assert.match(text, /turn 6 of 9 · cut off by a restart · 1 h agoThis turn was cut off by a restart: DSH stopped before it finished\.Asked/);
+    assert.match(text, /ReplyThis turn has no reply text\./);
+    assert.equal(withAttr(view.tree, 'data-recall-state')[0].props['data-recall-state'], 'cut-off');
+    view.update({ id: '3.9' });
+    await settle(5);
+    text = textIn(view.tree);
+    assert.match(text, /turn 9 of 9 · still running · 1 h agoThis turn is still running\.Asked/);
+    assert.match(text, /ReplyNo reply yet\./);
+    view.update({ id: '3.7' });
+    await settle(5);
+    assert.match(textIn(view.tree), /turn 7 of 9 · failed · 1 h agoThis turn failed: The model provider did not answer \(503\)\.Asked.*ReplyHalf an answer/);
+    view.update({ id: '3.4' });
+    await settle(5);
+    assert.equal(withAttr(view.tree, 'data-recall-state').length, 0, 'a turn that ended as it should says nothing more');
     view.update({ id: '9.2' });
     await settle(5);
     text = textIn(view.tree);

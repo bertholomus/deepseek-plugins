@@ -1,15 +1,33 @@
 # Recall round 2: the builder's notes
 
-Updated: 6:06 PM PDT (Claude Code, Recall round-2 builder)
+Updated: 6:20 PM PDT (Claude Code, Recall round-2 builder)
 
 ## Status
 
 Working through round 1's findings (`review/recall-round-1.md`: 8.0, NOT YET; reliability 8, UX 8).
 Findings 1 and 2 done in code and unit tests (their real-DSH steps come with the e2e batch), and with
 them Finding 5 (focus after Back), Finding 9's paging, and Finding 8's button names, plain-text
-snippets and "1 other section … matches". Finding 3 and 4 next.
+snippets and "1 other section … matches"; then Findings 3, 4 and 7. Finding 6 next.
 
 ## Done (newest first)
+
+- 6:20 PM PDT. F3, F4, F7. Each turn keeps how it ended (DSH's `turn/end` reason and why: who
+  stopped it, or the error's message; new `docs.ended` and `docs.why`, SCHEMA_VERSION 4, so an
+  older index is built again once). One state per turn, one word for it everywhere (rows, the
+  tool's card, the reading view after "of N", the tool's text): still running (this DSH's turn
+  only while DSH's agents say its session runs: `ctx.inject(['agents'])` plus `agent/status`,
+  `agent/created`, `agent/disposed`, sent to the index thread as a standing `running` call; 30 s
+  after DSH says it stopped with no end read, cut off), stopped (from the chat, by its parent
+  session, DSH closing it, a plugin), failed (with DSH's message), cut short (max-tokens),
+  blocked, cut off by a restart (DSH's `interrupted` closer after a crash, a turn opened while
+  one was open, or no end in a session that no longer runs). Another DSH's sessions and
+  transcripts keep the file-moved-lately rule. F4: the tool passes the calling agent's session
+  (`exec.agent.session.id`) and the search leaves out that session's open turn (counts too).
+  F7: an undated transcript turn takes the latest time before it, else the file's modified time.
+  Tests: `test/recall-host.test.js` (every end reason, DSH's word on running, the grace, the
+  tool's words; the asking turn; undated transcripts), `test/recall-plugin.test.js` (the agents
+  wiring through apply), `test/recall-client.test.js` (state words, "turn 9 of 9 · still
+  running", the reading view's sentence). README: "How each turn ended", the tool, Limits.
 
 - 6:06 PM PDT. F2: a turn's own words decide. bm25 with the title's weight at 0 (`own`) says
   whether a turn says the words; the index answers that alone for counts with the column filter
@@ -52,10 +70,8 @@ snippets and "1 other section … matches". Finding 3 and 4 next.
 
 1. (F2 done.) Run the bench once more after F3 and F6 if the search path changed, and update the
    README table again if it moved.
-2. F3 and F4: one honest state per turn (running only while DSH says so; stopped, failed, cut off
-   by a restart, cut short); the tool leaves out the asking turn.
-3. F6 and F7: the index shrinks after a take-out and a rebuild; undated transcripts take the
-   file's time.
+2. (F3, F4 done.)
+3. F6: the index shrinks after a take-out and a rebuild (F7 done).
 4. F8 and F9 rest: the wording slips not yet done (still running of N, nothing-typed others,
    Clear the filters twice, the not-a-folder words, a never-read file, "Read 1 file in 0
    seconds", "Reading what changed" with no total, `~/` in Stopped searching and problem paths,
@@ -93,6 +109,15 @@ snippets and "1 other section … matches". Finding 3 and 4 next.
   (more words or a filter). The README's Limits say the same.
 - Snippets are made plain on the host (`lib/plain.js`), so the page and the tool get the same
   words; single `*` and `_` stay (sums, names), and the reading view keeps the turn as written.
+
+- DSH's word on running sessions comes from its agents service, injected optionally (Recall
+  still needs nothing else); without it, this DSH's sessions use the file-moved-lately rule.
+- After DSH says a session stopped, its open turn says nothing for 30 s (its end is read about
+  1.5 s later) rather than "running" or "cut off".
+- Stopped turns' sentences name who stopped them only from DSH's own cause kinds (user, parent,
+  disposed, hook); any other reason reads "stopped", never a guess.
+- The asking turn is the calling session's open turn (DSH gives a tool the agent, not the turn
+  number); the session's earlier turns stay in the results.
 
 ## Gotchas
 

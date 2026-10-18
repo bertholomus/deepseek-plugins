@@ -23,7 +23,7 @@ export const LIMITS = Object.freeze({
 
 /** A turn just started. */
 export function newTurn({ turn, seq = 0, time = 0, line = 0, model = '', provider = '' }) {
-    return { turn, seq, time, end: 0, line, status: 'running', model, provider, prompt: '', head: '', tail: '', cut: false, tools: '', toolCount: 0 };
+    return { turn, seq, time, end: 0, line, status: 'running', why: '', model, provider, prompt: '', head: '', tail: '', cut: false, tools: '', toolCount: 0 };
 }
 
 const clean = (text) => String(text ?? '').replace(/\r\n?/g, '\n').replace(/\u0000/g, '').trim();
@@ -111,6 +111,7 @@ export function rowOf(turn, { done = turn.status !== 'running' } = {}) {
         end: turn.end,
         line: turn.line,
         status: done ? (turn.status === 'running' ? 'done' : turn.status) : 'running',
+        why: done ? String(turn.why ?? '') : '',
         model: turn.model,
         provider: turn.provider,
         label: '',

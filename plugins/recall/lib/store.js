@@ -19,7 +19,7 @@ import { chmodSync, existsSync, renameSync, rmSync, statSync, writeFileSync } fr
 import { plainText } from './plain.js';
 
 /** Bump when the tables change: an index of another version is built again. */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /** bm25 weights of the columns: title, prompt, reply, tools. */
 const WEIGHTS = [4.0, 2.0, 1.0, 0.7];
@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS docs (
   seq INTEGER NOT NULL DEFAULT 0,
   time INTEGER NOT NULL DEFAULT 0,
   done INTEGER NOT NULL DEFAULT 1,
+  ended TEXT NOT NULL DEFAULT '',
+  why TEXT NOT NULL DEFAULT '',
   kind TEXT NOT NULL,
   folder TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
@@ -288,14 +290,16 @@ export class Store {
      */
     putRow(fileId, file, row) {
         const found = this.sql('SELECT id FROM docs WHERE file = ? AND turn = ?').get(fileId, row.turn);
-        const values = [row.seq ?? 0, Math.round(row.time ?? 0), row.status === 'running' ? 0 : 1, file.kind, file.folder ?? '', row.model ?? '', row.label ?? '', row.line ?? 0];
+        // How the turn ended, when it did not end as it should: DSH's reason (aborted, error, interrupted, …) and why.
+        const ended = ['running', 'done', 'completed'].includes(row.status) || typeof row.status !== 'string' ? '' : row.status.slice(0, 40);
+        const values = [row.seq ?? 0, Math.round(row.time ?? 0), row.status === 'running' ? 0 : 1, ended, ended ? String(row.why ?? '').slice(0, 300) : '', file.kind, file.folder ?? '', row.model ?? '', row.label ?? '', row.line ?? 0];
         let id;
         if (found) {
             id = found.id;
-            this.sql('UPDATE docs SET seq = ?, time = ?, done = ?, kind = ?, folder = ?, model = ?, label = ?, line = ? WHERE id = ?').run(...values, id);
+            this.sql('UPDATE docs SET seq = ?, time = ?, done = ?, ended = ?, why = ?, kind = ?, folder = ?, model = ?, label = ?, line = ? WHERE id = ?').run(...values, id);
             this.sql('DELETE FROM fts WHERE rowid = ?').run(id);
         } else {
-            id = Number(this.sql('INSERT INTO docs (seq, time, done, kind, folder, model, label, line, file, turn) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(...values, fileId, row.turn).lastInsertRowid);
+            id = Number(this.sql('INSERT INTO docs (seq, time, done, ended, why, kind, folder, model, label, line, file, turn) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(...values, fileId, row.turn).lastInsertRowid);
         }
         this.sql('INSERT INTO fts (rowid, title, prompt, reply, tools) VALUES (?, ?, ?, ?, ?)').run(id, file.title ?? '', row.prompt ?? '', row.reply ?? '', row.tools ?? '');
         return id;
@@ -388,6 +392,31 @@ export class Store {
             out.set(r.id, plainText(best ?? ''));
         }
         return out;
+    }
+
+    /** How each row ended (`done`, DSH's reason when it ended early, and why), for the page's rows. */
+    endsOf(ids) {
+        const out = new Map();
+        if (ids.length === 0) return out;
+        const marks = ids.map(() => '?').join(', ');
+        for (const r of this.db.prepare(`SELECT id, done, ended, why FROM docs WHERE id IN (${marks})`).all(...ids)) out.set(r.id, r);
+        return out;
+    }
+
+    /** This DSH's session file for a session id (the tool leaves out the turn that asks), or undefined. */
+    ownSessionFile(sessionId) {
+        if (typeof sessionId !== 'string' || !sessionId) return undefined;
+        return this.sql('SELECT id FROM files WHERE session = ? AND own = 1 AND kind = \'session\' LIMIT 1').get(sessionId)?.id;
+    }
+
+    /** A file's open turn (a session's turn still going: the one that asks, for the tool), or undefined. */
+    openTurnOf(fileId) {
+        return this.sql('SELECT id FROM docs WHERE file = ? AND done = 0 ORDER BY turn DESC LIMIT 1').get(fileId)?.id;
+    }
+
+    /** Whether one row matches an FTS5 query. */
+    says(match, id) {
+        return Boolean(match) && this.sql('SELECT 1 AS hit FROM fts WHERE fts MATCH ? AND rowid = ?').get(match, id) !== undefined;
     }
 
     /** The start of each row's prompt, for "what was asked". */

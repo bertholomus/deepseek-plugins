@@ -48,6 +48,10 @@ const ownHit = (r) => r.own < 0;
 
 /** A transcript has no end-of-turn mark: its last turn is still running only while the transcript was written to lately. */
 export const TRANSCRIPT_QUIET_MS = 10 * 60_000;
+/** After DSH says a session stopped running, how long its log may still show the turn open (its end is read a moment later). */
+export const END_GRACE_MS = 30_000;
+/** How a turn that ended early ended, from DSH's reason for its end; any other reason reads as stopped. */
+export const END_STATES = Object.freeze({ aborted: 'stopped', error: 'failed', interrupted: 'cut-off', 'max-tokens': 'cut-short', blocked: 'blocked' });
 
 export class Engine {
     /**
@@ -70,6 +74,11 @@ export class Engine {
         this.busySince = 0;
         this.busyRead = 0;
         this.busyRows = 0;
+        /** This DSH's sessions running now, as DSH says (`running`); until it says, a session's log moving tells. */
+        this.live = new Set();
+        this.liveKnown = false;
+        /** When each session last stopped running, as DSH said (its turn's end is read a moment after). */
+        this.stoppedAt = new Map();
     }
 
     /** One request from the plugin. Throws a message in words. */
@@ -82,6 +91,16 @@ export class Engine {
             case 'touch':
                 for (const id of Array.isArray(args.sessionIds) ? args.sessionIds.slice(0, 500) : []) this.indexer.touchSession(id);
                 return true;
+            case 'running': {
+                // DSH's word on which of its sessions run now (sent again whenever one starts or stops).
+                const live = new Set((Array.isArray(args.sessions) ? args.sessions : []).filter((id) => typeof id === 'string').slice(0, 5000));
+                for (const id of this.live) if (!live.has(id)) this.stoppedAt.set(id, this.now());
+                for (const id of live) this.stoppedAt.delete(id);
+                if (this.stoppedAt.size > 5000) this.stoppedAt.clear();
+                this.live = live;
+                this.liveKnown = args.known === true;
+                return true;
+            }
             case 'rescan':
                 this.indexer.scan();
                 return this.status();
@@ -159,15 +178,19 @@ export class Engine {
         const sort = q.sort === 'newest' ? 'newest' : 'best';
         const base = { text, words: parsed.words, excluded: parsed.excluded, sort, filters: { ...filters, from: span.from ?? null, to: span.to ?? null } };
         if (text.trim() && !parsed.match) return { ...base, total: 0, totalMore: false, sessions: 0, results: [], more: false, took: this.took(started), nothing: 'no-words' };
+        // The tool's search leaves out the turn that asks (its session's open turn): it says its own words.
+        const leaveFile = typeof q.leave?.session === 'string' ? this.store.ownSessionFile(q.leave.session) : undefined;
+        const asking = leaveFile !== undefined ? this.store.openTurnOf(leaveFile) : undefined;
         const look = (cap) => {
-            const rows = this.store.candidates({ match: parsed.match, sort: parsed.match ? sort : 'newest', cap, filters });
-            return { rows, cap, ordered: this.groupsOf(rows, { parsed, sort, file }) };
+            const got = this.store.candidates({ match: parsed.match, sort: parsed.match ? sort : 'newest', cap, filters });
+            const rows = asking === undefined ? got : got.filter((r) => r.id !== asking);
+            return { rows, got: got.length, cap, ordered: this.groupsOf(rows, { parsed, sort, file }) };
         };
         let found = look(Math.min(SEARCH_LIMITS.candidates, Math.max(400, (offset + limit) * 10)));
         // A few sessions hold most of the matching turns: look through more of them before a page comes up short.
-        if (found.rows.length >= found.cap && found.ordered.length <= offset + limit && found.cap < SEARCH_LIMITS.candidates) found = look(SEARCH_LIMITS.candidates);
+        if (found.got >= found.cap && found.ordered.length <= offset + limit && found.cap < SEARCH_LIMITS.candidates) found = look(SEARCH_LIMITS.candidates);
         const { rows, cap, ordered } = found;
-        const capped = rows.length >= cap;
+        const capped = found.got >= cap;
         // A list goes as far as its 1,000th result, and as far as the files of the turns it looked through.
         const end = Math.min(offset + limit, SEARCH_LIMITS.offset);
         const page = ordered.slice(offset, end);
@@ -180,11 +203,13 @@ export class Engine {
         const ids = page.filter((g) => !g.titleOnly).map((g) => g.best.id);
         const snippets = this.store.snippets(parsed.match, ids);
         const asked = this.store.asked(page.map((g) => g.best.id));
+        const ends = this.store.endsOf(page.map((g) => g.best.id));
         const files = this.store.filesByIds([...new Set(page.map((g) => g.best.file))]);
         // Every row that says the words is here unless the cap cut them short: then the index counts them.
         const all = !capped || (sort === 'best' && parsed.match && !ownHit(rows.at(-1)));
-        const total = all ? rows.filter(ownHit).length : this.store.count({ match: parsed.own, filters, cap: SEARCH_LIMITS.count });
-        const results = page.map((g) => this.resultOf(g, files.get(g.best.file), snippets.get(g.best.id), asked.get(g.best.id)));
+        const counted = () => this.store.count({ match: parsed.own, filters, cap: SEARCH_LIMITS.count }) - (asking !== undefined && parsed.own && this.store.says(parsed.own, asking) ? 1 : 0);
+        const total = all ? rows.filter(ownHit).length : Math.max(0, counted());
+        const results = page.map((g) => this.resultOf(g, files.get(g.best.file), snippets.get(g.best.id), asked.get(g.best.id), ends.get(g.best.id)));
         const titled = ordered.filter((g) => g.titleOnly).length;
         return {
             ...base,
@@ -236,8 +261,9 @@ export class Engine {
         return Math.round((this.clock() - started) * 10) / 10;
     }
 
-    resultOf(g, f = {}, snippet = '', asked = '') {
+    resultOf(g, f = {}, snippet = '', asked = '', end = undefined) {
         const d = g.best;
+        const state = this.stateOf(d, f, end);
         return {
             id: `${d.file}.${d.turn}`,
             file: d.file,
@@ -253,7 +279,9 @@ export class Engine {
             time: d.time,
             folder: d.folder,
             model: d.model,
-            running: this.running(d, f),
+            state,
+            running: state === 'running',
+            ...(state && end?.why ? { why: end.why } : {}),
             snippet: snippet ?? '',
             asked: String(asked ?? '').replace(/\s+/g, ' ').trim(),
             hits: g.hits,
@@ -262,12 +290,34 @@ export class Engine {
         };
     }
 
-    /** Whether a turn is still running: a DSH session's until its end is logged; a transcript's while it is written to. */
-    running(d, f = {}) {
-        if (d.done !== 0) return false;
-        if (d.kind !== 'transcript') return true;
+    /**
+     * A turn's state in one word: '' when it ended as it should (and for a note's section), 'running', or how it
+     * ended early: 'stopped' (someone or something stopped it), 'failed', 'cut-short' (the model's length
+     * limit), 'blocked' (a plugin's check), or 'cut-off' (DSH stopped under it, by a crash or a restart).
+     * @param {object} d - the row: kind, done.
+     * @param {object} [f] - its file: own, session, updated, mtime.
+     * @param {{ ended?: string }} [end] - how it ended (the row's own `ended`, when it has one).
+     */
+    stateOf(d, f = {}, end = d) {
+        if (d.kind === 'handoff') return '';
+        if (d.done !== 0) return end?.ended ? END_STATES[end.ended] ?? 'stopped' : '';
+        // This DSH's session runs only while DSH says so; its end is read a moment after DSH says it stopped.
+        if (d.kind === 'session' && f.own === 1 && this.liveKnown) {
+            if (this.live.has(f.session)) return 'running';
+            const stopped = this.stoppedAt.get(f.session);
+            return stopped !== undefined && this.now() - stopped < END_GRACE_MS ? '' : 'cut-off';
+        }
+        // A transcript has no end mark: its last turn runs while it is written to (its own last time, else its
+        // file's). So does another DSH's session, and when that log is quiet with a turn open, its DSH stopped under it.
         const last = Number(f.updated) > 0 ? Number(f.updated) : Number(f.mtime) || 0;
-        return this.now() - last < TRANSCRIPT_QUIET_MS;
+        if (this.now() - last < TRANSCRIPT_QUIET_MS) return 'running';
+        return d.kind === 'session' ? 'cut-off' : '';
+    }
+
+    /** A row's state for an answer: its word, whether it runs, and why it ended early when DSH said. */
+    stateFields(d, f) {
+        const state = this.stateOf(d, f);
+        return { state, running: state === 'running', ...(state && d.why ? { why: d.why } : {}) };
     }
 
     /** One turn (or note section) in full, by its result id ("12.4"). */
@@ -294,7 +344,7 @@ export class Engine {
             time: d.time,
             folder: d.folder,
             model: d.model,
-            running: this.running(d, f),
+            ...this.stateFields(d, f),
             prompt: d.prompt ?? '',
             reply: d.reply ?? '',
             tools: d.tools ?? '',

@@ -119,7 +119,9 @@ export class TranscriptLog {
             const words = promptText(content);
             if (!words) return;
             if (s.open) this.close();
-            s.open = newTurn({ turn: s.count + 1, time: at, line: lineNo, model: s.model });
+            // A message with no time of its own takes the latest time before it in the file (the indexer gives
+            // one with none at all the file's modified time).
+            s.open = newTurn({ turn: s.count + 1, time: at || s.last, line: lineNo, model: s.model });
             addPrompt(s.open, words);
             if (!s.first) s.first = titleLine(words.split('\n').find((l) => l.trim()) ?? '');
             return;
