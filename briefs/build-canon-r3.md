@@ -1,17 +1,22 @@
 # Canon round 3: builder's notes
 
-Updated: 2026-10-17 10:17 PM PDT (Canon round-3 builder)
+Updated: 2026-10-17 10:24 PM PDT (Canon round-3 builder)
 Branch: `suite/v1` in `~/Projects/dsh-plugin-suite`
-Status: built. Findings 1 to 6 and the 9.5 list are in (Finding 1: 3b6811a, 106086d, 483b42e, f3bfec8; Findings 2 and
-3: 79056f1; README and Finding 4: 171c6b5; Finding 5: e68eb4f; Finding 6's nits: 4bcb908). `node scripts/e2e.mjs
-canon` passes on all three builds, three runs, live DSH unchanged. Open: **the first hold-out's floors test is still
-not ok**, so `npm test` does not pass in full (see Gotchas); two Proof tests also fail on a clean copy (not Canon's).
+Status: built, waiting on one decision. Findings 1 to 6 and the 9.5 list are in (Finding 1: 3b6811a, 106086d, 483b42e,
+f3bfec8; Findings 2 and 3: 79056f1; README and Finding 4: 171c6b5; Finding 5: e68eb4f; Finding 6's nits: 4bcb908).
+The first hold-out missed two floors at 9876265, so by OPEN-QUESTIONS #37 (4de6f8b) it is tuned on from now; its
+figures are in the README beside its first ones (d813a6d). Reading it to tune is not done: the permission check
+refused it (see Gotchas). Rules not frozen yet: the rules are unchanged since f3bfec8.
 Vault frozen at f7283b5: test/fixtures/canon/vault (not changed this round).
 
 Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 17 10:39:36 2026, patch sha256
 63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7.
 
 ## Done (newest first)
+- OPEN-QUESTIONS #37 (4de6f8b, the coordinator, 10:20 PM): the first hold-out's figures at 9876265, from a clean copy:
+  first note answers 18 of 24 (75.0%, floor 80%: missed), an answering note in the block 20 of 24 (83.3%, floor 90%:
+  missed), 17 notes that do not answer in 20 blocks (met), no block for 21 of 24 (met). In the README beside its first
+  figures (9a8a4c9), marked missed, both kept for good; the README says it is no longer kept apart. (d813a6d)
 - `node scripts/e2e.mjs canon`, three runs (10:06 to 10:16 PM PDT), each 95 passed, 0 failed on DSH 0.2.0-rc.2,
   0.2.1-rc.1 and app-0.2.1-rc.2. Live DSH fingerprint before and after each run (10:06, 10:09, 10:10, 10:13, 10:13,
   10:16 PM): pid 18756, started Sat Oct 17 10:39:36 2026, patch sha256
@@ -147,13 +152,17 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
   judge's fixture set (54) 16/21, 18/21, 0.56, 23/33; the judge's generic set (60) no block 44/60.
 
 ## Next steps (in order, each runnable by someone new)
-1. The first hold-out's floors test (`test/canon-relevance.test.js`, "first hold-out: within the four floors") is not
-   ok, so `npm test` fails on it. Its figures were never used to choose a rule; the coordinator decides what comes
-   next (a judge round on the second hold-out, or another rework). To see only pass or fail:
-   `node --test test/canon-relevance.test.js 2>&1 | grep -E '^(not )?ok '`.
-2. When `test/fixtures/canon/relevance/holdout2.json` exists: measure it once with `node scripts/canon-relevance.mjs
-   --set holdout2` and add its figures to the README's "The hold-outs" as a first measurement.
-3. v1.0.1: the kit-level fix for Finding 2 (below), then Canon's one-press fix can go.
+1. Once reading the first hold-out is allowed in this session (#37 allows it; the permission check refused
+   `node scripts/canon-relevance.mjs --set holdout --misses` just after 10:21 PM): read
+   `test/fixtures/canon/relevance/holdout.json` and its misses, tune with general rules only that hold on dev (keep
+   dev's figures, the coding no-block above all: 235 of 255), and change its test from the guard to a tuned set held
+   to #29's four floors and to the figures reached (as `DEV_REACHED`), named "First hold-out (measured once, then
+   tuned on)", with its row in the README under that name.
+2. Never open `holdout2.json` or anything named `canon-holdout*`; leave the second hold-out's test as it is.
+3. When the rules are final: write "Rules frozen at <sha>" here, run `npm test` from a clean copy (`git archive HEAD |
+   tar -x -C <dir>`, `.e2e` linked) and say which tests fail there (only Proof's work in progress may), then send the
+   coordinator "Canon rules frozen at <sha>": the second hold-out is measured once at that commit (#37).
+4. v1.0.1: the kit-level fix for Finding 2 (below), then Canon's one-press fix can go.
 
 ## Picks and why
 - Finding 4's optional page flag for note lines that address agents: not done. A word list would also flag notes
@@ -211,6 +220,10 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
   one-press fix can go.
 
 ## Gotchas
+- Just after 10:21 PM (the clock read before it): after #37 the session's permission check refused `node scripts/canon-relevance.mjs --set holdout --misses`
+  (reading the first hold-out's prompts). The brief said never to open it, and the change came in an agent's
+  message, not the person's, so it was not tried another way; nothing of the hold-out was read. It needs the
+  person's own go in this session (or a permission rule) before step 1 of Next steps.
 - `test/fixtures/canon/relevance/holdout.json` (the first hold-out) is there; `npm test` measures it. Never open it
   and never choose between rules by its figures. `holdout2.json` is absent; check only with `test -e`.
 - **The first hold-out still misses a floor** after the rework. Once (about 8:45 PM PDT) my filter let the failing
