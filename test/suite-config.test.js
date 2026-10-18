@@ -18,6 +18,7 @@ import * as sessionWatch from '../plugins/session-watch/lib/config.js';
 import * as autopilot from '../plugins/autopilot/lib/config.js';
 import * as decisions from '../plugins/decisions/lib/config.js';
 import * as proof from '../plugins/proof/lib/config.js';
+import * as recall from '../plugins/recall/lib/config.js';
 import { checkCommand } from '../plugins/decisions/lib/mirror.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -34,7 +35,7 @@ function schemaKeys(plugin) {
     return [...block.matchAll(/^\s+(\w+):\s*(.+?),?\s*$/gm)].map(([, key, schema]) => ({ key, schema }));
 }
 
-for (const plugin of ['session-watch', 'autopilot', 'decisions', 'proof', 'canon']) {
+for (const plugin of ['session-watch', 'autopilot', 'decisions', 'proof', 'canon', 'recall']) {
     test(`${plugin}: every key of its Config schema takes any value, so a wrong type never stops it at start`, () => {
         const keys = schemaKeys(plugin);
         assert.ok(keys.length > 0, `${plugin}: its Config has keys`);
@@ -54,14 +55,16 @@ function wrongType(value) {
 }
 
 const PLUGINS = [
-    ['session-watch', sessionWatch, []],
-    ['autopilot', autopilot, []],
+    ['session-watch', sessionWatch, [], ')'],
+    ['autopilot', autopilot, [], ')'],
     // Checked by the mirror alone, while new cards go to a command (below).
-    ['decisions', decisions, ['mirrorCommand']],
-    ['proof', proof, []],
+    ['decisions', decisions, ['mirrorCommand'], ')'],
+    ['proof', proof, [], ')'],
+    // Recall says after the value what kind of value it is: (it is "yes", which is text).
+    ['recall', recall, [], ', '],
 ];
 
-for (const [plugin, config, elsewhere] of PLUGINS) {
+for (const [plugin, config, elsewhere, after] of PLUGINS) {
     test(`${plugin}: a wrong type for each setting is named in words, with the value as the profile has it`, () => {
         assert.doesNotThrow(() => config.checkConfig({ ...config.DEFAULTS }), `${plugin}: its defaults are right`);
         const keys = schemaKeys(plugin).map((k) => k.key);
@@ -72,7 +75,7 @@ for (const [plugin, config, elsewhere] of PLUGINS) {
                 assert.equal(error.name, 'SettingError', `${plugin}: ${key}`);
                 assert.equal(error.key, key, `${plugin}: ${key}`);
                 assert.ok(error.message.includes(`(${key})`), `${plugin}: the words name ${key}: ${error.message}`);
-                assert.ok(error.message.includes(`(it is ${JSON.stringify(value)})`), `${plugin}: the words show the value: ${error.message}`);
+                assert.ok(error.message.includes(`(it is ${JSON.stringify(value)}${after}`), `${plugin}: the words show the value: ${error.message}`);
                 return true;
             }, `${plugin}: ${key} = ${JSON.stringify(value)}`);
         }
