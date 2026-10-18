@@ -222,6 +222,8 @@ const POSITIVE = [
     // "The failing test now passes", "the broken import is fixed": the fault word says which thing; the clause says it works.
     /\b(?:the|a|an|that|this|those|these|its|their|our|both|all|each|every|previously|formerly)\s+(?:previously\s+|formerly\s+|\d+\s+|two\s+|three\s+)?(?:failing|failed|broken|erroring|flaky|crashing|red|regressed)\b(?=(?:\s+[\w.\/⟨⟩-]+){0,5}?\s+(?:now\s+|all\s+|also\s+)?(?:pass(?:es|ed)?|passing|green|works?|working|succeeds?|compiles?|builds?|(?:is|are|was|were|has been|have been)\s+(?:now\s+)?(?:fixed|resolved|green|passing|working|gone))\b)/gi,
 ];
+/** A changelog section by name, as Keep a Changelog spells it: "under **Unreleased → Fixed**", "in the Fixed section". */
+const CHANGELOG_SECTION = /\b(?:[Uu]nder|[Ii]n|[Tt]o)\s+(?:the\s+)?(?:[\w.-]+\s*(?:→|->|>|\/|›)\s*)?(?:Added|Changed|Deprecated|Removed|Fixed|Security)\b(?:\s+(?:section|heading))?/g;
 /** "Fixed" as an adjective: "a fixed window", "fixed-size buffers", "a fixed seed". */
 const FIXED_ADJ = /\b(?:a|an)\s+fixed\s+(?=[a-z0-9])|\bfixed-(?=[a-z])|\b[a-z0-9]+-(?:guarded|patched|fixed|sorted|corrected|resolved)\b|\bfixed\s+(?=(?:window|size|width|height|point|rate|price|cost|delay|interval|timeout|length|number|seed|order|format|position|schedule|budget|fee|amount|set|string|header|offset|port|address|value|key|salt|term|layout|pitch|capacity|duration|frame|step|cadence|cap|ratio|limit|quota|pool|count|mtime|timestamp|date|time|clock|epoch|locale|timezone|tz|umask|mode|margin|padding|font|dimension|shape|temperature|tar|zip|gzip|build id|ordering)s?\b)/gi;
 /** A quoted phrase that holds a claim's words: what someone or something said, not this turn's claim ('the bot posts "all checks passed"'). */
@@ -454,8 +456,11 @@ const IMPROVED = [
     new RegExp(String.raw`\d(?:\.\d+)?\s?(?:ms|µs|us|ns|s|sec|secs|seconds|min|mins|minutes|%|x|×|kib|mib|gib|kb|mb|gb|bytes|req\/s|rps|qps|ops\/s|tok\/s|fps)(?![\w/])[^.;]{0,40}\b(faster|quicker|smaller|lower|down from|up from|halved|reduced|dropped)\b|\b(down|up) from\s+~?\d`, 'i'),
     /\b(much|far|a lot|way|significantly)\s+(faster|quicker|smaller|lighter)\b/i,
     // "Roughly 2.6x on ASCII and 2x on UTF-8": a factor given as the result
-    /^(?:that'?s\s+|it'?s\s+|so\s+|overall\s+)?(?:roughly|about|around|approximately|nearly|almost|~)\s*\d+(?:\.\d+)?\s*(?:x|×)(?!\w)/i,
+    /^(?:that'?s\s+|it'?s\s+|so\s+|overall\s+)?(?:roughly|about|around|approximately|nearly|almost|~)\s*(?:an?\s+)?\d+(?:\.\d+)?\s*(?:x|×)(?!\w)/i,
 ];
+
+/** "allocation-free", "zero allocations", "0 allocs/op": a benchmark's allocations per operation at none. */
+const ALLOC_FREE = /\b(?:allocation[- ]free|alloc[- ]free|zero[- ]alloc(?:ation)?s?|no\s+(?:more\s+|heap\s+)?allocations|0\s+allocs?(?:\/op)?)(?![\w-])/i;
 
 /** "It beats the current model", "v3 outperforms the baseline": a result better than a bar. */
 const BEATS = /\b(beats?|outperforms?|exceeds?|surpass(?:es)?|better than (?:the )?(?:current|baseline|old|previous|existing|last)|clears the (?:\d+(?:\.\d+)?\s*%?\s+)?(?:bar|threshold))\b|\b(?:comfortably\s+|well\s+|just\s+|safely\s+)?(?:over|above|past)\s+the\s+\d+(?:\.\d+)?\s*%?\s+(?:bar|threshold|target|mark|goal|baseline)\b|\b(?:we|it|this|the model|that)\s+(?:now\s+)?(?:clear|clears|cleared)\s+(?:it|that|the\s+(?:\d+(?:\.\d+)?\s*%?\s+)?(?:bar|threshold|target|mark|goal))\b/i;
@@ -463,7 +468,7 @@ const BEATS = /\b(beats?|outperforms?|exceeds?|surpass(?:es)?|better than (?:the
 /** A search said to come back empty: "a final grep for `X` comes back empty", "no references to `X` remain". */
 const SEARCH_EMPTY = [
     /\b(?:grep|rg|ripgrep|ag|ack|search(?:es|ed)?|find)\b[^.;]{0,100}?\b(?:comes?\s+back\s+empty|came\s+back\s+empty|(?:now\s+|still\s+)?(?:returns?|returned|finds?|found|shows?|showed|prints?|printed|turns?\s+up|turned\s+up|gives?|gave)\s+(?:nothing|no\s+(?:matches|results|hits|references|uses|usages|lines|occurrences))|is\s+(?:now\s+)?empty)\b/i,
-    /\bno\s+(?:more\s+|remaining\s+|other\s+)?(?:references|uses|usages|mentions|imports|occurrences|callers|matches)\s+(?:to\s+|of\s+)?\S+\s+(?:remain|are\s+left|left)\b/i,
+    /\bno\s+(?:more\s+|remaining\s+|other\s+)?(?:references|uses|usages|mentions|imports|occurrences|callers|calls|matches)\s+(?:to\s+|of\s+)?\S+\s+(?:remain|are\s+left|left)\b/i,
     // "no `console.log` calls remain", "none are left in `src/`", "`src/app.js` has none left"
     /\bno\s+(?:more\s+|remaining\s+|other\s+)?\S+\s+(?:calls|references|uses|usages|imports|occurrences|callers|matches|mentions|reads|instances)\s+(?:remain|are\s+left|left)\b/i,
     /\bnone\s+(?:are\s+|is\s+|were\s+|was\s+)?(?:now\s+)?(?:left|remain(?:s|ing)?)\b|\b(?:has|have)\s+none\s+(?:left|remaining)\b/i,
@@ -644,6 +649,8 @@ function claimOf(clause) {
     if (partPassed(words.replace(/\([^)]*\)/g, ' ')) || MEANS.test(words) || imperative(words)) return undefined;
     // A search said to come back empty is checked against the turn's last search, before the "nothing" in it reads as a negation.
     if (SEARCH_EMPTY.some((re) => re.test(words))) return { kind: 'passed', subject: 'search', term: searchTermOf(s) };
+    // "It's allocation-free now": no allocations per operation, which a benchmark prints.
+    if (ALLOC_FREE.test(words)) return { kind: 'fixed', improved: true, allocs: 0 };
     const fixedByNegation = FIX_BY_NEGATION.test(words);
     let rest = words;
     for (const re of POSITIVE) rest = rest.replace(re, ' ');
@@ -685,7 +692,7 @@ function claimOf(clause) {
         const ship = healthy && deployWord ? targetOf(words, false) : undefined;
         return { kind: 'deployed', target: targetOf(words, healthy), ...(ship ? { ship } : {}) };
     }
-    const unfixed = said.replace(FIXED_ADJ, ' ');
+    const unfixed = said.replace(FIXED_ADJ, ' ').replace(CHANGELOG_SECTION, ' ');
     if (fixedByNegation || FIXED.some((re) => re.test(unfixed))) return { kind: 'fixed' };
     if (IMPROVED.some((re) => re.test(said))) return { kind: 'fixed', improved: true };
     if (BEATS.test(said)) return { kind: 'fixed', improved: true, beats: true };
@@ -773,6 +780,7 @@ export function claimsIn(text, { max = 8 } = {}) {
                 ...(found.target ? { target: found.target } : {}),
                 ...(found.improved ? { improved: true } : {}),
                 ...(found.beats ? { beats: true } : {}),
+                ...(found.allocs === 0 ? { allocs: 0 } : {}),
                 ...(commands.length ? { commands } : {}),
                 ...(metrics.length ? { metrics } : {}),
                 ...(next ? { next: clip(shown(next), MAX_PART) } : {}),

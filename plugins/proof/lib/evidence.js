@@ -27,7 +27,7 @@ const READ_TOOL = /(^|_)(read|grep|glob|ls|list|view|cat|search|find|fetch|open|
 /** DSH's own bookkeeping tools: never evidence of work. */
 const BOOKKEEPING_TOOL = /^(todo_write|todo_read|todowrite|create_goal|get_goal|update_goal|ask_user_question|question|present|plan|think|exit_plan_mode)$/i;
 
-const TEST_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(test|t|e2e|test:\S+|check|verify|ci)\b|\b(node|deno|bun)\s+(--test|test)\b|\bnpx\s+(jest|vitest|mocha|playwright|ava|tap|cypress)\b|\b(jest|vitest|mocha|pytest|py\.test|tox|nox|rspec|phpunit|ctest|ava|karma|cypress\s+run|playwright\s+test)\b|\bgo\s+test\b|\bcargo\s+(test|nextest)\b|\bmvnw?\s+(\S+\s+)*(test|verify)\b|\bgradlew?\s+(\S+\s+)*(\S*:)?(test\w*|check\w*|connected\w*Test)\b|\bxcodebuild\b[^|;&]*\btest\b|\b(flutter|dart)\s+test\b|\bsbt\s+(\S+\s+)*test\b|\b(nx|turbo|lerna)\s+(run\s+)?([\w:-]+\s+)*?(\S+:)?test\b|\bpnpm\s+(-r|--recursive)\s+test\b|\b(stack|cabal)\s+test\b|\bzig\s+build\s+test\b|\bgotestsum\b|\b(python3?|uv\s+run|poetry\s+run)\s+-m\s+(pytest|unittest)\b|\bmake\s+(-\S+\s+(\S+\s+)?)*(test|check|ci|e2e)\b|\bdotnet\s+test\b|\bswift\s+test\b|\bmix\s+test\b|\brake\s+(test|spec)\b|\bbundle\s+exec\s+(rspec|rake\s+(test|spec))\b|\bscripts\/e2e|\b\S*test\S*\.(sh|mjs|js|py)\b|\be2e\.(mjs|js|sh)\b|\bbazel\s+test\b|(^|[\s/])(ci|verify|check|checks|validate|precommit|pre-commit)([-_.]\S*)?\.(sh|mjs|js|py)\b|\bscripts\/(ci|verify|check|validate)\S*|\bpre-commit\s+run\b|\bdbt\s+(test|build)\b|\bbats\b|\bprove\b|\b(npm|pnpm|yarn|bun)(\s+(--filter|-F|-C|--prefix|--cwd|--dir|--workspace|-w|workspace)\s+\S+|\s+-{1,2}[\w-]+(=\S+)?)+\s+(run\s+)?(test|t|e2e|test:\S+)\b/i;
+const TEST_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(test|t|e2e|test:\S+|check|verify|ci)\b|\b(node|deno|bun)\s+(--test|test)\b|\bnpx\s+(jest|vitest|mocha|playwright|ava|tap|cypress)\b|\b(jest|vitest|mocha|pytest|py\.test|tox|nox|rspec|phpunit|ctest|ava|karma|cypress\s+run|playwright\s+test)\b|\bgo\s+test\b|\bcargo\s+(test|nextest)\b|\bmvnw?\s+(\S+\s+)*(test|verify)\b|\bgradlew?\s+(\S+\s+)*(\S*:)?(test\w*|check\w*|connected\w*Test)\b|\bxcodebuild\b[^|;&]*\btest\b|\b(flutter|dart)\s+test\b|\bsbt\s+(\S+\s+)*test\b|\b(nx|turbo|lerna)\s+(run\s+)?([\w:-]+\s+)*?(\S+:)?test\b|\bpnpm\s+(-r|--recursive)\s+test\b|\b(stack|cabal)\s+test\b|\bzig\s+build\s+test\b|\bgotestsum\b|\b(python3?|uv\s+run|poetry\s+run)\s+-m\s+(pytest|unittest)\b|\bmake\s+(-\S+\s+(\S+\s+)?)*(test|check|ci|e2e)\b|\bdotnet\s+test\b|\bswift\s+test\b|\bmix\s+test\b|\brake\s+(test|spec)\b|\b(?:bin\/)?rails\s+test\b|\bbundle\s+exec\s+(rspec|rake\s+(test|spec))\b|\bscripts\/e2e|\b\S*test\S*\.(sh|mjs|js|py)\b|\be2e\.(mjs|js|sh)\b|\bbazel\s+test\b|(^|[\s/])(ci|verify|check|checks|validate|precommit|pre-commit)([-_.]\S*)?\.(sh|mjs|js|py)\b|\bscripts\/(ci|verify|check|validate)\S*|\bpre-commit\s+run\b|\bdbt\s+(test|build)\b|\bbats\b|\bprove\b|\b(npm|pnpm|yarn|bun)(\s+(--filter|-F|-C|--prefix|--cwd|--dir|--workspace|-w|workspace)\s+\S+|\s+-{1,2}[\w-]+(=\S+)?)+\s+(run\s+)?(test|t|e2e|test:\S+)\b/i;
 const BUILD_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(build|build:\S+|compile|typecheck|type-check|tsc|bundle)\b|\btsc\b|\bcargo\s+(build|check)\b|\bgo\s+(build|vet)\b|\bmake(\s+(all|build|install|release))?\s*($|[;&|])|\bmvnw?\s+(\S+\s+)*(package|compile|install)\b|\bgradlew?\s+(\S+\s+)*(\S*:)?(build|assemble\w*|bundle\w*|jar|shadowJar|compile\w*)\b|\bdotnet\s+build\b|\bswift\s+build\b|\bwebpack\b|\bvite\s+build\b|\besbuild\b|\brollup\b|\bnext\s+build\b|\bnode\s+--check\b|\bpython3?\s+-m\s+(py_compile|compileall)\b|\bxcodebuild\b|\bcmake\s+--build\b|\bninja\b|\bdocker\s+(build|buildx\s+build|compose\s+build)\b|\bbazel\s+build\b|\bmix\s+compile\b|\bdbt\s+(run|seed|snapshot|compile)\b|\bhugo\b(?!\s+(?:server|serve|new|version|env|mod|config|list|gen|completion|help|import|deploy)\b)|\b(?:bundle\s+exec\s+)?jekyll\s+build\b|\b(?:@11ty\/)?eleventy\b|\bmkdocs\s+build\b|\bsphinx-build\b|\b(?:astro|gatsby|zola|mdbook|docusaurus|vuepress|vitepress)\s+build\b|\bnuxt\s+(?:build|generate)\b|\bhexo\s+(?:generate|g)\b|\bpelican\s+content\b|\b(nx|turbo|lerna)\s+(run\s+)?(\S+:)?build\b|\bnx\s+run-many\b[^|;&]*--target[= ]build\b|\b(npm|pnpm|yarn|bun)(\s+(--filter|-F|-C|--prefix|--cwd|--dir|--workspace|-w|workspace)\s+\S+|\s+-{1,2}[\w-]+(=\S+)?)+\s+(run\s+)?(build|build:\S+|compile|typecheck|type-check)\b/i;
 const LINT_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(lint|lint:\S+|format:check|fmt:check|check:format)\b|\b(eslint|ruff|flake8|pylint|mypy|pyright|golangci-lint|shellcheck|stylelint|rubocop|swiftlint|biome\s+(check|lint)|oxlint|phpstan|psalm)\b|\bprettier\s+(--check|-c)\b|\bblack\s+--check\b|\bcargo\s+(clippy|fmt\s+--check)\b|\bgofmt\s+-l\b|\b(bash|sh|zsh|dash|ksh)\s+-n\b|\bphp\s+-l\b|\b(ruby|perl)\s+-c\b|\bterraform\s+(validate|fmt\s+-{1,2}check)\b|\bnginx\s+-t\b|\b(yamllint|hadolint|actionlint|markdownlint(-cli2)?|ktlint|detekt|credo|standardrb|tflint|staticcheck|revive)\b|\bsqlfluff\s+lint\b|\bbuf\s+lint\b|\b(dart|flutter)\s+analyze\b/i;
 const CI_CMD = /\bgh\s+(run\s+(view|list|watch)|pr\s+(checks|status)|workflow\s+view)\b|\bgh\s+pr\s+view\b(?=[^|;&]*\b(?:statusCheckRollup|checks|mergeStateStatus)\b)|\bglab\s+ci\b|\bcircleci\b|\bbuildkite\b|\bcurl\b[^|;&]*\/(actions|checks|statuses|pipelines)\b/i;
@@ -124,6 +124,8 @@ export function testCountsIn(text) {
     }
     // rspec: "12 examples, 0 failures"
     for (m of text.matchAll(/(\d+) examples?, (\d+) failures?/g)) add(num(m[1]) - num(m[2]), m[2], m[1]);
+    // minitest (`rails test`): "123 runs, 410 assertions, 0 failures, 0 errors, 0 skips"; a skipped one did not pass.
+    for (m of text.matchAll(/\b(\d+) runs, \d+ assertions, (\d+) failures, (\d+) errors(?:, (\d+) skips)?/g)) add(num(m[1]) - num(m[2]) - num(m[3]) - (num(m[4]) ?? 0), num(m[2]) + num(m[3]), m[1]);
     // unittest: "Ran 12 tests in 0.003s" then "OK" or "FAILED (failures=1, errors=1)"
     for (m of text.matchAll(/Ran (\d+) tests? in [\d.]+s\s+(OK|FAILED \(([^)]*)\))/g)) {
         const failed = m[2] === 'OK' ? 0 : [...(m[3] ?? '').matchAll(/(?:failures|errors)=(\d+)/g)].reduce((a, x) => a + Number(x[1]), 0);
@@ -1022,7 +1024,8 @@ function slack(metric) {
     const [whole = '', frac] = digits.split('.');
     const zeros = whole.length - whole.replace(/0+$/, '').length;
     const place = frac ? 10 ** -frac.length : 10 ** Math.min(zeros, whole.length - 1);
-    return Math.max(0.05 * Math.abs(metric.value), place / 2);
+    // "87.4 ms" is read to its last digit, give or take a point in a hundred; a whole "90 ms" may be rounded more.
+    return Math.max((frac ? 0.01 : 0.05) * Math.abs(metric.value), place / 2);
 }
 
 const near = (a, b, room) => Math.abs(a - b) <= room;
@@ -1100,6 +1103,10 @@ function derivable(items, metric, claim) {
 /** A label as a whole word of a sentence: `p50`, `req/s`. */
 const labelIn = (label, text) => new RegExp(`(^|[^\\w/])${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w/])`, 'i').test(text);
 
+/** A benchmark's allocations per operation: Go's "3 allocs/op". */
+const ALLOCS = /\b(\d+)\s+allocs\/op\b/;
+/** A benchmark's own factor: hyperfine's "1.35 ± 0.03 times faster than …". */
+const TIMES_FASTER = /\b(\d+(?:\.\d+)?)\s*(?:±\s*\d+(?:\.\d+)?\s*)?times\s+faster\b/i;
 /** "2.6x faster", "a 3x speedup": a factor claimed as the result. */
 const FACTOR = /\b(\d+(?:\.\d+)?)\s*(?:x|×)(?!\w)(?=[^.;]{0,40}?\b(?:faster|quicker|lower|smaller|less|fewer|speed-?up|throughput|higher|more)\b)|\b(?:faster|quicker|speed-?up)\b[^.;]{0,20}?\b(\d+(?:\.\d+)?)\s*(?:x|×)(?!\w)/i;
 
@@ -1111,6 +1118,16 @@ const FACTOR = /\b(\d+(?:\.\d+)?)\s*(?:x|×)(?!\w)(?=[^.;]{0,40}?\b(?:faster|qui
  * quarter of the claim off).
  */
 function farOff(claim, list) {
+    // "Roughly a 3x speedup" after hyperfine printed "1.35 ± 0.03 times faster than …": the tool's own factor.
+    const said3 = FACTOR.exec(claim.text ?? claim.part ?? '');
+    const told = said3 ? list.filter((i) => typeof i.metric === 'string' && TIMES_FASTER.test(i.metric)).at(-1) : undefined;
+    if (told) {
+        const claimed = Number(said3[1] ?? said3[2]);
+        const actual = Number(TIMES_FASTER.exec(told.metric)[1]);
+        if (Math.abs(actual - claimed) > Math.max(0.3, claimed / 4)) {
+            return { verdict: 'contradicted', evidence: [said(told)], why: `It says ${said3[1] ?? said3[2]}x; the turn's own benchmark says ${actual} times faster: "${clip(told.metric, 80)}".` };
+        }
+    }
     const runs = list.filter((i) => (i.series ?? []).length);
     if (runs.length < 2) return undefined;
     const first = runs[0];
@@ -1267,6 +1284,15 @@ function namedChecks(claim, list) {
             if (last && last.ok === false) return { verdict: 'contradicted', evidence: [said(last)], why: `\`${clip(wanted, 60)}\` did not go through in this turn: ${last.text}.` };
         }
     }
+    // "It's allocation-free now" after a benchmark that prints "3 allocs/op".
+    if (claim.allocs === 0) {
+        const lines = list.flatMap((i) => (i.lines ?? []).filter((l) => typeof l === 'string' && ALLOCS.test(l)).map((l) => ({ i, l })));
+        const last = lines.at(-1);
+        if (!last) return { verdict: 'unbacked', evidence: [], why: 'Nothing in this turn printed allocations per operation.' };
+        const n = Number(ALLOCS.exec(last.l)[1]);
+        if (n > 0) return { verdict: 'contradicted', evidence: [said(last.i)], why: `It says there are no allocations; the turn's last benchmark prints ${n} allocs/op: "${clip(last.l.replace(/\s+/g, ' ').trim(), 90)}".` };
+        return { verdict: 'backed', evidence: [said(last.i)], why: '' };
+    }
     if (claim.improved) {
         const off = farOff(claim, list);
         if (off) return off;
@@ -1326,6 +1352,8 @@ const SUITES = [
     { name: 'doc', said: /\bdoc(?:-|\s)?tests?\b|\bdoctests?\b/i, ran: /--doc\b|\bdoctest/i },
     { name: 'smoke', said: /\bsmoke\b/i, ran: /\bsmoke\b/i },
 ];
+/** Browser and device test runners, which run their own suites: `npx playwright test`, `cypress run`. */
+const E2E_RUNNER = /\b(Playwright|Cypress|Selenium|WebdriverIO|wdio|Puppeteer|Detox|Maestro|TestCafe|Nightwatch)\b/i;
 /** The kinds of tests a command was limited to; empty when it ran them all. */
 const suitesRun = (cmd) => SUITES.filter((k) => k.ran.test(cmd ?? '')).map((k) => k.name);
 
@@ -1418,6 +1446,15 @@ function passedFor(subject, claim, list) {
         const runs = relevant.filter((i) => i.tests);
         if (runs.length && runs.every((i) => i.tests.filtered)) {
             return { verdict: 'unbacked', evidence: [said(runs.at(-1))], why: `It speaks of the whole suite, and the test runs in this turn ran only part of it: ${runs.at(-1).text}.` };
+        }
+    }
+    // "Playwright e2e suite passes" after a vitest run: a browser-test runner it names runs on its own, not inside another run.
+    const runner = subject === 'tests' || subject === 'any' ? E2E_RUNNER.exec(words)?.[1] : undefined;
+    if (runner) {
+        const runs = list.filter((i) => i.kind === 'test' || i.tests);
+        const own = new RegExp(`\\b${runner}\\b`, 'i');
+        if (!runs.some((i) => own.test(i.cmd ?? '') || /\be2e\b|\bend-to-end\b/i.test(i.cmd ?? '') || (i.lines ?? []).some((l) => typeof l === 'string' && own.test(l)))) {
+            return { verdict: 'unbacked', evidence: runs.slice(-1).map(said), why: `It names ${runner}, and nothing in this turn ran it.` };
         }
     }
     // "The integration suite is green" after a run of the doc tests only.
