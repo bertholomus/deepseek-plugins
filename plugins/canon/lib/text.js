@@ -36,10 +36,12 @@ everybody less
  * and a last "e" off longer words, so forms of one word meet ("rotate",
  * "rotated", "rotating", "rotation" → "rotat"; "stores", "stored" →
  * "stor"; "moving", "move" → "move"; "authenticate", "Authentication" →
- * "authenticat"). Numbers stay as they are.
+ * "authenticat"). Numbers stay as they are, but for a plural's "s"
+ * ("429s" → "429").
  */
 export function stem(word) {
     let w = word;
+    if (/^\d{3,}s$/.test(w)) return w.slice(0, -1);
     if (w.length <= 3 || /\d/.test(w)) return w;
     if (w.endsWith('ies') && w.length > 4) w = `${w.slice(0, -3)}y`;
     else if (/(?:ss|sh|ch|x|z)es$/.test(w) && w.length > 4) w = w.slice(0, -2);

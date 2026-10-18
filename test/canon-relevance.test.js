@@ -20,7 +20,7 @@ import { isCodingRequest } from '../plugins/canon/lib/text.js';
  * The dev set's figures as reached (README, "How well it picks notes"):
  * held so a change that makes them worse fails here.
  */
-const DEV_REACHED = Object.freeze({ first: 480, inBlock: 493, extra: 182, noBlock: 312, coding: 232 });
+const DEV_REACHED = Object.freeze({ first: 517, inBlock: 531, extra: 198, noBlock: 321, coding: 235 });
 
 /** The fixture vault's projects: a folder named for one is that project's. */
 const PROJECTS = new Set(['harbor-gateway', 'lantern-api', 'lantern-web', 'quartz-cache', 'tide-ledger']);
@@ -78,6 +78,12 @@ test('dev set: every prompt has a kind; the round-2 judge\'s two sets, and quest
     const each = set.filter((e) => /^zp\d+$/.test(e.id) && e.kind === 'answers');
     assert.ok(each.length >= 60 && new Set(each.flatMap((e) => e.answers)).size >= 34, `${each.length} short questions, one or more for each note`);
     assert.ok(set.filter((e) => /^zq\d+$/.test(e.id) && e.kind !== 'answers').length >= 8, 'and questions no note answers asked the same way');
+    // And forms the groups before lacked (zr01, …): tasks a note answers told as orders with a work verb ("Set up the VPN
+    // for a new hire."), situations told as statements ("I'm getting 429s from lantern-api."), questions that name a tool
+    // no note has ("Do we page people through PagerDuty…?"), words alone ("ledger restore steps") and "may I" questions;
+    // and prompts no note answers in those forms (zs01, …).
+    assert.ok(set.filter((e) => /^zr\d+$/.test(e.id) && e.kind === 'answers').length >= 40, 'orders, statements, unknown names, words alone');
+    assert.ok(set.filter((e) => /^zs\d+$/.test(e.id) && e.kind !== 'answers').length >= 10, 'and prompts no note answers in them');
     // No prompt twice in one folder.
     const keys = set.map((e) => `${e.folder}\n${said(e.prompt)}`);
     assert.equal(new Set(keys).size, keys.length, 'a prompt repeats in its folder');

@@ -164,6 +164,7 @@ test('text: the words a prompt shares with a note, and chat filler that shares n
     }
     assert.notEqual(stem('port'), stem('portal'));
     assert.deepEqual(['string', 'station', 'action'].map(stem), ['string', 'station', 'action'], 'no root to give back');
+    assert.deepEqual(['429s', '1990s', '8443', '10s', 'k8s'].map(stem), ['429', '1990', '8443', '10s', 'k8s'], 'a number\'s plural is the number');
     // A prompt's words about the vault and about answering from it are left out; a note keeps them.
     assert.deepEqual(promptTerms('Check the team\'s shared notes in the canon vault, answer and cite the note: which ports?'), ['port']);
     assert.ok(['note', 'vault', 'canon'].every((t) => ABOUT_THE_VAULT.has(t)));
