@@ -367,7 +367,7 @@ const PASSED = [
 const ALL_PASS = new RegExp(String.raw`(?:^|\b)${SUBJECT}(?!\w)\s+(?:is|are|was|were|stays?|stayed|remains?|remained)\s+(?:still\s+|now\s+|back\s+(?:to|at)\s+|at\s+)?(\d+)\s*\/\s*\1(?![\d/])`, 'i');
 
 // "Uploaded build 213 to App Store Connect": an upload to a place ships it.
-const DEPLOY_WORD = /\b(deployed|redeployed|released|shipped|rolled out|rolled\s+(?:it|them|this|that|these|those|everything)\s+out|rolled back|promoted|published|pushed|merged|tagged|provisioned|uploaded(?=[^.;]{0,80}?\bto\s))\b/gi;
+const DEPLOY_WORD = /\b(deployed|redeployed|released|shipped|rolled out|rolled\s+(?:it|them|this|that|these|those|everything)\s+out|rolled\s+(?:the|a|an|our|your|its|their|both|all)\s+(?:\S+\s+){0,3}?out(?=\s+(?:to|on|onto|across|everywhere)\b)|rolled back|promoted|published|pushed|merged|tagged|provisioned|uploaded(?=[^.;]{0,80}?\bto\s))\b/gi;
 const DEPLOYED_OTHER = [
     // "staging is stable on the new version", "prod is healthy on 3.1.0": where the new version runs
     /\b(?:is|are)\s+(?:now\s+)?(?:stable|healthy|up|serving|running)\s+(?:on|with)\s+(?:the\s+)?(?:new\s+(?:version|release|build|image)|v?\d+\.\d+(?:\.\d+)?)\b/i,
@@ -375,6 +375,8 @@ const DEPLOYED_OTHER = [
     /\b(is|are)\s+(now\s+)?((built|pushed|published|up) and\s+)?(on|in)\s+(the\s+)?(registry|npm|pypi|crates\.io|docker ?hub|ghcr|ecr|gcr|rubygems|packagist|origin|production|prod|staging)\b/i,
     /\b(is|are)\s+(now\s+)?(on|at)\s+(v?\d+\.\d+(\.\d+)?|release v?\d+|the new (version|release|build|image))\b/i,
     /\b(created|cut)\s+the\s+(tag|release)\b/i,
+    // "Upgraded the `api` release in `staging`": a Helm release is a deploy.
+    /\b(?:upgraded|rolled\s+back)\s+(?:the\s+)?(?:\S+\s+){0,2}?(?:helm\s+)?release\b(?!\s+notes?\b)/i,
     /\b(is|are)\s+(now\s+)?(up|live|out|deployed)\s+(on|at|to)\s+(a|an|the|its)?\s*(new\s+)?([\w.-]+\s+){0,2}(preview|staging|production|prod|vercel|netlify|fly|heroku|render|cloud run|app engine|pages)\b/i,
     /\b(applied|ran|run|executed)\s+(it\s+|them\s+|the migrations?\s+)?(on|to|against|in)\s+(the\s+)?(staging|production|prod|live|preview|qa|uat)\b/i,
     /\b(staging|production|prod)\s*(db|database)?\s+(is|are)\s+(now\s+)?(at|on)\s+(head|the latest (migration|revision))\b/i,
@@ -435,7 +437,7 @@ const SETTING_BEFORE = /\b(?:discounts?|prices?|pricing|fees?|tax|vat|tiers?|sea
 const MOVED_FROM_TO = {
     test(text) {
         const t = String(text);
-        const re = /\b(?:went|goes|go|came|comes|got|gets|took|takes|brought|brings|moved|moves)\s+(?:[\w.$-]+\s+){0,4}?from\s+~?\d[\d.,]*\s*([a-zµ%/]*)\s+(?:to|down\s+to|up\s+to)\s+~?\d[\d.,]*\s*([a-zµ%/]*)/gi;
+        const re = /\b(?:went|goes|go|came|comes|got|gets|took|takes|brought|brings|moved|moves|fell|falls|dropped|drops|rose|rises|shrank|shrinks|grew|grows)\s+(?:[\w.$-]+\s+){0,4}?from\s+(?:(?:about|around|roughly|nearly|almost|approximately)\s+)?~?\d[\d.,]*\s*([a-zµ%/]*)\s+(?:to|down\s+to|up\s+to)\s+(?:(?:about|around|roughly|nearly|almost|approximately)\s+)?~?\d[\d.,]*\s*([a-zµ%/]*)/gi;
         for (const m of t.matchAll(re)) {
             if (SETTING_BEFORE.test(t.slice(0, m.index + m[0].indexOf('from')))) continue;
             const unit = (u) => ARROW_UNIT.test(u) || /^(?:ns|b|allocs)\/op$/i.test(u);
@@ -580,13 +582,13 @@ function commandsIn(text) {
 const METRIC_UNIT = String.raw`(?:ms|µs|us|ns|s|sec|secs|seconds|min|mins|minutes|%|x|×|kib|mib|gib|kb|mb|gb|b|bytes|req\/s|rps|qps|ops\/s|tok\/s|tokens\/s|t\/s|fps|rows\/s)`;
 const METRIC = new RegExp(String.raw`(?<![\w.])(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s?(${METRIC_UNIT})(?![\w/])|(?<![\w.])(\d+(?:\.\d+)?)(?=\s*(?:→|->|=>|⟶))|(?:→|->|=>|⟶)\s*(\d+(?:\.\d+)?)(?:\s?(${METRIC_UNIT})(?![\w/]))?`, 'gi');
 /** Words that make a figure in a claim a result to show, not a setting. */
-const METRIC_CONTEXT = /\b(coverage|p\d{2}|latency|throughput|faster|slower|quicker|speed(up)?|benchmark|bench|memory|rss|cpu|heap|bundle|size|smaller|larger|halved|reduced|dropped|down from|up from|improved|took|runtime|duration)\b|→|->|=>|⟶|\d\s*(x|×)\b/i;
+const METRIC_CONTEXT = /\b(coverage|p\d{2}|latency|throughput|faster|slower|quicker|speed(up)?|benchmark|bench|memory|rss|cpu|heap|bundle|size|smaller|larger|halved|reduced|dropped|fell|rose|shrank|down from|up from|improved|took|runtime|duration|per op)\b|→|->|=>|⟶|\d\s*(x|×)\b|\bfrom\s+(?:about\s+|around\s+|roughly\s+|~)?\d[\d.,]*\s*(?:ms|µs|us|ns|s|kb|mb|gb|kib|mib|gib)\s+to\s+\d/i;
 
 /** A figure named as a bar to meet ("the 200ms budget", "a 5% threshold"), not a result. */
 const BAR_NOUN = /^\s*(?:budget|target|limit|slo|sla|threshold|goal|bar|cap|ceiling|deadline)s?\b/i;
 
 /** A figure in words: "410 ms", "~71%", "120". */
-const FIGURE = String.raw`~?\s*(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s?(${METRIC_UNIT})?(?![\w/])`;
+const FIGURE = String.raw`(?:(?:about|around|roughly|nearly|almost|approximately)\s+)?~?\s*(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s?(${METRIC_UNIT})?(?![\w/])`;
 /**
  * "from 410 ms to 142 ms", "120 ms, down from 900 ms", "120 ms (was 900 ms)": a before and an after in words, each a
  * reading the turn must have printed, as with an arrow.

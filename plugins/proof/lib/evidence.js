@@ -214,7 +214,7 @@ export function metricIn(text) {
     return text.slice(start, end < 0 ? undefined : end).trim().slice(0, 120);
 }
 
-const NUMS = /(?<![\w.])(\d{1,3}(?:,\d{3})+|\d+\.\d+|\d+)\s?(ms|µs|us|ns|s|sec|secs|seconds|min|mins|%|x|×|kib|mib|gib|kb|mb|gb|b|bytes|req\/s|rps|qps|ops\/s|tok\/s|fps)?(?![\w/])/gi;
+const NUMS = /(?<![\w.])(\d{1,3}(?:,\d{3})+|\d+\.\d+|\d+)\s?(ms|µs|us|ns\/op|ns|s|sec|secs|seconds|min|mins|%|x|×|kib|mib|gib|kb|mb|gb|b|bytes|req\/s|rps|qps|ops\/s|tok\/s|fps)?(?![\w/])/gi;
 const MAX_NUMS = 64;
 
 /**
@@ -234,6 +234,9 @@ export function numsIn(text) {
             strong.add(value);
             if (unit === 's' || unit === 'sec' || unit === 'secs' || unit === 'seconds') strong.add(Math.round(value * 1000 * 1000) / 1000);
             if (unit === 'ms') strong.add(value / 1000);
+            // 1843 ns/op is 1.8 µs; 0.28 µs is 280 ns.
+            if (unit === 'ns' || unit === 'ns/op') strong.add(value / 1000);
+            if (unit === 'µs' || unit === 'us') { strong.add(value * 1000); strong.add(value / 1000); }
             if (unit === 'min' || unit === 'mins') strong.add(value * 60);
         } else if (value >= 2) weak.add(value);
         if (strong.size >= MAX_NUMS) break;
@@ -1566,6 +1569,9 @@ function judgeSearch(claim, list) {
 const REMOTE_PLACE = /\b(staging|production|prod|deployed|https?:\/\/(?!localhost|127\.0\.0\.1|0\.0\.0\.0)\S+)/i;
 
 /** Rule for `deployed`: something shipped to the place the claim names, and nothing after it says it is down. */
+/** "Upgraded the `api` release", "rolled back the release": a Helm release's upgrade. */
+const HELM_RELEASE = /\b(?:upgraded|rolled\s+back)\s+(?:the\s+)?(?:\S+\s+){0,2}?(?:helm\s+)?release\b(?!\s+notes?\b)/i;
+
 function judgeDeployed(claim, list) {
     const target = claim.target ?? 'any';
     const words = claim.part ?? claim.text;
@@ -1629,6 +1635,16 @@ function judgeDeployed(claim, list) {
         if (target === 'env') return (ships(i) && (to(i, 'env') || (i.targets ?? []).length === 0)) || i.deploys === true;
         return ships(i) || local(i) || i.deploys === true;
     }).sort(order);
+    // "Upgraded the `payments-api` release in `staging`": the act of a Helm upgrade, which the upgrade's own output shows,
+    // whatever a rollout check after it printed ("the rollout finished" is another claim).
+    if (target !== 'health' && HELM_RELEASE.test(words)) {
+        const helm = list.filter((i) => /\bhelm\s+(?:upgrade|install|rollback)\b/i.test(i.cmd ?? ''));
+        if (helm.length) {
+            const h = helm.at(-1);
+            if ((h.shipped ?? h.ok) === false) return { verdict: 'contradicted', evidence: [said(h)], why: `The Helm upgrade in this turn did not go through: ${h.text}.` };
+            if ((h.shipped ?? h.ok) === true) return { verdict: 'backed', evidence: [said(h)], why: '' };
+        }
+    }
     const tw = TARGET_WORDS[target] ?? TARGET_WORDS.any;
     if (deploys.length === 0) {
         // Nothing shipped in this turn, but a request shows where it runs: that says whether it is up.
