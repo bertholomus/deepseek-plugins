@@ -1109,6 +1109,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const CSS = [
             // The waiting state's one-press fix of a value in quotes, and what it saved.
             `.${P}-fix{margin-top:10px}`,
+            // Its button sits as far under its words as the kit's button in the problem box above it.
+            `.${P}-fix .${P}-actions{margin-top:10px}`,
             `.${P}-fixed{margin:0 0 8px}`,
             // The flag: a card in a chat, drawn like DSH's own cards there (no blur: the chat is glass already). It is a kit
             // pane, for the suite's colours, tag words, focus ring and motion rules; its own ground is DSH's layer 1.
