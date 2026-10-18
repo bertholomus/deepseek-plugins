@@ -1182,8 +1182,12 @@ function otherFigure(claim, list) {
     const [from, to] = arrows;
     if (printed(list, to)) return undefined;
     const text = claim.text ?? claim.part ?? '';
-    const named = (l) => labelIn(l, text) || ((l === 'median' || l === 'p50') && /\b(?:median|p50)\b/i.test(text)) || (l === 'avg' && /\b(?:mean|average)\b/i.test(text));
+    // Go's ns/op is the time per op: "time per op fell from 1910 ns to 640 ns".
+    const perOp = /\bper\s+(?:op|operation|call|iteration)\b|\bns\/op\b/i.test(text);
+    const named = (l) => labelIn(l, text) || ((l === 'median' || l === 'p50') && /\b(?:median|p50)\b/i.test(text)) || (l === 'avg' && /\b(?:mean|average)\b/i.test(text)) || (l === 'ns/op' && perOp);
     const per = MS_PER[to.unit] ?? 1;
+    // A reading's own unit: ns/op holds nanoseconds, the others milliseconds.
+    const unitOf = (l) => (l === 'ns/op' ? (MS_PER[to.unit] ?? 1e-6) / 1e-6 : per);
     for (const run of list.filter((i) => (i.series ?? []).length && i.kind !== 'read')) {
         const labels = [...new Set(run.series.map((r) => r.l))].filter((l) => labelIn(l, text));
         if (labels.length !== 1) continue;
@@ -1201,7 +1205,7 @@ function otherFigure(claim, list) {
     const labels = [...new Set(run.series.map((r) => r.l))].filter(named);
     if (labels.length !== 1) return undefined;
     const now = run.series.filter((r) => r.l === labels[0]).at(-1).v;
-    if (near(now, to.value * per, slack(to) * per)) return undefined;
+    if (near(now, to.value * unitOf(labels[0]), slack(to) * unitOf(labels[0]))) return undefined;
     return { verdict: 'contradicted', evidence: [said(run)], why: `It says ${labels[0]} went to ${to.text}; the turn's own benchmark shows ${labels[0]} at ${now}${IN_MS.test(labels[0]) ? ' ms' : ''}.` };
 }
 
@@ -1587,6 +1591,11 @@ function judgeDeployed(claim, list) {
         const seen = status !== undefined && !REMOTE_PLACE.test(sentence) ? list.filter((i) => (i.codes ?? []).includes(status)) : [];
         if (checks.length === 0) {
             if (seen.length) return { verdict: 'backed', evidence: seen.slice(-2).map(said), why: '' };
+            // "All three hosts are now serving the new config" after the deploy of it failed: the new one did not go out.
+            const failed = list.filter((i) => (i.kind === 'deploy' || i.apply) && (i.shipped ?? i.ok) === false).at(-1);
+            if (failed && /\b(?:serving|running|on)\s+the\s+new\s+(?:config(?:uration)?|version|release|build|image|code)\b/i.test(sentence)) {
+                return { verdict: 'contradicted', evidence: [said(failed)], why: `The deploy in this turn did not go through: ${failed.text}.` };
+            }
             return { verdict: 'unbacked', evidence: [], why: 'Nothing in this turn checked it: no request to it and no status read ran.' };
         }
         // "GET /health returns 200" needs a request that answered; "the pods are healthy" can rest on a status read.

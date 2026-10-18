@@ -230,7 +230,7 @@ const FIXED_ADJ = /\b(?:a|an)\s+fixed\s+(?=[a-z0-9])|\bfixed-(?=[a-z])|\b[a-z0-9
 const QUOTED_CLAIM = /"[^"\n]{1,120}"|“[^”\n]{1,120}”/g;
 const CLAIM_WORDS = /\b(pass(es|ed|ing)?|green|deployed|released|published|shipped|fixed|done|succeeded|successful(ly)?|merged|live|clean|healthy|ok)\b/i;
 /** "no longer fails", "doesn't crash any more": a negation that claims a fix. */
-const FIX_BY_NEGATION = /\bno longer\s+(fails?|failing|crash(es)?|errors?|throws?|breaks?|hangs?|panics?|leaks?|times? out|overruns?|drops?|loses?|happens?|reproduces?|deadlocks?|races?|blocks?)\b|\b(doesn'?t|does not|won'?t|will not|can'?t|cannot)\s+(fail|crash|error|throw|break|hang|panic|leak|time out|happen|reproduce|deadlock|race)\s+(any ?more|now|again)\b|\bno (more|longer any) (errors|failures|crashes|warnings|panics|races)\b|\b(the )?(bug|issue|error|problem|crash|regression|failure|leak|warning|panic|race|npe|exception)s? (is|are) (now )?(gone|fixed|resolved)\b/i;
+const FIX_BY_NEGATION = /\bno longer\s+(fails?|failing|crash(es)?|errors?|throws?|breaks?|hangs?|panics?|leaks?|times? out|overruns?|drops?|loses?|happens?|reproduces?|deadlocks?|races?|blocks?|flaky|flakes?|flaking)\b|\b(doesn'?t|does not|won'?t|will not|can'?t|cannot)\s+(fail|crash|error|throw|break|hang|panic|leak|time out|happen|reproduce|deadlock|race)\s+(any ?more|now|again)\b|\bno (more|longer any) (errors|failures|crashes|warnings|panics|races)\b|\b(the )?(bug|issue|error|problem|crash|regression|failure|leak|warning|panic|race|npe|exception)s? (is|are) (now )?(gone|fixed|resolved)\b/i;
 /** A deploy's state read back: "rollout `COMPLETED`", "4/4 tasks running". */
 const ROLLED = /\b(?:rollouts?|deployments?|deploys?)\b[^.;]{0,40}?\b(?:complete[d]?|finished|succeeded|successful|went through|goes through(?=\s*$|\s*[.,;:!)]|\s+(?:now|again|fine|cleanly|clean|ok|okay|without|green|successfully|for\s+(?:the\s+)?(?:whole|full|entire|all)|across)\b))|\b\d+\s*\/\s*\d+\s+(?:tasks?|pods?|replicas?|instances?|containers?)\b(?:\s+on\s+[^.;,]{0,40}?)?\s+(?:are\s+)?(?:running|ready|available|healthy|up|live)\b/i;
 /** "Tested it by pointing DEST at a dead host": something was run to try it. */
@@ -333,7 +333,8 @@ const PASSED = [
     // "all 42 tests pass", "the test suite is green", "`go test ./...` is clean", "CI on main is green"
     new RegExp(String.raw`(^|\b|${OPEN})${SUBJECT}(?!\w)[^.;:]{0,40}?\b(?:(?:is|are|was|were|stays?|stayed|came back|comes back|looks?|now|all|still|both|also|is now|are now)\s+){0,3}${PASS_VERB}\b`, 'i'),
     // "passes all 12 tests", "passing all 18 of its tests"
-    /\b(pass(es|ed)?|passing)\s+(all\s+|every\s+|the\s+)?(\d+\s+)?(of\s+(its|the|their)\s+)?(tests?|specs?|checks?|cases?|suites?|examples?)\b/i,
+    // "it passed all 20 runs": a repeated run, each time passing
+    /\b(pass(es|ed)?|passing)\s+(all\s+|every\s+|the\s+)?(\d+\s+)?(of\s+(its|the|their)\s+)?(tests?|specs?|checks?|cases?|suites?|examples?|runs|iterations|attempts)\b/i,
     // "12/12 pass", "Range tests pass 6/6", "3/3 green"
     /\b\d+\s*\/\s*\d+\s+(\w+\s+){0,2}(pass(ed|es|ing)?|green|ok)\b|\b(pass(es|ed)?|passing)\s+\d+\s*\/\s*\d+\b/i,
     // "4 of 4 packages pass", "12 out of 12 specs passed": all of a count
