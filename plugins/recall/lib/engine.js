@@ -101,12 +101,18 @@ export class Engine {
     /** One request from the plugin. Throws a message in words. */
     handle(op, args = {}) {
         switch (op) {
-            case 'configure':
+            case 'configure': {
+                const size = this.store.bytes();
+                const taken = this.store.taken;
                 this.indexer.configure(Array.isArray(args.sources) ? args.sources : []);
+                // The size the page showed before a folder was taken out is the one What happened starts from (taking it
+                // out writes to the write-ahead log, so the files are briefly bigger).
+                if (this.store.taken > taken && !this.shrinkFrom) this.shrinkFrom = size;
                 this.facetCache = undefined;
                 // A folder no longer searched is taken out at once: look at the space it left on the next slice.
                 this.shrinkLooked = 0;
                 return this.status();
+            }
             case 'touch':
                 for (const id of Array.isArray(args.sessionIds) ? args.sessionIds.slice(0, 500) : []) this.indexer.touchSession(id);
                 return true;
@@ -190,7 +196,11 @@ export class Engine {
             // A folder taken out at once (no longer in the settings) is seen here, at most every few seconds.
             if (this.now() - this.shrinkLooked < SHRINK_LOOK_MS) return { more: false };
             this.shrinkLooked = this.now();
-            if (!this.worthShrinking()) return { more: false };
+            if (!this.worthShrinking()) {
+                // Not worth a pass yet: a later one starts from the size it finds then.
+                this.shrinkFrom = 0;
+                return { more: false };
+            }
             this.shrinking = 'merge';
             this.shrinkCause = 'taken-out';
         }

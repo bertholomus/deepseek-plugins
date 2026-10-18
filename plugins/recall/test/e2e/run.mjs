@@ -853,7 +853,9 @@ try {
                 gone === OTHER.turns && small.index.bytes < full.bytes / 2 && (await search({ text: OTHER_WORD })).total === 0
                 && small.history.some((e) => /^Stopped searching \S*\/other-dsh$/.test(e.text) && e.why.includes(`(${OTHER.files} files, ${gone.toLocaleString('en-US')} turns)`)),
                 json({ before: [full.bytes, full.totals], after: [small.index.bytes, small.index.totals], history: small.history.slice(0, 3) }));
-            check('What happened says how much it gave back', /^What was taken out of it \(a folder no longer searched, files gone\) left space in it, which it gave back to the disk: it went from [\d,]+ MB to [\d,]+ MB\.$/.test(said?.why ?? ''), json(said));
+            check('What happened says how much it gave back, from the size the Index card showed before',
+                /^What was taken out of it \(a folder no longer searched, files gone\) left space in it, which it gave back to the disk: it went from [\d,]+ MB to [\d,]+ MB\.$/.test(said?.why ?? '')
+                && said.why.endsWith(`it went from ${mb(full.bytes)} to ${mb(small.index.bytes)}.`), json({ said, before: full.bytes, after: small.index.bytes }));
             await openRecall(page);
             const card = page.locator('[data-recall-index]');
             await waitFor(async () => (await card.innerText()).includes(`${mb(small.index.bytes)} on this computer`), 'the Index card to show the new size', 10000, 200)

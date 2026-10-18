@@ -1130,7 +1130,7 @@ test('index: a folder taken out and a rebuild give their space back to the disk,
     assert.ok(after < before * 0.25, `the index went from ${before} to ${after} bytes`);
     assert.equal(after, out.shrunk.after, 'the Index card\'s size is the new one');
     const last = notes.filter((n) => n.kind === 'shrunk').at(-1);
-    assert.deepEqual([last.cause, last.before > last.after], ['taken-out', true]);
+    assert.deepEqual([last.cause, last.before, last.after], ['taken-out', before, after], 'from the size the page showed before the folder was taken out');
     assert.ok(e.search({ text: 'gateway' }).total > 0 && e.search({ text: 'gateway' }).total < full);
     // Done: it does not start again by itself, and a small take-out is not worth a pass.
     assert.deepEqual(e.work(40), { more: false });

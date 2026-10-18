@@ -433,9 +433,9 @@ node scripts/e2e.mjs recall        # real DSH in a throwaway home, on every DSH 
 - reading DSH session logs, transcripts (undated ones take their file's
   time) and notes;
 - the incremental index: appends, rewrites, deletes, a folder that is not
-  there, an unclean stop, a broken index set aside, and the space a folder
-  taken out or a rebuild leaves given back, a slice at a time, with the
-  new size sent to the page;
+  there, an unclean stop, a broken index set aside, an older one deleted,
+  and the space a folder taken out or a rebuild leaves given back, a slice
+  at a time, with the new size sent to the page;
 - the query syntax, ranking (a turn that says the words before one whose
   title alone does), counts, plain-text snippets, filters, and lists cut
   where they stop;
@@ -447,8 +447,9 @@ node scripts/e2e.mjs recall        # real DSH in a throwaway home, on every DSH 
   page's log.
 
 The plugin tests start Recall as DSH does (`apply`, with stand-ins for
-DSH's packages): a wrong type in the profile, DSH's word on which sessions
-run. The browser-half tests cover the page, the mark and the jump to a
+DSH's packages): a wrong type in the profile, several at once, DSH's word
+on which sessions run, and two starts in one millisecond (What happened
+keeps both entries). The browser-half tests cover the page, the mark and the jump to a
 turn, buttons named with their result, focus after Back, the folder menu's
 cut paths and every state's words. The bench test runs the bench on 200
 sessions.
