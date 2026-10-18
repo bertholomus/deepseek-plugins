@@ -1,6 +1,6 @@
 # Canon round 3: builder's notes
 
-Updated: 2026-10-17 8:58 PM PDT (Canon round-3 builder)
+Updated: 2026-10-17 9:08 PM PDT (Canon round-3 builder)
 Branch: `suite/v1` in `~/Projects/dsh-plugin-suite`
 Status: under way. Finding 1 reworked after the first hold-out's guard failed at 14893d8 (this commit: the rule,
 the dev set, the tests); Findings 2 and 3 in (79056f1); README for the rework, 4, 5, 6's nits, `npm test` and the
@@ -11,6 +11,11 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
 63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7.
 
 ## Done (newest first)
+- A coding request's words in common need 45% of its weight when they are only in a note's body (was 55%):
+  set again on dev's coding requests alone, now that only they are held to a share. The body-only notes of coding
+  requests no note answers reach at most 0.42 (w12), and the answering note of t12 ("Add the API key header to
+  the Python client.": Authentication) is at 0.50. Dev: first note answers 313 of 349, in the block 323, 121
+  notes that do not answer, no block 272 of 307, coding 210 of 231 (t12 gained, nothing lost). (106086d)
 - The fit rule reworked (Finding 1, second pass), chosen on dev only, after the coordinator reported that `npm test`
   on a clean copy of 0aa5be1 (my commits up to 14893d8) failed the first hold-out's guard: "first note answers 25.0%
   (floor 80.0%)" and "an answering note in the block 25.0% (floor 90.0%)". **The guard was failing at 14893d8.**
@@ -47,7 +52,7 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
     case; l: long prompts; e: pasted errors; h: other names for a project; b: "can you check…", times, people;
     g: short forms; o, x: prompts no note answers in those forms). w05 relabelled `answers` (Schema migrations):
     it is the same task as the judge's jf-a21 and my t01. Five prompts I wrote again word for word were left out.
-  - Dev figures: first note answers 312 of 349 (89.4%), an answering note in the block 322 of 349 (92.3%), 0.37
+  - Dev figures then: first note answers 312 of 349 (89.4%), an answering note in the block 322 of 349 (92.3%), 0.37
     notes per block that do not answer (121 in 328), no block 272 of 307 (88.6%), everyday coding requests 210 of
     231 (90.9%). Every floor met; held in test/canon-relevance.test.js.
   - The rule reads only the prompt, the session's folder and the vault: the helper hands `recall.preStep` the
