@@ -6,7 +6,8 @@ Status: done. The reading (step 1) and per-claim scoring (step 2) were reopened 
 `seen9`, then the tenth as `seen10`) and frozen for the last time at c276436. The window (step 4, 1d2c707, and the
 style fix d48d5dd), the README (step 5, dfa720c and f51cb51) and the real-DSH steps (step 6, 0f73712 and b384b03) are
 committed; none changes a verdict. Real DSH from a clean copy of f51cb51: 132 passed, 0 failed on each of the three
-builds, live DSH unchanged before and after. `npm test` on the last commit: see "Real-DSH runs" under Gotchas.
+builds, live DSH unchanged before and after. `npm test` on a clean copy of cae74da (the code of the last commit; later commits touch only these notes): 839
+tests, 834 passed, 0 failed, 4 skipped, 1 todo (Canon's second hold-out, a known miss: OPEN-QUESTIONS #40).
 
 Reading frozen at c276436
 
@@ -308,6 +309,8 @@ After the freeze nothing that changes a verdict or the measure moves: `plugins/p
   - b384b03: 132 passed, 0 failed on 0.2.0-rc.2, 0.2.1-rc.1 and app-0.2.1-rc.2 (150 s, 149 s, 141 s).
   - f51cb51 (the code of the last commit): 132 passed, 0 failed on each of the three builds (139 s, 143 s, 136 s),
     11:37 to 11:44 PM PDT.
+- `npm test` on a clean copy of cae74da, 11:44 to 11:46 PM PDT, filtered to ok/not-ok and summary lines with the
+  eighth's rows dropped: 839 tests, 834 passed, 0 failed, 4 skipped, 1 todo (Canon's second hold-out, #40).
 - The quoted-value offer is not inside the kit's `[data-suite-trouble]` box: it sits under it, in the header card
   (`[data-proof-header="problem"]`), because the box is the kit's and takes no children.
 - A comma splits a sentence into clauses only before a joining word, so "Pushed to main, CI should pick it up" is one
