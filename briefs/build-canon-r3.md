@@ -1,16 +1,44 @@
 # Canon round 3: builder's notes
 
-Updated: 2026-10-17 9:54 PM PDT (Canon round-3 builder)
+Updated: 2026-10-17 10:17 PM PDT (Canon round-3 builder)
 Branch: `suite/v1` in `~/Projects/dsh-plugin-suite`
-Status: under way. Finding 1 reworked after the first hold-out's guard failed at 14893d8 (3b6811a, 106086d,
-483b42e, f3bfec8: the rules, the dev set, the tests); Findings 2 and 3 in (79056f1); README for the rework, 4, 5,
-6's nits, `npm test` and the e2e runs next. The first hold-out's floors test is still not ok (see Gotchas).
+Status: built. Findings 1 to 6 and the 9.5 list are in (Finding 1: 3b6811a, 106086d, 483b42e, f3bfec8; Findings 2 and
+3: 79056f1; README and Finding 4: 171c6b5; Finding 5: e68eb4f; Finding 6's nits: 4bcb908). `node scripts/e2e.mjs
+canon` passes on all three builds, three runs, live DSH unchanged. Open: **the first hold-out's floors test is still
+not ok**, so `npm test` does not pass in full (see Gotchas); two Proof tests also fail on a clean copy (not Canon's).
 Vault frozen at f7283b5: test/fixtures/canon/vault (not changed this round).
 
 Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 17 10:39:36 2026, patch sha256
 63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7.
 
 ## Done (newest first)
+- `node scripts/e2e.mjs canon`, three runs (10:06 to 10:16 PM PDT), each 95 passed, 0 failed on DSH 0.2.0-rc.2,
+  0.2.1-rc.1 and app-0.2.1-rc.2. Live DSH fingerprint before and after each run (10:06, 10:09, 10:10, 10:13, 10:13,
+  10:16 PM): pid 18756, started Sat Oct 17 10:39:36 2026, patch sha256
+  63e0c347ea6e115055480f4a0dc2cdcbb42287034525e2d9b0d59a072505eef7, unchanged. No plugin file was edited while they
+  ran, and no DSH Test window was needed beyond them (suite-canon-b3 never made).
+- `npm test` at 4bcb908: in the checkout, 833 tests, 824 pass, 5 fail: the first hold-out's floors test, and four
+  Proof tests with the Proof builder's uncommitted `plugins/proof/lib/claims.js` and `evidence.js` in the tree. On a
+  clean copy of HEAD at 4bcb908 (`git archive HEAD | tar -x`, `.e2e` linked; the repo has no node_modules), 826 pass,
+  3 fail: the first hold-out's floors test and two of Proof's (per claim on the tuned sets; the ninth hold-out once
+  tuned on), Proof's work in progress. Every other Canon test passes, and so does the naming scan. The copy was
+  removed after; nothing in it was opened.
+- Finding 6's nits (4bcb908): the form refuses the whole disk and the home folder as the vault ("/", "//", "/srv/..",
+  "~", "~/", "~/./") in the profile's words: "The vault's own folder, not the whole disk: a full path, such as
+  /Users/you/Canon, or one starting with ~/, such as ~/Obsidian/Canon." (client test, against `checkConfig`). A
+  draft's file name is cut after the last whole word within 80 characters, and a single longer word at 80
+  (drafts.js `slugOf`, host test). The try-out's near-miss words name a project's name only when one is named
+  (client test), and the `enabled: false` page's last line was fixed before. DSH's own Trajectory label
+  ("Dsh-plugin-canon") stays as it is: it is DSH's, not Canon's. README: the file name, the form's refusals.
+- Finding 5 (e68eb4f): the e2e's first state check waits until the vault's state is `ok`, not only for the
+  endpoint to answer.
+- README and Finding 4 (171c6b5): "What a turn gets" for the rules now (the split, the question rule with its one-word
+  cases and names no note has, the coding rule's third and 45% and the work object, folders inside a project, "this
+  repo", short forms, other words, defined terms); "How well it picks notes": the 922-prompt dev's make-up, a table of
+  round 2's rules, 14893d8's and now on it, by kind, the later groups' figures as first measured, what it still
+  misses; the hold-outs: 14893d8 fell short of two of the first hold-out's floors, and the rules now still fall short
+  of at least one (no hold-out figure written). Finding 4: quoting does not stop a model from acting on a note's
+  words (round 2's mascot sign-off); keep instructions to agents out of notes.
 - A fourth group of my own, written before it was measured, in forms the dev set lacked (zr01 to zr43 a note
   answers, zs01 to zs11 none does; two I had written before word for word left out): tasks a note answers told as
   orders with a work verb ("Set up the VPN for a new hire.", "Check who owns quartz-cache."), situations told as
@@ -119,17 +147,20 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
   judge's fixture set (54) 16/21, 18/21, 0.56, 23/33; the judge's generic set (60) no block 44/60.
 
 ## Next steps (in order, each runnable by someone new)
-1. README: "What a turn gets" (the two rules, folders inside a project, "this repo", short forms), "How well it
-   picks notes" (dev's make-up and figures; round 2 / round 3 at 14893d8 / now on dev; what it still misses).
-2. Finding 4 (README: a model may still act on a note's words; keep instructions to agents out of notes), Finding
-   5 (`plugins/canon/test/e2e/run.mjs`: the first state check waits until the vault's state is `ok`), Finding 6's
-   nits (the vault field refuses `/` and `~/` in the profile's words; a draft's file name cut at the last whole
-   word; DSH's Trajectory label stays).
-3. `npm test` (others' uncommitted Proof files may break unrelated tests: then a clean copy, `git archive HEAD | tar
-   -x -C <dir>` plus node_modules and .e2e linked), then `node scripts/e2e.mjs canon` x3 with `~/.local/bin/dsh-test
-   fingerprint` before and after each run.
+1. The first hold-out's floors test (`test/canon-relevance.test.js`, "first hold-out: within the four floors") is not
+   ok, so `npm test` fails on it. Its figures were never used to choose a rule; the coordinator decides what comes
+   next (a judge round on the second hold-out, or another rework). To see only pass or fail:
+   `node --test test/canon-relevance.test.js 2>&1 | grep -E '^(not )?ok '`.
+2. When `test/fixtures/canon/relevance/holdout2.json` exists: measure it once with `node scripts/canon-relevance.mjs
+   --set holdout2` and add its figures to the README's "The hold-outs" as a first measurement.
+3. v1.0.1: the kit-level fix for Finding 2 (below), then Canon's one-press fix can go.
 
 ## Picks and why
+- Finding 4's optional page flag for note lines that address agents: not done. A word list would also flag notes
+  that only say what agents may do ("Agents may save drafts" in Home.md); the README says what to do instead.
+- The vault field refuses what the form can know (the whole disk, `~`); a home folder written as a full path and
+  DSH's data folder are refused by Canon on save, in the profile's words, as before.
+- The e2e was run three times, not once, because Finding 5 was a race that failed once in four runs.
 - Fourth group, tried on dev and dropped: a name no note has forgiven when the note shares a rare word of its title,
   aliases, tags or headings (the PagerDuty question found On-call, and one everyday coding request no note answers
   got Rate limits on "request"); one common word in a note's body enough beside a named project, as round 2's rule
@@ -159,6 +190,17 @@ Live DSH fingerprint before any work (6:47 PM PDT): pid 18756, started Sat Oct 1
 - `isCodingRequest` reads the prompt only. Question-form coding requests ("How do I read a CSV file with pandas?")
   stay questions: 33 of 56 of mine get no block, the weakest group; picking them out needs a list of code words,
   not done.
+
+## DESIGN.md "Before you push" (this round's pushes)
+- [x] Surfaces sit right: no surface, ground or card changed this round (words, checks and rules only).
+- [x] Only DSH tokens in both versions, `--wp-blur`, `--wp-tint`, `body.wp-still`: no token added.
+- [x] No selector with a DSH hash, nothing on `:root`, `html` or `body`, no `:has()` into DSH's list: no CSS changed.
+- [x] Motion stops under `wp-still` and reduced motion: no motion added.
+- [x] `node --check plugins/canon/lib/client.js`: parses. `npm test`: every Canon test but the first hold-out's floors
+  test passes, and so does the naming scan; that test is not ok (Next steps 1).
+- [x] Both DSH versions and both themes: the e2e's browser half, light and dark, wide and narrow, on all three builds.
+  Wallpaper on and off not looked at again: nothing visual changed.
+- [x] Off leaves nothing behind, on again repeats nothing: the e2e switches Canon off and on in Plugins (95 passed).
 
 ## For the v1.0.1 list (the kit, not changed before the suite tag)
 - Finding 2 at the kit level (`shared/client-kit.js`, `SettingsBody`/`fieldSpec`): a number or switch field whose
