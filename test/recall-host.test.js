@@ -22,7 +22,7 @@ import { LIMITS, addReply, addTool, newTurn, rowOf, toolLine } from '../plugins/
 import { SCHEMA_VERSION, Store } from '../plugins/recall/lib/store.js';
 import { Engine, folderOf } from '../plugins/recall/lib/engine.js';
 import { IndexThread } from '../plugins/recall/lib/thread.js';
-import { DEFAULTS, LIVE_SETTINGS, MAX_FOLDERS, SETTING_TITLES, checkConfig, expandFolder, sourcesOf } from '../plugins/recall/lib/config.js';
+import { DEFAULTS, LIVE_SETTINGS, MAX_FOLDERS, SETTING_TITLES, checkConfig, expandFolder, indexing, sourcesOf, tildePath } from '../plugins/recall/lib/config.js';
 import { TOOL_LIMITS, TOOL_NAME, searchText, toolSpec, turnText } from '../plugins/recall/lib/tool.js';
 import { NoteLog, cleanQuery, pageState, refusalOf, working } from '../plugins/recall/lib/page.js';
 import { Journal } from '../plugins/recall/lib/shared/journal.js';
@@ -837,10 +837,10 @@ test('settings: folder lists are checked in words; a folder is a full path or on
     };
     const notList = wrong({ handoffFolders: '~/notes' });
     assert.equal(notList.key, 'handoffFolders');
-    assert.equal(notList.message, 'Handoff note folders (handoffFolders) must be a list of folders, such as ["~/notes"] (it is "~/notes")');
+    assert.equal(notList.message, 'Handoff note folders (handoffFolders) must be a list of folders in square brackets, such as ["~/notes"] (it is "~/notes", one folder without the brackets)');
     assert.match(wrong({ transcriptFolders: ['logs/here'] }).message, /must list folders by their full path or a path from ~\/, such as ~\/notes \("logs\/here" is not one\)/);
     assert.match(wrong({ sessionFolders: Array.from({ length: MAX_FOLDERS + 1 }, (_, i) => `/f${i}`) }).message, /may list at most 20 folders \(it lists 21\)/);
-    assert.equal(wrong({ tool: 'yes' }).message, 'Let agents search past work (tool) must be true or false (it is "yes")');
+    assert.equal(wrong({ tool: 'yes' }).message, 'Let agents search past work (tool) must be true or false, written without quotes (it is "yes", which is text)');
     assert.deepEqual(LIVE_SETTINGS, ['sessions', 'sessionFolders', 'transcriptFolders', 'handoffFolders', 'tool']);
     assert.equal(SETTING_TITLES.enabled, 'Recall on');
     assert.equal(expandFolder('~/notes/', '/Users/me'), '/Users/me/notes');
@@ -849,6 +849,40 @@ test('settings: folder lists are checked in words; a folder is a full path or on
     assert.equal(expandFolder('notes', '/Users/me'), undefined);
     assert.equal(expandFolder('', '/Users/me'), undefined);
     assert.equal(folderOf('~/x/', '/Users/me'), '/Users/me/x');
+});
+
+test('settings: a value of the wrong type is named in words, like a wrong range: text for a list, a switch in quotes, a number, a number as text, a group, an empty one', () => {
+    const wrong = (patch) => {
+        try { checkConfig({ ...DEFAULTS, ...patch }); } catch (error) { return [error.key, error.message]; }
+        return undefined;
+    };
+    const t = 'Coding-agent transcript folders (transcriptFolders)';
+    // The judge's shape: one folder where a list belongs (the README has people edit this row by hand).
+    assert.deepEqual(wrong({ transcriptFolders: '~/Projects/agent-logs' }), ['transcriptFolders', `${t} must be a list of folders in square brackets, such as ["~/Projects/agent-logs"] (it is "~/Projects/agent-logs", one folder without the brackets)`]);
+    assert.deepEqual(wrong({ transcriptFolders: 'agent-logs' }), ['transcriptFolders', `${t} must be a list of folders in square brackets, such as ["~/notes"] (it is "agent-logs", which is text, not a list)`]);
+    assert.deepEqual(wrong({ transcriptFolders: '' }), ['transcriptFolders', `${t} must be a list of folders in square brackets, such as ["~/notes"], or [] for none (it is "", which is empty text)`]);
+    assert.deepEqual(wrong({ transcriptFolders: 3 }), ['transcriptFolders', `${t} must be a list of folders in square brackets, such as ["~/notes"], or [] for none (it is 3, a number)`]);
+    assert.deepEqual(wrong({ transcriptFolders: true }), ['transcriptFolders', `${t} must be a list of folders in square brackets, such as ["~/notes"], or [] for none (it is true)`]);
+    assert.deepEqual(wrong({ transcriptFolders: { work: '~/logs' } }), ['transcriptFolders', `${t} must be a list of folders in square brackets, such as ["~/notes"], or [] for none (it is {"work":"~/logs"}, a group of named values)`]);
+    assert.deepEqual(wrong({ transcriptFolders: null }), ['transcriptFolders', `${t} must be a list of folders in square brackets, such as ["~/notes"], or [] for none (it is empty)`]);
+    assert.deepEqual(wrong({ handoffFolders: ['~/notes', 7] }), ['handoffFolders', 'Handoff note folders (handoffFolders) must list folders by their full path or a path from ~/, such as ~/notes (7 is a number, not a folder)']);
+    assert.deepEqual(wrong({ sessionFolders: [['~/.dsh-test']] }), ['sessionFolders', 'More DSH session folders (sessionFolders) must list folders by their full path or a path from ~/, such as ~/notes (["~/.dsh-test"] is a list, not a folder)']);
+    // A quoted switch, "yes", a number, a number written as text: each says what it is and how to write it.
+    const tool = 'Let agents search past work (tool) must be true or false';
+    assert.deepEqual(wrong({ tool: 'yes' }), ['tool', `${tool}, written without quotes (it is "yes", which is text)`]);
+    assert.deepEqual(wrong({ tool: 'true' }), ['tool', `${tool}, written without quotes (it is "true", which is text)`]);
+    assert.deepEqual(wrong({ tool: '1' }), ['tool', `${tool}, written without quotes (it is "1", which is text)`]);
+    assert.deepEqual(wrong({ tool: 1 }), ['tool', `${tool} (it is 1, a number)`]);
+    assert.deepEqual(wrong({ tool: ['yes'] }), ['tool', `${tool} (it is ["yes"], a list)`]);
+    assert.deepEqual(wrong({ tool: {} }), ['tool', `${tool} (it is {}, a group of named values)`]);
+    assert.deepEqual(wrong({ sessions: 0 }), ['sessions', 'Search this DSH\'s sessions (sessions) must be true or false (it is 0, a number)']);
+    assert.deepEqual(wrong({ enabled: 'false' }), ['enabled', 'Recall on (enabled) must be true or false, written without quotes (it is "false", which is text)']);
+    // A long value is cut, never pasted whole into the page.
+    assert.ok(wrong({ handoffFolders: `~/${'x'.repeat(400)}` })[1].length < 400);
+    // The first wrong one in the page's order is the one named.
+    assert.equal(wrong({ tool: 'yes', transcriptFolders: '~/logs' })[0], 'transcriptFolders');
+    assert.equal(indexing({ enabled: true }), true);
+    for (const value of [false, 'yes', 'true', 1, undefined]) assert.equal(indexing({ enabled: value }), false, String(value));
 });
 
 test('settings: the folders searched, each once, an inner folder left out for the outer one, this DSH\'s own sessions never twice', () => {
@@ -869,7 +903,7 @@ test('settings: the folders searched, each once, an inner folder left out for th
     ]);
     assert.deepEqual(left.map((l) => [l.kind, l.root, l.why]), [
         ['session', '/Users/me/.dsh', 'This is this DSH\'s own sessions folder, already searched.'],
-        ['transcript', '/Users/me/logs/a', 'Inside /Users/me/logs, which is already searched.'],
+        ['transcript', '/Users/me/logs/a', 'Inside ~/logs, which is already searched.'],
         ['transcript', '/Users/me/logs', 'Listed twice.'],
     ]);
     const off = sourcesOf({ ...DEFAULTS, sessions: false, sessionFolders: [own] }, { sessionsDir: own, home });

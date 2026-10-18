@@ -3,16 +3,17 @@
  * can change while it runs, what each must be, and the folders they name.
  * No DSH packages here, so the checks run in plain unit tests too.
  *
- * A wrong value never stops Recall from starting: it searches nothing, and
- * its page says which setting is wrong, what it must be, and where to
- * change it. A folder that is not there is not a wrong setting (a disk
- * may be unplugged): its status on the page says so.
+ * A wrong value never stops Recall from starting, whatever its type: it
+ * searches nothing, and its page and its log say which setting is wrong,
+ * what it must be, and where to change it. A folder that is not there is
+ * not a wrong setting (a disk may be unplugged): its status on the page
+ * says so.
  *
  * @module dsh-plugin-recall/config
  */
 import { homedir } from 'node:os';
 import { isAbsolute, join, normalize } from 'node:path';
-import { SettingError, changedEntry, changedTitles, onOff } from './shared/settings.js';
+import { SettingError, changedEntry, changedTitles } from './shared/settings.js';
 
 /** The settings, in the words the page, the settings form and the errors use. */
 export const SETTING_TITLES = Object.freeze({
@@ -43,10 +44,36 @@ export const FOLDER_SETTINGS = Object.freeze({ sessionFolders: 'session', transc
 /** The most folders one list takes. */
 export const MAX_FOLDERS = 20;
 
+/** Text of at most `max` characters, cut in the middle (a long path keeps its start and its last folder). */
+const cutMiddle = (text, max) => (text.length <= max ? text : `${text.slice(0, Math.ceil(max / 2) - 1)}…${text.slice(text.length - Math.floor(max / 2))}`);
+
+/** A value as the profile writes it (text in quotes), cut in the middle past 120 characters; "empty" when there is none. */
 const shown = (value) => {
-    if (value === undefined) return 'empty';
-    try { return JSON.stringify(value).slice(0, 120); } catch { return String(value).slice(0, 120); }
+    if (value === undefined || value === null) return 'empty';
+    if (typeof value === 'string') return JSON.stringify(cutMiddle(value, 118));
+    let text;
+    try { text = JSON.stringify(value); } catch { text = String(value); }
+    return cutMiddle(String(text), 120);
 };
+
+/** What kind of value a wrong one is, in words, after it is shown ("1, a number"); '' when showing it says enough. */
+const kindOf = (value) => {
+    if (typeof value === 'string') return value.trim() === '' ? ', which is empty text' : ', which is text';
+    if (typeof value === 'number') return ', a number';
+    if (Array.isArray(value)) return ', a list';
+    if (value !== null && typeof value === 'object') return ', a group of named values';
+    return '';
+};
+
+/** A setting as the person reads it: its title, then its name in the profile. */
+const named = (key) => `${SETTING_TITLES[key]} (${key})`;
+
+/** A path as a person reads it: the home folder as ~. */
+export function tildePath(path, home = homedir()) {
+    if (typeof path !== 'string' || path === '') return '';
+    if (path === home) return '~';
+    return home && path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+}
 
 /** A folder as written ("~/notes", "/Users/me/notes/"), made absolute; undefined when it cannot be one. */
 export function expandFolder(text, home = homedir()) {
@@ -59,13 +86,41 @@ export function expandFolder(text, home = homedir()) {
     return clean.length > 1 ? clean.replace(/\/+$/, '') : clean;
 }
 
-/** Throw unless `settings[key]` is a list of folders. */
+/**
+ * Throw unless `settings[key]` is true or false. A switch written in quotes
+ * ("true", "yes", "1") is text in the profile, so the words say how to
+ * write it instead.
+ */
+function onOff(settings, key) {
+    const value = settings?.[key];
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') throw new SettingError(key, `${named(key)} must be true or false, written without quotes (it is ${shown(value)}${kindOf(value)})`);
+    throw new SettingError(key, `${named(key)} must be true or false (it is ${shown(value)}${kindOf(value)})`);
+}
+
+/**
+ * Throw unless `settings[key]` is a list of folders. One folder written
+ * without the brackets is text in the profile, so the words show it in a
+ * list, as it must be written.
+ */
 function folderList(settings, key) {
     const value = settings?.[key];
-    const title = `${SETTING_TITLES[key]} (${key})`;
-    if (!Array.isArray(value)) throw new SettingError(key, `${title} must be a list of folders, such as ["~/notes"] (it is ${shown(value)})`);
+    const title = named(key);
+    if (!Array.isArray(value)) {
+        const text = typeof value === 'string' ? value.trim() : undefined;
+        if (text && expandFolder(text) !== undefined) {
+            const example = text.length <= 100 ? JSON.stringify([text]) : '["~/notes"]';
+            throw new SettingError(key, `${title} must be a list of folders in square brackets, such as ${example} (it is ${shown(value)}, one folder without the brackets)`);
+        }
+        if (text) throw new SettingError(key, `${title} must be a list of folders in square brackets, such as ["~/notes"] (it is ${shown(value)}, which is text, not a list)`);
+        throw new SettingError(key, `${title} must be a list of folders in square brackets, such as ["~/notes"], or [] for none (it is ${shown(value)}${kindOf(value)})`);
+    }
     if (value.length > MAX_FOLDERS) throw new SettingError(key, `${title} may list at most ${MAX_FOLDERS} folders (it lists ${value.length})`);
     for (const folder of value) {
+        if (typeof folder !== 'string') {
+            const kind = kindOf(folder).replace(/^, (?:which is )?/, '');
+            throw new SettingError(key, `${title} must list folders by their full path or a path from ~/, such as ~/notes (${shown(folder)} is ${kind ? `${kind}, ` : ''}not a folder)`);
+        }
         if (expandFolder(folder) === undefined) {
             throw new SettingError(key, `${title} must list folders by their full path or a path from ~/, such as ~/notes (${shown(folder)} is not one)`);
         }
@@ -73,14 +128,21 @@ function folderList(settings, key) {
     return value;
 }
 
-/** Check the settings and say what is wrong in words (a SettingError naming the setting). */
+/**
+ * Check the settings and say what is wrong in words (a SettingError naming
+ * the setting), the first wrong one in the order its page lists them. Every
+ * value reaches this check: the Config takes any value, so a wrong type is
+ * named here like a wrong range, and never stops Recall from starting.
+ */
 export function checkConfig(settings) {
-    const t = SETTING_TITLES;
-    onOff(settings, 'enabled', t.enabled);
-    onOff(settings, 'sessions', t.sessions);
+    onOff(settings, 'enabled');
+    onOff(settings, 'sessions');
     for (const key of Object.keys(FOLDER_SETTINGS)) folderList(settings, key);
-    onOff(settings, 'tool', t.tool);
+    onOff(settings, 'tool');
 }
+
+/** Whether Recall keeps an index at all: only when `enabled` is true (DSH fills in true when the profile sets nothing); a wrong value keeps it idle until it is fixed. */
+export const indexing = (settings) => settings?.enabled === true;
 
 /**
  * The folders Recall searches, from its settings: this DSH's sessions
@@ -107,14 +169,14 @@ export function sourcesOf(settings, { sessionsDir, home = homedir() }) {
             }
             const same = sources.find((s) => s.kind === kind && (s.root === root || root.startsWith(`${s.root}/`)));
             if (same) {
-                left.push({ kind, root, why: same.root === root ? 'Listed twice.' : `Inside ${same.root}, which is already searched.` });
+                left.push({ kind, root, why: same.root === root ? 'Listed twice.' : `Inside ${tildePath(same.root, home)}, which is already searched.` });
                 continue;
             }
             // An outer folder listed after an inner one: the outer one holds it.
             for (let i = sources.length - 1; i >= 0; i -= 1) {
                 const s = sources[i];
                 if (s.kind === kind && !s.own && s.root.startsWith(`${root}/`)) {
-                    left.push({ kind, root: s.root, why: `Inside ${root}, which is already searched.` });
+                    left.push({ kind, root: s.root, why: `Inside ${tildePath(root, home)}, which is already searched.` });
                     sources.splice(i, 1);
                 }
             }

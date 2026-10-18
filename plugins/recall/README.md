@@ -246,14 +246,23 @@ Folder lists take full paths or paths from `~/`, with commas between them.
 Adding a folder reads it in the background, and searches work meanwhile.
 Removing one takes what it held out of the index.
 
-A wrong value never stops Recall from starting:
+A wrong value never stops Recall from starting, whatever its type: a
+folder written without the list's brackets, `"yes"` or `"true"` in quotes
+for a switch, a number written as text.
 
 - It searches nothing and offers no tool.
-- Its page says which setting is wrong and what it must be.
-- **Open Recall's settings** takes you to that setting.
-- Once you fix it, Recall works again at once.
+- Its page says which setting is wrong, what it must be and what it is,
+  such as *Coding-agent transcript folders (transcriptFolders) must be a
+  list of folders in square brackets, such as ["~/agent-logs"] (it is
+  "~/agent-logs", one folder without the brackets)*. What happened says
+  it too, once, also when the profile was edited while DSH was stopped.
+- **Open Recall's settings** takes you to that setting, flagged in the
+  form.
+- Once you fix it, in the form or in the profile, Recall works again at
+  once.
 
-The index keeps what it had read, so nothing is read again.
+A wrong `enabled` keeps Recall idle, as `false` does, until it is fixed in
+the profile. The index keeps what it had read, so nothing is read again.
 
 ## Files
 

@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import z from '@deepseek-ai/schemastery';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { LIVE_SETTINGS, checkConfig, savedEntry, sourcesOf } from './config.js';
+import { LIVE_SETTINGS, checkConfig, indexing, savedEntry, sourcesOf } from './config.js';
 import { NoteLog, refusalOf, working } from './page.js';
 import { RecallRemote, SERVICE } from './remote.js';
 import { IndexThread } from './thread.js';
@@ -39,24 +39,27 @@ export const name = 'recall';
 export const inject = [];
 
 /**
- * Settings: types and defaults here, the rest in checkConfig (lib/config.js),
- * so a wrong value is said in words on Recall's page instead of stopping it
- * at start. The live ones are on its page in Plugins and apply as soon as
- * they are saved.
+ * Settings: only defaults here. Every key takes any value, and checkConfig
+ * (lib/config.js) says in words what each must be: DSH checks a plugin's
+ * entry against its schema before the plugin starts, and a value of the
+ * wrong type there (one folder where a list belongs, "yes" for a switch)
+ * would stop Recall with only "Problem" in Plugins, and be dropped without
+ * a word on an edit while DSH runs. The live ones are on its page in
+ * Plugins and apply as soon as they are saved.
  */
 export const Config = z.object({
     /** Profile only. false keeps Recall loaded but idle: no index thread, and its page says so. */
-    enabled: z.boolean().default(true),
+    enabled: z.any().default(true),
     /** Search this DSH's own sessions (its data folder's sessions). */
-    sessions: live(z.boolean().default(true)),
+    sessions: live(z.any().default(true)),
     /** Other DSH homes, or their `sessions` folders, to search too. */
-    sessionFolders: live(z.array(z.string()).default([])),
+    sessionFolders: live(z.any().default([])),
     /** Folders of coding-agent transcripts (JSON lines, one message a line), searched with their subfolders. */
-    transcriptFolders: live(z.array(z.string()).default([])),
+    transcriptFolders: live(z.any().default([])),
     /** Folders of Markdown handoff notes, searched with their subfolders. */
-    handoffFolders: live(z.array(z.string()).default([])),
+    handoffFolders: live(z.any().default([])),
     /** Offer agents the recall_search tool. */
-    tool: live(z.boolean().default(true)),
+    tool: live(z.any().default(true)),
 });
 
 /** How long after a session's event its log is read again (events come in bursts while a turn runs). */
@@ -83,6 +86,18 @@ export function apply(ctx, config) {
     const sessionsDir = dshHomePath('sessions');
     const journal = new Journal(join(dir, 'events.jsonl'), { logger, onChange: bump });
     const notes = new NoteLog({ journal });
+
+    // A wrong setting at the start (the profile edited while DSH was stopped, or an edit that made DSH start Recall
+    // again) is said in its log too, once; and so is its fix.
+    const lastSettings = journal.list({ limit: 400 }).find((entry) => entry.kind === 'settings');
+    if (!check.ok) {
+        const why = `${check.problem.text}.`;
+        if (!(lastSettings?.state === 'waiting on a setting' && lastSettings.why === why)) {
+            journal.add({ kind: 'settings', text: 'Started with a wrong setting; Recall waits until it is fixed', why, state: 'waiting on a setting' });
+        }
+    } else if (lastSettings?.state === 'waiting on a setting') {
+        journal.add({ kind: 'settings', text: 'Settings fixed: Recall is working again', why: 'Its settings were right when DSH started it again.', state: 'done' });
+    }
 
     let lastStatus;
     const thread = new IndexThread({
@@ -134,7 +149,7 @@ export function apply(ctx, config) {
     let toolsScope;
     let dropTool;
     const syncTool = () => {
-        const want = Boolean(toolsScope) && settings.enabled !== false && check.ok && settings.tool !== false;
+        const want = Boolean(toolsScope) && check.ok && settings.enabled !== false && settings.tool === true;
         if (want && !dropTool) {
             try {
                 const off = toolsScope.tools.register(defineTool(toolSpec({ ask, refusal })));
@@ -157,7 +172,9 @@ export function apply(ctx, config) {
         };
     });
 
-    if (settings.enabled !== false) {
+    // Only `enabled: true` keeps an index: false keeps Recall idle, and so does a wrong value until it is fixed.
+    const started = indexing(settings);
+    if (started) {
         try {
             ensurePrivateDir(dir);
         } catch (error) {
@@ -193,7 +210,7 @@ export function apply(ctx, config) {
     ctx.on('loader/volatile-update', guard(logger, 'recall: settings', (paths) => {
         const entry = savedEntry(check, paths);
         if (entry) journal.add(entry);
-        if (settings.enabled !== false) configure();
+        if (started) configure();
         syncTool();
         bump();
     }));

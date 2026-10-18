@@ -1051,7 +1051,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             entry: 'Recall',
             title: 'Recall',
             summary: 'Search everything you already did: this DSH\'s sessions, and the coding-agent transcripts and handoff notes named in its settings. A result opens at its turn.',
-            disabled: 'Recall is switched off in DSH\'s profile (enabled: false in its entry in cordis.patch.yml), so it keeps no index. To use it, set enabled to true there and restart DSH. To remove it instead, switch it off in Plugins.',
+            disabled: 'Recall is switched off in DSH\'s profile (enabled: false in its entry in cordis.patch.yml), so it keeps no index. To use it, set enabled to true there; DSH applies it when you save the file. To take its page out of the sidebar as well, switch Recall off in Plugins.',
             loading: 'Reading Recall',
             search: 'Search past work',
             placeholder: 'Search sessions, transcripts and notes',
@@ -1608,6 +1608,70 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             }, children);
         }
 
+        /** DSH's own list of plugins, as its Plugins page reads it (only read: Recall never changes it). */
+        const pluginList = kit.link('pluginManager', { name: 'DSH\'s plugin list' });
+        /** How often the page looks again while Recall does not answer. */
+        const DOWN_RECHECK_MS = 3000;
+
+        /** What DSH's plugin list says of Recall's search side: 'starting', 'stopping', 'failed', 'off', 'on', or 'unknown'. */
+        async function hostState() {
+            const result = await pluginList.call('listPlugins');
+            const rows = result.ok && Array.isArray(result.value) ? result.value.filter((row) => kit.isRecord(row) && row.moduleName === BUNDLE) : [];
+            if (rows.length === 0) return 'unknown';
+            const row = rows.find((r) => r.enabled !== false) ?? rows[0];
+            if (row.enabled === false) return 'off';
+            if (row.fiberPhase === 'failed') return 'failed';
+            if (row.fiberPhase === 'pending' || row.fiberPhase === 'loading') return 'starting';
+            if (row.fiberPhase === 'unloading') return 'stopping';
+            return row.fiberPhase === 'active' ? 'on' : 'unknown';
+        }
+
+        /** The words for each of those, and whether to offer Recall's row in Plugins. None says "switch it off and on": that mends none of them. */
+        const DOWN_WORDS = Object.freeze({
+            starting: { title: 'Recall is starting.', text: 'This page comes back by itself in a moment.' },
+            stopping: { title: 'Recall is stopping.', text: 'DSH is switching it off in Plugins. To search again, switch it on there.', open: true },
+            off: { title: 'Recall is switched off in Plugins.', text: 'To search again, switch it on there. This page comes back by itself once it runs.', open: true },
+            failed: { title: 'Recall could not start.', text: 'DSH stopped it as it started, so it searches nothing, and Plugins shows Problem for it. Restart DSH; if Recall stops again, DSH\'s log says why.', open: true },
+            on: { title: 'Recall runs, but this page cannot reach it.', text: 'DSH did not pass this page\'s request on to Recall. Reload the window; if this stays, restart DSH.' },
+            unknown: { title: 'Recall is not running.', text: 'Open Recall in Plugins to see why: Off there means it is switched off (switch it on), and Problem means it could not start (restart DSH). This page comes back by itself once it runs.', open: true },
+        });
+
+        /**
+         * Recall's search side does not answer: what DSH's plugin list says of
+         * it, and what to do next, looked at again every few seconds until it
+         * answers. A wrong setting never lands here: Recall starts with any
+         * value, and its page names the wrong one instead.
+         */
+        function RecallDown({ onRetry }) {
+            const [state, setState] = React.useState(undefined);
+            const [tick, setTick] = React.useState(0);
+            React.useEffect(() => {
+                let alive = true;
+                void hostState().then((s) => { if (alive) setState(s); }, () => { if (alive) setState('unknown'); });
+                const timer = setTimeout(() => {
+                    if (!alive) return;
+                    void onRetry?.();
+                    setTick((n) => n + 1);
+                }, DOWN_RECHECK_MS);
+                return () => {
+                    alive = false;
+                    clearTimeout(timer);
+                };
+            }, [tick]);
+            if (state === undefined) return h(kit.Loading, { text: 'Asking DSH about Recall' });
+            const words = DOWN_WORDS[state] ?? DOWN_WORDS.unknown;
+            const again = () => {
+                void onRetry?.();
+                setTick((n) => n + 1);
+            };
+            return h('div', { className: `${P}-trouble`, role: state === 'starting' ? 'status' : 'alert', 'data-suite-trouble': 'not-running', 'data-recall-down': state },
+                h('p', { className: `${P}-trouble-title` }, words.title),
+                h('p', { className: `${P}-trouble-text` }, words.text),
+                h('div', { className: `${P}-actions` },
+                    words.open && kit.canOpenPlugin() ? h(ui.Button, { variant: 'primary', size: 'sm', onClick: () => kit.openPlugin(BUNDLE) }, 'Open Recall in Plugins') : null,
+                    h(ui.Button, { variant: 'ghost', size: 'sm', onClick: again }, 'Check again')));
+        }
+
         /** The thread that owns the index stopped, or starts again: what happened, and what to do. */
         function ThreadState({ data, onRestart, busy, said }) {
             const t = data.thread ?? {};
@@ -1972,7 +2036,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             };
             const down = live.code === 'not-running' || (data === undefined && live.error);
             let cards;
-            if (down) {
+            if (live.code === 'not-running') {
+                cards = h(HeaderCard, { data: undefined }, h(RecallDown, { onRetry: live.refresh }));
+            } else if (down) {
                 cards = h(HeaderCard, { data: undefined }, h(kit.Trouble, { name: 'Recall', packageName: BUNDLE, code: live.code, text: live.error, onRetry: live.refresh, needsWatch: false }));
             } else if (data === undefined) {
                 cards = h(kit.Card, { title: TEXT.title, headingLevel: 1, main: true }, h(kit.Loading, { text: TEXT.loading }));
@@ -2145,7 +2211,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         function folderSpec(f) {
             return {
                 field: f.name,
-                format: (v) => (Array.isArray(v) ? v.join(', ') : v === undefined || v === null ? '' : typeof v === 'string' ? v : JSON.stringify(v)),
+                // A saved value that is not a list (one folder without the brackets, typed into the profile) shows as the
+                // profile has it, in quotes, so the form flags it with what fits rather than show it as if it were right.
+                format: (v) => (Array.isArray(v) ? v.join(', ') : v === undefined || v === null ? '' : JSON.stringify(v)),
                 parse: (t) => {
                     const text = String(t ?? '').trim();
                     if (text === '') return { kind: 'clear' };

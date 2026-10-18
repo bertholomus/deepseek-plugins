@@ -226,7 +226,8 @@ test('the page: not running, a wrong setting, switched off, the index stopped (w
 
     ({ mounted } = await page(states.off));
     text = textIn(mounted.tree);
-    assert.match(text, /switched off in DSH's profile \(enabled: false in its entry in cordis\.patch\.yml\), so it keeps no index\. To use it, set enabled to true there and restart DSH/);
+    assert.match(text, /switched off in DSH's profile \(enabled: false in its entry in cordis\.patch\.yml\), so it keeps no index\. To use it, set enabled to true there; DSH applies it when you save the file\. To take its page out of the sidebar as well, switch Recall off in Plugins\./);
+    assert.doesNotMatch(text, /To remove it/, 'switching it off in Plugins removes nothing');
     assert.equal(withAttr(mounted.tree, 'data-recall-search').length, 0);
 
     let calls;
@@ -256,9 +257,60 @@ test('the page: not running, a wrong setting, switched off, the index stopped (w
     const gone = m2(down.internals.RecallPage, {});
     t.after(() => { gone.unmount(); down.internals.kit.setConnection(undefined); });
     await settle(5);
+    gone.update({});
     text = textIn(gone.tree);
     assert.match(text, /Recall is not running\./);
     assert.doesNotMatch(text, /Session Watch/, 'Recall needs nothing else');
+});
+
+test('the page: while Recall does not answer, it says what DSH\'s plugin list says of it and what to do, never "switch it off and on"', async (t) => {
+    const show = async (rows) => {
+        const { react, mount } = statefulReact();
+        const { client } = loadClient(CLIENT, { react });
+        const asked = [];
+        client.internals.kit.setConnection({ rpc: { call: async (_path, method) => {
+            asked.push(method);
+            if (method === 'pluginManager/listPlugins') return rows === undefined ? new Promise(() => {}) : { ok: true, value: rows };
+            throw new Error('404 Not Found');
+        } } });
+        const opened = [];
+        client.internals.kit.setNavigation({ openBundle: (name) => opened.push(name) });
+        const mounted = mount(client.internals.RecallPage, {});
+        t.after(() => { mounted.unmount(); client.internals.kit.setConnection(undefined); });
+        await settle(5);
+        mounted.update({});
+        await settle(5);
+        mounted.update({});
+        return { tree: mounted.tree, text: textIn(mounted.tree), opened, asked };
+    };
+    const row = (patch) => ({ entryId: 'e-9', moduleName: 'dsh-plugin-recall', enabled: true, fiberPhase: 'active', ...patch });
+    const other = { entryId: 'e-1', moduleName: 'dsh-plugin-canon', enabled: true, fiberPhase: 'failed' };
+    const cases = [
+        [[other, row({ fiberPhase: 'failed' })], 'failed', /SettingsRecall could not start\.DSH stopped it as it started, so it searches nothing, and Plugins shows Problem for it\. Restart DSH; if Recall stops again, DSH's log says why\./],
+        [[row({ fiberPhase: 'loading' })], 'starting', /Recall is starting\.This page comes back by itself in a moment\./],
+        [[row({ enabled: false, fiberPhase: null })], 'off', /Recall is switched off in Plugins\.To search again, switch it on there\./],
+        [[row({ fiberPhase: 'unloading' })], 'stopping', /Recall is stopping\./],
+        [[row({ fiberPhase: 'active' })], 'on', /Recall runs, but this page cannot reach it\.DSH did not pass this page's request on to Recall\. Reload the window; if this stays, restart DSH\./],
+        [[other], 'unknown', /Recall is not running\.Open Recall in Plugins to see why: Off there means it is switched off \(switch it on\), and Problem means it could not start \(restart DSH\)\./],
+    ];
+    for (const [rows, state, words] of cases) {
+        const { tree, text, opened, asked } = await show(rows);
+        assert.equal(withAttr(tree, 'data-recall-down')[0]?.props['data-recall-down'], state, state);
+        assert.match(text, words, state);
+        assert.doesNotMatch(text, /off and on/, `${state}: switching it off and on mends none of these`);
+        assert.ok(asked.includes('pluginManager/listPlugins'), 'it reads DSH\'s plugin list');
+        assert.ok(!asked.some((m) => m.startsWith('pluginManager/') && m !== 'pluginManager/listPlugins'), 'and never changes it');
+        assert.ok(button(tree, 'Check again'), state);
+        const open = button(tree, 'Open Recall in Plugins');
+        assert.equal(Boolean(open), !['starting', 'on'].includes(state), state);
+        if (open) {
+            open.props.onClick();
+            assert.deepEqual(opened, ['dsh-plugin-recall']);
+        }
+    }
+    // While DSH's list has not answered: a line that says so, not a guess.
+    const waiting = await show(undefined);
+    assert.match(waiting.text, /Asking DSH about Recall/);
 });
 
 test('search: typing waits for a pause, Enter and filters search at once with what they say, more pages add on, and a refusal keeps the results', async (t) => {
@@ -643,7 +695,10 @@ test('settings in Plugins: every live setting, with the config\'s words, folder 
     const spec = folderSpec({ name: 'handoffFolders' });
     assert.equal(spec.format(['~/a', '/b']), '~/a, /b');
     assert.equal(spec.format(undefined), '');
-    assert.equal(spec.format('~/x'), '~/x', 'a wrong kind of value shows as it is, so the form can flag it');
+    assert.equal(spec.format('~/x'), '"~/x"', 'one folder saved without the brackets shows as the profile has it, so the form flags it');
+    assert.equal(spec.format(3), '3');
+    assert.equal(specOf(SETTINGS.find((f) => f.name === 'handoffFolders')).parse('"~/x"'), undefined, 'the quoted text never saves as it is');
+    assert.deepEqual(plain(specOf(SETTINGS.find((f) => f.name === 'handoffFolders')).parse('~/x')), { kind: 'set', value: ['~/x'] }, 'without the quotes it saves as a list');
     assert.equal(specOf(SETTINGS.find((f) => f.name === 'tool')).parse('off').value, false, 'switches as the kit does them');
     assert.doesNotMatch(JSON.stringify(TEXT) + CSS.join('') + JSON.stringify(SETTINGS) + SETTINGS_NOTE + SETTINGS_SUMMARY, OTHER_NAMES);
     assert.doesNotMatch(JSON.stringify(SETTINGS) + SETTINGS_NOTE + SETTINGS_SUMMARY + JSON.stringify(TEXT), /recall_search/, 'no tool name where people read');
@@ -664,7 +719,7 @@ test('settings in Plugins: every live setting, with the config\'s words, folder 
     const effects = [];
     const scope = {
         configForms: {
-            get: (entry) => ({ entry, getSnapshot: () => ({ status: 'ready', writable: true, value: { ...DEFAULTS, handoffFolders: ['~/notes', '/srv/handoffs'], transcriptFolders: 'oops' } }), subscribe: () => () => {} }),
+            get: (entry) => ({ entry, getSnapshot: () => ({ status: 'ready', writable: true, value: { ...DEFAULTS, handoffFolders: ['~/notes', '/srv/handoffs'], transcriptFolders: '~/agent-logs', tool: 'yes' } }), subscribe: () => () => {} }),
             whileServed: (entries, fn) => { served.push(entries); return fn(); },
         },
         slots: { inject: (_name, fn) => fn(), register: (spec, component) => { registered.push({ spec, component }); return () => {}; } },
@@ -690,7 +745,12 @@ test('settings in Plugins: every live setting, with the config\'s words, folder 
     const handoffs = fields.find((e) => e.props.label === 'Handoff note folders');
     assert.equal(handoffs.props.text, '~/notes, /srv/handoffs');
     assert.equal(handoffs.props.invalid, false);
+    // The judge's shapes, typed into the profile: one folder without the brackets, and "yes" for a switch.
     const transcripts = fields.find((e) => e.props.label === 'Coding-agent transcript folders');
+    assert.equal(transcripts.props.text, '"~/agent-logs"', 'shown as the profile has it');
     assert.equal(transcripts.props.invalid, true, 'a saved value that is not a folder list is flagged');
     assert.match(transcripts.props.invalidLabel, /full path or a path from ~\//);
+    const tool = elementsOf(form).find((e) => e.props?.['data-suite-setting'] === 'tool');
+    assert.ok(tool.props['data-suite-invalid'] !== undefined, 'a switch saved as "yes" is flagged');
+    assert.match(textIn(tool), /The saved value is neither on nor off\. Switch it to the one you want, then save\./);
 });
