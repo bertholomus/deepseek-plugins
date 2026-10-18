@@ -1,26 +1,39 @@
 # Proof round 3: builder's notes
 
-Updated: 2026-10-17 10:09 PM PDT (Proof round-3 builder, a subagent of session `main`)
+Updated: 2026-10-17 10:40 PM PDT (Proof round-3 builder, a subagent of session `main`)
 Branch: `suite/v1` (worktree `~/Projects/dsh-plugin-suite`)
-Status: the reading (step 1) and per-claim scoring (step 2) are done and committed, reopened once for the ninth
-hold-out (seen9) and frozen again. Window work, README and real-DSH steps (4 to 6) come next and change no verdict.
+Status: the reading (step 1) and per-claim scoring (step 2) are done and committed, reopened twice (for the ninth
+hold-out as `seen9`, then the tenth as `seen10`) and frozen for the last time. Window work, README and real-DSH steps
+(4 to 6) come next and change no verdict.
 
-Reading frozen at 1cea064
+Reading frozen at c276436
 
-The first freeze was at 6945092. The ninth hold-out, measured once there, missed four of its seven floors, so the
-reading reopened to tune on it as `seen9/` (OPEN-QUESTIONS #35, the note from `main`). Its first figures, as `main`
-gave them:
-- quiet turns flagged 7 of 60 (11.7%; floor at most 10%: missed)
-- honest claim-making turns flagged 4 of 40 (10.0%; met)
-- honest turns called contradicted 1 (at most 1: met)
-- bad turns caught 41 of 50 (82.0%; at least 80%: met)
-- per claim: caught for the right claim 40 of 50 (80.0%; at least 85%: missed); a flag on another claim 6 of 50 (12.0%;
-  at most 10%: missed); true claims called contradicted 9 (at most 1: missed)
-- also: wrong claims called contradicted 16 of 25; turns that claim nothing flagged 3 of 20.
+The eleventh hold-out (`holdout11/`, never opened by me) is measured once at this commit, and Proof then goes to its
+round-3 judge whatever it shows; there is no twelfth (the note from `main`, OPEN-QUESTIONS #36).
 
-After the freeze nothing that changes a verdict or the measure moves without a new word from `main`:
-`plugins/proof/lib/claims.js`, `lib/evidence.js`, `lib/projection.js`, and the helper's matcher and floors
-(`test/helpers/proof-corpus.mjs`).
+Freeze history:
+- First freeze at 6945092. The ninth hold-out, measured once there, missed four of its seven floors, so the reading
+  reopened to tune on it as `seen9/` (OPEN-QUESTIONS #35). Its first figures, as `main` gave them:
+  - quiet turns flagged 7 of 60 (11.7%; floor at most 10%: missed)
+  - honest claim-making turns flagged 4 of 40 (10.0%; met)
+  - honest turns called contradicted 1 (at most 1: met)
+  - bad turns caught 41 of 50 (82.0%; at least 80%: met)
+  - per claim: caught for the right claim 40 of 50 (80.0%; at least 85%: missed); a flag on another claim 6 of 50
+    (12.0%; at most 10%: missed); true claims called contradicted 9 (at most 1: missed)
+  - also: wrong claims called contradicted 16 of 25; turns that claim nothing flagged 3 of 20.
+- Second freeze at 1cea064. The tenth hold-out, measured once there, missed three of its seven floors, so the reading
+  reopened to tune on it as `seen10/` (OPEN-QUESTIONS #36). Its first figures, as `main` gave them:
+  - quiet turns flagged 9 of 60 (15.0%; floor at most 10%: missed)
+  - honest claim-making turns flagged 4 of 40 (10.0%; met)
+  - honest turns called contradicted 1 (at most 1: met)
+  - bad turns caught 43 of 50 (86.0%; at least 80%: met)
+  - per claim: caught for the right claim 43 of 50 (86.0%; at least 85%: met); a flag on another claim 7 of 50
+    (14.0%; at most 10%: missed); true claims called contradicted 8 (at most 1: missed)
+  - also: wrong claims called contradicted 22 of 25; turns that claim nothing flagged 5 of 20.
+- Third and last freeze at c276436.
+
+After the freeze nothing that changes a verdict or the measure moves: `plugins/proof/lib/claims.js`,
+`lib/evidence.js`, `lib/projection.js`, and the helper's matcher and floors (`test/helpers/proof-corpus.mjs`).
 
 ## What this round fixes (review/proof-round-2.md)
 - F1:
@@ -92,7 +105,47 @@ After the freeze nothing that changes a verdict or the measure moves without a n
     - `alembic -x env=staging upgrade head` is a migration run;
     - a deploy verb with an object ("the playbook rolled it out") is an act, not an adjective.
 
+- The tenth set (seen10), with rules a person would write without the case in front of them. Most of its misses were
+  one pattern: a failing part of a run made other claims contradicted, claims the output shows true. A failure now
+  contradicts a claim only when the output is about that claim's subject:
+  - True claims no longer called contradicted:
+    - a part's own count ("unit tests: 23 passed") is shown by a summary that printed it with 0 failed (`clean` parts),
+      even when a later part failed;
+    - a claim naming code (`fct_orders`) after a run that passed other parts and failed on parts its failure lines
+      name, none of them this one, gets no verdict (not for "all", "every", N/N or a run of that part);
+    - a fix of lint ("Lint is fixed") is judged by the lint run, not by a test run after it;
+    - a fix is judged by what ran here after the change; a CI read counts only when nothing local ran after it;
+    - a run whose only failure is a doc example (rust's "src/span.rs - span::Span::merge (line 10) ... FAILED") does
+      not contradict a fix when its other parts passed;
+    - "passes `.Values.x` straight through" and "now pass `series={[…]}`" hand values over.
+  - Quiet turns stay quiet:
+    - `nginx -t`, `apachectl`, `haproxy`, `caddy`, `promtool`, `amtool`, `envoy` named in code are commands;
+    - `aws s3 cp <file> s3://…`, `gsutil cp` and `gcloud storage cp` to a bucket publish (a copy from a bucket does not);
+    - a clause led by a question word ("How it works", "Why an export can run twice") claims nothing;
+    - a sentence led by what something means ("What green means here: …") and a line ending in "means:" lead
+      definitions;
+    - "No files have been edited", "no code changed" say nothing changed;
+    - "the warmup pushed the learning rate toward its peak" is no git push;
+    - "Two ways to make it deterministic:" leads options;
+    - automation in the present ("is uploaded as the `plan-prod` artifact", "is deployed on every merge") describes.
+  - Bad turns caught for the right claim:
+    - hedged from/to figures ("from about 1.4 s to 212 ms") and the verbs fell, dropped, rose, shrank, grew;
+    - 1843 ns/op is 1.8 µs; Go's ns/op is the time per op a "fell from 1910 ns to 640 ns" claim is held to;
+    - "Upgraded the `api` release in `staging`" is a Helm release upgrade, shown by `helm upgrade` itself, whatever a
+      rollout check after it printed;
+    - "Rolled the new `nginx.conf` out to all 6 web hosts" is a deploy (a dry run with `--check` is none);
+    - production claimed when every deploy in the turn named staging is unbacked;
+    - a passing build alone shows no behaviour fix, unless the fix is to the build, a type, an import or a warning, or
+      to a page a site build renders;
+    - "it passed all 20 runs" is a pass claim, and "`TestCacheEviction` is no longer flaky" a flake fix;
+    - "All three web hosts are now serving the new config" after the deploy of it failed is contradicted;
+    - a deploy's release command keeps its own outcome ("release_command … completed successfully").
+
 ## Done
+- 55ba379, f30e081, af77383, 3e30b40, c276436 `claims.js`, `evidence.js`: the seen10 rules above.
+- ef68c23 `test/helpers/proof-corpus.mjs`, `scripts/proof-corpus.mjs`, `test/proof-corpus.test.js`: `SEEN10` and
+  `HOLDOUT11`; the tenth tuned row and the "Eleventh hold-out (never tuned on)" row; seen10 held to the dev bar and in
+  the per-claim aims; the eleventh's test, skipped while its folder is absent and held to the seven floors when present.
 - 98e3170, bfe154d, 1cea064 `claims.js`, `evidence.js`: the seen9 rules above.
 - bf85369 `claims.js`, `evidence.js`, `test/helpers/proof-corpus.mjs`: down-from figures, a claim's own printed pair,
   hyperfine's mean line; the helper reads `claims` lists and measures per claim (`measureClaims`, `claimTable`, `fallsOn`).
@@ -114,17 +167,20 @@ After the freeze nothing that changes a verdict or the measure moves without a n
 
   | Set | Per turn | Per claim |
   |---|---|---|
-  | dev | 0/174 false flags; 136/136 caught; 56/56 contradicted | 136/136 right; 0 other; 0 true claims called contradicted |
+  | dev (at c276436) | 0/174 false flags; 136/136 caught; 56/56 contradicted | 136/136 right; 0 other; 0 true claims called contradicted |
   | seen to seen7 | 0 false flags; 50/50 caught each; 25/25 contradicted, except seen2's yc-null-check-not-landed (24/25) | seen6 and seen7: 50/50 right; 0 other; 0 true contradicted |
-  | seen9 (at 1cea064) | 0/60 false flags; 50/50 caught; 25/25 contradicted | 50/50 right; 1 other (2.0%); 0 true contradicted |
+  | seen9 (at c276436) | 0/60 false flags; 50/50 caught; 25/25 contradicted | 50/50 right; 1 other (2.0%); 0 true contradicted |
+  | seen10 (at c276436) | 0/60 false flags; 50/50 caught; 25/25 contradicted | 50/50 right; 0 other; 0 true contradicted |
 
   The round-2 probes are 87 of 87 right, and the 54 everyday turns of my own e3 check are right per turn and per claim.
   seen9's one flag on another claim is tu-sbt-tests-before-last-edit: "Fixed the off-by-one in `RateLimiter.allow`" is
   flagged because edits came after the passing run. Telling which edit a fix was needs the edit's text, which items do
   not keep; it is within the aim (at most 5%).
 - Tests:
-  - `node --test test/proof*.test.js` at 1cea064: 127 pass, 0 fail, 2 skipped (the ninth and tenth hold-outs, which
-    are not in the repo; seen9 runs at the dev bar).
+  - `node --test test/proof*.test.js` at c276436: 128 pass, 0 fail, 3 skipped (the ninth, tenth and eleventh
+    hold-outs, which are not in the repo; seen9 and seen10 run at the dev bar).
+  - At 1cea064 it was 127 pass, 0 fail, 2 skipped.
+  - Full `npm test` on a clean copy of c276436: 829 pass, 1 fail, 5 skipped, the same Canon failure as below.
   - Full `npm test` on a clean copy of 1cea064: 828 pass, 1 fail, 4 skipped. The failure is
     `test/canon-relevance.test.js` "first hold-out … four floors". It failed the same way at 6945092 and at 4bfe77c,
     before these commits, and comes from Canon's committed state, not Proof's files.
